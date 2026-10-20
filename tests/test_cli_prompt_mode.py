@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock
 import json
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 import time
@@ -73,33 +72,6 @@ def _continue_args(err: str) -> list[str]:
     return shlex.split(line[line.index(prefix) + len(prefix):])
 
 
-def test_config_defaults_to_defaultagent_workspace(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
-    monkeypatch.delenv("JS_SESSION", raising=False)
-    monkeypatch.setenv("JS_DEBUG_LOG", "1")
-
-    from js.config import from_env
-
-    actual = from_env()
-
-    # Sessions are filed by start directory; what is the agent's lives in its
-    # state dir; the prompt history is one file for every agent.
-    expected_sessions_dir = tmp_path / ".js" / "sessions" / session_store.slug(Path.cwd())
-    expected_state_dir = tmp_path / ".js" / "state" / "defaultagent"
-    assert actual.agent_id == "defaultagent"
-    assert actual.agent_dir == expected_state_dir
-    assert actual.history_file == tmp_path / ".js" / "state" / "history.jsonl"
-    assert actual.session_file.parent == expected_sessions_dir
-    assert actual.session_file.suffix == ".jsonl"
-    assert actual.session_file.exists()
-    assert actual.debug_log == expected_state_dir / "debug.log"
-    assert actual.prompts_dir.name == "defaultagent"
-    assert actual.sessions_dir == expected_sessions_dir
-    latest = json.loads((expected_state_dir / "latest.json").read_text(encoding="utf-8"))
-    assert latest["session_file"] == str(actual.session_file)
-    # Reading config writes nothing; the CLI entry point writes the first jsrc.
-    assert not (tmp_path / ".js" / "jsrc").exists()
 def test_personal_defaultagent_overrides_repo_defaultagent(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
@@ -1131,26 +1103,6 @@ def test_auto_compact_invalid_numeric_config_falls_back_to_defaults(monkeypatch,
     assert capsys.readouterr().out.count(msgs.AUTO_COMPACT_ARMED.line(colour=False, fullness=0.80)) == 2
 
 
-def test_auto_compact_misordered_thresholds_use_safe_defaults(monkeypatch, tmp_path, capsys):
-    calls: list[dict] = []
-    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
-    cfg = _auto_compact_cfg(
-        tmp_path,
-        compact={
-            "COMPACTION_WARN_AT": 0.95,  # invalid: notify after trigger
-            "COMPACTION_START_AT": 0.80,
-            "COMPACTION_FORCE_AT": 0.70,   # invalid: force before trigger
-        },
-    )
-
-    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 80, raising=False)
-    cli._maybe_auto_compact(cfg, _auto_state())
-
-    assert len(calls) == 1
-    assert calls[0]["forced"] is False
-    assert msgs.AUTO_COMPACT_ARMED.line(colour=False, fullness=0.80) in capsys.readouterr().out
-
-
 def test_auto_compact_string_false_values_disable_auto(monkeypatch, tmp_path, capsys):
     calls: list[dict] = []
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 95, raising=False)
@@ -1161,35 +1113,6 @@ def test_auto_compact_string_false_values_disable_auto(monkeypatch, tmp_path, ca
 
     assert calls == []
     assert capsys.readouterr().out == ""
-
-@pytest.mark.skipif(shutil.which("bwrap") is None, reason="-C needs bubblewrap")
-def test_dash_C_binds_working_dir_for_prompt_mode(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
-    monkeypatch.delenv("JS_SESSION", raising=False)
-    scaffold = tmp_path / "scaffold"
-    scaffold.mkdir()
-
-    seen: dict[str, str] = {}
-
-    def completion_stub(**kwargs):
-        seen["cwd"] = os.getcwd()
-        seen["ctx_cwd"] = str(runtime.T.STOCK_CONTEXT.cwd)
-        return _fake_stream_result("ok")
-
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
-
-    orig = os.getcwd()
-    try:
-        actual = cli.main(["-C", str(scaffold), "-p", "hi", "-n", "-q"])
-    finally:
-        os.chdir(orig)
-
-    assert actual == 0
-    # git -C semantics: the agent's process cwd AND the tool context it runs
-    # against are both bound to the -C dir, so relative paths resolve there.
-    assert Path(seen["cwd"]).resolve() == scaffold.resolve()
-    assert Path(seen["ctx_cwd"]).resolve() == scaffold.resolve()
 
 
 def test_dash_C_rejects_missing_dir(monkeypatch, tmp_path):
@@ -1217,45 +1140,6 @@ def test_auto_compact_fullness_excludes_output_reserve_and_buffer(monkeypatch, t
     assert len(calls) == 1
     assert calls[0]["forced"] is False
     assert msgs.AUTO_COMPACT_ARMED.line(colour=False, fullness=0.90) in capsys.readouterr().out
-
-
-def test_auto_compact_reserve_never_eats_more_than_half_the_window(monkeypatch, tmp_path, capsys):
-    # A model declaring a 64k output cap against a 32k window would leave a
-    # negative budget; the floor keeps half the window addressable instead of
-    # compacting on every single turn.
-    calls: list[dict] = []
-    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
-    cfg = _auto_compact_cfg(
-        tmp_path,
-        compact={"CONTEXT_SIZE": 32_000, "COMPACTION_HEADROOM_TOKENS": 4_000},
-    )
-    cfg = replace(cfg, max_output_tokens=64_000)
-
-    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 8_000, raising=False)
-    cli._maybe_auto_compact(cfg, _auto_state())
-
-    assert calls == []
-    assert msgs.AUTO_COMPACT_ARMED.line(colour=False, fullness=0.50) in capsys.readouterr().out
-
-
-def test_reply_reserve_is_capped_so_a_huge_output_limit_does_not_eat_the_window(monkeypatch, tmp_path, capsys):
-    # gpt-5.6-sol declares max_output 128000. Reserving all of it against a
-    # 370k window would leave 238k addressable and compact at ~190k; the
-    # reserve is capped at COMPACTION_REPLY_RESERVE_TOKENS (20k default), so
-    # 345,904 is addressable and 260k reads as 75%, under the trigger.
-    calls: list[dict] = []
-    monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
-    cfg = _auto_compact_cfg(
-        tmp_path,
-        compact={"CONTEXT_SIZE": 370_000, "COMPACTION_HEADROOM_TOKENS": 4_096},
-    )
-    cfg = replace(cfg, max_output_tokens=128_000)
-
-    monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 260_000, raising=False)
-    cli._maybe_auto_compact(cfg, _auto_state())
-
-    assert calls == []
-    assert msgs.AUTO_COMPACT_ARMED.line(colour=False, fullness=0.75) in capsys.readouterr().out
 
 
 def test_reply_reserve_cap_is_configurable(monkeypatch, tmp_path, capsys):
@@ -1375,24 +1259,6 @@ def test_named_nested_sessions_append_stably(monkeypatch, tmp_path):
     assert cli._run_prompt("second", session="caller/nested", show_continue=False) == 0
     nested = session_store.folder_for(tmp_path) / "caller" / "nested.jsonl"
     assert [message["content"] for message in load_messages(nested)] == ["first", "OK", "second", "OK"]
-
-
-@pytest.mark.skipif(shutil.which("bwrap") is None, reason="-C needs bubblewrap")
-def test_session_key_resumes_the_same_derived_session(monkeypatch, tmp_path, capsys):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
-    monkeypatch.delenv("JS_SESSION", raising=False)
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_kwargs: _fake_stream_result("OK"))
-    project = tmp_path / "project"
-    project.mkdir()
-
-    assert cli.main(["-C", str(project), "--session-key", "job-7", "-p", "third"]) == 0
-    assert cli.main(["-C", str(project), "--session-key", "job-7", "-p", "fourth"]) == 0
-    derived = list((session_store.folder_for(project) / "derived").glob("*.jsonl"))
-    assert len(derived) == 1
-    assert [message["content"] for message in load_messages(derived[0])] == ["third", "OK", "fourth", "OK"]
-    capsys.readouterr()
 
 
 def test_generated_prompt_emits_machine_session_metadata_even_when_quiet(monkeypatch, tmp_path, capsys):

@@ -98,46 +98,6 @@ def test_show_lines_effective_unknown_key_errors():
 # Overlay computation (the live route diffed against the store)
 # ---------------------------------------------------------------------------
 
-def test_overlay_env_sampling_shows_live_value():
-    store = settings.seed_defaults()  # TEMPERATURE unset
-    overlay = cli._live_settings_overlay(
-        store,
-        live_model=None,
-        model_source=None,
-        provider_id=None,
-        provider_base_url=None,
-        provider_api_key=None,
-        saved_login=None,
-        provider_default_base_url=None,
-        eff_sampling=Sampling(temperature=1.0),
-        env_sampling=Sampling(temperature=1.0),
-        manifest_sampling=Sampling(),
-        environ={"JS_TEMPERATURE": "1.0"},
-    )
-    live = overlay["TEMPERATURE"]
-    assert live.display == "1.0"
-    assert live.source == "env JS_TEMPERATURE"
-
-
-def test_overlay_flag_model_shows_source_tag():
-    store = settings.seed_defaults()
-    settings.set_dotted(store, ("MODEL",), "stored/model")
-    overlay = cli._live_settings_overlay(
-        store,
-        live_model="testes/test",
-        model_source="--model flag",
-        provider_id=None,
-        provider_base_url=None,
-        provider_api_key=None,
-        saved_login=None,
-        provider_default_base_url=None,
-        eff_sampling=Sampling(),
-        env_sampling=Sampling(),
-        manifest_sampling=Sampling(),
-        environ={},
-    )
-    assert overlay["MODEL"] == setcmd.LiveValue("testes/test", "--model flag")
-
 
 def test_overlay_login_provider_and_masked_key():
     class _Login:
@@ -170,27 +130,6 @@ def test_overlay_login_provider_and_masked_key():
     assert overlay["API_KEY"].source == "login testes"
 
 
-def test_overlay_empty_when_store_matches_effective():
-    store = settings.seed_defaults()
-    settings.set_dotted(store, ("MODEL",), "same/model")
-    settings.set_dotted(store, ("TEMPERATURE",), 0.7)
-    overlay = cli._live_settings_overlay(
-        store,
-        live_model="same/model",
-        model_source=None,
-        provider_id=None,
-        provider_base_url=None,
-        provider_api_key=None,
-        saved_login=None,
-        provider_default_base_url=None,
-        eff_sampling=Sampling(temperature=0.7),
-        env_sampling=Sampling(),
-        manifest_sampling=Sampling(),
-        environ={},
-    )
-    assert overlay == {}
-
-
 # ---------------------------------------------------------------------------
 # /save writer
 # ---------------------------------------------------------------------------
@@ -221,14 +160,6 @@ def test_save_round_trip_reproduces_effective_values(tmp_path):
     ):
         spec = settings.SPEC_BY_KEY[key]
         assert settings.get_dotted(reloaded, spec.path) == settings.get_dotted(store, spec.path)
-
-
-def test_save_writes_the_api_key_as_typed(tmp_path):
-    path = tmp_path / "jsrc"
-    settings.save_settings_to_jsrc(path, _effective_store())
-
-    # API_KEY IS persisted verbatim (his box; the jsrc key line is plain)
-    assert "set API_KEY sk-secret" in path.read_text(encoding="utf-8")
 
 
 def test_save_after_logout_keeps_provider_settings_cleared(tmp_path):

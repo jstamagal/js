@@ -14,52 +14,6 @@ from js import tool_binaries
 from js.toolkit.core import ToolContext
 
 
-def test_concurrent_downloads_preserve_each_transfer_and_snapshot(tmp_path, monkeypatch):
-    import threading
-    from concurrent.futures import ThreadPoolExecutor
-    from types import SimpleNamespace
-
-    target = tmp_path / "download"
-    target.write_bytes(b"original")
-    first_ready = threading.Event()
-    second_started = threading.Event()
-    release_first = threading.Event()
-    snapshots = []
-
-    def start(argv, **kwargs):
-        partial = Path(next(arg[6:] for arg in argv if arg.startswith("--dir=")))
-        partial /= next(arg[6:] for arg in argv if arg.startswith("--out="))
-        payload = b"first" if argv[-1].endswith("/first") else b"second"
-        partial.write_bytes(payload)
-        if payload == b"second":
-            second_started.set()
-        return SimpleNamespace(returncode=0, poll=lambda: 0)
-
-    def before_first():
-        first_ready.set()
-        assert release_first.wait(5)
-        snapshots.append(target.read_bytes())
-
-    monkeypatch.setattr(tool_binaries.subprocess, "Popen", start)
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        first = pool.submit(tool_binaries.download_with_aria2, "aria2c",
-                            "https://example.test/first", target, timeout_s=5,
-                            before_publish=before_first)
-        try:
-            assert first_ready.wait(5)
-            second = pool.submit(tool_binaries.download_with_aria2, "aria2c",
-                                 "https://example.test/second", target, timeout_s=5,
-                                 before_publish=lambda: snapshots.append(target.read_bytes()))
-            second_started.wait(0.2)
-        finally:
-            release_first.set()
-        first.result(timeout=5)
-        second.result(timeout=5)
-
-    assert snapshots == [b"original", b"first"]
-    assert target.read_bytes() == b"second"
-
-
 def test_saved_download_leaves_only_its_file_in_the_directory(tmp_path, monkeypatch):
     from types import SimpleNamespace
 

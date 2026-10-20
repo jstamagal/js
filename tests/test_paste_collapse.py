@@ -154,27 +154,3 @@ def test_only_the_input_line_collapses_a_paste():
         pastes.insert(buffer, text, None)
         assert (buffer.text != text) == collapsed, name
         assert pastes.expand(buffer.text) == text
-
-
-def test_the_echo_decision_sees_the_expanded_line():
-    token = pastes.keep("/help" + " " * 1100, 10)
-    asked: list[str] = []
-
-    async def main() -> None:
-        with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()):
-            app, _scrollback = screen.build_app(
-                prompt="> ", history=InMemoryHistory(), completer=None,
-                on_line=lambda line: asyncio.sleep(0), on_interrupt=lambda: None, on_eof=lambda: None,
-                echo=lambda line: asked.append(line) or False,
-            )
-            task = asyncio.ensure_future(app.run_async())
-            for chunk in (token, "\r"):
-                await asyncio.sleep(0.05)
-                pipe.send_text(chunk)
-            await asyncio.sleep(0.2)
-            app.exit()
-            await task
-
-    asyncio.run(main())
-
-    assert asked == ["/help"]

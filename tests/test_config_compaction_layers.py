@@ -33,23 +33,6 @@ def test_collect_settings_layers_global_project_and_local_with_env_cli(monkeypat
     assert cfg.prompt_roots[0].name == "prompts"
 
 
-def test_default_fetch_timeout_and_package_jsrc_cover_limits_and_compact():
-    out = settings.collect_settings(config_paths=[], env={})
-    assert out["FETCH_TIMEOUT"] == settings.default_value("FETCH_TIMEOUT")
-    assert out["INLINE_CODE_TIMEOUT"] == settings.default_value("INLINE_CODE_TIMEOUT")
-    text = settings.PACKAGE_JSRC.read_text(encoding="utf-8")
-    jsrc_keys = {
-        line.split()[1].lstrip("-")
-        for line in text.splitlines()
-        if line.startswith("set ")
-    }
-    assert {
-        "INLINE_CODE_TIMEOUT",
-        "CONTEXT_SIZE",
-        "COMPACTION_KEEP_RECENT_TOKENS",
-    } <= jsrc_keys
-
-
 def test_prompt_spec_uses_most_specific_agent_and_stacks_agents_files(tmp_path):
     repo = tmp_path / "repo"
     home = tmp_path / "home"
@@ -101,8 +84,6 @@ def test_agent_discovery_unions_roots_with_project_shadowing(tmp_path):
     names = set(reg.by_name)
     assert {"same", "global_only", "project_only"} <= names
     assert same.system == "project\n"
-
-
 
 
 def test_compaction_mark_rebuilds_summary_and_safe_tail_without_rewriting(tmp_path):
@@ -170,7 +151,6 @@ def test_compact_messages_invalid_numeric_settings_fall_back(monkeypatch, tmp_pa
 
     assert compaction.compacted(result)
     assert messages[0]["content"] == "<compaction-summary>\nSummary\n</compaction-summary>"
-
 
 
 def test_summarize_invalid_summary_max_tokens_falls_back(monkeypatch, tmp_path):

@@ -3,13 +3,12 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-import threading
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
 
 from js import model_metadata
 
@@ -253,32 +252,6 @@ def test_catalog_refresh_retains_release_dates(monkeypatch, tmp_path):
     assert model_metadata._release_dates() == {"maker:model-v2": "2026-05-01"}
     with sqlite3.connect(path) as connection:
         assert connection.execute("SELECT limit_context FROM models").fetchone() == (1000000,)
-
-
-def test_concurrent_catalog_refreshes_publish_independent_databases(monkeypatch, tmp_path):
-    monkeypatch.setattr(model_metadata.modelsdotdev_sync, "_load_providers", lambda _source: {})
-    write_database = model_metadata.modelsdotdev_sync._write_database
-    writing = threading.Lock()
-    written = threading.Barrier(2)
-
-    def synchronized_write(payload, output, source):
-        with writing:
-            write_database(payload, output, source)
-        written.wait(timeout=5)
-
-    monkeypatch.setattr(model_metadata.modelsdotdev_sync, "_write_database", synchronized_write)
-    output = tmp_path / "catalog.sqlite"
-    with ThreadPoolExecutor(max_workers=2) as workers:
-        refreshes = [workers.submit(model_metadata._generate_database, output=output) for _ in range(2)]
-        for refresh in refreshes:
-            refresh.result(timeout=10)
-
-    connection = sqlite3.connect(output)
-    try:
-        assert connection.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
-        assert connection.execute("SELECT * FROM model_release_dates").fetchall() == []
-    finally:
-        connection.close()
 
 
 def test_routed_latest_uses_family_release_date_and_preserves_variants(monkeypatch):

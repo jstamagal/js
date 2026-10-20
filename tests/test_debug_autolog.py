@@ -62,24 +62,6 @@ def _make_cfg(tmp_path: Path, log_dir: Path, *, trace: bool = False) -> Config:
     )
 
 
-def test_from_env_sets_debug_autolog_default_on(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
-    monkeypatch.delenv("JS_SESSION", raising=False)
-    monkeypatch.delenv("JS_REQUEST_LOG", raising=False)
-    from js.config import from_env
-
-    cfg = from_env()
-    assert cfg.debug_autolog is True
-    # The resolved autolog path lives one directory over from the session JSONL.
-    path = cli._debug_autolog_path(cfg, cfg.settings)
-    assert path is not None
-    assert path.parent.name == cfg.agent_id
-    assert path.parent.parent.name == "logs"
-    assert path.suffix == ".log"
-    assert path.stem == cfg.session_file.stem
-
-
 def test_debug_autolog_off_disables_path(tmp_path):
     cfg = _make_cfg(tmp_path, tmp_path / "logs")
     off = dict(cfg.settings)

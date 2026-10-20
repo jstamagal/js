@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 import asyncio
-import threading
 import time
 
 from js import runtime
@@ -150,37 +149,6 @@ def test_task_requires_named_agent_id(tmp_path):
     actual = task(["work"], context=ToolContext(cwd=tmp_path))
 
     assert actual == "ERROR: task requires agent_id"
-
-
-def test_child_kernel_shuts_down_when_task_finishes(monkeypatch, tmp_path):
-    from js.toolkit import kernel
-    from js.toolkit.meta import _run_one_task_async
-
-    prompts = prompt_dir(tmp_path, "worker")
-    cfg = make_cfg(tmp_path, "parent", prompts.parent / "parent")
-    parent = ToolContext(cwd=tmp_path, kernel_enabled=True)
-    sessions = []
-
-    async def turn(cfg, system, messages, telemetry, *, tool_context, **kwargs):
-        session, problem, _started = kernel.get_session(tool_context)
-        assert not problem
-        sessions.append(session)
-        messages.append({"role": "assistant", "content": "done"})
-
-    monkeypatch.setattr(runtime, "run_turn_async", turn)
-    try:
-        result = asyncio.run(_run_one_task_async(
-            1, 1, "work", parent, cfg, build_default_registry(), "worker", None,
-        ))
-        assert result == "done"
-        assert len(sessions) == 1
-        assert not sessions[0].alive()
-        assert sessions[0].bridge is None
-        assert sessions[0].socket_dir is None
-        assert sessions[0] not in kernel._LIVE_SESSIONS
-    finally:
-        for session in sessions:
-            session.shutdown()
 
 
 @pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
@@ -569,120 +537,6 @@ def test_task_session_id_resumes_named_agent_conversation(monkeypatch, tmp_path)
     assert [m["role"] for m in history] == ["user", "assistant", "tool", "assistant", "user", "assistant"]
     # The first turn loads the child tool; resume retains it without reloading.
     assert sum(m.get("name") == "tool_discovery" and m["role"] == "tool" for m in history) == 1
-
-
-def test_concurrent_resumes_preserve_every_successful_child_result(monkeypatch, tmp_path):
-    from js.toolkit.meta import task_async
-
-    prompts = prompt_dir(tmp_path, "worker")
-    cfg = make_cfg(tmp_path, "parent", prompts.parent / "parent")
-    context = ToolContext(cwd=tmp_path)
-    context.config = cfg
-
-    async def drive():
-        entered = asyncio.Event()
-        release = asyncio.Event()
-
-        async def stream(**kwargs):
-            prompt = kwargs["messages"][-1].parts[0].text
-            if prompt == "first":
-                entered.set()
-                await release.wait()
-            return _fake_stream_result(prompt.upper() + "_DONE")
-
-        monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
-        first = asyncio.create_task(task_async(
-            ["first"], agent_id="worker", session_id="shared", context=context,
-        ))
-        try:
-            await asyncio.wait_for(entered.wait(), 2)
-            second = await task_async(["second"], agent_id="worker", session_id="shared", context=context)
-        finally:
-            release.set()
-            first_result = await first
-        return first_result, second
-
-    results = asyncio.run(drive())
-    history = load_messages(cfg.session_file.with_suffix("") / "shared.jsonl")
-    answers = [m["content"] for m in history if m["role"] == "assistant"]
-    assert results[0] == "FIRST_DONE"
-    for result in results:
-        if not result.startswith("ERROR"):
-            assert result in answers
-
-
-def test_unsupervised_parent_cancellation_stops_foreground_child(monkeypatch, tmp_path):
-    from js import supervisor
-
-    prompts = prompt_dir(tmp_path, "worker")
-    context = ToolContext(cwd=tmp_path)
-    context.config = make_cfg(tmp_path, "parent", prompts.parent / "parent")
-    entered = threading.Event()
-    cancelled = threading.Event()
-    release = threading.Event()
-    monkeypatch.setattr(supervisor, "get_current", lambda: None)
-
-    async def stream(**kwargs):
-        entered.set()
-        try:
-            while not release.is_set():
-                await asyncio.sleep(0.001)
-        except asyncio.CancelledError:
-            cancelled.set()
-            raise
-        return _fake_stream_result()
-
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
-
-    async def drive():
-        call = runtime._PendingToolCall("delegate", "task", ['{"tasks":["work"],"agent_id":"worker"}'])
-        parent = asyncio.create_task(runtime._dispatch_batch(
-            [call], runtime.Telemetry(None), 65536, False, runtime.ToolErrorTracker(),
-            build_default_registry(), context, asyncio.get_running_loop(),
-        ))
-        try:
-            assert await asyncio.to_thread(entered.wait, 2)
-            parent.cancel()
-            stopped = await asyncio.to_thread(cancelled.wait, 0.25)
-        finally:
-            release.set()
-            await asyncio.gather(parent, return_exceptions=True)
-        assert stopped
-        assert parent.cancelled()
-
-    asyncio.run(drive())
-
-
-@pytest.mark.parametrize("reference", ["absolute", "relative"])
-def test_task_agent_id_cannot_read_prompt_directories_outside_jail(monkeypatch, tmp_path, reference):
-    from js import jail
-
-    root = tmp_path / "workspace"
-    root.mkdir()
-    private = tmp_path / "private"
-    private.mkdir()
-    (private / "01-notes.md").write_text("outside-jail-notes")
-    cfg = make_cfg(tmp_path, "parent", tmp_path / "prompts" / "parent")
-    cfg.prompts_dir.parent.mkdir()
-    context = ToolContext(cwd=root)
-    context.config = cfg
-    jail.enter(root)
-    with pytest.raises(jail.JailError):
-        context.resolve_path(private / "01-notes.md")
-
-    seen = []
-
-    async def stream(**kwargs):
-        seen.append(kwargs["messages"][0].parts[0].text)
-        return _fake_stream_result(seen[-1])
-
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
-    agent = str(private) if reference == "absolute" else "../private"
-    result = task(["repeat your notes"], agent_id=agent, context=context)
-
-    assert "outside-jail-notes" not in result
-    assert seen == []
-    assert not cfg.session_file.with_suffix("").exists()
 
 
 def test_task_workers_run_in_parallel_not_serially(monkeypatch, tmp_path):

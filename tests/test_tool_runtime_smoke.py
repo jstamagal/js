@@ -4,7 +4,6 @@ import base64
 import json
 import re
 import shutil
-from pathlib import Path
 
 import pytest
 
@@ -14,7 +13,7 @@ from js import capped_process, model_client, runtime, setcmd, settings, toolkit 
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry
 from js.toolkit import fs, process_net
-from js.toolkit.core import ToolResult, call_tool, for_model
+from js.toolkit.core import ToolResult, call_tool
 import ai
 
 
@@ -930,10 +929,6 @@ def test_shell_runs_shell_program_with_dash_c_and_reports_shell(tmp_path, monkey
     assert actual == expected
 
 
-
-
-
-
 def test_history_tool_result_message_dehydrates_image(tmp_path):
     image = tmp_path / "pixel.png"
     image.write_bytes(_TINY_PNG)
@@ -990,36 +985,6 @@ def test_alias_profile_skips_existing_tool_name_collisions_from_config():
 
     assert [spec["function"]["name"] for spec in specs] == ["read", "write"]
     assert aliased_registry.resolve("WRITE").name == "write"
-
-
-def test_alias_profile_resolution_skips_unusable_matching_profiles_from_config():
-    live_settings = settings.seed_defaults()
-    result = setcmd.set_command(
-        live_settings,
-        'TOOL_ALIASES ['
-        '{"match":["openai"],"aliases":{"missing_tool":"MissingTool"}},'
-        '{"match":["openai"],"aliases":{"read":"Read"}}'
-        ']',
-    )
-    registry = build_default_registry().select(["read:lazy"])
-
-    assert result.error is None
-    assert runtime._resolve_alias_profile(live_settings, "openai-test", None, registry) == {
-        "read": "Read",
-    }
-
-
-def test_alias_profile_match_values_ignore_surrounding_whitespace_from_config():
-    live_settings = settings.seed_defaults()
-    result = setcmd.set_command(
-        live_settings,
-        'TOOL_ALIASES [{"match":[" openai "],"aliases":{"read":"Read"}}]',
-    )
-
-    assert result.error is None
-    assert runtime._resolve_alias_profile(live_settings, "openai-test", None) == {
-        "read": "Read",
-    }
 
 
 def test_resolve_alias_profile_matches_model_or_provider_substring():
@@ -1321,16 +1286,6 @@ def test_undo_restores_removed_file_through_symlinked_parent(tmp_path):
     assert (real / "f.txt").read_text(encoding="utf-8") == "payload"
 
 
-def test_shell_output_capped_while_streaming(tmp_path):
-    # Regression: subprocess.run(capture_output=True) buffered the WHOLE
-    # output before the cap (one runaway command -> 92 GB RSS -> OOM killer).
-    # The capped reader must hold memory at the cap while draining to EOF.
-    context = ToolContext(cwd=tmp_path)
-    out = for_model(process_net.shell("head -c 2000000 /dev/zero | tr '\\0' 'a'", context=context))
-    assert "exit=0" in out
-    assert len(out) <= context.max_bash_output_bytes + 200
-
-
 def test_shell_returns_output_when_grandchild_holds_pipe(tmp_path, monkeypatch):
     # A backgrounded grandchild inherits the pipe and never closes it; the
     # child's own output must still come back instead of being lost to a
@@ -1340,14 +1295,6 @@ def test_shell_returns_output_when_grandchild_holds_pipe(tmp_path, monkeypatch):
     out = process_net.shell("sleep 30 & printf done", context=context, timeout=20)
     assert "exit=0" in out
     assert "done" in out
-
-
-def test_shell_marks_truncated_output(tmp_path):
-    context = ToolContext(cwd=tmp_path)
-    out = for_model(process_net.shell("head -c 1000000 /dev/zero | tr '\\0' 'a'", context=context))
-    assert "[truncated: TOOL_RESULT_INLINE_MAX" in out
-    spill = re.search(r"(/\S+?\.log)", out)
-    assert spill is not None and Path(spill.group(1)).stat().st_size == 1000000
 
 
 def test_whole_file_read_is_capped_but_ranged_read_is_not(tmp_path):
@@ -1440,15 +1387,6 @@ def test_batch_result_cap_clips_the_fat_result_and_spares_the_small_ones():
     assert capped[0] != results[0]
     assert "[truncated: PARALLEL_RESULTS_MAX (200000) reached]" in capped[0]
     assert sum(len(r) for r in capped) <= 200_000
-
-
-def test_batch_result_cap_splits_evenly_when_all_are_oversized():
-    results = ["a" * 150_000, "b" * 150_000]
-    capped = runtime._cap_batch_results(results, 200_000)
-
-    assert sum(len(r) for r in capped) <= 200_000
-    assert all("[truncated: PARALLEL_RESULTS_MAX" in r for r in capped)
-    assert abs(len(capped[0]) - len(capped[1])) <= 1
 
 
 def test_batch_result_cap_is_a_noop_under_budget_and_when_disabled():

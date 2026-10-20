@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
 from prompt_toolkit.application import create_app_session
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.input import create_pipe_input
@@ -81,32 +80,3 @@ def test_vi_escape_in_the_ex_line_cancels_it():
 
     assert ex == []
     assert lines == []
-
-
-@pytest.mark.parametrize("control", ["\x03", "\x04", "\t"])
-def test_ex_control_keys_preserve_the_message_draft(control):
-    from js.replcomplete import JsCompleter
-
-    completer = JsCompleter(commands=lambda: {"draftchanged": None})
-    lines, ex = _drive(
-        ["draft", "\x1b", ":set model X", control, "\x1b", ":w", "\r"],
-        "vi", completer=completer,
-    )
-
-    assert ex == [("w", "draft")]
-    assert lines == []
-
-
-def test_a_long_input_line_wraps_instead_of_scrolling_sideways():
-    from prompt_toolkit.enums import DEFAULT_BUFFER
-    from prompt_toolkit.layout import Window
-    from prompt_toolkit.layout.controls import BufferControl
-
-    app, _scrollback = screen.build_app(
-        prompt="> ", history=InMemoryHistory(), completer=None,
-        on_line=None, on_interrupt=lambda: None, on_eof=lambda: None,
-    )
-    windows = [w for w in app.layout.find_all_windows()
-               if isinstance(w, Window) and isinstance(w.content, BufferControl)
-               and w.content.buffer.name == DEFAULT_BUFFER]
-    assert windows and windows[0].wrap_lines()

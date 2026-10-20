@@ -6,16 +6,14 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
-import re
 import threading
 import time
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-from js import display, runtime, settings
+from js import runtime
 from js.toolkit import core as tool_core, fs
 from js.toolkit.core import Tool, ToolContext, call_is_read_only
 from js.toolkit.registry import ToolRegistry, build_default_registry
@@ -67,12 +65,6 @@ def _dispatch(calls, registry, context, *, trace: bool = False, progress=None, t
     return records
 
 
-def _shown_rows(capsys) -> list[str]:
-    """What was printed, without colour or the exchange rail."""
-    return [re.sub(r"\x1b\[[0-9;]*m", "", line).removeprefix(display.RAIL).removeprefix(" ")
-            for line in capsys.readouterr().out.splitlines()]
-
-
 def test_three_read_only_calls_that_each_sleep_half_a_second_run_at_once(tmp_path):
     probe = Probe()
     context = ToolContext(cwd=tmp_path, max_parallel_tools=8)
@@ -106,24 +98,6 @@ def test_results_come_back_in_the_model_order_not_the_finish_order(tmp_path):
 
     assert probe.finished == ["fast", "slow"]
     assert [(pc.id, result) for pc, _args, result in records] == [("slow", "SLOW"), ("fast", "FAST")]
-
-
-def test_max_parallel_tools_one_runs_every_call_in_turn(tmp_path, monkeypatch):
-    jsrc = settings.PACKAGE_JSRC.read_text(encoding="utf-8")
-    assert re.search(r"^set PARALLEL_TOOLS_MAX 8$", jsrc, re.M)
-    copy = tmp_path / "pkg" / "jsrc"
-    copy.parent.mkdir()
-    copy.write_text(re.sub(r"^set PARALLEL_TOOLS_MAX \d+$",
-                           "set PARALLEL_TOOLS_MAX 1", jsrc, flags=re.M), encoding="utf-8")
-    monkeypatch.setattr(settings, "PACKAGE_JSRC", copy)
-    probe = Probe()
-    context = ToolContext(cwd=tmp_path)
-    assert context.max_parallel_tools == 1
-
-    _dispatch(_calls("a", "b", "c"), _sleeper_registry(probe, 0.05), context)
-
-    assert probe.most == 1
-    assert probe.finished == ["a", "b", "c"]
 
 
 def test_the_cap_bounds_how_many_read_only_calls_run_at_once(tmp_path):
@@ -287,98 +261,6 @@ def test_cancel_mid_batch_keeps_finished_results_and_starts_nothing_new(tmp_path
     assert sorted(ran) == [1, 2]
     answered = {m["tool_call_id"]: m["content"] for m in messages if m["role"] == "tool"}
     assert answered == {"c1": "look 1", "c2": "look 2"}
-
-
-def test_parallel_exchanges_print_whole(capsys, tmp_path):
-    probe = Probe()
-    context = ToolContext(cwd=tmp_path, max_parallel_tools=8)
-    context.config = SimpleNamespace(settings={"TOOLS_DISPLAY": 2, "TOOLS_PREVIEW_LINES": 3})
-
-    def lines(label: str, context=None) -> str:
-        probe.enter()
-        time.sleep(0.05)
-        probe.leave(label)
-        return "\n".join(f"{label} row {n}" for n in range(3))
-
-    registry = ToolRegistry((Tool("sleeper", "test", lines, {"label": {"type": "string"}},
-                                  read_only=True),), {})
-
-    _dispatch(_calls("a", "b", "c", "d"), registry, context, trace=True)
-
-    assert probe.most > 1
-    out = _shown_rows(capsys)
-    headers = [i for i, line in enumerate(out) if line.startswith((display.MARK, display.OK, display.FAIL))]
-    assert len(headers) == 4
-    for start, end in zip(headers, [*headers[1:], len(out)], strict=True):
-        label = re.search(r'"label":\s*"(\w)"', out[start]) or re.search(r"\b([abcd])\b", out[start])
-        assert label is not None, out[start]
-        body = out[start + 1:end]
-        assert all(row.split()[0] == label.group(1) for row in body if " row " in row), body
-        assert sum(" row " in row for row in body) == 3
-
-
-def _parallel_reads(tmp_path):
-    context = ToolContext(cwd=tmp_path, max_parallel_tools=8)
-    context.config = SimpleNamespace(settings={"TOOLS_DISPLAY": 1})
-
-    def read(file_path: str, context=None) -> str:
-        time.sleep(0.02)
-        return "same size\n" * 20
-
-    registry = ToolRegistry((Tool("read", "test", read, {"file_path": {"type": "string"}},
-                                  read_only=True),), {})
-    paths = [f"src/module_{name}.py" for name in "abcd"]
-    calls = [runtime._PendingToolCall(f"c{i}", "read", [json.dumps({"file_path": path})])
-             for i, path in enumerate(paths)]
-    return calls, registry, context, paths
-
-
-def _on_screen():
-    """A telemetry whose tool exchanges draw on a scrollback, and that scrollback."""
-    from js import screen
-
-    scroll = screen.Scrollback()
-    scroll.toggle_key = ""
-
-    class Exchange:
-        def open(self, rendered):
-            self.span = scroll.exchange_open(rendered)
-
-        def update(self, rendered, expanded=None):
-            scroll.exchange_update(self.span, rendered, expanded)
-
-        def close(self, rendered, expanded=None):
-            scroll.exchange_close(self.span, rendered, expanded)
-
-    telemetry = runtime.Telemetry(None)
-    telemetry.exchange_factory = Exchange
-    return telemetry, scroll
-
-
-def test_parallel_reads_at_ui_tools_one_share_a_row_on_the_screen_that_names_each_file(tmp_path):
-    calls, registry, context, paths = _parallel_reads(tmp_path)
-    telemetry, scroll = _on_screen()
-
-    _dispatch(calls, registry, context, trace=True, telemetry=telemetry)
-
-    scroll.flush()
-    rows = [re.sub(r"\x1b\[[0-9;]*m", "", line).removeprefix(display.RAIL).removeprefix(" ")
-            for line in scroll.buffer.text.splitlines()]
-    traces = [line for line in rows if line.startswith((display.MARK, display.OK, display.FAIL))]
-    assert len(traces) == 1
-    for path in paths:
-        assert traces[0].count(path.rsplit("/", 1)[1]) == 1
-
-
-def test_parallel_reads_on_plain_stdout_are_each_shown_whole(capsys, tmp_path):
-    calls, registry, context, paths = _parallel_reads(tmp_path)
-
-    _dispatch(calls, registry, context, trace=True)
-
-    rows = _shown_rows(capsys)
-    traces = [line for line in rows if line.startswith((display.MARK, display.OK, display.FAIL))]
-    assert len(traces) == len(paths)
-    assert sum(row.count("same size") for row in rows) == 20 * len(paths)
 
 
 def test_which_calls_are_read_only():

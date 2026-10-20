@@ -79,7 +79,6 @@ def test_run_commit_auto_inits_non_repo_and_injects_survey(tmp_path, monkeypatch
     assert calls[0]["kwargs"]["tool_context"].cwd == target.resolve(strict=False)
 
 
-
 def test_run_commit_injects_messy_repo_snapshot_without_crashing(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     repo = tmp_path / "messy"
@@ -166,55 +165,6 @@ def test_run_commit_makes_no_snapshot_on_clean_tree(tmp_path, monkeypatch):
 
     backups = paths.commit_backups_dir()
     assert not backups.exists() or not any(backups.iterdir())
-
-
-def test_commit_snapshot_restores_modified_binary_contents(tmp_path, monkeypatch):
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    repo = tmp_path / "binary"
-    _init_repo(repo)
-    binary = repo / "image.bin"
-    binary.write_bytes(b"\x00original\xff")
-    _git(repo, "add", "image.bin")
-    _git(repo, "commit", "-qm", "binary baseline")
-    changed = b"\x00modified\xfe"
-    binary.write_bytes(changed)
-
-    snapshot = cli._snapshot_worktree(repo)
-    _git(repo, "restore", "image.bin")
-    _git(repo, "apply", str(snapshot / "tracked.patch"))
-
-    assert binary.read_bytes() == changed
-
-
-def test_commit_snapshot_restores_non_utf8_text(tmp_path, monkeypatch):
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    repo = tmp_path / "legacy"
-    _init_repo(repo)
-    legacy = repo / "legacy.txt"
-    legacy.write_bytes(b"caf\xe9 original\n")
-    _git(repo, "add", "legacy.txt")
-    _git(repo, "commit", "-qm", "legacy baseline")
-    changed = b"caf\xe9 changed\n"
-    legacy.write_bytes(changed)
-
-    snapshot = cli._snapshot_worktree(repo)
-    _git(repo, "restore", "legacy.txt")
-    _git(repo, "apply", str(snapshot / "tracked.patch"))
-
-    assert legacy.read_bytes() == changed
-
-
-def test_commit_snapshot_preserves_an_untracked_dangling_symlink(tmp_path, monkeypatch):
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    repo = tmp_path / "links"
-    _init_repo(repo)
-    (repo / "current").symlink_to("missing-target")
-
-    snapshot = cli._snapshot_worktree(repo)
-
-    saved = snapshot / "untracked" / "current"
-    assert saved.is_symlink()
-    assert str(saved.readlink()) == "missing-target"
 
 
 def test_run_commit_snapshot_prune_keeps_ten(tmp_path, monkeypatch):

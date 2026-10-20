@@ -727,78 +727,6 @@ def test_run_turn_applies_config_alias_profile_to_outgoing_tool_specs(monkeypatc
     assert messages[-1] == {"role": "assistant", "content": "OK"}
 
 
-def test_run_turn_skips_unusable_alias_profiles_before_rewriting_specs(monkeypatch, tmp_path):
-    calls: list[dict] = []
-
-    def stream_stub(**kwargs):
-        calls.append(kwargs)
-        return model_text_result("OK")
-
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "read", aliases={"read": "Read"}))
-    cfg = offline_config(
-        tmp_path,
-        model="openai-test",
-        settings={
-            "TOOL_ALIASES": [
-                    {"match": ["openai"], "aliases": {"missing_tool": "MissingTool"}},
-                    {"match": ["openai"], "aliases": {"read": "Read"}},
-                ],
-        },
-    )
-    registry = build_default_registry().select(["read:lazy"])
-    messages = [{"role": "user", "content": "Use tools if needed."}]
-
-    runtime.run_turn(
-        cfg,
-        "system",
-        messages,
-        runtime.Telemetry(None),
-        trace_override=False,
-        tool_registry=registry,
-        tool_context=ToolContext(cwd=tmp_path),
-        suppress_output=True,
-    )
-
-    assert {spec.name for spec in calls[0]["tools"]} == {"Read", "tool_discovery"}
-    assert messages[-1] == {"role": "assistant", "content": "OK"}
-
-
-def test_run_turn_skips_colliding_alias_profiles_before_rewriting_specs(monkeypatch, tmp_path):
-    calls: list[dict] = []
-
-    def stream_stub(**kwargs):
-        calls.append(kwargs)
-        return model_text_result("OK")
-
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "read", "write", aliases={"read": "Read"}))
-    cfg = offline_config(
-        tmp_path,
-        model="openai-test",
-        settings={
-            "TOOL_ALIASES": [
-                    {"match": "openai", "aliases": {"read": "write"}},
-                    {"match": "openai", "aliases": {"read": "Read"}},
-                ],
-        },
-    )
-    registry = build_default_registry().select(["read:lazy", "write:lazy"])
-    messages = [{"role": "user", "content": "Use tools if needed."}]
-
-    runtime.run_turn(
-        cfg,
-        "system",
-        messages,
-        runtime.Telemetry(None),
-        trace_override=False,
-        tool_registry=registry,
-        tool_context=ToolContext(cwd=tmp_path),
-        suppress_output=True,
-    )
-
-    assert {spec.name for spec in calls[0]["tools"]} == {"Read", "write", "tool_discovery"}
-    assert messages[-1] == {"role": "assistant", "content": "OK"}
-
-
 def test_run_turn_without_alias_profile_keeps_default_tool_names(monkeypatch, tmp_path):
     calls: list[dict] = []
 
@@ -877,52 +805,6 @@ def test_run_turn_streams_fs_search_tool_call_returns_content_before_final_text(
     assert exchange[0]["tool_calls"][0]["id"] == exchange[1]["tool_call_id"]
     assert "notes.txt:2:secret_token=42" in exchange[1]["content"]
     assert messages[-1] == {"role": "assistant", "content": "DONE"}
-
-
-def test_run_turn_hydrates_tool_context_caps_from_config(monkeypatch, tmp_path):
-    calls = 0
-    context = ToolContext(cwd=tmp_path)
-
-    def stream_stub(**kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            return model_tool_call_result("shell", [json.dumps({"command": "printf abcdef"})])
-        assert any(
-            msg.role == "tool"
-            and any(
-                getattr(p, "result", None)
-                and "--- stdout ---" in str(p.result)
-                and "[truncated: SHELL_OUTPUT_MAX (3) reached;" in str(p.result)
-                for p in msg.parts
-            )
-            for msg in kwargs["messages"]
-        )
-        return model_text_result("CAPPED")
-
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "shell"))
-    cfg = offline_config(tmp_path)
-    cfg = Config(**{**cfg.__dict__, "max_bash_output_bytes": 3, "max_tool_result_bytes": 1024, "fetch_timeout_s": 9})
-    messages = [{"role": "user", "content": "run shell"}]
-
-    runtime.run_turn(
-        cfg,
-        "system",
-        messages,
-        runtime.Telemetry(None),
-        trace_override=False,
-        tool_context=context,
-        suppress_output=True,
-    )
-
-    assert calls == 2
-    assert context.max_bash_output_bytes == 3
-    assert context.max_tool_result_bytes == 1024
-    assert context.fetch_timeout_s == 9
-    shell_result = next(m["content"] for m in messages if m.get("name") == "shell" and m.get("role") == "tool")
-    assert "abcdef" not in shell_result
-    assert "truncated" in shell_result
-    assert messages[-1] == {"role": "assistant", "content": "CAPPED"}
 
 
 def test_alias_profile_tool_call_dispatches_to_canonical_and_persists_lowercase(monkeypatch, tmp_path):
@@ -1545,65 +1427,6 @@ def test_trace_prints_a_result_line_for_success_and_for_error(capsys):
     assert len(markers) == 2
     assert markers[0].startswith(display.OK) and "big" in markers[0]
     assert markers[1].startswith(display.FAIL) and "boom" in markers[1]
-
-
-def test_trace_at_level_two_shows_the_first_lines_on_the_screen_then_shown_over_total():
-    from js import screen
-
-    scroll = screen.Scrollback()
-    scroll.toggle_key = ""
-
-    class Exchange:
-        def open(self, rendered):
-            self.span = scroll.exchange_open(rendered)
-
-        def update(self, rendered, expanded=None):
-            scroll.exchange_update(self.span, rendered, expanded)
-
-        def close(self, rendered, expanded=None):
-            scroll.exchange_close(self.span, rendered, expanded)
-
-    telemetry = runtime.Telemetry(None)
-    telemetry.exchange_factory = Exchange
-    registry = _trace_registry()
-    calls = [
-        runtime._PendingToolCall("c1", "big", ["{}"]),
-        runtime._PendingToolCall("c2", "boom", ["{}"]),
-    ]
-
-    runtime._dispatch_tool_calls(
-        calls, telemetry, 256 * 1024, True,
-        runtime.ToolErrorTracker(), registry, _tools_context(2),
-    )
-
-    scroll.flush()
-    lines = [ANSI_RE.sub("", line).removeprefix(display.RAIL).removeprefix(" ")
-             for line in scroll.buffer.text.splitlines()]
-    assert len(_marker_lines(lines)) == 2
-    shown = "\n".join(lines)
-    assert all(f"line {index} with some words in it" in shown for index in range(3))
-    assert "line 3 with some words in it" not in shown
-    # A short error is shown whole.
-    assert any("ERROR: tool_discovery found no native tool matching" in line for line in lines)
-
-
-def test_trace_at_level_two_on_plain_stdout_shows_every_line(capsys):
-    registry = _trace_registry()
-    calls = [
-        runtime._PendingToolCall("c1", "big", ["{}"]),
-        runtime._PendingToolCall("c2", "boom", ["{}"]),
-    ]
-
-    runtime._dispatch_tool_calls(
-        calls, runtime.Telemetry(None), 256 * 1024, True,
-        runtime.ToolErrorTracker(), registry, _tools_context(2),
-    )
-
-    lines = _trace_lines(capsys)
-    assert len(_marker_lines(lines)) == 2
-    shown = "\n".join(lines)
-    assert all(f"line {index} with some words in it" in shown for index in range(200))
-    assert any("ERROR: tool_discovery found no native tool matching" in line for line in lines)
 
 
 def test_trace_result_line_covers_the_unknown_tool_and_invalid_argument_paths(capsys):

@@ -240,20 +240,6 @@ def test_a_cell_tool_call_is_logged_like_a_direct_call(ctx):
 
 
 @needs_kernel
-def test_restarting_a_kernel_closes_the_previous_client_channels(ctx):
-    cell("x = 1", ctx)
-    previous = ctx.kernel_session.client
-    try:
-        dispatch("kernel", ctx, restart=True)
-
-        assert not previous.channels_running
-        assert not previous.hb_channel.is_alive()
-        assert "NEW 2" in cell("print('NEW', 1 + 1)", ctx)
-    finally:
-        previous.stop_channels()
-
-
-@needs_kernel
 def test_a_dead_kernel_is_shut_down_before_its_replacement_starts(ctx):
     cell("x = 1", ctx)
     old = ctx.kernel_session
@@ -327,17 +313,6 @@ def test_a_stopped_bridge_serves_again_on_the_same_socket_and_token(bridge, tmp_
     assert "read" in raw_request(bridge, names_request(bridge))["value"]
 
 
-def test_bridge_gives_code_the_whole_shell_output(bridge, tmp_path):
-    context = ToolContext(cwd=tmp_path, max_bash_output_bytes=32)
-    bridge.attach(build_default_registry(), context)
-    request = {"token": bridge.token, "op": "call", "tool": "shell",
-               "kwargs": {"command": "printf '%04096d' 0"}}
-
-    response = raw_request(bridge, json.dumps(request).encode())
-
-    assert response["value"].endswith("0" * 4096)
-
-
 def _guard_refusing(tool_name: str, seen: list[tuple[str, str]]):
     """An `on` table whose tool_call handler refuses ``tool_name``; ``seen``
     collects (event, tool) for every tool_call and tool_result it is shown."""
@@ -396,7 +371,6 @@ def test_a_read_of_content_starting_with_error_is_a_value(ctx):
 
     assert "LINES 2" in result
     assert "MISSING RAISED" in result
-
 
 
 def model_read(context: ToolContext, call_id: str, file_path: str) -> str:

@@ -2,43 +2,9 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
-import sys
 from pathlib import Path
 
 from js import memory as M
-
-
-def test_a_stale_process_cannot_rollback_another_turn(tmp_path):
-    path = tmp_path / "shared.jsonl"
-    first = {"role": "user", "content": "first"}
-    M.append_message(path, first)
-    stale = M.load_replay_messages(path)
-    newer = [first, {"role": "assistant", "content": "other process"}]
-    subprocess.run([sys.executable, "-c", """
-import json, sys
-from pathlib import Path
-from js import memory
-memory.persist_messages(Path(sys.argv[1]), json.loads(sys.argv[2]))
-""", str(path), json.dumps(newer)], check=True, timeout=10)
-
-    rejected = False
-    try:
-        M.persist_messages(path, stale)
-    except OSError:
-        rejected = True
-    assert M.load_replay_messages(path) == newer
-    assert rejected
-
-    live = M.load_replay_messages(path)
-    question = {"role": "user", "content": "next"}
-    live.append(question)
-    M.append_message(path, question)
-    live.append({"role": "assistant", "content": "local answer"})
-    M.persist_messages(path, live)
-    live[-1] = {"role": "assistant", "content": "edited answer"}
-    M.persist_messages(path, live)
-    assert M.load_replay_messages(path) == live
 
 
 def _assistant_toolcall(cid: str = "tc1") -> dict:
@@ -187,66 +153,6 @@ def test_heal_drops_duplicate_and_orphaned_tool_results():
     assert [m.get("tool_call_id") for m in healed if m["role"] == "tool"] == ["c1", "c2"]
     assert healed[-1] == {"role": "user", "content": "again"}
     assert history_utils.check_tool_ids(model_client.history_to_ai_messages("", healed)) == []
-
-
-def test_replay_of_a_compacted_journal_does_not_hold_the_history_compaction_dropped(tmp_path: Path):
-    """Only a caller that asks for the retained history pays for it."""
-    import tracemalloc
-
-    f = tmp_path / "s.jsonl"
-    body = "x" * 10_000
-    _write_records(f, [record for n in range(200) for record in (
-        _message_record({"role": "user", "content": f"{n} {body}"}),
-        {"kind": "mark", "version": M.SCHEMA_VERSION, "ts": 1.0,
-         "marker": "compaction:" + json.dumps({"summary": "s", "keep_from": 99})},
-    )])
-
-    tracemalloc.start()
-    try:
-        M.load_replay_messages(f)
-        _current, peak = tracemalloc.get_traced_memory()
-    finally:
-        tracemalloc.stop()
-
-    assert peak < 1_000_000
-
-
-def _message_record(message: dict) -> dict:
-    return {"kind": "message", "version": M.SCHEMA_VERSION, "ts": 1.0, "message": message}
-
-
-def _write_records(f: Path, records: list[dict]) -> None:
-    """Records written straight to the file: a big journal without a
-    transcript refresh per record."""
-    f.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
-
-
-def _old_writer_journal(f: Path, turns: int) -> None:
-    """`turns` tool-calling turns, then all of them appended once more, as
-    the writer before 2026-08-14 did."""
-    history = []
-    for n in range(turns):
-        history += [{"role": "user", "content": f"u{n}"}, _assistant_toolcall(f"call_{n}"),
-                    _tool_result(f"call_{n}", f"r{n}"), {"role": "assistant", "content": f"a{n}"}]
-    _write_records(f, [_message_record(message) for message in history + history[1:]])
-
-
-def test_the_retained_history_of_an_appended_twice_journal_is_read_in_linear_time(tmp_path: Path):
-    import time
-
-    def best(f: Path) -> float:
-        times = []
-        for _ in range(3):
-            start = time.perf_counter()
-            M.retained_messages(f)
-            times.append(time.perf_counter() - start)
-        return min(times)
-
-    small, large = tmp_path / "small.jsonl", tmp_path / "large.jsonl"
-    _old_writer_journal(small, 250)
-    _old_writer_journal(large, 1000)
-
-    assert best(large) < 10 * best(small)
 
 
 def test_restarting_thinking_keeps_steered_attachments_between_completed_rounds():

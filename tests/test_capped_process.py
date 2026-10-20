@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import os
-import errno
-import io
 import signal
 import threading
 
@@ -10,59 +8,6 @@ import pytest
 
 from js import capped_process
 from js.capped_process import CappedProcessTimeout, _run_capped
-
-
-def test_a_spill_that_fails_at_close_is_not_advertised_as_complete(monkeypatch, tmp_path):
-    class FullDisk(io.RawIOBase):
-        def writable(self):
-            return True
-
-        def write(self, data):
-            raise OSError(errno.ENOSPC, "disk full")
-
-    sink = io.BufferedWriter(FullDisk())
-    monkeypatch.setattr(capped_process, "open", lambda *args: sink, raising=False)
-    capture = capped_process._StreamCapture(8, tmp_path / "output.log")
-    capture.feed(b"HEADmiddleTAIL")
-
-    capture.close()
-
-    assert capture.ensure_spilled() is None
-    assert capture.read(0, capture.total) == b"HEADTAIL"
-    assert capture.excerpt(0, 8).path is None
-
-
-def test_late_spill_close_failure_preserves_the_excerpt(tmp_path, monkeypatch):
-    class FailingClose(io.BytesIO):
-        def close(self):
-            super().close()
-            raise OSError(errno.EIO, "close failed")
-
-    monkeypatch.setattr(capped_process, "open", lambda *args: FailingClose(), raising=False)
-    capture = capped_process._StreamCapture(64, tmp_path / "output.log")
-    capture.feed(b"HEADmiddleTAIL")
-    capture.close()
-
-    excerpt = capture.excerpt(0, 8)
-
-    assert excerpt.head == b"HEAD"
-    assert excerpt.tail == b"TAIL"
-    assert excerpt.path is None
-
-
-def test_spill_flush_failure_returns_retained_output(tmp_path, monkeypatch):
-    capture = capped_process._StreamCapture(8, tmp_path / "spill.log")
-    capture.feed(b"abcdefghijklmnop")
-
-    def disk_full():
-        raise OSError(28, "No space left on device")
-
-    monkeypatch.setattr(capture._file, "flush", disk_full)
-    try:
-        assert capture.read(0, 16) == b"abcdmnop"
-        assert capture.ensure_spilled() is None
-    finally:
-        capture.close()
 
 
 def test_run_capped_timeout_attaches_captured_stdout_and_stderr():

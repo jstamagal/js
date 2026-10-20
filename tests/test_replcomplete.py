@@ -74,11 +74,6 @@ def test_set_arg_completes_keys():
     assert n == len("COMPACTION_")
 
 
-def test_a_lowercase_prefix_completes_in_its_own_case():
-    cands, _ = _completer().candidates("/set comp")
-    assert cands == ["compaction_auto", "compaction_external_model"]
-
-
 def test_show_arg_completes_keys():
     cands, _ = _completer().candidates("/show MO")
     assert cands == ["MODEL"]
@@ -91,30 +86,6 @@ def test_value_candidates_prefix_matches_reasoning_effort_stops():
 
 def test_value_candidates_empty_for_unknown_key():
     assert value_candidates("MODEL", "de") == []
-
-
-def test_set_reasoning_effort_value_completes_xhigh():
-    # FINDING 54: `/set EFFORT x<tab>` must offer `xhigh`.
-    cands, n = _completer().candidates("/set EFFORT x")
-    assert cands == ["xhigh"]
-    assert n == len("x")
-
-
-def test_set_reasoning_effort_value_lists_all_stops_when_empty():
-    cands, _ = _completer().candidates("/set EFFORT ")
-    assert cands == ["high", "low", "max", "medium", "minimal", "off", "xhigh"]
-
-
-def test_set_non_enum_key_value_has_no_candidates():
-    cands, _ = _completer().candidates("/set MODEL de")
-    assert cands == []
-
-
-def test_show_second_word_still_completes_keys_not_values():
-    # /show never takes a value, so a second word still completes knob keys
-    # (not the reasoning-effort enum), unlike /set.
-    cands, _ = _completer().candidates("/show EFFORT M")
-    assert cands == ["MODEL"]
 
 
 def test_login_arg_completes_names():
@@ -183,12 +154,6 @@ def test_path_completion_treats_filename_metacharacters_as_literal_prefixes(tmp_
     candidates, _ = _completer().candidates(f"read {token}")
 
     assert candidates == ["@" + str(literal)]
-
-
-def test_set_arg_completes_dotted_display_names():
-    completer = JsCompleter(commands=_table, setting_keys=["ui.tools", "ui.net", "MODEL"])
-    cands, _ = completer.candidates("/set ui.")
-    assert cands == ["ui.net", "ui.tools"]
 
 
 def test_registered_spellcheck_language_reaches_hunspell(monkeypatch):

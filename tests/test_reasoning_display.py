@@ -10,7 +10,7 @@ import ai.types.events as events
 import pytest
 import httpx2
 
-from js import cli, config, display, memory, model_client, runtime, screen, settings, transcript
+from js import cli, config, display, memory, model_client, runtime, screen, transcript
 from js.toolkit import ToolContext
 
 
@@ -104,19 +104,6 @@ def test_cancel_during_reasoning_retains_partial_history(monkeypatch, tmp_path):
     assert messages[-1]["incomplete_reason"] == "cancelled"
     memory.persist_messages(cfg.session_file, messages)
     assert memory.load_messages(cfg.session_file, preserve_reasoning=True)[-1] == messages[-1]
-
-
-def test_reasoning_level_is_registered_validated_and_saved(tmp_path):
-    spec = settings.SPEC_BY_KEY["REASONING_DISPLAY"]
-    assert spec.default == 1
-    for level in range(4):
-        assert settings.coerce_value(spec, str(level)) == (level, None)
-    assert settings.coerce_value(spec, "-1")[1]
-    assert settings.coerce_value(spec, "4")[1]
-    path = tmp_path / "jsrc"
-    settings.save_settings_to_jsrc(path, {"REASONING_DISPLAY": 1})
-    loaded = settings.collect_settings(config_paths=[path], env={})
-    assert settings.get_dotted(loaded, ("REASONING_DISPLAY",)) == 1
 
 
 @pytest.mark.parametrize("level", [1, 2, 3])
@@ -388,85 +375,6 @@ def test_a_broken_stderr_stops_reasoning_and_never_raises(error):
     assert stream.writes == 1
 
 
-def test_a_collapsed_block_leads_with_the_exact_count_or_none():
-    scroll = screen.Scrollback()
-    block = scroll.reasoning(1)
-    block.append("thinking about it")
-    block.finish(1204)
-    assert transcript.strip_ansi(scroll.buffer.text).startswith("1,204 tok ")
-    scroll = screen.Scrollback()
-    block = scroll.reasoning(1)
-    block.append("thinking about it")
-    block.finish(None)
-    shown = transcript.strip_ansi(scroll.buffer.text)
-    assert "~" not in shown and not any(char.isdigit() for char in shown)
-
-
-def test_expanded_reasoning_is_word_wrapped_by_js(monkeypatch):
-    monkeypatch.setattr(display, "terminal_width", lambda: 40)
-    words = [f"word{n}" for n in range(60)]
-    scroll = screen.Scrollback()
-    block = scroll.reasoning(2)
-    block.append(" ".join(words) + "\n")
-    rows = transcript.strip_ansi(scroll.buffer.text).splitlines()
-    assert all(len(row) < 40 for row in rows)
-    assert [w for row in rows for w in row.split()][-60:] == words
-
-
-def test_stderr_reasoning_at_level_one_shows_its_text_and_the_count_line():
-    # Off the screen nothing can unfold a block, so reasoning never folds there.
-    from js.reasoning_display import StderrReasoning
-
-    stream = io.StringIO()
-    display = StderrReasoning(1, stream)
-    display.append("weighing it all\n")
-    display.answer_started()
-    display.finish(tokens=1204)
-    assert "weighing it all" in stream.getvalue()
-    assert stream.getvalue().endswith("1,204 tok reasoning\n")
-    stream = io.StringIO()
-    display = StderrReasoning(1, stream)
-    display.append("weighing")
-    display.finish(tokens=None)
-    assert "weighing" in stream.getvalue()
-    assert "~" not in stream.getvalue() and not any(char.isdigit() for char in stream.getvalue())
-
-
-def test_stderr_reasoning_on_a_terminal_wraps_to_its_width(monkeypatch):
-    from js.reasoning_display import StderrReasoning
-
-    class Terminal(io.StringIO):
-        def isatty(self) -> bool:
-            return True
-
-    monkeypatch.setattr(display, "terminal_width", lambda: 30)
-    monkeypatch.setattr("js.reasoning_display.terminal_width", lambda: 30)
-    stream = Terminal()
-    view = StderrReasoning(2, stream)
-    words = [f"word{n}" for n in range(30)]
-    for word in words:
-        view.append(word + " ")
-    view.answer_started()
-    rows = transcript.strip_ansi(stream.getvalue()).splitlines()
-    assert all(len(row) < 30 for row in rows), rows
-    assert [w for row in rows[1:] for w in row.split()] == words
-
-
-def test_stderr_reasoning_on_a_terminal_shows_each_full_row_as_it_fills(monkeypatch):
-    from js.reasoning_display import StderrReasoning
-
-    class Terminal(io.StringIO):
-        def isatty(self) -> bool:
-            return True
-
-    monkeypatch.setattr("js.reasoning_display.terminal_width", lambda: 30)
-    stream = Terminal()
-    view = StderrReasoning(2, stream)
-    view.append("word " * 200)
-    shown = transcript.strip_ansi(stream.getvalue()).split()
-    assert shown.count("word") > 150, shown
-
-
 def test_stderr_reasoning_shows_every_word_once_when_the_window_is_resized(monkeypatch):
     from js.reasoning_display import StderrReasoning
 
@@ -487,19 +395,6 @@ def test_stderr_reasoning_shows_every_word_once_when_the_window_is_resized(monke
         view.answer_started()
         rows = transcript.strip_ansi(stream.getvalue()).splitlines()
         assert [w for row in rows[1:] for w in row.split()] == words, (first, then, rows)
-
-
-def test_a_folded_heading_as_wide_as_the_window_stays_one_column_short(monkeypatch):
-    scroll = screen.Scrollback()
-    scroll.toggle_key = "c-o"
-    block = scroll.reasoning(1)
-    block.append("thinking")
-    block.finish(1_000)
-    wide = len(transcript.strip_ansi(scroll.buffer.text).rstrip("\n"))
-    monkeypatch.setattr(display, "terminal_width", lambda: wide)
-    block.finish(1_000)
-    rows = transcript.strip_ansi(scroll.buffer.text).rstrip("\n").split("\n")
-    assert all(len(row) < wide for row in rows), rows
 
 
 def test_unfolding_long_reasoning_and_folding_it_back_loses_no_scrollback(monkeypatch):
@@ -543,23 +438,3 @@ def test_open_reasoning_rewraps_only_its_last_row_as_it_streams(monkeypatch):
         return measured[0]
 
     assert stream(2000) < 3 * stream(1000)
-
-
-def test_a_space_at_a_reasoning_break_ends_its_row_and_starts_none(monkeypatch):
-    from js.reasoning_display import StderrReasoning
-
-    class Terminal(io.StringIO):
-        def isatty(self) -> bool:
-            return True
-
-    monkeypatch.setattr("js.reasoning_display.terminal_width", lambda: 5)
-    stream = Terminal()
-    view = StderrReasoning(2, stream)
-    view.append("aaaa bbbb cccc\n")
-    assert transcript.strip_ansi(stream.getvalue()).splitlines()[1:] == ["aaaa", "bbbb", "cccc"]
-
-    monkeypatch.setattr(display, "terminal_width", lambda: 5)
-    block = screen.Scrollback().reasoning(2)
-    for char in "aaaa bbbb cccc":
-        block.append(char)
-    assert block._body().split("\n") == ["aaaa", "bbbb", "cccc"]

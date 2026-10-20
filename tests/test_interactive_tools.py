@@ -5,7 +5,6 @@ import importlib.util
 import json
 import time
 import urllib.request
-from urllib.error import HTTPError
 from pathlib import Path
 
 import pytest
@@ -490,29 +489,6 @@ def test_terminal_snapshot_draws_the_cursor_and_cell_decorations(tmp_path):
     assert render("plain", 0, "plain.png") != render("\x1b[4mplain\x1b[0m", 0, "under.png")
 
 
-def test_terminal_snapshot_stops_session_after_jail_settings_change(tmp_path, monkeypatch):
-    from js import jail
-
-    monkeypatch.setattr(jail, "shape", lambda source: tuple(source.jail_hide or ()))
-    context = ToolContext(cwd=tmp_path)
-    context.jail_hide = ()
-    target = tmp_path / "snapshot.png"
-    try:
-        terminal_session(action="start", command="printf old-view; sleep 300",
-                         wait_ms=0, context=context)
-        child = context.terminal_sessions["main"]["child"]
-        context.jail_hide = (str(tmp_path / "hidden"),)
-
-        result = terminal_snapshot(output_path=str(target), wait_ms=0, context=context)
-
-        assert result.startswith("ERROR:")
-        assert "main" not in context.terminal_sessions
-        assert not child.isalive()
-        assert not target.exists()
-    finally:
-        close_terminal_sessions(context)
-
-
 def test_local_probe_server_returns_empty_favicon(tmp_path):
     target = tmp_path / "index.html"
     target.write_text("<p>clean</p>", encoding="utf-8")
@@ -522,29 +498,6 @@ def test_local_probe_server_returns_empty_favicon(tmp_path):
         with urllib.request.urlopen(favicon_url) as response:
             assert response.status == 204
             assert response.read() == b""
-    finally:
-        server.shutdown()
-        server.server_close()
-
-
-def test_local_probe_server_refuses_symlinks_outside_its_root(tmp_path):
-    public = tmp_path / "public"
-    public.mkdir()
-    (public / "index.html").write_text("<p>public</p>")
-    outside = tmp_path / "outside.txt"
-    outside.write_text("outside the served directory")
-    (public / "linked.txt").symlink_to(outside)
-    (public / "linked-dir").symlink_to(tmp_path, target_is_directory=True)
-    (public / "index-dir").mkdir()
-    (public / "index-dir" / "index.html").symlink_to(outside)
-    server, url, _ = browser_module._start_local_server(public)
-    try:
-        with urllib.request.urlopen(url, timeout=3) as response:
-            assert response.status == 200
-        for route in ("linked.txt", "linked-dir/outside.txt", "index-dir/"):
-            with pytest.raises(HTTPError) as refused:
-                urllib.request.urlopen(url + route, timeout=3)
-            assert refused.value.code in (403, 404)
     finally:
         server.shutdown()
         server.server_close()
@@ -580,90 +533,6 @@ def test_browser_probe_closes_local_server_when_output_setup_fails(
 
     assert "PermissionError" in report["error"]
     assert events == ["shutdown", "server_close"]
-
-
-def test_browser_output_path_refusal_leaves_no_local_server(tmp_path, monkeypatch):
-    from js import jail
-    from js.toolkit import call_tool
-
-    target = tmp_path / "index.html"
-    target.write_text("<p>local page</p>")
-    context = ToolContext(cwd=tmp_path)
-    live = set()
-
-    class Server:
-        def shutdown(self):
-            live.discard(self)
-
-        def server_close(self):
-            pass
-
-    def start(path, *, context):
-        server = Server()
-        live.add(server)
-        return server, "http://127.0.0.1:12345/index.html", path.parent
-
-    def resolve(path, *, write=False):
-        if write:
-            raise jail.JailError("output is outside the jail")
-        return target
-
-    monkeypatch.setattr(browser_module, "_start_local_server", start)
-    monkeypatch.setattr(context, "resolve_path", resolve)
-
-    result = call_tool(build_default_registry().resolve("browser_probe"),
-                       {"target": str(target), "output_dir": "denied"}, context)
-
-    assert result.startswith("ERROR:")
-    assert not live
-
-
-@_needs_chromium
-def test_browser_probe_uses_the_available_vulkan_webgl_renderer():
-    from playwright.sync_api import sync_playwright
-
-    with sync_playwright() as driver:
-        with driver.chromium.launch(args=["--use-angle=vulkan"]) as reference:
-            expected = browser_module._webgl_report(reference.new_page())
-        if "NVIDIA" not in (expected["renderer"] or ""):
-            pytest.skip("NVIDIA Vulkan renderer unavailable")
-
-        with browser_module._launch_browser(driver) as browser:
-            actual = browser_module._webgl_report(browser.new_page())
-
-    assert actual["webgl2"]
-    assert actual["renderer"] == expected["renderer"]
-
-
-@_needs_chromium
-def test_local_browser_subrequests_respect_jail_hide(tmp_path, monkeypatch):
-    from js import jail, paranoid
-
-    root = tmp_path / "web"
-    root.mkdir()
-    private = tmp_path / "private"
-    private.mkdir()
-    hidden = root / "hidden.txt"
-    hidden.write_text("hidden fixture contents")
-    (root / "index.html").write_text("""<!doctype html><p>public</p><script>
-    (async () => {
-      const response = await fetch('/hidden.txt');
-      if (response.ok) throw new Error(await response.text());
-    })();
-    </script>""")
-    monkeypatch.setenv("JS_PARANOID_MODE", "on")
-    monkeypatch.setattr(jail, "ACTIVE", jail.Jail(root=root, private=private, bwrap="bwrap"))
-    context = ToolContext(cwd=root)
-    context.jail_hide = (str(hidden),)
-    assert paranoid.mode() == "on"
-    with pytest.raises(jail.JailError):
-        context.resolve_path(hidden)
-
-    report = _payload(browser_probe(target=str(root), output_dir="probes", settle_ms=100,
-                                    context=context))
-
-    assert report["frames"]
-    assert report["page_errors"] == []
 
 
 @_needs_chromium

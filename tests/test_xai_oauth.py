@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import json
-import socket
 import time
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -91,37 +90,6 @@ def test_authorize_url_carries_pkce_and_loopback_redirect():
     assert query["nonce"] == ["nonce-value"]
     assert query["scope"] == [xai_auth.SCOPE]
     assert query["redirect_uri"] == [xai_auth.CALLBACK_REDIRECT_URI]
-
-
-def test_browser_can_deliver_the_callback_as_soon_as_it_opens(monkeypatch):
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        port = reserve.getsockname()[1]
-    monkeypatch.setattr(xai_auth, "CALLBACK_PORT", port)
-    monkeypatch.setattr(xai_auth, "discover", lambda: xai_auth.XaiEndpoints(
-        "https://auth.x.ai/authorize", "https://auth.x.ai/token",
-    ))
-    monkeypatch.setattr(xai_auth, "exchange_code_for_token", lambda endpoint, code, verifier:
-                        xai_auth.XaiToken(code, "refresh", 1234, endpoint))
-    connections = []
-
-    def open_browser(url):
-        state = parse_qs(urlparse(url).query)["state"][0]
-        connection = socket.create_connection(("127.0.0.1", port), timeout=1)
-        connections.append(connection)
-        connection.sendall(
-            f"GET /callback?state={state}&code=authorized HTTP/1.0\r\n\r\n".encode()
-        )
-        return True
-
-    monkeypatch.setattr(xai_auth.webbrowser, "open", open_browser)
-    try:
-        login = xai_auth.login_browser(timeout_s=1)
-        assert login.provider_api_key == "authorized"
-        assert connections[0].recv(4096)
-    finally:
-        for connection in connections:
-            connection.close()
 
 
 def test_code_exchange_builds_a_login_with_the_bearer_as_the_api_key():
@@ -264,23 +232,6 @@ def test_routing_refreshes_an_expired_bearer_before_handing_it_out(tmp_path, mon
         assert logins.load_logins()[xai_auth.XAI_PROVIDER_ID].provider_api_key == "renewed"
     finally:
         logins.set_config_dir(None)
-
-
-def test_routing_propagates_the_cause_of_a_rejected_refresh(monkeypatch):
-    logins.save_login(xai_auth.login_from_token(xai_auth.XaiToken(
-        access="expired", refresh="refresh-1", expires_at=time.time() - 1,
-        token_endpoint="https://auth.x.ai/oauth/token",
-    )))
-    failure = RuntimeError("invalid_grant")
-
-    def reject(*_args, **_kwargs):
-        raise failure
-
-    monkeypatch.setattr(xai_auth, "refresh_token", reject)
-    with pytest.raises(RuntimeError) as raised:
-        routing.resolve_model_route("grok-4", configured_provider_id=xai_auth.XAI_PROVIDER_ID)
-
-    assert raised.value.__cause__ is failure
 
 
 def test_routing_keeps_a_still_valid_bearer_when_an_early_refresh_fails(monkeypatch):

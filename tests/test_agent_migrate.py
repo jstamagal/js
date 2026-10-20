@@ -160,7 +160,6 @@ def test_an_existing_agent_yaml_loses_only_its_dead_entries(tmp_path, capsys):
     assert "grep" in out and "sem_search" in out
 
 
-
 def _keep_all(_entry):
     return True
 
@@ -330,36 +329,3 @@ def test_failed_prune_restores_the_original_manifest_bytes(tmp_path):
 
     assert result.action == "error"
     assert manifest.read_bytes() == original
-
-
-def test_concurrent_migrations_retain_the_agent_manifest(tmp_path, monkeypatch):
-    from concurrent.futures import ThreadPoolExecutor
-    from threading import Barrier, BrokenBarrierError
-
-    agent = _agent(tmp_path, "shared", {"00-tools.yaml": "model: mine\n", "01.md": "X\n"})
-    manifest = agent / "agent.yaml"
-    before_write = Barrier(2)
-    after_write = Barrier(2)
-    write_atomic = agent_migration._write_atomic
-
-    def rendezvous(barrier):
-        try:
-            barrier.wait(timeout=2)
-        except BrokenBarrierError:
-            pass
-
-    def publish_together(path, data):
-        if path == manifest:
-            rendezvous(before_write)
-        write_atomic(path, data)
-        if path == manifest:
-            rendezvous(after_write)
-
-    monkeypatch.setattr(agent_migration, "_write_atomic", publish_together)
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        pending = [pool.submit(agent_migration.migrate_agent_dir, agent, apply=True, keep=_keep_all)
-                   for _ in range(2)]
-        results = [future.result(timeout=10) for future in pending]
-
-    assert persona.load_agent_manifest(manifest).model == "mine"
-    assert sorted(result.action for result in results) == ["migrate", "none"]

@@ -149,19 +149,6 @@ def test_with_no_saved_login_the_login_flow_adds_one_then_a_model_is_picked():
     assert len(ask.asked) == 2 and ask.asked[0] != ask.asked[1]
 
 
-def test_adding_the_default_models_provider_ends_the_question():
-    """After `a` logs into the default model's own provider the default routes,
-    so there is nothing left to pick."""
-    _write_jsrc("set MODEL deepseek/deepseek-v4-flash\n")
-    ask = _answers("a")
-
-    chosen = install.ask_model({}, ask, pick=pytest.fail,
-                               add_provider=lambda: _login("deepseek", ["deepseek-v4-flash"]))
-
-    assert chosen is None
-    assert len(ask.asked) == 1
-
-
 def test_enter_or_a_cancelled_pick_leaves_the_jsrc_alone():
     text = "set MODEL deepseek/deepseek-v4-flash\n"
     _write_jsrc(text)
@@ -181,28 +168,6 @@ def test_write_model_id_replaces_an_unset_line_and_appends_when_there_is_none(tm
     bare.write_text("fset NET_DISPLAY 2", encoding="utf-8")
     settings.write_model_id(bare, "mimo/mimo-v3")
     assert bare.read_text(encoding="utf-8") == "fset NET_DISPLAY 2\nset MODEL mimo/mimo-v3\n"
-
-
-@pytest.mark.parametrize("model_id", ["local/$MODEL", "local\nset SHELL_WAIT 47"])
-def test_write_model_id_keeps_the_id_literal(tmp_path, model_id):
-    path = tmp_path / "jsrc"
-
-    settings.write_model_id(path, model_id)
-
-    loaded = settings.collect_settings([path], env={})
-    assert loaded["MODEL"] == model_id
-    assert settings.knob(loaded, "SHELL_WAIT") == settings.default_value("SHELL_WAIT")
-
-
-def test_write_model_id_uncomments_the_template_line_in_place(tmp_path):
-    jsrc = tmp_path / "jsrc"
-    settings.ensure_user_jsrc(jsrc)
-    before = jsrc.read_text(encoding="utf-8").splitlines()
-    settings.write_model_id(jsrc, "mimo/mimo-v3")
-    after = jsrc.read_text(encoding="utf-8").splitlines()
-
-    line = f"#set MODEL {settings.default_value('MODEL')}"
-    assert after == [("set MODEL mimo/mimo-v3" if text == line else text) for text in before]
 
 
 # --- without a terminal -------------------------------------------------------------

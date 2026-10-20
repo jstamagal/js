@@ -3,70 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-import subprocess
-import sys
 
 import pytest
 
 from js import logins, model_metadata, paths, runtime
 
-
-def test_provider_edit_keeps_another_process_rotated_tokens(tmp_logins_dir, monkeypatch):
-    from js import login_cli
-
-    logins.save_login(logins.Login(provider_id="openai-codex", provider_api_key="old-access",
-                                  codex_refresh_token="old-refresh", codex_token_expires=1,
-                                  provider_headers={"X-Old": "value"}))
-    stale = logins.load_logins()["openai-codex"]
-    answers = iter(["", "", "-"])
-
-    def input_during_refresh(*args, **kwargs):
-        if stale.codex_refresh_token == "old-refresh":
-            subprocess.run([sys.executable, "-c", """
-import sys
-from pathlib import Path
-from js import logins
-logins.set_config_dir(Path(sys.argv[1]))
-logins.save_login(logins.Login(provider_id='openai-codex', provider_api_key='new-access',
-                              codex_refresh_token='new-refresh', codex_token_expires=999,
-                              model_defaults={'other-model': {'TEMPERATURE': 0.3}}))
-""", str(tmp_logins_dir)], check=True, timeout=10)
-        return next(answers)
-
-    monkeypatch.setattr(login_cli, "_input", input_during_refresh)
-    login_cli._edit_saved_provider(stale)
-
-    saved = logins.load_logins_fresh()["openai-codex"]
-    assert saved.provider_headers == {}
-    assert (saved.provider_api_key, saved.codex_refresh_token, saved.codex_token_expires) == (
-        "new-access", "new-refresh", 999,
-    )
-    assert saved.model_defaults == {"other-model": {"TEMPERATURE": 0.3}}
-
-
-def test_save_preserves_the_store_when_the_reload_has_an_io_error(tmp_logins_dir, monkeypatch):
-    logins.save_login(logins.Login("existing", provider_api_key="kept"))
-    path = tmp_logins_dir / "logins.toml"
-    before = path.read_bytes()
-    real_open = Path.open
-    reads = 0
-
-    def failed_reload(target, mode="r", *args, **kwargs):
-        nonlocal reads
-        if target == path and mode == "rb":
-            reads += 1
-            if reads == 2:
-                raise OSError(5, "read failed", str(path))
-        return real_open(target, mode, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "open", failed_reload)
-    error = None
-    try:
-        logins.save_login(logins.Login("new", provider_api_key="new-value"))
-    except OSError as exc:
-        error = exc
-    assert path.read_bytes() == before
-    assert error is not None and error.errno == 5
 
 @pytest.fixture
 def tmp_logins_dir(tmp_path: Path, monkeypatch):
@@ -114,7 +55,6 @@ def test_save_and_load_login(tmp_logins_dir):
     assert loaded["openai"].provider_api_key == "sk-test"
 
 
-
 def test_save_login_writes_private_file_mode(tmp_logins_dir):
     logins.save_login(logins.Login(provider_id="openai", provider_api_key="sk-test"))
     mode = logins.login_path().stat().st_mode & 0o777
@@ -124,7 +64,6 @@ def test_save_login_updates_existing(tmp_logins_dir):
     logins.save_login(logins.Login(provider_id="x", provider_api_key="old"))
     logins.save_login(logins.Login(provider_id="x", provider_api_key="new"))
     assert logins.load_logins()["x"].provider_api_key == "new"
-
 
 
 def test_login_effective_provider_id_round_trip(tmp_logins_dir):

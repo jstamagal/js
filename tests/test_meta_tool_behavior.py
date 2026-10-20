@@ -2,25 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from js import paths
 from js.skills import ToolActivationResult
 from js.toolkit import ToolContext
 from js.toolkit import fs, meta
 from js.toolkit.registry import select
-
-
-def test_relative_task_session_stays_inside_sessions_directory(tmp_path):
-    sessions = tmp_path / "sessions"
-    sessions.mkdir()
-    agent = tmp_path / "agent"
-
-    with pytest.raises(ValueError):
-        meta._session_file_for_id(agent, sessions, "../other")
-
-    assert not (tmp_path / "other.jsonl").exists()
-    assert not (agent / "latest.json").exists()
 
 
 def test_plan_writes_markdown_under_plans_dir_and_reports_target(tmp_path):

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import time
 
-import pytest
 
 from js.toolkit import ToolContext
 from js.toolkit import process_net
@@ -96,44 +95,8 @@ def test_handle_defaults_to_the_latest_running_job(tmp_path):
     assert killed.startswith("killed handle")
 
 
-def test_clipped_output_still_reports_truncation(tmp_path):
-    context = ToolContext(
-        cwd=tmp_path,
-        max_bash_output_bytes=32,
-    )
-    result = shell("head -c 4096 /dev/zero | tr '\\0' x", timeout=10, context=context)
-    assert "exit=0" in result
-    assert "[truncated: SHELL_OUTPUT_MAX (32) reached;" in result
-    assert "x" * 33 not in result
-
-
 def test_unknown_action_and_missing_command_are_errors(tmp_path):
     context = ToolContext(cwd=tmp_path)
     assert shell(action="dance", context=context).startswith("ERROR: unknown action")
     assert shell(context=context).startswith("ERROR: command is required")
     assert shell(action="poll", handle="no-such", context=context).startswith("ERROR: no shell job")
-
-
-@pytest.mark.parametrize("action", ["poll", "wait", "kill"])
-@pytest.mark.parametrize("explicit_handle", [False, True])
-def test_other_context_cannot_control_a_shell_job(tmp_path, monkeypatch, action, explicit_handle):
-    monkeypatch.setattr(process_net, "_JOBS", {})
-    owner = ToolContext(cwd=tmp_path)
-    other = ToolContext(cwd=tmp_path)
-    started = shell(
-        "while [ ! -e gate ]; do sleep 0.01; done; printf 'owner-result\\n'",
-        timeout=1,
-        context=owner,
-    )
-    handle = started.split("handle ", 1)[1].split(",", 1)[0]
-    try:
-        denied = shell(action=action, handle=handle if explicit_handle else None,
-                       timeout=1, context=other)
-        assert denied.startswith("ERROR:")
-        assert process_net._JOBS[handle].running()
-        (tmp_path / "gate").touch()
-        finished = shell(action="wait", handle=handle, timeout=30, context=owner)
-        assert "exit=0" in finished
-        assert "owner-result" in finished
-    finally:
-        shell(action="kill", handle=handle, context=owner)

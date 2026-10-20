@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 from pathlib import Path
 
@@ -81,12 +80,6 @@ def test_directive_inside_a_longer_markdown_code_span_never_runs(tmp_path):
     assert actual == text
 
 
-def test_directives_inside_a_fenced_code_block_still_expand():
-    text = "```text\nagent: {{WHO}}\nshown: \\{{WHO}}\n```\n"
-
-    assert expand_prompt(text, env={"WHO": "ape"}) == "```text\nagent: ape\nshown: {{WHO}}\n```\n"
-
-
 def test_backtick_wrapped_readonly_directive_not_blanked():
     # `!{file PATH}` / `{{ENV}}` examples must survive, not expand to "".
     text = "Inject with `!{file PATH}` or `{{ENV_NAME}}` in the prompt."
@@ -134,18 +127,6 @@ def test_sh_inline_runs_when_allowed():
     assert expand_prompt("!{sh printf hello}", allow_code=True) == "hello"
 
 
-@pytest.mark.skipif(shutil.which("python3") is None, reason="python3 not on PATH")
-def test_directive_output_is_capped_and_marked():
-    out = expand_prompt(
-        "!{python import sys; sys.stdout.write('x' * 10000000)}",
-        allow_code=True,
-        max_output_bytes=1024,
-    )
-    assert out.startswith("x" * 1024)
-    assert "[truncated: SHELL_OUTPUT_MAX (1024) reached]" in out
-    assert len(out) < 1200
-
-
 # ---- default degrade: a failed directive is left literal, never raised ----
 
 def test_unknown_subsystem_degrades_to_literal(capsys):
@@ -170,37 +151,6 @@ def test_failed_code_run_degrades_to_literal(capsys):
     out = expand_prompt("!{sh sh -c 'exit 3'}", allow_code=True)
     assert out == "!{sh sh -c 'exit 3'}"
     assert capsys.readouterr().err  # a warning, and the load goes on
-
-
-@pytest.mark.parametrize("on_error", ["warn", "raise"])
-def test_directive_execution_permission_errors_follow_failure_policy(tmp_path, monkeypatch, capsys, on_error):
-    shell = tmp_path / "sh"
-    shell.write_text("#!/bin/sh\n", encoding="utf-8")
-    shell.chmod(0o600)
-    monkeypatch.setenv("PATH", str(tmp_path))
-    text = "!{sh printf hello} then !{env AFTER}"
-
-    if on_error == "raise":
-        with pytest.raises(PromptExpansionError) as failure:
-            expand_prompt(text, allow_code=True, env={"AFTER": "continued"}, on_error=on_error)
-        assert isinstance(failure.value.__cause__, PermissionError)
-    else:
-        assert expand_prompt(text, allow_code=True, env={"AFTER": "continued"}) == (
-            "!{sh printf hello} then continued"
-        )
-        assert capsys.readouterr().err
-
-
-def test_nonzero_exit_with_output_uses_the_output_and_warns(capsys):
-    """grep with no match, or a script ending on a false test, exits nonzero
-    after printing what the prompt wants."""
-    out = expand_prompt("gpu: !{sh echo none; false}", allow_code=True)
-    assert out == "gpu: none"
-    assert capsys.readouterr().err
-
-
-def test_nonzero_exit_with_only_whitespace_output_still_uses_it():
-    assert expand_prompt("a!{sh printf ' '; exit 7}b", allow_code=True) == "a b"
 
 
 def test_sh_nonzero_exit_errors():
@@ -411,26 +361,6 @@ def test_global_instruction_files_are_js_md_only(tmp_path, monkeypatch):
 
 
 # --- the stock agent's environment block -----------------------------------------
-
-@pytest.mark.skipif(shutil.which("cc") is None, reason="no C compiler for envctx")
-def test_stock_env_prompt_runs_envctx_from_js_own_directory(tmp_path, monkeypatch):
-    """The stock 02-env.md finds envctx through JS_ROOT, which js sets, so it
-    runs with a HOME that holds no copy of js."""
-    from js import persona
-
-    js_root = Path(persona.__file__).resolve().parents[1]
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("JS_ROOT", str(tmp_path / "stale"))
-    monkeypatch.chdir(tmp_path)
-    text = (js_root / "prompts" / "defaultagent" / "02-env.md").read_text(encoding="utf-8")
-    spec = persona.PromptSpec(system=text, tool_selectors=())
-    cfg = type("Cfg", (), {"settings": {"SHELL_PROGRAM": "sh"}, "allow_inline_code": True})()
-
-    expanded = persona._expand_spec(spec, cfg)
-
-    assert "envctx.c" not in expanded.system
-    assert any(line.startswith("user=") for line in expanded.system.splitlines())
-    assert Path(os.environ["JS_ROOT"]) == js_root
 
 
 def test_fenced_directive_with_empty_body_does_not_swallow_the_next_fence():

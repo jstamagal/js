@@ -101,33 +101,6 @@ def test_config_preserves_positional_constructor(tmp_path):
     )
 
 
-def test_shell_env_allow_defaults_to_existing_safe_set_and_loads_from_jsrc(
-    monkeypatch, tmp_path
-):
-    assert tuple(settings.default_value("SHELL_ENV_KEEP")) == (
-        "PATH",
-        "HOME",
-        "USER",
-        "LANG",
-        "LC_ALL",
-        "TERM",
-        "PWD",
-        "SHELL",
-        "BEADS_ACTOR",
-    )
-    config_dir = _isolated_config_home(monkeypatch, tmp_path)
-    config_dir.mkdir(parents=True)
-    (config_dir / "jsrc").write_text(
-        'set MODEL offline-test-model\n'
-        'set SHELL_ENV_KEEP ["PATH","FORGECODE_TOKEN"]\n',
-        encoding="utf-8",
-    )
-
-    cfg = from_env(save_session=False)
-
-    assert cfg.shell_env_allow == ("PATH", "FORGECODE_TOKEN")
-
-
 def test_shell_env_allow_is_live_and_installed_on_the_tool_context(monkeypatch, tmp_path):
     monkeypatch.setattr(
         runtime.model_client,

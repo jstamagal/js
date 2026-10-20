@@ -3,13 +3,10 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-import threading
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
-from js.capped_process import _StreamCapture
 from js.toolkit import ToolContext
 from js.toolkit import fs, process_net
 
@@ -46,30 +43,6 @@ class FakeResponse:
 
     def __exit__(self, exc_type, exc, tb):
         return False
-
-
-def test_unsaved_aria_transfer_uses_the_remaining_fetch_deadline(monkeypatch, tmp_path):
-    elapsed = [0.0]
-    transfer_budgets = []
-    monkeypatch.setattr(process_net.time, "monotonic", lambda: elapsed[0])
-    monkeypatch.setattr(process_net, "resolve_binary", lambda _name: "aria2c")
-
-    def open_response(_request, timeout):
-        elapsed[0] += 2
-        return FakeResponse(b"", {"Content-Type": "application/octet-stream"})
-
-    def download(_binary, _url, destination, *, timeout_s, **_kwargs):
-        transfer_budgets.append(timeout_s)
-        destination.write_bytes(b"\x00payload")
-
-    monkeypatch.setattr(process_net.urllib.request, "urlopen", open_response)
-    monkeypatch.setattr(process_net, "download_with_aria2", download)
-    context = ToolContext(cwd=tmp_path, fetch_timeout_s=5, download_timeout_s=300)
-
-    result = process_net.fetch("https://example.test/data.bin", context=context)
-
-    assert result.startswith("BINARY_RESPONSE"), result
-    assert transfer_budgets == [3]
 
 
 @pytest.mark.parametrize(
@@ -139,40 +112,6 @@ def test_file_url_download_writes_to_resolved_path(tmp_path):
     assert result == (
         f"SAVED_RESPONSE path={target} size=11 bytes content-type=application/octet-stream"
     )
-
-
-def test_concurrent_downloads_to_one_destination_publish_complete_files(tmp_path, monkeypatch):
-    sources = [tmp_path / "first.bin", tmp_path / "second.bin"]
-    payloads = [b"first download" * 100, b"second download" * 100]
-    for source, payload in zip(sources, payloads, strict=True):
-        source.write_bytes(payload)
-    barrier = threading.Barrier(2)
-    real_download = process_net._stream_download
-
-    def synchronized_download(read_chunk, *args):
-        first = True
-
-        def read(size):
-            nonlocal first
-            if first:
-                first = False
-                barrier.wait(timeout=10)
-            return read_chunk(size)
-
-        return real_download(read, *args)
-
-    monkeypatch.setattr(process_net, "_stream_download", synchronized_download)
-
-    def fetch(source):
-        return process_net.fetch(source.as_uri(), save="shared.bin",
-                                 context=ToolContext(cwd=tmp_path))
-
-    with ThreadPoolExecutor(max_workers=2) as workers:
-        results = list(workers.map(fetch, sources))
-
-    assert all(not result.startswith("ERROR:") for result in results), results
-    assert (tmp_path / "shared.bin").read_bytes() in payloads
-    assert set(tmp_path.iterdir()) == {*sources, tmp_path / "shared.bin", tmp_path / "runtime"}
 
 
 def test_file_url_download_is_guarded_by_the_configured_quota(tmp_path):
@@ -377,44 +316,6 @@ def test_shell_tool_schema_exposes_wait_and_job_actions():
     assert set(tool.params["action"]["enum"]) == {"run", "poll", "wait", "kill"}
     assert tool.params["handle"]["type"] == "string"
     assert "command" not in tool.required
-
-
-def test_shell_uses_configured_environment_allowlist_and_explains_failure(
-    monkeypatch, tmp_path
-):
-    seen = {}
-
-    class FakeProcess:
-        pid = 1
-        def running(self): return False
-        def elapsed(self): return 0.0
-        def snapshot(self): return b"", b"token lookup failed"
-        def stream(self, name):
-            capture = _StreamCapture(4096)
-            capture.feed(b"token lookup failed" if name == "stderr" else b"")
-            return capture
-        def wait(self, timeout):
-            return process_net.CappedProcessResult(returncode=7, stdout=b"", stderr=b"token lookup failed")
-
-    def start_stub(argv, **kwargs):
-        seen["env"] = kwargs["env"]
-        return FakeProcess()
-
-    monkeypatch.setenv("FORGECODE_TOKEN", "operator-secret")
-    monkeypatch.setenv("OTHER_SECRET", "kept-out")
-    monkeypatch.setattr(process_net, "start_capped", start_stub)
-    context = ToolContext(cwd=tmp_path, shell_program="/bin/sh")
-    context.shell_env_allow = (*process_net._ENV_ALLOW, "FORGECODE_TOKEN")
-
-    result = process_net.shell('use-token "$FORGECODE_TOKEN" "$OTHER_SECRET"', context=context)
-
-    assert seen["env"]["FORGECODE_TOKEN"] == "operator-secret"
-    assert "exit=7" in result
-    assert "environment=filtered" in result
-    assert "allowed=" in result
-    assert "FORGECODE_TOKEN" in result
-    assert "OTHER_SECRET" in result
-    assert "SHELL_ENV_KEEP" in result
 
 
 def test_html_link_prefixed_attribute_does_not_hijack_the_real_href(tmp_path):

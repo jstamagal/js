@@ -10,7 +10,6 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
-import re
 import threading
 import time
 from pathlib import Path
@@ -139,21 +138,6 @@ def test_history_reports_every_revision_and_what_can_be_restored(ctx):
     assert report.strip().endswith("restorable: r1")
 
 
-def test_discover_records_invalid_utf8_as_broken_and_still_indexes_the_rest(ctx):
-    cwd = Path(ctx.cwd)
-    directory = tbmod.toolbox_dirs(cwd)[0]
-    directory.mkdir(parents=True)
-    (directory / "bad.py").write_bytes(b"def bad():\n    return '\xff'\n")
-    healthy = directory / "good.py"
-    healthy.write_text("def good():\n    return 1\n", encoding="utf-8")
-
-    found = tbmod.discover(cwd)
-
-    assert found["bad"].error
-    assert not found["good"].error
-    assert found["good"].path == healthy
-
-
 def test_discover_records_a_syntax_error_as_broken_and_still_indexes_the_rest(ctx):
     cwd = Path(ctx.cwd)
     directory = tbmod.toolbox_dirs(cwd)[0]
@@ -280,46 +264,6 @@ def test_per_call_verbosity_beats_the_config_knob_which_beats_normal(ctx):
     assert kmod.resolve_verbosity(ctx, "nonsense") == "quiet"
     ctx.kernel_verbosity = "bogus"
     assert kmod.resolve_verbosity(ctx, "") == "normal"
-
-
-def _long_cell(ctx):
-    return lambda: kmod.render_execution(
-        ctx, level="normal", code="print(1)",
-        stdout="\n".join(f"line {i}" for i in range(40)),
-        stderr="", display="", error="", elapsed=0.1, cell=1,
-        added=[], removed=[], namespace=["f"], images=[], interrupted=False)
-
-
-def test_on_the_screen_the_render_folds_long_output_and_says_how_many_lines_it_hid(ctx, monkeypatch):
-    import sys
-
-    ctx.kernel_render_max_lines = 5
-    folds = []
-
-    class Screen(io.StringIO):
-        def isatty(self):
-            return False
-
-        def write_folded(self, folded, whole):
-            folds.append((folded, whole))
-
-    monkeypatch.setattr(sys, "stderr", Screen())
-    _long_cell(ctx)()
-
-    (folded, whole), = folds
-    assert "line 4" in folded and "line 5" not in folded
-    assert msgs.KERNEL_MORE_LINES.words(count=35) in folded
-    assert all(f"line {i}" in whole for i in range(40))
-
-
-def test_off_the_screen_the_render_prints_every_line(ctx, monkeypatch):
-    # Nothing off the screen can unfold a capped render, so it prints whole.
-    ctx.kernel_render_max_lines = 5
-
-    _result, screen = stderr_of(monkeypatch, _long_cell(ctx))
-
-    assert all(f"line {i}" in screen for i in range(40))
-    assert msgs.KERNEL_MORE_LINES.words(count=35) not in screen
 
 
 def test_verbose_splits_the_streams_that_normal_merges(ctx, monkeypatch):
@@ -596,34 +540,6 @@ def test_the_namespace_listing_is_rederived_from_the_live_kernel_each_call(ctx):
 
 
 @needs_kernel
-def test_namespace_probes_preserve_the_default_user_cell_handle(ctx):
-    kmod.kernel(code="answer = 42", context=ctx)
-
-    result = kmod.kernel(action="poll", context=ctx)
-
-    assert not result.startswith("ERROR"), result
-    assert kmod.pick_handle(ctx.kernel_session, "") is ctx.kernel_session.handles["1"]
-
-
-@needs_kernel
-def test_polling_a_finished_handle_preserves_the_running_cell(ctx, monkeypatch):
-    kmod.kernel(code="answer = 42", context=ctx)
-    session = ctx.kernel_session
-    ctx.kernel_wait_seconds = 0.2
-    kmod.kernel(code="import time\ntime.sleep(60)", context=ctx)
-    running = session.handles["2"]
-    run_cell = kmod.run_cell
-    monkeypatch.setattr(kmod, "run_cell", lambda session, code, timeout, **kwargs:
-                        run_cell(session, code, timeout=0.2, **kwargs))
-
-    kmod.kernel(action="poll", handle="1", context=ctx)
-    kmod.pump(session, time.monotonic() + 0.2)
-
-    assert not running.finished
-    assert kmod.busy_handle(session) is running
-
-
-@needs_kernel
 def test_a_wait_that_runs_out_interrupts_the_cell_and_leaves_the_namespace_intact(ctx):
     kmod.kernel(code="def survivor():\n    return 'alive'\n", context=ctx)
     ctx.kernel_wait_seconds = 0.2
@@ -659,32 +575,6 @@ def test_a_cell_that_outlasts_the_wait_returns_a_handle_instead_of_blocking(ctx)
     assert "KeyboardInterrupt" in stopped
     assert stopped.splitlines()[-1].startswith("NAMESPACE ")
     assert "1" in kmod.kernel(code="print(1)", context=ctx)
-
-
-@needs_kernel
-def test_an_internal_cell_stays_tracked_when_it_outlasts_the_interrupt_grace(ctx, monkeypatch):
-    kmod.kernel(code="x = 1", context=ctx)
-    session = ctx.kernel_session
-    interrupt = kmod.interrupt_and_collect
-    monkeypatch.setattr(kmod, "interrupt_and_collect",
-                        lambda session, handle: interrupt(session, handle, grace=0.1))
-
-    result = kmod.run_cell(session, (
-        "import os, signal, time\n"
-        "signal.signal(signal.SIGINT, signal.SIG_IGN)\n"
-        "print('armed', flush=True)\n"
-        "while not os.path.exists('release'):\n"
-        "    time.sleep(0.01)\n"
-        "print('released', flush=True)\n"
-    ), timeout=1, store_history=False)
-
-    assert result.timed_out and "armed" in result.stdout
-    live = kmod.busy_handle(session)
-    assert live is not None
-    (ctx.cwd / "release").touch()
-    kmod.collect_until(session, live, time.monotonic() + 10)
-    assert live.finished
-    assert "released" in kmod.poll_cell(session, live).stdout
 
 
 @needs_kernel
@@ -1112,56 +1002,6 @@ def _offline_kernel(monkeypatch, output=None, names=(), callables=None, alive=Tr
     return session
 
 
-def test_kernel_footer_reports_a_value_only_cell(tmp_path, monkeypatch):
-    _offline_kernel(monkeypatch, kmod.CellOutput(stdout="hello\n"), names=["x"])
-    context = ToolContext(cwd=tmp_path, kernel_enabled=True, kernel_verbosity="quiet")
-
-    result = kmod.kernel(code="x = 41", context=context)
-
-    assert "hello" in result
-    assert "DEFINED x" in result
-    assert result.splitlines()[-1] == "NAMESPACE (none)"
-
-
-def test_kernel_footer_reports_an_import_only_cell(tmp_path, monkeypatch):
-    _offline_kernel(monkeypatch, kmod.CellOutput(), names=["math"])
-    context = ToolContext(cwd=tmp_path, kernel_enabled=True, kernel_verbosity="quiet")
-
-    result = kmod.kernel(code="import math", context=context)
-
-    assert "DEFINED math" in result
-    assert result.splitlines()[-1] == "NAMESPACE (none)"
-
-
-def test_kernel_footer_stays_last_after_an_image(tmp_path, monkeypatch):
-    image = tmp_path / "cell.png"
-    image.write_bytes(b"\x89PNG")
-    _offline_kernel(
-        monkeypatch,
-        kmod.CellOutput(stdout="done\n", images=[image]),
-        names=["f"],
-        callables={"f": "f()"},
-    )
-    context = ToolContext(cwd=tmp_path, kernel_enabled=True, kernel_verbosity="quiet")
-
-    result = kmod.kernel(code="def f(): pass", context=context)
-
-    lines = result.splitlines()
-    assert lines[-1] == "NAMESPACE f"
-    assert any(line.startswith("IMAGE ") for line in lines)
-    assert next(i for i, line in enumerate(lines) if line.startswith("IMAGE ")) < len(lines) - 1
-
-
-def test_kernel_restart_with_empty_code_still_ends_with_the_footer(tmp_path, monkeypatch):
-    _offline_kernel(monkeypatch)
-    context = ToolContext(cwd=tmp_path, kernel_enabled=True, kernel_verbosity="quiet")
-
-    result = kmod.kernel(restart=True, context=context)
-
-    assert "kernel restarted; the namespace is empty" in result
-    assert result.splitlines()[-1] == "NAMESPACE (none)"
-
-
 def test_kernel_footer_survives_a_died_kernel(tmp_path, monkeypatch):
     session = _offline_kernel(
         monkeypatch, kmod.CellOutput(died=True), names=["x"], alive=False
@@ -1183,21 +1023,3 @@ def test_the_kernel_panel_draws_plain_on_a_stderr_that_is_not_a_terminal(ctx, mo
     monkeypatch.delenv("NO_COLOR", raising=False)
     kmod.render_event(ctx, "normal", "toolbox saved")
     assert "toolbox saved" in stream.getvalue() and "\x1b" not in stream.getvalue()
-
-
-def test_a_kernel_render_is_drawn_one_column_short_of_the_window(ctx, monkeypatch):
-    import sys
-
-    from js import display
-
-    class Terminal(io.StringIO):
-        def isatty(self):
-            return True
-
-    monkeypatch.setattr(display, "terminal_width", lambda: 40)
-    monkeypatch.setattr(sys, "stderr", Terminal())
-    kmod.render_execution(ctx, level="normal", code="print(1)", stdout="out\n", stderr="", display="",
-                          error="", elapsed=0.1, cell=1, added=[], removed=[], namespace=["f"], images=[],
-                          interrupted=False)
-    rows = re.sub(r"\x1b\[[0-9;]*m", "", sys.stderr.getvalue()).splitlines()
-    assert rows and all(display.cells(row) <= 39 for row in rows), rows

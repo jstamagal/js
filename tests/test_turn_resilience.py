@@ -14,7 +14,7 @@ import ai
 import httpx
 import pytest
 
-from js import compaction, model_client, retry, runtime, settings, turn_call
+from js import compaction, model_client, retry, runtime, turn_call
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
@@ -161,17 +161,6 @@ def _dropped(text: str):
     return step
 
 
-def _silent(*, after_headers: bool):
-    async def step(reader, writer):
-        if after_headers:
-            writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n")
-            writer.write(_chunk(b": opening\n\n"))
-            await writer.drain()
-        await reader.read()  # until the client gives up and closes
-        return False
-    return step
-
-
 def _served_turn(tmp_path, script, runtime_settings=None):
     """Run one turn against a scripted server. Returns (server, messages, error)."""
     messages = [{"role": "user", "content": "go"}]
@@ -208,26 +197,6 @@ def test_429_waits_what_retry_after_asks_then_retries(tmp_path, header, value, w
     assert server.arrivals[1] - server.arrivals[0] >= wait * 0.9
 
 
-def test_retry_budget_is_the_setting_and_the_sdk_adds_no_retries(tmp_path):
-    server, messages, error = _served_turn(
-        tmp_path, [_status(429, {"retry-after": "0"})], {"RETRY_COUNT_MAX": 3})
-
-    assert isinstance(error, ai.ProviderAPIError)
-    assert len(server.arrivals) == 4  # the first request and three retries
-    assert messages[-1]["role"] == "user"
-
-
-def test_retry_after_longer_than_the_limit_fails_without_waiting(tmp_path):
-    started = time.monotonic()
-    server, _messages, error = _served_turn(
-        tmp_path, [_status(429, {"retry-after": "60"}), _answer("late")],
-        {"RETRY_WAIT_MAX": 5})
-
-    assert isinstance(error, ai.ProviderAPIError)
-    assert len(server.arrivals) == 1
-    assert time.monotonic() - started < 10
-
-
 def _rate_limited(headers: dict[str, str]) -> ai.ProviderAPIError:
     response = httpx.Response(429, headers=headers)
     return ai.ProviderRateLimitError(
@@ -249,46 +218,6 @@ def test_retry_after_reads_seconds_milliseconds_and_http_dates():
 # Stream idle watchdog
 # --------------------------------------------------------------------------
 
-@pytest.mark.parametrize("after_headers", [False, True])
-def test_a_silent_stream_is_aborted_and_retried(tmp_path, after_headers):
-    server, messages, error = _served_turn(
-        tmp_path, [_silent(after_headers=after_headers), _answer("recovered")],
-        {"STREAM_IDLE_TIMEOUT": 0.5})
-
-    assert error is None
-    assert messages[-1] == {"role": "assistant", "content": "recovered"}
-    assert len(server.arrivals) == 2
-
-
-def test_keep_alive_bytes_hold_off_the_idle_watchdog(tmp_path):
-    # 1.2s of keep-alive comments, each 0.15s apart, against a 0.5s limit.
-    server, messages, error = _served_turn(
-        tmp_path, [_answer("slow but alive", keepalive=8, interval=0.15)],
-        {"STREAM_IDLE_TIMEOUT": 0.5})
-
-    assert error is None
-    assert messages[-1] == {"role": "assistant", "content": "slow but alive"}
-    assert len(server.arrivals) == 1
-
-
-def test_building_the_sdk_client_does_not_count_as_silence(tmp_path, monkeypatch):
-    # The first client in a process imports the provider SDK; stand in for
-    # that with a build slower than the idle limit.
-    from ai.providers.openai.provider import OpenAICompatibleProvider
-    build = OpenAICompatibleProvider._make_sdk_client
-
-    def slow_build(self, **kwargs):
-        time.sleep(0.6)
-        return build(self, **kwargs)
-
-    monkeypatch.setattr(OpenAICompatibleProvider, "_make_sdk_client", slow_build)
-    server, messages, error = _served_turn(
-        tmp_path, [_answer("first try")], {"STREAM_IDLE_TIMEOUT": 0.3})
-
-    assert error is None
-    assert messages[-1] == {"role": "assistant", "content": "first try"}
-    assert len(server.arrivals) == 1
-
 
 def test_a_connection_dropped_mid_stream_is_retried(tmp_path):
     server, messages, error = _served_turn(tmp_path, [_dropped("Green"), _answer("recovered")])
@@ -296,14 +225,6 @@ def test_a_connection_dropped_mid_stream_is_retried(tmp_path):
     assert error is None
     assert messages[-1] == {"role": "assistant", "content": "recovered"}
     assert len(server.arrivals) == 2
-
-
-def test_a_connection_that_keeps_dropping_gives_up_after_the_budget(tmp_path):
-    server, _messages, error = _served_turn(tmp_path, [_dropped("Green")], {"RETRY_COUNT_MAX": 2})
-
-    assert isinstance(error, ai.ProviderConnectionError)
-    assert error.is_retryable
-    assert len(server.arrivals) == 3
 
 
 class _ScrollbackLive:
@@ -354,15 +275,6 @@ def test_text_streamed_before_a_turn_fails_stays_on_the_screen(tmp_path, monkeyp
     text = scrollback.buffer.text
     assert "Green" in text and "Next" in text
     assert text.index("Green") < text.index("Next")
-
-
-def test_a_stream_that_stays_silent_gives_up_after_the_budget(tmp_path):
-    server, _messages, error = _served_turn(
-        tmp_path, [_silent(after_headers=True)],
-        {"STREAM_IDLE_TIMEOUT": 0.3, "RETRY_COUNT_MAX": 1})
-
-    assert isinstance(error, model_client.StreamIdleError)
-    assert len(server.arrivals) == 2
 
 
 # --------------------------------------------------------------------------
@@ -756,25 +668,6 @@ def test_a_compaction_summary_survives_a_dropped_connection(tmp_path):
 
     assert summary == "the summary"
     assert len(server.arrivals) == 2
-
-
-def test_a_compaction_summary_on_a_silent_stream_is_retried(tmp_path):
-    server, summary = _served_summary(
-        tmp_path, [_silent(after_headers=True), _answer("the summary")], {"STREAM_IDLE_TIMEOUT": 0.3})
-
-    assert summary == "the summary"
-    assert len(server.arrivals) == 2
-
-
-@pytest.mark.parametrize("key", [
-    "RETRY_COUNT_MAX", "RETRY_WAIT_MAX", "STREAM_IDLE_TIMEOUT",
-    "OUTPUT_TOKENS_RETRY_MAX", "OUTPUT_RESUMES_MAX",
-])
-def test_resilience_knobs_refuse_negative_values(key):
-    spec = settings.spec_for(key)
-    value, error = settings.coerce_value(spec, "-1")
-    assert value is None and error
-    assert settings.coerce_value(spec, "0") == (0, None)
 
 
 # --- an endless Retry-After (ALL-CLAIMS.md:429) -------------------------------

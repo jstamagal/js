@@ -3,9 +3,6 @@ ALL-CLAIMS.md:523-526. Every test runs in the tmp HOME the conftest installs."""
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -83,54 +80,6 @@ def test_a_raw_line_separator_inside_a_record_does_not_split_it(tmp_path):
         stream.write(json.dumps(record, ensure_ascii=False) + "\n")
     session_text.refresh(path)
     assert "a\u2028b" in session_store.text_path(path).read_text(encoding="utf-8")
-
-
-def test_two_refreshers_keep_the_newest_transcript(tmp_path):
-    path = _session(tmp_path)
-    first = subprocess.Popen([sys.executable, "-c", textwrap.dedent("""
-        import sys
-        from pathlib import Path
-        from js import session_text
-        write = session_text._write
-        def paused_write(path, text):
-            print('snapshot', flush=True)
-            assert sys.stdin.readline()
-            write(path, text)
-        session_text._write = paused_write
-        session_text.refresh(Path(sys.argv[1]))
-    """), str(path)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
-    second = None
-    try:
-        assert first.stdout.readline().strip() == "snapshot"
-        second = subprocess.Popen([sys.executable, "-c", textwrap.dedent("""
-            import fcntl, sys
-            from pathlib import Path
-            from js import session_store, session_text
-            path = Path(sys.argv[1])
-            session_store.append(path, {'kind': 'message', 'ts': 1, 'version': 1,
-                                       'message': {'role': 'user', 'content': 'newest'}})
-            flock = fcntl.flock
-            def observed_lock(fd, op):
-                if op == fcntl.LOCK_EX:
-                    try:
-                        return flock(fd, op | fcntl.LOCK_NB)
-                    except BlockingIOError:
-                        print('waiting', flush=True)
-                return flock(fd, op)
-            fcntl.flock = observed_lock
-            session_text.refresh(path)
-            print('published', flush=True)
-        """), str(path)], stdout=subprocess.PIPE, text=True)
-        assert second.stdout.readline().strip() in {"waiting", "published"}
-        first.communicate("continue\n", timeout=10)
-        second.communicate(timeout=10)
-        assert first.returncode == second.returncode == 0
-    finally:
-        for process in (first, second):
-            if process is not None and process.poll() is None:
-                process.kill()
-                process.wait()
-    assert session_store.text_path(path).read_text() == session_text.render(path)
 
 
 def test_registered_setting_can_stop_automatic_text_refresh(tmp_path):

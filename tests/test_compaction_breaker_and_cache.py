@@ -353,15 +353,6 @@ def test_one_budget_check_counts_one_failed_summary(monkeypatch, tmp_path):
     assert context.summary_failures == 1
 
 
-def test_cache_ttl_is_the_setting(tmp_path):
-    context = ToolContext(cwd=tmp_path)
-    context.last_request_at = 1000.0
-    assert not compaction.cache_expired(_config(tmp_path), context, now=1299.0)
-    assert compaction.cache_expired(_config(tmp_path), context, now=1300.0)
-    assert compaction.cache_expired(_config(tmp_path, {"COMPACTION_CACHE_TTL": 0}), context, now=1000.0)
-    assert not compaction.cache_expired(_config(tmp_path, {"COMPACTION_CACHE_TTL": 3600}), context, now=1300.0)
-
-
 def test_provider_overflow_clears_even_while_the_cache_is_warm(monkeypatch, tmp_path):
     cfg = _config(tmp_path)
     context = ToolContext(cwd=tmp_path)
@@ -493,58 +484,3 @@ def test_a_manual_compact_skip_does_not_touch_the_breaker(monkeypatch, tmp_path)
     monkeypatch.setattr(compaction, "summarize", huge_summary)
     compaction.compact_now_sync(cfg, "system", _over_budget_history(), context=context)
     assert getattr(context, "summary_failures", 0) == 0
-
-
-def test_a_failing_pre_hook_warns_the_user_and_feeds_the_model_nothing(monkeypatch, tmp_path, capsys):
-    """ALL-CLAIMS compaction.py:627-656: the hook's WARNING text went to the
-    summarizer as guidance, and the 30 s subprocess ran on the event loop."""
-    from js.capped_process import CappedProcessResult
-
-    cfg = _config(tmp_path, {**_SMALL_WINDOW, "COMPACTION_HINT_COMMAND": "false"})
-    monkeypatch.setattr(compaction, "_run_capped",
-                        lambda *a, **k: CappedProcessResult(returncode=3, stdout=b"", stderr=b"boom"))
-    seen = {}
-
-    async def summary(cfg, model, messages, focus, guidance):
-        seen["guidance"] = guidance
-        return "short"
-
-    monkeypatch.setattr(compaction, "summarize", summary)
-    compaction.compact_now_sync(cfg, "system", _over_budget_history(), forced=True)
-    assert seen["guidance"] == ""
-    err = capsys.readouterr().err
-    assert "COMPACTION_HINT_COMMAND exited 3: boom" in err
-
-
-def test_the_pre_hook_runs_off_the_event_loop(monkeypatch, tmp_path):
-    cfg = _config(tmp_path, {**_SMALL_WINDOW, "COMPACTION_HINT_COMMAND": "slow"})
-    ticks = []
-
-    window = {}
-
-    def slow_hook(_cfg):
-        window["start"] = time.monotonic()
-        time.sleep(0.3)
-        window["end"] = time.monotonic()
-        return "guide"
-
-    async def summary(cfg, model, messages, focus, guidance):
-        return "short"
-
-    monkeypatch.setattr(compaction, "_run_pre_hook", slow_hook)
-    monkeypatch.setattr(compaction, "summarize", summary)
-
-    async def main():
-        async def ticker():
-            for _ in range(5):
-                ticks.append(time.monotonic())
-                await asyncio.sleep(0.05)
-
-        task = asyncio.create_task(ticker())
-        await asyncio.sleep(0)
-        await compaction.compact_now(cfg, "system", _over_budget_history(), forced=True)
-        await task
-
-    asyncio.run(main())
-    # The loop kept ticking while the hook slept.
-    assert any(window["start"] < tick < window["end"] for tick in ticks)

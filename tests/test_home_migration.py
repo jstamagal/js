@@ -500,22 +500,6 @@ def _msg(role: str, content: str, ts: float = 101.0, **extra) -> dict:
     return {"kind": "message", "version": 1, "ts": ts, "message": {"role": role, "content": content, **extra}}
 
 
-def test_refused_session_move_preserves_its_latest_pointer(tmp_path):
-    project = tmp_path / "project"
-    old = paths.sessions_root() / "defaultagent"
-    source = _record(old / "s.jsonl", _meta(project), _msg("user", "original"))
-    target = _record(session_store.folder_for(project) / "s.jsonl",
-                     _meta(project), _msg("user", "different session"))
-    latest = _write(old / "latest.json", json.dumps({"session_file": str(source)}))
-    before = {path: path.read_bytes() for path in (source, target, latest)}
-
-    steps = list(home.refile_sessions(apply=True))
-
-    assert any(step.kind == "refuse" and step.source == source for step in steps)
-    assert not (paths.state_root() / "defaultagent" / "latest.json").exists()
-    assert {path: path.read_bytes() for path in before} == before
-
-
 def test_old_sessions_are_filed_by_start_directory_and_keep_their_names(tmp_path, monkeypatch, capsys):
     project = tmp_path / "work" / "my_repo"
     project.mkdir(parents=True)

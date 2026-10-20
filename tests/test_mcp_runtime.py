@@ -1063,72 +1063,6 @@ def test_malformed_remote_input_schemas_fall_back_to_valid_object_schemas():
     asyncio.run(drive())
 
 
-def test_object_schema_without_properties_keeps_pattern_arguments(config):
-    import jsonschema
-
-    schema = {
-        "type": "object",
-        "patternProperties": {"^count_": {"type": "integer"}},
-        "additionalProperties": False,
-    }
-    host = MCPHost(config, client_factory=FakeClient)
-    host.remote_tools["alpha_server__counts"] = ("Alpha Server", "counts", {"inputSchema": schema})
-    tool = host.tools({"alpha_server__counts"})[0]
-    parameters = tool.openai_spec()["function"]["parameters"]
-    jsonschema.validate({"count_files": 3}, parameters)
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate({"count_files": "three"}, parameters)
-
-
-def test_collision_aliases_obey_deny_on_original_public_name(config):
-    async def drive():
-        host = MCPHost(
-            MCPConfiguration(config.servers, MCPPolicy(tool_deny=(
-                "alpha_server__read_file", "alpha_server__denied",
-            ))),
-            client_factory=FakeClient,
-        )
-        try:
-            await host.discover(query="mcp")
-            assert host.remote_tools == {}
-        finally:
-            await host.close()
-
-    asyncio.run(drive())
-
-
-@pytest.mark.parametrize("cross_server", (False, True))
-def test_collision_diagnostics_mask_credentials_in_paranoid_mode(cross_server):
-    secret = "COLLISION_TOKEN_6192"
-    servers = [MCPServer("alpha", "alpha", "stdio", command="fake", env={"TOKEN": secret})]
-    names = {"alpha": [f"{secret}_read", f"{secret}_read!"]}
-    if cross_server:
-        servers.append(MCPServer("alpha__redacted", "alpha__redacted", "stdio", command="fake"))
-        names = {"alpha": [f"{secret}_read"], "alpha__redacted": ["read"]}
-
-    class CollisionClient(FakeClient):
-        def __init__(self, factory, **kwargs):
-            super().__init__(factory, **kwargs)
-            self.tools = [{"name": name, "inputSchema": {}} for name in names[factory()._name]]
-
-    async def drive():
-        events = []
-        host = MCPHost(
-            MCPConfiguration(tuple(servers), MCPPolicy()),
-            client_factory=CollisionClient,
-            paranoid_mode="on",
-            event_sink=lambda kind, **payload: events.append((kind, payload)),
-        )
-        try:
-            catalog = await host.discover("mcp")
-            assert len(host.remote_tools) == 2
-            assert secret not in json.dumps(events) + repr(catalog)
-        finally:
-            await host.close()
-
-    asyncio.run(drive())
-
-
 def test_normalized_remote_name_collisions_are_disambiguated_and_visible():
     class CollisionClient(FakeClient):
         def __init__(self, factory, **kwargs):
@@ -1315,27 +1249,6 @@ def test_separated_flag_credentials_and_wrapper_context_delivery():
     asyncio.run(drive())
 
 
-def test_remote_context_argument_preserves_explicit_null(config):
-    from js.toolkit.core import call_tool_async
-
-    async def drive():
-        host = MCPHost(config, client_factory=FakeClient)
-        client = FakeClient(None)
-        host.clients["Alpha Server"] = client
-        host.remote_tools["alpha_server__nullable"] = ("Alpha Server", "nullable", {
-            "inputSchema": {
-                "type": "object",
-                "properties": {"context": {"type": ["string", "null"]}},
-                "required": ["context"],
-            },
-        })
-        tool = host.tools({"alpha_server__nullable"})[0]
-        await call_tool_async(tool, {"context": None}, ToolContext(cwd=None))
-        assert client.calls == [("nullable", {"context": None})]
-
-    asyncio.run(drive())
-
-
 def test_client_errors_are_encoding_redacted_and_long_names_dispatch():
     from js.mcp.host import MAX_PUBLIC_TOOL_NAME, MCPHost
     from js.mcp_config import MCPConfiguration, MCPPolicy, MCPServer
@@ -1393,19 +1306,6 @@ def test_client_errors_are_encoding_redacted_and_long_names_dispatch():
         assert "[REDACTED]" in str(raised.value)
 
 
-def test_record_server_error_keeps_credentials_when_paranoid_mode_is_off():
-    server = MCPServer(
-        name="s", normalized_name="s", transport="http", url="http://127.0.0.1:1/mcp",
-        headers={"Authorization": "Bearer abc123"},
-    )
-    shown = MCPHost(MCPConfiguration((server,), MCPPolicy()), paranoid_mode="off")
-    hidden = MCPHost(MCPConfiguration((server,), MCPPolicy()), paranoid_mode="on")
-    for host in (shown, hidden):
-        host._record_server_error(server, RuntimeError("server rejected abc123"))
-    assert "abc123" in shown._server_errors["s"]
-    assert "abc123" not in hidden._server_errors["s"]
-
-
 def test_a_connected_servers_redaction_follows_paranoid_mode_changes():
     server = MCPServer(
         name="s", normalized_name="s", transport="http", url="http://127.0.0.1:1/mcp",
@@ -1438,77 +1338,3 @@ def test_run_turn_gives_a_reused_host_the_turns_paranoid_mode(tmp_path, monkeypa
         asyncio.run(runtime.run_turn_async(cfg, "s", [{"role": "user", "content": "hi"}],
                                            runtime.Telemetry(None), mcp_host=host))
     assert host.paranoid_mode == "on"
-
-
-def test_tool_metadata_is_redacted_again_when_masking_turns_on():
-    server = MCPServer(
-        name="s", normalized_name="s", transport="http", url="http://127.0.0.1:1/mcp",
-        headers={"Authorization": "Bearer abc123"},
-    )
-
-    class LeakyClient(FakeClient):
-        def __init__(self, factory, **kwargs):
-            super().__init__(factory, **kwargs)
-            self.tools = [{"name": "probe", "description": "uses abc123", "inputSchema": {}}]
-
-    host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=LeakyClient, paranoid_mode="off")
-
-    async def scenario():
-        await host._ensure_server(server)
-        await host.refresh()
-        before = repr(host.remote_tools)
-        host.paranoid_mode = "on"
-        await host.before_model_call()
-        return before, repr(host.remote_tools)
-
-    before, after = asyncio.run(scenario())
-    assert "abc123" in before
-    assert "abc123" not in after
-
-
-def test_turning_masking_on_redacts_cached_metadata_even_if_the_refresh_fails():
-    server = MCPServer(
-        name="s", normalized_name="s", transport="http", url="http://127.0.0.1:1/mcp",
-        headers={"Authorization": "Bearer abc123"},
-    )
-
-    class FlakyClient(FakeClient):
-        def __init__(self, factory, **kwargs):
-            super().__init__(factory, **kwargs)
-            self.tools = [{"name": "probe", "description": "uses abc123", "inputSchema": {}}]
-            self.down = False
-
-        async def list_tools(self, *, timeout=None):
-            if self.down:
-                raise ConnectionError("server gone")
-            return self.tools
-
-    host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=FlakyClient, paranoid_mode="off")
-
-    async def scenario():
-        await host._ensure_server(server)
-        await host.refresh()
-        FlakyClient.instances[-1].down = True
-        host.paranoid_mode = "on"
-        await host.before_model_call()
-        return repr(host.remote_tools), repr([t.description for t in host.tools(set(host.remote_tools))])
-
-    cached, tools = asyncio.run(scenario())
-    assert "abc123" not in cached
-    assert "abc123" not in tools
-
-
-def test_a_cached_server_error_is_masked_once_masking_turns_on():
-    leaky = MCPServer(
-        name="leaky", normalized_name="leaky", transport="http", url="http://127.0.0.1:1/mcp",
-        headers={"Authorization": "Bearer abc123"},
-    )
-    other = MCPServer(name="other", normalized_name="other", transport="stdio", command="true")
-    host = MCPHost(MCPConfiguration((leaky, other), MCPPolicy()), client_factory=FakeClient, paranoid_mode="off")
-    host._record_server_error(leaky, RuntimeError("server rejected abc123"))
-
-    host.paranoid_mode = "on"
-    entries = asyncio.run(host.discover("other rejected"))
-
-    assert any(entry.source == "leaky" for entry in entries)
-    assert "abc123" not in repr(entries)

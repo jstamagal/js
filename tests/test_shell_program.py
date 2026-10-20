@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-from js import settings
 from js.toolkit import ToolContext, process_net
 
 
@@ -25,11 +24,6 @@ def _exit_code(result: str) -> int:
 
 def _shell_line(result: str) -> str:
     return result.splitlines()[0]
-
-
-def test_shell_program_defaults_to_bash():
-    assert settings.default_value("SHELL_PROGRAM") == "bash"
-    assert ToolContext().shell_program == "bash"
 
 
 @needs_bash

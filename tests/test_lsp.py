@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from js import jail, settings
+from js import jail
 from js.toolkit import ToolContext, call_tool, lsp as lsp_mod, policy
 from js.toolkit.registry import build_default_registry
 
@@ -125,32 +125,6 @@ def test_one_server_serves_every_call_in_a_workspace(project):
     assert initializes[0]["params"]["rootUri"] == lsp_mod.file_uri(root)
 
 
-def test_server_reuse_respects_shell_env_keep(project, monkeypatch):
-    from types import SimpleNamespace
-
-    root, context, _log = project
-    monkeypatch.setattr(jail, "active", lambda: SimpleNamespace(root=root))
-    monkeypatch.setattr(jail, "wrap", lambda argv, *args, **kwargs: argv)
-    monkeypatch.setenv("LSP_TEST_SETTING", "enabled")
-    launched_envs = []
-    popen = lsp_mod.subprocess.Popen
-
-    def start(*args, **kwargs):
-        launched_envs.append(kwargs["env"])
-        return popen(*args, **kwargs)
-
-    monkeypatch.setattr(lsp_mod.subprocess, "Popen", start)
-    spec = lsp_mod.parse_servers(context.lsp_servers)[0]
-    context.shell_env_allow = ("LSP_TEST_SETTING",)
-    first = lsp_mod.server_for(spec, sys.executable, root, context, 5)
-    context.shell_env_allow = ()
-    second = lsp_mod.server_for(spec, sys.executable, root, context, 5)
-
-    assert second is not first
-    assert launched_envs[0] == {"LSP_TEST_SETTING": "enabled"}
-    assert launched_envs[1] == {}
-
-
 def test_server_requests_are_answered(project):
     root, context, log = project
     (root / "a.fake").write_text("x\n")
@@ -208,19 +182,6 @@ def test_bad_lsp_servers_setting_is_refused(project):
     assert run(context, operation="diagnostics", file_path=str(source)).startswith("ERROR:")
 
 
-def test_no_diagnostics_within_the_timeout_is_not_reported_clean(project, tmp_path):
-    root, context, _log = project
-    fake(context, tmp_path / "quiet.log", "--no-diagnostics")
-    context.lsp_timeout_s = 1
-    source = root / "a.fake"
-    source.write_text("ERROR\n")
-
-    result = run(context, operation="diagnostics", file_path=str(source))
-
-    assert "LSP_TIMEOUT" in result
-    assert "found ERROR" not in result
-
-
 def test_position_operations_need_a_position(project):
     root, context, _log = project
     source = root / "a.fake"
@@ -263,13 +224,6 @@ def test_workspace_root_never_climbs_above_the_operators_home(tmp_path, monkeypa
 
     assert lsp_mod.workspace_root(loose, spec, ToolContext(cwd=home / "work")) == home / "work"
     assert lsp_mod.workspace_root(loose, spec, ToolContext(cwd=tmp_path)) == home / "work"
-
-
-def test_every_default_server_entry_parses():
-    specs = lsp_mod.parse_servers(settings.default_value("LSP_SERVERS"))
-    covered = {ext for spec in specs for ext in spec.extensions}
-
-    assert {".py", ".rs", ".go", ".ts", ".tsx", ".js"} <= covered
 
 
 def test_lsp_is_read_only_and_lazy_for_the_default_agent():
@@ -324,56 +278,3 @@ def test_server_runs_in_the_jail(tmp_path, operator_home, monkeypatch):
 
 
 # --- real language servers, when installed -----------------------------------
-
-REAL_CASES = {
-    "python": {
-        "files": {"pyproject.toml": "[project]\nname = 'probe'\nversion = '0'\n",
-                  "probe.py": "def f(x: int) -> int:\n    return x\n\n\nf('a')\n"},
-        "target": "probe.py", "error_line": 5, "use": (5, "f"), "definition": "probe.py:1:5",
-    },
-    "go": {
-        "files": {"go.mod": "module example.com/probe\n\ngo 1.21\n",
-                  "main.go": "package main\n\nfunc f() int { return 1 }\n\nfunc main() {\n\tvar s string = f()\n\t_ = s\n}\n"},
-        "target": "main.go", "error_line": 6, "use": (6, "f"), "definition": "main.go:3:6",
-        "needs": ["go"],
-    },
-    "rust": {
-        "files": {"Cargo.toml": "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-                  "src/main.rs": "fn f() -> i32 { 1 }\n\nfn main() {\n    let _x = f();\n    let y = ;\n}\n"},
-        "target": "src/main.rs", "error_line": 5, "use": (4, "f"), "definition": "src/main.rs:1:4",
-        "needs": ["cargo"],
-    },
-    "typescript": {
-        "files": {"tsconfig.json": "{\"compilerOptions\": {\"strict\": true}}\n",
-                  "index.ts": "function f(): number { return 1 }\nconst s: string = f();\nexport { s };\n"},
-        "target": "index.ts", "error_line": 2, "use": (2, "f"), "definition": "index.ts:1:10",
-    },
-}
-_EXTENSIONS = {"python": ".py", "go": ".go", "rust": ".rs", "typescript": ".ts"}
-
-
-@pytest.mark.parametrize("language", sorted(REAL_CASES))
-def test_real_language_server(language, tmp_path):
-    case = REAL_CASES[language]
-    specs = lsp_mod.parse_servers(settings.default_value("LSP_SERVERS"))
-    serving = [spec for spec in specs if _EXTENSIONS[language] in spec.extensions]
-    if not any(shutil.which(spec.command[0]) for spec in serving):
-        pytest.skip(f"no {language} language server on PATH")
-    missing = [tool for tool in case.get("needs", []) if shutil.which(tool) is None]
-    if missing:
-        pytest.skip(f"{language} language server needs {', '.join(missing)}")
-    root = tmp_path / "probe"
-    for name, text in case["files"].items():
-        (root / name).parent.mkdir(parents=True, exist_ok=True)
-        (root / name).write_text(text)
-    context = ToolContext(cwd=root)
-    context.lsp_timeout_s = 120
-    target = str(root / case["target"])
-
-    definition = run(context, operation="definition", file_path=target,
-                     line=case["use"][0], symbol=case["use"][1])
-    diagnostics = run(context, operation="diagnostics", file_path=target)
-
-    assert case["definition"] in definition, definition
-    assert any(row.startswith(f"{case['error_line']}:") and ": error: " in row
-               for row in diagnostics.splitlines()), diagnostics

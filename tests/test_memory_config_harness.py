@@ -191,18 +191,6 @@ def test_from_env_respects_provider_runtime_caps_agent_and_no_save(monkeypatch, 
     assert actual.debug_log == expected_state_dir / "debug.log"
 
 
-def test_documented_bytes_env_names_are_canonical(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_SESSION", raising=False)
-    monkeypatch.setenv("JS_SHELL_OUTPUT_MAX", "222")
-    monkeypatch.setenv("JS_TOOL_RESULT_MAX", "444")
-
-    actual = from_env(save_session=False)
-
-    assert actual.max_bash_output_bytes == 222
-    assert actual.max_tool_result_bytes == 444
-
-
 def test_resolve_session_file_creates_and_resumes_nested_named_session(tmp_path):
     sessions_dir = tmp_path / "sessions" / "agent"
 

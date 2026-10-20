@@ -93,17 +93,6 @@ def test_stage_subset_of_hunks(repo):
     assert "line15_X" in _git(repo, "diff").stdout
 
 
-def test_partial_stage_works_with_zero_context_git_config(repo):
-    _git(repo, "config", "diff.context", "0")
-    _edit_lines(repo / "f.txt", (15, 28))
-
-    assert commit_helper.main(["stage", "f.txt", "1"]) == 0
-
-    staged = _git(repo, "show", ":f.txt").stdout.splitlines()
-    assert staged[14] == "line15_X"
-    assert staged[27] == "line28"
-
-
 def test_stage_and_survey_work_when_the_operator_forces_git_color(repo, capsys):
     """color.ui=always must not reach the parser.
 

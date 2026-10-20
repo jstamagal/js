@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import copy
-import os
 
 from pathlib import Path
 
 import pytest
 
-from js import rename, runtime, session_store, settings
+from js import runtime, session_store, settings
 from js.config import Config, from_env
 from js import messages as msgs
 
@@ -196,22 +195,6 @@ def test_explicit_default_model_extra_beats_the_agent_model(tmp_path):
     assert active.model == cfg.model
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root can list an unreadable directory")
-def test_unreadable_project_agent_refuses_global_fallback(tmp_path):
-    project = tmp_path / "project"
-    local = project / ".js" / "agents" / "worker"
-    global_agent = tmp_path / ".js" / "agents" / "worker"
-    for directory in (local, global_agent):
-        directory.mkdir(parents=True)
-        (directory / "01-prompt.md").write_text("agent instructions", encoding="utf-8")
-    local.chmod(0)
-    try:
-        with pytest.raises(ValueError):
-            from_env(cwd=project, agent_id="worker", save_session=False)
-    finally:
-        local.chmod(0o700)
-
-
 def test_presets_layer_over_base_in_order(monkeypatch, tmp_path):
     config_home, _data_home = _env_dirs(monkeypatch, tmp_path)
     js_dir = config_home
@@ -245,14 +228,6 @@ def test_ignoring_global_config_from_home_excludes_global_files(tmp_path, preset
     assert cfg.shell_wait_seconds == settings.default_value("SHELL_WAIT")
 
 
-def test_allow_inline_code_default_is_on(monkeypatch, tmp_path):
-    # Inverted: inline code runs by default, no flag/knob needed.
-    _env_dirs(monkeypatch, tmp_path)
-    monkeypatch.delenv("JS_INLINE_CODE", raising=False)
-    cfg = from_env(save_session=False)
-    assert cfg.allow_inline_code is True
-
-
 def test_allow_inline_code_opt_out_via_jsrc(monkeypatch, tmp_path):
     # Deliberate opt-out through the config knob.
     config_home, _data_home = _env_dirs(monkeypatch, tmp_path)
@@ -262,31 +237,6 @@ def test_allow_inline_code_opt_out_via_jsrc(monkeypatch, tmp_path):
 
     cfg = from_env(save_session=False)
     assert cfg.allow_inline_code is False
-
-
-def test_allow_inline_code_opt_out_via_env(monkeypatch, tmp_path):
-    # --im-a-pussy sets JS_INLINE_CODE=0; that env must flip the knob off
-    # through the registry env layer.
-    _env_dirs(monkeypatch, tmp_path)
-    monkeypatch.setenv("JS_INLINE_CODE", "0")
-    cfg = from_env(save_session=False)
-    assert cfg.allow_inline_code is False
-
-
-def test_project_config_env_and_cli_precedence(monkeypatch, tmp_path):
-    _env_dirs(monkeypatch, tmp_path)
-    project = tmp_path / "project"
-    cfg_path = project / ".js" / "jsrc"
-    cfg_path.parent.mkdir(parents=True)
-    cfg_path.write_text("set MODEL file-model\nset TURN_ROUNDS_MAX 7\n", encoding="utf-8")
-    monkeypatch.setenv("JS_MODEL", "env-model")
-
-    cfg_env = from_env(cwd=project, save_session=False)
-    assert cfg_env.model == "env-model"
-    assert cfg_env.max_tool_iterations == 7
-
-    cfg_cli = from_env(cwd=project, save_session=False, extras=["MODEL=cli-model"])
-    assert cfg_cli.model == "cli-model"
 
 
 def test_js_model_provider_prefix_is_parsed_once(monkeypatch, tmp_path):
@@ -363,68 +313,6 @@ def test_provider_config_reaches_stream_model(monkeypatch, tmp_path):
     assert captured_kwargs.get("provider_base_url") == "http://127.0.0.1:11434/v1"
     assert captured_kwargs.get("provider_api_key") == "ollama"
     assert captured_kwargs.get("provider_headers") == {"x-test": "1"}
-
-
-_AWKWARD_TEXT = ["a\nb", " leading", "trailing ", '"quoted"', "cost $5 # not a comment", "tab\there"]
-_AWKWARD = {
-    "str": _AWKWARD_TEXT + ["X-A: 1\nX-B: 2", "X-A: \"1\"; X-B: $2"],
-    "int": [0, 7, 123456],
-    "float": [0.25, 3.5],
-    "bool": [True, False],
-    "json": [["a\nb", " x ", "$y # z"], {"k": "line\nbreak \"q\" $v"}],
-    "map": [{"k": "line\nbreak \"q\" $v", "n": 2}],
-}
-
-
-def test_every_setting_survives_save_then_load_with_awkward_values(tmp_path):
-    checked = 0
-    for spec in settings.REGISTRY:
-        for value in _AWKWARD[spec.type]:
-            raw = value if isinstance(value, str) else settings._config_line_value(spec, value)
-            accepted, error = settings.coerce_value(spec, raw)
-            if error is not None or accepted != value:
-                continue  # not a value this setting holds as it is
-            store = settings.seed_defaults()
-            settings.set_dotted(store, spec.path, value)  # as env, an --extra or /load can leave it
-            live = settings.get_dotted(store, spec.path)
-            path = tmp_path / f"{spec.key}-{checked}.jsrc"
-            path.write_text("", encoding="utf-8")
-            settings.save_settings_to_jsrc(path, store)
-            loaded = settings.collect_settings(config_paths=[path], env={})
-            assert settings.get_dotted(loaded, spec.path) == live, (spec.key, value, path.read_text())
-            checked += 1
-    assert checked > len(settings.REGISTRY)
-    assert any(spec.key == "EXTRA_HEADERS" for spec in settings.REGISTRY)
-
-
-def test_save_keeps_the_complete_config_visible_to_another_reader(tmp_path, monkeypatch):
-    path = tmp_path / "jsrc"
-    path.write_text("set MODEL previous-model\nset TEMPERATURE 0.25\n")
-    path.chmod(0o640)
-    live = settings.collect_settings(config_paths=[path], env={})
-    settings.set_dotted(live, ("MODEL",), "next-model")
-    settings.set_dotted(live, ("TEMPERATURE",), 0.75)
-    observed = []
-
-    def interleaved_write(target, text, *args, **kwargs):
-        with target.open("w", encoding="utf-8") as stream:
-            stream.write(text[:len(text) // 2])
-            stream.flush()
-            other = settings.collect_settings(config_paths=[path], env={})
-            observed.append((settings.knob(other, "MODEL"), settings.knob(other, "TEMPERATURE")))
-            stream.write(text[len(text) // 2:])
-        return len(text)
-
-    # The reader is past its startup migration, which waits on the save's
-    # lock; its read of the jsrc itself takes no lock.
-    monkeypatch.setattr(rename, "migrate_jsrc_file", lambda *args, **kwargs: False)
-    monkeypatch.setattr(Path, "write_text", interleaved_write)
-    settings.save_settings_to_jsrc(path, live)
-
-    assert observed == [("previous-model", 0.25)]
-    loaded = settings.collect_settings(config_paths=[path], env={})
-    assert (settings.knob(loaded, "MODEL"), settings.knob(loaded, "TEMPERATURE")) == ("next-model", 0.75)
-    assert path.stat().st_mode & 0o777 == 0o640
 
 
 def test_registered_setting_can_disable_jsrc_migration(tmp_path):

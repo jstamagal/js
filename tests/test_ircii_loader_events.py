@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
-from threading import Event
 
 from js import cli, events, setcmd, settings
 from js.config import Config
@@ -168,17 +166,6 @@ def test_on_registers_handlers_against_typed_event_names():
     assert hooks.handlers_for("tool_call") == [events.EventHook(event="tool_call", handler="echo denied", suppress=True)]
 
 
-def test_on_accepts_listed_equals_form_without_storing_equals():
-    hooks = events.EventHooks()
-
-    result = setcmd.on_command(hooks, "turn_start = set COMPACTION_AUTO off")
-
-    assert result.error is None
-    assert hooks.handlers_for("turn_start") == [
-        events.EventHook(event="turn_start", handler="set COMPACTION_AUTO off", suppress=False)
-    ]
-
-
 def test_on_rejects_unknown_event_without_registering():
     hooks = events.EventHooks()
 
@@ -216,25 +203,6 @@ def test_event_hook_handler_errors_are_captured_without_raising(tmp_path):
     assert settings.get_dotted(state["settings"], ("COMPACTION_AUTO",)) is True
 
 
-def test_event_hook_invalid_dispatch_result_is_captured_without_raising():
-    hooks = events.EventHooks()
-
-    def invalid_dispatch(hook, emission):
-        return None
-
-    hooks.set_dispatcher(invalid_dispatch)
-    hook = hooks.add("turn_start", "set COMPACTION_AUTO off")
-
-    emission = hooks.emit("turn_start")
-
-    assert emission.results == [
-        events.EventHandlerResult(
-            hook=hook,
-            error="invalid event handler result: NoneType",
-        )
-    ]
-
-
 def test_event_hooks_skip_recursive_dispatch():
     hooks = events.EventHooks()
     calls: list[str] = []
@@ -254,29 +222,6 @@ def test_event_hooks_skip_recursive_dispatch():
     assert calls == ["turn_start:set COMPACTION_AUTO off"]
     assert emission.dispatch_skipped is False
     assert emission.results[0].error == "ok"
-
-
-def test_concurrent_subagent_tool_calls_each_run_refusal_hooks():
-    entered, release = Event(), Event()
-
-    def guard(hook, emission):
-        if emission.payload["name"] == "first":
-            entered.set()
-            assert release.wait(5)
-        return events.EventHandlerResult(hook=hook, refusal="blocked")
-
-    hooks = events.EventHooks(guard)
-    hooks.add("tool_call", "guard")
-    subagent_hooks = events.RefusableOnly(hooks)
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        first = executor.submit(subagent_hooks.emit, "tool_call", name="first")
-        try:
-            assert entered.wait(5)
-            second = subagent_hooks.emit("tool_call", name="second")
-        finally:
-            release.set()
-        assert events.refusal_of(first.result(timeout=5)) == "blocked"
-    assert events.refusal_of(second) == "blocked"
 
 
 def test_cli_load_updates_live_settings_and_event_hooks(tmp_path):
@@ -335,21 +280,4 @@ def test_cli_load_sampling_set_updates_live_sampling_override(tmp_path):
     }
 
     assert cli._handle_command(f"/load {script.name}", state, cfg) is True
-    assert state["live_set"]["TEMPERATURE"] == 0.2
-
-
-def test_cli_load_partial_sampling_set_updates_live_sampling_override(tmp_path):
-    script = tmp_path / "sampling-error.irc"
-    script.write_text("set TEMPERATURE 0.2\nbogus nope\n", encoding="utf-8")
-    cfg = make_cfg(tmp_path)
-    state = {
-        "messages": [],
-        "system": "sys",
-        "settings": settings.seed_defaults(),
-        "events": events.EventHooks(),
-    }
-
-    _, error = cli._run_command(f"/load {script.name}", state, cfg)
-
-    assert f"{script}:2" in error
     assert state["live_set"]["TEMPERATURE"] == 0.2

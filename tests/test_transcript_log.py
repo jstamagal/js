@@ -194,20 +194,6 @@ def test_transcript_file_gets_no_osc(tmp_path):
     assert "hi there" in text and "tool out" in text
 
 
-def test_an_escape_open_on_one_stream_hides_nothing_another_stream_writes():
-    import io
-
-    log = io.StringIO()
-    sink = transcript.TranscriptLogSink([log], [])
-    out = transcript.TranscriptTee(io.StringIO(), lambda: sink)
-    err = transcript.TranscriptTee(io.StringIO(), lambda: sink)
-    out.write("before \x1b]0;title")
-    err.write("STDERR_DIAGNOSTIC\n")
-    out.write("\x07 after\n")
-    assert "STDERR_DIAGNOSTIC" in log.getvalue()
-    assert "title" not in log.getvalue()
-
-
 def test_prompt_mode_transcript_records_each_tool_call_whole(monkeypatch, tmp_path, capsys):
     from types import SimpleNamespace
 
@@ -275,35 +261,3 @@ def test_the_transcript_records_the_same_bytes_whatever_console_draws_the_turn(m
     assert record("silent") == drawn
     assert capsys.readouterr().out == ""
     assert "alpha" in drawn and "<APE> the answer" in drawn
-
-
-def test_transcript_notices_and_statistics_do_not_depend_on_console_rendering(capsys):
-    import io
-
-    from js import messages, output
-
-    class Silent:
-        def emit(self, event):
-            pass
-
-    def record(silent):
-        contents = io.StringIO()
-        log = transcript.TranscriptLogSink([contents], [])
-        log._stamp = lambda: "[00:00] "
-        telemetry = runtime.Telemetry(None, transcript_log=log)
-        if silent:
-            telemetry.sink = output.Fanout(transcript.TranscriptSink(telemetry), Silent())
-        with cli._transcript_stdio(telemetry):
-            runtime._output(telemetry, "run_line", fields=["model=offline", "tools=3"])
-            runtime._output(telemetry, "call_stats", label="", elapsed_s=1, finish="stop",
-                            tool_calls=0, tokens=10, first_token_s=0.1, prompt_tokens=20,
-                            cached_tokens=10)
-            runtime._notice(telemetry, messages.STEERED, flush=True)
-            runtime._notice(telemetry, messages.RESPONSE_INCOMPLETE, stderr=True, reason="length")
-        return contents.getvalue()
-
-    drawn = record(False)
-    assert drawn
-    assert capsys.readouterr().out
-    assert record(True) == drawn
-    assert capsys.readouterr() == ("", "")

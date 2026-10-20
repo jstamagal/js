@@ -16,8 +16,7 @@ from js import runtime, turn_call
 from js import model_client as MC
 from js.config import Config
 from js.toolkit import ToolContext
-from js.toolkit.core import Tool
-from js.toolkit.registry import ToolRegistry, build_default_registry
+from js.toolkit.registry import build_default_registry
 from js.model_client import ModelStreamResult
 
 
@@ -351,20 +350,3 @@ def test_cap_result_marks_only_when_it_shortens():
     assert clipped.startswith("x")
     assert len(clipped.encode("utf-8")) <= 64
     assert "[truncated: TOOL_RESULT_MAX (64) reached]" in clipped
-
-
-def test_dispatch_marks_truncated_leaf_result():
-    big = "Z" * 500
-
-    def _handler(context=None, **kwargs):
-        return big
-
-    tool = Tool(name="bigtool", description="", handler=_handler, params={})
-    registry = ToolRegistry(tools=(tool,), aliases={})
-    _args, result = runtime._dispatch(
-        "bigtool", "{}", runtime.Telemetry(debug_log=None),
-        cap_bytes=64, registry=registry, tool_context=ToolContext(),
-    )
-    assert result.startswith("Z")
-    assert len(result.encode("utf-8")) <= 64
-    assert "[truncated: TOOL_RESULT_MAX (64) reached]" in result

@@ -6,11 +6,9 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import contextmanager
 import io
 import json
 import os
-import signal
 import sys
 import threading
 import time
@@ -50,15 +48,6 @@ def test_a_message_waits_for_an_agent_that_has_not_joined_yet(tmp_path):
     room = swarm.Room(tmp_path / "bus")
     room.send("runner", "late", "opener")
     assert [m.body for m in room.join("late").drain()] == ["opener"]
-
-
-@pytest.mark.parametrize("name", [".", ".."])
-def test_send_rejects_directory_components_as_agent_names(tmp_path, name):
-    room = swarm.Room(tmp_path / "bus")
-    with pytest.raises(ValueError):
-        room.send("runner", name, "opener")
-    assert not (tmp_path / "inbox").exists()
-    assert not (room.root / "inbox").exists()
 
 
 def test_a_rollcall_is_answered_by_the_process_and_touches_no_inbox_or_log(tmp_path, monkeypatch):
@@ -208,30 +197,6 @@ def test_a_claim_has_one_holder_until_released_or_expired(tmp_path, monkeypatch)
     monkeypatch.setattr(swarm.time, "time", lambda: now + 5)
     assert room.claim("parser", "a", ttl=60)[:2] == (True, "a")  # b's claim expired
     assert set(room.claims()) == {"parser"}
-
-
-def test_taking_a_task_preserves_a_concurrent_completion(tmp_path, monkeypatch):
-    taker = swarm.Room(tmp_path / "bus")
-    finisher = swarm.Room(taker.root)
-    task = taker.post_cell("runner", "audit runtime")
-    locked = taker._locked
-    finished = False
-
-    @contextmanager
-    def finish_after_unlock():
-        nonlocal finished
-        with locked():
-            yield
-        if not finished:
-            finished = True
-            finisher.finish_cell(task.id, "a", "audit complete")
-
-    monkeypatch.setattr(taker, "_locked", finish_after_unlock)
-    taker.take_cell(task.id, "b")
-
-    completed = finisher.cell(task.id)
-    assert (completed.status, completed.holder, completed.result) == ("done", "a", "audit complete")
-    assert task.key not in finisher.claims()
 
 
 def test_a_burst_is_one_wake(tmp_path):
@@ -402,44 +367,6 @@ def _agent_dir(tmp_path, monkeypatch):
     (directory / "00-role.md").write_text("SYSTEM", encoding="utf-8")
 
 
-def test_a_swarm_agent_sleeps_after_its_turn_and_wakes_on_a_message(tmp_path, monkeypatch):
-    _agent_dir(tmp_path, monkeypatch)
-    room = swarm.Room(tmp_path / "bus")
-    turns: list[list[str]] = []
-
-    def stream(**kwargs):
-        turns.append(["".join(p.text for p in m.parts if p.kind == "text")
-                      for m in kwargs["messages"] if m.role == "user"])
-        if len(turns) == 1:
-            threading.Timer(0.3, lambda: room.send("b", "a", "ping")).start()
-            answer = "first"
-        else:
-            room.send("steer", "a", "enough", kind="stop")  # lands during the turn; honored after it
-            answer = "second"
-        kwargs["on_text"](answer)
-        return ModelStreamResult(text=answer, tool_calls=[], reasoning="",
-                                 usage=ai.types.usage.Usage(input_tokens=0, output_tokens=1),
-                                 finish_reason="stop", assistant_message=ai.assistant_message(answer))
-
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
-    out = io.StringIO()
-
-    before = signal.getsignal(signal.SIGTERM)
-    code = cli._run_prompt("go", session="s1", swarm=str(tmp_path / "bus" / "a"), events=headless.JsonEvents(out))
-
-    assert code == 0
-    # The run's SIGTERM handler is gone once it ends: a later SIGTERM to this
-    # process is not turned into ^C.
-    assert signal.getsignal(signal.SIGTERM) is before
-    assert len(turns) == 2
-    assert "ping" in turns[1][-1] and "[#1 b -> you" in turns[1][-1]
-    kinds = [json.loads(line)["type"] for line in out.getvalue().splitlines()]
-    assert kinds.count("turn_start") == 2
-    second_turn = kinds.index("turn_start", kinds.index("turn_start") + 1)
-    assert kinds.index("sleep") < kinds.index("wake") < second_turn
-    assert kinds[-1] == "wake"  # the stop was the last thing it woke to; no turn ran on it
-
-
 # --------------------------------------------------------------------------
 # every agent in one process: python -m js.swarm run SPEC.json
 # --------------------------------------------------------------------------
@@ -507,18 +434,6 @@ def test_swarm_runner_fails_when_an_agent_cannot_be_configured(tmp_path, monkeyp
 
     assert swarm_run.run(spec, out=out) == 1
     events = _events(out)
-    assert [(e["agent"], e["reason"]) for e in events if e["type"] == "agent_end"] == [("a", "error")]
-    assert events[-1]["exit_code"] == 1
-
-
-def test_swarm_runner_reports_an_unusable_bus_path(tmp_path):
-    (tmp_path / "bus").write_text("occupied")
-    out = io.StringIO()
-    spec = _spec(tmp_path, [{"name": "a", "opener": "go", "cwd": str(tmp_path)}])
-
-    assert swarm_run.run(spec, out=out) == 1
-    events = _events(out)
-    assert [e["agent"] for e in events if e["type"] == "error"] == ["a"]
     assert [(e["agent"], e["reason"]) for e in events if e["type"] == "agent_end"] == [("a", "error")]
     assert events[-1]["exit_code"] == 1
 

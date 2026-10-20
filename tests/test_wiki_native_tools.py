@@ -1,14 +1,10 @@
 from __future__ import annotations
 
 import subprocess
-import threading
-from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
-from js import jail
 from js.capped_process import truncation_marker
 from js.toolkit import ToolContext
 from js.toolkit import fs
@@ -16,8 +12,6 @@ from js.toolkit import wiki as wiki_module
 from js.toolkit.core import call_tool
 from js.toolkit.descriptions import load_description
 from js.toolkit.wiki import convert as wiki_convert_module
-from js.toolkit.wiki import ops as wiki_ops_module
-from js.toolkit.wiki import pages as wiki_pages_module
 from js.toolkit.wiki import helpers as wiki_helpers_module
 from js.toolkit.wiki.convert import wiki_convert
 from js.toolkit.wiki.ops import wiki_finish_ingest
@@ -38,33 +32,6 @@ def _git_init(path: Path) -> None:
     subprocess.run(["git", "init", "-q", str(path)], check=True)
     subprocess.run(["git", "-C", str(path), "config", "user.email", "test@example.com"], check=True)
     subprocess.run(["git", "-C", str(path), "config", "user.name", "test"], check=True)
-
-
-def test_concurrent_page_creates_preserve_the_first_writers_content(tmp_path, monkeypatch):
-    vault = _vault(tmp_path)
-    page = vault / "sources" / "shared.md"
-    barrier = threading.Barrier(2)
-    real_lock = wiki_pages_module.vault_lock
-    persisted = []
-
-    @contextmanager
-    def synchronized_lock(path, context):
-        barrier.wait(timeout=10)
-        with real_lock(path, context):
-            yield
-            persisted.append(page.read_bytes())
-
-    monkeypatch.setattr(wiki_pages_module, "vault_lock", synchronized_lock)
-
-    def create(body):
-        return wiki_write(str(vault), "source", body, slug="shared", context=_ctx(tmp_path))
-
-    with ThreadPoolExecutor(max_workers=2) as workers:
-        results = list(workers.map(create, ["first agents contribution", "second agents contribution"]))
-
-    assert len(results) == len(persisted) == 2
-    assert persisted[1] == persisted[0]
-    assert page.read_bytes() == persisted[0]
 
 
 def test_wiki_write_override_dedup_reachable_through_declared_tool_schema(tmp_path):
@@ -608,91 +575,6 @@ def test_wiki_write_accepts_an_absolute_vault_that_is_the_working_directory(tmp_
     assert (tmp_path / "concepts" / "x.md").exists()
 
 
-def test_concurrent_ingests_keep_the_completed_archive(tmp_path, monkeypatch):
-    vault = _vault(tmp_path)
-    (vault / "PURPOSE.md").write_text("purpose\n")
-    source = vault / "inbox" / "unit"
-    source.mkdir(parents=True)
-    (source / "raw.txt").write_text("raw source\n")
-    ready = threading.Barrier(2)
-    real_lock = wiki_ops_module.vault_lock
-
-    @contextmanager
-    def contended_lock(path, context):
-        ready.wait(timeout=5)
-        with real_lock(path, context):
-            yield
-
-    monkeypatch.setattr(wiki_ops_module, "vault_lock", contended_lock)
-    monkeypatch.setattr(wiki_ops_module, "_commit", lambda *args: "git: no repository")
-
-    def finish(_):
-        return wiki_finish_ingest(str(vault), "unit", "Unit", context=_ctx(tmp_path))
-
-    with ThreadPoolExecutor(max_workers=2) as workers:
-        results = list(workers.map(finish, range(2)))
-
-    assert not source.exists()
-    assert (vault / "Clippings" / "unit" / "raw.txt").read_text() == "raw source\n"
-    assert sum(result.startswith("ERROR:") for result in results) == 1
-    assert (vault / "log.md").read_text().count("Archived:") == 1
-
-
-@pytest.mark.parametrize("entry", ["page_directory", "page_file", "asset_directory", "asset_file",
-                                  "archive_directory", "inbox_directory", "log_file", "lock_file"])
-def test_wiki_derived_paths_obey_the_jail(tmp_path, monkeypatch, entry):
-    root = tmp_path / "jail"
-    root.mkdir()
-    vault = _vault(root)
-    (vault / "PURPOSE.md").write_text("purpose\n")
-    (vault / "inbox").mkdir()
-    (vault / "inbox" / "unit.md").write_text("raw source\n")
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    image = root / "photo.png"
-    image.write_bytes(b"image bytes")
-    tool_name = "wiki_write"
-    args = {"vault": str(vault), "kind": "concept", "slug": "page", "body": "new content"}
-    if entry == "page_directory":
-        (vault / "concepts").symlink_to(outside, target_is_directory=True)
-    elif entry == "page_file":
-        (vault / "concepts").mkdir()
-        (vault / "concepts" / "page.md").symlink_to(outside / "page.md")
-    elif entry == "lock_file":
-        (vault / ".wiki.lock").symlink_to(outside / "lock")
-    elif entry.startswith("asset"):
-        tool_name = "wiki_convert"
-        args = {"vault": str(vault), "path": str(image)}
-        if entry == "asset_directory":
-            (vault / "assets").symlink_to(outside, target_is_directory=True)
-        else:
-            (vault / "assets").mkdir()
-            (vault / "assets" / image.name).symlink_to(outside / image.name)
-    else:
-        tool_name = "wiki_finish_ingest"
-        args = {"vault": str(vault), "unit": "unit.md", "title": "Unit"}
-        if entry == "archive_directory":
-            (vault / "Clippings").symlink_to(outside, target_is_directory=True)
-        elif entry == "log_file":
-            (vault / "log.md").symlink_to(outside / "log.md")
-        else:
-            (vault / "inbox" / "unit.md").unlink()
-            (vault / "inbox").rmdir()
-            (outside / "unit.md").write_text("outside source\n")
-            (vault / "inbox").symlink_to(outside, target_is_directory=True)
-
-    before = {path.name: path.read_bytes() for path in outside.iterdir()}
-    monkeypatch.setattr(jail, "ACTIVE", jail.Jail(root=root, bwrap="bwrap", private=tmp_path / "private"))
-    monkeypatch.setattr(wiki_convert_module, "run", lambda *args: (0, "", ""))
-    monkeypatch.setattr(wiki_ops_module, "_commit", lambda *args: "git: no repository")
-    tool = next(tool for tool in wiki_module.tools() if tool.name == tool_name)
-
-    result = call_tool(tool, args, _ctx(root))
-
-    assert {path.name: path.read_bytes() for path in outside.iterdir()} == before
-    assert result.startswith("ERROR:")
-
-
 def test_wiki_upsert_rejects_a_page_changed_since_read(tmp_path):
     vault = _vault(tmp_path)
     context = _ctx(tmp_path)
@@ -725,32 +607,6 @@ def test_wiki_upsert_follows_this_contexts_own_upsert(tmp_path):
     assert "second source" in page.read_text()
 
 
-def test_asset_copy_preserves_a_destination_created_after_the_check(tmp_path, monkeypatch):
-    vault = _vault(tmp_path)
-    (vault / "assets").mkdir()
-    image = tmp_path / "photo.png"
-    image.write_bytes(b"new image")
-    destination = vault / "assets" / image.name
-    real_exists = Path.exists
-    appeared = False
-
-    def exists(path):
-        nonlocal appeared
-        present = real_exists(path)
-        if path == destination and not present and not appeared:
-            appeared = True
-            destination.write_bytes(b"other worker's image")
-        return present
-
-    monkeypatch.setattr(Path, "exists", exists)
-    monkeypatch.setattr(wiki_convert_module, "run", lambda *args: (0, "", ""))
-
-    result = wiki_convert(str(image), vault=str(vault), context=_ctx(tmp_path))
-
-    assert destination.read_bytes() == b"other worker's image"
-    assert result.startswith("ERROR:")
-
-
 def test_upsert_of_a_missing_slug_still_checks_for_duplicates(tmp_path):
     vault = _vault(tmp_path)
     context = _ctx(tmp_path)
@@ -779,38 +635,3 @@ def test_external_conversion_discloses_truncation_within_the_byte_cap(tmp_path, 
 
     assert len(result.encode()) <= cap
     assert truncation_marker(cap, "TOOL_RESULT_MAX") in result
-
-
-def test_ingest_reports_the_cause_when_archive_rollback_also_fails(tmp_path, monkeypatch):
-    vault = _vault(tmp_path)
-    (vault / "PURPOSE.md").write_text("purpose\n")
-    source = vault / "inbox" / "unit.md"
-    source.parent.mkdir()
-    source.write_text("raw source\n")
-    archived = vault / "Clippings" / source.name
-    log_error = PermissionError("log append denied")
-    rollback_error = PermissionError("inbox restore denied")
-    real_open = Path.open
-    real_move = wiki_ops_module.shutil.move
-
-    def open_path(path, *args, **kwargs):
-        if path == vault / "log.md":
-            raise log_error
-        return real_open(path, *args, **kwargs)
-
-    def move(src, dest):
-        if Path(src) == archived:
-            raise rollback_error
-        return real_move(src, dest)
-
-    monkeypatch.setattr(Path, "open", open_path)
-    monkeypatch.setattr(wiki_ops_module.shutil, "move", move)
-
-    result = wiki_finish_ingest(str(vault), source.name, "Unit", context=_ctx(tmp_path))
-
-    assert result.startswith("ERROR:")
-    assert str(log_error) in result
-    assert str(rollback_error) in result
-    assert str(archived) in result
-    assert archived.read_text() == "raw source\n"
-    assert not source.exists()

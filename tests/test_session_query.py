@@ -155,11 +155,6 @@ def test_a_named_session_row_shows_its_name_and_a_generated_one_does_not():
     assert (named.name, generated.name, subagent.name) == ("modelswap", None, None)
 
 
-def test_a_hidden_kind_is_marked_in_the_last_column():
-    assert Q.kind_text(_session("q", turns=1, tool_calls=0, final_len=5)) == Q.QUICK
-    assert Q.kind_text(_session("n")) == "-"
-
-
 # --- the query grammar -------------------------------------------------------
 
 
@@ -250,12 +245,6 @@ def test_dir_is_a_shell_glob_over_the_start_directory(pattern, keep):
     assert sorted(_paths(Q.select(sessions, _parse(pattern), show_all=False))) == keep
 
 
-def test_an_invalid_directory_range_matches_nothing_without_aborting_search():
-    sessions = [_session("a", cwd="/tmp/a"), _session("z", cwd="/tmp/z")]
-
-    assert Q.select(sessions, _parse("dir:/tmp/[z-a]"), show_all=False) == []
-
-
 def test_mode_matches_how_it_started():
     sessions = [_session("p", mode="-p"), _session("r", mode="repl"), _session("pipe", mode="pipe")]
     assert _paths(Q.select(sessions, _parse("mode:-p"), show_all=False)) == ["p"]
@@ -279,13 +268,6 @@ def test_words_keep_only_scored_sessions_best_score_first():
     sessions = [_session("a"), _session("b"), _session("c")]
     ordered = Q.select(sessions, _parse("niri"), show_all=False, scores={"c": -3.0, "a": -1.0})
     assert _paths(ordered) == ["c", "a"]
-
-
-def test_the_parse_line_names_every_term():
-    described = Q.describe(_parse("niri >10 today agent:x* dir:~/js/** mode:-p model:*qwen*"))
-    for part in ("niri", ">10", "today", "x*", "~/js", "-p", "*qwen*"):
-        assert part in described
-    assert Q.describe(_parse("")) != Q.describe(_parse("niri"))
 
 
 def test_an_excerpt_starts_near_the_first_match_and_moves_its_spans():

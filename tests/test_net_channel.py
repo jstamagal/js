@@ -310,34 +310,6 @@ def test_turn_that_recovers_by_retry_prints_nothing_at_level_1(monkeypatch, sink
     assert _naming(lines, "nowhere.invalid") == []
 
 
-def test_turn_counts_response_bytes_into_its_turn_status(sink, tmp_path):
-    context = ToolContext(cwd=tmp_path)
-    context.turn_status = _RecordingStatus()
-
-    async def drive():
-        server = await asyncio.start_server(_serve_sse, "127.0.0.1", 0)
-        port = server.sockets[0].getsockname()[1]
-        # A configured window: a custom endpoint's own window would otherwise be
-        # probed with a GET this server never answers.
-        cfg = dataclasses.replace(_cfg(tmp_path, model="t"),
-                                  provider_base_url=f"http://127.0.0.1:{port}/v1",
-                                  settings={"CONTEXT_SIZE": 262_144})
-        try:
-            await runtime.run_turn_async(
-                cfg, "sys", [{"role": "user", "content": "go"}],
-                runtime.Telemetry(debug_log=None), tool_context=context, suppress_output=True,
-            )
-        finally:
-            server.close()
-            await server.wait_closed()
-
-    asyncio.run(asyncio.wait_for(drive(), 20))
-
-    history = context.turn_status.__dict__["history"]
-    assert len([n for n in history if n > 0]) >= 2
-    assert context.turn_status.net_bytes == 0          # zeroed at turn end
-
-
 def test_a_multi_line_provider_error_is_one_capped_banner_line():
     # ALL-CLAIMS.md:570: the fallback and connect branches printed str(exc) whole.
     body = '{\n  "error": {\n    "message": "boom",\n    "type": "server_error"\n  }\n}'

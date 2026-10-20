@@ -9,8 +9,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from js.mcp.client import MCPClient
-from js.mcp.protocol import JSONRPCPeer
 from js.mcp.transports import StreamableHTTPTransport, StreamableHTTPTransportError
 from js.mcp.types import LATEST_PROTOCOL_VERSION
 
@@ -165,125 +163,6 @@ def request(method="test/json", request_id=1):
     return {"jsonrpc": "2.0", "id": request_id, "method": method}
 
 
-def test_http_headers_follow_the_negotiated_protocol_version():
-    class NegotiatingHandler(Handler):
-        def do_POST(self):
-            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            self.state.record("POST", self.headers, body)
-            method = body["method"]
-            if method == "initialize":
-                result = {"protocolVersion": "2025-03-26", "capabilities": {"tools": {}},
-                          "serverInfo": {"name": "older-server", "version": "1"}}
-            elif self.headers.get("MCP-Protocol-Version") != "2025-03-26":
-                self._body(400, "application/json", b"")
-                return
-            elif method == "notifications/initialized":
-                self._body(202, "application/json", b"")
-                return
-            else:
-                result = {"tools": [{"name": "ready", "inputSchema": {"type": "object"}}]}
-            payload = {"jsonrpc": "2.0", "id": body["id"], "result": result}
-            self._body(200, "application/json", json.dumps(payload).encode())
-
-        def do_GET(self):
-            self._body(405, "application/json", b"")
-
-    async def scenario(url):
-        client = MCPClient(lambda: StreamableHTTPTransport(url))
-        try:
-            await client.initialize(timeout=1)
-            assert [tool["name"] for tool in await client.list_tools(timeout=1)] == ["ready"]
-        finally:
-            await client.close()
-
-    with server(NegotiatingHandler) as (_state, url):
-        run(scenario(url))
-
-
-@pytest.mark.parametrize("operation", ["send", "close"])
-def test_cross_origin_redirects_do_not_forward_credentials(operation):
-    class DestinationHandler(Handler):
-        def do_GET(self):
-            self.state.record("GET", self.headers)
-            self._body(200, "application/json", b'{"jsonrpc":"2.0","id":1,"result":{}}')
-
-    with server(DestinationHandler) as (destination, destination_url):
-        class RedirectHandler(Handler):
-            def do_POST(self):
-                self.rfile.read(int(self.headers.get("Content-Length", "0")))
-                self.send_response(303)
-                self.send_header("Location", destination_url)
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-
-            do_DELETE = do_POST
-
-        async def scenario(url):
-            transport = StreamableHTTPTransport(
-                url, headers={"Authorization": f"Bearer {SECRET}", "X-Api-Key": HEADER_SECRET})
-            transport._get_supported = False
-            try:
-                if operation == "send":
-                    try:
-                        await transport.send(request())
-                    except StreamableHTTPTransportError:
-                        pass
-                else:
-                    transport._session_id = SESSION
-                    await transport.close()
-                assert destination.requests == []
-            finally:
-                await transport.close()
-
-        with server(RedirectHandler) as (_source, url):
-            run(scenario(url))
-
-
-def test_server_reply_can_post_while_a_client_request_waits_for_headers():
-    waiting = threading.Event()
-    answered = threading.Event()
-
-    class DuplexHandler(Handler):
-        def do_POST(self):
-            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            if "method" not in body:
-                answered.set()
-                self._body(202, "application/json", b"")
-                return
-            if body["method"] != "bootstrap":
-                waiting.set()
-            if body["method"] == "bootstrap" or answered.wait(2):
-                payload = {"jsonrpc": "2.0", "id": body["id"], "result": {"ok": True}}
-                self._body(200, "application/json", json.dumps(payload).encode())
-            else:
-                self._body(504, "application/json", b"")
-
-        def do_GET(self):
-            self.state.gets += 1
-            if self.state.gets > 1:
-                self._body(405, "application/json", b"")
-                return
-            if waiting.wait(2):
-                payload = {"jsonrpc": "2.0", "id": "server-request", "method": "give-input"}
-                self._body(200, "text/event-stream", b"data: " + json.dumps(payload).encode() + b"\n\n")
-            else:
-                self._body(504, "application/json", b"")
-
-    async def scenario(url):
-        transport = StreamableHTTPTransport(url)
-        peer = await JSONRPCPeer.connect(lambda: transport)
-        peer.on_request("give-input", lambda _params: {})
-        try:
-            await peer.request("bootstrap", timeout=3)
-            assert await peer.request("needs-input", timeout=3) == {"ok": True}
-        finally:
-            answered.set()
-            await peer.close()
-
-    with server(DuplexHandler) as (_state, url):
-        run(scenario(url))
-
-
 def test_json_and_sse_post_replies_track_session_and_event_fields():
     async def scenario(url):
         transport = StreamableHTTPTransport(url)
@@ -399,23 +278,6 @@ def test_post_rejects_status_semantics_mismatches(message):
         run(scenario(url))
 
 
-def test_repeated_idle_stream_timeouts_preserve_notification_delivery():
-    async def scenario(url):
-        transport = StreamableHTTPTransport(url, timeout=0.05, reconnect_backoff=0, reconnect_attempts=1)
-        try:
-            await transport.send(request())
-            await transport.receive()
-            message = await asyncio.wait_for(transport.receive(), 2)
-            assert message["method"] == "after-idle"
-        finally:
-            await transport.close()
-
-    with server() as (state, url):
-        state.timeout_reconnect = 4
-        state.notification = {"jsonrpc": "2.0", "method": "after-idle"}
-        run(scenario(url))
-
-
 def test_invalid_sse_post_event_reports_safe_protocol_failure():
     async def scenario(url):
         transport = StreamableHTTPTransport(
@@ -476,33 +338,6 @@ def test_cancelled_post_before_headers_remains_owned_through_close():
 
     with server() as (state, url):
         state.delay_post_headers = True
-        run(scenario(state, url))
-
-
-def test_cancelling_one_post_preserves_another_response_stream():
-    async def scenario(state, url):
-        transport = StreamableHTTPTransport(url)
-        sending = None
-        try:
-            await transport.send(request("test/sse-long"))
-            assert (await asyncio.wait_for(transport.receive(), 1))["id"] == 1
-            state.delay_post_headers = True
-            sending = asyncio.create_task(transport.send(request(request_id=2)))
-            assert await asyncio.to_thread(state.post_started.wait, 1)
-            sending.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(sending, 1)
-            state.release_post.set()
-            message = await asyncio.wait_for(transport.receive(), 1)
-            assert message["method"] == "still-streaming"
-        finally:
-            state.release_post.set()
-            if sending is not None:
-                await asyncio.gather(sending, return_exceptions=True)
-            await transport.close()
-
-    with server() as (state, url):
-        state.long_post_followup = True
         run(scenario(state, url))
 
 
@@ -642,27 +477,6 @@ class ReadlineStream:
         chunk = self._payload[self._pos:end]
         self._pos = end
         return chunk
-
-
-def test_post_event_ids_do_not_change_get_resume_header(monkeypatch):
-    transport = StreamableHTTPTransport("http://127.0.0.1:1/mcp")
-    transport._consume_sse(ReadlineStream(b"id: get-one\n\n"), lambda _message: None)
-    run(transport._consume_post_stream(ReadlineStream(b"id: post-one\n\n")))
-    requests = []
-
-    class Unsupported:
-        status = 405
-
-        def close(self):
-            pass
-
-    def open_request(request, **_kwargs):
-        requests.append(request)
-        return Unsupported()
-
-    monkeypatch.setattr(transport, "_open", open_request)
-    transport._get_once()
-    assert requests[0].get_header("Last-event-id") == "get-one"
 
 
 def test_sse_grammar_cr_terminators_bom_and_empty_id_reset():

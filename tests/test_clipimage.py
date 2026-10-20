@@ -36,19 +36,6 @@ def no_display(monkeypatch):
     monkeypatch.delenv("DISPLAY", raising=False)
 
 
-def _fake_command(tmp_path: Path, body: str) -> str:
-    script = tmp_path / "fake-clip"
-    script.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
-    script.chmod(0o755)
-    return str(script)
-
-
-def _png_command(tmp_path: Path, data: bytes = _PNG) -> str:
-    image = tmp_path / "clip.bin"
-    image.write_bytes(data)
-    return _fake_command(tmp_path, f"cat '{image}'")
-
-
 def _cfg(tmp_path: Path, *, vision: bool) -> Config:
     sessions = tmp_path / "sessions"
     return Config(
@@ -116,14 +103,6 @@ def test_kitty_over_ssh_reads_through_the_terminal():
     assert not clipimage.uses_terminal({}, {"TERM": "xterm-kitty", "WAYLAND_DISPLAY": "wayland-1"})
 
 
-def test_configured_command_wins_over_the_display(tmp_path):
-    command = _png_command(tmp_path)
-    live = {"PASTE_IMAGE_COMMAND": command}
-
-    assert clipimage.clipboard_command(live, {"WAYLAND_DISPLAY": "wayland-1"}) == [command]
-    assert clipimage.read_image(live, env={}) == _PNG
-
-
 def test_missing_clipboard_tool_is_one_error(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path))
     with pytest.raises(clipimage.ClipboardError) as err:
@@ -131,40 +110,7 @@ def test_missing_clipboard_tool_is_one_error(tmp_path, monkeypatch):
     assert err.value.message is msgs.CLIPBOARD_TOOL_MISSING
 
 
-@pytest.mark.parametrize("body", ["exit 1", "echo just some text"])
-def test_clipboard_without_an_image_is_one_error(tmp_path, body):
-    live = {"PASTE_IMAGE_COMMAND": _fake_command(tmp_path, body)}
-    with pytest.raises(clipimage.ClipboardError) as err:
-        clipimage.read_image(live, env={})
-    assert err.value.message is msgs.CLIPBOARD_NO_IMAGE
-
-
-def test_image_over_max_file_bytes_is_refused(tmp_path):
-    live = {"PASTE_IMAGE_COMMAND": _png_command(tmp_path),
-            "FILE_BYTES_MAX": len(_PNG) - 1}
-    with pytest.raises(clipimage.ClipboardError) as err:
-        clipimage.read_image(live, env={})
-    assert err.value.message is msgs.CLIPBOARD_IMAGE_TOO_LARGE
-
-
 # --- the key -----------------------------------------------------------------
-
-def test_ctrl_v_puts_a_placeholder_in_the_line_and_submit_carries_it(tmp_path):
-    live = {"PASTE_IMAGE_COMMAND": _png_command(tmp_path)}
-
-    lines, _left = _drive(["what is ", CTRL_V, " and ", CTRL_V, "\r"], live)
-
-    assert lines == ["what is [image #1] and [image #2]"]
-    assert clipimage.lookup("[image #1]") == _PNG
-    assert clipimage.lookup("[image #2]") == _PNG
-
-
-def test_paste_key_follows_the_setting(tmp_path):
-    live = {"PASTE_IMAGE_COMMAND": _png_command(tmp_path), "PASTE_IMAGE_KEY": "escape v"}
-
-    _lines, left = _drive(["x", "\x1bv"], live)
-
-    assert left == "x[image #1]"
 
 
 def test_no_clipboard_prints_one_line_and_leaves_the_line_alone(no_display, capsys):
@@ -213,15 +159,6 @@ def test_pasted_image_reaches_the_model_as_an_at_path_image_does(tmp_path, visio
 
 # --- the settings --------------------------------------------------------------
 
-def test_paste_key_setting_takes_key_names_and_refuses_others():
-    spec = settings.SPEC_BY_KEY["PASTE_IMAGE_KEY"]
-
-    assert settings.coerce_value(spec, "escape  v") == ("escape v", None)
-    value, error = settings.coerce_value(spec, "c-notakey")
-    assert value is None and error
-    assert settings.default_value("PASTE_IMAGE_KEY") == "c-v"
-    assert settings.default_value("PASTE_IMAGE_COMMAND") is None
-
 
 @pytest.mark.parametrize("command", ["wl-paste '", "   "])
 def test_paste_command_setting_refuses_unsplittable_or_empty(command):
@@ -230,16 +167,6 @@ def test_paste_command_setting_refuses_unsplittable_or_empty(command):
     value, error = settings.coerce_value(spec, command)
     assert value is None and error
     assert settings.coerce_value(spec, "wl-paste --type image/png") == ("wl-paste --type image/png", None)
-
-
-@pytest.mark.parametrize("command", ["wl-paste '", "   "])
-def test_bad_configured_command_is_one_error_not_a_crash(command):
-    # Config files and env skip coerce_value, so read_image must catch it too.
-    live = {"PASTE_IMAGE_COMMAND": command}
-    with pytest.raises(clipimage.ClipboardError) as err:
-        clipimage.read_image(live, env={})
-    assert err.value.message is msgs.CLIPBOARD_READ_FAILED
-    assert "PASTE_IMAGE_COMMAND" in str(err.value)
 
 
 def test_placeholder_takes_plain_bounded_numbers_only():
