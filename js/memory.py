@@ -662,6 +662,11 @@ def _replay_records(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | No
                         tail = messages[keep_from:]
                         originals = list(tail)
                         drop_signed_reasoning(tail)
+                        if stamps is not None:
+                            for original, copy in zip(originals, tail, strict=True):
+                                entry = stamps.get(id(original))
+                                if copy is not original and entry is not None and entry[0] is original:
+                                    stamps[id(copy)] = (copy, entry[1])
                         if log is not None:
                             log.copied(originals, tail)
                         messages[:] = [_compaction_summary_message(data["summary"]),

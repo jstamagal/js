@@ -181,3 +181,16 @@ def test_restarting_thinking_keeps_steered_attachments_between_completed_rounds(
     assert json.loads(messages[5]["content"].split("\n", 1)[1]) == second
     projected = model_client.history_to_ai_messages("", messages, provider_id="anthropic", model_id="m")
     assert projected[4].parts[-1] is attachment
+
+
+def test_compaction_keeps_the_stamp_of_a_retained_signed_reply(tmp_path):
+    path = tmp_path / "signed.jsonl"
+    stamp = M.stamp_for("model-y", "anthropic", "high")
+    M.append_message(path, {"role": "user", "content": "question"})
+    M.append_message(path, {"role": "assistant", "content": "answer",
+                            "reasoning_parts": [{"type": "thinking", "signature": "sig"}],
+                            "reasoning_from": {"provider": "anthropic", "model": "model-y"}}, stamp=stamp)
+    M.append_compaction_mark(path, summary="earlier work", keep_from=1)
+
+    assert M.load_replay_messages(path)[-1] == {"role": "assistant", "content": "answer"}
+    assert M.last_reply_stamp(path) == stamp
