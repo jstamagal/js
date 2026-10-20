@@ -12,9 +12,9 @@
 #   commented out again. /save never writes a backup copy of this file.
 #
 #   Syntax:
-#       set some.setting value      give a setting a value
-#       set -some.setting           clear it (nothing set, js decides)
-#       #set some.setting value     commented out: js ignores the line
+#       set SOME_SETTING value      give a setting a value
+#       set -SOME_SETTING           clear it (nothing set, js decides)
+#       #set SOME_SETTING value     commented out: js ignores the line
 #
 #   Who wins when the same setting is set in more than one place,
 #   weakest first:
@@ -23,8 +23,8 @@
 #       <  js --extra key=value
 #
 #   Every setting also reads an environment variable named after it:
-#   ui.reasoning -> JS_UI_REASONING, limits.fetch_timeout_s ->
-#   JS_LIMITS_FETCH_TIMEOUT_S, and so on.
+#   FETCH_TIMEOUT -> JS_FETCH_TIMEOUT, ui.reasoning -> JS_UI_REASONING, and
+#   so on.
 #
 #   Inside js:  /set              list every setting and its current value
 #               /show <setting>   one setting, with its help text
@@ -40,9 +40,9 @@
 # provider/model. The provider part is the name of a login in
 # ~/.js/logins/logins.toml or a provider js knows. A bare model name with no
 # provider/ in front goes to the Vercel AI Gateway.
-#   example:  set model.id cpa/claude-opus-5-5
-#   example:  set model.id deepseek/deepseek-v4-flash
-#set model.id deepseek/deepseek-v4-flash
+#   example:  set MODEL cpa/claude-opus-5-5
+#   example:  set MODEL deepseek/deepseek-v4-flash
+#set MODEL deepseek/deepseek-v4-flash
 
 # How hard the model thinks before it answers. From least to most:
 #   off      no thinking at all
@@ -55,67 +55,67 @@
 # More thinking: slower, more tokens, often better on hard problems.
 # Unset: the provider's own default for that model. An agent's agent.yaml
 # can set its own effort, and a one-shot `js -p` uses that.
-#   example:  set model.reasoning_effort medium
-#set -model.reasoning_effort
+#   example:  set EFFORT medium
+#set -EFFORT
 
 # Largest reply the model may write in one call, in tokens. Thinking counts
 # toward it. Unset: the model's own limit from the model catalog, or no
 # limit sent at all if the catalog doesn't know the model.
-#   example:  set model.max_output_tokens 32000
-#set -model.max_output_tokens
+#   example:  set OUTPUT_TOKENS_MAX 32000
+#set -OUTPUT_TOKENS_MAX
 
 # The model's context window in tokens: how much conversation it can hold.
 # js uses this number to decide when the conversation is getting full and
 # needs compacting. Set it when the catalog has it wrong, or when your
 # endpoint gives you a different size than the public one. This one number
 # applies to whatever model is active. To set different sizes for different
-# models, use compact.context_window_overrides instead.
-#   example:  set model.context_window 1000000
-#set -model.context_window
+# models, use CONTEXT_SIZE_PER_MODEL instead.
+#   example:  set CONTEXT_SIZE 1000000
+#set -CONTEXT_SIZE
 
 # Only for Anthropic-format endpoints, and only for older models that think
 # against a token budget: Claude 4.5 and earlier, MiniMax, opencode-go.
 # This is the budget in tokens. Newer Claude models think adaptively and
-# ignore it. Unset: js picks a budget from model.reasoning_effort.
-#   example:  set model.thinking_budget 16000
-#set -model.thinking_budget
+# ignore it. Unset: js picks a budget from EFFORT.
+#   example:  set THINKING_BUDGET 16000
+#set -THINKING_BUDGET
 
 # Whether js sends images to the model.
 #   on      always send the image itself
 #   off     never send images
 #   unset   js guesses from what the catalog says the model can see
 # Turn it on when your model can see images but js doesn't know that.
-#   example:  set model.vision on
-#set -model.vision
+#   example:  set VISION on
+#set -VISION
 
 
 ################################################################################
 #  PROVIDER  --  where the requests go
 ################################################################################
 
-# Force a provider instead of reading it from model.id. It's the name of a
+# Force a provider instead of reading it from MODEL. It's the name of a
 # login from `js login` or a provider js knows: deepseek, openai-codex,
 # ollama, cpa ...
-#   example:  set provider.id cpa
-#set -provider.id
+#   example:  set PROVIDER cpa
+#set -PROVIDER
 
 # Force the address requests go to. Leave the API path off the end when the
 # login talks Anthropic format: js adds /v1/messages itself, so
 # http://host:8999/v1 there becomes /v1/v1/messages and fails with a 404.
 # OpenAI-format endpoints usually do want the /v1.
-#   example:  set provider.base_url http://vader:8999
-#set -provider.base_url
+#   example:  set BASE_URL http://vader:8999
+#set -BASE_URL
 
 # Force the API key. Unset: the key from your login or the provider's usual
 # environment variable. This file is plain text, so prefer `js login`.
-#   example:  set provider.api_key sk-...
-#set -provider.api_key
+#   example:  set API_KEY sk-...
+#set -API_KEY
 
 # Extra fields js adds to every request body, as JSON. For provider options
 # js has no setting for.
-#   example:  set provider.extra {"include_reasoning": true}
-#   example:  set provider.extra {"top_a": 0.1}
-#set provider.extra {}
+#   example:  set EXTRA_PARAMS {"include_reasoning": true}
+#   example:  set EXTRA_PARAMS {"top_a": 0.1}
+#set EXTRA_PARAMS {}
 
 
 ################################################################################
@@ -124,13 +124,18 @@
 
 # The agent js runs when you don't pass --agent. It's a folder name under
 # ~/.js/agents/. Read when js starts, so a change applies to the next run.
-#   example:  set agent forge
-#set agent defaultagent
+#   example:  set DEFAULT_AGENT forge
+#set DEFAULT_AGENT defaultagent
 
 
 ################################################################################
 #  SCREEN  --  what you see while js works
 ################################################################################
+
+# What starts each line js prints about its own state, such as the answer
+# to /set.
+#   example:  set BANNER -!-
+#set BANNER ***
 
 # The model's thinking, on screen.
 #   0  hidden; you never see it
@@ -194,8 +199,8 @@
 #   emacs  Enter sends the line
 #   vi     a multi-line box; Esc then :x sends, Esc then : opens a command
 #          line
-#   example:  set ui.editing_mode vi
-#set ui.editing_mode emacs
+#   example:  set EDITING_MODE vi
+#set EDITING_MODE emacs
 
 
 # --- status bar colours, #rrggbb ---
@@ -243,24 +248,24 @@
 # The key that pastes an image from the clipboard into your message. It
 # shows up as [image #N] and is sent with the line. Key names look like
 # c-v (Ctrl-V) or escape v (Esc then V). Clear it to bind no key.
-#   example:  set ui.paste_image_key escape v
-#set ui.paste_image_key c-v
+#   example:  set PASTE_IMAGE_KEY escape v
+#set PASTE_IMAGE_KEY c-v
 
 # The command js runs to get the clipboard image. Unset:
 # `wl-paste --type image/png` on Wayland,
 # `xclip -selection clipboard -t image/png -o` on X11.
-#   example:  set ui.paste_image_command xclip -selection clipboard -t image/png -o
-#set -ui.paste_image_command
+#   example:  set PASTE_IMAGE_COMMAND xclip -selection clipboard -t image/png -o
+#set -PASTE_IMAGE_COMMAND
 
 # A paste longer than this many lines shows in the input line as one
 # [paste #N +X lines] marker so it doesn't flood your screen. The whole
 # text is still sent. 0: no line limit.
-#   example:  set ui.paste_collapse_lines 40
-#set ui.paste_collapse_lines 10
+#   example:  set PASTE_COLLAPSE_LINES 40
+#set PASTE_COLLAPSE_LINES 10
 
 # Same as above, counted in characters. When both are 0, pastes are never
 # collapsed.
-#set ui.paste_collapse_chars 1000
+#set PASTE_COLLAPSE_CHARS 1000
 
 
 ################################################################################
@@ -269,18 +274,18 @@
 
 # Where every line you type at the prompt is saved, for all js runs.
 # Unset: ~/.js/state/history.jsonl
-#set -history.file
+#set -HISTORY_FILE
 
 # Up arrow order.
-#   on   lines you typed in this directory come first, newest first, then
-#        the rest
-#   off  every line in plain time order
+#   last  every line, newest first
+#   cwd   lines you typed in this directory come first, newest first, then
+#         the rest
 # Ctrl-R searches all of them either way.
-#   example:  set history.cwd_first off
-#set history.cwd_first on
+#   example:  set HISTORY_ORDER cwd
+#set HISTORY_ORDER last
 
 # How many past lines are loaded for Up and Ctrl-R.
-#set history.max_entries 10000
+#set HISTORY_SIZE 10000
 
 
 ################################################################################
@@ -293,7 +298,7 @@
 # scroll_down, complete.
 # Unset: ~/.js/keys when it exists.
 #   example line in that file:  bind c-t reasoning_toggle
-#set -keys.file
+#set -KEYBINDS_FILE
 
 
 ################################################################################
@@ -332,35 +337,35 @@
 
 # Most tool calls the model may make in one turn before js stops it with
 # "Tool loop hit max iterations".
-#   example:  set limits.max_tool_iterations 1000
-#set limits.max_tool_iterations 500
+#   example:  set TURN_ROUNDS_MAX 1000
+#set TURN_ROUNDS_MAX 500
 
 # Most separate tool calls js accepts from one reply. Exact duplicates are
 # merged first. The rest are refused with a note to the model.
-#set limits.max_tool_calls_per_message 50
+#set REPLY_TOOL_CALLS_MAX 50
 
 # How many read-only calls from one reply run at the same time (reads,
 # searches, fetches). A call that writes always runs alone, in order.
 # 1: everything runs one after another.
-#set runtime.max_parallel_tools 8
+#set PARALLEL_TOOLS_MAX 8
 
 # Whether the model may hand work to subagents, and how deep: a subagent
 # starting its own subagent is depth 2.
-#set limits.task_max_depth 2
+#set SUBAGENT_DEPTH_MAX 2
 
 # Most subagents one task call runs at once.
-#set limits.subagent_max_workers 8
+#set SUBAGENT_WORKERS_MAX 8
 
 # Subagents run on your current model instead of the one their own agent
 # names.
-#set subagents.prefer_inherit off
+#set SUBAGENT_INHERIT_MODEL off
 
 # Stop the model from choosing which model a subagent runs on.
-#set subagents.lock_model off
+#set SUBAGENT_MODEL_LOCK off
 
 # In a swarm, how many agents may be in the middle of a turn at the same
 # time. 0: no limit.
-#set swarm.slots 0
+#set SWARM_ACTIVE_MAX 0
 
 
 ################################################################################
@@ -370,24 +375,20 @@
 # Most shell output the model sees from one command, stdout and stderr
 # together, in bytes. Past that it gets the start and the end, plus the path
 # of a file holding all of it.
-#   example:  set limits.max_bash_output_bytes 1000000
-#set limits.max_bash_output_bytes 262144
-
-# A second cap on shell output, in bytes. The model gets whichever of this
-# and limits.max_bash_output_bytes is smaller. 0: no second cap.
-#set limits.max_bash_output_ceiling 150000
+#   example:  set SHELL_OUTPUT_MAX 1000000
+#set SHELL_OUTPUT_MAX 262144
 
 # A tool result bigger than this many bytes is saved to a file, and the
 # model gets a preview plus the path, so nothing is cut off and lost.
 # 0: off.
-#set limits.max_tool_result_inline_bytes 51200
+#set TOOL_RESULT_INLINE_MAX 51200
 
 # Hard cap on any single tool result, in bytes. Past it, the result is cut.
-#set limits.max_tool_result_bytes 262144
+#set TOOL_RESULT_MAX 262144
 
 # Cap on all results from one batch of parallel calls added together, in
 # bytes. The biggest results are cut first. 0: no cap.
-#set limits.max_tool_results_per_turn_bytes 200000
+#set PARALLEL_RESULTS_MAX 200000
 
 
 ################################################################################
@@ -395,21 +396,21 @@
 ################################################################################
 
 # Most lines one read() returns.
-#set limits.max_read_lines 2000
+#set READ_LINES_MAX 2000
 
 # Biggest file read() will read whole, in bytes. A read that asks for a
 # line range or a byte range works on any size file.
-#set limits.max_read_bytes 262144
+#set READ_BYTES_MAX 262144
 
 # Biggest file the other file tools (search and friends) will open.
-#set limits.max_file_bytes 2000000
+#set FILE_BYTES_MAX 2000000
 
 # A text file you attach to a message is cut at this many bytes.
-#set limits.max_text_attachment_bytes 65536
+#set ATTACHMENT_MAX 65536
 
 # How many lines of each cell output read() shows for a notebook (.ipynb).
 # The rest are counted, not shown. 0: just what kind of output each one is.
-#set notebook.output_lines 10
+#set NOTEBOOK_OUTPUT_LINES_MAX 10
 
 
 ################################################################################
@@ -418,24 +419,24 @@
 
 # How long one fetch() may take, in seconds, start to finish. Also the
 # timeout for the web search tools.
-#   example:  set limits.fetch_timeout_s 60
-#set limits.fetch_timeout_s 15
+#   example:  set FETCH_TIMEOUT 60
+#set FETCH_TIMEOUT 15
 
 # How long browse() may spend loading a page, in seconds. The browser gives
 # up a second early so whatever did load is still returned.
-#set limits.browse_timeout_s 60
+#set BROWSE_TIMEOUT 60
 
 # How long a file download (fetch with save=, or anything binary or huge)
 # may take, in seconds.
-#set limits.download_timeout_s 300
+#set DOWNLOAD_TIMEOUT 300
 
 # Biggest file fetch(save=...) may download, in bytes. 0: no limit; a
 # download goes straight to disk, so even a huge one is fine.
-#set limits.max_download_bytes 0
+#set DOWNLOAD_MAX 0
 
 # The User-Agent fetch and the web searches send.
-#   example:  set tools.user_agent Mozilla/5.0
-#set tools.user_agent js-agent/0.1
+#   example:  set HTTP_USER_AGENT Mozilla/5.0
+#set HTTP_USER_AGENT js-agent/0.1
 
 
 ################################################################################
@@ -445,25 +446,25 @@
 # The shell the model's commands run in: a name on your PATH, or a full
 # path. bash and zsh run with pipefail, so a pipeline fails when any part
 # of it fails.
-#   example:  set shell.program zsh
-#set shell.program bash
+#   example:  set SHELL_PROGRAM zsh
+#set SHELL_PROGRAM bash
 
 # How long a shell call waits for its command to finish before handing the
 # model a handle to check back with. The command keeps running; nothing is
 # killed.
-#   example:  set shell.wait_seconds 120
-#set shell.wait_seconds 30
+#   example:  set SHELL_WAIT 120
+#set SHELL_WAIT 30
 
 # Environment variables every shell command gets without the model having
 # to ask for each one. A JSON list of names.
-#   example:  set limits.shell_env_allow ["PATH", "HOME", "USER", "TERM", "GITHUB_TOKEN"]
-#set limits.shell_env_allow ["PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "PWD", "SHELL", "BEADS_ACTOR"]
+#   example:  set SHELL_ENV_KEEP ["PATH", "HOME", "USER", "TERM", "GITHUB_TOKEN"]
+#set SHELL_ENV_KEEP ["PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "PWD", "SHELL", "BEADS_ACTOR"]
 
 # Only when you run `js -C DIR`, which locks commands inside DIR: more paths
 # the commands can still see. A JSON list. "path" is read-only, "path:rw" is
 # read-write. Paths that don't exist are skipped.
-#   example:  set jail.bind ["~/.gitconfig", "~/notes:rw"]
-#set jail.bind ["~/.gitconfig", "~/.config/git", "~/.local/share/uv", "~/.cache/uv:rw"]
+#   example:  set JAIL_BIND ["~/.gitconfig", "~/notes:rw"]
+#set JAIL_BIND ["~/.gitconfig", "~/.config/git", "~/.local/share/uv", "~/.cache/uv:rw"]
 
 
 ################################################################################
@@ -480,7 +481,7 @@
 
 # Enable kernel and toolbox after installing the kernel extra:
 #   uv sync --extra kernel
-#set kernel.enabled off
+#set PYTHON_KERNEL off
 
 # Most lines shown per part of a kernel result on screen, so one huge
 # output can't scroll everything away. The model still gets all of it.
@@ -488,7 +489,7 @@
 
 # How long a kernel call waits for its code before handing the model a
 # handle to check back with. The code keeps running.
-#set kernel.wait_seconds 5
+#set PYTHON_KERNEL_WAIT 5
 
 
 ################################################################################
@@ -499,10 +500,10 @@
 # found in prompt files and put their output into the prompt. That runs
 # code from those files every time.
 #   off  never run them
-#set runtime.allow_inline_code on
+#set INLINE_CODE on
 
 # How long one of those may run, in seconds.
-#set limits.inline_code_timeout_s 300
+#set INLINE_CODE_TIMEOUT 300
 
 
 ################################################################################
@@ -513,24 +514,24 @@
 # rate limited (429), a server error (5xx), or a stream that dropped or
 # went quiet. It waits as long as the provider asks, otherwise 1s, 2s, 4s,
 # 8s, then 16s each time. 0: give up on the first error.
-#set runtime.retry_attempts 10
+#set RETRY_COUNT_MAX 10
 
 # Longest wait js accepts when a provider says "retry after N seconds". If
 # it asks for longer, js fails right away instead. 0: wait as long as asked.
-#set runtime.retry_max_wait_seconds 120
+#set RETRY_WAIT_MAX 120
 
 # A request that gets no data for this many seconds is dropped and retried.
 # Keep-alive pings count as data. 0: wait forever.
-#set runtime.stream_idle_seconds 300
+#set STREAM_IDLE_TIMEOUT 300
 
 # A reply cut off at its token limit is sent once more with this bigger
 # limit, when that's bigger than what was used and the model allows it.
 # 0: never.
-#set runtime.max_output_escalation 64000
+#set OUTPUT_TOKENS_RETRY_MAX 64000
 
 # After a reply gets cut off, how many times per turn js keeps what was
 # written and tells the model to carry on. 0: the turn just ends at the cut.
-#set runtime.max_output_resumes 3
+#set OUTPUT_RESUMES_MAX 3
 
 
 ################################################################################
@@ -542,7 +543,7 @@
 #          you; if no tool call is left, after the turn ends
 #   batch  everything you typed goes in as one message after the turn ends
 #   one    each line becomes its own turn, in order
-#set runtime.steer now
+#set STEER_MODE now
 
 
 ################################################################################
@@ -552,17 +553,17 @@
 # Keep a full log of every request in ~/.js/logs/<agent>/<session>.log:
 # the whole system prompt, the tool definitions and every message sent.
 # It's only written to the file, never shown.
-#set runtime.debug_autolog on
+#set REQUEST_LOG on
 
 # Where that log goes. Unset: ~/.js/logs/<agent>
-#set -runtime.debug_autolog_dir
+#set -REQUEST_LOG_DIR
 
 # Keep a copy of what printed on your screen in
 # ~/.js/logs/transcript/<agent>/<session>.log
-#set runtime.transcript_log on
+#set TRANSCRIPT_LOG on
 
 # Where that copy goes. Unset: ~/.js/logs/transcript/<agent>
-#set -runtime.transcript_log_dir
+#set -TRANSCRIPT_LOG_DIR
 
 # In `js -p`, print a short line for each tool call while it runs.
 #   off  you only see the final answer
@@ -570,7 +571,7 @@
 
 # Write a record of every internal event to state/<agent>/debug.log. Only
 # for chasing a js bug.
-#set runtime.debug off
+#set DEBUG_LOG off
 
 
 ################################################################################
@@ -583,94 +584,89 @@
 
 # Shrink automatically.
 #   off  only when you type /compact
-#set compact.auto on
+#set COMPACTION_AUTO on
 
 # How full the conversation is, from 0 to 1, when js
 #   tells you once:
-#set compact.notify_threshold 0.5
+#set COMPACTION_WARN_AT 0.5
 #   starts compacting:
-#set compact.trigger_threshold 0.8
+#set COMPACTION_START_AT 0.8
 #   compacts no matter what:
-#set compact.force_threshold 0.9
+#set COMPACTION_FORCE_AT 0.9
 # They have to go up in that order, or js ignores all three and uses the
 # stock values.
 
-# Context window compaction measures against, in tokens, for every model.
-# Unset: the window of the model that is running, from model.context_window,
-# compact.context_window_overrides or the model catalog.
-#set -compact.context_window
-
 # Context windows for specific models, as JSON. Write the key as
 # "provider/model" or just "model"; provider/model wins.
-#   example:  set compact.context_window_overrides {"cpa/claude-opus-5-5": 1000000, "qwen27b": 131072}
-#set compact.context_window_overrides {}
+#   example:  set CONTEXT_SIZE_PER_MODEL {"cpa/claude-opus-5-5": 1000000, "qwen27b": 131072}
+#set CONTEXT_SIZE_PER_MODEL {}
 
 # Window to assume only for a model js can't find a size for. Models it
 # does know aren't affected.
-#set compact.context_window_fallback 1000000
+#set CONTEXT_SIZE_UNKNOWN 1000000
 
 # Most tokens set aside for the model's next reply when js works out how
 # full things are. It uses the smaller of this and the model's real output
 # limit, so a model that claims a 128k reply can't eat a third of the
 # window.
-#set compact.summary_reserve_tokens 20000
+#set COMPACTION_REPLY_RESERVE_TOKENS 20000
 
 # Extra tokens of headroom kept free on top of that.
-#set compact.buffer_tokens 4096
+#set COMPACTION_HEADROOM_TOKENS 4096
 
 # How much of the most recent conversation is kept word for word after a
 # summary, in tokens.
-#set compact.tail_tokens 16384
+#set COMPACTION_KEEP_RECENT_TOKENS 16384
 
 # Skip compacting unless it would save at least this many tokens.
-#set compact.min_savings_tokens 400
+#set COMPACTION_MIN_SAVINGS_TOKENS 400
 
 # When clearing old tool results, this many of the newest stay whole.
-#set compact.clear_keep_recent 20
+#set COMPACTION_KEEP_TOOL_RESULTS 20
 
 # Prompt cache lifetime, in seconds. If your last request was at least this
 # long ago, the cache is gone anyway, so js clears old tool results first;
 # if it was sooner, js summarizes first so the cache isn't thrown away.
 # 0: always clear first.
-#set compact.cache_ttl_seconds 300
+#set COMPACTION_CACHE_TTL 300
 
 # The model that writes the summary. "same" means the one you're using.
-#   example:  set compact.model deepseek/deepseek-v4-flash
-#set compact.model same
+#   example:  set COMPACTION_EXTERNAL_MODEL deepseek/deepseek-v4-flash
+#set COMPACTION_EXTERNAL_MODEL same
 
 # Longest summary allowed, in tokens. It can't go over 8192.
-#set compact.summary_max_tokens 8192
+#set COMPACTION_SUMMARY_TOKENS_MAX 8192
 
 # Tool results sent to the summary model are cut to this many characters,
 # keeping the start and the end. 0: send them whole.
-#set compact.summary_tool_result_chars 2000
+#set COMPACTION_SUMMARY_RESULT_CHARS_MAX 2000
 
 # After this many automatic summaries fail in a row, automatic compaction
 # pauses. A successful /compact turns it back on.
-#set compact.max_summary_failures 3
+#set COMPACTION_FAILURES_MAX 3
 
 # After a summary, files the model had read recently are attached again,
 # newest first, so it doesn't lose them. How many:
-#set compact.rehydrate_max_files 5
+#set COMPACTION_REATTACH_FILES_MAX 5
 
 # The most tokens all those re-attached files may use together.
-#set compact.rehydrate_token_budget 50000
+#set COMPACTION_REATTACH_TOKENS_MAX 50000
 
 # A file bigger than this many tokens is named but not re-attached.
-#set compact.rehydrate_max_tokens_per_file 5000
+#set COMPACTION_REATTACH_FILE_TOKENS_MAX 5000
 
 # A shell command whose output js gives to the summary model as extra
 # instructions.
-#   example:  set compact.pre_hook cat ~/notes/what-matters.md
-#set -compact.pre_hook
+#   example:  set COMPACTION_HINT_COMMAND cat ~/notes/what-matters.md
+#set -COMPACTION_HINT_COMMAND
 
 # Where js keeps a full copy of the conversation from just before each
 # compaction. Unset: ~/.js/logs/<agent>/compactions
-#set -compact.flight_log_dir
+#set -COMPACTION_LOG_DIR
 
 # Characters per token js assumes until it learns the real ratio from the
 # provider.
-#set compact.chars_per_token 4.0
+#set COMPACTION_CHARS_PER_TOKEN 4.0
 
 
 ################################################################################
@@ -680,11 +676,11 @@
 # Most seconds an exec command may run before js kills it. When an `on`
 # handler runs it, whatever triggered the handler waits that long too.
 # 0: no limit.
-#set events.exec_timeout_s 30
+#set EXEC_TIMEOUT 30
 
 # Bytes of an exec command's output kept. Its stdout is shown to the model
 # with your next message. 0: keep all of it.
-#set events.exec_output_bytes 65536
+#set EXEC_OUTPUT_MAX 65536
 
 
 ################################################################################
@@ -695,10 +691,10 @@
 # first one whose extensions include the file's and whose program is
 # installed. "roots" are the files that mark a project's top folder;
 # without any, the nearest folder with .git in it.
-#set lsp.servers [{"name": "basedpyright", "command": ["basedpyright-langserver", "--stdio"], "extensions": [".py", ".pyi"], "roots": ["pyproject.toml", "setup.py", "setup.cfg", "pyrightconfig.json"]}, {"name": "pyright", "command": ["pyright-langserver", "--stdio"], "extensions": [".py", ".pyi"], "roots": ["pyproject.toml", "setup.py", "setup.cfg", "pyrightconfig.json"]}, {"name": "rust-analyzer", "command": ["rust-analyzer"], "extensions": [".rs"], "roots": ["Cargo.toml"]}, {"name": "gopls", "command": ["gopls"], "extensions": [".go"], "roots": ["go.work", "go.mod"]}, {"name": "typescript-language-server", "command": ["typescript-language-server", "--stdio"], "extensions": [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"], "roots": ["tsconfig.json", "jsconfig.json", "package.json"]}]
+#set LSP_SERVERS [{"name": "basedpyright", "command": ["basedpyright-langserver", "--stdio"], "extensions": [".py", ".pyi"], "roots": ["pyproject.toml", "setup.py", "setup.cfg", "pyrightconfig.json"]}, {"name": "pyright", "command": ["pyright-langserver", "--stdio"], "extensions": [".py", ".pyi"], "roots": ["pyproject.toml", "setup.py", "setup.cfg", "pyrightconfig.json"]}, {"name": "rust-analyzer", "command": ["rust-analyzer"], "extensions": [".rs"], "roots": ["Cargo.toml"]}, {"name": "gopls", "command": ["gopls"], "extensions": [".go"], "roots": ["go.work", "go.mod"]}, {"name": "typescript-language-server", "command": ["typescript-language-server", "--stdio"], "extensions": [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"], "roots": ["tsconfig.json", "jsconfig.json", "package.json"]}]
 
 # How long an lsp call waits for its server to start or answer, in seconds.
-#set lsp.timeout_s 30
+#set LSP_TIMEOUT 30
 
 
 ################################################################################
@@ -707,17 +703,17 @@
 
 # MCP servers js connects to, as JSON. A local server gets command, args
 # and env; a server over HTTP gets url and headers.
-#   example:  set mcp.servers {"files": {"command": "python", "args": ["/opt/files-mcp.py"]}}
-#   example:  set mcp.servers {"api": {"url": "http://127.0.0.1:8765/mcp", "headers": {"Authorization": "Bearer xyz"}}}
-#set mcp.servers {}
+#   example:  set MCP_SERVERS {"files": {"command": "python", "args": ["/opt/files-mcp.py"]}}
+#   example:  set MCP_SERVERS {"api": {"url": "http://127.0.0.1:8765/mcp", "headers": {"Authorization": "Bearer xyz"}}}
+#set MCP_SERVERS {}
 
 # Which agents may use which MCP servers and tools, as JSON. allow and deny
 # lists take wildcards.
-#   example:  set mcp.agents {"forge": {"servers": {"allow": ["files"]}, "tools": {"deny": ["*__delete*"]}}}
-#set mcp.agents {}
+#   example:  set MCP_AGENT_POLICY {"forge": {"servers": {"allow": ["files"]}, "tools": {"deny": ["*__delete*"]}}}
+#set MCP_AGENT_POLICY {}
 
 # How long a request to an MCP server waits for its answer, in seconds.
-#set mcp.request_timeout_s 10.0
+#set MCP_TIMEOUT 10.0
 
 
 ################################################################################
@@ -727,12 +723,12 @@
 # Give tools different names for particular models, as JSON. "match" is
 # checked against the model and provider names; the first profile that
 # matches is used.
-#   example:  set tools.alias_profiles [{"match": "qwen", "aliases": {"read": "read_file"}}]
-#set -tools.alias_profiles
+#   example:  set TOOL_ALIASES [{"match": "qwen", "aliases": {"read": "read_file"}}]
+#set -TOOL_ALIASES
 
 # Size of a terminal_session the model starts without giving one.
-#set tools.terminal_cols 64
-#set tools.terminal_rows 36
+#set TERMINAL_COLUMNS 64
+#set TERMINAL_ROWS 36
 
 
 ################################################################################
@@ -744,24 +740,24 @@
 # reject temperature and top_p outright.
 
 # Randomness. Lower is more predictable, higher is more varied.
-#   example:  set sampling.temperature 0.7
-#set -sampling.temperature
+#   example:  set TEMPERATURE 0.7
+#set -TEMPERATURE
 
 # Only pick from the most likely words that add up to this probability.
-#   example:  set sampling.top_p 0.95
-#set -sampling.top_p
+#   example:  set TOP_P 0.95
+#set -TOP_P
 
 # Only pick from this many of the most likely words.
-#   example:  set sampling.top_k 40
-#set -sampling.top_k
+#   example:  set TOP_K 40
+#set -TOP_K
 
 # Push back on repeating the same words. 1.0 is no push.
-#   example:  set sampling.repetition_penalty 1.1
-#set -sampling.repetition_penalty
+#   example:  set REPETITION_PENALTY 1.1
+#set -REPETITION_PENALTY
 
 # Push toward words that haven't been used yet. 0 is no push.
-#   example:  set sampling.presence_penalty 0.5
-#set -sampling.presence_penalty
+#   example:  set PRESENCE_PENALTY 0.5
+#set -PRESENCE_PENALTY
 
 
 ################################################################################

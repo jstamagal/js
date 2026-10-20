@@ -124,7 +124,7 @@ def test_ast_search_caps_output_at_tool_context_limit(tmp_path):
     actual = ast_search("foo($ARG)", path="calls.py", context=context)
 
     assert len(actual.encode("utf-8")) <= 80
-    assert actual.endswith("[truncated: limits.max_tool_result_bytes (80) reached]")
+    assert actual.endswith("[truncated: TOOL_RESULT_MAX (80) reached]")
 
 
 @requires_ast_grep

@@ -21,7 +21,7 @@ needs_bwrap = pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewr
 def turns(monkeypatch, tmp_path):
     """Each REPL turn runs the probes in `turns.probes` with the REPL's tool
     context and records the user message and the probe results."""
-    for name in ("JS_AGENT", "JS_SESSION", "JS_MODEL"):
+    for name in ("JS_DEFAULT_AGENT", "JS_SESSION", "JS_MODEL"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(runtime.T.STOCK_CONTEXT, "cwd", runtime.T.STOCK_CONTEXT.cwd)

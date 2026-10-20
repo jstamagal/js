@@ -35,9 +35,9 @@ def test_unknown_models_fall_back_to_the_name_heuristic():
 
 
 def test_knob_forces_vision_on_or_off():
-    assert vision_enabled_for_model("deepseek/deepseek-v4-pro", {"model": {"vision": True}}) is True
-    assert vision_enabled_for_model("claude-opus-5", {"model": {"vision": False}}) is False
-    assert vision_enabled_for_model("some-private-build", {"model": {"vision": True}}) is True
+    assert vision_enabled_for_model("deepseek/deepseek-v4-pro", {"VISION": True}) is True
+    assert vision_enabled_for_model("claude-opus-5", {"VISION": False}) is False
+    assert vision_enabled_for_model("some-private-build", {"VISION": True}) is True
 
 
 def test_env_override_beats_the_knob(monkeypatch):
@@ -45,19 +45,19 @@ def test_env_override_beats_the_knob(monkeypatch):
 
     monkeypatch.setenv("JS_VISION", "0")
     # Detection consumes the merged view; environment overrides config there.
-    store = settings.apply_env_overrides({"model": {"vision": True}}, env=os.environ)
+    store = settings.apply_env_overrides({"VISION": True}, env=os.environ)
     assert vision_enabled_for_model("claude-opus-5", store) is False
 
 
 def test_vision_knob_is_registered_and_settable():
     from js import settings, setcmd
 
-    assert settings.SPEC_BY_KEY["model.vision"].type == "bool"
+    assert settings.SPEC_BY_KEY["VISION"].type == "bool"
     store: dict = {}
-    assert setcmd.set_command(store, "model.vision on").error is None
-    assert settings.get_dotted(store, ("model", "vision")) is True
-    assert setcmd.set_command(store, "-model.vision").error is None
-    assert settings.get_dotted(store, ("model", "vision")) is None
+    assert setcmd.set_command(store, "VISION on").error is None
+    assert settings.get_dotted(store, ("VISION",)) is True
+    assert setcmd.set_command(store, "-VISION").error is None
+    assert settings.get_dotted(store, ("VISION",)) is None
 
 
 def test_js_vision_env_feeds_the_knob(monkeypatch):
@@ -65,4 +65,4 @@ def test_js_vision_env_feeds_the_knob(monkeypatch):
 
     monkeypatch.setenv("JS_VISION", "on")
     store = settings.collect_settings(config_paths=[], env=os.environ)
-    assert settings.get_dotted(store, ("model", "vision")) is True
+    assert settings.get_dotted(store, ("VISION",)) is True

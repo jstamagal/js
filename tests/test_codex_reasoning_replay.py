@@ -212,14 +212,14 @@ def codex(monkeypatch, tmp_path):
         agent_id="codex-replay",
         session="codex-replay",
         extras=[
-            "model.id=gpt-5.5",
-            "provider.id=openai-codex",
-            "provider.api_key=" + _fake_jwt(),
-            "model.reasoning_effort=high",
-            "model.vision=off",
-            "model.context_window=200000",
-            "runtime.debug_autolog=off",
-            "runtime.transcript_log=off",
+            "MODEL=gpt-5.5",
+            "PROVIDER=openai-codex",
+            "API_KEY=" + _fake_jwt(),
+            "EFFORT=high",
+            "VISION=off",
+            "CONTEXT_SIZE=200000",
+            "REQUEST_LOG=off",
+            "TRANSCRIPT_LOG=off",
         ],
     )
     prompts = tmp_path / ".js" / "agents" / "codex-replay"

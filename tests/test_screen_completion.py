@@ -14,7 +14,7 @@ from prompt_toolkit.output.vt100 import Vt100_Output
 
 from js import replcomplete, screen
 
-KEYS = ["model.context_window", "model.id", "model.reasoning_effort", "limits.max_read_lines"]
+KEYS = ["COMPACTION_AUTO", "COMPACTION_CACHE_TTL", "COMPACTION_WARN_AT", "MODEL"]
 
 
 def _drive(keys: list[str]) -> tuple[str, list[str], str]:
@@ -51,14 +51,20 @@ def _drive(keys: list[str]) -> tuple[str, list[str], str]:
 
 
 def test_the_first_tab_fills_the_shared_part_and_lists_the_matches():
-    text, matches, terminal = _drive(["/set mod", "\t"])
+    text, matches, terminal = _drive(["/set COMP", "\t"])
 
-    assert text == "/set model."
-    assert matches == ["context_window", "id", "reasoning_effort"]
-    assert "reasoning_effort" in terminal
+    assert text == "/set COMPACTION_"
+    assert matches == ["AUTO", "CACHE_TTL", "WARN_AT"]
+    assert "CACHE_TTL" in terminal
 
 
 def test_the_next_tab_selects_a_match():
-    text, _matches, _terminal = _drive(["/set mod", "\t", "\t"])
+    text, _matches, _terminal = _drive(["/set COMP", "\t", "\t"])
 
-    assert text == "/set model.context_window"
+    assert text == "/set COMPACTION_AUTO"
+
+
+def test_a_lowercase_prefix_fills_the_shared_part():
+    text, _matches, _terminal = _drive(["/set comp", "\t"])
+
+    assert text == "/set compaction_"

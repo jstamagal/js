@@ -162,7 +162,7 @@ def anthropic_thinking(model_name: str, effort: str | None,
                        budget: int | None = None) -> AnthropicThinking | None:
     """The thinking fields for ``effort`` on this model, or None to send none.
 
-    ``budget`` (``model.thinking_budget``) replaces the effort's budget on the
+    ``budget`` (``THINKING_BUDGET``) replaces the effort's budget on the
     models that take one."""
     if effort is None or effort not in _RANK:
         return None

@@ -191,7 +191,7 @@ def test_no_diagnostics_within_the_timeout_is_not_reported_clean(project, tmp_pa
 
     result = run(context, operation="diagnostics", file_path=str(source))
 
-    assert "lsp.timeout_s" in result
+    assert "LSP_TIMEOUT" in result
     assert "found ERROR" not in result
 
 
@@ -227,7 +227,7 @@ def test_workspace_root_prefers_markers_then_git_then_cwd(tmp_path):
 
 
 def test_every_default_server_entry_parses():
-    specs = lsp_mod.parse_servers(settings.default_value("lsp.servers"))
+    specs = lsp_mod.parse_servers(settings.default_value("LSP_SERVERS"))
     covered = {ext for spec in specs for ext in spec.extensions}
 
     assert {".py", ".rs", ".go", ".ts", ".tsx", ".js"} <= covered
@@ -316,7 +316,7 @@ _EXTENSIONS = {"python": ".py", "go": ".go", "rust": ".rs", "typescript": ".ts"}
 @pytest.mark.parametrize("language", sorted(REAL_CASES))
 def test_real_language_server(language, tmp_path):
     case = REAL_CASES[language]
-    specs = lsp_mod.parse_servers(settings.default_value("lsp.servers"))
+    specs = lsp_mod.parse_servers(settings.default_value("LSP_SERVERS"))
     serving = [spec for spec in specs if _EXTENSIONS[language] in spec.extensions]
     if not any(shutil.which(spec.command[0]) for spec in serving):
         pytest.skip(f"no {language} language server on PATH")

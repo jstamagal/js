@@ -63,11 +63,11 @@ def test_key_containing_an_at_sign_does_not_steal_the_endpoint_split():
 def test_settings_are_emitted_in_the_form_extra_accepts():
     pairs = parse("m:k[responses][high]@https://h/v1").as_settings()
     assert pairs == [
-        "model.id=m",
-        "provider.id=openai-responses",
-        "provider.base_url=https://h/v1",
-        "provider.api_key=k",
-        "model.reasoning_effort=high",
+        "MODEL=m",
+        "PROVIDER=openai-responses",
+        "BASE_URL=https://h/v1",
+        "API_KEY=k",
+        "EFFORT=high",
     ]
 
 

@@ -35,8 +35,8 @@ class Budget:
     @classmethod
     def from_settings(cls, settings: dict | None) -> Budget:
         return cls(
-            attempts=int(_settings.knob(settings, "runtime.retry_attempts") or 0),
-            max_wait=float(_settings.knob(settings, "runtime.retry_max_wait_seconds") or 0),
+            attempts=int(_settings.knob(settings, "RETRY_COUNT_MAX") or 0),
+            max_wait=float(_settings.knob(settings, "RETRY_WAIT_MAX") or 0),
         )
 
     def too_long(self, wait: float | None) -> bool:
@@ -48,9 +48,9 @@ class Budget:
 
 
 def idle_seconds(settings: dict | None) -> float | None:
-    """runtime.stream_idle_seconds as `stream_model_async` takes it: None for
+    """STREAM_IDLE_TIMEOUT as `stream_model_async` takes it: None for
     no watchdog."""
-    return float(_settings.knob(settings, "runtime.stream_idle_seconds") or 0) or None
+    return float(_settings.knob(settings, "STREAM_IDLE_TIMEOUT") or 0) or None
 
 
 def backoff(attempt: int) -> float:

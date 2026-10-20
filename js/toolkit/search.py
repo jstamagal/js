@@ -412,7 +412,7 @@ def _fit_truncation_marker(text: str, cap: int) -> str:
     cap = max(0, cap)
     if cap == 0:
         return ""
-    marker = truncation_marker(cap, "limits.max_tool_result_bytes")
+    marker = truncation_marker(cap, "TOOL_RESULT_MAX")
     marker_bytes = marker.encode("utf-8")
     if len(marker_bytes) >= cap:
         return marker_bytes[:cap].decode("utf-8", errors="ignore")

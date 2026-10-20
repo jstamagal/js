@@ -105,7 +105,7 @@ def test_runtime_recovers_through_real_boundary(monkeypatch, tmp_path, kind, per
         asyncio.run(call)
         assert messages[-1]["content"] == "recovered"
     if kind != "overflow":
-        budget = _settings.default_value("runtime.retry_attempts")
+        budget = _settings.default_value("RETRY_COUNT_MAX")
         assert len(attempts) == (1 if kind == "fatal" else budget + 1 if persistent else 2)
         assert all(m["content"] == "x" * 1000 for m in messages if m["role"] == "tool")
     else:
@@ -131,7 +131,7 @@ def test_summary_does_not_peel_non_overflow(monkeypatch, tmp_path):
 @pytest.mark.parametrize("window", [750000, 1000000])
 def test_runtime_banner_and_budget_share_configured_window(monkeypatch, tmp_path, capsys, window):
     monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: None)
-    cfg = replace(_config(tmp_path), trace=True, settings={"compact": {"context_window": window}})
+    cfg = replace(_config(tmp_path), trace=True, settings={"CONTEXT_SIZE": window})
     events = []
 
     class Capture:
@@ -157,8 +157,7 @@ def test_runtime_banner_and_budget_share_configured_window(monkeypatch, tmp_path
 
 def test_in_turn_compaction_announces_and_records_trigger(monkeypatch, tmp_path, capsys):
     cfg = replace(_config(tmp_path), max_output_tokens=500,
-                  settings={"compact": {"context_window": 10000, "tail_tokens": 100,
-                                        "buffer_tokens": 100, "summary_reserve_tokens": 500}})
+                  settings={"CONTEXT_SIZE": 10000, "COMPACTION_KEEP_RECENT_TOKENS": 100, "COMPACTION_HEADROOM_TOKENS": 100, "COMPACTION_REPLY_RESERVE_TOKENS": 500})
     messages = [{"role": "user", "content": "old " * 15000},
                 {"role": "assistant", "content": "prior answer"},
                 {"role": "user", "content": "continue"}]
@@ -191,7 +190,7 @@ def test_in_turn_compaction_announces_and_records_trigger(monkeypatch, tmp_path,
 
 def test_large_output_cap_keeps_small_conversation_intact(monkeypatch, tmp_path):
     cfg = replace(_config(tmp_path), max_output_tokens=128000,
-                  settings={"compact": {"context_window": 128000}})
+                  settings={"CONTEXT_SIZE": 128000})
     messages = [{"role": "user", "content": "old " * 1000},
                 {"role": "assistant", "content": "answer"},
                 {"role": "user", "content": "continue"}]
@@ -221,7 +220,7 @@ def test_overflow_clearing_is_visible_with_stdout_redirected(monkeypatch, tmp_pa
     import io
 
     cfg = _config(tmp_path)
-    cfg.settings["compact"] = {"flight_log_dir": str(tmp_path / "flights")}
+    cfg.settings["COMPACTION_LOG_DIR"] = str(tmp_path / "flights")
     messages = []
     for index in range(22):
         messages.extend([
@@ -271,7 +270,7 @@ def test_cached_agent_loop_keeps_context_without_repeated_summaries(monkeypatch,
     from ai.types.usage import Usage
 
     cfg = replace(_config(tmp_path), max_tool_iterations=20, max_output_tokens=None,
-                  settings={"compact": {"context_window_fallback": 128000}})
+                  settings={"CONTEXT_SIZE_UNKNOWN": 128000})
     monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: None)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: None)
     calls = []

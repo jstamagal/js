@@ -58,15 +58,15 @@ def _make_cfg(tmp_path: Path, log_dir: Path, *, trace: bool = False) -> Config:
         session_file=sessions_dir / "sess.jsonl",
         prompts_dir=prompts,
         # Pin the autolog directory so the test does not depend on platformdirs.
-        settings={"runtime": {"debug_autolog_dir": str(log_dir)}},
+        settings={"REQUEST_LOG_DIR": str(log_dir)},
     )
 
 
 def test_from_env_sets_debug_autolog_default_on(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
-    monkeypatch.delenv("JS_DEBUG_AUTOLOG", raising=False)
+    monkeypatch.delenv("JS_REQUEST_LOG", raising=False)
     from js.config import from_env
 
     cfg = from_env()
@@ -84,7 +84,7 @@ def test_debug_autolog_off_disables_path(tmp_path):
     cfg = _make_cfg(tmp_path, tmp_path / "logs")
     off = dict(cfg.settings)
     off.setdefault("runtime", {})
-    off["runtime"] = {**off["runtime"], "debug_autolog": False}
+    off["REQUEST_LOG"] = False
     assert cli._debug_autolog_path(cfg, off) is None
 
 

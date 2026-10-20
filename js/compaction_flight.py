@@ -57,8 +57,7 @@ class CompactionFlight:
         self.started = time.monotonic()
         self.cfg = cfg
         settings = getattr(cfg, "settings", {}) or {}
-        compact = settings.get("compact", {})
-        override = compact.get("flight_log_dir")
+        override = settings.get("COMPACTION_LOG_DIR")
         directory = Path(override).expanduser() if override else paths.logs_root() / cfg.agent_id / "compactions"
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path = directory / f"{_stem(cfg)}-{self.id}.jsonl"
@@ -95,10 +94,9 @@ class CompactionFlight:
         os.fsync(self.stream.fileno())
         if event in _LIFECYCLE:
             settings = getattr(self.cfg, "settings", {}) or {}
-            runtime = settings.get("runtime", {})
-            directory = runtime.get("debug_autolog_dir")
+            directory = settings.get("REQUEST_LOG_DIR")
             directory = Path(directory).expanduser() if directory else paths.logs_root() / self.cfg.agent_id
-            if runtime.get("debug_autolog", True):
+            if settings.get("REQUEST_LOG", True):
                 try:
                     directory.mkdir(parents=True, exist_ok=True)
                     with (directory / f"{_stem(self.cfg)}.log").open("a", encoding="utf-8") as log:

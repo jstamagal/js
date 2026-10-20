@@ -11,22 +11,22 @@ from js import messages as msgs
 @pytest.mark.parametrize(
     ("key", "raw", "expected"),
     [
-        ("model.id", "local-model", "local-model"),
-        ("limits.fetch_timeout_s", "20", 20),
+        ("MODEL", "local-model", "local-model"),
+        ("FETCH_TIMEOUT", "20", 20),
         (
-            "limits.shell_env_allow",
+            "SHELL_ENV_KEEP",
             '["PATH","HOME","FORGECODE_TOKEN"]',
             ["PATH", "HOME", "FORGECODE_TOKEN"],
         ),
-        ("limits.inline_code_timeout_s", "300", 300),
-        ("compact.notify_threshold", "0.75", 0.75),
+        ("INLINE_CODE_TIMEOUT", "300", 300),
+        ("COMPACTION_WARN_AT", "0.75", 0.75),
         ("runtime.trace", "off", False),
         (
-            "tools.alias_profiles",
+            "TOOL_ALIASES",
             '[{"match":["openai"],"aliases":{"read":"r"}}]',
             [{"match": ["openai"], "aliases": {"read": "r"}}],
         ),
-        ("provider.extra", '{"mode":"fast"}', {"mode": "fast"}),
+        ("EXTRA_PARAMS", '{"mode":"fast"}', {"mode": "fast"}),
     ],
 )
 def test_set_and_show_roundtrip_per_registry_type(key: str, raw: str, expected):
@@ -49,10 +49,10 @@ def test_set_and_show_roundtrip_per_registry_type(key: str, raw: str, expected):
 def test_shell_env_allow_rejects_values_that_are_not_variable_name_lists(raw):
     live_settings = settings.seed_defaults()
 
-    result = setcmd.set_command(live_settings, f"limits.shell_env_allow {raw}")
+    result = setcmd.set_command(live_settings, f"SHELL_ENV_KEEP {raw}")
 
     assert result.error == (
-        "limits.shell_env_allow: expected a JSON list of non-empty "
+        "SHELL_ENV_KEEP: expected a JSON list of non-empty "
         "environment-variable names"
     )
 
@@ -64,22 +64,22 @@ def test_tools_alias_profiles_rejects_non_list_json():
 
     result = setcmd.set_command(
         live_settings,
-        f"tools.alias_profiles {raw}",
+        f"TOOL_ALIASES {raw}",
     )
     config_settings = settings.seed_defaults()
     config_before = copy.deepcopy(config_settings)
     config_result = setcmd.apply_config_line(
         config_settings,
-        f"set tools.alias_profiles {raw}",
+        f"set TOOL_ALIASES {raw}",
     )
 
     assert result.handled is True
     assert result.changed is False
-    assert result.error == "tools.alias_profiles: expected a JSON list"
+    assert result.error == "TOOL_ALIASES: expected a JSON list"
     assert live_settings == before
     assert config_result.handled is True
     assert config_result.changed is False
-    assert config_result.error == "tools.alias_profiles: expected a JSON list"
+    assert config_result.error == "TOOL_ALIASES: expected a JSON list"
     assert config_settings == config_before
 
 
@@ -88,18 +88,18 @@ def test_tools_alias_profiles_rejects_entries_without_aliases():
     before = copy.deepcopy(live_settings)
     raw = '[{"match":["openai"]}]'
 
-    result = setcmd.set_command(live_settings, f"tools.alias_profiles {raw}")
+    result = setcmd.set_command(live_settings, f"TOOL_ALIASES {raw}")
     config_settings = settings.seed_defaults()
     config_before = copy.deepcopy(config_settings)
-    config_result = setcmd.apply_config_line(config_settings, f"set tools.alias_profiles {raw}")
+    config_result = setcmd.apply_config_line(config_settings, f"set TOOL_ALIASES {raw}")
 
     assert result.handled is True
     assert result.changed is False
-    assert result.error == "tools.alias_profiles: expected profiles with match and aliases"
+    assert result.error == "TOOL_ALIASES: expected profiles with match and aliases"
     assert live_settings == before
     assert config_result.handled is True
     assert config_result.changed is False
-    assert config_result.error == "tools.alias_profiles: expected profiles with match and aliases"
+    assert config_result.error == "TOOL_ALIASES: expected profiles with match and aliases"
     assert config_settings == config_before
 
 
@@ -108,18 +108,18 @@ def test_tools_alias_profiles_rejects_empty_alias_maps():
     before = copy.deepcopy(live_settings)
     raw = '[{"match":["openai"],"aliases":{}}]'
 
-    result = setcmd.set_command(live_settings, f"tools.alias_profiles {raw}")
+    result = setcmd.set_command(live_settings, f"TOOL_ALIASES {raw}")
     config_settings = settings.seed_defaults()
     config_before = copy.deepcopy(config_settings)
-    config_result = setcmd.apply_config_line(config_settings, f"set tools.alias_profiles {raw}")
+    config_result = setcmd.apply_config_line(config_settings, f"set TOOL_ALIASES {raw}")
 
     assert result.handled is True
     assert result.changed is False
-    assert result.error == "tools.alias_profiles: expected non-empty aliases"
+    assert result.error == "TOOL_ALIASES: expected non-empty aliases"
     assert live_settings == before
     assert config_result.handled is True
     assert config_result.changed is False
-    assert config_result.error == "tools.alias_profiles: expected non-empty aliases"
+    assert config_result.error == "TOOL_ALIASES: expected non-empty aliases"
     assert config_settings == config_before
 
 
@@ -128,18 +128,18 @@ def test_tools_alias_profiles_rejects_empty_match_values():
     before = copy.deepcopy(live_settings)
     raw = '[{"match":[],"aliases":{"read":"Read"}}]'
 
-    result = setcmd.set_command(live_settings, f"tools.alias_profiles {raw}")
+    result = setcmd.set_command(live_settings, f"TOOL_ALIASES {raw}")
     config_settings = settings.seed_defaults()
     config_before = copy.deepcopy(config_settings)
-    config_result = setcmd.apply_config_line(config_settings, f"set tools.alias_profiles {raw}")
+    config_result = setcmd.apply_config_line(config_settings, f"set TOOL_ALIASES {raw}")
 
     assert result.handled is True
     assert result.changed is False
-    assert result.error == "tools.alias_profiles: expected non-empty match values"
+    assert result.error == "TOOL_ALIASES: expected non-empty match values"
     assert live_settings == before
     assert config_result.handled is True
     assert config_result.changed is False
-    assert config_result.error == "tools.alias_profiles: expected non-empty match values"
+    assert config_result.error == "TOOL_ALIASES: expected non-empty match values"
     assert config_settings == config_before
 
 
@@ -148,18 +148,18 @@ def test_tools_alias_profiles_rejects_duplicate_alias_names():
     before = copy.deepcopy(live_settings)
     raw = '[{"match":["openai"],"aliases":{"read":"Tool","write":"tool"}}]'
 
-    result = setcmd.set_command(live_settings, f"tools.alias_profiles {raw}")
+    result = setcmd.set_command(live_settings, f"TOOL_ALIASES {raw}")
     config_settings = settings.seed_defaults()
     config_before = copy.deepcopy(config_settings)
-    config_result = setcmd.apply_config_line(config_settings, f"set tools.alias_profiles {raw}")
+    config_result = setcmd.apply_config_line(config_settings, f"set TOOL_ALIASES {raw}")
 
     assert result.handled is True
     assert result.changed is False
-    assert result.error == "tools.alias_profiles: expected unique alias names"
+    assert result.error == "TOOL_ALIASES: expected unique alias names"
     assert live_settings == before
     assert config_result.handled is True
     assert config_result.changed is False
-    assert config_result.error == "tools.alias_profiles: expected unique alias names"
+    assert config_result.error == "TOOL_ALIASES: expected unique alias names"
     assert config_settings == config_before
 
 
@@ -168,18 +168,18 @@ def test_tools_alias_profiles_rejects_invalid_alias_names():
     before = copy.deepcopy(live_settings)
     raw = '[{"match":["openai"],"aliases":{"read":"read file"}}]'
 
-    result = setcmd.set_command(live_settings, f"tools.alias_profiles {raw}")
+    result = setcmd.set_command(live_settings, f"TOOL_ALIASES {raw}")
     config_settings = settings.seed_defaults()
     config_before = copy.deepcopy(config_settings)
-    config_result = setcmd.apply_config_line(config_settings, f"set tools.alias_profiles {raw}")
+    config_result = setcmd.apply_config_line(config_settings, f"set TOOL_ALIASES {raw}")
 
     assert result.handled is True
     assert result.changed is False
-    assert result.error == "tools.alias_profiles: expected alias names matching [A-Za-z0-9_-]+"
+    assert result.error == "TOOL_ALIASES: expected alias names matching [A-Za-z0-9_-]+"
     assert live_settings == before
     assert config_result.handled is True
     assert config_result.changed is False
-    assert config_result.error == "tools.alias_profiles: expected alias names matching [A-Za-z0-9_-]+"
+    assert config_result.error == "TOOL_ALIASES: expected alias names matching [A-Za-z0-9_-]+"
     assert config_settings == config_before
 
 
@@ -188,18 +188,18 @@ def test_tools_alias_profiles_rejects_invalid_canonical_names():
     before = copy.deepcopy(live_settings)
     raw = '[{"match":["openai"],"aliases":{"read file":"Read"}}]'
 
-    result = setcmd.set_command(live_settings, f"tools.alias_profiles {raw}")
+    result = setcmd.set_command(live_settings, f"TOOL_ALIASES {raw}")
     config_settings = settings.seed_defaults()
     config_before = copy.deepcopy(config_settings)
-    config_result = setcmd.apply_config_line(config_settings, f"set tools.alias_profiles {raw}")
+    config_result = setcmd.apply_config_line(config_settings, f"set TOOL_ALIASES {raw}")
 
     assert result.handled is True
     assert result.changed is False
-    assert result.error == "tools.alias_profiles: expected canonical tool names matching [A-Za-z0-9_-]+"
+    assert result.error == "TOOL_ALIASES: expected canonical tool names matching [A-Za-z0-9_-]+"
     assert live_settings == before
     assert config_result.handled is True
     assert config_result.changed is False
-    assert config_result.error == "tools.alias_profiles: expected canonical tool names matching [A-Za-z0-9_-]+"
+    assert config_result.error == "TOOL_ALIASES: expected canonical tool names matching [A-Za-z0-9_-]+"
     assert config_settings == config_before
 
 
@@ -208,18 +208,18 @@ def test_provider_extra_rejects_non_object_json():
     before = copy.deepcopy(live_settings)
     raw = '["extra_body"]'
 
-    result = setcmd.set_command(live_settings, f"provider.extra {raw}")
+    result = setcmd.set_command(live_settings, f"EXTRA_PARAMS {raw}")
     config_settings = settings.seed_defaults()
     config_before = copy.deepcopy(config_settings)
-    config_result = setcmd.apply_config_line(config_settings, f"set provider.extra {raw}")
+    config_result = setcmd.apply_config_line(config_settings, f"set EXTRA_PARAMS {raw}")
 
     assert result.handled is True
     assert result.changed is False
-    assert result.error == "provider.extra: expected a JSON object"
+    assert result.error == "EXTRA_PARAMS: expected a JSON object"
     assert live_settings == before
     assert config_result.handled is True
     assert config_result.changed is False
-    assert config_result.error == "provider.extra: expected a JSON object"
+    assert config_result.error == "EXTRA_PARAMS: expected a JSON object"
     assert config_settings == config_before
 
 
@@ -230,85 +230,85 @@ def test_bool_off_is_valid_but_no_longer_a_magic_clear_token_for_other_types():
     live_settings = settings.seed_defaults()
 
     bool_result = setcmd.set_command(live_settings, "runtime.trace off")
-    int_result = setcmd.set_command(live_settings, "model.max_output_tokens 123")
-    rejected = setcmd.set_command(live_settings, "model.max_output_tokens off")
+    int_result = setcmd.set_command(live_settings, "OUTPUT_TOKENS_MAX 123")
+    rejected = setcmd.set_command(live_settings, "OUTPUT_TOKENS_MAX off")
 
     assert bool_result.error is None
     assert bool_result.lines == ["runtime.trace = off"]
     assert settings.get_dotted(live_settings, ("runtime", "trace")) is False
     assert int_result.error is None
-    assert int_result.lines == ["model.max_output_tokens = 123"]
-    assert rejected.error == "model.max_output_tokens: expected an integer"
+    assert int_result.lines == ["OUTPUT_TOKENS_MAX = 123"]
+    assert rejected.error == "OUTPUT_TOKENS_MAX: expected an integer"
     assert rejected.changed is False
-    assert settings.get_dotted(live_settings, ("model", "max_output_tokens")) == 123  # unchanged
+    assert settings.get_dotted(live_settings, ("OUTPUT_TOKENS_MAX",)) == 123  # unchanged
 
-    cleared = setcmd.set_command(live_settings, "-model.max_output_tokens")
+    cleared = setcmd.set_command(live_settings, "-OUTPUT_TOKENS_MAX")
     assert cleared.error is None
-    assert cleared.lines == ["model.max_output_tokens = <none>"]
-    assert settings.get_dotted(live_settings, ("model", "max_output_tokens")) is None
+    assert cleared.lines == ["OUTPUT_TOKENS_MAX = <none>"]
+    assert settings.get_dotted(live_settings, ("OUTPUT_TOKENS_MAX",)) is None
 
 
 def test_subagent_max_workers_rejects_values_below_one():
     live_settings = settings.seed_defaults()
 
-    rejected = setcmd.set_command(live_settings, "limits.subagent_max_workers 0")
-    accepted = setcmd.set_command(live_settings, "limits.subagent_max_workers 1")
+    rejected = setcmd.set_command(live_settings, "SUBAGENT_WORKERS_MAX 0")
+    accepted = setcmd.set_command(live_settings, "SUBAGENT_WORKERS_MAX 1")
 
-    assert rejected.error == "limits.subagent_max_workers: expected an integer >= 1"
+    assert rejected.error == "SUBAGENT_WORKERS_MAX: expected an integer >= 1"
     assert rejected.changed is False
     assert accepted.error is None
-    assert accepted.lines == ["limits.subagent_max_workers = 1"]
+    assert accepted.lines == ["SUBAGENT_WORKERS_MAX = 1"]
 
 
 @pytest.mark.parametrize("token", ["default", "auto", "none", "unset"])
 def test_magic_strings_store_verbatim_for_string_knobs(token):
-    # RULING A headline: a literal string knob like model.id stores these
+    # RULING A headline: a literal string knob like MODEL stores these
     # words as-is instead of silently clearing to the built-in default.
     live_settings = settings.seed_defaults()
 
-    result = setcmd.set_command(live_settings, f"model.id {token}")
+    result = setcmd.set_command(live_settings, f"MODEL {token}")
 
     assert result.error is None
-    assert result.lines == [f"model.id = {token}"]
-    assert settings.get_dotted(live_settings, ("model", "id")) == token
+    assert result.lines == [f"MODEL = {token}"]
+    assert settings.get_dotted(live_settings, ("MODEL",)) == token
 
-    cleared = setcmd.set_command(live_settings, "-model.id")
+    cleared = setcmd.set_command(live_settings, "-MODEL")
     assert cleared.error is None
-    assert settings.get_dotted(live_settings, ("model", "id")) is None
+    assert settings.get_dotted(live_settings, ("MODEL",)) is None
 
 
 def test_empty_state_rendering_distinguishes_off_none_and_unset():
     live_settings = settings.seed_defaults()
 
-    off = setcmd.show_lines(live_settings, "runtime.debug")
-    none = setcmd.show_lines(live_settings, "provider.id")
+    off = setcmd.show_lines(live_settings, "DEBUG_LOG")
+    none = setcmd.show_lines(live_settings, "PROVIDER")
     unset_spec = settings.SettingSpec(
-        "sampling.temperature",
+        "TEMPERATURE",
         "float",
         "Provider-default sampling temperature.",
         empty=settings.EMPTY_UNSET,
     )
 
-    assert off.lines[0] == "runtime.debug = off"
-    assert none.lines[0] == "provider.id = <none>"
+    assert off.lines[0] == "DEBUG_LOG = off"
+    assert none.lines[0] == "PROVIDER = <none>"
     assert setcmd.render_value(unset_spec, None) == "<unset>"
-    sampling = setcmd.show_lines(live_settings, "sampling.temperature")
-    assert sampling.lines[0] == "sampling.temperature = <unset>"
+    sampling = setcmd.show_lines(live_settings, "TEMPERATURE")
+    assert sampling.lines[0] == "TEMPERATURE = <unset>"
 
 
 def test_secret_values_are_masked_when_shown():
     live_settings = settings.seed_defaults()
 
-    changed = setcmd.set_command(live_settings, "provider.api_key sk-test")
-    shown = setcmd.show_lines(live_settings, "provider.api_key")
+    changed = setcmd.set_command(live_settings, "API_KEY sk-test")
+    shown = setcmd.show_lines(live_settings, "API_KEY")
 
     assert changed.error is None
-    assert changed.lines == ["provider.api_key = <set>"]
-    assert settings.get_dotted(live_settings, ("provider", "api_key")) == "sk-test"
-    assert shown.lines[0] == "provider.api_key = <set>"
+    assert changed.lines == ["API_KEY = <set>"]
+    assert settings.get_dotted(live_settings, ("API_KEY",)) == "sk-test"
+    assert shown.lines[0] == "API_KEY = <set>"
 
 
-@pytest.mark.parametrize("key", ["model.id.foo", "provider.id.foo", "limits.fetch_timeout_s.foo"])
+@pytest.mark.parametrize("key", ["MODEL.foo", "PROVIDER.foo", "FETCH_TIMEOUT.foo"])
 def test_registered_non_map_subkeys_return_error_without_mutating_settings(key: str):
     live_settings = settings.seed_defaults()
     before = copy.deepcopy(live_settings)
@@ -324,17 +324,17 @@ def test_registered_non_map_subkeys_return_error_without_mutating_settings(key: 
 def test_map_sub_key_updates_parent_map_and_shows_parent():
     live_settings = settings.seed_defaults()
 
-    changed = setcmd.set_command(live_settings, "provider.extra.organization /p")
-    shown = setcmd.show_lines(live_settings, "provider.extra")
+    changed = setcmd.set_command(live_settings, "EXTRA_PARAMS.organization /p")
+    shown = setcmd.show_lines(live_settings, "EXTRA_PARAMS")
 
     assert changed.error is None
-    assert changed.lines == ["provider.extra.organization = /p"]
-    assert settings.get_dotted(live_settings, ("provider", "extra", "organization")) == "/p"
+    assert changed.lines == ["EXTRA_PARAMS.organization = /p"]
+    assert settings.get_dotted(live_settings, ("EXTRA_PARAMS", "organization")) == "/p"
     assert shown.error is None
-    assert shown.lines[0] == "provider.extra = organization=/p"
+    assert shown.lines[0] == "EXTRA_PARAMS = organization=/p"
 
 
-@pytest.mark.parametrize("line", ["show model.id", "on input set compact.auto off", "run something"])
+@pytest.mark.parametrize("line", ["show MODEL", "on input set COMPACTION_AUTO off", "run something"])
 def test_apply_config_line_leaves_other_commands_to_the_command_table(line: str):
     before = settings.seed_defaults()
     store = settings.seed_defaults()
@@ -349,9 +349,9 @@ def test_apply_config_line_leaves_other_commands_to_the_command_table(line: str)
 @pytest.mark.parametrize(
     ("line", "path", "value"),
     [
-        ("/model local/qwen", ("model", "id"), "local/qwen"),
-        ("provider deepseek", ("provider", "id"), "deepseek"),
-        ("baseurl http://localhost:8080/v1", ("provider", "base_url"), "http://localhost:8080/v1"),
+        ("/model local/qwen", ("MODEL",), "local/qwen"),
+        ("provider deepseek", ("PROVIDER",), "deepseek"),
+        ("baseurl http://localhost:8080/v1", ("BASE_URL",), "http://localhost:8080/v1"),
     ],
 )
 def test_apply_config_line_applies_setting_short_names(line: str, path: tuple[str, ...], value: str):
@@ -369,16 +369,16 @@ def test_set_accepts_a_setting_short_name_for_its_key():
 
     result = setcmd.set_command(store, "model other/model")
 
-    assert result.changed_keys == ["model.id"]
-    assert settings.get_dotted(store, ("model", "id")) == "other/model"
+    assert result.changed_keys == ["MODEL"]
+    assert settings.get_dotted(store, ("MODEL",)) == "other/model"
 
 
 def test_apply_config_line_rejects_set_without_value():
-    result = setcmd.apply_config_line(settings.seed_defaults(), "set model.id")
+    result = setcmd.apply_config_line(settings.seed_defaults(), "set MODEL")
 
     assert result.handled is True
     assert result.changed is False
-    assert result.error == msgs.SET_NEEDS_TWO.text(line="set model.id")
+    assert result.error == msgs.SET_NEEDS_TWO.text(line="set MODEL")
 
 
 def test_registry_defaults_seed_and_env_overrides_roundtrip():
@@ -403,14 +403,14 @@ def test_registry_defaults_seed_and_env_overrides_roundtrip():
 
 
 def _env_case(spec: settings.SettingSpec) -> tuple[str, object]:
-    if spec.key == "model.reasoning_effort":
+    if spec.key == "EFFORT":
         # restricted domain (RULING B): an arbitrary string is rejected, so
         # the generic str-fallback below doesn't apply to this one knob.
         return "high", "high"
-    if spec.key == "provider.id":
+    if spec.key == "PROVIDER":
         # validated domain: must name a known provider or saved login.
         return "deepseek", "deepseek"
-    if spec.key == "provider.base_url":
+    if spec.key == "BASE_URL":
         # validated domain: must carry an http(s) scheme.
         return "http://env.test/v1", "http://env.test/v1"
     if spec.type == "bool":
@@ -430,25 +430,25 @@ def _env_case(spec: settings.SettingSpec) -> tuple[str, object]:
 
 def test_set_dash_key_unsets_registered_knob():
     cfg = {}
-    settings.set_dotted(cfg, ("sampling", "temperature"), 1.0)
-    result = setcmd.set_command(cfg, "-sampling.temperature")
+    settings.set_dotted(cfg, ("TEMPERATURE",), 1.0)
+    result = setcmd.set_command(cfg, "-TEMPERATURE")
     assert result.changed is True
-    assert result.changed_keys == ["sampling.temperature"]
-    assert settings.get_dotted(cfg, ("sampling", "temperature")) is None
+    assert result.changed_keys == ["TEMPERATURE"]
+    assert settings.get_dotted(cfg, ("TEMPERATURE",)) is None
 
 
 def test_set_dash_key_on_already_unset_is_noop():
-    result = setcmd.set_command({}, "-sampling.temperature")
+    result = setcmd.set_command({}, "-TEMPERATURE")
     assert result.changed is False
     assert result.changed_keys == []
 
 
 def test_set_dash_key_clears_map_subkey():
     cfg = {}
-    settings.set_dotted(cfg, ("provider", "extra", "organization"), "/tmp/x")
-    result = setcmd.set_command(cfg, "-provider.extra.organization")
+    settings.set_dotted(cfg, ("EXTRA_PARAMS", "organization"), "/tmp/x")
+    result = setcmd.set_command(cfg, "-EXTRA_PARAMS.organization")
     assert result.changed is True
-    assert settings.get_dotted(cfg, ("provider", "extra", "organization")) is None
+    assert settings.get_dotted(cfg, ("EXTRA_PARAMS", "organization")) is None
 
 
 def test_set_dash_unknown_knob_errors():
@@ -457,51 +457,119 @@ def test_set_dash_unknown_knob_errors():
 
 
 # --------------------------------------------------------------------------
-# canonical JS_<DOTTED> env parity (env <-> jsrc)
+# env: setting NAME is env JS_NAME
 # --------------------------------------------------------------------------
 
-def test_canonical_env_name_maps_dotted_key():
-    assert settings.canonical_env_name("sampling.top_p") == "JS_SAMPLING_TOP_P"
-    assert settings.canonical_env_name("limits.max_read_lines") == "JS_LIMITS_MAX_READ_LINES"
+def test_env_js_name_sets_the_setting():
+    overlaid = settings.apply_env_overrides(settings.seed_defaults(), {"JS_READ_LINES_MAX": "42"})
+    assert overlaid["READ_LINES_MAX"] == 42
 
 
-def test_canonical_env_sets_knob_without_hand_picked_alias():
-    # limits.max_read_lines has no short alias; the canonical name must still work.
-    overlaid = settings.apply_env_overrides(
-        settings.seed_defaults(), {"JS_LIMITS_MAX_READ_LINES": "42"}
-    )
-    assert settings.get_dotted(overlaid, ("limits", "max_read_lines")) == 42
+def test_old_env_name_still_sets_the_setting_and_new_name_wins():
+    old = settings.apply_env_overrides(settings.seed_defaults(), {"JS_REASONING": "high"})
+    both = settings.apply_env_overrides(settings.seed_defaults(), {"JS_REASONING": "high", "JS_EFFORT": "low"})
+    assert old["EFFORT"] == "high"
+    assert both["EFFORT"] == "low"
 
 
-def test_hand_picked_env_alias_wins_over_canonical():
-    overlaid = settings.apply_env_overrides(
-        settings.seed_defaults(),
-        {"JS_MODEL": "from-alias", "JS_MODEL_ID": "from-canonical"},
-    )
-    assert settings.get_dotted(overlaid, ("model", "id")) == "from-alias"
+def test_long_dotted_env_name_is_not_read():
+    overlaid = settings.apply_env_overrides(settings.seed_defaults(), {"JS_LIMITS_MAX_READ_LINES": "42"})
+    assert overlaid["READ_LINES_MAX"] == settings.default_value("READ_LINES_MAX")
 
 
 def test_provider_id_and_base_url_validate_at_set_time():
     live_settings = settings.seed_defaults()
 
-    bad_id = setcmd.set_command(live_settings, "provider.id not-a-provider-anywhere")
+    bad_id = setcmd.set_command(live_settings, "PROVIDER not-a-provider-anywhere")
     assert bad_id.error is not None
-    assert settings.get_dotted(live_settings, ("provider", "id"), None) is None
+    assert settings.get_dotted(live_settings, ("PROVIDER",), None) is None
 
-    ok_id = setcmd.set_command(live_settings, "provider.id deepseek")
+    ok_id = setcmd.set_command(live_settings, "PROVIDER deepseek")
     assert ok_id.error is None
 
-    bad_url = setcmd.set_command(live_settings, "provider.base_url http//localhost:8050/v1")
+    bad_url = setcmd.set_command(live_settings, "BASE_URL http//localhost:8050/v1")
     assert bad_url.error is not None
     assert "http://" in bad_url.error
 
-    ok_url = setcmd.set_command(live_settings, "provider.base_url http://localhost:8050/v1")
+    ok_url = setcmd.set_command(live_settings, "BASE_URL http://localhost:8050/v1")
     assert ok_url.error is None
 
 
 def test_editing_mode_accepts_emacs_or_vi_only():
     store = settings.seed_defaults()
 
-    assert setcmd.set_command(store, "ui.editing_mode vi").error is None
-    assert setcmd.set_command(store, "ui.editing_mode vim").error is not None
-    assert settings.get_dotted(store, ("ui", "editing_mode")) == "vi"
+    assert setcmd.set_command(store, "EDITING_MODE vi").error is None
+    assert setcmd.set_command(store, "EDITING_MODE vim").error is not None
+    assert settings.get_dotted(store, ("EDITING_MODE",)) == "vi"
+
+
+def test_old_dotted_name_is_refused():
+    live_settings = settings.seed_defaults()
+    result = setcmd.set_command(live_settings, "model.id other")
+    assert result.error is not None
+    assert live_settings["MODEL"] == settings.default_value("MODEL")
+
+
+def test_a_name_in_any_case_is_the_setting():
+    live_settings = settings.seed_defaults()
+    assert setcmd.set_command(live_settings, "read_lines_max 7").error is None
+    assert live_settings["READ_LINES_MAX"] == 7
+
+
+@pytest.mark.parametrize("key", ["ui.editing_mode", "runtime.debug", "kernel.enabled"])
+def test_a_retired_dotted_name_in_a_kept_section_is_refused(key):
+    live_settings = settings.seed_defaults()
+    before = copy.deepcopy(live_settings)
+    assert setcmd.set_command(live_settings, f"{key} on").error is not None
+    assert setcmd.apply_config_line(live_settings, f"set {key} on").error is not None
+    with pytest.raises(ValueError):
+        settings.parse_extra_arg(f"{key}=on")
+    assert live_settings == before
+
+
+def test_a_dotted_setting_takes_the_name_it_is_shown_under():
+    live_settings = settings.seed_defaults()
+    assert setcmd.set_command(live_settings, "UI.TOOLS 3").error is None
+    assert live_settings["ui"]["tools"] == 3
+
+
+def test_a_map_child_takes_its_setting_name_in_any_case():
+    live_settings = settings.seed_defaults()
+    assert setcmd.set_command(live_settings, "extra_params.organization Acme").error is None
+    assert live_settings["EXTRA_PARAMS"]["organization"] == "Acme"
+    assert settings.parse_extra_arg("extra_params.Team=x")[0] == ("EXTRA_PARAMS", "Team")
+
+
+def test_a_config_refuses_a_settings_key_that_is_not_a_setting(tmp_path):
+    from dataclasses import replace
+
+    from test_lazy_tool_discovery import _cfg
+
+    cfg = _cfg(tmp_path)
+    assert replace(cfg, settings={"RETRY_COUNT_MAX": 3}).settings == {"RETRY_COUNT_MAX": 3}
+    with pytest.raises(ValueError, match="retry_attempts"):
+        replace(cfg, settings={"retry_attempts": 3})
+
+
+@pytest.mark.parametrize("store", [
+    {"runtime": {"retry_attempts": 0}},
+    {"runtime": {"stream_idle_seconds": 1}},
+    {"ui": {"editing_mode": "vi"}},
+    {"ui": 3},
+])
+def test_a_config_refuses_an_old_name_under_a_section(tmp_path, store):
+    from dataclasses import replace
+
+    from test_lazy_tool_discovery import _cfg
+
+    with pytest.raises(ValueError):
+        replace(_cfg(tmp_path), settings=store)
+
+
+def test_a_config_takes_a_display_setting_and_map_contents(tmp_path):
+    from dataclasses import replace
+
+    from test_lazy_tool_discovery import _cfg
+
+    store = {"runtime": {"trace": True}, "EXTRA_PARAMS": {"a": {"b": 1}}, "CONTEXT_SIZE_PER_MODEL": {"x/y": 9}}
+    assert replace(_cfg(tmp_path), settings=store).settings == store

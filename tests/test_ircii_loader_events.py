@@ -44,7 +44,7 @@ def test_load_applies_slashless_script_lines(tmp_path):
     script = tmp_path / "boot.irc"
     script.write_text(
         "set runtime.trace off\n"
-        "set provider.extra.organization ./wiki\n",
+        "set EXTRA_PARAMS.organization ./wiki\n",
         encoding="utf-8",
     )
     state = make_state()
@@ -52,49 +52,49 @@ def test_load_applies_slashless_script_lines(tmp_path):
     assert cli._handle_command("/load boot.irc", state, make_cfg(tmp_path)) is True
 
     assert settings.get_dotted(state["settings"], ("runtime", "trace")) is False
-    assert settings.get_dotted(state["settings"], ("provider", "extra", "organization")) == "./wiki"
+    assert settings.get_dotted(state["settings"], ("EXTRA_PARAMS", "organization")) == "./wiki"
 
 
 def test_script_load_treats_bare_slash_line_as_noop(tmp_path):
     script = tmp_path / "bare-slash.irc"
-    script.write_text("/\nset compact.auto off\n", encoding="utf-8")
+    script.write_text("/\nset COMPACTION_AUTO off\n", encoding="utf-8")
     state = make_state()
 
     assert cli._run_command("/load bare-slash.irc", state, make_cfg(tmp_path)) == (True, None)
-    assert settings.get_dotted(state["settings"], ("compact", "auto")) is False
+    assert settings.get_dotted(state["settings"], ("COMPACTION_AUTO",)) is False
 
 
 def test_script_load_resolves_nested_loads_relative_to_current_script(tmp_path):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
-    (scripts / "inner.irc").write_text("set model.max_output_tokens 123\n", encoding="utf-8")
+    (scripts / "inner.irc").write_text("set OUTPUT_TOKENS_MAX 123\n", encoding="utf-8")
     outer = scripts / "outer.irc"
     outer.write_text("load inner.irc\n", encoding="utf-8")
     state = make_state()
 
     cli._handle_command(f"/load {outer}", state, make_cfg(tmp_path))
 
-    assert settings.get_dotted(state["settings"], ("model", "max_output_tokens")) == 123
+    assert settings.get_dotted(state["settings"], ("OUTPUT_TOKENS_MAX",)) == 123
 
 
 def test_script_load_allows_comment_after_nested_load_path(tmp_path):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
-    (scripts / "inner.irc").write_text("set compact.auto off\n", encoding="utf-8")
+    (scripts / "inner.irc").write_text("set COMPACTION_AUTO off\n", encoding="utf-8")
     outer = scripts / "outer.irc"
     outer.write_text("load inner.irc # shared event/settings bootstrap\n", encoding="utf-8")
     state = make_state()
 
     cli._handle_command(f"/load {outer}", state, make_cfg(tmp_path))
 
-    assert settings.get_dotted(state["settings"], ("compact", "auto")) is False
+    assert settings.get_dotted(state["settings"], ("COMPACTION_AUTO",)) is False
 
 
 def test_script_load_stops_at_the_first_error_and_names_every_file_on_the_way(tmp_path):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     inner = scripts / "inner.irc"
-    inner.write_text("set compact.auto off\nbogus nope\nset model.max_output_tokens 99\n", encoding="utf-8")
+    inner.write_text("set COMPACTION_AUTO off\nbogus nope\nset OUTPUT_TOKENS_MAX 99\n", encoding="utf-8")
     outer = scripts / "outer.irc"
     outer.write_text("load inner.irc\n", encoding="utf-8")
     state = make_state()
@@ -103,20 +103,20 @@ def test_script_load_stops_at_the_first_error_and_names_every_file_on_the_way(tm
 
     assert f"{outer}:1" in error
     assert f"{inner}:2" in error
-    assert settings.get_dotted(state["settings"], ("compact", "auto")) is False
-    assert settings.get_dotted(state["settings"], ("model", "max_output_tokens")) is None
+    assert settings.get_dotted(state["settings"], ("COMPACTION_AUTO",)) is False
+    assert settings.get_dotted(state["settings"], ("OUTPUT_TOKENS_MAX",)) is None
 
 
 def test_script_load_refuses_a_cycle(tmp_path):
     loop = tmp_path / "loop.irc"
-    loop.write_text("set compact.auto off\nload loop.irc\n", encoding="utf-8")
+    loop.write_text("set COMPACTION_AUTO off\nload loop.irc\n", encoding="utf-8")
     state = make_state()
 
     handled, error = cli._run_command("/load loop.irc", state, make_cfg(tmp_path))
 
     assert handled is True
     assert f"{loop}:2" in error
-    assert settings.get_dotted(state["settings"], ("compact", "auto")) is False
+    assert settings.get_dotted(state["settings"], ("COMPACTION_AUTO",)) is False
     assert state["load_stack"] == []
 
 
@@ -153,7 +153,7 @@ def test_load_runs_every_command_in_the_table(tmp_path, monkeypatch):
     assert state["provider_id"] == "deepseek"
     assert state["model"] == "deepseek-chat"
     assert state["aliases"] == {"ca": "compact-auto $*"}
-    assert settings.get_dotted(state["settings"], ("compact", "auto")) is False
+    assert settings.get_dotted(state["settings"], ("COMPACTION_AUTO",)) is False
     assert [hook.handler for hook in state["events"].handlers_for("turn_start")] == ["set runtime.trace on"]
 
 
@@ -169,11 +169,11 @@ def test_on_registers_handlers_against_typed_event_names():
 def test_on_accepts_listed_equals_form_without_storing_equals():
     hooks = events.EventHooks()
 
-    result = setcmd.on_command(hooks, "turn_start = set compact.auto off")
+    result = setcmd.on_command(hooks, "turn_start = set COMPACTION_AUTO off")
 
     assert result.error is None
     assert hooks.handlers_for("turn_start") == [
-        events.EventHook(event="turn_start", handler="set compact.auto off", suppress=False)
+        events.EventHook(event="turn_start", handler="set COMPACTION_AUTO off", suppress=False)
     ]
 
 
@@ -191,12 +191,12 @@ def test_event_hook_dispatches_handler_through_the_command_table(tmp_path):
     state = make_state()
     hooks = state["events"]
     hooks.set_dispatcher(cli._event_dispatcher(state, make_cfg(tmp_path)))
-    hooks.add("turn_start", "set compact.auto off")
+    hooks.add("turn_start", "set COMPACTION_AUTO off")
     hooks.add("turn_start", "alias hi turns")
 
     emission = hooks.emit("turn_start", model="offline-test-model")
 
-    assert settings.get_dotted(state["settings"], ("compact", "auto")) is False
+    assert settings.get_dotted(state["settings"], ("COMPACTION_AUTO",)) is False
     assert state["aliases"] == {"hi": "turns"}
     assert [result.error for result in emission.results] == [None, None]
 
@@ -211,7 +211,7 @@ def test_event_hook_handler_errors_are_captured_without_raising(tmp_path):
     emission = hooks.emit("turn_start")
 
     assert all(result.error for result in emission.results)
-    assert settings.get_dotted(state["settings"], ("compact", "auto")) is True
+    assert settings.get_dotted(state["settings"], ("COMPACTION_AUTO",)) is True
 
 
 def test_event_hook_invalid_dispatch_result_is_captured_without_raising():
@@ -221,7 +221,7 @@ def test_event_hook_invalid_dispatch_result_is_captured_without_raising():
         return None
 
     hooks.set_dispatcher(invalid_dispatch)
-    hook = hooks.add("turn_start", "set compact.auto off")
+    hook = hooks.add("turn_start", "set COMPACTION_AUTO off")
 
     emission = hooks.emit("turn_start")
 
@@ -245,11 +245,11 @@ def test_event_hooks_skip_recursive_dispatch():
         return events.EventHandlerResult(hook=hook, error="ok")
 
     hooks.set_dispatcher(recursive_dispatch)
-    hooks.add("turn_start", "set compact.auto off")
+    hooks.add("turn_start", "set COMPACTION_AUTO off")
 
     emission = hooks.emit("turn_start")
 
-    assert calls == ["turn_start:set compact.auto off"]
+    assert calls == ["turn_start:set COMPACTION_AUTO off"]
     assert emission.dispatch_skipped is False
     assert emission.results[0].error == "ok"
 
@@ -257,7 +257,7 @@ def test_event_hooks_skip_recursive_dispatch():
 def test_cli_load_updates_live_settings_and_event_hooks(tmp_path):
     script = tmp_path / "agent.irc"
     script.write_text(
-        "set compact.auto off\n"
+        "set COMPACTION_AUTO off\n"
         "on turn_start echo boot\n",
         encoding="utf-8",
     )
@@ -271,7 +271,7 @@ def test_cli_load_updates_live_settings_and_event_hooks(tmp_path):
     }
 
     assert cli._handle_command(f"/load {script.name}", state, cfg) is True
-    assert settings.get_dotted(state["settings"], ("compact", "auto")) is False
+    assert settings.get_dotted(state["settings"], ("COMPACTION_AUTO",)) is False
     assert hooks.handlers_for("turn_start") == [
         events.EventHook(event="turn_start", handler="echo boot", suppress=False)
     ]
@@ -300,7 +300,7 @@ def test_cli_load_partial_event_hook_output_keeps_script_order(tmp_path):
 
 def test_cli_load_sampling_set_updates_live_sampling_override(tmp_path):
     script = tmp_path / "sampling.irc"
-    script.write_text("set sampling.temperature 0.2\n", encoding="utf-8")
+    script.write_text("set TEMPERATURE 0.2\n", encoding="utf-8")
     cfg = make_cfg(tmp_path)
     state = {
         "messages": [],
@@ -316,7 +316,7 @@ def test_cli_load_sampling_set_updates_live_sampling_override(tmp_path):
 
 def test_cli_load_partial_sampling_set_updates_live_sampling_override(tmp_path):
     script = tmp_path / "sampling-error.irc"
-    script.write_text("set sampling.temperature 0.2\nbogus nope\n", encoding="utf-8")
+    script.write_text("set TEMPERATURE 0.2\nbogus nope\n", encoding="utf-8")
     cfg = make_cfg(tmp_path)
     state = {
         "messages": [],

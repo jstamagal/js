@@ -139,7 +139,7 @@ def test_load_does_not_authorize_sibling_and_next_call_can_recover(tmp_path, mon
 
 
 def test_restored_native_tools_obey_new_alias_profile(tmp_path, monkeypatch):
-    cfg = _cfg(tmp_path, {'tools': {'alias_profiles': [{'match': ['offline'], 'aliases': {'shell': 'Run'}}]}})
+    cfg = _cfg(tmp_path, {"TOOL_ALIASES": [{'match': ['offline'], 'aliases': {'shell': 'Run'}}]})
     memory.append_tool_surface(cfg.session_file, {'version': 1, 'agent_id': cfg.agent_id,
         'cwd': str(tmp_path.resolve()), 'ids': ['native:shell'], 'mcp_sources': []})
     seen = []

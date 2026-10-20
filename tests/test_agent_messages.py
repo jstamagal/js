@@ -16,7 +16,7 @@ from repl_driver import run_async, run_blocking
 def _agent(tmp_path, monkeypatch, files):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("JS_AGENT", "voice")
+    monkeypatch.setenv("JS_DEFAULT_AGENT", "voice")
     monkeypatch.setenv("JS_MODEL", "offline-test-model")
     monkeypatch.setattr(runtime.T, "STOCK_CONTEXT", ToolContext(cwd=tmp_path))
     directory = tmp_path / ".js" / "agents" / "voice"

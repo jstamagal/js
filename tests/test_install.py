@@ -110,14 +110,14 @@ def test_a_key_joins_an_existing_env_file_and_tightens_its_mode():
 
 
 def test_a_model_whose_provider_has_a_saved_login_routes():
-    _write_jsrc("set model.id deepseek/deepseek-v4-flash\n")
+    _write_jsrc("set MODEL deepseek/deepseek-v4-flash\n")
     assert install.default_model({}) == ("deepseek/deepseek-v4-flash", False)
     _login("deepseek", ["deepseek-v4-flash"])
     assert install.default_model({}) == ("deepseek/deepseek-v4-flash", True)
 
 
 def test_a_routed_default_model_asks_nothing():
-    _write_jsrc("set model.id deepseek/deepseek-v4-flash\n")
+    _write_jsrc("set MODEL deepseek/deepseek-v4-flash\n")
     _login("deepseek", ["deepseek-v4-flash"])
     ask = _answers()
 
@@ -126,7 +126,7 @@ def test_a_routed_default_model_asks_nothing():
 
 
 def test_a_picked_model_becomes_model_id_in_the_jsrc_and_the_rest_stays():
-    _write_jsrc("# mine\nset model.id deepseek/deepseek-v4-flash\nset ui.net 2\nalias x /help\n")
+    _write_jsrc("# mine\nset MODEL deepseek/deepseek-v4-flash\nset ui.net 2\nalias x /help\n")
     _login("mimo", ["mimo-v2", "mimo-v3"])
 
     chosen = install.ask_model({}, _answers("p"), pick=lambda: {"provider_id": "mimo", "model": "mimo-v3"},
@@ -134,12 +134,12 @@ def test_a_picked_model_becomes_model_id_in_the_jsrc_and_the_rest_stays():
 
     assert chosen == "mimo/mimo-v3"
     assert paths.global_config_file().read_text(encoding="utf-8") == (
-        "# mine\nset model.id mimo/mimo-v3\nset ui.net 2\nalias x /help\n")
+        "# mine\nset MODEL mimo/mimo-v3\nset ui.net 2\nalias x /help\n")
     assert install.default_model({}) == ("mimo/mimo-v3", True)
 
 
 def test_with_no_saved_login_the_login_flow_adds_one_then_a_model_is_picked():
-    _write_jsrc("set model.id deepseek/deepseek-v4-flash\n")
+    _write_jsrc("set MODEL deepseek/deepseek-v4-flash\n")
     ask = _answers("a", "p")
 
     chosen = install.ask_model({}, ask, pick=lambda: {"provider_id": "mimo", "model": "mimo-v3"},
@@ -152,7 +152,7 @@ def test_with_no_saved_login_the_login_flow_adds_one_then_a_model_is_picked():
 def test_adding_the_default_models_provider_ends_the_question():
     """After `a` logs into the default model's own provider the default routes,
     so there is nothing left to pick."""
-    _write_jsrc("set model.id deepseek/deepseek-v4-flash\n")
+    _write_jsrc("set MODEL deepseek/deepseek-v4-flash\n")
     ask = _answers("a")
 
     chosen = install.ask_model({}, ask, pick=pytest.fail,
@@ -163,7 +163,7 @@ def test_adding_the_default_models_provider_ends_the_question():
 
 
 def test_enter_or_a_cancelled_pick_leaves_the_jsrc_alone():
-    text = "set model.id deepseek/deepseek-v4-flash\n"
+    text = "set MODEL deepseek/deepseek-v4-flash\n"
     _write_jsrc(text)
     _login("mimo", ["mimo-v3"])
 
@@ -173,14 +173,14 @@ def test_enter_or_a_cancelled_pick_leaves_the_jsrc_alone():
 
 def test_write_model_id_replaces_an_unset_line_and_appends_when_there_is_none(tmp_path):
     jsrc = tmp_path / "jsrc"
-    jsrc.write_text("set ui.net 2\nset -model.id\n", encoding="utf-8")
+    jsrc.write_text("set ui.net 2\nset -MODEL\n", encoding="utf-8")
     settings.write_model_id(jsrc, "mimo/mimo-v3")
-    assert jsrc.read_text(encoding="utf-8") == "set ui.net 2\nset model.id mimo/mimo-v3\n"
+    assert jsrc.read_text(encoding="utf-8") == "set ui.net 2\nset MODEL mimo/mimo-v3\n"
 
     bare = tmp_path / "bare"
     bare.write_text("set ui.net 2", encoding="utf-8")
     settings.write_model_id(bare, "mimo/mimo-v3")
-    assert bare.read_text(encoding="utf-8") == "set ui.net 2\nset model.id mimo/mimo-v3\n"
+    assert bare.read_text(encoding="utf-8") == "set ui.net 2\nset MODEL mimo/mimo-v3\n"
 
 
 def test_write_model_id_uncomments_the_template_line_in_place(tmp_path):
@@ -190,8 +190,8 @@ def test_write_model_id_uncomments_the_template_line_in_place(tmp_path):
     settings.write_model_id(jsrc, "mimo/mimo-v3")
     after = jsrc.read_text(encoding="utf-8").splitlines()
 
-    line = f"#set model.id {settings.default_value('model.id')}"
-    assert after == [("set model.id mimo/mimo-v3" if text == line else text) for text in before]
+    line = f"#set MODEL {settings.default_value('MODEL')}"
+    assert after == [("set MODEL mimo/mimo-v3" if text == line else text) for text in before]
 
 
 # --- without a terminal -------------------------------------------------------------

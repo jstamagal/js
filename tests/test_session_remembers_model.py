@@ -66,7 +66,7 @@ def test_last_session_model_survives_a_session_with_no_metadata(tmp_path):
 def _repl(monkeypatch, tmp_path, argv, lines=()):
     """Launch `js --blocking *argv` over *lines*; return the model each turn ran on."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.delenv("JS_MODEL", raising=False)
     monkeypatch.chdir(tmp_path)

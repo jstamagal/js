@@ -70,7 +70,7 @@ class StreamIdleError(ai.ProviderTimeoutError):
 
     def __init__(self, seconds: float, *, provider: str | None = None) -> None:
         super().__init__(
-            f"no response bytes for {seconds:g}s (runtime.stream_idle_seconds)",
+            f"no response bytes for {seconds:g}s (STREAM_IDLE_TIMEOUT)",
             provider=provider, is_retryable=True,
         )
         self.seconds = seconds
@@ -760,7 +760,7 @@ _reasoning_sink: contextvars.ContextVar[Callable[[str], None] | None] = contextv
     "js_reasoning_sink", default=None,
 )
 
-# runtime.stream_idle_seconds for the `stream_model_async` call running in this
+# STREAM_IDLE_TIMEOUT for the `stream_model_async` call running in this
 # context; None or 0 leaves the stream without a watchdog.
 _idle_seconds: contextvars.ContextVar[float | None] = contextvars.ContextVar(
     "js_stream_idle_seconds", default=None,
@@ -1151,7 +1151,7 @@ async def _stream_with_model(
     # field to the provider's wire shape, so js no longer hand-routes sampling
     # knobs into top-level-vs-extra_body per transport — it declares intent and
     # lets the provider drop what it can't take.
-    # provider.extra is free-form raw passthrough. In the structured model every
+    # EXTRA_PARAMS is free-form raw passthrough. In the structured model every
     # raw kwarg rides extra_body, so fold a nested ``extra_body`` key up and carry
     # any sibling keys alongside it.
     extra_body: dict[str, Any] = {}
@@ -1191,7 +1191,7 @@ async def _stream_with_model(
         # Every provider on the Anthropic Messages wire takes the reasoning
         # setting as thinking: adaptive plus an effort on the models that take
         # it, a token budget on the rest (js/reasoning.py). A `thinking` set in
-        # provider.extra wins.
+        # EXTRA_PARAMS wins.
         plan = reasoning.anthropic_thinking(model_name, reasoning_effort, max_output_tokens, thinking_budget)
         own_thinking = "thinking" not in extra_body
         if plan is not None:
@@ -1204,7 +1204,7 @@ async def _stream_with_model(
         thinking = extra_body.get("thinking")
         extra_budget = thinking.get("budget_tokens") if isinstance(thinking, dict) and not own_thinking else None
         if isinstance(extra_budget, int) and max_output_tokens is None:
-            # A budget from provider.extra on a model with no known output cap:
+            # A budget from EXTRA_PARAMS on a model with no known output cap:
             # max_tokens has to sit above it.
             output_max_tokens = extra_budget + reasoning.ANTHROPIC_UNKNOWN_CAP_ANSWER
         if sampling is not None and isinstance(thinking, dict) and thinking.get("type") == "enabled":

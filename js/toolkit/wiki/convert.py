@@ -66,7 +66,7 @@ def _spreadsheet_text(out: str, tmp: Path, cap: int) -> str:
         except OSError as exc:
             return f"ERROR: {exc}"
         blocks.append(f"--- sheet {name} ---\n{text}" if len(sheets) > 1 else text)
-    return cap_text("\n".join(blocks), cap, truncation_marker(cap, "limits.max_tool_result_bytes"))
+    return cap_text("\n".join(blocks), cap, truncation_marker(cap, "TOOL_RESULT_MAX"))
 
 
 def _convert_with_soffice(p: Path, ext: str, cap: int, context: ToolContext) -> str:

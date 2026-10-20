@@ -68,12 +68,12 @@ def test_seeded_settings_are_what_package_jsrc_sets():
         assert setcmd.apply_config_line(applied, line).error is None
 
     assert seeded == applied
-    seeded["limits"]["max_read_lines"] = -1
-    assert settings.default_value("limits.max_read_lines") != -1
+    seeded["READ_LINES_MAX"] = -1
+    assert settings.default_value("READ_LINES_MAX") != -1
 
 
 def test_a_number_changed_in_package_jsrc_changes_behaviour_and_show(monkeypatch, tmp_path, capsys):
-    _package_copy(tmp_path, monkeypatch, **{"kernel.wait_seconds": "9", "limits.max_read_lines": "17"})
+    _package_copy(tmp_path, monkeypatch, **{"PYTHON_KERNEL_WAIT": "9", "READ_LINES_MAX": "17"})
     project = _isolated_home(monkeypatch, tmp_path)
 
     context = ToolContext(cwd=tmp_path)
@@ -86,17 +86,17 @@ def test_a_number_changed_in_package_jsrc_changes_behaviour_and_show(monkeypatch
 
     state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
     capsys.readouterr()
-    assert cli._handle_command("/show kernel.wait_seconds", state, cfg) is True
+    assert cli._handle_command("/show PYTHON_KERNEL_WAIT", state, cfg) is True
     shown = capsys.readouterr().out.splitlines()[0]
     assert shown.split("=", 1)[1].split()[0] == "9"
 
 
 def test_user_jsrc_layers_over_package_jsrc(monkeypatch, tmp_path):
-    _package_copy(tmp_path, monkeypatch, **{"limits.fetch_timeout_s": "44", "limits.max_read_lines": "17"})
+    _package_copy(tmp_path, monkeypatch, **{"FETCH_TIMEOUT": "44", "READ_LINES_MAX": "17"})
     project = _isolated_home(monkeypatch, tmp_path)
     user = tmp_path / "home" / ".js" / "jsrc"
     user.parent.mkdir(parents=True)
-    user.write_text("set limits.max_read_lines 33\n", encoding="utf-8")
+    user.write_text("set READ_LINES_MAX 33\n", encoding="utf-8")
 
     cfg = from_env(save_session=False, cwd=project)
 
@@ -129,7 +129,7 @@ def test_missing_package_jsrc_stops_startup_with_one_line_naming_the_path(tmp_pa
 
 def test_bad_line_in_package_jsrc_names_the_file_and_line(monkeypatch, tmp_path):
     path = tmp_path / "jsrc"
-    path.write_text("set model.id m\nset limits.max_read_lines lots\n", encoding="utf-8")
+    path.write_text("set MODEL m\nset READ_LINES_MAX lots\n", encoding="utf-8")
     monkeypatch.setattr(settings, "PACKAGE_JSRC", path)
 
     with pytest.raises(SystemExit) as raised:
@@ -147,9 +147,9 @@ def test_first_run_writes_the_commented_template_and_leaves_an_existing_jsrc(mon
     assert user.read_text(encoding="utf-8") == settings.JSRC_TEMPLATE.read_text(encoding="utf-8")
     assert settings.collect_settings(config_paths=[user], env={}) == settings.seed_defaults()
 
-    user.write_text("set limits.max_read_lines 33\n", encoding="utf-8")
+    user.write_text("set READ_LINES_MAX 33\n", encoding="utf-8")
     assert cli.main(["--list"]) == 0
-    assert user.read_text(encoding="utf-8") == "set limits.max_read_lines 33\n"
+    assert user.read_text(encoding="utf-8") == "set READ_LINES_MAX 33\n"
 
 
 def test_the_template_lists_every_setting_once_commented_at_its_stock_value():
@@ -168,7 +168,7 @@ def test_the_template_lists_every_setting_once_commented_at_its_stock_value():
 def test_package_jsrc_without_a_line_for_a_knob_stops_startup_naming_it(monkeypatch, tmp_path):
     lines = [
         line for line in settings.PACKAGE_JSRC.read_text(encoding="utf-8").splitlines()
-        if not line.startswith("set limits.max_read_lines ")
+        if not line.startswith("set READ_LINES_MAX ")
     ]
     path = tmp_path / "jsrc"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -180,7 +180,7 @@ def test_package_jsrc_without_a_line_for_a_knob_stops_startup_naming_it(monkeypa
     message = str(raised.value)
     assert len(message.splitlines()) == 1
     assert str(path) in message
-    assert "limits.max_read_lines" in message
+    assert "READ_LINES_MAX" in message
 
 
 def _show_value(cfg, state, key: str, capsys) -> str:
@@ -194,8 +194,8 @@ def test_set_dash_in_a_user_jsrc_runs_and_shows_the_package_value(monkeypatch, t
     user = tmp_path / "home" / ".js" / "jsrc"
     user.parent.mkdir(parents=True)
     user.write_text(
-        "set runtime.trace off\nset limits.max_read_lines 33\nset runtime.allow_inline_code off\n"
-        "set -runtime.trace\nset -limits.max_read_lines\nset -runtime.allow_inline_code\n",
+        "set runtime.trace off\nset READ_LINES_MAX 33\nset INLINE_CODE off\n"
+        "set -runtime.trace\nset -READ_LINES_MAX\nset -INLINE_CODE\n",
         encoding="utf-8",
     )
 
@@ -203,13 +203,13 @@ def test_set_dash_in_a_user_jsrc_runs_and_shows_the_package_value(monkeypatch, t
     state = {"messages": [], "system": "sys", "settings": copy.deepcopy(cfg.settings)}
 
     assert cfg.trace is settings.default_value("runtime.trace")
-    assert cfg.max_read_lines == settings.default_value("limits.max_read_lines")
-    assert cfg.allow_inline_code is settings.default_value("runtime.allow_inline_code")
+    assert cfg.max_read_lines == settings.default_value("READ_LINES_MAX")
+    assert cfg.allow_inline_code is settings.default_value("INLINE_CODE")
     assert _show_value(cfg, state, "runtime.trace", capsys) == (
         "on" if cfg.trace else "off"
     )
-    assert _show_value(cfg, state, "limits.max_read_lines", capsys) == str(cfg.max_read_lines)
-    assert _show_value(cfg, state, "runtime.allow_inline_code", capsys) == (
+    assert _show_value(cfg, state, "READ_LINES_MAX", capsys) == str(cfg.max_read_lines)
+    assert _show_value(cfg, state, "INLINE_CODE", capsys) == (
         "on" if cfg.allow_inline_code else "off"
     )
 
@@ -220,14 +220,14 @@ def test_live_set_dash_returns_to_the_session_start_value_in_show_turn_and_save(
     project = _isolated_home(monkeypatch, tmp_path)
     user = tmp_path / "home" / ".js" / "jsrc"
     user.parent.mkdir(parents=True)
-    user.write_text("set limits.max_read_lines 33\n", encoding="utf-8")
+    user.write_text("set READ_LINES_MAX 33\n", encoding="utf-8")
     cfg = from_env(save_session=False, cwd=project)
     state = {"messages": [], "system": "sys", "settings": copy.deepcopy(cfg.settings)}
 
-    assert cli._handle_command("/set limits.max_read_lines 5", state, cfg) is True
-    assert cli._handle_command("/set -limits.max_read_lines", state, cfg) is True
+    assert cli._handle_command("/set READ_LINES_MAX 5", state, cfg) is True
+    assert cli._handle_command("/set -READ_LINES_MAX", state, cfg) is True
 
-    assert _show_value(cfg, state, "limits.max_read_lines", capsys) == "33"
+    assert _show_value(cfg, state, "READ_LINES_MAX", capsys) == "33"
     assert cli._cfg_for_live_state(cfg, state).max_read_lines == 33
     assert cli._handle_command("/save", state, cfg) is True
     reloaded = from_env(save_session=False, cwd=project)
@@ -240,8 +240,8 @@ def test_save_uncomments_changed_settings_in_place_and_leaves_the_rest(tmp_path)
     target.write_text(target.read_text(encoding="utf-8") + "# my note\n", encoding="utf-8")
     before = target.read_text(encoding="utf-8").splitlines()
     live = settings.seed_defaults()
-    setcmd.set_command(live, "limits.fetch_timeout_s 77")
-    setcmd.set_command(live, "provider.id deepseek")
+    setcmd.set_command(live, "FETCH_TIMEOUT 77")
+    setcmd.set_command(live, "PROVIDER deepseek")
 
     assert settings.save_settings_to_jsrc(target, live) == 2
     after = target.read_text(encoding="utf-8").splitlines()
@@ -249,8 +249,8 @@ def test_save_uncomments_changed_settings_in_place_and_leaves_the_rest(tmp_path)
 
     assert len(after) == len(before)
     assert changed == {
-        f"#set limits.fetch_timeout_s {settings.default_value('limits.fetch_timeout_s')}": "set limits.fetch_timeout_s 77",
-        "#set -provider.id": "set provider.id deepseek",
+        f"#set FETCH_TIMEOUT {settings.default_value('FETCH_TIMEOUT')}": "set FETCH_TIMEOUT 77",
+        "#set -PROVIDER": "set PROVIDER deepseek",
     }
     assert settings.collect_settings(config_paths=[target], env={}) == live
     assert [path.name for path in tmp_path.glob("jsrc*")] == ["jsrc"]
@@ -258,12 +258,12 @@ def test_save_uncomments_changed_settings_in_place_and_leaves_the_rest(tmp_path)
 
 def test_save_comments_out_a_setting_set_back_to_its_stock_value(tmp_path):
     target = tmp_path / "jsrc"
-    target.write_text("# mine\nset limits.fetch_timeout_s 77\nset ui.net 0\n", encoding="utf-8")
+    target.write_text("# mine\nset FETCH_TIMEOUT 77\nset ui.net 0\n", encoding="utf-8")
     live = settings.seed_defaults()
     setcmd.set_command(live, "ui.net 0")
 
     assert settings.save_settings_to_jsrc(target, live) == 1
-    assert target.read_text(encoding="utf-8") == "# mine\n#set limits.fetch_timeout_s 77\nset ui.net 0\n"
+    assert target.read_text(encoding="utf-8") == "# mine\n#set FETCH_TIMEOUT 77\nset ui.net 0\n"
     assert settings.save_settings_to_jsrc(target, live) == 0
 
 
@@ -279,8 +279,8 @@ def test_jsrc_tool_knobs_reach_the_turn_tool_context(monkeypatch, tmp_path):
     user = tmp_path / "home" / ".js" / "jsrc"
     user.parent.mkdir(parents=True)
     user.write_text(
-        "set tools.user_agent knob-agent/3\nset tools.terminal_cols 71\nset tools.terminal_rows 29\n"
-        "set shell.program zsh\n",
+        "set HTTP_USER_AGENT knob-agent/3\nset TERMINAL_COLUMNS 71\nset TERMINAL_ROWS 29\n"
+        "set SHELL_PROGRAM zsh\n",
         encoding="utf-8",
     )
     cfg = from_env(save_session=False, cwd=project)
@@ -307,7 +307,7 @@ def test_jsrc_tool_knobs_reach_the_turn_tool_context(monkeypatch, tmp_path):
 def test_config_and_tool_context_defaults_come_from_package_jsrc(monkeypatch, tmp_path):
     _package_copy(
         tmp_path, monkeypatch,
-        **{"limits.browse_timeout_s": "61", "shell.wait_seconds": "31", "tools.terminal_cols": "70"},
+        **{"BROWSE_TIMEOUT": "61", "SHELL_WAIT": "31", "TERMINAL_COLUMNS": "70"},
     )
     d = tmp_path / "sessions"
     cfg = Config(
@@ -366,7 +366,7 @@ def test_text_attachment_cap_follows_its_knob(monkeypatch, tmp_path):
     project = _isolated_home(monkeypatch, tmp_path)
     user = tmp_path / "home" / ".js" / "jsrc"
     user.parent.mkdir(parents=True)
-    user.write_text("set limits.max_text_attachment_bytes 10\n", encoding="utf-8")
+    user.write_text("set ATTACHMENT_MAX 10\n", encoding="utf-8")
     cfg = from_env(save_session=False, cwd=project)
     (project / "a.txt").write_text("q" * 100, encoding="utf-8")
 
@@ -388,7 +388,7 @@ def test_rehydrate_max_files_knob_decides_whether_files_come_back(
     user = tmp_path / "home" / ".js" / "jsrc"
     user.parent.mkdir(parents=True)
     user.write_text(
-        f"set model.id offline-test-model\nset compact.rehydrate_max_files {max_files}\n", encoding="utf-8",
+        f"set MODEL offline-test-model\nset COMPACTION_REATTACH_FILES_MAX {max_files}\n", encoding="utf-8",
     )
     cfg = replace(from_env(save_session=False, cwd=project), session_file=tmp_path / "s.jsonl")
     source = project / "kept.py"

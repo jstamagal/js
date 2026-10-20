@@ -357,7 +357,7 @@ def _read_byte_range(target: Path, context: ToolContext, start_byte: int, end_by
     page of a spilled result is never spilled again. Both ends move back to a
     UTF-8 character start and the footer names the offsets actually returned.
     The lines the page shows whole count as read, for files of at most
-    limits.max_file_bytes; a larger file is read by seeking and records no
+    FILE_BYTES_MAX; a larger file is read by seeking and records no
     coverage."""
     try:
         size = target.stat().st_size
@@ -528,7 +528,7 @@ def fs_read(
     if not ranged and read_cap > 0 and size > read_cap:
         example = _read_call(target, 1, context.max_read_lines)
         return (
-            f"ERROR: file size ({size} bytes) exceeds limits.max_read_bytes ({read_cap}) "
+            f"ERROR: file size ({size} bytes) exceeds READ_BYTES_MAX ({read_cap}) "
             f"for a whole-file read. Read a range instead, e.g. {example} — "
             f"ranged reads are not subject to this cap."
         )
@@ -1703,7 +1703,7 @@ def _cap_ast_output(text: str, context: ToolContext) -> str:
     encoded = text.encode("utf-8")
     if len(encoded) <= cap:
         return text
-    marker = f"[truncated: limits.max_tool_result_bytes ({cap}) reached]"
+    marker = f"[truncated: TOOL_RESULT_MAX ({cap}) reached]"
     marker_bytes = marker.encode("utf-8")
     if len(marker_bytes) >= cap:
         return marker_bytes[:cap].decode("utf-8", errors="ignore")

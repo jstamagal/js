@@ -83,7 +83,7 @@ def _slots(cfg: Any, spec_slots: Any) -> int:
     if spec_slots is not None:
         return max(0, int(spec_slots))
     settings = getattr(cfg, "settings", {}) or {}
-    raw = settings.get("swarm", {}).get("slots") if isinstance(settings.get("swarm"), dict) else None
+    raw = settings.get("SWARM_ACTIVE_MAX")
     try:
         return max(0, int(raw))
     except (TypeError, ValueError):
@@ -244,7 +244,7 @@ class Runner:
     @staticmethod
     async def compact(cfg: Any, auto: compaction.AutoCompactState, context: ToolContext, system: str,
                       messages: list[dict]) -> None:
-        if not compaction.get_bool(cfg, "auto"):
+        if not compaction.get_bool(cfg, "COMPACTION_AUTO"):
             return
         with contextlib.suppress(Exception):
             await compaction.maybe_auto_compact_async(

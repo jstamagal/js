@@ -15,8 +15,8 @@ what an inline is activating. Subsystems are a registry:
   env, file   -- always on; they only READ (env var value / file contents).
   sh, bash,   -- they EXECUTE arbitrary code embedded in the prompt file. They
   python, py,    run when ``allow_code`` is true, which is the DEFAULT
-  c, node, js    (``runtime.allow_inline_code``). Opt out with ``--im-a-pussy``
-                 (or ``set runtime.allow_inline_code off`` / ``JS_ALLOW_INLINE_CODE=0``);
+  c, node, js    (``INLINE_CODE``). Opt out with ``--im-a-pussy``
+                 (or ``set INLINE_CODE off`` / ``JS_INLINE_CODE=0``);
                  a code directive then stays literal. Built-ins in its body
                  are substituted before execution.
 
@@ -138,14 +138,14 @@ def expand_prompt(
     in subsystem bodies. Unknown built-ins stay literal.
 
     ``timeout_s`` and ``max_output_bytes`` left None take the js/jsrc values of
-    limits.inline_code_timeout_s and limits.max_bash_output_bytes.
+    INLINE_CODE_TIMEOUT and SHELL_OUTPUT_MAX.
     """
     if "{{" not in text and "!{" not in text and "```!" not in text and "%%" not in text:
         return text
     if timeout_s is None:
-        timeout_s = settings.default_value("limits.inline_code_timeout_s")
+        timeout_s = settings.default_value("INLINE_CODE_TIMEOUT")
     if max_output_bytes is None:
-        max_output_bytes = settings.default_value("limits.max_bash_output_bytes")
+        max_output_bytes = settings.default_value("SHELL_OUTPUT_MAX")
 
     environ = os.environ if env is None else env
     builtins = variables or {}

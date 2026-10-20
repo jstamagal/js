@@ -18,7 +18,7 @@ from . import settings as _settings
 from . import turn_settings as _turn_settings
 from . import routing as _routing
 
-from .sampling import Sampling
+from .sampling import SAMPLING_FIELDS, Sampling
 
 _AGENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -58,8 +58,8 @@ def _sampling_from_extras(extras: list[str] | None) -> Sampling:
     values: dict[str, object] = {}
     for arg in extras or []:
         path, value = _settings.parse_extra_arg(arg)
-        if len(path) == 2 and path[0] == "sampling":
-            values[path[1]] = value
+        if len(path) == 1 and path[0].lower() in SAMPLING_FIELDS:
+            values[path[0].lower()] = value
     return Sampling.from_mapping(values)
 
 # Vision-capable model-name fragments the SDK registry does not cover (proxy-
@@ -96,7 +96,7 @@ def vision_enabled_for_model(model: str, settings: dict | None = None) -> bool:
     if settings is None:
         explicit = _env_bool(os.environ.get("JS_VISION", ""))
     else:
-        explicit = _settings.get_dotted(settings, ("model", "vision"))
+        explicit = _settings.get_dotted(settings, ("VISION",))
     if isinstance(explicit, bool):
         return explicit
     from . import model_metadata
@@ -135,16 +135,46 @@ class Config(_turn_settings.ConfigSettings):
     sampling_setscript: Sampling = field(default_factory=Sampling)
     sampling_env: Sampling = field(default_factory=Sampling)
     sampling_cli: Sampling = field(default_factory=Sampling)
-    explicit_model: bool = False  # model.id was set by JS_MODEL or config (not the built-in default); gates --agent agent.yaml model
-    explicit_provider: bool = False  # provider.id was set by config/env/CLI extras, not inferred from a model prefix
-    invocation_model: bool = False  # model.id was set by a JS_* env var or --extra, not a jsrc file
-    invocation_reasoning: bool = False  # model.reasoning_effort was set by a JS_* env var or --extra, not a jsrc file
+    explicit_model: bool = False  # MODEL was set by JS_MODEL or config (not the built-in default); gates --agent agent.yaml model
+    explicit_provider: bool = False  # PROVIDER was set by config/env/CLI extras, not inferred from a model prefix
+    invocation_model: bool = False  # MODEL was set by a JS_* env var or --extra, not a jsrc file
+    invocation_reasoning: bool = False  # EFFORT was set by a JS_* env var or --extra, not a jsrc file
     vision_enabled: bool = False
     settings: dict = field(default_factory=dict, compare=False)  # raw merged view, for the runtime
     prompt_roots: tuple[Path, ...] = field(default_factory=tuple, compare=False)
     agents_files: tuple[Path, ...] = field(default_factory=tuple, compare=False)
     project_dir: Path = field(default_factory=Path.cwd, compare=False)
     mcp: object | None = field(default=None, compare=False)  # immutable server definitions + active-agent policy
+
+    def __post_init__(self) -> None:
+        # A key that is not a setting (an old name such as retry_attempts)
+        # would be read by nothing; refuse it as `set` does.
+        unknown = _unknown_setting_keys(self.settings)
+        if unknown:
+            raise ValueError(msgs.UNKNOWN_SETTING.text(key=", ".join(unknown)))
+
+
+# A settings store holds each setting under its name. A flat name's value is
+# what the setting takes (a map setting's contents are free); a dotted display
+# setting sits in its section's dict, which holds nothing else.
+_FLAT_SETTINGS = frozenset(spec.key for spec in _settings.REGISTRY if len(spec.path) == 1)
+_SECTION_KEYS: dict[str, frozenset[str]] = {}
+for _spec in _settings.REGISTRY:
+    if len(_spec.path) == 2:
+        _SECTION_KEYS[_spec.path[0]] = _SECTION_KEYS.get(_spec.path[0], frozenset()) | {_spec.path[1]}
+
+
+def _unknown_setting_keys(store: dict) -> list[str]:
+    """The keys of ``store`` that are not settings, as dotted names."""
+    unknown: list[str] = []
+    for key, value in store.items():
+        if key in _FLAT_SETTINGS:
+            continue
+        if key in _SECTION_KEYS and isinstance(value, dict):
+            unknown += [f"{key}.{child}" for child in value if child not in _SECTION_KEYS[key]]
+        else:
+            unknown.append(str(key))
+    return sorted(unknown)
 
 
 def _reserve_session(agent_dir: Path, sessions_dir: Path) -> Path:
@@ -330,9 +360,9 @@ def jsrc_paths(
 
 def agent_from_settings(settings: dict, agent_id: str | None = None) -> str:
     """The agent a run uses: ``agent_id`` (from --agent or --commit) when
-    given, else the ``agent`` setting from ``settings``. Raises ValueError for
+    given, else the ``DEFAULT_AGENT`` setting from ``settings``. Raises ValueError for
     an id that is not letters, digits, '_' or '-'."""
-    return validate_agent_id(agent_id or _settings.knob(settings, "agent"))
+    return validate_agent_id(agent_id or _settings.knob(settings, "DEFAULT_AGENT"))
 
 
 def resolve_agent_id(
@@ -345,7 +375,7 @@ def resolve_agent_id(
     presets: list[str] | None = None,
 ) -> str:
     """The agent `from_env` picks for the same arguments, without building a
-    Config: ``agent_id`` beats env JS_AGENT, which beats the jsrc layers."""
+    Config: ``agent_id`` beats env JS_DEFAULT_AGENT, which beats the jsrc layers."""
     config_paths = jsrc_paths(
         (cwd or Path.cwd()).resolve(strict=False),
         ignore_local_config=ignore_local_config,
@@ -407,20 +437,19 @@ def from_env(
         extras=extras,
     )
     agent_id = agent_from_settings(js_root_settings, agent_id)
-    sampling_setscript = Sampling.from_mapping(jsrc_settings.get("sampling", {}))
+    sampling_setscript = Sampling.from_mapping({field: jsrc_settings.get(field.upper()) for field in SAMPLING_FIELDS})
     sampling_env = Sampling.from_env(env)
     sampling_cli = _sampling_from_extras(extras)
-    default_model = _settings.default_value("model.id")
-    raw_model = _settings.get_dotted(js_root_settings, ("model", "id")) or default_model
-    # Any env name that feeds model.id (JS_MODEL alias or canonical JS_MODEL_ID)
-    # makes the model invocation-explicit.
+    default_model = _settings.default_value("MODEL")
+    raw_model = _settings.get_dotted(js_root_settings, ("MODEL",)) or default_model
+    # Any env name that feeds MODEL makes the model invocation-explicit.
     invocation_explicit_model = any(
-        env.get(name) for name in _settings.env_names_for(_settings.SPEC_BY_KEY["model.id"]))
+        env.get(name) for name in _settings.env_names_for(_settings.SPEC_BY_KEY["MODEL"]))
     explicit_model = invocation_explicit_model or raw_model != default_model
-    _cfg_provider_id = _settings.get_dotted(js_root_settings, ("provider", "id"))
+    _cfg_provider_id = _settings.get_dotted(js_root_settings, ("PROVIDER",))
     explicit_provider = _cfg_provider_id is not None
-    _cfg_base_url = _settings.get_dotted(js_root_settings, ("provider", "base_url"))
-    _cfg_api_key = _settings.get_dotted(js_root_settings, ("provider", "api_key"))
+    _cfg_base_url = _settings.get_dotted(js_root_settings, ("BASE_URL",))
+    _cfg_api_key = _settings.get_dotted(js_root_settings, ("API_KEY",))
     try:
         route = _routing.resolve_model_route(
             raw_model,
@@ -452,11 +481,11 @@ def from_env(
     provider_headers = route.headers
     provider_def = _providers.get_provider(provider_id)
 
-    reasoning_effort = _settings.get_dotted(js_root_settings, ("model", "reasoning_effort"))
+    reasoning_effort = _settings.get_dotted(js_root_settings, ("EFFORT",))
     if reasoning_effort is None and provider_def is not None and provider_def.reasoning_effort:
         reasoning_effort = provider_def.reasoning_effort
 
-    runtime_debug = bool(_settings.knob(js_root_settings, "runtime.debug"))
+    runtime_debug = bool(_settings.knob(js_root_settings, "DEBUG_LOG"))
 
     from . import mcp_config
 
@@ -468,7 +497,7 @@ def from_env(
     sessions_dir = _session_store.folder_for(project_dir)
     state_dir = _paths.state_root() / agent_id
     state_dir.mkdir(parents=True, exist_ok=True)
-    history_setting = _settings.knob(js_root_settings, "history.file")
+    history_setting = _settings.knob(js_root_settings, "HISTORY_FILE")
     history_file = Path(history_setting).expanduser() if history_setting else _paths.prompt_history_file()
 
     session_name = session if session is not None else env.get("JS_SESSION")
@@ -509,7 +538,7 @@ def from_env(
         mcp=mcp,
         explicit_model=explicit_model,
         explicit_provider=explicit_provider,
-        invocation_model=_set_by_invocation("model.id", env, extras),
-        invocation_reasoning=_set_by_invocation("model.reasoning_effort", env, extras),
+        invocation_model=_set_by_invocation("MODEL", env, extras),
+        invocation_reasoning=_set_by_invocation("EFFORT", env, extras),
         **_turn_settings.project(js_root_settings),
     )

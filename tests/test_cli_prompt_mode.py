@@ -75,9 +75,9 @@ def _continue_args(err: str) -> list[str]:
 
 def test_config_defaults_to_defaultagent_workspace(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
-    monkeypatch.setenv("JS_DEBUG", "1")
+    monkeypatch.setenv("JS_DEBUG_LOG", "1")
 
     from js.config import from_env
 
@@ -102,7 +102,7 @@ def test_config_defaults_to_defaultagent_workspace(monkeypatch, tmp_path):
     assert not (tmp_path / ".js" / "jsrc").exists()
 def test_personal_defaultagent_overrides_repo_defaultagent(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
 
     personal_default = tmp_path / ".js" / "agents" / "defaultagent"
@@ -120,7 +120,7 @@ def test_personal_defaultagent_overrides_repo_defaultagent(monkeypatch, tmp_path
 
 def test_config_default_sessions_are_unique_and_latest_is_recorded(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
 
     from js.config import from_env
@@ -139,7 +139,7 @@ def test_config_default_sessions_are_unique_and_latest_is_recorded(monkeypatch, 
 
 def test_config_rejects_unsafe_agent_id_from_env(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("JS_AGENT", "../../etc")
+    monkeypatch.setenv("JS_DEFAULT_AGENT", "../../etc")
     monkeypatch.delenv("JS_SESSION", raising=False)
 
     from js.config import from_env
@@ -152,7 +152,7 @@ def test_config_rejects_unsafe_agent_id_from_env(monkeypatch, tmp_path):
 
 def test_cli_rejects_unsafe_agent_id_argument(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
 
     actual = cli.main(["--agent", "../../etc", "-p", "ignored"])
 
@@ -200,7 +200,7 @@ def test_compact_command_summarizes_with_the_active_model(monkeypatch, tmp_path)
 
 def test_interactive_prompt_enables_ctrl_z_suspend(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     seen = {}
@@ -220,7 +220,7 @@ def test_interactive_prompt_enables_ctrl_z_suspend(monkeypatch, tmp_path):
 
 def test_prompt_model_flag_with_provider_prefix_routes_provider_override(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     # A `-m provider/model` override routes only when that provider is logged in.
     from js import logins
@@ -252,7 +252,7 @@ def test_prompt_model_flag_with_provider_prefix_routes_provider_override(monkeyp
 
 def test_interactive_model_flag_with_provider_prefix_routes_provider_override(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.delenv("JS_MODEL", raising=False)
     monkeypatch.delenv("JS_PROVIDER", raising=False)
@@ -302,7 +302,7 @@ def test_cli_rejects_debug_and_debug_file_combination(monkeypatch):
 
 def test_config_existing_session_id_loads_with_and_without_suffix(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
 
     from js.config import from_env
@@ -324,7 +324,7 @@ def test_config_existing_session_id_loads_with_and_without_suffix(monkeypatch, t
 
 def test_config_missing_session_id_creates_named_session(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.setenv("JS_SESSION", "foo")
 
     from js.config import from_env
@@ -339,7 +339,7 @@ def test_config_missing_session_id_creates_named_session(monkeypatch, tmp_path):
 
 def test_config_existing_absolute_session_path_loads_exact_file(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     sessions_dir = session_store.folder_for(Path.cwd())
     sessions_dir.mkdir(parents=True)
     existing = sessions_dir / "foo-20260519T010203000000Z-deadbeefcafebabe.jsonl"
@@ -452,7 +452,7 @@ def test_prompt_instruction_combines_with_piped_stdin(monkeypatch):
 
 def test_prompt_model_override_is_preserved_in_continue_hint(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
 
     def completion_stub(**kwargs):
@@ -472,12 +472,12 @@ def test_prompt_model_override_is_preserved_in_continue_hint(monkeypatch, tmp_pa
 
 def test_resumed_prompt_uses_js_model_over_me_model_and_config(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.setenv("JS_MODEL", "from-js-model")
     config_dir = tmp_path / ".js"
     config_dir.mkdir(parents=True)
-    (config_dir / "jsrc").write_text("set model.id from-config\n", encoding="utf-8")
+    (config_dir / "jsrc").write_text("set MODEL from-config\n", encoding="utf-8")
     session_dir = session_store.folder_for(Path.cwd())
     session_dir.mkdir(parents=True)
     session_file = session_dir / "resume-env-model.jsonl"
@@ -500,7 +500,7 @@ def test_resumed_prompt_uses_js_model_over_me_model_and_config(monkeypatch, tmp_
 
 def test_js_prompt_mode_generated_session_prints_usable_continue_hint(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
 
     def completion_stub(**kwargs):
@@ -529,7 +529,7 @@ def test_js_prompt_mode_generated_session_prints_usable_continue_hint(monkeypatc
 def test_the_continue_hint_goes_to_stderr_and_stdout_keeps_only_the_answer(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_k: _fake_stream_result("HINT_OK"))
 
@@ -543,7 +543,7 @@ def test_the_continue_hint_goes_to_stderr_and_stdout_keeps_only_the_answer(monke
 def test_runtime_trace_shows_the_trace_on_stderr_in_prompt_mode(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_k: _fake_stream_result("TRACE_OK"))
     run_line = msgs.RUN_LINE.text(fields="")
@@ -558,7 +558,7 @@ def test_runtime_trace_shows_the_trace_on_stderr_in_prompt_mode(monkeypatch, tmp
 
 def test_js_prompt_mode_no_save_writes_no_session_or_latest(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
 
     def completion_stub(**kwargs):
@@ -608,7 +608,7 @@ def test_js_pipe_modes_no_save_pass_save_false(monkeypatch, capsys):
 
 def test_no_save_warning_is_only_for_a_headless_no_save_run(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.setattr(cli, "_run_prompt", lambda prompt, **kwargs: 0)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
@@ -664,7 +664,7 @@ def test_clustered_short_booleans_parse_with_prompt(monkeypatch):
 
 def test_prompt_mode_auto_compact_uses_model_override_for_same(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     seen: list[str] = []
 
@@ -744,7 +744,7 @@ def test_prompt_mode_missing_agent_fails_before_the_provider(monkeypatch, tmp_pa
     """Finding 55: a nonexistent agent id names the agent and the global agents
     dir where one is created, not the raw missing prompts directory."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_k: pytest.fail("provider reached"))
@@ -867,7 +867,7 @@ def test_commit_mode_rejects_agent_override_and_missing_target(monkeypatch, tmp_
 
 def test_resumed_prompt_model_override_is_used_and_preserved_in_continue_hint(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     session_dir = session_store.folder_for(Path.cwd())
     session_dir.mkdir(parents=True)
@@ -899,7 +899,7 @@ def test_short_session_and_agent_aliases_parse(monkeypatch):
 
 def test_a_session_run_under_an_agent_names_it_in_the_hint(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     # Sessions are filed by start directory, not by agent: the name finds the
     # session whatever agent runs it.
@@ -959,7 +959,7 @@ def _auto_compact_cfg(tmp_path, *, compact: dict | None = None) -> Config:
         # buffer_tokens 0 keeps these threshold tests on raw-window math, so the
         # synthetic 100-token window still means "80 tokens == 80% full"; the
         # reserve/buffer subtraction itself is covered separately below.
-        settings={"compact": {"buffer_tokens": 0, **({"context_window": 100} if not (compact or {}).get("context_window_fallback") else {}), **(compact or {})}},
+        settings={"COMPACTION_HEADROOM_TOKENS": 0, **({"CONTEXT_SIZE": 100} if not (compact or {}).get("CONTEXT_SIZE_UNKNOWN") else {}), **(compact or {})},
     )
 
 
@@ -976,7 +976,7 @@ def test_auto_compact_noops_when_disabled_or_paused(monkeypatch, tmp_path, capsy
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 95, raising=False)
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
 
-    disabled = _auto_compact_cfg(tmp_path, compact={"auto": False})
+    disabled = _auto_compact_cfg(tmp_path, compact={"COMPACTION_AUTO": False})
     cli._maybe_auto_compact(disabled, _auto_state())
     paused_state = _auto_state()
     paused_state["auto_compact"].paused = True
@@ -1097,16 +1097,16 @@ def test_auto_compact_invalid_numeric_config_falls_back_to_defaults(monkeypatch,
 
     for compact in (
         {
-            "context_window": "not-an-int",
-            "notify_threshold": "not-a-float",
-            "trigger_threshold": "not-a-float",
-            "force_threshold": "not-a-float",
+            "CONTEXT_SIZE": "not-an-int",
+            "COMPACTION_WARN_AT": "not-a-float",
+            "COMPACTION_START_AT": "not-a-float",
+            "COMPACTION_FORCE_AT": "not-a-float",
         },
         {
-            "context_window": True,
-            "notify_threshold": True,
-            "trigger_threshold": True,
-            "force_threshold": True,
+            "CONTEXT_SIZE": True,
+            "COMPACTION_WARN_AT": True,
+            "COMPACTION_START_AT": True,
+            "COMPACTION_FORCE_AT": True,
         },
     ):
         cfg = _auto_compact_cfg(tmp_path, compact=compact)
@@ -1125,9 +1125,9 @@ def test_auto_compact_misordered_thresholds_use_safe_defaults(monkeypatch, tmp_p
     cfg = _auto_compact_cfg(
         tmp_path,
         compact={
-            "notify_threshold": 0.95,  # invalid: notify after trigger
-            "trigger_threshold": 0.80,
-            "force_threshold": 0.70,   # invalid: force before trigger
+            "COMPACTION_WARN_AT": 0.95,  # invalid: notify after trigger
+            "COMPACTION_START_AT": 0.80,
+            "COMPACTION_FORCE_AT": 0.70,   # invalid: force before trigger
         },
     )
 
@@ -1145,7 +1145,7 @@ def test_auto_compact_string_false_values_disable_auto(monkeypatch, tmp_path, ca
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
 
     for raw in ("false", "0", "off", "no"):
-        cli._maybe_auto_compact(_auto_compact_cfg(tmp_path, compact={"auto": raw}), _auto_state())
+        cli._maybe_auto_compact(_auto_compact_cfg(tmp_path, compact={"COMPACTION_AUTO": raw}), _auto_state())
 
     assert calls == []
     assert capsys.readouterr().out == ""
@@ -1153,7 +1153,7 @@ def test_auto_compact_string_false_values_disable_auto(monkeypatch, tmp_path, ca
 @pytest.mark.skipif(shutil.which("bwrap") is None, reason="-C needs bubblewrap")
 def test_dash_C_binds_working_dir_for_prompt_mode(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     scaffold = tmp_path / "scaffold"
     scaffold.mkdir()
@@ -1195,7 +1195,7 @@ def test_auto_compact_fullness_excludes_output_reserve_and_buffer(monkeypatch, t
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
     cfg = _auto_compact_cfg(
         tmp_path,
-        compact={"context_window": 100_000, "buffer_tokens": 4_000},
+        compact={"CONTEXT_SIZE": 100_000, "COMPACTION_HEADROOM_TOKENS": 4_000},
     )
     cfg = replace(cfg, max_output_tokens=8_000)
 
@@ -1215,7 +1215,7 @@ def test_auto_compact_reserve_never_eats_more_than_half_the_window(monkeypatch, 
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
     cfg = _auto_compact_cfg(
         tmp_path,
-        compact={"context_window": 32_000, "buffer_tokens": 4_000},
+        compact={"CONTEXT_SIZE": 32_000, "COMPACTION_HEADROOM_TOKENS": 4_000},
     )
     cfg = replace(cfg, max_output_tokens=64_000)
 
@@ -1229,13 +1229,13 @@ def test_auto_compact_reserve_never_eats_more_than_half_the_window(monkeypatch, 
 def test_reply_reserve_is_capped_so_a_huge_output_limit_does_not_eat_the_window(monkeypatch, tmp_path, capsys):
     # gpt-5.6-sol declares max_output 128000. Reserving all of it against a
     # 370k window would leave 238k addressable and compact at ~190k; the
-    # reserve is capped at compact.summary_reserve_tokens (20k default), so
+    # reserve is capped at COMPACTION_REPLY_RESERVE_TOKENS (20k default), so
     # 345,904 is addressable and 260k reads as 75%, under the trigger.
     calls: list[dict] = []
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
     cfg = _auto_compact_cfg(
         tmp_path,
-        compact={"context_window": 370_000, "buffer_tokens": 4_096},
+        compact={"CONTEXT_SIZE": 370_000, "COMPACTION_HEADROOM_TOKENS": 4_096},
     )
     cfg = replace(cfg, max_output_tokens=128_000)
 
@@ -1252,9 +1252,9 @@ def test_reply_reserve_cap_is_configurable(monkeypatch, tmp_path, capsys):
     cfg = _auto_compact_cfg(
         tmp_path,
         compact={
-            "context_window": 370_000,
-            "buffer_tokens": 4_096,
-            "summary_reserve_tokens": 128_000,
+            "CONTEXT_SIZE": 370_000,
+            "COMPACTION_HEADROOM_TOKENS": 4_096,
+            "COMPACTION_REPLY_RESERVE_TOKENS": 128_000,
         },
     )
     cfg = replace(cfg, max_output_tokens=128_000)
@@ -1273,7 +1273,7 @@ def test_context_window_fallback_only_applies_when_the_model_is_unknown(monkeypa
     monkeypatch.setattr(cli.runtime, "_resolve_context_window", lambda *a, **kw: 1_050_000)
     cfg = _auto_compact_cfg(
         tmp_path,
-        compact={"context_window_fallback": 370_000, "buffer_tokens": 4_096},
+        compact={"CONTEXT_SIZE_UNKNOWN": 370_000, "COMPACTION_HEADROOM_TOKENS": 4_096},
     )
     cfg = replace(cfg, max_output_tokens=128_000)
     # 300k is 81% of a 370k pin but 29% of the real 1.05M window.
@@ -1316,7 +1316,7 @@ def test_context_window_overrides_ignore_junk_entries():
 
 
 def test_context_window_overrides_rebuild_dotted_model_ids():
-    # `set compact.context_window_overrides.openai-codex/gpt-5.6-sol 370000`
+    # `set CONTEXT_SIZE_PER_MODEL.openai-codex/gpt-5.6-sol 370000`
     # splits on every dot, so the loader must rejoin the id.
     try:
         runtime.set_context_window_overrides(
@@ -1329,7 +1329,7 @@ def test_context_window_overrides_rebuild_dotted_model_ids():
 
 
 def test_model_context_window_overrides_the_catalog_for_the_active_model(tmp_path):
-    # The single-model form, symmetric with model.max_output_tokens.
+    # The single-model form, symmetric with OUTPUT_TOKENS_MAX.
     cfg = _auto_compact_cfg(tmp_path)
     cfg = replace(cfg, model="gpt-5.6-sol", provider_id="openai-codex", model_context_window=370_000)
     try:
@@ -1344,7 +1344,7 @@ def test_model_context_window_overrides_the_catalog_for_the_active_model(tmp_pat
 def test_model_context_window_beats_the_multi_model_map(tmp_path):
     cfg = _auto_compact_cfg(tmp_path)
     cfg = replace(cfg, model="gpt-5.6-sol", provider_id="openai-codex", model_context_window=370_000)
-    cfg.settings["compact"]["context_window_overrides"] = {"openai-codex/gpt-5": {"6-sol": 900_000}}
+    cfg.settings["CONTEXT_SIZE_PER_MODEL"] = {"openai-codex/gpt-5": {"6-sol": 900_000}}
     try:
         runtime.install_context_window_overrides(cfg)
         assert runtime._resolve_context_window("gpt-5.6-sol", "openai-codex", None) == 370_000
@@ -1355,7 +1355,7 @@ def test_model_context_window_beats_the_multi_model_map(tmp_path):
 def test_named_nested_sessions_append_stably(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_kwargs: _fake_stream_result("OK"))
 
@@ -1369,7 +1369,7 @@ def test_named_nested_sessions_append_stably(monkeypatch, tmp_path):
 def test_session_key_resumes_the_same_derived_session(monkeypatch, tmp_path, capsys):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_kwargs: _fake_stream_result("OK"))
     project = tmp_path / "project"

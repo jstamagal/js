@@ -189,7 +189,7 @@ def test_a_clipped_earlier_read_is_not_named(tmp_path, monkeypatch):
     ], max_tool_result_bytes=0, max_tool_results_per_turn_bytes=8000,
         max_tool_result_inline_bytes=0, max_read_lines=5000, max_read_bytes=0)
 
-    assert "max_tool_results_per_turn_bytes" in _content(messages, "first")
+    assert "PARALLEL_RESULTS_MAX" in _content(messages, "first")
     assert "first" not in _content(messages, "again").split("\n", 1)[0]
     assert _content(messages, "again").startswith("1|L00001")
 

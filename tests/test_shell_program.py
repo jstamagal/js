@@ -1,4 +1,4 @@
-"""The shell tool runs `shell.program`, with pipefail where the shell has it,
+"""The shell tool runs `SHELL_PROGRAM`, with pipefail where the shell has it,
 and names the filtered environment only when the command asked for it."""
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ def _shell_line(result: str) -> str:
 
 
 def test_shell_program_defaults_to_bash():
-    assert settings.default_value("shell.program") == "bash"
+    assert settings.default_value("SHELL_PROGRAM") == "bash"
     assert ToolContext().shell_program == "bash"
 
 

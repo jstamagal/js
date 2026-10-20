@@ -350,7 +350,7 @@ def test_runtime_ignores_configured_alias_that_uses_discovery_name(monkeypatch, 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = _cfg(
         tmp_path,
-        {"tools": {"alias_profiles": [{"match": ["offline"], "aliases": {"read": "tool_discovery"}}]}},
+        {"TOOL_ALIASES": [{"match": ["offline"], "aliases": {"read": "tool_discovery"}}]},
     )
     messages = [{"role": "user", "content": "find tools"}]
     runtime.run_turn(
@@ -387,7 +387,7 @@ def test_runtime_regenerates_schemas_preserves_alias_history_and_keeps_next_turn
     registry = build_default_registry().select(["browser_probe:lazy", "read:lazy"])
     cfg = _cfg(
         tmp_path,
-        {"tools": {"alias_profiles": [{"match": ["offline"], "aliases": {"browser_probe": "Probe"}}]}},
+        {"TOOL_ALIASES": [{"match": ["offline"], "aliases": {"browser_probe": "Probe"}}]},
     )
     messages = [{"role": "user", "content": "inspect"}]
     context = ToolContext(cwd=tmp_path)

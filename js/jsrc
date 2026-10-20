@@ -6,16 +6,17 @@
 # `set -key` leaves a setting unset. `/set` with no argument lists every setting
 # and its value; `/show <key>` shows one with its help text.
 
-# --- agent ---
-set agent defaultagent
-
 # --- model ---
-set model.id deepseek/deepseek-v4-flash
-set -model.max_output_tokens
-set -model.context_window
-set -model.reasoning_effort
-set -model.thinking_budget
-set -model.vision
+set DEFAULT_AGENT defaultagent
+set MODEL deepseek/deepseek-v4-flash
+set -OUTPUT_TOKENS_MAX
+set -CONTEXT_SIZE
+set -EFFORT
+set -THINKING_BUDGET
+set -VISION
+
+# --- banner ---
+set BANNER ***
 
 # --- ui ---
 set ui.reasoning 2
@@ -38,19 +39,19 @@ set theme.removed #ff8aa7
 set theme.code #ff8aa7
 set ui.markdown on
 set ui.resume_exchanges 3
-set ui.editing_mode emacs
-set ui.paste_image_key c-v
-set ui.paste_collapse_lines 10
-set ui.paste_collapse_chars 1000
-set -ui.paste_image_command
+set EDITING_MODE emacs
+set PASTE_IMAGE_KEY c-v
+set PASTE_COLLAPSE_LINES 10
+set PASTE_COLLAPSE_CHARS 1000
+set -PASTE_IMAGE_COMMAND
 
 # --- history ---
-set -history.file
-set history.cwd_first on
-set history.max_entries 10000
+set -HISTORY_FILE
+set HISTORY_ORDER last
+set HISTORY_SIZE 10000
 
 # --- keys ---
-set -keys.file
+set -KEYBINDS_FILE
 
 # --- tags ---
 set -tags.file
@@ -61,118 +62,116 @@ set tags.message_chars 2000
 set tags.model jev-latest
 
 # --- provider ---
-set -provider.id
-set -provider.base_url
-set -provider.api_key
-set provider.extra {}
+set -PROVIDER
+set -BASE_URL
+set -API_KEY
+set EXTRA_PARAMS {}
 
 # --- limits ---
-set limits.max_tool_iterations 500
-set limits.max_tool_calls_per_message 50
-set limits.max_bash_output_bytes 262144
-set limits.max_bash_output_ceiling 150000
-set limits.max_tool_result_inline_bytes 51200
-set limits.max_tool_result_bytes 262144
-set limits.fetch_timeout_s 15
-set limits.shell_env_allow ["PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "PWD", "SHELL", "BEADS_ACTOR"]
-set limits.browse_timeout_s 60
-set limits.download_timeout_s 300
-set limits.max_download_bytes 0
-set limits.inline_code_timeout_s 300
-set limits.max_read_lines 2000
-set limits.max_file_bytes 2000000
-set limits.max_text_attachment_bytes 65536
-set limits.max_read_bytes 262144
-set limits.max_tool_results_per_turn_bytes 200000
-set limits.task_max_depth 2
-set limits.subagent_max_workers 8
+set TURN_ROUNDS_MAX 500
+set REPLY_TOOL_CALLS_MAX 50
+set SHELL_OUTPUT_MAX 262144
+set TOOL_RESULT_INLINE_MAX 51200
+set TOOL_RESULT_MAX 262144
+set FETCH_TIMEOUT 15
+set SHELL_ENV_KEEP ["PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "PWD", "SHELL", "BEADS_ACTOR"]
+set BROWSE_TIMEOUT 60
+set DOWNLOAD_TIMEOUT 300
+set DOWNLOAD_MAX 0
+set INLINE_CODE_TIMEOUT 300
+set READ_LINES_MAX 2000
+set FILE_BYTES_MAX 2000000
+set ATTACHMENT_MAX 65536
+set READ_BYTES_MAX 262144
+set PARALLEL_RESULTS_MAX 200000
+set SUBAGENT_DEPTH_MAX 2
+set SUBAGENT_WORKERS_MAX 8
 
 # --- swarm ---
-set swarm.slots 0
+set SWARM_ACTIVE_MAX 0
 
 # --- kernel ---
-set kernel.enabled off
+set PYTHON_KERNEL off
 set kernel.verbosity normal
 set kernel.render_max_lines 24
-set kernel.wait_seconds 5
+set PYTHON_KERNEL_WAIT 5
 
 # --- shell ---
-set shell.program bash
-set shell.wait_seconds 30
+set SHELL_PROGRAM bash
+set SHELL_WAIT 30
 
 # --- jail ---
-set jail.bind ["~/.gitconfig", "~/.config/git", "~/.local/share/uv", "~/.cache/uv:rw"]
+set JAIL_BIND ["~/.gitconfig", "~/.config/git", "~/.local/share/uv", "~/.cache/uv:rw"]
 
 # --- runtime ---
-set runtime.debug off
+set DEBUG_LOG off
 set runtime.trace on
-set runtime.max_parallel_tools 8
-set runtime.retry_attempts 10
-set runtime.retry_max_wait_seconds 120
-set runtime.stream_idle_seconds 300
-set runtime.max_output_escalation 64000
-set runtime.max_output_resumes 3
-set runtime.steer now
-set runtime.debug_autolog on
-set -runtime.debug_autolog_dir
-set runtime.transcript_log on
-set -runtime.transcript_log_dir
-set runtime.allow_inline_code on
+set PARALLEL_TOOLS_MAX 8
+set RETRY_COUNT_MAX 10
+set RETRY_WAIT_MAX 120
+set STREAM_IDLE_TIMEOUT 300
+set OUTPUT_TOKENS_RETRY_MAX 64000
+set OUTPUT_RESUMES_MAX 3
+set STEER_MODE now
+set REQUEST_LOG on
+set -REQUEST_LOG_DIR
+set TRANSCRIPT_LOG on
+set -TRANSCRIPT_LOG_DIR
+set INLINE_CODE on
 
 # --- events ---
-set events.exec_timeout_s 30
-set events.exec_output_bytes 65536
+set EXEC_TIMEOUT 30
+set EXEC_OUTPUT_MAX 65536
 
 # --- compact ---
-set compact.auto on
-set -compact.flight_log_dir
-set -compact.context_window
-set compact.context_window_overrides {}
-set compact.context_window_fallback 1000000
-set compact.notify_threshold 0.5
-set compact.trigger_threshold 0.8
-set compact.force_threshold 0.9
-set compact.buffer_tokens 4096
-set compact.summary_reserve_tokens 20000
-set compact.tail_tokens 16384
-set compact.min_savings_tokens 400
-set compact.clear_keep_recent 20
-set compact.rehydrate_max_files 5
-set compact.rehydrate_token_budget 50000
-set compact.rehydrate_max_tokens_per_file 5000
-set compact.chars_per_token 4.0
-set compact.model same
-set compact.summary_max_tokens 8192
-set compact.summary_tool_result_chars 2000
-set compact.max_summary_failures 3
-set compact.cache_ttl_seconds 300
-set -compact.pre_hook
+set COMPACTION_AUTO on
+set -COMPACTION_LOG_DIR
+set CONTEXT_SIZE_PER_MODEL {}
+set CONTEXT_SIZE_UNKNOWN 1000000
+set COMPACTION_WARN_AT 0.5
+set COMPACTION_START_AT 0.8
+set COMPACTION_FORCE_AT 0.9
+set COMPACTION_HEADROOM_TOKENS 4096
+set COMPACTION_REPLY_RESERVE_TOKENS 20000
+set COMPACTION_KEEP_RECENT_TOKENS 16384
+set COMPACTION_MIN_SAVINGS_TOKENS 400
+set COMPACTION_KEEP_TOOL_RESULTS 20
+set COMPACTION_REATTACH_FILES_MAX 5
+set COMPACTION_REATTACH_TOKENS_MAX 50000
+set COMPACTION_REATTACH_FILE_TOKENS_MAX 5000
+set COMPACTION_CHARS_PER_TOKEN 4.0
+set COMPACTION_EXTERNAL_MODEL same
+set COMPACTION_SUMMARY_TOKENS_MAX 8192
+set COMPACTION_SUMMARY_RESULT_CHARS_MAX 2000
+set COMPACTION_FAILURES_MAX 3
+set COMPACTION_CACHE_TTL 300
+set -COMPACTION_HINT_COMMAND
 
 # --- subagents ---
-set subagents.prefer_inherit off
-set subagents.lock_model off
+set SUBAGENT_INHERIT_MODEL off
+set SUBAGENT_MODEL_LOCK off
 
 # --- tools ---
-set -tools.alias_profiles
-set tools.user_agent js-agent/0.1
-set tools.terminal_cols 64
-set tools.terminal_rows 36
+set -TOOL_ALIASES
+set HTTP_USER_AGENT js-agent/0.1
+set TERMINAL_COLUMNS 64
+set TERMINAL_ROWS 36
 
 # --- lsp ---
-set lsp.servers [{"name": "basedpyright", "command": ["basedpyright-langserver", "--stdio"], "extensions": [".py", ".pyi"], "roots": ["pyproject.toml", "setup.py", "setup.cfg", "pyrightconfig.json"]}, {"name": "pyright", "command": ["pyright-langserver", "--stdio"], "extensions": [".py", ".pyi"], "roots": ["pyproject.toml", "setup.py", "setup.cfg", "pyrightconfig.json"]}, {"name": "rust-analyzer", "command": ["rust-analyzer"], "extensions": [".rs"], "roots": ["Cargo.toml"]}, {"name": "gopls", "command": ["gopls"], "extensions": [".go"], "roots": ["go.work", "go.mod"]}, {"name": "typescript-language-server", "command": ["typescript-language-server", "--stdio"], "extensions": [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"], "roots": ["tsconfig.json", "jsconfig.json", "package.json"]}]
-set lsp.timeout_s 30
+set LSP_SERVERS [{"name": "basedpyright", "command": ["basedpyright-langserver", "--stdio"], "extensions": [".py", ".pyi"], "roots": ["pyproject.toml", "setup.py", "setup.cfg", "pyrightconfig.json"]}, {"name": "pyright", "command": ["pyright-langserver", "--stdio"], "extensions": [".py", ".pyi"], "roots": ["pyproject.toml", "setup.py", "setup.cfg", "pyrightconfig.json"]}, {"name": "rust-analyzer", "command": ["rust-analyzer"], "extensions": [".rs"], "roots": ["Cargo.toml"]}, {"name": "gopls", "command": ["gopls"], "extensions": [".go"], "roots": ["go.work", "go.mod"]}, {"name": "typescript-language-server", "command": ["typescript-language-server", "--stdio"], "extensions": [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"], "roots": ["tsconfig.json", "jsconfig.json", "package.json"]}]
+set LSP_TIMEOUT 30
 
 # --- notebook ---
-set notebook.output_lines 10
+set NOTEBOOK_OUTPUT_LINES_MAX 10
 
 # --- mcp ---
-set mcp.servers {}
-set mcp.agents {}
-set mcp.request_timeout_s 10.0
+set MCP_SERVERS {}
+set MCP_AGENT_POLICY {}
+set MCP_TIMEOUT 10.0
 
 # --- sampling ---
-set -sampling.temperature
-set -sampling.top_p
-set -sampling.top_k
-set -sampling.repetition_penalty
-set -sampling.presence_penalty
+set -TEMPERATURE
+set -TOP_P
+set -TOP_K
+set -REPETITION_PENALTY
+set -PRESENCE_PENALTY

@@ -264,7 +264,7 @@ def test_stream_model_maps_missing_api_key_typeerror(monkeypatch):
 
     message = str(excinfo.value)
     _assert_provider_recovery(message, provider="openai", command="js --login openai")
-    assert "set provider.api_key <value>" in message
+    assert "set API_KEY <value>" in message
 
 
 def test_stream_model_maps_unknown_sdk_provider_id(monkeypatch):
@@ -317,7 +317,7 @@ def test_stream_model_maps_provider_authentication_error(monkeypatch):
 
     message = str(excinfo.value)
     _assert_provider_recovery(message, provider="openai", command="js --login openai")
-    assert "set provider.api_key <value>" in message
+    assert "set API_KEY <value>" in message
     assert "Incorrect API key" in message
 
 
@@ -550,11 +550,11 @@ def test_stream_model_applies_sampling_from_env_for_openai(monkeypatch):
     """JS_* env sampling is typed before stream_model; OpenAI only receives supported knobs."""
     sampling = Sampling.from_env(
         {
-            "JS_TEMP": "1.1",
-            "JS_TOPP": "0.96",
-            "JS_TOPK": "64",
-            "JS_REPPEN": "1.05",
-            "JS_PRPEN": "1.5",
+            "JS_TEMPERATURE": "1.1",
+            "JS_TOP_P": "0.96",
+            "JS_TOP_K": "64",
+            "JS_REPETITION_PENALTY": "1.05",
+            "JS_PRESENCE_PENALTY": "1.5",
         }
     )
     factory = _use_fake_stream(monkeypatch, _text_events("ok"))

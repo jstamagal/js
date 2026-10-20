@@ -16,7 +16,7 @@ SESSION = "modeswitch"
 @pytest.fixture
 def home(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
-    for name in ("JS_AGENT", "JS_SESSION", "JS_MODEL"):
+    for name in ("JS_DEFAULT_AGENT", "JS_SESSION", "JS_MODEL"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)

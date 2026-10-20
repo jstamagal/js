@@ -144,7 +144,7 @@ def test_keys_file_setting_names_the_file(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
 
     assert keys.keys_file({}) == tmp_path / ".js" / "keys"
-    assert keys.keys_file({"keys": {"file": "~/elsewhere/keys"}}) == tmp_path / "elsewhere" / "keys"
+    assert keys.keys_file({"KEYBINDS_FILE": "~/elsewhere/keys"}) == tmp_path / "elsewhere" / "keys"
 
 
 def _bound(kb: KeyBindings) -> dict[str, set[tuple]]:

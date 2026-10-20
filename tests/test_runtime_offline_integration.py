@@ -149,12 +149,7 @@ def _budget_config(tmp_path, *, context_window: int, buffer_tokens: int = 0) -> 
     return offline_config(
         tmp_path,
         settings={
-            "compact": {
-                "context_window": context_window,
-                "buffer_tokens": buffer_tokens,
-                "tail_tokens": 40,
-                "min_savings_tokens": 1,
-            }
+            "CONTEXT_SIZE": context_window, "COMPACTION_HEADROOM_TOKENS": buffer_tokens, "COMPACTION_KEEP_RECENT_TOKENS": 40, "COMPACTION_MIN_SAVINGS_TOKENS": 1
         },
     )
 
@@ -171,11 +166,9 @@ def _text_parts(messages: list[ai.types.messages.Message]) -> list[str]:
 
 
 _CLAUDE_ALIAS_SETTINGS = {
-    "tools": {
-        "alias_profiles": [
+    "TOOL_ALIASES": [
             {"match": ["claude"], "aliases": {"read": "Read", "write": "Write", "task": "Task"}},
         ]
-    }
 }
 
 
@@ -286,7 +279,7 @@ def test_incomplete_truncated_tool_call_is_not_persisted_or_dispatched(monkeypat
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     # No resend and no resume nudge: this pins what the cut reply itself records.
-    cfg = offline_config(tmp_path, settings={"runtime": {"max_output_escalation": 0, "max_output_resumes": 0}})
+    cfg = offline_config(tmp_path, settings={"OUTPUT_TOKENS_RETRY_MAX": 0, "OUTPUT_RESUMES_MAX": 0})
     messages = [{"role": "user", "content": "write a synthetic file"}]
 
     runtime.run_turn(
@@ -575,7 +568,7 @@ def test_run_turn_dispatches_registered_command_handler(monkeypatch, tmp_path):
     cfg = offline_config(tmp_path)
     state = {"messages": [], "system": "system", "settings": live_settings, "events": hooks}
     hooks.set_dispatcher(cli._event_dispatcher(state, cfg))
-    hooks.add("turn_start", "set compact.auto off")
+    hooks.add("turn_start", "set COMPACTION_AUTO off")
 
     def stream_stub(**kwargs):
         kwargs["on_text"]("OK")
@@ -594,7 +587,7 @@ def test_run_turn_dispatches_registered_command_handler(monkeypatch, tmp_path):
         event_hooks=hooks,
     )
 
-    assert settings.get_dotted(live_settings, ("compact", "auto")) is False
+    assert settings.get_dotted(live_settings, ("COMPACTION_AUTO",)) is False
     turn_start = next(emission for emission in hooks.emissions if emission.event == "turn_start")
     assert turn_start.results[0].error is None
 
@@ -746,12 +739,10 @@ def test_run_turn_skips_unusable_alias_profiles_before_rewriting_specs(monkeypat
         tmp_path,
         model="openai-test",
         settings={
-            "tools": {
-                "alias_profiles": [
+            "TOOL_ALIASES": [
                     {"match": ["openai"], "aliases": {"missing_tool": "MissingTool"}},
                     {"match": ["openai"], "aliases": {"read": "Read"}},
                 ],
-            },
         },
     )
     registry = build_default_registry().select(["read:lazy"])
@@ -784,12 +775,10 @@ def test_run_turn_skips_colliding_alias_profiles_before_rewriting_specs(monkeypa
         tmp_path,
         model="openai-test",
         settings={
-            "tools": {
-                "alias_profiles": [
+            "TOOL_ALIASES": [
                     {"match": "openai", "aliases": {"read": "write"}},
                     {"match": "openai", "aliases": {"read": "Read"}},
                 ],
-            },
         },
     )
     registry = build_default_registry().select(["read:lazy", "write:lazy"])
@@ -904,7 +893,7 @@ def test_run_turn_hydrates_tool_context_caps_from_config(monkeypatch, tmp_path):
             and any(
                 getattr(p, "result", None)
                 and "--- stdout ---" in str(p.result)
-                and "[truncated: limits.max_bash_output_bytes (3) reached;" in str(p.result)
+                and "[truncated: SHELL_OUTPUT_MAX (3) reached;" in str(p.result)
                 for p in msg.parts
             )
             for msg in kwargs["messages"]

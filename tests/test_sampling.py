@@ -6,7 +6,7 @@ from js import cli, persona
 from js.sampling import Sampling, call_params
 
 
-_JS_SAMPLING_ENV = ("JS_TEMP", "JS_TOPP", "JS_TOPK", "JS_REPPEN", "JS_PRPEN")
+_JS_SAMPLING_ENV = ("JS_TEMPERATURE", "JS_TOP_P", "JS_TOP_K", "JS_REPETITION_PENALTY", "JS_PRESENCE_PENALTY")
 
 
 def test_sampling_merge_overlays_only_non_none_fields():
@@ -24,11 +24,11 @@ def test_sampling_merge_overlays_only_non_none_fields():
 def test_sampling_from_env_reads_js_knobs():
     sampling = Sampling.from_env(
         {
-            "JS_TEMP": "0.6",
-            "JS_TOPP": "0.95",
-            "JS_TOPK": "64",
-            "JS_REPPEN": "1.05",
-            "JS_PRPEN": "1.2",
+            "JS_TEMPERATURE": "0.6",
+            "JS_TOP_P": "0.95",
+            "JS_TOP_K": "64",
+            "JS_REPETITION_PENALTY": "1.05",
+            "JS_PRESENCE_PENALTY": "1.2",
         }
     )
 
@@ -39,23 +39,6 @@ def test_sampling_from_env_reads_js_knobs():
         repetition_penalty=1.05,
         presence_penalty=1.2,
     )
-
-
-def test_sampling_from_env_reads_canonical_js_sampling_names():
-    # Parity with `set sampling.<field>`: JS_SAMPLING_<FIELD> works too.
-    sampling = Sampling.from_env(
-        {
-            "JS_SAMPLING_TEMPERATURE": "0.6",
-            "JS_SAMPLING_TOP_P": "0.95",
-            "JS_SAMPLING_TOP_K": "64",
-        }
-    )
-    assert sampling == Sampling(temperature=0.6, top_p=0.95, top_k=64)
-
-
-def test_sampling_short_alias_wins_over_canonical():
-    sampling = Sampling.from_env({"JS_TOPP": "0.1", "JS_SAMPLING_TOP_P": "0.9"})
-    assert sampling.top_p == 0.1
 
 
 def test_sampling_from_mapping_coerces_known_keys_and_ignores_unknown():
@@ -196,4 +179,4 @@ def test_non_finite_sampling_values_are_refused(raw):
     with pytest.raises(ValueError):
         Sampling.from_mapping({"temperature": raw})
     with pytest.raises(ValueError):
-        Sampling.from_env({"JS_TEMP": str(raw)})
+        Sampling.from_env({"JS_TEMPERATURE": str(raw)})

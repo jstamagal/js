@@ -100,10 +100,10 @@ def test_worker_cap_defaults_below_the_dispatch_pool(monkeypatch):
 
     monkeypatch.setattr(meta, "_run_one_task_async", probe)
 
-    ctx = _ctx()  # no override -> the js/jsrc limits.subagent_max_workers
+    ctx = _ctx()  # no override -> the js/jsrc SUBAGENT_WORKERS_MAX
     asyncio.run(meta.task_async(tasks=[f"t{n}" for n in range(20)], agent_id="worker", context=ctx))
 
-    assert peak <= settings.default_value("limits.subagent_max_workers")
+    assert peak <= settings.default_value("SUBAGENT_WORKERS_MAX")
 
 
 # --------------------------------------------------------------------------

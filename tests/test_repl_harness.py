@@ -107,33 +107,33 @@ def test_set_commands_parse_power_user_knobs():
     assert trace.lines == ["runtime.trace = on"]
     assert settings.get_dotted(live_settings, ("runtime", "trace")) is True
 
-    reasoning = setcmd.set_command(live_settings, "model.reasoning_effort max")
+    reasoning = setcmd.set_command(live_settings, "EFFORT max")
     assert reasoning.error is None
-    assert reasoning.lines == ["model.reasoning_effort = max"]
-    assert settings.get_dotted(live_settings, ("model", "reasoning_effort")) == "max"
+    assert reasoning.lines == ["EFFORT = max"]
+    assert settings.get_dotted(live_settings, ("EFFORT",)) == "max"
 
-    maxout = setcmd.set_command(live_settings, "model.max_output_tokens 64000")
+    maxout = setcmd.set_command(live_settings, "OUTPUT_TOKENS_MAX 64000")
     assert maxout.error is None
-    assert maxout.lines == ["model.max_output_tokens = 64000"]
-    assert settings.get_dotted(live_settings, ("model", "max_output_tokens")) == 64000
+    assert maxout.lines == ["OUTPUT_TOKENS_MAX = 64000"]
+    assert settings.get_dotted(live_settings, ("OUTPUT_TOKENS_MAX",)) == 64000
 
     # RULING A: magic strings die -- "off" is no longer a clear-token for a
     # nullable int knob; `set -key` is the only way to clear one.
-    cleared = setcmd.set_command(live_settings, "-model.max_output_tokens")
+    cleared = setcmd.set_command(live_settings, "-OUTPUT_TOKENS_MAX")
     assert cleared.error is None
-    assert cleared.lines == ["model.max_output_tokens = <none>"]
-    assert settings.get_dotted(live_settings, ("model", "max_output_tokens")) is None
+    assert cleared.lines == ["OUTPUT_TOKENS_MAX = <none>"]
+    assert settings.get_dotted(live_settings, ("OUTPUT_TOKENS_MAX",)) is None
 
 
 def test_unknown_commands_that_share_prefixes_are_refused_not_swallowed(tmp_path):
     cfg = make_cfg(tmp_path)
     state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
-    before = settings.get_dotted(state["settings"], ("model", "id"))
+    before = settings.get_dotted(state["settings"], ("MODEL",))
 
-    assert cli._handle_command("/setty model.id nope", state, cfg) is True
+    assert cli._handle_command("/setty MODEL nope", state, cfg) is True
     assert cli._handle_command("/showtime", state, cfg) is True
     assert cli._handle_command("/compact-autoload", state, cfg) is True
-    assert settings.get_dotted(state["settings"], ("model", "id")) == before
+    assert settings.get_dotted(state["settings"], ("MODEL",)) == before
 
 
 def test_repl_runtime_exception_rolls_back_persisted_user_message(monkeypatch, tmp_path, capsys):
@@ -214,7 +214,7 @@ def test_repl_set_runtime_debug_enables_later_event_telemetry(monkeypatch, tmp_p
     monkeypatch.setattr(cli._paths, "state_root", lambda: state_root)
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
 
-    run_blocking(cfg, ["/set runtime.debug on", "/on input echo nope", "hello", "exit"])
+    run_blocking(cfg, ["/set DEBUG_LOG on", "/on input echo nope", "hello", "exit"])
 
     records = _debug_records(debug_log)
     assert {
@@ -251,7 +251,7 @@ def test_repl_cancel_hook_partial_load_sampling_change_updates_next_turn(monkeyp
     cfg = replace(make_cfg(tmp_path), project_dir=tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
-    (tmp_path / "cancel.irc").write_text("set sampling.temperature 0.2\nbogus nope\n", encoding="utf-8")
+    (tmp_path / "cancel.irc").write_text("set TEMPERATURE 0.2\nbogus nope\n", encoding="utf-8")
     calls = 0
     temperatures: list[float | None] = []
 
@@ -296,7 +296,7 @@ def test_repl_input_hook_does_not_drop_existing_sampling_override(monkeypatch, t
 
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
 
-    run_blocking(cfg, ["/on input set compact.auto off", "hello", "exit"])
+    run_blocking(cfg, ["/on input set COMPACTION_AUTO off", "hello", "exit"])
 
     assert temperatures == [0.9]
 
@@ -312,7 +312,7 @@ def test_repl_input_hook_sampling_change_updates_turn_sampling(monkeypatch, tmp_
 
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
 
-    run_blocking(cfg, ["/on input set sampling.temperature 0.2", "hello", "exit"])
+    run_blocking(cfg, ["/on input set TEMPERATURE 0.2", "hello", "exit"])
 
     assert temperatures == [0.2]
 
@@ -321,7 +321,7 @@ def test_repl_input_hook_partial_load_model_change_updates_turn_model(monkeypatc
     cfg = replace(make_cfg(tmp_path), project_dir=tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
-    (tmp_path / "model.irc").write_text("set model.id hook-model\nbogus nope\n", encoding="utf-8")
+    (tmp_path / "model.irc").write_text("set MODEL hook-model\nbogus nope\n", encoding="utf-8")
     models: list[str] = []
 
     def run_turn_stub(cfg_arg, *args, **kwargs):
@@ -339,9 +339,9 @@ def test_repl_input_hook_partial_load_provider_change_updates_turn_config(monkey
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     (tmp_path / "provider.irc").write_text(
-        "set provider.id openai\n"
-        "set provider.base_url http://provider.test/v1\n"
-        "set provider.api_key sk-hook\n"
+        "set PROVIDER openai\n"
+        "set BASE_URL http://provider.test/v1\n"
+        "set API_KEY sk-hook\n"
         "bogus nope\n",
         encoding="utf-8",
     )
@@ -362,14 +362,14 @@ def test_repl_input_hook_partial_load_tool_aliases_update_turn_config(monkeypatc
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     (tmp_path / "tools.irc").write_text(
-        'set tools.alias_profiles [{"match":["offline-test-model"],"aliases":{"read":"r"}}]\n'
+        'set TOOL_ALIASES [{"match":["offline-test-model"],"aliases":{"read":"r"}}]\n'
         "bogus nope\n",
         encoding="utf-8",
     )
     seen: list[list[dict]] = []
 
     def run_turn_stub(cfg_arg, *args, **kwargs):
-        seen.append(cfg_arg.settings.get("tools", {}).get("alias_profiles", []))
+        seen.append(cfg_arg.settings.get("TOOL_ALIASES", []))
 
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
 
@@ -389,7 +389,7 @@ def test_repl_set_limit_updates_turn_config(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
 
-    run_blocking(cfg, ["/set limits.max_tool_result_bytes 123", "hello", "exit"])
+    run_blocking(cfg, ["/set TOOL_RESULT_MAX 123", "hello", "exit"])
 
     assert max_tool_result_bytes == [123]
 
@@ -405,7 +405,7 @@ def test_repl_set_subagent_prefer_inherit_updates_turn_config(monkeypatch, tmp_p
 
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
 
-    run_blocking(cfg, ["/set subagents.prefer_inherit on", "hello", "exit"])
+    run_blocking(cfg, ["/set SUBAGENT_INHERIT_MODEL on", "hello", "exit"])
 
     assert prefer_inherit == [True]
 
@@ -425,7 +425,7 @@ def test_repl_set_subagent_lock_model_updates_turn_config_and_task_schema(monkey
 
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
 
-    run_blocking(cfg, ["/set subagents.lock_model on", "hello", "exit"])
+    run_blocking(cfg, ["/set SUBAGENT_MODEL_LOCK on", "hello", "exit"])
 
     assert seen == [(True, False)]
 
@@ -446,9 +446,9 @@ def test_repl_set_max_output_updates_turn_config(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
 
     run_blocking(cfg, [
-                "/set model.max_output_tokens 5000",
+                "/set OUTPUT_TOKENS_MAX 5000",
                 "hello",
-                "/set -model.max_output_tokens",
+                "/set -OUTPUT_TOKENS_MAX",
                 "hello",
                 "exit",
             ])
@@ -467,7 +467,7 @@ def test_repl_set_reasoning_effort_updates_turn_config(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
 
-    run_blocking(cfg, ["/set model.reasoning_effort max", "hello", "exit"])
+    run_blocking(cfg, ["/set EFFORT max", "hello", "exit"])
 
     # `max` is a real ladder stop (reasoning.py) — config._norm_effort no longer
     # collapses it to "high"; reasoning.snap_effort floors it per-model instead.
@@ -501,7 +501,7 @@ def test_repl_set_reasoning_effort_off_disables_provider_default(monkeypatch, tm
 
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
 
-    run_blocking(cfg, ["/set model.reasoning_effort off", "hello", "exit"])
+    run_blocking(cfg, ["/set EFFORT off", "hello", "exit"])
 
     assert seen == [("none", "none")]
 
@@ -509,7 +509,7 @@ def test_repl_set_reasoning_effort_off_disables_provider_default(monkeypatch, tm
 def test_repl_set_reasoning_effort_default_is_rejected_not_a_clear_token(monkeypatch, tmp_path):
     # RULING B: "default"/"auto" are INVALID values now, not magic re-enable
     # tokens — the knob stays disabled from the earlier `off`, and clearing
-    # back to the provider default is only `set -model.reasoning_effort`.
+    # back to the provider default is only `set -EFFORT`.
     cfg = replace(make_cfg(tmp_path), reasoning_effort="xhigh", settings=settings.seed_defaults())
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
@@ -521,8 +521,8 @@ def test_repl_set_reasoning_effort_default_is_rejected_not_a_clear_token(monkeyp
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
 
     run_blocking(cfg, [
-                "/set model.reasoning_effort off",
-                "/set model.reasoning_effort default",
+                "/set EFFORT off",
+                "/set EFFORT default",
                 "hello",
                 "exit",
             ])
@@ -543,8 +543,8 @@ def test_repl_set_reasoning_effort_clear_via_dash_key_restores_provider_default(
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
 
     run_blocking(cfg, [
-                "/set model.reasoning_effort off",
-                "/set -model.reasoning_effort",
+                "/set EFFORT off",
+                "/set -EFFORT",
                 "hello",
                 "exit",
             ])
@@ -597,7 +597,7 @@ def test_repl_set_provider_extra_reaches_model_params(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.runtime.model_client, "_stream_async", stream_async_stub)
 
     run_blocking(cfg, [
-                '/set provider.extra {"extra_body":{"live_flag":true}}',
+                '/set EXTRA_PARAMS {"extra_body":{"live_flag":true}}',
                 "hello",
                 "exit",
             ])
@@ -611,7 +611,7 @@ def test_repl_turn_end_hook_partial_load_sampling_change_updates_next_turn(monke
     cfg = replace(make_cfg(tmp_path), project_dir=tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
-    (tmp_path / "turn-end.irc").write_text("set sampling.temperature 0.2\nbogus nope\n", encoding="utf-8")
+    (tmp_path / "turn-end.irc").write_text("set TEMPERATURE 0.2\nbogus nope\n", encoding="utf-8")
     calls = 0
     temperatures: list[float | None] = []
 
@@ -817,7 +817,7 @@ def test_model_command_opens_picker_and_updates_state(monkeypatch, tmp_path, cap
     assert state["provider_id"] == "deepseek"
     assert state["provider_api_key"] == "sk-test"
     assert state["model"] == "deepseek-v4-flash"
-    assert "set model.id deepseek/deepseek-v4-flash" in config_path.read_text(encoding="utf-8")
+    assert "set MODEL deepseek/deepseek-v4-flash" in config_path.read_text(encoding="utf-8")
 
 
 
@@ -836,7 +836,7 @@ def test_model_picker_persists_provider_prefixed_default(monkeypatch, tmp_path, 
     cfg = make_cfg(tmp_path)
     config_path = tmp_path / "config" / "jsrc"
     config_path.parent.mkdir(parents=True)
-    config_path.write_text("set model.id deepseek/deepseek-v4-flash\n", encoding="utf-8")
+    config_path.write_text("set MODEL deepseek/deepseek-v4-flash\n", encoding="utf-8")
     monkeypatch.setattr(cli._paths, "global_config_file", lambda: config_path)
     state = {
         "messages": [],
@@ -865,8 +865,8 @@ def test_model_picker_persists_provider_prefixed_default(monkeypatch, tmp_path, 
     assert state["provider_id"] == "openai-codex"
     assert state["provider_base_url"] == "https://chatgpt.com/backend-api"
     assert state["model"] == "gpt-5.5"
-    assert settings.get_dotted(state["settings"], ("model", "id")) == "openai-codex/gpt-5.5"
-    assert config_path.read_text(encoding="utf-8").splitlines()[0] == "set model.id openai-codex/gpt-5.5"
+    assert settings.get_dotted(state["settings"], ("MODEL",)) == "openai-codex/gpt-5.5"
+    assert config_path.read_text(encoding="utf-8").splitlines()[0] == "set MODEL openai-codex/gpt-5.5"
 
     from js.config import from_env
 

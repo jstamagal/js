@@ -227,6 +227,7 @@ USAGE = Message("Usage: {usage}")
 
 MIGRATE_NO_LEGACY = Message("No legacy config at {path}", GRAVE)
 MIGRATE_TARGET_EXISTS = Message("{path} already exists. Remove it first to migrate again.", GRAVE)
+MIGRATE_DELETED = Message("{key}: setting deleted. Written as a comment; edit by hand.", WARN)
 MIGRATE_WROTE = Message("Wrote {path} from {legacy}. Review it, then delete {legacy}. This flag is removed in 2 releases.")
 SAVE_FAILED = Message("Not saved: {error}", GRAVE)
 SAVED = Message("Saved {lines} to {path}")
@@ -373,7 +374,7 @@ SHORT_HELP = Message(
     "  -q          No resume hint after the answer. The session is still saved.\n"
     "  -f PATH     Attach a file or image. Repeatable.\n"
     "  --max-out N Max output tokens.\n"
-    "  --extra K=V One-off config, e.g. --extra limits.task_max_depth=3\n"
+    "  --extra K=V One-off config, e.g. --extra SUBAGENT_DEPTH_MAX=3\n"
     "\n"
     "MORE\n"
     "  js --login [PROVIDER]   Sign in.\n"
@@ -403,12 +404,12 @@ OPT_URL = Message(
     "Shape is openai, the default, responses or anthropic. Effort is the usual off..max ladder. "
     "The key defaults to a dummy. E.g. qwen27b@http://foo/v1  |  "
     "claude-sonnet-5:sk-foo[anthropic][max]@http://localhost:8317. "
-    "Desugars to --extra model.id/provider.id/provider.base_url/provider.api_key, "
+    "Desugars to --extra MODEL/PROVIDER/BASE_URL/API_KEY, "
     "so an explicit --extra still wins.")
 OPT_CD = Message(
     "Keep the agent in DIR, for every mode: -p, the REPL, --commit and the rest. DIR is the "
     "working directory. Every tool that starts a process runs under bubblewrap: DIR "
-    "read-write, the system read-only, /home hidden except PATH directories and jail.bind "
+    "read-write, the system read-only, /home hidden except PATH directories and JAIL_BIND "
     "entries, a private /tmp, the network on. File tools refuse paths outside DIR and the "
     "bound paths. Needs bwrap.")
 OPT_DEBUG = Message(
@@ -418,7 +419,7 @@ OPT_DEBUG = Message(
 OPT_DEBUG_FILE = Message(
     "Also write the full byte-honest request trace to PATH: unclipped system prompt, full tool-schema JSON "
     "with descriptions, the messages sent each call, and per-call timings. The clean final answer still "
-    "prints to stdout. runtime.debug_autolog always writes the same trace under logs/<agent>/<session>.log.")
+    "prints to stdout. REQUEST_LOG always writes the same trace under logs/<agent>/<session>.log.")
 OPT_SESSION = Message(
     "Create or resume a named session: this directory's folder first, then every folder under ~/.js/sessions."
     " Bare, open the session picker.")
@@ -444,7 +445,7 @@ OPT_BLOCKING = Message(
     "async event loop, so input stays live while a turn streams and subagents run, and ^C cancels the "
     "active turn.")
 OPT_EXTRA = Message(
-    "Set a dotted config key for this run, e.g. --extra limits.task_max_depth=3. May be repeated. "
+    "Set a dotted config key for this run, e.g. --extra SUBAGENT_DEPTH_MAX=3. May be repeated. "
     "Wins over env and all config files.")
 OPT_PRESET = Message(
     "Layer jsrc.<name> preset files on top of the base config, in order. The last wins. "
@@ -480,8 +481,8 @@ OPT_COMMIT = Message(
 OPT_COMPACT = Message("Compact an existing session id or path offline, append-only.")
 OPT_IM_A_PUSSY = Message(
     "Opt out of inline-code execution for this run: !{{sh|python|c|node ...}} directives and ```!lang fences "
-    "stay as written instead of running. Inline code runs by default. Set runtime.allow_inline_code off or "
-    "JS_ALLOW_INLINE_CODE=0 to make that permanent. {{{{VAR}}}} env expansion and !{{env}}/!{{file}} are "
+    "stay as written instead of running. Inline code runs by default. Set INLINE_CODE off or "
+    "JS_INLINE_CODE=0 to make that permanent. {{{{VAR}}}} env expansion and !{{env}}/!{{file}} are "
     "always on.")
 OPT_NO_SHELL_HISTORY = Message(
     "Keep your recent shell commands out of the prompt for this run: envctx skips its recent_shell block. "
@@ -599,7 +600,7 @@ ATTACHMENT_NOT_A_FILE = Message("Attachment is not a regular file: {path}")
 ATTACHMENT_UNREADABLE = Message("Attachment {path} not read: {error}")
 ATTACHMENT_IMAGE_TOO_LARGE = Message("Image attachment {path} is {size} bytes. The maximum is {limit} bytes.")
 # The paste-image key (js.clipimage): one line, and the input line is unchanged.
-CLIPBOARD_NONE = Message("No clipboard: no Wayland or X11 display. ui.paste_image_command names a command that prints the image.", WARN)
+CLIPBOARD_NONE = Message("No clipboard: no Wayland or X11 display. PASTE_IMAGE_COMMAND names a command that prints the image.", WARN)
 CLIPBOARD_TOOL_MISSING = Message("Clipboard image not read: {tool} is not installed.", WARN)
 CLIPBOARD_READ_FAILED = Message("Clipboard image not read: {tool}: {error}", WARN)
 CLIPBOARD_NO_IMAGE = Message("No image on the clipboard.", WARN)
@@ -858,7 +859,7 @@ DIRECTIVE_NOT_EXPANDED = Message("Directive not expanded: {error}", WARN)
 DIRECTIVE_UNKNOWN_SUBSYSTEM = Message("Unknown inline subsystem {name!r}. Known: {known}")
 DIRECTIVE_CODE_OFF = Message(
     "Inline {name!r} runs code, and inline code is off: "
-    "--im-a-pussy, set runtime.allow_inline_code off or JS_ALLOW_INLINE_CODE=0")
+    "--im-a-pussy, set INLINE_CODE off or JS_INLINE_CODE=0")
 DIRECTIVE_ENV_NEEDS_NAME = Message("!{{env ...}} needs a variable name. Got {body!r}")
 DIRECTIVE_NOT_ON_PATH = Message("{label}: {program!r} not found on PATH")
 DIRECTIVE_TIMED_OUT = Message("{label}: timed out after {seconds}s")
@@ -912,21 +913,21 @@ NO_PROVIDER_SET = Message("No provider set.")
 PROVIDER_NOT_LOGGED_IN = Message(
     "Provider {provider!r} is not logged in. Run `js --login {provider}`. `js --list-models` lists what is runnable.")
 MODEL_UNCONFIGURED = Message(
-    "Model {model!r} has no provider and no login. Set provider.id or JS_PROVIDER, run `js --login`, "
+    "Model {model!r} has no provider and no login. Set PROVIDER or JS_PROVIDER, run `js --login`, "
     "or prefix a logged-in provider. `js --list-models` lists what is runnable.")
 PROVIDER_NEEDS_KEY = Message(
-    "Provider {provider!r} needs an API key. Run `js --login {provider}` or `set provider.api_key <value>`.")
+    "Provider {provider!r} needs an API key. Run `js --login {provider}` or `set API_KEY <value>`.")
 PROVIDER_NO_AUTH_METHOD = Message(
     "Provider {provider!r} needs an API key: the SDK found no way to authenticate. "
-    "Run `js --login {provider}` or `set provider.api_key <value>`.")
+    "Run `js --login {provider}` or `set API_KEY <value>`.")
 PROVIDER_UNKNOWN = Message(
     "Unknown provider {provider!r}. Run `js --login {provider}`. `js --list-models` lists what is runnable.")
 PROVIDER_AUTH_FAILED = Message(
     "Provider {provider!r} authentication failed: {detail}. "
-    "Run `js --login {provider}` or `set provider.api_key <value>`.")
+    "Run `js --login {provider}` or `set API_KEY <value>`.")
 PROVIDER_NOT_CONFIGURED = Message(
     "Provider {provider!r} is not configured: {detail}. "
-    "Run `js --login {provider}` or `set provider.api_key <value>`.")
+    "Run `js --login {provider}` or `set API_KEY <value>`.")
 
 # --- Tool policy table (/tools) ----------------------------------------------
 

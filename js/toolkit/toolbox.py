@@ -513,7 +513,7 @@ def toolbox(
     if context is None:
         return "ERROR: missing ToolContext"
     if not context.kernel_enabled:
-        return "ERROR: kernel/toolbox disabled; use /set kernel.enabled on (requires js[kernel])."
+        return "ERROR: kernel/toolbox disabled; use /set PYTHON_KERNEL on (requires js[kernel])."
     verb = text_or_default(action, "list").strip().lower()
     name = text_or_default(name).strip()
     scope = "project" if text_or_default(scope, "global").strip().lower() == "project" else "global"

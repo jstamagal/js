@@ -166,11 +166,11 @@ def test_configured_hosts_run_over_both_real_transports_and_reload_session(monke
         }
         policy = {"e2e": {"servers": {"allow": ["*"]}, "tools": {"allow": ["*"]}}}
         jsrc.write_text(
-            "set model.id offline-test\n"
-            f"set mcp.servers {json.dumps(servers, separators=(',', ':'))}\n"
-            f"set mcp.agents {json.dumps(policy, separators=(',', ':'))}\n"
-            "set limits.max_tool_iterations 12\n"
-            "set model.max_output_tokens 10\n",
+            "set MODEL offline-test\n"
+            f"set MCP_SERVERS {json.dumps(servers, separators=(',', ':'))}\n"
+            f"set MCP_AGENT_POLICY {json.dumps(policy, separators=(',', ':'))}\n"
+            "set TURN_ROUNDS_MAX 12\n"
+            "set OUTPUT_TOKENS_MAX 10\n",
             encoding="utf-8",
         )
         cfg = config_mod.from_env(agent_id="e2e")
@@ -244,7 +244,7 @@ def test_transport_death_is_not_replayed_and_next_safe_request_reconnects(tmp_pa
         }
         from js.mcp_config import resolve
 
-        host = MCPHost(resolve({"mcp": {"servers": server}}, "default"))
+        host = MCPHost(resolve({"MCP_SERVERS": server}, "default"))
         await host.discover(query="mcp")
         tool = host.tools({"dying_pipe__alpha"})[0]
         try:
@@ -273,8 +273,8 @@ def test_many_configured_servers_cost_only_discovery_until_remote_schema_is_load
             for index in range(24)
         }
         jsrc.write_text(
-            "set model.id offline-test\n"
-            f"set mcp.servers {json.dumps(servers, separators=(',', ':'))}\n",
+            "set MODEL offline-test\n"
+            f"set MCP_SERVERS {json.dumps(servers, separators=(',', ':'))}\n",
             encoding="utf-8",
         )
         cfg = config_mod.from_env(agent_id="budget", save_session=False)

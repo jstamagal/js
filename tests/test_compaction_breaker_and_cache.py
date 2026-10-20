@@ -38,12 +38,12 @@ def net_lines():
 def _config(tmp_path, compact: dict | None = None):
     return replace(_cfg(tmp_path), provider_id="openai", provider_api_key="offline",
                    provider_base_url="http://127.0.0.1:1/v1", max_output_tokens=500,
-                   settings={"compact": dict(compact or {})})
+                   settings=dict(compact or {}))
 
 
 # A 10k window with a 500-token reply reserve and a 100-token buffer.
-_SMALL_WINDOW = {"context_window": 10000, "tail_tokens": 100, "buffer_tokens": 100,
-                 "summary_reserve_tokens": 500}
+_SMALL_WINDOW = {"CONTEXT_SIZE": 10000, "COMPACTION_KEEP_RECENT_TOKENS": 100, "COMPACTION_HEADROOM_TOKENS": 100,
+                 "COMPACTION_REPLY_RESERVE_TOKENS": 500}
 
 
 def _over_budget_history() -> list[dict]:
@@ -103,7 +103,7 @@ def test_three_failed_summaries_pause_in_turn_compaction_with_one_line(monkeypat
 
 
 def test_breaker_limit_is_the_setting(monkeypatch, tmp_path):
-    cfg = _config(tmp_path, {**_SMALL_WINDOW, "max_summary_failures": 1})
+    cfg = _config(tmp_path, {**_SMALL_WINDOW, "COMPACTION_FAILURES_MAX": 1})
     context = ToolContext(cwd=tmp_path)
     attempts = []
 
@@ -138,7 +138,7 @@ def test_a_successful_summary_resumes_paused_compaction(monkeypatch, tmp_path):
 
 
 def test_between_turn_compaction_pauses_after_three_failures(monkeypatch, tmp_path):
-    cfg = _config(tmp_path, {"context_window": 100, "buffer_tokens": 0})
+    cfg = _config(tmp_path, {"CONTEXT_SIZE": 100, "COMPACTION_HEADROOM_TOKENS": 0})
     context = ToolContext(cwd=tmp_path)
     context.last_prompt_tokens = 95
     failing = AsyncMock(side_effect=RuntimeError("summarizer down"))
@@ -192,14 +192,14 @@ def test_summary_tool_result_chars_zero_sends_whole_results(monkeypatch, tmp_pat
     body = "z" * 10_000
     messages = [{"role": "user", "content": "go"},
                 {"role": "tool", "tool_call_id": "c1", "name": "read", "content": body}]
-    cfg = _config(tmp_path, {"summary_tool_result_chars": 0})
+    cfg = _config(tmp_path, {"COMPACTION_SUMMARY_RESULT_CHARS_MAX": 0})
     asyncio.run(compaction.summarize(cfg, "offline-test", messages, "", ""))
     assert body in requests[0]
 
 
 def test_second_compaction_updates_the_previous_summary(monkeypatch, tmp_path):
     requests = _capture_summary_requests(monkeypatch, ["FIRST_SUMMARY", "SECOND_SUMMARY"])
-    cfg = _config(tmp_path, {"tail_tokens": 10, "min_savings_tokens": 1})
+    cfg = _config(tmp_path, {"COMPACTION_KEEP_RECENT_TOKENS": 10, "COMPACTION_MIN_SAVINGS_TOKENS": 1})
     context = ToolContext(cwd=tmp_path)
     messages = [{"role": "user", "content": "EARLY_WORK " * 500},
                 {"role": "assistant", "content": "done early"},
@@ -358,8 +358,8 @@ def test_cache_ttl_is_the_setting(tmp_path):
     context.last_request_at = 1000.0
     assert not compaction.cache_expired(_config(tmp_path), context, now=1299.0)
     assert compaction.cache_expired(_config(tmp_path), context, now=1300.0)
-    assert compaction.cache_expired(_config(tmp_path, {"cache_ttl_seconds": 0}), context, now=1000.0)
-    assert not compaction.cache_expired(_config(tmp_path, {"cache_ttl_seconds": 3600}), context, now=1300.0)
+    assert compaction.cache_expired(_config(tmp_path, {"COMPACTION_CACHE_TTL": 0}), context, now=1000.0)
+    assert not compaction.cache_expired(_config(tmp_path, {"COMPACTION_CACHE_TTL": 3600}), context, now=1300.0)
 
 
 def test_provider_overflow_clears_even_while_the_cache_is_warm(monkeypatch, tmp_path):
@@ -463,7 +463,7 @@ def test_cache_break_is_silent_below_net_level_two(monkeypatch, tmp_path, net_li
 def test_a_paid_summary_that_saves_too_little_counts_toward_the_breaker(monkeypatch, tmp_path):
     """ALL-CLAIMS compaction.py:955-963: the post-summary savings skip was not a
     failure, so every turn paid for the same summary again."""
-    cfg = _config(tmp_path, {**_SMALL_WINDOW, "max_summary_failures": 2})
+    cfg = _config(tmp_path, {**_SMALL_WINDOW, "COMPACTION_FAILURES_MAX": 2})
     context = ToolContext(cwd=tmp_path)
     calls = []
 
@@ -500,7 +500,7 @@ def test_a_failing_pre_hook_warns_the_user_and_feeds_the_model_nothing(monkeypat
     summarizer as guidance, and the 30 s subprocess ran on the event loop."""
     from js.capped_process import CappedProcessResult
 
-    cfg = _config(tmp_path, {**_SMALL_WINDOW, "pre_hook": "false"})
+    cfg = _config(tmp_path, {**_SMALL_WINDOW, "COMPACTION_HINT_COMMAND": "false"})
     monkeypatch.setattr(compaction, "_run_capped",
                         lambda *a, **k: CappedProcessResult(returncode=3, stdout=b"", stderr=b"boom"))
     seen = {}
@@ -513,11 +513,11 @@ def test_a_failing_pre_hook_warns_the_user_and_feeds_the_model_nothing(monkeypat
     compaction.compact_now_sync(cfg, "system", _over_budget_history(), forced=True)
     assert seen["guidance"] == ""
     err = capsys.readouterr().err
-    assert "pre_hook exited 3: boom" in err
+    assert "COMPACTION_HINT_COMMAND exited 3: boom" in err
 
 
 def test_the_pre_hook_runs_off_the_event_loop(monkeypatch, tmp_path):
-    cfg = _config(tmp_path, {**_SMALL_WINDOW, "pre_hook": "slow"})
+    cfg = _config(tmp_path, {**_SMALL_WINDOW, "COMPACTION_HINT_COMMAND": "slow"})
     ticks = []
 
     window = {}

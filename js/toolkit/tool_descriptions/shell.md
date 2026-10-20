@@ -1,4 +1,4 @@
-Run one command with bash (or the shell set in `shell.program`) and return
+Run one command with bash (or the shell set in `SHELL_PROGRAM`) and return
 exit code, stdout, and stderr. Under bash and zsh a pipeline fails when any
 stage fails (`pipefail`), so `false | cat` reports exit 1.
 Long output comes back as its head and its tail, with a marker between them
@@ -12,7 +12,7 @@ command that reads input gets end-of-file, and a password or confirmation
 prompt gets no answer.
 
 A command does not have to finish before you get an answer. The call waits
-`timeout` seconds (default from `shell.wait_seconds`); a command that finishes
+`timeout` seconds (default from `SHELL_WAIT`); a command that finishes
 inside that window comes back whole, and one still running comes back as a
 handle with whatever it has printed so far:
 

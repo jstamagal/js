@@ -63,7 +63,7 @@ MISSING_DEPS = (
     "ERROR: the kernel tool needs the {missing} package{plural}, which "
     "{verb} not importable in this environment. Install js[kernel], or run "
     "`uv sync --inexact --extra kernel` in this checkout. Enable it with "
-    "`/set kernel.enabled on`. The extra is declared in pyproject.toml; "
+    "`/set PYTHON_KERNEL on`. The extra is declared in pyproject.toml; "
     "`just sync` includes it for development, while `just install` creates the launcher. "
     "Every other tool is unaffected."
 )
@@ -168,7 +168,7 @@ def render_max_lines(context: Any) -> int:
 #
 # Two audiences, two renderings. The MODEL gets the return value of `kernel()`:
 # always complete, always the same shape, capped only by
-# limits.max_tool_result_bytes. The OPERATOR gets a rich panel on stderr whose
+# TOOL_RESULT_MAX. The OPERATOR gets a rich panel on stderr whose
 # detail the verbosity knob controls.
 #
 # stderr, not stdout, so `js -p '...' | jq` keeps working while the panel still
@@ -556,7 +556,7 @@ def missing_dependencies() -> str:
 def get_session(context: Any) -> tuple[KernelSession | None, str, bool]:
     """(session, error, started_now). Never raises; a failure comes back as text."""
     if not getattr(context, "kernel_enabled", False):
-        return None, "ERROR: kernel/toolbox disabled; use /set kernel.enabled on (requires js[kernel]).", False
+        return None, "ERROR: kernel/toolbox disabled; use /set PYTHON_KERNEL on (requires js[kernel]).", False
     problem = missing_dependencies()
     if problem:
         return None, problem, False
@@ -889,7 +889,7 @@ def cap_for_model(text: str, context: Any) -> str:
     encoded = text.encode("utf-8")
     if len(encoded) <= budget:
         return text
-    marker = truncation_marker(budget, "limits.max_tool_result_bytes")
+    marker = truncation_marker(budget, "TOOL_RESULT_MAX")
     keep = max(0, budget - len(marker.encode("utf-8")) - 1)
     return encoded[:keep].decode("utf-8", errors="ignore") + "\n" + marker
 
@@ -913,7 +913,7 @@ def _positive_seconds(raw: Any, default: float) -> float:
 def wait_seconds(context: Any) -> float:
     """How long a submitted cell is waited for before the call returns a handle."""
     return _positive_seconds(getattr(context, "kernel_wait_seconds", None),
-                             float(_settings.default_value("kernel.wait_seconds")))
+                             float(_settings.default_value("PYTHON_KERNEL_WAIT")))
 
 
 def _output_parts(output: CellOutput) -> list[str]:
@@ -997,7 +997,7 @@ def kernel(
     if context is None:
         return "ERROR: missing ToolContext"
     if not context.kernel_enabled:
-        return "ERROR: kernel/toolbox disabled; use /set kernel.enabled on (requires js[kernel])."
+        return "ERROR: kernel/toolbox disabled; use /set PYTHON_KERNEL on (requires js[kernel])."
     code = text_or_default(code)
     limit = _positive_seconds(timeout, 120.0)
     mode = text_or_default(action, "run").strip().lower() or "run"

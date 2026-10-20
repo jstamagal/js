@@ -60,16 +60,14 @@ def cfg_for(name, **compact):
         prompts_dir=d,
         project_dir=d,
         settings={
-            "compact": {
-                "auto": True,
-                "context_window": 10000,
-                "buffer_tokens": 100,
-                "summary_reserve_tokens": 100,
-                "tail_tokens": 100,
-                "min_savings_tokens": 20,
-                "flight_log_dir": str(d / "flights"),
-                **compact,
-            }
+            "COMPACTION_AUTO": True,
+            "CONTEXT_SIZE": 10000,
+            "COMPACTION_HEADROOM_TOKENS": 100,
+            "COMPACTION_REPLY_RESERVE_TOKENS": 100,
+            "COMPACTION_KEEP_RECENT_TOKENS": 100,
+            "COMPACTION_MIN_SAVINGS_TOKENS": 20,
+            "COMPACTION_LOG_DIR": str(d / "flights"),
+            **compact,
         },
     )
 
@@ -182,7 +180,7 @@ async def summary_fault(mode):
 
 
 async def no_prefix():
-    cfg = cfg_for("no_prefix", tail_tokens=99999)
+    cfg = cfg_for("no_prefix", COMPACTION_KEEP_RECENT_TOKENS=99999)
     messages = [{"role": "user", "content": "one short input"}]
     before = copy.deepcopy(messages)
     calls = 0
@@ -206,7 +204,7 @@ async def no_prefix():
 
 
 async def expanding_summary():
-    cfg = cfg_for("expanding_summary", tail_tokens=1)
+    cfg = cfg_for("expanding_summary", COMPACTION_KEEP_RECENT_TOKENS=1)
     messages = [
         {"role": "user", "content": "short old message"},
         {"role": "user", "content": "last question"},
@@ -231,7 +229,7 @@ async def expanding_summary():
 
 
 async def rehydration():
-    cfg = cfg_for("rehydration", tail_tokens=1)
+    cfg = cfg_for("rehydration", COMPACTION_KEEP_RECENT_TOKENS=1)
     file = cfg.agent_dir / "edited.py"
     file.write_text("FACT_99 = 1\n")
     context = ToolContext(cwd=cfg.agent_dir)
@@ -264,7 +262,7 @@ async def rehydration():
 
 
 async def between_turn():
-    cfg = cfg_for("between_turn", tail_tokens=1)
+    cfg = cfg_for("between_turn", COMPACTION_KEEP_RECENT_TOKENS=1)
     context = ToolContext(cwd=cfg.agent_dir)
     # Provider input is 6000; 3200 new output makes next request 9200 of 9800.
     messages = [
@@ -313,7 +311,7 @@ async def between_turn():
 
 
 async def run_loop(mode):
-    cfg = cfg_for(mode, context_window=1500 if mode == "persist_active" else 10000, tail_tokens=100)
+    cfg = cfg_for(mode, CONTEXT_SIZE=1500 if mode == "persist_active" else 10000, COMPACTION_KEEP_RECENT_TOKENS=100)
     context = ToolContext(cwd=cfg.agent_dir)
     if mode == "churn":
         prefix = C._compaction_summary_message("previous summary " * 100)
@@ -408,7 +406,7 @@ async def run_loop(mode):
 
 
 async def cancelled_summary():
-    cfg = cfg_for("cancelled_summary", tail_tokens=1)
+    cfg = cfg_for("cancelled_summary", COMPACTION_KEEP_RECENT_TOKENS=1)
     messages = [
         {"role": "user", "content": "prefix " * 1000},
         {"role": "user", "content": "current"},
@@ -438,7 +436,7 @@ async def cancelled_summary():
 
 
 async def partial_partition_failure():
-    cfg = cfg_for("partial_partition_failure", tail_tokens=1)
+    cfg = cfg_for("partial_partition_failure", COMPACTION_KEEP_RECENT_TOKENS=1)
     messages = [{"role": "user", "content": f"FACT_{n} " + "text " * 400} for n in range(8)]
     messages.append({"role": "user", "content": "current"})
     before = copy.deepcopy(messages)
@@ -466,7 +464,7 @@ async def partial_partition_failure():
 
 
 async def context_isolation():
-    cfg = cfg_for("context_isolation", tail_tokens=1)
+    cfg = cfg_for("context_isolation", COMPACTION_KEEP_RECENT_TOKENS=1)
     own = ToolContext(cwd=cfg.agent_dir)
     foreign = ToolContext(cwd=cfg.agent_dir)
     a = cfg.agent_dir / "own.py"
@@ -578,7 +576,7 @@ async def clearing_restart():
 
 
 async def zero_usage_executor():
-    cfg = cfg_for("zero_usage_executor", tail_tokens=1)
+    cfg = cfg_for("zero_usage_executor", COMPACTION_KEEP_RECENT_TOKENS=1)
     context = ToolContext(cwd=cfg.agent_dir)
     user = {"role": "user", "content": "current question"}
     messages = [
@@ -641,7 +639,7 @@ async def zero_usage_executor():
 
 
 async def recovery_rounds():
-    cfg = cfg_for("recovery_rounds", auto=False, tail_tokens=1)
+    cfg = cfg_for("recovery_rounds", COMPACTION_AUTO=False, COMPACTION_KEEP_RECENT_TOKENS=1)
     context = ToolContext(cwd=cfg.agent_dir)
     messages = [{"role": "user", "content": "old task"}]
     for n in range(45):
@@ -702,7 +700,7 @@ async def recovery_rounds():
 
 
 async def small_window():
-    cfg = cfg_for("small_window", context_window=4000, buffer_tokens=4096)
+    cfg = cfg_for("small_window", CONTEXT_SIZE=4000, COMPACTION_HEADROOM_TOKENS=4096)
     context = ToolContext(cwd=cfg.agent_dir)
     messages = [{"role": "user", "content": "short question"}]
     budgets = []
@@ -743,7 +741,7 @@ async def journal_sequence():
     import random
 
     rng = random.Random(441)
-    cfg = cfg_for("journal_sequence", tail_tokens=35)
+    cfg = cfg_for("journal_sequence", COMPACTION_KEEP_RECENT_TOKENS=35)
     messages = []
     mismatches = []
     operations = []
@@ -816,7 +814,7 @@ async def incomplete_usage():
 
 
 async def compacted_turn_cancel(error=False):
-    cfg = cfg_for("compacted_turn_error" if error else "compacted_turn_cancel", auto=False)
+    cfg = cfg_for("compacted_turn_error" if error else "compacted_turn_cancel", COMPACTION_AUTO=False)
     context = ToolContext(cwd=cfg.agent_dir)
     prefix = [
         {"role": "user" if i % 2 == 0 else "assistant", "content": f"old {i} " * 200}
@@ -882,7 +880,7 @@ async def compacted_turn_cancel(error=False):
 async def between_turn_cancel():
     import threading
 
-    cfg = cfg_for("between_turn_cancel", tail_tokens=1)
+    cfg = cfg_for("between_turn_cancel", COMPACTION_KEEP_RECENT_TOKENS=1)
     context = ToolContext(cwd=cfg.agent_dir)
     context.last_prompt_tokens = 9500
     user = {"role": "user", "content": "current"}

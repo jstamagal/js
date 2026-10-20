@@ -43,8 +43,8 @@ from .sanitize import int_or_default, text_or_default
 from .search import _absolutize
 
 
-# The js/jsrc limits.shell_env_allow, for a context whose own value is not a list.
-_ENV_ALLOW = tuple(_settings.default_value("limits.shell_env_allow"))
+# The js/jsrc SHELL_ENV_KEEP, for a context whose own value is not a list.
+_ENV_ALLOW = tuple(_settings.default_value("SHELL_ENV_KEEP"))
 # Where rustup's cargo and rustc on PATH find their toolchains; a command
 # inherits them with PATH, since without them those binaries do not run.
 _TOOLCHAIN_ENV = ("RUSTUP_HOME", "CARGO_HOME")
@@ -73,7 +73,7 @@ _VAR_REF_RE = re.compile(r"\$\{?[#!]?([A-Za-z_][A-Za-z0-9_]*)")
 
 
 def _resolve_shell(program: str) -> str | None:
-    """The executable the shell tool runs: `shell.program` looked up on PATH
+    """The executable the shell tool runs: `SHELL_PROGRAM` looked up on PATH
     (or taken as given when it is a path)."""
     return shutil.which(program)
 
@@ -225,7 +225,7 @@ _FRAME_BYTES = 128
 
 def _output_room(context: Any, header: str) -> int | None:
     """Bytes the rendered stdout and stderr together may take so the whole
-    result fits limits.max_tool_result_inline_bytes, or None without that
+    result fits TOOL_RESULT_INLINE_MAX, or None without that
     limit. Past it the runtime would spill the result again, and the preview
     would lose the tail."""
     inline = int(getattr(context, "max_tool_result_inline_bytes", 0) or 0)
@@ -273,11 +273,11 @@ def _job_output(job: _ShellJob, context: Any, header: str, *, since_last: bool) 
     starts = job.delivered if since_last else (0, 0)
     job.delivered = totals
     sizes = (totals[0] - starts[0], totals[1] - starts[1])
-    budget, knob = job.cap, f"limits.max_bash_output_bytes ({job.cap})"
+    budget, knob = job.cap, f"SHELL_OUTPUT_MAX ({job.cap})"
     room = _output_room(context, header)
     if room is not None and room < budget:
         budget = room
-        knob = f"limits.max_tool_result_inline_bytes ({context.max_tool_result_inline_bytes})"
+        knob = f"TOOL_RESULT_INLINE_MAX ({context.max_tool_result_inline_bytes})"
 
     def render(budget: int) -> tuple[str, str]:
         shares = _split_budget(sizes, budget)
@@ -294,8 +294,8 @@ def _job_output(job: _ShellJob, context: Any, header: str, *, since_last: bool) 
         used = sum(len(text.encode("utf-8")) for text in rendered)
         if used <= room:
             break
-        if knob.startswith("limits.max_bash_output_bytes"):
-            knob = f"limits.max_tool_result_inline_bytes ({context.max_tool_result_inline_bytes})"
+        if knob.startswith("SHELL_OUTPUT_MAX"):
+            knob = f"TOOL_RESULT_INLINE_MAX ({context.max_tool_result_inline_bytes})"
         budget = max(0, min(budget - 1, budget * room // used - 64))
         rendered = render(budget)
     return rendered
@@ -315,7 +315,7 @@ def _render_finished(job: _ShellJob, result: CappedProcessResult, description: s
         parts.append(
             "environment=filtered "
             f"unset={','.join(filtered)} allowed={allowed_names} present={present_names}; "
-            "names not allowed by limits.shell_env_allow or the env parameter are unset"
+            "names not allowed by SHELL_ENV_KEEP or the env parameter are unset"
         )
     stdout, stderr = _job_output(job, context, "\n".join(parts), since_last=since_last)
     if stdout:
@@ -378,14 +378,11 @@ def shell(
         managed_bin = str(TOOLS_DIR)
         inherited = safe_env.get("PATH", "")
         safe_env["PATH"] = f"{managed_bin}{os.pathsep}{inherited}" if inherited else managed_bin
-    program = str(getattr(context, "shell_program", "") or _settings.default_value("shell.program"))
+    program = str(getattr(context, "shell_program", "") or _settings.default_value("SHELL_PROGRAM"))
     shell_path = _resolve_shell(program)
     if shell_path is None:
-        return f"ERROR: shell.program {program!r} is not an executable on PATH"
+        return f"ERROR: SHELL_PROGRAM {program!r} is not an executable on PATH"
     cap = int(context.max_bash_output_bytes)
-    ceiling = int(getattr(context, "max_bash_output_ceiling", 0) or 0)
-    if ceiling > 0:
-        cap = min(cap, ceiling)
     # A command can create/edit/delete anything, so memoized fs_search results are
     # no longer trustworthy once one has run.
     context.invalidate_search_cache()
@@ -469,7 +466,7 @@ def _html_to_text(raw: str, base_url: str) -> str:
 
 
 # What may land in RAM for an INLINE result. A saved download is a different
-# question entirely: it streams to disk and is bounded by limits.max_download_bytes,
+# question entirely: it streams to disk and is bounded by DOWNLOAD_MAX,
 # which defaults to unlimited. A 6GB ISO is a normal thing to fetch(save=...).
 _DOWNLOAD_MAX_BYTES = 32 * 1024 * 1024
 _STREAM_CHUNK = 1024 * 1024
@@ -781,9 +778,9 @@ def _format_payload(
         inline_cap = max(0, int(getattr(context, "max_tool_result_inline_bytes", 0) or 0))
         spill_cap = inline_cap if inline_cap and (not hard_cap or inline_cap < hard_cap) else hard_cap
         limit_name = (
-            "limits.max_tool_result_inline_bytes"
+            "TOOL_RESULT_INLINE_MAX"
             if spill_cap == inline_cap and inline_cap
-            else "limits.max_tool_result_bytes"
+            else "TOOL_RESULT_MAX"
         )
         return spill_oversized_result(text, spill_cap, limit_name=limit_name, force=True)
     return text

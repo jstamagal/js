@@ -19,7 +19,7 @@ def _reply(cfg, system, messages, *a, **k):
 def _repl(monkeypatch, tmp_path, argv, lines=(), run_turn=lambda *a, **k: None):
     """Launch `js --blocking *argv` over *lines*; it exits on EOF."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.delenv("JS_MODEL", raising=False)
     monkeypatch.chdir(tmp_path)

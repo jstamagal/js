@@ -55,9 +55,9 @@ def test_provider_stream_delivers_reasoning_before_answer(monkeypatch):
 @pytest.mark.parametrize("suppressed", [False, True])
 def test_display_is_separate_from_answer_transcript_and_session(monkeypatch, tmp_path, level, suppressed):
     cfg = config.from_env(extras=[
-        "model.id=qwen-test", "provider.id=openai", "provider.base_url=http://local.test/v1",
-        "provider.api_key=fixture", "model.max_output_tokens=64", "model.context_window=262144",
-        "model.vision=off", f"ui.reasoning={level}",
+        "MODEL=qwen-test", "PROVIDER=openai", "BASE_URL=http://local.test/v1",
+        "API_KEY=fixture", "OUTPUT_TOKENS_MAX=64", "CONTEXT_SIZE=262144",
+        "VISION=off", f"ui.reasoning={level}",
     ])
     out, err, log = io.StringIO(), io.StringIO(), io.StringIO()
     sink = transcript.TranscriptLogSink([log], [])
@@ -88,9 +88,9 @@ def test_display_is_separate_from_answer_transcript_and_session(monkeypatch, tmp
 
 def test_cancel_during_reasoning_retains_partial_history(monkeypatch, tmp_path):
     cfg = config.from_env(extras=[
-        "model.id=qwen-test", "provider.id=openai", "provider.base_url=http://local.test/v1",
-        "provider.api_key=fixture", "model.max_output_tokens=64", "model.context_window=262144",
-        "model.vision=off", "ui.reasoning=0",
+        "MODEL=qwen-test", "PROVIDER=openai", "BASE_URL=http://local.test/v1",
+        "API_KEY=fixture", "OUTPUT_TOKENS_MAX=64", "CONTEXT_SIZE=262144",
+        "VISION=off", "ui.reasoning=0",
     ])
     scripted(monkeypatch, cancel=True)
     messages = [{"role": "user", "content": "first"}]
@@ -277,9 +277,9 @@ def test_reasoning_to_stderr_that_is_not_a_terminal_is_plain_text(level):
 
 def test_http_reasoning_streams_on_screen_before_answer_and_survives_collapse(monkeypatch, tmp_path):
     cfg = config.from_env(extras=[
-        "model.id=qwen-test", "provider.id=openai", "provider.base_url=http://local.test/v1",
-        "provider.api_key=fixture", "model.max_output_tokens=64", "model.context_window=262144",
-        "model.vision=off", "ui.reasoning=1",
+        "MODEL=qwen-test", "PROVIDER=openai", "BASE_URL=http://local.test/v1",
+        "API_KEY=fixture", "OUTPUT_TOKENS_MAX=64", "CONTEXT_SIZE=262144",
+        "VISION=off", "ui.reasoning=1",
     ])
     scroll = screen.Scrollback()
     app = SimpleNamespace(invalidate=lambda: None)
@@ -338,9 +338,9 @@ def test_prompt_mode_displays_reasoning_separately_and_persists_it(monkeypatch, 
     prompts.mkdir(parents=True)
     (prompts / "01-prompt.md").write_text("system\n")
     cfg = config.from_env(agent_id="reason-ui", extras=[
-        "model.id=qwen-test", "provider.id=openai", "provider.base_url=http://local.test/v1",
-        "provider.api_key=fixture", "model.max_output_tokens=64", "model.context_window=262144",
-        "model.vision=off", "runtime.debug_autolog=off", f"ui.reasoning={level}",
+        "MODEL=qwen-test", "PROVIDER=openai", "BASE_URL=http://local.test/v1",
+        "API_KEY=fixture", "OUTPUT_TOKENS_MAX=64", "CONTEXT_SIZE=262144",
+        "VISION=off", "REQUEST_LOG=off", f"ui.reasoning={level}",
     ])
     monkeypatch.setattr(cli, "_from_env", lambda *a, **kw: cfg)
     scripted(monkeypatch, cancel=cancel)

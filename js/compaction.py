@@ -47,14 +47,14 @@ _JSRC = object()
 
 
 def _fallback(key: str, default: Any) -> Any:
-    return _settings.default_value(f"compact.{key}") if default is _JSRC else default
+    return _settings.default_value(key) if default is _JSRC else default
 
 
 def get(cfg: Config, key: str, default: Any = _JSRC) -> Any:
+    """Setting ``key`` (`COMPACTION_AUTO`) from ``cfg.settings``."""
     default = _fallback(key, default)
     settings = getattr(cfg, "settings", {}) or {}
-    compact = settings.get("compact", {}) if isinstance(settings, dict) else {}
-    return compact.get(key, default) if isinstance(compact, dict) else default
+    return settings.get(key, default) if isinstance(settings, dict) else default
 
 
 def get_bool(cfg: Config, key: str, default: Any = _JSRC) -> bool:
@@ -124,7 +124,7 @@ def get_float(cfg: Config, key: str, default: Any = _JSRC, *, max_value: float |
 
 
 def get_model(cfg: Config) -> str:
-    raw = get(cfg, "model")
+    raw = get(cfg, "COMPACTION_EXTERNAL_MODEL")
     if not isinstance(raw, str):
         return cfg.model
     model = raw.strip()
@@ -134,7 +134,7 @@ def get_model(cfg: Config) -> str:
 
 
 def _pre_hook_command(cfg: Config) -> str:
-    raw = get(cfg, "pre_hook")
+    raw = get(cfg, "COMPACTION_HINT_COMMAND")
     if not isinstance(raw, str):
         return ""
     return raw.strip()
@@ -363,10 +363,10 @@ def clear_for_budget(
 ) -> tuple[int, int]:
     """Clear old tool-result bodies until ``over_budget(reclaimed_chars)`` is false.
 
-    Starts with ``compact.clear_keep_recent`` intact results and halves that
+    Starts with ``COMPACTION_KEEP_TOOL_RESULTS`` intact results and halves that
     each round down to one. An explicit zero clears all eligible results.
     Returns (results_cleared, chars_reclaimed)."""
-    keep_recent = get_nonnegative_int(cfg, "clear_keep_recent")
+    keep_recent = get_nonnegative_int(cfg, "COMPACTION_KEEP_TOOL_RESULTS")
     flight = _clearing_flight(messages, cfg=cfg, system=system, trigger=trigger, flight_data=flight_data)
     try:
         flight.notice("start", f"{trigger.get('phase')} context budget; keeping newest {keep_recent} tool results")
@@ -417,8 +417,8 @@ CACHE_BREAK_MIN_TOKENS = 2000
 
 def cache_expired(cfg: Config, context: Any, *, now: float | None = None) -> bool:
     """Whether the prompt cache of ``context``'s conversation has outlived
-    ``compact.cache_ttl_seconds``. No request yet counts as expired."""
-    ttl = get_nonnegative_int(cfg, "cache_ttl_seconds")
+    ``COMPACTION_CACHE_TTL``. No request yet counts as expired."""
+    ttl = get_nonnegative_int(cfg, "COMPACTION_CACHE_TTL")
     last = getattr(context, "last_request_at", None)
     if ttl == 0 or last is None:
         return True
@@ -457,14 +457,14 @@ def history_rewritten(context: Any) -> None:
 
 def auto_paused(cfg: Config, context: Any) -> bool:
     """Whether failed summaries have paused automatic compaction on ``context``."""
-    return int(getattr(context, "summary_failures", 0) or 0) >= get_int(cfg, "max_summary_failures")
+    return int(getattr(context, "summary_failures", 0) or 0) >= get_int(cfg, "COMPACTION_FAILURES_MAX")
 
 
 def record_auto_failure(cfg: Config, context: Any) -> msgs.Said | None:
     """Count one failed automatic summary. Returns the pause notice on the
-    failure that reaches ``compact.max_summary_failures``, else None."""
+    failure that reaches ``COMPACTION_FAILURES_MAX``, else None."""
     context.summary_failures = int(getattr(context, "summary_failures", 0) or 0) + 1
-    limit = get_int(cfg, "max_summary_failures")
+    limit = get_int(cfg, "COMPACTION_FAILURES_MAX")
     if context.summary_failures == limit:
         return msgs.AUTO_COMPACT_BREAKER.said(failures=limit)
     return None
@@ -498,11 +498,11 @@ def _post_compact_rehydration(
     A budget left None is its compact.rehydrate_* value in js/jsrc.
     """
     if max_files is None:
-        max_files = _settings.default_value("compact.rehydrate_max_files")
+        max_files = _settings.default_value("COMPACTION_REATTACH_FILES_MAX")
     if token_budget is None:
-        token_budget = _settings.default_value("compact.rehydrate_token_budget")
+        token_budget = _settings.default_value("COMPACTION_REATTACH_TOKENS_MAX")
     if per_file_tokens is None:
-        per_file_tokens = _settings.default_value("compact.rehydrate_max_tokens_per_file")
+        per_file_tokens = _settings.default_value("COMPACTION_REATTACH_FILE_TOKENS_MAX")
     paths = list(getattr(context, "read_paths", []) or [])
     if not paths:
         return None
@@ -548,24 +548,23 @@ def _post_compact_rehydration(
 
 
 def thresholds(cfg: Config) -> tuple[float, float, float]:
-    notify_at = get_float(cfg, "notify_threshold", max_value=1.0)
-    trigger_at = get_float(cfg, "trigger_threshold", max_value=1.0)
-    force_at = get_float(cfg, "force_threshold", max_value=1.0)
+    notify_at = get_float(cfg, "COMPACTION_WARN_AT", max_value=1.0)
+    trigger_at = get_float(cfg, "COMPACTION_START_AT", max_value=1.0)
+    force_at = get_float(cfg, "COMPACTION_FORCE_AT", max_value=1.0)
     if not (notify_at <= trigger_at <= force_at):
         return (
-            _settings.default_value("compact.notify_threshold"),
-            _settings.default_value("compact.trigger_threshold"),
-            _settings.default_value("compact.force_threshold"),
+            _settings.default_value("COMPACTION_WARN_AT"),
+            _settings.default_value("COMPACTION_START_AT"),
+            _settings.default_value("COMPACTION_FORCE_AT"),
         )
     return notify_at, trigger_at, force_at
 
 
 def configured_context_window(cfg: Config, resolve_window: Any) -> int:
-    """One configured window for the banner and both compaction triggers."""
-    window = get_int(cfg, "context_window", 0)
-    if window <= 0:
-        window = int(resolve_window() or 0)
-    return window if window > 0 else get_int(cfg, "context_window_fallback")
+    """One configured window for the banner and both compaction triggers:
+    CONTEXT_SIZE, else the resolved window, else CONTEXT_SIZE_UNKNOWN."""
+    window = get_int(cfg, "CONTEXT_SIZE", 0) or int(resolve_window() or 0)
+    return window if window > 0 else get_int(cfg, "CONTEXT_SIZE_UNKNOWN")
 
 
 def effective_context_window(cfg: Config, context_window: int) -> int:
@@ -585,9 +584,9 @@ def effective_context_window(cfg: Config, context_window: int) -> int:
     # happens. Cap it the way Claude Code does (min(max_output, 20k)).
     reserve = min(
         max(0, int(max_out or 0)),
-        get_nonnegative_int(cfg, "summary_reserve_tokens"),
+        get_nonnegative_int(cfg, "COMPACTION_REPLY_RESERVE_TOKENS"),
     )
-    buffer_tokens = get_nonnegative_int(cfg, "buffer_tokens")
+    buffer_tokens = get_nonnegative_int(cfg, "COMPACTION_HEADROOM_TOKENS")
     # Never let the reserve eat the whole window on a model with a huge declared
     # output cap; keep at least half the window addressable for input.
     return max(context_window // 2, context_window - reserve - buffer_tokens)
@@ -619,7 +618,7 @@ def estimated_prompt_tokens(cfg: Config, system: str, messages: list[dict]) -> i
     reads 0, does nothing, and the history that caused the failure survives
     into the next attempt unchanged.
     """
-    cpt = get_float(cfg, "chars_per_token")
+    cpt = get_float(cfg, "COMPACTION_CHARS_PER_TOKEN")
     try:
         return (
             context_budget.estimate_messages_tokens(messages or [], chars_per_token=cpt)
@@ -637,7 +636,7 @@ def _calibrated_chars_per_token(cfg: Config, system: str, messages: list[dict], 
     estimator drifts far enough that "keep 16k of tail" kept something quite
     different from 16k.
     """
-    configured = get_float(cfg, "chars_per_token")
+    configured = get_float(cfg, "COMPACTION_CHARS_PER_TOKEN")
     try:
         # The tracker lives on the tool context (set in run_turn_async), not in
         # module scope — reading a global here would silently always miss.
@@ -677,10 +676,7 @@ def _run_pre_hook(cfg: Config) -> str:
     if not hook:
         return ""
     shell_path = os.environ.get("SHELL", "/bin/sh")
-    cap = int(_settings.knob_attr(cfg, "max_bash_output_bytes", "limits.max_bash_output_bytes"))
-    ceiling = int(getattr(cfg, "max_bash_output_ceiling", 0) or 0)
-    if ceiling > 0:
-        cap = min(cap, ceiling)
+    cap = int(_settings.knob_attr(cfg, "max_bash_output_bytes", "SHELL_OUTPUT_MAX"))
     try:
         result = _run_capped(
             [shell_path, "-c", hook],
@@ -690,7 +686,7 @@ def _run_pre_hook(cfg: Config) -> str:
             cap=cap,
         )
     except Exception as exc:  # noqa: BLE001
-        msgs.warn(msgs.FAILED_WARN, error=f"compact pre_hook failed: {type(exc).__name__}: {exc}")
+        msgs.warn(msgs.FAILED_WARN, error=f"COMPACTION_HINT_COMMAND failed: {type(exc).__name__}: {exc}")
         return ""
     if not isinstance(result, CappedProcessResult):
         result = CappedProcessResult(result[0], result[1], result[2])
@@ -702,7 +698,7 @@ def _run_pre_hook(cfg: Config) -> str:
         stderr = stderr.rstrip("\n") + f"\n{truncation_marker(cap)}\n"
     if result.returncode != 0:
         msgs.warn(msgs.FAILED_WARN,
-                  error=f"compact pre_hook exited {result.returncode}: {(stderr or stdout).strip()}")
+                  error=f"COMPACTION_HINT_COMMAND exited {result.returncode}: {(stderr or stdout).strip()}")
         return ""
     return stdout.strip()
 
@@ -828,7 +824,7 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
         explicit_model=True,
     )
     previous, rest = _split_previous_summary(list(messages))
-    tool_result_chars = get_nonnegative_int(cfg, "summary_tool_result_chars")
+    tool_result_chars = get_nonnegative_int(cfg, "COMPACTION_SUMMARY_RESULT_CHARS_MAX")
     settings = getattr(cfg, "settings", None)
     idle = retry.idle_seconds(settings)
     budget = retry.Budget.from_settings(settings)
@@ -844,7 +840,7 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
                 provider_api_key=route.api_key,
                 messages=[ai.user_message(prompt)],
                 tools=None,
-                max_output_tokens=get_int(cfg, "summary_max_tokens", max_value=8192),
+                max_output_tokens=get_int(cfg, "COMPACTION_SUMMARY_TOKENS_MAX", max_value=8192),
                 reasoning_effort=None,
                 on_text=lambda text: ACTIVE_FLIGHT.get().record("summary_chunk", text=text) if ACTIVE_FLIGHT.get() else None,
                 provider_headers=route.headers,
@@ -960,8 +956,8 @@ async def compact_now(
     try:
         chars_per_token = _calibrated_chars_per_token(cfg, system, messages, context)
         if tail_tokens is None:
-            tail_tokens = get_int(cfg, "tail_tokens")
-        min_savings = get_int(cfg, "min_savings_tokens")
+            tail_tokens = get_int(cfg, "COMPACTION_KEEP_RECENT_TOKENS")
+        min_savings = get_int(cfg, "COMPACTION_MIN_SAVINGS_TOKENS")
         original_len = len(messages)
         keep_from = _safe_tail_start(messages, tail_tokens, chars_per_token)
         if preserve_from is not None:
@@ -995,9 +991,9 @@ async def compact_now(
         rehydrated = _post_compact_rehydration(
             context or T.STOCK_CONTEXT,
             chars_per_token=chars_per_token,
-            max_files=get_nonnegative_int(cfg, "rehydrate_max_files"),
-            token_budget=get_nonnegative_int(cfg, "rehydrate_token_budget"),
-            per_file_tokens=get_nonnegative_int(cfg, "rehydrate_max_tokens_per_file"),
+            max_files=get_nonnegative_int(cfg, "COMPACTION_REATTACH_FILES_MAX"),
+            token_budget=get_nonnegative_int(cfg, "COMPACTION_REATTACH_TOKENS_MAX"),
+            per_file_tokens=get_nonnegative_int(cfg, "COMPACTION_REATTACH_FILE_TOKENS_MAX"),
         )
         # The kept tail's signed reasoning was produced with the summarized
         # prefix in front of it.

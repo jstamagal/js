@@ -43,11 +43,11 @@ def test_compact_auto_toggles_setting_and_does_not_compact(tmp_path, monkeypatch
     monkeypatch.setattr(cli.compaction, "compact_now_sync", lambda *a, **k: compacted.append(1) or "nope")
 
     assert cli._handle_command("/compact-auto off", state, cfg) is True
-    assert settings.get_dotted(state["settings"], ("compact", "auto")) is False
+    assert settings.get_dotted(state["settings"], ("COMPACTION_AUTO",)) is False
     assert compacted == []  # toggling must NOT trigger a compaction
 
     assert cli._handle_command("/compact-auto on", state, cfg) is True
-    assert settings.get_dotted(state["settings"], ("compact", "auto")) is True
+    assert settings.get_dotted(state["settings"], ("COMPACTION_AUTO",)) is True
     assert compacted == []
 
 
@@ -80,7 +80,7 @@ def test_compact_command_model_flag_picks_the_summarizer(tmp_path, monkeypatch):
     assert cli._handle_command("/compact -m fast-summarizer keep the API decisions", state, cfg) is True
     assert cli._handle_command("/compact --model fast-summarizer", state, cfg) is True
     assert cli._handle_command("/compact -m fast-summarizer up to here", state, cfg) is True
-    # no flag = no override; compact.model (or the active model) decides
+    # no flag = no override; COMPACTION_EXTERNAL_MODEL (or the active model) decides
     assert cli._handle_command("/compact now", state, cfg) is True
 
     assert seen == [
@@ -109,12 +109,12 @@ def test_compact_command_uses_live_compact_settings(tmp_path, monkeypatch):
     seen_models: list[str | None] = []
 
     def compact_stub(compact_cfg, system, messages, *, model=None, focus="", forced=False):
-        seen_models.append(settings.get_dotted(compact_cfg.settings, ("compact", "model")))
+        seen_models.append(settings.get_dotted(compact_cfg.settings, ("COMPACTION_EXTERNAL_MODEL",)))
         return "ok"
 
     monkeypatch.setattr(cli.compaction, "compact_now_sync", compact_stub)
 
-    assert cli._handle_command("/set compact.model compact-live-model", state, cfg) is True
+    assert cli._handle_command("/set COMPACTION_EXTERNAL_MODEL compact-live-model", state, cfg) is True
     assert cli._handle_command("/compact", state, cfg) is True
 
     assert seen_models == ["compact-live-model"]
@@ -151,7 +151,7 @@ def test_compact_command_applies_live_provider_extra_to_summary_model(tmp_path, 
     monkeypatch.setattr(cli.runtime.model_client, "resolve_model", lambda *args, **kwargs: FakeModel())
     monkeypatch.setattr(cli.runtime.model_client, "_stream_async", stream_async_stub)
 
-    assert cli._handle_command('/set provider.extra {"extra_body":{"compact_flag":true}}', state, cfg) is True
+    assert cli._handle_command('/set EXTRA_PARAMS {"extra_body":{"compact_flag":true}}', state, cfg) is True
     assert cli._handle_command("/compact up to here", state, cfg) is True
 
     assert params_seen[0].extra_body == {"compact_flag": True}
@@ -163,7 +163,7 @@ def test_compact_auto_bad_arg_usage(tmp_path, capsys):
     assert cli._handle_command("/compact-auto maybe", state, cfg) is True  # handled, prints usage
     assert capsys.readouterr().out
     # unchanged
-    assert settings.get_dotted(state["settings"], ("compact", "auto")) is True
+    assert settings.get_dotted(state["settings"], ("COMPACTION_AUTO",)) is True
 
 
 # ---- /login <name> [key] [url] [provider] ----

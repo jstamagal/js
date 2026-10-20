@@ -123,7 +123,7 @@ class ToolRegistry:
             lazy=self.lazy - blocked,
             known_names=(self.known_names or frozenset(self.by_name)) | blocked,
             unavailable_errors={**self.unavailable_errors, **{
-                name: "ERROR: kernel/toolbox disabled; use /set kernel.enabled on (requires js[kernel])."
+                name: "ERROR: kernel/toolbox disabled; use /set PYTHON_KERNEL on (requires js[kernel])."
                 for name in blocked
             }},
         )

@@ -978,7 +978,7 @@ def test_alias_profile_skips_existing_tool_name_collisions_from_config():
     live_settings = settings.seed_defaults()
     result = setcmd.set_command(
         live_settings,
-        'tools.alias_profiles [{"match":["openai"],"aliases":{"read":"Write"}}]',
+        'TOOL_ALIASES [{"match":["openai"],"aliases":{"read":"Write"}}]',
     )
     registry = build_default_registry().select(["read:lazy", "write:lazy"])
 
@@ -995,7 +995,7 @@ def test_alias_profile_resolution_skips_unusable_matching_profiles_from_config()
     live_settings = settings.seed_defaults()
     result = setcmd.set_command(
         live_settings,
-        'tools.alias_profiles ['
+        'TOOL_ALIASES ['
         '{"match":["openai"],"aliases":{"missing_tool":"MissingTool"}},'
         '{"match":["openai"],"aliases":{"read":"Read"}}'
         ']',
@@ -1012,7 +1012,7 @@ def test_alias_profile_match_values_ignore_surrounding_whitespace_from_config():
     live_settings = settings.seed_defaults()
     result = setcmd.set_command(
         live_settings,
-        'tools.alias_profiles [{"match":[" openai "],"aliases":{"read":"Read"}}]',
+        'TOOL_ALIASES [{"match":[" openai "],"aliases":{"read":"Read"}}]',
     )
 
     assert result.error is None
@@ -1022,15 +1022,15 @@ def test_alias_profile_match_values_ignore_surrounding_whitespace_from_config():
 
 
 def test_resolve_alias_profile_matches_model_or_provider_substring():
-    settings = {"tools": {"alias_profiles": [
+    settings = {"TOOL_ALIASES": [
         {"match": ["claude"], "aliases": {"read": "Read", "write": "Write", "task": "Task"}},
-    ]}}
+    ]}
     assert runtime._resolve_alias_profile(settings, "openai/proxy-claude-sonnet-4", None) == {
         "read": "Read", "write": "Write", "task": "Task"}
     # Non-matching model id falls through to the default (empty) map.
     assert runtime._resolve_alias_profile(settings, "openai/proxy-gpt-5", None) == {}
     # The provider id is also matched against the substrings.
-    prov = {"tools": {"alias_profiles": [{"match": ["anthropic"], "aliases": {"read": "Read"}}]}}
+    prov = {"TOOL_ALIASES": [{"match": ["anthropic"], "aliases": {"read": "Read"}}]}
     assert runtime._resolve_alias_profile(prov, "some-model", "anthropic") == {"read": "Read"}
     # No profiles configured → empty map → default tool names.
     assert runtime._resolve_alias_profile({}, "openai/proxy-claude-sonnet-4", None) == {}
@@ -1344,7 +1344,7 @@ def test_shell_returns_output_when_grandchild_holds_pipe(tmp_path, monkeypatch):
 def test_shell_marks_truncated_output(tmp_path):
     context = ToolContext(cwd=tmp_path)
     out = process_net.shell("head -c 1000000 /dev/zero | tr '\\0' 'a'", context=context)
-    assert "[truncated: limits.max_tool_result_inline_bytes" in out
+    assert "[truncated: TOOL_RESULT_INLINE_MAX" in out
     spill = re.search(r"(/\S+?\.log)", out)
     assert spill is not None and Path(spill.group(1)).stat().st_size == 1000000
 
@@ -1358,7 +1358,7 @@ def test_whole_file_read_is_capped_but_ranged_read_is_not(tmp_path):
 
     whole = fs.read("big.txt", context=context)
     assert whole.startswith("ERROR")
-    assert "limits.max_read_bytes" in whole
+    assert "READ_BYTES_MAX" in whole
     assert "start_line" in whole
 
     ranged = fs.read("big.txt", start_line=5, end_line=7, context=context)
@@ -1368,7 +1368,7 @@ def test_whole_file_read_is_capped_but_ranged_read_is_not(tmp_path):
     # A bogus range must not smuggle the whole file past the cap.
     bogus = fs.read("big.txt", start_line=True, end_line=True, context=context)
     assert bogus.startswith("ERROR")
-    assert "limits.max_read_bytes" in bogus
+    assert "READ_BYTES_MAX" in bogus
 
 
 def test_whole_file_read_under_cap_is_untouched(tmp_path):
@@ -1435,7 +1435,7 @@ def test_batch_result_cap_clips_the_fat_result_and_spares_the_small_ones():
 
     assert capped[1:] == ["small"] * 6
     assert capped[0] != results[0]
-    assert "[truncated: limits.max_tool_results_per_turn_bytes (200000) reached]" in capped[0]
+    assert "[truncated: PARALLEL_RESULTS_MAX (200000) reached]" in capped[0]
     assert sum(len(r) for r in capped) <= 200_000
 
 
@@ -1444,7 +1444,7 @@ def test_batch_result_cap_splits_evenly_when_all_are_oversized():
     capped = runtime._cap_batch_results(results, 200_000)
 
     assert sum(len(r) for r in capped) <= 200_000
-    assert all("[truncated: limits.max_tool_results_per_turn_bytes" in r for r in capped)
+    assert all("[truncated: PARALLEL_RESULTS_MAX" in r for r in capped)
     assert abs(len(capped[0]) - len(capped[1])) <= 1
 
 

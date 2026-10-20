@@ -193,7 +193,7 @@ def test_offer_survives_a_result_spilled_past_the_inline_cap(project, monkeypatc
     context = ToolContext(cwd=project)
     context.max_tool_result_inline_bytes = 51200
     results = _turn(project, monkeypatch, _cfg(project), [('read', {'file_path': 'big.rs'})], context)
-    assert 'max_tool_result_inline_bytes' in results[0]
+    assert 'TOOL_RESULT_INLINE_MAX' in results[0]
     offered = _reminders(results)
     assert len(offered) == 1 and 'rust-style' in offered[0]
 

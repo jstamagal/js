@@ -45,10 +45,7 @@ def _cfg(tmp_path: Path, log_dir: Path, *, session_name: str = "sess.jsonl") -> 
         session_file=sessions / session_name,
         prompts_dir=prompts,
         settings={
-            "runtime": {
-                "debug_autolog": False,
-                "transcript_log_dir": str(log_dir),
-            }
+            "REQUEST_LOG": False, "TRANSCRIPT_LOG_DIR": str(log_dir)
         },
         debug_autolog=False,
         transcript_log_dir=str(log_dir),

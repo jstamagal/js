@@ -1,6 +1,6 @@
 """Clipboard images in the input line.
 
-The `ui.paste_image_key` key reads the image on the clipboard, keeps its bytes
+The `PASTE_IMAGE_KEY` key reads the image on the clipboard, keeps its bytes
 here, and inserts `[image #N]` at the cursor. When the line is submitted,
 `attach.split_repl_attachments` turns each kept placeholder into an attachment,
 and `attach.build_user_message` sends its bytes the way it sends an `@path`
@@ -80,10 +80,10 @@ def placeholders(text: str) -> list[str]:
 
 def clipboard_command(settings: Mapping | None, env: Mapping[str, str] | None = None) -> list[str] | None:
     """The command that writes the clipboard image to stdout:
-    `ui.paste_image_command` when set, else wl-paste under Wayland, else xclip
+    `PASTE_IMAGE_COMMAND` when set, else wl-paste under Wayland, else xclip
     under X11, else kitten inside a kitty terminal (ssh). None when there is
     no clipboard."""
-    configured = _settings.knob(settings, "ui.paste_image_command")
+    configured = _settings.knob(settings, "PASTE_IMAGE_COMMAND")
     if configured:
         # Raises ValueError on an unbalanced quote; read_image reports it.
         return shlex.split(str(configured))
@@ -114,15 +114,15 @@ def read_image(
 ) -> bytes:
     """The image bytes on the clipboard. Raises ClipboardError when there is no
     clipboard, no tool to read it, no image on it, or an image over
-    `limits.max_file_bytes`."""
+    `FILE_BYTES_MAX`."""
     try:
         argv = clipboard_command(settings, env)
     except ValueError as exc:
-        raise ClipboardError(msgs.CLIPBOARD_READ_FAILED, tool="ui.paste_image_command", error=exc) from exc
+        raise ClipboardError(msgs.CLIPBOARD_READ_FAILED, tool="PASTE_IMAGE_COMMAND", error=exc) from exc
     if argv is None:
         raise ClipboardError(msgs.CLIPBOARD_NONE)
     if not argv:
-        raise ClipboardError(msgs.CLIPBOARD_READ_FAILED, tool="ui.paste_image_command", error="empty command")
+        raise ClipboardError(msgs.CLIPBOARD_READ_FAILED, tool="PASTE_IMAGE_COMMAND", error="empty command")
     if shutil.which(argv[0]) is None:
         raise ClipboardError(msgs.CLIPBOARD_TOOL_MISSING, tool=argv[0])
     try:
@@ -133,19 +133,19 @@ def read_image(
     mime = _detect_visual_mime(_DETECT_NAME, data[:16])
     if done.returncode != 0 or not mime or not mime.startswith("image/"):
         raise ClipboardError(msgs.CLIPBOARD_NO_IMAGE)
-    limit = int(_settings.knob(settings, "limits.max_file_bytes"))
+    limit = int(_settings.knob(settings, "FILE_BYTES_MAX"))
     if len(data) > limit:
         raise ClipboardError(msgs.CLIPBOARD_IMAGE_TOO_LARGE, size=len(data), limit=limit)
     return data
 
 
 def key_bindings(get_settings: Callable[[], Mapping | None]) -> KeyBindingsBase:
-    """Bindings for the paste key, read from `ui.paste_image_key` on every key
+    """Bindings for the paste key, read from `PASTE_IMAGE_KEY` on every key
     press so a `/set` takes effect at once. Unset binds nothing."""
     cache: dict[object, KeyBindings | None] = {}
 
     def current() -> KeyBindings | None:
-        key = _settings.knob(get_settings(), "ui.paste_image_key")
+        key = _settings.knob(get_settings(), "PASTE_IMAGE_KEY")
         if key not in cache:
             cache.clear()
             cache[key] = _bindings_for(key, get_settings) if _settings.is_key_name(key) else None

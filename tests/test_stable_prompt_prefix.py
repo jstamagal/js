@@ -35,7 +35,7 @@ def test_a_multiline_prompt_survives_the_round_trip(tmp_path):
 
 def _repl(monkeypatch, tmp_path, argv, lines=()):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.delenv("JS_MODEL", raising=False)
     monkeypatch.chdir(tmp_path)

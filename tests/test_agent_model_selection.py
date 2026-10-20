@@ -348,7 +348,7 @@ def test_saved_login_prefix_overrides_pinned_provider_without_flag():
     from js.routing import resolve_model_route
 
     # The operator logged into opencode-go and asks for opencode-go/glm-5.1 while
-    # a stale `provider.id=deepseek` sits pinned in jsrc. The saved login makes
+    # a stale `PROVIDER=deepseek` sits pinned in jsrc. The saved login makes
     # the prefix authoritative even without prefix_overrides_provider and even
     # with use_saved_login=False (the live REPL state path) — and it carries the
     # login's base/key, not deepseek's.
@@ -421,7 +421,7 @@ def test_js_namespace_env_routes_without_any_login():
     from js.routing import resolve_model_route
 
     # RULING carve-out: JS_* vars are explicit js-directed instructions, not
-    # provider-native env farming. They arrive as configured provider.id/base/key
+    # provider-native env farming. They arrive as configured PROVIDER/base/key
     # and must route with no login at all.
     route = resolve_model_route(
         "custom-model",
@@ -440,11 +440,11 @@ def test_js_namespace_env_routes_without_any_login():
 def _one_shot_home(monkeypatch, tmp_path, manifest: str = "model: agent-model\nreasoning: low\ntools: []\n"):
     """A HOME whose jsrc pins a model and effort and whose `pinned` agent names its own."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    for name in ("JS_AGENT", "JS_SESSION", "JS_MODEL", "JS_REASONING", "JS_MODEL_ID", "JS_MODEL_REASONING_EFFORT"):
+    for name in ("JS_DEFAULT_AGENT", "JS_SESSION", "JS_MODEL", "JS_REASONING", "JS_EFFORT"):
         monkeypatch.delenv(name, raising=False)
     (tmp_path / ".js").mkdir(parents=True, exist_ok=True)
     (tmp_path / ".js" / "jsrc").write_text(
-        "set model.id jsrc-model\nset model.reasoning_effort high\n", encoding="utf-8")
+        "set MODEL jsrc-model\nset EFFORT high\n", encoding="utf-8")
     _write_agent_dir(tmp_path / ".js" / "agents", "pinned", manifest)
 
     seen: dict = {}
@@ -483,8 +483,8 @@ def test_one_shot_without_manifest_pins_keeps_jsrc_model_and_effort(monkeypatch,
         ({"reasoning": "xhigh"}, {}, {"model": "agent-model", "effort": "xhigh"}),
         ({}, {"JS_MODEL": "env-model"}, {"model": "env-model", "effort": "low"}),
         ({}, {"JS_REASONING": "medium"}, {"model": "agent-model", "effort": "medium"}),
-        ({"extras": ["model.id=extra-model"]}, {}, {"model": "extra-model", "effort": "low"}),
-        ({"extras": ["model.reasoning_effort=medium"]}, {}, {"model": "agent-model", "effort": "medium"}),
+        ({"extras": ["MODEL=extra-model"]}, {}, {"model": "extra-model", "effort": "low"}),
+        ({"extras": ["EFFORT=medium"]}, {}, {"model": "agent-model", "effort": "medium"}),
     ],
 )
 def test_one_shot_invocation_pins_beat_agent_manifest(monkeypatch, tmp_path, kwargs, env, expected):
@@ -517,18 +517,17 @@ def test_resumed_one_shot_stays_on_its_stamp_when_manifest_changes(monkeypatch, 
     assert seen == {"model": "agent-model", "effort": "low"}
 
 
-@pytest.mark.parametrize("env_name", ["JS_MODEL", "JS_MODEL_ID"])
-def test_env_model_prefix_without_login_errors_under_either_env_name(monkeypatch, tmp_path, env_name):
-    """JS_MODEL_ID is the canonical name of the JS_MODEL alias; both make the
-    model invocation-explicit, so an unlogged provider prefix fails loud instead
-    of running with provider_id=None and the raw slashy id."""
+def test_env_model_prefix_without_login_errors(monkeypatch, tmp_path):
+    """JS_MODEL makes the model invocation-explicit, so an unlogged provider
+    prefix fails loud instead of running with provider_id=None and the raw
+    slashy id."""
     from js.config import from_env
     from js.routing import ProviderNotLoggedInError
 
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
-    for name in ("JS_MODEL", "JS_MODEL_ID", "JS_PROVIDER", "JS_PROVIDER_ID"):
+    for name in ("JS_MODEL", "JS_PROVIDER"):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv(env_name, "deepseek/deepseek-chat")
+    monkeypatch.setenv("JS_MODEL", "deepseek/deepseek-chat")
     with pytest.raises(ProviderNotLoggedInError):
         from_env(save_session=False)

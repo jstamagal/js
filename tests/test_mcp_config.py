@@ -40,7 +40,7 @@ def _agents():
 
 def test_resolve_both_transports_defaults_enabled_filtering_and_immutability():
     resolved = mcp_config.resolve(
-        {"mcp": {"servers": _servers(), "agents": {}}},
+        {"MCP_SERVERS": _servers(), "MCP_AGENT_POLICY": {}},
         "defaultagent",
     )
 
@@ -64,7 +64,7 @@ def test_resolve_both_transports_defaults_enabled_filtering_and_immutability():
 
 def test_active_agent_server_and_tool_allow_deny_rules_have_deny_precedence():
     resolved = mcp_config.resolve(
-        {"mcp": {"servers": _servers(), "agents": _agents()}},
+        {"MCP_SERVERS": _servers(), "MCP_AGENT_POLICY": _agents()},
         "writer",
     )
 
@@ -85,7 +85,7 @@ def test_jsrc_env_extra_layering_reaches_active_config(monkeypatch, tmp_path):
     env_servers = {"env": {"command": "from-env"}}
     extra_servers = {"extra": {"url": "http://localhost:7777/mcp"}}
     (project_js / "jsrc").write_text(
-        f"set mcp.servers {json.dumps(file_servers)}\n",
+        f"set MCP_SERVERS {json.dumps(file_servers)}\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("JS_MCP_SERVERS", json.dumps(env_servers))
@@ -95,7 +95,7 @@ def test_jsrc_env_extra_layering_reaches_active_config(monkeypatch, tmp_path):
         cwd=project,
         save_session=False,
         ignore_global_config=True,
-        extras=[f"mcp.servers={json.dumps(extra_servers)}"],
+        extras=[f"MCP_SERVERS={json.dumps(extra_servers)}"],
     )
 
     assert [server.name for server in env_config.mcp.servers] == ["env"]
@@ -106,12 +106,12 @@ def test_mcp_server_secret_is_masked_in_mutation_show_and_transcript_lines():
     live = settings.seed_defaults()
     raw = json.dumps(_servers())
 
-    changed = setcmd.set_command(live, f"mcp.servers {raw}")
-    shown = setcmd.show_lines(live, "mcp.servers")
+    changed = setcmd.set_command(live, f"MCP_SERVERS {raw}")
+    shown = setcmd.show_lines(live, "MCP_SERVERS")
     transcript = "\n".join([*changed.lines, *shown.lines])
 
-    assert changed.lines == ["mcp.servers = <set>"]
-    assert shown.lines[0] == "mcp.servers = <set>"
+    assert changed.lines == ["MCP_SERVERS = <set>"]
+    assert shown.lines[0] == "MCP_SERVERS = <set>"
     assert ENV_SECRET not in transcript
     assert HEADER_SECRET not in transcript
 
@@ -119,7 +119,7 @@ def test_mcp_server_secret_is_masked_in_mutation_show_and_transcript_lines():
 def test_save_round_trips_actual_secret_server_configuration(tmp_path):
     live = settings.seed_defaults()
     raw = json.dumps(_servers())
-    result = setcmd.set_command(live, f"mcp.servers {raw}")
+    result = setcmd.set_command(live, f"MCP_SERVERS {raw}")
     assert result.error is None
     path = tmp_path / "jsrc"
 
@@ -128,7 +128,7 @@ def test_save_round_trips_actual_secret_server_configuration(tmp_path):
     reloaded = settings.collect_settings(config_paths=[path], env={})
 
     assert ENV_SECRET in saved and HEADER_SECRET in saved
-    assert reloaded["mcp"]["servers"] == _servers()
+    assert reloaded["MCP_SERVERS"] == _servers()
 
 
 @pytest.mark.parametrize(
@@ -148,18 +148,18 @@ def test_save_round_trips_actual_secret_server_configuration(tmp_path):
 )
 def test_server_validation_failures_do_not_mutate(value):
     live = settings.seed_defaults()
-    result = setcmd.set_command(live, f"mcp.servers {json.dumps(value)}")
+    result = setcmd.set_command(live, f"MCP_SERVERS {json.dumps(value)}")
 
     assert result.changed is False
     assert result.error
-    assert live["mcp"]["servers"] == {}
+    assert live["MCP_SERVERS"] == {}
 
 
 def test_duplicate_json_server_names_are_rejected():
     live = settings.seed_defaults()
     result = setcmd.set_command(
         live,
-        'mcp.servers {"same":{"command":"one"},"same":{"command":"two"}}',
+        'MCP_SERVERS {"same":{"command":"one"},"same":{"command":"two"}}',
     )
     assert result.changed is False
     assert result.error
@@ -177,37 +177,37 @@ def test_duplicate_json_server_names_are_rejected():
 )
 def test_agent_policy_validation_failures(value):
     live = settings.seed_defaults()
-    result = setcmd.set_command(live, f"mcp.agents {json.dumps(value)}")
+    result = setcmd.set_command(live, f"MCP_AGENT_POLICY {json.dumps(value)}")
     assert result.changed is False
     assert result.error is not None
-    assert live["mcp"]["agents"] == {}
+    assert live["MCP_AGENT_POLICY"] == {}
 
 
 def test_deny_on_the_normalized_name_also_disables_the_server():
     """`Local Files` goes by `local_files` everywhere; a deny on either name wins."""
     for deny in (["local_files"], ["Local Files"], ["local_*"]):
         resolved = mcp_config.resolve(
-            {"mcp": {"servers": _servers(), "agents": {"a": {"servers": {"deny": deny}}}}}, "a")
+            {"MCP_SERVERS": _servers(), "MCP_AGENT_POLICY": {"a": {"servers": {"deny": deny}}}}, "a")
         assert "Local Files" not in [server.name for server in resolved.servers], deny
         assert resolved.policy.allows_server("Local Files", "local_files") is False
     allowed = mcp_config.resolve(
-        {"mcp": {"servers": _servers(), "agents": {"a": {"servers": {"allow": ["local_files"]}}}}}, "a")
+        {"MCP_SERVERS": _servers(), "MCP_AGENT_POLICY": {"a": {"servers": {"allow": ["local_files"]}}}}, "a")
     assert [server.name for server in allowed.servers] == ["Local Files"]
 
 
 @pytest.mark.parametrize("bad", [0, -5, float("nan"), float("inf"), "30", True])
 def test_bad_request_timeout_is_a_config_error(bad):
     with pytest.raises(mcp_config.MCPConfigError):
-        mcp_config.resolve({"mcp": {"servers": {}, "agents": {}, "request_timeout_s": bad}}, "a")
+        mcp_config.resolve({"MCP_SERVERS": {}, "MCP_AGENT_POLICY": {}, "MCP_TIMEOUT": bad}, "a")
 
 
 def test_request_timeout_values_that_resolve():
     for raw, want in ((None, None), (30, 30.0), (0.5, 0.5)):
-        assert mcp_config.resolve({"mcp": {"request_timeout_s": raw}}, "a").request_timeout_s == want
+        assert mcp_config.resolve({"MCP_TIMEOUT": raw}, "a").request_timeout_s == want
 
 
 @pytest.mark.parametrize("text", ["nan", "inf", "-inf", "0", "-5"])
 def test_set_refuses_non_finite_or_non_positive_request_timeout(text):
-    spec = settings.SPEC_BY_KEY["mcp.request_timeout_s"]
+    spec = settings.SPEC_BY_KEY["MCP_TIMEOUT"]
     value, error = settings.coerce_value(spec, text)
     assert value is None and error

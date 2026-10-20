@@ -2,9 +2,9 @@
 
 Each key in `KEYS` that is in neither the environment nor ~/.js/.env is asked
 for in the terminal; an answer is appended to ~/.js/.env, which is kept at mode
-600, and Enter skips the key. When the `model.id` js starts with has no
+600, and Enter skips the key. When the `MODEL` js starts with has no
 provider to run on, the operator picks a saved login and one of its models, or
-adds a provider through the login flow, and the pick becomes `model.id` in
+adds a provider through the login flow, and the pick becomes `MODEL` in
 ~/.js/jsrc. A rerun asks only about what is still missing. Without a terminal
 nothing is asked: the missing keys and an unrouted model are named instead.
 
@@ -92,22 +92,22 @@ def ask_keys(environ: Mapping[str, str], env_file: Path, ask: Ask) -> list[str]:
 
 
 def default_model(environ: Mapping[str, str]) -> tuple[str | None, bool]:
-    """The `model.id` js starts with outside a project (~/.js/jsrc under the
+    """The `MODEL` js starts with outside a project (~/.js/jsrc under the
     environment), and whether it routes to a provider."""
     settings = settings_mod.collect_settings([paths.global_config_file()], env=dict(environ))
 
     def knob(key: str) -> Any:
         return settings_mod.knob(settings, key)
 
-    model_id = knob("model.id")
+    model_id = knob("MODEL")
     if not model_id:
         return None, False
     try:
         route = routing.resolve_model_route(
             str(model_id),
-            configured_provider_id=knob("provider.id"),
-            configured_base_url=knob("provider.base_url"),
-            configured_api_key=knob("provider.api_key"),
+            configured_provider_id=knob("PROVIDER"),
+            configured_base_url=knob("BASE_URL"),
+            configured_api_key=knob("API_KEY"),
             env=environ,
         )
     except routing.ProviderNotLoggedInError:
@@ -126,7 +126,7 @@ def ask_model(environ: Mapping[str, str], ask: Ask, *, pick: Callable[[], dict |
               add_provider: Callable[[], Any]) -> str | None:
     """When the default model does not route: offer the saved logins to pick
     a model from, and the login flow to add a provider, until a model is
-    picked or the operator skips. Returns the `model.id` saved, or None."""
+    picked or the operator skips. Returns the `MODEL` saved, or None."""
     model_id, routes = default_model(environ)
     if routes:
         return None

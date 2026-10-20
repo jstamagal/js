@@ -49,7 +49,7 @@ Output behavior:
   raises returns the real traceback, not a summary.
 - Images produced by matplotlib and friends are written to files under
   `~/.js/state/kernel/` and reported as `IMAGE <path>`.
-- The whole result is capped by `limits.max_tool_result_bytes` with a visible
+- The whole result is capped by `TOOL_RESULT_MAX` with a visible
   truncation marker. Do not shrink output by hand; let the cap do it.
 
 Interrupting does not destroy your work. A `KeyboardInterrupt` — from a `wait`

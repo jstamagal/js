@@ -91,12 +91,11 @@ def test_handle_defaults_to_the_latest_running_job(tmp_path):
 def test_clipped_output_still_reports_truncation(tmp_path):
     context = ToolContext(
         cwd=tmp_path,
-        max_bash_output_bytes=64,
-        max_bash_output_ceiling=32,
+        max_bash_output_bytes=32,
     )
     result = shell("head -c 4096 /dev/zero | tr '\\0' x", timeout=10, context=context)
     assert "exit=0" in result
-    assert "[truncated: limits.max_bash_output_bytes (32) reached;" in result
+    assert "[truncated: SHELL_OUTPUT_MAX (32) reached;" in result
     assert "x" * 33 not in result
 
 

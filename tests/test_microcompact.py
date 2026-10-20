@@ -61,7 +61,7 @@ def test_spill_writes_the_full_result_and_returns_a_pointer(tmp_path):
     out = runtime.spill_oversized_result(big, 50_000, spill_dir=tmp_path)
 
     assert len(out) < len(big)
-    assert "limits.max_tool_result_inline_bytes" in out
+    assert "TOOL_RESULT_INLINE_MAX" in out
     written = list(tmp_path.glob("result-*.txt"))
     assert len(written) == 1
     assert written[0].read_text(encoding="utf-8") == big
@@ -150,7 +150,7 @@ def test_recovery_records_failure_with_original_tool_bodies(monkeypatch, tmp_pat
     import pytest
     from test_config_compaction_layers import _compact_test_cfg
 
-    cfg = _compact_test_cfg(tmp_path, {"flight_log_dir": str(tmp_path / "flights")})
+    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_LOG_DIR": str(tmp_path / "flights")})
     msgs = _history(22)
     original = list(msgs)
 
@@ -172,7 +172,7 @@ def test_recovery_records_no_eligible_results(tmp_path, capsys):
     import json
     from test_config_compaction_layers import _compact_test_cfg
 
-    cfg = _compact_test_cfg(tmp_path, {"flight_log_dir": str(tmp_path / "flights")})
+    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_LOG_DIR": str(tmp_path / "flights")})
     msgs = _history(2)
     assert compaction.recover_overflow(msgs, 1, cfg=cfg, system="SYSTEM",
                                       error=ai.ProviderAPIError("context length exceeded"), flight_data={}) == ("summarize", 0, 0)

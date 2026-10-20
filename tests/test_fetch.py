@@ -89,7 +89,7 @@ def test_file_url_text_response_spills_full_text_at_tool_result_limit(tmp_path, 
     pointer = re.search(r"the full text is at (.+) — read it", result)
     assert pointer is not None
     assert Path(pointer.group(1)).read_text(encoding="utf-8") == "abcdef"
-    assert "limits.max_tool_result_bytes (4)" in result
+    assert "TOOL_RESULT_MAX (4)" in result
 
 
 def test_file_url_binary_returns_descriptor_instead_of_bytes(tmp_path):
@@ -116,7 +116,7 @@ def test_file_url_download_writes_to_resolved_path(tmp_path):
 
 
 def test_file_url_download_is_guarded_by_the_configured_quota(tmp_path):
-    """The ceiling is limits.max_download_bytes, not a compiled-in constant."""
+    """The ceiling is DOWNLOAD_MAX, not a compiled-in constant."""
     source = tmp_path / "too-big.bin"
     source.write_bytes(b"1234")
     context = ToolContext(cwd=tmp_path, max_download_bytes=3)
@@ -246,7 +246,7 @@ def test_http_text_over_cap_spills_full_response_using_standard_convention(
     assert Path(pointer.group(1)) == expected_path
     assert expected_path.read_text(encoding="utf-8") == body
     assert result.startswith(body[:512])
-    assert "limits.max_tool_result_bytes (1024)" in result
+    assert "TOOL_RESULT_MAX (1024)" in result
 
 
 def test_http_binary_response_returns_descriptor(monkeypatch, tmp_path):
@@ -273,7 +273,7 @@ def test_http_text_response_truncates_at_tool_result_limit(monkeypatch, tmp_path
     pointer = re.search(r"the full text is at (.+) — read it", result)
     assert pointer is not None
     assert Path(pointer.group(1)).read_text(encoding="utf-8") == "abcdef"
-    assert "limits.max_tool_result_bytes (4)" in result
+    assert "TOOL_RESULT_MAX (4)" in result
 
 
 def test_fetch_errors_return_error_strings_without_raising(monkeypatch, tmp_path):
@@ -354,7 +354,7 @@ def test_shell_uses_configured_environment_allowlist_and_explains_failure(
     assert "allowed=" in result
     assert "FORGECODE_TOKEN" in result
     assert "OTHER_SECRET" in result
-    assert "limits.shell_env_allow" in result
+    assert "SHELL_ENV_KEEP" in result
 
 
 def test_html_link_prefixed_attribute_does_not_hijack_the_real_href(tmp_path):

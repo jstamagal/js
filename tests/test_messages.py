@@ -221,7 +221,7 @@ class _Terminal(io.StringIO):
 
 
 def test_help_lists_every_command_without_a_paren_aside_or_dead_word(capsys):
-    cli._cmd_help("", {"aliases": {"x": "set model.id y"}}, object())
+    cli._cmd_help("", {"aliases": {"x": "set MODEL y"}}, object())
     lines = capsys.readouterr().out.splitlines()
     assert len(lines) > len(set(cli.COMMANDS.values()))
     assert _clean(lines) == []

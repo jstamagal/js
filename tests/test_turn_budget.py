@@ -118,8 +118,8 @@ class _Setup:
     """A TurnBudget over ``messages`` with a known window, and what it did."""
 
     def __init__(self, tmp_path, messages, *, window=8000, warm=False, compact=None):
-        settings = {"flight_log_dir": str(tmp_path / "flights"), **(compact or {})}
-        self.cfg = _cfg(tmp_path, {"compact": settings})
+        settings = {"COMPACTION_LOG_DIR": str(tmp_path / "flights"), **(compact or {})}
+        self.cfg = _cfg(tmp_path, settings)
         self.messages = messages
         self.convo = TurnConvo("SYSTEM", messages, provider_id=None, model="offline-test")
         self.tokens = context_budget.TokenState(chars_per_token=4.0)
@@ -188,7 +188,7 @@ def test_a_request_under_budget_is_left_alone(tmp_path, monkeypatch):
 
 def test_auto_off_skips_the_check_unless_forced(tmp_path, monkeypatch):
     _summaries(monkeypatch)
-    setup = _Setup(tmp_path, _tool_history(22), compact={"auto": False})
+    setup = _Setup(tmp_path, _tool_history(22), compact={"COMPACTION_AUTO": False})
     assert setup.fit(phase="preflight") is False
     assert setup.events == []
 
@@ -227,7 +227,7 @@ def test_a_turn_over_budget_on_its_own_summarizes_itself_keeping_a_tail(tmp_path
     assert kinds.index("context_clearing_deferred") < kinds.index("context_results_cleared")
     assert len(calls) == 1
     assert calls[0]["preserve_from"] is None
-    assert calls[0]["tail_tokens"] == compaction.get_int(setup.cfg, "tail_tokens")
+    assert calls[0]["tail_tokens"] == compaction.get_int(setup.cfg, "COMPACTION_KEEP_RECENT_TOKENS")
 
 
 @pytest.mark.parametrize("overflow_round", [1, 2, 3])
@@ -237,7 +237,7 @@ def test_a_forced_fit_keeps_half_as_much_tail_each_round(tmp_path, monkeypatch, 
                    window=1_000_000)
     history_tokens = int(compaction.history_chars(setup.messages) / 4.0)
     setup.fit(phase="overflow_recovery", force=True, overflow_round=overflow_round)
-    tail = min(compaction.get_int(setup.cfg, "tail_tokens"), history_tokens)
+    tail = min(compaction.get_int(setup.cfg, "COMPACTION_KEEP_RECENT_TOKENS"), history_tokens)
     assert [call["tail_tokens"] for call in calls] == [tail // 2 ** overflow_round]
 
 
@@ -276,7 +276,7 @@ def test_overflow_recovery_with_nothing_to_clear_summarizes(tmp_path, monkeypatc
     (1000, 0, 1000), (1000, 5000, 5000), (None, 0, None), (None, 700, 700),
 ])
 def test_the_provider_window_is_the_larger_known_window(tmp_path, resolved, configured, expected):
-    setup = _Setup(tmp_path, [], window=resolved, compact={"context_window": configured})
+    setup = _Setup(tmp_path, [], window=resolved, compact={"CONTEXT_SIZE": configured})
     assert setup.budget.provider_window() == expected
 
 

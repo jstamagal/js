@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
-_SAMPLING_FIELDS = (
+SAMPLING_FIELDS = (
     "temperature",
     "top_p",
     "top_k",
@@ -16,16 +16,9 @@ _SAMPLING_FIELDS = (
     "presence_penalty",
 )
 
-# Each sampling field reads its short hand-picked alias OR the canonical
-# JS_SAMPLING_<FIELD> form (parity with `set sampling.<field>` in jsrc). The
-# short alias wins when both are set.
-_ENV_KEYS = {
-    "temperature": ("JS_TEMP", "JS_SAMPLING_TEMPERATURE"),
-    "top_p": ("JS_TOPP", "JS_SAMPLING_TOP_P"),
-    "top_k": ("JS_TOPK", "JS_SAMPLING_TOP_K"),
-    "repetition_penalty": ("JS_REPPEN", "JS_SAMPLING_REPETITION_PENALTY"),
-    "presence_penalty": ("JS_PRPEN", "JS_SAMPLING_PRESENCE_PENALTY"),
-}
+# Each sampling field's env var: JS_<SETTING>, the setting being the field
+# name in capitals (TEMPERATURE -> JS_TEMPERATURE).
+_ENV_KEYS = {field: ("JS_" + field.upper(),) for field in SAMPLING_FIELDS}
 
 _ANTHROPIC_TRANSPORTS = frozenset({"anthropic", "custom_anthropic"})
 _OPENAI_TRANSPORTS = frozenset({"openai"})
@@ -95,7 +88,7 @@ class Sampling:
         if not d:
             return cls()
         values: dict[str, float | int | None] = {}
-        for key in _SAMPLING_FIELDS:
+        for key in SAMPLING_FIELDS:
             if key not in d:
                 continue
             raw = d[key]
@@ -124,7 +117,7 @@ class Sampling:
     def as_dict_nonnull(self) -> dict[str, float | int]:
         return {
             key: value
-            for key in _SAMPLING_FIELDS
+            for key in SAMPLING_FIELDS
             if (value := getattr(self, key)) is not None
         }
 
@@ -180,8 +173,8 @@ def call_params(sampling: Sampling, transport: str | None) -> dict[str, Any]:
 
     top_level_keys, extra_body_keys = capability
     values = sampling.as_dict_nonnull()
-    params = {key: values[key] for key in _SAMPLING_FIELDS if key in top_level_keys and key in values}
-    extra_body = {key: values[key] for key in _SAMPLING_FIELDS if key in extra_body_keys and key in values}
+    params = {key: values[key] for key in SAMPLING_FIELDS if key in top_level_keys and key in values}
+    extra_body = {key: values[key] for key in SAMPLING_FIELDS if key in extra_body_keys and key in values}
     if extra_body:
         params["extra_body"] = extra_body
     return params

@@ -267,7 +267,7 @@ def _flaky_model(monkeypatch, failures: list[Exception]) -> list[int]:
 
 def _retrying(tmp_path, attempts: int):
     """A config whose retry budget runs out before five failures do."""
-    return dataclasses.replace(_cfg(tmp_path), settings={"runtime": {"retry_attempts": attempts}})
+    return dataclasses.replace(_cfg(tmp_path), settings={"RETRY_COUNT_MAX": attempts})
 
 
 def test_turn_that_gives_up_on_dns_prints_one_line_at_level_1(monkeypatch, sink, tmp_path):
@@ -321,7 +321,7 @@ def test_turn_counts_response_bytes_into_its_turn_status(sink, tmp_path):
         # probed with a GET this server never answers.
         cfg = dataclasses.replace(_cfg(tmp_path, model="t"),
                                   provider_base_url=f"http://127.0.0.1:{port}/v1",
-                                  settings={"compact": {"context_window": 262_144}})
+                                  settings={"CONTEXT_SIZE": 262_144})
         try:
             await runtime.run_turn_async(
                 cfg, "sys", [{"role": "user", "content": "go"}],

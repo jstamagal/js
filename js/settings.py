@@ -36,6 +36,9 @@ from . import messages as msgs
 # next tool boundary, batch = one message after the turn, one = one turn per line.
 STEER_MODES: tuple[str, ...] = ("now", "batch", "one")
 
+# The order Up offers prompts in: last = newest first, cwd = this directory's first.
+HISTORY_ORDERS: tuple[str, ...] = ("last", "cwd")
+
 # The built-in default layer: one `set` line per registered knob.
 PACKAGE_JSRC = Path(__file__).with_name("jsrc")
 
@@ -64,17 +67,20 @@ EMPTY_UNSET = "unset"    # param deliberately not sent; provider default wins ("
 
 @dataclass(frozen=True)
 class SettingSpec:
-    """One runtime knob. ``key`` is the canonical dotted name — it is both the
-    storage path in the settings dict and the name used by `set`/`show`."""
+    """One setting. ``key`` is its name, UPPER_SNAKE (`MODEL`); a display
+    setting still has a dotted name (`ui.tools`). The key is the storage path
+    in the settings dict, split on dots, and the name `set` takes. Its env var
+    is ``JS_<KEY>`` (`canonical_env_name`)."""
 
     key: str
     type: str            # "str" | "int" | "float" | "bool" | "json" | "map"
     doc: str
-    env: str | None = None      # JS_* env var feeding the env layer, if any
+    env: str | None = None      # an older env var also read; JS_<KEY> wins over it
     empty: str = EMPTY_NONE     # how an unset value renders
     live: bool = True           # settable live in the REPL
     secret: bool = False        # mask the value in `show`
-    aliases: tuple[str, ...] = ()  # short names `set`/`show` accept for ``key``
+    aliases: tuple[str, ...] = ()  # jsrc verbs that set ``key``: `model X` is `set MODEL X`
+    group: str = ""             # what `/set <group>` lists it under; "" = the dotted section
 
     @property
     def path(self) -> tuple[str, ...]:
@@ -87,47 +93,49 @@ class SettingSpec:
 
     @property
     def section(self) -> str:
-        return self.path[0]
+        return self.group or self.path[0]
 
 
 # Every knob. Order here is the order `show` uses.
 REGISTRY: tuple[SettingSpec, ...] = (
     # --- agent ---
-    SettingSpec("agent", "str",
+    SettingSpec("DEFAULT_AGENT", "str",
                 "Agent a run uses when neither --agent nor --commit names one: a prompt "
                 "directory id, letters, digits, '_' or '-'. Read once at startup, so a "
-                "`set` here reaches later runs through /save."),
+                "`set` here reaches later runs through /save.", group="model"),
     # --- model ---
-    SettingSpec("model.id", "str",
-                "Default model id; unprefixed ids route through AI Gateway.",
-                env="JS_MODEL", aliases=("model",)),
-    SettingSpec("model.max_output_tokens", "int",
+    SettingSpec("MODEL", "str",
+                "Default model id; unprefixed ids route through AI Gateway.", aliases=("model",), group="model"),
+    SettingSpec("OUTPUT_TOKENS_MAX", "int",
                 "Per-call max_tokens; unset = models.dev metadata when known, else no explicit cap.",
-                env="JS_MAX_OUTPUT_TOKENS", empty=EMPTY_NONE),
-    SettingSpec("model.context_window", "int",
+                env="JS_MAX_OUTPUT_TOKENS", empty=EMPTY_NONE, group="model"),
+    SettingSpec("CONTEXT_SIZE", "int",
                 "Override the active model's context window. Unset = local runtime "
                 "allocation, then models.dev metadata. Beats every other source; for a "
-                "multi-model setup use compact.context_window_overrides instead.",
-                env="JS_CONTEXT_WINDOW", empty=EMPTY_NONE),
-    SettingSpec("model.reasoning_effort", "str",
+                "multi-model setup use CONTEXT_SIZE_PER_MODEL instead.",
+                env="JS_CONTEXT_WINDOW", empty=EMPTY_NONE, group="model"),
+    SettingSpec("EFFORT", "str",
                 "Thinking effort: off|minimal|low|medium|high|xhigh|max. off disables thinking. "
-                "Any other value is rejected. Clear with `set -model.reasoning_effort`.",
-                env="JS_REASONING", empty=EMPTY_NONE),
-    SettingSpec("model.thinking_budget", "int",
+                "Any other value is rejected. Clear with `set -EFFORT`.",
+                env="JS_REASONING", empty=EMPTY_NONE, group="model"),
+    SettingSpec("THINKING_BUDGET", "int",
                 "Thinking budget in tokens on the Anthropic wire, for the models that take a "
                 "budget: Claude 4.5 and earlier, MiniMax, opencode-go. Unset = derived from "
-                "model.reasoning_effort. Adaptive models and effort off ignore it.",
-                empty=EMPTY_NONE),
-    SettingSpec("model.vision", "bool",
+                "EFFORT. Adaptive models and effort off ignore it.",
+                empty=EMPTY_NONE, group="model"),
+    SettingSpec("VISION", "bool",
                 "Send image bytes to the active model: on/off; unset = detect from "
                 "models.dev input modalities, then curated name hints. Clear with "
-                "`set -model.vision`.",
-                env="JS_VISION", empty=EMPTY_NONE),
+                "`set -VISION`.", empty=EMPTY_NONE, group="model"),
+    # --- banner ---
+    SettingSpec("BANNER", "str",
+                "Text that starts each line js prints about its own state, such as "
+                "`/set` output. $BANNER in a format reads it.", group="banner"),
     # --- ui ---
     SettingSpec("ui.reasoning", "int",
                 "Reasoning display: 0 hidden, 1 stream then collapse, 2 leave visible, "
                 "3 leave visible with token counts. The reasoning_toggle key, Ctrl-O "
-                "unless keys.file moves it, folds and unfolds it in the async screen. "
+                "unless KEYBINDS_FILE moves it, folds and unfolds it in the async screen. "
                 "Display only; session reasoning is always retained."),
     SettingSpec("ui.net", "int",
                 "Network display in the async screen: 0 nothing, 1 failures, 2 also "
@@ -176,48 +184,48 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("ui.resume_exchanges", "int",
                 "Exchanges of a resumed session the REPL shows before its prompt, "
                 "drawn as a turn draws them. 0 shows none."),
-    SettingSpec("ui.editing_mode", "str",
+    SettingSpec("EDITING_MODE", "str",
                 "Input line key bindings in the async screen. emacs: Enter sends. vi: a "
-                "multi-line buffer, where Esc then `:` opens the ex line and `:x` sends."),
-    SettingSpec("ui.paste_image_key", "str",
+                "multi-line buffer, where Esc then `:` opens the ex line and `:x` sends.", group="input"),
+    SettingSpec("PASTE_IMAGE_KEY", "str",
                 "Key that pastes the clipboard image into the input line as [image #N]; "
                 "the image is sent with the line like an @path image. prompt_toolkit "
-                "key names, space-separated: c-v, escape v. Unset binds no key."),
-    SettingSpec("ui.paste_collapse_lines", "int",
+                "key names, space-separated: c-v, escape v. Unset binds no key.", group="input"),
+    SettingSpec("PASTE_COLLAPSE_LINES", "int",
                 "A bracketed paste of more lines than this shows in the input line "
                 "as one [paste #N +X lines] marker; the line sends the full text. "
-                "0 = no line limit."),
-    SettingSpec("ui.paste_collapse_chars", "int",
+                "0 = no line limit.", group="input"),
+    SettingSpec("PASTE_COLLAPSE_CHARS", "int",
                 "A bracketed paste of more characters than this shows as one "
                 "[paste #N X chars] marker; the line sends the full text. 0 = no "
-                "character limit. Both 0 never collapses a paste."),
-    SettingSpec("ui.paste_image_command", "str",
+                "character limit. Both 0 never collapses a paste.", group="input"),
+    SettingSpec("PASTE_IMAGE_COMMAND", "str",
                 "Command that prints the clipboard image. Unset = `wl-paste --type "
                 "image/png` under Wayland, `xclip -selection clipboard -t image/png -o` "
                 "under X11.",
-                empty=EMPTY_NONE),
+                empty=EMPTY_NONE, group="input"),
     # --- history ---
-    SettingSpec("history.file", "str",
+    SettingSpec("HISTORY_FILE", "str",
                 "Prompt history: every line sent at a REPL prompt, one JSON object per "
                 "line with ts, cwd, session, agent and text, shared by every js run. "
                 "Unset = ~/.js/state/history.jsonl. Read when the REPL starts.",
-                empty=EMPTY_NONE),
-    SettingSpec("history.cwd_first", "bool",
-                "Up offers the prompts typed in the current directory first, newest "
-                "first, then the rest; off, every prompt in time order. The "
-                "history_search key, Ctrl-R, searches all of them either way. Read "
-                "when the REPL starts.", empty=EMPTY_OFF),
-    SettingSpec("history.max_entries", "int",
-                "Newest prompts loaded from history.file for Up and Ctrl-R. Read when "
-                "the REPL starts."),
+                empty=EMPTY_NONE, group="history"),
+    SettingSpec("HISTORY_ORDER", "str",
+                "Order Up offers prompts in. last: every prompt, newest first. cwd: "
+                "the prompts typed in the current directory first, newest first, "
+                "then the rest. The history_search key, Ctrl-R, searches all of them "
+                "either way. Read when the REPL starts.", group="history"),
+    SettingSpec("HISTORY_SIZE", "int",
+                "Newest prompts loaded from HISTORY_FILE for Up and Ctrl-R. Read when "
+                "the REPL starts.", group="history"),
     # --- keys ---
-    SettingSpec("keys.file", "str",
+    SettingSpec("KEYBINDS_FILE", "str",
                 "Key bindings file: `bind KEY... ACTION` and `unbind KEY...` lines over "
                 "the defaults; a bad line is one error at startup and is skipped. "
                 "Unset = ~/.js/keys. Actions: submit, history_search, ex_open, ex_run, "
                 "ex_cancel, interrupt, eof, suspend, reasoning_toggle, redraw, "
                 "scroll_up, scroll_down, complete. Read when the REPL starts.",
-                empty=EMPTY_NONE),
+                empty=EMPTY_NONE, group="history"),
     # --- tags ---
     SettingSpec("tags.file", "str",
                 "Session tag list: one `name: description` line per tag. Unset = "
@@ -237,88 +245,72 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("tags.model", "str",
                 "TypeSafe model that judges session tags."),
     # --- provider ---
-    SettingSpec("provider.id", "str",
-                "Explicit js provider id, e.g. deepseek, openai-codex, ollama.",
-                env="JS_PROVIDER", empty=EMPTY_NONE, aliases=("provider",)),
-    SettingSpec("provider.base_url", "str",
-                "Explicit provider base URL; unset = provider default.",
-                env="JS_BASE_URL", empty=EMPTY_NONE, aliases=("baseurl",)),
-    SettingSpec("provider.api_key", "str",
-                "Explicit provider API key; unset = env/login default.",
-                env="JS_API_KEY", empty=EMPTY_NONE, secret=True, aliases=("apikey",)),
-    SettingSpec("provider.extra", "map",
+    SettingSpec("PROVIDER", "str",
+                "Explicit js provider id, e.g. deepseek, openai-codex, ollama.", empty=EMPTY_NONE, aliases=("provider",), group="provider"),
+    SettingSpec("BASE_URL", "str",
+                "Explicit provider base URL; unset = provider default.", empty=EMPTY_NONE, aliases=("baseurl",), group="provider"),
+    SettingSpec("API_KEY", "str",
+                "Explicit provider API key; unset = env/login default.", empty=EMPTY_NONE, secret=True, aliases=("apikey",), group="provider"),
+    SettingSpec("EXTRA_PARAMS", "map",
                 "Free-form extra params passed through to the provider SDK.",
-                empty=EMPTY_NONE),
+                empty=EMPTY_NONE, group="provider"),
     # --- limits ---
-    SettingSpec("limits.max_tool_iterations", "int",
-                "Max tool calls per turn before the loop gives up.",
-                env="JS_MAX_TOOL_ITERATIONS"),
-    SettingSpec("limits.max_tool_calls_per_message", "int",
+    SettingSpec("TURN_ROUNDS_MAX", "int",
+                "Max tool calls per turn before the loop gives up.", group="limits"),
+    SettingSpec("REPLY_TOOL_CALLS_MAX", "int",
                 "Maximum distinct tool calls accepted from one assistant message; "
-                "duplicates are collapsed before this ceiling is applied.",
-                env="JS_MAX_TOOL_CALLS_PER_MESSAGE"),
-    SettingSpec("limits.max_bash_output_bytes", "int",
+                "duplicates are collapsed before this ceiling is applied.", group="limits"),
+    SettingSpec("SHELL_OUTPUT_MAX", "int",
                 "Shell output shown per call, stdout and stderr together. Past it, the "
-                "head and tail are shown and the whole stream is written to a file.",
-                env="JS_MAX_BASH_OUTPUT_BYTES"),
-    SettingSpec("limits.max_bash_output_ceiling", "int",
-                "Upper bound a caller may raise max_bash_output_bytes to; the effective "
-                "shell cap is min(max_bash_output_bytes, this)."),
-    SettingSpec("limits.max_tool_result_inline_bytes", "int",
+                "head and tail are shown and the whole stream is written to a file.", group="limits"),
+    SettingSpec("TOOL_RESULT_INLINE_MAX", "int",
                 "Results larger than this are written to a file and replaced with a "
-                "preview plus the path, instead of being clipped and lost. 0 = off."),
-    SettingSpec("limits.max_tool_result_bytes", "int",
-                "Hard cap on any tool result string.",
-                env="JS_MAX_TOOL_RESULT_BYTES"),
-    SettingSpec("limits.fetch_timeout_s", "int",
+                "preview plus the path, instead of being clipped and lost. 0 = off.", group="limits"),
+    SettingSpec("TOOL_RESULT_MAX", "int",
+                "Hard cap on any tool result string.", group="limits"),
+    SettingSpec("FETCH_TIMEOUT", "int",
                 "fetch() whole-request deadline in seconds, and the per-call timeout for the "
-                "web-search backends' JSON calls.",
-                env="JS_FETCH_TIMEOUT"),
-    SettingSpec("limits.shell_env_allow", "json",
+                "web-search backends' JSON calls.", group="limits"),
+    SettingSpec("SHELL_ENV_KEEP", "json",
                 "Environment-variable names inherited by shell() without naming "
-                "them per call in env; a JSON string list."),
-    SettingSpec("limits.browse_timeout_s", "int",
+                "them per call in env; a JSON string list.", group="limits"),
+    SettingSpec("BROWSE_TIMEOUT", "int",
                 "browse() page budget in seconds. obscura is told to give up one "
                 "second earlier so its own graceful navigation-timeout path runs "
-                "and partial content survives.",
-                env="JS_BROWSE_TIMEOUT"),
-    SettingSpec("limits.download_timeout_s", "int",
+                "and partial content survives.", group="limits"),
+    SettingSpec("DOWNLOAD_TIMEOUT", "int",
                 "aria2c transfer timeout in seconds for saved, binary, and oversized "
                 "fetch() responses. Downloads are bounded by size, not by how fast a "
-                "page renders.",
-                env="JS_DOWNLOAD_TIMEOUT"),
-    SettingSpec("limits.max_download_bytes", "int",
+                "page renders.", group="limits"),
+    SettingSpec("DOWNLOAD_MAX", "int",
                 "Size ceiling for fetch(save=...) in bytes. 0 = unlimited: a save "
                 "streams to disk and never lands in memory, so an ISO or a model "
-                "weight is a normal download. Set a number only to impose a quota.",
-                env="JS_MAX_DOWNLOAD_BYTES"),
-    SettingSpec("limits.inline_code_timeout_s", "int",
-                "Timeout in seconds for !{sh|python|c|node ...} and ```!lang prompt expansions.",
-                env="JS_INLINE_CODE_TIMEOUT"),
-    SettingSpec("limits.max_read_lines", "int",
-                "Maximum lines returned by read()."),
-    SettingSpec("limits.max_file_bytes", "int",
-                "Maximum file bytes read by fs tools."),
-    SettingSpec("limits.max_text_attachment_bytes", "int",
+                "weight is a normal download. Set a number only to impose a quota.", group="limits"),
+    SettingSpec("INLINE_CODE_TIMEOUT", "int",
+                "Timeout in seconds for !{sh|python|c|node ...} and ```!lang prompt expansions.", group="limits"),
+    SettingSpec("READ_LINES_MAX", "int",
+                "Maximum lines returned by read().", group="limits"),
+    SettingSpec("FILE_BYTES_MAX", "int",
+                "Maximum file bytes read by fs tools.", group="limits"),
+    SettingSpec("ATTACHMENT_MAX", "int",
                 "Most bytes of a text file attached to a prompt; a larger file is "
-                "truncated. limits.max_tool_result_bytes also caps it."),
-    SettingSpec("limits.max_read_bytes", "int",
+                "truncated. TOOL_RESULT_MAX also caps it.", group="limits"),
+    SettingSpec("READ_BYTES_MAX", "int",
                 "Maximum file bytes for a whole-file read(); ignored when the call "
-                "passes a line or byte range, so ranged reads work on any size file."),
-    SettingSpec("limits.max_tool_results_per_turn_bytes", "int",
+                "passes a line or byte range, so ranged reads work on any size file.", group="limits"),
+    SettingSpec("PARALLEL_RESULTS_MAX", "int",
                 "Aggregate cap on all tool results returned by one batch of parallel "
-                "calls; the largest results are clipped first. 0 = unlimited."),
-    SettingSpec("limits.task_max_depth", "int",
-                "Maximum recursive task/subagent depth."),
-    SettingSpec("limits.subagent_max_workers", "int",
-                "Maximum concurrent subagent workers per task call; minimum 1."),
+                "calls; the largest results are clipped first. 0 = unlimited.", group="limits"),
+    SettingSpec("SUBAGENT_DEPTH_MAX", "int",
+                "Maximum recursive task/subagent depth.", group="limits"),
+    SettingSpec("SUBAGENT_WORKERS_MAX", "int",
+                "Maximum concurrent subagent workers per task call; minimum 1.", group="limits"),
     # --- swarm ---
-    SettingSpec("swarm.slots", "int",
-                "How many agents of an in-process swarm may be mid-turn at once; 0 is no cap."),
+    SettingSpec("SWARM_ACTIVE_MAX", "int",
+                "How many agents of an in-process swarm may be mid-turn at once; 0 is no cap.", group="shell"),
     # --- kernel ---
-    SettingSpec("kernel.enabled", "bool",
-                "Enable the persistent Python kernel and toolbox. Requires the kernel extra.",
-                env="JS_KERNEL_ENABLED"),
+    SettingSpec("PYTHON_KERNEL", "bool",
+                "Enable the persistent Python kernel and toolbox. Requires the kernel extra.", group="shell"),
     SettingSpec("kernel.verbosity", "str",
                 "How much of each kernel/toolbox call is rendered to your terminal. "
                 "quiet: errors and interrupts only. normal: code, output, timing, "
@@ -330,223 +322,217 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 "Line cap per section of that terminal render, so a 4000-line cell "
                 "cannot scroll the screen away. The hidden count is always shown, and "
                 "the model still gets the untrimmed output."),
-    SettingSpec("shell.program", "str",
+    SettingSpec("SHELL_PROGRAM", "str",
                 "Program the `shell` tool runs commands with: a name looked up on "
                 "PATH, or a path. bash and zsh run with `-o pipefail`, so a pipeline "
-                "fails when any stage fails."),
-    SettingSpec("shell.wait_seconds", "int",
+                "fails when any stage fails.", group="shell"),
+    SettingSpec("SHELL_WAIT", "int",
                 "Seconds a `shell` call waits for its command before returning a "
                 "handle to poll. The command keeps running; nothing is killed by "
-                "this wait."),
-    SettingSpec("kernel.wait_seconds", "int",
+                "this wait.", group="shell"),
+    SettingSpec("PYTHON_KERNEL_WAIT", "int",
                 "Seconds a `kernel` call waits for a submitted cell before returning "
                 "a handle to poll. The cell keeps running; nothing is interrupted by "
-                "this wait."),
+                "this wait.", group="shell"),
     # --- jail ---
-    SettingSpec("jail.bind", "json",
+    SettingSpec("JAIL_BIND", "json",
                 "Under `js -C DIR`, more paths the jail shows: a JSON list of "
                 "entries, absolute or starting with ~. \"path\" is read-only and "
                 "\"path:rw\" read-write. A path that does not exist is skipped. Commands see "
                 "each at its real path; the file tools may read it, and write it when "
-                "it is :rw."),
+                "it is :rw.", group="shell"),
     # --- runtime ---
-    SettingSpec("runtime.debug", "bool",
-                "Append per-event records to state/<agent>/debug.log.",
-                env="JS_DEBUG", empty=EMPTY_OFF),
+    SettingSpec("DEBUG_LOG", "bool",
+                "Append per-event records to state/<agent>/debug.log.", empty=EMPTY_OFF, group="runtime"),
     SettingSpec("runtime.trace", "bool",
                 "Pretty-print the tool-call trace line as the model runs.",
                 env="JS_TRACE", empty=EMPTY_OFF),
-    SettingSpec("runtime.max_parallel_tools", "int",
+    SettingSpec("PARALLEL_TOOLS_MAX", "int",
                 "Most read-only tool calls of one model response that run at once: "
                 "read, fs_search, the web searches, a GET fetch. A call that writes "
-                "runs alone, after the calls before it. 1 runs every call in turn."),
-    SettingSpec("runtime.retry_attempts", "int",
+                "runs alone, after the calls before it. 1 runs every call in turn.", group="runtime"),
+    SettingSpec("RETRY_COUNT_MAX", "int",
                 "Retries of one model request after a retryable failure: a 429, a "
                 "5xx, a dropped or idle stream. Each waits what the provider's "
                 "Retry-After or retry-after-ms header asks, else 1s, 2s, 4s ... up to "
-                "16s. 0 fails on the first error."),
-    SettingSpec("runtime.retry_max_wait_seconds", "float",
+                "16s. 0 fails on the first error.", group="runtime"),
+    SettingSpec("RETRY_WAIT_MAX", "float",
                 "Longest Retry-After wait honoured. A provider asking for longer "
-                "fails the request at once. 0 honours any wait."),
-    SettingSpec("runtime.stream_idle_seconds", "float",
+                "fails the request at once. 0 honours any wait.", group="runtime"),
+    SettingSpec("STREAM_IDLE_TIMEOUT", "float",
                 "Seconds a model request may go without a response byte before it "
-                "is aborted and retried under runtime.retry_attempts. SSE keep-alive "
-                "comments count as bytes. 0 waits forever."),
-    SettingSpec("runtime.max_output_escalation", "int",
+                "is aborted and retried under RETRY_COUNT_MAX. SSE keep-alive "
+                "comments count as bytes. 0 waits forever.", group="runtime"),
+    SettingSpec("OUTPUT_TOKENS_RETRY_MAX", "int",
                 "A reply cut off by its output-token cap is sent again once with "
                 "this cap, when it is larger than the one used and not above the "
-                "model's known output limit. 0 never resends."),
-    SettingSpec("runtime.max_output_resumes", "int",
+                "model's known output limit. 0 never resends.", group="runtime"),
+    SettingSpec("OUTPUT_RESUMES_MAX", "int",
                 "After a reply is cut off by its output-token cap, how many times per "
                 "turn the partial reply is kept and the model is told to resume. 0 "
-                "ends the turn on the cutoff."),
-    SettingSpec("runtime.steer", "str",
+                "ends the turn on the cutoff.", group="runtime"),
+    SettingSpec("STEER_MODE", "str",
                 "What a line typed while a turn runs does. now: it reaches the model "
                 "at the turn's next tool boundary, as a user message. A turn with no "
                 "boundary left gets it after it ends, as with batch. batch: every "
                 "line typed during the turn goes in as ONE message after it ends. "
-                "one: each line is its own turn, in order."),
-    SettingSpec("runtime.debug_autolog", "bool",
+                "one: each line is its own turn, in order.", group="runtime"),
+    SettingSpec("REQUEST_LOG", "bool",
                 "Append the full request trace to ~/.js/logs/<agent>/<session>.log: the "
                 "unclipped system prompt, tool-schema JSON, and the messages sent each call. "
-                "This trace never prints to the terminal, only to the file.",
-                env="JS_DEBUG_AUTOLOG", empty=EMPTY_OFF),
-    SettingSpec("runtime.debug_autolog_dir", "str",
-                "Directory for the debug autolog; unset = ~/.js/logs/<agent>.",
-                env="JS_DEBUG_AUTOLOG_DIR", empty=EMPTY_NONE),
-    SettingSpec("runtime.transcript_log", "bool",
+                "This trace never prints to the terminal, only to the file.", empty=EMPTY_OFF, group="runtime"),
+    SettingSpec("REQUEST_LOG_DIR", "str",
+                "Directory for the debug autolog; unset = ~/.js/logs/<agent>.", empty=EMPTY_NONE, group="runtime"),
+    SettingSpec("TRANSCRIPT_LOG", "bool",
                 "Append the visible terminal/TUI transcript to "
                 "~/.js/logs/transcript/<agent>/<session>.log: what printed to the user, with "
-                "IRC-style <USER>/<APE> tags for user/assistant turns.",
-                env="JS_TRANSCRIPT_LOG", empty=EMPTY_OFF),
-    SettingSpec("runtime.transcript_log_dir", "str",
-                "Directory for the visible transcript log; unset = ~/.js/logs/transcript/<agent>.",
-                env="JS_TRANSCRIPT_LOG_DIR", empty=EMPTY_NONE),
-    SettingSpec("runtime.allow_inline_code", "bool",
+                "IRC-style <USER>/<APE> tags for user/assistant turns.", empty=EMPTY_OFF, group="runtime"),
+    SettingSpec("TRANSCRIPT_LOG_DIR", "str",
+                "Directory for the visible transcript log; unset = ~/.js/logs/transcript/<agent>.", empty=EMPTY_NONE, group="runtime"),
+    SettingSpec("INLINE_CODE", "bool",
                 "Execute !{sh|python|c|node ...} inline directives / ```!lang fences in "
                 "prompt files and inject their stdout. This runs arbitrary code from "
-                "prompt files; opt out with --im-a-pussy or set this off.",
-                env="JS_ALLOW_INLINE_CODE", empty=EMPTY_OFF),
+                "prompt files; opt out with --im-a-pussy or set this off.", empty=EMPTY_OFF, group="runtime"),
     # --- events ---
-    SettingSpec("events.exec_timeout_s", "int",
+    SettingSpec("EXEC_TIMEOUT", "int",
                 "Seconds an `exec` command, typed or run by an `on` handler, may run "
                 "before its process group is killed; 0 is no limit. A handler's "
-                "command holds up the event that ran it for that long."),
-    SettingSpec("events.exec_output_bytes", "int",
+                "command holds up the event that ran it for that long.", group="events"),
+    SettingSpec("EXEC_OUTPUT_MAX", "int",
                 "Bytes of an `exec` command's stdout and stderr kept; the stdout "
-                "reaches the model as a js-reminder on the next message. 0 keeps all."),
+                "reaches the model as a js-reminder on the next message. 0 keeps all.", group="events"),
     # --- compact ---
-    SettingSpec("compact.auto", "bool",
-                "Automatic cache-aware context compaction.", empty=EMPTY_OFF),
-    SettingSpec("compact.flight_log_dir", "str",
-                "Full compaction flight snapshots; unset = logs/<agent>/compactions.", empty=EMPTY_NONE),
-    SettingSpec("compact.context_window", "int",
-                "Context window tokens for fullness math; unset = models.dev metadata.",
-                empty=EMPTY_NONE),
-    SettingSpec("compact.context_window_overrides", "map",
+    SettingSpec("COMPACTION_AUTO", "bool",
+                "Automatic cache-aware context compaction.", empty=EMPTY_OFF, group="compaction"),
+    SettingSpec("COMPACTION_LOG_DIR", "str",
+                "Full compaction flight snapshots; unset = logs/<agent>/compactions.", empty=EMPTY_NONE, group="compaction"),
+    SettingSpec("CONTEXT_SIZE_PER_MODEL", "map",
                 "Per-model context windows, keyed 'provider/model' or 'model'. "
                 "'provider/model' is the more specific. For surfaces models.dev has no row for — a subscription "
                 "endpoint serving the same model id as the public API with a different "
-                "usable window.", empty=EMPTY_NONE),
-    SettingSpec("compact.context_window_fallback", "int",
+                "usable window.", empty=EMPTY_NONE, group="context"),
+    SettingSpec("CONTEXT_SIZE_UNKNOWN", "int",
                 "Window to assume ONLY for models whose size cannot be resolved. Unlike "
                 "context_window this does not override models that are known, so covering "
                 "one unknown model no longer shrinks every known one.",
-                empty=EMPTY_NONE),
-    SettingSpec("compact.notify_threshold", "float",
-                "Notify once when context reaches this fraction."),
-    SettingSpec("compact.trigger_threshold", "float",
-                "Auto-compact at this fullness fraction."),
-    SettingSpec("compact.force_threshold", "float",
-                "Force compact at this fullness fraction."),
-    SettingSpec("compact.buffer_tokens", "int",
-                "Extra input-token headroom reserved by preflight/mid-turn compaction."),
-    SettingSpec("compact.summary_reserve_tokens", "int",
+                empty=EMPTY_NONE, group="context"),
+    SettingSpec("COMPACTION_WARN_AT", "float",
+                "Notify once when context reaches this fraction.", group="compaction"),
+    SettingSpec("COMPACTION_START_AT", "float",
+                "Auto-compact at this fullness fraction.", group="compaction"),
+    SettingSpec("COMPACTION_FORCE_AT", "float",
+                "Force compact at this fullness fraction.", group="compaction"),
+    SettingSpec("COMPACTION_HEADROOM_TOKENS", "int",
+                "Extra input-token headroom reserved by preflight/mid-turn compaction.", group="compaction"),
+    SettingSpec("COMPACTION_REPLY_RESERVE_TOKENS", "int",
                 "Ceiling on the reply headroom subtracted before the fullness fractions; "
                 "the actual reserve is min(model max_output_tokens, this). Stops a model "
-                "declaring a 128k output cap from eating a third of the window."),
-    SettingSpec("compact.tail_tokens", "int",
-                "Recent tail budget retained after compaction."),
-    SettingSpec("compact.min_savings_tokens", "int",
-                "Skip compaction unless estimated savings exceeds this."),
-    SettingSpec("compact.clear_keep_recent", "int",
+                "declaring a 128k output cap from eating a third of the window.", group="compaction"),
+    SettingSpec("COMPACTION_KEEP_RECENT_TOKENS", "int",
+                "Recent tail budget retained after compaction.", group="compaction"),
+    SettingSpec("COMPACTION_MIN_SAVINGS_TOKENS", "int",
+                "Skip compaction unless estimated savings exceeds this.", group="compaction"),
+    SettingSpec("COMPACTION_KEEP_TOOL_RESULTS", "int",
                 "Tool results left intact when an over-budget request clears old "
-                "tool-result bodies before falling back to a summary."),
-    SettingSpec("compact.rehydrate_max_files", "int",
+                "tool-result bodies before falling back to a summary.", group="compaction"),
+    SettingSpec("COMPACTION_REATTACH_FILES_MAX", "int",
                 "Recently read files re-attached after a summary compaction, "
-                "newest first. 0 = none."),
-    SettingSpec("compact.rehydrate_token_budget", "int",
-                "Estimated tokens all re-attached files may use together."),
-    SettingSpec("compact.rehydrate_max_tokens_per_file", "int",
+                "newest first. 0 = none.", group="compaction"),
+    SettingSpec("COMPACTION_REATTACH_TOKENS_MAX", "int",
+                "Estimated tokens all re-attached files may use together.", group="compaction"),
+    SettingSpec("COMPACTION_REATTACH_FILE_TOKENS_MAX", "int",
                 "A recently read file larger than this many estimated tokens is "
-                "named after a compaction but not re-attached."),
-    SettingSpec("compact.chars_per_token", "float",
-                "Fallback/self-calibrating character-to-token estimate."),
-    SettingSpec("compact.model", "str",
-                "Model used to write the compaction summary; 'same' = active model."),
-    SettingSpec("compact.summary_max_tokens", "int",
-                "Max tokens for the compaction summary. Capped at 8192."),
-    SettingSpec("compact.summary_tool_result_chars", "int",
+                "named after a compaction but not re-attached.", group="compaction"),
+    SettingSpec("COMPACTION_CHARS_PER_TOKEN", "float",
+                "Fallback/self-calibrating character-to-token estimate.", group="compaction"),
+    SettingSpec("COMPACTION_EXTERNAL_MODEL", "str",
+                "Model used to write the compaction summary; 'same' = active model.", group="compaction"),
+    SettingSpec("COMPACTION_SUMMARY_TOKENS_MAX", "int",
+                "Max tokens for the compaction summary. Capped at 8192.", group="compaction"),
+    SettingSpec("COMPACTION_SUMMARY_RESULT_CHARS_MAX", "int",
                 "Longest tool result, in characters, that a summary request carries "
-                "whole; a longer one keeps its head and tail. 0 = whole results."),
-    SettingSpec("compact.max_summary_failures", "int",
+                "whole; a longer one keeps its head and tail. 0 = whole results.", group="compaction"),
+    SettingSpec("COMPACTION_FAILURES_MAX", "int",
                 "Failed automatic summaries in a row that pause automatic compaction. "
-                "A successful /compact resumes it."),
-    SettingSpec("compact.cache_ttl_seconds", "int",
+                "A successful /compact resumes it.", group="compaction"),
+    SettingSpec("COMPACTION_CACHE_TTL", "int",
                 "Prompt-cache lifetime. An over-budget request clears old tool results "
                 "first when the last request is at least this old; before that it "
-                "summarizes earlier turns first. 0 = always clear first."),
-    SettingSpec("compact.pre_hook", "str",
+                "summarizes earlier turns first. 0 = always clear first.", group="compaction"),
+    SettingSpec("COMPACTION_HINT_COMMAND", "str",
                 "Optional shell command whose stdout guides compaction.",
-                empty=EMPTY_NONE),
+                empty=EMPTY_NONE, group="compaction"),
     # --- subagents ---
-    SettingSpec("subagents.prefer_inherit", "bool",
+    SettingSpec("SUBAGENT_INHERIT_MODEL", "bool",
                 "Subagents inherit the parent's model when true; else use the agent's own primary.",
-                empty=EMPTY_OFF),
-    SettingSpec("subagents.lock_model", "bool",
+                empty=EMPTY_OFF, group="subagents"),
+    SettingSpec("SUBAGENT_MODEL_LOCK", "bool",
                 "When true, the main agent cannot pick a subagent model via the task tool.",
-                empty=EMPTY_OFF),
+                empty=EMPTY_OFF, group="subagents"),
     # --- tools ---
-    SettingSpec("tools.alias_profiles", "json",
+    SettingSpec("TOOL_ALIASES", "json",
                 "Model-facing tool-name alias profiles: list of {match:string|[...], aliases:{...}}.",
-                empty=EMPTY_NONE),
-    SettingSpec("tools.user_agent", "str",
+                empty=EMPTY_NONE, group="tools"),
+    SettingSpec("HTTP_USER_AGENT", "str",
                 "User-Agent header fetch and the web-search backends send when a call "
-                "names none."),
-    SettingSpec("tools.terminal_cols", "int",
-                "Columns of a terminal_session started without cols."),
-    SettingSpec("tools.terminal_rows", "int",
-                "Rows of a terminal_session started without rows."),
+                "names none.", group="tools"),
+    SettingSpec("TERMINAL_COLUMNS", "int",
+                "Columns of a terminal_session started without cols.", group="tools"),
+    SettingSpec("TERMINAL_ROWS", "int",
+                "Rows of a terminal_session started without rows.", group="tools"),
     # --- lsp ---
-    SettingSpec("lsp.servers", "json",
+    SettingSpec("LSP_SERVERS", "json",
                 "Language servers the `lsp` tool may start: a JSON list of "
                 "{name, command, extensions, roots}. For a file, the first entry "
                 "whose extensions hold its extension and whose command[0] is on "
                 "PATH is used. roots are the files that mark a workspace root; "
-                "without one, the nearest directory holding .git is the root."),
-    SettingSpec("lsp.timeout_s", "int",
+                "without one, the nearest directory holding .git is the root.", group="lsp"),
+    SettingSpec("LSP_TIMEOUT", "int",
                 "Seconds an `lsp` call waits for its language server: to start, "
-                "to answer a request, or to publish diagnostics."),
+                "to answer a request, or to publish diagnostics.", group="lsp"),
     # --- notebook ---
-    SettingSpec("notebook.output_lines", "int",
+    SettingSpec("NOTEBOOK_OUTPUT_LINES_MAX", "int",
                 "Lines of each cell output a `read` of an .ipynb shows; the rest "
-                "is counted. 0 shows only what kind each output is."),
+                "is counted. 0 shows only what kind each output is.", group="notebook"),
     # --- mcp ---
-    SettingSpec("mcp.servers", "json",
+    SettingSpec("MCP_SERVERS", "json",
                 "Named MCP servers as JSON: stdio uses command/args/env; streamable HTTP uses url/headers.",
-                empty=EMPTY_NONE, secret=True),
-    SettingSpec("mcp.agents", "json",
+                empty=EMPTY_NONE, secret=True, group="mcp"),
+    SettingSpec("MCP_AGENT_POLICY", "json",
                 "Per-agent MCP policy JSON with servers/tools allow and deny glob lists.",
-                empty=EMPTY_NONE),
-    SettingSpec("mcp.request_timeout_s", "float",
+                empty=EMPTY_NONE, group="mcp"),
+    SettingSpec("MCP_TIMEOUT", "float",
                 "Seconds an MCP request waits for its server's reply: initialize, "
-                "list, call or read."),
+                "list, call or read.", group="mcp"),
     # --- sampling ---
-    SettingSpec("sampling.temperature", "float",
+    SettingSpec("TEMPERATURE", "float",
                 "Provider-default sampling temperature; unset = do not send.",
-                empty=EMPTY_UNSET),
-    SettingSpec("sampling.top_p", "float",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("TOP_P", "float",
                 "Provider-default nucleus sampling top_p; unset = do not send.",
-                empty=EMPTY_UNSET),
-    SettingSpec("sampling.top_k", "int",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("TOP_K", "int",
                 "Provider-default top_k sampling; unset = do not send.",
-                empty=EMPTY_UNSET),
-    SettingSpec("sampling.repetition_penalty", "float",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("REPETITION_PENALTY", "float",
                 "Provider-default repetition penalty; unset = do not send.",
-                empty=EMPTY_UNSET),
-    SettingSpec("sampling.presence_penalty", "float",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("PRESENCE_PENALTY", "float",
                 "Provider-default presence penalty; unset = do not send.",
-                empty=EMPTY_UNSET),
+                empty=EMPTY_UNSET, group="sampling"),
 )
 
 SPEC_BY_KEY: dict[str, SettingSpec] = {spec.key: spec for spec in REGISTRY}
+SPEC_BY_UPPER: dict[str, SettingSpec] = {spec.key.upper(): spec for spec in REGISTRY}
 SPEC_BY_ALIAS: dict[str, SettingSpec] = {alias: spec for spec in REGISTRY for alias in spec.aliases}
 
 
+
+
 def spec_for(name: str) -> SettingSpec | None:
-    """The spec a `set`/`show` name refers to: its dotted key or a short alias."""
-    return SPEC_BY_KEY.get(name) or SPEC_BY_ALIAS.get(name)
-KNOWN_SECTIONS: frozenset[str] = frozenset(spec.section for spec in REGISTRY)
+    """The spec a `set` name refers to: its key in any case (`model` is
+    `MODEL`, `UI.TOOLS` is `ui.tools`), or a jsrc verb alias."""
+    return SPEC_BY_KEY.get(name) or SPEC_BY_UPPER.get(name.upper()) or SPEC_BY_ALIAS.get(name)
 
 
 # ---------------------------------------------------------------------------
@@ -566,7 +552,7 @@ def is_hex_colour(value: object) -> bool:
 
 def is_key_name(value: object) -> bool:
     """True for a key prompt_toolkit can bind: key names separated by spaces,
-    e.g. `c-v` or `escape v`. The form `ui.paste_image_key` takes."""
+    e.g. `c-v` or `escape v`. The form `PASTE_IMAGE_KEY` takes."""
     from prompt_toolkit.key_binding import KeyBindings
 
     keys = value.split() if isinstance(value, str) else []
@@ -578,19 +564,19 @@ def is_key_name(value: object) -> bool:
         return False
     return True
 
-# The only values `model.reasoning_effort` accepts: the effort ladder in
+# The only values `EFFORT` accepts: the effort ladder in
 # js/reasoning.py, with its bottom stop "none" spelled "off" (stored as the
 # literal "none"). Everything else is rejected outright — no
 # default/auto/unset synonyms. Clearing the knob back to provider-default is
-# `set -model.reasoning_effort`, never a magic value here.
+# `set -EFFORT`, never a magic value here.
 REASONING_EFFORT_VALUES: tuple[str, ...] = ("off", *_reasoning.EFFORT_LADDER[1:])
 _REASONING_EFFORT_ERROR = "expected " + "|".join(REASONING_EFFORT_VALUES)
 
 
 def steer_mode(value: Any) -> str:
-    """The runtime.steer mode ``value`` names, or its js/jsrc value for anything else."""
+    """The STEER_MODE mode ``value`` names, or its js/jsrc value for anything else."""
     text = str(value or "").strip().lower()
-    return text if text in STEER_MODES else default_value("runtime.steer")
+    return text if text in STEER_MODES else default_value("STEER_MODE")
 
 
 def parse_bool(raw: str) -> bool | None:
@@ -603,8 +589,8 @@ def parse_bool(raw: str) -> bool | None:
 
 
 _NONNEGATIVE_KNOBS = frozenset({
-    "runtime.retry_attempts", "runtime.retry_max_wait_seconds", "runtime.stream_idle_seconds",
-    "runtime.max_output_escalation", "runtime.max_output_resumes",
+    "RETRY_COUNT_MAX", "RETRY_WAIT_MAX", "STREAM_IDLE_TIMEOUT",
+    "OUTPUT_TOKENS_RETRY_MAX", "OUTPUT_RESUMES_MAX",
 })
 
 
@@ -614,17 +600,17 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
     special-casing); the only way to clear a knob back to its default/unset
     state is `set -key` (see `apply_unset` in `js.setcmd`)."""
     text = raw.strip()
-    if spec.key == "model.reasoning_effort":
+    if spec.key == "EFFORT":
         v = text.lower()
         if v not in REASONING_EFFORT_VALUES:
             return None, _REASONING_EFFORT_ERROR
         return ("none" if v == "off" else v), None
-    if spec.key == "runtime.steer":
+    if spec.key == "STEER_MODE":
         v = text.lower()
         if v not in STEER_MODES:
             return None, msgs.EXPECTED_ONE_OF.text(choices="|".join(STEER_MODES))
         return v, None
-    if spec.key == "provider.id" and text:
+    if spec.key == "PROVIDER" and text:
         from . import providers as _providers
 
         if _providers.get_provider(text) is None:
@@ -632,15 +618,19 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         return text, None
     if (spec.key in {"ui.status_bg", "ui.status_fg"} or spec.key.startswith("theme.")) and not is_hex_colour(text):
         return None, msgs.EXPECTED_COLOUR.text(value=text)
-    if spec.key == "ui.editing_mode":
+    if spec.key == "HISTORY_ORDER":
+        if text not in HISTORY_ORDERS:
+            return None, msgs.EXPECTED_ONE_OF.text(choices="|".join(HISTORY_ORDERS))
+        return text, None
+    if spec.key == "EDITING_MODE":
         if text not in ("emacs", "vi"):
             return None, msgs.EXPECTED_ONE_OF.text(choices="emacs|vi")
         return text, None
-    if spec.key == "ui.paste_image_key":
+    if spec.key == "PASTE_IMAGE_KEY":
         if not is_key_name(text):
             return None, msgs.EXPECTED_KEY.text(value=text)
         return " ".join(text.split()), None
-    if spec.key == "ui.paste_image_command":
+    if spec.key == "PASTE_IMAGE_COMMAND":
         try:
             words = shlex.split(text)
         except ValueError as exc:
@@ -648,7 +638,7 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         if not words:
             return None, "expected a command"
         return text, None
-    if spec.key == "provider.base_url" and text:
+    if spec.key == "BASE_URL" and text:
         if not text.startswith(("http://", "https://")):
             return None, msgs.EXPECTED_URL.text(value=text)
         return text, None
@@ -668,9 +658,9 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         if spec.key in {"ui.reasoning", "ui.net", "ui.tools"} and value not in range(4):
             return None, msgs.EXPECTED_LEVEL.text()
         if spec.key in {
-            "limits.max_tool_calls_per_message", "limits.subagent_max_workers", "ui.tools_preview_lines",
-            "tools.terminal_cols", "tools.terminal_rows", "runtime.max_parallel_tools",
-            "history.max_entries", "lsp.timeout_s", "tags.max", "tags.messages", "tags.message_chars",
+            "REPLY_TOOL_CALLS_MAX", "SUBAGENT_WORKERS_MAX", "ui.tools_preview_lines",
+            "TERMINAL_COLUMNS", "TERMINAL_ROWS", "PARALLEL_TOOLS_MAX",
+            "HISTORY_SIZE", "LSP_TIMEOUT", "tags.max", "tags.messages", "tags.message_chars",
         } and value < 1:
             return None, msgs.EXPECTED_POSITIVE_INTEGER.text()
         return value, None
@@ -681,19 +671,19 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             return None, msgs.EXPECTED_NUMBER.text()
         if spec.key in _NONNEGATIVE_KNOBS and number < 0:
             return None, msgs.EXPECTED_NONNEGATIVE_NUMBER.text()
-        if spec.key == "mcp.request_timeout_s" and not (math.isfinite(number) and number > 0):
+        if spec.key == "MCP_TIMEOUT" and not (math.isfinite(number) and number > 0):
             return None, msgs.EXPECTED_POSITIVE_NUMBER.text()
         if spec.key == "tags.threshold" and not 0 <= number <= 1:
             return None, msgs.EXPECTED_PROBABILITY.text()
         return number, None
     if kind in ("json", "map"):
-        if spec.key in {"mcp.servers", "mcp.agents"}:
+        if spec.key in {"MCP_SERVERS", "MCP_AGENT_POLICY"}:
             from . import mcp_config
 
             try:
                 value = (
                     mcp_config.parse_servers_json(raw)
-                    if spec.key == "mcp.servers"
+                    if spec.key == "MCP_SERVERS"
                     else mcp_config.parse_agents_json(raw)
                 )
             except mcp_config.MCPConfigError as exc:
@@ -705,27 +695,27 @@ def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
                 return None, msgs.EXPECTED_JSON.text()
         if kind == "map" and not isinstance(value, dict):
             return None, msgs.EXPECTED_JSON_OBJECT.text()
-        if spec.key == "tools.alias_profiles":
+        if spec.key == "TOOL_ALIASES":
             error = _validate_alias_profiles(value)
             if error is not None:
                 return None, error
-        if spec.key in {"limits.shell_env_allow", "ui.tools_quiet", "ui.shell_quiet"}:
+        if spec.key in {"SHELL_ENV_KEEP", "ui.tools_quiet", "ui.shell_quiet"}:
             if not isinstance(value, list) or any(
                 not isinstance(item, str) or not item.strip() for item in value
             ):
                 return None, msgs.EXPECTED_ENV_NAMES.text()
-        if spec.key == "jail.bind":
+        if spec.key == "JAIL_BIND":
             from . import jail
 
             try:
                 jail.parse_binds(value)
             except ValueError as exc:
                 return None, str(exc)
-        if spec.key in {"mcp.servers", "mcp.agents"}:
+        if spec.key in {"MCP_SERVERS", "MCP_AGENT_POLICY"}:
             from . import mcp_config
 
             try:
-                if spec.key == "mcp.servers":
+                if spec.key == "MCP_SERVERS":
                     mcp_config.parse_servers(value)
                 else:
                     mcp_config.parse_agents(value)
@@ -797,12 +787,20 @@ def _parse_dotted_key(key: str) -> tuple[str, ...]:
 
 
 def parent_spec(key: str) -> SettingSpec | None:
-    """The registered knob ``key`` sits under (`provider.extra` for
-    `provider.extra.organization`), or None."""
+    """The registered setting ``key`` sits under (`EXTRA_PARAMS` for
+    `extra_params.organization`, the setting's name in any case), or None."""
+    upper = key.upper()
     for spec in REGISTRY:
-        if key.startswith(spec.key + "."):
+        if upper.startswith(spec.key.upper() + "."):
             return spec
     return None
+
+
+def child_key(key: str) -> str:
+    """``key`` with the setting it sits under spelled as registered and the
+    child's own part as typed: `extra_params.Team` is `EXTRA_PARAMS.Team`."""
+    spec = parent_spec(key)
+    return key if spec is None else spec.key + key[len(spec.key):]
 
 
 # ---------------------------------------------------------------------------
@@ -840,16 +838,18 @@ def parse_extra_arg(arg: str) -> tuple[tuple[str, ...], Any]:
         raise ValueError(msgs.EXTRA_EMPTY_KEY.text(arg=arg))
     if raw_value == "":
         raise ValueError(msgs.EXTRA_EMPTY_VALUE.text(arg=arg))
-    spec = SPEC_BY_KEY.get(key)
+    spec = spec_for(key)
     if spec is not None:
         value, error = coerce_value(spec, raw_value)
         if error is not None:
-            raise ValueError(msgs.EXTRA_BAD_VALUE.text(key=key, error=error))
+            raise ValueError(msgs.EXTRA_BAD_VALUE.text(key=spec.key, error=error))
         return spec.path, value
+    key = child_key(key)
+    path = _parse_dotted_key(key)
     prefix_spec = parent_spec(key)
-    if prefix_spec is not None and prefix_spec.type != "map":
+    if prefix_spec is None or prefix_spec.type != "map":
         raise ValueError(msgs.EXTRA_UNKNOWN_SETTING.text(key=key))
-    return _parse_dotted_key(key), coerce_extra_value(raw_value)
+    return path, coerce_extra_value(raw_value)
 
 
 def apply_cli_extras(settings: dict, extras: list[str]) -> dict:
@@ -864,27 +864,23 @@ def apply_cli_extras(settings: dict, extras: list[str]) -> dict:
 # ---------------------------------------------------------------------------
 
 def canonical_env_name(key: str) -> str:
-    """The deterministic env var for any dotted knob: ``a.b.c`` -> ``JS_A_B_C``.
-
-    Every knob is reachable from the environment under this name, so env and
-    jsrc stay at parity (``JS_SAMPLING_TOP_P`` <-> ``set sampling.top_p``). A
-    spec may ALSO carry a shorter hand-picked ``env`` alias (``JS_MODEL`` for
-    ``model.id``); that alias wins when both are set."""
+    """The env var for a setting: ``NAME`` -> ``JS_NAME`` (a dotted display
+    setting ``a.b`` -> ``JS_A_B``)."""
     return "JS_" + key.upper().replace(".", "_")
 
 
 def env_names_for(spec: SettingSpec) -> tuple[str, ...]:
-    """Env vars that feed ``spec``: the hand-picked alias first (highest
-    precedence), then the canonical ``JS_<DOTTED>`` form."""
+    """Env vars that feed ``spec``, highest precedence first: ``JS_<KEY>``,
+    then the older name it was known by, if any."""
     canon = canonical_env_name(spec.key)
     if spec.env and spec.env != canon:
-        return (spec.env, canon)
+        return (canon, spec.env)
     return (canon,)
 
 
 def apply_env_overrides(settings: dict, env: dict[str, str] | None = None) -> dict:
-    """Overlay JS_* env vars onto ``settings``. Each knob accepts its canonical
-    ``JS_<DOTTED>`` name plus any hand-picked alias; the alias wins."""
+    """Overlay JS_* env vars onto ``settings``: each setting's ``JS_<KEY>``,
+    or its older env name when ``JS_<KEY>`` is not set."""
     source = env if env is not None else os.environ
     for spec in REGISTRY:
         for name in env_names_for(spec):
@@ -1150,6 +1146,6 @@ def ensure_user_jsrc(path: Path) -> bool:
 
 
 def write_model_id(path: Path, model_id: str) -> None:
-    """Make ``model_id`` the `model.id` the jsrc at ``path`` sets, in place
+    """Make ``model_id`` the `MODEL` the jsrc at ``path`` sets, in place
     (`_write_jsrc_lines`). Raises OSError."""
-    _write_jsrc_lines(path, {"model.id": f"set model.id {model_id}"}, [])
+    _write_jsrc_lines(path, {"MODEL": f"set MODEL {model_id}"}, [])

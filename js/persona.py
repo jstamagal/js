@@ -196,7 +196,7 @@ def _coerce_reasoning_effort(path: Path, raw: Any) -> str | None:
         return "none"
     if not isinstance(raw, str):
         raise ValueError(f"reasoning in {path} must be a string")
-    spec = settings.SPEC_BY_KEY["model.reasoning_effort"]
+    spec = settings.SPEC_BY_KEY["EFFORT"]
     value, error = settings.coerce_value(spec, raw)
     if error:
         raise ValueError(f"reasoning in {path}: {error}")
@@ -440,11 +440,11 @@ def has_benchmarks(prompts_dir: Path) -> bool:
 def expand_agent_text(text: str, cfg) -> str:
     """Expand trusted agent text with this session's built-ins and code policy."""
     allow_code = bool(getattr(cfg, "allow_inline_code", False))
-    timeout_s = int(settings.knob_attr(cfg, "inline_code_timeout_s", "limits.inline_code_timeout_s"))
-    max_output_bytes = int(settings.knob_attr(cfg, "max_bash_output_bytes", "limits.max_bash_output_bytes"))
+    timeout_s = int(settings.knob_attr(cfg, "inline_code_timeout_s", "INLINE_CODE_TIMEOUT"))
+    max_output_bytes = int(settings.knob_attr(cfg, "max_bash_output_bytes", "SHELL_OUTPUT_MAX"))
     # The prompt's commands (envctx) report the shell the shell tool runs
-    # commands in, which is shell.program, not the operator's $SHELL.
-    program = str(settings.knob(getattr(cfg, "settings", None), "shell.program"))
+    # commands in, which is SHELL_PROGRAM, not the operator's $SHELL.
+    program = str(settings.knob(getattr(cfg, "settings", None), "SHELL_PROGRAM"))
     os.environ["JS_SHELL"] = shutil.which(program) or program
     # JS_ROOT is where js itself is: the directory holding the js package,
     # prompts/ and tools/, so a prompt reaches `$JS_ROOT/tools/envctx.c`

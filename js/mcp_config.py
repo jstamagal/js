@@ -73,7 +73,7 @@ class MCPConfiguration:
 
     servers: tuple[MCPServer, ...]
     policy: MCPPolicy
-    request_timeout_s: float | None = None  # mcp.request_timeout_s; None = its js/jsrc value
+    request_timeout_s: float | None = None  # MCP_TIMEOUT; None = its js/jsrc value
 
     def allows_tool(self, namespaced_tool_name: str) -> bool:
         return self.policy.allows_tool(namespaced_tool_name)
@@ -122,7 +122,7 @@ def _string_list(value: Any, field: str) -> tuple[str, ...]:
 def parse_servers(value: Mapping[str, Any]) -> tuple[tuple[MCPServer, bool], ...]:
     """Validate server definitions, retaining enabled state for policy resolution."""
     if not isinstance(value, Mapping):
-        raise MCPConfigError("mcp.servers must be a JSON object")
+        raise MCPConfigError("MCP_SERVERS must be a JSON object")
     servers: list[tuple[MCPServer, bool]] = []
     normalized: dict[str, str] = {}
     for name, entry in value.items():
@@ -192,7 +192,7 @@ def parse_servers(value: Mapping[str, Any]) -> tuple[tuple[MCPServer, bool], ...
 
 
 def parse_servers_json(raw: str) -> dict[str, Any]:
-    value = _json_object(raw, "mcp.servers")
+    value = _json_object(raw, "MCP_SERVERS")
     parse_servers(value)
     return value
 
@@ -205,7 +205,7 @@ def _policy_patterns(section: Mapping[str, Any], field: str) -> tuple[str, ...] 
 
 def parse_agents(value: Mapping[str, Any]) -> Mapping[str, MCPPolicy]:
     if not isinstance(value, Mapping):
-        raise MCPConfigError("mcp.agents must be a JSON object")
+        raise MCPConfigError("MCP_AGENT_POLICY must be a JSON object")
     result: dict[str, MCPPolicy] = {}
     for agent_id, entry in value.items():
         if not isinstance(agent_id, str) or _AGENT_ID_RE.fullmatch(agent_id) is None:
@@ -244,25 +244,22 @@ def parse_agents(value: Mapping[str, Any]) -> Mapping[str, MCPPolicy]:
 
 
 def parse_agents_json(raw: str) -> dict[str, Any]:
-    value = _json_object(raw, "mcp.agents")
+    value = _json_object(raw, "MCP_AGENT_POLICY")
     parse_agents(value)
     return value
 
 
 def resolve(settings: Mapping[str, Any], agent_id: str) -> MCPConfiguration:
     """Resolve enabled servers and active-agent policy from merged settings."""
-    mcp = settings.get("mcp", {})
-    if not isinstance(mcp, Mapping):
-        raise MCPConfigError("mcp settings must be an object")
-    parsed_servers = parse_servers(mcp.get("servers", {}))
-    policies = parse_agents(mcp.get("agents", {}))
+    parsed_servers = parse_servers(settings.get("MCP_SERVERS") or {})
+    policies = parse_agents(settings.get("MCP_AGENT_POLICY") or {})
     policy = policies.get(agent_id, MCPPolicy())
     enabled = tuple(
         server
         for server, is_enabled in parsed_servers
         if is_enabled and policy.allows_server(server.name, server.normalized_name)
     )
-    timeout = mcp.get("request_timeout_s")
+    timeout = settings.get("MCP_TIMEOUT")
     return MCPConfiguration(
         servers=enabled,
         policy=policy,
@@ -271,14 +268,14 @@ def resolve(settings: Mapping[str, Any], agent_id: str) -> MCPConfiguration:
 
 
 def _request_timeout(value: Any) -> float | None:
-    """``mcp.request_timeout_s`` as a positive finite float; None when unset.
+    """``MCP_TIMEOUT`` as a positive finite float; None when unset.
     Anything else is a config error now, not a ValueError (or a NaN that kills
     the event loop in ``asyncio.wait_for``) on the first MCP call."""
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise MCPConfigError(f"mcp.request_timeout_s must be a positive number, got {value!r}")
+        raise MCPConfigError(f"MCP_TIMEOUT must be a positive number, got {value!r}")
     number = float(value)
     if not (math.isfinite(number) and number > 0):
-        raise MCPConfigError(f"mcp.request_timeout_s must be a positive number, got {value!r}")
+        raise MCPConfigError(f"MCP_TIMEOUT must be a positive number, got {value!r}")
     return number

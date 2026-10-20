@@ -1,6 +1,6 @@
 """Named key actions for the REPL input and the keys file that remaps them.
 
-The keys file (`keys.file`, unset = ~/.js/keys) is a script in jsrc's
+The keys file (`KEYBINDS_FILE`, unset = ~/.js/keys) is a script in jsrc's
 grammar, one command per line; blank lines and `#` comments, whole-line or
 after the last word, are skipped:
 
@@ -68,10 +68,10 @@ _KEY_NAMES = frozenset(key.value for key in Keys if not key.value.startswith("<"
 
 
 def keys_file(settings: dict | None) -> Path:
-    """The keys file `keys.file` names, or ~/.js/keys when it is unset."""
+    """The keys file `KEYBINDS_FILE` names, or ~/.js/keys when it is unset."""
     from . import settings as _settings
 
-    value = _settings.knob(settings, "keys.file")
+    value = _settings.knob(settings, "KEYBINDS_FILE")
     return Path(value).expanduser() if value else paths.keys_file()
 
 

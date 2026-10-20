@@ -451,5 +451,5 @@ def _run_capped(
     return result
 
 
-def truncation_marker(cap: int, knob: str = "limits.max_bash_output_bytes") -> str:
+def truncation_marker(cap: int, knob: str = "SHELL_OUTPUT_MAX") -> str:
     return f"[truncated: {knob} ({cap}) reached]"

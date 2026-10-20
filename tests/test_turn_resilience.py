@@ -30,9 +30,9 @@ def offline_metadata(monkeypatch):
 
 def _config(tmp_path, runtime_settings: dict | None = None, *, window: int = 1_000_000, **fields):
     # A window set for the budget keeps the compaction triggers out of these turns.
-    settings = {"compact": {"context_window": window}}
+    settings = {"CONTEXT_SIZE": window}
     if runtime_settings:
-        settings["runtime"] = runtime_settings
+        settings.update(runtime_settings)
     return replace(_cfg(tmp_path, settings), **fields)
 
 
@@ -210,7 +210,7 @@ def test_429_waits_what_retry_after_asks_then_retries(tmp_path, header, value, w
 
 def test_retry_budget_is_the_setting_and_the_sdk_adds_no_retries(tmp_path):
     server, messages, error = _served_turn(
-        tmp_path, [_status(429, {"retry-after": "0"})], {"retry_attempts": 3})
+        tmp_path, [_status(429, {"retry-after": "0"})], {"RETRY_COUNT_MAX": 3})
 
     assert isinstance(error, ai.ProviderAPIError)
     assert len(server.arrivals) == 4  # the first request and three retries
@@ -221,7 +221,7 @@ def test_retry_after_longer_than_the_limit_fails_without_waiting(tmp_path):
     started = time.monotonic()
     server, _messages, error = _served_turn(
         tmp_path, [_status(429, {"retry-after": "60"}), _answer("late")],
-        {"retry_max_wait_seconds": 5})
+        {"RETRY_WAIT_MAX": 5})
 
     assert isinstance(error, ai.ProviderAPIError)
     assert len(server.arrivals) == 1
@@ -253,7 +253,7 @@ def test_retry_after_reads_seconds_milliseconds_and_http_dates():
 def test_a_silent_stream_is_aborted_and_retried(tmp_path, after_headers):
     server, messages, error = _served_turn(
         tmp_path, [_silent(after_headers=after_headers), _answer("recovered")],
-        {"stream_idle_seconds": 0.5})
+        {"STREAM_IDLE_TIMEOUT": 0.5})
 
     assert error is None
     assert messages[-1] == {"role": "assistant", "content": "recovered"}
@@ -264,7 +264,7 @@ def test_keep_alive_bytes_hold_off_the_idle_watchdog(tmp_path):
     # 1.2s of keep-alive comments, each 0.15s apart, against a 0.5s limit.
     server, messages, error = _served_turn(
         tmp_path, [_answer("slow but alive", keepalive=8, interval=0.15)],
-        {"stream_idle_seconds": 0.5})
+        {"STREAM_IDLE_TIMEOUT": 0.5})
 
     assert error is None
     assert messages[-1] == {"role": "assistant", "content": "slow but alive"}
@@ -283,7 +283,7 @@ def test_building_the_sdk_client_does_not_count_as_silence(tmp_path, monkeypatch
 
     monkeypatch.setattr(OpenAICompatibleProvider, "_make_sdk_client", slow_build)
     server, messages, error = _served_turn(
-        tmp_path, [_answer("first try")], {"stream_idle_seconds": 0.3})
+        tmp_path, [_answer("first try")], {"STREAM_IDLE_TIMEOUT": 0.3})
 
     assert error is None
     assert messages[-1] == {"role": "assistant", "content": "first try"}
@@ -299,7 +299,7 @@ def test_a_connection_dropped_mid_stream_is_retried(tmp_path):
 
 
 def test_a_connection_that_keeps_dropping_gives_up_after_the_budget(tmp_path):
-    server, _messages, error = _served_turn(tmp_path, [_dropped("Green")], {"retry_attempts": 2})
+    server, _messages, error = _served_turn(tmp_path, [_dropped("Green")], {"RETRY_COUNT_MAX": 2})
 
     assert isinstance(error, ai.ProviderConnectionError)
     assert error.is_retryable
@@ -359,7 +359,7 @@ def test_text_streamed_before_a_turn_fails_stays_on_the_screen(tmp_path, monkeyp
 def test_a_stream_that_stays_silent_gives_up_after_the_budget(tmp_path):
     server, _messages, error = _served_turn(
         tmp_path, [_silent(after_headers=True)],
-        {"stream_idle_seconds": 0.3, "retry_attempts": 1})
+        {"STREAM_IDLE_TIMEOUT": 0.3, "RETRY_COUNT_MAX": 1})
 
     assert isinstance(error, model_client.StreamIdleError)
     assert len(server.arrivals) == 2
@@ -492,7 +492,7 @@ def test_resume_nudges_are_a_setting(monkeypatch, tmp_path):
     calls = _scripted_model(monkeypatch, [_cut("half")])
     messages = [{"role": "user", "content": "go"}]
 
-    asyncio.run(_run(_config(tmp_path, {"max_output_escalation": 0, "max_output_resumes": 1},
+    asyncio.run(_run(_config(tmp_path, {"OUTPUT_TOKENS_RETRY_MAX": 0, "OUTPUT_RESUMES_MAX": 1},
                              max_output_tokens=1000), messages))
 
     assert [c["max_output_tokens"] for c in calls] == [1000, 1000]
@@ -743,15 +743,15 @@ def test_a_compaction_summary_survives_a_dropped_connection(tmp_path):
 
 def test_a_compaction_summary_on_a_silent_stream_is_retried(tmp_path):
     server, summary = _served_summary(
-        tmp_path, [_silent(after_headers=True), _answer("the summary")], {"stream_idle_seconds": 0.3})
+        tmp_path, [_silent(after_headers=True), _answer("the summary")], {"STREAM_IDLE_TIMEOUT": 0.3})
 
     assert summary == "the summary"
     assert len(server.arrivals) == 2
 
 
 @pytest.mark.parametrize("key", [
-    "runtime.retry_attempts", "runtime.retry_max_wait_seconds", "runtime.stream_idle_seconds",
-    "runtime.max_output_escalation", "runtime.max_output_resumes",
+    "RETRY_COUNT_MAX", "RETRY_WAIT_MAX", "STREAM_IDLE_TIMEOUT",
+    "OUTPUT_TOKENS_RETRY_MAX", "OUTPUT_RESUMES_MAX",
 ])
 def test_resilience_knobs_refuse_negative_values(key):
     spec = settings.spec_for(key)

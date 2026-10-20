@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+
 from pathlib import Path
 
 import pytest
@@ -60,57 +62,58 @@ def _build_config(
 
 def test_collect_settings_uses_built_in_default_when_no_file_or_env():
     out = settings.collect_settings(config_paths=[], env={})
-    assert out["model"]["id"] == settings.default_value("model.id")
-    assert out["limits"]["max_tool_iterations"] == settings.default_value("limits.max_tool_iterations")
-    assert out["limits"]["max_tool_calls_per_message"] == settings.default_value("limits.max_tool_calls_per_message")
+    assert out["MODEL"] == settings.default_value("MODEL")
+    assert out["TURN_ROUNDS_MAX"] == settings.default_value("TURN_ROUNDS_MAX")
+    assert out["REPLY_TOOL_CALLS_MAX"] == settings.default_value("REPLY_TOOL_CALLS_MAX")
 
 
 def test_collect_settings_reads_jsrc_set_lines(tmp_path):
     cfg = tmp_path / "jsrc"
-    cfg.write_text("set model.id file-model\n", encoding="utf-8")
+    cfg.write_text("set MODEL file-model\n", encoding="utf-8")
 
     out = settings.collect_settings(config_paths=[cfg], env={})
 
-    assert out["model"]["id"] == "file-model"
+    assert out["MODEL"] == "file-model"
 
 
 def test_jsrc_rejects_registered_non_map_subkeys_without_mutating(tmp_path):
     cfg = tmp_path / "jsrc"
     cfg.write_text(
-        "set tools.alias_profiles.foo bar\n"
-        "set model.id file-model\n",
+        "set TOOL_ALIASES.foo bar\n"
+        "set MODEL file-model\n",
         encoding="utf-8",
     )
     live_settings = settings.seed_defaults()
+    aliases_before = copy.deepcopy(live_settings.get("TOOL_ALIASES"))
 
     warnings = settings.load_jsrc_files([cfg], live_settings)
 
     assert warnings == [msgs.SCRIPT_LINE_FAILED.text(
-        path=cfg, lineno=1, error=msgs.UNKNOWN_SETTING.text(key="tools.alias_profiles.foo"))]
-    assert live_settings["model"]["id"] == "file-model"
-    assert "alias_profiles" not in live_settings.get("tools", {})
+        path=cfg, lineno=1, error=msgs.UNKNOWN_SETTING.text(key="TOOL_ALIASES.foo"))]
+    assert live_settings["MODEL"] == "file-model"
+    assert live_settings.get("TOOL_ALIASES") == aliases_before
 
 
 def test_collect_settings_applies_env_after_file(tmp_path):
     cfg = tmp_path / "jsrc"
-    cfg.write_text("set model.id file-model\n", encoding="utf-8")
+    cfg.write_text("set MODEL file-model\n", encoding="utf-8")
 
     out = settings.collect_settings(config_paths=[cfg], env={"JS_MODEL": "env-model"})
 
-    assert out["model"]["id"] == "env-model"
+    assert out["MODEL"] == "env-model"
 
 
 def test_collect_settings_cli_extras_win_over_env(tmp_path):
     cfg = tmp_path / "jsrc"
-    cfg.write_text("set model.id file-model\n", encoding="utf-8")
+    cfg.write_text("set MODEL file-model\n", encoding="utf-8")
 
     out = settings.collect_settings(
         config_paths=[cfg],
         env={"JS_MODEL": "env-model"},
-        extras=["model.id=cli-model"],
+        extras=["MODEL=cli-model"],
     )
 
-    assert out["model"]["id"] == "cli-model"
+    assert out["MODEL"] == "cli-model"
 
 
 def test_collect_settings_layers_global_project_and_local_jsrc(tmp_path):
@@ -119,21 +122,21 @@ def test_collect_settings_layers_global_project_and_local_jsrc(tmp_path):
     local_cfg = tmp_path / "project" / ".js" / "jsrc.local"
     global_cfg.parent.mkdir(parents=True)
     project_cfg.parent.mkdir(parents=True)
-    global_cfg.write_text("set model.id global-model\nset limits.fetch_timeout_s 20\nset limits.inline_code_timeout_s 222\n", encoding="utf-8")
-    project_cfg.write_text("set model.id project-model\nset limits.max_tool_iterations 7\n", encoding="utf-8")
-    local_cfg.write_text("set model.id local-model\n", encoding="utf-8")
+    global_cfg.write_text("set MODEL global-model\nset FETCH_TIMEOUT 20\nset INLINE_CODE_TIMEOUT 222\n", encoding="utf-8")
+    project_cfg.write_text("set MODEL project-model\nset TURN_ROUNDS_MAX 7\n", encoding="utf-8")
+    local_cfg.write_text("set MODEL local-model\n", encoding="utf-8")
 
     out = settings.collect_settings(config_paths=[global_cfg, project_cfg, local_cfg], env={})
 
-    assert out["model"]["id"] == "local-model"
-    assert out["limits"]["fetch_timeout_s"] == 20
-    assert out["limits"]["inline_code_timeout_s"] == 222
-    assert out["limits"]["max_tool_iterations"] == 7
+    assert out["MODEL"] == "local-model"
+    assert out["FETCH_TIMEOUT"] == 20
+    assert out["INLINE_CODE_TIMEOUT"] == 222
+    assert out["TURN_ROUNDS_MAX"] == 7
 
 
 def test_from_env_uses_the_js_home_and_writes_no_global_jsrc(monkeypatch, tmp_path):
     config_home, data_home = _env_dirs(monkeypatch, tmp_path)
-    # Explicit pin (provider.id / JS_PROVIDER) authorizes reading the provider's
+    # Explicit pin (PROVIDER / JS_PROVIDER) authorizes reading the provider's
     # native env key: an env key alone would create no route (ruling #1).
     monkeypatch.setenv("JS_PROVIDER", "deepseek")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
@@ -153,22 +156,22 @@ def test_from_env_reads_global_jsrc(monkeypatch, tmp_path):
     config_home, _data_home = _env_dirs(monkeypatch, tmp_path)
     global_cfg = config_home / "jsrc"
     global_cfg.parent.mkdir(parents=True)
-    global_cfg.write_text("set model.id global-model\nset limits.max_tool_iterations 8\n", encoding="utf-8")
+    global_cfg.write_text("set MODEL global-model\nset TURN_ROUNDS_MAX 8\n", encoding="utf-8")
 
     cfg = from_env(save_session=False)
 
     assert cfg.model == "global-model"
     assert cfg.max_tool_iterations == 8
-    assert global_cfg.read_text(encoding="utf-8").startswith("set model.id global-model")
+    assert global_cfg.read_text(encoding="utf-8").startswith("set MODEL global-model")
 
 
 def test_presets_layer_over_base_in_order(monkeypatch, tmp_path):
     config_home, _data_home = _env_dirs(monkeypatch, tmp_path)
     js_dir = config_home
     js_dir.mkdir(parents=True)
-    (js_dir / "jsrc").write_text("set model.id base-model\nset limits.fetch_timeout_s 5\n", encoding="utf-8")
-    (js_dir / "jsrc.fast").write_text("set model.id fast-model\n", encoding="utf-8")
-    (js_dir / "jsrc.slow").write_text("set model.id slow-model\nset limits.fetch_timeout_s 99\n", encoding="utf-8")
+    (js_dir / "jsrc").write_text("set MODEL base-model\nset FETCH_TIMEOUT 5\n", encoding="utf-8")
+    (js_dir / "jsrc.fast").write_text("set MODEL fast-model\n", encoding="utf-8")
+    (js_dir / "jsrc.slow").write_text("set MODEL slow-model\nset FETCH_TIMEOUT 99\n", encoding="utf-8")
 
     # No preset: base wins.
     assert from_env(save_session=False).model == "base-model"
@@ -186,7 +189,7 @@ def test_presets_layer_over_base_in_order(monkeypatch, tmp_path):
 def test_allow_inline_code_default_is_on(monkeypatch, tmp_path):
     # Inverted: inline code runs by default, no flag/knob needed.
     _env_dirs(monkeypatch, tmp_path)
-    monkeypatch.delenv("JS_ALLOW_INLINE_CODE", raising=False)
+    monkeypatch.delenv("JS_INLINE_CODE", raising=False)
     cfg = from_env(save_session=False)
     assert cfg.allow_inline_code is True
 
@@ -196,17 +199,17 @@ def test_allow_inline_code_opt_out_via_jsrc(monkeypatch, tmp_path):
     config_home, _data_home = _env_dirs(monkeypatch, tmp_path)
     global_cfg = config_home / "jsrc"
     global_cfg.parent.mkdir(parents=True)
-    global_cfg.write_text("set runtime.allow_inline_code off\n", encoding="utf-8")
+    global_cfg.write_text("set INLINE_CODE off\n", encoding="utf-8")
 
     cfg = from_env(save_session=False)
     assert cfg.allow_inline_code is False
 
 
 def test_allow_inline_code_opt_out_via_env(monkeypatch, tmp_path):
-    # --im-a-pussy sets JS_ALLOW_INLINE_CODE=0; that env must flip the knob off
+    # --im-a-pussy sets JS_INLINE_CODE=0; that env must flip the knob off
     # through the registry env layer.
     _env_dirs(monkeypatch, tmp_path)
-    monkeypatch.setenv("JS_ALLOW_INLINE_CODE", "0")
+    monkeypatch.setenv("JS_INLINE_CODE", "0")
     cfg = from_env(save_session=False)
     assert cfg.allow_inline_code is False
 
@@ -216,14 +219,14 @@ def test_project_config_env_and_cli_precedence(monkeypatch, tmp_path):
     project = tmp_path / "project"
     cfg_path = project / ".js" / "jsrc"
     cfg_path.parent.mkdir(parents=True)
-    cfg_path.write_text("set model.id file-model\nset limits.max_tool_iterations 7\n", encoding="utf-8")
+    cfg_path.write_text("set MODEL file-model\nset TURN_ROUNDS_MAX 7\n", encoding="utf-8")
     monkeypatch.setenv("JS_MODEL", "env-model")
 
     cfg_env = from_env(cwd=project, save_session=False)
     assert cfg_env.model == "env-model"
     assert cfg_env.max_tool_iterations == 7
 
-    cfg_cli = from_env(cwd=project, save_session=False, extras=["model.id=cli-model"])
+    cfg_cli = from_env(cwd=project, save_session=False, extras=["MODEL=cli-model"])
     assert cfg_cli.model == "cli-model"
 
 

@@ -259,9 +259,7 @@ def test_a_refused_signature_is_dropped_once_and_the_history_replayed(tmp_path, 
 
 
 def test_call_limits_read_the_resilience_settings():
-    limits = CallLimits.from_settings({"runtime": {
-        "retry_attempts": 4, "retry_max_wait_seconds": 60, "stream_idle_seconds": 0,
-        "max_output_escalation": 32000, "max_output_resumes": 2}})
+    limits = CallLimits.from_settings({"RETRY_COUNT_MAX": 4, "RETRY_WAIT_MAX": 60, "STREAM_IDLE_TIMEOUT": 0, "OUTPUT_TOKENS_RETRY_MAX": 32000, "OUTPUT_RESUMES_MAX": 2})
     assert limits == CallLimits(retry=retry.Budget(attempts=4, max_wait=60.0), stream_idle=None,
                                 max_output_escalation=32000, max_output_resumes=2)
 

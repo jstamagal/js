@@ -110,11 +110,11 @@ def test_results_come_back_in_the_model_order_not_the_finish_order(tmp_path):
 
 def test_max_parallel_tools_one_runs_every_call_in_turn(tmp_path, monkeypatch):
     jsrc = settings.PACKAGE_JSRC.read_text(encoding="utf-8")
-    assert re.search(r"^set runtime\.max_parallel_tools 8$", jsrc, re.M)
+    assert re.search(r"^set PARALLEL_TOOLS_MAX 8$", jsrc, re.M)
     copy = tmp_path / "pkg" / "jsrc"
     copy.parent.mkdir()
-    copy.write_text(re.sub(r"^set runtime\.max_parallel_tools \d+$",
-                           "set runtime.max_parallel_tools 1", jsrc, flags=re.M), encoding="utf-8")
+    copy.write_text(re.sub(r"^set PARALLEL_TOOLS_MAX \d+$",
+                           "set PARALLEL_TOOLS_MAX 1", jsrc, flags=re.M), encoding="utf-8")
     monkeypatch.setattr(settings, "PACKAGE_JSRC", copy)
     probe = Probe()
     context = ToolContext(cwd=tmp_path)
@@ -231,7 +231,7 @@ def test_a_clip_of_one_parallel_read_keeps_the_other_reads_coverage(tmp_path, mo
                                        suppress_output=True))
 
     whole = next(m["content"] for m in messages if m.get("tool_call_id") == "whole")
-    assert "max_tool_results_per_turn_bytes" in whole
+    assert "PARALLEL_RESULTS_MAX" in whole
     path = target.resolve()
     assert path not in context.fully_read_paths
     assert context.require_read(path, "edit", line_ranges=[(2995, 2995)]) is None

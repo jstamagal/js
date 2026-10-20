@@ -272,7 +272,7 @@ def _server_root_url(base_url: str) -> str:
 
 
 def _request_json(method: str, url: str, *, json_body: dict[str, Any] | None = None) -> Any:
-    timeout = min(float(_settings.default_value("limits.fetch_timeout_s")), _LOCAL_PROBE_MAX_S)
+    timeout = min(float(_settings.default_value("FETCH_TIMEOUT")), _LOCAL_PROBE_MAX_S)
     with httpx.Client(timeout=timeout) as client:
         response = client.request(method, url, json=json_body)
         response.raise_for_status()

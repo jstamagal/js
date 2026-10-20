@@ -60,13 +60,13 @@ class EndpointSpec:
     def as_settings(self) -> list[str]:
         """``key=value`` pairs in the form ``--extra`` already accepts."""
         pairs = [
-            f"model.id={self.model}",
-            f"provider.id={self.provider_id}",
-            f"provider.base_url={self.base_url}",
-            f"provider.api_key={self.api_key}",
+            f"MODEL={self.model}",
+            f"PROVIDER={self.provider_id}",
+            f"BASE_URL={self.base_url}",
+            f"API_KEY={self.api_key}",
         ]
         if self.reasoning_effort is not None:
-            pairs.append(f"model.reasoning_effort={self.reasoning_effort}")
+            pairs.append(f"EFFORT={self.reasoning_effort}")
         return pairs
 
 

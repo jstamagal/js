@@ -30,7 +30,7 @@ def test_save_then_restart_brings_back_handlers_and_aliases(monkeypatch, tmp_pat
     monkeypatch.chdir(tmp_path)
     cfg, state, _errors = _launch(tmp_path)
     _run([
-        "/on turn_start set compact.auto off",
+        "/on turn_start set COMPACTION_AUTO off",
         "/on ^tool_call set runtime.trace on",
         "/alias ca compact-auto $*",
         "/save",
@@ -39,7 +39,7 @@ def test_save_then_restart_brings_back_handlers_and_aliases(monkeypatch, tmp_pat
     _cfg, state, errors = _launch(tmp_path)
 
     assert errors == []
-    assert [h.handler for h in state["events"].handlers_for("turn_start")] == ["set compact.auto off"]
+    assert [h.handler for h in state["events"].handlers_for("turn_start")] == ["set COMPACTION_AUTO off"]
     assert [(h.handler, h.suppress) for h in state["events"].handlers_for("tool_call")] == [
         ("set runtime.trace on", True)
     ]
@@ -50,11 +50,11 @@ def test_save_keeps_the_jsrc_and_writes_only_what_changed(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
     jsrc = paths.global_config_file()
     jsrc.parent.mkdir(parents=True, exist_ok=True)
-    jsrc.write_text("# old\nset limits.max_read_lines 33\n", encoding="utf-8")
+    jsrc.write_text("# old\nset READ_LINES_MAX 33\n", encoding="utf-8")
     cfg, state, _errors = _launch(tmp_path)
-    _run(["/set compact.auto off", "/save"], state, cfg)
+    _run(["/set COMPACTION_AUTO off", "/save"], state, cfg)
 
-    assert jsrc.read_text(encoding="utf-8") == "# old\nset limits.max_read_lines 33\nset compact.auto off\n"
+    assert jsrc.read_text(encoding="utf-8") == "# old\nset READ_LINES_MAX 33\nset COMPACTION_AUTO off\n"
 
 
 def test_jsrc_model_and_provider_lines_take_effect(monkeypatch, tmp_path):
@@ -74,12 +74,12 @@ def test_rc_replay_leaves_set_lines_to_the_settings_layer(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
     jsrc = paths.global_config_file()
     jsrc.parent.mkdir(parents=True, exist_ok=True)
-    jsrc.write_text("set compact.auto off\nalias t turns\n", encoding="utf-8")
-    monkeypatch.setenv("JS_COMPACT_AUTO", "on")
+    jsrc.write_text("set COMPACTION_AUTO off\nalias t turns\n", encoding="utf-8")
+    monkeypatch.setenv("JS_COMPACTION_AUTO", "on")
 
     _cfg, state, _errors = _launch(tmp_path)
 
-    assert settings.get_dotted(state["settings"], ("compact", "auto")) is True
+    assert settings.get_dotted(state["settings"], ("COMPACTION_AUTO",)) is True
     assert state["aliases"] == {"t": "turns"}
 
 
@@ -88,8 +88,8 @@ def test_jsrc_load_resolves_beside_the_jsrc_and_stays_under_env(monkeypatch, tmp
     jsrc = paths.global_config_file()
     jsrc.parent.mkdir(parents=True, exist_ok=True)
     jsrc.write_text("load extra.irc\n", encoding="utf-8")
-    (jsrc.parent / "extra.irc").write_text("set compact.auto off\nalias t turns\n", encoding="utf-8")
-    monkeypatch.setenv("JS_COMPACT_AUTO", "on")
+    (jsrc.parent / "extra.irc").write_text("set COMPACTION_AUTO off\nalias t turns\n", encoding="utf-8")
+    monkeypatch.setenv("JS_COMPACTION_AUTO", "on")
     project = tmp_path / "project"
     project.mkdir()
 
@@ -97,7 +97,7 @@ def test_jsrc_load_resolves_beside_the_jsrc_and_stays_under_env(monkeypatch, tmp
 
     assert errors == []
     assert state["aliases"] == {"t": "turns"}
-    assert settings.get_dotted(state["settings"], ("compact", "auto")) is True
+    assert settings.get_dotted(state["settings"], ("COMPACTION_AUTO",)) is True
 
 
 def test_settings_in_a_jsrc_loaded_file_apply_at_config_load(tmp_path):
@@ -105,11 +105,11 @@ def test_settings_in_a_jsrc_loaded_file_apply_at_config_load(tmp_path):
     jsrc.write_text("load sub/extra.irc\nload jsrc\n", encoding="utf-8")
     (tmp_path / "sub").mkdir()
     (tmp_path / "sub" / "extra.irc").write_text("load ../more.irc\n", encoding="utf-8")
-    (tmp_path / "more.irc").write_text("set compact.auto off\n", encoding="utf-8")
+    (tmp_path / "more.irc").write_text("set COMPACTION_AUTO off\n", encoding="utf-8")
 
     live = settings.collect_settings(config_paths=[jsrc], env={})
 
-    assert settings.get_dotted(live, ("compact", "auto")) is False
+    assert settings.get_dotted(live, ("COMPACTION_AUTO",)) is False
 
 
 def test_rc_errors_name_the_line_and_do_not_stop_startup(monkeypatch, tmp_path):
@@ -137,7 +137,7 @@ def test_alias_runs_its_body_with_arguments(tmp_path):
     assert cli._handle_command("/ca off", state, None) is True
     assert cli._handle_command("/trace off", state, None) is True
 
-    assert settings.get_dotted(state["settings"], ("compact", "auto")) is False
+    assert settings.get_dotted(state["settings"], ("COMPACTION_AUTO",)) is False
     assert settings.get_dotted(state["settings"], ("runtime", "trace")) is False
 
 
@@ -183,7 +183,7 @@ def test_turn_state_commands_come_from_the_table(monkeypatch):
 def test_registering_the_same_handler_twice_keeps_one(tmp_path):
     """A handler loaded from one jsrc and saved into another registers once."""
     state = {**_state(), "events": cli.events.EventHooks()}
-    cli._handle_command("/on turn_start set compact.auto off", state, None)
-    cli._handle_command("/on turn_start set compact.auto off", state, None)
+    cli._handle_command("/on turn_start set COMPACTION_AUTO off", state, None)
+    cli._handle_command("/on turn_start set COMPACTION_AUTO off", state, None)
 
     assert len(state["events"].handlers_for("turn_start")) == 1

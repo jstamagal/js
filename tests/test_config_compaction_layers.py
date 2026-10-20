@@ -14,14 +14,14 @@ def test_collect_settings_layers_global_project_and_local_with_env_cli(monkeypat
     global_js = home / ".js"
     global_js.mkdir(parents=True)
     (project / ".js").mkdir(parents=True)
-    (global_js / "jsrc").write_text("set model.id global\nset limits.fetch_timeout_s 20\n", encoding="utf-8")
-    (project / ".js" / "jsrc").write_text("set model.id project\nset limits.max_tool_iterations 9\n", encoding="utf-8")
-    (project / ".js" / "jsrc.local").write_text("set model.id local\n", encoding="utf-8")
+    (global_js / "jsrc").write_text("set MODEL global\nset FETCH_TIMEOUT 20\n", encoding="utf-8")
+    (project / ".js" / "jsrc").write_text("set MODEL project\nset TURN_ROUNDS_MAX 9\n", encoding="utf-8")
+    (project / ".js" / "jsrc.local").write_text("set MODEL local\n", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("JS_MODEL", "env")
     monkeypatch.chdir(project)
 
-    cfg = from_env(save_session=False, extras=["model.id=cli"])
+    cfg = from_env(save_session=False, extras=["MODEL=cli"])
 
     assert cfg.model == "cli"
     assert cfg.fetch_timeout_s == 20
@@ -35,8 +35,8 @@ def test_collect_settings_layers_global_project_and_local_with_env_cli(monkeypat
 
 def test_default_fetch_timeout_and_package_jsrc_cover_limits_and_compact():
     out = settings.collect_settings(config_paths=[], env={})
-    assert out["limits"]["fetch_timeout_s"] == settings.default_value("limits.fetch_timeout_s")
-    assert out["limits"]["inline_code_timeout_s"] == settings.default_value("limits.inline_code_timeout_s")
+    assert out["FETCH_TIMEOUT"] == settings.default_value("FETCH_TIMEOUT")
+    assert out["INLINE_CODE_TIMEOUT"] == settings.default_value("INLINE_CODE_TIMEOUT")
     text = settings.PACKAGE_JSRC.read_text(encoding="utf-8")
     jsrc_keys = {
         line.split()[1].lstrip("-")
@@ -44,9 +44,9 @@ def test_default_fetch_timeout_and_package_jsrc_cover_limits_and_compact():
         if line.startswith("set ")
     }
     assert {
-        "limits.inline_code_timeout_s",
-        "compact.context_window",
-        "compact.tail_tokens",
+        "INLINE_CODE_TIMEOUT",
+        "CONTEXT_SIZE",
+        "COMPACTION_KEEP_RECENT_TOKENS",
     } <= jsrc_keys
 
 
@@ -144,7 +144,7 @@ def _compact_test_cfg(tmp_path, compact: dict) -> Config:
         sessions_dir=tmp_path / ".js" / "sessions" / "compact",
         session_file=tmp_path / ".js" / "sessions" / "compact" / "s.jsonl",
         prompts_dir=tmp_path / "prompts",
-        settings={"compact": compact},
+        settings=dict(compact),
     )
 
 
@@ -152,9 +152,9 @@ def test_compact_messages_invalid_numeric_settings_fall_back(monkeypatch, tmp_pa
     cfg = _compact_test_cfg(
         tmp_path,
         {
-            "chars_per_token": "bad-ratio",
-            "tail_tokens": "bad-tail",
-            "min_savings_tokens": "bad-min",
+            "COMPACTION_CHARS_PER_TOKEN": "bad-ratio",
+            "COMPACTION_KEEP_RECENT_TOKENS": "bad-tail",
+            "COMPACTION_MIN_SAVINGS_TOKENS": "bad-min",
         },
     )
     messages = [
@@ -181,7 +181,7 @@ def test_summarize_invalid_summary_max_tokens_falls_back(monkeypatch, tmp_path):
         return SimpleNamespace(text="Summary")
 
     monkeypatch.setattr(compaction.model_client, "stream_model_async", stream_stub)
-    cfg = _compact_test_cfg(tmp_path, {"summary_max_tokens": "bad-max"})
+    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_SUMMARY_TOKENS_MAX": "bad-max"})
     messages = [
         {"role": "user", "content": "old " * 20000},
         {"role": "assistant", "content": "done"},
@@ -190,7 +190,7 @@ def test_summarize_invalid_summary_max_tokens_falls_back(monkeypatch, tmp_path):
     result = compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True)
 
     assert compaction.compacted(result)
-    assert captured == [settings.default_value("compact.summary_max_tokens")]
+    assert captured == [settings.default_value("COMPACTION_SUMMARY_TOKENS_MAX")]
 
 
 def test_compact_pre_hook_ignores_malformed_and_blank_values(monkeypatch, tmp_path):
@@ -203,7 +203,7 @@ def test_compact_pre_hook_ignores_malformed_and_blank_values(monkeypatch, tmp_pa
     monkeypatch.setattr(compaction, "_run_capped", run_stub)
 
     for raw in (["echo hi"], {"cmd": "echo hi"}, 123, "   "):
-        cfg = _compact_test_cfg(tmp_path, {"pre_hook": raw})
+        cfg = _compact_test_cfg(tmp_path, {"COMPACTION_HINT_COMMAND": raw})
         assert compaction._run_pre_hook(cfg) == ""
 
     assert calls == []
@@ -218,7 +218,7 @@ def test_compact_pre_hook_trims_valid_command(monkeypatch, tmp_path):
         return CappedProcessResult(returncode=0, stdout=b"hook guidance\n", stderr=b"")
 
     monkeypatch.setattr(compaction, "_run_capped", run_stub)
-    cfg = _compact_test_cfg(tmp_path, {"pre_hook": "  echo guidance  "})
+    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_HINT_COMMAND": "  echo guidance  "})
 
     assert compaction._run_pre_hook(cfg) == "hook guidance"
     assert captured["cmd"][-2:] == ["-c", "echo guidance"]
@@ -236,13 +236,13 @@ def test_compact_pre_hook_output_is_capped_and_marked(monkeypatch, tmp_path):
         )
 
     monkeypatch.setattr(compaction, "_run_capped", run_stub)
-    cfg = _compact_test_cfg(tmp_path, {"pre_hook": "yes"})
+    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_HINT_COMMAND": "yes"})
     cfg = Config(**{**cfg.__dict__, "max_bash_output_bytes": 128})
 
     actual = compaction._run_pre_hook(cfg)
 
     assert actual.startswith("x" * 128)
-    assert "[truncated: limits.max_bash_output_bytes (128) reached]" in actual
+    assert "[truncated: SHELL_OUTPUT_MAX (128) reached]" in actual
 
 def test_compact_model_same_is_normalized_and_malformed_values_fall_back(monkeypatch, tmp_path):
     seen_models: list[str] = []
@@ -254,7 +254,7 @@ def test_compact_model_same_is_normalized_and_malformed_values_fall_back(monkeyp
     monkeypatch.setattr(compaction, "summarize", summarize_stub)
 
     for raw in (" SAME ", "same", 123):
-        cfg = _compact_test_cfg(tmp_path, {"model": raw})
+        cfg = _compact_test_cfg(tmp_path, {"COMPACTION_EXTERNAL_MODEL": raw})
         messages = [{"role": "user", "content": "old " * 20000},
                     {"role": "assistant", "content": "latest answer"}]
         compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True)
@@ -271,7 +271,7 @@ def test_compact_now_model_argument_overrides_the_configured_summary_model(monke
 
     monkeypatch.setattr(compaction, "summarize", summarize_stub)
 
-    cfg = _compact_test_cfg(tmp_path, {"model": "configured-summarizer"})
+    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_EXTERNAL_MODEL": "configured-summarizer"})
     messages = [{"role": "user", "content": "old " * 20000},
                 {"role": "assistant", "content": "latest answer"}]
     result = compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True, model="flag-summarizer")
@@ -284,15 +284,15 @@ def test_configured_window_tracks_live_setting_and_catalog(tmp_path):
     cfg = _compact_test_cfg(tmp_path, {})
     assert compaction.configured_context_window(cfg, lambda: None) == 1000000
     assert compaction.configured_context_window(cfg, lambda: 500000) == 500000
-    cfg.settings["compact"]["context_window"] = 750000
+    cfg.settings["CONTEXT_SIZE"] = 750000
     assert compaction.configured_context_window(cfg, lambda: 500000) == 750000
-    cfg.settings["compact"]["context_window"] = 1000000
+    cfg.settings["CONTEXT_SIZE"] = 1000000
     assert compaction.configured_context_window(cfg, lambda: None) == 1000000
 
 
 def test_get_bool_always_returns_a_bool(tmp_path):
     """ALL-CLAIMS compaction.py:60-71: garbage returned a non-bool default unchanged."""
-    cfg = _compact_test_cfg(tmp_path, {"flag": "maybe"})
-    assert compaction.get_bool(cfg, "flag", "not-a-bool") is False
-    assert compaction.get_bool(cfg, "flag", True) is True
-    assert compaction.get_bool(_compact_test_cfg(tmp_path, {"flag": "yes"}), "flag", None) is True
+    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_AUTO": "maybe"})
+    assert compaction.get_bool(cfg, "COMPACTION_AUTO", "not-a-bool") is False
+    assert compaction.get_bool(cfg, "COMPACTION_AUTO", True) is True
+    assert compaction.get_bool(_compact_test_cfg(tmp_path, {"COMPACTION_AUTO": "yes"}), "COMPACTION_AUTO", None) is True

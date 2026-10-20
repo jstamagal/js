@@ -126,7 +126,7 @@ def test_directive_output_is_capped_and_marked():
         max_output_bytes=1024,
     )
     assert out.startswith("x" * 1024)
-    assert "[truncated: limits.max_bash_output_bytes (1024) reached]" in out
+    assert "[truncated: SHELL_OUTPUT_MAX (1024) reached]" in out
     assert len(out) < 1200
 
 
@@ -377,7 +377,7 @@ def test_stock_env_prompt_runs_envctx_from_js_own_directory(tmp_path, monkeypatc
     monkeypatch.chdir(tmp_path)
     text = (js_root / "prompts" / "defaultagent" / "02-env.md").read_text(encoding="utf-8")
     spec = persona.PromptSpec(system=text, tool_selectors=())
-    cfg = type("Cfg", (), {"settings": {"shell": {"program": "sh"}}, "allow_inline_code": True})()
+    cfg = type("Cfg", (), {"settings": {"SHELL_PROGRAM": "sh"}, "allow_inline_code": True})()
 
     expanded = persona._expand_spec(spec, cfg)
 

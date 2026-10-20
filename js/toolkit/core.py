@@ -442,7 +442,7 @@ class ToolContext(_turn_settings.ContextSettings):
     # after a deliberate history rewrite.
     cache_read_baseline: int | None = None
     cache_read_model: str = ""
-    # Automatic summaries that failed in a row; compact.max_summary_failures
+    # Automatic summaries that failed in a row; COMPACTION_FAILURES_MAX
     # of them pause automatic compaction until a summary succeeds.
     summary_failures: int = 0
     turn_status: TurnStatus = field(default_factory=TurnStatus)
@@ -793,7 +793,7 @@ class ToolContext(_turn_settings.ContextSettings):
         if session == Path(os.devnull).resolve(strict=False):
             store = None
         else:
-            safe_agent = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in agent_id) or _settings.default_value("agent")
+            safe_agent = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in agent_id) or _settings.default_value("DEFAULT_AGENT")
             safe_stem = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in session.stem) or "session"
             session_hash = hashlib.sha256(str(session).encode("utf-8")).hexdigest()[:16]
             store = (state_dir or state_root()) / safe_agent / "undo" / f"{safe_stem}-{session_hash}"

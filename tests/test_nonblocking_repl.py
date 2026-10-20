@@ -21,7 +21,7 @@ def _session_file(tmp_path):
 
 def _drive_async_repl(monkeypatch, tmp_path, lines, run_turn_async_stub):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli.runtime, "run_turn_async", run_turn_async_stub)

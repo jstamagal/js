@@ -422,7 +422,7 @@ def test_spilled_tool_results_stay_readable(jailed):
 
 
 def test_jail_bind_setting_refuses_a_relative_path():
-    spec = settings.spec_for("jail.bind")
+    spec = settings.spec_for("JAIL_BIND")
 
     _value, error = settings.coerce_value(spec, '["relative/dir"]')
     assert error is not None
@@ -590,7 +590,7 @@ def test_commit_helper_dash_C_is_not_the_jail(tmp_path):
 
 def test_system_prompt_commands_see_the_shell_program(tmp_path):
     spec = persona.PromptSpec(system="shell={{JS_SHELL}}", tool_selectors=())
-    cfg = type("Cfg", (), {"settings": {"shell": {"program": "sh"}}, "allow_inline_code": False})()
+    cfg = type("Cfg", (), {"settings": {"SHELL_PROGRAM": "sh"}, "allow_inline_code": False})()
 
     expanded = persona._expand_spec(spec, cfg)
 

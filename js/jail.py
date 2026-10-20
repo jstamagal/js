@@ -9,7 +9,7 @@ hostile model. Under `-C`:
   filesystem mount. The jail's `/tmp` and `~/.js/tmp` are directories private
   to this js process. DIR is bound read-write at its real path. The PATH
   directories, rustup's toolchains and the kernel's interpreter under a hidden
-  tree or the host's `/tmp`, the `jail.bind` entries and the `/add` binds are bound back. The
+  tree or the host's `/tmp`, the `JAIL_BIND` entries and the `/add` binds are bound back. The
   network is shared.
 - the file tools resolve every path and refuse one outside DIR and the bound
   paths (`confine`). Their results name the jail's /tmp and ~/.js/tmp as the
@@ -85,9 +85,9 @@ def parse_bind(spec: str) -> Bind:
 
 
 def parse_binds(specs) -> list[Bind]:
-    """The `jail.bind` setting's value as binds. Raises ValueError."""
+    """The `JAIL_BIND` setting's value as binds. Raises ValueError."""
     if not isinstance(specs, (list, tuple)):
-        raise ValueError("jail.bind is a JSON list of \"path[:rw]\" strings")
+        raise ValueError("JAIL_BIND is a JSON list of \"path[:rw]\" strings")
     return [parse_bind(item) for item in specs]
 
 
@@ -220,7 +220,7 @@ class Jail:
     # --- what is visible -------------------------------------------------
 
     def binds(self, setting: object = ()) -> list[Bind]:
-        """The `jail.bind` entries plus the `/add` binds. Invalid entries in
+        """The `JAIL_BIND` entries plus the `/add` binds. Invalid entries in
         ``setting`` are skipped; `/set` refuses them."""
         out: list[Bind] = []
         for item in setting or ():
@@ -321,7 +321,7 @@ class Jail:
         return real
 
     def bound(self, path: Path, setting: object = ()) -> bool:
-        """Whether ``path`` lies in DIR, a `jail.bind` entry or an /add bind."""
+        """Whether ``path`` lies in DIR, a `JAIL_BIND` entry or an /add bind."""
         real = _real(path)
         return any(_under(real, _real(b.path)) for b in [Bind(self.root), *self.binds(setting)])
 
@@ -426,7 +426,7 @@ def wrap(argv: list[str], context: object, *, cwd: Path | str | None = None,
     """``argv`` to run in the jail when there is one, else ``argv`` itself.
     ``env`` is the environment the command gets; its PATH decides which PATH
     directories are bound back. ``context`` is the ToolContext whose
-    `jail.bind` applies."""
+    `JAIL_BIND` applies."""
     jail = ACTIVE
     if jail is None:
         return list(argv)

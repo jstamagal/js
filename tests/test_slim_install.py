@@ -42,7 +42,7 @@ assert 'ERROR:' not in result
 def test_kernel_setting_projects_installs_and_is_inherited():
     store = settings.seed_defaults()
     assert turn_settings.project(store)["kernel_enabled"] is False
-    settings.set_dotted(store, ("kernel", "enabled"), True)
+    settings.set_dotted(store, ("PYTHON_KERNEL",), True)
     cfg = SimpleNamespace(**turn_settings.project(store))
     parent = ToolContext()
     turn_settings.install(parent, cfg)
@@ -57,8 +57,8 @@ def test_live_kernel_toggle_rebuilds_the_selected_surface(tmp_path):
     state = {"settings": settings.seed_defaults(),
              "tool_selectors": ("kernel:eager", "toolbox:eager", "shell:eager")}
     for enabled in (True, False, True):
-        settings.set_dotted(state["settings"], ("kernel", "enabled"), enabled)
-        result = setcmd.CommandResult(changed_keys=("kernel.enabled",))
+        settings.set_dotted(state["settings"], ("PYTHON_KERNEL",), enabled)
+        result = setcmd.CommandResult(changed_keys=("PYTHON_KERNEL",))
         cli._apply_settings_result(result, state, cfg)
         surface = state["tool_registry"]
         assert (surface.resolve("kernel") is not None) is enabled

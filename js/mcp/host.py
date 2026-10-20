@@ -341,7 +341,7 @@ class MCPHost:
         if request_timeout is None:
             request_timeout = getattr(config, "request_timeout_s", None)
         if request_timeout is None:
-            request_timeout = _settings.default_value("mcp.request_timeout_s")
+            request_timeout = _settings.default_value("MCP_TIMEOUT")
         if request_timeout <= 0:
             raise ValueError("MCP request timeout must be positive")
         self.config = config

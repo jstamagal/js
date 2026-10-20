@@ -89,7 +89,7 @@ def test_bench_flag_runs_the_named_agent(monkeypatch):
 
 def test_run_bench_writes_stats_and_resolves_max_tokens(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.chdir(tmp_path)
     _write_agent(tmp_path)
@@ -128,7 +128,7 @@ def test_run_bench_writes_stats_and_resolves_max_tokens(tmp_path, monkeypatch):
 
 def test_run_bench_csv_has_one_row_per_benchmark(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.chdir(tmp_path)
     _write_agent(tmp_path)
@@ -144,7 +144,7 @@ def test_run_bench_csv_has_one_row_per_benchmark(tmp_path, monkeypatch):
 
 def test_bench_requires_benchmark_files(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.chdir(tmp_path)
     d = tmp_path / ".js" / "agents" / "noBench"

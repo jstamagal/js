@@ -86,7 +86,7 @@ def read_text(path: Path, cap: int) -> str:
         text = path.read_text("utf-8", errors="replace")
     except OSError as exc:
         return f"ERROR: {exc}"
-    return cap_text(text, cap, truncation_marker(cap, "limits.max_tool_result_bytes"))
+    return cap_text(text, cap, truncation_marker(cap, "TOOL_RESULT_MAX"))
 
 
 def copy_to_assets(src: Path, vault_path: Path) -> Path | str:

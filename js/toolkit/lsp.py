@@ -1,6 +1,6 @@
 """`lsp`: diagnostics, definition, references and hover from a language server.
 
-The `lsp.servers` setting lists the servers: each entry names a command, the
+The `LSP_SERVERS` setting lists the servers: each entry names a command, the
 file extensions it serves and the files that mark a workspace root. For a
 file, the first entry that serves its extension and whose command is on PATH
 is used.
@@ -69,24 +69,24 @@ class ServerSpec:
 
 
 def parse_servers(raw: Any) -> list[ServerSpec]:
-    """The `lsp.servers` setting as server specs. Raises LspError naming the
+    """The `LSP_SERVERS` setting as server specs. Raises LspError naming the
     first entry that is not {name, command, extensions[, roots]}."""
     if not isinstance(raw, list):
-        raise LspError("lsp.servers must be a JSON list of {name, command, extensions, roots} objects")
+        raise LspError("LSP_SERVERS must be a JSON list of {name, command, extensions, roots} objects")
     specs: list[ServerSpec] = []
     for index, entry in enumerate(raw):
         if not isinstance(entry, dict):
-            raise LspError(f"lsp.servers entry {index} is not an object")
+            raise LspError(f"LSP_SERVERS entry {index} is not an object")
         command = entry.get("command")
         extensions = entry.get("extensions")
         roots = entry.get("roots", [])
         if (not isinstance(command, list) or not command
                 or not all(isinstance(part, str) and part for part in command)):
-            raise LspError(f"lsp.servers entry {index}: command must be a non-empty list of strings")
+            raise LspError(f"LSP_SERVERS entry {index}: command must be a non-empty list of strings")
         if not isinstance(extensions, list) or not all(isinstance(ext, str) for ext in extensions):
-            raise LspError(f"lsp.servers entry {index}: extensions must be a list of strings such as \".py\"")
+            raise LspError(f"LSP_SERVERS entry {index}: extensions must be a list of strings such as \".py\"")
         if not isinstance(roots, list) or not all(isinstance(marker, str) for marker in roots):
-            raise LspError(f"lsp.servers entry {index}: roots must be a list of file names")
+            raise LspError(f"LSP_SERVERS entry {index}: roots must be a list of file names")
         name = entry.get("name")
         specs.append(ServerSpec(
             name=str(name) if isinstance(name, str) and name else command[0],
@@ -106,7 +106,7 @@ def pick_server(path: Path, specs: list[ServerSpec], env_path: str | None = None
         covered = sorted({ext for spec in specs for ext in spec.extensions})
         kind = f"{ext} files" if ext else "files without an extension"
         listing = ", ".join(covered) if covered else "nothing"
-        raise LspError(f"no language server is configured for {kind}; lsp.servers covers {listing}")
+        raise LspError(f"no language server is configured for {kind}; LSP_SERVERS covers {listing}")
     for spec in serving:
         found = shutil.which(spec.command[0], path=env_path)
         if found:
@@ -114,7 +114,7 @@ def pick_server(path: Path, specs: list[ServerSpec], env_path: str | None = None
     looked = ", ".join(dict.fromkeys(spec.command[0] for spec in serving))
     raise LspError(
         f"no language server for {ext} files is on PATH (looked for {looked}); "
-        "install one or add an entry to lsp.servers"
+        "install one or add an entry to LSP_SERVERS"
     )
 
 
@@ -362,7 +362,7 @@ class LanguageServer:
                 self.notify("$/cancelRequest", {"id": request_id})
             except LspError:
                 pass
-            raise LspError(f"no reply to {method} within {timeout:g}s (lsp.timeout_s)")
+            raise LspError(f"no reply to {method} within {timeout:g}s (LSP_TIMEOUT)")
         error = response.get("error")
         if isinstance(error, dict):
             raise LspError(f"{method} failed: {error.get('message', error)}")
@@ -560,7 +560,7 @@ def shutdown_servers() -> None:
 
 def _server_env(context: ToolContext) -> dict[str, str]:
     """The environment a server starts with: js's own, or under `js -C` only
-    the names `limits.shell_env_allow` lists."""
+    the names `SHELL_ENV_KEEP` lists."""
     if _jail.active() is None:
         return dict(os.environ)
     allow = tuple(getattr(context, "shell_env_allow", ()) or ())
@@ -600,7 +600,7 @@ def server_for(spec: ServerSpec, executable: str, root: Path, context: ToolConte
             server.initialize(timeout)
         except LspError as exc:
             server.shutdown()
-            hint = " Under -C it runs in the jail; jail.bind adds paths it needs." if jail is not None else ""
+            hint = " Under -C it runs in the jail; JAIL_BIND adds paths it needs." if jail is not None else ""
             raise LspError(f"did not start: {exc}.{hint}") from exc
         _SERVERS[key] = server
         return server
@@ -743,7 +743,7 @@ def lsp(
     try:
         size = target.stat().st_size
         if size > context.max_file_bytes:
-            return (f"ERROR: file size ({size} bytes) exceeds limits.max_file_bytes "
+            return (f"ERROR: file size ({size} bytes) exceeds FILE_BYTES_MAX "
                     f"({context.max_file_bytes}) for a language server")
         text = target.read_bytes().decode("utf-8")
     except OSError as exc:
@@ -772,7 +772,7 @@ def lsp(
                 items = server.wait_diagnostics(uri, version, before, timeout)
             if items is None:
                 return (f"{display}: {spec.name} published no diagnostics within {timeout:g}s "
-                        "(lsp.timeout_s); it may still be loading the workspace. Call again.")
+                        "(LSP_TIMEOUT); it may still be loading the workspace. Call again.")
             return _format_diagnostics(items, lines, display, spec.name)
         position = _position(lines, line, character, symbol)
         if isinstance(position, str):

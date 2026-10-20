@@ -1,7 +1,7 @@
 """Large bracketed pastes collapse to one marker in the input line.
 
-A paste of more than `ui.paste_collapse_lines` lines, or more than
-`ui.paste_collapse_chars` characters, is kept here and the input line shows
+A paste of more than `PASTE_COLLAPSE_LINES` lines, or more than
+`PASTE_COLLAPSE_CHARS` characters, is kept here and the input line shows
 `[paste #N +X lines]` (or `[paste #N X chars]` when only the character limit
 is passed) in its place (pi's editor). When the line is sent, `expand`
 puts every kept paste back, so the model reads the full text. Pastes are kept
@@ -65,8 +65,8 @@ def insert(buffer, data: str, settings: Mapping | None) -> None:
     the input line (the buffer named DEFAULT_BUFFER), the text itself
     otherwise. The ex line and the history search never expand markers."""
     text = normalize(data)
-    line_limit = int(_settings.knob(settings, "ui.paste_collapse_lines") or 0)
-    char_limit = int(_settings.knob(settings, "ui.paste_collapse_chars") or 0)
+    line_limit = int(_settings.knob(settings, "PASTE_COLLAPSE_LINES") or 0)
+    char_limit = int(_settings.knob(settings, "PASTE_COLLAPSE_CHARS") or 0)
     if buffer.name == DEFAULT_BUFFER and collapses(text, line_limit, char_limit):
         text = keep(text, line_limit)
     buffer.insert_text(text)

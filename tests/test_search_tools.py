@@ -431,7 +431,7 @@ def test_browse_truncation_marker_fits_result_cap(monkeypatch: pytest.MonkeyPatc
 
     actual = search.browse("https://example.com", context=ToolContext(cwd=tmp_path, max_tool_result_bytes=cap))
 
-    marker = truncation_marker(cap, "limits.max_tool_result_bytes")
+    marker = truncation_marker(cap, "TOOL_RESULT_MAX")
     expected = "x" * (cap - len(marker.encode()) - 1) + "\n" + marker
     assert actual == expected
     assert len(actual.encode()) == cap

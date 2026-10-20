@@ -79,7 +79,7 @@ def _resolve_alias_profile(
 ) -> dict[str, str]:
     """Pick the canonical->alias map for the first matching tool alias profile.
 
-    Profiles live under ``[[tools.alias_profiles]]`` in config; each entry has
+    Profiles live under ``[[TOOL_ALIASES]]`` in config; each entry has
     a ``match`` string or list of case-insensitive substrings tested against the
     model id and provider id, plus an ``aliases`` table mapping canonical tool
     names to the model-facing names. The first profile whose ``match`` hits
@@ -87,8 +87,7 @@ def _resolve_alias_profile(
     names. When a registry is provided, matching profiles with no usable
     aliases are skipped.
     """
-    tools_cfg = (settings or {}).get("tools")
-    profiles = tools_cfg.get("alias_profiles") if isinstance(tools_cfg, dict) else None
+    profiles = (settings or {}).get("TOOL_ALIASES")
     if not isinstance(profiles, list):
         return {}
     haystacks = [model.lower()]
@@ -175,7 +174,7 @@ _CONTEXT_WINDOW_OVERRIDES: dict[str, int] = {}
 
 
 def set_context_window_overrides(raw: Any) -> None:
-    """Install compact.context_window_overrides, a map of model key -> window.
+    """Install CONTEXT_SIZE_PER_MODEL, a map of model key -> window.
 
     models.dev carries one row per model id, not per *surface*. A subscription
     endpoint (openai-codex) and the public API can serve the same model id with
@@ -211,11 +210,11 @@ def set_context_window_overrides(raw: Any) -> None:
 def install_context_window_overrides(cfg: Config) -> None:
     """Install both override forms for this turn.
 
-    model.context_window is the single-model form, symmetric with
-    model.max_output_tokens, and wins — it names the model actually running.
-    compact.context_window_overrides is the multi-model map.
+    CONTEXT_SIZE is the single-model form, symmetric with
+    OUTPUT_TOKENS_MAX, and wins — it names the model actually running.
+    CONTEXT_SIZE_PER_MODEL is the multi-model map.
     """
-    overrides = dict(compaction.get(cfg, "context_window_overrides", None) or {})
+    overrides = dict(compaction.get(cfg, "CONTEXT_SIZE_PER_MODEL", None) or {})
     explicit = getattr(cfg, "model_context_window", None)
     if explicit:
         key = f"{cfg.provider_id}/{cfg.model}" if cfg.provider_id else cfg.model
@@ -903,7 +902,7 @@ def _well_formed_result(result: ToolResult) -> ToolResult:
 def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None) -> Any:
     """Spill-then-clip a tool result.
 
-    inline_cap (limits.max_tool_result_inline_bytes) sends anything larger to a
+    inline_cap (TOOL_RESULT_INLINE_MAX) sends anything larger to a
     file first, so what the model loses is only its position in the text, not
     the text. cap_bytes is the hard backstop after that.
 
@@ -914,7 +913,7 @@ def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None) -> A
     if isinstance(result, ToolResult):
         result = _well_formed_result(result)
         if cap_bytes > 0 and _tool_result_content_size(result) > cap_bytes:
-            marker = f"\n[truncated: limits.max_tool_result_bytes ({cap_bytes}) reached]"
+            marker = f"\n[truncated: TOOL_RESULT_MAX ({cap_bytes}) reached]"
             return _dehydrate_capped_result(result, cap_bytes, marker)
         return result
     if not isinstance(result, str):
@@ -929,7 +928,7 @@ def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None) -> A
     if inline_cap > 0:
         result = spill_oversized_result(result, inline_cap)
     if cap_bytes > 0:
-        return cap_text(result, cap_bytes, f"\n[truncated: limits.max_tool_result_bytes ({cap_bytes}) reached]")
+        return cap_text(result, cap_bytes, f"\n[truncated: TOOL_RESULT_MAX ({cap_bytes}) reached]")
     return result
 
 
@@ -938,7 +937,7 @@ def spill_oversized_result(
     inline_cap: int,
     *,
     spill_dir: Path | None = None,
-    limit_name: str = "limits.max_tool_result_inline_bytes",
+    limit_name: str = "TOOL_RESULT_INLINE_MAX",
     force: bool = False,
 ) -> str:
     """Write an oversized result to disk and return a preview plus the path.
@@ -1059,7 +1058,7 @@ def _cap_batch_results(results: list[Any], cap_bytes: int) -> list[Any]:
     sizes = [_result_size(r) for r in results]
     if sum(sizes) <= cap_bytes:
         return results
-    marker = f"\n[truncated: limits.max_tool_results_per_turn_bytes ({cap_bytes}) reached]"
+    marker = f"\n[truncated: PARALLEL_RESULTS_MAX ({cap_bytes}) reached]"
     allowance = _fair_share_ceiling(sizes, cap_bytes)
     if allowance < 0:
         return results
@@ -1615,7 +1614,7 @@ def _prepare_turn_context(context: ToolContext, cfg: Config, request: ModelReque
     context.context_tokens = 0
     context.tokens_until_compaction = None
     context.turn_status.reset()
-    chars_per_token = compaction.get_float(cfg, "chars_per_token")
+    chars_per_token = compaction.get_float(cfg, "COMPACTION_CHARS_PER_TOKEN")
     token_state = getattr(context, "context_budget_state", None)
     if not isinstance(token_state, context_budget.TokenState):
         token_state = context_budget.TokenState(chars_per_token=chars_per_token)
@@ -1713,7 +1712,7 @@ def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, 
             getattr(
                 cfg,
                 "max_tool_calls_per_message",
-                _settings.default_value("limits.max_tool_calls_per_message"),
+                _settings.default_value("REPLY_TOOL_CALLS_MAX"),
             ),
         )
         telemetry.event(
@@ -1728,7 +1727,7 @@ def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, 
             diagnostic = (
                 "Tool-call batch limit reached: "
                 f"retained {batch_stats.retained} distinct calls and rejected "
-                f"{batch_stats.capped} beyond limits.max_tool_calls_per_message."
+                f"{batch_stats.capped} beyond REPLY_TOOL_CALLS_MAX."
             )
             batch_diagnostic_suffix = ("\n\n" if text else "") + diagnostic
             text += batch_diagnostic_suffix

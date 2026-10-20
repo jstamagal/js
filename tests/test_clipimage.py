@@ -118,7 +118,7 @@ def test_kitty_over_ssh_reads_through_the_terminal():
 
 def test_configured_command_wins_over_the_display(tmp_path):
     command = _png_command(tmp_path)
-    live = {"ui": {"paste_image_command": command}}
+    live = {"PASTE_IMAGE_COMMAND": command}
 
     assert clipimage.clipboard_command(live, {"WAYLAND_DISPLAY": "wayland-1"}) == [command]
     assert clipimage.read_image(live, env={}) == _PNG
@@ -133,15 +133,15 @@ def test_missing_clipboard_tool_is_one_error(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("body", ["exit 1", "echo just some text"])
 def test_clipboard_without_an_image_is_one_error(tmp_path, body):
-    live = {"ui": {"paste_image_command": _fake_command(tmp_path, body)}}
+    live = {"PASTE_IMAGE_COMMAND": _fake_command(tmp_path, body)}
     with pytest.raises(clipimage.ClipboardError) as err:
         clipimage.read_image(live, env={})
     assert err.value.message is msgs.CLIPBOARD_NO_IMAGE
 
 
 def test_image_over_max_file_bytes_is_refused(tmp_path):
-    live = {"ui": {"paste_image_command": _png_command(tmp_path)},
-            "limits": {"max_file_bytes": len(_PNG) - 1}}
+    live = {"PASTE_IMAGE_COMMAND": _png_command(tmp_path),
+            "FILE_BYTES_MAX": len(_PNG) - 1}
     with pytest.raises(clipimage.ClipboardError) as err:
         clipimage.read_image(live, env={})
     assert err.value.message is msgs.CLIPBOARD_IMAGE_TOO_LARGE
@@ -150,7 +150,7 @@ def test_image_over_max_file_bytes_is_refused(tmp_path):
 # --- the key -----------------------------------------------------------------
 
 def test_ctrl_v_puts_a_placeholder_in_the_line_and_submit_carries_it(tmp_path):
-    live = {"ui": {"paste_image_command": _png_command(tmp_path)}}
+    live = {"PASTE_IMAGE_COMMAND": _png_command(tmp_path)}
 
     lines, _left = _drive(["what is ", CTRL_V, " and ", CTRL_V, "\r"], live)
 
@@ -160,7 +160,7 @@ def test_ctrl_v_puts_a_placeholder_in_the_line_and_submit_carries_it(tmp_path):
 
 
 def test_paste_key_follows_the_setting(tmp_path):
-    live = {"ui": {"paste_image_command": _png_command(tmp_path), "paste_image_key": "escape v"}}
+    live = {"PASTE_IMAGE_COMMAND": _png_command(tmp_path), "PASTE_IMAGE_KEY": "escape v"}
 
     _lines, left = _drive(["x", "\x1bv"], live)
 
@@ -214,18 +214,18 @@ def test_pasted_image_reaches_the_model_as_an_at_path_image_does(tmp_path, visio
 # --- the settings --------------------------------------------------------------
 
 def test_paste_key_setting_takes_key_names_and_refuses_others():
-    spec = settings.SPEC_BY_KEY["ui.paste_image_key"]
+    spec = settings.SPEC_BY_KEY["PASTE_IMAGE_KEY"]
 
     assert settings.coerce_value(spec, "escape  v") == ("escape v", None)
     value, error = settings.coerce_value(spec, "c-notakey")
     assert value is None and error
-    assert settings.default_value("ui.paste_image_key") == "c-v"
-    assert settings.default_value("ui.paste_image_command") is None
+    assert settings.default_value("PASTE_IMAGE_KEY") == "c-v"
+    assert settings.default_value("PASTE_IMAGE_COMMAND") is None
 
 
 @pytest.mark.parametrize("command", ["wl-paste '", "   "])
 def test_paste_command_setting_refuses_unsplittable_or_empty(command):
-    spec = settings.SPEC_BY_KEY["ui.paste_image_command"]
+    spec = settings.SPEC_BY_KEY["PASTE_IMAGE_COMMAND"]
 
     value, error = settings.coerce_value(spec, command)
     assert value is None and error
@@ -235,11 +235,11 @@ def test_paste_command_setting_refuses_unsplittable_or_empty(command):
 @pytest.mark.parametrize("command", ["wl-paste '", "   "])
 def test_bad_configured_command_is_one_error_not_a_crash(command):
     # Config files and env skip coerce_value, so read_image must catch it too.
-    live = {"ui": {"paste_image_command": command}}
+    live = {"PASTE_IMAGE_COMMAND": command}
     with pytest.raises(clipimage.ClipboardError) as err:
         clipimage.read_image(live, env={})
     assert err.value.message is msgs.CLIPBOARD_READ_FAILED
-    assert "ui.paste_image_command" in str(err.value)
+    assert "PASTE_IMAGE_COMMAND" in str(err.value)
 
 
 def test_placeholder_takes_plain_bounded_numbers_only():

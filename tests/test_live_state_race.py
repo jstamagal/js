@@ -18,13 +18,13 @@ from repl_driver import run_async
 
 def _setup(monkeypatch, tmp_path, pairs: int) -> list[tuple[str, str | None]]:
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.chdir(tmp_path)
     for i in range(pairs):
         (tmp_path / f"pair{i}.jsrc").write_text(
-            f"set provider.base_url http://h{i}.invalid\n"
-            + "set runtime.steer one\n" * 8  # widens the window between the two
+            f"set BASE_URL http://h{i}.invalid\n"
+            + "set STEER_MODE one\n" * 8  # widens the window between the two
             + f"model m{i}\n",
             encoding="utf-8",
         )
@@ -82,7 +82,7 @@ def test_interleaved_set_and_model_commands_never_mix_into_a_turn(monkeypatch, t
     seen = _setup(monkeypatch, tmp_path, pairs=rounds)
 
     async def script(on_line):
-        await on_line("/set runtime.steer one")
+        await on_line("/set STEER_MODE one")
         await on_line(f"/load {tmp_path / 'pair0.jsrc'}")
         lines = []
         for i in range(1, rounds):

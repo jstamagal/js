@@ -3,7 +3,7 @@
 Regression for the FIXME cluster where a custom login (booty/testes/a local
 llama.cpp box) was visible to /model and --list-models but invisible to
 routing: `provider/model` prefixes shipped the WHOLE string to the default
-provider, and pinning `provider.id` resolved base_url but handed the raw js id
+provider, and pinning `PROVIDER` resolved base_url but handed the raw js id
 to the SDK ("unknown provider id").
 """
 
@@ -138,7 +138,7 @@ def test_explicit_model_known_unlogged_prefix_does_not_ride_saved_default(
     _save_custom_login("testes")
     config_file = tmp_path / "home" / ".js" / "jsrc"
     config_file.parent.mkdir(parents=True, exist_ok=True)
-    config_file.write_text("set model.id testes/test\n", encoding="utf-8")
+    config_file.write_text("set MODEL testes/test\n", encoding="utf-8")
     monkeypatch.setenv("HF_TOKEN", "hf-decoy")
 
     cfg = from_env(cwd=tmp_path, save_session=False)
@@ -156,7 +156,7 @@ def test_js_model_known_unlogged_prefix_does_not_ride_saved_default(monkeypatch,
     _save_custom_login("testes")
     config_file = tmp_path / "home" / ".js" / "jsrc"
     config_file.parent.mkdir(parents=True, exist_ok=True)
-    config_file.write_text("set model.id testes/test\n", encoding="utf-8")
+    config_file.write_text("set MODEL testes/test\n", encoding="utf-8")
     monkeypatch.setenv("JS_MODEL", "huggingface/foo")
     monkeypatch.setenv("HF_TOKEN", "hf-decoy")
 
@@ -213,7 +213,7 @@ def test_explicit_model_same_saved_prefix_routes_to_saved_login(monkeypatch, tmp
     _save_custom_login("testes")
     config_file = tmp_path / "home" / ".js" / "jsrc"
     config_file.parent.mkdir(parents=True, exist_ok=True)
-    config_file.write_text("set model.id testes/test\n", encoding="utf-8")
+    config_file.write_text("set MODEL testes/test\n", encoding="utf-8")
 
     cfg = from_env(cwd=tmp_path, save_session=False)
     actual = cli._resolve_cli_model_override(cfg, "testes/other")

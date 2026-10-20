@@ -107,8 +107,8 @@ class CallLimits:
         return cls(
             retry=retry.Budget.from_settings(settings),
             stream_idle=retry.idle_seconds(settings),
-            max_output_escalation=int(_settings.knob(settings, "runtime.max_output_escalation") or 0),
-            max_output_resumes=int(_settings.knob(settings, "runtime.max_output_resumes") or 0),
+            max_output_escalation=int(_settings.knob(settings, "OUTPUT_TOKENS_RETRY_MAX") or 0),
+            max_output_resumes=int(_settings.knob(settings, "OUTPUT_RESUMES_MAX") or 0),
         )
 
 

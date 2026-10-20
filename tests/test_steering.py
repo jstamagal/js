@@ -1,4 +1,4 @@
-"""Input typed while a turn runs (runtime.steer).
+"""Input typed while a turn runs (STEER_MODE).
 
 now: the line reaches the model at the running turn's next tool boundary, as a
 user message after the tool results; a turn with no boundary left gets it as
@@ -124,7 +124,7 @@ def test_a_steered_message_does_not_start_a_new_turn_for_compaction():
 
 
 def test_steer_knob_accepts_the_three_modes_only():
-    spec = next(s for s in settings.REGISTRY if s.key == "runtime.steer")
+    spec = next(s for s in settings.REGISTRY if s.key == "STEER_MODE")
     assert spec.default == "now"
     for mode in ("now", "batch", "one", "BATCH"):
         value, error = settings.coerce_value(spec, mode)
@@ -175,7 +175,7 @@ class _Harness:
             return _text(f"reply {len(self.calls)}")
 
         monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.delenv("JS_AGENT", raising=False)
+        monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
         monkeypatch.delenv("JS_SESSION", raising=False)
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(cli.runtime, "run_turn_async", run_turn_async_with_hold)
@@ -248,7 +248,7 @@ def test_steer_batch_sends_lines_typed_during_a_turn_as_one_message(monkeypatch,
     h = _Harness(monkeypatch, tmp_path)
 
     async def script(on_line, h):
-        await on_line("/set runtime.steer batch")
+        await on_line("/set STEER_MODE batch")
         await on_line("first")
         await h.wait_hold()
         await on_line("second")
@@ -269,7 +269,7 @@ def test_steer_one_runs_a_turn_per_line(monkeypatch, tmp_path):
     h = _Harness(monkeypatch, tmp_path)
 
     async def script(on_line, h):
-        await on_line("/set runtime.steer one")
+        await on_line("/set STEER_MODE one")
         await on_line("first")
         await h.wait_hold()
         await on_line("second")

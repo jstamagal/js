@@ -1,13 +1,13 @@
 """The prompt history: every line submitted at a REPL prompt, in one file.
 
-`history.file` (unset = ~/.js/state/history.jsonl) holds one JSON object per
+`HISTORY_FILE` (unset = ~/.js/state/history.jsonl) holds one JSON object per
 line: ts (epoch seconds), cwd, session, agent and text. Every js process
 appends to the same file, one whole line per write.
 
 `PromptHistory` is that file as a prompt_toolkit history. It loads the newest
-`history.max_entries` entries. With `history.cwd_first` on, Up browses the
+`HISTORY_SIZE` entries. With `HISTORY_ORDER` cwd, Up browses the
 entries typed in the current directory first, newest first, then the rest;
-off, every entry in time order. A text is offered once, at its first place in
+with last, every entry in time order. A text is offered once, at its first place in
 that order. Ctrl-R's incremental search runs over the same loaded entries, so
 it finds a prompt typed in any directory, session or agent.
 

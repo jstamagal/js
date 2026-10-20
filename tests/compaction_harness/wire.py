@@ -146,7 +146,7 @@ async def wire(mode):
     server.owner = owner
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
     thread.start()
-    cfg = cfg_for("wire_" + mode, context_window=128000, tail_tokens=100)
+    cfg = cfg_for("wire_" + mode, CONTEXT_SIZE=128000, COMPACTION_KEEP_RECENT_TOKENS=100)
     cfg = replace(cfg, provider_base_url=f"http://127.0.0.1:{server.server_port}/v1")
     context = ToolContext(cwd=cfg.agent_dir)
     effects = []

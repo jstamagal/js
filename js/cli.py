@@ -34,6 +34,7 @@ from . import swarm as swarm_mod
 from . import attach, clipimage, codex_auth
 from . import agent_messages
 from . import compaction
+from . import rename
 from . import display as display_mod
 from . import dotenv
 from . import endpoint_uri
@@ -432,10 +433,10 @@ def _print_resume_hint(cfg: Config, state: dict) -> None:
     if cfg.session_file == Path(os.devnull) or not state.get("messages"):
         return
     resume = "js"
-    # A bare `js --session` runs the `agent` setting, so the hint names the
+    # A bare `js --session` runs the `DEFAULT_AGENT` setting, so the hint names the
     # agent unless both this run and that setting are on the js/jsrc default.
-    stock = settings.default_value("agent")
-    if cfg.agent_id != stock or settings.knob(cfg.settings, "agent") != stock:
+    stock = settings.default_value("DEFAULT_AGENT")
+    if cfg.agent_id != stock or settings.knob(cfg.settings, "DEFAULT_AGENT") != stock:
         resume += f" --agent {shlex.quote(cfg.agent_id)}"
     model = state.get("model")
     if isinstance(model, str) and model:
@@ -445,7 +446,7 @@ def _print_resume_hint(cfg: Config, state: dict) -> None:
 
 
 def _invocation_agent(args: argparse.Namespace, presets: list[str]) -> str:
-    """The agent this invocation runs: --agent, --commit, then the `agent`
+    """The agent this invocation runs: --agent, --commit, then the `DEFAULT_AGENT`
     setting, resolved as `from_env` resolves it."""
     return resolve_agent_id(
         args.agent or ("commit" if args.commit else None),
@@ -565,7 +566,7 @@ def _live_optional_str_setting(live_settings: dict, path: tuple[str, str], defau
 
 def _live_reasoning_effort_setting(live_settings: dict, default: str | None) -> str | None:
     missing = object()
-    raw = settings.get_dotted(live_settings, ("model", "reasoning_effort"), missing)
+    raw = settings.get_dotted(live_settings, ("EFFORT",), missing)
     if raw is missing:
         return default
     if raw is None:
@@ -575,13 +576,13 @@ def _live_reasoning_effort_setting(live_settings: dict, default: str | None) -> 
     return default
 
 
-def _live_bool_setting(live_settings: dict, path: tuple[str, str], default: bool) -> bool:
+def _live_bool_setting(live_settings: dict, path: tuple[str, ...], default: bool) -> bool:
     raw = settings.get_dotted(live_settings, path, default)
     return raw if isinstance(raw, bool) else default
 
 
 def _debug_log_from_live_settings(cfg: Config, live_settings: dict) -> Path | None:
-    enabled = _live_bool_setting(live_settings, ("runtime", "debug"), cfg.debug_log is not None)
+    enabled = _live_bool_setting(live_settings, ("DEBUG_LOG",), cfg.debug_log is not None)
     if not enabled:
         return None
     return cfg.debug_log or (_paths.state_root() / cfg.agent_id / "debug.log")
@@ -692,7 +693,7 @@ class _StdoutTee:
 def _transcript_log_path(cfg: Config, live_settings: dict) -> Path | None:
     """Resolve the per-session visible transcript path, or None when disabled."""
     if not _live_bool_setting(
-        live_settings, ("runtime", "transcript_log"), getattr(cfg, "transcript_log", True)
+        live_settings, ("TRANSCRIPT_LOG",), getattr(cfg, "transcript_log", True)
     ):
         return None
     session = cfg.session_file
@@ -701,7 +702,7 @@ def _transcript_log_path(cfg: Config, live_settings: dict) -> Path | None:
     else:
         stem = session.stem
     override = _live_optional_str_setting(
-        live_settings, ("runtime", "transcript_log_dir"), getattr(cfg, "transcript_log_dir", None)
+        live_settings, ("TRANSCRIPT_LOG_DIR",), getattr(cfg, "transcript_log_dir", None)
     )
     root = Path(override).expanduser() if override else (_paths.transcript_root() / cfg.agent_id)
     return root / f"{stem}.log"
@@ -754,7 +755,7 @@ def _debug_autolog_path(cfg: Config, live_settings: dict) -> Path | None:
     """Resolve the per-session autolog path, or None when autolog is off. Mirrors
     the session file's name, under logs/<agent>/."""
     if not _live_bool_setting(
-        live_settings, ("runtime", "debug_autolog"), settings.knob_attr(cfg, "debug_autolog", "runtime.debug_autolog")
+        live_settings, ("REQUEST_LOG",), settings.knob_attr(cfg, "debug_autolog", "REQUEST_LOG")
     ):
         return None
     session = cfg.session_file
@@ -763,7 +764,7 @@ def _debug_autolog_path(cfg: Config, live_settings: dict) -> Path | None:
     else:
         stem = session.stem
     override = _live_optional_str_setting(
-        live_settings, ("runtime", "debug_autolog_dir"), getattr(cfg, "debug_autolog_dir", None)
+        live_settings, ("REQUEST_LOG_DIR",), getattr(cfg, "debug_autolog_dir", None)
     )
     root = Path(override).expanduser() if override else (_paths.logs_root() / cfg.agent_id)
     return root / f"{stem}.log"
@@ -790,7 +791,7 @@ def _sync_trace_sink(
 ) -> None:
     """Attach/refresh ``telemetry.trace_sink`` for the always-on autolog. Reopens
     only when the target path set changes, so a long REPL session keeps one open
-    handle; toggling ``runtime.debug_autolog`` off closes it."""
+    handle; toggling ``REQUEST_LOG`` off closes it."""
     desired: list[Path] = []
     autolog = _debug_autolog_path(cfg, live_settings)
     if autolog is not None:
@@ -848,17 +849,11 @@ def _sampling_for_turn(
 # Effective /set view — annotate knobs whose live value bypasses the store
 # ---------------------------------------------------------------------------
 
-_SAMPLING_FIELDS: tuple[str, ...] = (
-    "temperature",
-    "top_p",
-    "top_k",
-    "repetition_penalty",
-    "presence_penalty",
-)
+_SAMPLING_FIELDS: tuple[str, ...] = sampling_mod.SAMPLING_FIELDS
 
 
 def _sampling_env_var(field: str, environ) -> str:
-    """The env var actually setting ``field`` (short alias preferred), or ''."""
+    """The env var actually setting ``field``, or ''."""
     for name in sampling_mod._ENV_KEYS.get(field, ()):
         if environ.get(name):
             return name
@@ -891,17 +886,17 @@ def _live_settings_overlay(
         spec = settings.SPEC_BY_KEY[key]
         overlay[key] = setcmd.LiveValue(display=setcmd.render_value(spec, value), source=source)
 
-    # model.id — the --model flag / `/model` command never lands in the store.
-    store_model = settings.get_dotted(settings_store, ("model", "id"))
+    # MODEL — the --model flag / `/model` command never lands in the store.
+    store_model = settings.get_dotted(settings_store, ("MODEL",))
     if live_model and model_source and live_model != store_model:
-        _mark("model.id", live_model, model_source)
+        _mark("MODEL", live_model, model_source)
 
     # provider.* — a saved login / provider default fills these outside the store.
-    store_pid = settings.get_dotted(settings_store, ("provider", "id"))
+    store_pid = settings.get_dotted(settings_store, ("PROVIDER",))
     if provider_id and provider_id != store_pid:
-        _mark("provider.id", provider_id, f"login {provider_id}" if saved_login is not None else "session")
+        _mark("PROVIDER", provider_id, f"login {provider_id}" if saved_login is not None else "session")
 
-    store_base = settings.get_dotted(settings_store, ("provider", "base_url"))
+    store_base = settings.get_dotted(settings_store, ("BASE_URL",))
     if provider_base_url and provider_base_url != store_base:
         if saved_login is not None and saved_login.provider_base_url == provider_base_url:
             source = f"login {provider_id}"
@@ -909,23 +904,23 @@ def _live_settings_overlay(
             source = "provider default"
         else:
             source = "session"
-        _mark("provider.base_url", provider_base_url, source)
+        _mark("BASE_URL", provider_base_url, source)
 
-    store_key = settings.get_dotted(settings_store, ("provider", "api_key"))
+    store_key = settings.get_dotted(settings_store, ("API_KEY",))
     if provider_api_key and provider_api_key != store_key:
         if saved_login is not None and saved_login.provider_api_key == provider_api_key:
             source = f"login {provider_id}"
         else:
             source = "session"
-        _mark("provider.api_key", provider_api_key, source)  # render masks it to <set>
+        _mark("API_KEY", provider_api_key, source)  # render masks it to <set>
 
-    # sampling.* — js/sampling.py reads JS_TEMP/JS_TOPK/... directly, so the short
-    # env aliases never reach the store; the agent manifest is off-store too.
+    # Sampling — js/sampling.py reads JS_TEMPERATURE/JS_TOP_K/... itself, and
+    # the agent manifest is off-store too.
     for field in _SAMPLING_FIELDS:
         eff = getattr(eff_sampling, field)
         if eff is None:
             continue
-        store_val = settings.get_dotted(settings_store, ("sampling", field))
+        store_val = settings.get_dotted(settings_store, (field.upper(),))
         if store_val is not None and _same_number(store_val, eff):
             continue
         if getattr(env_sampling, field) is not None and _same_number(getattr(env_sampling, field), eff):
@@ -935,7 +930,7 @@ def _live_settings_overlay(
             source = "agent sampling"
         else:
             source = "session"
-        _mark(f"sampling.{field}", eff, source)
+        _mark(field.upper(), eff, source)
 
     return overlay
 
@@ -983,26 +978,25 @@ def _effective_settings_snapshot(cfg: Config, state: dict) -> dict:
     turn_cfg = _cfg_for_live_state(cfg, state)
     live_model = state.get("model")
     if isinstance(live_model, str) and live_model:
-        settings.set_dotted(eff, ("model", "id"), live_model)
+        settings.set_dotted(eff, ("MODEL",), live_model)
     if turn_cfg.provider_id:
-        settings.set_dotted(eff, ("provider", "id"), turn_cfg.provider_id)
+        settings.set_dotted(eff, ("PROVIDER",), turn_cfg.provider_id)
     if turn_cfg.provider_base_url:
-        settings.set_dotted(eff, ("provider", "base_url"), turn_cfg.provider_base_url)
+        settings.set_dotted(eff, ("BASE_URL",), turn_cfg.provider_base_url)
     if turn_cfg.provider_api_key:
-        settings.set_dotted(eff, ("provider", "api_key"), turn_cfg.provider_api_key)
+        settings.set_dotted(eff, ("API_KEY",), turn_cfg.provider_api_key)
     eff_sampling = _sampling_for_turn(turn_cfg, state.get("prompt_spec"), state.get("sampling_cli", Sampling()))
     for field, value in eff_sampling.as_dict_nonnull().items():
-        settings.set_dotted(eff, ("sampling", field), value)
+        settings.set_dotted(eff, (field.upper(),), value)
     return eff
 
 
 def _sampling_override_from_live_settings(live_settings: dict) -> Sampling:
-    raw = settings.get_dotted(live_settings, ("sampling",), {})
-    return Sampling.from_mapping(raw if isinstance(raw, dict) else {})
+    return Sampling.from_mapping({field: live_settings.get(field.upper()) for field in _SAMPLING_FIELDS})
 
 
 def _model_from_live_settings(live_settings: dict) -> str | None:
-    raw = settings.get_dotted(live_settings, ("model", "id"), None)
+    raw = settings.get_dotted(live_settings, ("MODEL",), None)
     return raw if isinstance(raw, str) and raw else None
 
 
@@ -1020,16 +1014,16 @@ def _provider_from_live_settings(live_settings: dict) -> tuple[str | None, str |
         return raw if isinstance(raw, str) and raw else None
 
     return (
-        _value(("provider", "id")),
-        _value(("provider", "base_url")),
-        _value(("provider", "api_key")),
+        _value(("PROVIDER",)),
+        _value(("BASE_URL",)),
+        _value(("API_KEY",)),
     )
 
 
 def _sync_provider_from_live_settings(state: dict, changed_keys: list[str]) -> None:
     provider_id, base_url, api_key = _provider_from_live_settings(state["settings"])
     changed = set(changed_keys)
-    if "provider.id" in changed:
+    if "PROVIDER" in changed:
         if provider_id is None:
             state["provider_id"] = None
             state["provider_base_url"] = None
@@ -1037,9 +1031,9 @@ def _sync_provider_from_live_settings(state: dict, changed_keys: list[str]) -> N
             state["provider_headers"] = {}
         else:
             _set_provider_state(state, provider_id)
-    if "provider.base_url" in changed:
+    if "BASE_URL" in changed:
         state["provider_base_url"] = base_url
-    if "provider.api_key" in changed:
+    if "API_KEY" in changed:
         state["provider_api_key"] = api_key
 
 
@@ -1050,29 +1044,29 @@ def _sync_provider_delta_from_live_settings(
 ) -> None:
     changed_keys: list[str] = []
     if before[0] != after[0]:
-        changed_keys.append("provider.id")
+        changed_keys.append("PROVIDER")
     if before[1] != after[1]:
-        changed_keys.append("provider.base_url")
+        changed_keys.append("BASE_URL")
     if before[2] != after[2]:
-        changed_keys.append("provider.api_key")
+        changed_keys.append("API_KEY")
     if changed_keys:
         _sync_provider_from_live_settings(state, changed_keys)
 
 
 def _changed_model_key(keys: list[str]) -> bool:
-    return "model.id" in keys
+    return "MODEL" in keys
 
 
 def _changed_provider_key(keys: list[str]) -> bool:
-    return any(key in {"provider.id", "provider.base_url", "provider.api_key"} for key in keys)
+    return any(key in {"PROVIDER", "BASE_URL", "API_KEY"} for key in keys)
 
 
 def _changed_sampling_key(keys: list[str]) -> bool:
-    return any(key.startswith("sampling.") for key in keys)
+    return any(key.lower() in _SAMPLING_FIELDS for key in keys)
 
 
 def _changed_lock_subagent_model_key(keys: list[str]) -> bool:
-    return "subagents.lock_model" in keys
+    return "SUBAGENT_MODEL_LOCK" in keys
 
 
 def _emit_repl_event(
@@ -1130,7 +1124,7 @@ def _apply_saved_login_to_state(state: dict, provider_name: str) -> bool:
 async def _maybe_auto_compact_async(cfg: Config, state: dict) -> None:
     """The REPL's between-turn trigger: the policy lives in compaction, the
     printing lives here."""
-    if not compaction.get_bool(cfg, "auto"):
+    if not compaction.get_bool(cfg, "COMPACTION_AUTO"):
         return
     active_cfg = _cfg_for_live_state(cfg, {**state, "settings": state.get("settings", cfg.settings)})
     turn_status = runtime.T.STOCK_CONTEXT.turn_status
@@ -1255,7 +1249,7 @@ def _pick_model_into_state(state: dict, cfg: Config) -> None:
     state["model"] = selected["model"]
     default_model_id = providers.qualified_model_id(selected.get("provider_id"), selected["model"])
     if isinstance(state.get("settings"), dict):
-        settings.set_dotted(state["settings"], ("model", "id"), default_model_id)
+        settings.set_dotted(state["settings"], ("MODEL",), default_model_id)
     state["model_source"] = None  # the pick was persisted into the store
 
     _saved_path, save_error = _persist_default_model_id(default_model_id)
@@ -1399,11 +1393,19 @@ def _run_migrate_config() -> int:
     with legacy.open("rb") as fp:
         data = tomllib.load(fp)
     lines = ["# migrated from config.toml by `js --migrate-config`", ""]
-    lines.extend(f"set {key} {value}" for key, value in _flatten_toml(data))
+    deleted = []
+    for key, value in _flatten_toml(data):
+        if rename.is_deleted(key):
+            deleted.append(key)
+            lines.append(f"# deleted: set {key} {value}")
+        else:
+            lines.append(f"set {rename.renamed_key(key) or key} {rename.renamed_value(key, str(value))}")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("\n".join(lines) + "\n", encoding="utf-8")
     msgs.say(msgs.MIGRATE_WROTE, path=target, legacy=legacy)
-    return 0
+    for key in deleted:
+        msgs.warn(msgs.MIGRATE_DELETED, key=key)
+    return 1 if deleted else 0
 
 
 def _append_closing_note(cfg: Config, state: dict, reminder: str) -> None:
@@ -1483,25 +1485,23 @@ _MAX_ALIAS_DEPTH = 16
 def _apply_settings_result(result: setcmd.CommandResult, state: dict, cfg: Config) -> str | None:
     """Print a settings verb's output and carry changed keys into live state."""
     keys = result.changed_keys
-    sampling_keys = [key for key in keys if key.startswith("sampling.")]
-    if sampling_keys:
+    sampling_fields = [key.lower() for key in keys if key.lower() in _SAMPLING_FIELDS]
+    if sampling_fields:
         current = state.get("sampling_cli", Sampling())
-        for key in sampling_keys:
-            field = key.split(".", 1)[1]
-            if field in Sampling.__dataclass_fields__:
-                current = replace(current, **{field: settings.get_dotted(state["settings"], ("sampling", field), None)})
+        for field in sampling_fields:
+            current = replace(current, **{field: state["settings"].get(field.upper())})
         state["sampling_cli"] = current
     if _changed_model_key(keys):
         _sync_model_from_live_settings(state)
     if _changed_provider_key(keys):
         _sync_provider_from_live_settings(state, keys)
-    if _changed_lock_subagent_model_key(keys) or "kernel.enabled" in keys:
+    if _changed_lock_subagent_model_key(keys) or "PYTHON_KERNEL" in keys:
         _sync_tool_registry_from_live_settings(cfg, state)
     for out in result.lines:
         print(out)
     if result.error:
         return result.error
-    if any(key.startswith(("compact.context_window", "model.context_window")) for key in keys):
+    if any(key.startswith("CONTEXT_SIZE") for key in keys):
         active = _cfg_for_live_state(cfg, state)
         runtime.install_context_window_overrides(active)
         window = compaction.configured_context_window(
@@ -1835,7 +1835,7 @@ def _cmd_compact_auto(arg: str, state: dict, cfg: Config) -> str | None:
     value = arg.strip().lower()
     if value not in ("on", "off"):
         return msgs.USAGE.said(usage="/compact-auto on|off")
-    return _apply_settings_result(setcmd.apply_set(state["settings"], "compact.auto", value), state, cfg)
+    return _apply_settings_result(setcmd.apply_set(state["settings"], "COMPACTION_AUTO", value), state, cfg)
 
 
 def _cmd_compact(arg: str, state: dict, cfg: Config) -> str | None:
@@ -1910,7 +1910,7 @@ def _cmd_exec(arg: str, state: dict, cfg: Config) -> str | None:
         return msgs.USAGE.said(usage="/exec <command>")
     call = events.current_call()
     live = state.get("settings")
-    timeout = int(settings.knob(live, "events.exec_timeout_s"))
+    timeout = int(settings.knob(live, "EXEC_TIMEOUT"))
     env = dict(os.environ)
     stdin_text = ""
     if call is not None:
@@ -1921,7 +1921,7 @@ def _cmd_exec(arg: str, state: dict, cfg: Config) -> str | None:
             command,
             cwd=str(runtime.T.STOCK_CONTEXT.cwd),
             timeout=timeout,
-            cap=int(settings.knob(live, "events.exec_output_bytes") or 0),
+            cap=int(settings.knob(live, "EXEC_OUTPUT_MAX") or 0),
             stdin_text=stdin_text,
             env=env,
         )
@@ -2026,7 +2026,7 @@ def _restore_workspace(cfg: Config) -> None:
             if bind.path.exists():
                 jail.add(bind)
     cwd = Path(str(mark.get("cwd") or ""))
-    setting = settings.knob(getattr(cfg, "settings", None), "jail.bind")
+    setting = settings.knob(getattr(cfg, "settings", None), "JAIL_BIND")
     if cwd.is_absolute() and cwd.is_dir() and (jail is None or jail.bound(cwd, setting)):
         _set_working_dir(cwd)
 
@@ -2042,7 +2042,7 @@ def _cmd_cd(arg: str, state: dict, cfg: Config) -> str | None:
     if not target.is_dir():
         return msgs.CD_NOT_A_DIR.said(path=target)
     jail = _jail.active()
-    if jail is not None and not jail.bound(target, settings.knob(state.get("settings"), "jail.bind")):
+    if jail is not None and not jail.bound(target, settings.knob(state.get("settings"), "JAIL_BIND")):
         return msgs.CD_OUTSIDE_JAIL.said(path=target, root=jail.root)
     _set_working_dir(target)
     _queue_note(state, _CD_NOTICE.format(path=target))
@@ -2083,7 +2083,7 @@ def _cmd_drop(arg: str, state: dict, cfg: Config) -> str | None:
     if dropped is None:
         return msgs.DROP_UNKNOWN.said(path=path)
     jail.drop(path)
-    if not jail.bound(runtime.T.STOCK_CONTEXT.cwd, settings.knob(state.get("settings"), "jail.bind")):
+    if not jail.bound(runtime.T.STOCK_CONTEXT.cwd, settings.knob(state.get("settings"), "JAIL_BIND")):
         jail.add(dropped)
         return msgs.DROP_CWD.said(path=path)
     _queue_note(state, _DROP_NOTICE.format(path=path))
@@ -2282,7 +2282,7 @@ def _config_owned(raw: str) -> bool:
 def _apply_agent_model(cfg: Config, prompt_spec, model: str | None, *, config_pins: bool = True) -> Config:
     """Apply the active agent's agent.yaml `model:` through the resolver, unless
     the operator pinned a model. -m, a JS_* env var and --extra always pin; a
-    jsrc `model.id` pins only when ``config_pins``."""
+    jsrc `MODEL` pins only when ``config_pins``."""
     agent_model = getattr(prompt_spec, "model", "") if prompt_spec is not None else ""
     pinned = getattr(cfg, "explicit_model" if config_pins else "invocation_model", False)
     if not agent_model or model is not None or pinned:
@@ -2339,11 +2339,11 @@ def _format_prompt_load_error(cfg, exc: Exception) -> str:
 
 def _validate_cli_reasoning(reasoning: str) -> tuple[str | None, str | None]:
     """Coerce a raw ``--reasoning`` value through the SAME registry validation as
-    ``set model.reasoning_effort`` and ``JS_REASONING`` (ruling B): ``off``
+    ``set EFFORT`` and ``JS_REASONING`` (ruling B): ``off``
     disables (stored as ``none``); every other value must be a ladder stop. Any
     other token yields a clean local error instead of shipping garbage to the
     provider. Returns (value, error)."""
-    spec = settings.SPEC_BY_KEY["model.reasoning_effort"]
+    spec = settings.SPEC_BY_KEY["EFFORT"]
     return settings.coerce_value(spec, reasoning)
 
 
@@ -2670,7 +2670,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                     if show_continue:
                         hint = _session_hint_arg(cfg)
                         cont = resume_prefix or "js"
-                        # Plain -p has no resume_prefix; a resume runs the `agent`
+                        # Plain -p has no resume_prefix; a resume runs the `DEFAULT_AGENT`
                         # setting unless told otherwise, so a non-default agent MUST
                         # be echoed or the session continues under the wrong agent.
                         # (wiki/commit already fold the agent into resume_prefix.)
@@ -3251,7 +3251,7 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
         before_turn_model = _model_from_live_settings(state["settings"])
         before_turn_provider = _provider_from_live_settings(state["settings"])
         before_turn_lock = _live_bool_setting(
-            state["settings"], ("subagents", "lock_model"), cfg.lock_subagent_model
+            state["settings"], ("SUBAGENT_MODEL_LOCK",), cfg.lock_subagent_model
         )
         await runtime.run_turn_async(
             turn_cfg,
@@ -3278,7 +3278,7 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
         after_turn_provider = _provider_from_live_settings(state["settings"])
         _sync_provider_delta_from_live_settings(state, before_turn_provider, after_turn_provider)
         after_turn_lock = _live_bool_setting(
-            state["settings"], ("subagents", "lock_model"), cfg.lock_subagent_model
+            state["settings"], ("SUBAGENT_MODEL_LOCK",), cfg.lock_subagent_model
         )
         if after_turn_lock != before_turn_lock:
             _sync_tool_registry_from_live_settings(cfg, state)
@@ -3316,7 +3316,7 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
 
 def _steer_mode(state: dict) -> str:
     return settings.steer_mode(
-        settings.knob(state["settings"], "runtime.steer")
+        settings.knob(state["settings"], "STEER_MODE")
     )
 
 
@@ -3337,9 +3337,9 @@ async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop,
     This is what keeps state['messages'] single-writer while the input line
     stays live — the producer (`_repl_main`) never blocks on a turn.
 
-    ``steer_inbox`` holds lines typed during a turn at runtime.steer=now. The
+    ``steer_inbox`` holds lines typed during a turn at STEER_MODE=now. The
     running turn takes them at its next tool boundary; what it never reached
-    runs as one message right after it. At runtime.steer=batch, the lines
+    runs as one message right after it. At STEER_MODE=batch, the lines
     queued behind a turn run as one message.
     """
     steer_inbox = steer_inbox if steer_inbox is not None else []
@@ -3568,7 +3568,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
     event loop. The screen has three regions (scrollback, status, input); turn
     output lands in the scrollback and never touches the input line. ^C cancels
     the active turn instead of killing the process; a line typed during a turn
-    steers it or queues behind it, per runtime.steer."""
+    steers it or queues behind it, per STEER_MODE."""
     loop = asyncio.get_running_loop()
     loop.set_default_executor(ThreadPoolExecutor(max_workers=32, thread_name_prefix="js-dispatch"))
     sup = supervisor.Supervisor(loop)
@@ -3672,7 +3672,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         on_eof=on_eof,
         status=lambda width: _status_bar_line(cfg, state, sup.turn_active(), width),
         status_colours=lambda: _status_colours(state),
-        editing_mode=lambda: settings.knob(state["settings"], "ui.editing_mode"),
+        editing_mode=lambda: settings.knob(state["settings"], "EDITING_MODE"),
         on_ex=on_ex,
         key_bindings=merge_key_bindings([
             clipimage.key_bindings(lambda: state["settings"]),
@@ -3760,7 +3760,7 @@ def _repl_state(cfg, prompt_spec, *, messages: list[dict] | None = None,
         "model": model if model is not None else cfg.model,
         # Where state["model"] came from, for the effective /set view. A --model
         # flag never lands in the settings store, so record it here so /set can
-        # annotate `model.id = ... (live: --model flag)`.
+        # annotate `MODEL = ... (live: --model flag)`.
         "model_source": "--model flag" if model is not None else None,
         "provider_id": cfg.provider_id,
         "provider_base_url": cfg.provider_base_url,
@@ -3852,7 +3852,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
             before_turn_provider = _provider_from_live_settings(state["settings"])
             before_turn_lock = _live_bool_setting(
                 state["settings"],
-                ("subagents", "lock_model"),
+                ("SUBAGENT_MODEL_LOCK",),
                 cfg.lock_subagent_model,
             )
             runtime.run_turn(
@@ -3881,7 +3881,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
             _sync_provider_delta_from_live_settings(state, before_turn_provider, after_turn_provider)
             after_turn_lock = _live_bool_setting(
                 state["settings"],
-                ("subagents", "lock_model"),
+                ("SUBAGENT_MODEL_LOCK",),
                 cfg.lock_subagent_model,
             )
             if after_turn_lock != before_turn_lock:
@@ -4031,7 +4031,7 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
         msgs.warn(msgs.PRINTONLY_NO_CONFIG, error=f"{type(e).__name__}: {e}")
 
     allow_code = bool(getattr(cfg, "allow_inline_code", True))
-    timeout_s = int(settings.knob_attr(cfg, "inline_code_timeout_s", "limits.inline_code_timeout_s"))
+    timeout_s = int(settings.knob_attr(cfg, "inline_code_timeout_s", "INLINE_CODE_TIMEOUT"))
     system = raw_spec.system if raw_spec is not None else ""
     selectors = raw_spec.tool_selectors if raw_spec is not None else ()
 
@@ -4387,7 +4387,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     if args.im_a_pussy:
         # Inline code runs by default now; the opt-out flag turns it off for this
         # run via the same env knob the config layer reads.
-        os.environ["JS_ALLOW_INLINE_CODE"] = "0"
+        os.environ["JS_INLINE_CODE"] = "0"
     if args.no_shell_history:
         # envctx reads this; 0 drops its recent_shell block.
         os.environ["ENVCTX_HIST"] = "0"
@@ -4604,8 +4604,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         history=prompt_history.PromptHistory(
             cfg.history_file,
             lambda: _prompt_origin(cfg),
-            cwd_first=bool(settings.knob(cfg.settings, "history.cwd_first")),
-            limit=settings.knob(cfg.settings, "history.max_entries"),
+            cwd_first=settings.knob(cfg.settings, "HISTORY_ORDER") == "cwd",
+            limit=settings.knob(cfg.settings, "HISTORY_SIZE"),
             state_root=_paths.state_root(),
         ),
         key_bindings=keys_mod.prompt_bindings(keymap),
@@ -4648,16 +4648,16 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         if effort_error is not None:
             msgs.warn(msgs.BAD_REASONING, value=args.reasoning, error=effort_error)
             return 2
-        settings.set_dotted(live_settings, ("model", "reasoning_effort"), reasoning_seed)
+        settings.set_dotted(live_settings, ("EFFORT",), reasoning_seed)
     elif resumed_reasoning is not None:
-        settings.set_dotted(live_settings, ("model", "reasoning_effort"), resumed_reasoning)
+        settings.set_dotted(live_settings, ("EFFORT",), resumed_reasoning)
     if args.max_out is not None:
-        settings.set_dotted(live_settings, ("model", "max_output_tokens"), args.max_out)
+        settings.set_dotted(live_settings, ("OUTPUT_TOKENS_MAX",), args.max_out)
     elif (prompt_spec.max_output_tokens is not None
-          and settings.get_dotted(live_settings, ("model", "max_output_tokens"), None) is None):
+          and settings.get_dotted(live_settings, ("OUTPUT_TOKENS_MAX",), None) is None):
         # Agent default from agent.yaml — seed the per-turn source of truth so
         # it survives the _cfg_for_live_state rebuild. Config/env/--max-out win.
-        settings.set_dotted(live_settings, ("model", "max_output_tokens"), prompt_spec.max_output_tokens)
+        settings.set_dotted(live_settings, ("OUTPUT_TOKENS_MAX",), prompt_spec.max_output_tokens)
     state = _repl_state(
         cfg, prompt_spec,
         messages=messages,

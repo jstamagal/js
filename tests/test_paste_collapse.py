@@ -78,13 +78,13 @@ def test_a_small_paste_goes_in_as_typed():
 
 def test_limits_come_from_the_settings():
     live = settings.seed_defaults()
-    settings.set_dotted(live, ("ui", "paste_collapse_lines"), 2)
+    settings.set_dotted(live, ("PASTE_COLLAPSE_LINES",), 2)
     lines, shown = _paste_then_enter("a\nb\nc", live)
     assert lines == ["see a\nb\nc"]
     assert "+3 lines]" in shown
 
-    settings.set_dotted(live, ("ui", "paste_collapse_lines"), 0)
-    settings.set_dotted(live, ("ui", "paste_collapse_chars"), 0)
+    settings.set_dotted(live, ("PASTE_COLLAPSE_LINES",), 0)
+    settings.set_dotted(live, ("PASTE_COLLAPSE_CHARS",), 0)
     text = "\n".join(str(i) for i in range(50))
     _lines, shown = _paste_then_enter(text, live)
     assert "[paste #" not in shown

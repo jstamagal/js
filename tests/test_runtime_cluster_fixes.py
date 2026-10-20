@@ -330,7 +330,7 @@ def test_cap_result_marks_only_when_it_shortens():
     clipped = runtime._cap_result("x" * 100, 64)
     assert clipped.startswith("x")
     assert len(clipped.encode("utf-8")) <= 64
-    assert "[truncated: limits.max_tool_result_bytes (64) reached]" in clipped
+    assert "[truncated: TOOL_RESULT_MAX (64) reached]" in clipped
 
 
 def test_dispatch_marks_truncated_leaf_result():
@@ -347,4 +347,4 @@ def test_dispatch_marks_truncated_leaf_result():
     )
     assert result.startswith("Z")
     assert len(result.encode("utf-8")) <= 64
-    assert "[truncated: limits.max_tool_result_bytes (64) reached]" in result
+    assert "[truncated: TOOL_RESULT_MAX (64) reached]" in result

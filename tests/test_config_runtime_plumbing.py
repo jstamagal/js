@@ -75,7 +75,7 @@ def test_from_env_carries_subagent_worker_limit(monkeypatch, tmp_path):
     config_dir = _isolated_config_home(monkeypatch, tmp_path)
     config_dir.mkdir(parents=True)
     (config_dir / "jsrc").write_text(
-        "set model.id offline-test-model\nset limits.subagent_max_workers 3\n",
+        "set MODEL offline-test-model\nset SUBAGENT_WORKERS_MAX 3\n",
         encoding="utf-8",
     )
 
@@ -87,7 +87,7 @@ def test_from_env_carries_subagent_worker_limit(monkeypatch, tmp_path):
 def test_shell_env_allow_defaults_to_existing_safe_set_and_loads_from_jsrc(
     monkeypatch, tmp_path
 ):
-    assert tuple(settings.default_value("limits.shell_env_allow")) == (
+    assert tuple(settings.default_value("SHELL_ENV_KEEP")) == (
         "PATH",
         "HOME",
         "USER",
@@ -101,8 +101,8 @@ def test_shell_env_allow_defaults_to_existing_safe_set_and_loads_from_jsrc(
     config_dir = _isolated_config_home(monkeypatch, tmp_path)
     config_dir.mkdir(parents=True)
     (config_dir / "jsrc").write_text(
-        'set model.id offline-test-model\n'
-        'set limits.shell_env_allow ["PATH","FORGECODE_TOKEN"]\n',
+        'set MODEL offline-test-model\n'
+        'set SHELL_ENV_KEEP ["PATH","FORGECODE_TOKEN"]\n',
         encoding="utf-8",
     )
 
@@ -121,7 +121,7 @@ def test_shell_env_allow_is_live_and_installed_on_the_tool_context(monkeypatch, 
     live_settings = settings.seed_defaults()
     settings.set_dotted(
         live_settings,
-        ("limits", "shell_env_allow"),
+        ("SHELL_ENV_KEEP",),
         ["PATH", "FORGECODE_TOKEN"],
     )
     live_cfg = cli._cfg_for_live_state(cfg, {"settings": live_settings})

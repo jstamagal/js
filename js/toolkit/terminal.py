@@ -277,7 +277,7 @@ def terminal_session(
         env = dict(os.environ)
         if jail.active() is not None:
             # In the jail the command gets the shell tool's environment: the
-            # names in limits.shell_env_allow, so no provider key reaches it.
+            # names in SHELL_ENV_KEEP, so no provider key reaches it.
             env = {key: os.environ[key] for key in context.shell_env_allow if key in os.environ}
         env.update({"TERM": "xterm-256color", "COLUMNS": str(width), "LINES": str(height)})
         argv = jail.wrap([shell, "-c", command], context, cwd=workdir, env=env,

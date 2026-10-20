@@ -582,13 +582,10 @@ def test_one_failing_parallel_worker_does_not_sink_siblings(monkeypatch, tmp_pat
 def test_subagent_reresolves_mcp_policy_and_cannot_see_parent_server(monkeypatch, tmp_path):
     prompts = prompt_dir(tmp_path, "worker", "tools: []\n")
     settings = {
-        "mcp": {
-            "servers": {"parent-only": {"command": "never-started"}},
-            "agents": {
+        "MCP_SERVERS": {"parent-only": {"command": "never-started"}}, "MCP_AGENT_POLICY": {
                 "parent": {"servers": {"allow": ["parent-only"]}},
                 "worker": {"servers": {"deny": ["parent-only"]}},
             },
-        },
     }
 
     def from_env_stub(*, save_session: bool = True):
@@ -656,7 +653,7 @@ def test_subagent_final_is_capped_per_child_with_visible_marker(monkeypatch, tmp
     actual = task(["talk too much"], agent_id="worker", context=parent)
 
     # Single child: fair share == full budget (64 // 1), marker still fires.
-    assert "[truncated: limits.max_tool_result_bytes (64) reached]" in actual
+    assert "[truncated: TOOL_RESULT_MAX (64) reached]" in actual
     assert "X" * 65 not in actual
     assert len(actual.encode("utf-8")) <= 64
     assert "�" not in actual
@@ -683,7 +680,7 @@ def test_one_fat_sibling_does_not_starve_the_others(monkeypatch, tmp_path):
     # Short siblings survive intact — the fat one is bounded to its 1/N slice.
     assert "KEEP-ME-TWO" in actual
     assert "KEEP-ME-THREE" in actual
-    assert "[truncated: limits.max_tool_result_bytes (133) reached]" in actual  # 400 // 3
+    assert "[truncated: TOOL_RESULT_MAX (133) reached]" in actual  # 400 // 3
     assert "X" * 200 not in actual
 
 

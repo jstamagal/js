@@ -95,7 +95,7 @@ def show_lines(settings: dict, key: str | None = None) -> CommandResult:
 # Effective ("live") view
 #
 # `show_lines` renders the settings STORE — the values in the jsrc-derived dict.
-# But a flag (`--model`), a saved login, and env-read sampling (JS_TEMP ...) feed
+# But a flag (`--model`), a saved login, and env-read sampling (JS_TEMPERATURE ...) feed
 # the next turn WITHOUT ever landing in the store, so the store lies about what
 # runs. The REPL overlays those live sources onto the display via a per-knob
 # ``LiveValue`` map computed at the call site (cli.py), keeping `show_lines`
@@ -107,7 +107,7 @@ class LiveValue:
     """One knob's effective value plus where it actually comes from."""
 
     display: str   # already rendered + masked (secrets stay <set>)
-    source: str    # e.g. "--model flag", "login testes", "env JS_TEMP"
+    source: str    # e.g. "--model flag", "login testes", "env JS_TEMPERATURE"
 
 
 def _annotate(line: str, live: LiveValue | None) -> str:
@@ -169,14 +169,13 @@ def apply_set(settings: dict, key: str, raw: str) -> CommandResult:
             changed_keys=[spec.key],
         )
 
-    # sub-keys of a map knob (wiki.aliases.creative) or other keys within a known
-    # section — stored with loose scalar coercion. Children of registered
-    # non-map knobs are rejected so structured settings keep their validated shape.
+    # A sub-key of a map setting (EXTRA_PARAMS.organization) is stored with
+    # loose scalar coercion. Any other name that is not a setting is refused,
+    # children of registered non-map settings included.
+    key = _s.child_key(key)
     path = tuple(p for p in key.split(".") if p)
     prefix_spec = _s.parent_spec(key)
-    if prefix_spec is not None and prefix_spec.type != "map":
-        return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.text(key=key))
-    if prefix_spec is not None or (path and path[0] in _s.KNOWN_SECTIONS and len(path) > 1):
+    if prefix_spec is not None and prefix_spec.type == "map":
         value = _s.coerce_extra_value(raw)
         _s.set_dotted(settings, path, value)
         return CommandResult(
@@ -208,16 +207,16 @@ def apply_unset(settings: dict, key: str, baseline: dict | None = None) -> Comma
     one), the knob takes the baseline's value; a knob the baseline does not
     hold is removed from ``settings``."""
     spec = _s.spec_for(key)
+    if spec is None:
+        key = _s.child_key(key)
     path = spec.path if spec is not None else tuple(p for p in key.split(".") if p)
     if not path:
         return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.text(key=key))
     if spec is None:
         prefix_spec = _s.parent_spec(key)
-        if prefix_spec is not None and prefix_spec.type != "map":
-            # Children of a registered non-map knob are not a valid unset target
-            # (apply_set rejects them for the same reason).
-            return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.text(key=key))
-        if prefix_spec is None and not (path[0] in _s.KNOWN_SECTIONS and len(path) > 1):
+        if prefix_spec is None or prefix_spec.type != "map":
+            # Only a sub-key of a map setting is an unset target besides a
+            # setting (apply_set refuses the rest for the same reason).
             return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.text(key=key))
     missing = object()
     before = _s.get_dotted(settings, path, missing)

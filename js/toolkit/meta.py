@@ -296,7 +296,7 @@ async def _run_one_task_async(
     budget = int(getattr(parent_context, "max_tool_result_bytes", 0) or 0)
     if budget > 0:
         cap = budget // max(1, total)
-        final = cap_text(final, cap, f"\n[truncated: limits.max_tool_result_bytes ({cap}) reached]")
+        final = cap_text(final, cap, f"\n[truncated: TOOL_RESULT_MAX ({cap}) reached]")
     return final
 
 
@@ -387,8 +387,8 @@ async def _fan_out_async(indexed_items: list[tuple[int, Any]], coro_factory) -> 
 
 def _subagent_worker_cap(context: ToolContext, total: int) -> int:
     """Concurrency ceiling for one fan-out: at most `total` workers, never above
-    limits.subagent_max_workers."""
-    default = _settings.default_value("limits.subagent_max_workers")
+    SUBAGENT_WORKERS_MAX."""
+    default = _settings.default_value("SUBAGENT_WORKERS_MAX")
     limit = int_or_default(getattr(context, "subagent_max_workers", default), default, minimum=1)
     return max(1, min(total, limit))
 
@@ -423,7 +423,7 @@ def _prepare_fan_out(
             None,
         )
 
-    default_depth = _settings.default_value("limits.task_max_depth")
+    default_depth = _settings.default_value("SUBAGENT_DEPTH_MAX")
     max_depth = int_or_default(getattr(context, "task_max_depth", default_depth), default_depth, minimum=1)
     if getattr(context, "task_depth", 0) >= max_depth:
         return f"ERROR: task recursion depth limit reached ({max_depth})", None

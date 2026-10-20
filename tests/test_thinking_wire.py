@@ -307,15 +307,15 @@ def claude(monkeypatch, tmp_path):
         agent_id="thinking",
         session="thinking",
         extras=[
-            "model.id=claude-sonnet-4-5",
-            "provider.id=anthropic",
-            "provider.api_key=fixture",
-            "model.reasoning_effort=high",
-            "model.vision=off",
-            "model.context_window=200000",
-            "model.max_output_tokens=32000",
-            "runtime.debug_autolog=off",
-            "runtime.transcript_log=off",
+            "MODEL=claude-sonnet-4-5",
+            "PROVIDER=anthropic",
+            "API_KEY=fixture",
+            "EFFORT=high",
+            "VISION=off",
+            "CONTEXT_SIZE=200000",
+            "OUTPUT_TOKENS_MAX=32000",
+            "REQUEST_LOG=off",
+            "TRANSCRIPT_LOG=off",
         ],
     )
     prompts = tmp_path / ".js" / "agents" / "thinking"
@@ -491,7 +491,7 @@ def test_a_keep_tail_compaction_drops_the_signed_thinking_it_keeps(monkeypatch, 
     from js import compaction
     from test_config_compaction_layers import _compact_test_cfg
 
-    cfg = _compact_test_cfg(tmp_path, {"flight_log_dir": str(tmp_path / "flights"), "tail_tokens": 1})
+    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_LOG_DIR": str(tmp_path / "flights"), "COMPACTION_KEEP_RECENT_TOKENS": 1})
 
     async def summarize(*_a, **_kw):
         return "summary"
@@ -661,7 +661,7 @@ def test_a_drop_of_signed_reasoning_on_a_final_answer_survives_resume(tmp_path):
 def test_the_thinking_budget_setting_replaces_the_effort_budget(claude):
     cfg, wire, context = claude
     tuned = from_env(agent_id="thinking", session="thinking",
-                     extras=["model.thinking_budget=4000", "provider.id=anthropic", "model.id=claude-sonnet-4-5"])
+                     extras=["THINKING_BUDGET=4000", "PROVIDER=anthropic", "MODEL=claude-sonnet-4-5"])
     assert tuned.thinking_budget == 4000
     _turn(replace(cfg, thinking_budget=tuned.thinking_budget), [{"role": "user", "content": "first"}], context)
 

@@ -8,7 +8,7 @@ every other word, path detection runs FIRST — a token that looks like a path
 command it's an argument to — then the command's ``complete`` source decides:
 
 - ``set``    -> setting keys; the word after the key completes known enum
-  values instead, e.g. ``model.reasoning_effort``.
+  values instead, e.g. ``EFFORT``.
 - ``keys``   -> setting keys.
 - ``names``  -> provider ids + saved login names.
 - ``events`` -> event names.
@@ -42,7 +42,7 @@ _TRAILING_TOKEN = re.compile(r"\S*$")  # run of non-space chars before the curso
 # `/set <key> <value>` — keys whose value is a known small enum get their
 # legal values completed instead of falling through to no candidates.
 _VALUE_ENUM_KNOBS: dict[str, tuple[str, ...]] = {
-    "model.reasoning_effort": _settings.REASONING_EFFORT_VALUES,
+    "EFFORT": _settings.REASONING_EFFORT_VALUES,
 }
 
 
@@ -52,7 +52,7 @@ def _prefix(pool: Iterable[str], token: str) -> list[str]:
 
 def value_candidates(key: str, token: str) -> list[str]:
     """Known-good values for `key` (e.g. reasoning-effort stops), prefix-matched."""
-    values = _VALUE_ENUM_KNOBS.get(key)
+    values = _VALUE_ENUM_KNOBS.get(key.upper())
     if values is None:
         return []
     return _prefix(values, token.lower())
@@ -159,7 +159,10 @@ class JsCompleter(Completer):
         if source == "set" and len(words) >= 2:
             return value_candidates(words[1], token), len(token)
         if source in ("set", "keys"):
-            return _prefix(self._setting_keys, token), len(token)
+            # `set` takes a setting name in any case. A lowercase prefix gets
+            # its matches in lowercase, so the part they share can be filled in.
+            keys = [key for key in self._setting_keys if key.upper().startswith(token.upper())]
+            return sorted({key.lower() if token.islower() else key for key in keys}), len(token)
         if source == "names":
             return _prefix(list(self._names()) if self._names else [], token), len(token)
         if source == "events":

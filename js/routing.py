@@ -87,9 +87,8 @@ def _saved_login(provider_id: str | None):
 
 
 def provider_extra_params(cfg) -> dict | None:
-    """The operator's ``provider.extra`` settings table, as a plain dict."""
-    provider_cfg = (getattr(cfg, "settings", {}) or {}).get("provider")
-    extra = provider_cfg.get("extra") if isinstance(provider_cfg, dict) else None
+    """The operator's ``EXTRA_PARAMS`` settings table, as a plain dict."""
+    extra = (getattr(cfg, "settings", {}) or {}).get("EXTRA_PARAMS")
     return dict(extra) if isinstance(extra, dict) else None
 
 
@@ -112,7 +111,7 @@ def resolve_model_route(
     single source of truth for what is runnable):
 
     - ``prefix_login``: a saved ``js --login`` exists for the prefixed provider.
-      This is authoritative: it overrides a pinned ``provider.id`` and carries the
+      This is authoritative: it overrides a pinned ``PROVIDER`` and carries the
       login's base/key.
     - the prefix names the explicitly pinned ``configured_provider_id``.
     - ``prefix_overrides_provider`` (invocation-explicit ``-m``/``JS_MODEL`` and

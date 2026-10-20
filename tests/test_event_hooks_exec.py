@@ -110,7 +110,7 @@ def test_a_failing_handler_queues_nothing_and_records_the_failure(tmp_path):
 
 def test_a_handler_past_its_timeout_is_killed(tmp_path):
     state, cfg = _state(tmp_path)
-    settings.set_dotted(state["settings"], ("events", "exec_timeout_s"), 1)
+    settings.set_dotted(state["settings"], ("EXEC_TIMEOUT",), 1)
     _on(state, cfg, "session_start exec sleep 30")
 
     emission = state["events"].emit("session_start")
@@ -376,7 +376,7 @@ def summarize_stub(monkeypatch):
 
 
 def _compact_cfg(tmp_path):
-    return offline_config(tmp_path, settings={"compact": {"tail_tokens": 500, "min_savings_tokens": 1}})
+    return offline_config(tmp_path, settings={"COMPACTION_KEEP_RECENT_TOKENS": 500, "COMPACTION_MIN_SAVINGS_TOKENS": 1})
 
 
 def test_compaction_fires_pre_compact_then_post_compact(tmp_path, summarize_stub):
@@ -409,8 +409,8 @@ def test_slash_compact_runs_the_compact_handlers(tmp_path, summarize_stub):
     cfg = _compact_cfg(tmp_path)
     state["events"].set_dispatcher(cli._event_dispatcher(state, cfg))
     state["messages"] = _long_history()
-    settings.set_dotted(state["settings"], ("compact", "tail_tokens"), 500)
-    settings.set_dotted(state["settings"], ("compact", "min_savings_tokens"), 1)
+    settings.set_dotted(state["settings"], ("COMPACTION_KEEP_RECENT_TOKENS",), 500)
+    settings.set_dotted(state["settings"], ("COMPACTION_MIN_SAVINGS_TOKENS",), 1)
     _on(state, cfg, "pre_compact exec printf before")
     _on(state, cfg, "post_compact exec printf after")
 
@@ -421,8 +421,7 @@ def test_slash_compact_runs_the_compact_handlers(tmp_path, summarize_stub):
 
 def test_between_turn_auto_compaction_runs_the_compact_handlers(tmp_path, summarize_stub):
     state, cfg = _state(tmp_path)
-    cfg = offline_config(tmp_path, settings={"compact": {
-        "tail_tokens": 500, "min_savings_tokens": 1, "context_window": 4000, "auto": True}})
+    cfg = offline_config(tmp_path, settings={"COMPACTION_KEEP_RECENT_TOKENS": 500, "COMPACTION_MIN_SAVINGS_TOKENS": 1, "CONTEXT_SIZE": 4000, "COMPACTION_AUTO": True})
     state["settings"] = cfg.settings
     state["events"].set_dispatcher(cli._event_dispatcher(state, cfg))
     state["messages"] = _long_history()
@@ -480,7 +479,7 @@ def test_mid_turn_compaction_runs_the_compact_handlers(monkeypatch, tmp_path):
 @pytest.fixture
 def home(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
-    for name in ("JS_AGENT", "JS_SESSION", "JS_MODEL"):
+    for name in ("JS_DEFAULT_AGENT", "JS_SESSION", "JS_MODEL"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
