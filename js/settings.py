@@ -139,6 +139,8 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("SPINNER_FRAMES", "str", group="display"),
+    SettingSpec("SCROLLBACK_LINES_MAX", "int", group="display"),
     SettingSpec("MARKDOWN_HARD_BREAKS", "bool", group="display"),
     SettingSpec("MARKDOWN_INLINE_PADDING", "str", group="display"),
     SettingSpec("EXCHANGE_ARGUMENT_STYLE", "str", group="display"),

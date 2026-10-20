@@ -214,7 +214,7 @@ def test_screen_reasoning_shares_stdout_ordering_without_losing_queued_input():
 
 @pytest.mark.parametrize("level", [1, 2, 3])
 def test_scrollback_eviction_discards_fold_handles_not_recent_output(monkeypatch, level):
-    monkeypatch.setattr(screen, "SCROLLBACK_LINES", 8)
+    screen.fset.bind_settings({"SCROLLBACK_LINES_MAX": 8})
     scroll = screen.Scrollback()
     block = scroll.reasoning(level)
     block.append(THOUGHT)
@@ -503,7 +503,7 @@ def test_a_folded_heading_as_wide_as_the_window_stays_one_column_short(monkeypat
 
 
 def test_unfolding_long_reasoning_and_folding_it_back_loses_no_scrollback(monkeypatch):
-    monkeypatch.setattr(screen, "SCROLLBACK_LINES", 10)
+    screen.fset.bind_settings({"SCROLLBACK_LINES_MAX": 10})
     scroll = screen.Scrollback()
     scroll.toggle_key = "c-o"
     for n in range(5):

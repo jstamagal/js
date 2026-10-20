@@ -38,8 +38,6 @@ from . import messages as msgs
 from . import session_store
 from .reasoning_display import grey, settled_rows
 
-SCROLLBACK_LINES = 5000
-THROBBER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 TICK_BUSY_S = 0.1
 TICK_IDLE_S = 1.0
 # How long the interrupt or eof key stays armed: a second press inside this
@@ -111,7 +109,8 @@ def format_count(n: int) -> str:
 
 
 def throbber_frame(now: float) -> str:
-    return THROBBER[int(now / TICK_BUSY_S) % len(THROBBER)]
+    frames = fset.setting_value("SPINNER_FRAMES")
+    return frames[int(now / TICK_BUSY_S) % len(frames)] if frames else ""
 
 
 def turn_centre(status, *, now: float, show_bytes: bool) -> tuple[str, int | None]:
@@ -313,7 +312,7 @@ class Scrollback:
 
     def _set_text(self, text: str, cursor: int, *, follow: bool) -> None:
         lines = text.split("\n")
-        trimmed = "\n".join(lines[-(SCROLLBACK_LINES + self._unfolded_rows()):])
+        trimmed = "\n".join(lines[-(int(fset.setting_value("SCROLLBACK_LINES_MAX")) + self._unfolded_rows()):])
         removed = len(text) - len(trimmed)
         if removed:
             for block in self._spans:

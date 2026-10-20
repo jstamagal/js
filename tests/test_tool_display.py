@@ -725,7 +725,7 @@ def test_a_long_run_of_quiet_calls_renders_each_call_a_fixed_number_of_times(mon
 def test_unfolding_a_long_row_and_folding_it_back_loses_no_scrollback(monkeypatch):
     from js import screen
 
-    monkeypatch.setattr(screen, "SCROLLBACK_LINES", 10)
+    screen.fset.bind_settings({"SCROLLBACK_LINES_MAX": 10})
     scroll = screen.Scrollback()
     scroll.toggle_key = "c-o"
     for n in range(5):
