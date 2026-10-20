@@ -2864,8 +2864,6 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         }
         if reasoning is not None:
             turn_kwargs["reasoning_effort_override"] = reasoning_override
-        if not quiet:
-            msgs.warn(msgs.BENCH_START, name=bench.name, prompt=prompt_text.splitlines()[0][:80])
         ok, err = True, None
         t_wall = time.time()
         try:
@@ -2884,6 +2882,9 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
                         trace_override=bool(debug), **turn_kwargs,
                     )
                     prompt_text = P.expand_agent_text(bench.prompt, cfg)
+                    if not quiet:
+                        first = (prompt_text.splitlines() or [""])[0][:80]
+                        msgs.warn(msgs.BENCH_START, name=bench.name, prompt=first)
                     messages.append({"role": "user", "content": prompt_text})
                     await runtime.run_turn_async(
                         cfg, system, messages, telemetry, trace_override=bool(debug), **turn_kwargs,
