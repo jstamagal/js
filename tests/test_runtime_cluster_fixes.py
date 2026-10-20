@@ -191,7 +191,7 @@ def test_partial_text_closed_before_retry(tmp_path, monkeypatch, capsys):
         return _result("FINAL")
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stub)
-    monkeypatch.setattr(turn_call, "_backoff", lambda a: 0.0)
+    monkeypatch.setattr(turn_call, "_backoff", lambda *_: 0.0)
     cfg = _cfg(tmp_path)
     registry = build_default_registry(prompts_root=None)
     ctx = ToolContext(cwd=tmp_path)

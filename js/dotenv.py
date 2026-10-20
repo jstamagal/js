@@ -69,8 +69,13 @@ def load(cwd: Path | None = None, environ: dict[str, str] | None = None, *, sett
     if settings is None:
         from . import config
 
-        settings = config.run_settings(cwd, migrate=False)
-    env = os.environ if environ is None else environ
+        try:
+            settings = config.run_settings(cwd, migrate=False)
+        except ValueError:
+            # A bad setting is reported where startup loads settings; the
+            # .env files load with the shipped DOTENV_WALK_UP.
+            settings = None
+    env =os.environ if environ is None else environ
     applied: list[Path] = []
     for path in candidate_files(cwd, settings=settings):
         try:

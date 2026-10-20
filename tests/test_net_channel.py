@@ -261,7 +261,7 @@ def _flaky_model(monkeypatch, failures: list[Exception]) -> list[int]:
 
     monkeypatch.setattr(model_client, "resolve_model", lambda *a, **k: _FakeModel())
     monkeypatch.setattr(model_client, "_stream_async", fake_stream_async)
-    monkeypatch.setattr(turn_call, "_backoff", lambda _n: 0)
+    monkeypatch.setattr(turn_call, "_backoff", lambda *_: 0)
     return calls
 
 
