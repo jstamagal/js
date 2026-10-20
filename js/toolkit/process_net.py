@@ -716,14 +716,18 @@ def _aria_payload(
     response_url: str,
     raw: bool | None,
     context: ToolContext,
+    deadline: float,
 ) -> str:
     with tempfile.TemporaryDirectory(prefix="js-fetch-", dir=paths.tmp_dir()) as raw_temp:
         destination = Path(raw_temp) / "response"
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise _FetchTimeoutError
         download_with_aria2(
             binary,
             url,
             destination,
-            timeout_s=context.download_timeout_s,
+            timeout_s=remaining,
             headers=headers,
             max_bytes=_DOWNLOAD_MAX_BYTES,
         )
@@ -1011,6 +1015,7 @@ def fetch(
                 response_url=response_url,
                 raw=raw,
                 context=context,
+                deadline=request_deadline,
             )
         return _format_payload(
             data=payload,

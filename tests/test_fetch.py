@@ -48,6 +48,30 @@ class FakeResponse:
         return False
 
 
+def test_unsaved_aria_transfer_uses_the_remaining_fetch_deadline(monkeypatch, tmp_path):
+    elapsed = [0.0]
+    transfer_budgets = []
+    monkeypatch.setattr(process_net.time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(process_net, "resolve_binary", lambda _name: "aria2c")
+
+    def open_response(_request, timeout):
+        elapsed[0] += 2
+        return FakeResponse(b"", {"Content-Type": "application/octet-stream"})
+
+    def download(_binary, _url, destination, *, timeout_s, **_kwargs):
+        transfer_budgets.append(timeout_s)
+        destination.write_bytes(b"\x00payload")
+
+    monkeypatch.setattr(process_net.urllib.request, "urlopen", open_response)
+    monkeypatch.setattr(process_net, "download_with_aria2", download)
+    context = ToolContext(cwd=tmp_path, fetch_timeout_s=5, download_timeout_s=300)
+
+    result = process_net.fetch("https://example.test/data.bin", context=context)
+
+    assert result.startswith("BINARY_RESPONSE"), result
+    assert transfer_budgets == [3]
+
+
 @pytest.mark.parametrize(
     ("html", "expected"),
     [
