@@ -43,3 +43,30 @@ def test_recipes_preserve_argument_boundaries(tmp_path, recipe):
         capture_output=True, text=True, check=True,
     )
     assert json.loads(result.stdout)[-1] == argument
+
+
+@pytest.mark.parametrize("kind", ["file", "other-link", "managed-link"])
+def test_uninstall_removes_only_its_own_wiki_link(tmp_path, kind):
+    just = shutil.which("just")
+    if just is None:
+        pytest.skip("just is not installed")
+    root = Path(__file__).resolve().parents[1]
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    wiki = bin_dir / "wiki"
+    if kind == "file":
+        wiki.write_text("my wiki\n")
+    else:
+        target = root / "tools" / "wiki" if kind == "managed-link" else tmp_path / "other-wiki"
+        wiki.symlink_to(target)
+    uv = bin_dir / "uv"
+    uv.write_text("#!/bin/sh\nexit 0\n")
+    uv.chmod(0o755)
+
+    subprocess.run(
+        [just, "uninstall"], cwd=root,
+        env={**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]},
+        capture_output=True, text=True, check=True,
+    )
+
+    assert os.path.lexists(wiki) is (kind != "managed-link")

@@ -186,7 +186,10 @@ uninstall:
     if uv tool list 2>/dev/null | grep -q '^js '; then
         uv tool uninstall js
     fi
-    rm -f "$HOME/.local/bin/wiki"
+    wiki="$HOME/.local/bin/wiki"
+    if [ -L "$wiki" ] && [ "$(readlink "$wiki")" = "$(pwd -P)/tools/wiki" ]; then
+        rm -f "$wiki"
+    fi
 
 # ── testing ─────────────────────────────────────────────────────────────────
 
