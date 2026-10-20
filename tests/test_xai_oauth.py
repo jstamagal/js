@@ -249,3 +249,18 @@ def test_routing_propagates_the_cause_of_a_rejected_refresh(monkeypatch):
         routing.resolve_model_route("grok-4", configured_provider_id=xai_auth.XAI_PROVIDER_ID)
 
     assert raised.value.__cause__ is failure
+
+
+def test_routing_keeps_a_still_valid_bearer_when_an_early_refresh_fails(monkeypatch):
+    logins.save_login(xai_auth.login_from_token(xai_auth.XaiToken(
+        access="still-valid", refresh="refresh-1", expires_at=time.time() + 60,
+        token_endpoint="https://auth.x.ai/oauth/token",
+    )))
+
+    def offline(*_args, **_kwargs):
+        raise OSError("network unreachable")
+
+    monkeypatch.setattr(xai_auth, "refresh_token", offline)
+    route = routing.resolve_model_route("grok-4", configured_provider_id=xai_auth.XAI_PROVIDER_ID)
+
+    assert route.api_key == "still-valid"

@@ -13,6 +13,7 @@ nothing more — all routing decisions live here.
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
@@ -79,7 +80,15 @@ def _saved_login(provider_id: str | None):
     from . import xai_auth as _xai_auth
 
     if _xai_auth.is_xai_oauth_provider(normalized):
-        return _xai_auth.ensure_fresh_login(login)
+        try:
+            return _xai_auth.ensure_fresh_login(login)
+        except Exception:
+            # Refresh starts _REFRESH_SKEW_SECONDS before expiry; until the
+            # bearer has actually expired it still authenticates.
+            expires = login.xai_token_expires
+            if login.provider_api_key and expires is not None and time.time() < _xai_auth._expiry_or_zero(expires):
+                return login
+            raise
     return login
 
 
