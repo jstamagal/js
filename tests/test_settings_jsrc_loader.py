@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import os
 
 from pathlib import Path
 
@@ -177,6 +178,22 @@ def test_from_env_reads_global_jsrc(monkeypatch, tmp_path):
     assert cfg.model == "global-model"
     assert cfg.max_tool_iterations == 8
     assert global_cfg.read_text(encoding="utf-8").startswith("set MODEL global-model")
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can list an unreadable directory")
+def test_unreadable_project_agent_refuses_global_fallback(tmp_path):
+    project = tmp_path / "project"
+    local = project / ".js" / "agents" / "worker"
+    global_agent = tmp_path / ".js" / "agents" / "worker"
+    for directory in (local, global_agent):
+        directory.mkdir(parents=True)
+        (directory / "01-prompt.md").write_text("agent instructions", encoding="utf-8")
+    local.chmod(0)
+    try:
+        with pytest.raises(ValueError):
+            from_env(cwd=project, agent_id="worker", save_session=False)
+    finally:
+        local.chmod(0o700)
 
 
 def test_presets_layer_over_base_in_order(monkeypatch, tmp_path):

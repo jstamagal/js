@@ -296,7 +296,7 @@ def _select_prompt_dir(agent_id: str, repo_root: Path, global_root: Path, projec
     for root in (project_root, global_root, repo_root):
         candidate = root / agent_id
         try:
-            if candidate.is_dir() and any(candidate.glob("*.md")):
+            if candidate.is_dir() and any(entry.name.endswith(".md") for entry in candidate.iterdir()):
                 return candidate
         except OSError as exc:
             # Named agent exists but can't be read (symlink onto a sleeping
