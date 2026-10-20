@@ -268,6 +268,12 @@ def test_split_repl_attachments_apostrophe_does_not_drop_attachment(tmp_path):
     assert "summarize" in prompt
 
 
+def test_split_repl_attachments_uses_supplied_prefix():
+    assert attach.split_repl_attachments('isn\'t %"a b.png" @prose', prefix="%") == (
+        "isn't  @prose", ["a b.png"],
+    )
+
+
 def test_split_repl_attachments_preserves_prose_byte_for_byte():
     """Presence of an @attachment must not reflow the rest of the line — quotes
     and internal whitespace outside the removed @token span survive untouched."""

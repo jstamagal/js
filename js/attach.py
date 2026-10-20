@@ -68,7 +68,7 @@ def with_note(bundle: UserMessageBundle, note: str) -> UserMessageBundle:
 _DOUBLE_QUOTE_ESCAPES = '\\"$`\n'
 
 
-def _scan_tokens(line: str, *, quotes_everywhere: bool = True) -> list[tuple[str, int, int]]:
+def _scan_tokens(line: str, *, quotes_everywhere: bool = True, prefix: str = "@") -> list[tuple[str, int, int]]:
     """Split `line` into shell-word tokens, each returned as (unquoted_text, start,
     end) spanning the token's raw location in `line`. Mirrors shlex.split's posix
     quote and backslash handling (so @"a b.png" and @a\\ b.png both name
@@ -87,7 +87,7 @@ def _scan_tokens(line: str, *, quotes_everywhere: bool = True) -> list[tuple[str
         if i >= n:
             break
         start = i
-        if not quotes_everywhere and line[i] != "@":
+        if not quotes_everywhere and not line.startswith(prefix, i):
             while i < n and not line[i].isspace():
                 i += 1
             tokens.append((line[start:i], start, i))
@@ -141,8 +141,8 @@ def _scan_word(line: str, i: int) -> tuple[str, int] | None:
     return "".join(buf), i
 
 
-def split_repl_attachments(line: str) -> tuple[str, list[str]]:
-    """Extract @path tokens from a REPL line.
+def split_repl_attachments(line: str, *, prefix: str = "@") -> tuple[str, list[str]]:
+    """Extract prefixed attachment tokens from a REPL line (default: @path).
 
     Paths with spaces may be shell-quoted as @"path with spaces.png". If no
     attachment token is present, return the original line unchanged. When one
@@ -159,19 +159,21 @@ def split_repl_attachments(line: str) -> tuple[str, list[str]]:
     only the @tokens get quote handling and the rest splits on whitespace.
     """
 
+    if not prefix:
+        return line, clipimage.placeholders(line)
     try:
         shlex.split(line)
     except ValueError:
-        tokens = _scan_tokens(line, quotes_everywhere=False)
+        tokens = _scan_tokens(line, quotes_everywhere=False, prefix=prefix)
     else:
-        tokens = _scan_tokens(line)
+        tokens = _scan_tokens(line, prefix=prefix)
 
     attachments: list[str] = []
     spans: list[tuple[int, int]] = []
     for text, start, end in tokens:
-        if text.startswith("@") and text.strip("@"):
-            if text[1:] not in attachments:
-                attachments.append(text[1:])
+        if text.startswith(prefix) and text.strip(prefix):
+            if text[len(prefix):] not in attachments:
+                attachments.append(text[len(prefix):])
             spans.append((start, end))
 
     prompt = line
