@@ -78,12 +78,12 @@ def plan(
     return f"plan {action} at {target}" if existed else f"plan written to {target}"
 
 
-def skill(name: str, context: ToolContext | None = None) -> str:
+def skill(name: str, context: ToolContext | None = None, *, user_command: str = "/skill") -> str:
     assert context is not None
     catalog = discover_skills(context.cwd, disabled=context.skills_disabled)
     metadata = catalog.get(name)
     if metadata is not None and not metadata.model_invocable:
-        return f"ERROR: skill {metadata.name!r} is user-only; the user loads it with /skill {metadata.name}"
+        return f"ERROR: skill {metadata.name!r} is user-only; the user loads it with {user_command} {metadata.name}"
     loaded = load_skill(catalog, name, tool_registry=getattr(context, "tool_registry", None))
     if loaded is not None:
         return loaded.render()
