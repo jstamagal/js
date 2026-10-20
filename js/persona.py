@@ -13,6 +13,7 @@ import yaml
 
 from .promptexpand import expand_prompt, session_variables
 from .toolkit import policy
+from . import messages as msgs
 from . import settings
 
 
@@ -227,7 +228,11 @@ def _coerce_sampling(path: Path, raw: Any) -> dict[str, Any]:
             )
         if isinstance(val, bool) or not isinstance(val, (int, float)):
             raise ValueError(f"sampling.{key} in {path} must be a number")
-        out[key] = val
+        value, error = settings.coerce_value(settings.SPEC_BY_KEY[key.upper()], str(val))
+        if error is not None:
+            msgs.warn(msgs.ENV_SETTING_IGNORED, name=f"sampling.{key} in {path}", error=error)
+            continue
+        out[key] = value
     return out
 
 

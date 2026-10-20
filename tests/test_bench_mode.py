@@ -176,3 +176,19 @@ def test_bench_banner_shows_the_expanded_prompt(tmp_path, monkeypatch, capsys):
     assert rc == 0
     assert "expanded-value" in err
     assert "{{BENCH_PROBE}}" not in err
+
+
+def test_bench_default_cap_is_the_resolved_one_not_agent_yaml(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
+    monkeypatch.delenv("JS_SESSION", raising=False)
+    monkeypatch.chdir(tmp_path)
+    _write_agent(tmp_path)
+    (tmp_path / ".js" / "jsrc").write_text("set OUTPUT_TOKENS_MAX 700\n", encoding="utf-8")
+    captured: list = []
+    monkeypatch.setattr(cli.runtime.model_client, "stream_model_async", _stream_stub(captured))
+    assert _bench("jokertest") == 0
+
+    # 04-benchmark has no frontmatter: it takes the resolved cap, jsrc's 700,
+    # not agent.yaml's 4096.
+    assert captured[3] == 700

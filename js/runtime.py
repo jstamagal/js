@@ -24,7 +24,7 @@ from typing import Any
 
 from . import activity
 from . import events as event_mod
-from . import model_client, memory
+from . import login_defaults, model_client, memory
 import ai
 
 from . import colors as C
@@ -1803,6 +1803,26 @@ def _turn_request(cfg: Config, *, model_override: str | None, provider_id_overri
     )
 
 
+def _with_login_defaults(cfg: Config, model_override: str | None, provider_id_override: str | None,
+                         provider_base_url_override: str | None) -> Config:
+    """``cfg`` with the saved login defaults of the model this turn runs."""
+    turn = _overridden(cfg, model_override, provider_id_override, provider_base_url_override)
+    return replace(login_defaults.for_turn(turn), model=cfg.model, provider_id=cfg.provider_id,
+                   provider_base_url=cfg.provider_base_url)
+
+
+def _overridden(cfg: Config, model_override: str | None, provider_id_override: str | None,
+                provider_base_url_override: str | None) -> Config:
+    """``cfg`` routed to the model, provider and base URL this turn runs."""
+    return replace(
+        cfg,
+        model=model_override or cfg.model,
+        provider_id=provider_id_override if provider_id_override is not None else cfg.provider_id,
+        provider_base_url=(provider_base_url_override if provider_base_url_override is not None
+                           else cfg.provider_base_url),
+    )
+
+
 def _cache_key(cfg: Config) -> str | None:
     """One conversation, one cache key: OpenAI-compatible endpoints use it to
     route a request to the machine already holding that conversation's prefix.
@@ -2193,6 +2213,11 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     reloading config; unset values fall back to the Config values. The sync
     ``run_turn`` below wraps this for callers not yet on the async runtime.
     """
+    if sampling is None:
+        # The sampling of the model this turn runs, resolved like every other.
+        sampling = login_defaults.sampling(_overridden(
+            cfg, model_override, provider_id_override, provider_base_url_override))
+    cfg = _with_login_defaults(cfg, model_override, provider_id_override, provider_base_url_override)
     request = _turn_request(
         cfg, model_override=model_override, provider_id_override=provider_id_override,
         provider_base_url_override=provider_base_url_override,

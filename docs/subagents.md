@@ -204,14 +204,18 @@ tools:
 
 `reasoning:` sets the child default independently of the model. `off`
 explicitly disables reasoning; omitting it inherits the parent/provider setting.
+A child's `reasoning:` beats the effort it would inherit (the parent agent's,
+or a resumed session's), never an EFFORT the operator gave by env, flag or
+`/set`.
 Invalid values fail agent loading rather than being silently ignored.
 
 Top-level `js --agent <id>` also applies that agent's manifest through the same
 route resolver. A one-shot `-p` run applies `model:` and `reasoning:` over the
 jsrc files; `-m` / `--model`, `--reasoning`, a `JS_*` env var or `--extra` win
-over the manifest, and a resumed session stays on its last stamp. The REPL,
-`--bench` and `--commit` apply `model:` only, and there a configured
-non-default `MODEL` also leaves the manifest model unused.
+over the manifest, and a resumed session stays on its last stamp. The REPL
+and `--bench` apply `model:` and `reasoning:`; `--commit` applies `model:`
+only. In those three a configured non-default `MODEL` also leaves the
+manifest model unused.
 
 `SUBAGENT_MODEL_LOCK = true` (`Config.lock_subagent_model`) removes the `task`
 tool's `model` parameter from both the model-facing description and the JSON

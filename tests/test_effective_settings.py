@@ -34,7 +34,7 @@ def _repl_cfg(tmp_path) -> Config:
 
 def test_set_display_forms_leave_the_store_alone_and_mutations_reach_live_state(tmp_path):
     cfg = _repl_cfg(tmp_path)
-    state = {"messages": [], "system": "sys", "settings": settings.seed_defaults(), "sampling_cli": Sampling()}
+    state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
     for line in ("/set", "/show", "/set MODEL", "/show PROVIDER"):
         before = copy.deepcopy(state["settings"])
         assert cli._handle_command(line, state, cfg) is True
@@ -42,11 +42,11 @@ def test_set_display_forms_leave_the_store_alone_and_mutations_reach_live_state(
 
     cli._handle_command("/set TEMPERATURE 0.3", state, cfg)
     assert settings.get_dotted(state["settings"], ("TEMPERATURE",)) == 0.3
-    assert state["sampling_cli"].temperature == 0.3
+    assert state["live_set"]["TEMPERATURE"] == 0.3
 
     cli._handle_command("/set -TEMPERATURE", state, cfg)
     assert settings.get_dotted(state["settings"], ("TEMPERATURE",)) is None
-    assert state["sampling_cli"].temperature is None
+    assert "TEMPERATURE" not in state["live_set"]
 
 
 # ---------------------------------------------------------------------------

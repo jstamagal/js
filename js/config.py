@@ -18,7 +18,6 @@ from . import settings as _settings
 from . import turn_settings as _turn_settings
 from . import routing as _routing
 
-from .sampling import SAMPLING_FIELDS, Sampling
 
 _AGENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -53,14 +52,6 @@ def _env_bool(raw: str) -> bool | None:
         return False
     return None
 
-
-def _sampling_from_extras(extras: list[str] | None) -> Sampling:
-    values: dict[str, object] = {}
-    for arg in extras or []:
-        path, value = _settings.parse_extra_arg(arg)
-        if len(path) == 1 and path[0].lower() in SAMPLING_FIELDS:
-            values[path[0].lower()] = value
-    return Sampling.from_mapping(values)
 
 # Vision-capable model-name fragments the SDK registry does not cover (proxy-
 # and ollama-served ids it has never heard of). Matched case-insensitively as substrings.
@@ -132,9 +123,6 @@ class Config(_turn_settings.ConfigSettings):
     session_file: Path
     prompts_dir: Path
     provider_headers: dict[str, str] = field(default_factory=dict)
-    sampling_setscript: Sampling = field(default_factory=Sampling)
-    sampling_env: Sampling = field(default_factory=Sampling)
-    sampling_cli: Sampling = field(default_factory=Sampling)
     explicit_model: bool = False  # MODEL was set by JS_MODEL or config (not the built-in default); gates --agent agent.yaml model
     explicit_provider: bool = False  # PROVIDER was set by config/env/CLI extras, not inferred from a model prefix
     invocation_model: bool = False  # MODEL was set by a JS_* env var or --extra, not a jsrc file
@@ -145,6 +133,16 @@ class Config(_turn_settings.ConfigSettings):
     agents_files: tuple[Path, ...] = field(default_factory=tuple, compare=False)
     project_dir: Path = field(default_factory=Path.cwd, compare=False)
     mcp: object | None = field(default=None, compare=False)  # immutable server definitions + active-agent policy
+    # The layers js.login_defaults resolves its KEYS from, each holding only
+    # the keys it sets. The server and model layers come from the login.
+    layer_agent_default: dict = field(default_factory=dict, compare=False)
+    # None: a Config not built by from_env, which has no layers to resolve.
+    layer_jsrc: dict | None = field(default=None, compare=False)
+    layer_agent: dict = field(default_factory=dict, compare=False)
+    layer_env: dict = field(default_factory=dict, compare=False)
+    layer_flag: dict = field(default_factory=dict, compare=False)
+    layer_set: dict = field(default_factory=dict, compare=False)
+    layer_resume: dict = field(default_factory=dict, compare=False)
 
     def __post_init__(self) -> None:
         # A key that is not a setting (an old name such as retry_attempts)
@@ -463,9 +461,6 @@ def from_env(
     )
     agent_id = agent_from_settings(js_root_settings, agent_id)
     msgs.set_banner(str(_settings.knob(js_root_settings, "BANNER")))
-    sampling_setscript = Sampling.from_mapping({field: jsrc_settings.get(field.upper()) for field in SAMPLING_FIELDS})
-    sampling_env = Sampling.from_env(env)
-    sampling_cli = _sampling_from_extras(extras)
     default_model = _settings.default_value("MODEL")
     raw_model = _settings.get_dotted(js_root_settings, ("MODEL",)) or default_model
     # Any env name that feeds MODEL makes the model invocation-explicit.
@@ -507,6 +502,13 @@ def from_env(
     provider_headers = route.headers
     provider_def = _providers.get_provider(provider_id)
 
+    # The layers js.login_defaults resolves the login-default settings from.
+    from . import login_defaults as _login_defaults
+
+    layer_jsrc = _login_defaults.session_values(jsrc_settings)
+    layer_env = _login_defaults.env_layer(env)
+    layer_flag = _login_defaults.flag_layer(extras)
+
     reasoning_effort = _settings.get_dotted(js_root_settings, ("EFFORT",))
     if reasoning_effort is None and provider_def is not None and provider_def.reasoning_effort:
         reasoning_effort = provider_def.reasoning_effort
@@ -539,7 +541,7 @@ def from_env(
 
     global_instruction_files = _paths.global_instruction_files()
 
-    return Config(
+    return _login_defaults.for_turn(Config(
         agent_id=agent_id,
         agent_dir=state_dir,
         model=model,
@@ -547,9 +549,6 @@ def from_env(
         provider_base_url=provider_base_url,
         provider_api_key=provider_api_key,
         provider_headers=provider_headers,
-        sampling_setscript=sampling_setscript,
-        sampling_env=sampling_env,
-        sampling_cli=sampling_cli,
         reasoning_effort=_norm_effort(reasoning_effort),
         debug_log=debug,
         sessions_dir=sessions_dir,
@@ -566,5 +565,8 @@ def from_env(
         explicit_provider=explicit_provider,
         invocation_model=_set_by_invocation("MODEL", env, extras),
         invocation_reasoning=_set_by_invocation("EFFORT", env, extras),
+        layer_jsrc=layer_jsrc,
+        layer_env=layer_env,
+        layer_flag=layer_flag,
         **_turn_settings.project(js_root_settings),
-    )
+    ))

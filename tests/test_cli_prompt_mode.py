@@ -1572,3 +1572,26 @@ def test_prompt_interrupt_without_save(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime, "run_turn", interrupted)
     assert cli._run_prompt("explain", save=False) == 130
     assert not list((tmp_path / ".js/sessions").rglob("*.jsonl"))
+
+
+def test_one_shot_model_override_sends_that_models_saved_sampling(monkeypatch, tmp_path):
+    from js import logins
+
+    monkeypatch.setattr(logins, "_CONFIG_DIR_OVERRIDE", tmp_path / "logins")
+    logins.save_login(logins.Login(
+        provider_id="testes", sdk_provider_id="openai", provider_base_url="http://localhost:8050/v1",
+        provider_api_key="x", model_defaults={"a": {"TEMPERATURE": 0.2}, "b": {"TEMPERATURE": 0.9}}))
+    monkeypatch.setenv("JS_MODEL", "testes/a")
+    seen = {}
+
+    def fake_run_turn(cfg, system, messages, telemetry, trace_override=False, tool_context=None, **kwargs):
+        seen["sampling"] = kwargs.get("sampling")
+        messages.append({"role": "assistant", "content": "ok"})
+
+    monkeypatch.setattr(cli.runtime, "run_turn", fake_run_turn)
+    monkeypatch.setattr(cli.M, "load_messages", lambda _path: [])
+    monkeypatch.setattr(cli, "_append_turn", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
+
+    assert cli._run_prompt("foo", model="testes/b") == 0
+    assert seen["sampling"].temperature == 0.9

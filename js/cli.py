@@ -43,7 +43,7 @@ from . import endpoint_uri
 from . import events
 from . import exline
 from . import hookexec
-from . import logins
+from . import login_defaults, logins
 from . import memory as M
 from . import messages as msgs
 from . import model_client
@@ -412,13 +412,28 @@ def _stamp_without_login(stamp: dict, cfg: Config) -> str | None:
     return f"{provider}/{model}"
 
 
-def _resume_reasoning(stamp: dict, cfg: Config) -> str | None:
-    """The reasoning level of the last stamp, when it is valid and differs from the configured one."""
+def _stamped_reasoning(stamp: dict) -> str | None:
+    """The reasoning level of a stamp, when it is a valid one. A stamp
+    stores a disabled effort as `none`, which is `off`."""
     raw = stamp.get("reasoning")
     if not isinstance(raw, str) or not raw:
         return None
-    value, error = _validate_cli_reasoning(raw)
-    return value if error is None and value != cfg.reasoning_effort else None
+    value, error = _validate_cli_reasoning("off" if _norm_effort(raw) == "none" else raw)
+    return value if error is None else None
+
+
+def _resumed_layer(stamp: dict | None, cli_reasoning: str | None) -> dict:
+    """The resume layer a resumed session starts with: its stamped effort,
+    the session's own choice, pinned even when it equals what the startup
+    model would pick. A -r on the command line wins instead."""
+    effort = _stamped_reasoning(stamp) if stamp is not None and cli_reasoning is None else None
+    return {"EFFORT": effort} if effort else {}
+
+
+def _resume_reasoning(stamp: dict, cfg: Config) -> str | None:
+    """The reasoning level of the last stamp, when it is valid and differs from the configured one."""
+    value = _stamped_reasoning(stamp)
+    return value if value is not None and value != cfg.reasoning_effort else None
 
 
 def _print_resume_hint(cfg: Config, state: dict) -> None:
@@ -803,15 +818,21 @@ def _sync_trace_sink(
 
 
 def _cfg_for_live_state(cfg: Config, state: dict) -> Config:
+    """The Config a turn started now runs with: the live settings, and the
+    login-default settings resolved over every layer (login_defaults)."""
     active = _cfg_for_active_model(cfg, state)
     live_settings = state["settings"]
-    return replace(
+    agent_default, agent = login_defaults.agent_layers(state.get("prompt_spec"))
+    return login_defaults.for_turn(replace(
         active,
         **turn_settings.project(live_settings, fallback=active),
         settings=live_settings,
-        vision_enabled=vision_enabled_for_model(active.model, live_settings),
         reasoning_effort=_live_reasoning_effort_setting(live_settings, active.reasoning_effort),
-    )
+        layer_agent_default=agent_default,
+        layer_agent=agent,
+        layer_set=dict(state.get("live_set") or {}),
+        layer_resume=dict(state.get("live_resume") or {}),
+    ))
 
 def _sync_tool_registry_from_live_settings(cfg: Config, state: dict) -> None:
     """Rebuild the live registry. The agent load already printed the
@@ -826,21 +847,6 @@ def _sync_tool_registry_from_live_settings(cfg: Config, state: dict) -> None:
 
 def _state_value(state: dict, key: str, default):
     return state[key] if key in state else default
-
-def _sampling_for_turn(
-    cfg: Config,
-    prompt_spec,
-    cli_override: Sampling | None = None,
-) -> Sampling:
-    raw_manifest = getattr(prompt_spec, "sampling", {}) if prompt_spec else {}
-    manifest_sampling = Sampling.from_mapping(raw_manifest)
-    return (
-        cfg.sampling_setscript
-        .merge(manifest_sampling)
-        .merge(cfg.sampling_env)
-        .merge(cli_override or Sampling())
-    )
-
 
 # ---------------------------------------------------------------------------
 # Effective /set view — annotate knobs whose live value bypasses the store
@@ -951,10 +957,9 @@ def _live_settings_overlay_for_state(cfg: Config, state: dict) -> dict[str, setc
     provider_default_base_url = (
         providers.provider_base_url(provider_def, None, os.environ) if provider_def is not None else None
     )
-    prompt_spec = state.get("prompt_spec")
-    manifest_sampling = Sampling.from_mapping(getattr(prompt_spec, "sampling", {}) if prompt_spec else {})
-    eff_sampling = _sampling_for_turn(turn_cfg, prompt_spec, state.get("sampling_cli", Sampling()))
-    return _live_settings_overlay(
+    eff_sampling = login_defaults.sampling(turn_cfg)
+    manifest_sampling = login_defaults.layer_sampling(turn_cfg.layer_agent)
+    overlay = _live_settings_overlay(
         state["settings"],
         live_model=turn_cfg.model,
         model_source=state.get("model_source"),
@@ -964,16 +969,35 @@ def _live_settings_overlay_for_state(cfg: Config, state: dict) -> dict[str, setc
         saved_login=saved_login,
         provider_default_base_url=provider_default_base_url,
         eff_sampling=eff_sampling,
-        env_sampling=turn_cfg.sampling_env,
+        env_sampling=login_defaults.layer_sampling(turn_cfg.layer_env),
         manifest_sampling=manifest_sampling,
         environ=os.environ,
     )
+    # The login-default settings show their resolved value and its layer.
+    login = login_defaults.login_for(turn_cfg.provider_id, turn_cfg.provider_base_url)
+    masked = setcmd.masks_secrets(state["settings"])
+    values, sources = login_defaults.resolve(login_defaults.layers_of(turn_cfg))
+    for key in login_defaults.KEYS:
+        source = sources.get(key)
+        if key in overlay and source in (None, "env", "flag"):
+            continue  # the overlay already names the env var or flag
+        if source in (None, "jsrc") and values.get(key) == settings.get_dotted(state["settings"], (key,)):
+            continue
+        label = (f"login {login.provider_id} {source}" if source in ("server", "model") and login is not None
+                 else source or "unset")
+        overlay[key] = setcmd.LiveValue(
+            display=setcmd.render_value(settings.SPEC_BY_KEY[key], values.get(key), masked=masked),
+            source=label,
+        )
+    return overlay
 
 
 def _effective_settings_snapshot(cfg: Config, state: dict) -> dict:
     """A copy of the live settings store with the off-store live values (flag
     model, login provider, env/manifest sampling) folded in — what `/save` writes
-    so a reload reproduces the running configuration."""
+    so a reload reproduces the running configuration. A value the saved login's
+    server or model defaults put in is not the live state's to save: the login
+    keeps it, so the snapshot holds the jsrc-layer value, or none."""
     eff = copy.deepcopy(state["settings"]) if isinstance(state.get("settings"), dict) else {}
     turn_cfg = _cfg_for_live_state(cfg, state)
     live_model = state.get("model")
@@ -985,14 +1009,15 @@ def _effective_settings_snapshot(cfg: Config, state: dict) -> dict:
         settings.set_dotted(eff, ("BASE_URL",), turn_cfg.provider_base_url)
     if turn_cfg.provider_api_key:
         settings.set_dotted(eff, ("API_KEY",), turn_cfg.provider_api_key)
-    eff_sampling = _sampling_for_turn(turn_cfg, state.get("prompt_spec"), state.get("sampling_cli", Sampling()))
-    for field, value in eff_sampling.as_dict_nonnull().items():
-        settings.set_dotted(eff, (field.upper(),), value)
+    # The login-default settings save their jsrc and `/set` layers only.
+    saved = login_defaults.saved_jsrc_values(turn_cfg)
+    for key in login_defaults.KEYS:
+        if key in saved:
+            eff[key] = saved[key]
+        else:
+            eff.pop(key, None)
     return eff
 
-
-def _sampling_override_from_live_settings(live_settings: dict) -> Sampling:
-    return Sampling.from_mapping({field: live_settings.get(field.upper()) for field in _SAMPLING_FIELDS})
 
 
 def _model_from_live_settings(live_settings: dict) -> str | None:
@@ -1485,12 +1510,6 @@ _MAX_ALIAS_DEPTH = 16
 def _apply_settings_result(result: setcmd.CommandResult, state: dict, cfg: Config) -> str | None:
     """Print a settings verb's output and carry changed keys into live state."""
     keys = result.changed_keys
-    sampling_fields = [key.lower() for key in keys if key.lower() in _SAMPLING_FIELDS]
-    if sampling_fields:
-        current = state.get("sampling_cli", Sampling())
-        for field in sampling_fields:
-            current = replace(current, **{field: state["settings"].get(field.upper())})
-        state["sampling_cli"] = current
     if _changed_model_key(keys):
         _sync_model_from_live_settings(state)
     if _changed_provider_key(keys):
@@ -1528,7 +1547,31 @@ def _cmd_set(arg: str, state: dict, cfg: Config) -> str | None:
         return _show_settings(state, cfg, parts[0] if parts else None)
     # `set -key` goes back to the value the session started with.
     baseline = cfg.settings if isinstance(getattr(cfg, "settings", None), dict) else None
-    return _apply_settings_result(setcmd.set_command(state["settings"], arg, baseline), state, cfg)
+    result = setcmd.set_command(state["settings"], arg, baseline)
+    if result.error is None:
+        unset = parts[0].startswith("-")
+        _note_live_set(state, parts[0][1:] if unset else parts[0], unset=unset)
+    return _apply_settings_result(result, state, cfg)
+
+
+def _note_live_set(state: dict, name: str, *, unset: bool) -> None:
+    """Record one `set` (a typed `/set`, a script or `on` handler line) in the
+    `/set` layer of the login-default settings, as it runs: a new dict per
+    change. `set -KEY` takes the key out of the layer; any value, even one
+    equal to what the session already has, goes in."""
+    spec = settings.spec_for(name)
+    if spec is None or spec.key not in login_defaults.KEYS:
+        return
+    live = dict(state.get("live_set") or {})
+    value = None if unset else settings.get_dotted(state["settings"], spec.path)
+    if value is None:
+        live.pop(spec.key, None)
+    else:
+        live[spec.key] = value
+    state["live_set"] = live
+    # A set or unset of the key ends a resumed session's value for it.
+    if spec.key in (state.get("live_resume") or {}):
+        state["live_resume"] = {k: v for k, v in state["live_resume"].items() if k != spec.key}
 
 
 def _cmd_show(arg: str, state: dict, cfg: Config) -> str | None:
@@ -1605,7 +1648,10 @@ def _cmd_load(arg: str, state: dict, cfg: Config) -> str | None:
 
 def _cmd_save(arg: str, state: dict, cfg: Config) -> str | None:
     """Write the changed settings, `on` handlers and aliases into the global
-    jsrc, editing it in place."""
+    jsrc, editing it in place. `/save server` writes this session's model
+    settings into the saved login as the active model's defaults."""
+    if arg.strip().lower() == "server":
+        return _save_server(cfg, state)
     eff = _effective_settings_snapshot(cfg, state)
     hooks = state.get("events")
     extra = setcmd.event_lines(hooks) if hooks is not None else []
@@ -1619,13 +1665,37 @@ def _cmd_save(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
+def _save_server(cfg: Config, state: dict) -> str | None:
+    """Write the session's server and model layer values for the active
+    model into the login the session routes to."""
+    turn = _cfg_for_live_state(cfg, state)
+    login = login_defaults.login_for(turn.provider_id, turn.provider_base_url)
+    if login is None:
+        return msgs.SAVE_NO_SERVER.said(provider=turn.provider_id or turn.provider_base_url or turn.model)
+    values = login_defaults.saved_layer(turn)
+    model_defaults = dict(login.model_defaults or {})
+    # Merged into what the model already has: a key another layer decides for
+    # this run keeps its stored value.
+    model_defaults[turn.model] = {**model_defaults.get(turn.model, {}), **values}
+    try:
+        logins.save_login(replace(login, model_defaults={k: v for k, v in model_defaults.items() if v}))
+    except logins.LoginsCorruptError as exc:
+        return msgs.SAVE_FAILED.said(error=exc)
+    except OSError as exc:
+        return msgs.SAVE_FAILED.said(error=f"{type(exc).__name__}: {exc}")
+    msgs.say(msgs.SAVED_SERVER, settings=login_defaults.render(values) or msgs.NONE_VALUE.text(),
+             model=turn.model, provider=login.provider_id)
+    return None
+
+
 def _live_stamp(cfg: Config, state: dict) -> dict:
-    """The stamp a turn started now would write."""
-    active = _cfg_for_active_model(cfg, state)
-    live_settings = state.get("settings")
-    reasoning = _live_reasoning_effort_setting(live_settings if isinstance(live_settings, dict) else {},
-                                               active.reasoning_effort)
-    return M.stamp_for(active.model, active.provider_id, reasoning)
+    """The stamp a turn started now would write: its model and the effort that
+    model resolves to."""
+    if not isinstance(state.get("settings"), dict):
+        active = _cfg_for_active_model(cfg, state)
+        return M.stamp_for(active.model, active.provider_id, active.reasoning_effort)
+    turn = _cfg_for_live_state(cfg, state)
+    return M.stamp_for(turn.model, turn.provider_id, turn.reasoning_effort)
 
 
 def _cmd_model(arg: str, state: dict, cfg: Config) -> str | None:
@@ -2369,6 +2439,32 @@ def _validate_cli_reasoning(reasoning: str) -> tuple[str | None, str | None]:
     return settings.coerce_value(spec, reasoning)
 
 
+# The command-line flags that set a setting: (args attribute, setting). Each
+# reaches every run path as an --extra, which also records it as a flag value
+# that a saved login's defaults never replace (js.login_defaults).
+SETTING_FLAGS: tuple[tuple[str, str], ...] = (
+    ("reasoning", "EFFORT"),
+    ("max_out", "OUTPUT_TOKENS_MAX"),
+)
+
+
+def _setting_flag_extras(args: argparse.Namespace) -> tuple[list[str], int | None]:
+    """The --extra entries for the `SETTING_FLAGS` ``args`` sets, and an exit
+    code when one of them is not a value its setting takes."""
+    extras: list[str] = []
+    for attr, key in SETTING_FLAGS:
+        value = getattr(args, attr, None)
+        if value is None:
+            continue
+        if key == "EFFORT":
+            _seed, effort_error = _validate_cli_reasoning(str(value))
+            if effort_error is not None:
+                msgs.warn(msgs.BAD_REASONING, value=value, error=effort_error)
+                return [], 2
+        extras.append(f"{key}={value}")
+    return extras, None
+
+
 def _raise_keyboard_interrupt(*_args) -> None:
     raise KeyboardInterrupt
 
@@ -2421,8 +2517,6 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         if model is None:
             unreachable_stamp = _stamp_without_login(resumed, cfg)
             model = _resume_model_spec(resumed, cfg)
-        if reasoning is None:
-            reasoning_override = _resume_reasoning(resumed, cfg)
     _activate_saved_session(
         cfg,
         caller_key=caller_key,
@@ -2463,6 +2557,18 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         with _transcript_stdio(telemetry):
             msgs.warn(msgs.FAILED, error=e)
         return 2
+    # The model and agent this run uses are settled: the login-default
+    # settings resolve before sampling and attachments are worked out.
+    cfg = login_defaults.for_turn(login_defaults.with_agent(
+        cfg, prompt_spec, reasoning=not config_pins and resumed is None and reasoning_override is None))
+    if resumed is not None and reasoning is None:
+        # A resumed session's reasoning is this session's own choice, like
+        # /set, even when it is what the model would pick: its turns and the
+        # children they start run on it.
+        resumed_layer = _resumed_layer(resumed, None)
+        if resumed_layer:
+            cfg = login_defaults.for_turn(replace(cfg, layer_resume=resumed_layer))
+            reasoning_override = _stamped_reasoning(resumed)
     if prompt_spec is not None:
         prompt_spec = P._expand_spec(prompt_spec, cfg)
         system = prompt_spec.system
@@ -2522,7 +2628,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         "provider_base_url_override": cfg.provider_base_url,
         "provider_api_key_override": cfg.provider_api_key,
         "tool_registry": active_registry,
-        "sampling": _sampling_for_turn(cfg, prompt_spec, cfg.sampling_cli),
+        "sampling": login_defaults.sampling(cfg),
         "call_stats": call_stats,
     }
     if events is not None:
@@ -2828,10 +2934,12 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
     try:
         cfg = _apply_agent_model(cfg, prompt_spec, model)
         cfg = _resolve_cli_model_override(cfg, model)
+        cfg = login_defaults.for_turn(login_defaults.with_agent(cfg, prompt_spec))
     except ValueError as e:
         msgs.warn(msgs.FAILED, error=e)
         return 2
-    agent_default_max = prompt_spec.max_output_tokens
+    # The resolved OUTPUT_TOKENS_MAX: agent.yaml's max_tokens is one of its layers.
+    agent_default_max = cfg.max_output_tokens
     prompt_spec = P._expand_spec(prompt_spec, cfg)
     system = prompt_spec.system
 
@@ -2861,7 +2969,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
             "provider_base_url_override": cfg.provider_base_url,
             "provider_api_key_override": cfg.provider_api_key,
             "tool_registry": active_registry,
-            "sampling": _sampling_for_turn(cfg, prompt_spec, cfg.sampling_cli),
+            "sampling": login_defaults.sampling(cfg),
             "max_output_override": eff_max,
             "call_stats": call_stats,
         }
@@ -3277,7 +3385,6 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
     turn puts them back in the queue.
     """
     try:
-        before_turn_sampling = _sampling_override_from_live_settings(state["settings"])
         before_turn_model = _model_from_live_settings(state["settings"])
         before_turn_provider = _provider_from_live_settings(state["settings"])
         before_turn_lock = _live_bool_setting(
@@ -3294,14 +3401,11 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
             reasoning_effort_override=turn_cfg.reasoning_effort,
             max_output_override=turn_cfg.max_output_tokens,
             tool_registry=state["tool_registry"],
-            sampling=_sampling_for_turn(turn_cfg, prompt_spec, state["sampling_cli"]),
+            sampling=login_defaults.sampling(turn_cfg),
             event_hooks=state.get("events"),
             mcp_host=state.get("mcp_host"),
             steer=steer,
         )
-        after_turn_sampling = _sampling_override_from_live_settings(state["settings"])
-        if after_turn_sampling != before_turn_sampling:
-            state["sampling_cli"] = after_turn_sampling
         after_turn_model = _model_from_live_settings(state["settings"])
         if after_turn_model != before_turn_model:
             _sync_model_from_live_settings(state)
@@ -3609,7 +3713,7 @@ async def _initialize_repl_agent(cfg, state, telemetry, prompt_spec) -> None:
         await agent_messages.initialize(
             turn_cfg, prompt_spec, state["messages"], telemetry, system=state["system"],
             tool_registry=state["tool_registry"],
-            sampling=_sampling_for_turn(turn_cfg, prompt_spec, state["sampling_cli"]),
+            sampling=login_defaults.sampling(turn_cfg),
             event_hooks=state.get("events"), mcp_host=state.get("mcp_host"),
             echo_user=display_mod.echo_user,
         )
@@ -3830,7 +3934,6 @@ def _repl_state(cfg, prompt_spec, *, messages: list[dict] | None = None,
         "events": event_hooks,
         "tool_registry": tool_registry,
         "tool_selectors": prompt_spec.tool_selectors,
-        "sampling_cli": cfg.sampling_cli,
         "compact_notified": False,
         "compact_consecutive": 0,
         "compact_incomplete_consecutive": 0,
@@ -3941,7 +4044,6 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
         state["messages"].append(user_bundle.runtime_message)
         _append_turn(cfg, user_bundle.history_message)
         try:
-            before_turn_sampling = _sampling_override_from_live_settings(state["settings"])
             before_turn_model = _model_from_live_settings(state["settings"])
             before_turn_provider = _provider_from_live_settings(state["settings"])
             before_turn_lock = _live_bool_setting(
@@ -3960,14 +4062,11 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
                 reasoning_effort_override=turn_cfg.reasoning_effort,
                 max_output_override=turn_cfg.max_output_tokens,
                 tool_registry=state["tool_registry"],
-                sampling=_sampling_for_turn(turn_cfg, prompt_spec, state["sampling_cli"]),
+                sampling=login_defaults.sampling(turn_cfg),
                 event_hooks=state.get("events"),
                 mcp_host=state.get("mcp_host"),
                 loop_runner=mcp_loop,
             )
-            after_turn_sampling = _sampling_override_from_live_settings(state["settings"])
-            if after_turn_sampling != before_turn_sampling:
-                state["sampling_cli"] = after_turn_sampling
             after_turn_model = _model_from_live_settings(state["settings"])
             if after_turn_model != before_turn_model:
                 _sync_model_from_live_settings(state)
@@ -4333,6 +4432,11 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         except endpoint_uri.EndpointSpecError as exc:
             msgs.warn(msgs.BAD_URL_SPEC, error=exc)
             return 2
+    flag_extras, flag_error = _setting_flag_extras(args)
+    if flag_error is not None:
+        return flag_error
+    # After --extra, so a flag beats an --extra naming the same setting.
+    args.extras = [*args.extras, *flag_extras]
     presets = [name for spec in args.presets for name in spec.split(",") if name.strip()]
     set_invocation(extras=args.extras, presets=presets,
                    ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global)
@@ -4657,8 +4761,6 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         if remembered_model:
             args.model = remembered_model
             notices.append(msgs.line_for(msgs.RESUMED_MODEL, model=remembered_model))
-    resumed_reasoning = _resume_reasoning(resumed, cfg) if resumed is not None and args.reasoning is None else None
-
     try:
         prompt_spec = P.load_configured_prompt_spec(cfg, expand=False)
     except (FileNotFoundError, ValueError) as e:
@@ -4682,6 +4784,11 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     except ValueError as e:
         msgs.warn(msgs.FAILED, error=e)
         return 2
+    # Compared with what the resumed model and agent resolve to, not the
+    # startup model.
+    resumed_reasoning = (
+        _resume_reasoning(resumed, login_defaults.for_turn(login_defaults.with_agent(cfg, prompt_spec)))
+        if resumed is not None and args.reasoning is None else None)
     if unreachable_stamp is not None:
         msgs.say(msgs.RESUME_MODEL_FALLBACK, stamped=unreachable_stamp,
                  model=_stamp_label(cfg.model, cfg.provider_id))
@@ -4726,6 +4833,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         notices.append(msgs.line_for(msgs.PROMPT_CHANGED))
 
     live_settings = copy.deepcopy(cfg.settings) if isinstance(cfg.settings, dict) else {}
+    # A resumed session's reasoning is this session's own choice.
+    resumed_layer = _resumed_layer(resumed, args.reasoning)
     if args.reasoning is not None:
         reasoning_seed, effort_error = _validate_cli_reasoning(args.reasoning)
         if effort_error is not None:
@@ -4750,6 +4859,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         tool_registry=active_registry,
     )
     state["keymap"] = keymap
+    state["live_resume"] = resumed_layer
     if cut_off:
         _queue_note(state, _CUT_OFF_NOTICE)
     rc_errors = _run_rc_commands(state, cfg, jsrc_paths(

@@ -11,7 +11,6 @@ from js import cli, events, setcmd, settings
 from js import messages as msgs
 from js.config import Config
 from js.memory import append_message, load_messages
-from js.sampling import Sampling
 from repl_driver import run_blocking
 
 
@@ -287,7 +286,7 @@ def test_repl_input_hook_dispatches_before_run_turn(monkeypatch, tmp_path):
 
 
 def test_repl_input_hook_does_not_drop_existing_sampling_override(monkeypatch, tmp_path):
-    cfg = replace(make_cfg(tmp_path), sampling_cli=Sampling(temperature=0.9))
+    cfg = replace(make_cfg(tmp_path), layer_flag={"TEMPERATURE": 0.9})
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     temperatures: list[float | None] = []
@@ -303,7 +302,7 @@ def test_repl_input_hook_does_not_drop_existing_sampling_override(monkeypatch, t
 
 
 def test_repl_input_hook_sampling_change_updates_turn_sampling(monkeypatch, tmp_path):
-    cfg = replace(make_cfg(tmp_path), sampling_cli=Sampling(temperature=0.9))
+    cfg = replace(make_cfg(tmp_path), layer_flag={"TEMPERATURE": 0.9})
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     temperatures: list[float | None] = []

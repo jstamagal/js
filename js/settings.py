@@ -27,6 +27,7 @@ import shlex
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 from . import reasoning as _reasoning
@@ -371,6 +372,15 @@ _NONNEGATIVE_KNOBS = frozenset({
 })
 
 
+# The values a sampling setting can take: (lowest, highest), None = open.
+_SAMPLING_RANGES: dict[str, tuple[float | None, float | None]] = {
+    "TEMPERATURE": (0.0, None),
+    "TOP_P": (0.0, 1.0),
+    "REPETITION_PENALTY": (0.0, None),
+    "PRESENCE_PENALTY": (-2.0, 2.0),
+}
+
+
 def _unquoted(spec: SettingSpec, text: str) -> str:
     """A string setting's value written as a JSON string ("a\\nb"), the form
     `/save` uses for one a jsrc line cannot hold as it is, decoded; any other
@@ -473,6 +483,8 @@ def _coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             return None, msgs.EXPECTED_INTEGER.text()
         if spec.key in _NONNEGATIVE_KNOBS and value < 0:
             return None, msgs.EXPECTED_NONNEGATIVE_INTEGER.text()
+        if spec.key == "TOP_K" and value < 0:
+            return None, msgs.EXPECTED_NONNEGATIVE_INTEGER.text()
         if spec.key in {"ui.reasoning", "ui.net", "ui.tools"} and value not in range(4):
             return None, msgs.EXPECTED_LEVEL.text()
         if spec.key in {
@@ -487,6 +499,12 @@ def _coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             number = float(text)
         except ValueError:
             return None, msgs.EXPECTED_NUMBER.text()
+        if not math.isfinite(number):  # nan or inf is no setting's value
+            return None, msgs.EXPECTED_FINITE_NUMBER.text()
+        low, high = _SAMPLING_RANGES.get(spec.key, (None, None))
+        if (low is not None and number < low) or (high is not None and number > high):
+            return None, (msgs.EXPECTED_AT_LEAST.text(low=low) if high is None
+                          else msgs.EXPECTED_RANGE.text(low=low, high=high))
         if spec.key in _NONNEGATIVE_KNOBS and number < 0:
             return None, msgs.EXPECTED_NONNEGATIVE_NUMBER.text()
         if spec.key == "MCP_TIMEOUT" and not (math.isfinite(number) and number > 0):
@@ -722,18 +740,30 @@ def apply_env_overrides(settings: dict, env: dict[str, str] | None = None) -> di
     or its older env name when ``JS_<KEY>`` is not set."""
     source = env if env is not None else os.environ
     for spec in REGISTRY:
-        for name in env_names_for(spec):
-            if name not in source:
-                continue
-            value, error = coerce_value(spec, source[name])
-            if error is not None:
-                # garbage in the env: skip rather than clobber a working value,
-                # but say so — a silently dropped JS_BASE_URL costs an evening
-                msgs.warn(msgs.ENV_SETTING_IGNORED, name=name, error=error)
-                continue
+        missing = object()
+        value = env_value(spec, source, missing, warn=True)
+        if value is not missing:
             set_dotted(settings, spec.path, value)
-            break
     return settings
+
+
+def env_value(spec: SettingSpec, env: Mapping[str, str], missing: Any = None, *, warn: bool = False) -> Any:
+    """The value the environment gives ``spec``: its first env name, JS_<KEY>
+    then the older one, that holds a value `set` takes. An invalid one is
+    passed over (and named, with ``warn``) and the next name is tried.
+    ``missing`` when none gives one."""
+    for name in env_names_for(spec):
+        if name not in env:
+            continue
+        value, error = coerce_value(spec, env[name])
+        if error is not None:
+            # garbage in the env: skip rather than clobber a working value,
+            # but say so — a silently dropped JS_BASE_URL costs an evening
+            if warn:
+                msgs.warn(msgs.ENV_SETTING_IGNORED, name=name, error=error)
+            continue
+        return value
+    return missing
 
 
 # ---------------------------------------------------------------------------

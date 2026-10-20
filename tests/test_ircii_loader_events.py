@@ -307,11 +307,10 @@ def test_cli_load_sampling_set_updates_live_sampling_override(tmp_path):
         "system": "sys",
         "settings": settings.seed_defaults(),
         "events": events.EventHooks(),
-        "sampling_cli": cfg.sampling_cli,
     }
 
     assert cli._handle_command(f"/load {script.name}", state, cfg) is True
-    assert state["sampling_cli"].temperature == 0.2
+    assert state["live_set"]["TEMPERATURE"] == 0.2
 
 
 def test_cli_load_partial_sampling_set_updates_live_sampling_override(tmp_path):
@@ -323,10 +322,9 @@ def test_cli_load_partial_sampling_set_updates_live_sampling_override(tmp_path):
         "system": "sys",
         "settings": settings.seed_defaults(),
         "events": events.EventHooks(),
-        "sampling_cli": cfg.sampling_cli,
     }
 
     _, error = cli._run_command(f"/load {script.name}", state, cfg)
 
     assert f"{script}:2" in error
-    assert state["sampling_cli"].temperature == 0.2
+    assert state["live_set"]["TEMPERATURE"] == 0.2

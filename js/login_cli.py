@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Callable
 import curses
 import os
 import sys
@@ -12,7 +13,7 @@ from types import SimpleNamespace
 
 import ai
 
-from . import codex_auth, model_client, paranoid, providers, retry, xai_auth
+from . import codex_auth, login_defaults, model_client, paranoid, providers, retry, xai_auth
 from . import config, turn_settings
 from . import messages as msgs
 from .logins import (
@@ -71,12 +72,16 @@ def _curses_picker(
     *,
     preselected: set[int] | None = None,
     details: list[list[str]] | None = None,
+    on_edit: Callable[[curses.window, str], str | None] | None = None,
 ) -> list[int] | None:
     """Searchable chooser/checklist; selections always use original row indices.
 
     / edits the filter, enter returns to navigation, escape clears an in-progress
     search. Checklist all/none act on matching rows, preserving hidden choices.
+    With ``on_edit``, e calls it with the row's label and shows the
+    annotation it returns on the row.
     """
+    rows = list(rows)
     _use_terminal_colors()
     curses.curs_set(0)
     stdscr.keypad(True)
@@ -115,6 +120,8 @@ def _curses_picker(
         if multiple:
             draw(h - 2, msgs.PICKER_SELECTED.text(selected=len(selected), total=len(rows)))
         help_text = msgs.PICKER_KEYS_CHECKLIST if multiple else msgs.PICKER_KEYS
+        if multiple and on_edit is not None:
+            help_text = msgs.PICKER_KEYS_CHECKLIST_EDIT
         draw(h - 1, (msgs.PICKER_KEYS_SEARCH if searching else help_text).text())
         stdscr.refresh()
         try:
@@ -153,6 +160,11 @@ def _curses_picker(
         elif multiple and key == ord(" ") and matches:
             original = matches[idx]
             selected.discard(original) if original in selected else selected.add(original)
+        elif on_edit is not None and key == ord("e") and matches:
+            original = matches[idx]
+            annotation = on_edit(stdscr, rows[original][0])
+            if annotation is not None:
+                rows[original] = (rows[original][0], annotation)
         elif multiple and key in (ord("a"), ord("A")):
             selected.update(matches)
         elif multiple and key in (ord("n"), ord("N")):
@@ -216,11 +228,12 @@ def _curses_multiselect(
     title: str,
     *,
     preselected: set[int],
+    on_edit: Callable[[curses.window, str], str | None] | None = None,
 ) -> list[int] | None:
     """Spacebar checklist with / filtering; None means cancel."""
     if not rows:
         return []
-    return _curses_picker(stdscr, rows, title, preselected=preselected)
+    return _curses_picker(stdscr, rows, title, preselected=preselected, on_edit=on_edit)
 
 
 def _select_models_to_cache(
@@ -228,6 +241,8 @@ def _select_models_to_cache(
     models: list[str],
     *,
     annotate_dialects: bool = True,
+    saved: Login | None = None,
+    pending: list[Login] | None = None,
 ) -> list[str] | None:
     """Curate which fetched models to cache. None == user cancelled.
 
@@ -245,12 +260,13 @@ def _select_models_to_cache(
     cache = load_model_cache()
     cached = cache.get(provider_id, [])
     options = list(dict.fromkeys([*models, *cached]))
-    rows = [(model_id, dialects.get(model_id, "")) for model_id in options]
+    rows = [(model_id, _model_annotation(saved, model_id, dialects.get(model_id, ""))) for model_id in options]
     fetched = set(models)
     preselected = {idx for idx, model_id in enumerate(options) if model_id in fetched}
     title = msgs.LOGIN_PICK_MODELS.text(provider=provider_id)
     sys.stdout.flush()
-    chosen = curses.wrapper(_curses_multiselect, rows, title, preselected=preselected)
+    on_edit = _model_defaults_editor(saved.provider_id, pending, dialects) if saved is not None else None
+    chosen = curses.wrapper(_curses_multiselect, rows, title, preselected=preselected, on_edit=on_edit)
     if chosen is None:
         return None
     selected = [options[i] for i in chosen]
@@ -539,6 +555,18 @@ def _post_fetch_confirmation(login: Login, provider: providers.ProviderDef, mode
     return _run_secondary_test(login, provider, choice)
 
 
+def _keep_list(provider_id: str, login: Login, models: list[str]) -> tuple[list[str] | None, Login]:
+    """A login flow's keep-list for ``login``, not saved yet: the models to
+    cache (None when cancelled) and the login with what `e` edited in its
+    model defaults, starting from the ones a login saved before has."""
+    previous = load_logins().get(provider_id)
+    if login.model_defaults is None and previous is not None:
+        login = replace(login, model_defaults=dict(previous.model_defaults or {}))
+    pending = [login]
+    to_cache = _select_models_to_cache(provider_id, models, saved=login, pending=pending)
+    return to_cache, pending[0]
+
+
 def _run_codex_login(provider_id: str) -> int:
     try:
         if provider_id == codex_auth.CODEX_DEVICE_PROVIDER_ID:
@@ -551,7 +579,7 @@ def _run_codex_login(provider_id: str) -> int:
         msgs.warn(msgs.LOGIN_FAILED, error=f"{type(exc).__name__}: {exc}")
         return 1
 
-    to_cache = _select_models_to_cache(login.provider_id, models)
+    to_cache, login = _keep_list(login.provider_id, login, models)
     if to_cache is None:
         return 0
     try:
@@ -573,7 +601,7 @@ def _run_xai_login() -> int:
         msgs.warn(msgs.LOGIN_FAILED, error=f"{type(exc).__name__}: {exc}")
         return 1
 
-    to_cache = _select_models_to_cache(login.provider_id, models)
+    to_cache, login = _keep_list(login.provider_id, login, models)
     if to_cache is None:
         return 0
     try:
@@ -603,7 +631,93 @@ def _provider_details(login: Login, model_count: int) -> list[str]:
         msgs.LOGIN_DETAIL_CACHED.text(models=msgs.plural(model_count, "cached model")),
         msgs.LOGIN_DETAIL_HEADERS.text(
             headers=", ".join(f"{k}={_mask(v)}" for k, v in login.provider_headers.items()) or msgs.NONE_VALUE.text()),
+        msgs.LOGIN_DETAIL_DEFAULTS.text(defaults=login_defaults.render(login.defaults) or msgs.NONE_VALUE.text()),
     ]
+
+
+def _edit_defaults(login: Login) -> None:
+    """Ask for the server defaults and save them."""
+    while True:
+        raw = _input(msgs.LOGIN_EDIT_DEFAULTS.text(names=", ".join(login_defaults.KEYS)),
+                     default=login_defaults.render(login.defaults))
+        if raw is None:
+            return
+        if raw == "-":
+            values: dict = {}
+            break
+        try:
+            values = login_defaults.parse(raw)
+            break
+        except ValueError as exc:
+            msgs.say(msgs.LOGIN_BAD_DEFAULTS, error=exc)
+    save_login(replace(login, defaults=values))
+
+
+def _model_annotation(login: Login | None, model_id: str, tag: str = "") -> str:
+    """A keep-list row's annotation: its dialect tag and the model's defaults."""
+    values = login_defaults.render(((login.model_defaults if login else None) or {}).get(model_id))
+    return "  ".join(part for part in (tag, values) if part)
+
+
+def _model_defaults_editor(provider_id: str, pending: list[Login] | None = None,
+                           tags: dict[str, str] | None = None,
+                           ) -> Callable[[curses.window, str], str | None]:
+    """The keep-list's `e` action: ask for the model's defaults on the bottom
+    line, save them to the saved login, and return the row's new annotation
+    (None leaves it as it was). With ``pending`` (one login not saved yet,
+    during js --login) the edit goes into that login instead. ``tags`` holds
+    each row's dialect tag, kept in front of the defaults."""
+
+    def edit(stdscr: curses.window, model_id: str) -> str | None:
+        login = pending[0] if pending else load_logins().get(provider_id)
+        if login is None:
+            return None
+        current = login_defaults.render((login.model_defaults or {}).get(model_id))
+        raw = _curses_prompt(stdscr, msgs.LOGIN_EDIT_MODEL_DEFAULTS.text(model=model_id), current)
+        if raw is None:
+            return None
+        try:
+            values = {} if raw.strip() == "-" else login_defaults.parse(raw)
+        except ValueError:
+            return None
+        model_defaults = {k: v for k, v in (login.model_defaults or {}).items() if k != model_id}
+        if values:
+            model_defaults[model_id] = values
+        updated = replace(login, model_defaults=model_defaults)
+        if pending:
+            pending[0] = updated
+        else:
+            save_login(updated)
+        return _model_annotation(updated, model_id, (tags or {}).get(model_id, ""))
+
+    return edit
+
+
+def _curses_prompt(stdscr: curses.window, prompt: str, default: str) -> str | None:
+    """A line of text typed on the bottom row, starting from ``default``.
+    Enter returns it, escape returns None."""
+    h, w = stdscr.getmaxyx()
+    text = default
+    curses.curs_set(1)
+    try:
+        while True:
+            line = f"{prompt}{text}"[-max(1, w - 1):]
+            with contextlib.suppress(curses.error):
+                stdscr.move(h - 1, 0)
+                stdscr.clrtoeol()
+                stdscr.addstr(h - 1, 0, line)
+            stdscr.refresh()
+            key = stdscr.getch()
+            if key in (10, 13, curses.KEY_ENTER):
+                return text
+            if key in (27, 3):
+                return None
+            if key in (curses.KEY_BACKSPACE, 127, 8):
+                text = text[:-1]
+            elif 32 <= key < 256 and chr(key).isprintable():
+                text += chr(key)
+    finally:
+        curses.curs_set(0)
 
 
 def _edit_saved_provider(login: Login) -> None:
@@ -687,7 +801,10 @@ def _manage_models(login: Login) -> None:
             except Exception as exc:  # noqa: BLE001 - keep the existing cache on a failed fetch
                 status = msgs.LOGIN_REFETCH_FAILED.text(error=type(exc).__name__)
                 continue
-            curated = _select_models_to_cache(login.provider_id, models, annotate_dialects=False)
+            # Read again: an `e` in an earlier picker saved new defaults.
+            saved = load_logins().get(login.provider_id) or login
+            curated = _select_models_to_cache(login.provider_id, models, annotate_dialects=False,
+                                              saved=saved)
             if curated is not None:
                 cache_models(login.provider_id, curated, metadata=metadata)
 
@@ -695,17 +812,19 @@ def _manage_models(login: Login) -> None:
 def _manage_saved_provider(provider_id: str) -> None:
     while (login := load_logins().get(provider_id)) is not None:
         details = _provider_details(login, len(load_model_cache().get(provider_id, [])))
-        actions = [msgs.LOGIN_UPDATE.text(), msgs.LOGIN_MODELS.text(), msgs.LOGIN_BACK.text(),
-                   msgs.LOGIN_REMOVE.text()]
+        actions = [msgs.LOGIN_UPDATE.text(), msgs.LOGIN_MODELS.text(), msgs.LOGIN_DEFAULTS.text(),
+                   msgs.LOGIN_BACK.text(), msgs.LOGIN_REMOVE.text()]
         choice = _menu(_curses_menu, actions, msgs.LOGIN_MANAGE_ONE.text(provider=provider_id),
                        details=[details] * len(actions))
-        if choice is None or choice == 2:
+        if choice is None or choice == 3:
             return
         if choice == 0:
             _edit_saved_provider(login)
         elif choice == 1:
             _manage_models(login)
-        elif choice == 3:
+        elif choice == 2:
+            _edit_defaults(login)
+        elif choice == 4:
             _run_logout(provider_id)
             return
 
@@ -739,11 +858,20 @@ def _run_login(provider_id: str | None = None) -> int:
     try:
         models, model_metadata = test_login_with_metadata(login)
     except Exception as exc:  # noqa: BLE001
-        msgs.warn(msgs.LOGIN_FAILED, error=f"{type(exc).__name__}: {exc}")
+        # A server that is down now is still saved; its models come later
+        # through Models > Re-fetch.
+        msgs.warn(msgs.LOGIN_MODELS_UNREACHABLE, error=f"{type(exc).__name__}: {exc}")
         base = login.provider_base_url or ""
         if "404" in str(exc) and base and not base.rstrip("/").endswith("/v1"):
             msgs.warn(msgs.LOGIN_TRY_V1, base=base, suggested=f"{base.rstrip('/')}/v1")
-        return 1
+        try:
+            save_login(login)
+        except LoginsCorruptError as save_exc:
+            msgs.warn(msgs.LOGIN_NOT_SAVED, error=save_exc)
+            return 1
+        canonical_id = providers.normalize_provider_id(provider_id) or provider_id
+        msgs.say(msgs.PROVIDER_ADDED, provider=canonical_id, models=msgs.plural(0, "model"))
+        return 0
 
     confirmed = _post_fetch_confirmation(login, provider, models)
     if confirmed is None:
@@ -752,7 +880,7 @@ def _run_login(provider_id: str | None = None) -> int:
         return 1
 
     canonical_id = providers.normalize_provider_id(provider_id) or provider_id
-    to_cache = _select_models_to_cache(canonical_id, models)
+    to_cache, login = _keep_list(canonical_id, login, models)
     if to_cache is None:
         return 0
     try:
@@ -785,7 +913,8 @@ def _run_models_edit(provider_id: str) -> int:
         msgs.warn(msgs.LOGIN_NO_CACHED_MODELS, provider=target)
         return 1
 
-    curated = _select_models_to_cache(target, cached, annotate_dialects=False)
+    curated = _select_models_to_cache(target, cached, annotate_dialects=False,
+                                      saved=load_logins().get(target))
     if curated is None:
         msgs.say(msgs.LOGIN_CACHE_EDIT_CANCELLED, provider=target)
         return 0

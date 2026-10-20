@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from js import cli, persona
+from js import persona
 from js.sampling import Sampling, call_params
 
 
@@ -98,17 +98,18 @@ def test_call_params_maps_openai_compatible_extensions_to_extra_body():
     }
 
 
-def test_cli_sampling_for_turn_precedence():
-    cfg = SimpleNamespace(
-        sampling_setscript=Sampling(temperature=0.1, top_p=0.8),
-        sampling_env=Sampling(temperature=0.3, top_k=64),
-    )
-    prompt_spec = SimpleNamespace(
-        sampling={"temperature": 0.2, "repetition_penalty": 1.05}
-    )
-    cli_override = Sampling(temperature=0.4, presence_penalty=1.2)
+def test_turn_sampling_precedence():
+    from js import login_defaults
 
-    assert cli._sampling_for_turn(cfg, prompt_spec, cli_override) == Sampling(
+    cfg = SimpleNamespace(
+        provider_id=None, provider_base_url=None, model="m",
+        layer_jsrc={"TEMPERATURE": 0.1, "TOP_P": 0.8},
+        layer_agent={"TEMPERATURE": 0.2, "REPETITION_PENALTY": 1.05},
+        layer_env={"TEMPERATURE": 0.3, "TOP_K": 64},
+        layer_set={"TEMPERATURE": 0.4, "PRESENCE_PENALTY": 1.2},
+    )
+
+    assert login_defaults.sampling(cfg) == Sampling(
         temperature=0.4,
         top_p=0.8,
         top_k=64,

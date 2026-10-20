@@ -8,6 +8,7 @@ import asyncio
 import os
 from typing import Any
 
+from .. import login_defaults
 from .. import paths
 from .. import session_store
 from .. import settings as _settings
@@ -166,7 +167,6 @@ async def _run_one_task_async(
     from .. import persona as P
     from .. import agent_messages
     from ..runtime import Telemetry, run_turn_async
-    from ..sampling import Sampling
     from .. import routing
     from .terminal import close_terminal_sessions
 
@@ -225,18 +225,28 @@ async def _run_one_task_async(
             provider_api_key=route.api_key,
             provider_headers=route.headers,
         )
-    if prompt_spec.reasoning_effort is not None:
+    # The child's own model and agent.yaml settle its login-default settings;
+    # what its agent.yaml leaves out it takes from the parent's agent. An
+    # effort the parent's turn ran with that its layers do not give (a resumed
+    # session's) is the child's agent effort unless its agent.yaml sets one.
+    # Effort precedence for a child, lowest first: its model's login
+    # defaults < the agent layer (the parent agent's or inherited effort, a
+    # resumed one included, replaced by the child's agent.yaml reasoning) <
+    # env < flag < /set. So the operator's env, flag and /set effort beat a
+    # child's agent.yaml.
+    cfg = login_defaults.for_child(cfg)
+    ran = getattr(parent_cfg, "reasoning_effort", None)
+    if ran is not None and ran != login_defaults.for_turn(parent_cfg).reasoning_effort:
+        cfg = replace(cfg, layer_agent={**(getattr(cfg, "layer_agent", None) or {}), "EFFORT": ran})
+    cfg = login_defaults.for_turn(login_defaults.with_agent(cfg, prompt_spec, inherit=True))
+    if getattr(cfg, "layer_jsrc", None) is None and prompt_spec.reasoning_effort is not None:
+        # A Config with no layers resolves nothing: agent.yaml's reasoning is its effort.
         cfg = replace(cfg, reasoning_effort=prompt_spec.reasoning_effort)
     prompt_spec = P._expand_spec(prompt_spec, cfg)
 
     registry = full_registry.select(prompt_spec.tool_selectors, agent_id=agent)
     system = prompt_spec.system
-    sampling = (
-        cfg.sampling_setscript
-        .merge(Sampling.from_mapping(prompt_spec.sampling))
-        .merge(cfg.sampling_env)
-        .merge(cfg.sampling_cli)
-    )
+    sampling = login_defaults.sampling(cfg)
 
     child_context = _child_context(parent_context, registry, agent)
     child_context.config = cfg

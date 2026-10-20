@@ -30,7 +30,9 @@ CONTEXT_SIZE
 
 EFFORT
     Thinking effort: off|minimal|low|medium|high|xhigh|max. off disables
-    thinking. Any other value is rejected. Clear with `set -EFFORT`.
+    thinking. Any other value is rejected. Clear with `set -EFFORT`. A
+    subagent's agent.yaml reasoning beats the effort it inherits from its
+    parent, never an EFFORT from env, a flag or /set.
 
 THINKING_BUDGET
     Thinking budget in tokens on the Anthropic wire, for the models that

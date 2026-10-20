@@ -663,7 +663,9 @@ def test_the_thinking_budget_setting_replaces_the_effort_budget(claude):
     tuned = from_env(agent_id="thinking", session="thinking",
                      extras=["THINKING_BUDGET=4000", "PROVIDER=anthropic", "MODEL=claude-sonnet-4-5"])
     assert tuned.thinking_budget == 4000
-    _turn(replace(cfg, thinking_budget=tuned.thinking_budget), [{"role": "user", "content": "first"}], context)
+    # A turn resolves its settings from the layers: the budget rides the flag layer.
+    flagged = replace(cfg, layer_flag={**(cfg.layer_flag or {}), "THINKING_BUDGET": tuned.thinking_budget})
+    _turn(flagged, [{"role": "user", "content": "first"}], context)
 
     assert wire.bodies[0]["thinking"] == {"type": "enabled", "budget_tokens": 4000}
     assert wire.bodies[0]["max_tokens"] == 32000

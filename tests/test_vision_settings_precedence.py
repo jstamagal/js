@@ -4,7 +4,7 @@ from copy import deepcopy
 
 import pytest
 
-from js import cli, config, model_metadata, setcmd
+from js import cli, config, model_metadata
 
 
 @pytest.mark.parametrize(("environment", "override", "expected"), [
@@ -34,11 +34,11 @@ def test_live_vision_setting_and_unset_override_environment(monkeypatch):
     assert cfg.vision_enabled is False
     live = deepcopy(cfg.settings)
     state = {"settings": live}
-    assert setcmd.set_command(live, "VISION on").error is None
+    assert cli._cmd_set("VISION on", state, cfg) is None
     active = cli._cfg_for_live_state(cfg, state)
     assert active.vision_enabled is True
     assert config.vision_enabled_for_model(active.model, active.settings) is True
-    assert setcmd.set_command(live, "-VISION").error is None
+    # `set -VISION` in the REPL goes back to the session's start: env says off.
+    assert cli._cmd_set("-VISION", state, cfg) is None
     active = cli._cfg_for_live_state(cfg, state)
-    assert active.vision_enabled is True
-    assert config.vision_enabled_for_model(active.model, active.settings) is True
+    assert active.vision_enabled is False

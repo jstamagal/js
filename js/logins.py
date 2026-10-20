@@ -336,6 +336,11 @@ class Login:
     xai_token_expires: float | None = None
     xai_token_endpoint: str | None = None
     xai_email: str | None = None
+    # Setting values a run routed here takes (js.login_defaults): for the
+    # server, and per model id on top of those. None (a login built by a
+    # login flow) keeps what the saved login has; {} clears it.
+    defaults: dict[str, Any] | None = None
+    model_defaults: dict[str, dict[str, Any]] | None = None
 
     @property
     def effective_provider_id(self) -> str:
@@ -503,9 +508,21 @@ def _login_from_section(provider_id: str, raw: dict[str, Any]) -> Login:
     if not isinstance(headers_raw, dict):
         raise _BadSection("provider_headers must be a table")
     strings = {name: _optional_str(raw, name) for name in _STR_FIELDS}
+    defaults_raw = raw.get("defaults") or {}
+    model_defaults_raw = raw.get("model_defaults") or {}
+    if not isinstance(defaults_raw, dict):
+        raise _BadSection("defaults must be a table")
+    if not isinstance(model_defaults_raw, dict) or not all(
+            isinstance(v, dict) for v in model_defaults_raw.values()):
+        raise _BadSection("model_defaults must be a table of tables")
+    from . import login_defaults
+
+    model_defaults = {str(model): login_defaults.checked(values) for model, values in model_defaults_raw.items()}
     return Login(
         provider_id=providers.normalize_provider_id(stored_id) or stored_id,
         provider_headers={str(k): str(v) for k, v in headers_raw.items()},
+        defaults=login_defaults.checked(defaults_raw),
+        model_defaults={model: values for model, values in model_defaults.items() if values},
         codex_token_expires=_optional_expiry(raw, "codex_token_expires"),
         xai_token_expires=_optional_expiry(raw, "xai_token_expires"),
         **strings,
@@ -690,6 +707,13 @@ def save_login(login: Login) -> None:
         _refuse_if_corrupt()
         store = _read_store()
         loaded = dict(store.logins)
+        previous = loaded.get(canonical_id)
+        login = replace(
+            login,
+            defaults=login.defaults if login.defaults is not None else dict(getattr(previous, "defaults", None) or {}),
+            model_defaults=(login.model_defaults if login.model_defaults is not None
+                            else dict(getattr(previous, "model_defaults", None) or {})),
+        )
         loaded[canonical_id] = login
         _write_logins_toml(_serialize(store, loaded))
     forget_memory_login(canonical_id)

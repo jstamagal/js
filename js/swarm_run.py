@@ -30,7 +30,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, TextIO
 
-from . import agent_messages, compaction, headless, runtime
+from . import agent_messages, compaction, headless, login_defaults, runtime
 from . import memory as M
 from . import persona as P
 from . import swarm
@@ -99,15 +99,16 @@ def _configure(spec: AgentSpec) -> tuple[Any, str, Any, Any]:
     cfg = from_env(save_session=True, extras=extras, agent_id=spec.agent, session=spec.session, cwd=cwd)
     prompt_spec = P.load_configured_prompt_spec(cfg, expand=False)
     cfg = cli._apply_agent_model(cfg, prompt_spec, spec.model, config_pins=False)
-    if spec.effort is None:
-        cfg = cli._apply_agent_reasoning(cfg, prompt_spec)
-    else:
+    cfg = cli._resolve_cli_model_override(cfg, spec.model)
+    # agent.yaml's effort and max_tokens are the agent layers; the spec's own
+    # effort is set for this run like a flag. Every turn resolves them.
+    cfg = login_defaults.with_agent(cfg, prompt_spec, reasoning=spec.effort is None)
+    if spec.effort is not None:
         effort, error = cli._validate_cli_reasoning(spec.effort)
         if error:
             raise ValueError(error)
-        cfg = replace(cfg, reasoning_effort=effort)
-    cfg = P.apply_agent_max_tokens(cfg, prompt_spec)
-    cfg = cli._resolve_cli_model_override(cfg, spec.model)
+        cfg = replace(cfg, layer_flag={**(cfg.layer_flag or {}), "EFFORT": effort})
+    cfg = login_defaults.for_turn(cfg)
     prompt_spec = P._expand_spec(prompt_spec, cfg)
     system = prompt_spec.system
     if spec.seat_file:
@@ -254,12 +255,7 @@ class Runner:
 
 
 def _sampling(cfg: Any, prompt_spec: Any):
-    from .sampling import Sampling
-
-    return (cfg.sampling_setscript
-            .merge(Sampling.from_mapping(getattr(prompt_spec, "sampling", {}) or {}))
-            .merge(cfg.sampling_env)
-            .merge(cfg.sampling_cli))
+    return login_defaults.sampling(cfg)
 
 
 def load_spec(path: str | os.PathLike[str]) -> tuple[Path, list[AgentSpec], int | None]:

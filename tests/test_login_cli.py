@@ -268,7 +268,7 @@ def test_run_login_caches_server_model_metadata(monkeypatch, tmp_path: Path):
         monkeypatch.setattr(login_cli, "_input", fake_input)
         monkeypatch.setattr(login_cli, "test_login_with_metadata", lambda _login: (["served-model"], metadata))
         monkeypatch.setattr(login_cli, "_post_fetch_confirmation", lambda *_args: True)
-        monkeypatch.setattr(login_cli, "_select_models_to_cache", lambda _provider_id, models: models)
+        monkeypatch.setattr(login_cli, "_select_models_to_cache", lambda _provider_id, models, **_kwargs: models)
 
         assert login_cli._run_login("vllm") == 0
         assert logins.load_model_cache()["vllm"] == ["served-model"]
@@ -787,3 +787,222 @@ def test_login_without_a_terminal_fails_with_one_clear_error(monkeypatch, capsys
                 pass
             else:
                 raise AssertionError(f"{picker.__name__} did not refuse")
+
+
+def test_run_login_saves_a_server_whose_model_list_cannot_be_fetched(monkeypatch, tmp_path: Path):
+    logins.set_config_dir(tmp_path)
+
+    def fake_input(prompt, *, default=None, secret=False):
+        if prompt == BASE_URL_PROMPT:
+            return "http://down.example:8000/v1"
+        if prompt in KEY_PROMPTS:
+            return ""
+        raise AssertionError(f"unexpected prompt: {prompt}")
+
+    def unreachable(_login):
+        raise ConnectionError("connection refused")
+
+    try:
+        monkeypatch.setattr(login_cli, "_input", fake_input)
+        monkeypatch.setattr(login_cli, "test_login_with_metadata", unreachable)
+
+        assert login_cli._run_login("vllm") == 0
+        assert logins.load_logins()["vllm"].provider_base_url == "http://down.example:8000/v1"
+    finally:
+        _reset_logins()
+
+
+def test_login_defaults_survive_a_save_and_load(tmp_path: Path):
+    logins.set_config_dir(tmp_path)
+    try:
+        logins.save_login(logins.Login(
+            provider_id="vllm", provider_base_url="http://x/v1",
+            defaults={"CONTEXT_SIZE": 32768, "VISION": True},
+            model_defaults={"org/model-a": {"TEMPERATURE": 0.6}},
+        ))
+        logins.set_config_dir(tmp_path)  # drop any cached parse
+        login = logins.load_logins_fresh()["vllm"]
+        assert login.defaults == {"CONTEXT_SIZE": 32768, "VISION": True}
+        assert login.model_defaults == {"org/model-a": {"TEMPERATURE": 0.6}}
+    finally:
+        _reset_logins()
+
+
+def test_e_on_a_kept_model_saves_its_defaults(monkeypatch, tmp_path: Path):
+    import curses
+
+    class _Screen(_FakeStdscr):
+        def move(self, *_args):
+            pass
+
+        def clrtoeol(self):
+            pass
+
+    logins.set_config_dir(tmp_path)
+    try:
+        logins.save_login(logins.Login(provider_id="vllm", provider_base_url="http://x/v1"))
+        monkeypatch.setattr(curses, "curs_set", lambda _n: None)
+        typed = [ord(ch) for ch in "temperature=0.6"]
+        keys = [curses.KEY_DOWN, ord("e"), *typed, ord("\n"), ord("\n")]
+        chosen = login_cli._curses_multiselect(
+            _Screen(keys), [("model-a", ""), ("model-b", "")], "pick", preselected={0, 1},
+            on_edit=login_cli._model_defaults_editor("vllm"),
+        )
+        assert chosen == [0, 1]
+        assert logins.load_logins_fresh()["vllm"].model_defaults == {"model-b": {"TEMPERATURE": 0.6}}
+    finally:
+        _reset_logins()
+
+
+def test_logging_in_again_keeps_the_saved_defaults(monkeypatch, tmp_path: Path):
+    logins.set_config_dir(tmp_path)
+    logins.save_login(logins.Login(provider_id="vllm", provider_base_url="http://x/v1",
+                                   defaults={"CONTEXT_SIZE": 4096},
+                                   model_defaults={"m": {"TEMPERATURE": 0.5}}))
+
+    def fake_input(prompt, *, default=None, secret=False):
+        if prompt == BASE_URL_PROMPT or prompt in KEY_PROMPTS:
+            return default
+        raise AssertionError(f"unexpected prompt: {prompt}")
+
+    def unreachable(_login):
+        raise ConnectionError("down")
+
+    try:
+        monkeypatch.setattr(login_cli, "_input", fake_input)
+        monkeypatch.setattr(login_cli, "test_login_with_metadata", unreachable)
+        assert login_cli._run_login("vllm") == 0
+        login = logins.load_logins_fresh()["vllm"]
+        assert login.defaults == {"CONTEXT_SIZE": 4096}
+        assert login.model_defaults == {"m": {"TEMPERATURE": 0.5}}
+    finally:
+        _reset_logins()
+
+
+def test_effort_off_survives_a_save_and_load():
+    from js import login_defaults
+
+    values = login_defaults.parse("EFFORT=off")
+    assert login_defaults.checked(values) == values
+
+
+def test_an_oauth_style_save_keeps_the_saved_defaults(tmp_path: Path):
+    logins.set_config_dir(tmp_path)
+    try:
+        logins.save_login(logins.Login(provider_id="vllm", provider_api_key="old",
+                                       defaults={"CONTEXT_SIZE": 4096}, model_defaults={"m": {"TOP_K": 5}}))
+        logins.save_login(logins.Login(provider_id="vllm", provider_api_key="new"))  # a fresh login flow
+        login = logins.load_logins_fresh()["vllm"]
+        assert login.provider_api_key == "new"
+        assert login.defaults == {"CONTEXT_SIZE": 4096}
+        assert login.model_defaults == {"m": {"TOP_K": 5}}
+    finally:
+        _reset_logins()
+
+
+def test_e_in_the_keep_list_of_a_new_login_saves_the_models_defaults(monkeypatch, tmp_path: Path):
+    import curses
+
+    logins.set_config_dir(tmp_path)
+
+    def fake_input(prompt, *, default=None, secret=False):
+        if prompt == BASE_URL_PROMPT:
+            return "http://127.0.0.1:8000/v1"
+        if prompt in KEY_PROMPTS:
+            return ""
+        if prompt == msgs.LOGIN_ASK_EXTRA_MODELS.text():
+            return ""
+        raise AssertionError(f"unexpected prompt: {prompt}")
+
+    def keep_list(_fn, rows, _title, *, preselected, on_edit=None):
+        assert on_edit is not None
+        on_edit(None, "served-model")
+        return sorted(preselected)
+
+    try:
+        monkeypatch.setattr(login_cli, "_input", fake_input)
+        monkeypatch.setattr(login_cli, "_interactive", lambda: True)
+        monkeypatch.setattr(login_cli, "test_login_with_metadata", lambda _login: (["served-model"], {}))
+        monkeypatch.setattr(login_cli, "_post_fetch_confirmation", lambda *_args: True)
+        monkeypatch.setattr(login_cli, "_curses_prompt", lambda _screen, _label, _current: "temperature=0.6")
+        monkeypatch.setattr(curses, "wrapper", keep_list)
+
+        assert login_cli._run_login("vllm") == 0
+        assert logins.load_logins_fresh()["vllm"].model_defaults == {"served-model": {"TEMPERATURE": 0.6}}
+        assert logins.load_model_cache()["vllm"] == ["served-model"]
+    finally:
+        _reset_logins()
+
+
+def test_every_login_flows_keep_list_offers_e(monkeypatch, tmp_path: Path):
+    import curses
+
+    logins.set_config_dir(tmp_path)
+    edits = {}
+
+    def keep_list(_fn, rows, _title, *, preselected, on_edit=None):
+        edits[flow] = on_edit is not None
+        return sorted(preselected)
+
+    def fake_input(prompt, *, default=None, secret=False):
+        if prompt == BASE_URL_PROMPT:
+            return "http://127.0.0.1:8000/v1"
+        return ""
+
+    codex = logins.Login(provider_id="openai-codex", sdk_provider_id="openai-codex", provider_api_key="jwt",
+                         codex_refresh_token="refresh", codex_token_expires=1.0, codex_account_id="acct")
+    xai = logins.Login(provider_id="xai", sdk_provider_id="xai", provider_api_key="tok")
+    flows = {
+        "api": lambda: login_cli._run_login("vllm"),
+        "codex": lambda: login_cli._run_codex_login("openai-codex"),
+        "codex again": lambda: login_cli._run_codex_login("openai-codex"),
+        "xai": lambda: login_cli._run_xai_login(),
+        "models edit": lambda: login_cli._run_models_edit("vllm"),
+    }
+    try:
+        monkeypatch.setattr(login_cli, "_input", fake_input)
+        monkeypatch.setattr(login_cli, "_interactive", lambda: True)
+        monkeypatch.setattr(login_cli, "_dialect_map", lambda _provider_id: {})
+        monkeypatch.setattr(login_cli, "test_login_with_metadata", lambda _login: (["m"], {}))
+        monkeypatch.setattr(login_cli, "test_login", lambda _login: ["m"])
+        monkeypatch.setattr(login_cli, "_post_fetch_confirmation", lambda *_args: True)
+        monkeypatch.setattr(login_cli.codex_auth, "login_browser", lambda: codex)
+        monkeypatch.setattr(login_cli.xai_auth, "login_browser", lambda **_k: xai)
+        monkeypatch.setattr(curses, "wrapper", keep_list)
+        for flow, run in flows.items():
+            assert run() == 0, flow
+    finally:
+        _reset_logins()
+
+    assert edits == dict.fromkeys(flows, True)
+
+
+def test_refetch_after_an_edit_shows_the_edited_defaults(monkeypatch, tmp_path: Path):
+    import curses
+
+    logins.set_config_dir(tmp_path)
+    logins.save_login(logins.Login(provider_id="vllm", provider_base_url="http://x/v1"))
+    shown = []
+    choices = iter([2, 2, 3])
+
+    def keep_list(_fn, rows, _title, *, preselected, on_edit=None):
+        shown.append(dict(rows))
+        if len(shown) == 1:
+            on_edit(None, "m")
+        return sorted(preselected)
+
+    try:
+        monkeypatch.setattr(login_cli, "_menu", lambda *_a, **_k: next(choices))
+        monkeypatch.setattr(login_cli, "_interactive", lambda: True)
+        monkeypatch.setattr(login_cli, "_input", lambda *a, **k: "")
+        monkeypatch.setattr(login_cli, "test_login_with_metadata", lambda _login: (["m"], {}))
+        monkeypatch.setattr(login_cli, "_curses_prompt", lambda _screen, _label, _current: "temperature=0.6")
+        monkeypatch.setattr(curses, "wrapper", keep_list)
+
+        login_cli._manage_models(logins.load_logins_fresh()["vllm"])
+        edited = logins.load_logins_fresh()["vllm"]
+    finally:
+        _reset_logins()
+
+    assert shown[1]["m"] == login_cli._model_annotation(edited, "m")
+    assert shown[1]["m"] != shown[0]["m"]
