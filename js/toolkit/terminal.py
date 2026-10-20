@@ -18,6 +18,10 @@ from . import fs
 from .core import Tool, ToolContext
 from .descriptions import load_description
 from .sanitize import int_or_default, text_or_default
+from ..prompt_text import load_catalog
+
+_PROMPTS = load_catalog('toolkit_terminal')
+
 
 _KEY_SEQUENCES = {
     "enter": "\r",
@@ -163,14 +167,7 @@ def _observe(
         payload["exit_status"] = child.exitstatus
         payload["signal_status"] = child.signalstatus
     payload["reading"] = (
-        "lines is the rendered terminal screen. nonblank_lines=0 means the user sees "
-        "nothing. lines_changed and screen_responded compare this screen with the "
-        "most recent observation: for send they describe change during the wait window "
-        "after the sent keys, not proof the keys caused it; for look they describe "
-        "passive change since the prior observation. "
-        "terminal_snapshot updates that comparison baseline before a later send. "
-        "still_running is normal for a TUI and suspicious for a one-shot command. "
-        "Use terminal_snapshot to inspect layout and colour."
+        _PROMPTS['observe_lines_is_the_rendered_terminal_screen']
     )
     return _report(payload, context)
 
@@ -207,8 +204,7 @@ def _jail_refusal(state: dict[str, Any], session: str, context: ToolContext) -> 
         return None
     context.terminal_sessions.pop(session, None)
     _stop_state(state)
-    return (f"ERROR: terminal session {session!r} was started under other jail settings "
-            "(JAIL_BIND, JAIL_HIDE or SHELL_ENV_KEEP) and is stopped; start it again")
+    return (_PROMPTS['jail_refusal_error_terminal_session_was_started_under'].format(session=session))
 
 
 def _cleanup_live_children() -> None:
@@ -372,7 +368,7 @@ def _draw_screen(
     try:
         from PIL import Image, ImageDraw, ImageFont
     except ImportError as exc:
-        raise RuntimeError("terminal_snapshot requires js[vision]; run uv sync --inexact --extra vision") from exc
+        raise RuntimeError(_PROMPTS['draw_screen_terminal_snapshot_requires_js_vision_run']) from exc
 
     size = 16
     font = None

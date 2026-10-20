@@ -221,8 +221,8 @@ branch the audit was made on; they move as the code changes.
 | `js/toolkit/process_net.py` | _inline_read_limit_error / _fetch_file_url | policy | Model-facing text is loaded from `prompts/text/toolkit_process_net.json`; selection and execution policy are unchanged. | js-2lg.48 |
 | `js/toolkit/process_net.py` | tools | policy | Model-facing text is loaded from `prompts/text/toolkit_process_net.json`; selection and execution policy are unchanged. | js-2lg.48 |
 | `js/toolkit/search.py` | browse | policy | Model-facing text is loaded from `prompts/text/toolkit_search.json`; selection and execution policy are unchanged. | js-2lg.53 |
-| `js/toolkit/terminal.py:165-174` | _observe | policy | Builds the "reading" guidance paragraph the model reads. | js-2lg.55 |
-| `js/toolkit/terminal.py:210-211,372` | _jail_refusal / _draw_screen | policy | Builds the restart and install-hint text (`uv sync --extra vision`) in code. | js-2lg.55 |
+| `js/toolkit/terminal.py` | _observe | policy | Model-facing text is loaded from `prompts/text/toolkit_terminal.json`; selection and execution policy are unchanged. | js-2lg.55 |
+| `js/toolkit/terminal.py` | _jail_refusal / _draw_screen | policy | Model-facing text is loaded from `prompts/text/toolkit_terminal.json`; selection and execution policy are unchanged. | js-2lg.55 |
 | `js/toolkit/browser.py:93-95,251-254` | _frame_metrics / browser_probe | policy | Builds the install-hint text in code. | js-2lg.58 |
 | `js/toolkit/browser.py:412-422` | browser_probe | policy | Builds the "reading" guidance paragraph the model reads. | js-2lg.58 |
 | `js/toolkit/meta.py:670-673` | named_agent_tool | policy | Writes the fallback model-facing description of an agent tool in code. | js-2lg.62 |
