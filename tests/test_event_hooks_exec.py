@@ -597,3 +597,13 @@ def test_event_json_keeps_the_real_event_name():
 @pytest.mark.parametrize("cap,expected", [(2, "a"), (3, "aé"), (1, "a"), (0, "aé€"), (6, "aé€"), (4, "aé"), (5, "aé")])
 def test_clip_never_cuts_a_character_in_half(cap, expected):
     assert hookexec._clip("aé€".encode(), cap) == expected
+
+
+def test_registered_hook_shell_program_is_used(tmp_path):
+    import shutil
+
+    if shutil.which("bash") is None:
+        pytest.skip("bash is not installed")
+    settings.bind_live_settings({"HOOK_SHELL_PROGRAM": "bash"})
+    result = hookexec.run('printf "%s" "${BASH_VERSION:+bash}"', cwd=str(tmp_path), timeout=5, cap=100)
+    assert result.stdout == "bash"

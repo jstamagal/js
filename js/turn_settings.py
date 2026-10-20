@@ -121,6 +121,7 @@ class TurnSetting:
 
 
 TURN_SETTINGS: tuple[TurnSetting, ...] = (
+    TurnSetting("hook_shell_program", "HOOK_SHELL_PROGRAM", text),
     TurnSetting("swarm_spawn_max", "SWARM_SPAWN_MAX", integer),
     TurnSetting("session_text_auto_refresh", "SESSION_TEXT_AUTO_REFRESH", flag),
     TurnSetting("download_retry_wait", "DOWNLOAD_RETRY_WAIT", integer),
