@@ -79,6 +79,13 @@ def default_keymap() -> Keymap:
     return {action.name: action.keys for action in ACTIONS}
 
 
+
+def action_for(keymap: Keymap, key: str | KeySequence) -> str | None:
+    """The action bound to a picker key or sequence; None for search text."""
+    sequence = (key,) if isinstance(key, str) else key
+    return next((action for action, sequences in keymap.items()
+                 if any(_same(sequence, bound) for bound in sequences)), None)
+
 def _canonical(key: str) -> str:
     key = KEY_ALIASES.get(key, key)
     return " " if key == "space" else key

@@ -58,6 +58,14 @@ def _listed(picker) -> list[str]:
     return [session.path for session in picker.shown()]
 
 
+def test_session_picker_accepts_context_keymaps():
+    picker = _picker([_session("chosen")], keymaps={"list": {"choose": (("space",),)}})
+    assert picker.press("enter") is None
+    choice = picker.press(" ")
+    assert choice.action == session_picker.RESUME
+    assert choice.session.path == "chosen"
+
+
 def _body_lines(picker) -> list[str]:
     fragments, _ = picker.body()
     return "".join(text for _, text in fragments).split("\n")

@@ -327,6 +327,8 @@ branch the audit was made on; they move as the code changes.
 24 findings.
 
 Resolution notes (the rows below record the original audit):
+- js-2lg.111: session-picker list, search, messages and info keys are supplied
+  as separate action maps; each screen renders its active map in its hint.
 - js-2lg.109: the model picker accepts action bindings and handlers; its hint
   reads the supplied bindings. The existing map remains the default.
 - js-2lg.107: hint entries can render caller-supplied keymaps; the REPL assembly
