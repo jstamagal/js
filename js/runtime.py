@@ -558,7 +558,6 @@ class _Fold:
     """The quiet calls of one tool in the current run, shown as one row."""
 
     name: str
-    gap: bool
     calls: list[dict | None] = field(default_factory=list)
     running: int = 0
     exchange: Any = None
@@ -596,8 +595,7 @@ class ToolTrace:
     def _fold_text(self, fold: _Fold, settings: Any) -> str:
         if not fold.calls:
             return ""
-        return display.render_fold(fold.name, fold.calls, running=fold.running, gap=fold.gap,
-                                   settings=settings)
+        return display.render_fold(fold.name, fold.calls, running=fold.running, settings=settings)
 
     def _draw(self, fold: _Fold, settings: Any) -> None:
         factory = self._factory()
@@ -633,7 +631,7 @@ class ToolTrace:
             if level == 1 and not malformed and display.call_kind(name, args, settings) == "quiet":
                 fold = self._folds.get(name)
                 if fold is None:
-                    fold = self._folds[name] = _Fold(name, gap=not self._folds)
+                    fold = self._folds[name] = _Fold(name)
                 fold.calls.append(args)
                 fold.running += 1
                 opened.fold = fold
@@ -691,7 +689,7 @@ class ToolTrace:
             if fold is None and quiet and not failed:
                 fold = self._folds.get(name)
                 if fold is None:
-                    fold = self._folds[name] = _Fold(name, gap=not self._folds)
+                    fold = self._folds[name] = _Fold(name)
                 fold.calls.append(args)
                 self._draw(fold, settings)
                 return
@@ -706,7 +704,7 @@ class ToolTrace:
                 # A failed quiet call stands on its own row, inside the run.
                 tight = display.render_exchange(
                     name, args, result, level=level, preview=display.preview_lines(settings),
-                    malformed=malformed, settings=settings, gap=not self._folds)
+                    malformed=malformed, settings=settings)
                 factory = self._factory()
                 if factory is None:
                     self._held.append(tight)

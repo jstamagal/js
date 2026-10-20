@@ -316,8 +316,9 @@ A line typed while a turn runs is handled by `STEER_MODE`:
 
 Tool exchanges follow `TOOLS_DISPLAY`. Each one sits behind a bar down its left
 edge, amber while the call runs, green when it finished, red when it failed,
-with a mark (`…`, `✓`, `✗`), the tool name on a coloured chip, and the call's
-key argument (a path, a search pattern, the first line of a command, a URL).
+with a mark (`…`, `✓`, `✗`), the tool name in `COLOR_TOOL` on the gray of
+`COLOR_PANEL`, and the call's key argument (a path, a search pattern, the
+first line of a command, a URL). Exchanges stack with no blank row between.
 
 - `0` shows nothing.
 - `1` (the default) shows what matters. Quiet calls are one row, and a run of

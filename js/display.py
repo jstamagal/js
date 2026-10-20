@@ -779,25 +779,21 @@ class _Block:
         self.inner = self.width - _RAIL
         self.theme = colours
         self.state = state
-        self.rows: list[Text | None] = []
+        self.rows: list[Text] = []
 
     def colour(self) -> str:
         return {MARK: self.theme.warn, OK: self.theme.ok, FAIL: self.theme.error}[self.state]
-
-    def blank(self) -> None:
-        """A row with no rail: the gap before an exchange."""
-        self.rows.append(None)
 
     def header(self, name: str, args: dict | None, *, malformed: bool = False,
                about: str | None = None, rest: str | None = None,
                tail: str = "", tail_style: str = "") -> None:
         """`mark [name] key-argument  other-arguments[  tail]` on one row: the
-        name on an accent chip. `about` and `rest` replace what the arguments
+        name in COLOR_TOOL on the panel gray. `about` and `rest` replace what the arguments
         would give."""
         th = self.theme
         args = args if isinstance(args, dict) else {}
         row = Text.assemble((f"{self.state} ", f"bold {self.colour()}"),
-                            (f" {clean(name)} ", f"bold {th.panel} on {th.accent}"))
+                            (f" {clean(name)} ", f"bold {th.accent} on {th.panel}"))
         if len(tail) > self.inner // 2:
             tail = tail[:self.inner // 2 - 1] + "…"
         reserve = len(tail) + 2 if tail else 0
@@ -855,7 +851,7 @@ class _Block:
         console = _render_console(self.width)
         rail = Text.assemble((RAIL + " ", self.colour()))
         for row in self.rows:
-            console.print(Text("") if row is None else rail + row, soft_wrap=True)
+            console.print(rail + row, soft_wrap=True)
         return console.file.getvalue()  # type: ignore[attr-defined]
 
 
@@ -937,13 +933,11 @@ def fold_label(name: str, args: dict | None) -> str:
     return text if len(text) <= 24 else text[:23] + "…"
 
 
-def render_fold(name: str, calls: list[dict | None], *, running: int = 0, gap: bool = True,
+def render_fold(name: str, calls: list[dict | None], *, running: int = 0,
                 width: int | None = None, settings: Any = None) -> str:
     """Finished quiet calls of one tool as one row: `mark [name] N things
     label · label · +K`. `running` of them have not returned."""
     block = _Block(width or block_width(), theme(settings), MARK if running else OK)
-    if gap:
-        block.blank()
     one, many = _FOLD_NOUN.get(name, ("call", "calls"))
     about = f"{len(calls)} {one if len(calls) == 1 else many}"
     labels = [label for label in (fold_label(name, args) for args in calls) if label]
@@ -1131,8 +1125,7 @@ def _finished_full(block: _Block, name: str, args: dict, output: ToolOutput, lev
 
 def render_exchange(name: str, args: dict | None, result: Any = None, *, level: int,
                     preview: int = 12, width: int | None = None, malformed: bool = False,
-                    settings: Any = None, live: list[str] | None = None, elapsed: str = "",
-                    gap: bool = True) -> str:
+                    settings: Any = None, live: list[str] | None = None, elapsed: str = "") -> str:
     """One tool exchange behind its rail. `result` None is a call still
     running: `live` is the tail of its output so far, `elapsed` how long it
     has run.
@@ -1150,8 +1143,6 @@ def render_exchange(name: str, args: dict | None, result: Any = None, *, level: 
     args = args if isinstance(args, dict) else {}
     if result is None:
         block = _Block(width or block_width(), colours, MARK)
-        if gap:
-            block.blank()
         block.header(name, args, malformed=malformed,
                      tail=msgs.TOOL_RUNNING.body(elapsed=elapsed) if elapsed else "")
         if level >= 2:
@@ -1162,8 +1153,6 @@ def render_exchange(name: str, args: dict | None, result: Any = None, *, level: 
         return block.render()
     output = tool_output(name, result)
     block = _Block(width or block_width(), colours, FAIL if output.failed else OK)
-    if gap:
-        block.blank()
     if level == 1:
         _finished_brief(block, name, args, output, call_kind(name, args, settings), preview, malformed)
     else:
