@@ -55,7 +55,7 @@ settings, and `<unset>` for settings that explicitly defer to provider defaults.
 
 Under `js -C DIR`, `JAIL_HIDE` paths (by default `~/.js`, `~/.ssh`, `~/.gnupg`,
 `~/.netrc`, `~/.aws`, `~/.config/gh`) are empty in the jail whatever DIR and
-`JAIL_BIND` show. A hidden path created on the host while a long-running jailed
+`JAIL_BIND` show, and `js -C` refuses a DIR inside one. A hidden path created on the host while a long-running jailed
 command (kernel or terminal session) is already running can be visible to that
 command until it ends; file tools refuse it by name throughout.
 

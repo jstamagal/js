@@ -320,10 +320,10 @@ JAIL_HIDE
     DIR and JAIL_BIND show: a JSON list, absolute or starting with ~. A
     directory shows empty and a file shows as an empty file; the file tools
     refuse them. js's own directories inside one, such as the jail's
-    ~/.js/tmp, still show. A hidden path created on the host while a
-    long-running jailed command, a kernel or terminal session, is already
-    running can be visible to that command until it ends; file tools refuse
-    it by name throughout.
+    ~/.js/tmp, still show. `js -C` refuses a DIR inside a hidden path. A
+    hidden path created on the host while a long-running jailed command, a
+    kernel or terminal session, is already running can be visible to that
+    command until it ends; file tools refuse it by name throughout.
 
 DEBUG_LOG
     Append per-event records to state/<agent>/debug.log.

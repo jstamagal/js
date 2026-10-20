@@ -82,6 +82,7 @@ from .config import (
     from_env,
     jsrc_paths,
     resolve_agent_id,
+    run_settings,
     set_invocation,
     validate_agent_id,
     vision_enabled_for_model,
@@ -4460,11 +4461,25 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
             args.agent = target.agent
         if target.jailed and target.cwd and not args.cd:
             args.cd = target.cwd
+    # Fill unset env names from .env, the run's directory (DIR under -C)
+    # upward, then ~/.js/.env. The real environment always wins. `just run`
+    # already did this via the justfile's dotenv-load; this gives a bare `js`
+    # on PATH the same keys. Every setting source is loaded before the jail
+    # below is checked and built.
+    dotenv.load(Path(args.cd).expanduser() if args.cd else None)
     if args.cd:
         # -C is the jail: every tool that starts a process runs under
         # bubblewrap, and the file tools stay inside DIR and the bound paths.
+        # The self-test builds the jail this run uses: its JAIL_BIND and JAIL_HIDE.
         try:
-            jailed = _jail.enter(Path(args.cd).expanduser())
+            jail_settings = run_settings(Path(args.cd).expanduser())
+        except ValueError as exc:
+            msgs.warn(msgs.FAILED, error=exc)
+            return 2
+        try:
+            jailed = _jail.enter(Path(args.cd).expanduser(),
+                                 setting=settings.knob(jail_settings, "JAIL_BIND") or (),
+                                 hide=settings.knob(jail_settings, "JAIL_HIDE"))
         except _jail.JailError as exc:
             msgs.warn(msgs.JAIL_REFUSED, error=exc)
             return 2
@@ -4472,10 +4487,6 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         # STOCK_CONTEXT is built at import (before this chdir), so its cwd is
         # stale; rebind it so -p/REPL turns (which fall back to it) run in DIR.
         runtime.T.STOCK_CONTEXT.cwd = Path.cwd()
-    # Fill unset env names from .env, cwd upward, then ~/.js/.env. The
-    # real environment always wins. `just run` already did this via the
-    # justfile's dotenv-load; this gives a bare `js` on PATH the same keys.
-    dotenv.load()
     if args.json and not args.list and (
         (args.prompt is None and sys.stdin.isatty())
         or args.commit or args.bench or args.compact or args.printonly is not None

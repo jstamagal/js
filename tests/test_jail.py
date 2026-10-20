@@ -551,6 +551,28 @@ def test_a_jail_hide_path_with_glob_characters_stays_out_of_searches(operator_ho
 
 
 @needs_bwrap
+def test_wrap_never_probes_a_network_mount(jailed, monkeypatch):
+    dead = Path("/srv/js-test-dead-nfs")
+    mounts = jail._mounts()
+    monkeypatch.setattr(jail, "_mounts", lambda: [*mounts, jail._Mount("0:999", Path("/"), dead, "nfs4")])
+    probed: list[Path] = []
+    real_is_dir = getattr(jail, "_is_dir", Path.is_dir)
+
+    def prober(path: Path) -> bool:
+        if path == dead or dead in path.parents:
+            probed.append(path)
+            raise AssertionError(f"probed the dead mount {path}")
+        return real_is_dir(path)
+
+    monkeypatch.setattr(jail, "_is_dir", prober, raising=False)
+
+    argv = jail.wrap(["true"], jailed, cwd=jailed.cwd)
+
+    assert probed == []
+    assert "--ro-bind" in argv  # the jail was still built
+
+
+@needs_bwrap
 def test_removing_an_ancestor_of_a_hidden_path_is_refused(operator_home, monkeypatch):
     gh = operator_home / ".config" / "gh"
     gh.mkdir(parents=True)
@@ -651,26 +673,127 @@ def test_hidden_ast_matches_do_not_use_up_the_result_limit(operator_home, monkey
     assert "additional matches omitted" in result
 
 
+def _mount_targets(argv: list[str]) -> list[str]:
+    """Every path a bwrap argument mounts something on."""
+    targets: list[str] = []
+    for index, arg in enumerate(argv):
+        if arg in {"--tmpfs", "--dev", "--proc"}:
+            targets.append(argv[index + 1])
+        elif arg in {"--bind", "--ro-bind", "--bind-try", "--ro-bind-try"}:
+            targets.append(argv[index + 2])
+    return targets
+
+
 @needs_bwrap
-def test_wrap_never_probes_a_network_mount(jailed, monkeypatch):
-    dead = Path("/srv/js-test-dead-nfs")
+def test_a_network_mount_is_never_mounted_over(jailed, monkeypatch):
+    fake = Path("/etc/js-test-nfs")
     mounts = jail._mounts()
-    monkeypatch.setattr(jail, "_mounts", lambda: [*mounts, jail._Mount("0:999", Path("/"), dead, "nfs4")])
-    probed: list[Path] = []
-    real_is_dir = getattr(jail, "_is_dir", Path.is_dir)
+    monkeypatch.setattr(jail, "_mounts", lambda: [*mounts, jail._Mount("0:998", Path("/"), fake, "nfs4")])
 
-    def prober(path: Path) -> bool:
-        if path == dead or dead in path.parents:
-            probed.append(path)
-            raise AssertionError(f"probed the dead mount {path}")
-        return real_is_dir(path)
+    argv = jail.wrap(["cat", "/etc/hostname"], jailed, cwd=jailed.cwd)
 
-    monkeypatch.setattr(jail, "_is_dir", prober, raising=False)
+    assert not any(Path(target) == fake or fake in Path(target).parents for target in _mount_targets(argv))
+    assert "/etc" in _mount_targets(argv)  # its parent is covered instead
+    if Path("/etc/hostname").is_file():
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        assert proc.returncode == 0
+        assert proc.stdout == Path("/etc/hostname").read_text()
 
-    argv = jail.wrap(["true"], jailed, cwd=jailed.cwd)
 
-    assert probed == []
-    assert str(dead) in argv  # still hidden behind a tmpfs
+@needs_bwrap
+def test_a_network_mount_under_tmp_does_not_bring_the_host_tmp_back(jailed, monkeypatch, tmp_path):
+    host_file = Path(tempfile.gettempdir()) / f"js-host-only-{os.getpid()}.txt"
+    host_file.write_text("host tmp")
+    try:
+        fake = Path(tempfile.gettempdir()) / "js-test-nas"
+        mounts = jail._mounts()
+        monkeypatch.setattr(jail, "_mounts", lambda: [*mounts, jail._Mount("0:997", Path("/"), fake, "nfs4")])
+
+        argv = jail.wrap(["ls", "/tmp"], jailed, cwd=jailed.cwd)
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+
+        assert host_file.name not in proc.stdout
+        assert "/tmp" not in [argv[i + 1] for i, a in enumerate(argv) if a == "--tmpfs"]
+    finally:
+        host_file.unlink()
+
+
+@needs_bwrap
+def test_a_network_mount_directly_in_root_is_left_out_without_being_listed(jailed, monkeypatch):
+    fake = Path("/js-test-nfs-root")
+    mounts = jail._mounts()
+    monkeypatch.setattr(jail, "_mounts", lambda: [
+        *mounts, jail._Mount("0:996", Path("/"), fake, "nfs4"),
+        jail._Mount("0:995", Path("/"), fake / "child", "nfs4")])
+    real_scandir = os.scandir
+
+    def scandir(path="."):
+        if not isinstance(path, int) and (Path(path) == fake or fake in Path(path).parents):
+            raise AssertionError(f"listed the network mount {path}")
+        return real_scandir(path)
+
+    monkeypatch.setattr(jail.os, "scandir", scandir)
+
+    argv = jail.wrap(["cat", "/etc/hostname"], jailed, cwd=jailed.cwd)
+
+    assert "/" not in _mount_targets(argv)  # / is built entry by entry, without the mount
+    assert not any(Path(t) == fake or fake in Path(t).parents for t in _mount_targets(argv))
+    if Path("/etc/hostname").is_file():
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout == Path("/etc/hostname").read_text()
+
+
+@needs_bwrap
+@pytest.mark.parametrize("cover", ["network", "hidden"])
+def test_a_tmpfs_under_a_read_only_view_takes_no_new_file(operator_home, tmp_path, monkeypatch, cover):
+    # The parent of a network mount, and the parent of a hidden path under a
+    # read-only bind, get a tmpfs with their entries bound back; the view
+    # stays read-only all the same.
+    root = tmp_path / "work"
+    root.mkdir()
+    if cover == "network":
+        mounts = jail._mounts()
+        fake = jail._Mount("0:993", Path("/"), Path("/etc/js-test-nfs"), "nfs4")
+        monkeypatch.setattr(jail, "_mounts", lambda: [*mounts, fake])
+        target, bind = Path("/etc/js-made-in-jail"), ()
+    else:
+        target, bind = operator_home / "made-in-jail", ("~",)
+    monkeypatch.chdir(root)
+    try:
+        jail.enter(root, setting=bind)
+        context = ToolContext(cwd=root)
+        context.jail_bind = bind
+
+        assert _shell_ok(f"touch {root}/made-inside", context)
+        assert not _shell_ok(f"touch {target}", context)
+    finally:
+        jail.leave()
+
+
+@needs_bwrap
+def test_a_home_on_a_network_mount_is_a_writable_tmpfs(monkeypatch):
+    base = Path(tempfile.mkdtemp(dir="/var/tmp" if os.access("/var/tmp", os.W_OK) else None))
+    if jail._under(base, Path("/tmp")):
+        shutil.rmtree(base, ignore_errors=True)
+        pytest.skip("needs a writable directory outside /tmp")
+    home, root = base / "home", base / "work"
+    home.mkdir()
+    root.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    mounts = jail._mounts()
+    monkeypatch.setattr(jail, "_mounts", lambda: [*mounts, jail._Mount("0:992", Path("/"), home, "nfs4")])
+    monkeypatch.chdir(root)
+    try:
+        jail.enter(root)
+        context = ToolContext(cwd=root)
+        context.jail_bind = ()
+
+        assert _shell_ok(f"touch {home}/made-in-jail", context)
+        assert not (home / "made-in-jail").exists()
+    finally:
+        jail.leave()
+        shutil.rmtree(base, ignore_errors=True)
 
 
 def test_jail_bind_setting_refuses_a_relative_path():
@@ -871,7 +994,8 @@ def test_envctx_hist_zero_leaves_shell_history_out(tmp_path):
     home.mkdir()
     (home / ".bash_history").write_text("echo secret-cmd\n", encoding="utf-8")
     env = {**os.environ, "HOME": str(home), "SHELL": "/bin/bash", "CC": shutil.which("cc")}
-    env.pop("HISTFILE", None)
+    for name in ("HISTFILE", "ENVCTX_HIST", "ENVCTX_SKIP"):
+        env.pop(name, None)
 
     def run(**extra):
         return subprocess.run(["sh", str(envctx)], env={**env, **extra},
@@ -1103,6 +1227,33 @@ def test_the_kernel_reaches_no_hidden_path(operator_home, monkeypatch):
 
 
 @needs_bwrap
+def test_a_hidden_path_made_after_the_command_starts_stays_hidden(operator_home, tmp_path, monkeypatch):
+    shared = operator_home / "shared"
+    shared.mkdir()
+    (shared / "visible.txt").write_text("visible")
+    later = shared / "later"
+    root = tmp_path / "work"
+    root.mkdir()
+    monkeypatch.chdir(root)
+    jail.enter(root)
+    context = ToolContext(cwd=root)
+    context.jail_bind = (str(shared),)
+    context.jail_hide = (str(later),)
+
+    argv = jail.wrap(["sh", "-c", f"sleep 1; cat {later}/key 2>/dev/null; cat {shared}/visible.txt"],
+                     context, cwd=root)
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, text=True)
+    time.sleep(0.3)
+    later.mkdir()
+    (later / "key").write_text(SECRET)
+    out, _ = proc.communicate(timeout=60)
+
+    assert SECRET not in out
+    assert "visible" in out
+    assert tool("read", context, path=str(later / "key")).startswith("ERROR")
+
+
+@needs_bwrap
 def test_a_bound_alias_of_a_hidden_paths_parent_shows_it_empty(operator_home, tmp_path, monkeypatch):
     gh = operator_home / ".config" / "gh"
     gh.mkdir(parents=True)
@@ -1121,3 +1272,337 @@ def test_a_bound_alias_of_a_hidden_paths_parent_shows_it_empty(operator_home, tm
     assert SECRET not in shown
     assert "other" in shown
     assert SECRET not in tool("read", context, path=str(operator_home / "cfg" / "gh" / "hosts.yml"))
+
+
+def _shell_ok(command: str, context: ToolContext) -> bool:
+    code, _result = run_shell(command, context)
+    return code == 0
+
+
+@needs_bwrap
+@pytest.mark.parametrize("dir_in_home", [True, False])
+@pytest.mark.parametrize("bind", [(), ("~",), ("~:rw",)])
+@pytest.mark.parametrize("hide_kind", ["default", "none", "custom"])
+@pytest.mark.parametrize("present", [True, False])
+@pytest.mark.parametrize("network", [True, False])
+def test_the_mount_plan_keeps_dir_writable_and_binds_in_mode_and_hidden_paths_blank(
+        operator_home, tmp_path, monkeypatch, dir_in_home, bind, hide_kind, present, network):
+    custom = operator_home / "secretdir"
+    if present:
+        (operator_home / ".ssh").mkdir(exist_ok=True)
+        (operator_home / ".ssh" / "key").write_text(SECRET)
+        custom.mkdir(exist_ok=True)
+        (custom / "key").write_text(SECRET)
+    hide = {"default": None, "none": (), "custom": (str(custom),)}[hide_kind]
+    hidden_files = {"default": [operator_home / ".ssh" / "key"], "none": [],
+                    "custom": [custom / "key"]}[hide_kind]
+    root = (operator_home / "project") if dir_in_home else Path(tempfile.mkdtemp(dir=tmp_path.parent))
+    root.mkdir(exist_ok=True)
+    if network:
+        mounts = jail._mounts()
+        fake = jail._Mount("0:994", Path("/"), Path("/etc/js-test-nfs"), "nfs4")
+        monkeypatch.setattr(jail, "_mounts", lambda: [*mounts, fake])
+    monkeypatch.chdir(root)
+    skip = ("made-inside", "made-in-home")
+    before = _host_tree(operator_home, root, skip=skip)
+    try:
+        jail.enter(root, setting=bind, hide=hide)
+        context = ToolContext(cwd=root)
+        context.jail_bind = bind
+        context.jail_hide = hide
+
+        assert _shell_ok(f"touch {root}/made-inside", context)
+        assert (root / "made-inside").exists()
+        home_file = operator_home / "made-in-home"
+        run_shell(f"touch {home_file} 2>/dev/null; true", context)
+        # Only a writable bind of ~ reaches the host's home; a read-only one or
+        # the jail's own tmpfs does not.
+        assert home_file.exists() == (bind == ("~:rw",)), (bind, hide_kind)
+        for path in hidden_files:
+            if path.exists():
+                code, shown = run_shell(f"cat {path} 2>/dev/null; true", context)
+                assert SECRET not in shown, (path, bind, hide_kind)
+        # The jail makes nothing on the host: no mount point, no placeholder.
+        assert _host_tree(operator_home, root, skip=skip) == before
+    finally:
+        jail.leave()
+        if not dir_in_home:
+            shutil.rmtree(root, ignore_errors=True)
+
+
+def _host_tree(*roots: Path, skip: tuple[str, ...] = ()) -> dict[str, tuple]:
+    """Every path under ``roots`` as the host has it: its kind and its bytes
+    or link target. js's own state (~/.js) and the names in ``skip`` are left out."""
+    out: dict[str, tuple] = {}
+    for root in roots:
+        for top, dirs, files in os.walk(root):
+            dirs[:] = [d for d in dirs if not (Path(top) == Path(os.environ["HOME"]) and d == ".js")]
+            for name in [*dirs, *files]:
+                path = Path(top) / name
+                if name in skip:
+                    continue
+                if path.is_symlink():
+                    out[str(path)] = ("link", os.readlink(path))
+                elif path.is_dir():
+                    out[str(path)] = ("dir",)
+                else:
+                    out[str(path)] = ("file", path.read_bytes())
+    return out
+
+
+def _while_running(context: ToolContext, root: Path, command: str, change) -> str:
+    """``command`` run in the jail, with ``change`` made on the host while it runs."""
+    argv = jail.wrap(["sh", "-c", f"sleep 1; {command}"], context, cwd=root)
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, text=True)
+    time.sleep(0.3)
+    change()
+    out, _ = proc.communicate(timeout=60)
+    return out
+
+
+@needs_bwrap
+def test_replacing_a_hidden_file_on_the_host_does_not_show_it(operator_home, tmp_path, monkeypatch):
+    netrc = operator_home / ".netrc"
+    netrc.write_text("old")
+    root = Path(tempfile.mkdtemp(dir=tmp_path.parent))
+    monkeypatch.chdir(root)
+    jail.enter(root, setting=("~",))
+    context = ToolContext(cwd=root)
+    context.jail_bind = ("~",)
+
+    def replace_it():
+        fresh = operator_home / ".netrc.new"
+        fresh.write_text(SECRET)
+        os.replace(fresh, netrc)
+
+    try:
+        out = _while_running(context, root, f"cat {netrc} 2>/dev/null; true", replace_it)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    assert SECRET not in out
+
+
+@needs_bwrap
+def test_a_missing_hidden_path_stays_hidden_through_a_read_only_alias(operator_home, tmp_path, monkeypatch):
+    config = operator_home / ".config"
+    config.mkdir()
+    (operator_home / "cfg").symlink_to(config)
+    root = Path(tempfile.mkdtemp(dir=tmp_path.parent))
+    monkeypatch.chdir(root)
+    jail.enter(root, setting=(str(operator_home / "cfg"),))
+    context = ToolContext(cwd=root)
+    context.jail_bind = (str(operator_home / "cfg"),)
+
+    def make_it():
+        (config / "gh").mkdir()
+        (config / "gh" / "key").write_text(SECRET)
+
+    try:
+        out = _while_running(context, root, f"cat {operator_home}/cfg/gh/key 2>/dev/null; true", make_it)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    assert SECRET not in out
+
+
+def test_dash_C_starts_the_jail_with_the_configured_jail_hide(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_enter(directory, **kwargs):
+        seen.update(kwargs)
+        raise jail.JailError("stop here")
+
+    monkeypatch.setattr(jail, "enter", fake_enter)
+    monkeypatch.setenv("JS_JAIL_HIDE", "[]")
+    work = tmp_path / "work"
+    work.mkdir()
+
+    assert cli.main(["-C", str(work), "-p", "hi"]) == 2
+    assert seen["hide"] == []
+
+
+
+def test_dash_C_reads_jail_hide_from_the_targets_env_file(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_enter(directory, **kwargs):
+        seen.update(kwargs)
+        raise jail.JailError("stop here")
+
+    monkeypatch.setattr(jail, "enter", fake_enter)
+    # Restored to unset afterwards: the .env load sets it in os.environ.
+    monkeypatch.setenv("JS_JAIL_HIDE", "")
+    monkeypatch.delenv("JS_JAIL_HIDE")
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / ".env").write_text(f'JS_JAIL_HIDE=["{work}"]\n', encoding="utf-8")
+
+    assert cli.main(["-C", str(work), "-p", "hi"]) == 2
+    assert seen["hide"] == [str(work)]
+
+
+
+def test_dash_C_refuses_a_bad_setting_without_a_traceback(monkeypatch, tmp_path):
+    entered = []
+    monkeypatch.setattr(jail, "enter", lambda *a, **k: entered.append(a))
+    work = tmp_path / "work"
+    work.mkdir()
+
+    assert cli.main(["-C", str(work), "--extra", "TOP_P=bad", "-p", "hi"]) == 2
+    assert entered == []
+
+
+_MOUNT_OPS = {"--bind", "--ro-bind", "--bind-try", "--ro-bind-try", "--tmpfs"}
+
+
+def _mount_paths(argv: list[str]) -> list[str]:
+    """Every source and target of a mount in bwrap ``argv``."""
+    out: list[str] = []
+    for index, arg in enumerate(argv):
+        if arg == "--":
+            break
+        if arg == "--tmpfs":
+            out.append(argv[index + 1])
+        elif arg in _MOUNT_OPS:
+            out += argv[index + 1:index + 3]
+    return out
+
+
+def _etc_dir() -> Path:
+    return next(p for p in sorted(Path("/etc").iterdir()) if p.is_dir() and not p.is_symlink())
+
+
+@needs_bwrap
+@pytest.mark.parametrize("dir_place", ["outside", "in_hidden"])
+@pytest.mark.parametrize("bind", [(), ("~",), ("~:rw",)])
+@pytest.mark.parametrize("hides", [("~/.ssh",), ("~/.ssh", "~/.ssh/nested"), ("~/.ssh/nested", "~/.ssh")])
+@pytest.mark.parametrize("nested_present", [True, False])
+@pytest.mark.parametrize("network", ["none", "home", "etc"])
+@pytest.mark.parametrize("outside_home", [False, True])
+def test_the_mount_plan_hides_everything_under_a_hidden_path_and_never_mounts_a_network_mount(
+        operator_home, tmp_path, monkeypatch, dir_place, bind, hides, nested_present, network, outside_home):
+    ssh = operator_home / ".ssh"
+    ssh.mkdir()
+    (ssh / "key").write_text(SECRET)
+    if nested_present:
+        (ssh / "nested").mkdir()
+        (ssh / "nested" / "key").write_text(SECRET)
+    hide = [*hides, "~/missing-key"]
+    # Host paths outside ~: a root-level directory, a file, and a symlink to one.
+    outside = [p for p in (Path("/opt"), Path("/etc/hostname"), Path("/etc/os-release")) if p.exists()]
+    if outside_home:
+        hide += [str(p) for p in outside]
+    mounts = jail._mounts()
+    point = None
+    if network == "home":
+        point = operator_home / "nfs"
+        point.mkdir()
+        (point / "data").write_text("nfs")
+    elif network == "etc":
+        point = _etc_dir()
+        hide.append("/etc/js-test-missing-key")
+    if point is not None:
+        monkeypatch.setattr(jail, "_mounts", lambda: [*mounts, jail._Mount("0:994", Path("/"), point, "nfs4")])
+    if dir_place == "in_hidden":
+        root = ssh / "project"
+        root.mkdir()
+        monkeypatch.chdir(root)
+        with pytest.raises(jail.JailError):
+            jail.enter(root, setting=bind, hide=hide)
+        return
+    root = Path(tempfile.mkdtemp(dir=tmp_path.parent))
+    monkeypatch.chdir(root)
+    before = _host_tree(operator_home, root, skip=("made-inside",))
+    try:
+        jail.enter(root, setting=bind, hide=hide)
+        context = ToolContext(cwd=root)
+        context.jail_bind = bind
+        context.jail_hide = tuple(hide)
+
+        if point is not None:
+            assert str(point) not in _mount_paths(jail.wrap(["true"], context, cwd=root))
+        assert _shell_ok(f"touch {root}/made-inside", context)
+        for key in ssh.rglob("key"):
+            _code, shown = run_shell(f"cat {key} 2>/dev/null; true", context)
+            assert SECRET not in shown, (key, bind, hide)
+        for path in outside if outside_home else ():
+            empty = f'test -z "$(ls -A {path} 2>/dev/null)"' if path.is_dir() else f"test ! -s {path}"
+            assert _shell_ok(empty, context), (path, bind, hide)
+        assert _host_tree(operator_home, root, skip=("made-inside",)) == before
+    finally:
+        jail.leave()
+        shutil.rmtree(root, ignore_errors=True)
+
+
+_ARGV_BUDGET = 3000
+
+
+def _ro_after_writable(argv: list[str], writable: list[Path], hidden: list[Path], empty: Path) -> list[Path]:
+    """The read-only bind targets in bwrap ``argv`` at or under a writable
+    root, mounted after that root's writable bind: they would make part of it
+    read-only. A blank of a hidden path (the empty file, or inside a hidden
+    path) is meant to be read-only and is left out."""
+    out: list[Path] = []
+    bound: list[Path] = []
+    for index, arg in enumerate(argv):
+        if arg == "--":
+            break
+        if arg in ("--bind", "--bind-try") and Path(argv[index + 2]) in writable:
+            bound.append(Path(argv[index + 2]))
+        elif arg in ("--ro-bind", "--ro-bind-try") and Path(argv[index + 1]) != empty:
+            target = Path(argv[index + 2])
+            if (any(jail._under(target, w) for w in bound)
+                    and not any(jail._under(target, h) for h in hidden)):
+                out.append(target)
+    return out
+
+
+@needs_bwrap
+@pytest.mark.parametrize("dir_place", ["config", "project", "outside"])
+@pytest.mark.parametrize("bind", [(), ("~",), ("~:rw",), ("~", "~/.config:rw")])
+@pytest.mark.parametrize("big", ["none", "nested", "home"])
+def test_the_mount_plan_keeps_writable_trees_writable_and_its_argv_bounded(
+        operator_home, tmp_path, monkeypatch, dir_place, bind, big):
+    config = operator_home / ".config"
+    (config / "gh").mkdir(parents=True)
+    (config / "gh" / "hosts.yml").write_text(SECRET)
+    (config / "app" / "deep").mkdir(parents=True)
+    (config / "app" / "deep" / "settings.toml").write_text("x")
+    (operator_home / "project" / "src").mkdir(parents=True)
+    (operator_home / "project" / "src" / "main.py").write_text("x")
+    # Directories past any rebuild cutoff: nested under ~, and ~ itself.
+    large = {"none": [], "nested": [config, config / "app"],
+             "home": [operator_home, config, config / "app"]}[big]
+    for parent in large:
+        for i in range(4100):
+            (parent / f"f{i:04d}").write_text("")
+    root = {"config": config, "project": operator_home / "project",
+            "outside": Path(tempfile.mkdtemp(dir=tmp_path.parent))}[dir_place]
+    hide = [*_default_hides_for_test(), "~/missing-key"]
+    monkeypatch.chdir(root)
+    try:
+        jail.enter(root, setting=bind, hide=hide)
+        context = ToolContext(cwd=root)
+        context.jail_bind = bind
+        context.jail_hide = tuple(hide)
+        argv = jail.wrap(["true"], context, cwd=root)
+        writable = [root, *(jail._real(jail.parse_bind(b).path) for b in bind if jail.parse_bind(b).rw)]
+
+        assert len(argv) < _ARGV_BUDGET, len(argv)
+        hidden = jail.ACTIVE.hides(hide)
+        assert _ro_after_writable(argv, writable, hidden, jail.ACTIVE.private / "empty") == [], bind
+        for path in [p for p in root.rglob("*") if p.is_file() and p.parent.name != "gh"][:50]:
+            assert _shell_ok(f"echo y >> {path}", context), (path, bind)
+        _code, shown = run_shell(f"cat {config}/gh/hosts.yml 2>/dev/null; true", context)
+        assert SECRET not in shown
+    finally:
+        jail.leave()
+        if dir_place == "outside":
+            shutil.rmtree(root, ignore_errors=True)
+
+
+def _default_hides_for_test() -> list[str]:
+    from js import settings
+
+    return list(settings.default_value("JAIL_HIDE") or ())

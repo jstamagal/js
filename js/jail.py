@@ -5,8 +5,10 @@ hostile model. Under `-C`:
 
 - every command a tool starts (shell, kernel, terminal, wiki converters) runs
   under bubblewrap. The system is read-only. `/home` and the operator's home
-  are empty tmpfs mounts, and so are `/run/user` and every network
-  filesystem mount. The jail's `/tmp` and `~/.js/tmp` are directories private
+  are empty tmpfs mounts, and so is `/run/user`. A network filesystem
+  mount shows as an empty directory: its parent gets the tmpfs and the
+  parent's other entries are bound back, so nothing is mounted on the
+  network mount itself (a dead server would stall that). The jail's `/tmp` and `~/.js/tmp` are directories private
   to this js process. DIR is bound read-write at its real path. The PATH
   directories, rustup's toolchains and the kernel's interpreter under a hidden
   tree or the host's `/tmp`, the `JAIL_BIND` entries and the `/add` binds are bound back.
@@ -26,6 +28,7 @@ from __future__ import annotations
 
 import atexit
 import contextlib
+import itertools
 import os
 import pwd
 import re
@@ -203,6 +206,121 @@ def _other_views(tree: Path, mounts: list[_Mount]) -> list[Path]:
     return views
 
 
+def _binds_whole_root(network: set[Path]) -> bool:
+    """Whether the jail's / can be the host / bound whole: no network mount
+    sits directly in /, where nothing above it could cover it."""
+    return not any(point.parent == Path("/") for point in network)
+
+
+def _root_args(network: set[Path]) -> list[str]:
+    """bwrap arguments for the jail's /: the host / bound read-only, or, with
+    a network mount directly in /, each other entry of / bound one by one on
+    bwrap's own root (made read-only at the end) and the mount an empty
+    directory. Read from /'s own listing; no network mount is looked into."""
+    if _binds_whole_root(network):
+        return ["--ro-bind", "/", "/"]
+    out: list[str] = []
+    for entry in os.scandir("/"):
+        path = Path(entry.path)
+        if path in network:
+            out += ["--dir", str(path)]
+        elif entry.is_symlink():
+            out += ["--symlink", os.readlink(path), str(path)]
+        else:
+            out += ["--ro-bind-try", str(path), str(path)]
+    return out
+
+
+def _network_parents(network: set[Path], other_hidden: list[Path]) -> list[Path]:
+    """The directories `_mask_network_mounts` puts a tmpfs on: the parent of
+    each network mount outside ``other_hidden`` and outside another network
+    mount, outermost only, / left to `_root_args`."""
+    parents: list[Path] = []
+    for point in sorted(network, key=lambda p: len(p.parts)):
+        if any(_under(point, tree) for tree in other_hidden) or point.parent == point:
+            continue
+        # A mount inside another network mount goes with the outer one, and
+        # its parent (inside the outer mount) is never listed.
+        if any(other != point and _under(point, other) for other in network):
+            continue
+        parent = point.parent
+        if parent == Path("/"):
+            continue  # `_root_args` leaves it out of the jail's /
+        if not any(_under(parent, done) for done in parents):
+            parents.append(parent)
+    return parents
+
+
+def _mask_network_mounts(network: set[Path], other_hidden: list[Path]) -> list[str]:
+    """bwrap arguments that leave every network mount out of the jail without
+    mounting anything on it: mounting over a mount point looks the mount up,
+    and a dead NFS server stalls that lookup for seconds on every command.
+    The mount's parent directory gets a tmpfs instead, and the parent's other
+    entries are bound back, read from the parent's own listing (no stat of a
+    network mount). A mount inside another hidden tree needs nothing."""
+    out: list[str] = []
+    for parent in _network_parents(network, other_hidden):
+        out += ["--tmpfs", str(parent), *_bind_back(parent, network)]
+    return out
+
+
+def _read_only_covers(argv: list[str], covers: list[Path]) -> list[str]:
+    """``--remount-ro`` for each tmpfs in ``covers`` that bwrap ``argv``
+    still shows: a tmpfs that stands in for a read-only directory (its
+    entries bound back) is made read-only once everything is mounted in it.
+    One with a later mount at or above it is left as it is: that mount is
+    what shows there now."""
+    mount_ops = {"--tmpfs": 1, "--bind": 2, "--bind-try": 2, "--ro-bind": 2, "--ro-bind-try": 2}
+    out: list[str] = []
+    for cover in dict.fromkeys(covers):
+        last = max((i for i, arg in enumerate(argv[:-1])
+                    if arg == "--tmpfs" and argv[i + 1] == str(cover)), default=None)
+        if last is None:
+            continue
+        later = [Path(argv[i + mount_ops[arg]]) for i, arg in enumerate(argv) if i > last
+                 and arg in mount_ops and i + mount_ops[arg] < len(argv)]
+        if not any(_under(cover, target) for target in later):
+            out += ["--remount-ro", str(cover)]
+    return out
+
+
+def _bind_back(directory: Path, network: set[Path]) -> list[str]:
+    """bwrap arguments that show ``directory``'s entries again under a tmpfs,
+    leaving out the network mounts in it (each stays an empty directory)."""
+    out: list[str] = []
+    try:
+        entries = list(os.scandir(directory))
+    except OSError:
+        return out
+    for entry in entries:
+        path = Path(entry.path)
+        if path in network:
+            out += ["--dir", str(path)]
+            continue
+        try:
+            if entry.is_symlink():
+                out += ["--symlink", os.readlink(path), str(path)]
+            elif any(_under(point, path) for point in network):
+                out += ["--dir", str(path), *_bind_back(path, network)]
+            else:
+                out += ["--ro-bind-try", str(path), str(path)]
+        except OSError:
+            continue
+    return out
+
+
+_REBUILD_MAX = 512
+
+
+def _many_entries(directory: Path) -> bool:
+    """Whether ``directory`` holds more than `_REBUILD_MAX` entries."""
+    try:
+        with os.scandir(directory) as entries:
+            return sum(1 for _ in itertools.islice(entries, _REBUILD_MAX + 1)) > _REBUILD_MAX
+    except OSError:
+        return False
+
+
 def _toolchain_homes(home: Path) -> list[Path]:
     """Trees a PATH shim reads its toolchains from: rustup's ``cargo`` and
     ``rustc`` in /usr/bin find theirs under RUSTUP_HOME, ~/.rustup by default."""
@@ -271,7 +389,9 @@ class Jail:
         # subvolume, a bind mount elsewhere) is hidden there too.
         mounts = _mounts()
         out += [view for path in list(out) for view in _other_views(path, mounts)]
-        return list(dict.fromkeys(out))
+        out = list(dict.fromkeys(out))
+        # A path inside another hidden path goes with the outer one.
+        return [h for h in out if not any(other != h and _under(h, other) for other in out)]
 
     def _hide_entries(self, hide: object) -> list[Path]:
         """The valid `JAIL_HIDE` entries as written; None is the `js/jsrc` list."""
@@ -433,11 +553,20 @@ class Jail:
         over it; what js binds inside one is bound again on top."""
         hidden = hidden_roots()
         home = paths.user_home()
+        network = {m.point for m in _mounts() if m.fstype in NETWORK_FS}
         out = [self.bwrap, "--die-with-parent", "--unshare-ipc", "--unshare-uts",
-               "--unshare-cgroup-try", "--ro-bind", "/", "/", "--dev", "/dev"]
+               "--unshare-cgroup-try", *_root_args(network), "--dev", "/dev"]
         out += ["--bind", str(self.tmp), "/tmp"]
+        # The host /tmp is replaced whole by the private one: a network mount
+        # under it is already out of the jail.
+        masked = [*(root for root in hidden if root not in network), Path("/tmp")]
+        out += _mask_network_mounts(network, masked)
+        # A home on a network mount still gets its writable tmpfs: the mask
+        # above already covers the mount, so the tmpfs lands on the cover.
+        homes = {Path("/home"), *operator_homes(), Path("/run/user")}
         for root in hidden:
-            out += ["--tmpfs", str(root)]
+            if root not in network or (root in homes and not _under(root, Path("/tmp"))):
+                out += ["--tmpfs", str(root)]
         out += ["--bind", str(self.js_tmp), str(home / ".js" / "tmp"),
                 "--bind", str(self.private), str(self.private)]
 
@@ -465,69 +594,178 @@ class Jail:
                     and not covered(b.path)]
         # Outer paths first, so a bind inside another lands on top of it.
         binds = sorted(dict.fromkeys([*implicit, *explicit]), key=lambda b: len(b.path.parts))
-        for bind in binds:
-            src = str(bind.path)
-            out += ["--bind-try" if bind.rw else "--ro-bind-try", src, src]
-        out += self._hide_args(hide, binds, candidates, [*hidden, Path("/tmp")])
-        # The private ~/.js/tmp goes on top of DIR, the binds and the blanks.
-        out += ["--bind", str(self.js_tmp), str(home / ".js" / "tmp")]
+        plan, placeholders = self._mount_plan(hide, binds, candidates, [*hidden, Path("/tmp")], network)
+        out += plan
+        # The private ~/.js/tmp and private directory go on top of DIR, the
+        # binds and the blanks. The mount point must exist on the host: a
+        # read-only bind of ~ leaves bwrap no way to make it.
+        with contextlib.suppress(OSError):
+            (home / ".js" / "tmp").mkdir(parents=True, exist_ok=True)
+        out += ["--bind", str(self.js_tmp), str(home / ".js" / "tmp"),
+                "--bind", str(self.private), str(self.private)]
+        out += _read_only_covers(out, [*_network_parents(network, masked), *placeholders])
+        if not _binds_whole_root(network):
+            out += ["--remount-ro", "/"]
         if cwd is not None:
             out += ["--chdir", str(cwd)]
         prefix = _IGNORE_SIGINT if ignore_sigint else []
         return [*prefix, *out, "--", *argv]
 
-    def _hide_args(self, hide: object, binds: list[Bind], candidates: list[Bind],
-                   replaced: list[Path]) -> list[str]:
-        """bwrap arguments that blank each `JAIL_HIDE` path the jail would
-        show: one outside the ``replaced`` trees (it shows through the
-        read-only /), or one a bind reaches from above or from inside. Then
-        bind again the jail's private directory and the ``candidates`` that
-        lie inside a blanked path."""
-        shown = [h for h in self.hides(hide)
-                 if os.path.lexists(h)
-                 and (not any(_under(h, tree) for tree in replaced)
-                      or any(_under(h, _real(b.path)) or _under(_real(b.path), h) for b in binds))]
-        # A bind reached through a symlink (JAIL_BIND ~/alias -> ~/.ssh) is
-        # mounted at the link's path, not the target's: blank it there too.
-        targets: dict[Path, Path] = {h: h for h in shown}
+    def _mount_plan(self, hide: object, binds: list[Bind], candidates: list[Bind],
+                    replaced: list[Path], network: set[Path] = frozenset()) -> tuple[list[str], list[Path]]:
+        """bwrap arguments for the binds and the `JAIL_HIDE` blanks, in one
+        order: outer paths first, so a writable bind (DIR, a :rw entry) inside
+        a blanked or covered tree is mounted again on top and keeps its mode.
+
+        A hidden path the jail would show through a read-only view (a
+        read-only bind, an alias of one, or the read-only /) is hidden from
+        its parent: the parent gets a tmpfs and its other entries are bound
+        back, so the hidden entry stays an empty one even when the host
+        creates or replaces it later. In a writable tree (DIR, a :rw bind)
+        a tmpfs on the parent would swallow what the command writes, so an
+        existing hidden path is blanked where it is, and one that does not
+        exist yet is not mounted; file tools refuse it by name either way.
+        A hidden entry of / or of a directory of more than `_REBUILD_MAX`
+        entries, at any depth of a rebuild, is treated the same way, which
+        keeps the bwrap arguments bounded. A rebuild never goes into DIR or a
+        writable bind: each is bound whole, writable, on top of the cover. A
+        hidden path inside a network mount the jail leaves out needs nothing,
+        and no network mount is a source or target of a rebuilt parent. Then
+        the jail's own directories inside a blank are bound back.
+
+        Returns the arguments and the jail paths of the covered parents."""
+        hides = [h for h in self.hides(hide)]
+        ops: list[tuple[int, int, list[str]]] = []
         for bind in binds:
-            at, real_at = Path(os.path.abspath(bind.path)), _real(bind.path)
-            if at == real_at:
+            # A bind inside a hidden path would show it again, DIR included
+            # (`enter` refuses a DIR inside one).
+            if any(_under(_real(bind.path), h) for h in hides):
                 continue
-            for hidden in self.hides(hide):
-                if not os.path.lexists(hidden):
-                    continue
-                if _under(real_at, hidden):
-                    targets.setdefault(at, hidden)
-                elif _under(hidden, real_at):
-                    targets.setdefault(at / hidden.relative_to(real_at), hidden)
-        out: list[str] = []
-        # A hidden file shows as an empty file (a bound /dev/null would be a
-        # device on a nodev mount and refuse to open).
+            src = str(bind.path)
+            ops.append((len(bind.path.parts), 1, ["--bind-try" if bind.rw else "--ro-bind-try", src, src]))
+
+        def area(path: Path) -> Bind | None:
+            """The innermost bind showing host path ``path``, or None."""
+            holders = [b for b in binds if _under(path, _real(b.path))]
+            return max(holders, key=lambda b: len(_real(b.path).parts)) if holders else None
+
+        def views(real: Path) -> list[tuple[Path, bool]]:
+            """Where in the jail host path ``real`` shows, and whether it is
+            writable there: at itself (through a bind or the read-only /) and
+            under every bind reached through a symlink."""
+            out_views: dict[Path, bool] = {}
+            holder = area(real)
+            if holder is not None or not any(_under(real, tree) for tree in replaced):
+                out_views[real] = holder is not None and holder.rw
+            for bind in binds:
+                at, real_at = Path(os.path.abspath(bind.path)), _real(bind.path)
+                if at != real_at and _under(real, real_at):
+                    out_views.setdefault(at / real.relative_to(real_at), bind.rw)
+            return list(out_views.items())
+
         empty = self.private / "empty"
-        if targets and not empty.exists():
+        placeholders: dict[Path, Path] = {}   # jail path of a covered parent -> host parent
+        direct: list[Path] = []               # jail paths blanked where they are
+        for hidden in hides:
+            if any(_under(hidden, point) for point in network):
+                # Out of the jail with its mount unless a bind shows it; a bind
+                # inside it is the operator's choice to look it up.
+                if area(hidden) is not None and os.path.lexists(hidden):
+                    for at, _writable in views(hidden):
+                        direct.append(at)
+                continue
+            exists = os.path.lexists(hidden)
+            parent = hidden.parent
+            while not os.path.lexists(parent) and parent != parent.parent:
+                parent = parent.parent
+            # / and a large directory are not rebuilt (bwrap takes 9000
+            # arguments at most): their hidden entries are blanked in place.
+            in_place = parent == Path("/") or _many_entries(parent)
+            for at, writable in views(parent):
+                if writable or in_place:
+                    if exists:
+                        direct.append(at / hidden.relative_to(parent))
+                    continue
+                placeholders.setdefault(at, parent)
+            # A bind of the hidden path itself, through a symlink, is blanked at the link.
+            for bind in binds:
+                at, real_at = Path(os.path.abspath(bind.path)), _real(bind.path)
+                if at != real_at and _under(real_at, hidden) and exists:
+                    direct.append(at)
+        hidden_set = set(hides)
+
+        writable_roots = [Path(os.path.abspath(b.path)) for b in binds if b.rw]
+
+        def rebuild(parent: Path, at: Path) -> None:
+            """Bind ``parent``'s entries back at ``at`` (under a tmpfs): a
+            hidden entry as an empty one, a network mount as an empty
+            directory, and an entry holding either rebuilt the same way,
+            unless it has more than `_REBUILD_MAX` entries: then it is bound
+            whole and its hidden paths are blanked in place. DIR and a
+            writable bind are left to their own bind, which goes on top."""
+            try:
+                entries = list(os.scandir(parent))
+            except OSError:
+                return
+            for entry in entries:
+                real_entry, entry_at = parent / entry.name, at / entry.name
+                depth = len(entry_at.parts)
+                if any(_under(entry_at, root) for root in writable_roots):
+                    continue
+                try:
+                    if real_entry in hidden_set:
+                        if entry.is_dir(follow_symlinks=False):
+                            ops.append((depth, 0, ["--dir", str(entry_at)]))
+                        else:
+                            if not empty.exists():
+                                empty.touch(mode=0o444)
+                            ops.append((depth, 0, ["--ro-bind", str(empty), str(entry_at)]))
+                    elif real_entry in network:
+                        ops.append((depth, 0, ["--dir", str(entry_at)]))
+                    elif entry.is_symlink():
+                        ops.append((depth, 0, ["--symlink", os.readlink(real_entry), str(entry_at)]))
+                    elif (not any(_under(p, real_entry) for p in network)
+                          and any(_under(p, real_entry) for p in hidden_set)
+                          and _many_entries(real_entry)):
+                        ops.append((depth, 0, ["--ro-bind-try", str(real_entry), str(entry_at)]))
+                        direct.extend(entry_at / p.relative_to(real_entry) for p in hidden_set
+                                      if _under(p, real_entry) and os.path.lexists(p))
+                    elif any(_under(p, real_entry) for p in (*hidden_set, *network)):
+                        ops.append((depth, 0, ["--dir", str(entry_at)]))
+                        rebuild(real_entry, entry_at)
+                    else:
+                        ops.append((depth, 0, ["--ro-bind-try", str(real_entry), str(entry_at)]))
+                except OSError:
+                    continue
+
+        for at, parent in placeholders.items():
+            if any(_under(parent, point) for point in network) or at in network:
+                continue
+            ops.append((len(at.parts), 2, ["--tmpfs", str(at)]))
+            rebuild(parent, at)
+        out: list[str] = []
+        for _depth, _order, args in sorted(ops, key=lambda op: (op[0], op[1])):
+            out += args
+        if direct and not empty.exists():
             empty.touch(mode=0o444)
-        for target in sorted(targets, key=lambda p: len(p.parts)):
+        for target in sorted(dict.fromkeys(direct), key=lambda p: len(p.parts)):
             out += (["--tmpfs", str(target)] if _real(target).is_dir()
                     else ["--ro-bind", str(empty), str(target)])
-
-        def inside(path: Path) -> bool:
-            return any(path != h and _under(path, h) for h in shown)
-
-        again: list[str] = []
-        if inside(_real(self.private)):
-            again += ["--bind", str(self.private), str(self.private)]
+        blanked = [*direct, *(h for h in hides)]
         for bind in sorted(dict.fromkeys(candidates), key=lambda b: len(b.path.parts)):
-            if inside(_real(bind.path)):
+            real_bind = _real(bind.path)
+            if any(real_bind != b and _under(real_bind, b) for b in blanked) or any(
+                    _under(real_bind, p) for p in placeholders.values()):
                 src = str(bind.path)
-                again += ["--bind-try" if bind.rw else "--ro-bind-try", src, src]
-        return out + again
+                out += ["--bind-try" if bind.rw else "--ro-bind-try", src, src]
+        return out, list(placeholders)
 
-    def self_test(self) -> str | None:
+    def self_test(self, *, setting: object = (), hide: object = None) -> str | None:
         """None when a command runs in the jail, else bwrap's first error line."""
         try:
             proc = subprocess.run(
-                self.argv(["true"], cwd=self.root), capture_output=True, text=True, timeout=30,
+                self.argv(["true"], cwd=self.root, setting=setting, hide=hide),
+                capture_output=True, text=True, timeout=30,
             )
         except (OSError, subprocess.SubprocessError) as exc:
             return str(exc)
@@ -629,9 +867,11 @@ def _clear_stale_private_dirs() -> None:
             continue
 
 
-def enter(directory: Path | str) -> Jail:
+def enter(directory: Path | str, *, setting: object = (), hide: object = None) -> Jail:
     """Put this process's tools in a jail at ``directory``. Raises JailError
-    with one line when it cannot: no bwrap, a bad DIR, a failing self-test."""
+    with one line when it cannot: no bwrap, a bad DIR, a failing self-test.
+    The self-test builds the jail with the run's `JAIL_BIND` (``setting``) and
+    `JAIL_HIDE` (``hide``; None is the `js/jsrc` list)."""
     global ACTIVE
     root = _real(Path(directory).expanduser())
     if not root.is_dir():
@@ -645,9 +885,13 @@ def enter(directory: Path | str) -> Jail:
     private_root().mkdir(parents=True, exist_ok=True)
     private = Path(tempfile.mkdtemp(prefix=f"{os.getpid()}-", dir=private_root()))
     jail = Jail(root=root, bwrap=bwrap, private=private)
+    inside = next((h for h in jail.hides(hide) if _under(root, h)), None)
+    if inside is not None:
+        jail.cleanup()
+        raise JailError(f"-C {directory} is inside {inside}, a path hidden in the jail (JAIL_HIDE)")
     jail.tmp.mkdir()
     jail.js_tmp.mkdir()
-    failure = jail.self_test()
+    failure = jail.self_test(setting=setting, hide=hide)
     if failure is not None:
         jail.cleanup()
         raise JailError(f"-C: bubblewrap cannot start a jail: {failure}")

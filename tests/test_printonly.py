@@ -123,7 +123,10 @@ def test_printonly_prompt_inlines_expanded(offline_agent, capsys):
     assert "code=<ran>" in out           # code actually ran (on by default)
 
 
-def test_printonly_inlines_respect_opt_out(offline_agent, capsys):
+def test_printonly_inlines_respect_opt_out(offline_agent, monkeypatch, capsys):
+    # The flag sets JS_INLINE_CODE in os.environ; restored to unset afterwards.
+    monkeypatch.setenv("JS_INLINE_CODE", "")
+    monkeypatch.delenv("JS_INLINE_CODE")
     rc = cli.main(["-a", "potest", "--im-a-pussy", "--printonly=i"])
     out = capsys.readouterr().out
     assert rc == 0
@@ -131,7 +134,9 @@ def test_printonly_inlines_respect_opt_out(offline_agent, capsys):
 
 
 def test_incognito_flag_tells_envctx_to_skip_history(offline_agent, monkeypatch, capsys):
-    monkeypatch.delenv("ENVCTX_HIST", raising=False)
+    # The flag sets ENVCTX_HIST in os.environ; restored to unset afterwards.
+    monkeypatch.setenv("ENVCTX_HIST", "")
+    monkeypatch.delenv("ENVCTX_HIST")
     rc = cli.main(["-a", "potest", "-i", "--printonly=p"])
     capsys.readouterr()
     assert rc == 0

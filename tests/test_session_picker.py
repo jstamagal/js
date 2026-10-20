@@ -439,7 +439,7 @@ def test_bare_session_enters_the_jail_of_a_session_started_under_c(tmp_path, mon
     monkeypatch.chdir(tmp_path)
     entered = {}
 
-    def enter(root):
+    def enter(root, **_settings):
         entered["root"] = root
         raise cli._jail.JailError("no bwrap here")
 
