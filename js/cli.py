@@ -2635,8 +2635,12 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             cfg = login_defaults.for_turn(replace(cfg, layer_resume=resumed_layer))
             reasoning_override = _stamped_reasoning(resumed)
     if prompt_spec is not None:
-        prompt_spec = P._expand_spec(prompt_spec, cfg)
-        system = prompt_spec.system
+        recorded_system = M.load_system_prompt(cfg.session_file)
+        if recorded_system is None:
+            prompt_spec = P._expand_spec(prompt_spec, cfg)
+            system = prompt_spec.system
+        else:
+            system = recorded_system
     if unreachable_stamp is not None:
         with _transcript_stdio(telemetry):
             msgs.warn(msgs.RESUME_MODEL_FALLBACK, stamped=unreachable_stamp,
@@ -2655,6 +2659,14 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     )
     messages = M.load_replay_messages(cfg.session_file)
     cut_off = M.turn_cut_off(messages)
+    if prompt_spec is not None and save:
+        prompt_changed = M.record_prompt_seen(cfg.session_file, prompt_spec.source)
+        if recorded_system is None:
+            M.append_system_prompt(cfg.session_file, system)
+        elif prompt_changed:
+            notice = {"role": "user", "content": _PROMPT_CHANGED_NOTICE}
+            messages.append(notice)
+            _append_turn(cfg, notice)
     _restore_workspace(cfg)
     before_len = len(messages)
     if events is not None:
@@ -2725,7 +2737,8 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         nonlocal before_len, user_started
         if prompt_spec is not None and prompt_spec.exchanges and not messages:
             model_client.run_owning_loop(agent_messages.initialize(
-                cfg, prompt_spec, messages, replace(telemetry, transcript_log=turn_transcript), save=save,
+                cfg, prompt_spec, messages, replace(telemetry, transcript_log=turn_transcript),
+                system=system, save=save,
                 trace_override=debug or bool(debug_file) or cfg.trace,
                 tool_context=tool_context, echo_user=echo_user, **turn_kwargs,
             ))
