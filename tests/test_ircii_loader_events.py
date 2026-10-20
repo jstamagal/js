@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 
 from js import cli, events, setcmd, settings
 from js.config import Config
@@ -252,6 +254,29 @@ def test_event_hooks_skip_recursive_dispatch():
     assert calls == ["turn_start:set COMPACTION_AUTO off"]
     assert emission.dispatch_skipped is False
     assert emission.results[0].error == "ok"
+
+
+def test_concurrent_subagent_tool_calls_each_run_refusal_hooks():
+    entered, release = Event(), Event()
+
+    def guard(hook, emission):
+        if emission.payload["name"] == "first":
+            entered.set()
+            assert release.wait(5)
+        return events.EventHandlerResult(hook=hook, refusal="blocked")
+
+    hooks = events.EventHooks(guard)
+    hooks.add("tool_call", "guard")
+    subagent_hooks = events.RefusableOnly(hooks)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first = executor.submit(subagent_hooks.emit, "tool_call", name="first")
+        try:
+            assert entered.wait(5)
+            second = subagent_hooks.emit("tool_call", name="second")
+        finally:
+            release.set()
+        assert events.refusal_of(first.result(timeout=5)) == "blocked"
+    assert events.refusal_of(second) == "blocked"
 
 
 def test_cli_load_updates_live_settings_and_event_hooks(tmp_path):

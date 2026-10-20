@@ -113,7 +113,7 @@ class EventHooks:
     def __init__(self, dispatcher: EventHandlerDispatcher | None = None) -> None:
         self._hooks: dict[str, list[EventHook]] = {event: [] for event in CANONICAL_EVENT_NAMES}
         self._dispatcher = dispatcher
-        self._dispatch_depth = 0
+        self._dispatch_depth: ContextVar[int] = ContextVar("js_event_dispatch_depth", default=0)
 
     def set_dispatcher(self, dispatcher: EventHandlerDispatcher | None) -> None:
         self._dispatcher = dispatcher
@@ -145,7 +145,7 @@ class EventHooks:
         emission = EventEmission(event=name, payload=dict(payload), hooks=hooks)
         if self._dispatcher is None or not hooks:
             return emission
-        if self._dispatch_depth > 0:
+        if self._dispatch_depth.get() > 0:
             return EventEmission(
                 event=name,
                 payload=dict(payload),
@@ -153,7 +153,7 @@ class EventHooks:
                 dispatch_skipped=True,
             )
 
-        self._dispatch_depth += 1
+        depth_token = self._dispatch_depth.set(self._dispatch_depth.get() + 1)
         try:
             for hook in hooks:
                 call = HandlerCall(hook=hook, emission=emission)
@@ -176,7 +176,7 @@ class EventHooks:
                     result = replace(result, refusal=call.refusal)
                 emission.results.append(result)
         finally:
-            self._dispatch_depth -= 1
+            self._dispatch_depth.reset(depth_token)
         return emission
 
     def all(self) -> dict[str, list[EventHook]]:
