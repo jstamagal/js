@@ -199,3 +199,13 @@ def test_config_puts_the_history_in_state_unless_history_file_says(tmp_path, mon
 
     monkeypatch.setenv("JS_HISTORY_FILE", "~/hist.jsonl")
     assert from_env(save_session=False).history_file == tmp_path / "hist.jsonl"
+
+
+def test_history_migration_can_be_supplied_by_the_caller(tmp_path):
+    seen = []
+    path = tmp_path / "history.jsonl"
+    state = tmp_path / "state"
+    history = _history(path, state_root=state, migrate=lambda *args: seen.append(args))
+    assert list(history.load_history_strings()) == []
+    assert seen == [(path, state)]
+    assert not path.exists()

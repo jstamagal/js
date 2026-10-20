@@ -177,18 +177,19 @@ class PromptHistory(History):
 
     def __init__(self, path: Path, origin: Callable[[], Origin], *,
                  cwd_first: bool = True, limit: int | None = None,
-                 state_root: Path | None = None) -> None:
+                 state_root: Path | None = None, migrate=None) -> None:
         super().__init__()
         self.path = path
         self._origin = origin
         self._cwd_first = cwd_first
         self._limit = limit
         self._state_root = state_root
+        self._migrate = migrate
 
     def load_history_strings(self) -> Iterable[str]:
         if self._state_root is not None:
             with contextlib.suppress(OSError):
-                import_legacy(self.path, self._state_root)
+                (import_legacy if self._migrate is None else self._migrate)(self.path, self._state_root)
         entries = read_entries(self.path, self._limit)
         return browse_order(entries, self._origin().cwd, cwd_first=self._cwd_first)
 
