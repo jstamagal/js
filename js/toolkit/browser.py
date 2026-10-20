@@ -16,12 +16,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from .. import jail, paths
+from .. import jail, paths, settings as _settings
 from .core import Tool, ToolContext
 from .descriptions import load_description
 from .sanitize import int_or_default, text_or_default
 
-CHROME_FALLBACK = Path("/opt/chrome-for-testing/chrome-linux64/chrome")
 GL_ARGS = (
     "--use-angle=vulkan",
     "--hide-scrollbars",
@@ -199,14 +198,15 @@ def _safe_label(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")[:50] or "step"
 
 
-def _launch_browser(playwright: Any) -> Any:
+def _launch_browser(playwright: Any, context: ToolContext | None = None) -> Any:
     try:
         return playwright.chromium.launch(args=list(GL_ARGS))
     except Exception as first:
-        if not CHROME_FALLBACK.is_file():
+        fallback = _settings.knob_attr(context, "browser_fallback_file", "BROWSER_FALLBACK_FILE")
+        if not fallback or not Path(fallback).is_file():
             raise first
         return playwright.chromium.launch(
-            executable_path=str(CHROME_FALLBACK), args=list(GL_ARGS)
+            executable_path=str(fallback), args=list(GL_ARGS)
         )
 
 
@@ -295,7 +295,7 @@ def browser_probe(
         context.snapshot(run_dir)
         run_dir.mkdir(parents=True, exist_ok=False)
         with sync_playwright() as playwright:
-            browser = _launch_browser(playwright)
+            browser = _launch_browser(playwright, context)
             page = browser.new_page(viewport={"width": width, "height": height})
             page.on(
                 "console",
