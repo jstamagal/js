@@ -425,7 +425,7 @@ def link_file(session_file: Path) -> int:
     session_file = Path(session_file)
     with _open_locked(session_file, "r+", encoding="utf-8", errors="surrogateescape") as stream:
         info = os.fstat(stream.fileno())
-        lines, given = link_lines(stream.read().splitlines(keepends=True))
+        lines, given = link_lines(stream)
         if not given:
             return 0
         staging = session_file.with_name(f".{session_file.name}.{secrets.token_hex(4)}.tmp")

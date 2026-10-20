@@ -421,6 +421,24 @@ def _lines(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
+def test_linking_legacy_records_preserves_unicode_line_separators(tmp_path):
+    path = tmp_path / "legacy.jsonl"
+    messages = [{"role": "user", "content": "one\u2028two\u2029three\x85four"},
+                {"role": "assistant", "content": "reply"}]
+    records = [{"kind": "message", "version": 1, "ts": 1, "message": message}
+               for message in messages]
+    path.write_text("\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
+                    encoding="utf-8")
+
+    session_store.link_file(path)
+
+    assert load_messages(path) == messages
+    with path.open(encoding="utf-8") as stream:
+        linked = [json.loads(line) for line in stream]
+    assert all(isinstance(record["id"], str) for record in linked)
+    assert linked[1]["parent"] == linked[0]["id"]
+
+
 def test_a_branch_records_its_parent_and_the_id_of_the_message_it_split_at(tmp_path):
     parent = session_store.reserve(session_store.folder_for(tmp_path))
     record_session_start(parent, cwd=tmp_path, agent="defaultagent", mode="repl")
