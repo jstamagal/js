@@ -71,7 +71,7 @@ class JSONRPCPeer:
         self._ids = itertools.count(1)
         self._pending: dict[JSONRPCId, asyncio.Future[Any]] = {}
         self._incoming: dict[JSONRPCId, asyncio.Task[Any]] = {}
-        self._request_handlers: dict[str, RequestHandler] = {}
+        self._request_handlers: dict[str, RequestHandler] = {"ping": lambda _params: {}}
         self._notification_handlers: dict[str, list[NotificationHandler]] = {}
         self._notification_queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
         self._notification_task: asyncio.Task[None] | None = None
