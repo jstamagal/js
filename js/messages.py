@@ -1589,6 +1589,10 @@ CODEX_LOGIN_FAILURE_HTML = "<h1>OpenAI Codex login failed</h1><p>Return to js an
 
 CODEX_REFRESH_REJECTED = "OpenAI Codex refresh token was rejected ({detail}); run js --login openai-codex again"
 
+CODEX_PROVIDER_OPENAI_CODEX_ACCESS_TOKEN_IS_MISSING_CHATGPT = "OpenAI Codex access token is missing chatgpt_account_id"
+
+CODEX_PROVIDER_OPENAI_CODEX_REQUIRES_AN_OAUTH_ACCESS_TOKEN = "OpenAI Codex requires an OAuth access token; run js --login openai-codex"
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():

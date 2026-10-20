@@ -7,6 +7,8 @@ Codex model listing, Responses-style streaming, and function tool calls.
 
 from __future__ import annotations
 
+from . import messages as msgs
+
 import asyncio
 import base64
 import functools
@@ -82,7 +84,7 @@ def _account_id_from_token(access_token: str, account_id: str | None = None) -> 
         return account_id
     decoded_account_id, _email = codex_auth.token_profile(access_token)
     if not decoded_account_id:
-        raise ai.ConfigurationError("OpenAI Codex access token is missing chatgpt_account_id")
+        raise ai.ConfigurationError(msgs.CODEX_PROVIDER_OPENAI_CODEX_ACCESS_TOKEN_IS_MISSING_CHATGPT.format())
     return decoded_account_id
 
 
@@ -560,7 +562,7 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
         settings: dict | None = None,
     ) -> None:
         if not access_token:
-            raise ai.ConfigurationError("OpenAI Codex requires an OAuth access token; run js --login openai-codex")
+            raise ai.ConfigurationError(msgs.CODEX_PROVIDER_OPENAI_CODEX_REQUIRES_AN_OAUTH_ACCESS_TOKEN.format())
         resolved_account_id = _account_id_from_token(access_token, account_id)
         super().__init__(
             name=_PROVIDER,
