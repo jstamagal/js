@@ -200,6 +200,18 @@ def test_presets_layer_over_base_in_order(monkeypatch, tmp_path):
     assert cfg2.fetch_timeout_s == 99  # from slow; fast didn't set it
 
 
+@pytest.mark.parametrize("presets", [[], ["fast"]])
+def test_ignoring_global_config_from_home_excludes_global_files(tmp_path, presets):
+    config_dir = tmp_path / ".js"
+    config_dir.mkdir()
+    (config_dir / "jsrc").write_text("set SHELL_WAIT 47\n", encoding="utf-8")
+    (config_dir / "jsrc.fast").write_text("set SHELL_WAIT 49\n", encoding="utf-8")
+
+    cfg = from_env(cwd=tmp_path, save_session=False, ignore_global_config=True, presets=presets)
+
+    assert cfg.shell_wait_seconds == settings.default_value("SHELL_WAIT")
+
+
 def test_allow_inline_code_default_is_on(monkeypatch, tmp_path):
     # Inverted: inline code runs by default, no flag/knob needed.
     _env_dirs(monkeypatch, tmp_path)

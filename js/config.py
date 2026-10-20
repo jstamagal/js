@@ -324,10 +324,12 @@ def _preset_config_paths(
         name = raw.strip()
         if not name:
             continue
+        global_path = _paths.global_config_file().with_name(f"jsrc.{name}")
+        local_path = project_dir / ".js" / f"jsrc.{name}"
         if not ignore_global_config:
-            paths.append(_paths.global_config_file().with_name(f"jsrc.{name}"))
-        if not ignore_local_config:
-            paths.append(project_dir / ".js" / f"jsrc.{name}")
+            paths.append(global_path)
+        if not ignore_local_config and local_path != global_path:
+            paths.append(local_path)
     return paths
 
 
@@ -368,10 +370,14 @@ def jsrc_paths(
     Run from the home directory, the project `.js/` is `~/.js` itself, so its
     jsrc is the global layer and loads there only."""
     paths: list[Path] = []
+    global_path = _paths.global_config_file()
     if not ignore_global_config:
-        paths.append(_paths.global_config_file())
+        paths.append(global_path)
     if not ignore_local_config:
-        paths.extend([project_dir / ".js" / "jsrc", project_dir / ".js" / "jsrc.local"])
+        local_path = project_dir / ".js" / "jsrc"
+        if local_path != global_path:
+            paths.append(local_path)
+        paths.append(project_dir / ".js" / "jsrc.local")
     # Presets layer on top of the base jsrc files (still below env / --extra).
     paths.extend(_preset_config_paths(
         presets,
