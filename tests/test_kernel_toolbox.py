@@ -594,6 +594,16 @@ def test_the_namespace_listing_is_rederived_from_the_live_kernel_each_call(ctx):
 
 
 @needs_kernel
+def test_namespace_probes_preserve_the_default_user_cell_handle(ctx):
+    kmod.kernel(code="answer = 42", context=ctx)
+
+    result = kmod.kernel(action="poll", context=ctx)
+
+    assert not result.startswith("ERROR"), result
+    assert kmod.pick_handle(ctx.kernel_session, "") is ctx.kernel_session.handles["1"]
+
+
+@needs_kernel
 def test_a_wait_that_runs_out_interrupts_the_cell_and_leaves_the_namespace_intact(ctx):
     kmod.kernel(code="def survivor():\n    return 'alive'\n", context=ctx)
     ctx.kernel_wait_seconds = 0.2

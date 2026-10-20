@@ -881,7 +881,9 @@ def run_cell(session: KernelSession, code: str, timeout: int, *,
     is interrupted, never restarted.
     """
     started = time.monotonic()
+    last = session.last
     handle = session.submit(code, store_history=store_history)
+    session.last = last
     collect_until(session, handle, started + timeout)
     if not handle.finished and not handle.died:
         handle.timed_out = True
