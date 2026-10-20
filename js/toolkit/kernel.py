@@ -888,7 +888,8 @@ def run_cell(session: KernelSession, code: str, timeout: int, *,
         interrupt_and_collect(session, handle)
     result = _render_messages(session, handle.messages, marker)
     handle.delivered = len(handle.messages)
-    session.forget(handle)
+    if handle.finished or handle.died:
+        session.forget(handle)
     if not handle.died:
         _drain_shell(session, time.monotonic() + 1)
     result.timed_out = handle.timed_out

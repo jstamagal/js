@@ -632,6 +632,32 @@ def test_a_cell_that_outlasts_the_wait_returns_a_handle_instead_of_blocking(ctx)
 
 
 @needs_kernel
+def test_an_internal_cell_stays_tracked_when_it_outlasts_the_interrupt_grace(ctx, monkeypatch):
+    kmod.kernel(code="x = 1", context=ctx)
+    session = ctx.kernel_session
+    interrupt = kmod.interrupt_and_collect
+    monkeypatch.setattr(kmod, "interrupt_and_collect",
+                        lambda session, handle: interrupt(session, handle, grace=0.1))
+
+    result = kmod.run_cell(session, (
+        "import os, signal, time\n"
+        "signal.signal(signal.SIGINT, signal.SIG_IGN)\n"
+        "print('armed', flush=True)\n"
+        "while not os.path.exists('release'):\n"
+        "    time.sleep(0.01)\n"
+        "print('released', flush=True)\n"
+    ), timeout=1, store_history=False)
+
+    assert result.timed_out and "armed" in result.stdout
+    live = kmod.busy_handle(session)
+    assert live is not None
+    (ctx.cwd / "release").touch()
+    kmod.collect_until(session, live, time.monotonic() + 10)
+    assert live.finished
+    assert "released" in kmod.poll_cell(session, live).stdout
+
+
+@needs_kernel
 def test_a_second_cell_is_refused_while_the_first_is_still_running(ctx):
     ctx.kernel_wait_seconds = 0.2
     first = kmod.kernel(code="import time\ntime.sleep(60)", context=ctx)
