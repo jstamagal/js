@@ -243,3 +243,7 @@ set BROWSER_FALLBACK_FILE /opt/chrome-for-testing/chrome-linux64/chrome
 set SUBAGENT_RESULT_SHARE on
 
 set TYPESAFE_API_KEY ""
+
+set TOOLBOX_SEED_EXAMPLES on
+
+set TOOLBOX_REQUIRE_BOUND_NAMES on

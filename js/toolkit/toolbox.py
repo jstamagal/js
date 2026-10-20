@@ -529,7 +529,7 @@ def toolbox(
 
     # Both actions that show the box seed it first, so a fresh install lists the
     # shipped example instead of nothing.
-    if verb in ("list", "load"):
+    if context.toolbox_seed_examples and verb in ("list", "load"):
         seed_examples()
 
     if verb == "list":
@@ -577,7 +577,7 @@ def toolbox(
         # loaded, so a call to another tool resolves there.
         siblings = set(discover(cwd)) - {name}
         missing = [free for free in unbound_names(body) if free not in siblings]
-        if missing:
+        if missing and context.toolbox_require_bound_names:
             message = (
                 f"ERROR: {name!r} uses " + ", ".join(missing)
                 + ", which the file would not carry: a later session that loads it would "

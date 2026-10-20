@@ -121,6 +121,8 @@ class TurnSetting:
 
 
 TURN_SETTINGS: tuple[TurnSetting, ...] = (
+    TurnSetting("toolbox_require_bound_names", "TOOLBOX_REQUIRE_BOUND_NAMES", flag, on_context=True),
+    TurnSetting("toolbox_seed_examples", "TOOLBOX_SEED_EXAMPLES", flag, on_context=True),
     TurnSetting("typesafe_api_key", "TYPESAFE_API_KEY", text, on_context=True),
     TurnSetting("subagent_result_share", "SUBAGENT_RESULT_SHARE", flag, on_context=True),
     TurnSetting("browser_fallback_file", "BROWSER_FALLBACK_FILE", text, on_context=True),
