@@ -1299,6 +1299,24 @@ FSET_EMPTY = Message("{name}")
 
 COMPACTING_ROLE = Message("Compacting", banner=False)
 
+CLEARING_OVERFLOW_START = Message("provider overflow; round={round_}; keeping newest {keep_recent} tool results", banner=False)
+
+CLEARING_OVERFLOW_RESULT = Message("cleared {cleared} old tool results; reclaimed {reclaimed} chars", banner=False)
+
+CLEARING_NO_RESULTS = Message("no eligible tool results; summary recovery may follow", banner=False)
+
+CLEARING_BUDGET_START = Message("{value} context budget; keeping newest {keep_recent} tool results", banner=False)
+
+CLEARING_BUDGET_RESULT = Message("cleared {total} old tool results; reclaimed {reclaimed} chars", banner=False)
+
+CLEARING_STILL_OVER_BUDGET = Message("; still over budget", banner=False)
+
+SUMMARY_RESPONSE_INCOMPLETE = Message("summary response incomplete: {value}", banner=False)
+
+SUMMARY_RESPONSE_NO_TEXT = Message("summary response did not contain a completed text summary", banner=False)
+
+COMPACTION_FLIGHT_START = Message("model={compact_model} trigger={value} messages={original_len}", banner=False)
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():

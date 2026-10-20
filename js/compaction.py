@@ -388,10 +388,10 @@ def recover_overflow(
         flight_data=flight_data, log_dir=log_dir, emit=emit,
     )
     with _flight_recording(flight, system, messages):
-        flight.notice("start", f"provider overflow; round={round_}; keeping newest {keep_recent} tool results")
+        flight.notice("start", msgs.CLEARING_OVERFLOW_START.words(round_=round_, keep_recent=keep_recent))
         cleared, reclaimed = _record_cleared(flight, messages, keep_recent=keep_recent)
-        result = (f"cleared {cleared} old tool results; reclaimed {reclaimed} chars"
-                  if cleared else "no eligible tool results; summary recovery may follow")
+        result = (msgs.CLEARING_OVERFLOW_RESULT.words(cleared=cleared, reclaimed=reclaimed)
+                  if cleared else msgs.CLEARING_NO_RESULTS.words())
         flight.finish("success" if cleared else "skipped", system, messages, result=result)
         return ("cleared", cleared, reclaimed) if cleared else ("summarize", 0, 0)
 
@@ -410,7 +410,7 @@ def clear_for_budget(
     flight = _clearing_flight(messages, cfg=cfg, system=system, trigger=trigger, flight_data=flight_data,
                               log_dir=log_dir, emit=emit)
     with _flight_recording(flight, system, messages):
-        flight.notice("start", f"{trigger.get('phase')} context budget; keeping newest {keep_recent} tool results")
+        flight.notice("start", msgs.CLEARING_BUDGET_START.words(value=trigger.get('phase'), keep_recent=keep_recent))
         total = 0
         reclaimed = 0
         while True:
@@ -421,8 +421,8 @@ def clear_for_budget(
             if not still_over or keep_recent <= 1:
                 break
             keep_recent = max(1, keep_recent // 2)
-        result = (f"cleared {total} old tool results; reclaimed {reclaimed} chars"
-                  + ("; still over budget" if still_over else ""))
+        result = (msgs.CLEARING_BUDGET_RESULT.words(total=total, reclaimed=reclaimed)
+                  + (msgs.CLEARING_STILL_OVER_BUDGET.words() if still_over else ""))
         flight.finish("success" if total else "skipped", system, messages, result=result)
         return total, reclaimed
 
@@ -909,10 +909,10 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
                       or model_client.incomplete_reason_from_metadata(getattr(result, "provider_metadata", None)))
         finish = str(getattr(result, "finish_reason", ""))
         if incomplete or finish.startswith("incomplete") or is_max_output_incomplete(finish):
-            raise ValueError(f"summary response incomplete: {incomplete or finish}")
+            raise ValueError(msgs.SUMMARY_RESPONSE_INCOMPLETE.words(value=incomplete or finish))
         text = result.text.strip()
         if not text or getattr(result, "tool_calls", None):
-            raise ValueError("summary response did not contain a completed text summary")
+            raise ValueError(msgs.SUMMARY_RESPONSE_NO_TEXT.words())
         return text
 
     return await summarize_chunk(rest, 0, previous)
@@ -1015,7 +1015,7 @@ async def compact_now(
             flight.finish("skipped", system, messages, result=result)
             return result
         compact_model = model or get_model(cfg)
-        flight.notice("start", f"model={compact_model} trigger={trigger or 'manual'} messages={original_len}")
+        flight.notice("start", msgs.COMPACTION_FLIGHT_START.words(compact_model=compact_model, value=trigger or 'manual', original_len=original_len))
         phase = (trigger or {}).get("phase", "manual")
         if emit is not None:
             emit("pre_compact", phase=phase, forced=forced, focus=focus, model=compact_model,
