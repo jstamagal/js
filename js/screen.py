@@ -833,6 +833,10 @@ def build_app(
         if on_interrupt():
             armed.clear()
             return None
+        if event.current_buffer is ex_buffer:
+            armed.clear()
+            _ex_close(event.app)
+            return None
         if input_buffer.text:
             input_buffer.reset()
             _arm("interrupt")
@@ -840,6 +844,9 @@ def build_app(
         return _arm_or_quit("interrupt")
 
     def _ctrl_d(event):
+        if event.current_buffer is ex_buffer:
+            ex_buffer.delete()
+            return None
         if not input_buffer.text:
             return on_eof()
         if input_buffer.document.is_cursor_at_the_end:
@@ -859,7 +866,7 @@ def build_app(
     def _tab(event) -> None:
         # The first Tab fills in what every match shares and lists them all;
         # each Tab after that selects the next one.
-        b = input_buffer
+        b = event.current_buffer
         if b.complete_state:
             b.complete_next()
         else:

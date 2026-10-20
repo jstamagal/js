@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 from prompt_toolkit.application import create_app_session
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.input import create_pipe_input
@@ -13,7 +14,7 @@ from prompt_toolkit.output import DummyOutput
 from js import exline, screen
 
 
-def _drive(keys: list[str], mode: str, ex_runner=None) -> tuple[list[str], list[tuple[str, str]]]:
+def _drive(keys: list[str], mode: str, ex_runner=None, completer=None) -> tuple[list[str], list[tuple[str, str]]]:
     """Type ``keys`` (one chunk per write) into a real app, then quit it."""
     lines: list[str] = []
     ex: list[tuple[str, str]] = []
@@ -29,7 +30,7 @@ def _drive(keys: list[str], mode: str, ex_runner=None) -> tuple[list[str], list[
     async def main() -> None:
         with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()):
             app, _scrollback = screen.build_app(
-                prompt="> ", history=InMemoryHistory(), completer=None,
+                prompt="> ", history=InMemoryHistory(), completer=completer,
                 on_line=on_line, on_interrupt=lambda: None, on_eof=lambda: None,
                 editing_mode=lambda: mode, on_ex=on_ex,
             )
@@ -79,6 +80,20 @@ def test_vi_escape_in_the_ex_line_cancels_it():
     lines, ex = _drive(["hello", "\x1b", ":set model X", "\x1b", "\r"], "vi")
 
     assert ex == []
+    assert lines == []
+
+
+@pytest.mark.parametrize("control", ["\x03", "\x04", "\t"])
+def test_ex_control_keys_preserve_the_message_draft(control):
+    from js.replcomplete import JsCompleter
+
+    completer = JsCompleter(commands=lambda: {"draftchanged": None})
+    lines, ex = _drive(
+        ["draft", "\x1b", ":set model X", control, "\x1b", ":w", "\r"],
+        "vi", completer=completer,
+    )
+
+    assert ex == [("w", "draft")]
     assert lines == []
 
 
