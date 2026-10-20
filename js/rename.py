@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import TextIO
 
 from . import messages as msgs
-from .settings import SPEC_BY_KEY, parse_bool
+from .settings import SPEC_BY_KEY, _locked_jsrc, parse_bool
 
 # The names settings had before they were UPPER_SNAKE. `set`, jsrc and
 # --extra take only the new names.
@@ -638,6 +638,14 @@ def migrate_jsrc_file(path: Path, out: TextIO | None = None) -> bool:
     one warning per process naming the command to run by hand. Returns
     whether the file was rewritten."""
     stream = out if out is not None else sys.stderr
+    try:
+        with _locked_jsrc(path):
+            return _migrate_jsrc_file(path, stream)
+    except OSError:
+        return False
+
+
+def _migrate_jsrc_file(path: Path, stream: TextIO) -> bool:
     try:
         old = path.read_bytes()
         text = old.decode("utf-8")

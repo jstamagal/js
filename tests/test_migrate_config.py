@@ -446,3 +446,35 @@ def test_a_backup_name_taken_by_another_start_still_migrates(tmp_path, monkeypat
 
     assert jsrc.read_text(encoding="utf-8") == "set MODEL old/model\nset READ_LINES_MAX 77\n"
     assert taken.read_text(encoding="utf-8") == "another start's backup\n"
+
+
+def test_migration_does_not_overwrite_a_concurrent_save(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from js import rename, settings
+
+    jsrc = tmp_path / "jsrc"
+    jsrc.write_text("set model.id old/model\n", encoding="utf-8")
+    live = settings.seed_defaults()
+    settings.set_dotted(live, ("MODEL",), "new/model")
+    migrating = Event()
+    saved = Event()
+    real_migrate = rename.migrate_jsrc_text
+
+    def pause_after_read(text):
+        migrating.set()
+        saved.wait(2)
+        return real_migrate(text)
+
+    monkeypatch.setattr(rename, "migrate_jsrc_text", pause_after_read)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        migration = pool.submit(rename.migrate_jsrc_file, jsrc)
+        assert migrating.wait(5)
+        try:
+            settings.save_settings_to_jsrc(jsrc, live)
+        finally:
+            saved.set()
+        migration.result(timeout=5)
+
+    assert settings.knob(_load(jsrc)[0], "MODEL") == "new/model"

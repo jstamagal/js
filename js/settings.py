@@ -19,6 +19,7 @@ Precedence, lowest to highest:
 from __future__ import annotations
 
 import copy
+import fcntl
 import json
 import math
 import os
@@ -26,8 +27,9 @@ import re
 import shlex
 import sys
 from dataclasses import dataclass
+from contextlib import contextmanager
 from pathlib import Path
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Any
 
 from . import reasoning as _reasoning
@@ -1120,15 +1122,28 @@ def _edited_jsrc_lines(lines: list[str], wanted: dict[str, str | None], extra_li
     return lines + tail, changed + len(tail)
 
 
+@contextmanager
+def _locked_jsrc(path: Path) -> Iterator[None]:
+    """Hold the config directory across a jsrc read, edit and write."""
+    fd = os.open(path.resolve(strict=False).parent, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
 def _write_jsrc_lines(path: Path, wanted: dict[str, str | None], extra_lines: list[str],
                       unsets: dict[str, str] | None = None) -> int:
     """Edit the jsrc at ``path`` in place (`_edited_jsrc_lines`). Returns how
     many lines changed."""
-    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-    lines, changed = _edited_jsrc_lines(lines, wanted, extra_lines, unsets or {})
-    if changed:
-        _write_lines(path, lines)
-    return changed
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _locked_jsrc(path):
+        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+        lines, changed = _edited_jsrc_lines(lines, wanted, extra_lines, unsets or {})
+        if changed:
+            _write_lines(path, lines)
+        return changed
 
 
 def _serialized(lines: list[str]) -> str:
@@ -1176,6 +1191,14 @@ def save_settings_to_jsrc(
     one gets its line, or its clearing line, appended, which nothing after
     it can set back. ``extra_lines`` are `on` and `alias` lines. No copy of
     the file is made. Returns how many lines changed."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _locked_jsrc(path):
+        return _save_settings_to_jsrc(path, settings, extra_lines=extra_lines)
+
+
+def _save_settings_to_jsrc(
+    path: Path, settings: dict, *, extra_lines: list[str] | None = None,
+) -> int:
     from . import fset  # lazy: fset reads settings
 
     wanted: dict[str, str | None] = {}
