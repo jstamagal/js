@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import jail
-from .. import paths
+from .. import output, paths
 from .. import settings as _settings
 from ..capped_process import (
     CappedProcess,
@@ -964,7 +964,7 @@ def fetch(
                 f"content-type={content_type or 'unknown'}"
             )
         if save_target is not None and aria_eligible:
-            warn_urllib_fallback("fetch(save=...)")
+            warn_urllib_fallback("fetch(save=...)", emit=output.notice)
 
         req = urllib.request.Request(
             url,
@@ -1006,7 +1006,7 @@ def fetch(
                 truncated = len(payload) > limit
                 is_transfer = truncated or not _is_text_response(content_type, payload)
                 if is_transfer:
-                    warn_urllib_fallback("fetch() response transfer")
+                    warn_urllib_fallback("fetch() response transfer", emit=output.notice)
                 if too_large and is_transfer:
                     return _inline_read_limit_error()
             response_url = str(getattr(resp, "geturl", lambda: url)() or url)

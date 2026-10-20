@@ -1180,7 +1180,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
     started = time.time()
     view = None
     try:
-        with call_scope(call_id), registry_scope(
+        with output.using_sink(output.sink_of(telemetry)), call_scope(call_id), registry_scope(
                 active_registry, _cell_call_observer(telemetry, trace, context)):
             with activity.tool_call(tool.name):
                 result = call_tool(tool, args, context)
@@ -1191,13 +1191,13 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
                         error=f"{type(e).__name__}: {e}",
                         latency_ms=int((time.time() - started) * 1000))
         result = _jail.shown(f"ERROR running {tool.name}: {type(e).__name__}: {e}")
-    output = as_output(result)
-    result = output.model
+    produced = as_output(result)
+    result = produced.model
     if error_tracker is not None and isinstance(result, str):
         result = error_tracker.record(tool.name, result)
     capped = _cap_result(result, cap_bytes, context=context)
     _reconcile_read_delivery(tool.name, args, result, capped, context, call_id)
-    _trace_result(telemetry, context, tool.name, _operator_sees(output, result), args=args, exchange=opened,
+    _trace_result(telemetry, context, tool.name, _operator_sees(produced, result), args=args, exchange=opened,
                   view=view, traced=trace)
     return args, capped
 

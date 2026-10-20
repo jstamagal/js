@@ -102,3 +102,21 @@ def test_description_warning_is_an_event(monkeypatch, capsys):
     assert len(events) == 1
     assert dict(events[0].fields)["fields"]["problem"] == "invalid marker"
     assert capsys.readouterr() == ("", "")
+
+
+def test_fetch_fallback_warning_is_an_event(monkeypatch, tmp_path, capsys):
+    from js import tool_binaries
+    from js.toolkit import ToolContext, process_net
+
+    monkeypatch.setattr(tool_binaries, "_URLLIB_FALLBACK_REPORTED", set())
+    monkeypatch.setattr(process_net, "resolve_binary", lambda name: None)
+    def unavailable(*args, **kwargs):
+        raise OSError("offline")
+
+    monkeypatch.setattr(process_net.urllib.request, "urlopen", unavailable)
+    events = []
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        process_net.fetch("https://example.invalid/file", save="file", context=ToolContext(cwd=tmp_path))
+    assert len(events) == 1
+    assert dict(events[0].fields)["fields"]["purpose"] == "fetch(save=...)"
+    assert capsys.readouterr() == ("", "")

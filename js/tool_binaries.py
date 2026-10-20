@@ -170,13 +170,13 @@ def resolve_binary(executable: str) -> str | None:
 _URLLIB_FALLBACK_REPORTED: set[str] = set()
 
 
-def warn_urllib_fallback(purpose: str) -> None:
+def warn_urllib_fallback(purpose: str, *, emit: Callable | None = None) -> None:
     """Make loss of aria2c's transfer guarantees visible without changing
     results: once per purpose per process, on stderr."""
     if purpose in _URLLIB_FALLBACK_REPORTED:
         return
     _URLLIB_FALLBACK_REPORTED.add(purpose)
-    msgs.warn(msgs.URLLIB_FALLBACK, purpose=purpose)
+    (emit or msgs.warn)(msgs.URLLIB_FALLBACK, purpose=purpose)
 
 
 def aria2_argv(
