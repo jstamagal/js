@@ -488,6 +488,23 @@ def test_cut_off_tool_call_is_dropped_and_the_model_resumes(monkeypatch, tmp_pat
     assert not (tmp_path / "a.txt").exists()
 
 
+def test_a_cut_off_tool_call_keeps_no_thinking_blocks(monkeypatch, tmp_path):
+    # The rewritten reply drops its signed reasoning; the blocks go with it.
+    monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
+    blocks = [{"type": "thinking", "thinking": "plan", "signature": "sig"}]
+    dangling = [ModelToolCall(id="c1", name="write", arguments='{"file_path": "a.txt", "content": "unfin')]
+    cut = _cut("", dangling)
+    cut = replace(cut, reasoning_blocks=blocks,
+                  assistant_message=model_client.with_reasoning_blocks(cut.assistant_message, blocks))
+    _scripted_model(monkeypatch, [cut, _done("smaller pieces")])
+    messages = [{"role": "user", "content": "go"}]
+
+    asyncio.run(_run(_config(tmp_path), messages))
+
+    assert "reasoning_blocks" not in messages[1]
+    assert "reasoning_from" not in messages[1]
+
+
 def test_resume_nudges_are_a_setting(monkeypatch, tmp_path):
     calls = _scripted_model(monkeypatch, [_cut("half")])
     messages = [{"role": "user", "content": "go"}]

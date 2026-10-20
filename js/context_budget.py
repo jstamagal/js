@@ -188,8 +188,13 @@ def estimate_message_tokens(message: Any, *, chars_per_token: float = 4.0) -> in
             total += sum(_part_tokens(part, chars_per_token=chars_per_token) for part in content)
         else:
             total += estimate_text_tokens(content, chars_per_token=chars_per_token)
+        blocks = message.get("reasoning_blocks")
         reasoning = message.get("reasoning_content")
-        if reasoning:
+        if blocks:
+            # Claude's thinking blocks go back whole (text and signature) in
+            # place of the reasoning text.
+            total += estimate_text_tokens(_jsonish(blocks), chars_per_token=chars_per_token)
+        elif reasoning:
             total += estimate_text_tokens(reasoning, chars_per_token=chars_per_token)
         # Signed reasoning replays its provider payload too: a signature, or a
         # Codex item's encrypted content, which runs to kilobytes.
@@ -209,7 +214,12 @@ def estimate_message_tokens(message: Any, *, chars_per_token: float = 4.0) -> in
 
     role = str(getattr(message, "role", ""))
     total = 4 + estimate_text_tokens(role, chars_per_token=chars_per_token)
+    blocks = ((getattr(message, "provider_metadata", None) or {}).get("js") or {}).get("reasoning_blocks")
+    if blocks:
+        total += estimate_text_tokens(_jsonish(blocks), chars_per_token=chars_per_token)
     for part in getattr(message, "parts", None) or []:
+        if blocks and getattr(part, "kind", None) == "reasoning":
+            continue  # sent as the blocks above
         total += _part_tokens(part, chars_per_token=chars_per_token)
     if not getattr(message, "parts", None):
         total += estimate_text_tokens(_jsonish(message), chars_per_token=chars_per_token)

@@ -5,6 +5,8 @@ No network calls. All model interactions use a public ``ai.models.Stream``.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import ai
 import ai.types.events
 import ai.types.messages
@@ -775,6 +777,238 @@ def test_paranoid_mode_extra_sends_the_scrub_header(tmp_path):
         reasoning_effort_override=runtime._UNSET, max_output_override=1, sampling=None,
     )
     assert request.headers == {"X-JS-Scrub": "on"}
+
+
+def _cpa_chunk(delta: dict, finish: str | None = None):
+    from openai.types.chat import ChatCompletionChunk
+
+    return ChatCompletionChunk.model_validate({
+        "id": "c1", "object": "chat.completion.chunk", "created": 0, "model": "claude",
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+    })
+
+
+def test_streamed_reasoning_block_fragments_join_by_index():
+    collected = model_client.ReasoningBlocks()
+    for delta in (
+        {"reasoning_blocks": [{"index": 0, "type": "thinking", "thinking": "Let me "}]},
+        {"reasoning_blocks": [{"index": 0, "type": "thinking", "thinking": "think."}]},
+        {"reasoning_blocks": [{"index": 0, "type": "thinking", "signature": "sig-"},
+                              {"index": 1, "type": "redacted_thinking", "data": "opaque"}]},
+        {"reasoning_blocks": [{"index": 0, "type": "thinking", "signature": "123"}]},
+    ):
+        collected.observe(_cpa_chunk(delta))
+    assert collected.blocks() == [
+        {"type": "thinking", "thinking": "Let me think.", "signature": "sig-123"},
+        {"type": "redacted_thinking", "data": "opaque"},
+    ]
+
+
+def test_a_non_streaming_reply_gives_its_blocks_whole():
+    collected = model_client.ReasoningBlocks()
+    collected.observe({"choices": [{"message": {"content": "hi", "reasoning_blocks": [
+        {"index": 0, "type": "thinking", "thinking": "t", "signature": "s"}]}}]})
+    assert collected.blocks() == [{"type": "thinking", "thinking": "t", "signature": "s"}]
+
+
+async def _wire_messages(protocol, history: list[dict], chunks=()):
+    sent = {}
+
+    async def create(**kwargs):
+        sent.update(kwargs)
+
+        async def gen():
+            for chunk in chunks:
+                yield chunk
+        return gen()
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    model = ai.Model(id="claude", provider=ai.get_provider("openai", base_url="http://x/v1", api_key="k"))
+    messages = model_client.history_to_ai_messages("sys", history, provider_id=None, model_id="claude")
+    async for _event in protocol.stream(client, model, messages, provider="openai"):
+        pass
+    return sent["messages"]
+
+
+_BLOCKS = [{"type": "thinking", "thinking": "plan", "signature": "sig"}]
+_FROM = {"provider": None, "model": "claude"}
+_HISTORY = [
+    {"role": "user", "content": "go"},
+    {"role": "assistant", "content": "", "reasoning_content": "plan", "reasoning_blocks": _BLOCKS,
+     "reasoning_from": _FROM,
+     "tool_calls": [{"id": "t1", "type": "function", "function": {"name": "read", "arguments": "{}"}}]},
+    {"role": "tool", "tool_call_id": "t1", "name": "read", "content": "ok"},
+]
+
+
+def test_a_cpa_route_sends_stored_blocks_back_instead_of_reasoning_content():
+    import asyncio
+
+    sent = asyncio.run(_wire_messages(model_client._ReasoningContentProtocol(reasoning_blocks=True), _HISTORY))
+    assistant = next(m for m in sent if m["role"] == "assistant")
+    assert assistant["reasoning_blocks"] == _BLOCKS
+    assert "reasoning_content" not in assistant and "reasoning" not in assistant
+
+
+def test_blocks_are_never_sent_off_cpa():
+    import asyncio
+
+    sent = asyncio.run(_wire_messages(model_client._ReasoningContentProtocol(), _HISTORY))
+    assistant = next(m for m in sent if m["role"] == "assistant")
+    assert "reasoning_blocks" not in assistant
+    assert assistant["reasoning_content"] == "plan"
+
+
+def test_only_a_cliproxyapi_route_turns_block_echo_on():
+    cpa = model_client.resolve_model("claude", provider_id="cliproxyapi",
+                                      provider_base_url="http://vader:8999/v1", provider_api_key="k")
+    local = model_client.resolve_model("m", provider_id="ollama",
+                                        provider_base_url="http://localhost:11434/v1", provider_api_key="k")
+    assert cpa.provider.protocol.reasoning_blocks is True
+    assert getattr(local.provider.protocol, "reasoning_blocks", False) is False
+
+
+def test_the_reply_blocks_reach_the_stream_result(monkeypatch):
+    chunks = [
+        _cpa_chunk({"content": "hi", "reasoning_blocks": [{"index": 0, "type": "thinking", "thinking": "x"}]}),
+        _cpa_chunk({"reasoning_blocks": [{"index": 0, "type": "thinking", "signature": "s"}]}, finish="stop"),
+    ]
+
+    async def create(**kwargs):
+        async def gen():
+            for chunk in chunks:
+                yield chunk
+        return gen()
+
+    real_client = model_client._sdk_client
+    model = model_client.resolve_model("claude", provider_id="cliproxyapi",
+                                       provider_base_url="http://vader:8999/v1", provider_api_key="k")
+    sdk = real_client(model)
+    monkeypatch.setattr(sdk.chat.completions, "create", create)
+    monkeypatch.setattr(model_client, "resolve_model", lambda *a, **k: model)
+    result = model_client.stream_model(
+        model_id="claude", provider_id="cliproxyapi", provider_base_url="http://vader:8999/v1",
+        provider_api_key="k", messages=[ai.user_message("hi")], tools=None, max_output_tokens=None,
+        reasoning_effort=None, on_text=lambda _c: None,
+    )
+    assert result.reasoning_blocks == [{"type": "thinking", "thinking": "x", "signature": "s"}]
+
+
+def test_a_turn_stores_the_reply_blocks_on_its_assistant_message(monkeypatch, tmp_path):
+    import ai.types.usage
+
+    from js import runtime
+    from test_lazy_tool_discovery import _cfg
+
+    blocks = [{"type": "thinking", "thinking": "x", "signature": "s"}]
+
+    async def fake_stream(**_kwargs):
+        return model_client.ModelStreamResult(
+            text="done", tool_calls=[], reasoning="x",
+            usage=ai.types.usage.Usage(input_tokens=1, output_tokens=1), finish_reason="stop",
+            assistant_message=model_client.with_reasoning_blocks(ai.assistant_message("done"), blocks),
+            reasoning_blocks=blocks,
+        )
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", fake_stream)
+    messages = [{"role": "user", "content": "go"}]
+    runtime.run_turn(_cfg(tmp_path), "sys", messages, runtime.Telemetry(None), suppress_output=True)
+    assert messages[-1]["reasoning_blocks"] == blocks
+
+
+def test_compaction_drops_reasoning_blocks_with_the_signed_reasoning():
+    from js import memory
+
+    messages = [{"role": "assistant", "content": "a", "reasoning_content": "x",
+                 "reasoning_blocks": [{"type": "thinking", "thinking": "x", "signature": "s"}]}]
+    assert memory.drop_signed_reasoning(messages) == 1
+    assert messages == [{"role": "assistant", "content": "a", "reasoning_content": "x"}]
+
+
+def test_dropping_signed_reasoning_leaves_no_blocks_to_replay(monkeypatch, tmp_path):
+    import ai.types.usage
+
+    from js import memory, runtime
+    from test_lazy_tool_discovery import _cfg
+
+    blocks = [{"type": "thinking", "thinking": "x", "signature": "s"}]
+
+    async def fake_stream(**_kwargs):
+        return model_client.ModelStreamResult(
+            text="done", tool_calls=[], reasoning="x",
+            usage=ai.types.usage.Usage(input_tokens=1, output_tokens=1), finish_reason="stop",
+            assistant_message=model_client.with_reasoning_blocks(ai.assistant_message("done"), blocks),
+            reasoning_blocks=blocks,
+        )
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", fake_stream)
+    messages = [{"role": "user", "content": "go"}]
+    runtime.run_turn(_cfg(tmp_path), "sys", messages, runtime.Telemetry(None), suppress_output=True)
+    memory.drop_signed_reasoning(messages)
+
+    rebuilt = model_client.history_to_ai_messages("sys", messages)
+    assert all(model_client._stored_reasoning_blocks(m) is None for m in rebuilt)
+
+
+def test_blocks_go_back_on_their_own_message_when_answers_repeat():
+    import asyncio
+
+    history = [
+        {"role": "user", "content": "one"},
+        {"role": "assistant", "content": "Done.", "reasoning_content": "first"},
+        {"role": "user", "content": "two"},
+        {"role": "assistant", "content": "Done.", "reasoning_content": "second", "reasoning_blocks": _BLOCKS,
+         "reasoning_from": _FROM},
+        {"role": "user", "content": "three"},
+    ]
+    sent = asyncio.run(_wire_messages(model_client._ReasoningContentProtocol(reasoning_blocks=True), history))
+    first, second = [m for m in sent if m["role"] == "assistant"]
+    assert "reasoning_blocks" not in first
+    assert second["reasoning_blocks"] == _BLOCKS
+
+
+def test_reasoning_blocks_count_in_both_token_estimates():
+    from js import context_budget
+
+    blocks = [{"type": "thinking", "thinking": "t" * 4000, "signature": "s" * 40000}]
+    plain = {"role": "assistant", "content": "done", "reasoning_content": "t" * 4000}
+    signed = {**plain, "reasoning_blocks": blocks}
+
+    history_plain = context_budget.estimate_message_tokens(plain)
+    history_signed = context_budget.estimate_message_tokens(signed)
+    sdk_plain, = model_client.history_to_ai_messages("", [plain])
+    sdk_signed = model_client.with_reasoning_blocks(sdk_plain, blocks)
+
+    assert history_signed >= history_plain + 10000
+    assert (context_budget.estimate_message_tokens(sdk_signed)
+            >= context_budget.estimate_message_tokens(sdk_plain) + 10000)
+
+
+def test_blocks_go_back_only_to_the_model_that_wrote_them(monkeypatch, tmp_path):
+    import ai.types.usage
+
+    from js import runtime
+    from test_lazy_tool_discovery import _cfg
+
+    blocks = [{"type": "thinking", "thinking": "x", "signature": "s"}]
+
+    async def fake_stream(**_kwargs):
+        return model_client.ModelStreamResult(
+            text="done", tool_calls=[], reasoning="x",
+            usage=ai.types.usage.Usage(input_tokens=1, output_tokens=1), finish_reason="stop",
+            assistant_message=model_client.with_reasoning_blocks(ai.assistant_message("done"), blocks),
+            reasoning_blocks=blocks,
+        )
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", fake_stream)
+    cfg = _cfg(tmp_path)
+    messages = [{"role": "user", "content": "go"}]
+    runtime.run_turn(cfg, "sys", messages, runtime.Telemetry(None), suppress_output=True)
+
+    same = model_client.history_to_ai_messages("", messages, provider_id=cfg.provider_id, model_id=cfg.model)
+    other = model_client.history_to_ai_messages("", messages, provider_id=cfg.provider_id, model_id="other-model")
+    assert model_client._stored_reasoning_blocks(same[-1]) == blocks
+    assert model_client._stored_reasoning_blocks(other[-1]) is None
 
 
 def _sent_headers(monkeypatch, *, provider_id, base, headers):

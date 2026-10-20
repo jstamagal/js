@@ -148,8 +148,8 @@ def balance_orphaned_tool_calls(messages: list[dict]) -> list[dict]:
 
 # An assistant message's reasoning: the text, and the signed parts with the
 # provider and model they came from (`model_client.signed_reasoning_parts`).
-_REASONING_KEYS = frozenset({"reasoning_content", "reasoning_parts", "reasoning_from"})
-SIGNED_REASONING_KEYS = ("reasoning_parts", "reasoning_from")
+_REASONING_KEYS = frozenset({"reasoning_content", "reasoning_parts", "reasoning_from", "reasoning_blocks"})
+SIGNED_REASONING_KEYS = ("reasoning_parts", "reasoning_from", "reasoning_blocks")
 
 
 def drop_signed_reasoning(messages: list[dict], start: int = 0) -> int:

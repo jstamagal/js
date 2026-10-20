@@ -32,6 +32,7 @@ import ai.types.tools
 import ai.types.usage
 import ai.models
 from ai.models.core import params as ai_params
+from ai.providers import history_utils
 from ai.providers.openai.protocol import OpenAIChatCompletionsProtocol
 
 
@@ -59,6 +60,9 @@ class ModelStreamResult:
     elapsed_s: float = 0.0
     provider_metadata: dict[str, Any] | None = None
     incomplete_reason: str | None = None
+    # Claude's thinking blocks as CLIProxyAPI returns them on the OpenAI wire
+    # (`reasoning_blocks`), whole and in order; None when the reply had none.
+    reasoning_blocks: list[dict[str, Any]] | None = None
 
 
 class FriendlyProviderError(routing.ProviderNotLoggedInError):
@@ -199,25 +203,152 @@ def incomplete_finish_reason(reason: str) -> str:
     return f"incomplete:{reason}"
 
 
+# Where js keeps an assistant message's `reasoning_blocks` on the SDK message.
+JS_METADATA_KEY = "js"
+_REASONING_BLOCK_TYPES = frozenset({"thinking", "redacted_thinking"})
+_REASONING_BLOCK_STRINGS = ("thinking", "signature", "data")
+
+
+def valid_reasoning_blocks(blocks: Any) -> list[dict[str, Any]] | None:
+    """``blocks`` when it is a non-empty list of thinking blocks, else None."""
+    if not isinstance(blocks, list) or not blocks:
+        return None
+    if not all(isinstance(b, dict) and b.get("type") in _REASONING_BLOCK_TYPES for b in blocks):
+        return None
+    return blocks
+
+
+def _field(obj: Any, name: str) -> Any:
+    """``obj[name]`` for a dict, else the attribute or the pydantic extra."""
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return obj.get(name)
+    value = getattr(obj, name, None)
+    if value is None:
+        extra = getattr(obj, "model_extra", None)
+        if isinstance(extra, dict):
+            value = extra.get(name)
+    return value
+
+
+class ReasoningBlocks:
+    """Collects `reasoning_blocks` from a chat-completions reply: fragments
+    in stream deltas joined by index like tool-call deltas, or the whole list
+    on a non-streaming message."""
+
+    def __init__(self) -> None:
+        self._parts: dict[int, dict[str, Any]] = {}
+        self._whole: list[dict[str, Any]] | None = None
+
+    def observe(self, chunk: Any) -> None:
+        choices = _field(chunk, "choices")
+        if not choices:
+            return
+        choice = choices[0]
+        for fragment in _field(_field(choice, "delta"), "reasoning_blocks") or ():
+            self._add(fragment)
+        whole = _field(_field(choice, "message"), "reasoning_blocks")
+        if isinstance(whole, list):
+            self._whole = [{k: v for k, v in dict(b).items() if k != "index"} for b in whole if isinstance(b, dict)]
+
+    def _add(self, fragment: Any) -> None:
+        if not isinstance(fragment, dict):
+            return
+        index = fragment.get("index", 0)
+        block = self._parts.setdefault(index if isinstance(index, int) else 0, {})
+        for key, value in fragment.items():
+            if key == "index":
+                continue
+            if key in _REASONING_BLOCK_STRINGS and isinstance(value, str):
+                block[key] = block.get(key, "") + value
+            else:
+                block.setdefault(key, value)
+
+    def blocks(self) -> list[dict[str, Any]] | None:
+        if self._whole is not None:
+            return valid_reasoning_blocks(self._whole)
+        return valid_reasoning_blocks([self._parts[i] for i in sorted(self._parts)])
+
+
+# The collector of the `stream_model_async` call running in this context.
+_reasoning_blocks_sink: contextvars.ContextVar[ReasoningBlocks | None] = contextvars.ContextVar(
+    "js_reasoning_blocks_sink", default=None,
+)
+
+
+class _ObservedStream:
+    """An SDK chunk stream that shows each chunk to ``sink`` on the way past."""
+
+    def __init__(self, stream: Any, sink: ReasoningBlocks) -> None:
+        self._stream = stream
+        self._sink = sink
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
+
+    async def __aiter__(self):
+        async for chunk in self._stream:
+            self._sink.observe(chunk)
+            yield chunk
+
+
+def with_reasoning_blocks(message: ai.messages.Message, blocks: list[dict[str, Any]]) -> ai.messages.Message:
+    """``message`` carrying ``blocks`` for a later request to send back."""
+    metadata = dict(getattr(message, "provider_metadata", None) or {})
+    metadata[JS_METADATA_KEY] = {**dict(metadata.get(JS_METADATA_KEY) or {}), "reasoning_blocks": blocks}
+    return message.model_copy(update={"provider_metadata": metadata})
+
+
+def _stored_reasoning_blocks(message: ai.messages.Message) -> list[dict[str, Any]] | None:
+    metadata = getattr(message, "provider_metadata", None) or {}
+    return valid_reasoning_blocks((metadata.get(JS_METADATA_KEY) or {}).get("reasoning_blocks"))
+
+
 class _ReasoningContentProtocol(OpenAIChatCompletionsProtocol):
     """Adapt the SDK's reasoning field for local/custom chat-completions APIs.
 
     llama.cpp parses ``reasoning_content`` before applying its chat template.
     The client view is per stream; the provider still owns its real SDK client.
+
+    With ``reasoning_blocks`` (a CLIProxyAPI route), an assistant message that
+    carries Claude's thinking blocks sends them back as `reasoning_blocks`
+    instead of `reasoning_content`. Every reply's blocks are collected into
+    the call's `ReasoningBlocks`.
     """
 
     protocol_class_id: Literal["js_reasoning_content"] = "js_reasoning_content"
+    reasoning_blocks: bool = False
 
     def stream(self, client: Any, model: ai.Model, messages: list[ai.messages.Message], **kwargs: Any):
+        # The SDK turns each assistant message the history keeps into one
+        # assistant entry, in order, so the n-th entry is the n-th message.
+        per_assistant: list[list[dict[str, Any]] | None] = []
+        if self.reasoning_blocks:
+            kept, _issues = history_utils.drop_internal(messages)
+            per_assistant = [_stored_reasoning_blocks(m) for m in kept if m.role == "assistant"]
+
         async def create(**api_kwargs: Any):
-            outgoing = []
-            for message in api_kwargs["messages"]:
-                entry = dict(message)
-                if entry.get("role") == "assistant" and "reasoning" in entry:
+            entries = [dict(message) for message in api_kwargs["messages"]]
+            assistants = [entry for entry in entries if entry.get("role") == "assistant"]
+            blocks_by_entry = per_assistant if len(per_assistant) == len(assistants) else []
+            for entry, blocks in zip(assistants, blocks_by_entry or [None] * len(assistants), strict=True):
+                if blocks is not None:
+                    entry["reasoning_blocks"] = blocks
+                    entry.pop("reasoning", None)
+                    entry.pop("reasoning_content", None)
+                elif "reasoning" in entry:
                     entry.setdefault("reasoning_content", entry.pop("reasoning"))
-                outgoing.append(entry)
+            outgoing = entries
             api_kwargs["messages"] = outgoing
-            return await client.chat.completions.create(**api_kwargs)
+            response = await client.chat.completions.create(**api_kwargs)
+            sink = _reasoning_blocks_sink.get()
+            if sink is None:
+                return response
+            if hasattr(response, "__aiter__"):
+                return _ObservedStream(response, sink)
+            sink.observe(response)
+            return response
 
         view = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
         return super().stream(view, model, messages, **kwargs)
@@ -327,7 +458,9 @@ def resolve_model(
             provider_def.local or not provider_def.established
         )
         protocol = (
-            _ReasoningContentProtocol()
+            # Only a CLIProxyAPI route sends `reasoning_blocks`: its plugin
+            # takes them; a direct endpoint would not know the field.
+            _ReasoningContentProtocol(reasoning_blocks=transport == "cliproxyapi")
             if operator_endpoint or transport == "custom_openai" or custom_base
             else OpenAIChatCompletionsProtocol()
         )
@@ -494,7 +627,8 @@ def history_to_ai_messages(
     * ``role == "assistant"`` -> ``ai.assistant_message`` with text,
       reasoning, and tool call parts. Signed reasoning (``reasoning_parts``)
       replays whole, signatures included, when the record's
-      ``reasoning_from`` is this ``provider_id`` and ``model_id``.
+      ``reasoning_from`` is this ``provider_id`` and ``model_id``; so do
+      Claude's thinking blocks (``reasoning_blocks``).
     * ``role == "tool"`` -> ``ai.tool_message`` with a ``ToolResultPart``.
     """
     provider = providers.get_provider(provider_id)
@@ -550,7 +684,17 @@ def history_to_ai_messages(
             assistant = ai.assistant_message(*parts)
             provider_metadata = msg.get("provider_metadata")
             if isinstance(provider_metadata, dict):
-                assistant = assistant.model_copy(update={"provider_metadata": provider_metadata})
+                # The record's top-level reasoning_blocks is the one copy js
+                # replays; a js entry here is never read.
+                provider_metadata = {k: v for k, v in provider_metadata.items() if k != JS_METADATA_KEY}
+                if provider_metadata:
+                    assistant = assistant.model_copy(update={"provider_metadata": provider_metadata})
+            # Claude's thinking blocks are signed: they go back only to the
+            # provider and model that wrote them, as signed reasoning parts do.
+            blocks = valid_reasoning_blocks(msg.get("reasoning_blocks"))
+            if blocks is not None and reasoning.replays_signed_reasoning(
+                    msg.get("reasoning_from"), provider_id, model_id):
+                assistant = with_reasoning_blocks(assistant, blocks)
             out.append(assistant)
             continue
         if role == "tool":
@@ -1449,14 +1593,21 @@ async def _stream_with_model(
 
     reasoning_token = _reasoning_sink.set(on_reasoning)
     idle_token = _idle_seconds.set(stream_idle_seconds)
+    collected = ReasoningBlocks()
+    blocks_token = _reasoning_blocks_sink.set(collected)
     try:
-        return await _stream_async(
+        result = await _stream_async(
             model=model,
             messages=messages,
             tools=tools,
             params=params,
             on_text=on_text,
         )
+        blocks = collected.blocks()
+        if blocks is None:
+            return result
+        return replace(result, reasoning_blocks=blocks,
+                       assistant_message=with_reasoning_blocks(result.assistant_message, blocks))
     except routing.ProviderNotLoggedInError:
         raise
     except Exception as exc:
@@ -1470,6 +1621,7 @@ async def _stream_with_model(
             raise dropped from exc
         raise
     finally:
+        _reasoning_blocks_sink.reset(blocks_token)
         _idle_seconds.reset(idle_token)
         _reasoning_sink.reset(reasoning_token)
         stream_transport.reset_call(net_token)

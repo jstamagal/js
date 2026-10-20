@@ -1987,7 +1987,14 @@ def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, 
         ]
     if result.reasoning:
         record["reasoning_content"] = result.reasoning
-    if not isinstance(provider_metadata, dict):
+    # A rewritten reply keeps no signed reasoning, so no thinking blocks.
+    if getattr(result, "reasoning_blocks", None) and assistant_message_override is None:
+        record["reasoning_blocks"] = result.reasoning_blocks
+    if isinstance(provider_metadata, dict):
+        # reasoning_blocks are recorded once, at the top level above.
+        provider_metadata = {k: v for k, v in provider_metadata.items()
+                             if k != model_client.JS_METADATA_KEY} or None
+    else:
         provider_metadata = None
     incomplete_reason = incomplete_reason or model_client.incomplete_reason_from_metadata(provider_metadata)
     if provider_metadata:
@@ -2008,9 +2015,12 @@ def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, 
     )
     if signed_reasoning:
         record["reasoning_parts"] = signed_reasoning
+    if signed_reasoning or record.get("reasoning_blocks"):
         record["reasoning_from"] = reasoning_rules.reasoning_origin(request.provider_id, request.model)
-    if provider_metadata and not getattr(assistant_message, "provider_metadata", None):
-        assistant_message = assistant_message.model_copy(update={"provider_metadata": provider_metadata})
+    existing_metadata = getattr(assistant_message, "provider_metadata", None) or {}
+    if provider_metadata and not set(existing_metadata) - {model_client.JS_METADATA_KEY}:
+        assistant_message = assistant_message.model_copy(
+            update={"provider_metadata": {**provider_metadata, **existing_metadata}})
     convo.ai.append(_sanitize_assistant_message(assistant_message))
     messages.append(memory.note_time(record))
     # Recorded in full now; a later ^C in this turn must not re-append it.
