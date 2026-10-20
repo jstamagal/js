@@ -14,7 +14,6 @@ looked up on the module at each call.
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import time
 from collections.abc import Callable, Iterable
@@ -283,8 +282,7 @@ class ModelCaller:
                         raise
                     delay = wait if wait is not None else _backoff(transport_retries)
                     transport_retries += 1
-                    retry.announce(transport_retries, limits.retry, delay, e)
-                    await asyncio.sleep(delay)
+                    await retry.wait(transport_retries, limits.retry, delay, e)
                 else:
                     telemetry.event("fatal_error", model=model, error=f"{type(e).__name__}: {e}")
                     self._fail(e, retryable=False)

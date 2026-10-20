@@ -337,6 +337,12 @@ STREAM_IDLE_TIMEOUT
     aborted and retried under RETRY_COUNT_MAX. SSE keep-alive comments count
     as bytes. 0 waits forever.
 
+PROGRESS_INTERVAL
+    js -p: after this many seconds with nothing shown, a line on stderr
+    names what runs now and for how long: a tool call, a model call, or a
+    wait to retry one. It repeats after each further stretch of silence.
+    Not written under --json. 0 turns it off.
+
 OUTPUT_TOKENS_RETRY_MAX
     A reply cut off by its output-token cap is sent again once with this
     cap, when it is larger than the one used and not above the model's known

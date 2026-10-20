@@ -230,6 +230,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("RETRY_COUNT_MAX", "int", group="runtime"),
     SettingSpec("RETRY_WAIT_MAX", "float", group="runtime"),
     SettingSpec("STREAM_IDLE_TIMEOUT", "float", group="runtime"),
+    SettingSpec("PROGRESS_INTERVAL", "float", group="runtime"),
     SettingSpec("OUTPUT_TOKENS_RETRY_MAX", "int", group="runtime"),
     SettingSpec("OUTPUT_RESUMES_MAX", "int", group="runtime"),
     SettingSpec("STEER_MODE", "str", group="runtime"),
@@ -368,7 +369,7 @@ def parse_bool(raw: str) -> bool | None:
 
 
 _NONNEGATIVE_KNOBS = frozenset({
-    "RETRY_COUNT_MAX", "RETRY_WAIT_MAX", "STREAM_IDLE_TIMEOUT",
+    "RETRY_COUNT_MAX", "RETRY_WAIT_MAX", "STREAM_IDLE_TIMEOUT", "PROGRESS_INTERVAL",
     "OUTPUT_TOKENS_RETRY_MAX", "OUTPUT_RESUMES_MAX",
 })
 

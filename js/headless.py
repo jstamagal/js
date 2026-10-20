@@ -7,11 +7,18 @@ stderr, so stdout carries only these lines.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import math
+import sys
 import threading
+import time
+from collections.abc import Iterator
 from typing import Any, TextIO
 
-from .toolkit.core import ToolResult
+from . import messages as msgs
+from . import activity
+from .toolkit.core import ToolResult, TurnStatus
 
 SCHEMA_VERSION = 1
 SUMMARY_CHARS = 200
@@ -133,3 +140,106 @@ class LastLine:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.target, name)
+
+
+def _elapsed(seconds: float) -> str:
+    whole = int(seconds)
+    return f"{whole}s" if whole < 60 else f"{whole // 60}m {whole % 60:02d}s"
+
+
+# `time.monotonic()` of the last write through a `watch_output` stream.
+_last_output = 0.0
+
+
+class _Clocked:
+    """A stream that stamps `_last_output` on every write."""
+
+    def __init__(self, stream: TextIO) -> None:
+        self._stream = stream
+
+    def write(self, text: str) -> int:
+        global _last_output
+        if text:
+            _last_output = time.monotonic()
+        return self._stream.write(text)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
+
+
+@contextlib.contextmanager
+def watch_output() -> Iterator[None]:
+    """Put a `_Clocked` stream in front of sys.stdout and sys.stderr. The
+    headless entry point does this first, so every tee, trace sink and
+    display that later takes either stream writes through it."""
+    stdout, stderr = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = _Clocked(stdout), _Clocked(stderr)
+    try:
+        yield
+    finally:
+        sys.stdout, sys.stderr = stdout, stderr
+
+
+def last_output() -> float:
+    """When anything was last written to a watched stdout or stderr."""
+    return _last_output
+
+
+class Progress:
+    """`js -p`: a stderr line once PROGRESS_INTERVAL seconds pass with nothing
+    written to stdout or stderr (`watch_output`), naming what runs now (a
+    tool call, a model call, a wait before a model call is sent again) and for
+    how long, and again after each further interval of silence. Silence
+    counts across one call ending and the next starting."""
+
+    def __init__(self, status: TurnStatus, interval: float, *, out: TextIO | None = None) -> None:
+        self.status = status
+        self.interval = interval
+        self.out = out if out is not None else sys.stderr
+        self._since = time.monotonic()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def line(self, now: float | None = None) -> str | None:
+        """What runs now as a progress line, or None when nothing does."""
+        now = time.monotonic() if now is None else now
+        running = activity.running()
+        tools = [item for item in running if item.kind == activity.TOOL]
+        if tools:
+            elapsed = _elapsed(now - tools[0].started)
+            if len(tools) > 1:
+                return msgs.PROGRESS_TOOLS.line(tool=tools[0].name, extra=len(tools) - 1, elapsed=elapsed)
+            return msgs.PROGRESS_TOOL.line(tool=tools[0].name, elapsed=elapsed)
+        waits = [item for item in running if item.kind == activity.RETRY]
+        if waits:
+            left = max(0, math.ceil(waits[0].started + waits[0].seconds - now))
+            return msgs.PROGRESS_RETRY.line(seconds=left)
+        if running:
+            return msgs.PROGRESS_MODEL.line(elapsed=_elapsed(now - running[0].started),
+                                            tokens=self.status.output_tokens)
+        return None
+
+    def tick(self, now: float | None = None) -> None:
+        now = time.monotonic() if now is None else now
+        if now - max(self._since, last_output()) < self.interval:
+            return
+        text = self.line(now)
+        if text is not None:
+            self.out.write(text + "\n")
+            self.out.flush()
+            self._since = now
+
+    def _run(self) -> None:
+        while not self._stop.wait(min(self.interval, 1.0)):
+            self.tick()
+
+    def __enter__(self) -> Progress:
+        if self.interval > 0:
+            self._thread = threading.Thread(target=self._run, name="js-progress", daemon=True)
+            self._thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1)

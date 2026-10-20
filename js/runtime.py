@@ -20,6 +20,7 @@ import time
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from . import activity
 from . import events as event_mod
 from . import model_client, memory
 import ai
@@ -1139,7 +1140,8 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
     try:
         with call_scope(call_id), registry_scope(
                 active_registry, _cell_call_observer(telemetry, trace, context)):
-            result = call_tool(tool, args, context)
+            with activity.tool_call(tool.name):
+                result = call_tool(tool, args, context)
         telemetry.event("tool_ok", tool=tool.name, latency_ms=int((time.time() - started) * 1000))
     except Exception as e:  # noqa: BLE001
         telemetry.event("tool_exception", tool=tool.name,
@@ -1408,7 +1410,8 @@ async def _dispatch_async_tool(
     try:
         with call_scope(pc.id), registry_scope(
                 registry, _cell_call_observer(telemetry, trace, tool_context)):
-            result = await call_tool_async(tool, args, tool_context)
+            with activity.tool_call(tool.name):
+                result = await call_tool_async(tool, args, tool_context)
         telemetry.event("tool_ok", tool=tool.name, latency_ms=int((time.time() - started) * 1000))
     except asyncio.CancelledError:
         raise

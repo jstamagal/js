@@ -24,7 +24,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 import ai
 import httpx2
 
-from . import codex_auth, codex_provider, messages as msgs, providers, reasoning, retry, routing, stream_transport, tool_args
+from . import codex_auth, codex_provider, messages as msgs, activity, providers, reasoning, retry, routing, stream_transport, tool_args
 from .sampling import Sampling
 import ai.types.messages
 import ai.types.tools
@@ -1040,6 +1040,7 @@ def accepts_prompt_cache_key(
     return provider_name in _CACHE_KEY_VENDORS or sdk_provider_name in _CACHE_KEY_VENDORS
 
 
+@activity.tracked
 async def stream_model_async(
     *,
     model_id: str,

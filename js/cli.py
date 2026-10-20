@@ -2550,8 +2550,15 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     # -d shows the conversation as the REPL draws it: each user line, typed or
     # fired from the agent's files, ahead of the answer it got.
     echo_user = display_mod.echo_user if debug else None
+    progress_interval = 0.0 if events is not None else float(
+        settings.knob(getattr(cfg, "settings", None), "PROGRESS_INTERVAL") or 0)
 
     def run() -> None:
+        # Startup exchanges are model turns too, so progress covers them.
+        with headless.Progress((tool_context or runtime.T.STOCK_CONTEXT).turn_status, progress_interval):
+            turns()
+
+    def turns() -> None:
         nonlocal before_len, user_started
         if prompt_spec is not None and prompt_spec.exchanges and not messages:
             model_client.run_owning_loop(agent_messages.initialize(
@@ -4601,19 +4608,20 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
             and os.environ.get("JS_SESSION") is None
         )
         run = _run_prompt_json if args.json else _run_prompt
-        result = run(prompt, model=args.model, debug=args.debug, debug_file=args.debug_file,
-                     agent=args.agent, session=args.session, save=not args.no_save,
-                     caller_key=args.session_key, announce_generated=generated_session,
-                     reasoning=args.reasoning, maxout=args.max_out,
-                     show_continue=not args.quiet,
-                     extras=args.extras,
-                     ignore_local_config=args.ignore_local,
-                     ignore_global_config=args.ignore_global,
-                     files=args.files,
-                     stdin_attachment=stdin_attachment,
-                     presets=presets,
-                     stats_json=args.stats_json, stats_csv=args.stats_csv,
-                     swarm=args.swarm)
+        with headless.watch_output():
+            result = run(prompt, model=args.model, debug=args.debug, debug_file=args.debug_file,
+                         agent=args.agent, session=args.session, save=not args.no_save,
+                         caller_key=args.session_key, announce_generated=generated_session,
+                         reasoning=args.reasoning, maxout=args.max_out,
+                         show_continue=not args.quiet,
+                         extras=args.extras,
+                         ignore_local_config=args.ignore_local,
+                         ignore_global_config=args.ignore_global,
+                         files=args.files,
+                         stdin_attachment=stdin_attachment,
+                         presets=presets,
+                         stats_json=args.stats_json, stats_csv=args.stats_csv,
+                         swarm=args.swarm)
         if args.no_save:
             msgs.warn(msgs.NOT_SAVED_NO_RESUME)
         return result

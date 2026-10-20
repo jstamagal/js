@@ -202,3 +202,255 @@ def test_piped_stdin_with_json_is_a_headless_run(monkeypatch, capsys):
     assert code == 0
     assert [e["type"] for e in events][0] == "session"
     assert events[-1]["type"] == "result" and events[-1]["text"] == "piped answer"
+
+
+def _progress_lines(err: str) -> list[str]:
+    from js import messages as msgs
+
+    lead = msgs.PROGRESS_MODEL.template.split("{")[0]
+    return [line for line in err.splitlines() if lead in line]
+
+
+def _progress(interval=30):
+    import io
+    import time
+
+    from js import headless
+    from js.toolkit.core import TurnStatus
+
+    out = io.StringIO()
+    progress = headless.Progress(TurnStatus(), interval, out=out)
+    return progress, out, time.monotonic()
+
+
+def test_progress_waits_for_an_interval_of_silence_then_names_what_runs():
+    from js import activity
+
+    progress, out, start = _progress()
+    with activity.model_call():
+        progress.tick(start + 10)
+        assert not out.getvalue()
+        progress.tick(start + 31)
+    assert out.getvalue()
+
+
+def test_silence_counts_across_model_calls_and_tools_that_each_end_quickly():
+    from js import activity
+
+    progress, out, start = _progress()
+    with activity.model_call():
+        progress.tick(start + 10)
+    with activity.tool_call("shell"):
+        progress.tick(start + 20)
+    with activity.model_call():
+        progress.tick(start + 31)
+
+    assert out.getvalue()
+
+
+def test_progress_names_the_tool_running_now_not_one_that_finished():
+    from js import activity
+
+    progress, _out, _start = _progress()
+    with activity.tool_call("read"):
+        pass
+    with activity.tool_call("shell"):
+        line = progress.line()
+
+    assert "shell" in line and "read" not in line
+
+
+def test_a_wait_before_a_model_call_is_sent_again_is_progress():
+    from js import activity
+
+    progress, _out, _start = _progress()
+    with activity.retry_wait(90):
+        line = progress.line()
+
+    assert line is not None and "90" in line
+
+
+def _record_retry_waits(monkeypatch) -> list[str]:
+    from js import activity, retry
+
+    seen: list[str] = []
+
+    async def sleep(_delay):
+        seen.extend(item.kind for item in activity.running())
+
+    monkeypatch.setattr(retry, "_sleep", sleep)
+    return seen
+
+
+def test_retry_holds_its_wait_as_activity(monkeypatch):
+    import asyncio
+
+    import ai
+
+    from js import activity, retry
+
+    seen = _record_retry_waits(monkeypatch)
+    attempts = iter([ai.ProviderAPIError("busy", is_retryable=True), None])
+
+    async def request():
+        failure = next(attempts)
+        if failure is not None:
+            raise failure
+        return "ok"
+
+    asyncio.run(retry.call(request, retry.Budget(attempts=2, max_wait=0)))
+
+    assert activity.RETRY in seen
+
+
+def test_a_one_shot_turns_retry_wait_is_activity(monkeypatch):
+    import ai
+
+    from js import activity
+
+    seen = _record_retry_waits(monkeypatch)
+    replies = iter([ai.ProviderAPIError("busy", is_retryable=True), _reply("done")])
+
+    def stream(**kw):
+        reply = next(replies)
+        if isinstance(reply, BaseException):
+            raise reply
+        return reply
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+
+    assert cli.main(["-p", "hi", "--no-save"]) == 0
+    assert activity.RETRY in seen
+
+
+def test_a_write_to_watched_stdout_or_stderr_starts_the_silence_over(monkeypatch):
+    import io
+    import sys
+    import time
+
+    from js import activity, headless
+
+    for name in ("stdout", "stderr"):
+        monkeypatch.setattr(sys, "stdout", io.StringIO())
+        monkeypatch.setattr(sys, "stderr", io.StringIO())
+        progress, out, _start = _progress()
+        with headless.watch_output(), activity.model_call():
+            time.sleep(0.2)
+            print("trace line", file=getattr(sys, name))
+            progress.tick(time.monotonic() + 29.9)
+        assert not out.getvalue(), name
+
+
+def test_a_trace_line_between_calls_keeps_a_traced_one_shot_quiet(monkeypatch, capsys):
+    """Two model calls that together outlast the interval, with the tool's
+    trace line between them: the trace is a sign of life."""
+
+    monkeypatch.setenv("JS_PROGRESS_INTERVAL", "0.5")
+    monkeypatch.setenv("JS_TRACE", "1")
+    import asyncio
+
+    replies = iter([_reply("", calls=[("c1", "shell", json.dumps({"command": "echo hi"}))]), _reply("done")])
+
+    async def stream(model, **kw):
+        await asyncio.sleep(0.35)
+        return next(replies)
+
+    monkeypatch.setattr(runtime.model_client, "resolve_model", lambda *a, **k: type("M", (), {"provider": _Provider()})())
+    monkeypatch.setattr(runtime.model_client, "_stream_with_model", stream)
+
+    assert cli.main(["-p", "hi", "--no-save"]) == 0
+    assert not _progress_lines(capsys.readouterr().err)
+
+
+def test_a_dispatched_tool_call_is_activity_while_it_runs(tmp_path):
+    from js import activity
+    from js.toolkit.core import Tool, ToolContext
+    from js.toolkit.registry import ToolRegistry
+
+    seen = []
+
+    def probe(context=None):
+        seen.extend((item.kind, item.name) for item in activity.running())
+        return "ok"
+
+    registry = ToolRegistry((Tool("probe", "test", probe, {}),), {})
+    runtime._dispatch("probe", "{}", runtime.Telemetry(debug_log=None), 10_000, registry=registry,
+                      tool_context=ToolContext(cwd=tmp_path))
+
+    assert (activity.TOOL, "probe") in seen
+
+
+def test_hidden_reasoning_does_not_count_as_a_sign_of_life():
+    """Tokens that reach no stream leave the run looking hung."""
+    from js import activity
+
+    progress, out, start = _progress()
+    with activity.model_call():
+        progress.status.stream("hidden reasoning")
+        progress.tick(start + 31)
+
+    assert out.getvalue()
+
+
+class _Provider:
+    async def aclose(self):
+        return None
+
+
+def _slow_model(monkeypatch, *, slow_calls=(1,)):
+    """The real stream_model_async over a stubbed provider: call N sleeps
+    when N is in `slow_calls`."""
+    import asyncio
+
+    calls = []
+
+    async def stream(model, **kw):
+        calls.append(kw)
+        if len(calls) in slow_calls:
+            await asyncio.sleep(0.4)
+        return _reply("done")
+
+    monkeypatch.setattr(runtime.model_client, "resolve_model", lambda *a, **k: type("M", (), {"provider": _Provider()})())
+    monkeypatch.setattr(runtime.model_client, "_stream_with_model", stream)
+
+
+def test_any_model_call_counts_as_activity_as_a_compaction_summary_does(monkeypatch):
+    """Compaction and subagents call the model outside the turn's own call."""
+    import io
+
+    from js import headless
+    from js.toolkit.core import TurnStatus
+
+    _slow_model(monkeypatch)
+    out = io.StringIO()
+    with headless.Progress(TurnStatus(), 0.05, out=out):
+        runtime.model_client.run_owning_loop(runtime.model_client.stream_model_async(
+            model_id="m", provider_id="p", provider_base_url=None, provider_api_key=None,
+            messages=[], tools=None, max_output_tokens=None, reasoning_effort=None, on_text=lambda _t: None))
+
+    assert out.getvalue()
+
+
+def test_a_slow_one_shot_model_call_writes_progress_to_stderr(monkeypatch, capsys):
+    monkeypatch.setenv("JS_PROGRESS_INTERVAL", "0.05")
+    _slow_model(monkeypatch)
+
+    code = cli.main(["-p", "hi", "--no-save"])
+
+    assert code == 0
+    assert _progress_lines(capsys.readouterr().err)
+
+
+def test_a_slow_startup_exchange_writes_progress_to_stderr(monkeypatch, capsys, tmp_path):
+    agent = tmp_path / ".js" / "agents" / "opener"
+    agent.mkdir(parents=True)
+    (agent / "01-prompt.md").write_text("You answer.", encoding="utf-8")
+    (agent / "01-user.md").write_text("opening", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("JS_PROGRESS_INTERVAL", "0.05")
+    _slow_model(monkeypatch)
+
+    code = cli.main(["-p", "hi", "--no-save", "--agent", "opener"])
+
+    assert code == 0
+    assert _progress_lines(capsys.readouterr().err)

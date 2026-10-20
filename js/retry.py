@@ -20,6 +20,7 @@ from typing import Any
 
 import ai
 
+from . import activity
 from . import messages as msgs
 from . import settings as _settings
 from . import stream_transport
@@ -117,6 +118,17 @@ def announce(n: int, budget: Budget, delay: float, exc: BaseException) -> None:
                              failure=stream_transport.describe_failure(exc)))
 
 
+_sleep = asyncio.sleep
+
+
+async def wait(n: int, budget: Budget, delay: float, exc: BaseException) -> None:
+    """Announce retry `n` and wait `delay` seconds before it, held as a
+    retry wait (`activity`). Every retry of a model call waits here."""
+    announce(n, budget, delay, exc)
+    with activity.retry_wait(delay):
+        await _sleep(delay)
+
+
 async def call[T](request: Callable[[], Awaitable[T]], budget: Budget) -> T:
     """Await `request()`, sending it again after each retryable provider
     failure until `budget` is spent."""
@@ -125,10 +137,9 @@ async def call[T](request: Callable[[], Awaitable[T]], budget: Budget) -> T:
         try:
             return await request()
         except ai.ProviderAPIError as exc:
-            wait = retry_after_seconds(exc)
-            if not exc.is_retryable or retries >= budget.attempts or budget.too_long(wait):
+            asked = retry_after_seconds(exc)
+            if not exc.is_retryable or retries >= budget.attempts or budget.too_long(asked):
                 raise
-            delay = wait if wait is not None else backoff(retries)
+            delay = asked if asked is not None else backoff(retries)
             retries += 1
-            announce(retries, budget, delay, exc)
-            await asyncio.sleep(delay)
+            await wait(retries, budget, delay, exc)

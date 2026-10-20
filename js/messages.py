@@ -537,6 +537,12 @@ TURN_ABORTED = Message("Turn aborted.", WARN)
 NO_ASSISTANT_RESPONSE = Message("No assistant response.", GRAVE)
 CONTINUE_HINT = Message("Continue: {command}")
 
+# One-shot: what a turn is doing, while nothing else shows it.
+PROGRESS_MODEL = Message("Model generating for {elapsed}, {tokens} tokens streamed")
+PROGRESS_TOOL = Message("Tool {tool} running for {elapsed}")
+PROGRESS_TOOLS = Message("Tool {tool} and {extra} more running for {elapsed}")
+PROGRESS_RETRY = Message("Retrying the model call in {seconds}s")
+
 # --- Benchmarks --------------------------------------------------------------
 
 NO_BENCHMARKS = Message("Agent {agent!r} has no NN-benchmark.md files.", GRAVE)
