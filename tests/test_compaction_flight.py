@@ -70,6 +70,54 @@ def test_telemetry_writes_autolog_when_optional_debug_log_is_disabled():
     assert record["context_tokens"] == 123
 
 
+@pytest.mark.parametrize("operation", ["summary", "budget", "overflow"])
+@pytest.mark.parametrize("failure_type", [RuntimeError, asyncio.CancelledError])
+@pytest.mark.parametrize("broken", ["finish", "close", "both"])
+def test_flight_cleanup_preserves_the_original_error(
+    tmp_path, monkeypatch, operation, failure_type, broken,
+):
+    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_LOG_DIR": str(tmp_path / "flights"),
+                                      "COMPACTION_KEEP_RECENT_TOKENS": 1})
+    messages = [{"role": "user", "content": "old content " * 100},
+                {"role": "user", "content": "new content"}]
+    failure = failure_type("operation failed")
+
+    def fail(*args, **kwargs):
+        raise failure
+
+    async def summarize(*args, **kwargs):
+        raise failure
+
+    def fail_recording(*args, **kwargs):
+        raise OSError("flight disk full")
+
+    real_close = compaction.CompactionFlight.close
+
+    def close(self):
+        real_close(self)
+        raise OSError("flight close failed")
+
+    monkeypatch.setattr(compaction, "summarize", summarize)
+    monkeypatch.setattr(compaction, "_record_cleared", fail)
+    if broken in {"finish", "both"}:
+        monkeypatch.setattr(compaction.CompactionFlight, "finish", fail_recording)
+    if broken in {"close", "both"}:
+        monkeypatch.setattr(compaction.CompactionFlight, "close", close)
+
+    with pytest.raises(failure_type) as caught:
+        if operation == "summary":
+            asyncio.run(compaction.compact_now(cfg, "SYSTEM", messages, forced=True))
+        elif operation == "budget":
+            compaction.clear_for_budget(messages, cfg=cfg, system="SYSTEM", trigger={},
+                                        flight_data={}, over_budget=lambda _: True)
+        else:
+            compaction.recover_overflow(messages, 1, cfg=cfg, system="SYSTEM",
+                                        error=RuntimeError("overflow"), flight_data={})
+
+    assert caught.value is failure
+    assert compaction.ACTIVE_FLIGHT.get() is None
+
+
 def test_between_turn_uses_changed_live_window(monkeypatch, tmp_path):
     cfg = _compact_test_cfg(tmp_path, {"CONTEXT_SIZE": 1000000})
     state = _auto_state()

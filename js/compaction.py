@@ -18,6 +18,7 @@ import re
 import time
 import traceback
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -310,6 +311,31 @@ def _stamp(cfg: Config) -> dict:
                        getattr(cfg, "reasoning_effort", None))
 
 
+@contextmanager
+def _flight_recording(flight: CompactionFlight, system: str, messages: list[dict]):
+    token = ACTIVE_FLIGHT.set(flight)
+    failure = None
+    try:
+        yield
+    except BaseException as exc:
+        failure = exc
+        phase = "cancelled" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "failure"
+        try:
+            flight.finish(phase, system, messages, error=f"{type(exc).__name__}: {exc}",
+                          traceback=traceback.format_exc())
+        except Exception as recording_error:
+            exc.add_note(f"Compaction flight recording failed: {recording_error}")
+        raise
+    finally:
+        ACTIVE_FLIGHT.reset(token)
+        try:
+            flight.close()
+        except Exception as close_error:
+            if failure is None:
+                raise
+            failure.add_note(f"Compaction flight close failed: {close_error}")
+
+
 def _record_cleared(flight: CompactionFlight, messages: list[dict], *, keep_recent: int) -> tuple[int, int]:
     before = list(messages)
     cleared, reclaimed = microcompact(messages, keep_recent=keep_recent)
@@ -342,19 +368,13 @@ def recover_overflow(
                  "provider_error": _provider_error_fields(error)},
         flight_data=flight_data,
     )
-    try:
+    with _flight_recording(flight, system, messages):
         flight.notice("start", f"provider overflow; round={round_}; keeping newest {keep_recent} tool results")
         cleared, reclaimed = _record_cleared(flight, messages, keep_recent=keep_recent)
         result = (f"cleared {cleared} old tool results; reclaimed {reclaimed} chars"
                   if cleared else "no eligible tool results; summary recovery may follow")
         flight.finish("success" if cleared else "skipped", system, messages, result=result)
         return ("cleared", cleared, reclaimed) if cleared else ("summarize", 0, 0)
-    except BaseException as exc:
-        phase = "cancelled" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "failure"
-        flight.finish(phase, system, messages, error=f"{type(exc).__name__}: {exc}", traceback=traceback.format_exc())
-        raise
-    finally:
-        flight.close()
 
 
 def clear_for_budget(
@@ -368,7 +388,7 @@ def clear_for_budget(
     Returns (results_cleared, chars_reclaimed)."""
     keep_recent = get_nonnegative_int(cfg, "COMPACTION_KEEP_TOOL_RESULTS")
     flight = _clearing_flight(messages, cfg=cfg, system=system, trigger=trigger, flight_data=flight_data)
-    try:
+    with _flight_recording(flight, system, messages):
         flight.notice("start", f"{trigger.get('phase')} context budget; keeping newest {keep_recent} tool results")
         total = 0
         reclaimed = 0
@@ -384,12 +404,6 @@ def clear_for_budget(
                   + ("; still over budget" if still_over else ""))
         flight.finish("success" if total else "skipped", system, messages, result=result)
         return total, reclaimed
-    except BaseException as exc:
-        phase = "cancelled" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "failure"
-        flight.finish(phase, system, messages, error=f"{type(exc).__name__}: {exc}", traceback=traceback.format_exc())
-        raise
-    finally:
-        flight.close()
 
 
 def prefix_worth_summarizing(messages: list[dict], preserve_from: int) -> bool:
@@ -952,8 +966,7 @@ async def compact_now(
         cfg, system, messages, trigger=trigger or {"phase": "manual"},
         forced=forced, focus=focus, preserve_from=preserve_from, details=flight_data,
     )
-    token = ACTIVE_FLIGHT.set(flight)
-    try:
+    with _flight_recording(flight, system, messages):
         chars_per_token = _calibrated_chars_per_token(cfg, system, messages, context)
         if tail_tokens is None:
             tail_tokens = get_int(cfg, "COMPACTION_KEEP_RECENT_TOKENS")
@@ -1033,13 +1046,6 @@ async def compact_now(
             emit("post_compact", phase=phase, forced=forced, model=compact_model,
                  messages=len(messages), summarized=keep_from)
         return result
-    except BaseException as exc:
-        phase = "cancelled" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "failure"
-        flight.finish(phase, system, messages, error=f"{type(exc).__name__}: {exc}", traceback=traceback.format_exc())
-        raise
-    finally:
-        ACTIVE_FLIGHT.reset(token)
-        flight.close()
 
 
 def compact_now_sync(
