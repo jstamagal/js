@@ -44,6 +44,7 @@ set HISTORY_SIZE 10000
 
 # --- keys ---
 set -KEYBINDS_FILE
+set EXIT_ARM_TIMEOUT 2.0
 
 # --- provider ---
 set -PROVIDER

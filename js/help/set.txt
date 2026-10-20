@@ -1,6 +1,10 @@
 # What `/help set NAME` prints: each setting's NAME alone on a line, then
 # its help, indented four spaces. Lines starting with # are comments.
 
+EXIT_ARM_TIMEOUT
+    Seconds an idle interrupt or end-of-file key stays armed for a second
+    press to quit the async REPL.
+
 DEFAULT_AGENT
     Agent a run uses when neither --agent nor --commit names one: a prompt
     directory id, letters, digits, '_' or '-'. Read once at startup, so a

@@ -327,6 +327,8 @@ branch the audit was made on; they move as the code changes.
 24 findings.
 
 Resolution notes (the rows below record the original audit):
+- js-2lg.101: `EXIT_ARM_TIMEOUT` registers the existing two-second window;
+  `screen.build_app(handler_factory=...)` can replace or extend action handlers.
 - js-2lg.61: `meta.skill` accepts the user invocation command used in its refusal.
 - js-2lg.86: `cli.ReplAssembly` supplies a session's commands, quit and queue
   words, turn-state guard, unknown-command policy, forced-compaction phrase,

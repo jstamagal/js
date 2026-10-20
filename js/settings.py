@@ -279,6 +279,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("KERNEL_VERBOSITY", "str", group="display", command="fset"),
     SettingSpec("KERNEL_LINES_MAX", "int", group="display", command="fset"),
     SettingSpec("EDITING_MODE", "str", group="input"),
+    SettingSpec("EXIT_ARM_TIMEOUT", "float", group="input"),
     SettingSpec("PASTE_IMAGE_KEY", "str", group="input"),
     SettingSpec("PASTE_COLLAPSE_LINES", "int", group="input"),
     SettingSpec("PASTE_COLLAPSE_CHARS", "int", group="input"),

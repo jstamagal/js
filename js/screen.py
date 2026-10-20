@@ -40,9 +40,6 @@ from .reasoning_display import grey, settled_rows
 
 TICK_BUSY_S = 0.1
 TICK_IDLE_S = 1.0
-# How long the interrupt or eof key stays armed: a second press inside this
-# window quits.
-EXIT_ARM_SECONDS = 2.0
 
 # Variation selectors: prompt_toolkit folds one into the cell before it and
 # keeps that cell's width, so U+26A0 U+FE0F (a warning sign) is one column in
@@ -746,6 +743,7 @@ def build_app(
     application_factory: Callable | None = None,
     complete_while_typing: bool = False,
     complete_tab: Callable | None = None,
+    handler_factory: Callable[[dict[str, Handler]], dict[str, Handler]] | None = None,
 ) -> tuple[Application, Scrollback]:
     """`status(width)` renders the bar; `status_colours()` is its style, read on
     every repaint so a changed setting shows on the next invalidate. In vi mode
@@ -757,7 +755,7 @@ def build_app(
     ends the app with `app.exit()`, and an awaitable it returns runs as the
     key's handler. The interrupt key calls ``on_interrupt``; when that returns
     false (no turn to cancel), the key clears an input line with text and
-    arms the exit, and on an empty line a press within `EXIT_ARM_SECONDS` of
+    arms the exit, and on an empty line a press within `EXIT_ARM_TIMEOUT` of
     the last one quits, else arms. The eof key quits at an empty line,
     deletes the character under the cursor inside a line, and at the end of
     a line with text arms the exit, quitting on a second press within the
@@ -821,7 +819,7 @@ def build_app(
 
     def _arm(action: str) -> None:
         loop = asyncio.get_running_loop()
-        until = loop.time() + EXIT_ARM_SECONDS
+        until = loop.time() + float(fset.setting_value("EXIT_ARM_TIMEOUT"))
         armed.update(action=action, until=until)
         loop.call_at(until, _expire, until)
 
@@ -883,7 +881,7 @@ def build_app(
         return max(1, get_app().output.get_size().rows - 3)
 
     keymap = keymap if keymap is not None else keys.default_keymap()
-    bind_actions(kb, keymap, {
+    handlers = {
         "submit": Handler(_enter, has_focus(input_buffer) & ~vi_mode),
         "history_search": Handler(keys.history_search, has_focus(input_buffer) | is_searching),
         "ex_open": Handler(_ex_open, has_focus(input_buffer) & vi_navigation_mode),
@@ -897,7 +895,8 @@ def build_app(
         "scroll_up": Handler(lambda event: scrollback.buffer.cursor_up(count=_page())),
         "scroll_down": Handler(lambda event: scrollback.buffer.cursor_down(count=_page())),
         "complete": Handler(_tab),
-    })
+    }
+    bind_actions(kb, keymap, handlers if handler_factory is None else handler_factory(handlers))
     toggle = keymap.get("reasoning_toggle", ())
     scrollback.toggle_key = keys.describe(toggle[0]) if toggle else ""
 
