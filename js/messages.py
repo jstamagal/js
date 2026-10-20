@@ -1741,6 +1741,26 @@ AGENT_MANIFEST_PROMPTS_DIRECTORY_HAS_NO_MD_PROMPT_FILES = "prompts directory {pr
 
 AGENT_MANIFEST_MIGRATION_HINT = "move its settings to agent.yaml beside the prompt (just migrate-agents)"
 
+SKILL_FRONTMATTER_FRONTMATTER_IS_MISSING_A_CLOSING = "frontmatter is missing a closing ---"
+
+SKILL_FRONTMATTER_INVALID_YAML_FRONTMATTER = "invalid YAML frontmatter: {value}"
+
+SKILL_FRONTMATTER_FRONTMATTER_MUST_BE_A_MAPPING = "frontmatter must be a mapping"
+
+SKILL_FRONTMATTER_FRONTMATTER_MUST_BE_A_STRING = "{field} frontmatter must be a string"
+
+SKILL_FRONTMATTER_FRONTMATTER_MUST_BE_TRUE_OR_FALSE = "{field} frontmatter must be true or false"
+
+SKILL_FRONTMATTER_TOOLS_FRONTMATTER_MUST_BE_A_LIST_OF = "tools frontmatter must be a list of strings"
+
+SKILL_FRONTMATTER_TOOLS_FRONTMATTER_MUST_CONTAIN_SAFE_NON_EMPTY = "tools frontmatter must contain safe non-empty strings"
+
+SKILL_FRONTMATTER_TOOLS_FRONTMATTER_CONTAINS_DUPLICATE = "tools frontmatter contains duplicate {tool!r}"
+
+SKILL_FRONTMATTER_PATHS_FRONTMATTER_MUST_BE_A_LIST_OF = "paths frontmatter must be a list of glob strings"
+
+SKILL_FRONTMATTER_UNSAFE_SKILL_NAME = "unsafe skill name {name!r}"
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():

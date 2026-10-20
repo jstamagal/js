@@ -398,7 +398,7 @@ def _split_frontmatter(text: str) -> tuple[dict[str, Any], str, int]:
         return {}, text, 0
     match = re.search(r"\r?\n---[ \t]*(?:\r?\n|$)", text[3:])
     if match is None:
-        raise ValueError("frontmatter is missing a closing ---")
+        raise ValueError(msgs.SKILL_FRONTMATTER_FRONTMATTER_IS_MISSING_A_CLOSING.format())
     start = 3 + match.start()
     end = 3 + match.end()
     yaml_text = text[text.find("\n") + 1:start]
@@ -410,11 +410,11 @@ def _split_frontmatter(text: str) -> tuple[dict[str, Any], str, int]:
         try:
             manifest = yaml.safe_load(_quote_path_globs(yaml_text))
         except yaml.YAMLError:
-            raise ValueError(f"invalid YAML frontmatter: {_yaml_problem(exc)}") from exc
+            raise ValueError(msgs.SKILL_FRONTMATTER_INVALID_YAML_FRONTMATTER.format(value=_yaml_problem(exc))) from exc
     if manifest is None:
         manifest = {}
     if not isinstance(manifest, dict):
-        raise ValueError("frontmatter must be a mapping")
+        raise ValueError(msgs.SKILL_FRONTMATTER_FRONTMATTER_MUST_BE_A_MAPPING.format())
     return manifest, text[end:], end
 
 
@@ -474,7 +474,7 @@ def _string_field(manifest: dict[str, Any], field: str) -> str:
     if value is None:
         return ""
     if not isinstance(value, str):
-        raise ValueError(f"{field} frontmatter must be a string")
+        raise ValueError(msgs.SKILL_FRONTMATTER_FRONTMATTER_MUST_BE_A_STRING.format(field=field))
     return value.strip()
 
 
@@ -486,7 +486,7 @@ def _bool_field(manifest: dict[str, Any], field: str) -> bool:
         return value
     if isinstance(value, str) and value.strip().lower() in {"true", "false"}:
         return value.strip().lower() == "true"
-    raise ValueError(f"{field} frontmatter must be true or false")
+    raise ValueError(msgs.SKILL_FRONTMATTER_FRONTMATTER_MUST_BE_TRUE_OR_FALSE.format(field=field))
 
 
 def _tools_field(manifest: dict[str, Any]) -> tuple[str, ...]:
@@ -494,15 +494,15 @@ def _tools_field(manifest: dict[str, Any]) -> tuple[str, ...]:
     if value is None:
         return ()
     if not isinstance(value, list):
-        raise ValueError("tools frontmatter must be a list of strings")
+        raise ValueError(msgs.SKILL_FRONTMATTER_TOOLS_FRONTMATTER_MUST_BE_A_LIST_OF.format())
     tools: list[str] = []
     seen: set[str] = set()
     for item in value:
         if not isinstance(item, str) or not _TOOL_RE.fullmatch(item.strip()):
-            raise ValueError("tools frontmatter must contain safe non-empty strings")
+            raise ValueError(msgs.SKILL_FRONTMATTER_TOOLS_FRONTMATTER_MUST_CONTAIN_SAFE_NON_EMPTY.format())
         tool = item.strip()
         if tool in seen:
-            raise ValueError(f"tools frontmatter contains duplicate {tool!r}")
+            raise ValueError(msgs.SKILL_FRONTMATTER_TOOLS_FRONTMATTER_CONTAINS_DUPLICATE.format(tool=tool))
         seen.add(tool)
         tools.append(tool)
     return tuple(tools)
@@ -516,7 +516,7 @@ def _paths_field(manifest: dict[str, Any]) -> tuple[str, ...]:
     if isinstance(value, str):
         value = [value]
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValueError("paths frontmatter must be a list of glob strings")
+        raise ValueError(msgs.SKILL_FRONTMATTER_PATHS_FRONTMATTER_MUST_BE_A_LIST_OF.format())
     patterns = tuple(dict.fromkeys(
         expanded for item in value for part in _split_outside_braces(item)
         for expanded in _expand_braces(part)
@@ -559,7 +559,7 @@ def _expand_braces(pattern: str) -> list[str]:
 
 def _validate_name(name: str) -> None:
     if not _NAME_RE.fullmatch(name) or ".." in name:
-        raise ValueError(f"unsafe skill name {name!r}")
+        raise ValueError(msgs.SKILL_FRONTMATTER_UNSAFE_SKILL_NAME.format(name=name))
 
 
 def _derive_description(body: str, name: str) -> str:
