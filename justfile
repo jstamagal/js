@@ -78,7 +78,14 @@ install:
     uv_bin="$(command -v uv)"
     bin="$HOME/.local/bin"
     launcher="$bin/js"
+    wiki="$bin/wiki"
     marker="# js launcher written by just install"
+    if [ -e "$wiki" ] || [ -L "$wiki" ]; then
+        if [ ! -L "$wiki" ] || [ "$(readlink "$wiki")" != "$repo/tools/wiki" ]; then
+            echo "!! $wiki is not this checkout's wiki symlink — remove it and rerun" >&2
+            exit 1
+        fi
+    fi
     # large wheels over a flaky link: retry the transfer before giving up.
     UV_HTTP_RETRIES="${UV_HTTP_RETRIES:-5}" uv sync --no-dev --inexact {{ browser-extra }}
     # the uv tool install this recipe used to make; its shim sits where the
@@ -102,7 +109,7 @@ install:
     EOF
     chmod 755 "$tmp"
     mv -f "$tmp" "$launcher"
-    ln -sf "$repo/tools/wiki" "$bin/wiki"
+    ln -sf "$repo/tools/wiki" "$wiki"
     # Optional binaries: just install-tool-binaries; browser: just install-browser.
     # put the managed binaries on the operator's PATH too. js itself resolves
     # them by absolute path, but fd/bat/fzf are downloaded for a human and for
