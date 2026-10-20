@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from .. import paths
+from .. import jail, paths
 from .core import Tool, ToolContext
 from .descriptions import load_description
 from .sanitize import int_or_default, text_or_default
@@ -30,6 +30,10 @@ GL_ARGS = (
 
 
 class _QuietHandler(http.server.SimpleHTTPRequestHandler):
+    def __init__(self, *args: Any, context: ToolContext | None = None, **kwargs: Any) -> None:
+        self.context = context
+        super().__init__(*args, **kwargs)
+
     def send_head(self) -> Any:
         try:
             root = Path(self.directory).resolve()
@@ -43,6 +47,11 @@ class _QuietHandler(http.server.SimpleHTTPRequestHandler):
             if not target.resolve().is_relative_to(root):
                 self.send_error(403)
                 return None
+            if self.context is not None:
+                self.context.resolve_path(target)
+        except jail.JailError:
+            self.send_error(403)
+            return None
         except (OSError, RuntimeError):
             self.send_error(404)
             return None
@@ -65,10 +74,10 @@ class _ThreadingServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     daemon_threads = True
 
 
-def _start_local_server(path: Path) -> tuple[_ThreadingServer, str, Path]:
+def _start_local_server(path: Path, *, context: ToolContext | None = None) -> tuple[_ThreadingServer, str, Path]:
     root = path if path.is_dir() else path.parent
     index = "" if path.is_dir() else quote(path.name)
-    handler = functools.partial(_QuietHandler, directory=str(root))
+    handler = functools.partial(_QuietHandler, directory=str(root), context=context)
     server = _ThreadingServer(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, f"http://127.0.0.1:{server.server_address[1]}/{index}", root
@@ -263,7 +272,7 @@ def browser_probe(
         if not path.exists():
             return f"ERROR: no such local target: {path}"
         try:
-            server, url, _root = _start_local_server(path)
+            server, url, _root = _start_local_server(path, context=context)
         except OSError as exc:
             return f"ERROR: could not serve local target: {type(exc).__name__}: {exc}"
 

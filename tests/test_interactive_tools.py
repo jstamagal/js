@@ -567,7 +567,7 @@ def test_browser_probe_closes_local_server_when_output_setup_fails(
     monkeypatch.setattr(
         browser_module,
         "_start_local_server",
-        lambda path: (FakeServer(), "http://127.0.0.1:12345/index.html", path.parent),
+        lambda path, *, context: (FakeServer(), "http://127.0.0.1:12345/index.html", path.parent),
     )
     context = ToolContext(cwd=tmp_path)
 
@@ -598,7 +598,7 @@ def test_browser_output_path_refusal_leaves_no_local_server(tmp_path, monkeypatc
         def server_close(self):
             pass
 
-    def start(path):
+    def start(path, *, context):
         server = Server()
         live.add(server)
         return server, "http://127.0.0.1:12345/index.html", path.parent
@@ -633,6 +633,37 @@ def test_browser_probe_uses_the_available_vulkan_webgl_renderer():
 
     assert actual["webgl2"]
     assert actual["renderer"] == expected["renderer"]
+
+
+@_needs_chromium
+def test_local_browser_subrequests_respect_jail_hide(tmp_path, monkeypatch):
+    from js import jail, paranoid
+
+    root = tmp_path / "web"
+    root.mkdir()
+    private = tmp_path / "private"
+    private.mkdir()
+    hidden = root / "hidden.txt"
+    hidden.write_text("hidden fixture contents")
+    (root / "index.html").write_text("""<!doctype html><p>public</p><script>
+    (async () => {
+      const response = await fetch('/hidden.txt');
+      if (response.ok) throw new Error(await response.text());
+    })();
+    </script>""")
+    monkeypatch.setenv("JS_PARANOID_MODE", "on")
+    monkeypatch.setattr(jail, "ACTIVE", jail.Jail(root=root, private=private, bwrap="bwrap"))
+    context = ToolContext(cwd=root)
+    context.jail_hide = (str(hidden),)
+    assert paranoid.mode() == "on"
+    with pytest.raises(jail.JailError):
+        context.resolve_path(hidden)
+
+    report = _payload(browser_probe(target=str(root), output_dir="probes", settle_ms=100,
+                                    context=context))
+
+    assert report["frames"]
+    assert report["page_errors"] == []
 
 
 @_needs_chromium
