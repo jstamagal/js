@@ -1,6 +1,7 @@
 """wiki_write: create or UPSERT a wiki page with correct frontmatter."""
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -116,7 +117,8 @@ def wiki_write(
                 return (f"EXISTS: {page} already exists. Read it, merge (keep old content, add the new "
                         f"link, bump source_count), then call again with overwrite=true. This prevents clobber.")
             if existed:
-                guard = context.require_read(page, "overwrite it")
+                content_hash = hashlib.sha256(page.read_bytes()).hexdigest()[:16]
+                guard = context.require_read(page, "overwrite it", content_hash=content_hash)
                 if guard:
                     return guard
 

@@ -11,6 +11,7 @@ import pytest
 from js import jail
 from js.toolkit import ToolContext
 from js.toolkit import wiki as wiki_module
+from js.toolkit import fs
 from js.toolkit.core import call_tool
 from js.toolkit.descriptions import load_description
 from js.toolkit.wiki import convert as wiki_convert_module
@@ -140,7 +141,7 @@ def test_wiki_write_frontmatter_overwrite_guard_and_upsert(tmp_path):
         context=context,
     )
     after_blocked = page.read_text(encoding="utf-8")
-    context.remember_read(page, "test")
+    fs.read(str(page), context=context)
     upserted = wiki_write(
         str(vault),
         "concept",
@@ -669,4 +670,20 @@ def test_wiki_derived_paths_obey_the_jail(tmp_path, monkeypatch, entry):
     result = call_tool(tool, args, _ctx(root))
 
     assert {path.name: path.read_bytes() for path in outside.iterdir()} == before
+    assert result.startswith("ERROR:")
+
+
+def test_wiki_upsert_rejects_a_page_changed_since_read(tmp_path):
+    vault = _vault(tmp_path)
+    context = _ctx(tmp_path)
+    wiki_write(str(vault), "concept", "initial", slug="shared", context=context)
+    page = vault / "concepts" / "shared.md"
+    fs.read(str(page), context=context)
+    updated = page.read_text() + "\nAnother worker's evidence.\n"
+    page.write_text(updated)
+
+    result = wiki_write(str(vault), "concept", "stale merge", slug="shared",
+                        overwrite=True, context=context)
+
+    assert page.read_text() == updated
     assert result.startswith("ERROR:")
