@@ -230,6 +230,10 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("REQUEST_LOG", "bool", empty=EMPTY_OFF, group="runtime"),
     SettingSpec("REQUEST_LOG_DIR", "str", empty=EMPTY_NONE, group="runtime"),
     SettingSpec("TRANSCRIPT_LOG", "bool", empty=EMPTY_OFF, group="runtime"),
+    # --- hymem ---
+    SettingSpec("HYMEM_URL", "str", group="runtime"),
+    SettingSpec("HYMEM_USER", "str", group="runtime"),
+    SettingSpec("HYMEM_RECALL_MAX", "int", group="runtime"),
     SettingSpec("TRANSCRIPT_LOG_DIR", "str", empty=EMPTY_NONE, group="runtime"),
     SettingSpec("INLINE_CODE", "bool", empty=EMPTY_OFF, group="runtime"),
     # --- events ---

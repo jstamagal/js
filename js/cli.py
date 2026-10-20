@@ -45,6 +45,7 @@ from . import events
 from . import fset
 from . import exline
 from . import hookexec
+from . import hymem
 from . import login_defaults, logins
 from . import memory as M
 from . import messages as msgs
@@ -1139,6 +1140,8 @@ def _emit_session_event(state: dict, telemetry: runtime.Telemetry, cfg: Config, 
         cwd=str(runtime.T.STOCK_CONTEXT.cwd),
         messages=len(state.get("messages") or []),
     )
+    if event == "session_end":
+        hymem.file(cfg, runtime.T.STOCK_CONTEXT.cwd, final=True)
 
 
 def _apply_saved_login_to_state(state: dict, provider_name: str) -> bool:
@@ -2682,6 +2685,8 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     user_bundle = _note_model_switch(cfg, user_bundle)
     if cut_off:
         user_bundle = attach.with_note(user_bundle, _CUT_OFF_NOTICE)
+    if memory := hymem.recall_block(cfg, prompt, Path.cwd()):
+        user_bundle = attach.with_note(user_bundle, memory)
     call_stats: list[dict] = []
     turn_kwargs = {
         "model_override": cfg.model,
@@ -2837,6 +2842,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 )
             if save:
                 _persist_turn_messages(cfg, messages, reasoning_override)
+                hymem.file(cfg, Path.cwd(), final=True)
         finally:
             if trace_sink is not None:
                 trace_sink.close()

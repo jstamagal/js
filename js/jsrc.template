@@ -546,6 +546,18 @@
 # Where that copy goes. Unset: ~/.js/logs/transcript/<agent>
 #set -TRANSCRIPT_LOG_DIR
 
+# Long-term memory from a Hy-Memory server (js/hymem_server.py). Set to its
+# URL to turn it on: sessions are sent to it 10 turns at a time, the first
+# message of `js -p` and of a swarm agent carries the memories matching its
+# task, and the memory_search tool searches them. Unset: off.
+#set -HYMEM_URL
+
+# Whose memories these are on the server. Unset: your login name.
+#set -HYMEM_USER
+
+# Most memories a first message carries, and memory_search returns.
+#set HYMEM_RECALL_MAX 8
+
 # In `js -p`, print a short line for each tool call while it runs.
 #   off  you only see the final answer
 #fset TRACE on

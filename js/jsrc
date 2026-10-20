@@ -106,6 +106,9 @@ set REQUEST_LOG on
 set -REQUEST_LOG_DIR
 set TRANSCRIPT_LOG on
 set -TRANSCRIPT_LOG_DIR
+set -HYMEM_URL
+set -HYMEM_USER
+set HYMEM_RECALL_MAX 8
 set INLINE_CODE on
 
 # --- events ---
