@@ -494,6 +494,19 @@ def test_a_configured_download_quota_is_enforced_and_leaves_no_partial(tmp_path)
     assert list(tmp_path.glob(".*js-partial*")) == []
 
 
+def test_a_saved_download_gets_the_umask_mode(tmp_path):
+    source = tmp_path / "page.txt"
+    source.write_text("hello")
+    previous = os.umask(0o022)
+    try:
+        result = process_net.fetch(source.as_uri(), save="out.txt", context=ToolContext(cwd=tmp_path))
+    finally:
+        os.umask(previous)
+
+    assert result.startswith("SAVED_RESPONSE ")
+    assert (tmp_path / "out.txt").stat().st_mode & 0o777 == 0o644
+
+
 class StreamingResponse(FakeResponse):
     """A response that advances like a socket, so a buffered read is visible."""
 

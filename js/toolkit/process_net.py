@@ -520,8 +520,8 @@ def _stream_download(
     for. This is what lets max_download_bytes default to unlimited.
     """
     target.parent.mkdir(parents=True, exist_ok=True)
-    fd, partial_name = tempfile.mkstemp(prefix=f".{target.name}.js-partial-", dir=target.parent)
-    partial = Path(partial_name)
+    partial = target.parent / f".{target.name}.js-partial-{secrets.token_hex(6)}"
+    fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
     written = 0
     try:
         with os.fdopen(fd, "wb") as out:
