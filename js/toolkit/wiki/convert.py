@@ -137,7 +137,7 @@ def wiki_convert(path: str, vault: str = "", context: ToolContext = None) -> str
     if ext in IMG_EXT:
         embed = "(pass vault= to copy into assets/)"
         if vault_path:
-            copied = copy_to_assets(p, vault_path)
+            copied = copy_to_assets(p, vault_path, context)
             if isinstance(copied, str):
                 return copied
             embed = f"![[{copied.name}]]"
@@ -154,7 +154,7 @@ def wiki_convert(path: str, vault: str = "", context: ToolContext = None) -> str
     if ext in AV_EXT:
         embed = "(pass vault= to copy into assets/)"
         if vault_path:
-            copied = copy_to_assets(p, vault_path)
+            copied = copy_to_assets(p, vault_path, context)
             if isinstance(copied, str):
                 return copied
             embed = f"![[{copied.name}]]"

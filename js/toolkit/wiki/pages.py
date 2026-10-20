@@ -92,10 +92,7 @@ def wiki_write(
         )
     if not vp.is_dir():
         return f"ERROR: no vault at {vp}"
-    folder = vp / KIND_FOLDER[k]
-    folder.mkdir(exist_ok=True)
     s = slugify(slug or title)
-    page = folder / f"{s}.md"
     ptype = KIND_TYPE[k]
     tag_list = [KIND_TAG[ptype]] + [t.strip() for t in tags.split(",") if t.strip()]
     fm = ["---", f"type: {ptype}", f"tags: {json.dumps(tag_list, ensure_ascii=False)}"]
@@ -110,7 +107,10 @@ def wiki_write(
     head = f"# {title}" if title else f"# {s}"
     content = "\n".join(fm) + "\n\n" + head + "\n\n" + body.strip() + "\n"
     try:
-        with vault_lock(vp):
+        with vault_lock(vp, context):
+            folder = context.resolve_path(vp / KIND_FOLDER[k], write=True)
+            page = context.resolve_path(folder / f"{s}.md", write=True)
+            folder.mkdir(exist_ok=True)
             existed = page.exists()
             if existed and not overwrite:
                 return (f"EXISTS: {page} already exists. Read it, merge (keep old content, add the new "

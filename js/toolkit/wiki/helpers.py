@@ -31,9 +31,10 @@ _ENV_ALLOW = ("PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "PWD", "SHELL")
 
 
 @contextmanager
-def vault_lock(vault_path: Path):
+def vault_lock(vault_path: Path, context: ToolContext):
     vault_path.mkdir(parents=True, exist_ok=True)
-    lock_fd = os.open(str(vault_path / ".wiki.lock"), os.O_CREAT | os.O_RDWR, 0o644)
+    lock_path = context.resolve_path(vault_path / ".wiki.lock", write=True)
+    lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
         yield
@@ -89,7 +90,7 @@ def read_text(path: Path, cap: int) -> str:
     return cap_text(text, cap, truncation_marker(cap, "TOOL_RESULT_MAX"))
 
 
-def copy_to_assets(src: Path, vault_path: Path) -> Path | str:
+def copy_to_assets(src: Path, vault_path: Path, context: ToolContext) -> Path | str:
     """Copy a media file into <vault>/assets and return the destination path.
 
     A missing vault or an existing same-named file with different bytes comes
@@ -97,12 +98,12 @@ def copy_to_assets(src: Path, vault_path: Path) -> Path | str:
     """
     if not vault_path.is_dir():
         return f"ERROR: no vault at {vault_path}"
-    assets = vault_path / "assets"
+    assets = context.resolve_path(vault_path / "assets", write=True)
     try:
         assets.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         return f"ERROR: could not create asset directory {assets}: {exc}"
-    dest = assets / src.name
+    dest = context.resolve_path(assets / src.name, write=True)
     if dest.exists():
         try:
             identical = dest.read_bytes() == src.read_bytes()

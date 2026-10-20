@@ -6,6 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 
+import pytest
+
+from js import jail
 from js.toolkit import ToolContext
 from js.toolkit import wiki as wiki_module
 from js.toolkit.core import call_tool
@@ -42,9 +45,9 @@ def test_concurrent_page_creates_preserve_the_first_writers_content(tmp_path, mo
     persisted = []
 
     @contextmanager
-    def synchronized_lock(path):
+    def synchronized_lock(path, context):
         barrier.wait(timeout=10)
-        with real_lock(path):
+        with real_lock(path, context):
             yield
             persisted.append(page.read_bytes())
 
@@ -594,9 +597,9 @@ def test_concurrent_ingests_keep_the_completed_archive(tmp_path, monkeypatch):
     real_lock = wiki_ops_module.vault_lock
 
     @contextmanager
-    def contended_lock(path):
+    def contended_lock(path, context):
         ready.wait(timeout=5)
-        with real_lock(path):
+        with real_lock(path, context):
             yield
 
     monkeypatch.setattr(wiki_ops_module, "vault_lock", contended_lock)
@@ -612,3 +615,58 @@ def test_concurrent_ingests_keep_the_completed_archive(tmp_path, monkeypatch):
     assert (vault / "Clippings" / "unit" / "raw.txt").read_text() == "raw source\n"
     assert sum(result.startswith("ERROR:") for result in results) == 1
     assert (vault / "log.md").read_text().count("Archived:") == 1
+
+
+@pytest.mark.parametrize("entry", ["page_directory", "page_file", "asset_directory", "asset_file",
+                                  "archive_directory", "inbox_directory", "log_file", "lock_file"])
+def test_wiki_derived_paths_obey_the_jail(tmp_path, monkeypatch, entry):
+    root = tmp_path / "jail"
+    root.mkdir()
+    vault = _vault(root)
+    (vault / "PURPOSE.md").write_text("purpose\n")
+    (vault / "inbox").mkdir()
+    (vault / "inbox" / "unit.md").write_text("raw source\n")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    image = root / "photo.png"
+    image.write_bytes(b"image bytes")
+    tool_name = "wiki_write"
+    args = {"vault": str(vault), "kind": "concept", "slug": "page", "body": "new content"}
+    if entry == "page_directory":
+        (vault / "concepts").symlink_to(outside, target_is_directory=True)
+    elif entry == "page_file":
+        (vault / "concepts").mkdir()
+        (vault / "concepts" / "page.md").symlink_to(outside / "page.md")
+    elif entry == "lock_file":
+        (vault / ".wiki.lock").symlink_to(outside / "lock")
+    elif entry.startswith("asset"):
+        tool_name = "wiki_convert"
+        args = {"vault": str(vault), "path": str(image)}
+        if entry == "asset_directory":
+            (vault / "assets").symlink_to(outside, target_is_directory=True)
+        else:
+            (vault / "assets").mkdir()
+            (vault / "assets" / image.name).symlink_to(outside / image.name)
+    else:
+        tool_name = "wiki_finish_ingest"
+        args = {"vault": str(vault), "unit": "unit.md", "title": "Unit"}
+        if entry == "archive_directory":
+            (vault / "Clippings").symlink_to(outside, target_is_directory=True)
+        elif entry == "log_file":
+            (vault / "log.md").symlink_to(outside / "log.md")
+        else:
+            (vault / "inbox" / "unit.md").unlink()
+            (vault / "inbox").rmdir()
+            (outside / "unit.md").write_text("outside source\n")
+            (vault / "inbox").symlink_to(outside, target_is_directory=True)
+
+    before = {path.name: path.read_bytes() for path in outside.iterdir()}
+    monkeypatch.setattr(jail, "ACTIVE", jail.Jail(root=root, bwrap="bwrap", private=tmp_path / "private"))
+    monkeypatch.setattr(wiki_convert_module, "run", lambda *args: (0, "", ""))
+    monkeypatch.setattr(wiki_ops_module, "_commit", lambda *args: "git: no repository")
+    tool = next(tool for tool in wiki_module.tools() if tool.name == tool_name)
+
+    result = call_tool(tool, args, _ctx(root))
+
+    assert {path.name: path.read_bytes() for path in outside.iterdir()} == before
+    assert result.startswith("ERROR:")
