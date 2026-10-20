@@ -24,8 +24,16 @@ from prompt_toolkit.output import Output, create_output
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame
 
-from . import fset, logins, providers
+from . import fset, keys, logins, providers
 from . import messages as msgs
+
+
+MODEL_KEYMAP: keys.Keymap = {
+    "up": (("up",), ("k",)), "down": (("down",), ("j",)),
+    "page_up": (("pageup",),), "page_down": (("pagedown",),),
+    "focus": (("tab",), ("left",), ("right",)), "choose": (("enter",),),
+    "quit": (("escape",), ("q",), ("c-c",)), "fetch": (("f",),),
+}
 
 
 @dataclass(frozen=True)
@@ -239,35 +247,27 @@ class ModelPicker:
         return Frame(Window(control, always_hide_cursor=True), title=title, width=width)
 
     def application(
-        self, *, input: Input | None = None, output: Output | None = None
+        self, *, input: Input | None = None, output: Output | None = None,
+        keymap: keys.Keymap | None = None, handlers: dict | None = None,
     ) -> Application[dict[str, Any] | None]:
         kb = KeyBindings()
+        keymap = MODEL_KEYMAP if keymap is None else keymap
 
-        @kb.add("up")
-        @kb.add("k")
         def _up(event: KeyPressEvent) -> None:
             self.move(-1)
 
-        @kb.add("down")
-        @kb.add("j")
         def _down(event: KeyPressEvent) -> None:
             self.move(1)
 
-        @kb.add("pageup")
         def _page_up(event: KeyPressEvent) -> None:
             self.move(-10)
 
-        @kb.add("pagedown")
         def _page_down(event: KeyPressEvent) -> None:
             self.move(10)
 
-        @kb.add("tab")
-        @kb.add("left")
-        @kb.add("right")
         def _toggle(event: KeyPressEvent) -> None:
             self.toggle_focus()
 
-        @kb.add("enter")
         def _choose(event: KeyPressEvent) -> None:
             if self.focus == "providers":
                 if self.model_rows:
@@ -277,13 +277,9 @@ class ModelPicker:
             if chosen is not None:
                 event.app.exit(result=chosen)
 
-        @kb.add("escape", eager=True)
-        @kb.add("q")
-        @kb.add("c-c")
         def _quit(event: KeyPressEvent) -> None:
             event.app.exit(result=None)
 
-        @kb.add("f")
         def _fetch(event: KeyPressEvent) -> None:
             self.detail = msgs.PICK_FETCHING.text()
 
@@ -292,6 +288,14 @@ class ModelPicker:
                 event.app.invalidate()
 
             event.app.create_background_task(run())
+
+        actions = {"up": _up, "down": _down, "page_up": _page_up, "page_down": _page_down,
+                   "focus": _toggle, "choose": _choose, "quit": _quit, "fetch": _fetch}
+        if handlers is not None:
+            actions.update(handlers)
+        for action, sequences in keymap.items():
+            for sequence in sequences:
+                kb.add(*sequence, eager=sequence == ("escape",))(actions[action])
 
         body = VSplit(
             [
@@ -304,7 +308,7 @@ class ModelPicker:
             [
                 body,
                 Window(FormattedTextControl(lambda: [("class:detail", self.detail)]), height=1),
-                Window(FormattedTextControl([("class:help", msgs.PICK_HELP.text())]), height=1),
+                Window(FormattedTextControl([("class:help", msgs.PICK_HELP.with_keymap(keymap, MODEL_KEYMAP).text())]), height=1),
             ]
         )
         return Application(

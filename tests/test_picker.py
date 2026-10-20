@@ -10,6 +10,15 @@ from prompt_toolkit.output import DummyOutput
 from js import logins, paths, picker, providers
 
 
+def test_model_picker_accepts_action_keys():
+    from prompt_toolkit.input import DummyInput
+
+    state = picker.ModelPicker()
+    app = state.application(input=DummyInput(), output=DummyOutput(), keymap={"focus": (("z",),)})
+    app.key_bindings.get_bindings_for_keys(("z",))[0].handler(None)
+    assert state.focus == "models"
+
+
 def _reset_logins() -> None:
     logins.set_config_dir(paths.login_store_dir())
 
