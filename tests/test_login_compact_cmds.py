@@ -217,3 +217,17 @@ def test_login_bare_name_loads_saved(tmp_path, monkeypatch):
 
     assert cli._handle_command("/login deepseek", state, cfg) is True
     assert loaded == ["deepseek"]  # bare /login keeps the old load-saved behavior
+
+
+def test_login_preserves_the_live_session_when_the_store_is_corrupt(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.logins, "_CONFIG_DIR_OVERRIDE", tmp_path)
+    path = tmp_path / "logins.toml"
+    path.write_text("[broken", encoding="utf-8")
+    before = path.read_bytes()
+    state = {"messages": [], "provider_id": "ollama", "provider_api_key": "current-key"}
+
+    assert cli._handle_command("/login deepseek replacement-key", state, make_cfg(tmp_path))
+
+    assert state["provider_id"] == "ollama"
+    assert state["provider_api_key"] == "current-key"
+    assert path.read_bytes() == before

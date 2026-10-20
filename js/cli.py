@@ -1358,12 +1358,15 @@ def _cmd_login(arg: str, state: dict, cfg: Config) -> str | None:
         return msgs.LOGIN_UNKNOWN_PROVIDER.said(name=name)
     sdk = prov.effective_sdk_provider_id if prov is not None else ptype
     canonical = providers.normalize_provider_id(name) or name
-    logins.save_login(logins.Login(
-        provider_id=canonical,
-        sdk_provider_id=sdk,
-        provider_base_url=url,
-        provider_api_key=key,
-    ))
+    try:
+        logins.save_login(logins.Login(
+            provider_id=canonical,
+            sdk_provider_id=sdk,
+            provider_base_url=url,
+            provider_api_key=key,
+        ))
+    except (logins.LoginsCorruptError, logins.LoginStoreBusyError, OSError) as exc:
+        return msgs.LOGIN_NOT_SAVED.said(error=f"{type(exc).__name__}: {exc}")
     _apply_saved_login_to_state(state, canonical)
     msgs.say(msgs.LOGIN_SAVED, provider=canonical)
     return None
