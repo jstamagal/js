@@ -60,6 +60,24 @@ def test_concurrent_downloads_preserve_each_transfer_and_snapshot(tmp_path, monk
     assert target.read_bytes() == b"second"
 
 
+def test_saved_download_leaves_only_its_file_in_the_directory(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    directory = tmp_path / "project"
+    directory.mkdir()
+
+    def start(argv, **kwargs):
+        partial = Path(next(arg[6:] for arg in argv if arg.startswith("--dir=")))
+        (partial / next(arg[6:] for arg in argv if arg.startswith("--out="))).write_bytes(b"payload")
+        return SimpleNamespace(returncode=0, poll=lambda: 0)
+
+    monkeypatch.setattr(tool_binaries.subprocess, "Popen", start)
+    tool_binaries.download_with_aria2("aria2c", "https://example.test/file", directory / "file",
+                                      timeout_s=5)
+
+    assert sorted(path.name for path in directory.iterdir()) == ["file"]
+
+
 def _tar_gz(member: str, content: bytes) -> bytes:
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode="w:gz") as bundle:

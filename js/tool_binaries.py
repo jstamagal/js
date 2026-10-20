@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import messages as msgs
+from . import paths
 
 
 TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools" / "bin"
@@ -313,7 +314,11 @@ def download_with_aria2(
     started = time.monotonic()
     destination.parent.mkdir(parents=True, exist_ok=True)
     # The persistent lock inode covers partials, identity metadata and publication.
-    lock_path = destination.with_name(f".{destination.name}.aria2-lock")
+    # It lives in js's tmp directory, keyed by the destination, not beside it.
+    locks = paths.tmp_dir() / "aria2-locks"
+    locks.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha256(str(destination.resolve(strict=False)).encode()).hexdigest()
+    lock_path = locks / f"{key}.lock"
     with lock_path.open("ab") as lock:
         while True:
             try:
