@@ -154,3 +154,16 @@ def test_only_the_input_line_collapses_a_paste():
         pastes.insert(buffer, text, None)
         assert (buffer.text != text) == collapsed, name
         assert pastes.expand(buffer.text) == text
+
+
+def test_paste_storage_can_belong_to_each_assembly():
+    from js import pastes
+
+    first, second = {}, {}
+    with pastes.using_store(first):
+        token = pastes.keep("first", 0)
+        with pastes.using_store(second):
+            other = pastes.keep("second", 0)
+            assert pastes.expand(other) == "second"
+        assert pastes.expand(token) == "first"
+    assert first == {1: "first"} and second == {1: "second"}

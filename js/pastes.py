@@ -13,6 +13,8 @@ from __future__ import annotations
 from . import messages as msgs
 
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from collections.abc import Callable, Mapping
 
 from prompt_toolkit.enums import DEFAULT_BUFFER
@@ -23,6 +25,23 @@ from . import settings as _settings
 
 _MARKER = re.compile(r"\[paste #(\d+)(?: \+\d+ lines| \d+ chars)\]")
 _pastes: dict[int, str] = {}
+
+_STORE: ContextVar[dict | None] = ContextVar("js_paste_store", default=None)
+
+
+@contextmanager
+def using_store(store: dict[int, str]):
+    """Keep and expand pastes in the caller's store for the duration of the body."""
+    token = _STORE.set(store)
+    try:
+        yield store
+    finally:
+        _STORE.reset(token)
+
+
+def _store() -> dict[int, str]:
+    store = _STORE.get()
+    return _pastes if store is None else store
 
 
 def normalize(data: str) -> str:
@@ -45,8 +64,9 @@ def collapses(text: str, line_limit: int, char_limit: int) -> bool:
 
 def keep(text: str, line_limit: int) -> str:
     """Keep ``text`` and return the marker that stands for it."""
-    n = len(_pastes) + 1
-    _pastes[n] = text
+    store = _store()
+    n = len(store) + 1
+    store[n] = text
     return marker(n, text, line_limit)
 
 
@@ -57,7 +77,7 @@ def expand(line: str) -> str:
         return line
 
     def fill(match: re.Match) -> str:
-        return _pastes.get(int(match.group(1)), match.group(0))
+        return _store().get(int(match.group(1)), match.group(0))
 
     return _MARKER.sub(fill, line)
 
