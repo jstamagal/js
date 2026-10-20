@@ -258,9 +258,9 @@ branch the audit was made on; they move as the code changes.
 | `js/hookexec.py` | refusal | policy | Model-facing text is loaded from `prompts/text/hookexec.json`; selection and execution policy are unchanged. | js-2lg.202 |
 | `js/jail.py` | Jail.confine | policy | Model-facing text is loaded from `prompts/text/jail.json`; selection and execution policy are unchanged. | js-2lg.204 |
 | `js/capped_process.py` | truncation_marker | policy | Model-facing text is loaded from `prompts/text/capped_process.json`; selection and execution policy are unchanged. | js-2lg.213 |
-| `js/mcp/host.py:306-331` | MCPHost.CONTROL_TOOLS | policy | Writes the MCP control tool descriptions and usage nudges in code, not in tool_descriptions/*.md. | js-2lg.215 |
-| `js/mcp/host.py:475,496,502,675-677,749,754-755,810` | MCPHost.discover / _index_server_tools / _regroup_tools / _make_tool | policy | Builds the catalog entry text the model reads (server error, connected server, collision notes, default "MCP tool") in code. | js-2lg.215 |
-| `js/mcp/host.py:244,252,271,793` | _safe_content_block / resource_result / _make_tool | policy | Builds "[... content suppressed]" and "MCP tool ... is no longer available" text for the model in code. | js-2lg.215 |
+| `js/mcp/host.py` | MCPHost.CONTROL_TOOLS | policy | Model-facing text is loaded from `prompts/text/mcp_host.json`; selection and execution policy are unchanged. | js-2lg.215 |
+| `js/mcp/host.py` | MCPHost.discover / _index_server_tools / _regroup_tools / _make_tool | policy | Model-facing text is loaded from `prompts/text/mcp_host.json`; selection and execution policy are unchanged. | js-2lg.215 |
+| `js/mcp/host.py` | _safe_content_block / resource_result / _make_tool | policy | Model-facing text is loaded from `prompts/text/mcp_host.json`; selection and execution policy are unchanged. | js-2lg.215 |
 
 ## S8 messages
 

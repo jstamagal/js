@@ -18,6 +18,10 @@ from ..toolkit.core import CatalogEntry, Tool, ToolResult, compact_json
 from ..toolkit.discovery import ranked_entries, schema_search_text, search_tokens
 from .client import MCPClient
 from .transports import StdioTransport, StreamableHTTPTransport
+from ..prompt_text import load_catalog
+
+_PROMPTS = load_catalog('mcp_host')
+
 
 _NAME_RE = re.compile(r"[^a-z0-9_]+")
 
@@ -241,7 +245,7 @@ def _safe_content_block(raw: Any, secrets: tuple[str, ...]) -> dict[str, Any]:
     item = _redact_value(dict(raw), secrets)
     kind = item.get("type")
     if kind in {"image", "audio"} and not _safe_media_data(item.get("data", ""), secrets):
-        return {"type": "text", "text": f"[{kind} content suppressed]"}
+        return {"type": "text", "text": _PROMPTS['safe_content_block_content_suppressed'].format(kind=kind)}
     if kind == "resource":
         resource = item.get("resource")
         if (
@@ -249,7 +253,7 @@ def _safe_content_block(raw: Any, secrets: tuple[str, ...]) -> dict[str, Any]:
             and "blob" in resource
             and not _safe_media_data(resource["blob"], secrets)
         ):
-            return {"type": "text", "text": "[embedded resource content suppressed]"}
+            return {"type": "text", "text": _PROMPTS['safe_content_block_embedded_resource_content_suppressed']}
     return item
 
 
@@ -265,10 +269,10 @@ def resource_result(result: Any, secrets: tuple[str, ...] = ()) -> ToolResult:
     for content in result.contents:
         item = _redact_value(dict(content), secrets)
         if "text" in item:
-            blocks.append({"type": "text", "text": f"[{item.get('uri', '')}]\n{item['text']}"})
+            blocks.append({"type": "text", "text": _PROMPTS['resource_result_text'].format(item_get_uri=item.get('uri', ''), item_text=item['text'])})
         elif "blob" in item:
             if not _safe_media_data(item["blob"], secrets):
-                blocks.append({"type": "text", "text": "[resource content suppressed]"})
+                blocks.append({"type": "text", "text": _PROMPTS['resource_result_resource_content_suppressed']})
                 continue
             blocks.append({
                 "type": "resource",
@@ -286,34 +290,31 @@ def prompt_result(result: Any, secrets: tuple[str, ...] = ()) -> ToolResult:
     blocks: list[dict[str, Any]] = []
     description = _redact_value(result.description, secrets)
     if description:
-        blocks.append({"type": "text", "text": f"[description]\n{description}"})
+        blocks.append({"type": "text", "text": _PROMPTS['prompt_result_description'].format(description=description)})
     for raw_message in result.messages:
         message = _redact_value(raw_message, secrets)
         role = str(message.get("role", "user"))
         content = message.get("content")
         if not isinstance(content, dict):
-            blocks.append({"type": "text", "text": f"[{role}]\n{compact_json(content)}"})
+            blocks.append({"type": "text", "text": _PROMPTS['prompt_result_text'].format(role=role, compact_json_content=compact_json(content))})
             continue
         item = _safe_content_block(content, secrets)
         if item.get("type") == "text":
-            blocks.append({"type": "text", "text": f"[{role}]\n{item.get('text', '')}"})
+            blocks.append({"type": "text", "text": _PROMPTS['prompt_result_text_2'].format(role=role, item_get_text=item.get('text', ''))})
         else:
-            blocks.append({"type": "text", "text": f"[{role}]"})
+            blocks.append({"type": "text", "text": _PROMPTS['prompt_result_text_3'].format(role=role)})
             blocks.append(item)
     return ToolResult(blocks=blocks)
 
 
 _MCP_CONTROL_SETUP = (
-    " Before using this control, run tool_discovery with kind=\"mcp\" (and "
-    "optionally source) to connect servers, then pass the exact server name from "
-    "a mcp:server:* status result."
+    _PROMPTS['default_before_using_this_control_run_tool']
 )
 _MCP_RESOURCE_URI = (
-    " First call mcp_resource_list or mcp_resource_templates and copy an exact "
-    "returned URI."
+    _PROMPTS['default_first_call_mcp_resource_list_or']
 )
 _MCP_PROMPT_NAME = (
-    " First call mcp_prompt_list and copy an exact returned prompt name."
+    _PROMPTS['default_first_call_mcp_prompt_list_and']
 )
 
 
@@ -321,13 +322,13 @@ class MCPHost:
     """Own clients and lazy remote metadata for one js session."""
 
     CONTROL_TOOLS = (
-        ("mcp_resource_list", "List resources from an MCP server." + _MCP_CONTROL_SETUP),
-        ("mcp_resource_templates", "List resource templates from an MCP server." + _MCP_CONTROL_SETUP),
-        ("mcp_resource_read", "Read an MCP resource by URI." + _MCP_CONTROL_SETUP + _MCP_RESOURCE_URI),
-        ("mcp_resource_subscribe", "Subscribe to updates for an MCP resource." + _MCP_CONTROL_SETUP + _MCP_RESOURCE_URI),
-        ("mcp_resource_unsubscribe", "Unsubscribe from updates for an MCP resource." + _MCP_CONTROL_SETUP + _MCP_RESOURCE_URI),
-        ("mcp_prompt_list", "List prompts from an MCP server." + _MCP_CONTROL_SETUP),
-        ("mcp_prompt_get", "Get an MCP prompt and its messages." + _MCP_CONTROL_SETUP + _MCP_PROMPT_NAME),
+        ("mcp_resource_list", _PROMPTS['default_list_resources_from_an_mcp_server'] + _MCP_CONTROL_SETUP),
+        ("mcp_resource_templates", _PROMPTS['default_list_resource_templates_from_an_mcp'] + _MCP_CONTROL_SETUP),
+        ("mcp_resource_read", _PROMPTS['default_read_an_mcp_resource_by_uri'] + _MCP_CONTROL_SETUP + _MCP_RESOURCE_URI),
+        ("mcp_resource_subscribe", _PROMPTS['default_subscribe_to_updates_for_an_mcp'] + _MCP_CONTROL_SETUP + _MCP_RESOURCE_URI),
+        ("mcp_resource_unsubscribe", _PROMPTS['default_unsubscribe_from_updates_for_an_mcp'] + _MCP_CONTROL_SETUP + _MCP_RESOURCE_URI),
+        ("mcp_prompt_list", _PROMPTS['default_list_prompts_from_an_mcp_server'] + _MCP_CONTROL_SETUP),
+        ("mcp_prompt_get", _PROMPTS['default_get_an_mcp_prompt_and_its'] + _MCP_CONTROL_SETUP + _MCP_PROMPT_NAME),
     )
 
     def __init__(
@@ -472,7 +473,7 @@ class MCPHost:
             entries.append(CatalogEntry(
                 f"mcp:server-error:{server.normalized_name}",
                 server.name,
-                f"MCP server error: {message}"[:240],
+                _PROMPTS['discover_mcp_server_error'].format(message=message)[:240],
                 "mcp",
                 server.name,
                 loadable=False,
@@ -493,13 +494,13 @@ class MCPHost:
             entries.append(CatalogEntry(
                 f"mcp:server:{normalize_tool_name(server_name)}",
                 server_name,
-                f"Connected MCP server ({detail}); use this exact server name with MCP controls.",
+                _PROMPTS['discover_connected_mcp_server_use_this_exact'].format(detail=detail),
                 "mcp",
                 server_name,
                 loadable=False,
             ))
         for public, (server_name, _remote, raw) in self.remote_tools.items():
-            description = str(raw.get("description") or raw.get("title") or "MCP tool")[:240]
+            description = str(raw.get("description") or raw.get("title") or _PROMPTS['discover_mcp_tool'])[:240]
             entries.append(CatalogEntry(
                 f"mcp:{public}", public, description, "mcp", server_name,
                 search_text=f"{raw.get('description') or ''} {schema_search_text(raw.get('inputSchema'))}",
@@ -672,8 +673,7 @@ class MCPHost:
                     f"mcp:collision:{server.normalized_name}:{digest}",
                     public,
                     (
-                        f"MCP tool names {names} normalize to the same public name; "
-                        f"exposed with disambiguated names: {aliases}"
+                        _PROMPTS['index_server_tools_mcp_tool_names_normalize_to_the'].format(names=names, aliases=aliases)
                     )[:240],
                     "mcp",
                     server.name,
@@ -738,21 +738,20 @@ class MCPHost:
                     exposed.append((server_name, str(raw["name"]), alias))
                 digest = hashlib.sha256(
                     (public + "\0" + "\0".join(
-                        f"{server}/{remote}" for server, remote, _raw in candidates
+                        _PROMPTS['regroup_tools_text'].format(server=server, remote=remote) for server, remote, _raw in candidates
                     )).encode()
                 ).hexdigest()[:6]
                 mappings = ", ".join(
-                    f"{server}/{remote} as mcp:{alias}"
+                    _PROMPTS['regroup_tools_as_mcp'].format(server=server, remote=remote, alias=alias)
                     for server, remote, alias in exposed
                 )
                 if not mappings:
-                    mappings = "no disambiguated ID is allowed by current tool policy"
+                    mappings = _PROMPTS['regroup_tools_no_disambiguated_id_is_allowed_by']
                 cross_server_collisions.append(CatalogEntry(
                     f"mcp:collision:cross:{digest}",
                     public,
                     (
-                        f"MCP tools from multiple servers collide as {public}; "
-                        f"use disambiguated IDs {mappings}."
+                        _PROMPTS['regroup_tools_mcp_tools_from_multiple_servers_collide'].format(public=public, mappings=mappings)
                     ),
                     "mcp",
                     "mcp",
@@ -790,7 +789,7 @@ class MCPHost:
             async def call(**kwargs: Any) -> ToolResult:
                 current = self.remote_tools.get(name)
                 if current is None or not self.config.allows_tool(name):
-                    return ToolResult.text(f"ERROR: MCP tool {name!r} is no longer available", is_error=True)
+                    return ToolResult.text(_PROMPTS['call_error_mcp_tool_is_no_longer'].format(name=name), is_error=True)
                 client = self.clients[current[0]]
                 server_config = next(item for item in self.config.servers if item.name == current[0])
                 return mcp_tool_result(
@@ -807,7 +806,7 @@ class MCPHost:
             )
             return Tool(
                 name,
-                str(raw.get("description") or "MCP tool"),
+                str(raw.get("description") or _PROMPTS['make_tool_mcp_tool']),
                 call,
                 properties,
                 tuple(required),
@@ -817,7 +816,7 @@ class MCPHost:
 
     def _server(self, server: str) -> MCPClient:
         if server not in self.clients:
-            raise ValueError(f"MCP server {server!r} is not initialized")
+            raise ValueError(_PROMPTS['server_mcp_server_is_not_initialized'].format(server=server))
         return self.clients[server]
 
     def _control_tool(self, name: str) -> Tool:
