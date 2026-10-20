@@ -303,7 +303,7 @@ TRANSCRIPT_LOG_DIR
     ~/.js/logs/transcript/<agent>.
 
 HYMEM_URL
-    URL of a Hy-Memory server (js/hymem_server.py), e.g.
+    URL of a Hy-Memory server, which js/hymem_server.py is, for example
     http://vader:19527. Set, it turns long-term memory on: a session is sent
     to the server 10 user turns at a time while it runs and the rest when it
     ends; the first message of `js -p` and of a swarm agent carries a
