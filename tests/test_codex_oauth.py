@@ -988,6 +988,31 @@ def test_codex_requests_carry_the_provider_headers(monkeypatch):
     assert sent["X-JS-Scrub"] == "on" and sent["X-Pool"] == "fofa"
 
 
+def test_saved_codex_login_keeps_the_requests_explicit_base_url(monkeypatch):
+    login = codex_auth.login_from_token(codex_auth.CodexToken(
+        access=_fake_jwt(), refresh="refresh", expires_at=time.time() + 3600,
+        account_id="acct_123",
+    ))
+    logins.save_login(login)
+    client = _FakeCodexHttpClient()
+    initialize = codex_provider.OpenAICodexProvider.__init__
+
+    def with_fake_client(self, **kwargs):
+        initialize(self, **{**kwargs, "client": client})
+
+    monkeypatch.setattr(codex_provider.OpenAICodexProvider, "__init__", with_fake_client)
+    model_client.stream_model(
+        model_id="gpt-5.5", provider_id="openai-codex",
+        provider_base_url="https://codex.example.test/backend-api",
+        provider_api_key=login.provider_api_key,
+        messages=[ai.user_message("ping")], tools=None, max_output_tokens=None,
+        reasoning_effort=None, on_text=lambda _c: None,
+    )
+
+    assert client.stream_calls[0]["url"] == "https://codex.example.test/backend-api/codex/responses"
+    assert logins.load_logins()["openai-codex"].provider_base_url == login.provider_base_url
+
+
 def test_codex_extra_params_reach_the_http_body(monkeypatch):
     client = _FakeCodexHttpClient()
     monkeypatch.setattr(

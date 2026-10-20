@@ -577,13 +577,13 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
         self._set_client(client or httpx.AsyncClient(timeout=_CLIENT_TIMEOUT))
 
     @classmethod
-    def from_login(cls, login: Login) -> OpenAICodexProvider:
+    def from_login(cls, login: Login, *, base_url: str | None = None) -> OpenAICodexProvider:
         return cls(
             access_token=login.provider_api_key or "",
             refresh_token=login.codex_refresh_token,
             expires_at=login.codex_token_expires,
             account_id=login.codex_account_id,
-            base_url=login.provider_base_url,
+            base_url=base_url or login.provider_base_url,
             login=login,
         )
 
@@ -958,7 +958,7 @@ def provider_from_login_or_token(
 
     login = logins.load_logins().get(codex_auth.CODEX_PROVIDER_ID)
     if login is not None and login.provider_api_key:
-        provider = OpenAICodexProvider.from_login(login)
+        provider = OpenAICodexProvider.from_login(login, base_url=provider_base_url)
     else:
         provider = OpenAICodexProvider(
             access_token=provider_api_key or "",
