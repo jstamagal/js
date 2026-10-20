@@ -741,6 +741,11 @@ def build_app(
     key_bindings: KeyBindingsBase | None = None,
     keymap: keys.Keymap | None = None,
     echo: Callable[[str], bool] = lambda line: True,
+    user_line: Callable[[str], str] | None = None,
+    layout_factory: Callable[[Layout], Layout] | None = None,
+    application_factory: Callable | None = None,
+    complete_while_typing: bool = False,
+    complete_tab: Callable | None = None,
 ) -> tuple[Application, Scrollback]:
     """`status(width)` renders the bar; `status_colours()` is its style, read on
     every repaint so a changed setting shows on the next invalidate. In vi mode
@@ -764,7 +769,7 @@ def build_app(
         name=DEFAULT_BUFFER,  # the buffer js.pastes collapses large pastes in
         history=history,
         completer=completer,
-        complete_while_typing=False,
+        complete_while_typing=complete_while_typing,
         enable_history_search=True,
         multiline=vi_mode,
     )
@@ -778,7 +783,7 @@ def build_app(
         input_buffer.reset()
         sent = pastes.expand(line).strip()
         if sent and echo(sent):
-            scrollback.append(display.user_line(line))
+            scrollback.append((display.user_line if user_line is None else user_line)(line))
         await on_line(sent)
 
     editor = InputEditor(input_buffer, submit)
@@ -863,6 +868,9 @@ def build_app(
             event.app.invalidate()
 
     def _tab(event) -> None:
+        if complete_tab is not None:
+            complete_tab(event)
+            return
         # The first Tab fills in what every match shares and lists them all;
         # each Tab after that selects the next one.
         b = event.current_buffer
@@ -951,7 +959,10 @@ def build_app(
     def _sync_editing_mode(app: Application) -> None:
         app.editing_mode = _editing_mode()
 
-    app = Application(
+    if layout_factory is not None:
+        layout = layout_factory(layout)
+    factory = Application if application_factory is None else application_factory
+    app = factory(
         layout=layout,
         key_bindings=kb if key_bindings is None else merge_key_bindings([kb, key_bindings]),
         style=DynamicStyle(_style),
