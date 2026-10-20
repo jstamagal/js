@@ -143,3 +143,19 @@ def test_user_echo_is_an_event(capsys):
     assert [event.name for event in events] == ["user_echo"]
     assert dict(events[0].fields)["text"] == "hello"
     assert capsys.readouterr() == ("", "")
+
+
+def test_ex_write_reports_through_an_event(tmp_path, capsys):
+    import asyncio
+
+    from js import exline
+
+    events = []
+    path = tmp_path / "buffer"
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        asyncio.run(exline.run_ex(f"w {path}", SimpleNamespace(text="saved"),
+                                  is_command=lambda verb: False, dispatch=None))
+    assert path.read_text() == "saved\n"
+    assert len(events) == 1
+    assert dict(events[0].fields)["fields"]["path"] == path
+    assert capsys.readouterr() == ("", "")

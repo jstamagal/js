@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Protocol
 
 from . import messages as msgs
-from . import pastes, paths, fset
+from . import fset, output, pastes, paths
 
 NOTES_FILE = "notes.txt"
 BUFFER_FILE = "buffer.txt"
@@ -91,7 +91,7 @@ async def run_ex(
             path = Path(arg).expanduser() if arg else paths.notes_dir() / BUFFER_FILE
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(pastes.expand(editor.text) + "\n", encoding="utf-8")
-            msgs.say(msgs.BUFFER_WRITTEN, path=path)
+            output.notice(msgs.BUFFER_WRITTEN, stderr=False, flush=False, path=path)
         elif verb == "x":
             await editor.submit()
         elif verb == "q":
@@ -113,6 +113,6 @@ async def run_ex(
         elif shutil.which(verb):
             await edit_buffer(editor, [verb, *shlex.split(arg)])
         else:
-            msgs.say(msgs.EX_UNKNOWN, verb=verb)
+            output.notice(msgs.EX_UNKNOWN, stderr=False, flush=False, verb=verb)
     except (OSError, UnicodeError, ValueError) as e:
-        msgs.say(msgs.EX_FAILED, verb=verb, error=f"{type(e).__name__}: {e}")
+        output.notice(msgs.EX_FAILED, stderr=False, flush=False, verb=verb, error=f"{type(e).__name__}: {e}")
