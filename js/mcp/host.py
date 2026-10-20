@@ -531,6 +531,7 @@ class MCPHost:
         if client is not None:
             if not client.initialized:
                 await client.initialize(timeout=self.request_timeout)
+                self._mark_metadata_dirty(server, client)
             return client
 
         def changed(feature: str, name: str = server.name) -> None:
@@ -565,13 +566,16 @@ class MCPHost:
         )
         self.clients[server.name] = client
         await client.initialize(timeout=self.request_timeout)
+        self._mark_metadata_dirty(server, client)
+        return client
+
+    def _mark_metadata_dirty(self, server: MCPServer, client: MCPClient) -> None:
         capabilities = getattr(client, "server_capabilities", None)
         features = {
             name for name in ("tools", "resources", "prompts")
             if capabilities is None or capabilities.supports(name)
         }
         self._dirty.setdefault(server.name, set()).update(features)
-        return client
 
     def _event(self, kind: str, **payload: Any) -> None:
         if self.telemetry is not None:

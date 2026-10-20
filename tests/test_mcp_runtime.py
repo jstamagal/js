@@ -165,6 +165,29 @@ def test_silent_stdio_server_returns_within_configured_deadline():
     asyncio.run(drive())
 
 
+def test_discovery_lists_tools_after_recovering_initialization(config):
+    class RecoveringClient(FakeClient):
+        async def initialize(self, *, timeout=None):
+            if not getattr(self, "failed_once", False):
+                self.failed_once = True
+                raise ConnectionError("temporarily unavailable")
+            self.tools = [{"name": "ready", "inputSchema": {"type": "object"}}]
+            await super().initialize(timeout=timeout)
+
+    async def drive():
+        host = MCPHost(config, client_factory=RecoveringClient)
+        try:
+            await host.discover(query="mcp")
+            found = await host.discover(query="mcp")
+
+            assert "alpha_server__ready" in host.remote_tools
+            assert any(entry.id == "mcp:alpha_server__ready" for entry in found)
+        finally:
+            await host.close()
+
+    asyncio.run(drive())
+
+
 def test_host_passes_deadline_to_metadata_calls_remote_calls_and_controls():
     class DeadlineClient(FakeClient):
         def __init__(self, factory, **kwargs):
