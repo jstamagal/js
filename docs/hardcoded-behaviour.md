@@ -327,6 +327,9 @@ branch the audit was made on; they move as the code changes.
 24 findings.
 
 Resolution notes (the rows below record the original audit):
+- js-2lg.144: login pickers and text entry take action maps, with hints from
+  those maps; environment-key acceptance, test-choice interpretation and their
+  questions are supplied independently. Existing answers remain the defaults.
 - js-2lg.132: attachment splitting and its unbalanced-quote scanner accept
   the attachment prefix. The REPL keeps the default @ syntax.
 - js-2lg.123: `run_ex` takes the verb-handler table and force-form aliases;

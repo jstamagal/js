@@ -74,6 +74,14 @@ def test_login_provider_rows_show_saved_env_and_registry(monkeypatch, tmp_path: 
         _reset_logins()
 
 
+def test_login_picker_accepts_action_keymaps(monkeypatch):
+    monkeypatch.setattr(login_cli.curses, "curs_set", lambda value: None)
+    screen = _FakeStdscr([ord("z")])
+    chosen = login_cli._curses_picker(screen, [("first", "")], "choose",
+                                      keymaps={"list": {"choose": (ord("z"),)}})
+    assert chosen == [0]
+
+
 def test_collect_api_login_offers_env_key_and_accepting_uses_it(monkeypatch, tmp_path: Path):
     # Owner ruling: login never silently farms env keys. It OFFERS the env key;
     # answering yes uses it, and only then.

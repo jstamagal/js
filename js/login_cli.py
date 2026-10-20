@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 import curses
 import os
 import sys
@@ -70,6 +70,39 @@ def _use_terminal_colors() -> None:
         curses.use_default_colors()
 
 
+CursesKeymap = Mapping[str, tuple[int, ...]]
+_CURSES_TEXT_KEYS: CursesKeymap = {
+    "choose": (10, 13, curses.KEY_ENTER), "back": (27, 3),
+    "backspace": (curses.KEY_BACKSPACE, 127, 8),
+}
+LOGIN_KEYMAPS: dict[str, CursesKeymap] = {
+    "list": {"search": (ord("/"),), "up": (curses.KEY_UP, ord("k")),
+             "down": (curses.KEY_DOWN, ord("j")), "page_up": (curses.KEY_PPAGE,),
+             "page_down": (curses.KEY_NPAGE,), "first": (curses.KEY_HOME,), "last": (curses.KEY_END,),
+             "toggle": (ord(" "),), "edit": (ord("e"),), "all": (ord("a"), ord("A")),
+             "none": (ord("n"), ord("N")), "choose": (10, 13, curses.KEY_ENTER),
+             "quit": (ord("q"), 27, 3)},
+    "search": {"choose": (10, 13, curses.KEY_ENTER), "back": (27,), "quit": (3,),
+               "backspace": (curses.KEY_BACKSPACE, 127, 8)},
+}
+
+
+def _curses_action(keymap: CursesKeymap, key: int) -> str | None:
+    return next((action for action, values in keymap.items() if key in values), None)
+
+
+def _curses_hint(message: msgs.Message, keymap: CursesKeymap, defaults: CursesKeymap) -> msgs.Message:
+    names = {curses.KEY_UP: "up", curses.KEY_DOWN: "down", curses.KEY_PPAGE: "pageup",
+             curses.KEY_NPAGE: "pagedown", curses.KEY_ENTER: "enter", 10: "enter", 13: "enter",
+             27: "escape", 3: "c-c", ord(" "): "space"}
+
+    def convert(table):
+        return {action: tuple((names.get(key, chr(key)),) for key in values)
+                for action, values in table.items()}
+
+    return message.with_keymap(convert(keymap), convert(defaults))
+
+
 def _curses_picker(
     stdscr: curses.window,
     rows: list[tuple[str, str]],
@@ -78,6 +111,7 @@ def _curses_picker(
     preselected: set[int] | None = None,
     details: list[list[str]] | None = None,
     on_edit: Callable[[curses.window, str], str | None] | None = None,
+    keymaps: Mapping[str, CursesKeymap] | None = None,
 ) -> list[int] | None:
     """Searchable chooser/checklist; selections always use original row indices.
 
@@ -86,6 +120,7 @@ def _curses_picker(
     With ``on_edit``, e calls it with the row's label and shows the
     annotation it returns on the row.
     """
+    keymaps = LOGIN_KEYMAPS if keymaps is None else keymaps
     rows = list(rows)
     _use_terminal_colors()
     curses.curs_set(0)
@@ -127,59 +162,62 @@ def _curses_picker(
         help_text = msgs.PICKER_KEYS_CHECKLIST if multiple else msgs.PICKER_KEYS
         if multiple and on_edit is not None:
             help_text = msgs.PICKER_KEYS_CHECKLIST_EDIT
-        draw(h - 1, (msgs.PICKER_KEYS_SEARCH if searching else help_text).text())
+        context = "search" if searching else "list"
+        hint = msgs.PICKER_KEYS_SEARCH if searching else help_text
+        draw(h - 1, _curses_hint(hint, keymaps[context], LOGIN_KEYMAPS[context]).text())
         stdscr.refresh()
         try:
             key = stdscr.getch()
         except KeyboardInterrupt:
             return None
+        action = _curses_action(keymaps[context], key)
         if searching:
-            if key in (10, 13, curses.KEY_ENTER):
+            if action == "choose":
                 searching = False
-            elif key == 27:
+            elif action == "back":
                 query = ""
                 searching = False
-            elif key == 3:
+            elif action == "quit":
                 return None
-            elif key in (curses.KEY_BACKSPACE, 127, 8):
+            elif action == "backspace":
                 query = query[:-1]
             elif 32 <= key < 256 and chr(key).isprintable():
                 query += chr(key)
             idx = 0
             continue
-        if key == ord("/"):
+        if action == "search":
             searching = True
             query = ""
-        elif key in (curses.KEY_UP, ord("k")):
+        elif action == "up":
             idx = max(0, idx - 1)
-        elif key in (curses.KEY_DOWN, ord("j")):
+        elif action == "down":
             idx = min(len(matches) - 1, idx + 1)
-        elif key == curses.KEY_PPAGE:
+        elif action == "page_up":
             idx = max(0, idx - page)
-        elif key == curses.KEY_NPAGE:
+        elif action == "page_down":
             idx = min(len(matches) - 1, idx + page)
-        elif key == curses.KEY_HOME:
+        elif action == "first":
             idx = 0
-        elif key == curses.KEY_END:
+        elif action == "last":
             idx = len(matches) - 1
-        elif multiple and key == ord(" ") and matches:
+        elif multiple and action == "toggle" and matches:
             original = matches[idx]
             selected.discard(original) if original in selected else selected.add(original)
-        elif on_edit is not None and key == ord("e") and matches:
+        elif on_edit is not None and action == "edit" and matches:
             original = matches[idx]
             annotation = on_edit(stdscr, rows[original][0])
             if annotation is not None:
                 rows[original] = (rows[original][0], annotation)
-        elif multiple and key in (ord("a"), ord("A")):
+        elif multiple and action == "all":
             selected.update(matches)
-        elif multiple and key in (ord("n"), ord("N")):
+        elif multiple and action == "none":
             selected.difference_update(matches)
-        elif key in (10, 13, curses.KEY_ENTER):
+        elif action == "choose":
             if multiple:
                 return sorted(selected)
             if matches:
                 return [matches[idx]]
-        elif key in (ord("q"), 27, 3):
+        elif action == "quit":
             return None
 
 
@@ -234,6 +272,7 @@ def _curses_multiselect(
     *,
     preselected: set[int],
     on_edit: Callable[[curses.window, str], str | None] | None = None,
+    keymaps: Mapping[str, CursesKeymap] | None = None,
 ) -> list[int] | None:
     """Spacebar checklist with / filtering; None means cancel."""
     if not rows:
@@ -390,12 +429,19 @@ def _env_key_name(provider: providers.ProviderDef, env: dict[str, str]) -> str |
     return None
 
 
+
+def _accept_env_key(answer: str) -> bool:
+    return answer.strip().lower() in {"y", "yes"}
+
 def _collect_api_login(
     provider_id: str,
     sdk_provider_id: str | None,
     provider: providers.ProviderDef,
     *,
     shape_provider_id: str | None = None,
+    accept_env_key: Callable[[str], bool] | None = None,
+    env_key_default: str = "n",
+    env_key_question: msgs.Message = msgs.LOGIN_ASK_ENV_KEY,
 ) -> Login | None:
     existing = load_logins().get(providers.normalize_provider_id(provider_id) or provider_id)
     env = os.environ
@@ -428,10 +474,10 @@ def _collect_api_login(
     base_url = entered_base_url or None
 
     if env_key_name and env_key:
-        answer = _input(msgs.LOGIN_ASK_ENV_KEY.text(name=env_key_name, key=_mask(env_key)), default="n")
+        answer = _input(env_key_question.text(name=env_key_name, key=_mask(env_key)), default=env_key_default)
         if answer is None:
             return None
-        if answer.strip().lower() in {"y", "yes"}:
+        if (accept_env_key or _accept_env_key)(answer):
             api_key = env_key
 
     keyless_ok = provider.local or not provider.established
@@ -488,7 +534,25 @@ def _display_models(models: list[str]) -> None:
         msgs.say(msgs.MORE_ROWS, count=len(models) - len(shown))
 
 
-def _secondary_test_choice(models: list[str], *, require_test: bool, read=None, say=None, write=None) -> str | None | bool:
+def _test_answer(choice: str, models: list[str]) -> str | bool | None:
+    if not choice:
+        return True
+    if choice.lower() in {"q", "quit", "exit"}:
+        return False
+    if choice.lower() == "t":
+        return models[0]
+    if choice in models:
+        return choice
+    if choice.isdigit():
+        index = int(choice) - 1
+        if 0 <= index < min(len(models), _MODEL_LIST_LIMIT):
+            return models[index]
+    return None
+
+
+def _secondary_test_choice(models: list[str], *, require_test: bool, read=None, say=None, write=None,
+                           interpret: Callable[[str, list[str]], str | bool | None] | None = None,
+                           question: msgs.Message = msgs.LOGIN_ASK_TEST) -> str | None | bool:
     announce = msgs.say if say is None else say
     reader = input if read is None else read
     if not models:
@@ -498,25 +562,16 @@ def _secondary_test_choice(models: list[str], *, require_test: bool, read=None, 
     # didn't prove the key can generate — it never forces a test.
     if require_test:
         announce(msgs.LOGIN_LISTING_NOT_PROOF)
-    prompt = msgs.LOGIN_ASK_TEST.text()
+    prompt = question.text()
     while True:
         try:
             choice = reader(prompt).strip()
         except (EOFError, KeyboardInterrupt):
             (print if write is None else write)()
             return False
-        if not choice:
-            return True
-        if choice.lower() in {"q", "quit", "exit"}:
-            return False
-        if choice.lower() == "t":
-            return models[0]
-        if choice in models:
-            return choice
-        if choice.isdigit():
-            index = int(choice) - 1
-            if 0 <= index < min(len(models), _MODEL_LIST_LIMIT):
-                return models[index]
+        result = (interpret or _test_answer)(choice, models)
+        if result is not None:
+            return result
         announce(msgs.LOGIN_TEST_CHOICES)
 
 def _run_secondary_test(login: Login, provider: providers.ProviderDef, model_id: str, *, settings=None, say=None) -> bool:
@@ -712,9 +767,11 @@ def _model_defaults_editor(provider_id: str, pending: list[Login] | None = None,
     return edit
 
 
-def _curses_prompt(stdscr: curses.window, prompt: str, default: str) -> str | None:
+def _curses_prompt(stdscr: curses.window, prompt: str, default: str, *,
+                   keymap: CursesKeymap | None = None) -> str | None:
     """A line of text typed on the bottom row, starting from ``default``.
     Enter returns it, escape returns None."""
+    keymap = _CURSES_TEXT_KEYS if keymap is None else keymap
     h, w = stdscr.getmaxyx()
     text = default
     curses.curs_set(1)
@@ -727,11 +784,12 @@ def _curses_prompt(stdscr: curses.window, prompt: str, default: str) -> str | No
                 stdscr.addstr(h - 1, 0, line)
             stdscr.refresh()
             key = stdscr.getch()
-            if key in (10, 13, curses.KEY_ENTER):
+            action = _curses_action(keymap, key)
+            if action == "choose":
                 return text
-            if key in (27, 3):
+            if action == "back":
                 return None
-            if key in (curses.KEY_BACKSPACE, 127, 8):
+            if action == "backspace":
                 text = text[:-1]
             elif 32 <= key < 256 and chr(key).isprintable():
                 text += chr(key)
