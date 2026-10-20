@@ -222,12 +222,15 @@ def incomplete_reason_from_metadata(provider_metadata: Any) -> str | None:
     """
     if not isinstance(provider_metadata, dict):
         return None
-    reason = provider_metadata.get("incomplete_reason")
-    details = provider_metadata.get("incomplete_details")
-    if reason is None and isinstance(details, dict):
-        reason = details.get("reason")
-    if provider_metadata.get("incomplete") or reason is not None:
-        return str(reason or "unknown")
+    for metadata in (provider_metadata, provider_metadata.get("openai")):
+        if not isinstance(metadata, dict):
+            continue
+        reason = metadata.get("incomplete_reason")
+        details = metadata.get("incomplete_details")
+        if reason is None and isinstance(details, dict):
+            reason = details.get("reason")
+        if metadata.get("incomplete") or metadata.get("status") == "incomplete" or reason is not None:
+            return str(reason or "unknown")
     return None
 
 
@@ -1244,6 +1247,8 @@ async def _stream_async(
     incomplete_reason = incomplete_reason_from_metadata(provider_metadata)
     if incomplete_reason is None and finish_reason == _OUTPUT_CAP_FINISH:
         incomplete_reason = "max_output_tokens"
+    if incomplete_reason is None and finish_reason == "content_filter":
+        incomplete_reason = "content_filter"
     tool_calls = [
         ModelToolCall(
             id=part.tool_call_id,

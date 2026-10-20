@@ -5,6 +5,7 @@ import json
 
 import ai
 import httpx2
+import pytest
 
 from js import model_client
 
@@ -90,3 +91,27 @@ def test_anthropic_retains_all_system_instructions(monkeypatch):
 
     assert _stream(monkeypatch, "anthropic", respond, messages).text == "ok"
     assert [message.model_dump() for message in messages] == original
+
+
+@pytest.mark.parametrize("provider", ["openai", "openai-responses"])
+def test_content_filter_marks_the_reply_incomplete(monkeypatch, provider):
+    def respond(request):
+        if provider == "openai":
+            events = [{
+                "id": "reply", "object": "chat.completion.chunk", "created": 1, "model": "test",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "content_filter"}],
+            }]
+        else:
+            events = [{"type": "response.incomplete", "sequence_number": 0, "response": {
+                "id": "reply", "object": "response", "created_at": 1, "model": "test",
+                "status": "incomplete", "output": [], "error": None,
+                "incomplete_details": {"reason": "content_filter"},
+            }}]
+        return httpx2.Response(
+            200, headers={"content-type": "text/event-stream"},
+            content="".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n",
+        )
+
+    result = _stream(monkeypatch, provider, respond, [ai.user_message("ping")])
+    assert result.incomplete_reason == "content_filter"
+    assert result.finish_reason == "incomplete:content_filter"
