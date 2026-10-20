@@ -22,7 +22,7 @@ from js.turn_stream import StreamSink, TurnEvents
 
 @pytest.fixture(autouse=True)
 def no_waiting(monkeypatch):
-    monkeypatch.setattr(turn_call, "_backoff", lambda _n: 0)
+    monkeypatch.setattr(turn_call, "_backoff", lambda _n, _budget: 0)
     monkeypatch.setattr(turn_call.model_metadata, "resolve_max_output", lambda *a, **k: None)
 
 

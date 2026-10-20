@@ -28,6 +28,15 @@ from . import settings as _settings
 INVALID: Any = object()
 
 
+def number(raw: Any) -> Any:
+    if raw is None or isinstance(raw, bool):
+        return INVALID
+    try:
+        return float(raw)
+    except (TypeError, ValueError, OverflowError):
+        return INVALID
+
+
 def integer(raw: Any) -> Any:
     if raw is None or isinstance(raw, bool):
         return INVALID
@@ -112,6 +121,10 @@ class TurnSetting:
 
 
 TURN_SETTINGS: tuple[TurnSetting, ...] = (
+    TurnSetting("retry_backoff_jitter", "RETRY_BACKOFF_JITTER", number),
+    TurnSetting("retry_backoff_max", "RETRY_BACKOFF_MAX", number),
+    TurnSetting("retry_backoff_multiplier", "RETRY_BACKOFF_MULTIPLIER", number),
+    TurnSetting("retry_backoff_start", "RETRY_BACKOFF_START", number),
     # --- on the ToolContext ---
     TurnSetting("max_read_lines", "READ_LINES_MAX", integer, on_context=True),
     TurnSetting("max_file_bytes", "FILE_BYTES_MAX", integer, on_context=True),

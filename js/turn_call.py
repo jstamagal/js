@@ -289,7 +289,7 @@ class ModelCaller:
                                             retry_after=wait, limit=limits.retry.max_wait)
                         self._fail(e, retryable=True)
                         raise
-                    delay = wait if wait is not None else _backoff(transport_retries)
+                    delay = wait if wait is not None else _backoff(transport_retries, limits.retry)
                     transport_retries += 1
                     await retry.wait(transport_retries, limits.retry, delay, e)
                 else:

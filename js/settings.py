@@ -139,6 +139,10 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("RETRY_BACKOFF_JITTER", "float", group="runtime"),
+    SettingSpec("RETRY_BACKOFF_MAX", "float", group="runtime"),
+    SettingSpec("RETRY_BACKOFF_MULTIPLIER", "float", group="runtime"),
+    SettingSpec("RETRY_BACKOFF_START", "float", group="runtime"),
     # --- agent ---
     SettingSpec("DEFAULT_AGENT", "str", group="models"),
     # --- model ---

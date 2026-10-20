@@ -25,7 +25,7 @@ from test_lazy_tool_discovery import _cfg
 def offline_metadata(monkeypatch):
     monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: None)
-    monkeypatch.setattr(turn_call, "_backoff", lambda _n: 0)
+    monkeypatch.setattr(turn_call, "_backoff", lambda _n, _budget: 0)
 
 
 def _config(tmp_path, runtime_settings: dict | None = None, *, window: int = 1_000_000, **fields):
