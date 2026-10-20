@@ -19,8 +19,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from typing import Any, Literal
 from types import SimpleNamespace
-from collections.abc import AsyncIterator, Callable, Sequence
-from contextlib import AsyncExitStack, aclosing, asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from contextlib import AsyncExitStack, aclosing, asynccontextmanager, contextmanager
 
 import ai
 import httpx2
@@ -526,6 +526,27 @@ def turn_headers(headers: dict[str, str] | None, cfg: Any) -> dict[str, str]:
     then ``cfg``'s EXTRA_HEADERS, then what PARANOID_MODE adds."""
     merged = with_extra_headers(headers, getattr(cfg, "extra_headers", None))
     return with_extra_headers(merged, paranoid.wire_headers(getattr(cfg, "paranoid_mode", "off")))
+
+
+_model_factory: contextvars.ContextVar[Callable[..., ai.Model] | None] = contextvars.ContextVar(
+    "js_model_factory", default=None,
+)
+
+
+@contextmanager
+def using_model_factory(factory: Callable[..., ai.Model]) -> Iterator[None]:
+    """Build streamed models with ``factory`` in this scope and its child tasks.
+
+    The factory takes the same arguments as ``resolve_model``: positional
+    ``model_id`` and keyword provider id, base URL, API key and headers.
+    Each call transfers a model to js, which closes its provider after streaming.
+    Turns and summary compaction share this scope; nested scopes restore it.
+    """
+    token = _model_factory.set(factory)
+    try:
+        yield
+    finally:
+        _model_factory.reset(token)
 
 
 def resolve_model(
@@ -1542,7 +1563,10 @@ async def stream_model_async(
             **(provider_headers or {}),
         }
     try:
-        model = resolve_model(
+        factory = _model_factory.get()
+        if factory is None:
+            factory = resolve_model
+        model = factory(
             model_id,
             provider_id=provider_id,
             provider_base_url=provider_base_url,

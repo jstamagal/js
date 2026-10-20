@@ -7,6 +7,7 @@ import time
 from types import SimpleNamespace
 
 import ai
+import ai.models
 import ai.types.messages
 import ai.types.usage
 import pytest
@@ -217,6 +218,73 @@ def test_run_turn_emits_text_response_events(monkeypatch, tmp_path):
     assert hooks.emitted[2][1]["text"] == "OK"
     assert hooks.emitted[3][1]["text"] == "OK"
     assert hooks.emitted[-1][1]["reason"] == "stop"
+
+
+def test_scoped_model_factory_runs_tools_and_summary_compaction(tmp_path):
+    import asyncio
+    from js import model_client, routing
+
+    replies = iter([
+        _make_assistant_msg("", [ModelToolCall("observe-1", "observe", "{}")]),
+        ai.assistant_message("observed"),
+        ai.assistant_message("summary"),
+    ])
+    calls, created, closed, ran = [], [], [], []
+
+    class ScriptedProvider(ai.models.Provider):
+        provider_class_id: str = "proof-gaps-scripted"
+        name: str = "scripted"
+        default_base_url: str = "http://scripted.invalid"
+
+        async def stream(self, model, messages, **kwargs):
+            calls.append(messages)
+            async with ai.models.Stream.replay_message(next(replies)) as stream:
+                async for event in stream:
+                    yield event
+
+        async def aclose(self):
+            closed.append(self)
+
+    def factory(model_id, **route):
+        model = ai.Model(id=model_id, provider=ScriptedProvider())
+        created.append(model)
+        return model
+
+    cfg = offline_config(tmp_path, settings={"COMPACTION_KEEP_RECENT_TOKENS": 1})
+    context = ToolContext(cwd=tmp_path)
+    registry = ToolRegistry(
+        (Tool("observe", "Record a call", lambda: ran.append(True) or "recorded", {}),), aliases={},
+    )
+    messages = [{"role": "user", "content": "old context " * 300}]
+    hooks = RecordingHooks()
+
+    async def drive():
+        with model_client.using_model_factory(factory):
+            await runtime.run_turn_async(
+                cfg, "system", messages, runtime.Telemetry(None),
+                tool_registry=registry, tool_context=context, event_hooks=hooks,
+                suppress_output=True,
+            )
+            assert ran == [True]
+            assert messages[-1]["content"] == "observed"
+            result = await compaction.compact_now(
+                cfg, "system", messages, forced=True, context=context,
+                emit=lambda event, **payload: hooks.emitted.append((event, payload)),
+            )
+            assert compaction.compacted(result)
+        with pytest.raises(routing.ProviderNotLoggedInError):
+            await model_client.stream_model_async(
+                model_id=cfg.model, provider_id=None, provider_base_url=None,
+                provider_api_key=None, messages=[ai.user_message("hi")], tools=None,
+                max_output_tokens=None, reasoning_effort=None, on_text=lambda text: None,
+            )
+
+    asyncio.run(drive())
+    assert len(calls) == 3
+    assert [model.id for model in created] == [cfg.model] * 3
+    assert closed == [model.provider for model in created]
+    assert any(event == "stream" for event, _ in hooks.emitted)
+    assert any(event == "post_compact" for event, _ in hooks.emitted)
 
 
 def test_run_turn_surfaces_and_persists_incomplete_responses(monkeypatch, tmp_path):
