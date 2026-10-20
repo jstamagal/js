@@ -216,6 +216,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("PYTHON_KERNEL_WAIT", "int", group="shell"),
     # --- jail ---
     SettingSpec("JAIL_BIND", "json", group="shell"),
+    SettingSpec("JAIL_HIDE", "json", group="shell"),
     # --- runtime ---
     SettingSpec("DEBUG_LOG", "bool", empty=EMPTY_OFF, group="runtime"),
     SettingSpec("runtime.trace", "bool",
@@ -518,11 +519,11 @@ def _coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
                 not isinstance(item, str) or not item.strip() for item in value
             ):
                 return None, msgs.EXPECTED_ENV_NAMES.text()
-        if spec.key == "JAIL_BIND":
+        if spec.key in {"JAIL_BIND", "JAIL_HIDE"}:
             from . import jail
 
             try:
-                jail.parse_binds(value)
+                (jail.parse_binds if spec.key == "JAIL_BIND" else jail.parse_hides)(value)
             except ValueError as exc:
                 return None, str(exc)
         if spec.key in {"MCP_SERVERS", "MCP_AGENT_POLICY"}:

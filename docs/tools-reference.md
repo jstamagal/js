@@ -316,7 +316,8 @@ Use `cwd` instead of writing `cd ... && ...` in the command.
 Under `js -C DIR` the command runs under bubblewrap (`js/jail.py`): DIR
 read-write at its real path, the system read-only, `/home`, the home,
 `/run/user` and network filesystems empty except the `PATH` directories under
-them (read-only) and the `JAIL_BIND` entries, a `/tmp` and `~/.js/tmp` private
+them (read-only) and the `JAIL_BIND` entries, the `JAIL_HIDE` paths empty
+whatever shows them, a `/tmp` and `~/.js/tmp` private
 to the js process (`PATH` directories under the host `/tmp` bound in read-only),
 the network shared, `--die-with-parent`. `kernel`,
 `terminal_session` and the wiki converters run in the same jail. The file tools

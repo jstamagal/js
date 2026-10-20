@@ -137,6 +137,7 @@ TURN_SETTINGS: tuple[TurnSetting, ...] = (
     TurnSetting("shell_program", "SHELL_PROGRAM", text, on_context=True),
     TurnSetting("max_parallel_tools", "PARALLEL_TOOLS_MAX", at_least_one, on_context=True),
     TurnSetting("jail_bind", "JAIL_BIND", paths, on_context=True),
+    TurnSetting("jail_hide", "JAIL_HIDE", paths, on_context=True),
     TurnSetting("lsp_servers", "LSP_SERVERS", entries, on_context=True),
     TurnSetting("lsp_timeout_s", "LSP_TIMEOUT", integer, on_context=True),
     TurnSetting("notebook_output_lines", "NOTEBOOK_OUTPUT_LINES_MAX", integer, on_context=True),

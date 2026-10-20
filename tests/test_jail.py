@@ -421,6 +421,236 @@ def test_spilled_tool_results_stay_readable(jailed):
     assert tool("write", jailed, path=str(spill), content="x", overwrite=True).startswith("ERROR:")
 
 
+@needs_bwrap
+def test_jail_hide_blanks_key_stores_in_a_jail_rooted_at_home(operator_home, monkeypatch):
+    ssh = operator_home / ".ssh"
+    ssh.mkdir()
+    (ssh / "id_ed25519").write_text(SECRET)
+    (operator_home / ".netrc").write_text(SECRET)
+    (paths.home() / "jsrc").parent.mkdir(parents=True, exist_ok=True)
+    (paths.home() / "jsrc").write_text(f"set API_KEY {SECRET}\n")
+    spill_dir = paths.tool_results_dir()
+    spill_dir.mkdir(parents=True, exist_ok=True)
+    (spill_dir / "result-1.txt").write_text("spilled-result\n")
+    monkeypatch.chdir(operator_home)
+    jail.enter(operator_home)
+    context = ToolContext(cwd=operator_home)
+    context.jail_bind = ()
+
+    code, result = run_shell(
+        "cat ~/.ssh/id_ed25519 ~/.netrc ~/.js/jsrc; "
+        f"cat {spill_dir}/result-1.txt; echo kept > ~/.js/tmp/t && cat ~/.js/tmp/t",
+        context,
+    )
+
+    assert SECRET not in result
+    assert "spilled-result" in result
+    assert "kept" in result
+    assert tool("read", context, path=str(ssh / "id_ed25519")).startswith("ERROR:")
+    assert tool("read", context, path=str(paths.home() / "jsrc")).startswith("ERROR:")
+    assert "spilled-result" in tool("read", context, path=str(spill_dir / "result-1.txt"))
+
+
+@needs_bwrap
+def test_searches_in_a_home_rooted_jail_leave_jail_hide_paths_out(operator_home, monkeypatch):
+    ssh = operator_home / ".ssh"
+    ssh.mkdir()
+    (ssh / "id_ed25519").write_text("KEYMATERIAL-4471\n")
+    monkeypatch.chdir(operator_home)
+    jail.enter(operator_home)
+    context = ToolContext(cwd=operator_home)
+    context.jail_bind = ()
+
+    files = tool("fs_search", context, pattern="**", glob=".ssh/**", output_mode="files_with_matches")
+    found = tool("fs_search", context, pattern="KEYMATERIAL", glob=".ssh/**")
+    listing = fs.list_dir(str(operator_home), recursive=True, context=context)
+
+    assert "id_ed25519" not in files + found + listing
+    assert "KEYMATERIAL" not in found
+
+
+@needs_bwrap
+def test_a_jail_dir_or_bind_inside_a_jail_hide_path_stays_hidden(operator_home, tmp_path, monkeypatch):
+    nested = operator_home / ".ssh" / "nested"
+    nested.mkdir(parents=True)
+    (nested / "key").write_text(SECRET)
+    root = tmp_path / "work"
+    root.mkdir()
+    monkeypatch.chdir(root)
+    jail.enter(root)
+    context = ToolContext(cwd=root)
+    context.jail_bind = (str(nested),)
+
+    code, result = run_shell(f"cat {nested}/key", context)
+
+    assert SECRET not in result
+    assert tool("read", context, path=str(nested / "key")).startswith("ERROR:")
+
+
+@needs_bwrap
+def test_file_tools_and_commands_share_the_private_js_tmp_in_a_home_rooted_jail(operator_home, monkeypatch):
+    monkeypatch.chdir(operator_home)
+    jail.enter(operator_home)
+    context = ToolContext(cwd=operator_home)
+    context.jail_bind = ()
+    target = paths.user_home() / ".js" / "tmp" / "shared.txt"
+
+    assert not tool("write", context, path=str(target), content="from-the-file-tool").startswith("ERROR")
+    code, result = run_shell(f"cat {target}", context)
+
+    assert "from-the-file-tool" in result
+    assert not target.exists()  # it lives in the jail's private directory
+
+
+@needs_bwrap
+@pytest.mark.skipif(not Path("/etc/hostname").is_file(), reason="no /etc/hostname")
+def test_jail_hide_blanks_a_path_the_read_only_root_shows(jailed):
+    jailed.jail_hide = ("/etc/hostname",)
+
+    code, result = run_shell("wc -c < /etc/hostname", jailed)
+
+    assert code == 0
+    assert "\n0\n" in f"\n{result}\n"
+
+
+@needs_bwrap
+def test_a_path_directory_inside_a_jail_hide_path_stays_hidden(operator_home, monkeypatch):
+    tools = operator_home / ".ssh" / "bin"
+    tools.mkdir(parents=True)
+    (tools / "key").write_text(SECRET)
+    monkeypatch.setenv("PATH", f"{tools}{os.pathsep}{os.environ['PATH']}")
+    root = operator_home / "work"
+    root.mkdir()
+    monkeypatch.chdir(root)
+    jail.enter(root)
+    context = ToolContext(cwd=root)
+    context.jail_bind = ()
+
+    code, result = run_shell(f"cat {tools}/key", context)
+
+    assert SECRET not in result
+
+
+@needs_bwrap
+def test_a_jail_hide_path_with_glob_characters_stays_out_of_searches(operator_home, monkeypatch):
+    keys = operator_home / "[keys]"
+    keys.mkdir()
+    (keys / "token.txt").write_text("KEYMATERIAL-9182\n")
+    (operator_home / "notes").mkdir()
+    (operator_home / "notes" / "plain.txt").write_text("KEYMATERIAL-9183\n")
+    monkeypatch.chdir(operator_home)
+    jail.enter(operator_home)
+    context = ToolContext(cwd=operator_home)
+    context.jail_bind = ()
+    context.jail_hide = (str(keys),)
+
+    found = tool("fs_search", context, pattern="KEYMATERIAL")
+
+    assert "token.txt" not in found
+    assert "plain.txt" in found  # the search itself reaches the rest of DIR
+
+
+@needs_bwrap
+def test_removing_an_ancestor_of_a_hidden_path_is_refused(operator_home, monkeypatch):
+    gh = operator_home / ".config" / "gh"
+    gh.mkdir(parents=True)
+    (gh / "hosts.yml").write_text(SECRET)
+    monkeypatch.chdir(operator_home)
+    jail.enter(operator_home)
+    context = ToolContext(cwd=operator_home)
+    context.jail_bind = ()
+
+    result = tool("remove", context, path=str(operator_home / ".config"), permanent=True)
+
+    assert result.startswith("ERROR")
+    assert (gh / "hosts.yml").read_text() == SECRET
+
+
+@needs_bwrap
+def test_removing_a_hidden_path_that_is_a_symlink_is_refused(operator_home, tmp_path, monkeypatch):
+    store = tmp_path / "dotfiles" / "netrc"
+    store.parent.mkdir()
+    store.write_text(SECRET)
+    (operator_home / ".netrc").symlink_to(store)
+    monkeypatch.chdir(operator_home)
+    jail.enter(operator_home)
+    context = ToolContext(cwd=operator_home)
+    context.jail_bind = ()
+
+    result = tool("remove", context, path=str(operator_home / ".netrc"), permanent=True)
+
+    assert result.startswith("ERROR")
+    assert (operator_home / ".netrc").is_symlink()
+
+
+@needs_bwrap
+def test_a_symlink_into_a_hidden_path_stays_out_of_a_recursive_listing(operator_home, tmp_path, monkeypatch):
+    ssh = operator_home / ".ssh"
+    ssh.mkdir()
+    (ssh / "id_ed25519").write_text(SECRET)
+    work = operator_home / "work"
+    work.mkdir()
+    (work / "alias").symlink_to(ssh / "id_ed25519")
+    monkeypatch.chdir(operator_home)
+    jail.enter(operator_home)
+    context = ToolContext(cwd=operator_home)
+    context.jail_bind = ()
+
+    listing = fs.list_dir(str(work), recursive=True, context=context)
+
+    assert "alias" not in listing
+
+
+@needs_bwrap
+def test_a_recursive_listing_reads_the_hidden_paths_once_not_per_file(operator_home, monkeypatch):
+    small, large = operator_home / "small", operator_home / "large"
+    small.mkdir()
+    large.mkdir()
+    (small / "a.txt").write_text("a")
+    for index in range(30):
+        (large / f"{index}.txt").write_text("a")
+    monkeypatch.chdir(operator_home)
+    jail.enter(operator_home)
+    context = ToolContext(cwd=operator_home)
+    context.jail_bind = ()
+    reads: list[int] = []
+    real_hides = jail.Jail.hides
+    monkeypatch.setattr(jail.Jail, "hides", lambda self, hide=None: reads.append(1) or real_hides(self, hide))
+
+    def reads_for(directory: Path) -> int:
+        reads.clear()
+        fs.list_dir(str(directory), recursive=True, context=context)
+        return len(reads)
+
+    assert reads_for(large) == reads_for(small)
+
+
+@needs_bwrap
+def test_hidden_ast_matches_do_not_use_up_the_result_limit(operator_home, monkeypatch):
+    if fs._ast_grep_binary() is None:
+        pytest.skip("ast-grep is not installed")
+    keys = operator_home / "aaa-keys"
+    keys.mkdir()
+    for n in range(20):
+        (keys / f"k{n}.js").write_text("let secret = 1;\n")
+    work = operator_home / "work"
+    work.mkdir()
+    for n in range(2):
+        (work / f"v{n}.js").write_text("let secret = 2;\n")
+    monkeypatch.chdir(operator_home)
+    jail.enter(operator_home)
+    context = ToolContext(cwd=operator_home)
+    context.jail_bind = ()
+    context.jail_hide = (str(keys),)
+
+    result = fs.ast_search("let secret = $A", path=str(operator_home), lang="javascript",
+                           max_results=1, context=context)
+
+    assert "aaa-keys" not in result
+    assert "v0.js" in result or "v1.js" in result
+    assert "additional matches omitted" in result
+
+
 def test_jail_bind_setting_refuses_a_relative_path():
     spec = settings.spec_for("JAIL_BIND")
 
@@ -628,3 +858,244 @@ def test_envctx_hist_zero_leaves_shell_history_out(tmp_path):
     assert "secret-cmd" in run()
     out = run(ENVCTX_HIST="0")
     assert "recent_shell" not in out and "secret-cmd" not in out
+
+
+@needs_bwrap
+def test_a_kernel_started_before_a_jail_hide_change_is_restarted(monkeypatch, tmp_path):
+    started: list = []
+
+    class FakeSession:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+            self.stopped = False
+
+        def start(self):
+            started.append(self)
+
+        def alive(self):
+            return not self.stopped
+
+        def shutdown(self):
+            self.stopped = True
+
+    monkeypatch.setattr(kmod, "missing_dependencies", lambda: "")
+    monkeypatch.setattr(kmod, "KernelSession", FakeSession)
+    monkeypatch.setattr(kmod, "_attach_tools", lambda session, context: None)
+    root = tmp_path / "root"
+    root.mkdir()
+    jail.enter(root)
+    context = ToolContext(cwd=root, kernel_enabled=True)
+    context.jail_hide = ()
+
+    first, _err, _new = kmod.get_session(context)
+    again, _err, started_again = kmod.get_session(context)
+    context.jail_hide = ("~/.ssh",)
+    changed, _err, restarted = kmod.get_session(context)
+
+    assert again is first and not started_again
+    assert restarted and changed is not first and first.stopped
+    assert changed.jail_hide == ("~/.ssh",)
+
+
+@needs_bwrap
+def test_a_terminal_started_before_a_jail_hide_change_runs_nothing_more(operator_home, tmp_path, monkeypatch):
+    from js.toolkit import terminal
+
+    pytest.importorskip("pexpect")
+    pytest.importorskip("pyte")
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.chdir(root)
+    jail.enter(root)
+    context = ToolContext(cwd=root)
+    context.jail_hide = ()
+    try:
+        started = terminal.terminal_session("start", "main", command="cat", context=context)
+        assert not started.startswith("ERROR"), started
+        context.jail_hide = (str(operator_home / "notes.txt"),)
+
+        sent = terminal.terminal_session("send", "main", keys="hi,Enter", context=context)
+
+        assert sent.startswith("ERROR")
+        assert "main" not in context.terminal_sessions
+    finally:
+        terminal.close_terminal_sessions(context)
+
+
+@needs_bwrap
+def test_the_python_header_retry_keeps_hidden_paths_out(operator_home, monkeypatch):
+    if fs._ast_grep_binary() is None:
+        pytest.skip("ast-grep is not installed")
+    keys = operator_home / "aaa-keys"
+    keys.mkdir()
+    (keys / "k.py").write_text("def probe(x):\n    return 1\n")
+    work = operator_home / "work"
+    work.mkdir()
+    (work / "v.py").write_text("def probe(x):\n    return 2\n")
+    monkeypatch.chdir(operator_home)
+    jail.enter(operator_home)
+    context = ToolContext(cwd=operator_home)
+    context.jail_bind = ()
+    context.jail_hide = (str(keys),)
+
+    result = fs.ast_search("def probe($X):", path=str(operator_home), lang="python", context=context)
+
+    assert "v.py" in result
+    assert "aaa-keys" not in result
+    assert not result.startswith("ERROR")
+
+
+def test_an_unjailed_kernel_survives_a_jail_setting_change(monkeypatch, tmp_path):
+    class FakeSession:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+            self.stopped = False
+
+        def start(self):
+            pass
+
+        def alive(self):
+            return not self.stopped
+
+        def shutdown(self):
+            self.stopped = True
+
+    jail.leave()
+    monkeypatch.setattr(kmod, "missing_dependencies", lambda: "")
+    monkeypatch.setattr(kmod, "KernelSession", FakeSession)
+    monkeypatch.setattr(kmod, "_attach_tools", lambda session, context: None)
+    context = ToolContext(cwd=tmp_path, kernel_enabled=True)
+    context.jail_hide = ()
+
+    first, _err, _new = kmod.get_session(context)
+    context.jail_hide = ("~/.ssh",)
+    again, _err, started = kmod.get_session(context)
+
+    assert again is first and not started and not first.stopped
+
+
+def _hidden_tree(home: Path) -> dict[str, Path]:
+    """A hidden key, a hidden notebook, and every way to name them."""
+    ssh = home / ".ssh"
+    ssh.mkdir(exist_ok=True)
+    (ssh / "key").write_text(SECRET)
+    (ssh / "nb.ipynb").write_text(json.dumps({"cells": [{"cell_type": "code", "id": "c1", "source": SECRET,
+                                                        "metadata": {}, "outputs": [], "execution_count": None}],
+                                             "metadata": {}, "nbformat": 4, "nbformat_minor": 5}))
+    (home / "alias_file").symlink_to(ssh / "key")
+    (home / "alias_dir").symlink_to(ssh)
+    return {"direct": ssh / "key", "file alias": home / "alias_file", "dir alias": home / "alias_dir" / "key",
+            "notebook": ssh / "nb.ipynb"}
+
+
+def _assert_nothing_hidden_leaks(context: ToolContext, home: Path, names: dict[str, Path]) -> None:
+    key = home / ".ssh" / "key"
+    for how, path in names.items():
+        for name, args in (("read", {"path": str(path)}),
+                           ("write", {"path": str(path), "content": "x", "overwrite": True}),
+                           ("patch", {"path": str(path), "old_string": SECRET, "new_string": "x"}),
+                           ("remove", {"path": str(path), "permanent": True})):
+            result = tool(name, context, **args)
+            assert SECRET not in result, (how, name, result)
+        assert SECRET not in tool("notebook_edit", context, file_path=str(names["notebook"]),
+                                  cell_id="c1", new_source="x")
+    for args in ({"pattern": SECRET}, {"pattern": SECRET, "glob": "**/key"},
+                 {"pattern": "**", "glob": "**/key", "output_mode": "files_with_matches"}):
+        result = tool("fs_search", context, path=str(home), **args)
+        assert SECRET not in result and "/.ssh/" not in result, (args, result)
+    assert ".ssh/key" not in fs.list_dir(str(home), recursive=True, context=context)
+    code, shown = run_shell(
+        f"cat {key} {home}/alias_file {home}/alias_dir/key {home}/*/key {home}/.ssh/* 2>/dev/null; true", context)
+    assert SECRET not in shown
+    assert key.read_text() == SECRET  # nothing changed it
+
+
+@needs_bwrap
+def test_no_tool_reaches_a_hidden_path_in_a_home_rooted_jail(operator_home, monkeypatch):
+    names = _hidden_tree(operator_home)
+    monkeypatch.chdir(operator_home)
+    jail.enter(operator_home)
+    context = ToolContext(cwd=operator_home)
+    context.jail_bind = ()
+
+    _assert_nothing_hidden_leaks(context, operator_home, names)
+
+
+@needs_bwrap
+def test_no_tool_reaches_a_hidden_path_through_a_bound_alias(operator_home, tmp_path, monkeypatch):
+    _hidden_tree(operator_home)
+    root = tmp_path / "work"
+    root.mkdir()
+    monkeypatch.chdir(root)
+    jail.enter(root)
+    context = ToolContext(cwd=root)
+    context.jail_bind = (str(operator_home / "alias_dir"), str(operator_home / "alias_file"))
+
+    code, shown = run_shell(f"cat {operator_home}/alias_dir/key {operator_home}/alias_file 2>/dev/null; true", context)
+
+    assert SECRET not in shown
+    for path in (operator_home / "alias_dir" / "key", operator_home / "alias_file"):
+        assert SECRET not in tool("read", context, path=str(path))
+
+
+@needs_bwrap
+def test_a_hidden_path_is_hidden_in_another_mount_view_too(operator_home, tmp_path, monkeypatch):
+    mirror = tmp_path / "mirror"
+    (mirror / ".ssh").mkdir(parents=True)
+    (mirror / ".ssh" / "key").write_text(SECRET)
+    home = jail._real(operator_home)
+    mounts = jail._mounts()
+    holder = max((m for m in mounts if jail._under(home, m.point)), key=lambda m: len(m.point.parts))
+    view = jail._Mount(holder.device, holder.root / home.relative_to(holder.point), mirror, "ext4")
+    monkeypatch.setattr(jail, "_mounts", lambda: [*mounts, view])
+    monkeypatch.chdir(mirror)
+    jail.enter(mirror)
+    context = ToolContext(cwd=mirror)
+    context.jail_bind = ()
+
+    code, shown = run_shell(f"cat {mirror}/.ssh/key 2>/dev/null; true", context)
+
+    assert SECRET not in shown
+    assert tool("read", context, path=str(mirror / ".ssh" / "key")).startswith("ERROR")
+
+
+@needs_bwrap
+@needs_kernel
+def test_the_kernel_reaches_no_hidden_path(operator_home, monkeypatch):
+    names = _hidden_tree(operator_home)
+    monkeypatch.chdir(operator_home)
+    jail.enter(operator_home)
+    context = ToolContext(cwd=operator_home, kernel_enabled=True)
+    context.jail_bind = ()
+    code = (f"import contextlib\nfor p in {[str(p) for p in names.values()]!r}:\n"
+            "    with contextlib.suppress(OSError):\n        print(open(p).read())\nprint('kernel-ran')\n")
+
+    try:
+        result = str(kmod.kernel(code=code, context=context))
+    finally:
+        if context.kernel_session is not None:
+            context.kernel_session.shutdown()
+
+    assert "kernel-ran" in result
+    assert SECRET not in result
+
+
+@needs_bwrap
+def test_a_bound_alias_of_a_hidden_paths_parent_shows_it_empty(operator_home, tmp_path, monkeypatch):
+    gh = operator_home / ".config" / "gh"
+    gh.mkdir(parents=True)
+    (gh / "hosts.yml").write_text(SECRET)
+    (operator_home / ".config" / "other.txt").write_text("other")
+    (operator_home / "cfg").symlink_to(operator_home / ".config")
+    root = tmp_path / "work"
+    root.mkdir()
+    monkeypatch.chdir(root)
+    jail.enter(root)
+    context = ToolContext(cwd=root)
+    context.jail_bind = (str(operator_home / "cfg"),)
+
+    code, shown = run_shell(f"cat {operator_home}/cfg/gh/hosts.yml 2>/dev/null; cat {operator_home}/cfg/other.txt", context)
+
+    assert SECRET not in shown
+    assert "other" in shown
+    assert SECRET not in tool("read", context, path=str(operator_home / "cfg" / "gh" / "hosts.yml"))

@@ -576,7 +576,8 @@ def server_for(spec: ServerSpec, executable: str, root: Path, context: ToolConte
     when there is none. Raises LspError when it cannot start."""
     jail = _jail.active()
     key = (spec, str(root), None if jail is None else str(jail.root),
-           tuple(context.jail_bind) if jail is not None else ())
+           tuple(context.jail_bind) if jail is not None else (),
+           tuple(context.jail_hide) if jail is not None else ())
     with _SERVERS_LOCK:
         server = _SERVERS.get(key)
         if server is not None and server.alive:

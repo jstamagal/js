@@ -484,7 +484,8 @@ class ToolContext(_turn_settings.ContextSettings):
             path = self.cwd / path
         jail = _jail.active()
         if jail is not None:
-            return jail.confine(path, write=write, follow=follow, setting=self.jail_bind)
+            return jail.confine(path, write=write, follow=follow, setting=self.jail_bind,
+                                hide=self.jail_hide)
         if not follow:
             return Path(os.path.abspath(path))
         return path.resolve()

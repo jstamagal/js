@@ -469,6 +469,10 @@ see `<dir>`, and it puts the tools in a jail:
   `~/.config/git`, `~/.local/share/uv` and `~/.cache/uv:rw`, so git and uv
   work in the jail. Tools installed as symlinks into another tree (Homebrew,
   `uv tool`) need that tree bound: `set JAIL_BIND [..., "/home/linuxbrew"]`.
+- The `JAIL_HIDE` setting lists paths that are always empty in the jail,
+  whatever DIR and `JAIL_BIND` show, and that the file tools refuse. The
+  default is `~/.js`, `~/.ssh`, `~/.gnupg`, `~/.netrc`, `~/.aws` and
+  `~/.config/gh`, so a jail rooted at your home still shows no keys.
 
 `-C` needs `bwrap` (bubblewrap). Without it, or when a startup self-test of the
 jail fails, js prints one line and exits; nothing runs unjailed. A missing or

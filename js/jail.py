@@ -9,7 +9,9 @@ hostile model. Under `-C`:
   filesystem mount. The jail's `/tmp` and `~/.js/tmp` are directories private
   to this js process. DIR is bound read-write at its real path. The PATH
   directories, rustup's toolchains and the kernel's interpreter under a hidden
-  tree or the host's `/tmp`, the `JAIL_BIND` entries and the `/add` binds are bound back. The
+  tree or the host's `/tmp`, the `JAIL_BIND` entries and the `/add` binds are bound back.
+  Each `JAIL_HIDE` path (~/.js, ~/.ssh and the like) those binds would show
+  is mounted empty, so a jail rooted at $HOME still shows no keys. The
   network is shared.
 - the file tools resolve every path and refuse one outside DIR and the bound
   paths (`confine`). Their results name the jail's /tmp and ~/.js/tmp as the
@@ -30,6 +32,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -89,6 +92,29 @@ def parse_binds(specs) -> list[Bind]:
     if not isinstance(specs, (list, tuple)):
         raise ValueError("JAIL_BIND is a JSON list of \"path[:rw]\" strings")
     return [parse_bind(item) for item in specs]
+
+
+def parse_hide(spec: str) -> Path:
+    """One `JAIL_HIDE` entry: a path, absolute or starting with ``~``.
+    Raises ValueError."""
+    text = str(spec).strip()
+    path = Path(os.path.expanduser(text)) if text else Path()
+    if not text or not path.is_absolute():
+        raise ValueError(f"hide path must be absolute or start with ~: {spec!r}")
+    return Path(os.path.abspath(path))
+
+
+def parse_hides(specs) -> list[Path]:
+    """The `JAIL_HIDE` setting's value as paths. Raises ValueError."""
+    if not isinstance(specs, (list, tuple)):
+        raise ValueError("JAIL_HIDE is a JSON list of path strings")
+    return [parse_hide(item) for item in specs]
+
+
+def _default_hides() -> tuple[str, ...]:
+    from . import settings
+
+    return tuple(settings.default_value("JAIL_HIDE") or ())
 
 
 def _real(path: Path) -> Path:
@@ -228,6 +254,46 @@ class Jail:
                 out.append(parse_bind(item))
         return [*out, *self.added]
 
+    def hides(self, hide: object = None) -> list[Path]:
+        """The `JAIL_HIDE` paths as the host resolves them; None is the
+        `js/jsrc` list. Invalid entries are skipped; `/set` refuses them."""
+        out = [_real(path) for path in self._hide_entries(hide)]
+        # The same directory where another mount shows it (a home on a btrfs
+        # subvolume, a bind mount elsewhere) is hidden there too.
+        mounts = _mounts()
+        out += [view for path in list(out) for view in _other_views(path, mounts)]
+        return list(dict.fromkeys(out))
+
+    def _hide_entries(self, hide: object) -> list[Path]:
+        """The valid `JAIL_HIDE` entries as written; None is the `js/jsrc` list."""
+        out: list[Path] = []
+        for item in _default_hides() if hide is None else hide or ():
+            with contextlib.suppress(ValueError):
+                out.append(parse_hide(item))
+        return out
+
+    def hidden_test(self, hide: object = None) -> Callable[[Path], bool]:
+        """`hidden` with the `JAIL_HIDE` paths read once, for a tool that
+        asks about every entry of a walk."""
+        own = [_real(self.private), _real(paths.tool_results_dir())]
+        named = [_real(entry.parent) / entry.name for entry in self._hide_entries(hide)]
+        hidden = [*self.hides(hide), *named]
+        return lambda real: (any(_under(real, h) for h in hidden)
+                             and not any(_under(real, area) for area in own))
+
+    def hidden(self, real: Path, hide: object = None) -> bool:
+        """Whether host path ``real`` lies in a `JAIL_HIDE` path, outside js's
+        own directories there (the private dir, spilled tool results). An
+        entry that is a symlink is hidden by its own name too, for a tool
+        that does not follow the last component (remove)."""
+        return self.hidden_test(hide)(real)
+
+    def hidden_under(self, root: Path, hide: object = None) -> list[Path]:
+        """The `JAIL_HIDE` paths inside host directory ``root``, for a tool
+        that walks it on the host."""
+        real_root = _real(root)
+        return [h for h in self.hides(hide) if h != real_root and _under(h, real_root)]
+
     def _areas(self, setting: object) -> list[Bind]:
         """Every tree a file tool may reach, as the host sees it."""
         explicit = [Bind(self.root, True), *self.binds(setting)]
@@ -265,12 +331,13 @@ class Jail:
         """``path`` as the host sees it: under the jail's /tmp or ~/.js/tmp it
         names a file in the private directory, anywhere else itself."""
         path = Path(os.path.abspath(path))
-        if any(_under(path, b.path) or _under(path, _real(b.path))
-               for b in [Bind(self.root), *self.binds(setting)]):
-            return path
+        # `argv` binds the private ~/.js/tmp last, over DIR and every bind.
         js_tmp = paths.user_home() / ".js" / "tmp"
         if _under(path, js_tmp):
             return self.js_tmp / path.relative_to(js_tmp)
+        if any(_under(path, b.path) or _under(path, _real(b.path))
+               for b in [Bind(self.root), *self.binds(setting)]):
+            return path
         # A hidden tree stays hidden even where it sits under /tmp.
         if any(_under(path, root) for root in hidden_roots()):
             return path
@@ -295,7 +362,7 @@ class Jail:
         return re.sub(pattern, lambda m: views[m.group(1)], text)
 
     def confine(self, path: Path, *, write: bool = False, follow: bool = True,
-                setting: object = ()) -> Path:
+                setting: object = (), hide: object = None) -> Path:
         """The host path a file tool uses for ``path``. Raises JailError when
         the jail does not show it, or shows it read-only and ``write`` is set."""
         mapped = self.host_path(path, setting)
@@ -316,6 +383,11 @@ class Jail:
             raise JailError(
                 f"{path} is outside the jail: js -C keeps the tools in {self.root} and its bound paths"
             )
+        if self.hidden(real, hide):
+            raise JailError(f"{path} is hidden in the jail (JAIL_HIDE)")
+        # Removing or moving a tree takes everything under it, hidden or not.
+        if write and any(h != real and _under(h, real) for h in self.hides(hide)):
+            raise JailError(f"{path} holds a path hidden in the jail (JAIL_HIDE); a tool may not change it")
         if write and not best.rw:
             raise JailError(f"{path} is read-only in the jail (bound from {best.path})")
         return real
@@ -341,12 +413,15 @@ class Jail:
 
     def argv(self, argv: list[str], *, cwd: Path | str | None = None, env_path: str = "",
              setting: object = (), extra_ro: tuple[Path, ...] = (),
-             extra_rw: tuple[Path, ...] = (), ignore_sigint: bool = False) -> list[str]:
+             extra_rw: tuple[Path, ...] = (), ignore_sigint: bool = False,
+             hide: object = None) -> list[str]:
         """``argv`` wrapped to run in the jail.
 
         ``env_path`` is the PATH the command runs with; its directories under a
         hidden tree or the host /tmp are bound back read-only. ``extra_ro``/``extra_rw`` bind
-        more paths for this one command (the kernel's interpreter, its sockets)."""
+        more paths for this one command (the kernel's interpreter, its sockets).
+        Each ``hide`` path (`JAIL_HIDE`) a bind would show is mounted empty
+        over it; what js binds inside one is bound again on top."""
         hidden = hidden_roots()
         home = paths.user_home()
         out = [self.bwrap, "--die-with-parent", "--unshare-ipc", "--unshare-uts",
@@ -366,6 +441,12 @@ class Jail:
         implicit.append(Bind(_real(paths.tool_results_dir()), False))
         implicit += [Bind(p, False) for p in _toolchain_homes(home)]
         implicit += [Bind(p, False) for extra in extra_ro for p in reach(Path(extra))]
+        # What a JAIL_HIDE path may not cover: js's own binds (spilled tool
+        # results, this command's kernel paths), never DIR, a JAIL_BIND or
+        # /add entry, or a PATH directory.
+        candidates = [Bind(_real(paths.tool_results_dir()), False),
+                      *(Bind(p, False) for extra in extra_ro for p in reach(Path(extra))),
+                      *(Bind(Path(p), True) for p in extra_rw)]
         # The host /tmp is replaced by the private one, so a path under it is
         # as unreachable as one in a hidden tree and is bound back. A replaced
         # root itself on PATH is not bound back: it would cover its replacement.
@@ -378,10 +459,60 @@ class Jail:
         for bind in binds:
             src = str(bind.path)
             out += ["--bind-try" if bind.rw else "--ro-bind-try", src, src]
+        out += self._hide_args(hide, binds, candidates, [*hidden, Path("/tmp")])
+        # The private ~/.js/tmp goes on top of DIR, the binds and the blanks.
+        out += ["--bind", str(self.js_tmp), str(home / ".js" / "tmp")]
         if cwd is not None:
             out += ["--chdir", str(cwd)]
         prefix = _IGNORE_SIGINT if ignore_sigint else []
         return [*prefix, *out, "--", *argv]
+
+    def _hide_args(self, hide: object, binds: list[Bind], candidates: list[Bind],
+                   replaced: list[Path]) -> list[str]:
+        """bwrap arguments that blank each `JAIL_HIDE` path the jail would
+        show: one outside the ``replaced`` trees (it shows through the
+        read-only /), or one a bind reaches from above or from inside. Then
+        bind again the jail's private directory and the ``candidates`` that
+        lie inside a blanked path."""
+        shown = [h for h in self.hides(hide)
+                 if os.path.lexists(h)
+                 and (not any(_under(h, tree) for tree in replaced)
+                      or any(_under(h, _real(b.path)) or _under(_real(b.path), h) for b in binds))]
+        # A bind reached through a symlink (JAIL_BIND ~/alias -> ~/.ssh) is
+        # mounted at the link's path, not the target's: blank it there too.
+        targets: dict[Path, Path] = {h: h for h in shown}
+        for bind in binds:
+            at, real_at = Path(os.path.abspath(bind.path)), _real(bind.path)
+            if at == real_at:
+                continue
+            for hidden in self.hides(hide):
+                if not os.path.lexists(hidden):
+                    continue
+                if _under(real_at, hidden):
+                    targets.setdefault(at, hidden)
+                elif _under(hidden, real_at):
+                    targets.setdefault(at / hidden.relative_to(real_at), hidden)
+        out: list[str] = []
+        # A hidden file shows as an empty file (a bound /dev/null would be a
+        # device on a nodev mount and refuse to open).
+        empty = self.private / "empty"
+        if targets and not empty.exists():
+            empty.touch(mode=0o444)
+        for target in sorted(targets, key=lambda p: len(p.parts)):
+            out += (["--tmpfs", str(target)] if _real(target).is_dir()
+                    else ["--ro-bind", str(empty), str(target)])
+
+        def inside(path: Path) -> bool:
+            return any(path != h and _under(path, h) for h in shown)
+
+        again: list[str] = []
+        if inside(_real(self.private)):
+            again += ["--bind", str(self.private), str(self.private)]
+        for bind in sorted(dict.fromkeys(candidates), key=lambda b: len(b.path.parts)):
+            if inside(_real(bind.path)):
+                src = str(bind.path)
+                again += ["--bind-try" if bind.rw else "--ro-bind-try", src, src]
+        return out + again
 
     def self_test(self) -> str | None:
         """None when a command runs in the jail, else bwrap's first error line."""
@@ -407,9 +538,40 @@ def active() -> Jail | None:
     return ACTIVE
 
 
+def shape(source: object) -> tuple:
+    """The settings a long-running jailed process (a kernel, a terminal
+    session) is built from, as its record or a tool context holds them:
+    JAIL_BIND, JAIL_HIDE and the kept environment. A process started under
+    another shape than the context's now must not run anything more. Without
+    a jail there is nothing they shape."""
+    if ACTIVE is None:
+        return ()
+    hide = getattr(source, "jail_hide", None)
+    return (tuple(getattr(source, "jail_bind", ()) or ()),
+            tuple(hide) if hide is not None else None,
+            tuple(getattr(source, "shell_env_allow", None) or getattr(source, "env_allow", ()) or ()))
+
+
 def shown(text: str) -> str:
     """``text`` as `Jail.shown` writes it under a jail, else itself."""
     return text if ACTIVE is None else ACTIVE.shown(text)
+
+
+def hider(context: object) -> Callable[[Path], bool]:
+    """Under a jail, a test of whether a path, with its symlinks resolved,
+    lies in a `JAIL_HIDE` path of ``context``; the paths are read once."""
+    if ACTIVE is None:
+        return lambda path: False
+    test = ACTIVE.hidden_test(getattr(context, "jail_hide", None))
+    return lambda path: test(_real(Path(path)))
+
+
+def hidden_under(root: Path, context: object) -> list[Path]:
+    """Under a jail, the `JAIL_HIDE` paths of ``context`` inside host
+    directory ``root``: what a tool walking ``root`` on the host leaves out."""
+    if ACTIVE is None:
+        return []
+    return ACTIVE.hidden_under(root, getattr(context, "jail_hide", None))
 
 
 def scratch_dir() -> Path:
@@ -426,14 +588,15 @@ def wrap(argv: list[str], context: object, *, cwd: Path | str | None = None,
     """``argv`` to run in the jail when there is one, else ``argv`` itself.
     ``env`` is the environment the command gets; its PATH decides which PATH
     directories are bound back. ``context`` is the ToolContext whose
-    `JAIL_BIND` applies."""
+    `JAIL_BIND` and `JAIL_HIDE` apply."""
     jail = ACTIVE
     if jail is None:
         return list(argv)
     path_value = (env if env is not None else os.environ).get("PATH", "")
     return jail.argv(list(argv), cwd=cwd, env_path=path_value,
                      setting=getattr(context, "jail_bind", ()),
-                     extra_ro=extra_ro, extra_rw=extra_rw, ignore_sigint=ignore_sigint)
+                     extra_ro=extra_ro, extra_rw=extra_rw, ignore_sigint=ignore_sigint,
+                     hide=getattr(context, "jail_hide", None))
 
 
 def private_root() -> Path:

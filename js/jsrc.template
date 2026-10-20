@@ -462,6 +462,11 @@
 #   example:  set JAIL_BIND ["~/.gitconfig", "~/notes:rw"]
 #set JAIL_BIND ["~/.gitconfig", "~/.config/git", "~/.local/share/uv", "~/.cache/uv:rw"]
 
+# Only with `js -C DIR`: paths that are always empty inside, whatever DIR
+# and JAIL_BIND show, so a jail rooted at your home still shows no keys.
+#   example:  set JAIL_HIDE ["~/.js", "~/.ssh", "~/work/secrets"]
+#set JAIL_HIDE ["~/.js", "~/.ssh", "~/.gnupg", "~/.netrc", "~/.aws", "~/.config/gh"]
+
 
 ################################################################################
 #  KERNEL  --  the model's persistent Python session

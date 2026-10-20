@@ -307,6 +307,8 @@ def terminal_session(
             "cwd": workdir,
             "snapshot_n": 0,
             "previous_lines": None,
+            # The jail settings it started under (`jail.shape`).
+            "jail": jail.shape(context),
         }
         _LIVE_CHILDREN.add(child)
         old = sessions.get(session)
@@ -318,6 +320,14 @@ def terminal_session(
     state = sessions.get(session)
     if state is None:
         return f"ERROR: no terminal session named {session!r}; use action=start first"
+
+    if action != "stop" and state.get("jail") != jail.shape(context):
+        # Started under other JAIL_BIND, JAIL_HIDE or SHELL_ENV_KEEP values:
+        # it could still reach what the jail now hides. It is stopped.
+        sessions.pop(session, None)
+        _stop_state(state)
+        return (f"ERROR: terminal session {session!r} was started under other jail settings "
+                "(JAIL_BIND, JAIL_HIDE or SHELL_ENV_KEEP) and is stopped; start it again")
 
     if action == "stop":
         sessions.pop(session, None)

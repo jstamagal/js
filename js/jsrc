@@ -98,6 +98,7 @@ set SHELL_WAIT 30
 
 # --- jail ---
 set JAIL_BIND ["~/.gitconfig", "~/.config/git", "~/.local/share/uv", "~/.cache/uv:rw"]
+set JAIL_HIDE ["~/.js", "~/.ssh", "~/.gnupg", "~/.netrc", "~/.aws", "~/.config/gh"]
 
 # --- runtime ---
 set DEBUG_LOG off

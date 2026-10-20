@@ -17,8 +17,9 @@ import threading
 import functools
 from functools import lru_cache
 from pathlib import Path
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
+from .. import jail
 from ..tool_binaries import resolve_binary
 from .core import Output, Tool, ToolContext
 from .sanitize import int_or_default
@@ -1240,14 +1241,32 @@ def patch(
     return f"patched {target} ({summary}, hash {content_hash})\n{diff}"
 
 
-def _iter_files(root: Path) -> Iterable[Path]:
+def _glob_literal(text: str) -> str:
+    """``text`` as a ripgrep glob that matches only itself."""
+    return re.sub(r"([\\\[\]*?{}])", r"\\\1", text)
+
+
+def _real_dir(path: Path) -> Path:
+    """``path`` with symlinks resolved, or as given when it cannot be."""
+    try:
+        return path.resolve()
+    except (OSError, RuntimeError):
+        return Path(os.path.abspath(path))
+
+
+def _iter_files(root: Path, hidden: Callable[[Path], bool] | None = None) -> Iterable[Path]:
+    """Regular files under ``root``, leaving out every path ``hidden`` says
+    lies in a hidden tree (it resolves symlinks, so a link into one is out)."""
     if root.is_file():
         yield root
         return
     for base, dirs, files in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in {".git", "__pycache__", "node_modules", ".venv", "venv"}]
+        dirs[:] = [d for d in dirs if d not in {".git", "__pycache__", "node_modules", ".venv", "venv"}
+                   and not (hidden and hidden(Path(base) / d))]
         for name in files:
             candidate = Path(base) / name
+            if hidden and hidden(candidate):
+                continue
             # Regular files only: a FIFO/socket/device (or a symlink to one) in
             # the walk would otherwise reach a reader and, for a pipe with no
             # writer, hang the whole turn on open(). is_file() stats (never
@@ -1585,6 +1604,9 @@ def fs_search(
         argv.append("--hidden")
     else:
         argv += ["--glob", _HIDDEN_GUARD_GLOB]
+    # JAIL_HIDE paths inside the root stay out whatever the globs ask for.
+    for glob in _hidden_globs(root if root.is_dir() else root.parent, context):
+        argv += ["--glob", glob]
     argv += ["--", str(root)]
 
     # Run rg from the search root: a glob containing a slash is matched against
@@ -1645,6 +1667,7 @@ def _ast_argv(
     lang: str | None,
     rewrite: str | None = None,
     stdin: bool = False,
+    excludes: tuple[str, ...] = (),
 ) -> list[str]:
     argv = [
         binary,
@@ -1661,11 +1684,23 @@ def _ast_argv(
         argv += ["--lang", lang]
     if rewrite is not None:
         argv.append(f"--rewrite={rewrite}")
+    for glob in excludes:
+        argv += ["--globs", glob]
     if stdin:
         argv.append("--stdin")
     else:
         argv += ["--", str(root)]
     return argv
+
+
+def _hidden_globs(base: Path, context: ToolContext) -> tuple[str, ...]:
+    """ast-grep/ripgrep globs, relative to working directory ``base``, that
+    leave out every `JAIL_HIDE` path inside it."""
+    out: list[str] = []
+    for hidden in jail.hidden_under(base, context):
+        rel = _glob_literal(hidden.relative_to(_real_dir(base)).as_posix())
+        out += [f"!/{rel}", f"!/{rel}/**"]
+    return tuple(out)
 
 
 def _ast_records(
@@ -1675,9 +1710,15 @@ def _ast_records(
     lang: str | None,
     rewrite: str | None,
     want: int,
+    context: ToolContext,
 ) -> tuple[list[dict], int | None, str, bool, str | None, bool]:
+    # Hidden paths stay out of the search itself, so they never count
+    # against ``want``; the globs match relative to the search root.
+    base = root if root.is_dir() else root.parent
+    excludes = _hidden_globs(base, context)
     lines, rc, stderr, timed_out = _rg_stream(
-        _ast_argv(binary, pattern, root, lang, rewrite), want, _AST_GREP_TIMEOUT_S
+        _ast_argv(binary, pattern, root, lang, rewrite, excludes=excludes), want, _AST_GREP_TIMEOUT_S,
+        cwd=str(base),
     )
 
     used_stdin = False
@@ -1928,9 +1969,12 @@ def ast_search(
     if binary is None:
         return _AST_GREP_MISSING
 
-    records, rc, stderr, timed_out, parse_error, used_stdin = _ast_records(
-        binary, pattern, root, language, rewrite, limit + 1
-    )
+    def search(query: str, rewrite_to: str | None) -> tuple[list[dict], int | None, str, bool, str | None, bool]:
+        # Every attempt, the Python header retry included, keeps the hidden
+        # paths out the same way.
+        return _ast_records(binary, query, root, language, rewrite_to, limit + 1, context)
+
+    records, rc, stderr, timed_out, parse_error, used_stdin = search(pattern, rewrite)
     failure = _ast_failure(rc, stderr, timed_out, parse_error)
     if failure is not None:
         return failure
@@ -1945,9 +1989,7 @@ def ast_search(
             )
         body_var = _body_var(header)
         headed = f"{header}\n    $$${body_var}"
-        records, rc, stderr, timed_out, parse_error, used_stdin = _ast_records(
-            binary, headed, root, language, None, limit + 1
-        )
+        records, rc, stderr, timed_out, parse_error, used_stdin = search(headed, None)
         failure = _ast_failure(rc, stderr, timed_out, parse_error)
         if failure is not None:
             return failure
@@ -2006,7 +2048,8 @@ def ast_search(
                 apply_stderr = str(exc)
                 break
     else:
-        argv = _ast_argv(binary, pattern, root, language, rewrite)
+        argv = _ast_argv(binary, pattern, root, language, rewrite,
+                         excludes=_hidden_globs(Path(context.cwd), context))
         argv.remove("--json=stream")
         argv.insert(-2, "--update-all")
         rc, _stdout, apply_stderr = run(argv, context=context, timeout=_AST_GREP_TIMEOUT_S)
@@ -2044,7 +2087,7 @@ def list_dir(path: str, recursive: bool = False, context: ToolContext | None = N
         return f"ERROR: not a directory: {root}"
     lines: list[str] = []
     if recursive:
-        for p in _iter_files(root):
+        for p in _iter_files(root, jail.hider(context)):
             rel = p.relative_to(root)
             lines.append(f"  {rel} ({p.stat().st_size}b)")
     else:

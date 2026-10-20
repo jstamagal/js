@@ -53,6 +53,12 @@ settings, and `<unset>` for settings that explicitly defer to provider defaults.
 `PARANOID_MODE` `on` or `extra`, a set secret setting (`API_KEY`, `EXTRA_HEADERS`,
 `EXTRA_PARAMS`, `MCP_SERVERS`) shows as `<set>`; with the default `off` it shows in full.
 
+Under `js -C DIR`, `JAIL_HIDE` paths (by default `~/.js`, `~/.ssh`, `~/.gnupg`,
+`~/.netrc`, `~/.aws`, `~/.config/gh`) are empty in the jail whatever DIR and
+`JAIL_BIND` show. A hidden path created on the host while a long-running jailed
+command (kernel or terminal session) is already running can be visible to that
+command until it ends; file tools refuse it by name throughout.
+
 Tool alias profiles let a model see alternate tool names without changing the
 canonical tool handlers. Profiles are evaluated in order; each `match` value is
 case-insensitive substring-matched against the active model id and provider id.

@@ -369,6 +369,7 @@ class KernelSession:
     # Under `js -C` the kernel runs in the jail with these binds and only the
     # allowlisted environment names; taken from the ToolContext that started it.
     jail_bind: tuple[str, ...] = ()
+    jail_hide: tuple[str, ...] | None = None
     env_allow: tuple[str, ...] = ()
 
     @property
@@ -561,16 +562,19 @@ def get_session(context: Any) -> tuple[KernelSession | None, str, bool]:
     if problem:
         return None, problem, False
     session = getattr(context, "kernel_session", None)
-    if session is not None and session.alive():
+    if session is not None and session.alive() and jail.shape(session) == jail.shape(context):
         _attach_tools(session, context)
         return session, "", False
     if session is not None:
-        # The kernel died: release its bridge thread, socket dir and log.
+        # The kernel died, or the jail it was started in (JAIL_BIND, JAIL_HIDE,
+        # the kept environment) has changed since: release its bridge
+        # thread, socket dir and log, and start one in the current jail.
         session.shutdown()
         context.kernel_session = None
     artifacts = paths.kernel_state_root() / f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
     session = KernelSession(cwd=Path(context.cwd), artifacts=artifacts,
                             jail_bind=tuple(getattr(context, "jail_bind", ()) or ()),
+                            jail_hide=getattr(context, "jail_hide", None),
                             env_allow=tuple(getattr(context, "shell_env_allow", ()) or ()))
     try:
         session.start()
