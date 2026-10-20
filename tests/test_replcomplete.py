@@ -174,6 +174,17 @@ def test_path_candidates_marks_directories(tmp_path):
     assert cands == [str(tmp_path / "sub") + "/"]
 
 
+def test_path_completion_treats_filename_metacharacters_as_literal_prefixes(tmp_path):
+    literal = tmp_path / "report[1].txt"
+    literal.write_text("wanted", encoding="utf-8")
+    (tmp_path / "report1.txt").write_text("other file", encoding="utf-8")
+    token = "@" + str(tmp_path / "report[1]")
+
+    candidates, _ = _completer().candidates(f"read {token}")
+
+    assert candidates == ["@" + str(literal)]
+
+
 def test_set_arg_completes_dotted_display_names():
     completer = JsCompleter(commands=_table, setting_keys=["ui.tools", "ui.net", "MODEL"])
     cands, _ = completer.candidates("/set ui.")

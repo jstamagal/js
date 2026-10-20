@@ -80,7 +80,7 @@ def path_candidates(token: str) -> list[str]:
     raw = token[1:] if at else token
     base = os.path.expanduser(raw)
     try:
-        hits = glob.glob(base + "*")
+        hits = glob.glob(glob.escape(base) + "*")
     except OSError:
         return []
     prefix = "@" if at else ""
