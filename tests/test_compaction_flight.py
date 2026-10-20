@@ -166,6 +166,29 @@ def _flight_cfg(tmp_path, session_file):
     )
 
 
+def test_flight_snapshots_round_trip_saved_text_with_lone_surrogates(tmp_path):
+    from js import compaction_flight, memory
+
+    cfg = _flight_cfg(tmp_path, tmp_path / "s.jsonl")
+    message = {"role": "user", "content": "filename: café-\udcff.txt"}
+    memory.append_message(cfg.session_file, message)
+    messages = memory.load_replay_messages(cfg.session_file)
+
+    flight = compaction_flight.CompactionFlight(
+        cfg, "system", messages, trigger={}, forced=True, focus=None,
+        preserve_from=0, details={}, directory=compaction.flight_log_dir(cfg),
+    )
+    try:
+        flight.finish("success", "system", messages)
+    finally:
+        flight.close()
+
+    records = [json.loads(line) for line in flight.path.read_text(encoding="utf-8").splitlines()]
+    assert [record["messages"] for record in records if record["event"] in {"before", "after"}] == [
+        [message], [message],
+    ]
+
+
 def test_one_shot_flight_and_autolog_are_named_per_run_not_null(tmp_path):
     import os
 

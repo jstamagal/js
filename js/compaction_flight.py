@@ -101,7 +101,8 @@ class CompactionFlight:
         directory = Path(directory).expanduser()
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path = directory / f"{_stem(cfg)}-{self.id}.jsonl"
-        self.stream = os.fdopen(os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8")
+        self.stream = os.fdopen(os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600),
+                                "w", encoding="utf-8", errors="backslashreplace")
         try:
             self._start(system, messages, settings, operation=operation, trigger=trigger, forced=forced,
                         focus=focus, preserve_from=preserve_from, details=details)
@@ -157,9 +158,10 @@ class CompactionFlight:
     def snapshot(self, phase, system, messages):
         if self.stream is None:
             return
-        encoded = json.dumps({"system": system, "messages": messages}, ensure_ascii=False, default=_json)
+        encoded = json.dumps({"system": system, "messages": messages}, ensure_ascii=False,
+                             default=_json).encode("utf-8", "backslashreplace")
         self.record(phase, system=system, messages=messages, message_count=len(messages),
-                    utf8_bytes=len(encoded.encode()), sha256=hashlib.sha256(encoded.encode()).hexdigest())
+                    utf8_bytes=len(encoded), sha256=hashlib.sha256(encoded).hexdigest())
 
     def notice(self, event, detail=""):
         if self.emit is not None:
