@@ -1345,6 +1345,20 @@ SETTING_SOURCE_LOGIN_LAYER = Message("login {provider_id} {source}", banner=Fals
 
 SETTING_SOURCE_UNSET = Message("unset", banner=False)
 
+LOOP_LOOP_EXPECTS_A_POSITIVE_TURN_COUNT_MINUTES = "--loop expects a positive turn count, minutes (M), or hours (H)"
+
+LOOP_ATTEMPTS_EXHAUSTED = Message("STOP: {completed} completed turns after {attempts} attempts.", banner=False)
+
+LOOP_UNLIMITED = "unlimited"
+
+LOOP_ATTEMPT = Message("\n=== js loop attempt {attempts}, completed {completed}/{value} ===", banner=False)
+
+LOOP_CHILD_STOPPED = Message("STOP: child exited {code}; {completed} turns completed.", banner=False)
+
+LOOP_CHILD_RETRY = "Child exited {code}; retrying in {delay}s ({failures}/{failure_limit} consecutive failures)."
+
+LOOP_STOPPED = Message("Stopped by operator; owned child has exited.", banner=False)
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():
