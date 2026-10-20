@@ -72,7 +72,7 @@ class JsonEvents:
             self.errored = True
         elif kind == "session":
             self.session = fields
-        line = json.dumps({"type": kind, **fields}, ensure_ascii=False, default=str)
+        line = json.dumps({"type": kind, **fields}, ensure_ascii=True, default=str)
         with self._lock:
             self.out.write(line + "\n")
             self.out.flush()

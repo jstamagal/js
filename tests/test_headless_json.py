@@ -5,12 +5,13 @@ The schema these tests pin is in docs/headless-json.md."""
 from __future__ import annotations
 
 import json
+import io
 
 import ai
 import ai.types.usage
 import pytest
 
-from js import cli, runtime, usage
+from js import cli, headless, runtime, usage
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit.core import ToolContext
 
@@ -69,6 +70,19 @@ def _run(monkeypatch, capsys, replies, argv):
     code = cli.main(argv)
     captured = capsys.readouterr()
     return code, _events(captured.out), captured.err
+
+
+def test_json_tool_arguments_with_a_lone_surrogate_remain_valid_utf8():
+    buffer = io.BytesIO()
+    out = io.TextIOWrapper(buffer, encoding="utf-8")
+    events = headless.JsonEvents(out)
+
+    events.runtime_event("tool_call", {
+        "id": "call", "name": "read", "arguments": r'{"file_path":"\ud800"}',
+    })
+
+    event = json.loads(buffer.getvalue().decode("utf-8"))
+    assert event["arguments"] == {"file_path": "\ud800"}
 
 
 def test_a_turn_with_a_tool_call_streams_every_event_kind(monkeypatch, capsys, tmp_path):
