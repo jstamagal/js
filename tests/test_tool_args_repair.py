@@ -93,3 +93,21 @@ def test_nested_anyof_string_branch_keeps_the_string():
     schema = {"anyOf": [{"anyOf": [{"type": "string"}, {"type": "object"}]}, {"type": "array"}]}
     assert coerce_to_schema("[1]", schema) == "[1]"
     assert coerce_to_schema('{"a": 1}', schema) == '{"a": 1}'  # string branch: string is valid
+
+
+def test_nested_union_coerces_object_properties():
+    from js.tool_args import coerce_to_schema, schema_error
+
+    schema = {"anyOf": [
+        {"type": "null"},
+        {"oneOf": [
+            {"type": "object", "properties": {"count": {"type": "integer"}},
+             "required": ["count"], "additionalProperties": False},
+            {"type": "array", "items": {"type": "boolean"}},
+        ]},
+    ]}
+
+    actual = coerce_to_schema('{"count": "3"}', schema)
+
+    assert actual == {"count": 3}
+    assert schema_error(actual, schema) is None

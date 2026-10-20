@@ -178,15 +178,34 @@ def coerce_to_schema(value: object, schema: object) -> object:
     if isinstance(value, dict):
         properties = schema.get("properties")
         if isinstance(properties, dict):
-            return {
+            value = {
                 key: coerce_to_schema(item, properties[key]) if key in properties else item
                 for key, item in value.items()
             }
-        return value
     if isinstance(value, list):
         items = schema.get("items")
         if isinstance(items, dict):
-            return [coerce_to_schema(item, items) for item in value]
+            value = [coerce_to_schema(item, items) for item in value]
+    if isinstance(value, (dict, list)):
+        branches = [
+            branch
+            for variants in (schema.get("anyOf"), schema.get("oneOf"))
+            if isinstance(variants, list)
+            for branch in variants
+            if isinstance(branch, dict) and "$ref" not in branch
+        ]
+        if branches:
+            from referencing.exceptions import Unresolvable
+
+            try:
+                if schema_error(value, schema) is None:
+                    return value
+                for branch in branches:
+                    candidate = coerce_to_schema(value, branch)
+                    if schema_error(candidate, schema) is None:
+                        return candidate
+            except Unresolvable:
+                pass
     return value
 
 
