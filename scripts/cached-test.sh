@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Run the offline suite once per tree state. The key is HEAD plus a hash of
-# the working-tree diff (tracked and untracked), so an unchanged tree replays
+# Run the offline suite once per command and tree state. The key is HEAD plus
+# hashes of the command and working-tree diff (tracked and untracked), so a matching run replays
 # the last run — its output, its exit code, who ran it and when — instead of
 # spending 40 seconds re-learning the same answer. `just test --force` reruns.
 set -uo pipefail
@@ -13,7 +13,8 @@ if [ "${1:-}" = "--force" ]; then force=1; shift; fi
 
 head=$(git rev-parse HEAD)
 dirty=$( { git diff HEAD --no-color; git ls-files --others --exclude-standard -z | xargs -0 -r sha256sum; } | sha256sum | cut -c1-16)
-key="${head:0:12}-${dirty}"
+command_key=$(printf '%s\0' "$@" | sha256sum | cut -c1-16)
+key="${head:0:12}-${dirty}-${command_key}"
 hit="$cache_dir/$key"
 
 if [ $force -eq 0 ] && [ -f "$hit.out" ] && [ -f "$hit.meta" ]; then
