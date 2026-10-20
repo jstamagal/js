@@ -1641,6 +1641,28 @@ PROVIDER_ENDPOINT_ENV_HINT = Message("set {value}", banner=False)
 
 PROVIDER_ENDPOINT_CONFIGURE_HINT = Message("configure its base URL", banner=False)
 
+ENDPOINT_SPEC_EMPTY_ENDPOINT_SPEC_EXPECTED_MODEL_KEY_SHAPE = "empty endpoint spec; expected model[:key][[shape]][[effort]]@url"
+
+ENDPOINT_SPEC_NO_ENDPOINT_IN_EXPECTED_SOMETHING_LIKE_QWEN = "no @endpoint in {spec!r}; expected something like qwen27b@http://host:8000/v1"
+
+ENDPOINT_SPEC_NO_ENDPOINT_AFTER_IN = "no endpoint after @ in {spec!r}"
+
+ENDPOINT_SPEC_ENDPOINT_HAS_NO_SCHEME_WRITE_HTTP_OR = "endpoint {base_url!r} has no scheme; write http:// or https://"
+
+ENDPOINT_SPEC_EMPTY_IN = "empty [] in {spec!r}"
+
+ENDPOINT_SPEC_TWO_WIRE_SHAPES_IN_AND_ONE_MORE = "two wire shapes in {spec!r}: [{tag}] and one more"
+
+ENDPOINT_SPEC_TWO_REASONING_EFFORTS_IN_AND_ONE_MORE = "two reasoning efforts in {spec!r}: [{tag}] and one more"
+
+ENDPOINT_SPEC_UNKNOWN_TAG_IN_WIRE_SHAPES_ARE_EFFORTS = "unknown tag [{tag}] in {spec!r}; wire shapes are {value}; efforts are {value2}"
+
+ENDPOINT_SPEC_NO_MODEL_ID_IN = "no model id in {spec!r}"
+
+ENDPOINT_SPEC_EMPTY_API_KEY_AFTER_IN = "empty api key after ':' in {spec!r}"
+
+ENDPOINT_SPEC_NO_MODEL_ID_BEFORE_IN = "no model id before ':' in {spec!r}"
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():
