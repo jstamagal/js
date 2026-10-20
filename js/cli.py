@@ -3114,11 +3114,12 @@ def _worktree_patch(repo_dir: Path, commit_helper) -> str:
     `git diff HEAD` is staged+unstaged against the last commit. A repo with no
     commits yet has no HEAD, so fall back to staged+unstaged separately.
     """
-    diff = commit_helper._git("diff", "HEAD", check=False, repo=repo_dir)
+    flags = (*commit_helper._DIFF_FLAGS, "--binary")
+    diff = commit_helper._git("diff", *flags, "HEAD", check=False, repo=repo_dir)
     if diff.returncode == 0:
         return diff.stdout
-    staged = commit_helper._git("diff", "--cached", check=False, repo=repo_dir)
-    unstaged = commit_helper._git("diff", check=False, repo=repo_dir)
+    staged = commit_helper._git("diff", "--cached", *flags, check=False, repo=repo_dir)
+    unstaged = commit_helper._git("diff", *flags, check=False, repo=repo_dir)
     return (staged.stdout if staged.returncode == 0 else "") + (unstaged.stdout if unstaged.returncode == 0 else "")
 
 
