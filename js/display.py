@@ -28,6 +28,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from rich.cells import cell_len
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.syntax import Syntax
@@ -729,18 +730,22 @@ def _highlight(lines: list[str], lexer: str) -> list[Text]:
     return parts if len(parts) == len(lines) else [Text(line) for line in lines]
 
 
-def _fit(text: Text, room: int, wrap: bool) -> list[Text]:
-    """`text` as rows of at most `room` cells: folded when `wrap`, else one
-    row cut with an ellipsis."""
+def _fit(text: Text, room: int) -> list[Text]:
+    """`text` as rows of at most `room` cells: a long line breaks at the
+    column, as a terminal wraps it, and keeps all of itself."""
     text = text.copy()
     text.expand_tabs(8)
-    if not wrap:
-        text.truncate(room, overflow="ellipsis")
-        return [text]
-    return list(text.wrap(_MEASURE, room, overflow="fold")) or [Text("")]
+    cuts: list[int] = []
+    used = 0
+    for index, char in enumerate(text.plain):
+        width = cell_len(char)
+        if used + width > room and used:
+            cuts.append(index)
+            used = 0
+        used += width
+    return list(text.divide(cuts)) if cuts else [text]
 
 
-_MEASURE = Console(file=io.StringIO(), width=200)
 
 
 class _Block:
@@ -796,23 +801,26 @@ class _Block:
         row.pad_right(self.inner - _INDENT - row.cell_len)
         self.rows.append(Text(" " * _INDENT) + row)
 
-    def panel(self, lines: list[Text], *, wrap: bool) -> None:
+    def panel(self, lines: list[Text]) -> None:
         """`lines` on the panel background, padded to one width."""
         room = self.inner - _INDENT - 2 * _PAD
         for line in lines:
-            for piece in _fit(line, room, wrap):
+            for piece in _fit(line, room):
                 self._panel_row(piece)
 
-    def numbered(self, lines: list[tuple[str, Text]], *, wrap: bool) -> None:
+    def numbered(self, lines: list[tuple[str, Text]], *, sign: int = 0) -> None:
         """`(number, text)` rows as a file view on the panel: dim
         right-aligned numbers, the text beside them, a folded row continuing
-        under its text."""
+        under its text. The first `sign` columns of a text, a diff's `+ ` or
+        `- `, stand alone in their column: a folded row continues after them."""
         gutter = max((len(number) for number, _ in lines), default=1)
-        room = self.inner - _INDENT - 2 * _PAD - gutter - 2
+        room = self.inner - _INDENT - 2 * _PAD - gutter - 2 - sign
         for number, text in lines:
-            for index, piece in enumerate(_fit(text, room, wrap)):
+            head = text[:sign]
+            for index, piece in enumerate(_fit(text[sign:], room)):
                 label = number.rjust(gutter) if index == 0 else " " * gutter
-                self._panel_row(Text.assemble((label, self.theme.dim), "  ", piece))
+                lead = head if index == 0 else Text(" " * sign)
+                self._panel_row(Text.assemble((label, self.theme.dim), "  ", lead, piece))
 
     def note(self, text: str, style: str = "") -> None:
         row = Text(" " * (_INDENT + _PAD) + text, style or self.theme.dim)
@@ -1006,9 +1014,9 @@ def _program(block: _Block, name: str, args: dict, level: int, preview: int) -> 
     lines = lines[:len(lines) - hidden]
     code = _highlight(lines, _lexer(name, args, "\n".join(lines)))
     if name == "write":
-        block.numbered([(str(n), text) for n, text in enumerate(code, 1)], wrap=level == 3)
+        block.numbered([(str(n), text) for n, text in enumerate(code, 1)])
     else:
-        block.panel(code, wrap=level == 3)
+        block.panel(code)
     if hidden:
         block.note(_hidden(hidden))
 
@@ -1043,7 +1051,7 @@ def _finished_brief(block: _Block, name: str, args: dict, output: ToolOutput, ki
                          tail_style=colours.error)
             return
         block.header(name, args, malformed=malformed)
-        _capped(block, _result_rows(output, colours), preview, lambda rows: block.panel(rows, wrap=True))
+        _capped(block, _result_rows(output, colours), preview, lambda rows: block.panel(rows))
         if output.tries is not None:
             block.note(msgs.TOOL_TRIES_LEFT.body(left=output.tries[0], allowed=output.tries[1]), colours.error)
         return
@@ -1057,19 +1065,19 @@ def _finished_brief(block: _Block, name: str, args: dict, output: ToolOutput, ki
     if diff is not None:
         rows, lead = diff
         block.header(name, args, malformed=malformed, tail=lead)
-        _capped(block, rows, preview, lambda shown: block.numbered(shown, wrap=False))
+        _capped(block, rows, preview, lambda shown: block.numbered(shown, sign=2))
         return
     said = args.get(_SAID_ARG.get(name, ""))
     if isinstance(said, str) and said.strip():
         block.header(name, args, malformed=malformed, tail=_last_line(output))
         lines = [Text(line, colours.panel_text) for line in clean(said).strip("\n").split("\n")]
-        _capped(block, lines, preview, lambda rows: block.panel(rows, wrap=True))
+        _capped(block, lines, preview, lambda rows: block.panel(rows))
         return
     if kind == "diff" or len(output.lines) <= 1:
         block.header(name, args, malformed=malformed, tail=_last_line(output))
         return
     block.header(name, args, malformed=malformed)
-    _capped(block, _result_rows(output, colours), preview, lambda rows: block.panel(rows, wrap=False))
+    _capped(block, _result_rows(output, colours), preview, lambda rows: block.panel(rows))
 
 
 def _finished_full(block: _Block, name: str, args: dict, output: ToolOutput, level: int,
@@ -1079,7 +1087,6 @@ def _finished_full(block: _Block, name: str, args: dict, output: ToolOutput, lev
     colours = block.theme
     block.header(name, args, malformed=malformed)
     _program(block, name, args, level, preview)
-    wrap = level == 3
     limit = preview if level == 2 else max(len(output.lines), 1)
     note_style = colours.error if output.failed else ""
     if not output.lines:
@@ -1089,14 +1096,14 @@ def _finished_full(block: _Block, name: str, args: dict, output: ToolOutput, lev
     diff = _diff_view(output, colours) if name == "patch" else None
     if read is not None:
         rows, of = read
-        shown = _capped(block, rows, limit, lambda part: block.numbered(part, wrap=wrap))
+        shown = _capped(block, rows, limit, lambda part: block.numbered(part))
         block.note(metrics(output, shown=shown, lines=len(rows), of=of), note_style)
     elif diff is not None:
         rows, lead = diff
-        _capped(block, rows, limit, lambda part: block.numbered(part, wrap=wrap))
+        _capped(block, rows, limit, lambda part: block.numbered(part, sign=2))
         block.note(lead, note_style)
     else:
-        shown = _capped(block, _result_rows(output, colours), limit, lambda part: block.panel(part, wrap=wrap))
+        shown = _capped(block, _result_rows(output, colours), limit, lambda part: block.panel(part))
         block.note(metrics(output, shown=shown), note_style)
 
 
@@ -1108,11 +1115,12 @@ def render_exchange(name: str, args: dict | None, result: Any = None, *, level: 
     running: `live` is the tail of its output so far, `elapsed` how long it
     has run.
 
-    TOOLS_DISPLAY  1  what `call_kind` says of the call: a quiet call is one row,
-                 a command its last line, a patch its diff, anything else its
-                 result; a failure shows its error
-              2  the program and the first `preview` result lines, long ones cut
-              3  the program and every result line, long ones folded
+    TOOLS_DISPLAY  1  what `call_kind` says of the call: a quiet call is one
+                      row, a command its last line, a patch its diff, anything
+                      else its result; a failure shows its error
+                   2  the program and the first `preview` result lines
+                   3  the program and every result line
+    A long line wraps; none is cut.
     """
     if level <= 0:
         return ""
@@ -1128,7 +1136,7 @@ def render_exchange(name: str, args: dict | None, result: Any = None, *, level: 
             _program(block, name, args, level, preview)
         if live:
             tail = [clean(line) for line in live][-LIVE_LINES:]
-            block.panel([Text(line, colours.panel_text) for line in tail], wrap=False)
+            block.panel([Text(line, colours.panel_text) for line in tail])
         return block.render()
     output = tool_output(name, result)
     block = _Block(width or block_width(), colours, FAIL if output.failed else OK)
