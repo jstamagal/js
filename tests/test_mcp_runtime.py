@@ -1032,6 +1032,23 @@ def test_malformed_remote_input_schemas_fall_back_to_valid_object_schemas():
     asyncio.run(drive())
 
 
+def test_object_schema_without_properties_keeps_pattern_arguments(config):
+    import jsonschema
+
+    schema = {
+        "type": "object",
+        "patternProperties": {"^count_": {"type": "integer"}},
+        "additionalProperties": False,
+    }
+    host = MCPHost(config, client_factory=FakeClient)
+    host.remote_tools["alpha_server__counts"] = ("Alpha Server", "counts", {"inputSchema": schema})
+    tool = host.tools({"alpha_server__counts"})[0]
+    parameters = tool.openai_spec()["function"]["parameters"]
+    jsonschema.validate({"count_files": 3}, parameters)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"count_files": "three"}, parameters)
+
+
 def test_normalized_remote_name_collisions_are_disambiguated_and_visible():
     class CollisionClient(FakeClient):
         def __init__(self, factory, **kwargs):

@@ -800,7 +800,7 @@ class MCPHost:
             valid_input_schema = (
                 isinstance(raw.get("inputSchema"), dict)
                 and schema.get("type") == "object"
-                and isinstance(schema.get("properties"), dict)
+                and ("properties" not in schema or isinstance(schema["properties"], dict))
             )
             return Tool(
                 name,
