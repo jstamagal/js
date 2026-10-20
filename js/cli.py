@@ -4564,7 +4564,15 @@ def _main(argv: list[str] | None = None) -> int:
     if args.loop is not None:
         from . import loop_controller
         try:
-            return loop_controller.run(dispatch_argv, args.loop, bench=args.bench, prompt=args.prompt)
+            loop_settings = settings.collect_settings(
+                config_paths=jsrc_paths(
+                    Path(args.cd).expanduser().resolve() if args.cd else Path.cwd(),
+                    ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global,
+                    presets=[name for spec in args.presets for name in spec.split(",") if name.strip()],
+                ), extras=args.extras,
+            )
+            return loop_controller.run(dispatch_argv, args.loop, bench=args.bench, prompt=args.prompt,
+                                       settings=loop_settings)
         except (ValueError, OSError) as exc:
             parser.error(str(exc))
     if _json_run_requested(args):

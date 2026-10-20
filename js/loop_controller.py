@@ -1,6 +1,8 @@
 """Repeat complete CLI invocations as fresh, isolated processes."""
 from __future__ import annotations
 
+from . import settings as _settings
+
 import os
 from pathlib import Path
 import re
@@ -99,7 +101,7 @@ def _stop_child(child: subprocess.Popen) -> None:
 
 
 def run(argv: list[str], limit: str, *, bench: str | None, prompt: str | None,
-        child_command: list[str] | None = None) -> int:
+        child_command: list[str] | None = None, settings: dict | None = None) -> int:
     count, seconds = parse_limit(limit)
     command = list(child_command or [sys.executable, "-m", "js"])
     args = child_argv(argv, limit)
@@ -109,7 +111,9 @@ def run(argv: list[str], limit: str, *, bench: str | None, prompt: str | None,
         args += ["-p", _DEFAULT_PROMPT]
     deadline = time.monotonic() + seconds if seconds is not None else None
     completed = failures = attempts = 0
-    max_attempts = count * 3 if count is not None else None
+    max_attempts = count * int(_settings.knob(settings, "LOOP_ATTEMPTS_MULTIPLIER")) if count is not None else None
+    failure_limit = int(_settings.knob(settings, "LOOP_FAILURES_MAX"))
+    backoff_max = int(_settings.knob(settings, "LOOP_BACKOFF_MAX"))
     try:
         while (count is None or completed < count) and (deadline is None or time.monotonic() < deadline):
             if max_attempts is not None and attempts >= max_attempts:
@@ -132,11 +136,11 @@ def run(argv: list[str], limit: str, *, bench: str | None, prompt: str | None,
             if code == 130:
                 return 130
             failures += 1
-            if count is not None or failures >= 5:
+            if count is not None or failures >= failure_limit:
                 print(f"STOP: child exited {code}; {completed} turns completed.", file=sys.stderr)
                 return code or 1
-            delay = min(2 ** (failures - 1), 8)
-            print(f"Child exited {code}; retrying in {delay}s ({failures}/5 consecutive failures).", file=sys.stderr)
+            delay = min(2 ** (failures - 1), backoff_max)
+            print(f"Child exited {code}; retrying in {delay}s ({failures}/{failure_limit} consecutive failures).", file=sys.stderr)
             if deadline is not None and time.monotonic() + delay >= deadline:
                 return code or 1
             time.sleep(delay)

@@ -139,6 +139,9 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("LOOP_BACKOFF_MAX", "int", group="runtime"),
+    SettingSpec("LOOP_FAILURES_MAX", "int", group="runtime"),
+    SettingSpec("LOOP_ATTEMPTS_MULTIPLIER", "int", group="runtime"),
     SettingSpec("NOTEBOOK_CLEAR_OUTPUTS", "bool", group="notebook"),
     SettingSpec("NOTEBOOK_REQUIRE_READ", "bool", group="notebook"),
     SettingSpec("LSP_ALLOW_HOME_ROOT", "bool", group="lsp"),
