@@ -67,7 +67,8 @@ def test_every_secret_setting_is_masked_everywhere_settings_are_shown(tmp_path):
                       paranoid_mode="on")
         cfg.settings.update(store)
         flight = compaction_flight.CompactionFlight(
-            cfg, "sys", [], trigger="test", forced=True, focus="", preserve_from=0, details={})
+            cfg, "sys", [], trigger="test", forced=True, focus="", preserve_from=0, details={},
+            directory=compaction_flight.flight_log_dir(cfg))
         flight.close()
         assert SENTINEL not in flight.path.read_text(), key
 

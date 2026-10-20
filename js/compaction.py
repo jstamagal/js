@@ -20,12 +20,14 @@ import traceback
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import ai
 
 from . import context_budget
 from .compaction_flight import ACTIVE_FLIGHT, CompactionFlight
+from .compaction_flight import NOTICE as NOTICE, flight_log_dir as flight_log_dir, printing as printing
 from . import memory as M
 from . import messages as msgs
 from . import model_client
@@ -293,12 +295,13 @@ def microcompact(
 
 
 def _clearing_flight(messages: list[dict], *, cfg: Config, system: str, trigger: dict,
-                     flight_data: dict) -> CompactionFlight:
+                     flight_data: dict, log_dir: Path | None,
+                     emit: Callable[..., Any] | None) -> CompactionFlight:
     try:
         return CompactionFlight(
             cfg, system, messages, trigger=trigger,
             forced=True, focus="clear old tool-result bodies", preserve_from=None,
-            details=flight_data, operation="tool-result-clearing",
+            details=flight_data, directory=log_dir, emit=emit, operation="tool-result-clearing",
         )
     except OSError as exc:
         msgs.warn(msgs.CLEARING_FLIGHT_FAILED, error=exc)
@@ -358,15 +361,18 @@ def _record_cleared(flight: CompactionFlight, messages: list[dict], *, keep_rece
 def recover_overflow(
     messages: list[dict], round_: int, *, cfg: Config, system: str,
     error: BaseException, flight_data: dict,
+    log_dir: Path | None = None, emit: Callable[..., Any] | None = None,
 ) -> tuple[str, int, int]:
-    """Record and announce tool-result clearing after a provider overflow."""
+    """Record and announce tool-result clearing after a provider overflow.
+    ``log_dir`` is where the flight log goes (None: no log); notices go to
+    ``emit``."""
     keep_recent = max(0, 20 // round_)
     flight = _clearing_flight(
         messages, cfg=cfg, system=system,
         trigger={"phase": "overflow_recovery", "round": round_,
                  "error": f"{type(error).__name__}: {error}",
                  "provider_error": _provider_error_fields(error)},
-        flight_data=flight_data,
+        flight_data=flight_data, log_dir=log_dir, emit=emit,
     )
     with _flight_recording(flight, system, messages):
         flight.notice("start", f"provider overflow; round={round_}; keeping newest {keep_recent} tool results")
@@ -379,15 +385,17 @@ def recover_overflow(
 
 def clear_for_budget(
     messages: list[dict], *, cfg: Config, system: str, trigger: dict, flight_data: dict,
-    over_budget: Any,
+    over_budget: Any, log_dir: Path | None = None, emit: Callable[..., Any] | None = None,
 ) -> tuple[int, int]:
     """Clear old tool-result bodies until ``over_budget(reclaimed_chars)`` is false.
 
     Starts with ``COMPACTION_KEEP_TOOL_RESULTS`` intact results and halves that
     each round down to one. An explicit zero clears all eligible results.
-    Returns (results_cleared, chars_reclaimed)."""
+    Returns (results_cleared, chars_reclaimed). ``log_dir`` and ``emit`` are
+    as for :func:`recover_overflow`."""
     keep_recent = get_nonnegative_int(cfg, "COMPACTION_KEEP_TOOL_RESULTS")
-    flight = _clearing_flight(messages, cfg=cfg, system=system, trigger=trigger, flight_data=flight_data)
+    flight = _clearing_flight(messages, cfg=cfg, system=system, trigger=trigger, flight_data=flight_data,
+                              log_dir=log_dir, emit=emit)
     with _flight_recording(flight, system, messages):
         flight.notice("start", f"{trigger.get('phase')} context budget; keeping newest {keep_recent} tool results")
         total = 0
@@ -958,13 +966,17 @@ async def compact_now(
     tail_tokens: int | None = None,
     context: Any = None,
     emit: Callable[..., Any] | None = None,
+    log_dir: Path | None = None,
 ) -> str:
     """Summarize ``messages`` before the kept tail, in place. ``emit(event,
-    **payload)`` hears pre_compact when the summary is about to be written and
-    post_compact once it replaced the history."""
+    **payload)`` hears pre_compact when the summary is about to be written,
+    post_compact once it replaced the history, and each flight notice as a
+    ``compaction_notice`` event. The flight log goes to ``log_dir``; None
+    writes none."""
     flight = CompactionFlight(
         cfg, system, messages, trigger=trigger or {"phase": "manual"},
         forced=forced, focus=focus, preserve_from=preserve_from, details=flight_data,
+        directory=log_dir, emit=emit,
     )
     with _flight_recording(flight, system, messages):
         chars_per_token = _calibrated_chars_per_token(cfg, system, messages, context)
@@ -1000,7 +1012,7 @@ async def compact_now(
                       messages=messages[:keep_from])
         summary = await summarize(cfg, compact_model, messages[:keep_from], focus, guidance)
         recorded_trigger = {**(trigger or {"phase": "manual"}), "attempt_id": flight.id,
-                            "flight_path": str(flight.path)}
+                            **({"flight_path": str(flight.path)} if flight.path else {})}
         rehydrated = _post_compact_rehydration(
             context or T.STOCK_CONTEXT,
             chars_per_token=chars_per_token,
@@ -1062,6 +1074,7 @@ def compact_now_sync(
     context: Any = None,
     loop_runner: asyncio.Runner | None = None,
     emit: Callable[..., Any] | None = None,
+    log_dir: Path | None = None,
 ) -> str:
     """Sync wrapper over :func:`compact_now` for callers off the event loop.
 
@@ -1070,7 +1083,7 @@ def compact_now_sync(
     coro = compact_now(
         cfg, system, messages, focus=focus, forced=forced, model=model,
         preserve_from=preserve_from, trigger=trigger, flight_data=flight_data,
-        context=context, emit=emit,
+        context=context, emit=emit, log_dir=log_dir,
     )
     if loop_runner is not None:
         return loop_runner.run(coro)
@@ -1105,9 +1118,10 @@ async def maybe_auto_compact_async(
     messages: list[dict],
     resolve_window: Any,
     emit: Callable[..., Any] | None = None,
+    log_dir: Path | None = None,
 ) -> AutoCompactOutcome:
-    """Run the between-turn trigger, compacting if it fires. ``emit`` goes to
-    compact_now.
+    """Run the between-turn trigger, compacting if it fires. ``emit`` and
+    ``log_dir`` go to compact_now.
 
     ``resolve_window`` is a zero-arg callable returning the model's context
     window (or None); it is invoked at most once and only when the configured
@@ -1148,7 +1162,8 @@ async def maybe_auto_compact_async(
     out.forced = fullness >= force_at
     try:
         out.result = await _between_turn_compact(cfg, ac, context, system, messages, out.forced,
-                                                 prompt_tokens, context_window, effective_window, emit)
+                                                 prompt_tokens, context_window, effective_window, emit,
+                                                 log_dir)
     except Exception as exc:  # noqa: BLE001 - a failed summary leaves the history as it was
         out.notices.append(msgs.COMPACTION_FAILED.said(error=f"{type(exc).__name__}: {exc}"))
         if (paused := record_auto_failure(cfg, context)) is not None:
@@ -1171,9 +1186,10 @@ async def maybe_auto_compact_async(
 async def _between_turn_compact(cfg: Config, ac: AutoCompactState, context: Any, system: str,
                                 messages: list[dict], forced: bool, prompt_tokens: int,
                                 context_window: int, effective_window: int,
-                                emit: Callable[..., Any] | None = None) -> str:
+                                emit: Callable[..., Any] | None = None,
+                                log_dir: Path | None = None) -> str:
     return await compact_now(
-        cfg, system, messages, forced=forced, context=context, emit=emit,
+        cfg, system, messages, forced=forced, context=context, emit=emit, log_dir=log_dir,
         trigger={"phase": "between-turn", "context_tokens": prompt_tokens,
                  "context_window": context_window, "effective_input_limit": effective_window},
         flight_data={"auto_state": dict(vars(ac)), "last_prompt_tokens": getattr(context, "last_prompt_tokens", None),

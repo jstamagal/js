@@ -1121,11 +1121,13 @@ def _emit_repl_event(
     return emission
 
 
-def _compact_hooks(state: dict) -> dict:
-    """The ``emit`` keyword a compaction call takes: the state's `on` handler
-    table, when the state has one."""
+def _compact_hooks(state: dict, cfg: Config) -> dict:
+    """The ``emit`` and ``log_dir`` keywords a compaction call takes: notices
+    print, other events go to the state's `on` handler table when it has one,
+    and the flight log goes to js's flight log directory."""
     hook_table = state.get("events")
-    return {} if hook_table is None else {"emit": hook_table.emit}
+    return {"emit": compaction.printing(None if hook_table is None else hook_table.emit),
+            "log_dir": compaction.flight_log_dir(cfg)}
 
 
 def _emit_session_event(state: dict, telemetry: runtime.Telemetry, cfg: Config, event: str) -> None:
@@ -1171,7 +1173,7 @@ async def _maybe_auto_compact_async(cfg: Config, state: dict) -> None:
                 lambda: runtime._resolve_context_window(
                     active_cfg.model, active_cfg.provider_id, active_cfg.provider_base_url
                 ),
-                **_compact_hooks(state),
+                **_compact_hooks(state, active_cfg),
             )
     finally:
         turn_status.compacting = False
@@ -1951,7 +1953,7 @@ def _cmd_compact(arg: str, state: dict, cfg: Config) -> str | None:
         compact_cfg = _cfg_for_live_state(cfg, state)
         with stream_transport.net_role("Compacting"):
             result = compaction.compact_now_sync(compact_cfg, state["system"], state["messages"], model=model,
-                                                 focus=focus, forced=forced, **_compact_hooks(state))
+                                                 focus=focus, forced=forced, **_compact_hooks(state, compact_cfg))
     except Exception as e:  # noqa: BLE001
         return msgs.COMPACTION_FAILED.said(error=f"{type(e).__name__}: {e}")
     msgs.say(msgs.COMPACTION_DONE, result=result)
@@ -3308,7 +3310,9 @@ def _run_compact_offline(session: str, *, agent: str | None = None, focus: str =
         prompt_spec = P.load_configured_prompt_spec(cfg)
         messages = M.load_replay_messages(cfg.session_file)
         compact_cfg = replace(cfg, model=model) if model is not None else cfg
-        result = compaction.compact_now_sync(compact_cfg, prompt_spec.system, messages, focus=focus, forced=True)
+        result = compaction.compact_now_sync(compact_cfg, prompt_spec.system, messages, focus=focus, forced=True,
+                                             emit=compaction.printing(),
+                                             log_dir=compaction.flight_log_dir(compact_cfg))
     except Exception as e:  # noqa: BLE001
         msgs.warn(msgs.FAILED, error=_error_text(e))
         return 1

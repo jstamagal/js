@@ -253,6 +253,7 @@ class Runner:
             await compaction.maybe_auto_compact_async(
                 cfg, auto, context, system, messages,
                 lambda: runtime._resolve_context_window(cfg.model, cfg.provider_id, cfg.provider_base_url),
+                emit=compaction.printing(), log_dir=compaction.flight_log_dir(cfg),
             )
 
 

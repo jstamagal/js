@@ -1008,7 +1008,7 @@ DIRECTIVE_EXITED = Message("{label}: exited {code}: {stderr}")
 DIRECTIVE_EXITED_SILENT = Message("{label}: exited {code}. No stderr")
 DIRECTIVE_EXITED_OUTPUT_USED = Message("{label}: exited {code}. Its output was used", WARN)
 FLIGHT_AUTOLOG_FAILED = Message("Flight autolog not written: {error}. Flight {path}", GRAVE)
-FLIGHT_NOTICE = Message("Compaction {event} {id}: operation={operation} {detail} flight={path}")
+FLIGHT_NOTICE = Message("Compaction {stage} {id}: operation={operation} {detail} flight={path}")
 
 # --- Settings verbs ----------------------------------------------------------
 

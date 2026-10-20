@@ -469,16 +469,21 @@ retain phase, context-token count, window and effective input limit.
 
 ### Compaction flight records
 
-Every call to the central compaction function writes a unique attempt under
+Every compaction js runs writes a unique attempt under
 `logs/<agent>/compactions/<session>-<attempt>.jsonl`. `COMPACTION_LOG_DIR`
-changes that directory. Records contain caller stack/PIDs, active model and
+changes that directory. The directory is the `log_dir` argument of
+`compact_now`, `recover_overflow` and `clear_for_budget`; js's callers pass
+`compaction.flight_log_dir(cfg)`, and None writes no record. Records contain caller stack/PIDs, active model and
 settings (secret settings and credential fields masked under `PARANOID_MODE` `on`/`extra`), exact system/messages before and after,
 content hashes, retention decision, summary input/output and provider trace,
 plus success, skip, failure or cancellation. Runtime-triggered records also
 include the tool schemas, request budget and usage anchor. Files are created
 with mode 0600; records are flushed and fsynced before summarization starts.
 
-Terminal START and outcome notices include attempt ID and file path. Session
+Terminal START and outcome notices include attempt ID and file path. They
+reach the caller's `emit` as `compaction_notice` events; `compaction.printing()`
+is the `emit` js passes, which prints them as `*** Compaction ...` lines on
+stderr and hands every other event on. Session
 compaction marks carry that same ID. Budget telemetry also goes to the existing
 request autolog as `FLIGHT` JSON records even when optional runtime debug is off.
 `/set CONTEXT_SIZE N` immediately displays the effective next-request

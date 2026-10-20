@@ -385,7 +385,7 @@ def test_compaction_fires_pre_compact_then_post_compact(tmp_path, summarize_stub
 
     result = compaction.compact_now_sync(
         _compact_cfg(tmp_path), "sys", messages, forced=True,
-        emit=lambda event, **payload: heard.append((event, payload)),
+        emit=lambda event, **payload: event != compaction.NOTICE and heard.append((event, payload)),
     )
 
     assert compaction.compacted(result)
@@ -399,7 +399,7 @@ def test_a_skipped_compaction_fires_neither(tmp_path, summarize_stub):
     messages = [{"role": "user", "content": "hi"}]
 
     compaction.compact_now_sync(_compact_cfg(tmp_path), "sys", messages,
-                                emit=lambda event, **_payload: heard.append(event))
+                                emit=lambda event, **_payload: event != compaction.NOTICE and heard.append(event))
 
     assert heard == []
 

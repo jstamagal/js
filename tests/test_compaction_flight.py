@@ -40,10 +40,10 @@ def test_flight_persists_before_after_and_terminal_outcome(monkeypatch, tmp_path
 
     monkeypatch.setattr(compaction, "summarize", summarize)
     if failure is None:
-        asyncio.run(compaction.compact_now(cfg, "SYSTEM", messages, forced=True))
+        asyncio.run(compaction.compact_now(cfg, "SYSTEM", messages, forced=True, log_dir=compaction.flight_log_dir(cfg), emit=compaction.printing()))
     else:
         with pytest.raises(type(failure)):
-            asyncio.run(compaction.compact_now(cfg, "SYSTEM", messages, forced=True))
+            asyncio.run(compaction.compact_now(cfg, "SYSTEM", messages, forced=True, log_dir=compaction.flight_log_dir(cfg), emit=compaction.printing()))
         assert messages == original
     path, records = read_flight(cfg)
     assert records[0]["settings"]["API_KEY"] == "<set>"
@@ -106,13 +106,13 @@ def test_flight_cleanup_preserves_the_original_error(
 
     with pytest.raises(failure_type) as caught:
         if operation == "summary":
-            asyncio.run(compaction.compact_now(cfg, "SYSTEM", messages, forced=True))
+            asyncio.run(compaction.compact_now(cfg, "SYSTEM", messages, forced=True, log_dir=compaction.flight_log_dir(cfg), emit=compaction.printing()))
         elif operation == "budget":
             compaction.clear_for_budget(messages, cfg=cfg, system="SYSTEM", trigger={},
-                                        flight_data={}, over_budget=lambda _: True)
+                                        flight_data={}, over_budget=lambda _: True, log_dir=compaction.flight_log_dir(cfg), emit=compaction.printing())
         else:
             compaction.recover_overflow(messages, 1, cfg=cfg, system="SYSTEM",
-                                        error=RuntimeError("overflow"), flight_data={})
+                                        error=RuntimeError("overflow"), flight_data={}, log_dir=compaction.flight_log_dir(cfg), emit=compaction.printing())
 
     assert caught.value is failure
     assert compaction.ACTIVE_FLIGHT.get() is None
@@ -123,7 +123,7 @@ def test_between_turn_uses_changed_live_window(monkeypatch, tmp_path):
     state = _auto_state()
     state["settings"] = {"CONTEXT_SIZE": 128000}
     captured = []
-    monkeypatch.setattr(compaction, "maybe_auto_compact_async", AsyncMock(side_effect=lambda active, *args: captured.append(active) or compaction.AutoCompactOutcome()))
+    monkeypatch.setattr(compaction, "maybe_auto_compact_async", AsyncMock(side_effect=lambda active, *args, **kwargs: captured.append(active) or compaction.AutoCompactOutcome()))
     cli._maybe_auto_compact(cfg, state)
     assert captured[0].settings["CONTEXT_SIZE"] == 128000
     state["settings"]["CONTEXT_SIZE"] = 1000000
@@ -192,7 +192,8 @@ def test_summary_request_and_response_are_recorded(monkeypatch, tmp_path):
 
     monkeypatch.setattr(compaction.model_client, "stream_model_async", stream)
     asyncio.run(compaction.compact_now(cfg, "system", [{"role": "user", "content": "old"},
-                                                       {"role": "user", "content": "new"}], forced=True))
+                                                       {"role": "user", "content": "new"}], forced=True,
+                                         log_dir=compaction.flight_log_dir(cfg), emit=compaction.printing()))
     path, records = read_flight(cfg)
     assert any(r["event"] == "summary_trace" and r["text"] == "provider request trace" for r in records)
     assert any(r["event"] == "summary_chunk" and r["text"] == "summary chunk" for r in records)
@@ -219,7 +220,8 @@ def test_one_shot_flight_and_autolog_are_named_per_run_not_null(tmp_path):
     from js.compaction_flight import CompactionFlight
 
     cfg = _flight_cfg(tmp_path, Path(os.devnull))
-    flight = CompactionFlight(cfg, "S", [], trigger={}, forced=True, focus=None, preserve_from=0, details={})
+    flight = CompactionFlight(cfg, "S", [], trigger={}, forced=True, focus=None, preserve_from=0, details={},
+                              directory=compaction.flight_log_dir(cfg))
     flight.close()
     stem = f"voice-{os.getpid()}"
     assert flight.path.name.startswith(stem + "-")
@@ -246,7 +248,8 @@ def test_failed_start_closes_the_stream(tmp_path, monkeypatch):
     cfg = _flight_cfg(tmp_path, tmp_path / "s.jsonl")
     with pytest.raises(OSError, match="snapshot failed"):
         compaction_flight.CompactionFlight(cfg, "S", [], trigger={}, forced=True, focus=None,
-                                           preserve_from=0, details={})
+                                           preserve_from=0, details={},
+                                           directory=compaction.flight_log_dir(cfg))
     assert opened and all(stream.closed for stream in opened)
 
 
@@ -255,7 +258,8 @@ def test_summary_chunks_are_not_fsynced_but_lifecycle_events_are(tmp_path, monke
 
     cfg = _flight_cfg(tmp_path, tmp_path / "s.jsonl")
     flight = compaction_flight.CompactionFlight(cfg, "S", [], trigger={}, forced=True, focus=None,
-                                                preserve_from=0, details={})
+                                                preserve_from=0, details={},
+                                                directory=compaction.flight_log_dir(cfg))
     syncs = []
     monkeypatch.setattr(compaction_flight.os, "fsync", lambda fd: syncs.append(fd))
     for chunk in range(50):
@@ -266,3 +270,35 @@ def test_summary_chunks_are_not_fsynced_but_lifecycle_events_are(tmp_path, monke
     flight.close()
     lines = flight.path.read_text().splitlines()
     assert sum('"summary_chunk"' in line for line in lines) == 50
+
+
+def test_compaction_from_an_external_script_prints_nothing_and_writes_nothing_under_home(
+        monkeypatch, tmp_path, capsys):
+    import os
+
+    from js.config import Config
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    cfg = Config(
+        agent_id="script", agent_dir=tmp_path / "agent", model="offline-test-model",
+        provider_id=None, provider_base_url=None, provider_api_key=None, reasoning_effort=None,
+        max_output_tokens=None, max_tool_iterations=5, max_bash_output_bytes=65536,
+        max_tool_result_bytes=65536, fetch_timeout_s=5, debug_log=None, trace=False,
+        history_file=tmp_path / ".history", sessions_dir=tmp_path / "sessions",
+        session_file=Path(os.devnull), prompts_dir=tmp_path / "prompts",
+        settings={"COMPACTION_KEEP_RECENT_TOKENS": 1},
+    )
+
+    async def summarize(*a, **kw):
+        return "summary"
+
+    monkeypatch.setattr(compaction, "summarize", summarize)
+    messages = [{"role": "user", "content": "old content " * 100}, {"role": "user", "content": "new content"}]
+    result = compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True)
+    assert compaction.compacted(result)
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+    assert list(home.rglob("*")) == []

@@ -235,6 +235,7 @@ class TurnBudget:
                          "usage_anchor": vars(self._tokens).get("_anchor"),
                          "tools": tools,
                          "ai_messages": self._convo.ai},
+            log_dir=compaction.flight_log_dir(self._cfg), emit=compaction.printing(),
         )
         if action == "cleared":
             self._rewritten()
@@ -260,6 +261,7 @@ class TurnBudget:
             cleared, chars = compaction.clear_for_budget(
                 messages, cfg=self._cfg, system=self._convo.system, trigger=check.trigger,
                 flight_data=check.flight_data, over_budget=check.over_budget,
+                log_dir=compaction.flight_log_dir(self._cfg), emit=compaction.printing(),
             )
         except Exception as exc:  # noqa: BLE001 - an optional step never kills the turn
             messages[:] = before  # microcompact edits in place; keep memory and disk alike
@@ -289,7 +291,8 @@ class TurnBudget:
                 result = await compaction.compact_now(
                     cfg, self._convo.system, messages, focus=focus, forced=True,
                     preserve_from=preserve_from, trigger=check.trigger, flight_data=check.flight_data,
-                    tail_tokens=tail_tokens, context=context, emit=self._emit,
+                    tail_tokens=tail_tokens, context=context, emit=compaction.printing(self._emit),
+                    log_dir=compaction.flight_log_dir(cfg),
                 )
         except Exception as exc:  # noqa: BLE001
             msgs.warn(msgs.COMPACTION_FAILED, error=f"{type(exc).__name__}: {exc}")

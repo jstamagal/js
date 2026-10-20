@@ -58,7 +58,7 @@ def test_compact_auto_does_not_swallow_plain_compact(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_cfg_for_active_model", lambda cfg, state: cfg)
     monkeypatch.setattr(
         cli.compaction, "compact_now_sync",
-        lambda cfg, system, messages, *, model=None, focus="", forced=False: seen_focus.append(focus) or "ok",
+        lambda cfg, system, messages, *, model=None, focus="", forced=False, **_: seen_focus.append(focus) or "ok",
     )
     # plain /compact still runs a compaction with a clean focus (not "-auto on")
     assert cli._handle_command("/compact please", state, cfg) is True
@@ -70,7 +70,7 @@ def test_compact_command_model_flag_picks_the_summarizer(tmp_path, monkeypatch):
     state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
     seen: list[tuple[str | None, str, bool]] = []
 
-    def compact_stub(compact_cfg, system, messages, *, model=None, focus="", forced=False):
+    def compact_stub(compact_cfg, system, messages, *, model=None, focus="", forced=False, **_):
         seen.append((model, focus, forced))
         return "ok"
 
@@ -108,7 +108,7 @@ def test_compact_command_uses_live_compact_settings(tmp_path, monkeypatch):
     state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
     seen_models: list[str | None] = []
 
-    def compact_stub(compact_cfg, system, messages, *, model=None, focus="", forced=False):
+    def compact_stub(compact_cfg, system, messages, *, model=None, focus="", forced=False, **_):
         seen_models.append(settings.get_dotted(compact_cfg.settings, ("COMPACTION_EXTERNAL_MODEL",)))
         return "ok"
 
