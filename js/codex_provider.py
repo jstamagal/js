@@ -733,7 +733,8 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
         body = await _build_body_async(model, messages, tools, params)
         headers = _with_own_headers(self._extra_headers, _codex_headers(access, account_id, stream=True))
         url = responses_url(self.base_url)
-        text_open = False
+        text_block: str | None = None
+        text_count = 0
         # The open reasoning block, keyed by its reasoning item id, and the ids
         # already closed: an item's encrypted content arrives on its
         # output_item.done, which can land after text closed the block.
@@ -754,7 +755,7 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
             call = _ToolCall(item_id=item_id, call_id=call_id, name=str(item.get("name") or ""))
             tools_by_item[item_id] = call
             tool_order.append(call)
-            return [ai.events.ToolStart(tool_call_id=call_id, tool_name=call.name)]
+            return [*close_text(), *close_reasoning(), ai.events.ToolStart(tool_call_id=call_id, tool_name=call.name)]
 
         def tool_for(raw: Mapping[str, Any]) -> _ToolCall | None:
             item_id = raw.get("item_id")
@@ -790,11 +791,18 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
             out.append(ai.events.ToolEnd(tool_call_id=call.call_id, tool_call=ai.types.messages.DUMMY_TOOL_CALL))
             return out
 
+        def close_text() -> list[ai.events.Event]:
+            nonlocal text_block
+            if text_block is None:
+                return []
+            block_id, text_block = text_block, None
+            return [ai.events.TextEnd(block_id=block_id)]
+
         def open_reasoning(block_id: str) -> list[ai.events.Event]:
             nonlocal reasoning_block
             if reasoning_block == block_id:
                 return []
-            out = close_reasoning()
+            out = [*close_text(), *close_reasoning()]
             reasoning_block = block_id
             out.append(ai.events.ReasoningStart(block_id=block_id))
             return out
@@ -845,6 +853,10 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                         continue
                     if event_type in {"response.reasoning_summary_part.done", "response.output_item.done"}:
                         item = raw.get("item")
+                        if event_type == "response.output_item.done" and isinstance(item, dict) and item.get("type") == "message":
+                            for ev in close_text():
+                                yield ev
+                            continue
                         if event_type == "response.output_item.done" and isinstance(item, dict) and item.get("type") in {"function_call", "custom_tool_call"}:
                             args = item.get("arguments") if item.get("type") == "function_call" else item.get("input")
                             item_id = str(item.get("id") or item.get("call_id") or "")
@@ -865,10 +877,11 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                         if isinstance(delta, str) and delta:
                             for ev in close_reasoning():
                                 yield ev
-                            if not text_open:
-                                text_open = True
-                                yield ai.events.TextStart(block_id="text")
-                            yield ai.events.TextDelta(block_id="text", chunk=delta)
+                            if text_block is None:
+                                text_count += 1
+                                text_block = f"text-{text_count}"
+                                yield ai.events.TextStart(block_id=text_block)
+                            yield ai.events.TextDelta(block_id=text_block, chunk=delta)
                         continue
                     if event_type in {"response.function_call_arguments.delta", "response.custom_tool_call_input.delta"}:
                         delta = raw.get("delta")
@@ -899,9 +912,8 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                             provider_metadata = {"incomplete": True, "incomplete_reason": reason}
                         for ev in close_reasoning():
                             yield ev
-                        if text_open:
-                            text_open = False
-                            yield ai.events.TextEnd(block_id="text")
+                        for ev in close_text():
+                            yield ev
                         for call in tool_order:
                             for ev in end_tool(call, None):
                                 yield ev

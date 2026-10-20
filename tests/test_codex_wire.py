@@ -85,3 +85,33 @@ def test_explicit_codex_token_selects_its_own_account(monkeypatch):
             )
 
     asyncio.run(drive())
+
+
+def test_streamed_text_items_keep_the_reasoning_between_them(monkeypatch):
+    reasoning = {
+        "type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "signed",
+    }
+    events = [
+        {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}},
+        {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "before"},
+        {"type": "response.output_item.done", "item": {"type": "message", "id": "msg_1"}},
+        {"type": "response.output_item.added", "item": {"type": "reasoning", "id": "rs_1"}},
+        {"type": "response.reasoning_summary_text.delta", "item_id": "rs_1", "delta": "plan"},
+        {"type": "response.output_item.done", "item": reasoning},
+        {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_2"}},
+        {"type": "response.output_text.delta", "item_id": "msg_2", "delta": "after"},
+        {"type": "response.output_item.done", "item": {"type": "message", "id": "msg_2"}},
+        {"type": "response.completed", "response": {"status": "completed"}},
+    ]
+
+    def respond(request):
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"},
+            content="".join(f"data: {json.dumps(event)}\n\n" for event in events),
+        )
+
+    result = _stream(monkeypatch, respond, [ai.user_message("ping")])
+    assert [(part.kind, part.text) for part in result.assistant_message.parts] == [
+        ("text", "before"), ("reasoning", "plan"), ("text", "after"),
+    ]
+    assert model_client.signed_reasoning_parts(result.assistant_message)[0]["text_before"] == 6
