@@ -121,6 +121,8 @@ class TurnSetting:
 
 
 TURN_SETTINGS: tuple[TurnSetting, ...] = (
+    TurnSetting("lsp_allow_home_root", "LSP_ALLOW_HOME_ROOT", flag, on_context=True),
+    TurnSetting("lsp_environment_inherit", "LSP_ENVIRONMENT_INHERIT", flag, on_context=True),
     TurnSetting("toolbox_require_bound_names", "TOOLBOX_REQUIRE_BOUND_NAMES", flag, on_context=True),
     TurnSetting("toolbox_seed_examples", "TOOLBOX_SEED_EXAMPLES", flag, on_context=True),
     TurnSetting("typesafe_api_key", "TYPESAFE_API_KEY", text, on_context=True),

@@ -139,6 +139,8 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("LSP_ALLOW_HOME_ROOT", "bool", group="lsp"),
+    SettingSpec("LSP_ENVIRONMENT_INHERIT", "bool", group="lsp"),
     SettingSpec("TOOLBOX_REQUIRE_BOUND_NAMES", "bool", group="tools"),
     SettingSpec("TOOLBOX_SEED_EXAMPLES", "bool", group="tools"),
     SettingSpec("TYPESAFE_API_KEY", "str", secret=True, group="tools"),

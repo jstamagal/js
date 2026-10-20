@@ -122,25 +122,26 @@ def workspace_root(path: Path, spec: ServerSpec, context: ToolContext) -> Path:
     """The directory the server treats as its workspace: the nearest ancestor
     holding one of the spec's root markers, else the nearest holding `.git`,
     else the working directory when it holds the file, else the file's
-    directory. The operator's home, its ancestors and `/` are never a root,
+    directory. LSP_ALLOW_HOME_ROOT controls whether the operator's home,
+    its ancestors and `/` can be roots,
     and under `js -C` neither is a directory outside the jail."""
     jail = _jail.active()
     home = paths.user_home().resolve()
-    never = {Path("/"), home}
+    never = set() if context.lsp_allow_home_root else {Path("/"), home}
     for markers in (spec.roots, (".git",)):
         if not markers:
             continue
         for directory in path.parents:
             if jail is not None and not jail.bound(directory, context.jail_bind):
                 break
-            if directory == home:
+            if not context.lsp_allow_home_root and directory == home:
                 break
             if directory in never:
                 continue
             if any((directory / marker).exists() for marker in markers):
                 return directory
     cwd = Path(context.cwd).resolve()
-    if cwd in path.parents and cwd not in never and cwd not in home.parents:
+    if cwd in path.parents and cwd not in never and (context.lsp_allow_home_root or cwd not in home.parents):
         return cwd
     return path.parent
 
@@ -564,7 +565,7 @@ def shutdown_servers() -> None:
 def _server_env(context: ToolContext) -> dict[str, str]:
     """The environment a server starts with: js's own, or under `js -C` only
     the names `SHELL_ENV_KEEP` lists."""
-    if _jail.active() is None:
+    if _jail.active() is None and context.lsp_environment_inherit:
         return dict(os.environ)
     allow = tuple(getattr(context, "shell_env_allow", ()) or ())
     return {key: os.environ[key] for key in allow if key in os.environ}
