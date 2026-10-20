@@ -1797,6 +1797,14 @@ SWARM_ROSTER_HOLDS = Message("holds {claims}", banner=False)
 
 SWARM_BOARD_OPEN = Message("open", banner=False)
 
+SWARM_RUN_THE_SPEC_NEEDS_A_ROOT_THE_BUS = "the spec needs a root: the bus directory"
+
+SWARM_RUN_THE_SPEC_NAMES_NO_AGENTS = "the spec names no agents"
+
+SWARM_RUN_AGENT_NAMES_REPEAT = "agent names repeat: {value}"
+
+SWARM_RUN_FAILED = "swarm run: {exc}"
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():

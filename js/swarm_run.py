@@ -19,6 +19,8 @@ is persisted and the exit code is 130.
 
 from __future__ import annotations
 
+from . import messages as msgs
+
 import asyncio
 import contextlib
 import json
@@ -266,13 +268,13 @@ def load_spec(path: str | os.PathLike[str]) -> tuple[Path, list[AgentSpec], int 
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     root = Path(str(raw.get("root") or "")).expanduser()
     if not str(raw.get("root") or ""):
-        raise ValueError("the spec needs a root: the bus directory")
+        raise ValueError(msgs.SWARM_RUN_THE_SPEC_NEEDS_A_ROOT_THE_BUS.format())
     agents = [AgentSpec.from_dict(d) for d in raw.get("agents") or []]
     if not agents:
-        raise ValueError("the spec names no agents")
+        raise ValueError(msgs.SWARM_RUN_THE_SPEC_NAMES_NO_AGENTS.format())
     names = [a.name for a in agents]
     if len(set(names)) != len(names):
-        raise ValueError(f"agent names repeat: {', '.join(n for n in names if names.count(n) > 1)}")
+        raise ValueError(msgs.SWARM_RUN_AGENT_NAMES_REPEAT.format(value=', '.join(n for n in names if names.count(n) > 1)))
     slots = raw.get("slots")
     return root, agents, None if slots is None else int(slots)
 
@@ -287,5 +289,5 @@ def main(path: str) -> int:
     try:
         return run(path)
     except (OSError, ValueError) as exc:
-        print(f"swarm run: {exc}", file=sys.stderr)
+        print(msgs.SWARM_RUN_FAILED.format(exc=exc), file=sys.stderr)
         return 2
