@@ -1489,6 +1489,10 @@ SETTING_NOT_A_HEADER_WANT_NAME_VALUE = "not a header (want 'Name: value'): {entr
 
 SETTING_EMPTY_KEY = "empty key: {key!r}"
 
+LOGIN_DEFAULT_NOT_NAME_VALUE_WITH_NAME_ONE_OF = "not NAME=value with NAME one of {value}: {entry}"
+
+LOGIN_DEFAULT_ = "{key}: {error}"
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():

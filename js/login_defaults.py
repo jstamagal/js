@@ -26,6 +26,8 @@ the resolved values.
 
 from __future__ import annotations
 
+from . import messages as msgs
+
 from dataclasses import replace
 from typing import Any
 
@@ -54,10 +56,10 @@ def parse(text: str) -> dict[str, Any]:
         name, sep, raw = entry.partition("=")
         key = name.strip().upper()
         if not sep or key not in KEYS:
-            raise ValueError(f"not NAME=value with NAME one of {', '.join(KEYS)}: {entry}")
+            raise ValueError(msgs.LOGIN_DEFAULT_NOT_NAME_VALUE_WITH_NAME_ONE_OF.format(value=', '.join(KEYS), entry=entry))
         value, error = _settings.coerce_value(_settings.SPEC_BY_KEY[key], raw.strip())
         if error is not None:
-            raise ValueError(f"{key}: {error}")
+            raise ValueError(msgs.LOGIN_DEFAULT_.format(key=key, error=error))
         values[key] = value
     return values
 
