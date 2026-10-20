@@ -226,6 +226,19 @@ def test_workspace_root_prefers_markers_then_git_then_cwd(tmp_path):
     assert lsp_mod.workspace_root(tmp_path / "sub" / "a.fake", spec, ToolContext(cwd=tmp_path)) == tmp_path / "sub"
 
 
+def test_workspace_root_never_climbs_above_the_operators_home(tmp_path, monkeypatch):
+    spec = lsp_mod.ServerSpec("fake", ("x",), (".fake",), ("fake.toml",))
+    home = tmp_path / "home"
+    (home / "work").mkdir(parents=True)
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "fake.toml").write_text("")
+    monkeypatch.setattr(lsp_mod.paths, "user_home", lambda: home)
+    loose = home / "work" / "a.fake"
+
+    assert lsp_mod.workspace_root(loose, spec, ToolContext(cwd=home / "work")) == home / "work"
+    assert lsp_mod.workspace_root(loose, spec, ToolContext(cwd=tmp_path)) == home / "work"
+
+
 def test_every_default_server_entry_parses():
     specs = lsp_mod.parse_servers(settings.default_value("LSP_SERVERS"))
     covered = {ext for spec in specs for ext in spec.extensions}

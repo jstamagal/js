@@ -255,8 +255,8 @@ are all missing, returns one ERROR line naming them.
 
 The workspace root is the nearest directory holding one of the entry's
 `roots` files, else the nearest holding `.git`, else the working directory
-when it holds the file, else the file's directory. The operator's home and `/`
-are never a root. One server runs per entry, root and jail for the life of the
+when it holds the file, else the file's directory. The operator's home, any
+directory above it, and `/` are never a root; the search stops at home. One server runs per entry, root and jail for the life of the
 process.
 
 Each call sends the file's content from disk: `didOpen` the first time, then

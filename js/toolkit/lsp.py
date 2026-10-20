@@ -122,22 +122,25 @@ def workspace_root(path: Path, spec: ServerSpec, context: ToolContext) -> Path:
     """The directory the server treats as its workspace: the nearest ancestor
     holding one of the spec's root markers, else the nearest holding `.git`,
     else the working directory when it holds the file, else the file's
-    directory. The operator's home and `/` are never a root, and under `js -C`
-    neither is a directory outside the jail."""
+    directory. The operator's home, its ancestors and `/` are never a root,
+    and under `js -C` neither is a directory outside the jail."""
     jail = _jail.active()
-    never = {Path("/"), paths.user_home().resolve()}
+    home = paths.user_home().resolve()
+    never = {Path("/"), home}
     for markers in (spec.roots, (".git",)):
         if not markers:
             continue
         for directory in path.parents:
             if jail is not None and not jail.bound(directory, context.jail_bind):
                 break
+            if directory == home:
+                break
             if directory in never:
                 continue
             if any((directory / marker).exists() for marker in markers):
                 return directory
     cwd = Path(context.cwd).resolve()
-    if cwd in path.parents and cwd not in never:
+    if cwd in path.parents and cwd not in never and cwd not in home.parents:
         return cwd
     return path.parent
 
