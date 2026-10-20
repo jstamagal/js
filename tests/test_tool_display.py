@@ -1,4 +1,4 @@
-"""Tool exchanges at ui.tools 0-3, control-byte cleaning, and transcript markers."""
+"""Tool exchanges at TOOLS_DISPLAY 0-3, control-byte cleaning, and transcript markers."""
 
 from __future__ import annotations
 
@@ -149,7 +149,7 @@ def test_saved_transcript_has_the_ascii_marker_for_every_tool_exchange(capsys):
         sink = TranscriptLogSink([log], [])
         telemetry = runtime.Telemetry(None, transcript_log=sink)
         context = ToolContext(cwd="/tmp")
-        context.config = SimpleNamespace(settings={"ui": {"tools": level}})
+        context.config = SimpleNamespace(settings={"TOOLS_DISPLAY": level})
         calls = [
             runtime._PendingToolCall("c1", "lines", ["{}"]),
             runtime._PendingToolCall("c2", "fail", ["{}"]),
@@ -167,7 +167,7 @@ def test_saved_transcript_has_the_ascii_marker_for_every_tool_exchange(capsys):
 
 def test_ui_tools_zero_prints_nothing_for_an_exchange(capsys):
     context = ToolContext(cwd="/tmp")
-    context.config = SimpleNamespace(settings={"ui": {"tools": 0}})
+    context.config = SimpleNamespace(settings={"TOOLS_DISPLAY": 0})
 
     runtime._dispatch_tool_calls(
         [runtime._PendingToolCall("c1", "lines", ["{}"])], runtime.Telemetry(None), 256 * 1024, True,
@@ -203,7 +203,7 @@ def test_concurrent_task_exchanges_print_whole_at_level_two(capsys):
 
     registry = ToolRegistry(tools=(Tool("task", "task", task, {}),), aliases={"task": "task"})
     context = ToolContext(cwd="/tmp")
-    context.config = SimpleNamespace(settings={"ui": {"tools": 2}})
+    context.config = SimpleNamespace(settings={"TOOLS_DISPLAY": 2})
     calls = [
         runtime._PendingToolCall("c1", "task", ['{"prompt": "slow"}']),
         runtime._PendingToolCall("c2", "task", ['{"prompt": "fast"}']),
@@ -239,7 +239,7 @@ def _traced(calls, *, level: int = 1) -> tuple[list[str], str]:
     log = io.StringIO()
     telemetry = runtime.Telemetry(None, transcript_log=TranscriptLogSink([log], []))
     context = ToolContext(cwd="/tmp")
-    context.config = SimpleNamespace(settings={"ui": {"tools": level}})
+    context.config = SimpleNamespace(settings={"TOOLS_DISPLAY": level})
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         for name, args, result in calls:

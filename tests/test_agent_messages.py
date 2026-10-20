@@ -274,7 +274,7 @@ def test_repl_displays_each_fired_message_and_reply(tmp_path, monkeypatch, capsy
         "02-user.md": "second startup prompt",
     })
     cfg = from_env(session="seeded")
-    cfg.settings["ui"]["resume_exchanges"] = resume_exchanges
+    cfg.settings["RESUME_EXCHANGES"] = resume_exchanges
     _model(monkeypatch, ["first startup reply", "second startup reply"])
 
     if blocking:

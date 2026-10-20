@@ -47,8 +47,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .. import messages as msgs
+from .. import fset as _fset
 from .. import jail
+from .. import messages as msgs
 from .. import paths
 from .. import settings as _settings
 from ..capped_process import truncation_marker
@@ -143,7 +144,7 @@ def _shutdown_live_kernels() -> None:
 def resolve_verbosity(context: Any, override: str = "") -> str:
     """Per-call parameter beats the config knob beats its js/jsrc value.
 
-    Both exist on purpose. The knob (`kernel.verbosity`) is how the operator
+    Both exist on purpose. The knob (`KERNEL_VERBOSITY`) is how the operator
     sets the baseline he wants to read all session without editing tool calls;
     the parameter is how one noisy cell gets squelched, or one mystery cell
     cranked to verbose, without restarting anything.
@@ -154,12 +155,12 @@ def resolve_verbosity(context: Any, override: str = "") -> str:
     configured = str(getattr(context, "kernel_verbosity", "") or "").strip().lower()
     if configured in VERBOSITY_LEVELS:
         return configured
-    return _settings.default_value("kernel.verbosity")
+    return _settings.default_value("KERNEL_VERBOSITY")
 
 
 def render_max_lines(context: Any) -> int:
     value = int_or_default(getattr(context, "kernel_render_max_lines", None),
-                           _settings.default_value("kernel.render_max_lines"), minimum=1)
+                           _settings.default_value("KERNEL_LINES_MAX"), minimum=1)
     return value
 
 
@@ -176,6 +177,11 @@ def render_max_lines(context: Any) -> int:
 # string: a display knob that silently deleted the NAMESPACE line would break
 # the one property this whole tool rests on.
 # --------------------------------------------------------------------------
+
+
+def _style(role: str) -> str:
+    """Rich style for /fset colour entry ``role``; "" when it has none."""
+    return _fset.hex_for(role) or ""
 
 
 def _console() -> Any:
@@ -220,30 +226,31 @@ def render_execution(
 
     console = _console()
     limit = render_max_lines(context)
+    dim = _style("COLOR_DIM")
 
     if level == "quiet":
-        # Severity is the colour: yellow for an interrupt, red for a failure.
-        style = "bold yellow" if interrupted and not error else "bold red"
-        body, hidden = _clip(error or msgs.KERNEL_CELL_INTERRUPTED.text(), limit)
-        console.print(Text(msgs.KERNEL_CELL.text(cell=cell), style=style) + Text(body))
+        # Severity is the colour: warn for an interrupt, error for a failure.
+        style = "bold " + _style("COLOR_WARN" if interrupted and not error else "COLOR_ERROR")
+        body, hidden = _clip(error or msgs.KERNEL_CELL_INTERRUPTED.body(), limit)
+        console.print(Text(msgs.KERNEL_CELL.body(cell=cell) + " ", style=style) + Text(body))
         if hidden:
-            console.print(Text("  " + msgs.KERNEL_MORE_LINES.text(count=hidden),
-                               style="dim"))
+            console.print(Text("  " + msgs.KERNEL_MORE_LINES.body(count=hidden),
+                               style=dim))
         return
 
     grid = Table.grid(padding=(0, 1))
-    grid.add_column(no_wrap=True, style="bold cyan")
+    grid.add_column(no_wrap=True, style="bold " + _style("COLOR_ACCENT"))
     grid.add_column(overflow="fold")
 
     shown_code, code_hidden = _clip(code.strip(), limit)
-    grid.add_row("code", Syntax(shown_code, "python", theme="ansi_dark",
+    grid.add_row("code", Syntax(shown_code, "python", theme=_fset.code_style(),
                                 word_wrap=True, background_color="default"))
     if code_hidden:
-        grid.add_row("", Text(msgs.KERNEL_MORE_CODE_LINES.text(count=code_hidden), style="dim"))
+        grid.add_row("", Text(msgs.KERNEL_MORE_CODE_LINES.body(count=code_hidden), style=dim))
 
     if level == "verbose":
-        sections = (("stdout", stdout, ""), ("stderr", stderr, "yellow"),
-                    ("display", display, "magenta"))
+        sections = (("stdout", stdout, ""), ("stderr", stderr, _style("COLOR_WARN")),
+                    ("display", display, _style("COLOR_ACCENT")))
     else:
         merged = "".join(part for part in (stdout, stderr, display) if part)
         sections = (("out", merged, ""),)
@@ -254,33 +261,34 @@ def render_execution(
         shown, hidden = _clip(body.rstrip("\n"), limit)
         grid.add_row(label, Text(shown, style=style or None))
         if hidden:
-            grid.add_row("", Text(msgs.KERNEL_MORE_LINES.text(count=hidden),
-                                  style="dim"))
+            grid.add_row("", Text(msgs.KERNEL_MORE_LINES.body(count=hidden),
+                                  style=dim))
 
     if error:
         shown, hidden = _clip(error.rstrip("\n"), limit)
-        grid.add_row("error", Text(shown, style="red"))
+        grid.add_row("error", Text(shown, style=_style("COLOR_ERROR")))
         if hidden:
-            grid.add_row("", Text(msgs.KERNEL_MORE_LINES.text(count=hidden),
-                                  style="dim"))
+            grid.add_row("", Text(msgs.KERNEL_MORE_LINES.body(count=hidden),
+                                  style=dim))
     if interrupted:
-        grid.add_row("stopped", Text(msgs.KERNEL_STOPPED.text(), style="bold yellow"))
+        grid.add_row("stopped", Text(msgs.KERNEL_STOPPED.body(), style="bold " + _style("COLOR_WARN")))
     if added:
-        grid.add_row("defined", Text(", ".join(added), style="green"))
+        grid.add_row("defined", Text(", ".join(added), style=_style("COLOR_OK")))
     if removed:
-        grid.add_row("gone", Text(", ".join(removed), style="red"))
-    grid.add_row("namespace", Text(", ".join(namespace) if namespace else msgs.NONE_VALUE.text()))
+        grid.add_row("gone", Text(", ".join(removed), style=_style("COLOR_ERROR")))
+    grid.add_row("namespace", Text(", ".join(namespace) if namespace else msgs.NONE_VALUE.body()))
     for image in images:
-        grid.add_row("image", Text(str(image), style="blue"))
+        grid.add_row("image", Text(str(image), style=_style("COLOR_ACCENT")))
 
-    console.print(Panel(grid, title=msgs.KERNEL_PANEL_TITLE.text(cell=cell),
+    console.print(Panel(grid, title=msgs.KERNEL_PANEL_TITLE.body(cell=cell),
                         subtitle=f"{elapsed:.2f}s", title_align="left",
-                        subtitle_align="right", border_style="cyan"))
+                        subtitle_align="right", border_style=_style("COLOR_SEPARATOR")))
 
 
-def render_event(context: Any, level: str, message: str, *, style: str = "cyan",
+def render_event(context: Any, level: str, message: str, *, style: str = "COLOR_ACCENT",
                  verbose_only: bool = False) -> None:
     """Lifecycle/activity note: kernel started, restarted, died, tool saved.
+    ``style`` is the /fset colour entry the note is drawn in.
 
     Multi-line messages print one line per line. Folding them onto one line with
     separators is how a five-tool toolbox listing became an unreadable ribbon.
@@ -294,12 +302,13 @@ def render_event(context: Any, level: str, message: str, *, style: str = "cyan",
     from ..display import clean
 
     console = _console()
+    dim = _style("COLOR_DIM")
     lines = clean(message).splitlines() or [""]
     shown, hidden = _clip("\n".join(lines), render_max_lines(context))
     for line in shown.splitlines():
-        console.print(Text("· ", style="dim") + Text(line, style=style))
+        console.print(Text("· ", style=dim) + Text(line, style=_style(style)))
     if hidden:
-        console.print(Text("  " + msgs.KERNEL_EVENT_MORE_LINES.text(count=hidden), style="dim"))
+        console.print(Text("  " + msgs.KERNEL_EVENT_MORE_LINES.body(count=hidden), style=dim))
 
 
 # --------------------------------------------------------------------------
@@ -956,7 +965,7 @@ def _died(context: ToolContext, session: KernelSession, level: str, notes: list[
         "Everything defined in this session is gone; call again with restart=true "
         "and rebuild."
     )
-    render_event(context, level, message, style="bold red")
+    render_event(context, level, message, style="COLOR_ERROR")
     return "\n".join([*notes, message, "NAMESPACE (none)"])
 
 
@@ -967,7 +976,7 @@ def _busy(context: ToolContext, session: KernelSession, level: str, notes: list[
     hint = (f'handle {live.id}: action="poll" for new output, action="interrupt" to stop it, '
             'action="wait" to block for it. A cell blocked in a syscall that ignores '
             "SIGINT needs restart=true")
-    render_event(context, level, message, style="bold red")
+    render_event(context, level, message, style="COLOR_ERROR")
     return cap_for_model("\n".join([*notes, message, hint, f"HANDLE {live.id} RUNNING"]), context)
 
 
@@ -1012,11 +1021,11 @@ def kernel(
 
     session, problem, started_now = get_session(context)
     if session is None:
-        render_event(context, level, problem, style="bold red")
+        render_event(context, level, problem, style="COLOR_ERROR")
         return problem
     notes: list[str] = []
     if started_now:
-        render_event(context, level, msgs.KERNEL_STARTED.text(cwd=session.cwd), verbose_only=True)
+        render_event(context, level, msgs.KERNEL_STARTED.body(cwd=session.cwd), verbose_only=True)
         notes.append(f"kernel started (cwd {session.cwd})")
 
     if restart:
@@ -1024,9 +1033,9 @@ def kernel(
             session.restart()
         except Exception as exc:  # noqa: BLE001
             message = f"ERROR: kernel restart failed: {type(exc).__name__}: {exc}"
-            render_event(context, level, message, style="bold red")
+            render_event(context, level, message, style="COLOR_ERROR")
             return message
-        render_event(context, level, msgs.KERNEL_RESTARTED.text(), style="yellow")
+        render_event(context, level, msgs.KERNEL_RESTARTED.body(), style="COLOR_WARN")
         notes.append("kernel restarted; the namespace is empty")
         if mode == "run" and not code.strip():
             return "\n".join([*notes, "NAMESPACE (none)"])
@@ -1036,7 +1045,7 @@ def kernel(
         if live is None:
             message = (f"ERROR: no cell {('handle ' + target) if target else 'is running'}; "
                        "nothing to poll, interrupt, or wait for")
-            render_event(context, level, message, style="bold red")
+            render_event(context, level, message, style="COLOR_ERROR")
             return cap_for_model("\n".join([*notes, message]), context)
         if mode == "poll":
             output = poll_cell(session, live)
@@ -1088,7 +1097,7 @@ def kernel(
         live, output = submit_cell(session, code, window, label=str(session.executions))
     except Exception as exc:  # noqa: BLE001
         message = f"ERROR: kernel execution failed: {type(exc).__name__}: {exc}"
-        render_event(context, level, message, style="bold red")
+        render_event(context, level, message, style="COLOR_ERROR")
         return message
 
     if live.died or not session.alive():

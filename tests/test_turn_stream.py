@@ -65,7 +65,7 @@ def _sink(log, *, suppress=False, reasoning=2, sink=None, transcript=False):
     telemetry = _telemetry(log, transcript=transcript)
     events = TurnEvents(None, sink, telemetry, model="m", provider_id="p")
     return StreamSink(telemetry, TurnStatus(), events,
-                      settings={"ui": {"reasoning": reasoning, "markdown": False}},
+                      settings={"REASONING_DISPLAY": reasoning, "MARKDOWN": False},
                       suppress_output=suppress)
 
 

@@ -66,9 +66,9 @@ def test_stream_without_reasoning_callback_does_not_reach_an_earlier_one(monkeyp
     assert seen == ["A0", "A1", "A2"]
 
 
-def test_ui_reasoning_reads_its_canonical_env_var():
-    overlaid = settings.apply_env_overrides(settings.seed_defaults(), {"JS_UI_REASONING": "1"})
-    assert settings.get_dotted(overlaid, ("ui", "reasoning")) == 1
+def test_reasoning_display_reads_its_canonical_env_var():
+    overlaid = settings.apply_env_overrides(settings.seed_defaults(), {"JS_REASONING_DISPLAY": "1"})
+    assert settings.get_dotted(overlaid, ("REASONING_DISPLAY",)) == 1
 
-    ignored = settings.apply_env_overrides(settings.seed_defaults(), {"JS_UI_REASONING": "9"})
-    assert settings.get_dotted(ignored, ("ui", "reasoning")) == settings.SPEC_BY_KEY["ui.reasoning"].default
+    ignored = settings.apply_env_overrides(settings.seed_defaults(), {"JS_REASONING_DISPLAY": "9"})
+    assert settings.get_dotted(ignored, ("REASONING_DISPLAY",)) == settings.SPEC_BY_KEY["REASONING_DISPLAY"].default

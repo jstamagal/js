@@ -1,0 +1,26 @@
+# claude: Claude Code's default dark theme.
+# A theme is fset lines: palette slots, colours and formats.
+
+fset COLOR_TEXT #ffffff
+fset COLOR_DIM #999999
+fset COLOR_USER #ffffff
+fset COLOR_USER_MARK $HOST_COLOR|$COLOR_USER
+fset COLOR_AGENT #d77757
+fset COLOR_AGENT_MARK $HOST_COLOR|$COLOR_AGENT
+fset COLOR_SYSTEM #d77757
+fset COLOR_WARN #ffc107
+fset COLOR_ERROR #ff6b80
+fset COLOR_OK #4eba65
+fset COLOR_TOOL #ffffff
+fset COLOR_TOOL_OUTPUT #c8c8c8
+fset COLOR_PANEL #373737
+fset COLOR_ACCENT #b1b9f9
+fset COLOR_ADDED #4eba65
+fset COLOR_REMOVED #ff6b80
+fset COLOR_CODE #b1b9f9
+fset COLOR_REASONING #999999
+fset COLOR_SEPARATOR #505050
+fset COLOR_STATUS_BACKGROUND #373737
+fset COLOR_STATUS_TEXT #ffffff
+fset COLOR_STATUS_ACCENT $HOST_COLOR|$COLOR_ACCENT
+fset CODE_STYLE monokai

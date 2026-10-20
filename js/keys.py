@@ -163,7 +163,7 @@ def parse(text: str, path: Path | str) -> tuple[Keymap, list[str]]:
     for lineno, line in enumerate(text.splitlines(), 1):
         keymap, error = apply_line(keymap, line)
         if error is not None:
-            errors.append(msgs.SCRIPT_LINE_FAILED.text(path=path, lineno=lineno, error=error))
+            errors.append(msgs.SCRIPT_LINE_FAILED.said(path=path, lineno=lineno, error=error))
     return keymap, errors
 
 

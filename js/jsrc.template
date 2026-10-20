@@ -23,7 +23,7 @@
 #       <  js --extra key=value
 #
 #   Every setting also reads an environment variable named after it:
-#   FETCH_TIMEOUT -> JS_FETCH_TIMEOUT, ui.reasoning -> JS_UI_REASONING, and
+#   FETCH_TIMEOUT -> JS_FETCH_TIMEOUT, REASONING_DISPLAY -> JS_REASONING_DISPLAY, and
 #   so on.
 #
 #   Inside js:  /set              list every setting and its current value
@@ -168,8 +168,8 @@
 #   3  like 2, plus a token count when the thinking ends
 # Ctrl-O folds and unfolds the thinking whatever the level. This only
 # changes the screen; the thinking is kept either way.
-#   example:  set ui.reasoning 1
-#set ui.reasoning 2
+#   example:  fset REASONING_DISPLAY 1
+#fset REASONING_DISPLAY 2
 
 # Network chatter, on screen.
 #   0  nothing, not even errors
@@ -177,8 +177,8 @@
 #   2  also "Connecting" and "Connected" lines, and a byte counter in the
 #      status bar until the first word of the answer arrives
 #   3  also retries, model catalog refreshes and per-call stream stats
-#   example:  set ui.net 0
-#set ui.net 2
+#   example:  fset NET_DISPLAY 0
+#fset NET_DISPLAY 2
 
 # How tool calls look on screen.
 #   0  you don't see them
@@ -186,37 +186,37 @@
 #      row per tool, a shell command shows its output while it runs and then
 #      shrinks to one row, an edit shows its diff, a failure shows its error
 #   2  every call, with the first few lines of each result
-#      (ui.tools_preview_lines)
+#      (TOOLS_PREVIEW_LINES)
 #   3  every call, with its whole result
-#   example:  set ui.tools 2
-#set ui.tools 1
+#   example:  fset TOOLS_DISPLAY 2
+#fset TOOLS_DISPLAY 1
 
-# How many lines of a result or a diff ui.tools 1 and 2 show before hiding
+# How many lines of a result or a diff TOOLS_DISPLAY 1 and 2 show before hiding
 # the rest.
-#   example:  set ui.tools_preview_lines 30
-#set ui.tools_preview_lines 12
+#   example:  fset TOOLS_PREVIEW_LINES 30
+#fset TOOLS_PREVIEW_LINES 12
 
-# Tools ui.tools 1 counts as quick: each folds into one row instead of
+# Tools TOOLS_DISPLAY 1 counts as quick: each folds into one row instead of
 # showing its result. A JSON list of tool names.
-#   example:  set ui.tools_quiet ["read", "fs_search"]
-#set ui.tools_quiet ["read", "fs_search", "ast_search", "lsp", "fetch", "browse", "browser_probe", "exa_search", "serper_search", "tavily_search", "docs_search", "claim", "release", "subscribe", "wake_me", "who", "tasks", "take_task", "tool_discovery", "skill", "undo", "terminal_snapshot"]
+#   example:  fset TOOLS_QUIET ["read", "fs_search"]
+#fset TOOLS_QUIET ["read", "fs_search", "ast_search", "lsp", "fetch", "browse", "browser_probe", "exa_search", "serper_search", "tavily_search", "docs_search", "claim", "release", "subscribe", "wake_me", "who", "tasks", "take_task", "tool_discovery", "skill", "undo", "terminal_snapshot"]
 
-# Shell commands ui.tools 1 counts as quick, matched by the command's first
+# Shell commands TOOLS_DISPLAY 1 counts as quick, matched by the command's first
 # word or first two words. A JSON list.
-#   example:  set ui.shell_quiet ["ls", "cat", "git status"]
-#set ui.shell_quiet ["cd", "ls", "cat", "head", "tail", "wc", "pwd", "tree", "stat", "file", "which", "find", "fd", "grep", "rg", "du", "df", "ps", "echo", "sort", "uniq", "git status", "git log", "git diff", "git show", "git branch"]
+#   example:  fset SHELL_QUIET ["ls", "cat", "git status"]
+#fset SHELL_QUIET ["cd", "ls", "cat", "head", "tail", "wc", "pwd", "tree", "stat", "file", "which", "find", "fd", "grep", "rg", "du", "df", "ps", "echo", "sort", "uniq", "git status", "git log", "git diff", "git show", "git branch"]
 
 # Draw the model's Markdown (headings, bold, code blocks) on screen.
 #   on   each block is drawn formatted once it's finished
 #   off  raw text exactly as it arrives
 # Output going to a pipe or a file is always raw.
-#   example:  set ui.markdown off
-#set ui.markdown on
+#   example:  fset MARKDOWN off
+#fset MARKDOWN on
 
 # When you resume a session, how many of its last exchanges are shown
 # again before the prompt. 0 shows none.
-#   example:  set ui.resume_exchanges 10
-#set ui.resume_exchanges 3
+#   example:  fset RESUME_EXCHANGES 10
+#fset RESUME_EXCHANGES 3
 
 # Keys on the input line.
 #   emacs  Enter sends the line
@@ -226,44 +226,13 @@
 #set EDITING_MODE emacs
 
 
-# --- status bar colours, #rrggbb ---
+# --- colours, palette and formats ---
 
-#   example:  set ui.status_bg #1e1e2e
-#set ui.status_bg #00007f
-#set ui.status_fg #ffffff
-
-
-# --- tool display colours, #rrggbb ---
-
-# Tool names, and the mark on a call that's still running.
-#set theme.accent #1fb4ff
-
-# The mark on a call that finished fine.
-#set theme.ok #00c555
-
-# The mark on a call that failed, and its error text.
-#set theme.error #ff8aa7
-
-# A command's stderr lines.
-#set theme.warn #e59500
-
-# Faded text: arguments, line numbers, timings.
-#set theme.dim #b8b4c2
-
-# Background behind a command's output.
-#set theme.panel #2d2c35
-
-# Text inside that output box.
-#set theme.panel_text #e1e0e5
-
-# Diff lines added.
-#set theme.added #00c555
-
-# Diff lines removed.
-#set theme.removed #ff8aa7
-
-# `inline code` in the model's answers, drawn on the theme.panel colour.
-#set theme.code #ff8aa7
+# How everything looks is /fset: `/fset` lists it, `/fset THEME bitchx`
+# picks a built-in theme (claude, crush, bitchx, github, paper, splash3),
+# `/fset COLOR_STATUS_BACKGROUND #1e1e2e` changes one colour, and /save
+# writes your fset lines here.
+#   example:  fset HOST_COLOR #0000aa
 
 
 # --- pasting ---
@@ -483,7 +452,7 @@
 #   normal   code, output, timing, variables
 #   verbose  also stdout, stderr and displays split apart, plus kernel
 #            start and stop
-#set kernel.verbosity normal
+#fset KERNEL_VERBOSITY normal
 
 # Enable kernel and toolbox after installing the kernel extra:
 #   uv sync --extra kernel
@@ -491,7 +460,7 @@
 
 # Most lines shown per part of a kernel result on screen, so one huge
 # output can't scroll everything away. The model still gets all of it.
-#set kernel.render_max_lines 24
+#fset KERNEL_LINES_MAX 24
 
 # How long a kernel call waits for its code before handing the model a
 # handle to check back with. The code keeps running.
@@ -578,7 +547,7 @@
 
 # In `js -p`, print a short line for each tool call while it runs.
 #   off  you only see the final answer
-#set runtime.trace on
+#fset TRACE on
 
 # Write a record of every internal event to state/<agent>/debug.log. Only
 # for chasing a js bug.

@@ -294,7 +294,7 @@ calls", a rule that exists nowhere in js. The only one-shot rule js sends is
 ## 5. Display
 
 - The per-turn `run model=… provider=…` header stays.
-- `ui.net` default stays 2; `set ui.net 1` in jsrc shows failures only.
+- `NET_DISPLAY` default stays 2; `fset NET_DISPLAY 1` in jsrc shows failures only.
 - Bug (js-1g1.9, fixed): the last block of a streamed answer showed garbled
   ("reseat607:00scaed if width stays x4.glips smack", yoda, 2026-09-29,
   session `20260929T101208214271Z-acc53bcfc3ea7213`). The stray characters

@@ -1,4 +1,4 @@
-"""The `ui.net` channel: connection lines, failures, and the byte counter.
+"""The NET_DISPLAY channel: connection lines, failures, and the byte counter.
 
 The streaming tests run a real OpenAI-compatible SSE server on 127.0.0.1 and
 drive `stream_model_async` through the actual SDK and transport.

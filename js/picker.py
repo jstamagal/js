@@ -24,7 +24,7 @@ from prompt_toolkit.output import Output, create_output
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame
 
-from . import logins, providers
+from . import fset, logins, providers
 from . import messages as msgs
 
 
@@ -70,21 +70,22 @@ def _model_rows(provider_id: str) -> list[ModelRow]:
     return [ModelRow(id=model_id, provider=provider_id) for model_id in cached]
 
 
-# Colors are the terminal's: `ansi*` names resolve through whatever palette the
-# terminal runs, and nothing paints a background, so the picker sits in the
-# same colors as the shell around it.
-_STYLE = Style.from_dict(
-    {
-        "frame.border": "ansiblue",
-        "frame.label": "ansicyan bold",
-        "row.selected": "bg:ansigreen fg:ansiblack bold",
-        "row.marked": "bold",
-        "row.dim": "ansibrightblack",
-        "detail": "ansigreen",
-        "help": "ansigreen",
-    }
-)
-
+def _style() -> Style:
+    """The picker in /fset's colours; nothing paints a background, so it sits
+    on the screen around it."""
+    c = {role: fset.hex_for(role) or "" for role in ("COLOR_SEPARATOR", "COLOR_ACCENT", "COLOR_OK", "COLOR_DIM",
+                                                     "COLOR_PANEL")}
+    return Style.from_dict(
+        {
+            "frame.border": c["COLOR_SEPARATOR"],
+            "frame.label": f"{c['COLOR_ACCENT']} bold",
+            "row.selected": f"bg:{c['COLOR_OK']} {c['COLOR_PANEL']} bold" if c["COLOR_OK"] else "reverse bold",
+            "row.marked": "bold",
+            "row.dim": c["COLOR_DIM"],
+            "detail": c["COLOR_OK"],
+            "help": c["COLOR_OK"],
+        }
+    )
 
 
 class ModelPicker:
@@ -306,7 +307,7 @@ class ModelPicker:
         return Application(
             layout=Layout(root),
             key_bindings=kb,
-            style=_STYLE,
+            style=_style(),
             full_screen=True,
             input=input,
             output=output,

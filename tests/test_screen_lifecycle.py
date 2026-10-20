@@ -120,7 +120,7 @@ def test_resume_notices_and_last_exchanges_are_in_the_scrollback_before_the_prom
     terminal = _Recorder()
     _install_screen(monkeypatch, script, terminal)
     monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession([]))
-    assert cli.main(["--session", session_file.stem, "--extra", "ui.resume_exchanges=2"]) == 0
+    assert cli.main(["--session", session_file.stem, "--extra", "RESUME_EXCHANGES=2"]) == 0
 
     shown = seen[0]
     assert "Model: cliapiproxy/claude-opus-5" in shown

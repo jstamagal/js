@@ -363,12 +363,12 @@ def test_the_twotool_agent_ships_with_exactly_kernel_toolbox_and_shell():
 
 def test_kernel_verbosity_is_a_real_config_knob_with_a_default(tmp_path, monkeypatch):
     keys = {spec.key for spec in jssettings.REGISTRY}
-    assert {"kernel.verbosity", "kernel.render_max_lines"} <= keys
+    assert {"KERNEL_VERBOSITY", "KERNEL_LINES_MAX"} <= keys
 
     monkeypatch.setenv("JS_KERNEL_VERBOSITY", "verbose")
     cfg = jsconfig.from_env(save_session=False, cwd=tmp_path)
     assert cfg.kernel_verbosity == "verbose"
-    assert cfg.kernel_render_max_lines == jssettings.default_value("kernel.render_max_lines")
+    assert cfg.kernel_render_max_lines == jssettings.default_value("KERNEL_LINES_MAX")
 
     # a value outside the three levels falls back rather than reaching the render
     monkeypatch.setenv("JS_KERNEL_VERBOSITY", "shouting")

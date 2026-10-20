@@ -1519,7 +1519,7 @@ def _trace_registry():
 
 def _tools_context(level: int) -> ToolContext:
     context = ToolContext(cwd="/tmp")
-    context.config = SimpleNamespace(settings={"ui": {"tools": level, "tools_preview_lines": 3}})
+    context.config = SimpleNamespace(settings={"TOOLS_DISPLAY": level, "TOOLS_PREVIEW_LINES": 3})
     return context
 
 

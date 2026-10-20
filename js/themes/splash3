@@ -1,0 +1,27 @@
+# splash3: Light: bitchtea's splash3 palette, errors in red.
+# A theme is fset lines: palette slots, colours and formats.
+
+fset COLOR_BACKGROUND #f9fafc
+fset COLOR_TEXT #111111
+fset COLOR_DIM #56585c
+fset COLOR_USER #191a1c
+fset COLOR_USER_MARK $HOST_COLOR|$COLOR_USER
+fset COLOR_AGENT #0a2fb9
+fset COLOR_AGENT_MARK $HOST_COLOR|$COLOR_AGENT
+fset COLOR_SYSTEM #292a2c
+fset COLOR_WARN #8a6116
+fset COLOR_ERROR #c62828
+fset COLOR_OK #2e7d32
+fset COLOR_TOOL #333436
+fset COLOR_TOOL_OUTPUT #191a1c
+fset COLOR_PANEL #eef2f7
+fset COLOR_ACCENT #0433d2
+fset COLOR_ADDED #2e7d32
+fset COLOR_REMOVED #c62828
+fset COLOR_CODE #0a2fb9
+fset COLOR_REASONING #56585c
+fset COLOR_SEPARATOR #d8dde3
+fset COLOR_STATUS_BACKGROUND #d9e5f5
+fset COLOR_STATUS_TEXT #002b80
+fset COLOR_STATUS_ACCENT $HOST_COLOR|$COLOR_ACCENT
+fset CODE_STYLE default

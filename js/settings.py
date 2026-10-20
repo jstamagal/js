@@ -68,10 +68,10 @@ EMPTY_UNSET = "unset"    # param deliberately not sent; provider default wins ("
 
 @dataclass(frozen=True)
 class SettingSpec:
-    """One setting. ``key`` is its name, UPPER_SNAKE (`MODEL`); a display
-    setting still has a dotted name (`ui.tools`). The key is the storage path
-    in the settings dict, split on dots, and the name `set` takes. Its env var
-    is ``JS_<KEY>`` (`canonical_env_name`)."""
+    """One setting. ``key`` is its name, UPPER_SNAKE (`MODEL`). The key is
+    the storage path in the settings dict, split on dots, and the name its
+    ``command``, `set` or `fset`, takes. Its env var is ``JS_<KEY>``
+    (`canonical_env_name`)."""
 
     key: str
     type: str            # "str" | "int" | "float" | "bool" | "json" | "map"
@@ -81,6 +81,7 @@ class SettingSpec:
     secret: bool = False        # mask the value in `show`
     aliases: tuple[str, ...] = ()  # jsrc verbs that set ``key``: `model X` is `set MODEL X`
     group: str = ""             # what `/set <group>` lists it under; "" = the dotted section
+    command: str = "set"        # the verb that owns it: `set`, or `fset` for how js looks
 
     @property
     def path(self) -> tuple[str, ...]:
@@ -97,31 +98,40 @@ class SettingSpec:
 
     @property
     def doc(self) -> str:
-        """This setting's help: its entry in `js/help/set.txt`, "" when it has none."""
+        """This setting's help: its entry in `js/help/set.txt`, or
+        `js/help/fset.txt` for one /fset owns; "" when it has none."""
+        if self.command == "fset":
+            return read_help(FSET_HELP_FILE).get(self.key, "")
         return setting_help().get(self.key, "")
 
 
-# `/help set NAME` text, one entry per setting.
+# `/help set NAME` text, one entry per setting; `/help fset NAME` text, one
+# entry per /fset entry that is not a format or a palette slot.
 SETTING_HELP_FILE = Path(__file__).parent / "help" / "set.txt"
-_help_cache: dict[str, str] | None = None
+FSET_HELP_FILE = Path(__file__).parent / "help" / "fset.txt"
+_help_cache: dict[Path, dict[str, str]] = {}
 
 
-def setting_help() -> dict[str, str]:
-    """NAME -> help text, read once from `SETTING_HELP_FILE`: a NAME alone on
-    a line, then its help indented. `#` lines are comments."""
-    global _help_cache
-    if _help_cache is None:
+def read_help(path: Path) -> dict[str, str]:
+    """NAME -> help text, read once from the help file at ``path``: a NAME
+    alone on a line, then its help indented. `#` lines are comments."""
+    if path not in _help_cache:
         entries: dict[str, list[str]] = {}
         current: list[str] | None = None
-        for line in SETTING_HELP_FILE.read_text(encoding="utf-8").splitlines():
+        for line in path.read_text(encoding="utf-8").splitlines():
             if line.startswith("#"):
                 continue
             if line and not line[0].isspace():
                 current = entries.setdefault(line.strip(), [])
             elif current is not None:
                 current.append(line.strip())
-        _help_cache = {name: " ".join(" ".join(body).split()) for name, body in entries.items()}
-    return _help_cache
+        _help_cache[path] = {name: " ".join(" ".join(body).split()) for name, body in entries.items()}
+    return _help_cache[path]
+
+
+def setting_help() -> dict[str, str]:
+    """NAME -> help text from `SETTING_HELP_FILE`."""
+    return read_help(SETTING_HELP_FILE)
 
 
 # Every setting. Order here is the order `/set` lists them in.
@@ -143,27 +153,18 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("BANNER", "str", group="startup"),
     SettingSpec("MOTD_FILE", "str", empty=EMPTY_NONE, group="startup"),
     SettingSpec("MOTD_DIR", "str", empty=EMPTY_NONE, group="startup"),
-    # --- ui ---
-    SettingSpec("ui.reasoning", "int"),
-    SettingSpec("ui.net", "int"),
-    SettingSpec("ui.status_bg", "str"),
-    SettingSpec("ui.status_fg", "str"),
-    SettingSpec("ui.tools", "int"),
-    SettingSpec("ui.tools_quiet", "json"),
-    SettingSpec("ui.shell_quiet", "json"),
-    SettingSpec("ui.tools_preview_lines", "int"),
-    SettingSpec("ui.markdown", "bool"),
-    SettingSpec("theme.accent", "str"),
-    SettingSpec("theme.ok", "str"),
-    SettingSpec("theme.error", "str"),
-    SettingSpec("theme.warn", "str"),
-    SettingSpec("theme.dim", "str"),
-    SettingSpec("theme.panel", "str"),
-    SettingSpec("theme.panel_text", "str"),
-    SettingSpec("theme.added", "str"),
-    SettingSpec("theme.removed", "str"),
-    SettingSpec("theme.code", "str"),
-    SettingSpec("ui.resume_exchanges", "int"),
+    # --- display: /fset entries ---
+    SettingSpec("REASONING_DISPLAY", "int", group="display", command="fset"),
+    SettingSpec("NET_DISPLAY", "int", group="display", command="fset"),
+    SettingSpec("TOOLS_DISPLAY", "int", group="display", command="fset"),
+    SettingSpec("TOOLS_QUIET", "json", group="display", command="fset"),
+    SettingSpec("SHELL_QUIET", "json", group="display", command="fset"),
+    SettingSpec("TOOLS_PREVIEW_LINES", "int", group="display", command="fset"),
+    SettingSpec("MARKDOWN", "bool", group="display", command="fset"),
+    SettingSpec("RESUME_EXCHANGES", "int", group="display", command="fset"),
+    SettingSpec("TRACE", "bool", empty=EMPTY_OFF, group="display", command="fset"),
+    SettingSpec("KERNEL_VERBOSITY", "str", group="display", command="fset"),
+    SettingSpec("KERNEL_LINES_MAX", "int", group="display", command="fset"),
     SettingSpec("EDITING_MODE", "str", group="input"),
     SettingSpec("PASTE_IMAGE_KEY", "str", group="input"),
     SettingSpec("PASTE_COLLAPSE_LINES", "int", group="input"),
@@ -210,9 +211,6 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("SWARM_ACTIVE_MAX", "int", group="shell"),
     # --- kernel ---
     SettingSpec("PYTHON_KERNEL", "bool", group="shell"),
-    SettingSpec("kernel.verbosity", "str",
-                env="JS_KERNEL_VERBOSITY"),
-    SettingSpec("kernel.render_max_lines", "int"),
     SettingSpec("SHELL_PROGRAM", "str", group="shell"),
     SettingSpec("SHELL_WAIT", "int", group="shell"),
     SettingSpec("PYTHON_KERNEL_WAIT", "int", group="shell"),
@@ -221,8 +219,6 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("JAIL_HIDE", "json", group="shell"),
     # --- runtime ---
     SettingSpec("DEBUG_LOG", "bool", empty=EMPTY_OFF, group="runtime"),
-    SettingSpec("runtime.trace", "bool",
-                env="JS_TRACE", empty=EMPTY_OFF),
     SettingSpec("PARALLEL_TOOLS_MAX", "int", group="runtime"),
     SettingSpec("RETRY_COUNT_MAX", "int", group="runtime"),
     SettingSpec("RETRY_WAIT_MAX", "float", group="runtime"),
@@ -324,7 +320,7 @@ _HEX_COLOUR_RE = re.compile(r"#[0-9a-fA-F]{6}")
 
 
 def is_hex_colour(value: object) -> bool:
-    """True for a `#rrggbb` string, the form the `ui.status_*` colours take."""
+    """True for a `#rrggbb` string."""
     return isinstance(value, str) and _HEX_COLOUR_RE.fullmatch(value) is not None
 
 
@@ -382,24 +378,20 @@ _SAMPLING_RANGES: dict[str, tuple[float | None, float | None]] = {
 
 
 def _unquoted(spec: SettingSpec, text: str) -> str:
-    """A string setting's value written as a JSON string ("a\\nb"), the form
-    `/save` uses for one a jsrc line cannot hold as it is, decoded; any other
-    text as it is."""
-    if spec.type != "str" or len(text) < 2 or not (text.startswith('"') and text.endswith('"')):
-        return text
-    try:
-        decoded = json.loads(text)
-    except (json.JSONDecodeError, ValueError):
-        return text
-    return decoded if isinstance(decoded, str) else text
+    """A value that is not JSON as a jsrc line gives it: a JSON string
+    literal, the form `/save` writes one a line cannot hold as it is, is the
+    string it spells (`from_line_literal`); any other text as it is."""
+    return text if spec.type in ("json", "map") else from_line_literal(text)
 
 
 def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
     """Coerce ``raw`` for ``spec``. Returns (value, error). Values store
     VERBATIM — there is no magic clear-token (no "default"/"auto"/"none"/"unset"
     special-casing); the only way to clear a setting back to its default/unset
-    state is `set -key` (see `apply_unset` in `js.setcmd`). The error for a
-    secret setting never repeats any part of the value."""
+    state is `set -key` (see `apply_unset` in `js.setcmd`). A value that is
+    not JSON is read as a jsrc line gives it first (`_unquoted`), so a quoted
+    line means what its string would typed. The error for a secret setting
+    never repeats any part of the value."""
     value, error = _coerce_value(spec, raw)
     if error is not None and spec.secret:
         # Both forms: as typed, and as decoded from a quoted JSON string.
@@ -426,32 +418,30 @@ def _coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
     if spec.key == "STEER_MODE":
         v = text.lower()
         if v not in STEER_MODES:
-            return None, msgs.EXPECTED_ONE_OF.text(choices="|".join(STEER_MODES))
+            return None, msgs.EXPECTED_ONE_OF.said(choices="|".join(STEER_MODES))
         return v, None
     if spec.key == "PARANOID_MODE":
         v = text.lower()
         if v not in ("off", "on", "extra"):
-            return None, msgs.EXPECTED_ONE_OF.text(choices="off|on|extra")
+            return None, msgs.EXPECTED_ONE_OF.said(choices="off|on|extra")
         return v, None
     if spec.key == "PROVIDER" and text:
         from . import providers as _providers
 
         if _providers.get_provider(text) is None:
-            return None, msgs.UNKNOWN_PROVIDER_ID.text(provider=text)
+            return None, msgs.UNKNOWN_PROVIDER_ID.said(provider=text)
         return text, None
-    if (spec.key in {"ui.status_bg", "ui.status_fg"} or spec.key.startswith("theme.")) and not is_hex_colour(text):
-        return None, msgs.EXPECTED_COLOUR.text(value=text)
     if spec.key == "HISTORY_ORDER":
         if text not in HISTORY_ORDERS:
-            return None, msgs.EXPECTED_ONE_OF.text(choices="|".join(HISTORY_ORDERS))
+            return None, msgs.EXPECTED_ONE_OF.said(choices="|".join(HISTORY_ORDERS))
         return text, None
     if spec.key == "EDITING_MODE":
         if text not in ("emacs", "vi"):
-            return None, msgs.EXPECTED_ONE_OF.text(choices="emacs|vi")
+            return None, msgs.EXPECTED_ONE_OF.said(choices="emacs|vi")
         return text, None
     if spec.key == "PASTE_IMAGE_KEY":
         if not is_key_name(text):
-            return None, msgs.EXPECTED_KEY.text(value=text)
+            return None, msgs.EXPECTED_KEY.said(value=text)
         return " ".join(text.split()), None
     if spec.key == "PASTE_IMAGE_COMMAND":
         try:
@@ -468,47 +458,47 @@ def _coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             return None, str(exc)
     if spec.key == "BASE_URL" and text:
         if not text.startswith(("http://", "https://")):
-            return None, msgs.EXPECTED_URL.text(value=text)
+            return None, msgs.EXPECTED_URL.said(value=text)
         return text, None
     kind = spec.type
     if kind == "bool":
         parsed = parse_bool(text)
         if parsed is None:
-            return None, msgs.EXPECTED_ONE_OF.text(choices="on|off")
+            return None, msgs.EXPECTED_ONE_OF.said(choices="on|off")
         return parsed, None
     if kind == "int":
         try:
             value = int(text)
         except ValueError:
-            return None, msgs.EXPECTED_INTEGER.text()
+            return None, msgs.EXPECTED_INTEGER.said()
         if spec.key in _NONNEGATIVE_KNOBS and value < 0:
-            return None, msgs.EXPECTED_NONNEGATIVE_INTEGER.text()
+            return None, msgs.EXPECTED_NONNEGATIVE_INTEGER.said()
         if spec.key == "TOP_K" and value < 0:
-            return None, msgs.EXPECTED_NONNEGATIVE_INTEGER.text()
-        if spec.key in {"ui.reasoning", "ui.net", "ui.tools"} and value not in range(4):
-            return None, msgs.EXPECTED_LEVEL.text()
+            return None, msgs.EXPECTED_NONNEGATIVE_INTEGER.said()
+        if spec.key in {"REASONING_DISPLAY", "NET_DISPLAY", "TOOLS_DISPLAY"} and value not in range(4):
+            return None, msgs.EXPECTED_LEVEL.said()
         if spec.key in {
-            "REPLY_TOOL_CALLS_MAX", "SUBAGENT_WORKERS_MAX", "ui.tools_preview_lines",
+            "REPLY_TOOL_CALLS_MAX", "SUBAGENT_WORKERS_MAX", "TOOLS_PREVIEW_LINES", "KERNEL_LINES_MAX",
             "TERMINAL_COLUMNS", "TERMINAL_ROWS", "PARALLEL_TOOLS_MAX",
             "HISTORY_SIZE", "LSP_TIMEOUT",
         } and value < 1:
-            return None, msgs.EXPECTED_POSITIVE_INTEGER.text()
+            return None, msgs.EXPECTED_POSITIVE_INTEGER.said()
         return value, None
     if kind == "float":
         try:
             number = float(text)
         except ValueError:
-            return None, msgs.EXPECTED_NUMBER.text()
+            return None, msgs.EXPECTED_NUMBER.said()
         if not math.isfinite(number):  # nan or inf is no setting's value
-            return None, msgs.EXPECTED_FINITE_NUMBER.text()
+            return None, msgs.EXPECTED_FINITE_NUMBER.said()
         low, high = _SAMPLING_RANGES.get(spec.key, (None, None))
         if (low is not None and number < low) or (high is not None and number > high):
-            return None, (msgs.EXPECTED_AT_LEAST.text(low=low) if high is None
-                          else msgs.EXPECTED_RANGE.text(low=low, high=high))
+            return None, (msgs.EXPECTED_AT_LEAST.said(low=low) if high is None
+                          else msgs.EXPECTED_RANGE.said(low=low, high=high))
         if spec.key in _NONNEGATIVE_KNOBS and number < 0:
-            return None, msgs.EXPECTED_NONNEGATIVE_NUMBER.text()
+            return None, msgs.EXPECTED_NONNEGATIVE_NUMBER.said()
         if spec.key == "MCP_TIMEOUT" and not (math.isfinite(number) and number > 0):
-            return None, msgs.EXPECTED_POSITIVE_NUMBER.text()
+            return None, msgs.EXPECTED_POSITIVE_NUMBER.said()
         return number, None
     if kind in ("json", "map"):
         if spec.key in {"MCP_SERVERS", "MCP_AGENT_POLICY"}:
@@ -526,18 +516,18 @@ def _coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             try:
                 value = json.loads(raw)
             except (json.JSONDecodeError, ValueError):
-                return None, msgs.EXPECTED_JSON.text()
+                return None, msgs.EXPECTED_JSON.said()
         if kind == "map" and not isinstance(value, dict):
-            return None, msgs.EXPECTED_JSON_OBJECT.text()
+            return None, msgs.EXPECTED_JSON_OBJECT.said()
         if spec.key == "TOOL_ALIASES":
             error = _validate_alias_profiles(value)
             if error is not None:
                 return None, error
-        if spec.key in {"SHELL_ENV_KEEP", "ui.tools_quiet", "ui.shell_quiet"}:
+        if spec.key in {"SHELL_ENV_KEEP", "TOOLS_QUIET", "SHELL_QUIET"}:
             if not isinstance(value, list) or any(
                 not isinstance(item, str) or not item.strip() for item in value
             ):
-                return None, msgs.EXPECTED_ENV_NAMES.text()
+                return None, msgs.EXPECTED_ENV_NAMES.said()
         if spec.key in {"JAIL_BIND", "JAIL_HIDE"}:
             from . import jail
 
@@ -584,28 +574,28 @@ def parse_header_lines(text: str | None) -> dict[str, str]:
 
 def _validate_alias_profiles(value: Any) -> str | None:
     if not isinstance(value, list):
-        return msgs.EXPECTED_JSON_LIST.text()
+        return msgs.EXPECTED_JSON_LIST.said()
     for profile in value:
         if not isinstance(profile, dict):
-            return msgs.EXPECTED_ALIAS_PROFILES.text()
+            return msgs.EXPECTED_ALIAS_PROFILES.said()
         match = profile.get("match")
         aliases = profile.get("aliases")
         if not isinstance(match, (str, list)) or not isinstance(aliases, dict):
-            return msgs.EXPECTED_ALIAS_PROFILES.text()
+            return msgs.EXPECTED_ALIAS_PROFILES.said()
         if not aliases:
-            return msgs.EXPECTED_NONEMPTY_ALIASES.text()
+            return msgs.EXPECTED_NONEMPTY_ALIASES.said()
         matches = [match] if isinstance(match, str) else match
         if not matches or any(not isinstance(item, str) or not item.strip() for item in matches):
-            return msgs.EXPECTED_NONEMPTY_MATCH.text()
+            return msgs.EXPECTED_NONEMPTY_MATCH.said()
         seen_aliases: set[str] = set()
         for canonical, alias in aliases.items():
             if not isinstance(canonical, str) or _TOOL_ALIAS_NAME_RE.fullmatch(canonical) is None:
-                return msgs.EXPECTED_CANONICAL_TOOL_NAMES.text()
+                return msgs.EXPECTED_CANONICAL_TOOL_NAMES.said()
             if not isinstance(alias, str) or _TOOL_ALIAS_NAME_RE.fullmatch(alias) is None:
-                return msgs.EXPECTED_ALIAS_NAMES.text()
+                return msgs.EXPECTED_ALIAS_NAMES.said()
             key = alias.lower()
             if key in seen_aliases:
-                return msgs.EXPECTED_UNIQUE_ALIASES.text()
+                return msgs.EXPECTED_UNIQUE_ALIASES.said()
             seen_aliases.add(key)
     return None
 
@@ -688,24 +678,24 @@ def coerce_extra_value(raw: str) -> Any:
 def parse_extra_arg(arg: str) -> tuple[tuple[str, ...], Any]:
     """Parse one ``--extra KEY=VALUE`` argument into (path, value)."""
     if "=" not in arg:
-        raise ValueError(msgs.EXTRA_NOT_KEY_VALUE.text(arg=arg))
+        raise ValueError(msgs.EXTRA_NOT_KEY_VALUE.said(arg=arg))
     raw_key, raw_value = arg.split("=", 1)
     key = raw_key.strip()
     if not key:
-        raise ValueError(msgs.EXTRA_EMPTY_KEY.text(arg=arg))
+        raise ValueError(msgs.EXTRA_EMPTY_KEY.said(arg=arg))
     if raw_value == "":
-        raise ValueError(msgs.EXTRA_EMPTY_VALUE.text(arg=arg))
+        raise ValueError(msgs.EXTRA_EMPTY_VALUE.said(arg=arg))
     spec = spec_for(key)
     if spec is not None:
         value, error = coerce_value(spec, raw_value)
         if error is not None:
-            raise ValueError(msgs.EXTRA_BAD_VALUE.text(key=spec.key, error=error))
+            raise ValueError(msgs.EXTRA_BAD_VALUE.said(key=spec.key, error=error))
         return spec.path, value
     key = child_key(key)
     path = _parse_dotted_key(key)
     prefix_spec = parent_spec(key)
     if prefix_spec is None or prefix_spec.type != "map":
-        raise ValueError(msgs.EXTRA_UNKNOWN_SETTING.text(key=key))
+        raise ValueError(msgs.EXTRA_UNKNOWN_SETTING.said(key=key))
     return path, coerce_extra_value(raw_value)
 
 
@@ -793,12 +783,12 @@ def _package_settings() -> dict:
     for lineno, raw in enumerate(text.splitlines(), 1):
         result = setcmd.apply_config_line(settings, raw)
         if result.error or not result.handled:
-            problem = result.error or msgs.DEFAULTS_NOT_A_SET_LINE.text()
+            problem = result.error or msgs.DEFAULTS_NOT_A_SET_LINE.said()
             raise DefaultsError(msgs.line_for(msgs.DEFAULTS_BAD_LINE, file=sys.stderr, location=f"{path}:{lineno}",
                                               error=problem))
         parsed = setcmd.split_command(raw)
         if parsed is not None:
-            name = parsed[1].split(maxsplit=1)[0] if parsed[0] == "set" else parsed[0]
+            name = setcmd.first_word(parsed[1])[0] if parsed[0] in ("set", "fset") else parsed[0]
             spec = spec_for(name.removeprefix("-"))
             if spec is not None:
                 listed.add(spec.key)
@@ -844,39 +834,73 @@ def knob_attr(obj: Any, attr: str, key: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def load_jsrc_files(paths: list[Path], settings: dict) -> list[str]:
-    """Apply each existing jsrc script onto ``settings`` in order. Returns a list
-    of human-readable warnings (bad/unknown lines) — a single typo never aborts
-    the boot."""
+# What config load left for the REPL to run, per top-level jsrc: each line
+# the settings layer does not own (`alias`, `on`, any other command), in the
+# order config load met it inside the files it loaded, already expanded; and
+# each `load` that could not run, as its refusal. The replay runs these and
+# reads, resolves and expands nothing again.
+def _apply_jsrc(path: Path, settings: dict, stack: list[Path], warnings: list[str],
+                lines: list[str] | None = None) -> str | None:
+    """Apply the settings lines of the jsrc at ``path`` (or ``lines``, read
+    as that file) onto ``settings``, the files it loads with it, in order. A
+    loaded file stops at its first bad setting, as `/load` stops it, and so
+    does every loaded file containing it; the top-level jsrc goes on. Every
+    other line is the REPL's, which runs the whole file again in one pass
+    (`cli._run_rc_commands`). Returns why a loaded file stopped, or None."""
     from . import setcmd  # lazy: setcmd imports this module
 
-    warnings: list[str] = []
-
-    def apply_file(path: Path, stack: list[Path]) -> None:
+    if lines is None:
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
-        except (OSError, UnicodeError):
-            return
-        stack.append(path)
+        except (OSError, UnicodeError) as exc:
+            return msgs.LOAD_UNREADABLE.said(path=path, error=f"{type(exc).__name__}: {exc}")
+    loaded = bool(stack)
+    stack.append(path)
+    try:
         for lineno, raw in enumerate(lines, 1):
+            # $NAMEs expand once, before the line is read as any command.
+            raw = setcmd.expand_line(raw, settings)
             parsed = setcmd.split_command(raw)
+            error = None
             if parsed is not None and parsed[0] in setcmd.LOAD_VERBS:
-                # A loaded file's settings sit in the jsrc layer too, resolved
-                # against the containing file. The REPL replay reports a
-                # missing file or a cycle.
+                # A loaded file's lines sit in the jsrc layer too, resolved
+                # against the containing file, at the point the load stands.
                 target, error = setcmd.load_path(parsed[1], path.parent)
-                if error is None and target not in stack and len(stack) < setcmd.MAX_LOAD_DEPTH:
-                    apply_file(target, stack)
-                continue
-            result = setcmd.apply_config_line(settings, raw, baseline=_package_settings())
-            if result.error:
-                warnings.append(msgs.SCRIPT_LINE_FAILED.text(path=path, lineno=lineno, error=result.error))
+                if error is None and len(stack) >= setcmd.MAX_LOAD_DEPTH:
+                    error = msgs.LOAD_TOO_DEEP.said()
+                elif error is None and target in stack:
+                    error = msgs.LOAD_CYCLE.said(path=target)
+                elif error is None and not target.is_file():
+                    error = msgs.LOAD_NOT_FOUND.said(path=target)
+                if error is None:
+                    error = _apply_jsrc(target, settings, stack, warnings)
+            else:
+                result = setcmd.apply_config_line(settings, raw, baseline=_package_settings())
+                if result.handled and result.error:
+                    error = msgs.SCRIPT_LINE_FAILED.said(path=path, lineno=lineno, error=result.error)
+                    warnings.append(error)
+            if loaded and error is not None:
+                return error
+    finally:
         stack.pop()
+    return None
 
+
+def load_jsrc_files(paths: list[Path], settings: dict) -> list[str]:
+    """Apply each existing jsrc script's settings onto ``settings`` in order.
+    Returns a list of human-readable warnings (bad lines) — a single typo
+    never aborts the boot."""
+    warnings: list[str] = []
     for path in paths:
         if path.exists():
-            apply_file(path.resolve(strict=False), [])
+            _apply_jsrc(path.resolve(strict=False), settings, [], warnings)
     return warnings
+
+
+# The layers each list of jsrc files was last collected with, to collect it
+# again (`collect_again`) or to lay over a jsrc layer the REPL ran
+# (`over_jsrc_layer`).
+_COLLECTED: dict[tuple[Path, ...], tuple[dict[str, str] | None, list[str] | None]] = {}
 
 
 def collect_settings(
@@ -890,11 +914,39 @@ def collect_settings(
     passes the global, project, and project-local files explicitly.
     """
     settings = seed_defaults()
+    from . import fset
+
+    # The /fset entries the jsrc files set are rebuilt with the settings.
+    fset.reset()
 
     from . import paths as _paths
     paths = config_paths if config_paths is not None else [_paths.global_config_file()]
     load_jsrc_files(paths, settings)
 
+    apply_env_overrides(settings, env=env)
+    if extras:
+        apply_cli_extras(settings, extras)
+    _COLLECTED[tuple(paths)] = (env, list(extras) if extras else None)
+    return settings
+
+
+def collect_again(paths: list[Path]) -> dict:
+    """The settings ``paths`` give under the env and CLI layers they were last
+    collected with (`collect_settings`); the jsrc layer alone when they were
+    never collected."""
+    if tuple(paths) not in _COLLECTED:
+        settings = seed_defaults()
+        load_jsrc_files(paths, settings)
+        return settings
+    env, extras = _COLLECTED[tuple(paths)]
+    return collect_settings(paths, env=env, extras=extras)
+
+
+def over_jsrc_layer(paths: list[Path], layer: dict) -> dict:
+    """``layer``, the settings the jsrc files ``paths`` set, under the env and
+    CLI layers they were last collected with."""
+    settings = copy.deepcopy(layer)
+    env, extras = _COLLECTED.get(tuple(paths), ({}, None))
     apply_env_overrides(settings, env=env)
     if extras:
         apply_cli_extras(settings, extras)
@@ -905,27 +957,75 @@ def collect_settings(
 # /save — write the changed settings into the user jsrc, in place
 # ---------------------------------------------------------------------------
 
-def _config_line_value(spec: SettingSpec, value: Any) -> str:
-    """Render ``value`` as the right-hand side of a `set <key> <value>` line —
-    the inverse of `coerce_value`, so a saved line reloads to the same value."""
+def config_value_text(value: Any) -> str:
+    """``value`` as `set` takes it: on/off, JSON for a list or a map, else
+    the text — the inverse of `coerce_value`."""
     if isinstance(value, bool):
         return "on" if value else "off"
     if isinstance(value, (dict, list)):
         return json.dumps(value)
-    text = str(value)
-    # One the line cannot hold as it is (a line break, spaces at an end, a
-    # leading quote) goes as a JSON string, which `coerce_value` decodes.
-    if spec.type == "str" and (text != text.strip() or text.startswith('"') or any(c in text for c in "\n\r")):
-        return json.dumps(text)
+    return str(value)
+
+
+# What a jsrc line cannot hold as it is: a break `str.splitlines` splits a
+# file at, or space at either end, which a command strips; nor an empty
+# value, which a command reads as none. A value that starts with a quote is
+# quoted too, so it never reads as a literal.
+_UNHELD = re.compile("[\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029]|^\\s|\\s$|^\"")
+
+
+def line_literal(text: str) -> str:
+    """``text`` as one jsrc line holds it: as it is, or, when a line cannot
+    hold it as it is, a JSON string literal, every break in it escaped."""
+    if text and not _UNHELD.search(text):
+        return text
+    quoted = json.dumps(text, ensure_ascii=False)
+    for char in "\x85\u2028\u2029":
+        quoted = quoted.replace(char, f"\\u{ord(char):04x}")
+    return quoted
+
+
+def from_line_literal(text: str) -> str:
+    """A string value as a jsrc line or a typed command gives it: a JSON
+    string literal is the string it spells (`line_literal`), anything else
+    is itself."""
+    if len(text) >= 2 and text.startswith('"') and text.endswith('"'):
+        try:
+            value = json.loads(text)
+        except ValueError:
+            return text
+        if isinstance(value, str):
+            return value
     return text
 
 
-def _set_line(spec: SettingSpec, value: Any) -> str:
-    """`set <key> <value>`, or `set -<key>` when ``value`` is empty."""
-    if value is None or value == "":
-        return f"set -{spec.key}"
-    return f"set {spec.key} {_config_line_value(spec, value)}"
+def jsrc_text(name: str, text: str) -> str:
+    """``text`` as the value on a jsrc line for setting or /fset entry
+    ``name``, so the line loads back to ``text`` (`line_literal`): a `$` is
+    written `$$`, since a jsrc line's `$NAME`s expand when it loads, except
+    in a format or colour, which keeps its `$NAME`s for when it is drawn."""
+    from . import fset  # lazy: fset reads settings
 
+    text = line_literal(text)
+    return text if fset.read_when_drawn(name) else text.replace("$", "$$")
+
+
+def _config_line_value(spec: SettingSpec, value: Any) -> str:
+    """Render ``value`` as the right-hand side of a `set <key> <value>` line,
+    so a saved line reloads to the same value (`jsrc_text`)."""
+    return jsrc_text(spec.key, config_value_text(value))
+
+
+def _set_line(spec: SettingSpec, value: Any) -> str:
+    """`set <key> <value>`, or `set -<key>` when ``value`` is None; `fset`
+    for an entry /fset owns. An empty value is written `""`."""
+    if value is None:
+        return f"{spec.command} -{spec.key}"
+    return f"{spec.command} {spec.key} {_config_line_value(spec, value)}"
+
+
+# How `_jsrc_key` names an `fset` line for an entry `js.fset` holds.
+FSET_KEY = "fset:"
 
 # The commented user jsrc js writes on first run: every setting at its stock
 # value under a description, all of it commented out.
@@ -940,52 +1040,114 @@ def _jsrc_key(line: str) -> tuple[str | None, bool]:
 
     body = line.strip()
     live = not body.startswith("#")
-    if not live and not body.startswith("#set "):
+    if not live and not body.startswith(("#set ", "#fset ")):
         return None, False
     parsed = setcmd.split_command(body if live else body[1:])
     if parsed is None or not setcmd.config_owns(parsed[0]):
         return None, False
     verb, arg = parsed
-    name = arg.split(maxsplit=1)[0] if verb == "set" and arg else verb
+    name = setcmd.first_word(arg)[0] if verb in ("set", "fset") and arg else verb
     spec = spec_for(name.lstrip("-"))
+    if spec is None and verb == "fset" and name:
+        return FSET_KEY + name.lstrip("-"), live
     return (spec.key if spec else None), live
 
 
-def _write_jsrc_lines(path: Path, wanted: dict[str, str | None], extra_lines: list[str]) -> int:
-    """Edit the jsrc at ``path`` in place. ``wanted`` maps a setting to the
-    line it should have, or to None to comment its live line out. A setting
-    with a line rewrites its live line, else uncomments its `#set` line, else
-    is appended. ``extra_lines`` not in the file yet are appended. Every other
-    line is left alone. Returns how many lines changed."""
-    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+def _edited_jsrc_lines(lines: list[str], wanted: dict[str, str | None], extra_lines: list[str],
+                       unsets: dict[str, str]) -> tuple[list[str], int]:
+    """``lines`` of a jsrc edited so each setting in ``wanted`` gets the line
+    it maps to, or its stock value for None, with ``extra_lines`` not in it
+    yet appended; and how many lines changed.
+
+    A setting's last live line is rewritten, else its `#set` line
+    uncommented. When a `load` comes after that line, the loaded file could
+    set the setting back, so the line goes at the end instead; the earlier
+    lines stay, since a `load` between them may read them. A setting back at
+    its stock value has its live lines with no `load` after them commented
+    out, and its line in ``unsets`` (`set -NAME`) appended when one with a
+    `load` after it is left. Every other line is left alone."""
+    from . import setcmd  # lazy: setcmd imports this module
+
+    lines = list(lines)
     keyed = [_jsrc_key(line) for line in lines]
-    live = {key for key, is_live in keyed if key and is_live}
-    placed: set[str] = set()
+    loads = [i for i, line in enumerate(lines)
+             if (parsed := setcmd.split_command(line)) is not None and parsed[0] in setcmd.LOAD_VERBS]
+
+    def before_a_load(index: int) -> bool:
+        return bool(loads) and loads[-1] > index
+
+    live: dict[str, list[int]] = {}
+    commented: dict[str, list[int]] = {}
+    for index, (key, is_live) in enumerate(keyed):
+        if key is not None:
+            (live if is_live else commented).setdefault(key, []).append(index)
     changed = 0
-    for i, (key, is_live) in enumerate(keyed):
-        if key not in wanted:
-            continue
-        line = wanted[key]
+    tail: list[str] = []
+    for key, line in wanted.items():
+        last = live[key][-1] if key in live else None
         if line is None:
-            if is_live:
-                lines[i] = "#" + lines[i]
+            for index in live.get(key, []):
+                if not before_a_load(index):
+                    lines[index] = "#" + lines[index]
+                    changed += 1
+            if last is not None and before_a_load(last) and key in unsets:
+                tail.append(unsets[key])
+            continue
+        if last is not None and not before_a_load(last):
+            if lines[last].strip() != line:
+                lines[last] = line
                 changed += 1
-            continue
-        if key in placed or (not is_live and key in live):
-            continue
-        placed.add(key)
-        if lines[i].strip() != line:
-            lines[i] = line
+        elif last is None and key in commented and not before_a_load(commented[key][0]):
+            lines[commented[key][0]] = line
             changed += 1
-    tail = [line for key, line in wanted.items() if line is not None and key not in placed]
+        else:
+            tail.append(line)
     present = {line.strip() for line in lines}
     tail += [line for line in extra_lines if line.strip() not in present]
-    lines += tail
-    changed += len(tail)
+    return lines + tail, changed + len(tail)
+
+
+def _write_jsrc_lines(path: Path, wanted: dict[str, str | None], extra_lines: list[str],
+                      unsets: dict[str, str] | None = None) -> int:
+    """Edit the jsrc at ``path`` in place (`_edited_jsrc_lines`). Returns how
+    many lines changed."""
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    lines, changed = _edited_jsrc_lines(lines, wanted, extra_lines, unsets or {})
     if changed:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        _write_lines(path, lines)
     return changed
+
+
+def _serialized(lines: list[str]) -> str:
+    return "\n".join(lines) + "\n"
+
+
+def _write_lines(path: Path, lines: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_serialized(lines), encoding="utf-8")
+
+
+def _reloaded(path: Path, text: str) -> tuple[dict, dict[str, str]]:
+    """The settings and /fset entries a fresh start would load from ``text``
+    as the jsrc at ``path``, read the way startup reads a file, the files it
+    loads with it. The live ones, and the banner the messages speak behind,
+    are left as they are."""
+    from . import fset  # lazy: fset reads settings
+
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").splitlines()
+    loaded = seed_defaults()
+    banner = msgs.BANNER
+    try:
+        with fset.held():
+            _apply_jsrc(path.resolve(strict=False), loaded, [], [], lines=lines)
+            entries = fset.overrides()
+    finally:
+        msgs.set_banner(banner)
+    return loaded, entries
+
+
+def _at_stock(spec: SettingSpec, value: Any) -> bool:
+    return value == spec.default or (value in (None, "") and spec.default in (None, ""))
 
 
 def save_settings_to_jsrc(
@@ -994,19 +1156,43 @@ def save_settings_to_jsrc(
     *,
     extra_lines: list[str] | None = None,
 ) -> int:
-    """Write ``settings`` into the jsrc at ``path``, editing it in place: a
-    setting not at its stock value gets its line (`_write_jsrc_lines`), a
-    setting back at its stock value has its live line commented out.
-    ``extra_lines`` are `on` and `alias` lines. No copy of the file is made.
-    Returns how many lines changed."""
+    """Write ``settings`` and the /fset entries into the jsrc at ``path``,
+    editing it in place (`_edited_jsrc_lines`). The edited file is then
+    loaded in memory the way a fresh start loads it, files it loads
+    included; each setting or entry that comes back different from the live
+    one gets its line, or its clearing line, appended, which nothing after
+    it can set back. ``extra_lines`` are `on` and `alias` lines. No copy of
+    the file is made. Returns how many lines changed."""
+    from . import fset  # lazy: fset reads settings
+
     wanted: dict[str, str | None] = {}
+    unsets: dict[str, str] = {}
     for spec in REGISTRY:
-        value = get_dotted(settings, spec.path)
-        if value == spec.default or (value in (None, "") and spec.default in (None, "")):
-            wanted[spec.key] = None
-        else:
-            wanted[spec.key] = _set_line(spec, value)
-    return _write_jsrc_lines(path, wanted, extra_lines or [])
+        value = knob(settings, spec.key)
+        unsets[spec.key] = _set_line(spec, None)
+        wanted[spec.key] = None if _at_stock(spec, value) else _set_line(spec, value)
+    existing = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    for key, _live in map(_jsrc_key, existing):
+        if key is not None and key.startswith(FSET_KEY):
+            wanted[key] = None
+            unsets[key] = f"fset -{key[len(FSET_KEY):]}"
+    entries = fset.overrides()
+    for name, value in entries.items():
+        wanted[FSET_KEY + name] = f"fset {name} {jsrc_text(name, value)}"
+    lines, changed = _edited_jsrc_lines(existing, wanted, extra_lines or [], unsets)
+
+    loaded, loaded_entries = _reloaded(path, _serialized(lines))
+    tail: list[str] = []
+    for spec in REGISTRY:
+        value, back = knob(settings, spec.key), knob(loaded, spec.key)
+        if not (back == value or (_at_stock(spec, value) and _at_stock(spec, back))):
+            tail.append(wanted[spec.key] or unsets[spec.key])
+    for name in sorted(set(entries) | set(loaded_entries)):
+        if loaded_entries.get(name) != entries.get(name):
+            tail.append(wanted.get(FSET_KEY + name) or f"fset -{name}")
+    if changed or tail:
+        _write_lines(path, lines + tail)
+    return changed + len(tail)
 
 
 def ensure_user_jsrc(path: Path) -> bool:

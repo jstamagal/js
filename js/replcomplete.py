@@ -123,7 +123,7 @@ class JsCompleter(Completer):
 
     ``commands`` returns the command table as verb -> argument completion
     source (read per keystroke, so aliases defined mid-session complete);
-    ``setting_keys`` is the static setting list; ``names`` returns provider ids
+    ``setting_keys`` is the static setting list; ``fset_names`` the /fset entries; ``names`` returns provider ids
     + saved login names; ``spell`` is an injected ``str -> list[str]``
     suggester; ``bare_words`` are the slashless commands. Keeps this module dependency-free and unit-testable.
     """
@@ -135,8 +135,10 @@ class JsCompleter(Completer):
         names: Callable[[], Iterable[str]] | None = None,
         spell: Callable[[str], list[str]] | None = None,
         bare_words: Iterable[str] = (),
+        fset_names: Iterable[str] = (),
     ) -> None:
         self._commands = commands
+        self._fset_names = tuple(fset_names)
         self._bare_words = tuple(bare_words)
         self._setting_keys = tuple(setting_keys)
         self._names = names
@@ -163,6 +165,10 @@ class JsCompleter(Completer):
             # its matches in lowercase, so the part they share can be filled in.
             keys = [key for key in self._setting_keys if key.upper().startswith(token.upper())]
             return sorted({key.lower() if token.islower() else key for key in keys}), len(token)
+        if source == "fset" and len(words) == 1:
+            # `fset` takes a name in any case, the same way.
+            names = [name for name in self._fset_names if name.startswith(token.upper())]
+            return sorted({name.lower() if token.islower() else name for name in names}), len(token)
         if source == "names":
             return _prefix(list(self._names()) if self._names else [], token), len(token)
         if source == "events":

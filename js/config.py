@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import fset as _fset
 from . import messages as msgs
 from . import paths as _paths
 from . import session_store as _session_store
@@ -540,6 +541,7 @@ def from_env(
     debug = state_dir / "debug.log" if runtime_debug else None
 
     global_instruction_files = _paths.global_instruction_files()
+    _fset.bind_settings(js_root_settings)
 
     return _login_defaults.for_turn(Config(
         agent_id=agent_id,

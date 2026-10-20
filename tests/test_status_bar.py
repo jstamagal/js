@@ -11,7 +11,7 @@ import ai
 import pytest
 from prompt_toolkit.output import ColorDepth
 
-from js import model_client, runtime, screen, setcmd, settings
+from js import fset, model_client, runtime, screen, setcmd, settings
 from js.config import Config
 from js.model_client import ModelStreamResult
 from js.toolkit.core import ToolContext, TurnStatus
@@ -171,21 +171,22 @@ def test_turn_status_counts_bytes_only_until_the_first_token():
     assert status == TurnStatus()
 
 
-def test_status_style_uses_the_hex_given_and_falls_back_on_garbage():
-    assert "#000000" in screen.status_style("#ffffff", "#000000")
-    assert screen.status_style("red", "blue") == screen.STATUS_STYLE
+def test_status_style_is_the_fset_status_colours():
+    assert fset.set_entry("COLOR_STATUS_BACKGROUND", "#000000") is None
+    assert fset.set_entry("COLOR_STATUS_TEXT", "#ffffff") is None
+    assert "bg:#000000" in screen.status_style() and "#ffffff" in screen.status_style()
 
 
-def test_status_colour_settings_accept_only_hex():
+def test_status_colour_entries_accept_only_colours():
     live: dict = {}
-    assert setcmd.set_command(live, "ui.status_bg #000000").error is None
-    assert settings.get_dotted(live, ("ui", "status_bg"), None) == "#000000"
-    assert setcmd.set_command(live, "ui.status_fg white").error
-    assert setcmd.set_command(live, "ui.net 4").error
-    assert setcmd.set_command(live, "ui.net 3").error is None
+    assert setcmd.fset_command(live, "COLOR_STATUS_BACKGROUND #000000").error is None
+    assert fset.hex_for("COLOR_STATUS_BACKGROUND") == "#000000"
+    assert setcmd.fset_command(live, "COLOR_STATUS_TEXT white").error
+    assert setcmd.fset_command(live, "NET_DISPLAY 4").error
+    assert setcmd.fset_command(live, "NET_DISPLAY 3").error is None
 
 
-def test_status_bar_is_truecolor_and_repaints_on_set(monkeypatch):
+def test_status_bar_is_truecolor_and_repaints_on_fset(monkeypatch):
     """build_app asks for 24-bit colour even on TERM=linux, and the bar's style
     is read on each repaint. Application is replaced by a recorder."""
     captured: dict = {}
@@ -196,21 +197,17 @@ def test_status_bar_is_truecolor_and_repaints_on_set(monkeypatch):
 
     monkeypatch.setenv("TERM", "linux")
     monkeypatch.setattr(screen, "Application", Recorder)
-    live: dict = {}
     screen.build_app(
         prompt="> ", history=None, completer=None,
         on_line=None, on_interrupt=None, on_eof=None,
         status=lambda width: "",
-        status_colours=lambda: screen.status_style(
-            settings.get_dotted(live, ("ui", "status_fg"), screen.STATUS_FG),
-            settings.get_dotted(live, ("ui", "status_bg"), screen.STATUS_BG),
-        ),
     )
 
     assert captured["color_depth"] == ColorDepth.DEPTH_24_BIT
     style = captured["style"]
-    assert style.get_attrs_for_style_str("class:status").bgcolor == screen.STATUS_BG.lstrip("#")
-    setcmd.set_command(live, "ui.status_bg #000000")
+    before = fset.hex_for("COLOR_STATUS_BACKGROUND")
+    assert style.get_attrs_for_style_str("class:status").bgcolor == before.lstrip("#")
+    setcmd.fset_command({}, "COLOR_STATUS_BACKGROUND #000000")
     style.invalidation_hash()
     assert style.get_attrs_for_style_str("class:status").bgcolor == "000000"
 
@@ -279,10 +276,28 @@ def test_status_bar_line_never_raises_on_sparse_state(tmp_path, turn_active):
 
 def test_status_colour_survives_save_and_load(tmp_path):
     live = settings.seed_defaults()
-    assert setcmd.set_command(live, "ui.status_bg #000000").error is None
+    assert setcmd.fset_command(live, "COLOR_STATUS_BACKGROUND #000000").error is None
     path = tmp_path / "jsrc"
     settings.save_settings_to_jsrc(path, live)
+    fset.reset()
 
     reloaded = settings.seed_defaults()
     assert settings.load_jsrc_files([path], reloaded) == []
-    assert settings.get_dotted(reloaded, ("ui", "status_bg"), None) == "#000000"
+    assert fset.hex_for("COLOR_STATUS_BACKGROUND") == "#000000"
+
+
+def test_the_screen_text_colour_applies_without_a_background():
+    from prompt_toolkit.styles import Style
+
+    assert fset.set_entry("COLOR_TEXT", "#123456") is None
+    assert fset.hex_for("COLOR_BACKGROUND") is None
+    attrs = Style.from_dict({"screen": screen.screen_style()}).get_attrs_for_style_str("class:screen")
+    assert attrs.color == "123456" and not attrs.bgcolor
+
+
+def test_a_status_field_keeps_its_palette_colour():
+    assert fset.set_entry("STATUS_CONTEXT", "%C04ctx %s%C") is None
+    line = screen.status_line(100, **BAR)
+    red = fset.fg("PALETTE_04")
+    assert red and f"{red}ctx 121,000" in line
+    assert len(fset.plain(line)) == 100

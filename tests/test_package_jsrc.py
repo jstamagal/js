@@ -23,7 +23,7 @@ REPO = Path(__file__).resolve().parents[1]
 
 
 def _set_lines(text: str) -> list[str]:
-    return [line.split()[1] for line in text.splitlines() if line.startswith("set ")]
+    return [line.split()[1] for line in text.splitlines() if line.startswith(("set ", "fset "))]
 
 
 def _package_copy(tmp_path: Path, monkeypatch, **changes: str) -> Path:
@@ -156,7 +156,7 @@ def test_the_template_lists_every_setting_once_commented_at_its_stock_value():
     seen = []
     for line in settings.JSRC_TEMPLATE.read_text(encoding="utf-8").splitlines():
         assert not line.strip() or line.startswith("#"), line
-        if line.startswith("#set "):
+        if line.startswith(("#set ", "#fset ")):
             body = line[1:]
             seen.append(body.split()[1].lstrip("-"))
             store = settings.seed_defaults()
@@ -194,19 +194,19 @@ def test_set_dash_in_a_user_jsrc_runs_and_shows_the_package_value(monkeypatch, t
     user = tmp_path / "home" / ".js" / "jsrc"
     user.parent.mkdir(parents=True)
     user.write_text(
-        "set runtime.trace off\nset READ_LINES_MAX 33\nset INLINE_CODE off\n"
-        "set -runtime.trace\nset -READ_LINES_MAX\nset -INLINE_CODE\n",
+        "set TRANSCRIPT_LOG off\nset READ_LINES_MAX 33\nset INLINE_CODE off\n"
+        "set -TRANSCRIPT_LOG\nset -READ_LINES_MAX\nset -INLINE_CODE\n",
         encoding="utf-8",
     )
 
     cfg = from_env(save_session=False, cwd=project)
     state = {"messages": [], "system": "sys", "settings": copy.deepcopy(cfg.settings)}
 
-    assert cfg.trace is settings.default_value("runtime.trace")
+    assert cfg.transcript_log is settings.default_value("TRANSCRIPT_LOG")
     assert cfg.max_read_lines == settings.default_value("READ_LINES_MAX")
     assert cfg.allow_inline_code is settings.default_value("INLINE_CODE")
-    assert _show_value(cfg, state, "runtime.trace", capsys) == (
-        "on" if cfg.trace else "off"
+    assert _show_value(cfg, state, "TRANSCRIPT_LOG", capsys) == (
+        "on" if cfg.transcript_log else "off"
     )
     assert _show_value(cfg, state, "READ_LINES_MAX", capsys) == str(cfg.max_read_lines)
     assert _show_value(cfg, state, "INLINE_CODE", capsys) == (
@@ -258,12 +258,12 @@ def test_save_uncomments_changed_settings_in_place_and_leaves_the_rest(tmp_path)
 
 def test_save_comments_out_a_setting_set_back_to_its_stock_value(tmp_path):
     target = tmp_path / "jsrc"
-    target.write_text("# mine\nset FETCH_TIMEOUT 77\nset ui.net 0\n", encoding="utf-8")
+    target.write_text("# mine\nset FETCH_TIMEOUT 77\nfset NET_DISPLAY 0\n", encoding="utf-8")
     live = settings.seed_defaults()
-    setcmd.set_command(live, "ui.net 0")
+    setcmd.fset_command(live, "NET_DISPLAY 0")
 
     assert settings.save_settings_to_jsrc(target, live) == 1
-    assert target.read_text(encoding="utf-8") == "# mine\n#set FETCH_TIMEOUT 77\nset ui.net 0\n"
+    assert target.read_text(encoding="utf-8") == "# mine\n#set FETCH_TIMEOUT 77\nfset NET_DISPLAY 0\n"
     assert settings.save_settings_to_jsrc(target, live) == 0
 
 

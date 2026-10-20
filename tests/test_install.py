@@ -126,7 +126,7 @@ def test_a_routed_default_model_asks_nothing():
 
 
 def test_a_picked_model_becomes_model_id_in_the_jsrc_and_the_rest_stays():
-    _write_jsrc("# mine\nset MODEL deepseek/deepseek-v4-flash\nset ui.net 2\nalias x /help\n")
+    _write_jsrc("# mine\nset MODEL deepseek/deepseek-v4-flash\nfset NET_DISPLAY 2\nalias x /help\n")
     _login("mimo", ["mimo-v2", "mimo-v3"])
 
     chosen = install.ask_model({}, _answers("p"), pick=lambda: {"provider_id": "mimo", "model": "mimo-v3"},
@@ -134,7 +134,7 @@ def test_a_picked_model_becomes_model_id_in_the_jsrc_and_the_rest_stays():
 
     assert chosen == "mimo/mimo-v3"
     assert paths.global_config_file().read_text(encoding="utf-8") == (
-        "# mine\nset MODEL mimo/mimo-v3\nset ui.net 2\nalias x /help\n")
+        "# mine\nset MODEL mimo/mimo-v3\nfset NET_DISPLAY 2\nalias x /help\n")
     assert install.default_model({}) == ("mimo/mimo-v3", True)
 
 
@@ -173,14 +173,14 @@ def test_enter_or_a_cancelled_pick_leaves_the_jsrc_alone():
 
 def test_write_model_id_replaces_an_unset_line_and_appends_when_there_is_none(tmp_path):
     jsrc = tmp_path / "jsrc"
-    jsrc.write_text("set ui.net 2\nset -MODEL\n", encoding="utf-8")
+    jsrc.write_text("fset NET_DISPLAY 2\nset -MODEL\n", encoding="utf-8")
     settings.write_model_id(jsrc, "mimo/mimo-v3")
-    assert jsrc.read_text(encoding="utf-8") == "set ui.net 2\nset MODEL mimo/mimo-v3\n"
+    assert jsrc.read_text(encoding="utf-8") == "fset NET_DISPLAY 2\nset MODEL mimo/mimo-v3\n"
 
     bare = tmp_path / "bare"
-    bare.write_text("set ui.net 2", encoding="utf-8")
+    bare.write_text("fset NET_DISPLAY 2", encoding="utf-8")
     settings.write_model_id(bare, "mimo/mimo-v3")
-    assert bare.read_text(encoding="utf-8") == "set ui.net 2\nset MODEL mimo/mimo-v3\n"
+    assert bare.read_text(encoding="utf-8") == "fset NET_DISPLAY 2\nset MODEL mimo/mimo-v3\n"
 
 
 def test_write_model_id_uncomments_the_template_line_in_place(tmp_path):

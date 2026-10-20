@@ -8,10 +8,10 @@ finished top-level blocks commit once and are never redrawn; only the last,
 still-open block is live. Anywhere else it writes the cleaned text as it
 arrives.
 
-The tool renderers build the exchange a turn prints at `ui.tools` 0-3: a
+The tool renderers build the exchange a turn prints at TOOLS_DISPLAY 0-3: a
 header (mark, tool name, key argument, the other arguments dim), the program
 or output in a panel, a file or a diff as a numbered view, and a dim footer
-with the metrics. The colours are the `theme.*` settings.
+with the metrics. The colours are /fset's `COLOR_*` entries (`js.fset`).
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from rich.syntax import Syntax
 from rich.text import Text
 from rich.theme import Theme as _RichTheme
 
-from . import colors as C
+from . import fset
 from . import messages as msgs
 from . import settings as _settings
 
@@ -85,20 +85,26 @@ def clean(text: str) -> str:
 # grep of a saved transcript finds every exchange the screen showed.
 TOOL_MARKER = ">"
 
-# Chrome: harness-subroutine output, bold white on dark gray.
-CHROME = "\033[1;97;48;2;48;48;48m"
-CHROME_ERROR = "\033[1;91;48;2;48;48;48m"
-CODE_THEME = "ansi_dark"
+def chrome(text: str) -> str:
+    """Harness-subroutine output: bold COLOR_TEXT on COLOR_PANEL."""
+    return f"{fset.BOLD}{fset.fg('COLOR_TEXT')}{fset.bg('COLOR_PANEL')}{text}{fset.RESET}"
+
 
 # The two voices of a conversation. The user's line sits behind the input
-# prompt in bold; the answer opens with a dim mirrored glyph on its own line.
-PROMPT = f"{C.BOLD}{C.YELLOW}{msgs.INPUT_PROMPT}{C.RESET}"
-ASSISTANT_MARK = f"{C.GREY}❮{C.RESET}\n"
+# prompt in bold; the answer opens with a mirrored glyph on its own line.
+def prompt() -> str:
+    """The input prompt, in COLOR_USER_MARK."""
+    return f"{fset.BOLD}{fset.paint('COLOR_USER_MARK', msgs.INPUT_PROMPT)}"
+
+
+def assistant_mark() -> str:
+    """The mark an answer opens with, in COLOR_AGENT_MARK."""
+    return fset.paint("COLOR_AGENT_MARK", "❮") + "\n"
 
 
 def user_line(text: str) -> str:
     """One user message as the conversation shows it."""
-    return f"{PROMPT}{C.BOLD}{text}{C.RESET}\n"
+    return f"{prompt()}{fset.BOLD}{fset.paint('COLOR_USER', text)}{fset.RESET}\n"
 
 
 def echo_user(text: str) -> None:
@@ -113,18 +119,18 @@ def _setting(settings: Any, key: str) -> Any:
 
 
 def tools_level(settings: Any) -> int:
-    """`ui.tools` from live settings: 0 nothing, 1 what matters, 2 preview, 3 whole."""
-    level = _setting(settings, "ui.tools")
-    return level if isinstance(level, int) and level in range(4) else _settings.default_value("ui.tools")
+    """TOOLS_DISPLAY from live settings: 0 nothing, 1 what matters, 2 preview, 3 whole."""
+    level = _setting(settings, "TOOLS_DISPLAY")
+    return level if isinstance(level, int) and level in range(4) else _settings.default_value("TOOLS_DISPLAY")
 
 
 def preview_lines(settings: Any) -> int:
-    lines = _setting(settings, "ui.tools_preview_lines")
-    return lines if isinstance(lines, int) and lines > 0 else _settings.default_value("ui.tools_preview_lines")
+    lines = _setting(settings, "TOOLS_PREVIEW_LINES")
+    return lines if isinstance(lines, int) and lines > 0 else _settings.default_value("TOOLS_PREVIEW_LINES")
 
 
 def markdown_enabled(settings: Any) -> bool:
-    return _setting(settings, "ui.markdown") is not False
+    return _setting(settings, "MARKDOWN") is not False
 
 
 def terminal_width() -> int:
@@ -151,13 +157,31 @@ def _rendered_text(console: Console) -> str:
     return "\n".join(lines)
 
 
+def _markdown_styles(colours: Theme) -> dict[str, str]:
+    """Rich's Markdown styles that carry a colour, in the theme's colours."""
+    return {
+        "markdown.code": f"{colours.code} on {colours.panel}",
+        "markdown.code_block": colours.panel_text,
+        "markdown.block_quote": colours.dim,
+        "markdown.list": colours.highlight,
+        "markdown.item.number": colours.highlight,
+        "markdown.h2": f"underline {colours.highlight}",
+        "markdown.h3": f"bold {colours.highlight}",
+        "markdown.h4": f"italic {colours.highlight}",
+        "markdown.link": colours.highlight,
+        "markdown.link_url": f"underline {colours.dim}",
+        "markdown.table.border": colours.separator,
+        "markdown.table.header": f"not bold {colours.highlight}",
+        "markdown.kbd": f"bold {colours.highlight}",
+    }
+
+
 def render_markdown(source: str, width: int, settings: Any = None) -> str:
     """ANSI rendering of Markdown source at `width` columns: no blank lines
     before or after, ending in one newline. Inline code is a chip: its text in
-    `theme.code` on the panel background, a space of padding each side."""
-    colours = theme(settings)
-    console = _render_console(width, {"markdown.code": f"{colours.code} on {colours.panel}"})
-    document = Markdown(source, code_theme=CODE_THEME, hyperlinks=False)
+    COLOR_CODE on COLOR_PANEL, a space of padding each side."""
+    console = _render_console(width, _markdown_styles(theme(settings)))
+    document = Markdown(source, code_theme=fset.code_style(), hyperlinks=False)
     for token in document.parsed:
         for child in token.children or ():
             if child.type == "code_inline":
@@ -433,9 +457,10 @@ _PAD = 1
 
 @dataclass(frozen=True)
 class Theme:
-    """The colours of a tool exchange, each a `theme.<role>` setting."""
+    """The colours of a tool exchange and an answer, each an /fset colour entry."""
 
     accent: str      # tool name, running mark
+    highlight: str   # Markdown headings, links, list numbers
     ok: str          # finished mark
     error: str       # failed mark, error text
     warn: str        # stderr
@@ -445,10 +470,19 @@ class Theme:
     added: str       # diff: added line
     removed: str     # diff: removed line
     code: str        # inline code in an answer
+    separator: str   # rules and table borders
+
+
+_THEME_ROLES = {
+    "accent": "COLOR_TOOL", "highlight": "COLOR_ACCENT", "ok": "COLOR_OK", "error": "COLOR_ERROR", "warn": "COLOR_WARN",
+    "dim": "COLOR_DIM", "panel": "COLOR_PANEL", "panel_text": "COLOR_TOOL_OUTPUT",
+    "added": "COLOR_ADDED", "removed": "COLOR_REMOVED", "code": "COLOR_CODE", "separator": "COLOR_SEPARATOR",
+}
 
 
 def theme(settings: Any = None) -> Theme:
-    return Theme(**{role: str(_setting(settings, f"theme.{role}")) for role in Theme.__dataclass_fields__})
+    """The colours /fset gives now; ``settings`` is unused, kept for callers."""
+    return Theme(**{field: fset.hex_for(role) or "default" for field, role in _THEME_ROLES.items()})
 
 
 def for_transcript(rendered: str) -> str:
@@ -683,7 +717,7 @@ def _highlight(lines: list[str], lexer: str) -> list[Text]:
     if lexer in ("text", "default"):
         return [Text(line) for line in lines]
     code = "\n".join(lines)
-    parts = list(Syntax(code, lexer, theme=CODE_THEME, background_color="default")
+    parts = list(Syntax(code, lexer, theme=fset.code_style(), background_color="default")
                  .highlight(code).split("\n", allow_blank=True))[:len(lines)]
     return parts if len(parts) == len(lines) else [Text(line) for line in lines]
 
@@ -729,12 +763,12 @@ class _Block:
         th = self.theme
         args = args if isinstance(args, dict) else {}
         row = Text.assemble((f"{self.state} ", f"bold {self.colour()}"),
-                            (f" {clean(name)} ", f"bold black on {th.accent}"))
+                            (f" {clean(name)} ", f"bold {th.panel} on {th.accent}"))
         if len(tail) > self.inner // 2:
             tail = tail[:self.inner // 2 - 1] + "…"
         reserve = len(tail) + 2 if tail else 0
         if malformed:
-            row.append(" " + msgs.TOOL_ARGS_UNPARSED.text(), th.error)
+            row.append(" " + msgs.TOOL_ARGS_UNPARSED.body(), th.error)
         if about is None:
             about = key_argument(name, args, max(self.inner - row.cell_len - reserve - 1, _KEY_ARG_MIN))
         if about:
@@ -789,7 +823,7 @@ class _Block:
 
 
 def _hidden(count: int) -> str:
-    return msgs.TOOL_MORE_LINES.text(count=count)
+    return msgs.TOOL_MORE_LINES.body(count=count)
 
 
 def _names(settings: Any, key: str) -> frozenset[str]:
@@ -801,10 +835,10 @@ _SHELL_JOIN = re.compile(r"\s*(?:&&|\|\||;|\|)\s*")
 
 
 def _looks_around(command: Any, settings: Any) -> bool:
-    """A shell command made only of `ui.shell_quiet` commands, writing nowhere."""
+    """A shell command made only of SHELL_QUIET commands, writing nowhere."""
     if not isinstance(command, str) or not command.strip() or "\n" in command.strip() or ">" in command:
         return False
-    quiet = _names(settings, "ui.shell_quiet")
+    quiet = _names(settings, "SHELL_QUIET")
     for part in _SHELL_JOIN.split(command.strip()):
         words = part.split()
         if not words or (words[0] not in quiet and " ".join(words[:2]) not in quiet):
@@ -813,7 +847,7 @@ def _looks_around(command: Any, settings: Any) -> bool:
 
 
 def call_kind(name: str, args: dict | None, settings: Any = None) -> str:
-    """What `ui.tools` 1 shows of a call.
+    """What TOOLS_DISPLAY 1 shows of a call.
 
     quiet    one row, and a run of them folds into one row per tool
     command  its output while it runs, one row once it ends
@@ -821,7 +855,7 @@ def call_kind(name: str, args: dict | None, settings: Any = None) -> str:
     loud     its result
     """
     args = args if isinstance(args, dict) else {}
-    if name in _names(settings, "ui.tools_quiet"):
+    if name in _names(settings, "TOOLS_QUIET"):
         return "quiet"
     if name == "shell":
         return "quiet" if _looks_around(args.get("command"), settings) else "command"
@@ -941,7 +975,7 @@ def _diff_view(output: ToolOutput, colours: Theme) -> tuple[list[tuple[str, Text
     return rows, summary.group(1)
 
 
-# The argument a call's own text is in, shown at `ui.tools` 1 in place of the
+# The argument a call's own text is in, shown at TOOLS_DISPLAY 1 in place of the
 # result, which only acknowledges it.
 _SAID_ARG: dict[str, str] = {"send": "text", "post_task": "body", "finish_task": "result"}
 # Rows of a running command's output kept on screen.
@@ -953,7 +987,7 @@ def _last_line(output: ToolOutput) -> str:
 
 
 def _program(block: _Block, name: str, args: dict, level: int, preview: int) -> None:
-    """The call's program under its header at `ui.tools` 2 and 3: a `write`'s
+    """The call's program under its header at TOOLS_DISPLAY 2 and 3: a `write`'s
     file as a numbered view, any other body of more than one line as a panel."""
     body = args.get(_BODY_ARG.get(name, ""))
     if not isinstance(body, str) or not body.strip():
@@ -987,7 +1021,7 @@ def _capped(block: _Block, rows: list[Any], limit: int, draw: Callable[[list[Any
 
 def _finished_brief(block: _Block, name: str, args: dict, output: ToolOutput, kind: str,
                     preview: int, malformed: bool) -> None:
-    """A finished exchange at `ui.tools` 1."""
+    """A finished exchange at TOOLS_DISPLAY 1."""
     colours = block.theme
     command = kind == "command" or name == "shell"
     if output.failed:
@@ -1004,7 +1038,7 @@ def _finished_brief(block: _Block, name: str, args: dict, output: ToolOutput, ki
         block.header(name, args, malformed=malformed)
         _capped(block, _result_rows(output, colours), preview, lambda rows: block.panel(rows, wrap=True))
         if output.tries is not None:
-            block.note(msgs.TOOL_TRIES_LEFT.text(left=output.tries[0], allowed=output.tries[1]), colours.error)
+            block.note(msgs.TOOL_TRIES_LEFT.body(left=output.tries[0], allowed=output.tries[1]), colours.error)
         return
     if kind == "quiet":
         block.header(name, args, malformed=malformed)
@@ -1033,7 +1067,7 @@ def _finished_brief(block: _Block, name: str, args: dict, output: ToolOutput, ki
 
 def _finished_full(block: _Block, name: str, args: dict, output: ToolOutput, level: int,
                    preview: int, malformed: bool) -> None:
-    """A finished exchange at `ui.tools` 2 and 3: the program, the result as
+    """A finished exchange at TOOLS_DISPLAY 2 and 3: the program, the result as
     a file view, a diff or a panel, and its metrics."""
     colours = block.theme
     block.header(name, args, malformed=malformed)
@@ -1042,7 +1076,7 @@ def _finished_full(block: _Block, name: str, args: dict, output: ToolOutput, lev
     limit = preview if level == 2 else max(len(output.lines), 1)
     note_style = colours.error if output.failed else ""
     if not output.lines:
-        block.note(metrics(output) if output.failed else msgs.TOOL_NO_OUTPUT.text(), note_style)
+        block.note(metrics(output) if output.failed else msgs.TOOL_NO_OUTPUT.body(), note_style)
         return
     read = _read_view(output, args) if name == "read" else None
     diff = _diff_view(output, colours) if name == "patch" else None
@@ -1067,7 +1101,7 @@ def render_exchange(name: str, args: dict | None, result: Any = None, *, level: 
     running: `live` is the tail of its output so far, `elapsed` how long it
     has run.
 
-    ui.tools  1  what `call_kind` says of the call: a quiet call is one row,
+    TOOLS_DISPLAY  1  what `call_kind` says of the call: a quiet call is one row,
                  a command its last line, a patch its diff, anything else its
                  result; a failure shows its error
               2  the program and the first `preview` result lines, long ones cut
@@ -1082,7 +1116,7 @@ def render_exchange(name: str, args: dict | None, result: Any = None, *, level: 
         if gap:
             block.blank()
         block.header(name, args, malformed=malformed,
-                     tail=msgs.TOOL_RUNNING.text(elapsed=elapsed) if elapsed else "")
+                     tail=msgs.TOOL_RUNNING.body(elapsed=elapsed) if elapsed else "")
         if level >= 2:
             _program(block, name, args, level, preview)
         if live:
@@ -1130,8 +1164,8 @@ def render_exchanges(messages: list[dict], count: int, *, width: int,
                      level: int, preview: int, markdown: bool = True,
                      settings: Any = None) -> str:
     """The last `count` exchanges of `messages` as a turn prints them: the
-    user's line as `user_line` draws it, each tool exchange at `ui.tools`
-    `level`, the answer behind `ASSISTANT_MARK` as Markdown at `width` (plain
+    user's line as `user_line` draws it, each tool exchange at TOOLS_DISPLAY
+    `level`, the answer behind `assistant_mark()` as Markdown at `width` (plain
     text when `markdown` is off). An exchange starts at a user message that was
     not steered into a turn."""
     starts = [i for i, message in enumerate(messages)
@@ -1149,7 +1183,7 @@ def render_exchanges(messages: list[dict], count: int, *, width: int,
             out.append(user_line(text))
         elif role == "assistant":
             if text.strip():
-                out.append(ASSISTANT_MARK)
+                out.append(assistant_mark())
                 out.append(render_markdown(text, width) if markdown else text + "\n")
             for call in message.get("tool_calls") or []:
                 name, args = _call_args(call)

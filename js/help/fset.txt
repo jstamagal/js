@@ -1,0 +1,140 @@
+# What `/help fset NAME` prints: each /fset entry's NAME alone on a line,
+# then its help, indented four spaces. Lines starting with # are comments.
+# A colour is #rrggbb, a palette slot 00-98, or $NAME of another colour;
+# a|b takes the first that resolves. PALETTE_00..PALETTE_98 are the mIRC
+# palette; every message's format is named after its js/messages.py entry.
+
+REASONING_DISPLAY
+    Reasoning display: 0 hidden, 1 stream then collapse, 2 leave visible, 3
+    leave visible with token counts. The reasoning_toggle key, Ctrl-O unless
+    KEYBINDS_FILE moves it, folds and unfolds it in the async screen.
+    Display only; session reasoning is always retained.
+
+NET_DISPLAY
+    Network display in the async screen: 0 nothing, 1 failures, 2 also
+    Connecting/Connected lines and a response byte counter on the status bar
+    until the first token, 3 also retries, catalog refreshes and per-call
+    stream stats.
+
+TOOLS_DISPLAY
+    Tool exchange display: 0 nothing; 1 what matters: quiet calls fold into
+    one row per tool, a command shows its output while it runs and one row
+    after, a patch shows its diff, a failure its error; 2 every call with
+    the first TOOLS_PREVIEW_LINES result lines; 3 every call whole.
+
+TOOLS_QUIET
+    Tools whose calls TOOLS_DISPLAY 1 shows as one row and folds: a JSON
+    list of tool names.
+
+SHELL_QUIET
+    Shell commands TOOLS_DISPLAY 1 treats as quiet, by first word or first
+    two: a JSON list.
+
+TOOLS_PREVIEW_LINES
+    Lines of a result, a diff or a program shown before the rest is hidden
+    at TOOLS_DISPLAY 1 and 2.
+
+MARKDOWN
+    Render assistant Markdown on a terminal: finished blocks are highlighted
+    once, the open block stays live. Off writes the text as it arrives.
+    Output that is not a terminal is always plain text.
+
+RESUME_EXCHANGES
+    Exchanges of a resumed session the REPL shows before its prompt, drawn
+    as a turn draws them. 0 shows none.
+
+TRACE
+    Pretty-print the tool-call trace line as the model runs.
+
+KERNEL_VERBOSITY
+    How much of each kernel/toolbox call is rendered to your terminal.
+    quiet: errors and interrupts only. normal: code, output, timing,
+    namespace. verbose: stdout, stderr and display split out, plus kernel
+    lifecycle and toolbox activity. Affects only what you see; the model
+    always receives the full result.
+
+KERNEL_LINES_MAX
+    Line cap per section of the kernel's terminal render, so a 4000-line
+    cell cannot scroll the screen away. The hidden count is always shown,
+    and the model still gets the untrimmed output.
+
+THEME
+    The built-in theme: a palette, colours and formats under the entries set
+    here. claude, crush, bitchx, github, paper or splash3.
+
+HOST_COLOR
+    This box's colour, for the prompt, the speaker marks and the status
+    bar's accent. Empty leaves the theme's own.
+
+CODE_STYLE
+    The Pygments style code in answers and tool exchanges is highlighted in.
+
+COLOR_BACKGROUND
+    The screen's background in the async REPL. Empty leaves the terminal's
+    own.
+
+COLOR_TEXT
+    Ordinary text js draws itself.
+
+COLOR_DIM
+    Metadata: arguments, line numbers, metrics.
+
+COLOR_USER
+    The operator's lines.
+
+COLOR_USER_MARK
+    The input prompt and the operator's speaker mark.
+
+COLOR_AGENT
+    The agent's colour, its mark's fallback.
+
+COLOR_AGENT_MARK
+    The agent's speaker mark.
+
+COLOR_SYSTEM
+    $BANNER on the lines where js reports its own state.
+
+COLOR_WARN
+    The values of a warning, and standard error in a tool exchange.
+
+COLOR_ERROR
+    The values of a failure, a failed call's mark and its error text.
+
+COLOR_OK
+    A finished call's mark.
+
+COLOR_TOOL
+    A tool's name in a tool exchange.
+
+COLOR_TOOL_OUTPUT
+    A tool's output in a tool exchange.
+
+COLOR_PANEL
+    The background behind tool output and a tool's name.
+
+COLOR_ACCENT
+    Highlights: Markdown headings, links, list numbers.
+
+COLOR_ADDED
+    Added lines of a diff.
+
+COLOR_REMOVED
+    Removed lines of a diff.
+
+COLOR_CODE
+    Inline code in an answer, drawn on COLOR_PANEL.
+
+COLOR_REASONING
+    The model's reasoning text.
+
+COLOR_SEPARATOR
+    Rules and table borders.
+
+COLOR_STATUS_BACKGROUND
+    The status bar's background.
+
+COLOR_STATUS_TEXT
+    The status bar's text.
+
+COLOR_STATUS_ACCENT
+    The status bar's clock.

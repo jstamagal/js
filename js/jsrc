@@ -20,27 +20,17 @@ set BANNER ***
 set -MOTD_FILE
 set -MOTD_DIR
 
+# --- display: /fset entries ---
+fset REASONING_DISPLAY 2
+fset NET_DISPLAY 2
+fset TOOLS_DISPLAY 1
+fset TOOLS_PREVIEW_LINES 12
+fset TOOLS_QUIET ["read", "fs_search", "ast_search", "lsp", "fetch", "browse", "browser_probe", "exa_search", "serper_search", "tavily_search", "docs_search", "claim", "release", "subscribe", "wake_me", "who", "tasks", "take_task", "tool_discovery", "skill", "undo", "terminal_snapshot"]
+fset SHELL_QUIET ["cd", "ls", "cat", "head", "tail", "wc", "pwd", "tree", "stat", "file", "which", "find", "fd", "grep", "rg", "du", "df", "ps", "echo", "sort", "uniq", "git status", "git log", "git diff", "git show", "git branch"]
+fset MARKDOWN on
+fset RESUME_EXCHANGES 3
+
 # --- ui ---
-set ui.reasoning 2
-set ui.net 2
-set ui.status_bg #00007f
-set ui.status_fg #ffffff
-set ui.tools 1
-set ui.tools_preview_lines 12
-set ui.tools_quiet ["read", "fs_search", "ast_search", "lsp", "fetch", "browse", "browser_probe", "exa_search", "serper_search", "tavily_search", "docs_search", "claim", "release", "subscribe", "wake_me", "who", "tasks", "take_task", "tool_discovery", "skill", "undo", "terminal_snapshot"]
-set ui.shell_quiet ["cd", "ls", "cat", "head", "tail", "wc", "pwd", "tree", "stat", "file", "which", "find", "fd", "grep", "rg", "du", "df", "ps", "echo", "sort", "uniq", "git status", "git log", "git diff", "git show", "git branch"]
-set theme.accent #1fb4ff
-set theme.ok #00c555
-set theme.error #ff8aa7
-set theme.warn #e59500
-set theme.dim #b8b4c2
-set theme.panel #2d2c35
-set theme.panel_text #e1e0e5
-set theme.added #00c555
-set theme.removed #ff8aa7
-set theme.code #ff8aa7
-set ui.markdown on
-set ui.resume_exchanges 3
 set EDITING_MODE emacs
 set PASTE_IMAGE_KEY c-v
 set PASTE_COLLAPSE_LINES 10
@@ -89,8 +79,8 @@ set SWARM_ACTIVE_MAX 0
 
 # --- kernel ---
 set PYTHON_KERNEL off
-set kernel.verbosity normal
-set kernel.render_max_lines 24
+fset KERNEL_VERBOSITY normal
+fset KERNEL_LINES_MAX 24
 set PYTHON_KERNEL_WAIT 5
 
 # --- shell ---
@@ -103,7 +93,7 @@ set JAIL_HIDE ["~/.js", "~/.ssh", "~/.gnupg", "~/.netrc", "~/.aws", "~/.config/g
 
 # --- runtime ---
 set DEBUG_LOG off
-set runtime.trace on
+fset TRACE on
 set PARALLEL_TOOLS_MAX 8
 set RETRY_COUNT_MAX 10
 set RETRY_WAIT_MAX 120

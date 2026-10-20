@@ -292,7 +292,7 @@ def test_cancel_mid_batch_keeps_finished_results_and_starts_nothing_new(tmp_path
 def test_parallel_exchanges_print_whole(capsys, tmp_path):
     probe = Probe()
     context = ToolContext(cwd=tmp_path, max_parallel_tools=8)
-    context.config = SimpleNamespace(settings={"ui": {"tools": 2, "tools_preview_lines": 3}})
+    context.config = SimpleNamespace(settings={"TOOLS_DISPLAY": 2, "TOOLS_PREVIEW_LINES": 3})
 
     def lines(label: str, context=None) -> str:
         probe.enter()
@@ -319,7 +319,7 @@ def test_parallel_exchanges_print_whole(capsys, tmp_path):
 
 def test_parallel_reads_at_ui_tools_one_share_a_row_that_names_each_file(capsys, tmp_path):
     context = ToolContext(cwd=tmp_path, max_parallel_tools=8)
-    context.config = SimpleNamespace(settings={"ui": {"tools": 1}})
+    context.config = SimpleNamespace(settings={"TOOLS_DISPLAY": 1})
 
     def read(file_path: str, context=None) -> str:
         time.sleep(0.02)

@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from js import cli, colors as C, commit_helper, home, paths, settings, stream_transport, tool_binaries
+from js import cli, commit_helper, fset, home, paths, settings, stream_transport, tool_binaries
 from js import tooldiag, toolstats
 from js import messages as msgs
 from js.promptexpand import expand_prompt
@@ -34,13 +34,13 @@ def _plain(text: str) -> str:
 
 
 def test_a_banner_line_starts_with_the_slot_and_a_plain_line_does_not(monkeypatch):
-    monkeypatch.setattr(msgs, "BANNER", "@@")
+    monkeypatch.setattr(fset, "banner_text", lambda: "@@")
     assert _plain(msgs.Message("Model: {model}").line(model="m")).startswith("@@ ")
     assert not _plain(msgs.Message("{model}", banner=False).line(model="m")).startswith("@@")
 
 
 def test_command_output_reaches_the_screen_through_the_slot(monkeypatch, capsys):
-    monkeypatch.setattr(msgs, "BANNER", "@@")
+    monkeypatch.setattr(fset, "banner_text", lambda: "@@")
     state = {"provider_id": None, "provider_base_url": None, "provider_api_key": None}
     cli._cmd_baseurl("https://example.test/v1", state, object())
     cli._handle_command("/alias nope", {"aliases": {}}, object())
@@ -50,7 +50,7 @@ def test_command_output_reaches_the_screen_through_the_slot(monkeypatch, capsys)
 
 
 def test_network_lines_go_through_the_slot(monkeypatch):
-    monkeypatch.setattr(msgs, "BANNER", "@@")
+    monkeypatch.setattr(fset, "banner_text", lambda: "@@")
     lines: list[str] = []
     stream_transport.install_sink(stream_transport.NetSink(level=lambda: 2, emit=lines.append))
     try:
@@ -60,21 +60,24 @@ def test_network_lines_go_through_the_slot(monkeypatch):
     assert lines and all(_plain(line).startswith("@@ ") for line in lines)
 
 
-@pytest.mark.parametrize(("severity", "colour"), [(msgs.GRAVE, C.BR_RED), (msgs.WARN, C.BR_YELLOW)])
-def test_severity_paints_the_holes_not_the_line(severity, colour):
+@pytest.mark.parametrize(("severity", "role"), [(msgs.GRAVE, "COLOR_ERROR"), (msgs.WARN, "COLOR_WARN")])
+def test_severity_paints_the_holes_not_the_line(severity, role):
+    colour = fset.fg(role)
     line = msgs.Message("Model {model} not saved: {error}", severity).line(model="m1", error="disk full")
-    assert f"{colour}m1{C.RESET}" in line
-    assert f"{colour}disk full{C.RESET}" in line
+    assert f"{colour}m1{fset.RESET}" in line
+    assert f"{colour}disk full{fset.RESET}" in line
     assert f"{colour}Model" not in line
 
 
 def test_a_message_without_holes_is_painted_whole():
     line = msgs.Message("Prompt is empty.", msgs.GRAVE).line()
-    assert line == msgs.banner(f"{C.BR_RED}Prompt is empty.{C.RESET}")
+    assert _plain(line) == msgs.banner("Prompt is empty.")
+    assert line.endswith(f"{fset.fg('COLOR_ERROR')} Prompt is empty.{fset.RESET}")
 
 
-def test_info_is_not_coloured():
-    assert "\x1b" not in msgs.Message("Model: {model}").line(model="m")
+def test_info_colours_only_the_slot():
+    line = msgs.Message("Model: {model}").line(model="m")
+    assert line == fset.paint("COLOR_SYSTEM", fset.banner_text()) + " Model: m"
 
 
 def test_format_specs_and_conversions_survive_painting():
@@ -83,7 +86,7 @@ def test_format_specs_and_conversions_survive_painting():
 
 
 def test_text_is_the_message_without_slot_or_colour(monkeypatch):
-    monkeypatch.setattr(msgs, "BANNER", "@@")
+    monkeypatch.setattr(fset, "banner_text", lambda: "@@")
     text = msgs.Message("Model {model} not saved", msgs.GRAVE).text(model="m1")
     assert "@@" not in text and "\x1b" not in text and "m1" in text
 
@@ -91,7 +94,7 @@ def test_text_is_the_message_without_slot_or_colour(monkeypatch):
 @pytest.mark.parametrize("name", sorted(_entries()))
 def test_no_entry_carries_the_slot_a_severity_word_or_a_paren(name):
     template = _entries()[name].template
-    assert msgs.BANNER not in template
+    assert settings.default_value("BANNER") not in template
     assert "(" not in template and ")" not in template
     assert not any(word in template.lower() for word in DEAD)
 
@@ -135,7 +138,7 @@ def test_no_print_in_js_carries_a_dead_word_or_the_slot():
         for call in _screen_calls(tree):
             for text in _string_parts(call):
                 lowered = text.lower()
-                if msgs.BANNER in text or any(word in lowered for word in DEAD):
+                if settings.default_value("BANNER") in text or any(word in lowered for word in DEAD):
                     found.append(f"{path.relative_to(JS_ROOT)}:{getattr(call, 'lineno', 0)}: {text!r}")
     assert found == []
 
@@ -170,7 +173,7 @@ def test_command_line_help_and_command_docs_name_an_entry():
 
 def test_the_slot_is_spelled_only_in_messages():
     spelled = [str(path.relative_to(JS_ROOT)) for path in _modules()
-               if path.name != "messages.py" and f'"{msgs.BANNER}' in path.read_text(encoding="utf-8")]
+               if path.name != "messages.py" and f'"{settings.default_value("BANNER")}' in path.read_text(encoding="utf-8")]
     assert spelled == []
 
 
@@ -273,9 +276,9 @@ def test_a_command_refusal_shows_in_its_entry_severity(monkeypatch):
 
     usage, failure = terminal.getvalue().splitlines()
     assert usage == msgs.USAGE.line(usage="/compact-auto on|off")
-    assert "\x1b" not in usage
+    assert fset.fg("COLOR_ERROR") not in usage and fset.fg("COLOR_WARN") not in usage
     assert failure == msgs.SAVE_FAILED.line(error="disk full")
-    assert msgs.SEVERITY_COLOR[msgs.SAVE_FAILED.severity] in failure
+    assert fset.fg(msgs.SEVERITY_ROLE[msgs.SAVE_FAILED.severity]) in failure
 
 
 def test_a_refused_home_move_shows_in_its_entry_severity(tmp_path):
@@ -292,7 +295,7 @@ def test_a_refused_home_move_shows_in_its_entry_severity(tmp_path):
     said = home.describe(steps[0], apply=True)
     assert said.message is msgs.HOME_REFUSED
     assert terminal.getvalue() == said.message.line(**said.fields) + "\n"
-    assert msgs.SEVERITY_COLOR[msgs.HOME_REFUSED.severity] in terminal.getvalue()
+    assert fset.fg(msgs.SEVERITY_ROLE[msgs.HOME_REFUSED.severity]) in terminal.getvalue()
 
 
 def test_offline_compaction_reports_through_the_slot(monkeypatch, capsys):

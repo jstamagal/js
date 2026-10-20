@@ -43,7 +43,7 @@ def make_state() -> dict:
 def test_load_applies_slashless_script_lines(tmp_path):
     script = tmp_path / "boot.irc"
     script.write_text(
-        "set runtime.trace off\n"
+        "set TRANSCRIPT_LOG off\n"
         "set EXTRA_PARAMS.organization ./wiki\n",
         encoding="utf-8",
     )
@@ -51,7 +51,7 @@ def test_load_applies_slashless_script_lines(tmp_path):
 
     assert cli._handle_command("/load boot.irc", state, make_cfg(tmp_path)) is True
 
-    assert settings.get_dotted(state["settings"], ("runtime", "trace")) is False
+    assert settings.get_dotted(state["settings"], ("TRANSCRIPT_LOG",)) is False
     assert settings.get_dotted(state["settings"], ("EXTRA_PARAMS", "organization")) == "./wiki"
 
 
@@ -143,7 +143,7 @@ def test_load_runs_every_command_in_the_table(tmp_path, monkeypatch):
         "model deepseek-chat\n"
         "alias ca compact-auto $*\n"
         "ca off\n"
-        "on turn_start set runtime.trace on\n",
+        "on turn_start set TRANSCRIPT_LOG on\n",
         encoding="utf-8",
     )
     state = make_state()
@@ -154,7 +154,7 @@ def test_load_runs_every_command_in_the_table(tmp_path, monkeypatch):
     assert state["model"] == "deepseek-chat"
     assert state["aliases"] == {"ca": "compact-auto $*"}
     assert settings.get_dotted(state["settings"], ("COMPACTION_AUTO",)) is False
-    assert [hook.handler for hook in state["events"].handlers_for("turn_start")] == ["set runtime.trace on"]
+    assert [hook.handler for hook in state["events"].handlers_for("turn_start")] == ["set TRANSCRIPT_LOG on"]
 
 
 def test_on_registers_handlers_against_typed_event_names():

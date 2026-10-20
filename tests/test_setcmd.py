@@ -28,7 +28,7 @@ def _changed(key: str, value: str) -> str:
         ),
         ("INLINE_CODE_TIMEOUT", "300", 300),
         ("COMPACTION_WARN_AT", "0.75", 0.75),
-        ("runtime.trace", "off", False),
+        ("TRANSCRIPT_LOG", "off", False),
         (
             "TOOL_ALIASES",
             '[{"match":["openai"],"aliases":{"read":"r"}}]',
@@ -236,13 +236,13 @@ def test_bool_off_is_valid_but_no_longer_a_magic_clear_token_for_other_types():
     # `set -key` (js/setcmd.py apply_unset) is the only way to clear one.
     live_settings = settings.seed_defaults()
 
-    bool_result = setcmd.set_command(live_settings, "runtime.trace off")
+    bool_result = setcmd.set_command(live_settings, "TRANSCRIPT_LOG off")
     int_result = setcmd.set_command(live_settings, "OUTPUT_TOKENS_MAX 123")
     rejected = setcmd.set_command(live_settings, "OUTPUT_TOKENS_MAX off")
 
     assert bool_result.error is None
-    assert bool_result.lines == [_changed("RUNTIME.TRACE", "off")]
-    assert settings.get_dotted(live_settings, ("runtime", "trace")) is False
+    assert bool_result.lines == [_changed("TRANSCRIPT_LOG", "off")]
+    assert settings.get_dotted(live_settings, ("TRANSCRIPT_LOG",)) is False
     assert int_result.error is None
     assert int_result.lines == [_changed("OUTPUT_TOKENS_MAX", "123")]
     assert rejected.error == "OUTPUT_TOKENS_MAX: expected an integer"
@@ -544,10 +544,11 @@ def test_a_retired_dotted_name_in_a_kept_section_is_refused(key):
     assert live_settings == before
 
 
-def test_a_dotted_setting_takes_the_name_it_is_shown_under():
+def test_a_display_setting_takes_its_name_in_any_case_under_fset():
     live_settings = settings.seed_defaults()
-    assert setcmd.set_command(live_settings, "UI.TOOLS 3").error is None
-    assert live_settings["ui"]["tools"] == 3
+    assert setcmd.fset_command(live_settings, "tools_display 3").error is None
+    assert live_settings["TOOLS_DISPLAY"] == 3
+    assert setcmd.set_command(live_settings, "tools_display 2").error
 
 
 def test_a_map_child_takes_its_setting_name_in_any_case():
@@ -588,5 +589,22 @@ def test_a_config_takes_a_display_setting_and_map_contents(tmp_path):
 
     from test_lazy_tool_discovery import _cfg
 
-    store = {"runtime": {"trace": True}, "EXTRA_PARAMS": {"a": {"b": 1}}, "CONTEXT_SIZE_PER_MODEL": {"x/y": 9}}
+    store = {"TRACE": True, "EXTRA_PARAMS": {"a": {"b": 1}}, "CONTEXT_SIZE_PER_MODEL": {"x/y": 9}}
     assert replace(_cfg(tmp_path), settings=store).settings == store
+
+
+def test_fset_rows_draw_through_their_own_format():
+    live = settings.seed_defaults()
+    assert setcmd.fset_command(live, "FSET_VALUE <%s|%s>").error is None
+    assert setcmd.fset_command(live, "FSET_EMPTY <%s>").error is None
+    assert setcmd.fset_command(live, "NET_DISPLAY").lines == ["<NET_DISPLAY|2>"]
+    assert setcmd.fset_command(live, "HOST_COLOR").lines == ["<HOST_COLOR>"]
+
+
+def test_a_live_value_annotation_draws_through_its_format():
+    from js import fset
+
+    fset.set_entry("SETTING_LIVE", "%s OVERRIDE %s")
+    overlay = {"MODEL": setcmd.LiveValue(display="m1", source="--model flag")}
+    lines = setcmd.show_lines_effective(settings.seed_defaults(), overlay, "MODEL").lines
+    assert lines and "OVERRIDE --model flag" in lines[0]

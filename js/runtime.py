@@ -27,7 +27,6 @@ from . import events as event_mod
 from . import login_defaults, model_client, memory
 import ai
 
-from . import colors as C
 from . import context_budget
 from . import display
 from . import jail as _jail
@@ -521,7 +520,7 @@ def _history_tool_result_message(pc: _PendingToolCall, result: Any) -> list[dict
 # --------------------------------------------------------------------------
 
 def _tool_settings(tool_context: ToolContext | None) -> Any:
-    """Live settings for the display dials; `/set ui.tools 3` reaches the next exchange."""
+    """Live settings for the display dials; `/fset TOOLS_DISPLAY 3` reaches the next exchange."""
     context = tool_context or T.STOCK_CONTEXT
     return getattr(getattr(context, "config", None), "settings", None)
 
@@ -580,7 +579,7 @@ class _OpenCall:
 class ToolTrace:
     """What one turn shows of its tool calls.
 
-    At `ui.tools` 1 the quiet calls between two things that are not quiet are
+    At TOOLS_DISPLAY 1 the quiet calls between two things that are not quiet are
     a run: each tool's calls in it share one row. On a screen that can redraw
     (`Telemetry.exchange_factory`) a row is drawn when its first call starts
     and redrawn as calls join it; on plain stdout the run is written when it
@@ -1901,7 +1900,7 @@ def _trace_banner(request: ModelRequest, context: ToolContext, registry: ToolReg
     except Exception:  # noqa: BLE001 — registry internals
         ntools = "?"
     bits.append(f"tools={ntools}")
-    print(f"{display.CHROME}{msgs.RUN_LINE.text(fields='  '.join(bits))}{C.RESET}", flush=True)
+    print(display.chrome(msgs.RUN_LINE.text(fields='  '.join(bits))), flush=True)
 
 
 def _note_user_skill(messages: list[dict], registry: ToolRegistry) -> None:

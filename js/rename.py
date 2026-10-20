@@ -42,6 +42,30 @@ from .settings import SPEC_BY_KEY, parse_bool
 # --extra take only the new names.
 RENAMED_SETTINGS: dict[str, str] = {
     "agent": "DEFAULT_AGENT",
+    # How js looks: /fset entries now, set with `fset`.
+    "ui.reasoning": "REASONING_DISPLAY",
+    "ui.net": "NET_DISPLAY",
+    "ui.tools": "TOOLS_DISPLAY",
+    "ui.tools_quiet": "TOOLS_QUIET",
+    "ui.shell_quiet": "SHELL_QUIET",
+    "ui.tools_preview_lines": "TOOLS_PREVIEW_LINES",
+    "ui.markdown": "MARKDOWN",
+    "ui.resume_exchanges": "RESUME_EXCHANGES",
+    "runtime.trace": "TRACE",
+    "kernel.verbosity": "KERNEL_VERBOSITY",
+    "kernel.render_max_lines": "KERNEL_LINES_MAX",
+    "ui.status_bg": "COLOR_STATUS_BACKGROUND",
+    "ui.status_fg": "COLOR_STATUS_TEXT",
+    "theme.accent": "COLOR_TOOL",
+    "theme.ok": "COLOR_OK",
+    "theme.error": "COLOR_ERROR",
+    "theme.warn": "COLOR_WARN",
+    "theme.dim": "COLOR_DIM",
+    "theme.panel": "COLOR_PANEL",
+    "theme.panel_text": "COLOR_TOOL_OUTPUT",
+    "theme.added": "COLOR_ADDED",
+    "theme.removed": "COLOR_REMOVED",
+    "theme.code": "COLOR_CODE",
     "model.id": "MODEL",
     "model.max_output_tokens": "OUTPUT_TOKENS_MAX",
     "model.context_window": "CONTEXT_SIZE",
@@ -176,12 +200,14 @@ def _canonical_env(key: str) -> str:
 
 # Main also read every setting from JS_<DOTTED_NAME>: JS_COMPACT_AUTO,
 # JS_LIMITS_MAX_READ_LINES. Each becomes the JS_<NAME> of its new setting.
+# A colour entry (`COLOR_TOOL`) is no setting and has no env var.
 for _old, _new in RENAMED_SETTINGS.items():
-    if "." in _old and _canonical_env(_old) != "JS_" + _new:
+    if "." in _old and _new in SPEC_BY_KEY and _canonical_env(_old) != "JS_" + _new:
         RENAMED_ENV.setdefault(_canonical_env(_old), "JS_" + _new)
 
-# Env names of deleted settings: reported, never renamed.
-DELETED_ENV: tuple[str, ...] = tuple(_canonical_env(key) for key in DELETED_SETTINGS)
+# Env names of deleted settings and of colour entries: reported, never renamed.
+DELETED_ENV: tuple[str, ...] = tuple(_canonical_env(key) for key in DELETED_SETTINGS) + tuple(
+    _canonical_env(old) for old, new in RENAMED_SETTINGS.items() if "." in old and new not in SPEC_BY_KEY)
 
 
 def renamed_key(old: str) -> str | None:
@@ -281,6 +307,7 @@ def _rename_set(line: str, start: int, assigns: list[tuple[str, str]] | None = N
     if first is None:
         return line
     verb = line[first[0]:first[1]].lstrip("/").lower()
+    command = first
     if verb in ("alias", "on"):
         if next(it, None) is None:
             return line
@@ -289,6 +316,7 @@ def _rename_set(line: str, start: int, assigns: list[tuple[str, str]] | None = N
             body = next(it, None)
         if body is None or line[body[0]:body[1]].lstrip("/").lower() != "set":
             return line
+        command = body
     elif verb != "set":
         return line
     name = next(it, None)
@@ -303,6 +331,9 @@ def _rename_set(line: str, start: int, assigns: list[tuple[str, str]] | None = N
     if new is None:
         return line
     out = line[:name[0]] + dash + new
+    if is_fset(new):
+        # The command word `set` becomes `fset`.
+        out = line[:command[1] - 3] + "f" + line[command[1] - 3:name[0]] + dash + new
     value = next(it, None) if old == "history.cwd_first" and not dash else None
     if value is None:
         return out + line[name[1]:]
@@ -316,6 +347,12 @@ def _literal_value(old: str, value: str) -> str:
     if old == "history.cwd_first" and parse_bool(value) is None:
         raise Unparsable(value)
     return renamed_value(old, value)
+
+
+def is_fset(new: str) -> bool:
+    """Whether new name ``new`` is an /fset entry, set with `fset`."""
+    spec = SPEC_BY_KEY.get(new)
+    return new.startswith("COLOR_") or (spec is not None and spec.command == "fset")
 
 
 # ---------------------------------------------------------------------------

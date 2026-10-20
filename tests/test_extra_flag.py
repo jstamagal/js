@@ -52,7 +52,7 @@ def test_parse_extra_arg_splits_dotted_key_and_coerces_int():
 def test_parse_extra_arg_coerces_registered_values():
     # Exact registered keys use registry coercion, including string/null semantics.
     assert settings.parse_extra_arg("COMPACTION_CHARS_PER_TOKEN=4.5")[1] == 4.5
-    assert settings.parse_extra_arg("runtime.trace=off")[1] is False
+    assert settings.parse_extra_arg("TRACE=off")[1] is False
     assert settings.parse_extra_arg("DEBUG_LOG=on")[1] is True
     assert settings.parse_extra_arg("COMPACTION_HINT_COMMAND=null")[1] == "null"
     assert settings.parse_extra_arg("MODEL=some-model")[1] == "some-model"
@@ -74,7 +74,7 @@ def test_extra_registered_string_keys_use_registry_coercion(raw, expected):
 
 @pytest.mark.parametrize(
     "raw",
-    ["runtime.trace=maybe", "FETCH_TIMEOUT=abc", "COMPACTION_WARN_AT=abc"],
+    ["TRACE=maybe", "FETCH_TIMEOUT=abc", "COMPACTION_WARN_AT=abc"],
 )
 def test_extra_registered_scalar_keys_use_registry_validation(raw):
     key = raw.split("=", 1)[0]

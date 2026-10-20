@@ -74,10 +74,10 @@ def test_max_parallel_tools_is_at_least_one():
 
 
 def test_an_unknown_kernel_verbosity_falls_back():
-    default = settings.default_value("kernel.verbosity")
+    default = settings.default_value("KERNEL_VERBOSITY")
 
-    assert project(_store(**{"kernel.verbosity": "LOUD"}))["kernel_verbosity"] == default
-    assert project(_store(**{"kernel.verbosity": " Verbose "}))["kernel_verbosity"] == "verbose"
+    assert project(_store(**{"KERNEL_VERBOSITY": "LOUD"}))["kernel_verbosity"] == default
+    assert project(_store(**{"KERNEL_VERBOSITY": " Verbose "}))["kernel_verbosity"] == "verbose"
 
 
 def test_a_shell_env_allow_with_an_empty_name_falls_back():
@@ -94,7 +94,7 @@ def test_an_unset_optional_integer_stays_unset():
 
 
 def test_a_non_boolean_flag_falls_back():
-    assert project(_store(**{"runtime.trace": "yes"}))["trace"] == settings.default_value("runtime.trace")
+    assert project(_store(**{"TRACE": "yes"}))["trace"] == settings.default_value("TRACE")
 
 
 def test_install_copies_only_context_rows_the_cfg_has():

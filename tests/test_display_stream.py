@@ -265,3 +265,12 @@ def test_an_open_tool_exchange_is_redrawn_where_it_stands_after_later_text():
     scrollback.exchange_close(span, "finished\n")
     scrollback.flush()
     assert scrollback.buffer.text == "before\nfinished\nafter\n"
+
+
+def test_markdown_highlights_take_the_accent_colour_not_the_tool_colour():
+    from js import fset
+
+    fset.set_entry("COLOR_ACCENT", "#102030")
+    fset.set_entry("COLOR_TOOL", "#405060")
+    rendered = display.render_markdown("## Heading two\n\n1. first\n2. second\n", 60)
+    assert "38;2;16;32;48" in rendered and "38;2;64;80;96" not in rendered

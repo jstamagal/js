@@ -4,7 +4,7 @@ httpx2 2.12's default response stream closes the pool entry but not its active
 byte iterator (pydantic/httpx2#1195). This response-local wrapper closes both.
 Recheck the adapter when that upstream iterator ownership is repaired.
 
-The same wrapper sees every response byte, which is what the `ui.net` channel
+The same wrapper sees every response byte, which is what the NET_DISPLAY channel
 counts. The channel prints only while a sink is installed (the async REPL
 screen); everywhere else each hook is a no-op.
 """
@@ -26,7 +26,7 @@ import httpx2
 from httpx2._client import BoundAsyncStream
 from httpx2._transports.default import AsyncResponseStream
 
-from . import colors as C
+from . import fset
 from . import messages as msgs
 
 
@@ -69,7 +69,7 @@ def install_sink(sink: NetSink | None) -> None:
 
 
 def net_level() -> int | None:
-    """The live `ui.net` level while a sink is installed, else None."""
+    """The live NET_DISPLAY level while a sink is installed, else None."""
     if _sink is None:
         return None
     try:
@@ -96,22 +96,25 @@ def report_held_failure() -> None:
     say_for_caller(1, describe_failure(exc))
 
 
-def say_or_print(level: int, text: str) -> None:
+def say_or_print(level: int, line: str) -> None:
     """A network line that predates the channel: the channel decides while a
-    sink is installed; otherwise it prints to stderr as a `***` line."""
+    sink is installed; otherwise it prints to stderr."""
     if _sink is None:
-        print(msgs.banner(text), file=sys.stderr)
+        print(msgs.for_stream(_net_line(line), sys.stderr), file=sys.stderr)
     else:
-        say(level, text)
+        say(level, line)
 
 
-def say_for_caller(level: int, text: str) -> None:
+def say_for_caller(level: int, line: str) -> None:
     """`say`, prefixed with the calling role's label ("Subagent 2: ...")."""
-    say(level, _labelled(_role.get(), text))
+    say(level, _labelled(_role.get(), line))
 
 
-def _labelled(role: NetRole, text: str) -> str:
-    return f"{role.label}: {text}" if role.label else text
+def _labelled(role: NetRole, line: str) -> str:
+    if not role.label:
+        return line
+    text = fset.to_ansi(line.message.body_runs(**line.fields)) if isinstance(line, msgs.Said) else line
+    return msgs.NET_LABELLED.said(label=role.label, text=text)
 
 
 def reset_role(token: contextvars.Token) -> None:
@@ -127,11 +130,13 @@ def net_role(label: str = "", *, agent: str = "", status: Any = None) -> Iterato
         reset_role(token)
 
 
-def say(level: int, text: str) -> None:
-    """Print one `***` network line when the channel is at `level` or above."""
+def say(level: int, line: str) -> None:
+    """Print one network line when the channel is at `level` or above. A
+    `said()` entry draws through its own format, which decides whether
+    `$BANNER` leads it; plain text through NET_LINE's."""
     if _sink is not None and (net_level() or 0) >= level:
         try:
-            _sink.emit(_banner(text))
+            _sink.emit(_net_line(line))
         except Exception:  # noqa: BLE001 — a display failure never fails the request
             pass
 
@@ -140,8 +145,11 @@ def _host(url: str) -> str:
     return urlsplit(url).hostname or url
 
 
-def _banner(text: str) -> str:
-    return f"{C.BR_YELLOW}{msgs.banner(text)}{C.RESET}"
+def _net_line(line: str) -> str:
+    """A network line on the screen: its entry's runs, COLOR_WARN where the
+    format sets no colour."""
+    said = line if isinstance(line, msgs.Said) else msgs.NET_LINE.said(text=line)
+    return fset.to_ansi(said.message.runs(whole="COLOR_WARN", **said.fields))
 
 
 def describe_failure(exc: BaseException) -> str:
@@ -160,7 +168,7 @@ def describe_failure(exc: BaseException) -> str:
         if isinstance(status, int):
             first_line = next(iter(str(err).splitlines()), "")
             reason = str(getattr(err, "code", None) or getattr(err, "type", None) or first_line[:80])
-            return f"{C.BR_RED}{status}{C.BR_YELLOW} {reason}".rstrip()
+            return f"{fset.fg('COLOR_ERROR')}{status}{fset.fg('COLOR_WARN')} {reason}".rstrip()
     for err in chain:
         text = str(err)
         if isinstance(err, socket.gaierror) or any(needle in text for needle in (
@@ -177,7 +185,7 @@ def describe_failure(exc: BaseException) -> str:
         if isinstance(err, (httpx2.ConnectError, ConnectionError)):
             host = next((h for h in (_request_host(e) for e in chain) if h), "")
             return _failure(msgs.NET_CONNECT_FAILED, f"{host} {_one_line(err)}".strip())
-    return f"{C.BR_RED}{type(exc).__name__}{C.BR_YELLOW}: {_one_line(exc)}"
+    return f"{fset.fg('COLOR_ERROR')}{type(exc).__name__}{fset.fg('COLOR_WARN')}: {_one_line(exc)}"
 
 
 _DETAIL_WIDTH = 160
@@ -193,7 +201,7 @@ def _one_line(err: BaseException) -> str:
 
 def _failure(kind: msgs.Message, detail: str) -> str:
     """A failure line: the kind of failure painted hot, then what it names."""
-    head = f"{C.BR_RED}{kind.text()}{C.BR_YELLOW}"
+    head = f"{fset.fg('COLOR_ERROR')}{kind.body()}{fset.fg('COLOR_WARN')}"
     return f"{head}: {detail}" if detail else head
 
 
@@ -225,11 +233,11 @@ class NetCall:
     def _connecting_line(self) -> str:
         label, agent = self._role.label, self._role.agent
         if label == "Compacting":
-            return msgs.NET_COMPACTING.text(model=self._model, url=self._url)
+            return msgs.NET_COMPACTING.said(model=self._model, url=self._url)
         if label:
             entry = msgs.NET_ROLE_CONNECTING_AGENT if agent else msgs.NET_ROLE_CONNECTING
-            return entry.text(role=label, url=self._url, agent=agent)
-        return msgs.NET_CONNECTING.text(url=self._url)
+            return entry.said(role=label, url=self._url, agent=agent)
+        return msgs.NET_CONNECTING.said(url=self._url)
 
     def request_sent(self) -> None:
         """The transport is sending the request: the handshake clock starts here,
@@ -245,9 +253,9 @@ class NetCall:
         ms = int((time.perf_counter() - self._started) * 1000)
         host = host or _host(self._url)
         if self._role.label:
-            say(2, msgs.NET_ROLE_CONNECTED.text(role=self._role.label, host=host, ms=ms))
+            say(2, msgs.NET_ROLE_CONNECTED.said(role=self._role.label, host=host, ms=ms))
         else:
-            say(2, msgs.NET_CONNECTED.text(host=host, ms=ms))
+            say(2, msgs.NET_CONNECTED.said(host=host, ms=ms))
 
     def received(self, n: int) -> None:
         self.connected()

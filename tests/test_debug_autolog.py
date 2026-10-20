@@ -4,7 +4,7 @@
 
 Regression guard for FIXME3 item 10: a plain run leaked the whole request trace
 (unclipped system prompt + all tool schemas + messages JSON) to stdout because
-the model-boundary dump was wired to the always-on `runtime.trace` flag.
+the model-boundary dump was wired to the always-on `TRACE` flag.
 """
 
 from __future__ import annotations

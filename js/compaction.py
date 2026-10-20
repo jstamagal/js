@@ -447,7 +447,7 @@ def note_response(context: Any, *, model_key: str, cache_read: int | None, now: 
     if drop <= previous * CACHE_BREAK_FRACTION or drop < CACHE_BREAK_MIN_TOKENS:
         return None
     idle = int(now - last) if last is not None else 0
-    return msgs.NET_CACHE_BREAK.text(before=previous, after=cache_read, drop=drop / previous, idle=idle)
+    return msgs.NET_CACHE_BREAK.said(before=previous, after=cache_read, drop=drop / previous, idle=idle)
 
 
 def history_rewritten(context: Any) -> None:

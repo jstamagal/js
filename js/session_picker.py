@@ -31,6 +31,7 @@ from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.output import Output, create_output
 from prompt_toolkit.styles import Style
 
+from . import fset
 from . import messages as msgs
 from . import session_query as Q
 from . import session_store
@@ -61,22 +62,25 @@ class _Closed:
 
 CLOSED = _Closed()
 
-_STYLE = Style.from_dict(
-    {
-        "title": "ansicyan bold",
-        "keys": "ansigreen",
-        "query": "bold",
-        "parse": "ansibrightblack",
-        "columns": "ansibrightblack",
-        "group": "ansiblue bold",
-        "selected": "reverse",
-        "hit": "ansibrightblack",
-        "match": "ansiyellow bold",
-        "stamp": "ansibrightblack",
-        "label": "ansibrightblack",
-        "preview": "ansibrightblack",
-    }
-)
+def _style() -> Style:
+    """The picker in /fset's colours."""
+    c = {role: fset.hex_for(role) or "" for role in ("COLOR_ACCENT", "COLOR_OK", "COLOR_DIM", "COLOR_WARN")}
+    return Style.from_dict(
+        {
+            "title": f"{c['COLOR_ACCENT']} bold",
+            "keys": c["COLOR_OK"],
+            "query": "bold",
+            "parse": c["COLOR_DIM"],
+            "columns": c["COLOR_DIM"],
+            "group": f"{c['COLOR_ACCENT']} bold",
+            "selected": "reverse",
+            "hit": c["COLOR_DIM"],
+            "match": f"{c['COLOR_WARN']} bold",
+            "stamp": c["COLOR_DIM"],
+            "label": c["COLOR_DIM"],
+            "preview": c["COLOR_DIM"],
+        }
+    )
 
 _MOVES = {"up": -1, "k": -1, "down": 1, "j": 1, "pageup": -_PAGE, "pagedown": _PAGE}
 _FIRST = ("home", "g")
@@ -493,7 +497,7 @@ class SessionPicker:
                        scroll_offsets=ScrollOffsets(bottom=self.preview_height)),
             ]
         )
-        return Application(layout=Layout(root), key_bindings=kb, style=_STYLE, full_screen=True,
+        return Application(layout=Layout(root), key_bindings=kb, style=_style(), full_screen=True,
                            input=input, output=output)
 
 

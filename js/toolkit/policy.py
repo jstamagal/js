@@ -302,15 +302,15 @@ def render_table(decisions: Sequence[Decision], bans: Mapping[str, Sequence[str]
     order = {"eager": 0, "lazy": 1, "ban": 2, None: 3}
     rows = sorted(decisions, key=lambda d: (order[d.modifier], d.tool.name))
     width = max((len(d.tool.name) for d in rows), default=4)
-    lines = [msgs.TOOL_CHAIN_ROW.text(tool=msgs.TOOL_CHAIN_TOOL.text(), width=width,
-                                      state=msgs.TOOL_CHAIN_STATE.text(),
-                                      decided=msgs.TOOL_CHAIN_DECIDED_BY.text())]
+    lines = [msgs.line_for(msgs.TOOL_CHAIN_ROW, tool=msgs.worded(msgs.TOOL_CHAIN_TOOL.said()), width=width,
+                                      state=msgs.worded(msgs.TOOL_CHAIN_STATE.said()),
+                                      decided=msgs.worded(msgs.TOOL_CHAIN_DECIDED_BY.said()))]
     for d in rows:
         state = d.modifier or "-"
-        decided = d.rule.label if d.rule is not None else msgs.NONE_VALUE.text()
-        lines.append(msgs.TOOL_CHAIN_ROW.text(tool=d.tool.name, width=width, state=state, decided=decided))
+        decided = d.rule.label if d.rule is not None else msgs.worded(msgs.NONE_VALUE.said())
+        lines.append(msgs.line_for(msgs.TOOL_CHAIN_ROW, tool=d.tool.name, width=width, state=state, decided=decided))
     shown = {d.tool.name.lower() for d in rows if d.modifier in ("eager", "lazy")}
     for name, patterns in sorted(bans.items()):
         if name in shown:
-            lines.append(msgs.TOOL_CHAIN_BAN.text(tool=name, patterns=", ".join(repr(p) for p in patterns)))
+            lines.append(msgs.line_for(msgs.TOOL_CHAIN_BAN, tool=name, patterns=", ".join(repr(p) for p in patterns)))
     return lines

@@ -522,12 +522,12 @@ def ensure_fresh_catalog(*, force: bool = False) -> CatalogStatus | None:
         if current is None:
             raise RuntimeError(_refresh_failure)
         return current
-    stream_transport.say_or_print(3, msgs.CATALOG_UPDATING.text())
+    stream_transport.say_or_print(3, msgs.CATALOG_UPDATING.said())
     try:
         status = refresh_catalog(force=True)
     except Exception as exc:
         _refresh_failure = " ".join(f"{type(exc).__name__}: {exc}".split())
-        stream_transport.say_or_print(1, msgs.CATALOG_UPDATE_FAILED.text(error=_refresh_failure))
+        stream_transport.say_or_print(1, msgs.CATALOG_UPDATE_FAILED.said(error=_refresh_failure))
         if current is not None:
             _activate_database(current.db_path)
             return current

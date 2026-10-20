@@ -57,7 +57,7 @@ def test_display_is_separate_from_answer_transcript_and_session(monkeypatch, tmp
     cfg = config.from_env(extras=[
         "MODEL=qwen-test", "PROVIDER=openai", "BASE_URL=http://local.test/v1",
         "API_KEY=fixture", "OUTPUT_TOKENS_MAX=64", "CONTEXT_SIZE=262144",
-        "VISION=off", f"ui.reasoning={level}",
+        "VISION=off", f"REASONING_DISPLAY={level}",
     ])
     out, err, log = io.StringIO(), io.StringIO(), io.StringIO()
     sink = transcript.TranscriptLogSink([log], [])
@@ -90,7 +90,7 @@ def test_cancel_during_reasoning_retains_partial_history(monkeypatch, tmp_path):
     cfg = config.from_env(extras=[
         "MODEL=qwen-test", "PROVIDER=openai", "BASE_URL=http://local.test/v1",
         "API_KEY=fixture", "OUTPUT_TOKENS_MAX=64", "CONTEXT_SIZE=262144",
-        "VISION=off", "ui.reasoning=0",
+        "VISION=off", "REASONING_DISPLAY=0",
     ])
     scripted(monkeypatch, cancel=True)
     messages = [{"role": "user", "content": "first"}]
@@ -107,16 +107,16 @@ def test_cancel_during_reasoning_retains_partial_history(monkeypatch, tmp_path):
 
 
 def test_reasoning_level_is_registered_validated_and_saved(tmp_path):
-    spec = settings.SPEC_BY_KEY["ui.reasoning"]
+    spec = settings.SPEC_BY_KEY["REASONING_DISPLAY"]
     assert spec.default == 2
     for level in range(4):
         assert settings.coerce_value(spec, str(level)) == (level, None)
     assert settings.coerce_value(spec, "-1")[1]
     assert settings.coerce_value(spec, "4")[1]
     path = tmp_path / "jsrc"
-    settings.save_settings_to_jsrc(path, {"ui": {"reasoning": 1}})
+    settings.save_settings_to_jsrc(path, {"REASONING_DISPLAY": 1})
     loaded = settings.collect_settings(config_paths=[path], env={})
-    assert settings.get_dotted(loaded, ("ui", "reasoning")) == 1
+    assert settings.get_dotted(loaded, ("REASONING_DISPLAY",)) == 1
 
 
 @pytest.mark.parametrize("level", [1, 2, 3])
@@ -279,7 +279,7 @@ def test_http_reasoning_streams_on_screen_before_answer_and_survives_collapse(mo
     cfg = config.from_env(extras=[
         "MODEL=qwen-test", "PROVIDER=openai", "BASE_URL=http://local.test/v1",
         "API_KEY=fixture", "OUTPUT_TOKENS_MAX=64", "CONTEXT_SIZE=262144",
-        "VISION=off", "ui.reasoning=1",
+        "VISION=off", "REASONING_DISPLAY=1",
     ])
     scroll = screen.Scrollback()
     app = SimpleNamespace(invalidate=lambda: None)
@@ -340,7 +340,7 @@ def test_prompt_mode_displays_reasoning_separately_and_persists_it(monkeypatch, 
     cfg = config.from_env(agent_id="reason-ui", extras=[
         "MODEL=qwen-test", "PROVIDER=openai", "BASE_URL=http://local.test/v1",
         "API_KEY=fixture", "OUTPUT_TOKENS_MAX=64", "CONTEXT_SIZE=262144",
-        "VISION=off", "REQUEST_LOG=off", f"ui.reasoning={level}",
+        "VISION=off", "REQUEST_LOG=off", f"REASONING_DISPLAY={level}",
     ])
     monkeypatch.setattr(cli, "_from_env", lambda *a, **kw: cfg)
     scripted(monkeypatch, cancel=cancel)

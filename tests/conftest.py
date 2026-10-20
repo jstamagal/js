@@ -97,6 +97,16 @@ def fresh_model_catalog(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def fresh_fset():
+    """Each test starts with no /fset entry set and no live settings bound."""
+    from js import fset
+
+    yield
+    fset.reset()
+    fset.bind_settings(None)
+
+
+@pytest.fixture(autouse=True)
 def local_model_catalog(monkeypatch, fresh_model_catalog):
     """Every test reads the session's fresh catalog, so no lookup downloads
     models.dev. A refresh that reaches the download fails instead. The

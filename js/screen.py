@@ -33,16 +33,12 @@ from prompt_toolkit.output import ColorDepth
 from prompt_toolkit.styles import DynamicStyle, Style
 from prompt_toolkit.widgets import SearchToolbar
 
-from . import display, keys, pastes
+from . import display, fset, keys, pastes
 from . import messages as msgs
 from . import session_store
 from .context_budget import estimate_text_tokens
 from .reasoning_display import grey
-from .settings import default_value, is_hex_colour
 
-STATUS_BG = default_value("ui.status_bg")
-STATUS_FG = default_value("ui.status_fg")
-STATUS_STYLE = f"bold {STATUS_FG} bg:{STATUS_BG}"
 SCROLLBACK_LINES = 5000
 THROBBER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 TICK_BUSY_S = 0.1
@@ -72,12 +68,32 @@ def _drawable(text: str) -> str:
 
 # --- status bar ------------------------------------------------------------
 
-def status_style(fg: object, bg: object) -> str:
-    """The bar's prompt_toolkit style from two hex strings; a value that is not
-    `#rrggbb` falls back to its default."""
-    fg = fg if is_hex_colour(fg) else STATUS_FG
-    bg = bg if is_hex_colour(bg) else STATUS_BG
-    return f"bold {fg} bg:{bg}"
+def status_style() -> str:
+    """The bar's prompt_toolkit style: COLOR_STATUS_TEXT on COLOR_STATUS_BACKGROUND."""
+    if not fset.colour_on():
+        return "bold reverse"
+    fg = fset.hex_for("COLOR_STATUS_TEXT")
+    bg = fset.hex_for("COLOR_STATUS_BACKGROUND")
+    return " ".join(filter(None, ("bold", fg, f"bg:{bg}" if bg else "")))
+
+
+def screen_style() -> str:
+    """The whole screen's prompt_toolkit style: COLOR_TEXT, on
+    COLOR_BACKGROUND when the theme sets one, else on the terminal's own."""
+    if not fset.colour_on():
+        return ""
+    bg = fset.hex_for("COLOR_BACKGROUND")
+    fg = fset.hex_for("COLOR_TEXT")
+    return " ".join(filter(None, (f"bg:{bg}" if bg else "", fg or "")))
+
+
+def accent_clock(line: str) -> str:
+    """The bar's `[HH:MM]` lead in COLOR_STATUS_ACCENT, as ANSI text."""
+    end = line.find("]") + 1 if line.startswith("[") else 0
+    if not end:
+        return line
+    code = fset.fg("COLOR_STATUS_ACCENT")
+    return f"{code}{line[:end]}\x1b[39m{line[end:]}" if code else line
 
 
 @functools.lru_cache(maxsize=8)
@@ -107,10 +123,20 @@ def turn_centre(status, *, now: float, show_bytes: bool) -> tuple[str, int | Non
         elapsed = int(max(0.0, now - status.tool_started))
         return f"{status.tool}{extra} {elapsed}s", None
     if status.compacting:
-        return msgs.STATUS_COMPACTING.text(), None
+        return _field(msgs.STATUS_COMPACTING), None
     if show_bytes and status.net_bytes:
         return f"{status.net_bytes // 100 * 100:,}B", None
     return "", status.output_tokens or None
+
+
+def _field(message: msgs.Message, **fields) -> str:
+    """One status bar field through its /fset format, palette colours kept."""
+    return message.line(**fields)
+
+
+def _width(text: str) -> int:
+    """Columns ``text`` takes on the bar, colour escapes not counted."""
+    return len(fset.plain(text))
 
 
 def status_line(
@@ -132,7 +158,8 @@ def status_line(
 
     Left `[HH:MM] provider/model context`, centre `throbber phase count` (only
     while `throbber` is set, i.e. a turn runs), right `agent/session cache N%
-    cost`, where `cost` is the session's spend (`usage.status_text`).
+    cost`, where `cost` is the session's spend (`usage.status_text`). Each
+    field is drawn through its /fset format, STATUS_CLOCK and the rest.
     Groups that do not fit give way in a fixed order: cache, then the model's
     head, then the provider, then the centre count, then the cost, then the
     agent id. The session name stays, elided with an ellipsis when it still
@@ -145,22 +172,28 @@ def status_line(
     show = {"cache": cache_pct is not None, "provider": bool(provider),
             "count": output_tokens is not None, "agent": bool(agent_id), "cost": bool(cost)}
 
+    clock_text = _field(msgs.STATUS_CLOCK, clock=clock)
+
     def groups() -> tuple[str, str, str]:
         route = "/".join(filter(None, (provider if show["provider"] else "", model_text)))
-        left = " ".join(filter(None, (f"[{clock}]", route,
-                                      None if context_tokens is None else str(context_tokens))))
+        left = " ".join(filter(None, (
+            clock_text, _field(msgs.STATUS_ROUTE, route=route) if route else "",
+            "" if context_tokens is None else _field(msgs.STATUS_CONTEXT, tokens=context_tokens))))
         centre = ""
         if throbber:
-            count = format_count(output_tokens) if show["count"] and output_tokens is not None else ""
-            centre = " ".join(filter(None, (throbber, phase, count)))
+            count = (_field(msgs.STATUS_REPLY, tokens=format_count(output_tokens))
+                     if show["count"] and output_tokens is not None else "")
+            centre = " ".join(filter(None, (_field(msgs.STATUS_SPINNER, spinner=throbber),
+                                            _field(msgs.STATUS_PHASE, phase=phase) if phase else "", count)))
         who = "/".join(filter(None, (agent_id if show["agent"] else "", session_text)))
-        right = " ".join(filter(None, (who, msgs.STATUS_CACHE.text(pct=cache_pct) if show["cache"] else "",
-                                       cost if show["cost"] else "")))
+        right = " ".join(filter(None, (_field(msgs.STATUS_WHO, who=who) if who else "",
+                                       _field(msgs.STATUS_CACHE, pct=cache_pct) if show["cache"] else "",
+                                       _field(msgs.STATUS_COST, cost=cost) if show["cost"] else "")))
         return left, centre, right
 
     def fits(left: str, centre: str, right: str) -> bool:
         gaps = 4 if centre else (2 if right else 0)
-        return len(left) + len(centre) + len(right) + gaps <= width
+        return _width(left) + _width(centre) + _width(right) + gaps <= width
 
     def truncate_model() -> None:
         nonlocal model_text
@@ -182,22 +215,24 @@ def status_line(
         step()
         left, centre, right = groups()
 
-    gap = width - len(left) - len(right)
-    if centre and gap >= len(centre) + 4:
-        before = max(2, (gap - len(centre)) // 2)
+    gap = width - _width(left) - _width(right)
+    if centre and gap >= _width(centre) + 4:
+        before = max(2, (gap - _width(centre)) // 2)
         middle = " " * before + centre
-        line = left + middle + " " * (gap - len(middle)) + right
+        line = left + middle + " " * (gap - _width(middle)) + right
     elif not centre and gap >= (2 if right else 0):
         line = left + " " * gap + right
     else:
         # Still too wide: keep the clock, throbber and session, cut the left group.
-        room = width - len(f"[{clock}]") - 1 - (len(centre) + 1 if centre else 0)
+        room = width - _width(clock_text) - 1 - (_width(centre) + 1 if centre else 0)
         session_text = _elide(session_text, room)
-        left, centre, right = groups()
+        left, centre, right = (fset.plain(group) for group in groups())
         tail = " ".join(filter(None, (centre, right)))
-        room = max(len(f"[{clock}]"), width - len(tail) - 1)
+        room = max(_width(clock_text), width - len(tail) - 1)
         line = " ".join(filter(None, (left[:room], tail)))
-    return line[:width].ljust(width)
+    if _width(line) > width:
+        line = fset.plain(line)[:width]
+    return line + " " * (width - _width(line))
 
 
 def session_short(session_file) -> str:
@@ -570,14 +605,14 @@ def bind_actions(kb: KeyBindings, keymap: keys.Keymap, handlers: dict[str, Handl
 
 def build_app(
     *,
-    prompt: str,
+    prompt: str | Callable[[], str],
     history,
     completer,
     on_line: Callable[[str], Coroutine],
     on_interrupt: Callable[[], None],
     on_eof: Callable[[], Awaitable | None],
     status: Callable[[int], str] = lambda width: "",
-    status_colours: Callable[[], str] = lambda: STATUS_STYLE,
+    status_colours: Callable[[], str] = status_style,
     editing_mode: Callable[[], str] = lambda: "emacs",
     on_ex: Callable[[str, InputEditor], Coroutine] | None = None,
     key_bindings: KeyBindingsBase | None = None,
@@ -682,9 +717,9 @@ def build_app(
     toggle = keymap.get("reasoning_toggle", ())
     scrollback.toggle_key = keys.describe(toggle[0]) if toggle else ""
 
-    def _status_text() -> str:
+    def _status_text():
         try:
-            return status(get_app().output.get_size().columns)
+            return ANSI(accent_clock(status(get_app().output.get_size().columns)))
         except Exception:  # noqa: BLE001 — the bar must never take the screen down
             return " "
 
@@ -692,8 +727,11 @@ def build_app(
         try:
             colours = status_colours()
         except Exception:  # noqa: BLE001
-            colours = STATUS_STYLE
+            colours = ""
         return _status_style_sheet(colours)
+
+    def _prompt() -> str:
+        return prompt() if callable(prompt) else prompt
 
     layout = Layout(
         FloatContainer(
@@ -706,14 +744,14 @@ def build_app(
                                      search_buffer_control=search_toolbar.control,
                                      lexer=None),
                        height=Dimension(min=1, max=10), dont_extend_height=True,
-                       get_line_prefix=lambda lineno, wrap: to_formatted_text(ANSI(prompt if lineno == 0 and not wrap
-                                                                                   else " " * len(_plain(prompt))))),
+                       get_line_prefix=lambda lineno, wrap: to_formatted_text(ANSI(_prompt() if lineno == 0 and not wrap
+                                                                                   else " " * len(_plain(_prompt()))))),
                 ConditionalContainer(
                     Window(BufferControl(buffer=ex_buffer), height=1, get_line_prefix=lambda *_: ":"),
                     filter=has_focus(ex_buffer),
                 ),
                 search_toolbar,
-            ]),
+            ], style=screen_style),
             floats=[Float(xcursor=True, ycursor=True, transparent=True,
                           content=MultiColumnCompletionsMenu())],
         ),

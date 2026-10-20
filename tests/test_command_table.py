@@ -31,7 +31,7 @@ def test_save_then_restart_brings_back_handlers_and_aliases(monkeypatch, tmp_pat
     cfg, state, _errors = _launch(tmp_path)
     _run([
         "/on turn_start set COMPACTION_AUTO off",
-        "/on ^tool_call set runtime.trace on",
+        "/on ^tool_call set TRANSCRIPT_LOG on",
         "/alias ca compact-auto $*",
         "/save",
     ], state, cfg)
@@ -41,7 +41,7 @@ def test_save_then_restart_brings_back_handlers_and_aliases(monkeypatch, tmp_pat
     assert errors == []
     assert [h.handler for h in state["events"].handlers_for("turn_start")] == ["set COMPACTION_AUTO off"]
     assert [(h.handler, h.suppress) for h in state["events"].handlers_for("tool_call")] == [
-        ("set runtime.trace on", True)
+        ("set TRANSCRIPT_LOG on", True)
     ]
     assert state["aliases"] == {"ca": "compact-auto $*"}
 
@@ -132,13 +132,13 @@ def _state() -> dict:
 def test_alias_runs_its_body_with_arguments(tmp_path):
     state = _state()
     cli._handle_command("/alias ca compact-auto $*", state, None)
-    cli._handle_command("/alias trace set runtime.trace", state, None)
+    cli._handle_command("/alias trace set TRANSCRIPT_LOG", state, None)
 
     assert cli._handle_command("/ca off", state, None) is True
     assert cli._handle_command("/trace off", state, None) is True
 
     assert settings.get_dotted(state["settings"], ("COMPACTION_AUTO",)) is False
-    assert settings.get_dotted(state["settings"], ("runtime", "trace")) is False
+    assert settings.get_dotted(state["settings"], ("TRANSCRIPT_LOG",)) is False
 
 
 def test_alias_cannot_shadow_a_command_and_can_be_removed():

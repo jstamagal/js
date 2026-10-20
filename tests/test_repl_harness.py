@@ -7,7 +7,7 @@ from pathlib import Path
 import ai
 import pytest
 
-from js import cli, events, setcmd, settings
+from js import cli, events, fset, setcmd, settings
 from js import messages as msgs
 from js.config import Config
 from js.memory import append_message, load_messages
@@ -102,10 +102,10 @@ def test_wipe_preserves_existing_backups_instead_of_overwriting(tmp_path):
 def test_set_commands_parse_power_user_knobs():
     live_settings = settings.seed_defaults()
 
-    trace = setcmd.set_command(live_settings, "runtime.trace on")
+    trace = setcmd.set_command(live_settings, "TRANSCRIPT_LOG on")
     assert trace.error is None
-    assert trace.lines == [msgs.SETTING_CHANGED.line(colour=False, key="RUNTIME.TRACE", value="on")]
-    assert settings.get_dotted(live_settings, ("runtime", "trace")) is True
+    assert trace.lines == [msgs.SETTING_CHANGED.line(colour=False, key="TRANSCRIPT_LOG", value="on")]
+    assert settings.get_dotted(live_settings, ("TRANSCRIPT_LOG",)) is True
 
     reasoning = setcmd.set_command(live_settings, "EFFORT max")
     assert reasoning.error is None
@@ -280,7 +280,7 @@ def test_repl_input_hook_dispatches_before_run_turn(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
 
-    run_blocking(cfg, ["/on input set runtime.trace on", "hello", "exit"])
+    run_blocking(cfg, ["/on input fset TRACE on", "hello", "exit"])
 
     assert trace_overrides == [True]
 
@@ -563,7 +563,7 @@ def test_repl_set_runtime_trace_updates_turn_config(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
 
-    run_blocking(cfg, ["/set runtime.trace on", "hello", "exit"])
+    run_blocking(cfg, ["/fset TRACE on", "hello", "exit"])
 
     assert traces == [True]
 
@@ -929,7 +929,7 @@ def test_model_command_prints_the_model_as_provider_slash_model(monkeypatch, tmp
     finally:
         logins.set_config_dir(None)
 
-    assert msgs.MODEL_SET.line(colour=False, model="ollama/gemma4:e2b") in capsys.readouterr().out
+    assert msgs.MODEL_SET.line(colour=False, model="ollama/gemma4:e2b") in fset.plain(capsys.readouterr().out)
 
 
 def test_model_command_unlogged_vendor_prefix_stays_on_pinned_endpoint(tmp_path):

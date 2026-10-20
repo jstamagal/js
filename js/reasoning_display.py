@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from . import colors as C
+from . import fset
 from .context_budget import estimate_text_tokens
 from .display import clean
 
@@ -16,15 +16,16 @@ class ReasoningDisplay(Protocol):
 
 
 def grey(text: str) -> str:
-    """Reasoning text in grey, control sequences removed."""
+    """Reasoning text in COLOR_REASONING, control sequences removed."""
     text = clean(text)
-    rendered = "\n".join(f"{C.GREY}{line}{C.RESET}" for line in text.split("\n"))
-    return rendered.removesuffix(C.GREY + C.RESET) if text.endswith("\n") else rendered
+    code = fset.fg("COLOR_REASONING")
+    rendered = "\n".join(f"{code}{line}{fset.RESET}" if line else line for line in text.split("\n"))
+    return rendered
 
 
 class StderrReasoning:
     """Streaming fallback for terminals without the editable scrollback view.
-    Grey on a terminal; a stream that is not one gets plain text."""
+    COLOR_REASONING on a terminal; a stream that is not one gets plain text."""
 
     def __init__(self, level: int, stream) -> None:
         self.level = level

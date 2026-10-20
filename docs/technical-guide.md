@@ -202,7 +202,7 @@ entry on normal completion or cancellation. This covers SSE termination before
 HTTP EOF with httpx2 2.12 (upstream pydantic/httpx2#1195). Custom transports are
 left as supplied. Recheck this adapter when upstream stream ownership changes.
 
-The same wrapper carries the `ui.net` channel. `stream_model_async` opens a
+The same wrapper carries the `NET_DISPLAY` channel. `stream_model_async` opens a
 `NetCall` per request (`stream_transport.begin_call`); the response iterator
 counts bytes into the caller's `TurnStatus` until the first token, and a
 `trace` request extension reports the TCP/TLS handshake as "connected" (the

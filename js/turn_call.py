@@ -22,7 +22,6 @@ from typing import Any
 
 import ai
 
-from . import colors as C
 from . import compaction
 from . import context_budget
 from . import display
@@ -227,7 +226,7 @@ class ModelCaller:
                     telemetry.event("max_output_escalated", model=model,
                                     max_output_tokens=call_max_out, escalated_to=escalated)
                     stream_transport.say_for_caller(
-                        2, msgs.MAX_OUTPUT_ESCALATED.text(before=call_max_out or "default", after=escalated))
+                        2, msgs.MAX_OUTPUT_ESCALATED.said(before=call_max_out or "default", after=escalated))
                     call_max_out = escalated
                     continue
                 return reply
@@ -401,7 +400,7 @@ class ModelCaller:
             stats = msgs.CALL_STATS.text(
                 ms=int(elapsed * 1000), finish=finish, tool_calls=n_calls,
                 tokens=out_tokens, tps=tps, ttft=ttft, cache=cache)
-            print(f"{display.CHROME}{label + ': ' if label else ''}{stats}{C.RESET}", flush=True)
+            print(display.chrome(f"{label + ': ' if label else ''}{stats}"), flush=True)
         return ModelReply(result=result, finish=finish, provider_metadata=provider_metadata,
                           incomplete_reason=incomplete_reason, ai_tools=ai_tools, usage_stale=usage_stale)
 

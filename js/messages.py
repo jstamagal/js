@@ -5,14 +5,18 @@ lives only in this file. Tool results, prompts and tool descriptions, which the
 model reads, are not here. The commit helper's entries are: the operator runs
 it, and the commit agent reads the same output through a shell.
 
+An entry's name is also its /fset format's (`js.fset`): the screen shows a
+message through that format, which by default is the entry's text with a `%s`
+per hole.
+
 A `Message` is in one register:
 
-  banner   the client reporting its own state: the `BANNER` slot, a space,
-           then the text. No template carries the slot literally.
+  banner   the client reporting its own state: `$BANNER`, the BANNER setting,
+           a space, then the text. No template carries the slot literally.
   plain    content: tables, lists, headings, prompts the operator answers.
 
-Severity is colour, never a word. `WARN` paints in light yellow and `GRAVE`
-in light red, and only the holes: the values that tell the operator what
+Severity is colour, never a word. `WARN` paints in COLOR_WARN and `GRAVE` in
+COLOR_ERROR, and only the holes: the values that tell the operator what
 happened. A message without holes is painted whole. `say` paints only a stream
 that is a terminal.
 """
@@ -21,21 +25,23 @@ from __future__ import annotations
 
 import argparse
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from string import Formatter
 from typing import Any
 
-from . import colors as C
+from . import fset
 
 # The banner slot: what starts every line the client says about its own
-# state. The BANNER setting sets it (`set_banner`).
+# state, and what $BANNER in a /fset format reads. The BANNER setting sets it
+# (`set_banner`).
 BANNER = "***"
 
 INFO = "info"
 WARN = "warn"
 GRAVE = "grave"
 
-SEVERITY_COLOR = {INFO: "", WARN: C.BR_YELLOW, GRAVE: C.BR_RED}
+# The colour entry each severity paints in; INFO paints nothing.
+SEVERITY_ROLE = {INFO: "", WARN: "COLOR_WARN", GRAVE: "COLOR_ERROR"}
 
 _FORMATTER = Formatter()
 
@@ -45,17 +51,61 @@ class Message:
     template: str
     severity: str = INFO
     banner: bool = True
+    # The entry's name in this module, and the name of its /fset format.
+    name: str = field(default="", compare=False)
 
     def text(self, **fields: Any) -> str:
         """The message with its holes filled: no slot, no colour. For a
         channel that is not the screen, or that adds the slot itself."""
         return self.template.format(**fields)
 
+    def default_format(self) -> str:
+        """The /fset format this entry has when nothing sets one: `$BANNER`
+        for a banner entry, then the template with a `%s` per hole."""
+        parts = ["$BANNER "] if self.banner else []
+        for literal, name, _spec, _conversion in _FORMATTER.parse(self.template):
+            parts.append(fset.escape(literal))
+            if name is not None:
+                parts.append("%s")
+        return "".join(parts)
+
+    def format(self) -> str:
+        """The entry's /fset format: the one set, else `default_format`."""
+        found = fset.lookup(self.name) if self.name else None
+        return self.default_format() if found is None else found
+
+    def runs(self, *, whole: str = "", **fields: Any) -> list[fset.Run]:
+        """The message through its /fset format as colour runs (`js.fset.runs`),
+        severity the colour where the format sets none, else colour entry
+        ``whole``. Every output target draws from these."""
+        holes = _holes(self.template, fields)
+        role = SEVERITY_ROLE[self.severity]
+        return fset.runs(self.format(), holes, hole=role if holes else "", whole=whole or ("" if holes else role))
+
     def line(self, *, colour: bool = True, **fields: Any) -> str:
-        """The message as the screen shows it. `colour=False` leaves the
-        severity paint off."""
-        body = _paint(self.template, fields, SEVERITY_COLOR[self.severity] if colour else "")
-        return banner(body) if self.banner else body
+        """The message as the screen shows it, through its /fset format.
+        `colour=False` is the plain text, for a channel that is not a screen."""
+        parts = self.runs(**fields)
+        return fset.to_ansi(parts) if colour else fset.to_plain(parts)
+
+    def plain(self, **fields: Any) -> str:
+        """The message through its /fset format as plain text, for a file or
+        a dump that is not a screen."""
+        return fset.to_plain(self.runs(**fields))
+
+    def body_runs(self, **fields: Any) -> list[fset.Run]:
+        """The entry's runs without a leading `$BANNER`: a piece of a row, or
+        a line for a channel that adds the slot itself."""
+        fmt = self.format()
+        for lead in ("$BANNER ", "$G "):
+            if fmt.startswith(lead):
+                fmt = fmt[len(lead):]
+                break
+        return fset.runs(fmt, _holes(self.template, fields))
+
+    def body(self, **fields: Any) -> str:
+        """`body_runs` as text with 24-bit colour escapes (`js.fset.to_ansi`)."""
+        return fset.to_ansi(self.body_runs(**fields))
 
     def said(self, **fields: Any) -> Said:
         """`text()` that keeps its entry, so a printer shows it with this
@@ -81,8 +131,8 @@ class Said(str):
 
 
 def banner(text: str) -> str:
-    """`text` behind the banner slot."""
-    return f"{BANNER} {text}"
+    """`text` behind the banner slot, the BANNER setting."""
+    return f"{fset.banner_text()} {text}"
 
 
 def set_banner(value: str) -> None:
@@ -91,42 +141,58 @@ def set_banner(value: str) -> None:
     BANNER = value
 
 
-def _paint(template: str, fields: dict[str, Any], color: str) -> str:
-    if not color:
-        return template.format(**fields)
-    parts: list[str] = []
-    holes = 0
-    for literal, name, spec, conversion in _FORMATTER.parse(template):
-        parts.append(literal)
+def _holes(template: str, fields: dict[str, Any]) -> list[str]:
+    """The template's holes filled from ``fields``, in order, as text."""
+    values: list[str] = []
+    for _literal, name, spec, conversion in _FORMATTER.parse(template):
         if name is None:
             continue
-        holes += 1
         value = _FORMATTER.get_field(name, (), fields)[0]
         value = _FORMATTER.convert_field(value, conversion)
-        spec = _FORMATTER.vformat(spec or "", (), fields)
-        parts.append(f"{color}{format(value, spec)}{C.RESET}")
-    if holes == 0:
-        return f"{color}{template.format(**fields)}{C.RESET}"
-    return "".join(parts)
+        values.append(format(value, _FORMATTER.vformat(spec or "", (), fields)))
+    return values
 
 
-def _is_terminal(stream: Any) -> bool:
+def is_terminal(stream: Any) -> bool:
     try:
         return bool(stream.isatty())
     except (AttributeError, ValueError, OSError):
         return False
 
 
+def for_stream(text: str, stream: Any = None) -> str:
+    """``text``, which may carry colour escapes, as ``stream`` (stdout by
+    default) takes it: as it is on a terminal with colour on, plain anywhere
+    else. Every printer that writes drawn text goes through here or
+    `line_for`."""
+    stream = stream if stream is not None else sys.stdout
+    return text if is_terminal(stream) and fset.colour_on() else fset.plain(text)
+
+
 def line_for(message: Message, /, *, file: Any = None, **fields: Any) -> str:
     """The line `say` prints to `file`, stdout by default."""
     stream = file if file is not None else sys.stdout
-    return message.line(colour=_is_terminal(stream), **fields)
+    return message.line(colour=is_terminal(stream), **fields)
 
 
 def say(message: Message, /, *, file: Any = None, flush: bool = False, **fields: Any) -> None:
     """Print `message` to stdout, or to `file`."""
     stream = file if file is not None else sys.stdout
     print(line_for(message, file=stream, **fields), file=stream, flush=flush)
+
+
+def worded(text: str) -> str:
+    """``text`` as its entry's /fset format words it when it is a `said()`
+    entry, plain: for a message that carries another inside a hole."""
+    return fset.to_plain(text.message.body_runs(**text.fields)) if isinstance(text, Said) else text
+
+
+def failure_line(error: str) -> str:
+    """A failure as the screen shows it: a `said()` entry through its own
+    format, any other text through FAILED's."""
+    if isinstance(error, Said):
+        return line_for(error.message, **error.fields)
+    return line_for(FAILED, error=error)
 
 
 def say_said(said: Said, /, *, file: Any = None, flush: bool = False) -> None:
@@ -308,6 +374,7 @@ UNKNOWN_SLASH_COMMAND = Message("Invalid command", WARN)
 
 CMD_HELP = Message("Show this message. help set NAME explains a setting.")
 CMD_SET = Message("List settings, a group or a *_FILE wildcard, show one, or change one. set -NAME clears one.")
+CMD_FSET = Message("List what js looks like, show one entry, or change one. fset -NAME clears one.")
 CMD_SHOW = Message("List every setting and its effective value.")
 CMD_SAVE = Message("Write your changed settings, handlers and aliases into the global jsrc, in place. /save server writes the model settings into the saved login.")
 CMD_LOAD = Message("Run each line of a file as a command. source is the same command.")
@@ -629,16 +696,13 @@ NOT_SAVED_NO_RESUME = Message("Session not saved. Resume unavailable.", WARN)
 
 # --- REPL startup ------------------------------------------------------------
 
-STARTUP = Message(
-    f"{C.CYAN}me — js agent{C.RESET}\n"
-    f"{C.MAGENTA}Agent:{C.RESET}  {{agent}}\n"
-    f"{C.MAGENTA}Model:{C.RESET}  {{model}}\n"
-    f"{C.MAGENTA}Prompt:{C.RESET} {{prompt}}\n"
-    f"{C.MAGENTA}Memory:{C.RESET} {{memory}}\n"
-    "\n"
-    f"{C.GREEN}Type exit or Ctrl-D to quit. /help lists commands.{C.RESET}\n",
-    banner=False,
-)
+# Each a line of the REPL's opening lines; js/fset gives them their colours.
+STARTUP_TITLE = Message("me — js agent", banner=False)
+STARTUP_AGENT = Message("Agent:  {agent}", banner=False)
+STARTUP_MODEL = Message("Model:  {model}", banner=False)
+STARTUP_PROMPT = Message("Prompt: {prompt}", banner=False)
+STARTUP_MEMORY = Message("Memory: {memory}", banner=False)
+STARTUP_HINT = Message("Type exit or Ctrl-D to quit. /help lists commands.", banner=False)
 RESUMED_MODEL = Message("Model: {model}")
 RESUME_MODEL_FALLBACK = Message("No login for {stamped}, the model this session last ran on. Continuing on {model}.", WARN)
 RESUMED = Message("Resumed: {messages}.")
@@ -666,6 +730,9 @@ COMPACTION_FAILED = Message("Compaction failed: {error}", GRAVE)
 
 # --- The network channel -----------------------------------------------------
 
+# A network line built from pieces, and a line behind its caller's label.
+NET_LINE = Message("{text}")
+NET_LABELLED = Message("{label}: {text}")
 NET_CONNECTING = Message("Connecting: {url}")
 NET_CONNECTED = Message("Connected: {host}  {ms}ms")
 NET_ROLE_CONNECTING = Message("{role}: connecting {url}")
@@ -900,11 +967,13 @@ SETTING_IS = Message("The value of {key} is: {value}")
 SETTING_CHANGED = Message("Value of {key} changed to: {value}")
 SETTING_ROW = Message("{key} {value}")
 SETTING_LIVE = Message("{line}  live: {source}", banner=False)
+SETTING_IS_FSET = Message("{key} is how js looks: /fset {key}")
 NO_EVENT_HANDLERS = Message("No event handlers.", banner=False)
 ON_NEEDS_TWO = Message("on needs an event and a handler.")
 SET_NEEDS_TWO = Message("set needs a key and a value: {line!r}")
 EXPECTED_ONE_OF = Message("expected {choices}")
 EXPECTED_COLOUR = Message("expected a #rrggbb colour, got {value!r}")
+EXPECTED_COLOUR_VALUE = Message("expected #rrggbb, a palette slot 00-98 or $NAME, several joined by |, got {value!r}")
 EXPECTED_KEY = Message("expected prompt_toolkit key names such as c-v or escape v, got {value!r}")
 EXPECTED_URL = Message("expected a URL starting with http:// or https://, got {value!r}")
 EXPECTED_INTEGER = Message("expected an integer")
@@ -985,8 +1054,17 @@ TOOL_CHAIN_BAN = Message("ban {tool}: {patterns}", banner=False)
 
 # --- Status bar --------------------------------------------------------------
 
-STATUS_COMPACTING = Message("compacting")
-STATUS_CACHE = Message("cache {pct}%")
+# Each field of the status bar, drawn only when it has a value.
+STATUS_CLOCK = Message("[{clock}]", banner=False)
+STATUS_ROUTE = Message("{route}", banner=False)
+STATUS_CONTEXT = Message("{tokens}", banner=False)
+STATUS_SPINNER = Message("{spinner}", banner=False)
+STATUS_PHASE = Message("{phase}", banner=False)
+STATUS_REPLY = Message("{tokens}", banner=False)
+STATUS_WHO = Message("{who}", banner=False)
+STATUS_CACHE = Message("cache {pct}%", banner=False)
+STATUS_COST = Message("{cost}", banner=False)
+STATUS_COMPACTING = Message("compacting", banner=False)
 
 # --- Tool exchanges ----------------------------------------------------------
 
@@ -1001,7 +1079,7 @@ TOOL_RUNNING = Message("running {elapsed}")
 KERNEL_MORE_LINES = Message("... {count} more lines. The model got the full text.")
 KERNEL_MORE_CODE_LINES = Message("... {count} more lines of code.")
 KERNEL_EVENT_MORE_LINES = Message("... {count} more lines.")
-KERNEL_CELL = Message("Kernel cell {cell}: ")
+KERNEL_CELL = Message("Kernel cell {cell}:")
 KERNEL_CELL_INTERRUPTED = Message("Cell interrupted.")
 KERNEL_STOPPED = Message("SIGINT sent. Namespace intact.")
 KERNEL_PANEL_TITLE = Message("Kernel cell {cell}")
@@ -1136,3 +1214,18 @@ GIT_APPLY_FAILED = Message("git apply failed")
 MESSAGE_FILE_UNREADABLE = Message("Message file not read: {error}", GRAVE)
 MESSAGE_FILE_EMPTY = Message("Commit message file is empty: {path}", GRAVE)
 COMMITTED = Message("Committed.")
+
+# --- /fset ---------------------------------------------------------------------
+
+FSET_UNKNOWN = Message("Unknown /fset entry: {name}")
+# A refusal of a value for NAME, the reason worded by its own format.
+FSET_REFUSED = Message("{name}: {error}")
+FSET_NO_CODE_STYLE = Message("no Pygments style {value!r}")
+FSET_VALUE = Message("{name} {value}", banner=False)
+FSET_EMPTY = Message("{name}", banner=False)
+
+
+# Every entry by name; each knows its own, for its /fset format.
+ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
+for _name, _entry in ENTRIES.items():
+    object.__setattr__(_entry, "name", _name)

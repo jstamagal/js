@@ -48,81 +48,6 @@ BANNER
     Text that starts each line js prints about its own state, such as `/set`
     output. $BANNER in a format reads it.
 
-ui.reasoning
-    Reasoning display: 0 hidden, 1 stream then collapse, 2 leave visible, 3
-    leave visible with token counts. The reasoning_toggle key, Ctrl-O unless
-    KEYBINDS_FILE moves it, folds and unfolds it in the async screen.
-    Display only; session reasoning is always retained.
-
-ui.net
-    Network display in the async screen: 0 nothing, 1 failures, 2 also
-    Connecting/Connected lines and a response byte counter on the status bar
-    until the first token, 3 also retries, catalog refreshes and per-call
-    stream stats.
-
-ui.status_bg
-    Status bar background, #rrggbb. Drawn in truecolor on every terminal.
-
-ui.status_fg
-    Status bar foreground, #rrggbb.
-
-ui.tools
-    Tool exchange display: 0 nothing; 1 what matters: quiet calls fold into
-    one row per tool, a command shows its output while it runs and one row
-    after, a patch shows its diff, a failure its error; 2 every call with
-    the first ui.tools_preview_lines result lines; 3 every call whole.
-
-ui.tools_quiet
-    Tools whose calls ui.tools 1 shows as one row and folds: a JSON list of
-    tool names.
-
-ui.shell_quiet
-    Shell commands ui.tools 1 treats as quiet, by first word or first two: a
-    JSON list.
-
-ui.tools_preview_lines
-    Lines of a result, a diff or a program shown before the rest is hidden
-    at ui.tools 1 and 2.
-
-ui.markdown
-    Render assistant Markdown on a terminal: finished blocks are highlighted
-    once, the open block stays live. Off writes the text as it arrives.
-    Output that is not a terminal is always plain text.
-
-theme.accent
-    Tool name and the mark of a running call in a tool exchange, #rrggbb.
-
-theme.ok
-    Mark of a finished call in a tool exchange, #rrggbb.
-
-theme.error
-    Mark of a failed call and error text in a tool exchange, #rrggbb.
-
-theme.warn
-    Standard error lines in a tool exchange, #rrggbb.
-
-theme.dim
-    Arguments, line numbers and metrics in a tool exchange, #rrggbb.
-
-theme.panel
-    Background of an output panel in a tool exchange, #rrggbb.
-
-theme.panel_text
-    Text of an output panel in a tool exchange, #rrggbb.
-
-theme.added
-    Added lines of a diff in a tool exchange, #rrggbb.
-
-theme.removed
-    Removed lines of a diff in a tool exchange, #rrggbb.
-
-theme.code
-    Inline code in an answer, drawn on theme.panel, #rrggbb.
-
-ui.resume_exchanges
-    Exchanges of a resumed session the REPL shows before its prompt, drawn
-    as a turn draws them. 0 shows none.
-
 EDITING_MODE
     Input line key bindings in the async screen. emacs: Enter sends. vi: a
     multi-line buffer, where Esc then `:` opens the ex line and `:x` sends.
@@ -283,18 +208,6 @@ PYTHON_KERNEL
     Enable the persistent Python kernel and toolbox. Requires the kernel
     extra.
 
-kernel.verbosity
-    How much of each kernel/toolbox call is rendered to your terminal.
-    quiet: errors and interrupts only. normal: code, output, timing,
-    namespace. verbose: stdout, stderr and display split out, plus kernel
-    lifecycle and toolbox activity. Affects only what you see; the model
-    always receives the full result.
-
-kernel.render_max_lines
-    Line cap per section of that terminal render, so a 4000-line cell cannot
-    scroll the screen away. The hidden count is always shown, and the model
-    still gets the untrimmed output.
-
 SHELL_PROGRAM
     Program the `shell` tool runs commands with: a name looked up on PATH,
     or a path. bash and zsh run with `-o pipefail`, so a pipeline fails when
@@ -327,9 +240,6 @@ JAIL_HIDE
 
 DEBUG_LOG
     Append per-event records to state/<agent>/debug.log.
-
-runtime.trace
-    Pretty-print the tool-call trace line as the model runs.
 
 PARALLEL_TOOLS_MAX
     Most read-only tool calls of one model response that run at once: read,

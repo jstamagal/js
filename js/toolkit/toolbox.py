@@ -549,7 +549,7 @@ def toolbox(
             return "ERROR: restore needs revision=<n>; call history first to see what exists"
         report = restore(cwd, name, target, model=model)
         _kernel.render_event(context, level, report,
-                             style="bold red" if report.startswith("ERROR") else "green")
+                             style="COLOR_ERROR" if report.startswith("ERROR") else "COLOR_OK")
         return _kernel.cap_for_model(report, context)
 
     if verb == "save":
@@ -581,19 +581,19 @@ def toolbox(
                 "NameError. Save them as their own tools, inline them into this "
                 "definition, or pass the whole definition in `source`."
             )
-            _kernel.render_event(context, level, message, style="bold red")
+            _kernel.render_event(context, level, message, style="COLOR_ERROR")
             return _kernel.cap_for_model(message, context)
         report = "\n".join([write_revision(cwd, name, body, model=model,
                                            note=text_or_default(note), scope=scope),
                             *warnings])
         _kernel.render_event(context, level, report,
-                             style="bold red" if report.startswith("ERROR") else "green")
+                             style="COLOR_ERROR" if report.startswith("ERROR") else "COLOR_OK")
         return _kernel.cap_for_model(report, context)
 
     # load
     session, problem, started_now = _kernel.get_session(context)
     if session is None:
-        _kernel.render_event(context, level, problem, style="bold red")
+        _kernel.render_event(context, level, problem, style="COLOR_ERROR")
         return problem
     if started_now:
         _kernel.render_event(context, level, msgs.KERNEL_STARTED.text(cwd=session.cwd),
@@ -615,7 +615,7 @@ def toolbox(
         lines.append("NAMESPACE " + ", ".join(sorted(session.namespace)))
     for line in lines:
         _kernel.render_event(context, level, line,
-                             style="red" if "BROKEN" in line else "green")
+                             style="COLOR_ERROR" if "BROKEN" in line else "COLOR_OK")
     return _kernel.cap_for_model("\n".join(lines), context)
 
 

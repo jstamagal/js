@@ -114,7 +114,7 @@ def announce(n: int, budget: Budget, delay: float, exc: BaseException) -> None:
     level 1, so a long Retry-After does not look like a hang."""
     stream_transport.say_for_caller(
         1 if delay >= 10 else 3,
-        msgs.RETRY_WAIT.text(n=n, of=budget.attempts, seconds=delay,
+        msgs.RETRY_WAIT.said(n=n, of=budget.attempts, seconds=delay,
                              failure=stream_transport.describe_failure(exc)))
 
 

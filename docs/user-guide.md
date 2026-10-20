@@ -114,6 +114,7 @@ REPL commands:
 /logout                        clear provider/baseurl/apikey for this session
 /models [max]                  list available models from the active provider
 /set [key [val]]              list settings, show one, or change one
+/fset [NAME [value]]          list how js looks: formats, palette, colours, theme, display levels
 /show [key]                   list all current config values or one key
 /save                         write your changed settings into the global jsrc
 /load <file>                  run each line of a file as a command (also /source)
@@ -121,9 +122,9 @@ REPL commands:
 /alias [name [command]]       list, show or define a command alias
 /exec <command>               run a shell command; its stdout goes with the next message
 /set EFFORT high
-/set ui.reasoning 2            show reasoning and leave it visible (default)
-/set ui.tools 3                show every tool call and its whole result
-/set ui.tools 1                fold reads and searches, show diffs, running commands and failures
+/fset REASONING_DISPLAY 2     show reasoning and leave it visible (default)
+/fset TOOLS_DISPLAY 3         show every tool call and its whole result
+/fset TOOLS_DISPLAY 1         fold reads and searches, show diffs, running commands and failures
 /set COMPACTION_AUTO off
 /on turn_start set COMPACTION_AUTO off
 /turns
@@ -224,10 +225,16 @@ Review $1. Focus on ${2:-correctness}; list findings worst first.
 `/save` writes into the global jsrc, in place: each setting not at its stock
 value gets its line uncommented with your value, a live line for a setting
 back at stock is commented out, and `on` handlers and aliases not yet in the
-file are appended. Every other line stays as it is, and no backup is made. On
-the next start the settings layer applies the `set` lines (and a setting's
-short name, e.g. `model X` is `set model X`) under env and `--extra`; the REPL
-then runs every other jsrc line through the command table.
+file are appended. Every other line stays as it is, and no backup is made. A
+value a line cannot hold as it is (nothing, a line break, space at either
+end, a leading `"`) is written as a JSON string literal, `"first\nsecond"`, and a
+setting or format given a JSON string literal takes the string it spells,
+before any other reading of the value. On
+the next start the REPL runs each jsrc file a line at a time, in order, as
+`/load` runs a file, its `set` lines (and a setting's short name, e.g. `model X`
+is `set model X`) and its commands together, under env and `--extra`. A loaded
+file stops at its first error, and so does every loaded file containing it; the
+jsrc itself goes on past an error.
 
 `/cd DIR` moves the session: js's working directory and the tools' move to
 `DIR`, and the next user message carries one `<js-reminder>` saying the working
@@ -248,7 +255,7 @@ the JSONL so future loads ignore older messages in that file.
 `/wipe` rotates the active session file to `.jsonl.bak`, `.jsonl.bak.1`, and so
 on, then clears the in-process messages.
 
-Reasoning streams visibly by default. `/set ui.reasoning 0` hides it, `1`
+Reasoning streams visibly by default. `/fset REASONING_DISPLAY 0` hides it, `1`
 auto-collapses it when the answer starts, `2` leaves it visible, and `3` adds
 token counts. In the standard async screen, **Ctrl-O** toggles retained reasoning
 without changing the input line. `/save` persists the setting. Hiding or folding
@@ -263,10 +270,10 @@ terminal it drops the cache figure first, then shortens the model name, then
 drops the provider, the token count, the cost and the agent id; the clock,
 spinner and session stay. A session started with `--session NAME` shows its
 whole name, cut short with `…` when nothing else is left to drop. Its
-colours are `/set ui.status_bg #rrggbb` and `/set ui.status_fg #rrggbb`, drawn
+colours are `/fset COLOR_STATUS_BACKGROUND #rrggbb` and `/fset COLOR_STATUS_TEXT #rrggbb`, drawn
 in truecolor on every terminal, including the Linux console.
 
-`ui.net` sets how much of the network shows, 0 to 3. At 1 only failures print
+`NET_DISPLAY` sets how much of the network shows, 0 to 3. At 1 only failures print
 (`*** DNS failure: host`, `*** 429 ...`, timeouts), once, when js stops
 retrying, and so does a retry that waits 10s or more; at 2 (the default) each
 model request, including subagents and compaction, also prints
@@ -277,7 +284,7 @@ prints one `*** Prompt cache break` line with both counts and the seconds
 since that request; at 3 each retry, models.dev catalog
 refreshes and the per-call stream stats line (`ms finish tok tok/s cache`)
 print as well. In the screen that stats
-line follows `ui.net`; `-p` and `--blocking` still show it with `-d`.
+line follows `NET_DISPLAY`; `-p` and `--blocking` still show it with `-d`.
 
 `/set EDITING_MODE vi` makes the input line a vi buffer (the default is
 `emacs`, where Enter sends). In vi mode typing starts in insert mode, Enter is a
@@ -307,7 +314,7 @@ A line typed while a turn runs is handled by `STEER_MODE`:
 - `batch`: the lines wait for the turn to end and then go in as ONE message.
 - `one`: each line is its own turn, in order.
 
-Tool exchanges follow `ui.tools`. Each one sits behind a bar down its left
+Tool exchanges follow `TOOLS_DISPLAY`. Each one sits behind a bar down its left
 edge, amber while the call runs, green when it finished, red when it failed,
 with a mark (`…`, `✓`, `✗`), the tool name on a coloured chip, and the call's
 key argument (a path, a search pattern, the first line of a command, a URL).
@@ -315,29 +322,29 @@ key argument (a path, a search pattern, the first line of a command, a URL).
 - `0` shows nothing.
 - `1` (the default) shows what matters. Quiet calls are one row, and a run of
   them folds into one row per tool: `read 6 files`, with the file names beside
-  it. The quiet tools are `ui.tools_quiet`; a shell command is quiet when every
-  command in it is in `ui.shell_quiet` and it redirects nothing (`ls -la`,
+  it. The quiet tools are `TOOLS_QUIET`; a shell command is quiet when every
+  command in it is in `SHELL_QUIET` and it redirects nothing (`ls -la`,
   `git status | head`). Any other shell command shows the last lines of its
   output while it runs, once it has run for a second, and becomes one row with
   its last line when it ends. A `patch` shows its diff, a `send` the message
-  sent, any other tool its result, each cut at `ui.tools_preview_lines` lines.
+  sent, any other tool its result, each cut at `TOOLS_PREVIEW_LINES` lines.
   A failed call shows its error.
 - `2` shows every call on its own with its program and the first
-  `ui.tools_preview_lines` lines of the result.
+  `TOOLS_PREVIEW_LINES` lines of the result.
 - `3` shows every call with its whole result.
 
 On the REPL screen an exchange is redrawn in place as it changes. Elsewhere a
 call is printed once, when it finishes, and a run of quiet calls when the run
-ends. The colours are the `theme.*` settings (`/set theme.accent #1fb4ff`). In
+ends. The colours are /fset `COLOR_*` entries (`/fset COLOR_TOOL #1fb4ff`); `/fset THEME bitchx` picks a built-in theme. In
 a saved transcript every call is recorded on its own and its header starts
-with `>`, so `grep '] > shell'` finds every shell call made at `ui.tools` 1 or
+with `>`, so `grep '] > shell'` finds every shell call made at `TOOLS_DISPLAY` 1 or
 higher (the `]` keeps `<USER>` lines out). Tool output, tool arguments and
 model text are stripped of escape sequences and control bytes before the
 terminal sees them.
 
 Assistant Markdown is rendered on a terminal: each finished block (paragraph,
 list, fenced code) is highlighted once and stays put; only the block still
-being written is redrawn. `/set ui.markdown off` writes the text as it arrives.
+being written is redrawn. `/fset MARKDOWN off` writes the text as it arrives.
 Output that is not a terminal, such as `js -p ... | less`, is plain text.
 
 Ctrl-C cancels the active turn and drops queued and steering lines; `/flush`
@@ -345,7 +352,7 @@ drops them without touching the turn. `exit` or Ctrl-D during a turn does what
 Ctrl-C does, keeping the partial answer and marking the turn interrupted, and
 the screen closes once the turn has ended.
 
-Resuming a session in the screen shows its last `ui.resume_exchanges` exchanges
+Resuming a session in the screen shows its last `RESUME_EXCHANGES` exchanges
 (3 by default, 0 for none) as a turn draws them, below the startup lines and
 the `*** Resumed` and `*** Model` notices.
 
@@ -421,7 +428,7 @@ cost per model call, errors, and a closing `result`. Everything else goes to
 stderr. The schema is in [Headless JSON Events](headless-json.md).
 
 `--debug` streams the trace to stdout. `--debug-file` writes the rich trace to a
-file and keeps stdout clean. They are mutually exclusive. With `runtime.trace`
+file and keeps stdout clean. They are mutually exclusive. With `TRACE`
 on, a plain one-shot run shows the trace on stderr and keeps stdout answer-only.
 
 `-q` / `--quiet` suppresses the `*** Continue: ...` resume hint that one-shot mode

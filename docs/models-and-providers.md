@@ -230,7 +230,7 @@ both the parse and the serialize side.
 
 ### Reasoning display
 
-`ui.reasoning` controls presentation in the standard REPL and one-shot mode,
+`REASONING_DISPLAY` controls presentation in the standard REPL and one-shot mode,
 independently of `EFFORT`:
 
 | Value | Display |
@@ -240,7 +240,7 @@ independently of `EFFORT`:
 | `2` | Stream and leave visible — **default** |
 | `3` | Stream and leave visible, with token counts (`~` marks estimates) |
 
-Use `/set ui.reasoning <0-3>` and `/save`; `JS_UI_REASONING` is its canonical
+Use `/fset REASONING_DISPLAY <0-3>` and `/save`; `JS_REASONING_DISPLAY` is its canonical
 environment variable. Setting changes apply to subsequent turns. In the standard async screen,
 **Ctrl-O** collapses or expands retained reasoning blocks without changing the
 input line; a manual toggle overrides auto-collapse for those blocks.

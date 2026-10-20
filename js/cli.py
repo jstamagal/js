@@ -41,6 +41,7 @@ from . import display as display_mod
 from . import dotenv
 from . import endpoint_uri
 from . import events
+from . import fset
 from . import exline
 from . import hookexec
 from . import login_defaults, logins
@@ -1549,6 +1550,8 @@ def _cmd_set(arg: str, state: dict, cfg: Config) -> str | None:
     # `set -key` goes back to the value the session started with.
     baseline = cfg.settings if isinstance(getattr(cfg, "settings", None), dict) else None
     result = setcmd.set_command(state["settings"], arg, baseline)
+    if state.get("rc_replay"):
+        return _replayed(result)
     if result.error is None:
         unset = parts[0].startswith("-")
         _note_live_set(state, parts[0][1:] if unset else parts[0], unset=unset)
@@ -1573,6 +1576,21 @@ def _note_live_set(state: dict, name: str, *, unset: bool) -> None:
     # A set or unset of the key ends a resumed session's value for it.
     if spec.key in (state.get("live_resume") or {}):
         state["live_resume"] = {k: v for k, v in state["live_resume"].items() if k != spec.key}
+
+
+def _replayed(result: setcmd.CommandResult) -> str | None:
+    """A settings verb's output in the startup run of the jsrc files: printed,
+    its keys left in the jsrc layer. `_run_rc_commands` carries what the run
+    changed into live state when it ends."""
+    for out in result.lines:
+        print(out)
+    return result.error
+
+
+def _cmd_fset(arg: str, state: dict, cfg: Config) -> str | None:
+    baseline = cfg.settings if isinstance(getattr(cfg, "settings", None), dict) else None
+    result = setcmd.fset_command(state["settings"], arg, baseline)
+    return _replayed(result) if state.get("rc_replay") else _apply_settings_result(result, state, cfg)
 
 
 def _cmd_show(arg: str, state: dict, cfg: Config) -> str | None:
@@ -1636,8 +1654,6 @@ def _cmd_load(arg: str, state: dict, cfg: Config) -> str | None:
     stack.append(path)
     try:
         for lineno, raw in enumerate(lines, 1):
-            if state.get("rc_replay") and _config_owned(raw):
-                continue
             error = _run_script_line(raw, state, cfg)
             if error:
                 return msgs.SCRIPT_LINE_FAILED.said(path=path, lineno=lineno, error=error)
@@ -1970,10 +1986,26 @@ def _help_set(name: str) -> str | None:
     return None
 
 
+def _help_fset(name: str) -> str | None:
+    """`/help fset NAME`: the /fset entry's help text, from `js/help/fset.txt`."""
+    if not name:
+        return msgs.USAGE.said(usage="/help fset NAME")
+    key = name.upper()
+    doc = settings.read_help(settings.FSET_HELP_FILE).get(key)
+    if doc is None:
+        return msgs.FSET_UNKNOWN.said(name=name)
+    msgs.say(msgs.HELP_SETTING, key=key)
+    for line in textwrap.wrap(doc, 72):
+        msgs.say(msgs.HELP_SETTING_LINE, text=line)
+    return None
+
+
 def _cmd_help(arg: str, state: dict, cfg: Config) -> str | None:
     topic, _, rest = arg.strip().partition(" ")
     if topic.lower() == "set":
         return _help_set(rest.strip())
+    if topic.lower() == "fset":
+        return _help_fset(rest.strip())
     rows = [(f"/{c.usage}", c.doc.text()) for c in dict.fromkeys(COMMANDS.values())]
     rows += [(f"/{name}", msgs.HELP_ALIAS.text(body=body)) for name, body in (state.get("aliases") or {}).items()]
     rows += [(f"/{name}", msgs.HELP_PROMPT_COMMAND.text(path=command.path, description=command.description))
@@ -2184,6 +2216,7 @@ COMMANDS: dict[str, Command] = {
     "help": Command(_cmd_help, "help [set NAME]", msgs.CMD_HELP),
     "set": Command(_cmd_set, "set [key [value]]", msgs.CMD_SET,
                    complete="set"),
+    "fset": Command(_cmd_fset, "fset [name [value]]", msgs.CMD_FSET, complete="fset"),
     "show": Command(_cmd_show, "show [key]", msgs.CMD_SHOW, complete="keys"),
     "save": Command(_cmd_save, "save", msgs.CMD_SAVE),
     **{verb: _LOAD for verb in setcmd.LOAD_VERBS},
@@ -2244,6 +2277,8 @@ def _run_command(line: str, state: dict, cfg: Config, depth: int = 0) -> tuple[b
             return False, None
         if depth >= _MAX_ALIAS_DEPTH:
             return True, msgs.ALIAS_TOO_DEEP.said(name=verb)
+        # The body's $NAMEs expand once; the typed arguments never do.
+        body = setcmd.expand_line(body, state.get("settings"))
         expanded = body.replace("$*", arg) if "$*" in body else f"{body} {arg}".strip()
         handled, error = _run_command(expanded, state, cfg, depth + 1)
         return True, error if handled else msgs.ALIAS_UNKNOWN_COMMAND.said(name=verb, verb=expanded.split()[0])
@@ -2253,7 +2288,14 @@ def _run_command(line: str, state: dict, cfg: Config, depth: int = 0) -> tuple[b
 
 
 def _run_script_line(line: str, state: dict, cfg: Config) -> str | None:
-    """One line from a file of commands: an unknown verb is an error."""
+    """One line from a file of commands, its $NAMEs expanded once: an
+    unknown verb is an error. In the startup run of the jsrc files a
+    setting's short name is that setting, as config load read it: `model X`
+    is `set MODEL X`, not the /model command."""
+    line = setcmd.expand_line(line, state.get("settings"))
+    parsed = setcmd.split_command(line)
+    if state.get("rc_replay") and parsed is not None and parsed[0] in settings.SPEC_BY_ALIAS:
+        line = f"set {parsed[0]} {parsed[1]}"
     handled, error = _run_command(line, state, cfg)
     if not handled:
         return msgs.UNKNOWN_COMMAND.said(verb=setcmd.split_command(line)[0])
@@ -2318,7 +2360,7 @@ def _event_dispatcher(state: dict, cfg: Config):
     """Run `on` handler text through the command table."""
 
     def dispatch(hook: events.EventHook, emission: events.EventEmission) -> events.EventHandlerResult:
-        handled, error = _run_command(hook.handler, state, cfg)
+        handled, error = _run_command(setcmd.expand_line(hook.handler, state.get("settings")), state, cfg)
         if not handled:
             parsed = setcmd.split_command(hook.handler)
             error = f"unsupported event handler command: {parsed[0] if parsed else '<blank>'}"
@@ -2328,16 +2370,30 @@ def _event_dispatcher(state: dict, cfg: Config):
 
 
 def _run_rc_commands(state: dict, cfg: Config, paths: list[Path]) -> list[str]:
-    """Run the jsrc lines the settings layer did not apply at config load
-    (`on`, `alias`, `load`, every other command) through the table, in order.
-    A relative `load` resolves against the jsrc's directory. The `set` lines
-    of loaded files were applied at config load, so the replay skips them.
-    Output is dropped; the errors come back for the banner."""
+    """Run each jsrc file a line at a time, in order, through the same line
+    runner `/load` uses (`_run_script_line`), its settings and its commands
+    together: a `load` in it is `/load`, so a loaded file stops at its first
+    error and so does every loaded file containing it; the jsrc itself goes
+    on past an error. A relative `load` resolves against the jsrc's
+    directory. The run starts from the stock settings and no /fset entries,
+    as config load did; each setting it leaves different from what config
+    load found takes its value in the live settings, under the env and CLI
+    layers, and what the session put on top of the jsrc layer stays. Output
+    is dropped; the errors come back for the banner."""
+    from . import fset as _fset
+
     errors: list[str] = []
     stack = state.setdefault("load_stack", [])
+    live = state.get("settings")
+    found = settings.collect_again(paths)
+    layer = settings.seed_defaults()
+    _fset.reset()
+    state["settings"] = layer
     state["rc_replay"] = True
     try:
         for path in paths:
+            if not path.exists():
+                continue
             try:
                 lines = path.read_text(encoding="utf-8").splitlines()
             except (OSError, UnicodeError):
@@ -2345,24 +2401,29 @@ def _run_rc_commands(state: dict, cfg: Config, paths: list[Path]) -> list[str]:
             stack.append(path.resolve(strict=False))
             try:
                 for lineno, raw in enumerate(lines, 1):
-                    if _config_owned(raw):
-                        continue
                     with contextlib.redirect_stdout(io.StringIO()):
                         error = _run_script_line(raw, state, cfg)
                     if error:
-                        errors.append(msgs.SCRIPT_LINE_FAILED.text(path=path, lineno=lineno, error=error))
+                        errors.append(msgs.SCRIPT_LINE_FAILED.said(path=path, lineno=lineno, error=error))
             finally:
                 stack.pop()
     finally:
+        state["settings"] = live
         state.pop("rc_replay", None)
+    if isinstance(live, dict):
+        ran = settings.over_jsrc_layer(paths, layer)
+        changed: list[str] = []
+        for spec in settings.REGISTRY:
+            value = settings.get_dotted(ran, spec.path)
+            if settings.get_dotted(found, spec.path) != value:
+                settings.set_dotted(live, spec.path, copy.deepcopy(value))
+                changed.append(spec.key)
+        # The model, provider and the rest of the state follow only what the
+        # run changed: the flags and the resumed session stay over the jsrc.
+        _apply_settings_result(setcmd.CommandResult(handled=True, changed=bool(changed),
+                                                    changed_keys=changed), state, cfg)
+        msgs.set_banner(str(settings.knob(live, "BANNER")))
     return errors
-
-
-def _config_owned(raw: str) -> bool:
-    """A blank line, a comment, or a line the settings layer applied at
-    config load (jsrc and the files it loads)."""
-    parsed = setcmd.split_command(raw)
-    return parsed is None or setcmd.config_owns(parsed[0])
 
 
 def _agent_model_applies(cfg: Config, prompt_spec, model: str | None, *, config_pins: bool = True) -> bool:
@@ -2733,7 +2794,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 # Plain and --debug-file: stdout carries only the final answer,
                 # reprinted below. The log captures the streamed answer plus, for
                 # --debug-file, the concise trace lines; the full request trace
-                # lands there via telemetry.trace_sink. With runtime.trace on, the
+                # lands there via telemetry.trace_sink. With TRACE on, the
                 # concise trace also shows on stderr as the model runs.
                 capture = trace_sink if trace_sink is not None else io.StringIO()
                 trace = bool(getattr(cfg, "trace", False))
@@ -3397,7 +3458,7 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
             state["messages"],
             telemetry,
             trace_override=bool(
-                settings.get_dotted(state["settings"], ("runtime", "trace"), cfg.trace)
+                settings.get_dotted(state["settings"], ("TRACE",), cfg.trace)
             ),
             reasoning_effort_override=turn_cfg.reasoning_effort,
             max_output_override=turn_cfg.max_output_tokens,
@@ -3589,9 +3650,16 @@ def _startup_banner(cfg: Config, state: dict, notices: list[str], errors: list[s
     text = motd.pick(settings.knob(state["settings"], "MOTD_FILE"), settings.knob(state["settings"], "MOTD_DIR"))
     return "\n".join([
         *([motd.lines_for_scrollback(text.rstrip("\r\n")) + motd.RESET] if text else []),
-        msgs.STARTUP.line(agent=cfg.agent_id, model=state["model"], prompt=cfg.prompts_dir, memory=cfg.session_file),
+        msgs.STARTUP_TITLE.line(),
+        msgs.STARTUP_AGENT.line(agent=cfg.agent_id),
+        msgs.STARTUP_MODEL.line(model=state["model"]),
+        msgs.STARTUP_PROMPT.line(prompt=cfg.prompts_dir),
+        msgs.STARTUP_MEMORY.line(memory=cfg.session_file),
+        "",
+        msgs.STARTUP_HINT.line(),
+        "",
         *notices,
-        *(msgs.FAILED.line(error=error) for error in errors),
+        *(msgs.failure_line(error) for error in errors),
     ])
 
 
@@ -3646,19 +3714,11 @@ def _drain_queue(queue: asyncio.Queue) -> int:
     return len(_take_queued(queue))
 
 
-def _live_ui_int(state: dict, key: str) -> int:
-    """A 0-3 `ui.<key>` level from live settings; its js/jsrc value when bad."""
-    default = settings.default_value(f"ui.{key}")
-    value = settings.get_dotted(state.get("settings") or {}, ("ui", key), default)
+def _live_level(state: dict, key: str) -> int:
+    """A 0-3 display level from live settings; its js/jsrc value when bad."""
+    default = settings.default_value(key)
+    value = settings.knob(state.get("settings") or {}, key)
     return value if isinstance(value, int) and value in range(4) else default
-
-
-def _status_colours(state: dict) -> str:
-    live = state.get("settings") or {}
-    return screen.status_style(
-        settings.knob(live, "ui.status_fg"),
-        settings.knob(live, "ui.status_bg"),
-    )
 
 
 def _status_bar_line(cfg: Config, state: dict, turn_active: bool, width: int) -> str:
@@ -3675,7 +3735,7 @@ def _status_bar_line(cfg: Config, state: dict, turn_active: bool, width: int) ->
     if turn_active:
         throbber = screen.throbber_frame(now)
         phase, output_tokens = screen.turn_centre(
-            context.turn_status, now=now, show_bytes=_live_ui_int(state, "net") >= 2,
+            context.turn_status, now=now, show_bytes=_live_level(state, "NET_DISPLAY") >= 2,
         )
     return screen.status_line(
         width,
@@ -3694,9 +3754,9 @@ def _status_bar_line(cfg: Config, state: dict, turn_active: bool, width: int) ->
 
 
 def _resume_view(state: dict, width: int) -> str:
-    """The last `ui.resume_exchanges` exchanges of the session, drawn at `width`."""
+    """The last RESUME_EXCHANGES exchanges of the session, drawn at `width`."""
     live = state.get("settings") or {}
-    count = settings.knob(live, "ui.resume_exchanges")
+    count = settings.knob(live, "RESUME_EXCHANGES")
     return display_mod.render_exchanges(
         state["messages"], count if isinstance(count, int) else 0, width=width,
         level=display_mod.tools_level(live), preview=display_mod.preview_lines(live),
@@ -3825,14 +3885,13 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         )
 
     app, scrollback = screen.build_app(
-        prompt=display_mod.PROMPT,
+        prompt=display_mod.prompt,
         history=session.history,
         completer=session.completer,
         on_line=on_line,
         on_interrupt=on_interrupt,
         on_eof=on_eof,
         status=lambda width: _status_bar_line(cfg, state, sup.turn_active(), width),
-        status_colours=lambda: _status_colours(state),
         editing_mode=lambda: settings.knob(state["settings"], "EDITING_MODE"),
         echo=lambda line: _echoes(line, state),
         on_ex=on_ex,
@@ -3857,7 +3916,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         with screen.capture_stdio(loop, scrollback, app):
             try:
                 stream_transport.install_sink(stream_transport.NetSink(
-                    level=lambda: _live_ui_int(state, "net"),
+                    level=lambda: _live_level(state, "NET_DISPLAY"),
                     emit=lambda line: print(line, flush=True),
                 ))
                 if banner:
@@ -3912,6 +3971,7 @@ def _repl_state(cfg, prompt_spec, *, messages: list[dict] | None = None,
         system = prompt_spec.system
     if live_settings is None:
         live_settings = copy.deepcopy(cfg.settings) if isinstance(cfg.settings, dict) else {}
+    fset.bind_settings(live_settings)
     if tool_registry is None:
         tool_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
     event_hooks = events.EventHooks()
@@ -3973,7 +4033,7 @@ def _blocking_echo(raw: str, state: dict) -> str | None:
     line = pastes.expand(raw).strip()
     if not line or not _echoes(line, state):
         return None
-    return display_mod.PROMPT + raw
+    return display_mod.user_line(raw).rstrip("\n")
 
 
 def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
@@ -3990,7 +4050,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
         mcp_loop.run(_initialize_repl_agent(cfg, state, telemetry, prompt_spec))
     while state["running"]:
         try:
-            raw = session.prompt(ANSI(display_mod.PROMPT))
+            raw = session.prompt(ANSI(display_mod.prompt()))
             if (echo := _blocking_echo(raw, state)) is not None:
                 print(echo)
             line = pastes.expand(raw).strip()
@@ -4058,7 +4118,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
                 state["messages"],
                 telemetry,
                 trace_override=bool(
-                    settings.get_dotted(state["settings"], ("runtime", "trace"), cfg.trace)
+                    settings.get_dotted(state["settings"], ("TRACE",), cfg.trace)
                 ),
                 reasoning_effort_override=turn_cfg.reasoning_effort,
                 max_output_override=turn_cfg.max_output_tokens,
@@ -4810,7 +4870,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     keymap, key_errors = keys_mod.load(keys_mod.keys_file(cfg.settings))
     completer = replcomplete.JsCompleter(
         commands=lambda: _command_completions(state),
-        setting_keys=[spec.key for spec in settings.REGISTRY],
+        setting_keys=[spec.key for spec in settings.REGISTRY if spec.command == "set"],
+        fset_names=[*(spec.key for spec in settings.REGISTRY if spec.command == "fset"), *fset.names()],
         names=lambda: sorted(set(providers.known_provider_ids()) | set(logins.load_logins())),
         spell=replcomplete.hunspell_suggest,
         bare_words=QUIT_WORDS,

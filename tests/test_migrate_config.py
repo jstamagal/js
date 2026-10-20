@@ -131,6 +131,12 @@ def test_two_spellings_of_one_setting_are_reported():
     assert _jsrc("set EFFORT low\nset EFFORT high")[1] == []
 
 
+def test_the_env_var_of_a_setting_that_became_a_colour_entry_is_reported_gone():
+    from js.rename import report_old_names
+
+    assert report_old_names("export JS_THEME_ACCENT=#ff0000") == [(1, "JS_THEME_ACCENT", None)]
+
+
 def test_kind_of_rewrites_only_jsrc_files():
     from js.rename import kind_of
 
@@ -252,3 +258,19 @@ def test_spaces_around_an_equals_sign_do_not_hide_agent(text):
 def test_an_exec_body_in_a_jsrc_is_reported():
     line = "on turn_start exec sh -c 'JS_REASONING=high js -p hi'"
     assert _jsrc(line) == (line, [(1, "")])
+
+
+def test_migrate_writes_display_and_colour_settings_as_fset_lines_that_reload(tmp_path, monkeypatch):
+    from js import fset, settings
+
+    legacy = tmp_path / "config.toml"
+    target = tmp_path / "jsrc"
+    legacy.write_text('[ui]\ntools = 3\n[theme]\naccent = "#112233"\n', encoding="utf-8")
+    monkeypatch.setattr(cli._paths, "legacy_global_config_file", lambda: legacy)
+    monkeypatch.setattr(cli._paths, "global_config_file", lambda: target)
+
+    assert cli._run_migrate_config() == 0
+    loaded = settings.seed_defaults()
+    assert settings.load_jsrc_files([target], loaded) == []
+    assert settings.knob(loaded, "TOOLS_DISPLAY") == 3
+    assert fset.hex_for("COLOR_TOOL") == "#112233"

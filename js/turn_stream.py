@@ -70,10 +70,10 @@ class TurnEvents:
 
 
 def reasoning_level(settings: dict | None) -> int:
-    """ui.reasoning, or its js/jsrc value when the store holds no level 0-3."""
-    level = _settings.knob(settings, "ui.reasoning")
+    """REASONING_DISPLAY, or its js/jsrc value when the store holds no level 0-3."""
+    level = _settings.knob(settings, "REASONING_DISPLAY")
     if not isinstance(level, int) or level not in range(4):
-        level = _settings.default_value("ui.reasoning")
+        level = _settings.default_value("REASONING_DISPLAY")
     return level
 
 
@@ -81,7 +81,7 @@ class StreamSink:
     """``text`` and ``reasoning`` are the ``on_text`` and ``on_reasoning``
     callbacks of one model call. Each Display opens at its first chunk and
     finishes at ``close``. Nothing is shown when ``suppress_output`` is set,
-    and no reasoning at ui.reasoning 0; the text still reaches the turn status
+    and no reasoning at REASONING_DISPLAY 0; the text still reaches the turn status
     and the ``stream`` event."""
 
     def __init__(self, telemetry: Any, turn_status: Any, events: TurnEvents, *,
@@ -154,7 +154,7 @@ class StreamSink:
                     factory(self._markdown) if factory is not None
                     else display.Display.for_stream(sys.stdout, markdown=self._markdown)
                 )
-                self._answer.mark(display.ASSISTANT_MARK)
+                self._answer.mark(display.assistant_mark())
             self._answer.chunk("text", chunk)
 
     def close(self, reasoning_tokens: int | None = None) -> None:
