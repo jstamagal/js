@@ -1213,6 +1213,8 @@ def _other_arguments(name: str, args: dict, whole: bool = False) -> str:
     notes: list[str] = []
     span = args.get("range")
     if name == "read" and isinstance(span, dict):
+        span = {key: clean(value) if isinstance(value, str) else value for key, value in span.items()}
+        args = {**args, "range": span}
         if "start_byte" in span or "end_byte" in span:
             notes.append(f"bytes {span.get('start_byte', 0)}-{span.get('end_byte', '')}")
         elif "start_line" in span or "end_line" in span:
@@ -1229,7 +1231,7 @@ def _other_arguments(name: str, args: dict, whole: bool = False) -> str:
             if key not in left_out and value is not None and value != ""]
     if rest:
         notes.append("(" + ", ".join(rest) + ")")
-    return " ".join(notes)
+    return clean(" ".join(notes))
 
 
 def _lexer(name: str, args: dict, body: str) -> str:

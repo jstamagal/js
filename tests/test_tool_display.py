@@ -87,6 +87,16 @@ def test_escape_sequences_in_tool_arguments_do_not_reach_the_terminal():
         assert "\x1b" not in stripped
 
 
+def test_control_sequences_in_read_range_values_do_not_reach_the_terminal():
+    hostile = "\x1b]0;UNTRUSTED_TITLE\x07\x1b[2J"
+    for unit in ("line", "byte"):
+        args = {"file_path": "x.py", "range": {f"start_{unit}": hostile, f"end_{unit}": 4}}
+        for level in (1, 2, 3):
+            stripped = SGR.sub("", _running("read", args, level))
+            assert "\x1b" not in stripped
+            assert "UNTRUSTED_TITLE" not in stripped
+
+
 def test_shell_envelope_is_dropped_and_exit_shown_only_when_nonzero():
     ok = "shell=/bin/zsh\nexit=0\n--- stdout ---\nhello\nworld"
     failed = "shell=/bin/zsh\nexit=2\n--- stdout ---\nhello\n--- stderr ---\nboom"
