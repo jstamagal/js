@@ -19,6 +19,7 @@ from typing import Any
 
 from . import display as _display
 from . import fset
+from . import output
 from . import messages as msgs
 from . import toolkit as _toolkit
 
@@ -48,6 +49,15 @@ class TranscriptLogSink:
         # each speaker, so an escape cut between two writes is still taken
         # whole and one stream's open escape never swallows another's text.
         self._cleaners: dict[str, _display.StreamCleaner] = {}
+
+    def emit(self, event: output.OutputEvent) -> None:
+        fields = dict(event.fields)
+        if event.name == "transcript_plain":
+            self.write_plain(fields["text"], source=fields.get("source", ""))
+        elif event.name == "transcript_user":
+            self.write_user(fields["text"])
+        elif event.name == "transcript_assistant":
+            self.write_assistant(fields["text"])
 
     def _cleaned(self, stream: str, text: str) -> str:
         cleaner = self._cleaners.setdefault(stream, _display.StreamCleaner(controls=True))
@@ -209,7 +219,7 @@ class TranscriptTee:
             pass
         sink = self._sink_getter()
         if sink is not None:
-            sink.write_plain(text, source=f"tee:{id(self)}")
+            sink.emit(output.event("transcript_plain", text=text, source=f"tee:{id(self)}"))
 
     def write_unlogged(self, text: str) -> None:
         """Write display-only material without feeding any nested transcript tee."""
@@ -261,7 +271,7 @@ class TranscriptSink:
         while stream is not None and id(stream) not in seen:
             seen.add(id(stream))
             if isinstance(stream, TranscriptTee) and stream._sink_getter() is log and log is not None:
-                log.write_plain(text, source=f"tee:{id(stream)}")
+                log.emit(output.event("transcript_plain", text=text, source=f"tee:{id(stream)}"))
                 return
             stream = getattr(stream, "_primary", None)
 

@@ -261,3 +261,20 @@ def test_the_transcript_records_the_same_bytes_whatever_console_draws_the_turn(m
     assert record("silent") == drawn
     assert capsys.readouterr().out == ""
     assert "alpha" in drawn and "<APE> the answer" in drawn
+
+
+def test_transcript_stdio_capture_emits_text_to_its_sink():
+    import io
+
+    captured = []
+
+    class Sink:
+        def emit(self, event):
+            captured.append(event)
+
+    sink = Sink()
+    stream = transcript.TranscriptTee(io.StringIO(), lambda: sink)
+    stream.write("raw output\n")
+
+    assert captured[0].name == "transcript_plain"
+    assert dict(captured[0].fields)["text"] == "raw output\n"

@@ -65,6 +65,7 @@ from . import keys as keys_mod
 from . import paths as _paths
 from . import prompt_commands
 from . import prompt_history
+from . import output
 from . import transcript as transcript_mod
 from .promptexpand import expand_prompt, session_variables
 from . import screen
@@ -644,6 +645,10 @@ class _DebugTraceSink:
         self._lock = threading.Lock()
 
     def write(self, text: str) -> None:
+        self.emit(output.event("debug_text", text=text))
+
+    def emit(self, event: output.OutputEvent) -> None:
+        text = dict(event.fields).get("text", "")
         if not text:
             return
         with self._lock:
@@ -689,7 +694,7 @@ class _StdoutTee:
             self._primary.write(text)
         except Exception:
             pass
-        self._sink.write(text)
+        self._sink.emit(output.event("debug_text", text=text))
 
     def write_unlogged(self, text: str) -> None:
         """Terminal-only material (a live region redrawn in place) skips the log."""
@@ -2836,7 +2841,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         if save:
             _append_turn(cfg, user_bundle.history_message)
         if turn_transcript is not None:
-            turn_transcript.write_user(prompt)
+            turn_transcript.emit(output.event("transcript_user", text=prompt))
         if echo_user is not None:
             echo_user(prompt)
         runtime.run_turn(cfg, system, messages, telemetry,
@@ -2868,7 +2873,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             if save:
                 _append_turn(cfg, wake)
             if turn_transcript is not None:
-                turn_transcript.write_user(wake["content"])
+                turn_transcript.emit(output.event("transcript_user", text=wake["content"]))
             if echo_user is not None:
                 echo_user(wake["content"])
             runtime.run_turn(cfg, system, messages, telemetry,
@@ -2971,7 +2976,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             if not debug:
                 content = answer["content"].strip()
                 if (sink := _transcript_sink(telemetry)) is not None:
-                    sink.write_assistant(content)
+                    sink.emit(output.event("transcript_assistant", text=content))
                 if events is None:
                     with _mute_transcript_tee(_transcript_sink(telemetry)):
                         display_mod.print_answer(
@@ -3705,7 +3710,7 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
     # Logged as the turn starts, not as the line was typed: a line queued
     # behind a running turn joins the transcript where the model sees it.
     if (sink := _transcript_sink(telemetry)) is not None:
-        sink.write_user(line)
+        sink.emit(output.event("transcript_user", text=line))
     steered: list[attach.UserMessageBundle] = []
 
     async def take_steer() -> dict | None:
@@ -3735,7 +3740,7 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
         )
         steered.append(bundle)
         if (sink := _transcript_sink(telemetry)) is not None:
-            sink.write_user(text)
+            sink.emit(output.event("transcript_user", text=text))
         return bundle.runtime_message
 
     job = sup.spawn(
@@ -4217,7 +4222,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
             _sync_telemetry_from_live_settings(cfg, state, telemetry)
             continue
         if (sink := _transcript_sink(telemetry)) is not None:
-            sink.write_user(line)
+            sink.emit(output.event("transcript_user", text=line))
 
         prompt_text, line_attachments = attach.split_repl_attachments(line)
         _emit_repl_event(

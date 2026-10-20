@@ -81,6 +81,10 @@ branch the audit was made on; they move as the code changes.
 
 7 findings.
 
+- js-2lg.85: CLI user/final-answer records, transcript capture and debug capture
+  dispatch events to their log sinks. Legacy stdio capture remains as an event
+  bridge so arbitrary printed diagnostics and one-shot visibility stay identical.
+
 | file:line | function | kind | what the part decides | bead |
 |---|---|---|---|---|
 | `js/turn_stream.py:145-149,163-168,191-195` | StreamSink.text/close/_muted_transcript_tee | presentation | Tees answer chunks into the transcript log and mutes the log's stdout tee. | js-2lg.13 |

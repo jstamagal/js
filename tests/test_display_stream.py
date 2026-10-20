@@ -167,8 +167,8 @@ class _Log:
     def __init__(self) -> None:
         self.text = ""
 
-    def write(self, text: str) -> None:
-        self.text += text
+    def emit(self, event) -> None:
+        self.text += dict(event.fields)["text"]
 
     def flush(self) -> None:
         pass
