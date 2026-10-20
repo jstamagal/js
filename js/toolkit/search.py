@@ -25,6 +25,10 @@ from ..tool_binaries import resolve_binary
 from .core import Tool, ToolContext
 from .descriptions import load_description
 from .sanitize import int_or_default, text_or_default
+from ..prompt_text import load_catalog
+
+_PROMPTS = load_catalog('toolkit_search')
+
 
 
 def _http_body(
@@ -591,9 +595,7 @@ def browse(
         if not shot_path.exists():
             return f"ERROR: obscura exited 0 but wrote no screenshot at {shot_path}"
         return (
-            f"SCREENSHOT path={shot_path} size={shot_path.stat().st_size} bytes\n"
-            "obscura returns either a picture or a dump, never both. "
-            "Call browse again without screenshot to read this page's content."
+            _PROMPTS['browse_screenshot_path_size_bytes_obscura_returns'].format(shot_path=shot_path, shot_path_stat_st_size=shot_path.stat().st_size)
         )
     if dump != "original":
         stdout = stdout.strip()
@@ -606,7 +608,7 @@ def browse(
         # The body is kept: a 404 page sometimes IS what the caller wanted to
         # read. But it leads with ERROR so the runtime marks the result as an
         # error and the model cannot mistake an error page for the document.
-        return f"ERROR: HTTP {status} from {_redacted_url(url)}; the page below is the error response\n{body}"
+        return _PROMPTS['browse_error_http_from_the_page_below'].format(status=status, redacted_url_url=_redacted_url(url), body=body)
     return body
 
 
