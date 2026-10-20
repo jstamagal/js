@@ -1596,6 +1596,13 @@ async def _stream_with_model(
     is_anthropic_wire = sdk_provider_name == "anthropic" or provider_name == "anthropic"
     if is_anthropic_wire:
         messages = _without_empty_text_parts(messages)
+        systems = [message for message in messages if message.role == "system"]
+        if len(systems) > 1:
+            system = "\n\n".join("".join(part.text for part in message.parts
+                                       if isinstance(part, ai.types.messages.TextPart))
+                                   for message in systems)
+            messages = [ai.system_message(system),
+                        *(message for message in messages if message.role != "system")]
     output_max_tokens = max_output_tokens if sends_max_output(provider_id) else None
 
     reasoning_params: ai_params.ReasoningParams | None = None

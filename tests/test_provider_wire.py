@@ -72,3 +72,21 @@ def test_anthropic_tool_continuation_omits_empty_text_blocks(monkeypatch):
 
     assert _stream(monkeypatch, "anthropic", respond, messages).text == "ok"
     assert [message.model_dump() for message in messages] == original
+
+
+def test_anthropic_retains_all_system_instructions(monkeypatch):
+    messages = model_client.history_to_ai_messages("primary system", [
+        {"role": "system", "content": "history system"},
+        {"role": "user", "content": "ping"},
+    ], provider_id="anthropic")
+    original = [message.model_dump() for message in messages]
+
+    def respond(request):
+        wire = json.loads(request.content)
+        assert "primary system" in wire["system"]
+        assert "history system" in wire["system"]
+        assert all(message["role"] != "system" for message in wire["messages"])
+        return _anthropic_reply()
+
+    assert _stream(monkeypatch, "anthropic", respond, messages).text == "ok"
+    assert [message.model_dump() for message in messages] == original
