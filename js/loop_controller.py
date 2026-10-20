@@ -12,10 +12,14 @@ import signal
 import subprocess
 import sys
 import time
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('loop_controller')
+
 
 
 _DURATION = re.compile(r"([1-9][0-9]*)([mMhH])\Z")
-_DEFAULT_PROMPT = "Carry out your assigned task for this fresh session."
+_DEFAULT_PROMPT = _PROMPTS['default_carry_out_your_assigned_task_for']
 
 
 def parse_limit(value: str) -> tuple[int | None, float | None]:

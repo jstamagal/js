@@ -238,7 +238,7 @@ branch the audit was made on; they move as the code changes.
 | `js/cli.py` | _cmd_cd, _cmd_add, _cmd_drop | policy | Model-facing text is loaded from `prompts/text/cli.json`; selection and execution policy are unchanged. | js-2lg.78 |
 | `js/cli.py` | _append_closing_note, _cmd_quit | policy | Model-facing text is loaded from `prompts/text/cli.json`; selection and execution policy are unchanged. | js-2lg.78 |
 | `js/cli.py` | _run_commit | policy | Model-facing text is loaded from `prompts/text/cli.json`; selection and execution policy are unchanged. | js-2lg.78 |
-| `js/loop_controller.py:14,107-109` | run | policy | The model-facing default prompt for loop children is fixed in code. | js-2lg.89 |
+| `js/loop_controller.py` | run | policy | Model-facing text is loaded from `prompts/text/loop_controller.json`; selection and execution policy are unchanged. | js-2lg.89 |
 | `js/attach.py:311-315` | _prepare_bytes | presentation | Builds the model-facing "ATTACHED_BINARY_FILE ... (content not inlined)" text in code. | js-2lg.131 |
 | `js/attach.py:318-322` | _prepare_image | presentation | Builds the model-facing "VISUAL_FILE ... (vision disabled; image bytes not sent)" text in code. | js-2lg.131 |
 | `js/attach.py:364-369` | _format_text_attachment | presentation | Builds the model-facing "Attached file: ... [truncated to N bytes]" header and fence in code. | js-2lg.131 |
