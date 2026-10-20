@@ -483,6 +483,8 @@ ALIAS_TOO_DEEP = Message("alias {name}: nesting too deep.")
 ALIAS_UNKNOWN_COMMAND = Message("alias {name}: unknown command {verb}")
 KEY_UNBOUND = "unbound"
 _HINT_ACTIONS = {
+    "INSTALL_ASK_MODEL": {"p": ("pick",), "a": ("add",)},
+    "INSTALL_ASK_PROVIDER": {"a": ("add",)},
     "TURN_RUNNING": {"^C": ("interrupt",)},
     "PRESS_CTRL_C_AGAIN": {"^C": ("interrupt",)},
     "STARTUP_HINT": {"Ctrl-D": ("eof",)},

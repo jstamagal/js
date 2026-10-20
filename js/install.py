@@ -124,11 +124,24 @@ def _say_unrouted(model_id: str | None, *, say=None) -> None:
         announce(msgs.INSTALL_MODEL_UNSET)
 
 
+MODEL_ANSWERS: Mapping[str, str] = {"a": "add", "p": "pick"}
+
+
+def _model_question(message: msgs.Message, answers: Mapping[str, str]) -> str:
+    def keymap(table):
+        return {action: tuple((word,) for word, target in table.items() if target == action)
+                for action in set(table.values())}
+
+    return message.with_keymap(keymap(answers), keymap(MODEL_ANSWERS)).words()
+
+
 def ask_model(environ: Mapping[str, str], ask: Ask, *, pick: Callable[[], dict | None],
-              add_provider: Callable[[], Any], say=None) -> str | None:
+              add_provider: Callable[[], Any], say=None,
+              answers: Mapping[str, str] | None = None) -> str | None:
     """When the default model does not route: offer the saved logins to pick
     a model from, and the login flow to add a provider, until a model is
     picked or the operator skips. Returns the `MODEL` saved, or None."""
+    answers = MODEL_ANSWERS if answers is None else answers
     announce = msgs.say if say is None else say
     model_id, routes = default_model(environ)
     if routes:
@@ -142,19 +155,20 @@ def ask_model(environ: Mapping[str, str], ask: Ask, *, pick: Callable[[], dict |
                                                          models=msgs.plural(len(cache.get(provider_id, [])), "model"))
                              for provider_id in sorted(saved))
             announce(msgs.INSTALL_LOGINS, logins=rows)
-            answer = ask(msgs.INSTALL_ASK_MODEL.words())
+            answer = ask(_model_question(msgs.INSTALL_ASK_MODEL, answers))
         else:
-            answer = ask(msgs.INSTALL_ASK_PROVIDER.words())
+            answer = ask(_model_question(msgs.INSTALL_ASK_PROVIDER, answers))
         choice = (answer or "").strip().lower()
         if not choice:
             return None
-        if choice == "a":
+        action = answers.get(choice)
+        if action == "add":
             add_provider()
             # The new login may be the default model's provider: then the
             # default routes and there is nothing left to pick.
             if default_model(environ)[1]:
                 return None
-        elif choice == "p" and saved:
+        elif action == "pick" and saved:
             selected = pick()
             if selected:
                 chosen = providers.qualified_model_id(selected.get("provider_id"), selected["model"])

@@ -327,6 +327,8 @@ branch the audit was made on; they move as the code changes.
 24 findings.
 
 Resolution notes (the rows below record the original audit):
+- js-2lg.173: model setup takes its answer-to-action table; its questions name
+  that table. The shipped answers remain a and p.
 - js-2lg.144: login pickers and text entry take action maps, with hints from
   those maps; environment-key acceptance, test-choice interpretation and their
   questions are supplied independently. Existing answers remain the defaults.

@@ -125,6 +125,16 @@ def test_a_routed_default_model_asks_nothing():
     assert ask.asked == []
 
 
+def test_model_setup_accepts_supplied_answer_words():
+    _write_jsrc("set MODEL deepseek/deepseek-v4-flash\n")
+    _login("mimo", ["mimo-v3"])
+    chosen = install.ask_model({}, _answers("choose"),
+                               pick=lambda: {"provider_id": "mimo", "model": "mimo-v3"},
+                               add_provider=pytest.fail, answers={"choose": "pick"})
+    assert chosen == "mimo/mimo-v3"
+    assert install.default_model({}) == ("mimo/mimo-v3", True)
+
+
 def test_a_picked_model_becomes_model_id_in_the_jsrc_and_the_rest_stays():
     _write_jsrc("# mine\nset MODEL deepseek/deepseek-v4-flash\nfset NET_DISPLAY 2\nalias x /help\n")
     _login("mimo", ["mimo-v2", "mimo-v3"])
