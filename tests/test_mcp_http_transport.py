@@ -194,6 +194,45 @@ def test_http_headers_follow_the_negotiated_protocol_version():
         run(scenario(url))
 
 
+@pytest.mark.parametrize("operation", ["send", "close"])
+def test_cross_origin_redirects_do_not_forward_credentials(operation):
+    class DestinationHandler(Handler):
+        def do_GET(self):
+            self.state.record("GET", self.headers)
+            self._body(200, "application/json", b'{"jsonrpc":"2.0","id":1,"result":{}}')
+
+    with server(DestinationHandler) as (destination, destination_url):
+        class RedirectHandler(Handler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                self.send_response(303)
+                self.send_header("Location", destination_url)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            do_DELETE = do_POST
+
+        async def scenario(url):
+            transport = StreamableHTTPTransport(
+                url, headers={"Authorization": f"Bearer {SECRET}", "X-Api-Key": HEADER_SECRET})
+            transport._get_supported = False
+            try:
+                if operation == "send":
+                    try:
+                        await transport.send(request())
+                    except StreamableHTTPTransportError:
+                        pass
+                else:
+                    transport._session_id = SESSION
+                    await transport.close()
+                assert destination.requests == []
+            finally:
+                await transport.close()
+
+        with server(RedirectHandler) as (_source, url):
+            run(scenario(url))
+
+
 def test_json_and_sse_post_replies_track_session_and_event_fields():
     async def scenario(url):
         transport = StreamableHTTPTransport(url)

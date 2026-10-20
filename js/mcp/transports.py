@@ -11,6 +11,7 @@ import os
 import socket
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
@@ -67,6 +68,18 @@ class _SocketTrackingHTTPSHandler(urllib.request.HTTPSHandler):
         return self.do_open(
             functools.partial(_TrackedHTTPSConnection, track=self._track), req, context=self._context
         )
+
+
+class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        source = urllib.parse.urlsplit(req.full_url)
+        target = urllib.parse.urlsplit(newurl)
+        defaults = {"http": 80, "https": 443}
+        old_origin = (source.scheme, source.hostname, source.port or defaults.get(source.scheme))
+        new_origin = (target.scheme, target.hostname, target.port or defaults.get(target.scheme))
+        if new_origin != old_origin:
+            raise urllib.error.HTTPError(req.full_url, code, "MCP redirect changes origin", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 class StdioTransportError(ConnectionError):
@@ -360,6 +373,7 @@ class StreamableHTTPTransport:
         self._closed = False
         self._pending_socks: dict[int, list[socket.socket]] = {}
         self._opener = urllib.request.build_opener(
+            _SameOriginRedirectHandler(),
             _SocketTrackingHTTPHandler(self._track_socket),
             _SocketTrackingHTTPSHandler(self._track_socket),
         )
