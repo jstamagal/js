@@ -82,7 +82,8 @@ def session_variables(cfg) -> dict[str, str]:
 # A leading backslash escapes any form: when present the
 # whole match is emitted verbatim minus that backslash (see _resolve) -- the only
 # escape that reaches the fenced block. A code span consumes matching complete
-# backtick runs, keeping every directive inside it literal. The built-in scanner
+# backtick runs on one line, keeping every directive inside it literal; a fenced
+# block spans lines, so the directives in it expand. The built-in scanner
 # also recognizes adjacent backticks when substituting inside subsystem bodies.
 #
 # The fenced form additionally must OPEN A LINE, like a real markdown fence: the
@@ -94,7 +95,7 @@ def session_variables(cfg) -> dict[str, str]:
 _DIRECTIVE = re.compile(
     r"(?:"
     r"(?<![^\n])(?P<find>[ ]{0,3})(?P<bs>\\)?```!(?P<fsub>[A-Za-z0-9_+-]+)[^\n]*\n(?:(?P<fbody>.*?)\n)??[ ]{0,3}```[ \t]*(?=\r?\n|\Z)"
-    r"|(?P<literal_span>(?<![\\`])(?P<span_ticks>`+)(?!`).*?(?<!`)(?P=span_ticks)(?!`))"
+    r"|(?P<literal_span>(?<![\\`])(?P<span_ticks>`+)(?!`)[^\n]*?(?<!`)(?P=span_ticks)(?!`))"
     r"|(?P<ibs>\\)?(?P<itick>`)?!\{(?P<isub>[A-Za-z0-9_+-]+)(?:[ \t]+(?P<iargs>[^}]*))?\}(?(itick)`)"
     r"|(?P<ebs>\\)?(?P<etick>`)?\{\{(?P<env>[^{}]*?)\}\}(?(etick)`)"
     r"|" + _VARIABLE.pattern +

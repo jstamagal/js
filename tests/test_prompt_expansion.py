@@ -81,6 +81,12 @@ def test_directive_inside_a_longer_markdown_code_span_never_runs(tmp_path):
     assert actual == text
 
 
+def test_directives_inside_a_fenced_code_block_still_expand():
+    text = "```text\nagent: {{WHO}}\nshown: \\{{WHO}}\n```\n"
+
+    assert expand_prompt(text, env={"WHO": "ape"}) == "```text\nagent: ape\nshown: {{WHO}}\n```\n"
+
+
 def test_backtick_wrapped_readonly_directive_not_blanked():
     # `!{file PATH}` / `{{ENV}}` examples must survive, not expand to "".
     text = "Inject with `!{file PATH}` or `{{ENV_NAME}}` in the prompt."
