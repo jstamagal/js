@@ -33,6 +33,7 @@ from collections.abc import Callable, Iterable, Mapping
 
 from prompt_toolkit.completion import Completer, Completion
 
+from . import fset
 from . import events
 from . import settings as _settings
 
@@ -94,7 +95,7 @@ def event_candidates(token: str) -> list[str]:
     return [prefix + event for event in _prefix(events.CANONICAL_EVENT_NAMES, raw)]
 
 
-def hunspell_suggest(word: str, *, lang: str = "en_US") -> list[str]:
+def hunspell_suggest(word: str, *, lang: str | None = None) -> list[str]:
     """Spelling suggestions for one word via ``hunspell -a``. Returns [] for a
     correct word, an empty/non-alpha token, or if hunspell/the dict is missing
     (so the REPL never breaks when ``hunspell-<lang>`` isn't installed)."""
@@ -102,11 +103,11 @@ def hunspell_suggest(word: str, *, lang: str = "en_US") -> list[str]:
         return []
     try:
         proc = subprocess.run(
-            ["hunspell", "-a", "-d", lang],
+            ["hunspell", "-a", "-d", lang if lang is not None else fset.setting_value("SPELLCHECK_LANGUAGE")],
             input=word + "\n",
             capture_output=True,
             text=True,
-            timeout=2,
+            timeout=float(fset.setting_value("SPELLCHECK_TIMEOUT")),
         )
     except (OSError, subprocess.SubprocessError):
         return []

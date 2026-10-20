@@ -139,6 +139,8 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("SPELLCHECK_TIMEOUT", "float", group="input"),
+    SettingSpec("SPELLCHECK_LANGUAGE", "str", group="input"),
     SettingSpec("SPINNER_FRAMES", "str", group="display"),
     SettingSpec("SCROLLBACK_LINES_MAX", "int", group="display"),
     SettingSpec("MARKDOWN_HARD_BREAKS", "bool", group="display"),

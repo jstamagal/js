@@ -189,3 +189,20 @@ def test_set_arg_completes_dotted_display_names():
     completer = JsCompleter(commands=_table, setting_keys=["ui.tools", "ui.net", "MODEL"])
     cands, _ = completer.candidates("/set ui.")
     assert cands == ["ui.net", "ui.tools"]
+
+
+def test_registered_spellcheck_language_reaches_hunspell(monkeypatch):
+    from types import SimpleNamespace
+    from js import fset, replcomplete
+
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(stdout="*\n")
+
+    monkeypatch.setattr(replcomplete.subprocess, "run", run)
+    fset.bind_settings({"SPELLCHECK_LANGUAGE": "de_DE", "SPELLCHECK_TIMEOUT": 7})
+    replcomplete.hunspell_suggest("wort")
+    assert calls[0][0][-1] == "de_DE"
+    assert calls[0][1]["timeout"] == 7
