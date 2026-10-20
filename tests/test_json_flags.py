@@ -97,6 +97,23 @@ def test_logins_json_empty_store(tmp_logins_dir):
     assert cli._logins_json() == []
 
 
+def test_logins_json_hides_credentials_when_paranoid_mode_is_on(tmp_logins_dir, capsys):
+    logins.save_login(logins.Login(
+        provider_id="private-proxy", provider_api_key="key-secret",
+        provider_headers={"Authorization": "Bearer header-secret"},
+        xai_refresh_token="refresh-secret",
+    ))
+
+    assert cli.main(["--extra", "PARANOID_MODE=on", "--logins-json"]) == 0
+    rows = _stdout_json(capsys)
+
+    assert rows[0]["provider_id"] == "private-proxy"
+    assert rows[0]["has_api_key"] is True
+    assert all(secret not in json.dumps(rows) for secret in (
+        "key-secret", "header-secret", "refresh-secret",
+    ))
+
+
 def test_logins_json_masks_api_key_for_codex_but_keeps_for_normal(tmp_logins_dir):
     # A normal provider login keeps its api key (the picker needs it); a codex
     # login has its access JWT nulled. Both have refresh tokens nulled.

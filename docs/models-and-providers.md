@@ -432,8 +432,10 @@ pickers (e.g. the Go picker), all printing a single line to stdout:
   (saved login with no built-in def).
 - `python -m js --logins-json` — only saved logins, with `has_api_key` /
   `has_codex_refresh_token` booleans. The Codex refresh token is always nulled
-  in the output, and Codex providers' `provider_api_key` is nulled too, so the
-  bridge never leaks long-lived secrets.
+  in the output, and Codex providers' `provider_api_key` is nulled too.
+  With `PARANOID_MODE on` or `extra`, API keys and xAI refresh tokens are
+  nulled and provider headers are empty. With it off, other providers'
+  credentials remain available for a picker to reconnect.
 - `python -m js --models-json <provider>` — the (filtered) model list for a
   provider; omit the provider to use the effective configured provider.
 

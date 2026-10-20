@@ -52,6 +52,7 @@ from . import model_client
 from . import model_metadata
 from . import persona as P
 from . import pastes
+from . import paranoid
 from . import picker
 from . import providers
 from . import replcomplete
@@ -3316,13 +3317,17 @@ def _providers_json() -> list[dict]:
 
 def _logins_json() -> list[dict]:
     rows: list[dict] = []
+    masked = paranoid.masks(paranoid.mode())
     for provider_id, login in sorted(logins.load_logins().items()):
         item = asdict(login)
         item["provider_id"] = provider_id
         item["has_api_key"] = bool(item.get("provider_api_key"))
         item["has_codex_refresh_token"] = bool(item.get("codex_refresh_token"))
-        if codex_auth.is_codex_provider(provider_id):
+        if masked or codex_auth.is_codex_provider(provider_id):
             item["provider_api_key"] = None
+        if masked:
+            item["provider_headers"] = {}
+            item["xai_refresh_token"] = None
         item["codex_refresh_token"] = None
         rows.append(item)
     return rows
