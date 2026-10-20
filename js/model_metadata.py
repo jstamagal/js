@@ -152,12 +152,12 @@ def _generate_database(*, output: Path) -> None:
         staged.unlink(missing_ok=True)
 
 
-def _provider_candidates(provider_id: str | None) -> tuple[str, ...]:
+def _provider_candidates(provider_id: str | None, *, include_sdk: bool = True) -> tuple[str, ...]:
     candidates: list[str] = []
     normalized = providers.normalize_provider_id(provider_id) if provider_id else None
     if normalized:
         provider = providers.get_provider(normalized)
-        if provider is not None and provider.effective_sdk_provider_id:
+        if include_sdk and provider is not None and provider.effective_sdk_provider_id:
             candidates.append(provider.effective_sdk_provider_id)
         if codex_auth.is_codex_provider(normalized):
             candidates.append("openai")
@@ -689,8 +689,8 @@ def model_prices(model_id: str, provider_id: str | None = None) -> tuple[Any, ..
     price for it.
 
     A call with a provider is priced only by that provider's own catalog row
-    (or the rows its SDK or login maps to), so a local server running a model
-    that some API sells is not charged that API's price. A call with no
+    (Codex uses OpenAI's rates), so a local server running a model that some
+    API sells is not charged that API's price. A call with no
     provider goes through the gateway and is priced by the routed row. Looking
     up a provider that is not built in refreshes a stale catalog, as every
     provider lookup does; results are cached per model and provider.
@@ -698,10 +698,10 @@ def model_prices(model_id: str, provider_id: str | None = None) -> tuple[Any, ..
     current = current_catalog_status()
     if current is not None:
         _activate_database(current.db_path)
-    names = [f"{candidate}:{model_id}" for candidate in _provider_candidates(provider_id)]
+    names = [f"{candidate}:{model_id}" for candidate in _provider_candidates(provider_id, include_sdk=False)]
     bare_model, bare_provider = _normalize_request(model_id, provider_id)
     if bare_provider:
-        names += [f"{candidate}:{bare_model}" for candidate in _provider_candidates(bare_provider)]
+        names += [f"{candidate}:{bare_model}" for candidate in _provider_candidates(bare_provider, include_sdk=False)]
     else:
         limits = lookup_limits(bare_model, None)
         if limits is not None and limits.provider_id is not None:
