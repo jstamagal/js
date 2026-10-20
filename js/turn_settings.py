@@ -121,6 +121,7 @@ class TurnSetting:
 
 
 TURN_SETTINGS: tuple[TurnSetting, ...] = (
+    TurnSetting("session_text_auto_refresh", "SESSION_TEXT_AUTO_REFRESH", flag),
     TurnSetting("download_retry_wait", "DOWNLOAD_RETRY_WAIT", integer),
     TurnSetting("download_retries_max", "DOWNLOAD_RETRIES_MAX", integer),
     TurnSetting("download_connections_max", "DOWNLOAD_CONNECTIONS_MAX", integer),

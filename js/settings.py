@@ -140,6 +140,7 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("SESSION_TEXT_AUTO_REFRESH", "bool", group="history"),
     SettingSpec("SESSION_STATUS_MARK", "str", group="history"),
     SettingSpec("SESSION_QUICK_REPLY_CHARACTERS_MAX", "int", group="history"),
     SettingSpec("SESSION_QUICK_TOOL_CALLS_MAX", "int", group="history"),

@@ -131,3 +131,15 @@ def test_two_refreshers_keep_the_newest_transcript(tmp_path):
                 process.kill()
                 process.wait()
     assert session_store.text_path(path).read_text() == session_text.render(path)
+
+
+def test_registered_setting_can_stop_automatic_text_refresh(tmp_path):
+    from js import settings
+
+    path = _session(tmp_path)
+    text_path = session_store.text_path(path)
+    before = text_path.read_bytes()
+    settings.bind_live_settings({"SESSION_TEXT_AUTO_REFRESH": False})
+    memory.append_message(path, {"role": "assistant", "content": "new reply"})
+    assert text_path.read_bytes() == before
+    assert "new reply" in path.read_text()

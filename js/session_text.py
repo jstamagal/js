@@ -1,7 +1,7 @@
 """The readable `.txt` transcript beside each session `.jsonl`.
 
 The `.jsonl` is the record; the `.txt` is rebuilt from it after every write, so
-the two stay in step. Its shape is fixed so ripgrep and head work on it:
+the two stay in step while SESSION_TEXT_AUTO_REFRESH is on (the default). Its shape is fixed so ripgrep and head work on it:
 
     agent: defaultagent   dir: /home/ronald_rump/js   mode: repl
     models: deepseek-v4-flash → xiaomi/mimo-v2.6-pro (#0031)
@@ -513,6 +513,10 @@ def refresh(session_file: Path) -> None:
 
     Only a `.jsonl` gets one. A failure to read or write leaves the `.txt` as
     it was: it is derived, and the record is what matters."""
+    from . import settings
+
+    if not settings.live_value("SESSION_TEXT_AUTO_REFRESH"):
+        return
     session_file = Path(session_file)
     if session_file.suffix != session_store.SUFFIX:
         return
