@@ -651,6 +651,28 @@ def test_hidden_ast_matches_do_not_use_up_the_result_limit(operator_home, monkey
     assert "additional matches omitted" in result
 
 
+@needs_bwrap
+def test_wrap_never_probes_a_network_mount(jailed, monkeypatch):
+    dead = Path("/srv/js-test-dead-nfs")
+    mounts = jail._mounts()
+    monkeypatch.setattr(jail, "_mounts", lambda: [*mounts, jail._Mount("0:999", Path("/"), dead, "nfs4")])
+    probed: list[Path] = []
+    real_is_dir = getattr(jail, "_is_dir", Path.is_dir)
+
+    def prober(path: Path) -> bool:
+        if path == dead or dead in path.parents:
+            probed.append(path)
+            raise AssertionError(f"probed the dead mount {path}")
+        return real_is_dir(path)
+
+    monkeypatch.setattr(jail, "_is_dir", prober, raising=False)
+
+    argv = jail.wrap(["true"], jailed, cwd=jailed.cwd)
+
+    assert probed == []
+    assert str(dead) in argv  # still hidden behind a tmpfs
+
+
 def test_jail_bind_setting_refuses_a_relative_path():
     spec = settings.spec_for("JAIL_BIND")
 

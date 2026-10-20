@@ -210,19 +210,28 @@ def _toolchain_homes(home: Path) -> list[Path]:
     return [_real(rustup)] if rustup.is_dir() else []
 
 
+def _is_dir(path: Path) -> bool:
+    return path.is_dir()
+
+
 def hidden_roots() -> list[Path]:
     """The trees the jail replaces with an empty tmpfs, outermost first:
     /home, the operator's home, /run/user, every network filesystem, and every
-    other mount that shows one of those."""
+    other mount that shows one of those.
+
+    A mount point is taken from the mount table as it is, never statted: a
+    dead network mount would block the stat, and with it every jailed
+    command. A path inside a tree already in the list is not statted either."""
     mounts = _mounts()
+    points = {m.point for m in mounts}
     base = [Path("/home"), *operator_homes(), Path("/run/user"),
             *(m.point for m in mounts if m.fstype in NETWORK_FS)]
     candidates = [*base, *(view for tree in base for view in _other_views(tree, mounts))]
     roots: list[Path] = []
     for candidate in sorted(dict.fromkeys(candidates), key=lambda p: len(p.parts)):
-        if candidate == Path("/") or not candidate.is_dir():
+        if candidate == Path("/") or any(_under(candidate, root) for root in roots):
             continue
-        if any(_under(candidate, root) for root in roots):
+        if candidate not in points and not _is_dir(candidate):
             continue
         roots.append(candidate)
     return roots
