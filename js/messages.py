@@ -1813,6 +1813,26 @@ EVENT_HOOK_UNKNOWN_EVENT_149 = "unknown event: {event}"
 
 AGENT_LOCK_ANOTHER_LOCK_RUN_OF_AGENT_IS_RUNNING = "another --lock run of agent {agent_id!r} is running ({path})"
 
+JAIL_SETTING_EMPTY_BIND = "empty bind: {spec!r}"
+
+JAIL_SETTING_BIND_PATH_MUST_BE_ABSOLUTE_OR_START = "bind path must be absolute or start with ~: {spec!r}"
+
+JAIL_SETTING_JAIL_BIND_IS_A_JSON_LIST_OF = "JAIL_BIND is a JSON list of \"path[:rw]\" strings"
+
+JAIL_SETTING_HIDE_PATH_MUST_BE_ABSOLUTE_OR_START = "hide path must be absolute or start with ~: {spec!r}"
+
+JAIL_SETTING_JAIL_HIDE_IS_A_JSON_LIST_OF = "JAIL_HIDE is a JSON list of path strings"
+
+JAIL_SETTING_C_TARGET_IS_NOT_A_DIRECTORY = "-C target is not a directory: {directory}"
+
+JAIL_SETTING_C_IS_NOT_A_JAIL_NAME_A = "-C / is not a jail; name a directory"
+
+JAIL_SETTING_C_RUNS_TOOLS_UNDER_BUBBLEWRAP_AND_BWRAP = "-C runs tools under bubblewrap, and bwrap is not on PATH; install bubblewrap"
+
+JAIL_SETTING_C_IS_INSIDE_A_PATH_HIDDEN_IN = "-C {directory} is inside {inside}, a path hidden in the jail (JAIL_HIDE)"
+
+JAIL_SETTING_C_BUBBLEWRAP_CANNOT_START_A_JAIL = "-C: bubblewrap cannot start a jail: {failure}"
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():

@@ -26,6 +26,8 @@ host.
 
 from __future__ import annotations
 
+from . import messages as msgs
+
 import atexit
 import contextlib
 import itertools
@@ -84,17 +86,17 @@ def parse_bind(spec: str) -> Bind:
             text, rw = text[: -len(suffix)], writable
             break
     if not text:
-        raise ValueError(f"empty bind: {spec!r}")
+        raise ValueError(msgs.JAIL_SETTING_EMPTY_BIND.format(spec=spec))
     path = Path(os.path.expanduser(text))
     if not path.is_absolute():
-        raise ValueError(f"bind path must be absolute or start with ~: {spec!r}")
+        raise ValueError(msgs.JAIL_SETTING_BIND_PATH_MUST_BE_ABSOLUTE_OR_START.format(spec=spec))
     return Bind(Path(os.path.abspath(path)), rw)
 
 
 def parse_binds(specs) -> list[Bind]:
     """The `JAIL_BIND` setting's value as binds. Raises ValueError."""
     if not isinstance(specs, (list, tuple)):
-        raise ValueError("JAIL_BIND is a JSON list of \"path[:rw]\" strings")
+        raise ValueError(msgs.JAIL_SETTING_JAIL_BIND_IS_A_JSON_LIST_OF.format())
     return [parse_bind(item) for item in specs]
 
 
@@ -104,14 +106,14 @@ def parse_hide(spec: str) -> Path:
     text = str(spec).strip()
     path = Path(os.path.expanduser(text)) if text else Path()
     if not text or not path.is_absolute():
-        raise ValueError(f"hide path must be absolute or start with ~: {spec!r}")
+        raise ValueError(msgs.JAIL_SETTING_HIDE_PATH_MUST_BE_ABSOLUTE_OR_START.format(spec=spec))
     return Path(os.path.abspath(path))
 
 
 def parse_hides(specs) -> list[Path]:
     """The `JAIL_HIDE` setting's value as paths. Raises ValueError."""
     if not isinstance(specs, (list, tuple)):
-        raise ValueError("JAIL_HIDE is a JSON list of path strings")
+        raise ValueError(msgs.JAIL_SETTING_JAIL_HIDE_IS_A_JSON_LIST_OF.format())
     return [parse_hide(item) for item in specs]
 
 
@@ -907,12 +909,12 @@ def enter(directory: Path | str, *, setting: object = (), hide: object = None) -
     global ACTIVE
     root = _real(Path(directory).expanduser())
     if not root.is_dir():
-        raise JailError(f"-C target is not a directory: {directory}")
+        raise JailError(msgs.JAIL_SETTING_C_TARGET_IS_NOT_A_DIRECTORY.format(directory=directory))
     if root == Path("/"):
-        raise JailError("-C / is not a jail; name a directory")
+        raise JailError(msgs.JAIL_SETTING_C_IS_NOT_A_JAIL_NAME_A.format())
     bwrap = shutil.which("bwrap")
     if bwrap is None:
-        raise JailError("-C runs tools under bubblewrap, and bwrap is not on PATH; install bubblewrap")
+        raise JailError(msgs.JAIL_SETTING_C_RUNS_TOOLS_UNDER_BUBBLEWRAP_AND_BWRAP.format())
     _clear_stale_private_dirs()
     private_root().mkdir(parents=True, exist_ok=True)
     private = Path(tempfile.mkdtemp(prefix=f"{os.getpid()}-", dir=private_root()))
@@ -920,13 +922,13 @@ def enter(directory: Path | str, *, setting: object = (), hide: object = None) -
     inside = next((h for h in jail.hides(hide) if _under(root, h)), None)
     if inside is not None:
         jail.cleanup()
-        raise JailError(f"-C {directory} is inside {inside}, a path hidden in the jail (JAIL_HIDE)")
+        raise JailError(msgs.JAIL_SETTING_C_IS_INSIDE_A_PATH_HIDDEN_IN.format(directory=directory, inside=inside))
     jail.tmp.mkdir()
     jail.js_tmp.mkdir()
     failure = jail.self_test(setting=setting, hide=hide)
     if failure is not None:
         jail.cleanup()
-        raise JailError(f"-C: bubblewrap cannot start a jail: {failure}")
+        raise JailError(msgs.JAIL_SETTING_C_BUBBLEWRAP_CANNOT_START_A_JAIL.format(failure=failure))
     leave()
     ACTIVE = jail
     os.environ["JS_JAIL"] = str(root)
