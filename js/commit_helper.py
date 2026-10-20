@@ -88,6 +88,7 @@ _DIFF_FLAGS = (
     "--no-textconv",
     "--no-color",
     "--no-relative",
+    "--unified=3",
     "--src-prefix=a/",
     "--dst-prefix=b/",
 )
