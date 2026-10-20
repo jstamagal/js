@@ -1617,7 +1617,15 @@ def fs_search(
     if unread:
         more = len(unread) - _RG_WALK_ERRORS_SHOWN
         named = "; ".join(unread[:_RG_WALK_ERRORS_SHOWN]) + (f"; and {more} more" if more > 0 else "")
-        out += f"\n[not searched, rg could not read {len(unread)} path(s): {named}]"
+        if rc is None:
+            # The walk stopped with the page full; paths past that point were
+            # never reached, so the count is a floor.
+            out += (
+                f"\n[not searched, rg could not read at least {len(unread)} path(s) "
+                f"before the walk stopped at head_limit: {named}]"
+            )
+        else:
+            out += f"\n[not searched, rg could not read {len(unread)} path(s): {named}]"
     if memoized:
         context.search_cache[cache_key] = out
     return out
