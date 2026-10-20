@@ -149,3 +149,20 @@ def test_registered_codex_settings_reach_the_request(monkeypatch):
     assert json.loads(seen[0].content)["text"]["verbosity"] == "high"
     assert seen[0].headers["originator"] == "custom"
     assert seen[0].headers["user-agent"] == "configured-agent"
+
+
+def test_codex_message_pair_policy_reaches_the_request():
+    seen = []
+    def repair(items):
+        seen.extend(items)
+        return []
+    async def drive():
+        provider = codex_provider.OpenAICodexProvider(
+            access_token="fixture", account_id="account", repair_tool_pairs=repair)
+        try:
+            return await codex_provider._build_body_async(
+                ai.Model(id="test", provider=provider), [ai.user_message("hello")], None, None)
+        finally:
+            await provider.aclose()
+    body = asyncio.run(drive())
+    assert seen and body["input"] == []

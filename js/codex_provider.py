@@ -359,7 +359,7 @@ def replayed_reasoning_item(provider_metadata: Mapping[str, Any] | None) -> dict
     return dict(item)
 
 
-async def _messages_to_codex(messages: list[ai.messages.Message]) -> tuple[str | None, list[dict[str, Any]]]:
+async def _messages_to_codex(messages: list[ai.messages.Message], *, repair_tool_pairs=None) -> tuple[str | None, list[dict[str, Any]]]:
     instructions: str | None = None
     items: list[dict[str, Any]] = []
     for msg in messages:
@@ -417,7 +417,8 @@ async def _messages_to_codex(messages: list[ai.messages.Message]) -> tuple[str |
         if msg.role == "internal":
             continue
         raise ValueError(f"unsupported Codex message role: {msg.role!r}")
-    return instructions, _repair_tool_pairs(items)
+    repair = _repair_tool_pairs if repair_tool_pairs is None else repair_tool_pairs
+    return instructions, repair(items)
 
 
 def _tools_to_codex(tools: Sequence[ai.types.tools.Tool] | None) -> list[dict[str, Any]] | None:
@@ -474,7 +475,8 @@ async def _build_body_async(
     params: ai_params.InferenceRequestParams | None,
 ) -> dict[str, Any]:
     settings = getattr(getattr(model, "provider", None), "_settings", None)
-    instructions, input_items = await _messages_to_codex(messages)
+    repair = getattr(getattr(model, "provider", None), "_repair_tool_pairs", None)
+    instructions, input_items = await _messages_to_codex(messages, repair_tool_pairs=repair)
     body: dict[str, Any] = {
         "model": model.id,
         "input": input_items,
@@ -548,6 +550,7 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
     # PARANOID_MODE's); the OAuth and account headers win over them.
     _extra_headers: dict[str, str] = pydantic.PrivateAttr(default_factory=dict)
     _settings: dict = pydantic.PrivateAttr(default_factory=dict)
+    _repair_tool_pairs: Any = pydantic.PrivateAttr(default=None)
 
     def __init__(
         self,
@@ -560,6 +563,7 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
         login: Login | None = None,
         client: httpx.AsyncClient | None = None,
         settings: dict | None = None,
+        repair_tool_pairs=None,
     ) -> None:
         if not access_token:
             raise ai.ConfigurationError(msgs.CODEX_PROVIDER_OPENAI_CODEX_REQUIRES_AN_OAUTH_ACCESS_TOKEN.format())
@@ -572,6 +576,7 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
         from . import config
 
         self._settings = config.run_settings() if settings is None else settings
+        self._repair_tool_pairs = repair_tool_pairs
         self._access_token = access_token
         self._refresh_token = refresh_token
         self._expires_at = expires_at
