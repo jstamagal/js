@@ -137,6 +137,13 @@ def terminal_width() -> int:
     return max(20, shutil.get_terminal_size((80, 24)).columns)
 
 
+def block_width() -> int:
+    """Columns a drawn block may fill: one short of the terminal. The async
+    screen's scrollback keeps a cursor cell after every line, so a row as wide
+    as the window wraps onto a blank second row."""
+    return terminal_width() - 1
+
+
 def _render_console(width: int, styles: dict[str, str] | None = None) -> Console:
     return Console(
         theme=_RichTheme(styles) if styles else None,
@@ -904,7 +911,7 @@ def render_fold(name: str, calls: list[dict | None], *, running: int = 0, gap: b
                 width: int | None = None, settings: Any = None) -> str:
     """Finished quiet calls of one tool as one row: `mark [name] N things
     label · label · +K`. `running` of them have not returned."""
-    block = _Block(width or terminal_width(), theme(settings), MARK if running else OK)
+    block = _Block(width or block_width(), theme(settings), MARK if running else OK)
     if gap:
         block.blank()
     one, many = _FOLD_NOUN.get(name, ("call", "calls"))
@@ -1112,7 +1119,7 @@ def render_exchange(name: str, args: dict | None, result: Any = None, *, level: 
     colours = theme(settings)
     args = args if isinstance(args, dict) else {}
     if result is None:
-        block = _Block(width or terminal_width(), colours, MARK)
+        block = _Block(width or block_width(), colours, MARK)
         if gap:
             block.blank()
         block.header(name, args, malformed=malformed,
@@ -1124,7 +1131,7 @@ def render_exchange(name: str, args: dict | None, result: Any = None, *, level: 
             block.panel([Text(line, colours.panel_text) for line in tail], wrap=False)
         return block.render()
     output = tool_output(name, result)
-    block = _Block(width or terminal_width(), colours, FAIL if output.failed else OK)
+    block = _Block(width or block_width(), colours, FAIL if output.failed else OK)
     if gap:
         block.blank()
     if level == 1:

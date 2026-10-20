@@ -309,3 +309,14 @@ def test_the_output_of_a_command_still_running_can_be_read():
         process_net.interrupt_inflight(context)
         worker.join(10)
     assert process_net.live_tail(context, command, 6) is None
+
+
+def test_no_exchange_row_fills_the_terminal_width(monkeypatch):
+    """The scrollback adds a cursor cell after every line; a row as wide as the
+    window wraps onto a blank second row."""
+    monkeypatch.setattr(display, "terminal_width", lambda: 50)
+    shell = "shell=bash\nexit=0\n--- stdout ---\none\ntwo\n"
+    for text in (_shown("shell", shell, 2, args={"command": "ls"}),
+                 _running("shell", {"command": "ls"}, 1, live=["a", "b"]),
+                 display.render_fold("read", [{"path": "/x/a.py"}])):
+        assert max(len(row) for row in SGR.sub("", text).splitlines()) < 50
