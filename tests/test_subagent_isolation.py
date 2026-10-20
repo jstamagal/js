@@ -571,6 +571,46 @@ def test_task_session_id_resumes_named_agent_conversation(monkeypatch, tmp_path)
     assert sum(m.get("name") == "tool_discovery" and m["role"] == "tool" for m in history) == 1
 
 
+def test_concurrent_resumes_preserve_every_successful_child_result(monkeypatch, tmp_path):
+    from js.toolkit.meta import task_async
+
+    prompts = prompt_dir(tmp_path, "worker")
+    cfg = make_cfg(tmp_path, "parent", prompts.parent / "parent")
+    context = ToolContext(cwd=tmp_path)
+    context.config = cfg
+
+    async def drive():
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def stream(**kwargs):
+            prompt = kwargs["messages"][-1].parts[0].text
+            if prompt == "first":
+                entered.set()
+                await release.wait()
+            return _fake_stream_result(prompt.upper() + "_DONE")
+
+        monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+        first = asyncio.create_task(task_async(
+            ["first"], agent_id="worker", session_id="shared", context=context,
+        ))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            second = await task_async(["second"], agent_id="worker", session_id="shared", context=context)
+        finally:
+            release.set()
+            first_result = await first
+        return first_result, second
+
+    results = asyncio.run(drive())
+    history = load_messages(cfg.session_file.with_suffix("") / "shared.jsonl")
+    answers = [m["content"] for m in history if m["role"] == "assistant"]
+    assert results[0] == "FIRST_DONE"
+    for result in results:
+        if not result.startswith("ERROR"):
+            assert result in answers
+
+
 def test_unsupervised_parent_cancellation_stops_foreground_child(monkeypatch, tmp_path):
     from js import supervisor
 

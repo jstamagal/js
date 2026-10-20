@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from contextlib import contextmanager
 from pathlib import Path
 import asyncio
+import fcntl
 import os
 from typing import Any
 
@@ -108,6 +110,21 @@ def _reserve_worker_session(agent_dir: Path, sessions_dir: Path) -> Path:
     session_file = session_store.reserve(sessions_dir, session_store.task_name)
     session_store.write_latest(agent_dir, session_file)
     return session_file
+
+
+@contextmanager
+def _worker_session(session_file: Path):
+    """Hold one worker's conversation through replay, execution and persistence."""
+    if session_file == Path(os.devnull):
+        yield
+        return
+    lock_path = session_file.resolve().with_suffix(".task.lock")
+    with lock_path.open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ValueError(f"worker session is already running: {session_file}") from exc
+        yield
 
 
 def _select_agent_prompt_dir(agent: str, prompt_roots: tuple[Path, ...]) -> Path:
@@ -242,54 +259,55 @@ async def _run_one_task_async(
     if getattr(cfg, "layer_jsrc", None) is None and prompt_spec.reasoning_effort is not None:
         # A Config with no layers resolves nothing: agent.yaml's reasoning is its effort.
         cfg = replace(cfg, reasoning_effort=prompt_spec.reasoning_effort)
-    prompt_spec = P._expand_spec(prompt_spec, cfg)
+    with _worker_session(Path(cfg.session_file)):
+        prompt_spec = P._expand_spec(prompt_spec, cfg)
 
-    registry = full_registry.select(prompt_spec.tool_selectors, agent_id=agent)
-    system = prompt_spec.system
-    sampling = login_defaults.sampling(cfg)
+        registry = full_registry.select(prompt_spec.tool_selectors, agent_id=agent)
+        system = prompt_spec.system
+        sampling = login_defaults.sampling(cfg)
 
-    child_context = _child_context(parent_context, registry, agent)
-    child_context.config = cfg
-    from ..usage import session_key
+        child_context = _child_context(parent_context, registry, agent)
+        child_context.config = cfg
+        from ..usage import session_key
 
-    child_context.usage_chain = (session_key(Path(parent_cfg.session_file), parent_context),
-                                 *getattr(parent_context, "usage_chain", ()))
-    child_context.net_label = f"Subagent {idx}"
-    if Path(cfg.session_file) != Path(os.devnull):
-        from ..session_catalog import record_session_start
+        child_context.usage_chain = (session_key(Path(parent_cfg.session_file), parent_context),
+                                     *getattr(parent_context, "usage_chain", ()))
+        child_context.net_label = f"Subagent {idx}"
+        if Path(cfg.session_file) != Path(os.devnull):
+            from ..session_catalog import record_session_start
 
-        record_session_start(cfg.session_file, cwd=child_context.cwd, agent=agent, model=cfg.model,
-                             mode="subagent", parent=parent_cfg.session_file)
-    messages = M.load_replay_messages(cfg.session_file)
-    parent_hooks = getattr(parent_context, "tool_call_hooks", None)
-    telemetry = Telemetry(debug_log=cfg.debug_log)
-    turn_kwargs = {
-        "trace_override": False,
-        "tool_registry": registry,
-        "tool_context": child_context,
-        "suppress_output": True,
-        "sampling": sampling,
-        "event_hooks": None if parent_hooks is None else RefusableOnly(parent_hooks),
-    }
-    try:
-        await agent_messages.initialize(cfg, prompt_spec, messages, telemetry, **turn_kwargs)
-        messages.append(M.note_time({"role": "user", "content": prompt}))
-        await run_turn_async(
-            cfg,
-            system,
-            messages,
-            telemetry,
-            **turn_kwargs,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return f"ERROR {type(exc).__name__}: {exc}"
-    finally:
-        close_terminal_sessions(child_context)
-        if child_context.kernel_session is not None:
-            child_context.kernel_session.shutdown()
-            child_context.kernel_session = None
-        M.persist_messages(cfg.session_file, messages,
-                           stamp=M.stamp_for(cfg.model, cfg.provider_id, cfg.reasoning_effort))
+            record_session_start(cfg.session_file, cwd=child_context.cwd, agent=agent, model=cfg.model,
+                                 mode="subagent", parent=parent_cfg.session_file)
+        messages = M.load_replay_messages(cfg.session_file)
+        parent_hooks = getattr(parent_context, "tool_call_hooks", None)
+        telemetry = Telemetry(debug_log=cfg.debug_log)
+        turn_kwargs = {
+            "trace_override": False,
+            "tool_registry": registry,
+            "tool_context": child_context,
+            "suppress_output": True,
+            "sampling": sampling,
+            "event_hooks": None if parent_hooks is None else RefusableOnly(parent_hooks),
+        }
+        try:
+            await agent_messages.initialize(cfg, prompt_spec, messages, telemetry, **turn_kwargs)
+            messages.append(M.note_time({"role": "user", "content": prompt}))
+            await run_turn_async(
+                cfg,
+                system,
+                messages,
+                telemetry,
+                **turn_kwargs,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return f"ERROR {type(exc).__name__}: {exc}"
+        finally:
+            close_terminal_sessions(child_context)
+            if child_context.kernel_session is not None:
+                child_context.kernel_session.shutdown()
+                child_context.kernel_session = None
+            M.persist_messages(cfg.session_file, messages,
+                               stamp=M.stamp_for(cfg.model, cfg.provider_id, cfg.reasoning_effort))
 
     final = ""
     for msg in reversed(messages):

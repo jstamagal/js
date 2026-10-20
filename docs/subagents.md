@@ -29,6 +29,7 @@ Rules:
 - `tasks` must be a list of strings.
 - Empty task strings are ignored; an all-empty list is an error.
 - `session_id` is optional and resumes that worker agent session.
+- A session with an active worker refuses another concurrent run.
 - Recursive task depth defaults to `2` and is set by `SUBAGENT_DEPTH_MAX` in
   config or `--extra SUBAGENT_DEPTH_MAX=N`. (There is no `JS_TASK_MAX_DEPTH`
   env var.)
