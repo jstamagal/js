@@ -145,7 +145,7 @@ def theme_name() -> str:
     return name if name in themes() else defaults().get(THEME, "")
 
 
-def lookup(name: str) -> str | None:
+def lookup(name: str, *, transform_default=None) -> str | None:
     """Entry ``name``'s value: the operator's, the theme's, else the default;
     None when none of them sets it."""
     if name in _overrides:
@@ -155,7 +155,8 @@ def lookup(name: str) -> str | None:
     theme = theme_entries(theme_name())
     if name in theme:
         return theme[name]
-    return defaults().get(name)
+    value = defaults().get(name)
+    return transform_default(value) if value is not None and transform_default is not None else value
 
 
 def entry_value(name: str) -> str | None:

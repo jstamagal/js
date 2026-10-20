@@ -327,6 +327,10 @@ branch the audit was made on; they move as the code changes.
 24 findings.
 
 Resolution notes (the rows below record the original audit):
+- js-2lg.107: hint entries can render caller-supplied keymaps; the REPL assembly
+  can supply a hint renderer for cancellation, startup and idle interrupts.
+  Existing REPL key files retain their existing hints by default. Picker callers
+  supply their own action maps rather than the REPL keymap.
 - js-2lg.101: `EXIT_ARM_TIMEOUT` registers the existing two-second window;
   `screen.build_app(handler_factory=...)` can replace or extend action handlers.
 - js-2lg.61: `meta.skill` accepts the user invocation command used in its refusal.

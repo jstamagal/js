@@ -24,10 +24,11 @@ that is a terminal.
 from __future__ import annotations
 
 import argparse
+import re
 from contextlib import contextmanager
 from contextvars import ContextVar
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from string import Formatter
 from typing import Any
 
@@ -75,6 +76,11 @@ SEVERITY_ROLE = {INFO: "", WARN: "COLOR_WARN", GRAVE: "COLOR_ERROR"}
 _FORMATTER = Formatter()
 
 
+def _replace_key_labels(text: str, replacements: dict[str, str]) -> str:
+    pattern = r"(?<![A-Za-z0-9/])(?:" + "|".join(re.escape(label) for label in sorted(replacements, key=len, reverse=True)) + r")(?![A-Za-z0-9/])"
+    return re.sub(pattern, lambda match: replacements[match[0]], text)
+
+
 @dataclass(frozen=True)
 class Message:
     template: str
@@ -82,6 +88,25 @@ class Message:
     banner: bool = True
     # The entry's name in this module, and the name of its /fset format.
     name: str = field(default="", compare=False)
+    key_labels: tuple[tuple[str, str], ...] = field(default=(), compare=False, repr=False)
+
+    def with_keymap(self, keymap: dict, defaults: dict) -> Message:
+        """This hint with changed bindings named from its caller's keymap.
+
+        The shipped labels stay as written while bindings match the defaults.
+        Operator /fset formats retain their own wording.
+        """
+        from .keys import describe
+
+        replacements = {}
+        for label, actions in _HINT_ACTIONS.get(self.name, {}).items():
+            if any(keymap.get(action, ()) != defaults.get(action, ()) for action in actions):
+                sequences = dict.fromkeys(seq for action in actions for seq in keymap.get(action, ()))
+                replacements[label] = "/".join(describe(seq) for seq in sequences) or KEY_UNBOUND
+        if not replacements:
+            return self
+        escaped = {label: text.replace("{", "{{").replace("}", "}}") for label, text in replacements.items()}
+        return replace(self, template=_replace_key_labels(self.template, escaped), key_labels=tuple(replacements.items()))
 
     def text(self, **fields: Any) -> str:
         """The message with its holes filled: no slot, no colour. For a
@@ -100,7 +125,11 @@ class Message:
 
     def format(self) -> str:
         """The entry's /fset format: the one set, else `default_format`."""
-        found = fset.lookup(self.name) if self.name else None
+        if self.key_labels:
+            labels = {label: fset.escape(text) for label, text in self.key_labels}
+            found = fset.lookup(self.name, transform_default=lambda text: _replace_key_labels(text, labels)) if self.name else None
+        else:
+            found = fset.lookup(self.name) if self.name else None
         return self.default_format() if found is None else found
 
     def runs(self, *, whole: str = "", **fields: Any) -> list[fset.Run]:
@@ -452,6 +481,30 @@ DROP_DONE = Message("{path} is no longer visible in the jail.")
 NO_QUEUED_PROMPTS = Message("No queued prompts.")
 ALIAS_TOO_DEEP = Message("alias {name}: nesting too deep.")
 ALIAS_UNKNOWN_COMMAND = Message("alias {name}: unknown command {verb}")
+KEY_UNBOUND = "unbound"
+_HINT_ACTIONS = {
+    "TURN_RUNNING": {"^C": ("interrupt",)},
+    "PRESS_CTRL_C_AGAIN": {"^C": ("interrupt",)},
+    "STARTUP_HINT": {"Ctrl-D": ("eof",)},
+    "PICKER_KEYS": {"↑↓/jk": ("up", "down"), "pgup/pgdn": ("page_up", "page_down"),
+                    "/": ("search",), "enter": ("choose",), "q/esc": ("quit",)},
+    "PICKER_KEYS_CHECKLIST": {"↑↓/jk": ("up", "down"), "/": ("search",), "space": ("toggle",),
+                              "a": ("all",), "n": ("none",), "enter": ("choose",), "q": ("quit",)},
+    "PICKER_KEYS_CHECKLIST_EDIT": {"↑↓/jk": ("up", "down"), "/": ("search",), "space": ("toggle",),
+                                   "a": ("all",), "n": ("none",), "e": ("edit",),
+                                   "enter": ("choose",), "q": ("quit",)},
+    "PICKER_KEYS_SEARCH": {"enter": ("choose",), "esc": ("back",)},
+    "PICK_HELP": {"tab": ("focus",), "↑↓": ("up", "down"), "enter": ("choose",),
+                  "f": ("fetch",), "esc/q": ("quit",)},
+    "SKILLS_KEYS": {"space": ("toggle",), "enter": ("choose",), "/": ("search",), "esc": ("back",)},
+    "SKILLS_QUERY_KEYS": {"enter": ("choose",), "esc": ("back",)},
+    "SESSIONS_KEYS": {"v": ("view",), "/": ("search",), "b": ("messages",),
+                      "i": ("info",), "a": ("all",), "esc": ("back",)},
+    "SESSIONS_QUERY_KEYS": {"enter": ("choose",), "esc": ("back",)},
+    "SESSIONS_MESSAGES_KEYS": {"enter": ("choose",), "r": ("resume",), "esc": ("back",)},
+    "SESSIONS_INFO_KEYS": {"enter": ("choose",), "esc": ("back",)},
+}
+
 TURN_RUNNING = Message("Turn running. {command} would clobber its context. ^C to cancel, or wait.")
 UNKNOWN_COMMAND = Message("Unknown command: {verb}")
 UNKNOWN_SLASH_COMMAND = Message("Invalid command", WARN)

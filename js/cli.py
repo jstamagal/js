@@ -2317,7 +2317,7 @@ def _run_command(line: str, state: dict, cfg: Config, depth: int = 0) -> tuple[b
         handled, error = _run_command(expanded, state, cfg, depth + 1)
         return True, error if handled else msgs.ALIAS_UNKNOWN_COMMAND.said(name=verb, verb=expanded.split()[0])
     if _repl_assembly(state).guard_turn_state and command.turn_state and (sup := supervisor.get_current()) is not None and sup.turn_active():
-        return True, msgs.TURN_RUNNING.said(command=f"/{verb}")
+        return True, _repl_hint(msgs.TURN_RUNNING, state).said(command=f"/{verb}")
     return True, command.run(arg, state, cfg)
 
 
@@ -2372,6 +2372,7 @@ class ReplAssembly:
     interrupt: Callable | None = None
     blocking_interrupts_max: int = 2
     banner: Callable | None = None
+    hint_renderer: Callable[[msgs.Message, dict], msgs.Message] | None = None
     input_bindings: Callable | None = None
     prompt_options: Callable[[], dict] = _repl_prompt_options
 
@@ -3762,6 +3763,11 @@ def _print_skill_catalog(state: dict) -> None:
     msgs.say(msgs.SKILL_HINT)
 
 
+
+def _repl_hint(message: msgs.Message, state: dict) -> msgs.Message:
+    render = _repl_assembly(state).hint_renderer
+    return message if render is None else render(message, state)
+
 def _default_startup_banner(cfg: Config, state: dict, notices: list[str], errors: list[str]) -> str:
     """What the REPL prints into its scrollback when it is up: the MOTD
     (`js.motd`) raw with its colours reset after, then the startup line,
@@ -3775,7 +3781,7 @@ def _default_startup_banner(cfg: Config, state: dict, notices: list[str], errors
         msgs.STARTUP_PROMPT.line(prompt=cfg.prompts_dir),
         msgs.STARTUP_MEMORY.line(memory=cfg.session_file),
         "",
-        msgs.STARTUP_HINT.line(),
+        _repl_hint(msgs.STARTUP_HINT, state).line(),
         "",
         *notices,
         *(msgs.failure_line(error) for error in errors),
@@ -3965,7 +3971,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
             msgs.say(msgs.DROPPED_QUEUED, prompts=msgs.plural(flushed, "queued prompt"))
             return
         if _is_turn_state_command(line, state) and sup.turn_active():
-            msgs.say(msgs.TURN_RUNNING, command=line.split()[0])
+            msgs.say(_repl_hint(msgs.TURN_RUNNING, state), command=line.split()[0])
             return
         handled = await loop.run_in_executor(None, _handle_command, line, state, cfg)
         if handled:
@@ -4196,7 +4202,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
             interrupt_count += 1
             if interrupt_count < _repl_assembly(state).blocking_interrupts_max:
                 print()
-                msgs.say(msgs.PRESS_CTRL_C_AGAIN)
+                msgs.say(_repl_hint(msgs.PRESS_CTRL_C_AGAIN, state))
                 continue
             print()
             break
