@@ -1551,6 +1551,8 @@ async def stream_model_async(
         if friendly is not None:
             raise friendly from exc
         raise
+    if settings is not None and isinstance(model.provider, codex_provider.OpenAICodexProvider):
+        model.provider._settings = settings
     # The provider owns an HTTP client from here on; every exit below, including
     # a failure while the request is still being assembled, must close it.
     try:

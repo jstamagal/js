@@ -25,7 +25,7 @@ import httpx
 import pydantic
 from ai.models.core import params as ai_params
 
-from . import codex_auth
+from . import codex_auth, settings as _settings
 
 if TYPE_CHECKING:
     from .logins import Login
@@ -40,11 +40,13 @@ _FALLBACK_CLIENT_VERSION = "0.145.0"
 
 
 @functools.cache
-def _client_version() -> str:
-    override = os.environ.get("JS_CODEX_CLIENT_VERSION", "").strip()
+def _client_version(override: str | None = None, detect: bool | None = None) -> str:
+    override = (os.environ.get("JS_CODEX_CLIENT_VERSION", "") if override is None else override).strip()
     if override:
         return override
-    exe = shutil.which("codex")
+    if detect is None:
+        detect = _settings.default_value("CODEX_CLIENT_DETECT")
+    exe = shutil.which("codex") if detect else None
     if exe:
         try:
             proc = subprocess.run(
@@ -56,7 +58,6 @@ def _client_version() -> str:
         except (OSError, subprocess.SubprocessError):
             pass
     return _FALLBACK_CLIENT_VERSION
-_ORIGINATOR = "pi"
 _USER_AGENT = f"js/0.1.0 ({platform.system().lower()} {platform.release()}; {platform.machine()})"
 _PROVIDER = codex_auth.CODEX_PROVIDER_ID
 _INTERRUPTED_TOOL_OUTPUT = "[No tool output recorded: the tool call was interrupted before it produced a result.]"
@@ -100,13 +101,13 @@ def _with_own_headers(extra: dict[str, str], own: dict[str, str]) -> dict[str, s
     return {**{k: v for k, v in own.items() if k.lower() not in taken}, **kept}
 
 
-def _codex_headers(access_token: str, account_id: str, *, stream: bool) -> dict[str, str]:
+def _codex_headers(access_token: str, account_id: str, *, stream: bool, settings: dict | None = None) -> dict[str, str]:
     headers = {
         "Authorization": f"Bearer {access_token}",
         "chatgpt-account-id": account_id,
         "OpenAI-Beta": "responses=experimental",
-        "originator": _ORIGINATOR,
-        "User-Agent": _USER_AGENT,
+        "originator": _settings.knob(settings, "CODEX_ORIGINATOR"),
+        "User-Agent": _settings.knob(settings, "CODEX_USER_AGENT") or _USER_AGENT,
     }
     if stream:
         headers["accept"] = "text/event-stream"
@@ -470,13 +471,14 @@ async def _build_body_async(
     tools: Sequence[ai.types.tools.Tool] | None,
     params: ai_params.InferenceRequestParams | None,
 ) -> dict[str, Any]:
+    settings = getattr(model.provider, "_settings", None)
     instructions, input_items = await _messages_to_codex(messages)
     body: dict[str, Any] = {
         "model": model.id,
         "input": input_items,
         "stream": True,
         "store": False,
-        "text": {"verbosity": "low"},
+        "text": {"verbosity": _settings.knob(settings, "CODEX_TEXT_VERBOSITY")},
         "include": ["reasoning.encrypted_content"],
     }
     if instructions:
@@ -486,7 +488,7 @@ async def _build_body_async(
         body["tools"] = codex_tools
     effort = _effort_from_params(params)
     if effort is not None:
-        body["reasoning"] = {"effort": effort, "summary": "detailed"}
+        body["reasoning"] = {"effort": effort, "summary": _settings.knob(settings, "CODEX_REASONING_SUMMARY")}
     # Codex rejects caller-supplied output caps; forward only the sampling knobs
     # the codex transport admitted into params.sampling.
     temperature, top_p = _sampling_from_params(params)
@@ -543,6 +545,7 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
     # Headers every request also carries (the login's, EXTRA_HEADERS,
     # PARANOID_MODE's); the OAuth and account headers win over them.
     _extra_headers: dict[str, str] = pydantic.PrivateAttr(default_factory=dict)
+    _settings: dict = pydantic.PrivateAttr(default_factory=dict)
 
     def __init__(
         self,
@@ -554,6 +557,7 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
         base_url: str | None = None,
         login: Login | None = None,
         client: httpx.AsyncClient | None = None,
+        settings: dict | None = None,
     ) -> None:
         if not access_token:
             raise ai.ConfigurationError("OpenAI Codex requires an OAuth access token; run js --login openai-codex")
@@ -563,6 +567,9 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
             default_base_url=_trim_base_url(base_url),
             api_key_value=access_token,
         )
+        from . import config
+
+        self._settings = config.run_settings() if settings is None else settings
         self._access_token = access_token
         self._refresh_token = refresh_token
         self._expires_at = expires_at
@@ -649,13 +656,15 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
     async def list_models(self) -> list[str]:
         access, account_id = await self._ensure_access()
         base = _trim_base_url(self.base_url)
-        headers = _with_own_headers(self._extra_headers, _codex_headers(access, account_id, stream=False))
+        headers = _with_own_headers(self._extra_headers, _codex_headers(access, account_id, stream=False, settings=self._settings))
         errors: list[str] = []
         for path in _MODEL_PATHS:
             try:
                 response = await self.client.get(
                     f"{base}{path}",
-                    params={"client_version": await asyncio.to_thread(_client_version)},
+                    params={"client_version": await asyncio.to_thread(
+                        _client_version, _settings.knob(self._settings, "CODEX_CLIENT_VERSION") or None,
+                        _settings.knob(self._settings, "CODEX_CLIENT_DETECT"))},
                     headers=headers,
                 )
             except httpx.TimeoutException as exc:
@@ -731,7 +740,7 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
     ) -> AsyncGenerator[ai.events.Event]:
         access, account_id = await self._ensure_access()
         body = await _build_body_async(model, messages, tools, params)
-        headers = _with_own_headers(self._extra_headers, _codex_headers(access, account_id, stream=True))
+        headers = _with_own_headers(self._extra_headers, _codex_headers(access, account_id, stream=True, settings=self._settings))
         url = responses_url(self.base_url)
         text_block: str | None = None
         text_count = 0

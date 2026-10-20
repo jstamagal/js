@@ -133,3 +133,19 @@ def test_streamed_text_items_keep_the_reasoning_between_them(monkeypatch):
         ("text", "before"), ("reasoning", "plan"), ("text", "after"),
     ]
     assert model_client.signed_reasoning_parts(result.assistant_message)[0]["text_before"] == 6
+
+
+def test_registered_codex_settings_reach_the_request(monkeypatch):
+    seen = []
+
+    def respond(request):
+        seen.append(request)
+        return _completed()
+
+    _stream(monkeypatch, respond, [ai.user_message("hi")], settings={
+        "CODEX_TEXT_VERBOSITY": "high", "CODEX_ORIGINATOR": "custom",
+        "CODEX_USER_AGENT": "configured-agent",
+    })
+    assert json.loads(seen[0].content)["text"]["verbosity"] == "high"
+    assert seen[0].headers["originator"] == "custom"
+    assert seen[0].headers["user-agent"] == "configured-agent"

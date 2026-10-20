@@ -121,6 +121,12 @@ class TurnSetting:
 
 
 TURN_SETTINGS: tuple[TurnSetting, ...] = (
+    TurnSetting("codex_client_detect", "CODEX_CLIENT_DETECT", flag),
+    TurnSetting("codex_client_version", "CODEX_CLIENT_VERSION", text),
+    TurnSetting("codex_user_agent", "CODEX_USER_AGENT", text),
+    TurnSetting("codex_originator", "CODEX_ORIGINATOR", text),
+    TurnSetting("codex_reasoning_summary", "CODEX_REASONING_SUMMARY", text),
+    TurnSetting("codex_text_verbosity", "CODEX_TEXT_VERBOSITY", text),
     TurnSetting("notebook_clear_outputs", "NOTEBOOK_CLEAR_OUTPUTS", flag, on_context=True),
     TurnSetting("notebook_require_read", "NOTEBOOK_REQUIRE_READ", flag, on_context=True),
     TurnSetting("lsp_allow_home_root", "LSP_ALLOW_HOME_ROOT", flag, on_context=True),

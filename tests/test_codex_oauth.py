@@ -347,7 +347,7 @@ async def _collect_provider_stream(provider: codex_provider.OpenAICodexProvider)
 
 
 def test_codex_provider_lists_models_and_streams_responses_shape(monkeypatch):
-    monkeypatch.setattr(codex_provider, "_client_version", lambda: "0.145.0")
+    monkeypatch.setattr(codex_provider, "_client_version", lambda *args: "0.145.0")
     client = _FakeCodexHttpClient()
     provider = codex_provider.OpenAICodexProvider(
         access_token=_fake_jwt(),
