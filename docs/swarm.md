@@ -138,7 +138,7 @@ loop in one process. The code is `js/swarm_run.py`.
 {"root": "/tmp/troop-42", "slots": 0,
  "agents": [{"name": "kivu", "agent": "troop", "model": "cpa/deepseek-v4.1-flash", "effort": "low",
              "opener": "You are kivu ...", "session": "troop-42-kivu", "cwd": "/tmp/troop-42/kivu",
-             "seat_file": "/tmp/troop-42/kivu.seat.md", "opts": {"limits.shell_env_allow": "[\"PATH\"]"}}]}
+             "seat_file": "/tmp/troop-42/kivu.seat.md", "opts": {"SHELL_ENV_KEEP": "[\"PATH\"]"}}]}
 ```
 
 Each agent gets what a `--swarm` process gets, built the way the task tool
@@ -153,7 +153,7 @@ inbox, so a hundred idle agents cost one process and no model calls.
 
 `slots` caps how many agents may be mid-turn at once; the rest wait for a
 slot before starting their next turn. Unset, it is the registered setting
-`swarm.slots`; 0 is no cap. `recruit` inside this runner adds an agent to the
+`SWARM_ACTIVE_MAX`; 0 is no cap. `recruit` inside this runner adds an agent to the
 loop with the recruiter's agent, model and settings and a session named
 `<parent session>-<name>`; its `spawned` marker says `"inproc": true`.
 

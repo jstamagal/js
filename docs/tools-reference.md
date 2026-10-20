@@ -20,14 +20,14 @@ Parameters:
 - `show_line_numbers`: default true.
 
 A byte-range read returns raw text, no line prefixes, at most half the tighter
-of `limits.max_tool_result_inline_bytes` and `limits.max_tool_result_bytes`
+of `TOOL_RESULT_INLINE_MAX` and `TOOL_RESULT_MAX`
 per call, so a page is never spilled again. Both ends move back to a UTF-8
 character start, and a footer names the offsets returned and the `range` that
-continues. A file over `limits.max_file_bytes` is read by seeking to the page,
+continues. A file over `FILE_BYTES_MAX` is read by seeking to the page,
 and that read authorizes no edit; within the limit, the lines a page shows whole
 count as read for `patch`.
 
-A tool result over `limits.max_tool_result_inline_bytes` is spilled to
+A tool result over `TOOL_RESULT_INLINE_MAX` is spilled to
 `~/.js/state/tool-results/` and replaced by a preview plus a notice naming
 the file and the `range` that continues past the preview: always a byte range,
 plus a line range when the result has more than one line. A single-line
@@ -50,12 +50,12 @@ the lines come back in full. Any write, patch or undo of the file starts over.
 
 Images return either a vision-disabled text stub or an internal image marker
 that the runtime expands for vision models. PDFs use `pdftotext`. Both are
-refused when the file exceeds `limits.max_file_bytes`.
+refused when the file exceeds `FILE_BYTES_MAX`.
 
 A notebook (`.ipynb`) read without a range shows its cells: index, id (the
 nbformat `id`, or `cell-N` by position before nbformat 4.5), type, execution
 count and source, then each output summarised. A stream or `text/plain`
-output shows at most `notebook.output_lines` lines; other MIME types show only
+output shows at most `NOTEBOOK_OUTPUT_LINES_MAX` lines; other MIME types show only
 their size; an error shows `ename: evalue`. That read records the file's hash
 for `notebook_edit` and `write`, but no line coverage: a `patch` of the raw
 JSON needs a ranged read, which returns the raw JSON. A `.ipynb` that is not a
@@ -117,7 +117,7 @@ read saw, so the error carries the diff from that content to the current one
 and names both hashes. Lines the model had seen that the change left alone stay
 seen at their new line numbers, and the lines the diff shows count as read, so
 the retry needs no second `read`. A diff larger than half the tighter of
-`limits.max_tool_result_inline_bytes` and `limits.max_tool_result_bytes` is
+`TOOL_RESULT_INLINE_MAX` and `TOOL_RESULT_MAX` is
 replaced by the changed line numbers. `patch` then stays gated on those lines
 until they are read; an overwrite retry goes through and discards them, and
 `undo` brings them back.
@@ -247,7 +247,7 @@ Parameters:
 - `character`: 1-based column on that line, or instead
 - `symbol`: text on that line; the position is its first occurrence.
 
-`lsp.servers` lists the servers: `{name, command, extensions, roots}`. The
+`LSP_SERVERS` lists the servers: `{name, command, extensions, roots}`. The
 first entry that serves the file's extension and whose `command[0]` is on PATH
 is used; by default basedpyright, then pyright, for Python, rust-analyzer,
 gopls and typescript-language-server. A file no entry serves, or whose servers
@@ -264,14 +264,14 @@ Each call sends the file's content from disk: `didOpen` the first time, then
 has open are resent when they changed, and closed when they are gone.
 `diagnostics` waits for the server to publish for the new version, then
 0.3 s more for later publishes; an unchanged file returns the last ones at
-once. Nothing within `lsp.timeout_s` returns a line saying so, not an empty
+once. Nothing within `LSP_TIMEOUT` returns a line saying so, not an empty
 list. Positions are converted between code point columns and LSP's UTF-16
 offsets both ways.
 
 Under `-C` the server runs in the jail with the allowlisted environment
-(`limits.shell_env_allow`); the command's directory and the symlinks it
+(`SHELL_ENV_KEEP`); the command's directory and the symlinks it
 resolves through are bound back. A server that needs more (its runtime, a
-toolchain) gets it through `jail.bind`.
+toolchain) gets it through `JAIL_BIND`.
 
 ## Process And Network
 
@@ -284,7 +284,7 @@ Parameters:
 - `command`
 - `cwd`
 - `timeout` — seconds the call blocks before returning a handle (default
-  `shell.wait_seconds`, 30). The command is never killed by this.
+  `SHELL_WAIT`, 30). The command is never killed by this.
 - `action` — `run` (default), `poll`, `wait`, `kill`
 - `handle` — job id for `poll`/`wait`/`kill`; defaults to the latest running job
 - `keep_ansi`
@@ -302,10 +302,10 @@ already came back as a handle keep running.
 The command's stdin is `/dev/null` and it has no controlling terminal, so it
 never reads the keystrokes meant for js's input line.
 
-`shell` runs `shell.program` (default `bash`) with `-c`. bash and zsh also get
+`shell` runs `SHELL_PROGRAM` (default `bash`) with `-c`. bash and zsh also get
 `-o pipefail`, so a pipeline reports the failure of any stage.
 
-The command's environment holds only the names in `limits.shell_env_allow` and
+The command's environment holds only the names in `SHELL_ENV_KEEP` and
 the `env` parameter. When the command text references (`$NAME`, `${NAME}`) a
 variable that js has but the command's environment does not, the result
 carries an `environment=filtered unset=NAME allowed=… present=…` line after the
@@ -316,7 +316,7 @@ Use `cwd` instead of writing `cd ... && ...` in the command.
 Under `js -C DIR` the command runs under bubblewrap (`js/jail.py`): DIR
 read-write at its real path, the system read-only, `/home`, the home,
 `/run/user` and network filesystems empty except the `PATH` directories under
-them (read-only) and the `jail.bind` entries, a `/tmp` and `~/.js/tmp` private
+them (read-only) and the `JAIL_BIND` entries, a `/tmp` and `~/.js/tmp` private
 to the js process (`PATH` directories under the host `/tmp` bound in read-only),
 the network shared, `--die-with-parent`. `kernel`,
 `terminal_session` and the wiki converters run in the same jail. The file tools
@@ -339,7 +339,7 @@ Parameters:
 HTML is converted to text unless `raw=true`. Inline output is capped by
 `max_tool_result_bytes`. A download streams to disk and returns
 `SAVED_RESPONSE path=... size=...`; it is bounded by
-`limits.max_download_bytes`, which defaults to `0`, meaning unlimited.
+`DOWNLOAD_MAX`, which defaults to `0`, meaning unlimited.
 
 Saved GET responses, binary responses, and bodies over the inline result budget
 are transferred through the system aria2c with segmentation, retry, resume,
@@ -438,7 +438,7 @@ Parameters:
 - `keys`: comma-separated named keys or literal text for `send`.
 - `cwd`: working directory for `start`.
 - `wait_ms`: redraw collection delay, default `700`.
-- `cols`, `rows`: terminal dimensions; unset, the `tools.terminal_cols` and `tools.terminal_rows` settings.
+- `cols`, `rows`: terminal dimensions; unset, the `TERMINAL_COLUMNS` and `TERMINAL_ROWS` settings.
 
 Named input includes Enter, Tab, Escape, arrows, navigation keys, Ctrl-C/D/L,
 and F1 through F12. Results include the rendered screen, cursor, changed-line
@@ -509,7 +509,7 @@ comma-separated globs) is path-scoped. Globs may be unquoted (`paths: *.rs`,
 `patch` or `write` succeeds on a file that matches, the tool result starts with
 one `<js-reminder>` that names the skill, its description and the
 `tool_discovery {"load":"skill:<name>"}` call. It goes first so a result spilled
-past `limits.max_tool_result_inline_bytes` or clipped still shows it. Each skill
+past `TOOL_RESULT_INLINE_MAX` or clipped still shows it. Each skill
 is offered once per session: the record lives in the session's tool-surface
 mark, so it survives later turns, compaction and resume, and a `/reset` clears
 it. A skill already loaded, through `tool_discovery`, the `skill` tool or the
@@ -547,9 +547,9 @@ let it build its own. They do not replace the hardened tools, do not wrap them,
 and do not import their rails. The shipped `twotool` agent
 (`js --agent twotool`) is this mode: `kernel`, `toolbox`, `shell`, nothing else.
 
-Both are gated by `kernel.enabled`, off by default. Install `js[kernel]` or run
-`uv sync --no-dev --extra kernel`, then `/set kernel.enabled on` (and `/save`
-to persist it). `/set kernel.enabled off` removes both from subsequent turns,
+Both are gated by `PYTHON_KERNEL`, off by default. Install `js[kernel]` or run
+`uv sync --no-dev --extra kernel`, then `/set PYTHON_KERNEL on` (and `/save`
+to persist it). `/set PYTHON_KERNEL off` removes both from subsequent turns,
 including subagents; it does not interrupt an already-running turn or cell.
 Jupyter's `jupyter_client` and `ipykernel` are optional, not base dependencies.
 Without them enabled tools return an ERROR naming the missing package and
@@ -571,7 +571,7 @@ Parameters:
 - `restart`: kill and restart, destroying every definition.
 - `verbosity`: `quiet`, `normal`, or `verbose` for this call's terminal render.
 
-A cell is submitted with a bounded wait (`kernel.wait_seconds`, capped by
+A cell is submitted with a bounded wait (`PYTHON_KERNEL_WAIT`, capped by
 `timeout`). A cell that finishes inside the wait returns whole; one still running
 returns a `HANDLE <id> RUNNING` line and whatever it has printed so far, and the
 agent polls or waits for the rest instead of blocking the turn. A new `code`
@@ -599,7 +599,7 @@ and friends) is written under `~/.js/state/kernel/<run>/` and reported as
 directory, never the terminal. The kernel's sockets are unix sockets in a
 private `js-kernel-*` directory under the temp dir, removed at shutdown, so two
 js processes starting kernels at once cannot be handed the same TCP port.
-The result string is capped by `limits.max_tool_result_bytes` with the standard
+The result string is capped by `TOOL_RESULT_MAX` with the standard
 truncation marker.
 
 Ctrl-C on a turn that has a kernel cell in flight interrupts that cell before the

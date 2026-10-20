@@ -322,7 +322,7 @@ Servers belong in the existing config file, merged across global and project
 scope like everything else:
 
 ```toml
-[mcp.servers.jupyter]
+[MCP_SERVERS.jupyter]
 command = "uvx"
 args = ["mcp-jupyter-notebook"]
 env = { MCP_JUPYTER_SESSION_MODE = "server" }
@@ -330,7 +330,7 @@ cwd = "~/notebooks"
 enabled = true
 tools = ["notebook_*"]        # allow-list, globbed, optional
 
-[mcp.servers.linear]
+[MCP_SERVERS.linear]
 url = "https://mcp.linear.app/mcp"
 headers = { Authorization = "Bearer ..." }
 ```

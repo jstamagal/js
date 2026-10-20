@@ -303,7 +303,7 @@ calls", a rule that exists nowhere in js. The only one-shot rule js sends is
 
 ## 4. Shell tool
 
-- New setting `shell.program`, default `bash` in `js/jsrc`. Today the tool
+- New setting `SHELL_PROGRAM`, default `bash` in `js/jsrc`. Today the tool
   runs `$SHELL` with no setting; models write bash, and zsh broke a model's
   `echo ===` separator on 2026-09-29.
 - Under bash, commands run with `pipefail`, so `dmesg … 2>/dev/null | rg … |
@@ -338,7 +338,7 @@ home.
   bubblewrap. DIR is bound read-write at its real path and is the working
   directory.
 - The operator's home is a tmpfs. Bound back read-only: every `$PATH`
-  directory under home, so toolchains work. The setting `jail.bind` adds
+  directory under home, so toolchains work. The setting `JAIL_BIND` adds
   paths (`~/.cache/uv:rw`, …).
 - `/usr`, `/etc` and the rest of the system: read-only. `/tmp` and
   `~/.js/tmp`: private to the jail.
@@ -366,7 +366,7 @@ home.
 How it is built (`js/jail.py`):
 
 - One jail per js process, entered by `-C` after a self-test (`bwrap … true`).
-  Each command builds its own bwrap argv, so a changed `jail.bind` reaches the
+  Each command builds its own bwrap argv, so a changed `JAIL_BIND` reaches the
   next command.
 - `--ro-bind / /`, then empty tmpfs mounts over `/home`, the operator's home
   (by `$HOME` and by the password database), `/run/user`, every network
@@ -395,7 +395,7 @@ How it is built (`js/jail.py`):
   a `JailError` becomes one `ERROR:` line in `call_tool`. Writes need a
   read-write area (DIR, a `:rw` bind, the private tmp).
 - `JS_JAIL` is exported; `tools/envctx.c` prints `confined=DIR` and a rule
-  line. It prints `shell=$JS_SHELL`, which js exports from `shell.program`
+  line. It prints `shell=$JS_SHELL`, which js exports from `SHELL_PROGRAM`
   before expanding the system prompt.
 - Not jailed: MCP servers (the operator configures them), the commit helper's
   git (js's own code), inline prompt directives (the operator's prompt).

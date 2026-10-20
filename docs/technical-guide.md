@@ -230,16 +230,16 @@ compacts. The meter's callback adds the call to the turn's totals, which
 Provider request retry:
 
 - A failure with SDK `ProviderAPIError.is_retryable` is retried up to
-  `runtime.retry_attempts` times (default 10). Each retry waits what the
+  `RETRY_COUNT_MAX` times (default 10). Each retry waits what the
   response's `retry-after-ms` or `Retry-After` header asks (seconds or an HTTP
   date), else 1s, 2s, 4s ... up to 16s plus jitter. A wait longer than
-  `runtime.retry_max_wait_seconds` (default 120, 0 means no limit) fails the
+  `RETRY_WAIT_MAX` (default 120, 0 means no limit) fails the
   request at once. `_open_stream` sets the OpenAI and Anthropic SDK clients'
   `max_retries` to 0, so these retries are the only ones. The turn runs them
   itself (`turn_call.ModelCaller`), between overflow and max-output recovery; every other model
   request (compaction summaries, the `/login` test) goes through
   `retry.call` under the same budget.
-- `runtime.stream_idle_seconds` (default 300, 0 off) is the stream idle
+- `STREAM_IDLE_TIMEOUT` (default 300, 0 off) is the stream idle
   watchdog. `_stream_async` runs the request under an `asyncio.timeout` whose
   deadline moves forward on every response chunk the transport reads (SSE
   keep-alive comments included) and on every SDK event. The wait for the
@@ -253,8 +253,8 @@ Provider request retry:
   window is a silent overflow: the provider cut the input to fit. So is a
   reply cut off by its cap with no output and an input filling 99% of the
   window. The window is the larger of the model's (`_resolve_context_window`)
-  and `compact.context_window`, so a catalog that understates the window can
-  be corrected there. A silent overflow spends an overflow round the same way
+  and `CONTEXT_SIZE`, so a catalog that understates the window can be
+  corrected there. A silent overflow spends an overflow round the same way
   and the request is sent again. When reply text is already on the screen or
   stdout, the reply is kept instead and the shed history serves the next
   request, so no reply is printed twice. The SDK's `input_tokens` already
@@ -267,7 +267,7 @@ incomplete with `max_output_tokens` or the SDK's finish reason is `length`
 run. Then:
 
 1. Once per turn, the same request is sent again with
-   `runtime.max_output_escalation` (default 64000) as the cap, held to the
+   `OUTPUT_TOKENS_RETRY_MAX` (default 64000) as the cap, held to the
    model's known output limit and to what the window leaves after the
    prompt. This happens only when that is larger than the cap the cut reply
    had, so a model already at its limit, a full window, or Codex (which takes
@@ -278,7 +278,7 @@ run. Then:
    configured cap without shedding history.
 2. A reply still cut off is recorded, with any truncated tool call dropped,
    followed by a user message marked `resume_nudge` telling the model to
-   resume. This repeats up to `runtime.max_output_resumes` times per turn
+   resume. This repeats up to `OUTPUT_RESUMES_MAX` times per turn
    (default 3). After that the turn ends `incomplete`.
 
 ## Tool Dispatch
@@ -306,7 +306,7 @@ instead of surfacing "no assistant response".
 `task` calls from the same assistant turn are dispatched concurrently. The
 other calls from that turn run in model order under a readers-writer rule:
 read-only calls next to each other run together, up to
-`runtime.max_parallel_tools` at once (default 8; 1 runs every call in turn),
+`PARALLEL_TOOLS_MAX` at once (default 8; 1 runs every call in turn),
 and a call that writes runs alone, after every call before it. Read, read,
 patch, read runs as [read ∥ read] → patch → read. Result messages are restored
 to original tool-call order before being appended. See
@@ -452,13 +452,13 @@ variant names. Manufacturer rows resolve equal-release reseller duplicates.
 A family lookup is an estimate of an alias target, not router configuration.
 
 Ollama, llama.cpp and vLLM can use their actual allocated context. Explicit
-model overrides remain available. `compact.context_window` applies a shared
-window to the run banner and both automatic compaction paths;
-`compact.context_window_fallback` is the window assumed for unresolved models;
+model overrides remain available. `CONTEXT_SIZE` applies one window to the
+run banner and both automatic compaction paths;
+`CONTEXT_SIZE_UNKNOWN` is the window assumed for unresolved models;
 `js/jsrc` sets it to 1,000,000.
 
 Both automatic compaction paths cap reply headroom with
-`compact.summary_reserve_tokens` and reserve `compact.buffer_tokens`.
+`COMPACTION_REPLY_RESERVE_TOKENS` and reserve `COMPACTION_HEADROOM_TOKENS`.
 Output truncation alone does not trigger summarization. Between-turn compaction
 is awaited on the async CLI loop, so cancellation stops its provider request.
 In-turn compaction
@@ -469,7 +469,7 @@ retain phase, context-token count, window and effective input limit.
 ### Compaction flight records
 
 Every call to the central compaction function writes a unique attempt under
-`logs/<agent>/compactions/<session>-<attempt>.jsonl`. `compact.flight_log_dir`
+`logs/<agent>/compactions/<session>-<attempt>.jsonl`. `COMPACTION_LOG_DIR`
 changes that directory. Records contain caller stack/PIDs, active model and
 settings (credential fields redacted), exact system/messages before and after,
 content hashes, retention decision, summary input/output and provider trace,
@@ -480,7 +480,7 @@ with mode 0600; records are flushed and fsynced before summarization starts.
 Terminal START and outcome notices include attempt ID and file path. Session
 compaction marks carry that same ID. Budget telemetry also goes to the existing
 request autolog as `FLIGHT` JSON records even when optional runtime debug is off.
-`/set compact.context_window N` immediately displays the effective next-request
+`/set CONTEXT_SIZE N` immediately displays the effective next-request
 window, and between-turn compaction reads the same live settings.
 
 Overflow recovery also records `operation=tool-result-clearing` attempts before
@@ -492,19 +492,19 @@ recorded as SKIPPED; any following summarization has its own attempt ID.
 
 ### Compaction commit and replay
 
-In-turn budget recovery clears old tool results (`compact.clear_keep_recent`
+In-turn budget recovery clears old tool results (`COMPACTION_KEEP_TOOL_RESULTS`
 starts the retained-result count), summarizes the history before the current
 user message, and, if the active turn itself is too large, summarizes its older
 work while retaining a paired assistant/tool tail. Empty prefixes and
 summary-only prefixes are not summarized. The order depends on the prompt cache.
-When the last request is at least `compact.cache_ttl_seconds` old (default 300,
+When the last request is at least `COMPACTION_CACHE_TTL` old (default 300,
 0 = always), or the provider has already refused the request, clearing runs
 first. While the cache is warm, the summary of earlier turns runs first, and
 clearing runs only if that summary did not bring the request under budget.
 Clearing always runs before the current turn is summarized, because that summary
 rewrites the whole history too.
 
-`compact.max_summary_failures` (default 3) automatic summaries that fail in a
+`COMPACTION_FAILURES_MAX` (default 3) automatic summaries that fail in a
 row pause automatic compaction, in-turn and between turns, and print one line
 saying so. One budget check makes at most one failed summary attempt. While
 paused, tool-result clearing still runs, warm cache or not. A successful
@@ -516,7 +516,7 @@ reserve and buffer calculation.
 The summary request is plain text, not JSON: one `[User]`, `[Assistant]`,
 `[Assistant tool calls]` or `[Tool result name]` paragraph per message inside
 `<conversation>`. Tool results, tool-call arguments and reasoning longer than
-`compact.summary_tool_result_chars` (default 2000, 0 = whole) keep their head
+`COMPACTION_SUMMARY_RESULT_CHARS_MAX` (default 2000, 0 = whole) keep their head
 and tail. When the prefix starts with an earlier `<compaction-summary>`, that
 summary goes in `<previous-summary>` and the model is asked to update it with
 the new messages, so a second compaction carries the first one forward instead

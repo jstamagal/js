@@ -28,8 +28,8 @@ Rules:
 - `tasks` must be a list of strings.
 - Empty task strings are ignored; an all-empty list is an error.
 - `session_id` is optional and resumes that worker agent session.
-- Recursive task depth defaults to `2` and is set by `limits.task_max_depth` in
-  config or `--extra limits.task_max_depth=N`. (There is no `JS_TASK_MAX_DEPTH`
+- Recursive task depth defaults to `2` and is set by `SUBAGENT_DEPTH_MAX` in
+  config or `--extra SUBAGENT_DEPTH_MAX=N`. (There is no `JS_TASK_MAX_DEPTH`
   env var.)
 
 ## Direct Agent Tools
@@ -184,8 +184,8 @@ Not implemented:
 Subagents choose a model in this order:
 
 1. the `task` tool's `model` argument, if the operator has not set
-   `subagents.lock_model`;
-2. the parent turn's current model, when `subagents.prefer_inherit` is true;
+   `SUBAGENT_MODEL_LOCK`;
+2. the parent turn's current model, when `SUBAGENT_INHERIT_MODEL` is true;
 3. the child agent's `agent.yaml` `model:`;
 4. the parent model as the fallback.
 
@@ -211,9 +211,9 @@ route resolver. A one-shot `-p` run applies `model:` and `reasoning:` over the
 jsrc files; `-m` / `--model`, `--reasoning`, a `JS_*` env var or `--extra` win
 over the manifest, and a resumed session stays on its last stamp. The REPL,
 `--bench` and `--commit` apply `model:` only, and there a configured
-non-default `model.id` also leaves the manifest model unused.
+non-default `MODEL` also leaves the manifest model unused.
 
-`subagents.lock_model = true` (`Config.lock_subagent_model`) removes the `task`
+`SUBAGENT_MODEL_LOCK = true` (`Config.lock_subagent_model`) removes the `task`
 tool's `model` parameter from both the model-facing description and the JSON
 schema. The child can still use its own manifest `model:`; the parent model
 just cannot override it through a tool call.

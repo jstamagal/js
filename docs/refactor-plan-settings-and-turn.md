@@ -12,7 +12,7 @@ I used the `codebase-design` vocabulary throughout: interface, depth, seam, adap
 Line numbers already moved once while I was reading. `main` went from `2193857` to `31900da` when bead/picker merged, and cli.py's `_LIVE_LIMIT_FIELDS` moved from ~448 in the review to 488 and then 490. Treat every number in this plan as an anchor to re-grep, not an address.
 
 In-flight work that collides with this plan (`bd list`):
-- **js-1g1.13 resilience** (bead/resilience): rewrites the retry loop inside `run_turn_async` and adds settings (retry budget, `runtime.stream_idle_seconds`).
+- **js-1g1.13 resilience** (bead/resilience): rewrites the retry loop inside `run_turn_async` and adds settings (retry budget, `STREAM_IDLE_TIMEOUT`).
 - **js-1g1.14 compaction** (bead/compaction): rewrites `_maybe_compact_request_for_budget` and adds a failure breaker whose state crosses turns.
 - **js-1g1.12 reasoning** (bead/reasoning): changes the reasoning stream and the shape of the assistant record.
 - **js-1g1.15 edits, 1g1.26 shell head+tail, 1g1.27–30 (LSP, notebook, keys, paste)**: each probably adds a setting, which today means touching all six places.

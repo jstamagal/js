@@ -83,11 +83,11 @@ pi retries once. Codex does not recover inside a normal turn.
 
 **Shell output keeps the head and throws away the tail.** Done in js-1g1.26. `_StreamCapture` now keeps the head and the tail, and the reader writes the raw stream to a file once it passes the cap. The result shows both ends and names the byte range left out and the file, which `read` reaches with `start_byte`. Background job polls work the same way.
 
-**Retry gave up after two attempts and ignored `Retry-After`.** Done in js-1g1.13: a retry waits what `retry-after-ms` or `Retry-After` asks, up to `runtime.retry_attempts` (default 10), and a wait over `runtime.retry_max_wait_seconds` fails at once. The SDK clients' own retries are off, so the budget is js's alone.
+**Retry gave up after two attempts and ignored `Retry-After`.** Done in js-1g1.13: a retry waits what `retry-after-ms` or `Retry-After` asks, up to `RETRY_COUNT_MAX` (default 10), and a wait over `RETRY_WAIT_MAX` fails at once. The SDK clients' own retries are off, so the budget is js's alone.
 
 **A direct Anthropic provider gets no thinking.** Done in js-1g1.12: every provider on the anthropic SDK now takes `reasoning` as thinking, adaptive with an effort on Claude 4.6 and later and a token budget on the rest (`reasoning.anthropic_thinking`). Before, `steers_via_effort` covered only Codex, OpenAI-SDK and implicit gateway endpoints, and a Claude model on the direct API ran with thinking off whatever `reasoning` said.
 
-**A turn cut off by max output tokens just ended.** Done in js-1g1.13: the request is sent again once with `runtime.max_output_escalation` (64k, held to the model's limit), then up to `runtime.max_output_resumes` (3) resume nudges, as Claude Code does. The SDK's `length` finish now counts as a cutoff; before, only Codex's did.
+**A turn cut off by max output tokens just ended.** Done in js-1g1.13: the request is sent again once with `OUTPUT_TOKENS_RETRY_MAX` (64k, held to the model's limit), then up to `OUTPUT_RESUMES_MAX` (3) resume nudges, as Claude Code does. The SDK's `length` finish now counts as a cutoff; before, only Codex's did.
 
 **Compaction summaries are cold.** The summary request is a fresh one-message prompt, so it reads nothing from the main thread's cache. Claude Code forks the summary call so it shares the main thread's cache prefix. The rest of this gap is done in js-1g1.14: the history goes as plain text with tool results clipped to 2000 chars, a second compaction updates the previous summary, and 3 failed summaries in a row pause automatic compaction.
 
@@ -130,9 +130,9 @@ pi retries once. Codex does not recover inside a normal turn.
 | mechanism | from | js change |
 |---|---|---|
 | Parallel read-only calls behind one RwLock; drain results in order | Codex `core/src/tools/parallel.rs` | done in js-1g1.11: `_dispatch_tool_calls`, `Tool.read_only` and `read_only_when` |
-| Honour `Retry-After`, bigger budget, fallback model after repeated 529s | Claude Code `services/api/withRetry.ts` | done in js-1g1.13 except the fallback model: `retry_after_seconds`, `runtime.retry_attempts` |
+| Honour `Retry-After`, bigger budget, fallback model after repeated 529s | Claude Code `services/api/withRetry.ts` | done in js-1g1.13 except the fallback model: `retry_after_seconds`, `RETRY_COUNT_MAX` |
 | Keep head and tail; spill the raw stream, not the clipped text | Codex `head_tail_buffer.rs`, pi `output-accumulator.ts` | done in js-1g1.26: `capped_process._StreamCapture`, `process_net._job_output` |
-| Max-output recovery: escalate once, then resume nudges | Claude Code `query.ts:1195` | done in js-1g1.13: `runtime.max_output_escalation`, `runtime.max_output_resumes` |
+| Max-output recovery: escalate once, then resume nudges | Claude Code `query.ts:1195` | done in js-1g1.13: `OUTPUT_TOKENS_RETRY_MAX`, `OUTPUT_RESUMES_MAX` |
 | Persist thinking signatures; replay Codex encrypted reasoning | pi `anthropic-messages.ts`, Codex `models.rs` | done in js-1g1.12: `reasoning_parts` on the assistant record, replayed to the same provider and model |
 | Compaction breaker at 3 failures; text serialisation; iterative summary | Claude Code `autoCompact.ts:70`, pi `compaction/utils.ts` | done in js-1g1.14: `compaction.serialize_conversation`, `record_auto_failure` |
 | Cache-aware clearing; cache-break detection | Claude Code `microCompact.ts`, `promptCacheBreakDetection.ts` | done in js-1g1.14: `compaction.cache_expired`, `note_response` |
@@ -146,8 +146,8 @@ pi retries once. Codex does not recover inside a normal turn.
 | Interrupted-turn note on resume | Claude Code `conversationRecovery.ts` | done in js-1g1.21: `memory.turn_cut_off`, `_CUT_OFF_NOTICE` |
 | Path-scoped rules and skills | Claude Code `claudemd.ts:250` | skills done in js-1g1.24: `paths:` frontmatter, `TurnToolSurface.offer_path_skills`; rules still missing |
 | Drop-in markdown commands with `$1` / `$@` | pi `prompt-templates.ts` | done in js-1g1.23: `prompt_commands.py`, `~/.js/commands/NAME.md` |
-| Paste collapse to `[paste #N +X lines]` | pi `editor.ts:1259` | done in js-1g1.23: `pastes.py`, `ui.paste_collapse_lines`, `ui.paste_collapse_chars` |
-| Clipboard image paste as `[image #N]` | Claude Code `usePasteHandler.ts`, pi `clipboard-image.ts`, Codex `clipboard_paste.rs` | done in js-1g1.30: `clipimage.py`, `ui.paste_image_key` |
+| Paste collapse to `[paste #N +X lines]` | pi `editor.ts:1259` | done in js-1g1.23: `pastes.py`, `PASTE_COLLAPSE_LINES`, `PASTE_COLLAPSE_CHARS` |
+| Clipboard image paste as `[image #N]` | Claude Code `usePasteHandler.ts`, pi `clipboard-image.ts`, Codex `clipboard_paste.rs` | done in js-1g1.30: `clipimage.py`, `PASTE_IMAGE_KEY` |
 | Hooks that return context or block | Claude Code `utils/hooks.ts:418` | done in js-1g1.20: `on EVENT exec CMD`, `hookexec.py`; session and compact events |
 | Kernel-to-tools bridge (`tools.read(...)` in a cell) | Codex code mode, pi codemode | done in js-1g1.22: `kernel_bridge.py`, `kernel_client.py` |
 
@@ -161,7 +161,7 @@ pi retries once. Codex does not recover inside a normal turn.
 - **Programmatic tool calling** (code mode). Done in js-1g1.22: a kernel cell calls `tools.read(...)` and gets a Python value.
 - **Push notifications.** Shell and kernel jobs are pull-only, and there's no stall watchdog.
 - **Worktree isolation for `task` workers.** They share one tree.
-- **Provider fallback.** The stream idle watchdog (`runtime.stream_idle_seconds`) and silent-overflow detection (a reply whose input exceeds the window) are done in js-1g1.13.
+- **Provider fallback.** The stream idle watchdog (`STREAM_IDLE_TIMEOUT`) and silent-overflow detection (a reply whose input exceeds the window) are done in js-1g1.13.
 - **Automatic memory.** Possibly already covered by the wiki pipeline, which is not wired into sessions.
 
 ## Architecture review (js alone)

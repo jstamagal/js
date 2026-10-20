@@ -61,7 +61,7 @@ js exports two variables before it expands a prompt:
 | Variable | Value |
 | --- | --- |
 | `JS_ROOT` | The directory holding js itself: the `js` package, `prompts/` and `tools/`. The stock agent runs `sh "$JS_ROOT/tools/envctx.c"`. |
-| `JS_SHELL` | The shell the shell tool runs commands in (`shell.program`, resolved on PATH). |
+| `JS_SHELL` | The shell the shell tool runs commands in (`SHELL_PROGRAM`, resolved on PATH). |
 
 ### `!{subsystem args}` — inline directive
 
@@ -111,8 +111,8 @@ timeout, unknown subsystem — is left **literal** in the prompt with a one-line
 warning on stderr; it does not abort prompt assembly. (Callers of
 `expand_prompt` can pass `on_error="raise"` for the strict behavior.) The
 default per-directive timeout is 300 seconds; set
-`limits.inline_code_timeout_s` or `JS_INLINE_CODE_TIMEOUT` to override it.
-Output is capped at `limits.max_bash_output_bytes`. A failing directive's
+`INLINE_CODE_TIMEOUT` or `JS_INLINE_CODE_TIMEOUT` to override it.
+Output is capped at `SHELL_OUTPUT_MAX`. A failing directive's
 stderr goes into the warning; a succeeding one's stderr is discarded.
 
 ## When and where directives run
@@ -132,13 +132,13 @@ stderr goes into the warning; a succeeding one's stderr is discarded.
 
 ## Code execution is on by default
 
-Code subsystems run by default (`runtime.allow_inline_code`, default `on`).
+Code subsystems run by default (`INLINE_CODE`, default `on`).
 Opting out:
 
 ```bash
-js --im-a-pussy -p "..."               # this run only (sets JS_ALLOW_INLINE_CODE=0)
-set runtime.allow_inline_code off      # permanent, in jsrc
-JS_ALLOW_INLINE_CODE=0 js -p "..."     # via environment
+js --im-a-pussy -p "..."               # this run only (sets JS_INLINE_CODE=0)
+set INLINE_CODE off      # permanent, in jsrc
+JS_INLINE_CODE=0 js -p "..."     # via environment
 ```
 
 With code execution off, any `!{sh ...}`, `!{python ...}`, ` ```!c ` etc. is
@@ -148,7 +148,7 @@ expand.
 > **Security note.** By default `js` compiles and runs arbitrary code taken
 > from your prompt files (the agent's `*.md` and any stacked `AGENTS.md`).
 > Treat a prompt directory as executable input: only add prompt dirs you wrote
-> or fully trust, or run with `--im-a-pussy` / `runtime.allow_inline_code off`.
+> or fully trust, or run with `--im-a-pussy` / `INLINE_CODE off`.
 
 ## Keeping a directive literal
 

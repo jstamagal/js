@@ -35,21 +35,22 @@ a setting not at its stock value gets its line uncommented with the live value
 (or appended, when the file has no line for it), a live line for a setting back
 at stock is commented out, and `on` handlers and aliases not in the file yet
 are appended. Every other line is left alone and no backup is made. Picking a
-default model in the model picker writes `model.id` the same way.
+default model in the model picker writes `MODEL` the same way.
 
-`provider.id`, `provider.base_url`, and `provider.api_key` are unset in
-`js/jsrc`. When `provider.id` is set, the provider is constructed explicitly with
+`PROVIDER`, `BASE_URL`, and `API_KEY` are unset in
+`js/jsrc`. When `PROVIDER` is set, the provider is constructed explicitly with
 the given base URL and API key; otherwise `ai-python` routes the model id
 natively through AI Gateway or via `provider:model` syntax for direct providers.
 
 ## Setting Reference
 
-Every settable key is registered in `js/settings.py` `REGISTRY` with its type
-and help text; its default is its line in `js/jsrc`. `/set` with no argument
-lists every setting and its current value; `/show <key>` shows one setting with its
-help. Empty-state rendering uses `off` for false booleans, `<none>` for no-value
+Every setting is registered in `js/settings.py` `REGISTRY` with its type; its
+help text is its entry in `js/help/set.txt` and its default is its line in
+`js/jsrc`. `/set` with no argument lists every setting and its current value,
+`/set NAME` shows one, `/set compaction` one group and `/set *_FILE` the names
+a wildcard matches; `/help set NAME` prints a setting's help. Empty-state rendering uses `off` for false booleans, `<none>` for no-value
 settings, and `<unset>` for settings that explicitly defer to provider defaults. A set
-`provider.api_key` is masked as `<set>`.
+`API_KEY` is masked as `<set>`.
 
 Tool alias profiles let a model see alternate tool names without changing the
 canonical tool handlers. Profiles are evaluated in order; each `match` value is
@@ -62,17 +63,17 @@ Aliases that collide with an active canonical tool name are also ignored.
 
 ## MCP Servers And Per-Agent Policy
 
-`mcp.servers` and `mcp.agents` are JSON-valued `jsrc` settings. A stdio server
+`MCP_SERVERS` and `MCP_AGENT_POLICY` are JSON-valued `jsrc` settings. A stdio server
 uses `command`, optional `args`/`env`, and an optional `enabled` boolean:
 
 ```text
-set mcp.servers {"Local Files":{"command":"python","args":["/opt/files-mcp.py"],"env":{"FILES_TOKEN":"secret"}}}
+set MCP_SERVERS {"Local Files":{"command":"python","args":["/opt/files-mcp.py"],"env":{"FILES_TOKEN":"secret"}}}
 ```
 
 A streamable-HTTP server uses `url` and optional `headers`:
 
 ```text
-set mcp.servers {"Project API":{"url":"http://127.0.0.1:8765/mcp","headers":{"Authorization":"Bearer secret"}}}
+set MCP_SERVERS {"Project API":{"url":"http://127.0.0.1:8765/mcp","headers":{"Authorization":"Bearer secret"}}}
 ```
 
 The value is one JSON object, so combine both entries when using both transports.
@@ -80,11 +81,11 @@ Server names must normalize uniquely. A server requires exactly one of `command`
 or `url`; HTTP URLs must use `http` or `https` and may not contain userinfo.
 Disabled servers are omitted before runtime.
 
-`mcp.agents` applies independent server and namespaced-tool policy by agent id.
+`MCP_AGENT_POLICY` applies independent server and namespaced-tool policy by agent id.
 Allow/deny entries are case-sensitive glob patterns and deny always wins:
 
 ```text
-set mcp.agents {"autocoder":{"servers":{"allow":["Local *"],"deny":["*Prod*"]},"tools":{"allow":["local_files__*"],"deny":["*__delete*"]}}}
+set MCP_AGENT_POLICY {"autocoder":{"servers":{"allow":["Local *"],"deny":["*Prod*"]},"tools":{"allow":["local_files__*"],"deny":["*__delete*"]}}}
 ```
 
 An absent `allow` permits everything not denied; an empty `allow` permits
@@ -110,44 +111,33 @@ secrets in prompts or server-controlled content.
 ## Environment Variables
 
 Registry-backed `JS_*` variables overlay all `jsrc` files and use the same
-coercion as `set`. Every setting reads its canonical `JS_<DOTTED_UPPER>` name
-(`sampling.top_p` <-> `JS_SAMPLING_TOP_P`); the settings below also take a shorter
-name, which wins when both are set. Default values are the lines in `js/jsrc`.
+coercion as `set`. Setting `NAME` reads env var `JS_NAME` (`TOP_P` <->
+`JS_TOP_P`, `MODEL` <-> `JS_MODEL`). Three older env names are still read; the
+new name wins when both are set:
 
-| Variable | Key | Meaning |
+| Old variable | New variable | Setting |
 | --- | --- | --- |
-| `JS_MODEL` | `model.id` | Default model id; unprefixed ids route through AI Gateway. |
-| `JS_MAX_OUTPUT_TOKENS` | `model.max_output_tokens` | Per-call max_tokens; unset = models.dev metadata when known, else no explicit cap. |
-| `JS_REASONING` | `model.reasoning_effort` | Thinking effort: off\|minimal\|low\|medium\|high\|xhigh\|max (`off` disables thinking); any other value is rejected. |
-| `JS_PROVIDER` | `provider.id` | Explicit js provider id (e.g. deepseek, openai-codex, ollama). |
-| `JS_BASE_URL` | `provider.base_url` | Explicit provider base URL; unset = provider default. |
-| `JS_API_KEY` | `provider.api_key` | Explicit provider API key; unset = env/login default. |
-| `JS_MAX_TOOL_ITERATIONS` | `limits.max_tool_iterations` | Max tool calls per turn before the loop gives up. |
-| `JS_MAX_BASH_OUTPUT_BYTES` | `limits.max_bash_output_bytes` | Shell output shown per call, stdout and stderr together. Past it, the head and tail are shown and the whole stream is written to a file. |
-| `JS_MAX_TOOL_RESULT_BYTES` | `limits.max_tool_result_bytes` | Hard cap on any tool result string. |
-| `JS_FETCH_TIMEOUT` | `limits.fetch_timeout_s` | fetch() per-request timeout in seconds. |
-| `JS_INLINE_CODE_TIMEOUT` | `limits.inline_code_timeout_s` | Timeout in seconds for executable inline prompt directives. |
-| `JS_DEBUG` | `runtime.debug` | Append per-event records to `state/<agent>/debug.log`. |
-| `JS_TRACE` | `runtime.trace` | Show the per-turn run line, per-call stats and tool exchanges as the model runs (on stderr in one-shot mode). |
+| `JS_REASONING` | `JS_EFFORT` | `EFFORT` |
+| `JS_CONTEXT_WINDOW` | `JS_CONTEXT_SIZE` | `CONTEXT_SIZE` |
+| `JS_MAX_OUTPUT_TOKENS` | `JS_OUTPUT_TOKENS_MAX` | `OUTPUT_TOKENS_MAX` |
+
+Default values are the lines in `js/jsrc`.
 
 Official `ai-python` SDK env vars (`AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`,
 `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`) are read directly by the provider and
 do not need to be copied into `jsrc`.
 
-The agent a run uses is the `agent` setting (`JS_AGENT`, default
-`defaultagent` in `js/jsrc`). `set agent autocoder` in a `jsrc` file picks it for
-every run under that file; `JS_AGENT` beats the `jsrc` files, and `--agent` or
+The agent a run uses is the `DEFAULT_AGENT` setting (`JS_DEFAULT_AGENT`, default
+`defaultagent` in `js/jsrc`). `set DEFAULT_AGENT autocoder` in a `jsrc` file picks it for
+every run under that file; `JS_DEFAULT_AGENT` beats the `jsrc` files, and `--agent` or
 `--commit` beats both. `--last` and `--session-key` resolve the agent the same
-way. The agent is read once at startup: `/set agent` in the REPL does not switch
+way. The agent is read once at startup: `/set DEFAULT_AGENT` in the REPL does not switch
 the running session, and `/save` carries it to later runs. `JS_SESSION` is still
 read from the environment. CLI code threads the selected agent and session
 through `Config` instead of mutating `os.environ`. Artifact mode is threaded
 through `ToolContext`.
 
-`limits.task_max_depth` and `limits.subagent_max_workers` have only their
-canonical names, `JS_LIMITS_TASK_MAX_DEPTH` and `JS_LIMITS_SUBAGENT_MAX_WORKERS`.
-
-Code-running inline prompt directives are on by default; `JS_ALLOW_INLINE_CODE=0`
+Code-running inline prompt directives are on by default; `JS_INLINE_CODE=0`
 disables them (`--im-a-pussy` sets exactly that for one run). See
 [inline-directives.md](inline-directives.md).
 
@@ -193,29 +183,31 @@ js --debug
 js --debug-file /tmp/js-debug.log
 js --reasoning off
 js --max-out 64000
-js --extra limits.task_max_depth=3
+js --extra SUBAGENT_DEPTH_MAX=3
 js --im-a-pussy
 js -i                  # --no-shell-history
 js --migrate-config
 ```
 
-`--extra KEY=VALUE` sets any dotted config key for one run and wins over env and
-all `jsrc` files. It may be repeated. Exact registered keys use the same
-registry coercion as `set` and env vars, including JSON validation for structured
+`--extra KEY=VALUE` sets one registered setting for one run and wins over env and
+all `jsrc` files. It may be repeated. KEY is a registered setting name (any case)
+or a child of a map setting such as `EXTRA_PARAMS.organization`; any other key is
+refused with `Unknown setting`. Registered settings use the same registry
+coercion as `set` and env vars, including JSON validation for structured
 settings; values store verbatim, with no magic clear/default token (clearing a
-setting back to its default is `set -key`). Loose keys and map subkeys use
-generic int -> float -> `true`/`false`/`null` -> string coercion. The key splits
-on the first `=` only, so values may contain `=`.
+setting back to its default is `set -NAME`). Map children use generic
+int -> float -> `true`/`false`/`null` -> string coercion. The key splits on the
+first `=` only, so values may contain `=`.
 
 In the REPL, `set [key [val]]` uses the same registry: `set` lists settings,
 `set key` shows one value, `set key value` changes the live setting, and
 `set -key` puts it back to the value the session started with.
 `show [key]` lists every current value or only the requested key. Secret values
-such as `provider.api_key` render as `<set>` once set.
+such as `API_KEY` render as `<set>` once set.
 
-`set` also accepts a setting's short name: `model` (`model.id`), `provider`
-(`provider.id`), `baseurl` (`provider.base_url`), and `apikey`
-(`provider.api_key`).
+`set` also accepts a setting's short name: `model` (`MODEL`), `provider`
+(`PROVIDER`), `baseurl` (`BASE_URL`), and `apikey`
+(`API_KEY`).
 
 A `jsrc` file is a file of commands; a leading `/` is optional. While config
 loads, the settings layer (`setcmd.apply_config_line`) applies `set` lines and
@@ -244,7 +236,7 @@ for the run: it sets `ENVCTX_HIST=0`, and envctx then prints no
 `recent_shell` block. Export `ENVCTX_HIST=0` to make it permanent.
 
 `--reasoning off` is an explicit override. It disables reasoning even when
-`JS_REASONING` is set.
+`JS_EFFORT` is set.
 
 `-m` / `--model` overrides the effective configured/env model for the selected
 run or session.
@@ -280,9 +272,9 @@ project.
     <session>.jsonl      # the record, append-only
     <session>.txt        # its readable transcript
     <session>/           # its subagent runs
-  keys                   # key bindings (keys.file), read at REPL start
+  keys                   # key bindings (KEYBINDS_FILE), read at REPL start
   state/
-    history.jsonl        # every prompt sent at a REPL prompt (history.file)
+    history.jsonl        # every prompt sent at a REPL prompt (HISTORY_FILE)
     <agent_id>/debug.log
     <agent_id>/undo/
     <agent_id>/latest.json   # the agent's latest session, for --last
@@ -746,7 +738,7 @@ the same offline. On load, the mark rebuilds in-memory context as:
 3. a fixed tail (`tail_tokens`, default `16384`) whose boundary backs up so an
 assistant `tool_calls` message is not separated from its tool results.
 
-The summary model is `compact.model`; literal `same` uses the active session
+The summary model is `COMPACTION_EXTERNAL_MODEL`; literal `same` uses the active session
 model. `/compact -m <model>` overrides it for that one manual compaction.
-Optional focus text and `compact.pre_hook` stdout are supplied as guidance.
+Optional focus text and `COMPACTION_HINT_COMMAND` stdout are supplied as guidance.
 Hook failures warn but do not block compaction.

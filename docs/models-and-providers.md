@@ -26,12 +26,12 @@ export JS_MODEL=deepseek/deepseek-v4-flash
 Optional explicit provider config in `jsrc`:
 
 ```text
-set provider.id openai
-set provider.base_url http://127.0.0.1:8317/v1
-set provider.api_key sk-local
+set PROVIDER openai
+set BASE_URL http://127.0.0.1:8317/v1
+set API_KEY sk-local
 ```
 
-When `provider.id` is set, the provider is constructed explicitly with the given
+When `PROVIDER` is set, the provider is constructed explicitly with the given
 base URL and API key. When unset, js routes the model id as follows: a slash prefix
 (e.g. `deepseek/deepseek-v4-flash`) matching a known provider goes directly to that
 provider; a colon prefix (e.g. `openai:gpt-4o`) uses the SDK's direct-routing form;
@@ -43,9 +43,9 @@ Provider env overrides (always win over `jsrc` files):
 
 | Variable | Effect |
 | --- | --- |
-| `JS_PROVIDER` | Overrides `provider.id` |
-| `JS_BASE_URL` | Overrides `provider.base_url` |
-| `JS_API_KEY` | Overrides `provider.api_key` |
+| `JS_PROVIDER` | Overrides `PROVIDER` |
+| `JS_BASE_URL` | Overrides `BASE_URL` |
+| `JS_API_KEY` | Overrides `API_KEY` |
 
 Official SDK env vars (`AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`,
 `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`) are read directly by `ai-python`
@@ -119,7 +119,7 @@ run itself names wins over them: `-m` / `--model`, `--reasoning`, a `JS_*` env
 var, or `--extra`. A resumed session stays on the model and effort of its last
 stamp. The REPL, `--bench` and `--commit` apply the manifest `model:` unless
 the operator has pinned one with `-m` / `--model`, `JS_MODEL`, or a configured
-non-default `model.id`, and do not apply `reasoning:`. Subagent-specific
+non-default `MODEL`, and do not apply `reasoning:`. Subagent-specific
 precedence and lock behavior live in [subagents.md](subagents.md).
 
 REPL:
@@ -138,12 +138,12 @@ also updates the active provider/base/key for that REPL session.
 Environment:
 
 ```bash
-export JS_REASONING=high
+export JS_EFFORT=high
 ```
 
 CLI:
 For OpenAI Codex / ChatGPT OAuth models, reasoning is a separate setting. Use
-`JS_REASONING=xhigh` or `--reasoning xhigh`; do **not** suffix the model id as
+`JS_EFFORT=xhigh` or `--reasoning xhigh`; do **not** suffix the model id as
 `gpt-5.5:xhigh`.
 
 ```bash
@@ -154,13 +154,13 @@ js --reasoning max -p "prompt"
 REPL:
 
 ```text
-/set model.reasoning_effort off
-/set model.reasoning_effort high
-/set model.reasoning_effort xhigh   # deepseek-native models
+/set EFFORT off
+/set EFFORT high
+/set EFFORT xhigh   # deepseek-native models
 ```
 
 Accepted effort values are `off|minimal|low|medium|high|xhigh|max`.
-`off` is stored as `"none"`; `/set -model.reasoning_effort` restores the provider
+`off` is stored as `"none"`; `/set -EFFORT` restores the provider
 default. Other spellings are rejected. Supported values are snapped to the
 nearest effort that the selected endpoint actually serves.
 
@@ -181,13 +181,13 @@ takes the effort as thinking (`js/reasoning.py`):
   think (Fable, Mythos, Claude 5.5 and later) it sends effort `low` instead.
 - Every other model gets `thinking: {"type": "enabled", "budget_tokens": N}`:
   minimal 1024, low 2048, medium 8192, high 16384, xhigh 24576, max 32000.
-  `model.thinking_budget` replaces that number for every effort. The
+  `THINKING_BUDGET` replaces that number for every effort. The
   budget leaves 1024 tokens of `max_tokens` for the answer; with no known output
   cap, `max_tokens` is the budget plus 8192. `off` sends no thinking. With a
-  budget, js sends no `sampling.temperature` or `sampling.top_k`: Anthropic
+  budget, js sends no `TEMPERATURE` or `TOP_K`: Anthropic
   rejects either alongside budget thinking.
 
-A `thinking` object in `provider.extra` replaces the one js builds. When it
+A `thinking` object in `EXTRA_PARAMS` replaces the one js builds. When it
 carries a `budget_tokens` and the model's output cap is unknown, `max_tokens`
 is that budget plus 8192.
 
@@ -231,7 +231,7 @@ both the parse and the serialize side.
 ### Reasoning display
 
 `ui.reasoning` controls presentation in the standard REPL and one-shot mode,
-independently of `model.reasoning_effort`:
+independently of `EFFORT`:
 
 | Value | Display |
 |---|---|
@@ -260,21 +260,21 @@ Sampling overrides are typed per turn and are never exported back into
 Config/script and REPL:
 
 ```text
-set sampling.temperature 0.6
-set sampling.top_p 0.95
-set sampling.top_k 64
-set sampling.repetition_penalty 1.05
-set sampling.presence_penalty 1.2
+set TEMPERATURE 0.6
+set TOP_P 0.95
+set TOP_K 64
+set REPETITION_PENALTY 1.05
+set PRESENCE_PENALTY 1.2
 ```
 
 Environment:
 
 ```bash
-export JS_TEMP=0.6
-export JS_TOPP=0.95
-export JS_TOPK=64
-export JS_REPPEN=1.05
-export JS_PRPEN=1.2
+export JS_TEMPERATURE=0.6
+export JS_TOP_P=0.95
+export JS_TOP_K=64
+export JS_REPETITION_PENALTY=1.05
+export JS_PRESENCE_PENALTY=1.2
 ```
 
 Agent manifests (`agent.yaml`) may set the same keys:
@@ -290,7 +290,7 @@ Precedence for a turn is:
 1. `jsrc` set-script sampling
 2. agent manifest `sampling:`
 3. `JS_*` sampling env vars
-4. CLI/live overrides (`--extra sampling.temperature=...`, REPL `/set ...`)
+4. CLI/live overrides (`--extra TEMPERATURE=...`, REPL `/set ...`)
 
 Wire filtering is provider-family specific:
 
@@ -308,17 +308,17 @@ Wire filtering is provider-family specific:
 
 Order:
 
-1. `--max-out` or `/set model.max_output_tokens <tokens>`
-2. `JS_MAX_OUTPUT_TOKENS`
-3. `model.max_output_tokens` in `jsrc`
+1. `--max-out` or `/set OUTPUT_TOKENS_MAX <tokens>`
+2. `JS_OUTPUT_TOKENS_MAX` (or the older `JS_MAX_OUTPUT_TOKENS`)
+3. `OUTPUT_TOKENS_MAX` in `jsrc`
 4. agent manifest `max_tokens:` in `agent.yaml`
 5. models.dev metadata for the active model/provider
 6. if the catalog has no match, no explicit cap is sent
 
 A reply cut off by this cap is sent again once with
-`runtime.max_output_escalation` tokens (default 64000, never above the model's
+`OUTPUT_TOKENS_RETRY_MAX` tokens (default 64000, never above the model's
 known limit or the room the window leaves), unless its text is already
-printed, then gets up to `runtime.max_output_resumes` resume nudges
+printed, then gets up to `OUTPUT_RESUMES_MAX` resume nudges
 (default 3). See the runtime loop in `technical-guide.md`.
 
 For custom providers js first tries the active provider mapped to its underlying
@@ -455,8 +455,8 @@ image bytes for image files.
 
 Order:
 
-1. the resolved `model.vision` setting: config < `JS_VISION` < `--extra`, followed
-   by live `/set model.vision on|off` changes. `/set -model.vision` restores detection.
+1. the resolved `VISION` setting: config < `JS_VISION` < `--extra`, followed
+   by live `/set VISION on|off` changes. `/set -VISION` restores detection.
 2. models.dev input modalities for the model id, keyed on the model rather than
    the provider
 3. curated model-name hints, minus anti-hints for code/embed/rerank/audio/
@@ -474,8 +474,8 @@ never heard of the id, the harness falls back to the name-based check.
 
 ## Shell And Terminal Tools
 
-The `shell` tool runs commands with the `shell.program` setting (default
-`bash`). `set shell.program zsh` in jsrc makes it zsh.
+The `shell` tool runs commands with the `SHELL_PROGRAM` setting (default
+`bash`). `set SHELL_PROGRAM zsh` in jsrc makes it zsh.
 
 Current behavior:
 

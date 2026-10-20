@@ -17,7 +17,7 @@ environment nor in `~/.js/.env` (`TYPESAFE_API_KEY`, `TAVILY_API_KEY`,
 `EXA_API_KEY`, `SERPER_API_KEY`, `CONTEXT7_API_KEY`; an answer is saved to
 `~/.js/.env` at mode 600, Enter skips), and a default model when the configured
 one has no provider to run on: pick a saved login and one of its models, or add
-a provider through the login flow, and the pick is saved as `model.id` in
+a provider through the login flow, and the pick is saved as `MODEL` in
 `~/.js/jsrc`. A rerun asks only about what is still missing. Without a terminal
 it asks nothing and names what is missing.
 
@@ -30,7 +30,7 @@ model runs. `just uninstall` removes the launcher and the `wiki` symlink.
 
 Heavy features are explicit extras: `uv sync --no-dev --extra kernel`,
 `--extra vision`, `--extra tags`, or `--extra browser` (combine flags as needed).
-Enable kernel/toolbox with `/set kernel.enabled on`; it defaults off.
+Enable kernel/toolbox with `/set PYTHON_KERNEL on`; it defaults off.
 The setting is applied at turn boundaries, like other turn settings.
 Managed CLI binaries are opt-in via `just install-tool-binaries` on supported
 platforms; otherwise tools use PATH. Chromium is separately opt-in via
@@ -40,7 +40,7 @@ Playwright has no Android or musllinux wheels; leave it out on those platforms.
 
 ## Basic Configuration
 Built-in default model is `deepseek/deepseek-v4-flash`; override it with
-`JS_MODEL`, `model.id` in `jsrc`, or `--model` for one run.
+`JS_MODEL`, `MODEL` in `jsrc`, or `--model` for one run.
 
 AI Gateway / default routing:
 
@@ -120,12 +120,12 @@ REPL commands:
 /on [event handler]           list or register event hooks
 /alias [name [command]]       list, show or define a command alias
 /exec <command>               run a shell command; its stdout goes with the next message
-/set model.reasoning_effort high
+/set EFFORT high
 /set ui.reasoning 2            show reasoning and leave it visible (default)
 /set ui.tools 3                show every tool call and its whole result
 /set ui.tools 1                fold reads and searches, show diffs, running commands and failures
-/set compact.auto off
-/on turn_start set compact.auto off
+/set COMPACTION_AUTO off
+/on turn_start set COMPACTION_AUTO off
 /turns
 /persona
 /tools                         each tool's state (eager/lazy/ban) and the entry that decided it
@@ -190,12 +190,12 @@ A `tool_call` handler whose command exits 2 refuses the call: the call never
 runs, and the model reads the first line of the command's stderr (else of its
 stdout) as the call's result, `ERROR: ...`. Exit 0 lets it run. Subagents'
 tool calls and a kernel cell's `tools.<name>(...)` calls go through the same
-`tool_call` handlers; a subagent's turn fires no other event. Any other status, or running past `events.exec_timeout_s`
+`tool_call` handlers; a subagent's turn fires no other event. Any other status, or running past `EXEC_TIMEOUT`
 seconds (30, 0 for no limit; the process group is killed), prints one `exec:`
 line and queues nothing. A handler's command holds up the event that ran it
 until the shell exits; what it starts in the background (`cmd &`) keeps
 running, and its output is read for a moment after the shell exits and then
-dropped. `events.exec_output_bytes` caps what is kept of each stream. What a
+dropped. `EXEC_OUTPUT_MAX` caps what is kept of each stream. What a
 handler queues during a turn reaches the model with the next user message.
 `exec` commands are the operator's, not the model's: under `-C` they run on
 the host, outside the jail, with js's own environment.
@@ -279,7 +279,7 @@ refreshes and the per-call stream stats line (`ms finish tok tok/s cache`)
 print as well. In the screen that stats
 line follows `ui.net`; `-p` and `--blocking` still show it with `-d`.
 
-`/set ui.editing_mode vi` makes the input line a vi buffer (the default is
+`/set EDITING_MODE vi` makes the input line a vi buffer (the default is
 `emacs`, where Enter sends). In vi mode typing starts in insert mode, Enter is a
 newline, and Esc then `:` opens the ex line at the bottom:
 
@@ -297,7 +297,7 @@ newline, and Esc then `:` opens the ex line at the bottom:
 
 Notes and `:w` saves live in `~/.js/work/notes/`.
 
-A line typed while a turn runs is handled by `runtime.steer`:
+A line typed while a turn runs is handled by `STEER_MODE`:
 
 - `now` (default): the line joins the running turn. It reaches the model as a
   user message at the next tool boundary, after the tool results and before
@@ -349,8 +349,8 @@ Resuming a session in the screen shows its last `ui.resume_exchanges` exchanges
 (3 by default, 0 for none) as a turn draws them, below the startup lines and
 the `*** Resumed` and `*** Model` notices.
 
-A paste of more than `ui.paste_collapse_lines` lines (10) or
-`ui.paste_collapse_chars` characters (1000) shows in the input line as one
+A paste of more than `PASTE_COLLAPSE_LINES` lines (10) or
+`PASTE_COLLAPSE_CHARS` characters (1000) shows in the input line as one
 marker, `[paste #N +X lines]` or `[paste #N X chars]`; the line sends the full
 text, in both REPLs. The scrollback echoes the line with the marker; the
 history file keeps the full text. A limit of 0 is no limit on that count.
@@ -359,16 +359,16 @@ The terminal must send bracketed paste, which every common terminal does.
 ### Prompt history and keys
 
 Every line sent at a REPL prompt, in either REPL, is appended to one file
-shared by every run: `~/.js/state/history.jsonl` (`history.file`), one JSON
-object per line with `ts`, `cwd`, `session`, `agent` and `text`. Up walks the
-prompts typed in the current directory first, newest first, then the rest
-(`history.cwd_first off` walks them all in time order). **Ctrl-R** opens an
+shared by every run: `~/.js/state/history.jsonl` (`HISTORY_FILE`), one JSON
+object per line with `ts`, `cwd`, `session`, `agent` and `text`. Up walks
+every prompt, newest first; `HISTORY_ORDER cwd` walks the prompts typed in the
+current directory first, newest first, then the rest. **Ctrl-R** opens an
 incremental search over all of them: type to narrow, Ctrl-R again for the next
 older match, Enter or Esc to take it into the input line, Ctrl-G to give up.
-The newest `history.max_entries` prompts are loaded. A collapsed paste is
+The newest `HISTORY_SIZE` prompts are loaded. A collapsed paste is
 written out whole.
 
-`~/.js/keys` (`keys.file`) remaps the async screen's keys, in jsrc's grammar:
+`~/.js/keys` (`KEYBINDS_FILE`) remaps the async screen's keys, in jsrc's grammar:
 
 ```
 bind c-f history_search     # add a key to an action
@@ -456,7 +456,7 @@ see `<dir>`, and it puts the tools in a jail:
   run, and so is the interpreter the kernel starts. `/tmp` and `~/.js/tmp`
   are directories private to this js process, shared by its commands and
   removed when it exits. The network stays on. The command's environment is
-  `limits.shell_env_allow`, so provider keys are not in it.
+  `SHELL_ENV_KEEP`, so provider keys are not in it.
 - The file tools (`read`, `write`, `patch`, `remove`, `undo`, `fs_search`,
   `ast_search`, `list_dir`, `fetch file://` and `save=`, `browse` screenshots)
   refuse a path outside `<dir>` and the bound paths with one `ERROR` line. A
@@ -464,11 +464,11 @@ see `<dir>`, and it puts the tools in a jail:
 - Subagents run in the same jail.
 - `exec` commands (typed, or run by an `on` handler) are not tools: they run
   on the host with js's environment.
-- The `jail.bind` setting shows more paths: a JSON list of `"path"`
+- The `JAIL_BIND` setting shows more paths: a JSON list of `"path"`
   (read-only) or `"path:rw"` entries. The default binds `~/.gitconfig`,
   `~/.config/git`, `~/.local/share/uv` and `~/.cache/uv:rw`, so git and uv
   work in the jail. Tools installed as symlinks into another tree (Homebrew,
-  `uv tool`) need that tree bound: `set jail.bind [..., "/home/linuxbrew"]`.
+  `uv tool`) need that tree bound: `set JAIL_BIND [..., "/home/linuxbrew"]`.
 
 `-C` needs `bwrap` (bubblewrap). Without it, or when a startup self-test of the
 jail fails, js prints one line and exits; nothing runs unjailed. A missing or
@@ -529,9 +529,9 @@ image. js reads it with `wl-paste --type image/png` under Wayland and
 `xclip -selection clipboard -t image/png -o` under X11, and over ssh inside a
 kitty terminal with `kitten clipboard -g -m image/png /dev/stdout`, which asks
 the kitty on your desk for its clipboard (kitty may show a permission prompt;
-see its `clipboard_control`); `ui.paste_image_command`
-names another command that prints the image, and `ui.paste_image_key` moves the
-key (`/set ui.paste_image_key escape v` for Alt-V). With no clipboard, such as
+see its `clipboard_control`); `PASTE_IMAGE_COMMAND`
+names another command that prints the image, and `PASTE_IMAGE_KEY` moves the
+key (`/set PASTE_IMAGE_KEY escape v` for Alt-V). With no clipboard, such as
 on the Linux console, the key prints one line and the input line stays as it
 was. Placeholders count up for the whole run, so a line recalled from history
 still carries its image.
@@ -607,8 +607,8 @@ globs (`"*:ban"`, `wiki_*:lazy`) and `tag:NAME` pulls in a tag from
 entries means the model gets no tools. `/tools` shows the resolved table.
 Details: [tool-system.md](tool-system.md).
 
-A run without `--agent` uses the `agent` setting: `set agent autocoder` in
-`~/.js/jsrc` or a project `.js/jsrc`, or `JS_AGENT=autocoder`. The built-in
+A run without `--agent` uses the `DEFAULT_AGENT` setting: `set DEFAULT_AGENT autocoder` in
+`~/.js/jsrc` or a project `.js/jsrc`, or `JS_DEFAULT_AGENT=autocoder`. The built-in
 value is `defaultagent`.
 
 Current prompt dirs:
@@ -620,9 +620,9 @@ Current prompt dirs:
 
 ## Shell Expectations
 
-The `shell` tool runs commands with the `shell.program` setting:
+The `shell` tool runs commands with the `SHELL_PROGRAM` setting:
 
-`bash -o pipefail -c` by default. `set shell.program zsh` runs
+`bash -o pipefail -c` by default. `set SHELL_PROGRAM zsh` runs
 `zsh -o pipefail -c`; any other program (such as `sh`) runs with `-c` and no
 pipefail. A name is looked up on PATH; a path is used as given.
 
@@ -660,6 +660,7 @@ The memory layer is append-only JSONL plus control marks:
 
 Use `/compact [focus]` in the REPL or `js --compact <session>` offline to append
 a compaction mark without rewriting the JSONL file. `/compact -m <model>` makes
-that one compaction with the named summarizer instead of `compact.model`.
-Automatic cache-aware compaction is controlled by `set compact.auto` and the
-`set compact.*` settings in `~/.js/jsrc` or project `.js/jsrc`.
+that one compaction with the named summarizer instead of `COMPACTION_EXTERNAL_MODEL`.
+Automatic cache-aware compaction is controlled by `set COMPACTION_AUTO` and the
+other `COMPACTION_*` settings (`/set compaction` lists them) in `~/.js/jsrc` or
+project `.js/jsrc`.

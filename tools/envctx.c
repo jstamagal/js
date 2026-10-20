@@ -637,7 +637,7 @@ int main(void) {
 
   /* ---- session ---- */
   /* js exports JS_SHELL: the shell its shell tool runs commands in
-     (shell.program), which need not be the operator's login $SHELL. */
+     (SHELL_PROGRAM), which need not be the operator's login $SHELL. */
   const char *sh = getenv("JS_SHELL"), *term = getenv("TERM"),
              *venv = getenv("VIRTUAL_ENV");
   if (!sh || !*sh)

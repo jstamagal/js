@@ -31,7 +31,7 @@ compatibility. The harness optimizes for:
 
 - Low-friction terminal workflows.
 - Explicit settings instead of hidden policy.
-- Shell execution through a settable program (`shell.program`, default bash).
+- Shell execution through a settable program (`SHELL_PROGRAM`, default bash).
 - Rich model-facing tool descriptions.
 - Prompt-directory agents.
 - Parallel subagent delegation.

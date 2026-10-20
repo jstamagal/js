@@ -185,7 +185,7 @@ grep
 
 Tool names remain canonical by default. There is no automatic Claude-specific capitalization.
 
-Optional `tools.alias_profiles` settings map canonical names to model-facing aliases. Each profile contains a `match` string or list of strings and an `aliases` table. Matching is case-insensitive substring matching against the model ID and provider ID. The first matching profile with usable aliases wins; without a matching profile, names remain unchanged.
+Optional `TOOL_ALIASES` settings map canonical names to model-facing aliases. Each profile contains a `match` string or list of strings and an `aliases` table. Matching is case-insensitive substring matching against the model ID and provider ID. The first matching profile with usable aliases wins; without a matching profile, names remain unchanged.
 
 The runtime rewrites outgoing tool schema names and backtick-wrapped tool-name references in descriptions. The active registry resolves aliases back to canonical handlers, and tool-call history records canonical names.
 
@@ -201,14 +201,14 @@ Dispatch rules:
 - the other calls run in model order under a readers-writer rule, the one
   Codex uses (`codex-rs/core/src/tools/parallel.rs`):
   - a read-only call runs beside the read-only calls next to it, up to
-    `runtime.max_parallel_tools` at once (default 8)
+    `PARALLEL_TOOLS_MAX` at once (default 8)
   - a call that is not read-only runs alone: it starts after every earlier
     call has finished, and later calls wait for it
   - so read, read, patch, read runs as [read ∥ read] → patch → read
-  - `runtime.max_parallel_tools 1` runs every call in turn
+  - `PARALLEL_TOOLS_MAX 1` runs every call in turn
 - results are appended in original tool-call order
 - tool result content is capped, per result and then per batch
-  (`limits.max_tool_results_per_turn_bytes` covers the whole batch)
+  (`PARALLEL_RESULTS_MAX` covers the whole batch)
 - ^C starts no queued call; calls already running finish and their results
   are kept
 - repeated tool errors get retry metadata
@@ -309,7 +309,7 @@ anchors, and supports snapshot-backed structural rewrite previews and applies.
 
 ## Shell
 
-`shell` runs the `shell.program` setting:
+`shell` runs the `SHELL_PROGRAM` setting:
 
 - `bash -o pipefail -c` by default; zsh also gets `-o pipefail`, other
   shells run with `-c` alone
@@ -329,8 +329,8 @@ The tool output includes:
 
 ANSI is stripped unless `keep_ansi=true`.
 
-Stdout and stderr together get a budget: `limits.max_bash_output_bytes`, or
-less when the result would otherwise pass `limits.max_tool_result_inline_bytes`.
+Stdout and stderr together get a budget: `SHELL_OUTPUT_MAX`, or
+less when the result would otherwise pass `TOOL_RESULT_INLINE_MAX`.
 A stream under half the budget is shown whole and the other gets the rest.
 The budget counts raw bytes; when the rendered text is still larger than the
 inline limit (invalid UTF-8 renders as 3-byte U+FFFD, and the markers add
@@ -386,7 +386,7 @@ For another Python project, the behavior to preserve is:
 - read-before-write state in context
 - patch/multi-patch behavior: exact match first, then the normalised fallback
 - in-process undo snapshots
-- `shell.program` shell execution
+- `SHELL_PROGRAM` shell execution
 - task parallelism and child context isolation
 - Claude provider-facing name transform based on model string only
 - canonical persisted history

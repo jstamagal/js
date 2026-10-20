@@ -40,8 +40,8 @@ supported platforms. `just sync` is the developer setup and includes test extras
 Install optional features with `uv sync --no-dev --extra kernel`, `--extra vision`,
 `--extra tags`, or `--extra browser` (combine flags to retain multiple extras).
 Package installers can use `js[kernel,vision,tags,browser]` instead of `js`.
-The kernel/toolbox pair is disabled by default: `/set kernel.enabled on` enables
-it after installation; `/set kernel.enabled off` disables both, including in
+The kernel/toolbox pair is disabled by default: `/set PYTHON_KERNEL on` enables
+it after installation; `/set PYTHON_KERNEL off` disables both, including in
 subagents on subsequent turns, and `/save` persists the setting. Like other
 turn settings, changing it does not interrupt an already-running turn or cell. `vision` supplies Pillow for terminal snapshots;
 `browser` includes it plus Playwright. Browser binaries are a separate opt-in:
@@ -101,9 +101,9 @@ project `.js/jsrc`, then project `.js/jsrc.local`; env vars override files and
 CLI `--extra key=value` overrides env. On its first run js writes `~/.js/jsrc`:
 every setting, described, with an example, commented out at its stock value.
 Only the lines you uncomment, or `/save` uncomments, set anything.
-`js/jsrc` sets `model.id` to `deepseek/deepseek-v4-flash`;
+`js/jsrc` sets `MODEL` to `deepseek/deepseek-v4-flash`;
 `JS_MODEL` overrides it. Explicit
-`set provider.id/base_url/api_key` are opt-in only; `JS_PROVIDER`, `JS_BASE_URL`,
+`set PROVIDER`, `BASE_URL` and `API_KEY` are opt-in only; `JS_PROVIDER`, `JS_BASE_URL`,
 and `JS_API_KEY` are env overrides. Official SDK env vars (`AI_GATEWAY_API_KEY`,
 `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`) are read directly by
 `ai-python` when no explicit provider config is set. Tune any setting live with
