@@ -9,6 +9,7 @@ reload reproduces the running configuration.
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 
 from js import cli, setcmd, settings
 from js.config import Config
@@ -228,3 +229,17 @@ def test_save_writes_the_api_key_as_typed(tmp_path):
 
     # API_KEY IS persisted verbatim (his box; the jsrc key line is plain)
     assert "set API_KEY sk-secret" in path.read_text(encoding="utf-8")
+
+
+def test_save_after_logout_keeps_provider_settings_cleared(tmp_path):
+    store = settings.seed_defaults()
+    store.update(PROVIDER="ollama", BASE_URL="http://offline.invalid/v1", API_KEY="old-key")
+    cfg = replace(_repl_cfg(tmp_path), settings=store, provider_id="ollama",
+                  provider_base_url=store["BASE_URL"], provider_api_key=store["API_KEY"])
+    state = {"settings": copy.deepcopy(store), "model": cfg.model, "messages": []}
+
+    assert cli._handle_command("/logout", state, cfg)
+    assert cli._cmd_save("", state, cfg) is None
+    reloaded = settings.collect_settings(config_paths=[cli._paths.global_config_file()], env={})
+
+    assert all(settings.knob(reloaded, key) is None for key in ("PROVIDER", "BASE_URL", "API_KEY"))

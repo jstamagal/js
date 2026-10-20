@@ -1012,12 +1012,9 @@ def _effective_settings_snapshot(cfg: Config, state: dict) -> dict:
     live_model = state.get("model")
     if isinstance(live_model, str) and live_model:
         settings.set_dotted(eff, ("MODEL",), live_model)
-    if turn_cfg.provider_id:
-        settings.set_dotted(eff, ("PROVIDER",), turn_cfg.provider_id)
-    if turn_cfg.provider_base_url:
-        settings.set_dotted(eff, ("BASE_URL",), turn_cfg.provider_base_url)
-    if turn_cfg.provider_api_key:
-        settings.set_dotted(eff, ("API_KEY",), turn_cfg.provider_api_key)
+    settings.set_dotted(eff, ("PROVIDER",), turn_cfg.provider_id)
+    settings.set_dotted(eff, ("BASE_URL",), turn_cfg.provider_base_url)
+    settings.set_dotted(eff, ("API_KEY",), turn_cfg.provider_api_key)
     # The login-default settings save their jsrc and `/set` layers only.
     saved = login_defaults.saved_jsrc_values(turn_cfg)
     for key in login_defaults.KEYS:
