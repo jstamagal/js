@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 from js import cli, login_cli, logins, paths, providers
 from js import messages as msgs
 
@@ -118,6 +120,26 @@ def test_collect_api_login_declining_env_key_prompts_for_one(monkeypatch, tmp_pa
         assert login.provider_api_key == "sk-typed-real"
     finally:
         _reset_logins()
+
+
+@pytest.mark.parametrize("provider_id", ["deepseek", "vllm"])
+def test_cancelled_api_key_prompt_cancels_login(monkeypatch, provider_id):
+    provider = providers.provider_for_login(provider_id)
+    for name in provider.api_key_env + provider.base_url_env + provider.model_env:
+        monkeypatch.delenv(name, raising=False)
+    if provider_id == "deepseek":
+        logins.save_login(logins.Login(provider_id=provider_id, provider_api_key="saved-key"))
+    replies = iter(["", KeyboardInterrupt()])
+
+    def reply(_prompt):
+        value = next(replies)
+        if isinstance(value, KeyboardInterrupt):
+            raise value
+        return value
+
+    monkeypatch.setattr("builtins.input", reply)
+
+    assert login_cli._collect_api_login(provider_id, provider.effective_sdk_provider_id, provider) is None
 
 
 def test_variable_endpoint_providers_show_base_url_field():

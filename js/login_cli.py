@@ -431,6 +431,8 @@ def _collect_api_login(
     if provider.requires_api_key and not api_key:
         prompt = msgs.LOGIN_ASK_KEY_OPTIONAL if keyless_ok else msgs.LOGIN_ASK_KEY
         api_key = _input(prompt.text(), secret=True)
+        if api_key is None:
+            return None
         if not api_key:
             if not keyless_ok:
                 msgs.warn(msgs.LOGIN_NO_KEY)
@@ -440,6 +442,8 @@ def _collect_api_login(
             msgs.say(msgs.LOGIN_PLACEHOLDER_KEY)
     elif api_key and existing is not None and api_key == existing.provider_api_key:
         entered = _input(msgs.LOGIN_ASK_KEY_KEEP.text(), secret=True)
+        if entered is None:
+            return None
         if entered:
             api_key = entered
 
