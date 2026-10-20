@@ -121,6 +121,10 @@ class TurnSetting:
 
 
 TURN_SETTINGS: tuple[TurnSetting, ...] = (
+    TurnSetting("jail_clean_private_dirs", "JAIL_CLEAN_PRIVATE_DIRS", flag, on_context=True),
+    TurnSetting("jail_hide_network_filesystems", "JAIL_HIDE_NETWORK_FILESYSTEMS", flag, on_context=True),
+    TurnSetting("jail_hide_operator_home", "JAIL_HIDE_OPERATOR_HOME", flag, on_context=True),
+    TurnSetting("jail_base_hidden_dirs", "JAIL_BASE_HIDDEN_DIRS", paths, on_context=True),
     TurnSetting("hook_shell_program", "HOOK_SHELL_PROGRAM", text),
     TurnSetting("swarm_spawn_max", "SWARM_SPAWN_MAX", integer),
     TurnSetting("session_text_auto_refresh", "SESSION_TEXT_AUTO_REFRESH", flag),

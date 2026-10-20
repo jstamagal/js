@@ -40,7 +40,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import paths
+from . import paths, settings as _settings
 
 # Filesystem types whose mounts are hidden in the jail. `find /` over an NFS
 # home is the sweep the jail exists to stop.
@@ -343,8 +343,11 @@ def hidden_roots() -> list[Path]:
     command. A path inside a tree already in the list is not statted either."""
     mounts = _mounts()
     points = {m.point for m in mounts}
-    base = [Path("/home"), *operator_homes(), Path("/run/user"),
-            *(m.point for m in mounts if m.fstype in NETWORK_FS)]
+    base = [Path(value) for value in _settings.live_value("JAIL_BASE_HIDDEN_DIRS")]
+    if _settings.live_value("JAIL_HIDE_OPERATOR_HOME"):
+        base[1:1] = operator_homes()
+    if _settings.live_value("JAIL_HIDE_NETWORK_FILESYSTEMS"):
+        base.extend(m.point for m in mounts if m.fstype in NETWORK_FS)
     candidates = [*base, *(view for tree in base for view in _other_views(tree, mounts))]
     roots: list[Path] = []
     for candidate in sorted(dict.fromkeys(candidates), key=lambda p: len(p.parts)):
@@ -579,7 +582,8 @@ class Jail:
         over it; what js binds inside one is bound again on top."""
         hidden = hidden_roots()
         home = paths.user_home()
-        network = {m.point for m in _mounts() if m.fstype in NETWORK_FS}
+        network = ({m.point for m in _mounts() if m.fstype in NETWORK_FS}
+                   if _settings.live_value("JAIL_HIDE_NETWORK_FILESYSTEMS") else set())
         out = [self.bwrap, "--die-with-parent", "--unshare-ipc", "--unshare-uts",
                "--unshare-cgroup-try", *_root_args(network), "--dev", "/dev"]
         out += ["--bind", str(self.tmp), "/tmp"]
@@ -878,6 +882,8 @@ def private_root() -> Path:
 
 def _clear_stale_private_dirs() -> None:
     """Remove the private directories of js processes that are gone."""
+    if not _settings.live_value("JAIL_CLEAN_PRIVATE_DIRS"):
+        return
     root = private_root()
     if not root.is_dir():
         return
