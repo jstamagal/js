@@ -1623,6 +1623,18 @@ XAI_LOGIN_FAILURE_HTML = "<h1>xAI login failed</h1><p>Return to js and try again
 
 XAI_REFRESH_REJECTED = "xAI OAuth refresh token was rejected ({detail}); run js --login xai-oauth again"
 
+OAUTH_CALLBACK_COULD_NOT_BIND_THE_CALLBACK_PORT = "{label} could not bind the callback port {port}: {exc}"
+
+OAUTH_CALLBACK_COULD_NOT_BIND_THE_CALLBACK_PORT_ON = "{label} could not bind the callback port {port} on 127.0.0.1 or ::1"
+
+OAUTH_CALLBACK_TIMED_OUT_WAITING_FOR_THE_BROWSER_CALLBACK = "{label} timed out waiting for the browser callback"
+
+OAUTH_CALLBACK_FAILED = "{label} failed: {received_error}"
+
+OAUTH_CALLBACK_STATE_MISMATCH = "{label} state mismatch"
+
+OAUTH_CALLBACK_CALLBACK_CARRIED_NO_AUTHORIZATION_CODE = "{label} callback carried no authorization code"
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():

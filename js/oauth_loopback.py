@@ -9,6 +9,8 @@ the string has to match what the provider has on file.
 
 from __future__ import annotations
 
+from . import messages as msgs
+
 import selectors
 import errno
 import socket
@@ -116,9 +118,9 @@ def wait_for_code(
     try:
         servers = _bind(port)
     except OSError as exc:
-        raise OAuthCallbackError(f"{label} could not bind the callback port {port}: {exc}") from exc
+        raise OAuthCallbackError(msgs.OAUTH_CALLBACK_COULD_NOT_BIND_THE_CALLBACK_PORT.format(label=label, port=port, exc=exc)) from exc
     if not servers:
-        raise OAuthCallbackError(f"{label} could not bind the callback port {port} on 127.0.0.1 or ::1")
+        raise OAuthCallbackError(msgs.OAUTH_CALLBACK_COULD_NOT_BIND_THE_CALLBACK_PORT_ON.format(label=label, port=port))
     done = threading.Event()
     lock = threading.Lock()
     for server in servers:
@@ -154,11 +156,11 @@ def wait_for_code(
             server.server_close()
 
     if winner is None:
-        raise OAuthCallbackError(f"{label} timed out waiting for the browser callback")
+        raise OAuthCallbackError(msgs.OAUTH_CALLBACK_TIMED_OUT_WAITING_FOR_THE_BROWSER_CALLBACK.format(label=label))
     if winner.received_error:
-        raise OAuthCallbackError(f"{label} failed: {winner.received_error}")
+        raise OAuthCallbackError(msgs.OAUTH_CALLBACK_FAILED.format(label=label, received_error=winner.received_error))
     if winner.received_state != expected_state:
-        raise OAuthCallbackError(f"{label} state mismatch")
+        raise OAuthCallbackError(msgs.OAUTH_CALLBACK_STATE_MISMATCH.format(label=label))
     if not winner.received_code:
-        raise OAuthCallbackError(f"{label} callback carried no authorization code")
+        raise OAuthCallbackError(msgs.OAUTH_CALLBACK_CALLBACK_CARRIED_NO_AUTHORIZATION_CODE.format(label=label))
     return winner.received_code
