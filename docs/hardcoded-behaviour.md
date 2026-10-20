@@ -25,7 +25,7 @@ branch the audit was made on; they move as the code changes.
 
 ## S1 loop-events
 
-31 findings.
+30 findings.
 
 | file:line | function | kind | what the part decides | bead |
 |---|---|---|---|---|
@@ -42,7 +42,6 @@ branch the audit was made on; they move as the code changes.
 | `js/cli.py:2437` | _run_rc_commands | presentation | Output from the startup jsrc replay is dropped by redirecting stdout into a StringIO. | js-2lg.82 |
 | `js/cli.py:2959-2994` | _json_run, _emit_failure | presentation | The headless error event is taken from the last printed stderr line, with ANSI codes and warning marks removed. | js-2lg.82 |
 | `js/headless.py:170-180` | watch_output | presentation | The process-global sys.stdout and sys.stderr are replaced so progress can detect silence. | js-2lg.88 |
-| `js/display.py:416,419,420` | echo_user | presentation | Writes the echoed user line to the global sys.stdout, not to a stream the caller passes. | js-2lg.96 |
 | `js/screen.py:977-989` | capture_stdio | presentation | Replaces the global sys.stdout and sys.stderr with one proxy, so stderr merges into the scrollback. | js-2lg.104 |
 | `js/screen.py:671` | _ScreenStdout.isatty | presentation | Reports every captured stream as a terminal. | js-2lg.104 |
 | `js/messages.py:200-218` | for_stream / line_for / say | presentation | Write to the global sys.stdout when no file is passed. | js-2lg.105 |

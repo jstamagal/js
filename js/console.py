@@ -373,6 +373,10 @@ class ConsoleSink:
         getattr(kernel_display, f"render_{kind}")(context, level, content,
                                                   style=style, verbose_only=verbose_only)
 
+    def _on_user_echo(self, *, text: str) -> None:
+        sys.stdout.write(msgs.for_stream(display.user_line(text)))
+        sys.stdout.flush()
+
     # The streamed reply
 
     def _on_stream_open(self, *, stream: output.Key) -> None:

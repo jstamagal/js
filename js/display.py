@@ -22,7 +22,6 @@ import json
 import os
 import re
 import shutil
-import sys
 import time
 from collections import Counter
 from collections.abc import Callable, Iterator
@@ -38,6 +37,7 @@ from rich.theme import Theme as _RichTheme
 
 from . import fset
 from . import messages as msgs
+from . import output
 from . import settings as _settings
 
 _SGR_ONLY = re.compile(r"\x1b\[[0-9;]*m")
@@ -414,10 +414,8 @@ def user_line(text: str) -> str:
 
 
 def echo_user(text: str) -> None:
-    """Print `user_line(text)` where the answer will follow, plain on a
-    stream that is not a terminal."""
-    sys.stdout.write(msgs.for_stream(user_line(text)))
-    sys.stdout.flush()
+    """Emit the user text to be echoed where the answer will follow."""
+    output.emit(output.event("user_echo", text=text))
 
 
 def _setting(settings: Any, key: str) -> Any:

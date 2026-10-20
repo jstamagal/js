@@ -132,3 +132,14 @@ def test_kernel_note_is_an_event(capsys):
     assert [event.name for event in events] == ["kernel_note"]
     assert dict(events[0].fields)["content"] == "saved"
     assert capsys.readouterr() == ("", "")
+
+
+def test_user_echo_is_an_event(capsys):
+    from js import display
+
+    events = []
+    with output.using_sink(SimpleNamespace(emit=events.append)):
+        display.echo_user("hello")
+    assert [event.name for event in events] == ["user_echo"]
+    assert dict(events[0].fields)["text"] == "hello"
+    assert capsys.readouterr() == ("", "")
