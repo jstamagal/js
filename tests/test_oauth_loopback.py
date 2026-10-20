@@ -4,6 +4,7 @@ hit carrying the expected state ends the wait."""
 from __future__ import annotations
 
 import socket
+import errno
 import threading
 import time
 import urllib.request
@@ -11,6 +12,21 @@ import urllib.request
 import pytest
 
 from js import oauth_loopback
+
+
+def test_a_callback_port_conflict_preserves_the_bind_error():
+    with socket.socket() as occupied:
+        occupied.bind(("127.0.0.1", 0))
+        occupied.listen()
+        port = occupied.getsockname()[1]
+
+        with pytest.raises(oauth_loopback.OAuthCallbackError) as raised:
+            oauth_loopback.wait_for_code(
+                port=port, path="/cb", expected_state="S", timeout_s=0.1,
+                label="probe", success_html="ok", failure_html="bad")
+
+    assert isinstance(raised.value.__cause__, OSError)
+    assert raised.value.__cause__.errno == errno.EADDRINUSE
 
 
 def _free_port() -> int:

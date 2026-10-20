@@ -10,6 +10,7 @@ the string has to match what the provider has on file.
 from __future__ import annotations
 
 import selectors
+import errno
 import socket
 import threading
 import time
@@ -90,8 +91,12 @@ def _bind(port: int) -> list[_Server]:
     for cls, address in ((_Server, "127.0.0.1"), (_ServerV6, "::1")):
         try:
             servers.append(cls((address, port), _Handler))
-        except OSError:
-            continue  # this family is unavailable here; the other may still bind
+        except OSError as exc:
+            if exc.errno != errno.EADDRINUSE:
+                continue  # this family is unavailable here; the other may still bind
+            for server in servers:
+                server.server_close()
+            raise
     return servers
 
 
@@ -106,7 +111,10 @@ def wait_for_code(
     failure_html: str,
 ) -> str:
     """Serve the redirect URI until the browser hits it; return the auth code."""
-    servers = _bind(port)
+    try:
+        servers = _bind(port)
+    except OSError as exc:
+        raise OAuthCallbackError(f"{label} could not bind the callback port {port}: {exc}") from exc
     if not servers:
         raise OAuthCallbackError(f"{label} could not bind the callback port {port} on 127.0.0.1 or ::1")
     done = threading.Event()
