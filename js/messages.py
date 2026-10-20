@@ -1811,6 +1811,8 @@ EVENT_HOOK_ON_NEEDS_A_HANDLER = "on needs a handler"
 
 EVENT_HOOK_UNKNOWN_EVENT_149 = "unknown event: {event}"
 
+AGENT_LOCK_ANOTHER_LOCK_RUN_OF_AGENT_IS_RUNNING = "another --lock run of agent {agent_id!r} is running ({path})"
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():
