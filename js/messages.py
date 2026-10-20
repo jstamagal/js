@@ -1761,6 +1761,42 @@ SKILL_FRONTMATTER_PATHS_FRONTMATTER_MUST_BE_A_LIST_OF = "paths frontmatter must 
 
 SKILL_FRONTMATTER_UNSAFE_SKILL_NAME = "unsafe skill name {name!r}"
 
+SWARM_SWARM_NAME_MUST_BE_ONE_WORD_OF = "swarm name must be one word of [A-Za-z0-9_.-]: {name!r}"
+
+SWARM_A_MESSAGE_KIND_IS_ONE_WORD_OF = "a message kind is one word of [A-Za-z0-9_.-]: {kind!r}"
+
+SWARM_IS_ALREADY_ON_THE_BUS = "{name} is already on the bus"
+
+SWARM_THIS_BUS_ALREADY_HAS_SPAWNED_AGENTS_THE = "this bus already has {spawned} spawned agents; the cap is {maximum}"
+
+SWARM_SENT = Message("sent #{seq}", banner=False)
+
+SWARM_POSTED = Message("posted #{id}", banner=False)
+
+SWARM_ROSTER_YOU = "(you)"
+
+SWARM_ROSTER_SILENT = "no answer at rollcall since {value}"
+
+SWARM_ROSTER_ASLEEP = Message("asleep", banner=False)
+
+SWARM_ROSTER_WORKING = Message("working", banner=False)
+
+SWARM_ROSTER_EMPTY = "(nobody yet)"
+
+SWARM_BOARD_EMPTY = "(no tasks on the board)"
+
+SWARM_BOARD_TAKEN = "taken by {holder}"
+
+SWARM_BOARD_DONE = "done by {holder}"
+
+SWARM_BOARD_ROW = "#{id} [{state}] {title}"
+
+SWARM_BOARD_FROM = " (from {by})"
+
+SWARM_ROSTER_HOLDS = Message("holds {claims}", banner=False)
+
+SWARM_BOARD_OPEN = Message("open", banner=False)
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():

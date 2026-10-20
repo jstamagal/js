@@ -42,6 +42,8 @@ in an inbox or the log. A member whose process is gone stays silent.
 
 from __future__ import annotations
 
+from . import messages as msgs
+
 from . import settings as _settings
 
 import contextlib
@@ -76,14 +78,14 @@ _NAME = re.compile(r"[A-Za-z0-9_.-]+")
 
 def check_name(name: str) -> str:
     if name in {".", ".."} or not _NAME.fullmatch(name or ""):
-        raise ValueError(f"swarm name must be one word of [A-Za-z0-9_.-]: {name!r}")
+        raise ValueError(msgs.SWARM_SWARM_NAME_MUST_BE_ONE_WORD_OF.format(name=name))
     return name
 
 
 def check_kind(kind: str) -> str:
     kind = (kind or "").strip() or "say"
     if not _NAME.fullmatch(kind):
-        raise ValueError(f"a message kind is one word of [A-Za-z0-9_.-]: {kind!r}")
+        raise ValueError(msgs.SWARM_A_MESSAGE_KIND_IS_ONE_WORD_OF.format(kind=kind))
     return kind
 
 
@@ -502,28 +504,28 @@ def roster(room: Room, me: str | None = None) -> str:
     for name in room.members():
         bits = [name]
         if name == me:
-            bits.append("(you)")
+            bits.append(msgs.SWARM_ROSTER_YOU.format())
         silent = None if name == me else room.silent_since(name)
         if silent is not None:
-            bits.append(f"no answer at rollcall since {_clock(silent)}")
+            bits.append(msgs.SWARM_ROSTER_SILENT.format(value=_clock(silent)))
         else:
-            bits.append("asleep" if room.asleep(name) else "working")
+            bits.append(msgs.SWARM_ROSTER_ASLEEP.words() if room.asleep(name) else msgs.SWARM_ROSTER_WORKING.words())
         if held.get(name):
-            bits.append("holds " + ", ".join(sorted(held[name])))
+            bits.append(msgs.SWARM_ROSTER_HOLDS.words(claims=", ".join(sorted(held[name]))))
         lines.append(" ".join(bits))
-    return "\n".join(lines) or "(nobody yet)"
+    return "\n".join(lines) or msgs.SWARM_ROSTER_EMPTY.format()
 
 
 def board(room: Room) -> str:
     """The work board as the model and the operator read it."""
     lines = []
     for c in room.cells():
-        state = {"open": "open", "taken": f"taken by {c.holder}", "done": f"done by {c.holder}"}[c.status]
-        lines.append(f"#{c.id} [{state}] {c.title}" + (f" (from {c.by})" if c.by else ""))
+        state = {"open": msgs.SWARM_BOARD_OPEN.words(), "taken": msgs.SWARM_BOARD_TAKEN.format(holder=c.holder), "done": msgs.SWARM_BOARD_DONE.format(holder=c.holder)}[c.status]
+        lines.append(msgs.SWARM_BOARD_ROW.format(id=c.id, state=state, title=c.title) + (msgs.SWARM_BOARD_FROM.format(by=c.by) if c.by else ""))
         first = (c.result if c.status == "done" else c.body).strip().splitlines()
         if first:
             lines.append(f"    {first[0][:160]}")
-    return "\n".join(lines) or "(no tasks on the board)"
+    return "\n".join(lines) or msgs.SWARM_BOARD_EMPTY.format()
 
 
 def sibling_argv(argv: list[str], swarm: str, name: str) -> list[str]:
@@ -690,11 +692,11 @@ class Agent:
         root = self.room.root
         home = root / name
         if name in self.room.members() or (home / "spawned").is_file():
-            raise ValueError(f"{name} is already on the bus")
+            raise ValueError(msgs.SWARM_IS_ALREADY_ON_THE_BUS.format(name=name))
         spawned = sum(1 for p in root.iterdir() if (p / "spawned").is_file()) if root.is_dir() else 0
         maximum = int(_settings.live_value("SWARM_SPAWN_MAX"))
         if spawned >= maximum:
-            raise ValueError(f"this bus already has {spawned} spawned agents; the cap is {maximum}")
+            raise ValueError(msgs.SWARM_THIS_BUS_ALREADY_HAS_SPAWNED_AGENTS_THE.format(spawned=spawned, maximum=maximum))
         home.mkdir(parents=True, exist_ok=True)
         cmd = sibling_argv(sys.argv if argv is None else argv, str(home), name)
         with open(home / "events.jsonl", "ab") as out, open(home / "stderr", "ab") as err:
@@ -947,7 +949,6 @@ def with_bus_tools(registry):
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
-    from . import messages as msgs
 
     ap = argparse.ArgumentParser(prog="python -m js.swarm", description=msgs.SWARM_CLI.words())
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -974,7 +975,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "send":
         body = a.text if a.text not in (None, "-") else sys.stdin.read()
         msg = Room(a.root).send(a.sender, a.to, body, a.kind)
-        print(f"sent #{msg.seq}")
+        print(msgs.SWARM_SENT.words(seq=msg.seq))
     elif a.cmd == "members":
         print(roster(Room(a.root)))
     elif a.cmd == "quiet":
@@ -984,7 +985,7 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "post":
         body = a.body if a.body != "-" else sys.stdin.read()
         cell = Room(a.root).post_cell(a.by, a.title, body)
-        print(f"posted #{cell.id}")
+        print(msgs.SWARM_POSTED.words(id=cell.id))
     else:
         from . import swarm_run
 
