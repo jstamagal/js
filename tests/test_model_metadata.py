@@ -350,3 +350,21 @@ def test_a_pinned_latest_id_takes_its_own_catalog_row(monkeypatch):
     result = model_metadata.lookup_limits("gpt-5.2-chat-latest", "openai")
     assert (result.provider_id, result.context_window) == ("openai", 128000)
     assert "openai:gpt-5.2-chat-latest" in seen
+
+
+def test_registered_setting_can_disable_catalog_refresh(monkeypatch):
+    from contextvars import ContextVar
+
+    monkeypatch.setattr(model_metadata, "_policy_settings", ContextVar("test_metadata_policy", default=None), raising=False)
+    model_metadata.bind_settings({"MODEL_CATALOG_AUTO_REFRESH": False})
+    current = model_metadata.current_catalog_status()
+    calls = []
+    monkeypatch.setattr(model_metadata, "catalog_is_stale", lambda _status: True)
+
+    def refresh(**kwargs):
+        calls.append(kwargs)
+        return current
+
+    monkeypatch.setattr(model_metadata, "refresh_catalog", refresh)
+    assert model_metadata.ensure_fresh_catalog() == current
+    assert calls == []

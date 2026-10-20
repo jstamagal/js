@@ -2,7 +2,8 @@
 
 js keeps its own writable mirror of the models.dev catalog under ~/.js/cache.
 The bundled DB from the installed package is only the seed. On lookup we check
-whether the active catalog is older than 8 hours; if so, we refresh it into
+whether the active catalog exceeds MODEL_CATALOG_AGE_MAX (8 hours by default);
+when MODEL_CATALOG_AUTO_REFRESH is on, we refresh it into
 js's own DB and record when that happened. A forced refresh is available from
 js CLI/REPL commands.
 """
@@ -14,6 +15,7 @@ import os
 import sqlite3
 import tempfile
 from contextlib import closing
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
@@ -30,7 +32,17 @@ from modelsdotdev._internal import sync as modelsdotdev_sync
 from . import codex_auth, model_matching, paths, providers, settings as _settings, stream_transport
 from . import messages as msgs
 
-_CATALOG_MAX_AGE = timedelta(hours=8)
+_policy_settings: ContextVar[dict | None] = ContextVar("js_metadata_settings", default=None)
+
+
+def bind_settings(settings: dict | None) -> None:
+    """Use this invocation or turn's live store for metadata policy."""
+    _policy_settings.set(settings)
+
+
+def _policy(key: str):
+    return _settings.knob(_policy_settings.get(), key)
+
 _STATUS_VERSION = 1
 # A local server that has not answered in this many seconds is not up.
 _LOCAL_PROBE_MAX_S = 3.0
@@ -343,6 +355,8 @@ def probe_local_context_window(
     An explicit ``provider_id`` is the route's provider and wins over a
     provider-like prefix in the model name: ``Alibaba/Qwen3.8-27B`` behind a
     local openai-compatible server is probed at that server, not at Alibaba."""
+    if not _policy("MODEL_CONTEXT_PROBE"):
+        return None
     parsed_provider, parsed_model = providers.parse_model_prefix(model_id)
     if parsed_provider is not None and parsed_model is not None and (
         provider_id is None
@@ -480,7 +494,7 @@ def catalog_is_stale(status: CatalogStatus | None, *, now: datetime | None = Non
     if checked_at is None:
         return True
     current = datetime.now(tz=UTC) if now is None else now.astimezone(UTC)
-    if current - checked_at >= _CATALOG_MAX_AGE:
+    if current - checked_at >= timedelta(seconds=float(_policy("MODEL_CATALOG_AGE_MAX"))):
         return True
     with closing(sqlite3.connect(status.db_path)) as connection:
         return connection.execute(
@@ -519,7 +533,7 @@ def ensure_fresh_catalog(*, force: bool = False) -> CatalogStatus | None:
     current = current_catalog_status()
     if current is not None:
         _activate_database(current.db_path)
-    if not force and not catalog_is_stale(current):
+    if not force and (not _policy("MODEL_CATALOG_AUTO_REFRESH") or not catalog_is_stale(current)):
         return current
     if not force and _refresh_failure is not None:
         if current is None:

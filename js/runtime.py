@@ -2084,6 +2084,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         sampling = login_defaults.sampling(_overridden(
             cfg, model_override, provider_id_override, provider_base_url_override))
     cfg = _with_login_defaults(cfg, model_override, provider_id_override, provider_base_url_override)
+    model_metadata.bind_settings(getattr(cfg, "settings", None))
     request = _turn_request(
         cfg, model_override=model_override, provider_id_override=provider_id_override,
         provider_base_url_override=provider_base_url_override,

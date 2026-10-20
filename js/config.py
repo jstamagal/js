@@ -485,6 +485,9 @@ def from_env(
     agent_id = agent_from_settings(js_root_settings, agent_id)
     msgs.set_banner(str(_settings.knob(js_root_settings, "BANNER")))
     default_model = _settings.default_value("MODEL")
+    from . import model_metadata
+
+    model_metadata.bind_settings(js_root_settings)
     raw_model = _settings.get_dotted(js_root_settings, ("MODEL",)) or default_model
     # Any env name that feeds MODEL makes the model invocation-explicit.
     invocation_explicit_model = any(
