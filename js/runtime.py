@@ -2054,7 +2054,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
              mcp_host: Any = None,
              steer: Callable[[], dict | None | Awaitable[dict | None]] | None = None,
              event_sink: Callable[[str, dict], None] | None = None,
-             approve: event_mod.Approve | event_mod.Approval | None = None) -> None:
+             approve: event_mod.Approve | event_mod.Approval | None = None,
+             *, skill_catalog: skills.SkillCatalog | None = None) -> None:
     """One user turn → tool-use loop until the model stops. The real primitive:
     it awaits the model stream and runs tool dispatch in a thread executor, so it
     NEVER blocks the loop — many turns/subagents run concurrently. Mutates
@@ -2075,6 +2076,9 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     runs. It returns None to let the call run, or the line the model reads as
     the refused call's result. Subagents started in this turn and tool calls
     from kernel cells answer to it too. None runs every call.
+
+    ``skill_catalog`` supplies this turn's skill discovery policy and the
+    built-in skill tool's catalog. None discovers skills from the usual roots.
 
     Provider overrides let the REPL /prompt mode switch endpoint without
     reloading config; unset values fall back to the Config values. The sync
@@ -2106,7 +2110,9 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     # A fresh registry rechecks current policy and aliases while restoring the
     # session's visibility. Marks survive compaction and process restarts.
     active_registry = base_registry.aliased(alias_map).lazy_surface(
-        active_context.cwd, mcp_host=mcp_host, disabled_skills=cfg.skills_disabled)
+        active_context.cwd, mcp_host=mcp_host, disabled_skills=cfg.skills_disabled,
+        skill_catalog=skill_catalog)
+    active_context.skill_catalog = skill_catalog
     surface = SurfaceJournal(getattr(cfg, "session_file", None), agent_id=cfg.agent_id,
                              cwd=active_context.cwd, registry=active_registry)
     token_state = _prepare_turn_context(active_context, cfg, request, active_registry, event_hooks, approve)

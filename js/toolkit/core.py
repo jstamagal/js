@@ -29,6 +29,7 @@ from .. import jail as _jail
 from .. import settings as _settings
 from .. import turn_settings as _turn_settings
 from ..paths import state_root
+from ..skills import SkillCatalog
 from ..prompt_text import load_catalog
 
 _PROMPTS = load_catalog('toolkit_core')
@@ -471,6 +472,7 @@ class ToolContext(_turn_settings.ContextSettings):
     kernel_session: Any = None            # the live IPython kernel, one per process
     lsp_configuration: Any = field(default=None, repr=False)
     subagent_assembly: Any = field(default=None, repr=False)
+    skill_catalog: SkillCatalog | None = field(default=None, repr=False)
     swarm: Any = None                     # js.swarm.Agent when this process runs with --swarm
     # The `on` table whose tool_call handlers vet the calls of subagents started
     # through this context; set by the turn that runs with it.

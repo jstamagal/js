@@ -157,11 +157,14 @@ class ToolRegistry:
         return replace(self, aliases=merged)
 
     def lazy_surface(
-        self, cwd: Path, mcp_host: object | None = None, disabled_skills: Iterable[str] = ()
+        self, cwd: Path, mcp_host: object | None = None, disabled_skills: Iterable[str] = (),
+        *, skill_catalog: SkillCatalog | None = None,
     ) -> TurnToolSurface:
         """Create a fresh view; the runtime restores session visibility within selection.
-        ``disabled_skills`` (SKILLS_DISABLED) are left out of its skill catalog."""
-        return TurnToolSurface(self, cwd, mcp_host=mcp_host, disabled_skills=disabled_skills)
+        ``skill_catalog`` supplies the discovery policy; otherwise discover with
+        ``disabled_skills`` (SKILLS_DISABLED) left out of the catalog."""
+        return TurnToolSurface(self, cwd, mcp_host=mcp_host, disabled_skills=disabled_skills,
+                               skill_catalog=skill_catalog)
 
 
 def _search_text(tool: Tool, present: set[str]) -> str:
@@ -192,6 +195,7 @@ class TurnToolSurface:
     def __init__(
         self, allowed: ToolRegistry, cwd: Path, mcp_host: object | None = None,
         disabled_skills: Iterable[str] = (),
+        *, skill_catalog: SkillCatalog | None = None,
     ) -> None:
         self.allowed = allowed
         self.on_change: Callable[[dict], None] | None = None
@@ -207,7 +211,7 @@ class TurnToolSurface:
             reserved.add(discovery.DISCOVERY_TOOL_NAME)
             self.mcp_host.reserve_public_names(reserved)
         self._skill_catalog = (
-            discover_skills(cwd, disabled=disabled_skills)
+            (skill_catalog if skill_catalog is not None else discover_skills(cwd, disabled=disabled_skills))
             if allowed.resolve("skill") is not None else SkillCatalog()
         )
         self._skills = {
