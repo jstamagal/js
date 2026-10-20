@@ -1047,3 +1047,28 @@ def test_codex_session_cache_key_reaches_the_http_body(monkeypatch):
     )
 
     assert client.stream_calls[0]["json"]["prompt_cache_key"] == "js-agent-session-1"
+
+
+def test_browser_oauth_accepts_input_and_notice_services(monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    notices, opened, registered = [], [], []
+    source = object()
+    server = SimpleNamespace(server_close=lambda: None)
+    selector = SimpleNamespace(
+        register=lambda *args: registered.append(args),
+        select=lambda **kwargs: [(SimpleNamespace(data=None, fd=7), None)],
+        close=lambda: None,
+    )
+    monkeypatch.setattr(codex_auth, "_bind_callback_servers", lambda cls: [server])
+    monkeypatch.setattr(codex_auth.selectors, "DefaultSelector", lambda: selector)
+    monkeypatch.setattr(codex_auth.secrets, "token_urlsafe", lambda size: "state")
+    monkeypatch.setattr(codex_auth, "exchange_code_for_token", lambda *args: "token")
+    monkeypatch.setattr(codex_auth, "login_from_token", lambda token: token)
+    result = codex_auth.login_browser(
+        stdin=source, read=lambda *args: b"http://localhost:1455/auth/callback?code=code&state=state\n",
+        say=lambda *args, **kwargs: notices.append(args), open_browser=False, opener=opened.append,
+    )
+    assert result == "token" and notices and opened == []
+    assert any(args[0] is source for args in registered)
+    assert capsys.readouterr().out == ""

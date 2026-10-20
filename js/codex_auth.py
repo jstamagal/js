@@ -352,9 +352,14 @@ def _bind_callback_servers(handler_cls: type[BaseHTTPRequestHandler]) -> list[_C
     return servers
 
 
-def login_browser(*, timeout_s: float = 300.0, originator: str = "opencode") -> Login:
+def login_browser(*, timeout_s: float = 300.0, originator: str = "opencode",
+                  say=None, stdin=None, read=None, open_browser: bool = True, opener=None) -> Login:
     """Run the fixed-port browser PKCE OAuth flow and return a saved Login."""
 
+    announce = msgs.say if say is None else say
+    input_stream = sys.stdin if stdin is None else stdin
+    read_input = os.read if read is None else read
+    launch_browser = webbrowser.open if opener is None else opener
     verifier, challenge = _pkce_pair()
     state = secrets.token_urlsafe(24)
     url = build_authorize_url(state, challenge, originator=originator)
@@ -366,8 +371,8 @@ def login_browser(*, timeout_s: float = 300.0, originator: str = "opencode") -> 
     for server in servers:
         server.expected_state = state
         server.timeout = 1.0
-    msgs.say(msgs.OAUTH_OPENING, service="OpenAI Codex", url=url)
-    msgs.say(msgs.OAUTH_PASTE_CALLBACK)
+    announce(msgs.OAUTH_OPENING, service="OpenAI Codex", url=url)
+    announce(msgs.OAUTH_PASTE_CALLBACK)
     deadline = time.monotonic() + timeout_s
     sel = selectors.DefaultSelector()
     winner: _CallbackServer | None = None
@@ -376,14 +381,15 @@ def login_browser(*, timeout_s: float = 300.0, originator: str = "opencode") -> 
         for server in servers:
             sel.register(server, selectors.EVENT_READ, server)
         try:
-            sel.register(sys.stdin, selectors.EVENT_READ, None)
+            sel.register(input_stream, selectors.EVENT_READ, None)
         except (OSError, ValueError):
             pass  # Captured or redirected stdin may not be selectable.
-        webbrowser.open(url)
+        if open_browser:
+            launch_browser(url)
         while time.monotonic() < deadline and winner is None:
             for key, _events in sel.select(timeout=1.0):
                 if key.data is None:
-                    chunk = os.read(key.fd, 4096)
+                    chunk = read_input(key.fd, 4096)
                     if not chunk:
                         sel.unregister(key.fileobj)
                         continue
@@ -405,7 +411,7 @@ def login_browser(*, timeout_s: float = 300.0, originator: str = "opencode") -> 
                             ):
                                 raise ValueError(msgs.CODEX_OAUTH_INVALID_CALLBACK.format())
                         except (ValueError, UnicodeError):
-                            msgs.say(msgs.OAUTH_BAD_CALLBACK)
+                            announce(msgs.OAUTH_BAD_CALLBACK)
                             continue
                         winner = servers[0]
                         winner.received_state = state
@@ -435,9 +441,11 @@ def login_browser(*, timeout_s: float = 300.0, originator: str = "opencode") -> 
     )
 
 
-def login_device(*, open_browser: bool = True) -> Login:
+def login_device(*, open_browser: bool = True, say=None, opener=None) -> Login:
     """Run the headless Codex device-code OAuth flow and return a saved Login."""
 
+    announce = msgs.say if say is None else say
+    launch_browser = webbrowser.open if opener is None else opener
     with httpx.Client(timeout=_TOKEN_TIMEOUT) as client:
         response = client.post(
             DEVICE_USERCODE_URL,
@@ -463,9 +471,9 @@ def login_device(*, open_browser: bool = True) -> Login:
         except (TypeError, ValueError):
             poll_interval = 5.0 + _DEVICE_POLL_SAFETY_MARGIN
 
-        msgs.say(msgs.OAUTH_DEVICE, service="OpenAI Codex", url=DEVICE_AUTH_URL, code=user_code)
+        announce(msgs.OAUTH_DEVICE, service="OpenAI Codex", url=DEVICE_AUTH_URL, code=user_code)
         if open_browser:
-            webbrowser.open(DEVICE_AUTH_URL)
+            launch_browser(DEVICE_AUTH_URL)
 
         for poll in range(_DEVICE_MAX_POLLS):
             time.sleep(min(poll_interval, 5.0) if poll == 0 else poll_interval)
