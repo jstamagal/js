@@ -441,8 +441,13 @@ def _prepare_fan_out(
     if getattr(context, "task_depth", 0) >= max_depth:
         return f"ERROR: task recursion depth limit reached ({max_depth})", None
 
-    from ..config import from_env
+    from ..config import from_env, validate_agent_id
     from .registry import build_default_registry
+
+    try:
+        validate_agent_id(agent_id)
+    except ValueError as exc:
+        return f"ERROR: {exc}", None
 
     parent_cfg = getattr(context, "config", None) or from_env(save_session=True)
     # Honor the subagent-model lock at every depth: when locked, rebuild the

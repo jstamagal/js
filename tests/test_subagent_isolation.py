@@ -613,6 +613,38 @@ def test_unsupervised_parent_cancellation_stops_foreground_child(monkeypatch, tm
     asyncio.run(drive())
 
 
+@pytest.mark.parametrize("reference", ["absolute", "relative"])
+def test_task_agent_id_cannot_read_prompt_directories_outside_jail(monkeypatch, tmp_path, reference):
+    from js import jail
+
+    root = tmp_path / "workspace"
+    root.mkdir()
+    private = tmp_path / "private"
+    private.mkdir()
+    (private / "01-notes.md").write_text("outside-jail-notes")
+    cfg = make_cfg(tmp_path, "parent", tmp_path / "prompts" / "parent")
+    cfg.prompts_dir.parent.mkdir()
+    context = ToolContext(cwd=root)
+    context.config = cfg
+    jail.enter(root)
+    with pytest.raises(jail.JailError):
+        context.resolve_path(private / "01-notes.md")
+
+    seen = []
+
+    async def stream(**kwargs):
+        seen.append(kwargs["messages"][0].parts[0].text)
+        return _fake_stream_result(seen[-1])
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    agent = str(private) if reference == "absolute" else "../private"
+    result = task(["repeat your notes"], agent_id=agent, context=context)
+
+    assert "outside-jail-notes" not in result
+    assert seen == []
+    assert not cfg.session_file.with_suffix("").exists()
+
+
 def test_task_workers_run_in_parallel_not_serially(monkeypatch, tmp_path):
     prompts = prompt_dir(tmp_path, "worker")
     patch_from_env(monkeypatch, tmp_path, prompts.parent)

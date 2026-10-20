@@ -25,6 +25,7 @@ Schema:
 Rules:
 
 - `agent_id` is required to start workers.
+- Agent IDs contain only letters, numbers, underscores, and hyphens.
 - `tasks` must be a list of strings.
 - Empty task strings are ignored; an all-empty list is an error.
 - `session_id` is optional and resumes that worker agent session.
@@ -76,12 +77,13 @@ parallel.
 For each child task:
 
 1. The parent config is copied with `dataclasses.replace`.
-2. `agent_id`, `agent_dir`, `history_file`, `sessions_dir`, `session_file`, and
-   `prompts_dir` are changed for the child agent.
-3. If `session_id` is provided, that child session is opened or created under
-   the child agent.
+2. `agent_id`, `agent_dir`, `sessions_dir`, `session_file`, and `prompts_dir`
+   are changed for the child agent.
+3. If `session_id` is provided, that child session is opened or created inside
+   the parent session's subagent directory.
 4. Otherwise a fresh `task-<timestamp>-<random>.jsonl` is reserved.
-5. The child's new messages are appended to that child session after success.
+5. The child's new messages are persisted on success, error, or cancellation.
+   Its terminal sessions and private Python kernel are closed when it exits.
 
 ## Tool Surface Isolation
 
@@ -94,8 +96,8 @@ The child loads:
 ```
 
 Then selects tools from the full registry using that agent's `agent.yaml`
-`tools:` entries. If the prompt directory is missing, the worker runs with an
-empty system prompt and no tools.
+`tools:` entries. A missing prompt directory returns an error before creating
+a worker session.
 
 Child contexts copy:
 
