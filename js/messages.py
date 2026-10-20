@@ -1805,6 +1805,12 @@ SWARM_RUN_AGENT_NAMES_REPEAT = "agent names repeat: {value}"
 
 SWARM_RUN_FAILED = "swarm run: {exc}"
 
+EVENT_HOOK_UNKNOWN_EVENT = "unknown event: {clean}"
+
+EVENT_HOOK_ON_NEEDS_A_HANDLER = "on needs a handler"
+
+EVENT_HOOK_UNKNOWN_EVENT_149 = "unknown event: {event}"
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():

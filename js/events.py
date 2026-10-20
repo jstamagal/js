@@ -128,10 +128,10 @@ class EventHooks:
         event, suppress = parse_event_token(event_token)
         if event is None:
             clean = event_token.strip().lstrip("^").lower().replace("-", "_")
-            raise ValueError(f"unknown event: {clean}")
+            raise ValueError(msgs.EVENT_HOOK_UNKNOWN_EVENT.format(clean=clean))
         text = handler.strip()
         if not text:
-            raise ValueError("on needs a handler")
+            raise ValueError(msgs.EVENT_HOOK_ON_NEEDS_A_HANDLER.format())
         hook = EventHook(event=event, handler=text, suppress=suppress)
         if hook not in self._hooks[event]:  # the same handler twice would run twice
             self._hooks[event].append(hook)
@@ -146,7 +146,7 @@ class EventHooks:
     def emit(self, event: str, **payload) -> EventEmission:
         name = normalize_event_name(event)
         if name is None:
-            raise ValueError(f"unknown event: {event}")
+            raise ValueError(msgs.EVENT_HOOK_UNKNOWN_EVENT_149.format(event=event))
         hooks = self.handlers_for(name)
         emission = EventEmission(event=name, payload=dict(payload), hooks=hooks)
         if self._dispatcher is None or not hooks:
@@ -200,7 +200,7 @@ class RefusableOnly:
     def emit(self, event: str, **payload) -> EventEmission:
         name = normalize_event_name(event)
         if name is None:
-            raise ValueError(f"unknown event: {event}")
+            raise ValueError(msgs.EVENT_HOOK_UNKNOWN_EVENT_149.format(event=event))
         if name in REFUSABLE_EVENTS:
             return self._hooks.emit(name, **payload)
         return EventEmission(event=name, payload=dict(payload), hooks=[])
