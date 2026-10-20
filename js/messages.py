@@ -1511,6 +1511,36 @@ LOGIN_STORE_ = "{path}: {exc}"
 
 LOGIN_STORE__911 = "{value}: {exc}"
 
+LOGIN_SHAPE_CHAT_COMPLETIONS = "OpenAI-compatible chat completions"
+
+LOGIN_SHAPE_RESPONSES = "OpenAI Responses-style endpoint"
+
+LOGIN_SHAPE_ANTHROPIC = "Anthropic-compatible endpoint"
+
+LOGIN_SHAPE_PROXY = "CLIProxyAPI / OpenAI-compatible proxy with optional headers"
+
+LOGIN_PICKER_ROW = "{cursor} {box}{label}{tag}"
+
+LOGIN_PROVIDER_ROW = "{pid:<28} {name} [{source}]"
+
+LOGIN_API_SHAPE_ROW = "{pid}  {desc}"
+
+LOGIN_SAVED_PROVIDER_DETAIL = "{provider_id} — {value} [saved]"
+
+LOGIN_PICKER_CURSOR = ">"
+
+LOGIN_PICKER_SELECTED = "[x] "
+
+LOGIN_PICKER_UNSELECTED = "[ ] "
+
+LOGIN_SOURCE_SAVED = Message("saved", banner=False)
+
+LOGIN_SOURCE_ENVIRONMENT = Message("env", banner=False)
+
+LOGIN_SOURCE_REGISTRY = Message("registry", banner=False)
+
+LOGIN_PICKER_NEEDS_AN_INTERACTIVE_TERMINAL_STDIN_AND_STDOUT = "needs an interactive terminal (stdin and stdout must be a TTY)"
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():

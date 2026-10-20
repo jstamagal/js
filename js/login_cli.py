@@ -30,10 +30,10 @@ from .logins import (
 )
 
 _API_SHAPES: list[tuple[str, str, str]] = [
-    ("openai-completions", "openai", "OpenAI-compatible chat completions"),
-    ("openai-responses", "openai", "OpenAI Responses-style endpoint"),
-    ("anthropic-custom", "anthropic", "Anthropic-compatible endpoint"),
-    ("cliproxyapi", "openai", "CLIProxyAPI / OpenAI-compatible proxy with optional headers"),
+    ("openai-completions", "openai", msgs.LOGIN_SHAPE_CHAT_COMPLETIONS.format()),
+    ("openai-responses", "openai", msgs.LOGIN_SHAPE_RESPONSES.format()),
+    ("anthropic-custom", "anthropic", msgs.LOGIN_SHAPE_ANTHROPIC.format()),
+    ("cliproxyapi", "openai", msgs.LOGIN_SHAPE_PROXY.format()),
 ]
 _API_SHAPE_IDS = {shape_id for shape_id, _sdk, _desc in _API_SHAPES}
 _SECONDARY_TEST_PROMPT = "1+1="
@@ -110,10 +110,10 @@ def _curses_picker(
         start = max(0, idx - page + 1)
         for off, original in enumerate(matches[start:start + page]):
             label, annotation = rows[original]
-            cursor = ">" if start + off == idx else " "
-            box = ("[x] " if original in selected else "[ ] ") if multiple else ""
+            cursor = msgs.LOGIN_PICKER_CURSOR.format() if start + off == idx else " "
+            box = (msgs.LOGIN_PICKER_SELECTED.format() if original in selected else msgs.LOGIN_PICKER_UNSELECTED.format()) if multiple else ""
             tag = f"  {annotation}" if annotation else ""
-            draw(off + 2, f"{cursor} {box}{label}{tag}")
+            draw(off + 2, msgs.LOGIN_PICKER_ROW.format(cursor=cursor, box=box, label=label, tag=tag))
         if not matches:
             draw(2, msgs.PICKER_NO_MATCHES.text())
         for off, line in enumerate(detail):
@@ -296,7 +296,7 @@ def _menu(*args, **kwargs):
     """`curses.wrapper` for a picker; NoTerminalError instead of a curses crash
     when there is no terminal."""
     if not _interactive():
-        raise NoTerminalError("needs an interactive terminal (stdin and stdout must be a TTY)")
+        raise NoTerminalError(msgs.LOGIN_PICKER_NEEDS_AN_INTERACTIVE_TERMINAL_STDIN_AND_STDOUT.format())
     return curses.wrapper(*args, **kwargs)
 
 
@@ -307,7 +307,7 @@ def _login_provider_rows() -> list[tuple[str, str, str]]:
 
     for provider_id, _login in sorted(saved.items()):
         provider = providers.get_provider(provider_id)
-        rows.append((provider_id, provider.display_name if provider else provider_id, "saved"))
+        rows.append((provider_id, provider.display_name if provider else provider_id, msgs.LOGIN_SOURCE_SAVED.words()))
         seen.add(provider_id)
 
     env_rows: list[tuple[str, str, str]] = []
@@ -321,7 +321,7 @@ def _login_provider_rows() -> list[tuple[str, str, str]]:
             continue
         env_configured = providers.first_env(provider.api_key_env + provider.base_url_env + provider.model_env) is not None
         target = env_rows if env_configured else registry_rows
-        target.append((provider.id, provider.display_name, "env" if env_configured else "registry"))
+        target.append((provider.id, provider.display_name, msgs.LOGIN_SOURCE_ENVIRONMENT.words() if env_configured else msgs.LOGIN_SOURCE_REGISTRY.words()))
         seen.add(provider.id)
 
     env_rows.sort(key=lambda row: row[1].lower())
@@ -331,7 +331,7 @@ def _login_provider_rows() -> list[tuple[str, str, str]]:
 
 def _select_provider() -> str | None:
     rows = _login_provider_rows()
-    items = [msgs.LOGIN_ADD_CUSTOM.text(), *[f"{pid:<28} {name} [{source}]" for pid, name, source in rows]]
+    items = [msgs.LOGIN_ADD_CUSTOM.text(), *[msgs.LOGIN_PROVIDER_ROW.format(pid=pid, name=name, source=source) for pid, name, source in rows]]
     sys.stdout.flush()
     idx = _menu(_curses_menu, items, msgs.LOGIN_PICK_PROVIDER.text())
     if idx is None:
@@ -342,7 +342,7 @@ def _select_provider() -> str | None:
 
 
 def _select_api_shape() -> tuple[str, str] | None:
-    items = [f"{pid}  {desc}" for pid, _sdk, desc in _API_SHAPES]
+    items = [msgs.LOGIN_API_SHAPE_ROW.format(pid=pid, desc=desc) for pid, _sdk, desc in _API_SHAPES]
     sys.stdout.flush()
     idx = _menu(_curses_menu, items, msgs.LOGIN_PICK_SHAPE.text())
     if idx is None:
@@ -632,7 +632,7 @@ def _say_provider_added(provider_id: str, email: str | None, model_count: int) -
 def _provider_details(login: Login, model_count: int) -> list[str]:
     provider = providers.get_provider(login.provider_id)
     return [
-        f"{login.provider_id} — {provider.display_name if provider else login.provider_id} [saved]",
+        msgs.LOGIN_SAVED_PROVIDER_DETAIL.format(provider_id=login.provider_id, value=provider.display_name if provider else login.provider_id),
         msgs.LOGIN_DETAIL_BASE_URL.text(url=login.provider_base_url or msgs.BUILTIN_VALUE.text()),
         msgs.LOGIN_DETAIL_KEY.text(key=_mask(login.provider_api_key) if login.provider_api_key else msgs.NONE_VALUE.text()),
         msgs.LOGIN_DETAIL_CACHED.text(models=msgs.plural(model_count, "cached model")),
