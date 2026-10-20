@@ -64,7 +64,9 @@ def find_cell(cells: list[dict], cell_id: str) -> int | None:
             return index
     match = _INDEXED_ID.fullmatch(wanted)
     if match and int(match.group(1)) < len(cells):
-        return int(match.group(1))
+        index = int(match.group(1))
+        if cell_ids(cells)[index] == wanted:
+            return index
     return None
 
 

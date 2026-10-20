@@ -193,6 +193,17 @@ def test_unknown_cell_id_is_refused_and_lists_the_ids(nb):
     assert path.read_bytes() == before
 
 
+def test_positional_id_cannot_delete_a_cell_with_a_real_id(nb):
+    path, context = nb
+    tool("read", context, file_path=str(path))
+    before = path.read_bytes()
+
+    result = tool("notebook_edit", context, file_path=str(path), cell_id="cell-0", edit_mode="delete")
+
+    assert path.read_bytes() == before
+    assert result.startswith("ERROR")
+
+
 def test_edit_without_a_read_is_refused(nb):
     path, context = nb
     before = path.read_bytes()
