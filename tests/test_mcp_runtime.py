@@ -1097,6 +1097,38 @@ def test_collision_aliases_obey_deny_on_original_public_name(config):
     asyncio.run(drive())
 
 
+@pytest.mark.parametrize("cross_server", (False, True))
+def test_collision_diagnostics_mask_credentials_in_paranoid_mode(cross_server):
+    secret = "COLLISION_TOKEN_6192"
+    servers = [MCPServer("alpha", "alpha", "stdio", command="fake", env={"TOKEN": secret})]
+    names = {"alpha": [f"{secret}_read", f"{secret}_read!"]}
+    if cross_server:
+        servers.append(MCPServer("alpha__redacted", "alpha__redacted", "stdio", command="fake"))
+        names = {"alpha": [f"{secret}_read"], "alpha__redacted": ["read"]}
+
+    class CollisionClient(FakeClient):
+        def __init__(self, factory, **kwargs):
+            super().__init__(factory, **kwargs)
+            self.tools = [{"name": name, "inputSchema": {}} for name in names[factory()._name]]
+
+    async def drive():
+        events = []
+        host = MCPHost(
+            MCPConfiguration(tuple(servers), MCPPolicy()),
+            client_factory=CollisionClient,
+            paranoid_mode="on",
+            event_sink=lambda kind, **payload: events.append((kind, payload)),
+        )
+        try:
+            catalog = await host.discover("mcp")
+            assert len(host.remote_tools) == 2
+            assert secret not in json.dumps(events) + repr(catalog)
+        finally:
+            await host.close()
+
+    asyncio.run(drive())
+
+
 def test_normalized_remote_name_collisions_are_disambiguated_and_visible():
     class CollisionClient(FakeClient):
         def __init__(self, factory, **kwargs):

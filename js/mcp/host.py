@@ -645,7 +645,7 @@ class MCPHost:
                 "mcp_catalog_collision",
                 tool=public,
                 server=server_name,
-                remote_names=[remote for remote, _safe, _component in candidates],
+                remote_names=[safe["name"] for _remote, safe, _component in candidates],
             )
             exposed: list[tuple[str, str]] = []
             occurrences: dict[str, int] = {}
@@ -735,7 +735,7 @@ class MCPHost:
                     ):
                         continue
                     self.remote_tools[alias] = (server_name, remote, raw)
-                    exposed.append((server_name, remote, alias))
+                    exposed.append((server_name, str(raw["name"]), alias))
                 digest = hashlib.sha256(
                     (public + "\0" + "\0".join(
                         f"{server}/{remote}" for server, remote, _raw in candidates
