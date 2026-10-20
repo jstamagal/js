@@ -439,12 +439,13 @@ def test_remove_chonker_requires_confirmed_permanent_delete(tmp_path, monkeypatc
     target = tmp_path / "big.log"
     target.write_text("not actually big\n", encoding="utf-8")
 
-    monkeypatch.setattr(fs, "_path_size_no_follow", lambda path: fs._TRASH_MAX_BYTES + 1)
+    maximum = settings.default_value("TRASH_BYTES_MAX")
+    monkeypatch.setattr(fs, "_path_size_no_follow", lambda path, *, cap: maximum + 1)
 
     result = fs.remove("big.log", context=context)
 
     assert result == (
-        f"ERROR: target is over the 512 MiB trash limit ({fs._TRASH_MAX_BYTES + 1} bytes); "
+        f"ERROR: target is over the 512 MiB trash limit ({maximum + 1} bytes); "
         "confirm with the operator and pass permanent=true to delete directly."
     )
     assert target.exists()
@@ -1432,3 +1433,21 @@ def test_tool_error_tracker_uses_registered_limit():
     tracker = runtime.ToolErrorTracker.from_settings({"TOOL_ERRORS_MAX": 1})
     tracker.record("read", "ERROR: missing")
     assert tracker.limit_reached()
+
+
+def test_remove_uses_the_configured_trash_size_limit(tmp_path, monkeypatch):
+    from js import turn_settings
+    from js.config import from_env
+
+    cfg = from_env(extras=["TRASH_BYTES_MAX=4"])
+    context = ToolContext(cwd=tmp_path)
+    turn_settings.install(context, cfg)
+    target = tmp_path / "small.txt"
+    target.write_bytes(b"too large")
+    monkeypatch.setattr(fs, "_trash_target", lambda target, context: target.unlink())
+
+    result = fs.remove("small.txt", context=context)
+
+    assert result.startswith("ERROR")
+    assert target.read_bytes() == b"too large"
+    assert not context.snapshots.get(target)

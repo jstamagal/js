@@ -141,6 +141,8 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("REMOVE_TRASH", "bool", group="tools"),
+    SettingSpec("TRASH_BYTES_MAX", "int", group="tools"),
     SettingSpec("TOOL_ARGUMENT_STRICT", "bool", group="runtime"),
     SettingSpec("JAIL_CLEAN_PRIVATE_DIRS", "bool", group="shell"),
     SettingSpec("JAIL_HIDE_NETWORK_FILESYSTEMS", "bool", group="shell"),

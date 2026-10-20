@@ -833,3 +833,9 @@ JAIL_HIDE_NETWORK_FILESYSTEMS
 JAIL_CLEAN_PRIVATE_DIRS
     on: the -C jail removes private directories left by js processes that
     are gone.
+
+REMOVE_TRASH
+    Move removed paths to trash unless permanent=true. Default: on.
+
+TRASH_BYTES_MAX
+    Maximum size in bytes accepted by trash removal. Default: 536870912.

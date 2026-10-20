@@ -38,6 +38,7 @@ from typing import Any
 import yaml
 
 from .. import output, paths
+from .. import settings as _settings
 from .. import messages as msgs
 from .core import Tool
 from ..prompt_text import load_catalog
@@ -317,3 +318,14 @@ def render_table(decisions: Sequence[Decision], bans: Mapping[str, Sequence[str]
         if name in shown:
             lines.append(msgs.line_for(msgs.TOOL_CHAIN_BAN, tool=name, patterns=", ".join(repr(p) for p in patterns)))
     return lines
+
+
+def removal_decision(context: Any, *, permanent: bool | None, size: int) -> tuple[bool, str | None]:
+    """The removal mode and any refusal under the operator's trash policy."""
+    permanent = bool(permanent) or not _settings.knob_attr(context, "remove_trash", "REMOVE_TRASH")
+    maximum = int(_settings.knob_attr(context, "trash_bytes_max", "TRASH_BYTES_MAX"))
+    if not permanent and size > maximum:
+        limit = f"{maximum // (1024 * 1024)} MiB" if maximum % (1024 * 1024) == 0 else f"{maximum} bytes"
+        return permanent, (f"ERROR: target is over the {limit} trash limit ({size} bytes); "
+                           "confirm with the operator and pass permanent=true to delete directly.")
+    return permanent, None

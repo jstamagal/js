@@ -121,6 +121,8 @@ class TurnSetting:
 
 
 TURN_SETTINGS: tuple[TurnSetting, ...] = (
+    TurnSetting("remove_trash", "REMOVE_TRASH", flag, on_context=True),
+    TurnSetting("trash_bytes_max", "TRASH_BYTES_MAX", integer, on_context=True),
     TurnSetting("tool_argument_strict", "TOOL_ARGUMENT_STRICT", flag),
     TurnSetting("jail_clean_private_dirs", "JAIL_CLEAN_PRIVATE_DIRS", flag, on_context=True),
     TurnSetting("jail_hide_network_filesystems", "JAIL_HIDE_NETWORK_FILESYSTEMS", flag, on_context=True),

@@ -20,6 +20,8 @@ from pathlib import Path
 from collections.abc import Callable, Iterable
 
 from .. import jail
+from .. import settings as _settings
+from . import policy
 from ..tool_binaries import resolve_binary
 from .core import Output, Tool, ToolContext, view as _view
 from .sanitize import int_or_default
@@ -51,7 +53,6 @@ _IMAGE_MIME_BY_EXT = {
     ".gif": "image/gif",
 }
 _IMAGE_RESULT_PREFIX = "IMAGE_RESULT\t"
-_TRASH_MAX_BYTES = 512 * 1024 * 1024
 
 
 def _resolve_path_no_follow(context: ToolContext, raw: str | os.PathLike[str], *,
@@ -59,7 +60,9 @@ def _resolve_path_no_follow(context: ToolContext, raw: str | os.PathLike[str], *
     return context.resolve_path(raw, write=write, follow=False)
 
 
-def _path_size_no_follow(path: Path, *, cap: int = _TRASH_MAX_BYTES + 1) -> int:
+def _path_size_no_follow(path: Path, *, cap: int | None = None) -> int:
+    if cap is None:
+        cap = int(_settings.default_value("TRASH_BYTES_MAX")) + 1
     try:
         if path.is_symlink() or path.is_file():
             return path.lstat().st_size
@@ -664,9 +667,11 @@ def remove(path: str, permanent: bool | None = False, context: ToolContext | Non
     if not target.exists() and not target.is_symlink():
         return f"ERROR: no such path: {target}"
     try:
-        size = _path_size_no_follow(target)
-        if not permanent and size > _TRASH_MAX_BYTES:
-            return f"ERROR: target is over the 512 MiB trash limit ({size} bytes); confirm with the operator and pass permanent=true to delete directly."
+        maximum = int(_settings.knob_attr(context, "trash_bytes_max", "TRASH_BYTES_MAX"))
+        size = _path_size_no_follow(target, cap=maximum + 1)
+        permanent, refusal = policy.removal_decision(context, permanent=permanent, size=size)
+        if refusal is not None:
+            return refusal
         _snapshot_remove_target(context, target)
         if not permanent:
             error = _trash_target(target, context)

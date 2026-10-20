@@ -102,6 +102,10 @@ branch the audit was made on; they move as the code changes.
 
 2 findings.
 
+- js-2lg.43: REMOVE_TRASH and TRASH_BYTES_MAX register the previous trash
+  default and 512 MiB cap, inherited by tool contexts. Tool policy decides
+  the removal mode and refusal; fs measures and carries out that decision.
+
 | file:line | function | kind | what the part decides | bead |
 |---|---|---|---|---|
 | `js/toolkit/fs.py:50,101-108,665-686` | remove / _trash_target | policy | Sends a remove to the trash by default and refuses one over a fixed 512 MiB with "confirm with the operator", with no setting or approval gate. | js-2lg.43 |
