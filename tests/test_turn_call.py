@@ -307,3 +307,14 @@ def test_overflow_recovery_uses_registered_round_limit(tmp_path, monkeypatch):
     with pytest.raises(ai.ProviderAPIError):
         turn.call()
     assert len(turn.budget.recoveries) == 1
+
+
+def test_call_statistics_reach_the_sink_when_console_stats_are_hidden(tmp_path, monkeypatch, capsys):
+    turn = _Turn(tmp_path, monkeypatch, [_done()])
+    emitted = []
+    turn.telemetry.sink = SimpleNamespace(emit=emitted.append)
+    turn.call()
+    stats = [dict(event.fields) for event in emitted if event.name == "call_stats"]
+    assert len(stats) == 1
+    assert stats[0]["tokens"] == 5
+    assert capsys.readouterr() == ("", "")

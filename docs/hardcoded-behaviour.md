@@ -25,15 +25,12 @@ branch the audit was made on; they move as the code changes.
 
 ## S1 loop-events
 
-50 findings.
+47 findings.
 
 | file:line | function | kind | what the part decides | bead |
 |---|---|---|---|---|
 | `js/turn_budget.py:238,264,294` | TurnBudget.recover_overflow/_clear/_summarize | presentation | Passes compaction.printing() as emit, so flight notices go to stderr and not to the turn's event emit. | js-2lg.8 |
 | `js/turn_budget.py:268,298,301-302` | TurnBudget._clear/_summarize | presentation | Writes COMPACTION_FAILED and the breaker pause notice straight to stderr. | js-2lg.8 |
-| `js/turn_call.py:228-229` | ModelCaller.call | presentation | Prints MAX_OUTPUT_ESCALATED on the network channel itself. | js-2lg.10 |
-| `js/turn_call.py:368-370` | ModelCaller._reply | presentation | Prints the prompt-cache-break line on the network channel itself. | js-2lg.10 |
-| `js/turn_call.py:396-406` | ModelCaller._reply | presentation | Prints the CALL_STATS line to stdout and decides itself when it shows (NET_DISPLAY>=3 or trace). | js-2lg.10 |
 | `js/turn_stream.py:128-132,152-157` | StreamSink.reasoning/text | presentation | Without a factory it falls back to StderrReasoning on sys.stderr and a Display on sys.stdout, and always sets the agent speaker label. | js-2lg.12 |
 | `js/stream_transport.py:102-108` | say_or_print | presentation | Prints the network line to stderr when no sink is installed. | js-2lg.14 |
 | `js/stream_transport.py:147-177` | say/_net_line | presentation | Renders each network line to ANSI with COLOR_WARN before the sink sees it, so the sink gets a finished string, not an event. | js-2lg.14 |

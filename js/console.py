@@ -261,6 +261,16 @@ def _print_run_line(fields: list[str]) -> None:
         print(msgs.for_stream(fset.to_ansi(row)), flush=True)
 
 
+def call_stats_visible(label: str, trace: bool | None, suppressed: bool) -> bool:
+    """Whether js's views show the statistics for this call."""
+    from . import stream_transport
+
+    if trace is None:
+        return True
+    net = stream_transport.net_level()
+    return bool(net >= 3 and (label or not suppressed)) if net is not None else trace
+
+
 @dataclass
 class _Stream:
     """The Displays one turn's streamed reply is drawn in, and the transcript
@@ -315,7 +325,10 @@ class ConsoleSink:
             _print_run_line(fields)
 
     def _on_call_stats(self, *, label: str, elapsed_s: float, finish: Any, tool_calls: int, tokens: int,
-                       first_token_s: float | None, prompt_tokens: int, cached_tokens: int) -> None:
+                       first_token_s: float | None, prompt_tokens: int, cached_tokens: int,
+                       trace: bool | None = None, suppressed: bool = False) -> None:
+        if not call_stats_visible(label, trace, suppressed):
+            return
         tps = (tokens / elapsed_s) if elapsed_s > 0 else 0.0
         cache = ""
         if prompt_tokens > 0 and cached_tokens > 0:

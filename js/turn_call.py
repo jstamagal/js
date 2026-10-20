@@ -402,13 +402,11 @@ class ModelCaller:
                 "finish_reason": finish,
                 "n_tool_calls": n_calls,
             })
-        net = stream_transport.net_level()
-        label = context.net_label
-        if (net >= 3 and (label or not self._suppress)) if net is not None else self._trace:
-            output.sink_of(self._telemetry).emit(output.event(
-                "call_stats", label=label, elapsed_s=time.time() - t0, finish=finish, tool_calls=n_calls,
-                tokens=out_tokens, first_token_s=result.first_token_s,
-                prompt_tokens=context.last_prompt_tokens, cached_tokens=context.last_cached_tokens))
+        output.sink_of(self._telemetry).emit(output.event(
+            "call_stats", label=context.net_label, elapsed_s=time.time() - t0, finish=finish, tool_calls=n_calls,
+            tokens=out_tokens, first_token_s=result.first_token_s,
+            prompt_tokens=context.last_prompt_tokens, cached_tokens=context.last_cached_tokens,
+            trace=self._trace, suppressed=self._suppress))
         return ModelReply(result=result, finish=finish, provider_metadata=provider_metadata,
                           incomplete_reason=incomplete_reason, ai_tools=ai_tools, usage_stale=usage_stale)
 

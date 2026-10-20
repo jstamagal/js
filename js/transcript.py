@@ -272,7 +272,12 @@ class TranscriptSink:
             self._plain(fset.to_ansi(row) + "\n")
 
     def _on_call_stats(self, *, label: str, elapsed_s: float, finish: Any, tool_calls: int, tokens: int,
-                       first_token_s: float | None, prompt_tokens: int, cached_tokens: int) -> None:
+                       first_token_s: float | None, prompt_tokens: int, cached_tokens: int,
+                       trace: bool | None = None, suppressed: bool = False) -> None:
+        from .console import call_stats_visible
+
+        if not call_stats_visible(label, trace, suppressed):
+            return
         tps = (tokens / elapsed_s) if elapsed_s > 0 else 0.0
         cache = ""
         if prompt_tokens > 0 and cached_tokens > 0:
