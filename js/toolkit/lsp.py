@@ -575,7 +575,9 @@ def server_for(spec: ServerSpec, executable: str, root: Path, context: ToolConte
     """The running server for ``spec`` at ``root``, started and initialized
     when there is none. Raises LspError when it cannot start."""
     jail = _jail.active()
-    key = (spec, str(root), None if jail is None else str(jail.root),
+    env = _server_env(context)
+    key = (spec, executable, str(root), tuple(sorted(env.items())),
+           None if jail is None else str(jail.root),
            tuple(context.jail_bind) if jail is not None else (),
            tuple(context.jail_hide) if jail is not None else ())
     with _SERVERS_LOCK:
@@ -585,7 +587,6 @@ def server_for(spec: ServerSpec, executable: str, root: Path, context: ToolConte
         if server is not None:
             del _SERVERS[key]
             server.shutdown()
-        env = _server_env(context)
         # In the jail the command's directory is bound back, and so is every
         # symlink on the way to the file it resolves to.
         command = Path(executable)

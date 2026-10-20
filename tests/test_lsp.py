@@ -125,6 +125,32 @@ def test_one_server_serves_every_call_in_a_workspace(project):
     assert initializes[0]["params"]["rootUri"] == lsp_mod.file_uri(root)
 
 
+def test_server_reuse_respects_shell_env_keep(project, monkeypatch):
+    from types import SimpleNamespace
+
+    root, context, _log = project
+    monkeypatch.setattr(jail, "active", lambda: SimpleNamespace(root=root))
+    monkeypatch.setattr(jail, "wrap", lambda argv, *args, **kwargs: argv)
+    monkeypatch.setenv("LSP_TEST_SETTING", "enabled")
+    launched_envs = []
+    popen = lsp_mod.subprocess.Popen
+
+    def start(*args, **kwargs):
+        launched_envs.append(kwargs["env"])
+        return popen(*args, **kwargs)
+
+    monkeypatch.setattr(lsp_mod.subprocess, "Popen", start)
+    spec = lsp_mod.parse_servers(context.lsp_servers)[0]
+    context.shell_env_allow = ("LSP_TEST_SETTING",)
+    first = lsp_mod.server_for(spec, sys.executable, root, context, 5)
+    context.shell_env_allow = ()
+    second = lsp_mod.server_for(spec, sys.executable, root, context, 5)
+
+    assert second is not first
+    assert launched_envs[0] == {"LSP_TEST_SETTING": "enabled"}
+    assert launched_envs[1] == {}
+
+
 def test_server_requests_are_answered(project):
     root, context, log = project
     (root / "a.fake").write_text("x\n")
