@@ -397,10 +397,10 @@ class ModelCaller:
             if context.last_prompt_tokens > 0 and context.last_cached_tokens > 0:
                 cache = f"  cache {100.0 * context.last_cached_tokens / context.last_prompt_tokens:.0f}%"
             ttft = f"  ttft {int(result.first_token_s * 1000)}ms" if result.first_token_s is not None else ""
-            stats = msgs.CALL_STATS.text(
-                ms=int(elapsed * 1000), finish=finish, tool_calls=n_calls,
-                tokens=out_tokens, tps=tps, ttft=ttft, cache=cache)
-            print(display.chrome(f"{label + ': ' if label else ''}{stats}"), flush=True)
+            stats = msgs.CALL_STATS.line(
+                colour=False, label=f"{label}: " if label else "", ms=int(elapsed * 1000), finish=finish,
+                tool_calls=n_calls, tokens=out_tokens, tps=tps, ttft=ttft, cache=cache)
+            print(display.chrome(stats), flush=True)
         return ModelReply(result=result, finish=finish, provider_metadata=provider_metadata,
                           incomplete_reason=incomplete_reason, ai_tools=ai_tools, usage_stale=usage_stale)
 

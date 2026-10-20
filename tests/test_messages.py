@@ -313,3 +313,14 @@ def test_the_urllib_fallback_is_an_entry_on_stderr_once_per_purpose(monkeypatch,
     tool_binaries.warn_urllib_fallback("x")
     tool_binaries.warn_urllib_fallback("x")
     assert capsys.readouterr().err.splitlines() == [msgs.banner(msgs.URLLIB_FALLBACK.text(purpose="x"))]
+
+
+@pytest.mark.parametrize("name", ["RUN_LINE", "CALL_STATS", "NO_ALIASES", "NO_JOBS", "NO_EVENT_HANDLERS",
+                                  "SESSION_TITLE", "CWD_IS", "SKILL_HINT", "HOME_NOTHING_TO_MOVE"])
+def test_js_reporting_its_own_state_speaks_behind_the_slot(monkeypatch, name):
+    monkeypatch.setattr(fset, "banner_text", lambda: "@@")
+    entry = msgs.ENTRIES[name]
+    fields = {field: "x" for _literal, field, _spec, _conv in msgs._FORMATTER.parse(entry.template) if field}
+    if "tps" in fields:
+        fields["tps"] = 1.0
+    assert _plain(entry.line(**fields)).startswith("@@ ")

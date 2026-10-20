@@ -1900,7 +1900,7 @@ def _trace_banner(request: ModelRequest, context: ToolContext, registry: ToolReg
     except Exception:  # noqa: BLE001 — registry internals
         ntools = "?"
     bits.append(f"tools={ntools}")
-    print(display.chrome(msgs.RUN_LINE.text(fields='  '.join(bits))), flush=True)
+    print(display.chrome(msgs.RUN_LINE.line(colour=False, fields='  '.join(bits))), flush=True)
 
 
 def _note_user_skill(messages: list[dict], registry: ToolRegistry) -> None:
