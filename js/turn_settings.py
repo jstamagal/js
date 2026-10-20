@@ -121,6 +121,7 @@ class TurnSetting:
 
 
 TURN_SETTINGS: tuple[TurnSetting, ...] = (
+    TurnSetting("deepseek_default_effort", "DEEPSEEK_DEFAULT_EFFORT", text),
     TurnSetting("codex_client_detect", "CODEX_CLIENT_DETECT", flag),
     TurnSetting("codex_client_version", "CODEX_CLIENT_VERSION", text),
     TurnSetting("codex_user_agent", "CODEX_USER_AGENT", text),

@@ -534,7 +534,7 @@ def from_env(
 
     reasoning_effort = _settings.get_dotted(js_root_settings, ("EFFORT",))
     if reasoning_effort is None and provider_def is not None and provider_def.reasoning_effort:
-        reasoning_effort = provider_def.reasoning_effort
+        reasoning_effort = provider_def.default_effort(js_root_settings)
 
     runtime_debug = bool(_settings.knob(js_root_settings, "DEBUG_LOG"))
 

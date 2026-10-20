@@ -534,7 +534,7 @@ def _run_secondary_test(login: Login, provider: providers.ProviderDef, model_id:
             messages=[ai.user_message(_SECONDARY_TEST_PROMPT)],
             tools=None,
             max_output_tokens=None,
-            reasoning_effort=provider.reasoning_effort,
+            reasoning_effort=provider.default_effort(settings),
             on_text=on_text,
             retry_budget=retry.Budget.from_settings(None),
             stream_idle_seconds=retry.idle_seconds(None),

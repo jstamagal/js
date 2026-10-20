@@ -15,7 +15,7 @@ from collections.abc import Mapping
 import modelsdotdev
 from ai.providers.base import _PROVIDER_REGISTRY
 
-from . import codex_auth, xai_auth
+from . import codex_auth, xai_auth, settings as _settings
 
 Transport = str
 
@@ -63,6 +63,11 @@ class ProviderDef:
     @property
     def effective_sdk_provider_id(self) -> str | None:
         return self.sdk_provider_id or self.id
+
+    def default_effort(self, settings: dict | None = None) -> str | None:
+        """The provider default when the run supplies no EFFORT."""
+        return (_settings.knob(settings, "DEEPSEEK_DEFAULT_EFFORT")
+                if self.id == "deepseek" else self.reasoning_effort)
 
     @property
     def login_base_url_field(self) -> bool:
@@ -132,7 +137,7 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         base_env=("DEEPSEEK_BASE_URL",),
         model_env=("DEEPSEEK_MODEL",),
         append_only=True,
-        reasoning_effort="xhigh",
+        reasoning_effort=_settings.default_value("DEEPSEEK_DEFAULT_EFFORT"),
     ),
     _p(
         "ollama",

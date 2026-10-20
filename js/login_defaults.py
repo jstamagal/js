@@ -255,7 +255,7 @@ def for_turn(cfg: Any) -> Any:
     }
     provider = providers.get_provider(getattr(cfg, "provider_id", None))
     changes["reasoning_effort"] = _norm_effort(values.get("EFFORT")) or (
-        provider.reasoning_effort if provider is not None else None)
+        provider.default_effort(settings) if provider is not None else None)
     return replace(
         cfg,
         **changes,

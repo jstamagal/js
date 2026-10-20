@@ -139,6 +139,7 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("DEEPSEEK_DEFAULT_EFFORT", "str", group="providers"),
     SettingSpec("CODEX_CLIENT_DETECT", "bool", group="providers"),
     SettingSpec("CODEX_CLIENT_VERSION", "str", group="providers"),
     SettingSpec("CODEX_USER_AGENT", "str", group="providers"),
