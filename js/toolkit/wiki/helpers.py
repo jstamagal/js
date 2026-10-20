@@ -9,6 +9,7 @@ import subprocess
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from ... import jail
 from ...capped_process import truncation_marker
@@ -90,6 +91,19 @@ def read_text(path: Path, cap: int) -> str:
     return cap_text(text, cap, truncation_marker(cap, "TOOL_RESULT_MAX"))
 
 
+def _existing_asset(src: Path, dest: Path) -> Path | str:
+    try:
+        identical = dest.read_bytes() == src.read_bytes()
+    except OSError as exc:
+        return f"ERROR: could not compare {src} with {dest}: {exc}"
+    if not identical:
+        return (
+            f"ERROR: asset name collision at {dest}: a different file already "
+            f"uses that name; rename {src.name} and convert again"
+        )
+    return dest
+
+
 def copy_to_assets(src: Path, vault_path: Path, context: ToolContext) -> Path | str:
     """Copy a media file into <vault>/assets and return the destination path.
 
@@ -105,18 +119,14 @@ def copy_to_assets(src: Path, vault_path: Path, context: ToolContext) -> Path | 
         return f"ERROR: could not create asset directory {assets}: {exc}"
     dest = context.resolve_path(assets / src.name, write=True)
     if dest.exists():
-        try:
-            identical = dest.read_bytes() == src.read_bytes()
-        except OSError as exc:
-            return f"ERROR: could not compare {src} with {dest}: {exc}"
-        if not identical:
-            return (
-                f"ERROR: asset name collision at {dest}: a different file already "
-                f"uses that name; rename {src.name} and convert again"
-            )
-        return dest
+        return _existing_asset(src, dest)
     try:
-        shutil.copy2(src, dest)
+        with vault_lock(vault_path, context), NamedTemporaryFile(dir=assets, prefix=".wiki-asset-") as staged:
+            shutil.copy2(src, staged.name)
+            try:
+                os.link(staged.name, dest)
+            except FileExistsError:
+                return _existing_asset(src, dest)
     except OSError as exc:
         return f"ERROR: could not copy {src} to {dest}: {exc}"
     return dest

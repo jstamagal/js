@@ -687,3 +687,29 @@ def test_wiki_upsert_rejects_a_page_changed_since_read(tmp_path):
 
     assert page.read_text() == updated
     assert result.startswith("ERROR:")
+
+
+def test_asset_copy_preserves_a_destination_created_after_the_check(tmp_path, monkeypatch):
+    vault = _vault(tmp_path)
+    (vault / "assets").mkdir()
+    image = tmp_path / "photo.png"
+    image.write_bytes(b"new image")
+    destination = vault / "assets" / image.name
+    real_exists = Path.exists
+    appeared = False
+
+    def exists(path):
+        nonlocal appeared
+        present = real_exists(path)
+        if path == destination and not present and not appeared:
+            appeared = True
+            destination.write_bytes(b"other worker's image")
+        return present
+
+    monkeypatch.setattr(Path, "exists", exists)
+    monkeypatch.setattr(wiki_convert_module, "run", lambda *args: (0, "", ""))
+
+    result = wiki_convert(str(image), vault=str(vault), context=_ctx(tmp_path))
+
+    assert destination.read_bytes() == b"other worker's image"
+    assert result.startswith("ERROR:")
