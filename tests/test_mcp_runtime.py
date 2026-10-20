@@ -1080,6 +1080,23 @@ def test_object_schema_without_properties_keeps_pattern_arguments(config):
         jsonschema.validate({"count_files": "three"}, parameters)
 
 
+def test_collision_aliases_obey_deny_on_original_public_name(config):
+    async def drive():
+        host = MCPHost(
+            MCPConfiguration(config.servers, MCPPolicy(tool_deny=(
+                "alpha_server__read_file", "alpha_server__denied",
+            ))),
+            client_factory=FakeClient,
+        )
+        try:
+            await host.discover(query="mcp")
+            assert host.remote_tools == {}
+        finally:
+            await host.close()
+
+    asyncio.run(drive())
+
+
 def test_normalized_remote_name_collisions_are_disambiguated_and_visible():
     class CollisionClient(FakeClient):
         def __init__(self, factory, **kwargs):

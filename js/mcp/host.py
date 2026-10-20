@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import fnmatch
 import hashlib
 import inspect
 import urllib.parse
@@ -630,6 +631,8 @@ class MCPHost:
             grouped_tools.setdefault(public, []).append((remote, safe_raw, component))
         collision_entries: list[CatalogEntry] = []
         for public, candidates in grouped_tools.items():
+            if any(fnmatch.fnmatchcase(public, rule) for rule in self.config.policy.tool_deny):
+                continue
             if len(candidates) == 1:
                 remote, safe_raw, _component = candidates[0]
                 if (
