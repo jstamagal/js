@@ -84,10 +84,10 @@ _CURSOR_COLOUR = (255, 255, 255)
 _LIVE_CHILDREN: set[Any] = set()
 
 
-def _colour(name: str, fallback: tuple[int, int, int]) -> tuple[int, int, int]:
+def _colour(name: str, fallback: tuple[int, int, int], palette=None) -> tuple[int, int, int]:
     if not name or name == "default":
         return fallback
-    named = _ANSI_RGB.get(name)
+    named = (_ANSI_RGB if palette is None else palette).get(name)
     if named is not None:
         return named
     if re.fullmatch(r"[0-9a-fA-F]{6}", name):
@@ -365,7 +365,10 @@ def terminal_session(
     return f"ERROR: action must be one of start, send, look, stop, list; got {action!r}"
 
 
-def _draw_screen(screen: Any, path: Path) -> None:
+def _draw_screen(
+    screen: Any, path: Path, *, font_candidates=_FONT_CANDIDATES,
+    palette=None, background=_BACKGROUND, foreground=_FOREGROUND, cursor_colour=_CURSOR_COLOUR,
+) -> None:
     try:
         from PIL import Image, ImageDraw, ImageFont
     except ImportError as exc:
@@ -373,7 +376,7 @@ def _draw_screen(screen: Any, path: Path) -> None:
 
     size = 16
     font = None
-    for candidate in _FONT_CANDIDATES:
+    for candidate in font_candidates:
         if not Path(candidate).exists():
             continue
         try:
@@ -390,7 +393,7 @@ def _draw_screen(screen: Any, path: Path) -> None:
     image = Image.new(
         "RGB",
         (cell_width * screen.columns + 8, cell_height * screen.lines + 8),
-        _BACKGROUND,
+        background,
     )
     draw = ImageDraw.Draw(image)
     for y in range(screen.lines):
@@ -398,14 +401,14 @@ def _draw_screen(screen: Any, path: Path) -> None:
         for x in range(screen.columns):
             cell = row[x]
             char = cell.data or " "
-            foreground = _colour(getattr(cell, "fg", "default"), _FOREGROUND)
-            background = _colour(getattr(cell, "bg", "default"), _BACKGROUND)
+            cell_foreground = _colour(getattr(cell, "fg", "default"), foreground, palette)
+            cell_background = _colour(getattr(cell, "bg", "default"), background, palette)
             if getattr(cell, "reverse", False):
-                foreground, background = background, foreground
+                cell_foreground, cell_background = cell_background, cell_foreground
             px, py = 4 + x * cell_width, 4 + y * cell_height
-            if background != _BACKGROUND:
+            if cell_background != background:
                 draw.rectangle(
-                    [px, py, px + cell_width, py + cell_height], fill=background
+                    [px, py, px + cell_width, py + cell_height], fill=cell_background
                 )
             if char != " ":
                 bold = bool(getattr(cell, "bold", False))
@@ -413,19 +416,19 @@ def _draw_screen(screen: Any, path: Path) -> None:
                     (px, py),
                     char,
                     font=font,
-                    fill=foreground,
+                    fill=cell_foreground,
                     stroke_width=1 if bold else 0,
-                    stroke_fill=foreground if bold else None,
+                    stroke_fill=cell_foreground if bold else None,
                 )
                 if getattr(cell, "underscore", False):
                     draw.line(
                         [px, py + cell_height - 2, px + cell_width - 1, py + cell_height - 2],
-                        fill=foreground,
+                        fill=cell_foreground,
                     )
                 if getattr(cell, "strikethrough", False):
                     draw.line(
                         [px, py + cell_height // 2, px + cell_width - 1, py + cell_height // 2],
-                        fill=foreground,
+                        fill=cell_foreground,
                     )
     if not getattr(screen.cursor, "hidden", False):
         cursor_x, cursor_y = screen.cursor.x, screen.cursor.y
@@ -433,7 +436,7 @@ def _draw_screen(screen: Any, path: Path) -> None:
             px, py = 4 + cursor_x * cell_width, 4 + cursor_y * cell_height
             draw.rectangle(
                 [px, py, px + cell_width - 1, py + cell_height - 1],
-                outline=_CURSOR_COLOUR,
+                outline=cursor_colour,
                 width=2,
             )
     image.save(path, format="PNG")
@@ -444,6 +447,8 @@ def terminal_snapshot(
     output_path: str | None = "",
     wait_ms: int | None = 100,
     context: ToolContext | None = None,
+    *,
+    renderer=None,
 ) -> str:
     """Render one live PTY screen to PNG and return it through js vision handling."""
     if context is None:
@@ -469,7 +474,7 @@ def terminal_snapshot(
     try:
         context.snapshot(target)
         target.parent.mkdir(parents=True, exist_ok=True)
-        _draw_screen(state["screen"], target)
+        (_draw_screen if renderer is None else renderer)(state["screen"], target)
     except Exception as exc:
         return f"ERROR: could not render terminal snapshot: {type(exc).__name__}: {exc}"
     state["snapshot_n"] = snapshot_n
