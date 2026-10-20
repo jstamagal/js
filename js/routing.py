@@ -76,13 +76,10 @@ def _saved_login(provider_id: str | None):
     # refreshes inside its own provider; the xAI login rides the plain openai
     # transport, so the only place the token can be renewed before it is spent
     # is here, where the credential is read.
-    try:
-        from . import xai_auth as _xai_auth
+    from . import xai_auth as _xai_auth
 
-        if _xai_auth.is_xai_oauth_provider(normalized):
-            return _xai_auth.ensure_fresh_login(login)
-    except Exception:  # noqa: BLE001 - a stale token still beats no route at all
-        return login
+    if _xai_auth.is_xai_oauth_provider(normalized):
+        return _xai_auth.ensure_fresh_login(login)
     return login
 
 

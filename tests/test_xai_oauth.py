@@ -232,3 +232,20 @@ def test_routing_refreshes_an_expired_bearer_before_handing_it_out(tmp_path, mon
         assert logins.load_logins()[xai_auth.XAI_PROVIDER_ID].provider_api_key == "renewed"
     finally:
         logins.set_config_dir(None)
+
+
+def test_routing_propagates_the_cause_of_a_rejected_refresh(monkeypatch):
+    logins.save_login(xai_auth.login_from_token(xai_auth.XaiToken(
+        access="expired", refresh="refresh-1", expires_at=time.time() - 1,
+        token_endpoint="https://auth.x.ai/oauth/token",
+    )))
+    failure = RuntimeError("invalid_grant")
+
+    def reject(*_args, **_kwargs):
+        raise failure
+
+    monkeypatch.setattr(xai_auth, "refresh_token", reject)
+    with pytest.raises(RuntimeError) as raised:
+        routing.resolve_model_route("grok-4", configured_provider_id=xai_auth.XAI_PROVIDER_ID)
+
+    assert raised.value.__cause__ is failure
