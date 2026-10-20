@@ -61,3 +61,16 @@ def test_set_model_shows_the_model_the_agent_runs(repl, capsys):
     assert cli._handle_command("/set model", agent_state, agent_cfg) is True
     [line] = capsys.readouterr().out.splitlines()
     assert "review-agent-pick" in line and f"agent {cfg.agent_id}" in line
+
+
+def test_banner_changes_can_belong_to_the_caller():
+    from js import setcmd
+
+    before = msgs.BANNER
+    changed = []
+    values = {}
+    result = setcmd.set_command(values, "BANNER custom", banner_changed=changed.append)
+    assert result.changed and changed == ["custom"]
+    setcmd.set_command(values, "-BANNER", {"BANNER": before}, banner_changed=changed.append)
+    assert changed == ["custom", before]
+    assert msgs.BANNER == before
