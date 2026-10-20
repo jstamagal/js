@@ -125,7 +125,8 @@ def test_custom_sink_receives_retry_and_network_lines_without_using_the_screen(m
     _run(_offline_config(tmp_path, trace=True, settings={}), tmp_path, sink, "hello")
 
     assert screen == []
-    assert len(sink.named("network")) == 2
+    assert len(sink.named("network")) == 1
+    assert len(sink.named("retry_wait")) == 1
     assert capsys.readouterr() == ("", "")
 
 

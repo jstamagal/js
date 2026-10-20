@@ -2141,6 +2141,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     )
     error_tracker = ToolErrorTracker.from_settings(getattr(cfg, "settings", None))
 
+    output_token = output.set_sink(output.sink_of(telemetry))
     net_role_token = stream_transport.set_role(
         active_context.net_label, agent=cfg.agent_id, status=turn_status, retries=True,
     )
@@ -2228,6 +2229,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         usage_mod.stop(usage_token)
         stream_transport.reset_role(net_role_token)
         stream_transport.reset_output(net_output_token)
+        output.reset_sink(output_token)
         turn_status.reset()
         if owns_mcp_host and mcp_host is not None:
             await mcp_host.close()

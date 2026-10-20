@@ -94,14 +94,23 @@ def event(name: str, /, **fields: Any) -> OutputEvent:
 _sink: ContextVar[Sink | None] = ContextVar("js_output_sink", default=None)
 
 
+def set_sink(sink: Sink):
+    """Bind library output to ``sink``; return the token for ``reset_sink``."""
+    return _sink.set(sink)
+
+
+def reset_sink(token) -> None:
+    _sink.reset(token)
+
+
 @contextmanager
 def using_sink(sink: Sink):
     """Send this task's library output to ``sink`` for the scope."""
-    token = _sink.set(sink)
+    token = set_sink(sink)
     try:
         yield
     finally:
-        _sink.reset(token)
+        reset_sink(token)
 
 
 def emit(event: OutputEvent) -> None:

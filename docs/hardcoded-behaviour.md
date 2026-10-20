@@ -25,14 +25,13 @@ branch the audit was made on; they move as the code changes.
 
 ## S1 loop-events
 
-44 findings.
+43 findings.
 
 | file:line | function | kind | what the part decides | bead |
 |---|---|---|---|---|
 | `js/turn_budget.py:238,264,294` | TurnBudget.recover_overflow/_clear/_summarize | presentation | Passes compaction.printing() as emit, so flight notices go to stderr and not to the turn's event emit. | js-2lg.8 |
 | `js/turn_budget.py:268,298,301-302` | TurnBudget._clear/_summarize | presentation | Writes COMPACTION_FAILED and the breaker pause notice straight to stderr. | js-2lg.8 |
 | `js/turn_stream.py:128-132,152-157` | StreamSink.reasoning/text | presentation | Without a factory it falls back to StderrReasoning on sys.stderr and a Display on sys.stdout, and always sets the agent speaker label. | js-2lg.12 |
-| `js/retry.py:112-118` | announce | presentation | Decides that a wait of 10s or more shows at level 1, and pre-renders RETRY_WAIT for the network channel. | js-2lg.16 |
 | `js/compaction.py:307` | _clearing_flight | presentation | Writes CLEARING_FLIGHT_FAILED to stderr. | js-2lg.19 |
 | `js/compaction.py:710-711,721-723` | _run_pre_hook | presentation | Writes hook failures to stderr with English error text built in code. | js-2lg.19 |
 | `js/compaction.py:880` | summarize.summarize_chunk | presentation | Prints SUMMARY_SPLIT to stdout. | js-2lg.19 |

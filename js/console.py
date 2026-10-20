@@ -351,6 +351,16 @@ class ConsoleSink:
         else:
             network_display.draw(level, line, fallback=fallback)
 
+    def _on_retry_wait(self, *, n: int, attempts: int, delay: float,
+                       error: BaseException, label: str) -> None:
+        from . import network_display
+
+        line = msgs.RETRY_WAIT.said(n=n, of=attempts, seconds=delay,
+                                    failure=network_display.Failure(error))
+        if label:
+            line = network_display.LabelledLine(label, line)
+        network_display.draw(1 if delay >= 10 else 3, line)
+
     # The streamed reply
 
     def _on_stream_open(self, *, stream: output.Key) -> None:

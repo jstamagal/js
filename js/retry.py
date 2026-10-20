@@ -21,7 +21,7 @@ from typing import Any
 import ai
 
 from . import activity
-from . import messages as msgs
+from . import output
 from . import settings as _settings
 from . import stream_transport
 
@@ -120,12 +120,9 @@ def retry_after_seconds(exc: BaseException) -> float | None:
 
 
 def announce(n: int, budget: Budget, delay: float, exc: BaseException) -> None:
-    """The network-channel line for retry `n`. A wait of 10s or more shows at
-    level 1, so a long Retry-After does not look like a hang."""
-    stream_transport.say_for_caller(
-        1 if delay >= 10 else 3,
-        msgs.RETRY_WAIT.said(n=n, of=budget.attempts, seconds=delay,
-                             failure=stream_transport.describe_failure(exc)))
+    """Tell the sink which retry will wait, and the failure it follows."""
+    output.emit(output.event("retry_wait", n=n, attempts=budget.attempts, delay=delay,
+                             error=exc, label=stream_transport._role.get().label))
 
 
 _sleep = asyncio.sleep
