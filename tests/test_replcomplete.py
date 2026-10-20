@@ -171,3 +171,12 @@ def test_registered_spellcheck_language_reaches_hunspell(monkeypatch):
     replcomplete.hunspell_suggest("wort")
     assert calls[0][0][-1] == "de_DE"
     assert calls[0][1]["timeout"] == 7
+
+
+def test_completion_routes_and_enums_come_from_the_caller():
+    completer = JsCompleter(commands=lambda: {"set": "set"},
+                            path_completion=lambda token: None,
+                            unknown_arguments=lambda head, token: [head + ":" + token],
+                            value_enums={"CUSTOM": ("chosen",)})
+    assert completer.candidates("/set CUSTOM ch") == (["chosen"], 2)
+    assert completer.candidates("hello ./file") == (["hello:./file"], 6)

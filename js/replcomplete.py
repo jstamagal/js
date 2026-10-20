@@ -51,9 +51,9 @@ def _prefix(pool: Iterable[str], token: str) -> list[str]:
     return sorted({c for c in pool if c.startswith(token)})
 
 
-def value_candidates(key: str, token: str) -> list[str]:
+def value_candidates(key: str, token: str, enums: Mapping | None = None) -> list[str]:
     """Known-good values for `key` (e.g. reasoning-effort stops), prefix-matched."""
-    values = _VALUE_ENUM_KNOBS.get(key.upper())
+    values = (_VALUE_ENUM_KNOBS if enums is None else enums).get(key.upper())
     if values is None:
         return []
     return _prefix(values, token.lower())
@@ -137,6 +137,9 @@ class JsCompleter(Completer):
         spell: Callable[[str], list[str]] | None = None,
         bare_words: Iterable[str] = (),
         fset_names: Iterable[str] = (),
+        path_completion: Callable[[str], list[str] | None] | None = None,
+        unknown_arguments: Callable[[str, str], list[str]] | None = None,
+        value_enums: Mapping | None = None,
     ) -> None:
         self._commands = commands
         self._fset_names = tuple(fset_names)
@@ -144,6 +147,9 @@ class JsCompleter(Completer):
         self._setting_keys = tuple(setting_keys)
         self._names = names
         self._spell = spell
+        self._path_completion = path_completion
+        self._unknown_arguments = unknown_arguments
+        self._value_enums = value_enums
 
     def candidates(self, text_before_cursor: str) -> tuple[list[str], int]:
         """Pure-ish: (candidate list, token length) for the text left of cursor."""
@@ -154,13 +160,17 @@ class JsCompleter(Completer):
             return command_candidates(token, table, self._bare_words), len(token)
         words = before.split()
         head = words[0].removeprefix(CMDCHAR).lower()
-        if looks_like_path(token):
-            return path_candidates(token), len(token)
+        paths = (self._path_completion(token) if self._path_completion is not None
+                 else path_candidates(token) if looks_like_path(token) else None)
+        if paths is not None:
+            return paths, len(token)
         if head not in table:
+            if self._unknown_arguments is not None:
+                return self._unknown_arguments(head, token), len(token)
             return (self._spell(token) if self._spell is not None else []), len(token)
         source = table[head]
         if source == "set" and len(words) >= 2:
-            return value_candidates(words[1], token), len(token)
+            return value_candidates(words[1], token, self._value_enums), len(token)
         if source in ("set", "keys"):
             # `set` takes a setting name in any case. A lowercase prefix gets
             # its matches in lowercase, so the part they share can be filled in.
