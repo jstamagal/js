@@ -1365,6 +1365,18 @@ DIRECTIVE_ = Message("!{{{name}}}: {__name__}: {exc}", banner=False)
 
 DIRECTIVE_UNREADABLE_AS_TEXT = "unreadable as text: {path} ({exc})"
 
+SETTING_VALUE_OFF = Message("off", banner=False)
+
+SETTING_VALUE_ON = Message("on", banner=False)
+
+SETTING_VALUE_UNSET = Message("<unset>", banner=False)
+
+SETTING_VALUE_NONE = Message("<none>", banner=False)
+
+SETTING_VALUE_SECRET = Message("<set>", banner=False)
+
+EVENT_HANDLER_REGISTERED = Message("on {prefix}{event} = {handler}", banner=False)
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():

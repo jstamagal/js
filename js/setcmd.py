@@ -39,10 +39,10 @@ class CommandResult:
 
 def _empty_display(spec: _s.SettingSpec) -> str:
     if spec.empty == _s.EMPTY_OFF:
-        return "off"
+        return msgs.SETTING_VALUE_OFF.words()
     if spec.empty == _s.EMPTY_UNSET:
-        return "<unset>"
-    return "<none>"
+        return msgs.SETTING_VALUE_UNSET.words()
+    return msgs.SETTING_VALUE_NONE.words()
 
 
 def masks_secrets(settings: dict | None) -> bool:
@@ -75,9 +75,9 @@ def render_value(spec: _s.SettingSpec, value, *, masked: bool = True) -> str:
     if value is None:
         return _empty_display(spec)
     if spec.type == "bool":
-        return "on" if value else "off"
+        return msgs.SETTING_VALUE_ON.words() if value else msgs.SETTING_VALUE_OFF.words()
     if spec.secret and masked:
-        return "<set>" if value else _empty_display(spec)
+        return msgs.SETTING_VALUE_SECRET.words() if value else _empty_display(spec)
     if isinstance(value, dict):
         if not value:
             return _empty_display(spec)
@@ -218,7 +218,7 @@ def apply_set(settings: dict, key: str, raw: str, *, verb: str = "set") -> Comma
             changed=True,
             lines=[msgs.line_for(
                 msgs.SETTING_CHANGED, key=key,
-                value="<set>" if prefix_spec is not None and prefix_spec.secret and masks_secrets(settings)
+                value=msgs.SETTING_VALUE_SECRET.words() if prefix_spec is not None and prefix_spec.secret and masks_secrets(settings)
                 else raw.strip())],
             changed_keys=[key],
         )
@@ -276,9 +276,9 @@ def apply_unset(settings: dict, key: str, baseline: dict | None = None, *, verb:
         prefix_spec = _s.parent_spec(key)
         secret = prefix_spec is not None and prefix_spec.secret
         if after is missing:
-            display = "<unset>"
+            display = msgs.SETTING_VALUE_UNSET.words()
         elif secret and masks_secrets(settings):
-            display = "<set>"
+            display = msgs.SETTING_VALUE_SECRET.words()
         else:
             display = str(after)
         name = key
@@ -396,7 +396,7 @@ def on_command(hooks: _events.EventHooks, arg: str) -> CommandResult:
     except ValueError as e:
         return CommandResult(handled=True, error=str(e))
     prefix = "^" if hook.suppress else ""
-    return CommandResult(handled=True, changed=True, lines=[f"on {prefix}{hook.event} = {hook.handler}"])
+    return CommandResult(handled=True, changed=True, lines=[msgs.EVENT_HANDLER_REGISTERED.words(prefix=prefix, event=hook.event, handler=hook.handler)])
 
 
 # ---------------------------------------------------------------------------
