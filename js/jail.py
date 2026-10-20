@@ -496,7 +496,8 @@ class Jail:
         """The host path a file tool uses for ``path``. Raises JailError when
         the jail does not show it, or shows it read-only and ``write`` is set."""
         mapped = self.host_path(path, setting)
-        pending = deque(Path(os.path.abspath(path)).parts[1:])
+        absolute = path if path.is_absolute() else Path.cwd() / path
+        pending = deque(absolute.parts[1:])
         current = Path("/")
         links = 0
         while pending:

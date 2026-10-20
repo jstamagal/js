@@ -84,6 +84,19 @@ def test_find_finds_no_zshrc_under_home(jailed):
     assert output.strip() == "END"
 
 
+def test_parent_after_a_symlink_resolves_inside_its_target(tmp_path, monkeypatch):
+    root = tmp_path / "project"
+    (root / "real" / "nested").mkdir(parents=True)
+    (root / "item").write_text("wrong file")
+    (root / "real" / "item").write_text("target file")
+    (root / "shortcut").symlink_to("real/nested")
+    current = jail.Jail(root=root, bwrap="bwrap", private=tmp_path / "private")
+    monkeypatch.setattr(jail, "ACTIVE", current)
+    context = ToolContext(cwd=root)
+
+    assert context.resolve_path("shortcut/../item").read_text() == "target file"
+
+
 def test_other_views_of_a_hidden_home_are_hidden():
     # The home is a btrfs subvolume; the whole filesystem is mounted too.
     mounts = [
