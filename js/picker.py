@@ -119,7 +119,7 @@ class ModelPicker:
 
     # -- state -------------------------------------------------------------
 
-    def _load_models(self) -> None:
+    def _load_models(self, model: str | None = None) -> None:
         self.model_index = 0
         if not self.provider_rows:
             self.model_rows = []
@@ -130,9 +130,10 @@ class ModelPicker:
         if not self.model_rows:
             self.detail = msgs.PICK_NO_CACHED.text(provider=provider.id)
             return
-        if self._initial_model:
+        wanted = model if model is not None else self._initial_model
+        if wanted:
             for idx, row in enumerate(self.model_rows):
-                if row.id == self._initial_model:
+                if row.id == wanted:
                     self.model_index = idx
                     break
         self.detail = msgs.PICK_PROVIDER_DETAIL.text(provider=provider.id, source=provider.source,
@@ -199,7 +200,8 @@ class ModelPicker:
             models = await logins.fetch_models(login)
             logins.cache_models(provider.id, models)
             if self.current_provider() is provider:
-                self._load_models()
+                selected = self.selection()
+                self._load_models(selected["model"] if selected is not None else None)
         except Exception as exc:  # noqa: BLE001
             self.detail = msgs.PICK_FETCH_FAILED.text(error=f"{type(exc).__name__}: {exc}")
 

@@ -163,6 +163,36 @@ def test_fetch_finishing_after_provider_switch_preserves_the_selected_model(monk
         _reset_logins()
 
 
+def test_picker_refresh_keeps_a_model_selected_while_the_fetch_waits(monkeypatch, tmp_path):
+    logins.set_config_dir(tmp_path)
+    logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="offline-key"))
+    logins.cache_models("deepseek", ["initial", "chosen"])
+
+    async def scenario():
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def fetch(_login):
+            started.set()
+            await release.wait()
+            return ["new", "chosen", "initial"]
+
+        monkeypatch.setattr(logins, "fetch_models", fetch)
+        state = picker.ModelPicker(provider_id="deepseek", model="initial")
+        task = asyncio.create_task(state.fetch())
+        await started.wait()
+        state.toggle_focus()
+        state.move(1)
+        release.set()
+        await task
+
+        assert state.selection()["model"] == "chosen"
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        _reset_logins()
+
+
 def test_picker_enter_selects_model(tmp_path: Path):
     logins.set_config_dir(tmp_path)
     logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="sk-test"))
