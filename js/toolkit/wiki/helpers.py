@@ -76,10 +76,11 @@ def run(cmd: list[str], context: ToolContext, timeout: int = 300) -> tuple[int, 
     except OSError as exc:
         return 1, "", str(exc)
     cap = context.max_tool_result_bytes
+    marker = truncation_marker(cap, "TOOL_RESULT_MAX")
     return (
         proc.returncode,
-        proc.stdout[:cap].decode("utf-8", "replace"),
-        proc.stderr[:cap].decode("utf-8", "replace"),
+        cap_text(proc.stdout.decode("utf-8", "replace"), cap, marker),
+        cap_text(proc.stderr.decode("utf-8", "replace"), cap, marker),
     )
 
 

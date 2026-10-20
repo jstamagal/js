@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from js import jail
+from js.capped_process import truncation_marker
 from js.toolkit import ToolContext
 from js.toolkit import wiki as wiki_module
 from js.toolkit import fs
@@ -17,6 +18,7 @@ from js.toolkit.descriptions import load_description
 from js.toolkit.wiki import convert as wiki_convert_module
 from js.toolkit.wiki import ops as wiki_ops_module
 from js.toolkit.wiki import pages as wiki_pages_module
+from js.toolkit.wiki import helpers as wiki_helpers_module
 from js.toolkit.wiki.convert import wiki_convert
 from js.toolkit.wiki.ops import wiki_finish_ingest
 from js.toolkit.wiki.pages import wiki_write
@@ -725,3 +727,21 @@ def test_upsert_of_a_missing_slug_still_checks_for_duplicates(tmp_path):
 
     assert not (vault / "concepts" / "chain-of-draft-prompting.md").exists()
     assert result.startswith("NEAR-MATCH:")
+
+
+@pytest.mark.parametrize("suffix", [".pdf", ".docx"])
+def test_external_conversion_discloses_truncation_within_the_byte_cap(tmp_path, monkeypatch, suffix):
+    document = tmp_path / f"document{suffix}"
+    document.write_bytes(b"document fixture")
+    cap = 1025
+
+    def run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout=("é" * 4000).encode(), stderr=b"")
+
+    monkeypatch.setattr(wiki_helpers_module.subprocess, "run", run)
+    monkeypatch.setattr(wiki_convert_module, "_which", lambda binary: f"/usr/bin/{binary}")
+
+    result = wiki_convert(str(document), context=_ctx(tmp_path, max_bytes=cap))
+
+    assert len(result.encode()) <= cap
+    assert truncation_marker(cap, "TOOL_RESULT_MAX") in result
