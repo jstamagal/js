@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Callable, Mapping
 
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import KEY_ALIASES, Keys
@@ -75,8 +76,8 @@ def keys_file(settings: dict | None) -> Path:
     return Path(value).expanduser() if value else paths.keys_file()
 
 
-def default_keymap() -> Keymap:
-    return {action.name: action.keys for action in ACTIONS}
+def default_keymap(actions: tuple[Action, ...] | None = None) -> Keymap:
+    return {action.name: action.keys for action in (ACTIONS if actions is None else actions)}
 
 
 
@@ -107,13 +108,14 @@ def _overlaps(a: str, b: str) -> bool:
     return a == b or SCREEN in (a, b)
 
 
-def bind(keymap: Keymap, sequence: KeySequence, action: str) -> Keymap:
+def bind(keymap: Keymap, sequence: KeySequence, action: str, *, actions: tuple[Action, ...] | None = None) -> Keymap:
     """``keymap`` with ``sequence`` added to ``action`` and taken off every
     other action that can fire in the same place."""
-    context = ACTION_BY_NAME[action].context
+    registry = ACTION_BY_NAME if actions is None else {item.name: item for item in actions}
+    context = registry[action].context
     result: Keymap = {}
     for name, sequences in keymap.items():
-        if name != action and _overlaps(ACTION_BY_NAME[name].context, context):
+        if name != action and _overlaps(registry[name].context, context):
             sequences = tuple(seq for seq in sequences if not _same(seq, sequence))
         result[name] = sequences
     if not any(_same(seq, sequence) for seq in result[action]):
@@ -127,9 +129,10 @@ def unbind(keymap: Keymap, sequence: KeySequence) -> Keymap:
             for name, sequences in keymap.items()}
 
 
-def apply_line(keymap: Keymap, line: str) -> tuple[Keymap, str | None]:
+def apply_line(keymap: Keymap, line: str, *, actions: tuple[Action, ...] | None = None) -> tuple[Keymap, str | None]:
     """One keys-file line applied to ``keymap``: ``(keymap, error)``. A line
     with an error leaves the keymap as it was."""
+    registry = ACTION_BY_NAME if actions is None else {item.name: item for item in actions}
     parsed = setcmd.split_command(line)
     if parsed is None:
         return keymap, None
@@ -146,7 +149,7 @@ def apply_line(keymap: Keymap, line: str) -> tuple[Keymap, str | None]:
         if len(words) < 2:
             return keymap, msgs.KEYS_BIND_USAGE.said()
         *sequence, action = words
-        if action not in ACTION_BY_NAME:
+        if action not in registry:
             return keymap, msgs.KEYS_UNKNOWN_ACTION.said(action=action)
     elif verb == "unbind":
         if not words:
@@ -159,30 +162,30 @@ def apply_line(keymap: Keymap, line: str) -> tuple[Keymap, str | None]:
             return keymap, error
     if action is None:
         return unbind(keymap, tuple(sequence)), None
-    return bind(keymap, tuple(sequence), action), None
+    return bind(keymap, tuple(sequence), action, actions=actions), None
 
 
-def parse(text: str, path: Path | str) -> tuple[Keymap, list[str]]:
+def parse(text: str, path: Path | str, *, actions: tuple[Action, ...] | None = None) -> tuple[Keymap, list[str]]:
     """The keymap a keys file's ``text`` gives, starting from the defaults, and
     one `path:line: error` line per line that did not apply."""
-    keymap = default_keymap()
+    keymap = default_keymap(actions)
     errors: list[str] = []
     for lineno, line in enumerate(text.splitlines(), 1):
-        keymap, error = apply_line(keymap, line)
+        keymap, error = apply_line(keymap, line, actions=actions)
         if error is not None:
             errors.append(msgs.SCRIPT_LINE_FAILED.said(path=path, lineno=lineno, error=error))
     return keymap, errors
 
 
-def load(path: Path) -> tuple[Keymap, list[str]]:
+def load(path: Path, *, actions: tuple[Action, ...] | None = None) -> tuple[Keymap, list[str]]:
     """The keymap in the keys file at ``path``; the defaults when there is none."""
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return default_keymap(), []
+        return default_keymap(actions), []
     except (OSError, UnicodeError) as exc:
-        return default_keymap(), [msgs.KEYS_UNREADABLE.said(path=path, error=exc)]
-    return parse(text, path)
+        return default_keymap(actions), [msgs.KEYS_UNREADABLE.said(path=path, error=exc)]
+    return parse(text, path, actions=actions)
 
 
 def describe(sequence: KeySequence) -> str:
@@ -206,10 +209,12 @@ def history_search(event) -> None:
         search.start_search(direction=SearchDirection.BACKWARD)
 
 
-def prompt_bindings(keymap: Keymap) -> KeyBindings:
-    """The keymap's bindings a plain prompt_toolkit prompt (the --blocking
-    REPL) runs: history_search. Its other keys are prompt_toolkit's own."""
+def prompt_bindings(keymap: Keymap, *, handlers: Mapping[str, Callable] | None = None) -> KeyBindings:
+    """Bind the actions a blocking prompt supplies handlers for. The stock
+    prompt supplies history_search; other keys remain prompt_toolkit's own."""
     kb = KeyBindings()
-    for sequence in keymap.get("history_search", ()):
-        kb.add(*sequence)(history_search)
+    handlers = {"history_search": history_search} if handlers is None else handlers
+    for action, handler in handlers.items():
+        for sequence in keymap.get(action, ()):
+            kb.add(*sequence)(handler)
     return kb
