@@ -22,6 +22,10 @@ from .core import Tool, ToolContext
 from . import task_jobs
 from .descriptions import load_description
 from .sanitize import int_or_default, text_or_default
+from ..prompt_text import load_catalog
+
+_PROMPTS = load_catalog('toolkit_meta')
+
 
 
 @dataclass(frozen=True)
@@ -689,37 +693,36 @@ def named_agent_tool(agent_id: str, description: str | None = None) -> Tool:
     run_named_agent._js_agent_id = agent_id  # type: ignore[attr-defined]
 
     text = description or (
-        f"Run the `{agent_id}` agent as a subagent. Provide one or more task strings; "
-        "the agent loads its own persona and selected tool surface."
+        _PROMPTS['named_agent_tool_run_the_agent_as_a_subagent'].format(agent_id=agent_id)
     )
     return Tool(
         agent_id,
         text,
         run_named_agent,
-        {"tasks": {"type": "array", "items": {"type": "string"}, "description": "One or more clear, detailed task prompts to run in parallel."}},
+        {"tasks": {"type": "array", "items": {"type": "string"}, "description": _PROMPTS['named_agent_tool_one_or_more_clear_detailed_task']}},
         required=("tasks",),
     )
 
 
 def _task_params(flags: tuple[str, ...]) -> dict:
     params = {
-        "tasks": {"type": "array", "items": {"type": "string"}, "description": "One or more clear, detailed task prompts to run in parallel."},
-        "agent_id": {"type": "string", "description": "Worker agent id; loads that agent's persona and selected tools."},
-        "session_id": {"type": "string", "description": "Optional session id for a worker context."},
-        "background": {"type": "boolean", "default": False, "description": "Return a handle at once and run the workers in the background."},
-        "action": {"type": "string", "enum": ["run", "poll", "wait", "kill"], "default": "run", "description": "run starts workers; poll, wait and kill act on a background handle."},
-        "handle": {"type": "string", "description": "Background task id from a HANDLE line, for poll/wait/kill."},
-        "timeout": {"type": "integer", "description": "Seconds a wait blocks; without it, wait blocks until the task ends."},
+        "tasks": {"type": "array", "items": {"type": "string"}, "description": _PROMPTS['task_params_one_or_more_clear_detailed_task']},
+        "agent_id": {"type": "string", "description": _PROMPTS['task_params_worker_agent_id_loads_that_agent']},
+        "session_id": {"type": "string", "description": _PROMPTS['task_params_optional_session_id_for_a_worker']},
+        "background": {"type": "boolean", "default": False, "description": _PROMPTS['task_params_return_a_handle_at_once_and']},
+        "action": {"type": "string", "enum": ["run", "poll", "wait", "kill"], "default": "run", "description": _PROMPTS['task_params_run_starts_workers_poll_wait_and']},
+        "handle": {"type": "string", "description": _PROMPTS['task_params_background_task_id_from_a_handle']},
+        "timeout": {"type": "integer", "description": _PROMPTS['task_params_seconds_a_wait_blocks_without_it']},
     }
     if "model_override" in flags:
-        params["model"] = {"type": "string", "description": "Model for the subagent(s), same string as --model. Set it when the operator names one; omit otherwise."}
+        params["model"] = {"type": "string", "description": _PROMPTS['task_params_model_for_the_subagent_s_same']}
     return params
 
 
 def tools(flags: tuple[str, ...] = ("model_override",)) -> tuple[Tool, ...]:
     return (
-        Tool("plan", load_description("plan"), plan, {"plan_name": {"type": "string", "description": "Plan name used in the filename."}, "version": {"type": "string", "description": "Version suffix used in the filename."}, "content": {"type": "string", "description": "Markdown plan body to persist."}, "overwrite": {"type": "boolean", "default": False, "description": "Replace an existing plan with the same name and version."}}, required=("plan_name", "version", "content")),
-        Tool("skill", load_description("skill"), skill, {"name": {"type": "string", "description": "Local skill name to load."}}, required=("name",), read_only=True),
+        Tool("plan", load_description("plan"), plan, {"plan_name": {"type": "string", "description": _PROMPTS['tools_plan_name_used_in_the_filename']}, "version": {"type": "string", "description": _PROMPTS['tools_version_suffix_used_in_the_filename']}, "content": {"type": "string", "description": _PROMPTS['tools_markdown_plan_body_to_persist']}, "overwrite": {"type": "boolean", "default": False, "description": _PROMPTS['tools_replace_an_existing_plan_with_the']}}, required=("plan_name", "version", "content")),
+        Tool("skill", load_description("skill"), skill, {"name": {"type": "string", "description": _PROMPTS['tools_local_skill_name_to_load']}}, required=("name",), read_only=True),
         Tool(
             "task",
             load_description("task", flags=flags),

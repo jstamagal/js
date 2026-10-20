@@ -1,0 +1,17 @@
+{
+  "named_agent_tool_run_the_agent_as_a_subagent": "Run the `{agent_id}` agent as a subagent. Provide one or more task strings; the agent loads its own persona and selected tool surface.",
+  "named_agent_tool_one_or_more_clear_detailed_task": "One or more clear, detailed task prompts to run in parallel.",
+  "task_params_one_or_more_clear_detailed_task": "One or more clear, detailed task prompts to run in parallel.",
+  "task_params_worker_agent_id_loads_that_agent": "Worker agent id; loads that agent's persona and selected tools.",
+  "task_params_optional_session_id_for_a_worker": "Optional session id for a worker context.",
+  "task_params_return_a_handle_at_once_and": "Return a handle at once and run the workers in the background.",
+  "task_params_run_starts_workers_poll_wait_and": "run starts workers; poll, wait and kill act on a background handle.",
+  "task_params_background_task_id_from_a_handle": "Background task id from a HANDLE line, for poll/wait/kill.",
+  "task_params_seconds_a_wait_blocks_without_it": "Seconds a wait blocks; without it, wait blocks until the task ends.",
+  "task_params_model_for_the_subagent_s_same": "Model for the subagent(s), same string as --model. Set it when the operator names one; omit otherwise.",
+  "tools_plan_name_used_in_the_filename": "Plan name used in the filename.",
+  "tools_version_suffix_used_in_the_filename": "Version suffix used in the filename.",
+  "tools_markdown_plan_body_to_persist": "Markdown plan body to persist.",
+  "tools_replace_an_existing_plan_with_the": "Replace an existing plan with the same name and version.",
+  "tools_local_skill_name_to_load": "Local skill name to load."
+}
