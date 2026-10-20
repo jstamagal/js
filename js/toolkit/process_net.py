@@ -78,8 +78,10 @@ def _resolve_shell(program: str) -> str | None:
     return shutil.which(program)
 
 
-def _shell_argv(shell_path: str, command: str) -> list[str]:
-    flags = ["-o", "pipefail"] if Path(shell_path).name in _PIPEFAIL_SHELLS else []
+def _shell_argv(shell_path: str, command: str, pipefail: bool | None = None) -> list[str]:
+    if pipefail is None:
+        pipefail = _settings.default_value("SHELL_PIPEFAIL")
+    flags = ["-o", "pipefail"] if pipefail and Path(shell_path).name in _PIPEFAIL_SHELLS else []
     return [shell_path, *flags, "-c", command]
 
 
@@ -393,7 +395,7 @@ def shell(
     # The managed binaries are downloaded for a command to call by name, so the
     # directory holding them leads PATH. Without this fd, bat and fzf are
     # installed and unreachable.
-    if "PATH" in allowed:
+    if context.shell_managed_path and "PATH" in allowed:
         managed_bin = str(TOOLS_DIR)
         inherited = safe_env.get("PATH", "")
         safe_env["PATH"] = f"{managed_bin}{os.pathsep}{inherited}" if inherited else managed_bin
@@ -407,7 +409,7 @@ def shell(
     context.invalidate_search_cache()
     job_id = _next_job_id()
     try:
-        argv = jail.wrap(_shell_argv(shell_path, command), context, cwd=workdir,
+        argv = jail.wrap(_shell_argv(shell_path, command, context.shell_pipefail), context, cwd=workdir,
                          env=safe_env, extra_ro=(Path(shell_path),))
         process = start_capped(
             argv,
@@ -423,6 +425,8 @@ def shell(
     _register_job(job)
     with _blocking_on(context, job):
         result = process.wait(wait_s)
+    if result is None and context.shell_kill_on_wait:
+        result = process.kill()
     if result is None:
         # The command outlived the window. It is NOT killed: a long build or
         # test run finishing on its own beats one killed at an arbitrary
@@ -448,6 +452,8 @@ def _shell_job_action(action: str, handle: str | None, timeout: int | None, desc
     wait_s = 0 if action == "poll" else int_or_default(timeout, int(context.shell_wait_seconds), minimum=1)
     with _blocking_on(context, job):
         result = job.process.wait(wait_s)
+    if result is None and action == "wait" and context.shell_kill_on_wait:
+        result = job.process.kill()
     if result is None:
         return _render_running(job, job.process.elapsed(), context)
     return _render_finished(job, result, description, job.allowed, job.safe_env, context, since_last=True)

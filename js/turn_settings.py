@@ -121,6 +121,9 @@ class TurnSetting:
 
 
 TURN_SETTINGS: tuple[TurnSetting, ...] = (
+    TurnSetting("shell_kill_on_wait", "SHELL_KILL_ON_WAIT", flag, on_context=True),
+    TurnSetting("shell_managed_path", "SHELL_MANAGED_PATH", flag, on_context=True),
+    TurnSetting("shell_pipefail", "SHELL_PIPEFAIL", flag, on_context=True),
     TurnSetting("search_one_file_system", "SEARCH_ONE_FILE_SYSTEM", flag, on_context=True),
     TurnSetting("search_deduplicate", "SEARCH_DEDUPLICATE", flag, on_context=True),
     TurnSetting("read_deduplicate", "READ_DEDUPLICATE", flag, on_context=True),

@@ -139,6 +139,9 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("SHELL_KILL_ON_WAIT", "bool", group="shell"),
+    SettingSpec("SHELL_MANAGED_PATH", "bool", group="shell"),
+    SettingSpec("SHELL_PIPEFAIL", "bool", group="shell"),
     SettingSpec("SEARCH_ONE_FILE_SYSTEM", "bool", group="tools"),
     SettingSpec("SEARCH_DEDUPLICATE", "bool", group="tools"),
     SettingSpec("READ_DEDUPLICATE", "bool", group="tools"),

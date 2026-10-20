@@ -118,3 +118,14 @@ def test_shell_own_variables_are_not_reported_as_unset(tmp_path, monkeypatch):
     result = process_net.shell('echo "$SHLVL $PWD"; exit 1', context=ToolContext(cwd=tmp_path, shell_program="/bin/sh"))
 
     assert "environment=filtered" not in result
+
+
+@needs_bash
+def test_registered_setting_can_disable_pipefail(tmp_path):
+    from types import SimpleNamespace
+    from js import turn_settings
+
+    context = ToolContext(cwd=tmp_path, shell_program="bash")
+    turn_settings.install(context, SimpleNamespace(**turn_settings.project({"SHELL_PIPEFAIL": False})))
+    result = process_net.shell("false | cat", context=context)
+    assert _exit_code(result) == 0
