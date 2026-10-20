@@ -1663,6 +1663,30 @@ ENDPOINT_SPEC_EMPTY_API_KEY_AFTER_IN = "empty api key after ':' in {spec!r}"
 
 ENDPOINT_SPEC_NO_MODEL_ID_BEFORE_IN = "no model id before ':' in {spec!r}"
 
+TOOL_RELEASE_ARIA_NO_VERIFIED_RELEASE_ASSET_FOR = "aria2: no verified release asset for {system} {machine}"
+
+TOOL_RELEASE_TERMUX_PKG_UNAVAILABLE_RESTORE_PKG_ON_PATH = "Termux: pkg unavailable; restore pkg on PATH and rerun `just install-tool-binaries`"
+
+TOOL_RELEASE_TERMUX_PKG_INSTALL_FAILED_NO_DESKTOP_FALLBACK = "Termux: pkg install failed: {exc}; no desktop fallback"
+
+TOOL_RELEASE_TERMUX_PKG_DID_NOT_PROVIDE_EXECUTABLE_NO = "Termux: pkg did not provide executable {candidate}; no desktop fallback"
+
+TOOL_RELEASE_TERMUX_PACKAGE_EXECUTABLE_RESOLVES_TO_MANAGED_TOOLS = "Termux: package executable {candidate} resolves to managed tools"
+
+TOOL_TERMUX_AST_GREP_MISSING = "ast-grep: no verified Termux release; install a native build separately"
+
+TOOL_TERMUX_OBSCURA_MISSING = "obscura/obscura-worker: no verified Termux release; install native builds separately"
+
+TOOL_VERIFIED_RELEASE_MISSING = "{name}: no verified release asset for {system} {machine}"
+
+TOOL_RELEASE_GLIBC_REQUIRED = "{name}: {value} requires glibc >= {minimum}; found {value2} {version}; no verified musl asset"
+
+TOOL_OBSCURA_RELEASE_MISSING = "obscura: no verified compatible release for {system} {machine} {libc} {version}; pinned x86_64 Linux asset requires glibc >= 2.35; ARM64 Linux/macOS archives await content verification"
+
+TOOL_ARIA2_HOMEBREW_FAILED = "aria2: Homebrew unavailable or `brew install aria2` failed; install Homebrew (https://brew.sh) and rerun `just install`"
+
+TOOLKIT_INCOMPLETE_PREFIX = "toolkit incomplete:\n"
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():

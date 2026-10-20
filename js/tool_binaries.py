@@ -142,7 +142,7 @@ def aria2_release(machine: str | None = None, system: str | None = None) -> Down
         ),
     }
     if system != "Linux" or machine not in hashes:
-        raise InstallError(f"aria2: no verified release asset for {system} {machine}")
+        raise InstallError(msgs.TOOL_RELEASE_ARIA_NO_VERIFIED_RELEASE_ASSET_FOR.format(system=system, machine=machine))
     asset = f"aria2-{machine}-linux-musl_static.zip"
     archive_hash, executable_hash = hashes[machine]
     return DownloadTool(
@@ -547,8 +547,8 @@ def release_plan() -> tuple[list[DownloadTool], list[str]]:
     """Select verified native assets; never substitute a compatibility layer."""
     if is_termux():
         return [], [
-            "ast-grep: no verified Termux release; install a native build separately",
-            "obscura/obscura-worker: no verified Termux release; install native builds separately",
+            msgs.TOOL_TERMUX_AST_GREP_MISSING.format(),
+            msgs.TOOL_TERMUX_OBSCURA_MISSING.format(),
         ]
     system = platform.system()
     machine = platform.machine().lower()
@@ -565,13 +565,12 @@ def release_plan() -> tuple[list[DownloadTool], list[str]]:
         row = next((r for r in rows if r["executable"] == name
                     and r["system"] == system and r["machine"] == machine), None)
         if row is None:
-            missing.append(f"{name}: no verified release asset for {system} {machine}")
+            missing.append(msgs.TOOL_VERIFIED_RELEASE_MISSING.format(name=name, system=system, machine=machine))
             continue
         minimum = row["minimum_glibc"]
         if minimum and (libc != "glibc" or not version or
                         tuple(map(int, version.split("."))) < tuple(map(int, minimum.split(".")))):
-            missing.append(f"{name}: {row['asset']} requires glibc >= {minimum}; "
-                           f"found {libc or 'unknown libc'} {version}; no verified musl asset")
+            missing.append(msgs.TOOL_RELEASE_GLIBC_REQUIRED.format(name=name, value=row['asset'], minimum=minimum, value2=libc or 'unknown libc', version=version))
             continue
         specs.append(DownloadTool(**{k: v for k, v in row.items()
                                      if k not in ("system", "machine", "minimum_glibc")}))
@@ -580,9 +579,7 @@ def release_plan() -> tuple[list[DownloadTool], list[str]]:
     ):
         specs.append(next(s for s in DOWNLOAD_TOOLS if s.name == "obscura"))
     else:
-        missing.append(f"obscura: no verified compatible release for {system} {machine} "
-                       f"{libc} {version}; pinned x86_64 Linux asset requires glibc >= 2.35; "
-                       "ARM64 Linux/macOS archives await content verification")
+        missing.append(msgs.TOOL_OBSCURA_RELEASE_MISSING.format(system=system, machine=machine, libc=libc, version=version))
     return specs, missing
 
 
@@ -619,19 +616,19 @@ def _provision_termux_tools(tools_dir: Path) -> Path:
     """Link package-owned Android executables, resolving outside managed PATH."""
     pkg = shutil.which("pkg")
     if pkg is None:
-        raise InstallError("Termux: pkg unavailable; restore pkg on PATH and rerun `just install-tool-binaries`")
+        raise InstallError(msgs.TOOL_RELEASE_TERMUX_PKG_UNAVAILABLE_RESTORE_PKG_ON_PATH.format())
     packages = {"aria2": "aria2c", "bat": "bat", "fd": "fd", "fzf": "fzf", "ripgrep": "rg"}
     try:
         subprocess.run([pkg, "install", "-y", *packages], check=True, timeout=600)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
-        raise InstallError(f"Termux: pkg install failed: {exc}; no desktop fallback") from exc
+        raise InstallError(msgs.TOOL_RELEASE_TERMUX_PKG_INSTALL_FAILED_NO_DESKTOP_FALLBACK.format(exc=exc)) from exc
     package_bin = Path(pkg).resolve().parent
     candidates = {name: package_bin / name for name in packages.values()}
     for name, candidate in candidates.items():
         if not candidate.is_file() or not os.access(candidate, os.X_OK):
-            raise InstallError(f"Termux: pkg did not provide executable {candidate}; no desktop fallback")
+            raise InstallError(msgs.TOOL_RELEASE_TERMUX_PKG_DID_NOT_PROVIDE_EXECUTABLE_NO.format(candidate=candidate))
         if candidate.resolve().is_relative_to(tools_dir.resolve()):
-            raise InstallError(f"Termux: package executable {candidate} resolves to managed tools")
+            raise InstallError(msgs.TOOL_RELEASE_TERMUX_PACKAGE_EXECUTABLE_RESOLVES_TO_MANAGED_TOOLS.format(candidate=candidate))
     tools_dir.mkdir(parents=True, exist_ok=True)
     for name, candidate in candidates.items():
         target = tools_dir / name
@@ -695,8 +692,7 @@ def install_all(*, tools_dir: Path = TOOLS_DIR) -> None:
             missing = [m for m in missing if not m.startswith("aria2:")]
         else:
             missing = [m for m in missing if not m.startswith("aria2:")] + [
-                "aria2: Homebrew unavailable or `brew install aria2` failed; "
-                "install Homebrew (https://brew.sh) and rerun `just install`"
+                msgs.TOOL_ARIA2_HOMEBREW_FAILED.format()
             ]
 
     def download(url: str, destination: Path) -> None:
@@ -727,7 +723,7 @@ def install_all(*, tools_dir: Path = TOOLS_DIR) -> None:
         msgs.say(msgs.TOOL_INSTALLED, state=state, path=target, asset_sha=spec.asset_sha256,
                  sha=spec.executable_sha256)
     if missing:
-        raise InstallError("toolkit incomplete:\n" + "\n".join(missing))
+        raise InstallError(msgs.TOOLKIT_INCOMPLETE_PREFIX.format() + "\n".join(missing))
 
 def main() -> int:
     try:
