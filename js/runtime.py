@@ -1900,7 +1900,14 @@ def _trace_banner(request: ModelRequest, context: ToolContext, registry: ToolReg
     except Exception:  # noqa: BLE001 — registry internals
         ntools = "?"
     bits.append(f"tools={ntools}")
-    print(display.chrome(msgs.RUN_LINE.line(colour=False, fields='  '.join(bits))), flush=True)
+    _print_run_line(bits)
+
+
+def _print_run_line(fields: list[str]) -> None:
+    """The run line through its format, wrapped between two fields."""
+    rendered = msgs.line_for(msgs.RUN_LINE, fields="".join(display.FIELD_BREAK + field for field in fields))
+    for row in display.field_lines(rendered, display.block_width()):
+        print(row, flush=True)
 
 
 def _note_user_skill(messages: list[dict], registry: ToolRegistry) -> None:

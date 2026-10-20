@@ -86,9 +86,31 @@ def clean(text: str) -> str:
 # grep of a saved transcript finds every exchange the screen showed.
 TOOL_MARKER = ">"
 
-def chrome(text: str) -> str:
-    """Harness-subroutine output: bold COLOR_TEXT on COLOR_PANEL."""
-    return f"{fset.BOLD}{fset.fg('COLOR_TEXT')}{fset.bg('COLOR_PANEL')}{text}{fset.RESET}"
+# What `field_lines` breaks a rendered line at: put before each field in
+# place of its separator before the line is rendered.
+FIELD_BREAK = "\x00"
+
+
+def field_lines(rendered: str, width: int, sep: str = "  ") -> list[str]:
+    """``rendered``, a line whose fields each follow a `FIELD_BREAK`, as rows
+    of at most ``width`` columns, broken only between two fields; the rows
+    after the first start under the first field. A field wider than the row
+    has a row of its own. A line with no field is one row."""
+    head, *fields = rendered.split(FIELD_BREAK)
+    if not fields:
+        return [head]
+    lead = cell_len(fset.plain(head))
+    rows = [head + fields[0]]
+    used = lead + cell_len(fset.plain(fields[0]))
+    for field in fields[1:]:
+        size = cell_len(fset.plain(field))
+        if used + len(sep) + size <= width:
+            rows[-1] += sep + field
+            used += len(sep) + size
+        else:
+            rows.append(" " * lead + field)
+            used = lead + size
+    return rows
 
 
 # The two voices of a conversation. The user's line sits behind the input
