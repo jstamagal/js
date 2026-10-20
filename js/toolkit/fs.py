@@ -21,7 +21,7 @@ from collections.abc import Callable, Iterable
 
 from .. import jail
 from ..tool_binaries import resolve_binary
-from .core import Output, Tool, ToolContext
+from .core import Output, Tool, ToolContext, view as _view
 from .sanitize import int_or_default
 from .wiki.helpers import run
 from .descriptions import load_description
@@ -396,6 +396,7 @@ def _read_byte_range(target: Path, context: ToolContext, start_byte: int, end_by
     text = buf[start - base:end - base].decode("utf-8", errors="replace")
     if whole is not None:
         _remember_byte_read(target, context, whole, start, end)
+    _view(path=str(target), start_byte=start, end_byte=end, total_bytes=size, text=text)
     if end < size:
         footer = f"[bytes {start}-{end} of {size}; continue with {_read_byte_call(target, end)}]"
     else:
@@ -548,6 +549,7 @@ def fs_read(
     if total == 0:
         context.remember_read(target, content_hash, total_lines=0, whole_file=True)
         context.remember_content(target, content_hash, data)
+        _view(path=str(target), start_line=0, end_line=0, total_lines=0, lines=[])
         return f"{target} is empty (hash {content_hash})"
 
     # Resolve the window: a reversed range is
@@ -578,6 +580,7 @@ def fs_read(
         whole_file=start == 1 and end == total,
     )
     context.remember_content(target, content_hash, data)
+    _view(path=str(target), start_line=start, end_line=end, total_lines=total, lines=selected)
     suffix = ""
     if end < total:
         suffix = f"\n[{total} total lines; continue with {_read_call(target, end + 1)}]"
@@ -647,6 +650,8 @@ def write(file_path: str | None = None, content: str = "", overwrite: bool = Fal
         data = _write_bytes_preserving_existing_newlines(target, content)
     except OSError as exc:
         return f"ERROR: {exc}"
+    _view(path=str(target), before=current.decode("utf-8", errors="replace") if replacing else None,
+         after=data.decode("utf-8", errors="replace"), bytes=len(data))
     content_hash = _hash_bytes(data)
     # The model wrote every byte of the new content, so the file counts as
     # fully read: a patch can follow without a read in between.
@@ -672,10 +677,12 @@ def remove(path: str, permanent: bool | None = False, context: ToolContext | Non
             if error:
                 context.discard_snapshot(target)
                 return error
+            _view(path=str(target), trashed=True)
             return f"trashed {target}"
         _delete_target_no_follow(target)
     except OSError as exc:
         return f"ERROR: {exc}"
+    _view(path=str(target), trashed=False)
     return f"removed {target}"
 
 
@@ -1230,6 +1237,7 @@ def patch(
         whole_file=was_whole,
     )
     context.remember_content(target, content_hash, data)
+    _view(path=str(target), before=source, after=updated, edits=len(pending), replacements=replacements)
     diff = _unified_diff(source, updated, str(target), str(target))
     if len(diff) > 4000:
         diff = diff[:4000] + "\n... [diff truncated]"

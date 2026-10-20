@@ -48,7 +48,7 @@ from .config import Config, vision_enabled_for_model
 from .sampling import Sampling
 from .reasoning_display import ReasoningDisplay
 from . import reasoning as reasoning_rules
-from .toolkit.core import (ToolContext, ToolOutput, ToolResult, as_output, call_is_read_only, call_scope,
+from .toolkit.core import (ToolContext, ToolOutput, ToolResult, as_output, call_is_read_only, call_scope, call_view,
                            call_tool, call_tool_async, registry_scope)
 from .toolkit.registry import ToolRegistry
 from .turn_budget import TurnBudget, TurnConvo, last_user_message_index as _last_user_message_index
@@ -561,16 +561,17 @@ def _trace_call(telemetry: Telemetry, tool_context: ToolContext | None, name: st
 
 def _trace_result(telemetry: Telemetry, tool_context: ToolContext | None, name: str, result: Any,
                   *, args: dict | None = None, malformed: bool = False,
-                  exchange: output.Key | None = None,
+                  exchange: output.Key | None = None, view: dict | None = None,
                   traced: bool = True) -> None:
     """Show a finished call. `exchange` is what `_trace_call` returned for it;
-    without one the call is shown whole now."""
+    without one the call is shown whole now. `view` is what the tool handed
+    the screen beside its result (`toolkit.core.view`)."""
     with output.LOCK:
         if exchange is None:
             exchange = _trace_call(telemetry, tool_context, name, args, malformed=malformed,
                                    traced=traced, deferred=True)
         _output(telemetry, "tool_result", call=exchange, name=name, args=args, result=result,
-                malformed=malformed, context=tool_context, traced=traced)
+                malformed=malformed, context=tool_context, view=view, traced=traced)
 
 
 def _repair_jsonish(raw: str) -> dict:
@@ -1128,7 +1129,7 @@ def _cell_call_observer(telemetry: Telemetry, trace: bool,
         else:
             telemetry.event("tool_exception", tool=name, via="kernel", error=failure,
                             latency_ms=latency_ms)
-        _trace_result(telemetry, context, name, result, args=args, traced=trace)
+        _trace_result(telemetry, context, name, result, args=args, traced=trace, view=call_view())
 
     return observe
 
@@ -1172,11 +1173,13 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
         return args, capped
 
     started = time.time()
+    view = None
     try:
         with call_scope(call_id), registry_scope(
                 active_registry, _cell_call_observer(telemetry, trace, context)):
             with activity.tool_call(tool.name):
                 result = call_tool(tool, args, context)
+            view = call_view()
         telemetry.event("tool_ok", tool=tool.name, latency_ms=int((time.time() - started) * 1000))
     except Exception as e:  # noqa: BLE001
         telemetry.event("tool_exception", tool=tool.name,
@@ -1190,7 +1193,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
     capped = _cap_result(result, cap_bytes, context=context)
     _reconcile_read_delivery(tool.name, args, result, capped, context, call_id)
     _trace_result(telemetry, context, tool.name, _operator_sees(output, result), args=args, exchange=opened,
-                  traced=trace)
+                  view=view, traced=trace)
     return args, capped
 
 
@@ -1446,11 +1449,13 @@ async def _dispatch_async_tool(
         return pc, args, result
     opened = _trace_call(telemetry, tool_context, tool.name, args, traced=trace)
     started = time.time()
+    view = None
     try:
         with call_scope(pc.id), registry_scope(
                 registry, _cell_call_observer(telemetry, trace, tool_context)):
             with activity.tool_call(tool.name):
                 result = await call_tool_async(tool, args, tool_context)
+            view = call_view()
         telemetry.event("tool_ok", tool=tool.name, latency_ms=int((time.time() - started) * 1000))
     except asyncio.CancelledError:
         raise
@@ -1464,7 +1469,7 @@ async def _dispatch_async_tool(
     if isinstance(result, str):
         result = error_tracker.record(tool.name, result)
     _trace_result(telemetry, tool_context, tool.name, _operator_sees(output, raw_result), args=args,
-                  exchange=opened, traced=trace)
+                  exchange=opened, view=view, traced=trace)
     return pc, args, result
 
 

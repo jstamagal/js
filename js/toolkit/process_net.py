@@ -36,7 +36,7 @@ from ..tool_binaries import (
     resolve_binary,
     warn_urllib_fallback,
 )
-from .core import Tool, ToolContext, ToolOutput
+from .core import Tool, ToolContext, ToolOutput, view as _view
 from .descriptions import load_description
 from .fs import _detect_visual_mime, _image_marker, _read_regular_bytes
 from .sanitize import int_or_default, text_or_default
@@ -324,6 +324,8 @@ def _render_finished(job: _ShellJob, result: CappedProcessResult, description: s
             "names not allowed by SHELL_ENV_KEEP or the env parameter are unset"
         )
     (stdout, stderr), whole = _job_output(job, context, "\n".join(parts), since_last=since_last)
+    _view(command=job.command, handle=job.id, running=False, exit_code=result.returncode,
+         stdout=(whole or (stdout, stderr))[0], stderr=(whole or (stdout, stderr))[1])
 
     def text(stdout: str, stderr: str) -> str:
         rows = list(parts)
@@ -346,6 +348,8 @@ def _render_running(job: _ShellJob, waited: float, context: Any) -> str | ToolOu
         f"or action=\"kill\", handle=\"{job.id}\" to stop it."
     )
     (stdout, stderr), whole = _job_output(job, context, head, since_last=True)
+    _view(command=job.command, handle=job.id, running=True, exit_code=None,
+         stdout=(whole or (stdout, stderr))[0], stderr=(whole or (stdout, stderr))[1])
 
     def text(stdout: str, stderr: str) -> str:
         parts = [head]

@@ -305,7 +305,7 @@ class ConsoleSink:
             self._open[call] = opened
 
     def _on_tool_result(self, *, call: Any, name: str, args: dict | None, result: Any, malformed: bool,
-                        context: ToolContext | None, traced: bool = True, **_more: Any) -> None:
+                        context: ToolContext | None, view: dict | None, traced: bool = True) -> None:
         if not traced:
             return
         opened = self._open.pop(call, None) if call is not None else None

@@ -278,35 +278,36 @@ class ToolBridge:
             return {"error": banned}
         observer = self.observer
         call_id = f"kernel-tools-{next(self._calls)}"
-        hooks = getattr(context, "tool_call_hooks", None)
-        refusal = _hook_refusal(hooks, call_id, tool.name, arguments)
-        if refusal is not None:
+        with call_scope(call_id, for_model=False):
+            hooks = getattr(context, "tool_call_hooks", None)
+            refusal = _hook_refusal(hooks, call_id, tool.name, arguments)
+            if refusal is not None:
+                if observer is not None:
+                    observer(tool.name, arguments, refusal, 0.0, None, refused=True)
+                return {"error": refusal}
+            started = time.monotonic()
+            try:
+                with registry_scope(registry, observer):
+                    result = call_tool(tool, arguments, context)
+            except Exception as exc:  # noqa: BLE001 - a failing handler is the cell's exception
+                failure = f"{type(exc).__name__}: {exc}"
+                result = _jail.shown(f"ERROR running {tool.name}: {failure}")
+                if observer is not None:
+                    observer(tool.name, arguments, result, time.monotonic() - started, failure)
+                _emit(hooks, "tool_result", id=call_id, name=tool.name, result=result)
+                return {"error": result}
+            output = as_output(result)
+            result = output.shown()
             if observer is not None:
-                observer(tool.name, arguments, refusal, 0.0, None, refused=True)
-            return {"error": refusal}
-        started = time.monotonic()
-        try:
-            with call_scope(call_id, for_model=False), registry_scope(registry, observer):
-                result = call_tool(tool, arguments, context)
-        except Exception as exc:  # noqa: BLE001 - a failing handler is the cell's exception
-            failure = f"{type(exc).__name__}: {exc}"
-            result = _jail.shown(f"ERROR running {tool.name}: {failure}")
-            if observer is not None:
-                observer(tool.name, arguments, result, time.monotonic() - started, failure)
+                # The trace shows the operator everything the call produced.
+                observer(tool.name, arguments, output.shown(), time.monotonic() - started, None)
             _emit(hooks, "tool_result", id=call_id, name=tool.name, result=result)
-            return {"error": result}
-        output = as_output(result)
-        result = output.shown()
-        if observer is not None:
-            # The trace shows the operator everything the call produced.
-            observer(tool.name, arguments, output.shown(), time.monotonic() - started, None)
-        _emit(hooks, "tool_result", id=call_id, name=tool.name, result=result)
-        if isinstance(result, ToolResult) and result.is_error:
-            return {"error": result.dehydrated()}
-        value = _plain(result)
-        if isinstance(value, str) and value.startswith("ERROR") and not isinstance(result, Output):
-            return {"error": value}
-        return {"value": value}
+            if isinstance(result, ToolResult) and result.is_error:
+                return {"error": result.dehydrated()}
+            value = _plain(result)
+            if isinstance(value, str) and value.startswith("ERROR") and not isinstance(result, Output):
+                return {"error": value}
+            return {"value": value}
 
 
 def _emit(hooks: Any, event: str, **payload: Any) -> Any:

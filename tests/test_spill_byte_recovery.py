@@ -36,6 +36,20 @@ def _dispatch_read(context: ToolContext, args: dict) -> str:
     return delivered
 
 
+def test_a_byte_range_has_a_structured_view_of_the_actual_utf8_window(context):
+    from js.toolkit.core import call_scope, call_view
+
+    path = context.cwd / "utf8.txt"
+    path.write_text("aé\nbeta\n", encoding="utf-8")
+    with call_scope("byte-read"):
+        result = fs.fs_read(file_path=str(path), start_byte=2, end_byte=6, context=context)
+        shown = call_view()
+
+    assert result.startswith("é\nbe\n")
+    assert shown == {"path": str(path), "start_byte": 1, "end_byte": 6,
+                     "total_bytes": 9, "text": "é\nbe"}
+
+
 def _spill(context: ToolContext, payload: str) -> tuple[str, str, list[dict]]:
     spilled = runtime._cap_result(payload, 0, context.max_tool_result_inline_bytes)
     pointer = _POINTER.search(spilled)

@@ -196,7 +196,10 @@ reasoning, notices) is an `OutputEvent` with structured fields, sent to
 `Telemetry.sink`; `js/output.py` lists the events. Without a sink of its own a
 telemetry uses js's console (`js/console.py`), which draws them as js always
 has. A program that sets `Telemetry(None, sink=...)` gets the events and js
-prints nothing.
+prints nothing. Beside the text the model gets, read, patch, write, remove and
+shell hand the screen their result as fields with `toolkit.core.view` (path,
+text before and after, line numbers, exit code, stdout and stderr); the
+tool_result event carries them as `view`.
 
 1. Builds `ai` message and tool parts via `js/model_client`.
 2. Calls `model_client.stream_model(...)`.

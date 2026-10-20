@@ -211,3 +211,45 @@ def test_a_turn_with_its_own_sink_gets_every_visible_thing_as_fields_and_prints_
     assert [event["text"] for event in sink.named("answer")] == ["done"]
     assert sink.named("call_stats")[-1]["finish"] == "stop"
 
+
+def test_file_and_shell_tools_hand_the_screen_their_result_as_fields(monkeypatch, tmp_path):
+    import json
+
+    from tool_loading import after_loading
+
+    from js import runtime
+    from js.model_client import ModelToolCall
+
+    (tmp_path / "notes.txt").write_text("alpha\nbeta\n", encoding="utf-8")
+    calls: list[dict] = []
+
+    def respond(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return _reply(tool_calls=[
+                ModelToolCall(id="r1", name="read", arguments='{"file_path":"notes.txt"}'),
+                ModelToolCall(id="s1", name="shell", arguments='{"command":"echo out; echo err >&2; exit 3"}'),
+            ])
+        if len(calls) == 2:
+            return _reply(tool_calls=[
+                ModelToolCall(id="p1", name="patch", arguments=json.dumps(
+                    {"file_path": "notes.txt", "old_string": "beta", "new_string": "gamma"})),
+                ModelToolCall(id="w1", name="write", arguments=json.dumps(
+                    {"file_path": "new.txt", "content": "x\n"})),
+            ])
+        return _reply("done")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async",
+                        after_loading(respond, "read", "shell", "patch", "write"))
+    sink = _Sink()
+    _run(_offline_config(tmp_path, trace=True, settings={}), tmp_path, sink, "work")
+
+    views = {event["name"]: event["view"] for event in sink.named("tool_result") if event["view"]}
+    notes, new = str(tmp_path / "notes.txt"), str(tmp_path / "new.txt")
+    assert views["read"] == {"path": notes, "start_line": 1, "end_line": 2, "total_lines": 2,
+                             "lines": ["alpha", "beta"]}
+    assert (views["shell"]["exit_code"], views["shell"]["stdout"], views["shell"]["stderr"]) == (
+        3, "out\n", "err\n")
+    assert (views["patch"]["path"], views["patch"]["before"], views["patch"]["after"]) == (
+        notes, "alpha\nbeta\n", "alpha\ngamma\n")
+    assert (views["write"]["path"], views["write"]["before"], views["write"]["after"]) == (new, None, "x\n")

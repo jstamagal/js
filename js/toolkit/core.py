@@ -50,6 +50,8 @@ _CALL_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("js_tool_c
 # False while the running call's result goes to code (a kernel cell) rather
 # than to the model's history.
 _FOR_MODEL: contextvars.ContextVar[bool] = contextvars.ContextVar("js_tool_call_for_model", default=True)
+# What the running call's tool hands the screen beside its result (`view`).
+_VIEW: contextvars.ContextVar[dict | None] = contextvars.ContextVar("js_tool_call_view", default=None)
 _anonymous_calls = itertools.count()
 
 
@@ -59,11 +61,28 @@ def call_scope(call_id: str, *, for_model: bool = True):
     result goes to code rather than to the model's history."""
     token = _CALL_ID.set(call_id)
     model_token = _FOR_MODEL.set(for_model)
+    view_token = _VIEW.set({})
     try:
         yield
     finally:
+        _VIEW.reset(view_token)
         _FOR_MODEL.reset(model_token)
         _CALL_ID.reset(token)
+
+
+def view(**fields: Any) -> None:
+    """Hand the screen structured fields that describe the running call's
+    result (a path, the text before and after, line numbers, an exit code),
+    beside the text the model gets. Outside a `call_scope` it does nothing."""
+    holder = _VIEW.get()
+    if holder is not None:
+        holder.update(fields)
+
+
+def call_view() -> dict | None:
+    """What the running call's tool handed the screen with `view`, or None."""
+    holder = _VIEW.get()
+    return dict(holder) if holder else None
 
 
 # The registry the running tool call was dispatched through. The kernel's tool

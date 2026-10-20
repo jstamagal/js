@@ -8,7 +8,7 @@ gives js's own, the console (`js/console.py`). See docs/nonblocking-windows.md.
 The loop's events, and their fields:
 
     tool_call      call, name, args, malformed, context, traced, deferred
-    tool_result    call, name, args, result, malformed, context, traced
+    tool_result    call, name, args, result, malformed, context, view, traced
     tools_settle   (none): the run of quiet tool calls ends
     run_line       fields: the run line's "key=value" strings
     call_stats     label, elapsed_s, finish, tool_calls, tokens,
@@ -27,6 +27,15 @@ one turn's streamed reply together; ``context`` is the call's ToolContext.
 ``traced`` is the trace setting for an exchange; ``deferred`` asks the console
 to draw the exchange whole when it finishes. Every call still reaches the sink.
 
+``view`` is what the tool handed the screen beside the text the model got
+(`toolkit.core.view`), or None:
+
+    read           path, start_line, end_line, total_lines, lines
+                   or path, start_byte, end_byte, total_bytes, text for a byte range
+    patch          path, before, after, edits, replacements
+    write          path, before (None for a new file), after, bytes
+    remove         path, trashed
+    shell          command, handle, running, exit_code, stdout, stderr
 """
 
 from __future__ import annotations
