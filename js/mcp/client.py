@@ -308,13 +308,25 @@ class MCPClient:
         items: list[dict[str, Any]] = []
         cursor: str | None = None
         seen: set[str] = set()
+        page_peer: JSONRPCPeer | None = None
+
+        def prepare_page() -> None:
+            nonlocal page_peer
+            current = self._require_peer()
+            if current is not page_peer:
+                items.clear()
+                seen.clear()
+                params.pop("cursor", None)
+                page_peer = current
+
         while True:
             params: dict[str, Any] = {}
             if cursor is not None:
                 params["cursor"] = cursor
             self._add_progress_token(params, progress_token)
             raw = await self._safe_request(
-                method, params or None, timeout, lambda: self._require_capability(capability)
+                method, params, timeout, lambda: self._require_capability(capability),
+                before_request=prepare_page,
             )
             try:
                 if not isinstance(raw, dict):
@@ -356,6 +368,8 @@ class MCPClient:
         params: Mapping[str, Any] | None,
         timeout: float | None,
         require_capability: Callable[[], None],
+        *,
+        before_request: Callable[[], None] | None = None,
     ) -> Any:
         self._require_previously_initialized()
         for attempt in range(self._reconnect_attempts + 1):
@@ -363,6 +377,8 @@ class MCPClient:
                 if not self.initialized:
                     await self.initialize(timeout=timeout)
                 require_capability()
+                if before_request is not None:
+                    before_request()
                 return await self._require_peer().request(method, params, timeout=timeout)
             except asyncio.CancelledError:
                 raise

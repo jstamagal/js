@@ -328,6 +328,33 @@ def test_safe_operation_retries_when_transport_dies_during_request():
     asyncio.run(drive())
 
 
+def test_pagination_restarts_when_a_page_requires_a_new_connection():
+    class SessionCursorServer(SpecServer):
+        def handle(self, method, params):
+            if method != "tools/list":
+                return super().handle(method, params)
+            if len(self.connections) == 1:
+                self.die_on = (0, "tools/list")
+                return {"tools": [{"name": "old"}], "nextCursor": "old-session"}
+            cursor = params.get("cursor")
+            if cursor == "old-session":
+                raise ValueError("cursor belongs to the previous session")
+            if cursor == "new-session":
+                return {"tools": [{"name": "new-b"}]}
+            return {"tools": [{"name": "new-a"}], "nextCursor": "new-session"}
+
+    async def drive():
+        server = SessionCursorServer()
+        client = await initialized_client(server)
+        try:
+            tools = await client.list_tools()
+            assert [tool["name"] for tool in tools] == ["new-a", "new-b"]
+        finally:
+            await client.close()
+
+    asyncio.run(drive())
+
+
 def test_interrupted_tool_call_is_never_replayed_and_next_operation_recovers():
     async def drive():
         server = SpecServer()
