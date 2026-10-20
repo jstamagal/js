@@ -31,6 +31,24 @@ GL_ARGS = (
 
 
 class _QuietHandler(http.server.SimpleHTTPRequestHandler):
+    def send_head(self) -> Any:
+        try:
+            root = Path(self.directory).resolve()
+            target = Path(self.translate_path(self.path))
+            if target.is_dir():
+                for name in ("index.html", "index.htm"):
+                    index = target / name
+                    if index.is_file():
+                        target = index
+                        break
+            if not target.resolve().is_relative_to(root):
+                self.send_error(403)
+                return None
+        except (OSError, RuntimeError):
+            self.send_error(404)
+            return None
+        return super().send_head()
+
     def do_GET(self) -> None:
         if self.path.partition("?")[0] == "/favicon.ico":
             self.send_response(204)

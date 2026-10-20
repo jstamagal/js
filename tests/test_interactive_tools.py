@@ -5,6 +5,7 @@ import importlib.util
 import json
 import time
 import urllib.request
+from urllib.error import HTTPError
 from pathlib import Path
 
 import pytest
@@ -521,6 +522,29 @@ def test_local_probe_server_returns_empty_favicon(tmp_path):
         with urllib.request.urlopen(favicon_url) as response:
             assert response.status == 204
             assert response.read() == b""
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_local_probe_server_refuses_symlinks_outside_its_root(tmp_path):
+    public = tmp_path / "public"
+    public.mkdir()
+    (public / "index.html").write_text("<p>public</p>")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside the served directory")
+    (public / "linked.txt").symlink_to(outside)
+    (public / "linked-dir").symlink_to(tmp_path, target_is_directory=True)
+    (public / "index-dir").mkdir()
+    (public / "index-dir" / "index.html").symlink_to(outside)
+    server, url, _ = browser_module._start_local_server(public)
+    try:
+        with urllib.request.urlopen(url, timeout=3) as response:
+            assert response.status == 200
+        for route in ("linked.txt", "linked-dir/outside.txt", "index-dir/"):
+            with pytest.raises(HTTPError) as refused:
+                urllib.request.urlopen(url + route, timeout=3)
+            assert refused.value.code in (403, 404)
     finally:
         server.shutdown()
         server.server_close()
