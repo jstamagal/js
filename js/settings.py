@@ -191,6 +191,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("SHELL_OUTPUT_MAX", "int", group="limits"),
     SettingSpec("TOOL_RESULT_INLINE_MAX", "int", group="limits"),
     SettingSpec("TOOL_RESULT_MAX", "int", group="limits"),
+    SettingSpec("TOOL_MEDIA_MAX", "int", group="limits"),
     SettingSpec("FETCH_TIMEOUT", "int", group="limits"),
     SettingSpec("SHELL_ENV_KEEP", "json", group="limits"),
     SettingSpec("BROWSE_TIMEOUT", "int", group="limits"),

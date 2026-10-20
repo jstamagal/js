@@ -376,8 +376,13 @@
 # 0: off.
 #set TOOL_RESULT_INLINE_MAX 51200
 
-# Hard cap on any single tool result, in bytes. Past it, the result is cut.
+# Hard cap on the text of any single tool result, in bytes. Past it, the
+# result is cut. Images and audio don't count; TOOL_MEDIA_MAX caps them.
 #set TOOL_RESULT_MAX 262144
+
+# Cap on each image or audio a tool returns, in bytes of base64 data. A
+# bigger one is dropped with a line that says why. 0: no cap.
+#set TOOL_MEDIA_MAX 5242880
 
 # Cap on all results from one batch of parallel calls added together, in
 # bytes. The biggest results are cut first. 0: no cap.

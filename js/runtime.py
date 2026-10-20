@@ -6,10 +6,12 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Awaitable, Callable
 import asyncio
+import base64
 import contextlib
 import functools
 import inspect
 import json
+import math
 import hashlib
 import itertools
 import os
@@ -830,36 +832,247 @@ class ToolErrorTracker:
 # Tool dispatch
 # --------------------------------------------------------------------------
 
-def _tool_result_content_size(result: ToolResult) -> int:
-    """Measure model-facing payload content without charging block metadata."""
-    size = 0
+# Blocks a model sees as media, not text: TOOL_MEDIA_MAX caps them, and the
+# text budgets (TOOL_RESULT_MAX, PARALLEL_RESULTS_MAX) do not count them. An
+# embedded resource with a blob is media too: it is attached the same way,
+# except a text/* blob, which the SDK sends as text (`_text_blobs_as_text`).
+_MEDIA_BLOCKS = frozenset({"image", "audio"})
+
+
+def _text_blobs_as_text(result: ToolResult) -> ToolResult:
+    """``result`` with each embedded resource whose blob is text/* given as
+    its decoded text, so both text budgets count and clip it; unchanged (same
+    object) when there is none. A blob that is not valid base64 stays."""
+    blocks: list[dict] = []
+    changed = False
     for block in result.blocks:
-        kind = str(block.get("type", "unknown"))
-        if kind == "text":
-            size += byte_size(str(block.get("text", "")))
-        elif kind == "structured":
-            size += byte_size(json.dumps(block.get("value"), ensure_ascii=False, separators=(",", ":"), default=str))
-        elif kind in {"image", "audio"}:
-            size += byte_size(str(block.get("data", "")))
-        elif kind == "resource":
-            resource = block.get("resource")
-            if isinstance(resource, dict):
-                payload = resource.get("text", resource.get("blob", ""))
-                size += byte_size(str(payload))
-        elif kind == "resource_link":
-            size += byte_size(str(block.get("name", ""))) + byte_size(str(block.get("uri", "")))
+        resource = block.get("resource") if block.get("type") == "resource" else None
+        if (isinstance(resource, dict) and resource.get("blob") is not None
+                and not isinstance(resource.get("text"), str)
+                and str(resource.get("mimeType", "")).lower().startswith("text/")):
+            try:
+                data = base64.b64decode(str(resource["blob"]), validate=True)
+            except (ValueError, TypeError):
+                blocks.append(block)
+                continue
+            text = data.decode("utf-8", "replace")
+            blocks.append({**block, "resource": {k: v for k, v in resource.items() if k != "blob"} | {"text": text}})
+            changed = True
         else:
-            size += byte_size(json.dumps(block, ensure_ascii=False, separators=(",", ":"), default=str))
-    return size
+            blocks.append(block)
+    return replace(result, blocks=blocks) if changed else result
+
+
+def _media_payload(block: dict) -> str | None:
+    """The base64 data of a media block, or None for a block that is not media."""
+    kind = block.get("type")
+    if kind in _MEDIA_BLOCKS:
+        return str(block.get("data", ""))
+    resource = block.get("resource") if kind == "resource" else None
+    if isinstance(resource, dict) and not isinstance(resource.get("text"), str) and resource.get("blob") is not None:
+        return str(resource["blob"])
+    return None
+
+
+def _final_texts(result: ToolResult) -> tuple[str, str]:
+    """The text ``result`` becomes: what the provider gets (media rendered
+    as their metadata lines) and what the session keeps."""
+    return model_client.provider_text(result), result.dehydrated()
+
+
+def _tool_result_content_size(result: ToolResult) -> int:
+    """The text bytes ``result`` costs, measured on its final forms: the
+    provider text and the persisted text, whichever is longer. A media
+    block's data is not text; its metadata line is."""
+    return max(byte_size(text) for text in _final_texts(result))
 
 
 def _result_size(result: Any) -> int:
-    return _tool_result_content_size(result) if isinstance(result, ToolResult) else byte_size(result)
+    if isinstance(result, ToolResult):
+        return _tool_result_content_size(result)
+    if _image_marker_stub(result) is not None:
+        return byte_size(model_client.provider_text(result))
+    return byte_size(result)
+
+
+# The mark on a notice `_cap_media` writes. An object, not a value: a tool or
+# MCP server can put any JSON in a block, but never this.
+_MEDIA_NOTICE = object()
+# The longest one notice gets, so the notices fit a text budget.
+_MEDIA_NOTICE_MAX = 240
+
+
+def _clip_name(text: str, limit: int = 48) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _is_media_notice(block: dict) -> bool:
+    return block.get("media_notice") is _MEDIA_NOTICE
+
+
+def _without_notice_marks(result: ToolResult) -> ToolResult:
+    """``result`` with any ``media_notice`` key a tool or server sent dropped."""
+    if not any("media_notice" in block for block in result.blocks):
+        return result
+    return replace(result, blocks=[{k: v for k, v in block.items() if k != "media_notice"}
+                                   for block in result.blocks])
+
+
+def _media_notice(kind: str, mime: str, reason: str) -> str:
+    """js's one notice for a media block it did not send."""
+    notice = f"[{_clip_name(str(kind))} {_clip_name(str(mime))} dropped: {reason}]"
+    return cap_text(notice, _MEDIA_NOTICE_MAX, "]")
+
+
+def _media_names(block: dict) -> tuple[str, str]:
+    resource = block.get("resource") if block.get("type") == "resource" else None
+    if isinstance(resource, dict):
+        return (f"embedded resource {resource.get('uri', '')}",
+                str(resource.get("mimeType", "application/octet-stream")))
+    return str(block.get("type")), str(block.get("mimeType", "application/octet-stream"))
+
+
+def _with_short_names(block: dict) -> dict:
+    """A media block with the names a server supplies cut short, so its
+    metadata line stays small."""
+    out = dict(block)
+    if "mimeType" in out:
+        out["mimeType"] = _clip_name(str(out["mimeType"]))
+    resource = out.get("resource")
+    if isinstance(resource, dict):
+        out["resource"] = {**resource, **{key: _clip_name(str(resource[key]))
+                                          for key in ("uri", "mimeType", "name") if key in resource}}
+    return out
+
+
+def _overflow(blocks: list[dict], budget: int, is_error: bool) -> int:
+    """How many bytes ``blocks`` go over ``budget``; 0 when they fit."""
+    return max(0, _tool_result_content_size(ToolResult(blocks, is_error=is_error)) - budget)
 
 
 def _dehydrate_capped_result(result: ToolResult, budget: int, marker: str) -> ToolResult:
-    # Even a short media placeholder must disclose the payload was removed.
-    return ToolResult.text(cap_text(result.dehydrated() + marker, budget, marker))
+    """``result`` packed into ``budget`` bytes of final text: js's media
+    notices first, then the media blocks whose metadata lines still fit with
+    room left for a notice of the ones that do not, then the rest of the text
+    clipped to the room left. Every byte, separators and an error prefix
+    included, is inside the budget."""
+    is_error = result.is_error
+    media = [_with_short_names(block) for block in result.blocks if _media_payload(block) is not None]
+    notices = [str(block.get("text", "")) for block in result.blocks if _is_media_notice(block)]
+    text = ToolResult([block for block in result.blocks
+                       if _media_payload(block) is None and not _is_media_notice(block)],
+                      is_error=is_error).dehydrated()
+    kept: list[dict] = []
+    if notices:
+        joined = "\n".join(notices)
+        cap = budget
+        while cap > 0:
+            notice = {"type": "text", "text": cap_text(joined, cap, "]"), "media_notice": _MEDIA_NOTICE}
+            over = _overflow([notice], budget, is_error)
+            if not over:
+                kept.append(notice)
+                break
+            cap -= over
+    dropped: list[dict] = []
+    if not _overflow([*kept, *media], budget, is_error):
+        kept.extend(media)
+    else:
+        # Some media will not fit: room for the bare marker that says so is
+        # kept free first, and media fill what is left.
+        bare = {"type": "text", "text": "[media dropped]", "media_notice": _MEDIA_NOTICE}
+        for block in media:
+            if not _overflow([*kept, block, bare], budget, is_error):
+                kept.append(block)
+            else:
+                dropped.append(block)
+    if dropped:
+        # A media block with no room still says so: its notice, cut to the
+        # room there is, at the least a bare marker.
+        joined = "\n".join(_media_notice(*_media_names(block), f"no room in a {budget}-byte result")
+                           for block in dropped)
+        cap = budget - _tool_result_content_size(ToolResult(kept, is_error=is_error)) - (1 if kept else 0)
+        for wording in (joined, "[media dropped]"):
+            notice = {"type": "text", "text": cap_text(wording, max(cap, 0), "]"), "media_notice": _MEDIA_NOTICE}
+            if notice["text"] and not _overflow([*kept, notice], budget, is_error):
+                kept.append(notice)
+                break
+    room = budget - _tool_result_content_size(ToolResult(kept, is_error=is_error)) - (1 if kept else 0)
+    while room > 0:
+        block = {"type": "text", "text": cap_text(text + marker, room, marker)}
+        over = _overflow([block, *kept], budget, is_error) if block["text"] else room
+        if not over:
+            kept.insert(0, block)
+            break
+        room -= over
+    if not kept:
+        kept = [{"type": "text", "text": ""}]
+    if _overflow(kept, budget, is_error):
+        # A budget under the "ERROR: " an error result is persisted with: the
+        # failure is said in what room there is, without the prefix.
+        return ToolResult.text(cap_text("ERROR", budget, ""))
+    return ToolResult(kept, is_error=is_error)
+
+
+def _limit(setting: int | None) -> int | None:
+    """A cap setting as the cap helpers take it: None (no cap) for a setting
+    of 0 or less, the bytes otherwise. Inside the helpers 0 means zero."""
+    return None if setting is None or setting <= 0 else setting
+
+
+def _cap_media(result: ToolResult, media_max: int | None) -> ToolResult:
+    """``result`` with each media block over ``media_max`` bytes of data
+    replaced by js's notice that says so. None = unlimited."""
+    if media_max is None:
+        return result
+    blocks: list[dict] = []
+    for block in result.blocks:
+        payload = _media_payload(block)
+        size = byte_size(payload) if payload is not None else 0
+        if size > media_max:
+            kind, mime = _media_names(block)
+            blocks.append({"type": "text", "media_notice": _MEDIA_NOTICE, "text": _media_notice(
+                kind, mime, f"{size} bytes is over TOOL_MEDIA_MAX ({media_max}); "
+                "capture a smaller region or a lower resolution")})
+        else:
+            blocks.append(block)
+    return result if blocks == result.blocks else replace(result, blocks=blocks)
+
+
+def _image_marker_stub(result: Any) -> str | None:
+    """The text a native read's image marker becomes, or None for any other result."""
+    if not isinstance(result, str) or not result.startswith(_IMAGE_RESULT_PREFIX):
+        return None
+    parts = result.split("\t", 3)
+    return parts[3] if len(parts) == 4 else ""
+
+
+def _cap_image_marker(result: str, cap_bytes: int | None, media_max: int | None) -> str:
+    """A native read's image marker under the same rules as a media block:
+    over ``media_max`` bytes of base64 data, or with no room for its text in
+    ``cap_bytes``, it becomes js's notice, cut to ``cap_bytes``. None = no cap;
+    0 means zero bytes."""
+    parts = result.split("\t", 3)
+    if len(parts) != 4:
+        result = well_formed(result)
+        return cap_text(result, cap_bytes, "]") if cap_bytes is not None else result
+    _prefix, path, mime, stub = parts
+    # The path stays as the filesystem names it (the file is read by it); the
+    # text the model and the session see is made strictly UTF-8.
+    mime, stub = well_formed(mime), well_formed(stub)
+    result = f"{_IMAGE_RESULT_PREFIX}{path}\t{mime}\t{stub}"
+    try:
+        size = 4 * math.ceil(os.path.getsize(path) / 3)
+    except OSError:
+        size = 0
+    notice = None
+    if media_max is not None and size > media_max:
+        notice = _media_notice("image", mime, f"{size} bytes is over TOOL_MEDIA_MAX ({media_max}); "
+                               "capture a smaller region or a lower resolution")
+    elif cap_bytes is not None and byte_size(model_client.provider_text(result)) > cap_bytes:
+        notice = _media_notice("image", mime, f"no room in a {cap_bytes}-byte result")
+    if notice is None:
+        return result
+    return cap_text(notice, cap_bytes, "]") if cap_bytes is not None else notice
 
 
 def _well_formed_key(key: Any, taken: set) -> Any:
@@ -900,7 +1113,8 @@ def _well_formed_result(result: ToolResult) -> ToolResult:
     return replace(result, blocks=blocks)
 
 
-def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None) -> Any:
+def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None,
+                context: ToolContext | None = None) -> Any:
     """Spill-then-clip a tool result.
 
     inline_cap (TOOL_RESULT_INLINE_MAX) sends anything larger to a
@@ -912,13 +1126,20 @@ def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None) -> A
     truncated leaf result never looks like the tool simply stopped early. A cap of
     0 or less means unlimited (matches the settings convention)."""
     if isinstance(result, ToolResult):
-        result = _well_formed_result(result)
+        result = _without_notice_marks(_well_formed_result(_text_blobs_as_text(result)))
+        # TOOL_MEDIA_MAX of the context running the call.
+        media_context = context if context is not None else T.STOCK_CONTEXT
+        result = _cap_media(result, _limit(int(getattr(media_context, "max_tool_media_bytes", 0) or 0)))
         if cap_bytes > 0 and _tool_result_content_size(result) > cap_bytes:
             marker = f"\n[truncated: TOOL_RESULT_MAX ({cap_bytes}) reached]"
             return _dehydrate_capped_result(result, cap_bytes, marker)
         return result
     if not isinstance(result, str):
         return result
+    if _image_marker_stub(result) is not None:
+        media_context = context if context is not None else T.STOCK_CONTEXT
+        return _cap_image_marker(result, _limit(cap_bytes),
+                                 _limit(int(getattr(media_context, "max_tool_media_bytes", 0) or 0)))
     # A lone surrogate (surrogateescape read, json.loads) would crash whichever
     # strict encode meets it next; it reaches the model as `?`.
     result = well_formed(result)
@@ -1069,6 +1290,8 @@ def _cap_batch_results(results: list[Any], cap_bytes: int) -> list[Any]:
             capped.append(result)
         elif isinstance(result, ToolResult):
             capped.append(_dehydrate_capped_result(result, allowance, marker))
+        elif _image_marker_stub(result) is not None:
+            capped.append(_cap_image_marker(result, allowance, None))
         else:
             capped.append(cap_text(result, allowance, marker))
     return capped
@@ -1131,7 +1354,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
     if tool is None:
         telemetry.event("tool_unknown", tool=name, args=args)
         result = active_registry.unavailable_error(name)
-        capped = _cap_result(result, cap_bytes)
+        capped = _cap_result(result, cap_bytes, context=context)
         if trace:
             _trace_result(telemetry, context, trace_name, capped, args=args, exchange=opened)
         return args, capped
@@ -1150,7 +1373,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
         result = _jail.shown(f"ERROR running {tool.name}: {type(e).__name__}: {e}")
     if error_tracker is not None and isinstance(result, str):
         result = error_tracker.record(tool.name, result)
-    capped = _cap_result(result, cap_bytes)
+    capped = _cap_result(result, cap_bytes, context=context)
     _reconcile_read_delivery(tool.name, args, result, capped, context, call_id)
     if trace:
         _trace_result(telemetry, context, tool.name, capped, args=args, exchange=opened)
@@ -1240,7 +1463,7 @@ def _dispatch_tool_calls(
         args = json.loads(pc.arguments())
         telemetry.event("tool_invalid", tool=pc.name, error=pc.validation_error)
         result = pc.validation_error if pc.unavailable or pc.refused else f"ERROR: invalid arguments for {pc.name}: {pc.validation_error}"
-        recorded = _cap_result(result, cap_bytes)
+        recorded = _cap_result(result, cap_bytes, context=tool_context)
         if not pc.unavailable:
             recorded = error_tracker.record(pc.name, recorded)
         # A call rejected before dispatch is still an exchange the model sees.
@@ -1366,7 +1589,7 @@ async def _dispatch_fan_out_async(
     if tool is None:
         telemetry.event("tool_unknown", tool=pc.name, args=args)
         result = registry.unavailable_error(pc.name)
-        recorded = _cap_result(result, cap_bytes)
+        recorded = _cap_result(result, cap_bytes, context=tool_context)
         if trace:
             _trace_result(telemetry, tool_context, trace_name, recorded, args=args, exchange=opened)
         return pc, args, recorded
@@ -1380,7 +1603,7 @@ async def _dispatch_fan_out_async(
                         error=f"{type(e).__name__}: {e}",
                         latency_ms=int((time.time() - started) * 1000))
         result = _jail.shown(f"ERROR running {tool.name}: {type(e).__name__}: {e}")
-    recorded = error_tracker.record(tool.name, _cap_result(result, cap_bytes))
+    recorded = error_tracker.record(tool.name, _cap_result(result, cap_bytes, context=tool_context))
     if trace:
         _trace_result(telemetry, tool_context, tool.name, recorded, args=args, exchange=opened)
     return pc, args, recorded
@@ -1419,7 +1642,7 @@ async def _dispatch_async_tool(
         telemetry.event("tool_exception", tool=tool.name, error=f"{type(exc).__name__}: {exc}")
         result = _jail.shown(f"ERROR running {tool.name}: {type(exc).__name__}: {exc}")
     raw_result = result
-    result = _cap_result(result, cap_bytes)
+    result = _cap_result(result, cap_bytes, context=tool_context)
     _reconcile_read_delivery(tool.name, args, raw_result, result, tool_context, pc.id)
     if isinstance(result, str):
         result = error_tracker.record(tool.name, result)

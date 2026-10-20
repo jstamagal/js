@@ -636,10 +636,25 @@ def test_image_tool_result_becomes_user_file_message_without_persisting_base64(t
     assert tool_part.result == "visual stub"
     user_parts = messages[1].parts
     assert isinstance(user_parts[0], ai.types.messages.TextPart)
-    assert user_parts[0].text == "visual stub"
+    # The stub goes once, in the tool message; the media message has the label.
+    assert user_parts[0].text == model_client.media_label("tc1", "visual stub")
     assert isinstance(user_parts[1], ai.types.messages.FilePart)
     assert user_parts[1].media_type == "image/png"
     assert isinstance(user_parts[1].data, bytes)
+
+def test_each_media_message_of_a_batch_names_its_own_tool_call(tmp_path):
+    # A batch's media messages all follow its tool messages, so each one must
+    # say which call it belongs to.
+    labels = []
+    for call_id, name in (("call_a", "a.png"), ("call_b", "b.png")):
+        image = tmp_path / name
+        image.write_bytes(b"\x89PNGfake")
+        marker = f"IMAGE_RESULT\t{image}\timage/png\tVISUAL_FILE {image} mime=image/png"
+        user = model_client.build_tool_result_messages(call_id, "read", marker)[1]
+        labels.append(user.parts[0].text)
+    assert "call_a" in labels[0] and "a.png" in labels[0]
+    assert "call_b" in labels[1] and "b.png" in labels[1]
+
 
 def test_plain_tool_result_message():
     msg = model_client.build_tool_result_message("tc1", "fs_search", "42")

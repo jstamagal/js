@@ -26,6 +26,7 @@ import httpx2
 
 from . import codex_auth, codex_provider, messages as msgs, activity, paranoid, providers, reasoning, retry, routing, stream_transport, tool_args
 from .sampling import Sampling
+from .text_bytes import byte_prefix, cap_text
 import ai.types.messages
 import ai.types.tools
 import ai.types.usage
@@ -580,8 +581,12 @@ def _image_result_payload(result: str) -> tuple[str, str, bytes] | str | None:
     try:
         data = Path(raw_path).read_bytes()
     except OSError as exc:
-        return f"ERROR: could not read visual result {raw_path}: {exc}"
+        return _visual_read_error(raw_path, exc)
     return stub, mime, data
+
+
+def _visual_read_error(raw_path: str, exc: OSError) -> str:
+    return f"ERROR: could not read visual result {raw_path}: {exc}"
 
 
 def _build_tool_result_part(
@@ -668,6 +673,42 @@ def _mixed_result_parts(result: Any) -> tuple[str, list[Any], bool]:
     return "\n".join(text), media, result.is_error
 
 
+# The longest tool call id a media label names; the text budgets count every
+# label at this width.
+MEDIA_LABEL_ID_MAX = 64
+# The most bytes of a result's first line a media label repeats.
+MEDIA_LABEL_HEAD_MAX = 120
+
+
+def media_label(tool_call_id: str, text: str) -> str:
+    """The text of the user message that carries a tool result's media. A
+    batch's media messages all follow its tool messages, so the label names
+    the call and the first line of the result's text."""
+    head = cap_text(text.split("\n", 1)[0], MEDIA_LABEL_HEAD_MAX, "…")
+    return f"[media of tool result {byte_prefix(tool_call_id, MEDIA_LABEL_ID_MAX)}: {head}]"
+
+
+def provider_text(result: Any) -> str:
+    """Every text the provider gets for ``result``, joined: the tool
+    message's, and with media the user message's, its label counted with the
+    longest call id. A native read's image marker is its stub and the label,
+    as `build_tool_result_messages` sends it."""
+    widest = "x" * MEDIA_LABEL_ID_MAX
+    if isinstance(result, str) and result.startswith("IMAGE_RESULT\t"):
+        parts = result.split("\t", 3)
+        if len(parts) != 4:
+            return "ERROR: malformed image result marker"
+        try:
+            with open(parts[1], "rb"):
+                pass
+        except OSError as exc:
+            # The file is gone or unreadable: the error is what is sent.
+            return _visual_read_error(parts[1], exc)
+        return f"{parts[3]}\n{media_label(widest, parts[3])}"
+    text, media, _is_error = _mixed_result_parts(result)
+    return f"{text}\n{media_label(widest, text)}" if media else text
+
+
 def build_tool_result_messages(
     tool_call_id: str, tool_name: str, result: Any
 ) -> list[ai.messages.Message]:
@@ -685,7 +726,7 @@ def build_tool_result_messages(
             tool_call_id, result=text, tool_name=tool_name, is_error=is_error
         ))]
         if media:
-            messages.append(ai.user_message(ai.types.messages.TextPart(text=text), *media))
+            messages.append(ai.user_message(ai.types.messages.TextPart(text=media_label(tool_call_id, text)), *media))
         return messages
     payload = _image_result_payload(result)
     if payload is None:
@@ -712,7 +753,7 @@ def build_tool_result_messages(
             )
         ),
         ai.user_message(
-            ai.types.messages.TextPart(text=stub),
+            ai.types.messages.TextPart(text=media_label(tool_call_id, stub)),
             ai.types.messages.FilePart(data=data, media_type=mime),
         ),
     ]

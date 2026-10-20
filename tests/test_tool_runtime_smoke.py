@@ -835,7 +835,8 @@ def test_build_tool_result_messages_expands_image_marker_with_user_file_part(tmp
     assert not trp.is_error
     assert trp.result == "visual stub"
     assert isinstance(messages[1].parts[0], ai.types.messages.TextPart)
-    assert messages[1].parts[0].text == "visual stub"
+    # The stub goes once, in the tool message; the media message has the label.
+    assert messages[1].parts[0].text == model_client.media_label("call_1", "visual stub")
     assert isinstance(messages[1].parts[1], ai.types.messages.FilePart)
     assert messages[1].parts[1].data == _TINY_PNG
     assert messages[1].parts[1].media_type == "image/png"
@@ -1386,8 +1387,9 @@ def test_whole_file_read_under_cap_is_untouched(tmp_path):
     [
         ({"type": "text", "text": "x" * 16}, "x" * 16),
         ({"type": "structured", "value": {"data": "x" * 5}}, '{"data":"xxxxx"}'),
-        ({"type": "resource", "resource": {"uri": "file:///x", "text": "x" * 16}}, "x" * 16),
-        ({"type": "image", "data": "x" * 16, "mimeType": "image/png"}, "x" * 16),
+        # A resource costs its whole final text, the header line included.
+        ({"type": "resource", "resource": {"uri": "file:///x", "text": "x" * 16}},
+         "[embedded resource file:///x]\n" + "x" * 16),
     ],
 )
 def test_tool_result_cap_preserves_boundary_and_dehydrates_oversized_content(block, payload):
@@ -1400,7 +1402,7 @@ def test_tool_result_cap_preserves_boundary_and_dehydrates_oversized_content(blo
     assert isinstance(capped, ToolResult)
     assert len(capped.blocks) == 1
     assert capped.blocks[0]["type"] == "text"
-    assert "[truncated]" in capped.dehydrated()
+    assert "truncated" in capped.dehydrated()
     assert len(capped.dehydrated().encode("utf-8")) <= cap - 1
     assert all(item.get("type") not in {"image", "audio", "resource", "structured"} for item in capped.blocks)
 
@@ -1410,8 +1412,9 @@ def test_tool_result_cap_preserves_boundary_and_dehydrates_oversized_content(blo
     [
         ({"type": "text", "text": "x" * 16}, "x" * 16),
         ({"type": "structured", "value": {"data": "x" * 5}}, '{"data":"xxxxx"}'),
-        ({"type": "resource", "resource": {"uri": "file:///x", "text": "x" * 16}}, "x" * 16),
-        ({"type": "image", "data": "x" * 16, "mimeType": "image/png"}, "x" * 16),
+        # A resource costs its whole final text, the header line included.
+        ({"type": "resource", "resource": {"uri": "file:///x", "text": "x" * 16}},
+         "[embedded resource file:///x]\n" + "x" * 16),
     ],
 )
 def test_batch_cap_preserves_tool_result_at_boundary_and_dehydrates_when_over(block, payload):

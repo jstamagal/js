@@ -119,6 +119,7 @@ TURN_SETTINGS: tuple[TurnSetting, ...] = (
     TurnSetting("max_tool_result_bytes", "TOOL_RESULT_MAX", integer, on_context=True),
     TurnSetting("max_bash_output_bytes", "SHELL_OUTPUT_MAX", integer, on_context=True),
     TurnSetting("max_tool_result_inline_bytes", "TOOL_RESULT_INLINE_MAX", integer, on_context=True),
+    TurnSetting("max_tool_media_bytes", "TOOL_MEDIA_MAX", integer, on_context=True),
     TurnSetting("fetch_timeout_s", "FETCH_TIMEOUT", integer, on_context=True),
     TurnSetting("browse_timeout_s", "BROWSE_TIMEOUT", integer, on_context=True),
     TurnSetting("download_timeout_s", "DOWNLOAD_TIMEOUT", integer, on_context=True),

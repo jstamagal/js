@@ -213,7 +213,13 @@ TOOL_RESULT_INLINE_MAX
     preview plus the path, instead of being clipped and lost. 0 = off.
 
 TOOL_RESULT_MAX
-    Hard cap on any tool result string.
+    Hard cap on the text of any tool result. Images and audio do not count;
+    TOOL_MEDIA_MAX caps them.
+
+TOOL_MEDIA_MAX
+    Cap on each image or audio block in a tool result, such as an MCP
+    screenshot, in bytes of base64 data. A larger block is replaced by a line saying it
+    was dropped and why. 0 = unlimited.
 
 FETCH_TIMEOUT
     fetch() whole-request deadline in seconds, and the per-call timeout for
@@ -257,8 +263,9 @@ READ_BYTES_MAX
     a line or byte range, so ranged reads work on any size file.
 
 PARALLEL_RESULTS_MAX
-    Aggregate cap on all tool results returned by one batch of parallel
-    calls; the largest results are clipped first. 0 = unlimited.
+    Aggregate cap on the text of all tool results returned by one batch of
+    parallel calls; the largest results are clipped first. Images and audio
+    do not count. 0 = unlimited.
 
 SUBAGENT_DEPTH_MAX
     Maximum recursive task/subagent depth.
