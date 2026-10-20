@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import messages as msgs
-from . import paths, settings as _settings
+from . import output, paths, settings as _settings
 
 
 TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools" / "bin"
@@ -172,11 +172,11 @@ _URLLIB_FALLBACK_REPORTED: set[str] = set()
 
 def warn_urllib_fallback(purpose: str, *, emit: Callable | None = None) -> None:
     """Make loss of aria2c's transfer guarantees visible without changing
-    results: once per purpose per process, on stderr."""
+    results: one output event per purpose per process."""
     if purpose in _URLLIB_FALLBACK_REPORTED:
         return
     _URLLIB_FALLBACK_REPORTED.add(purpose)
-    (emit or msgs.warn)(msgs.URLLIB_FALLBACK, purpose=purpose)
+    (emit or output.notice)(msgs.URLLIB_FALLBACK, purpose=purpose)
 
 
 def aria2_argv(
