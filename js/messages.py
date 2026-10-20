@@ -1277,8 +1277,8 @@ FSET_UNKNOWN = Message("Unknown /fset entry: {name}")
 FSET_REFUSED = Message("{name}: {error}")
 FSET_NO_CODE_STYLE = Message("no Pygments style {value!r}")
 FSET_MARK_MODIFIER = Message("a mark takes no variation selector or skin-tone modifier")
-FSET_VALUE = Message("{name} {value}", banner=False)
-FSET_EMPTY = Message("{name}", banner=False)
+FSET_VALUE = Message("{name} {value}")
+FSET_EMPTY = Message("{name}")
 
 
 # Every entry by name; each knows its own, for its /fset format.

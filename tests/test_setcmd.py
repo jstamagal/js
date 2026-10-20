@@ -608,3 +608,15 @@ def test_a_live_value_annotation_draws_through_its_format():
     overlay = {"MODEL": setcmd.LiveValue(display="m1", source="--model flag")}
     lines = setcmd.show_lines_effective(settings.seed_defaults(), overlay, "MODEL").lines
     assert lines and "OVERRIDE --model flag" in lines[0]
+
+
+def test_fset_listing_rows_start_with_the_banner_like_set_rows():
+    from js import fset
+
+    live = settings.seed_defaults()
+    lead = fset.banner_text() + " "
+    set_rows = setcmd.show_lines_effective(live, {}, "*").lines
+    assert set_rows and all(row.startswith(lead) for row in set_rows)
+    for name in ("NET_DISPLAY", "HOST_COLOR"):
+        rows = setcmd.fset_command(live, name).lines
+        assert rows and all(row.startswith(lead) for row in rows), rows
