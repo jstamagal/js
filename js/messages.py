@@ -1833,6 +1833,58 @@ JAIL_SETTING_C_IS_INSIDE_A_PATH_HIDDEN_IN = "-C {directory} is inside {inside}, 
 
 JAIL_SETTING_C_BUBBLEWRAP_CANNOT_START_A_JAIL = "-C: bubblewrap cannot start a jail: {failure}"
 
+MCP_CONFIG_DUPLICATE_OBJECT_KEY = "duplicate object key: {key!r}"
+
+MCP_CONFIG_MUST_BE_A_JSON_OBJECT = "{setting} must be a JSON object"
+
+MCP_CONFIG_MUST_BE_AN_OBJECT_OF_STRING_VALUES = "{field} must be an object of string values"
+
+MCP_CONFIG_MUST_BE_A_LIST_OF_NON_EMPTY = "{field} must be a list of non-empty strings"
+
+MCP_CONFIG_MCP_SERVERS_MUST_BE_A_JSON_OBJECT = "MCP_SERVERS must be a JSON object"
+
+MCP_CONFIG_MCP_SERVER_NAMES_MUST_BE_NON_EMPTY = "mcp server names must be non-empty strings"
+
+MCP_CONFIG_MCP_SERVER_NAME_HAS_NO_USABLE_CHARACTERS = "mcp server name {name!r} has no usable characters"
+
+MCP_CONFIG_MCP_SERVER_NAMES_AND_NORMALIZE_TO_THE = "mcp server names {previous!r} and {name!r} normalize to the same name"
+
+MCP_CONFIG_MCP_SERVER_MUST_BE_AN_OBJECT = "mcp server {name!r} must be an object"
+
+MCP_CONFIG_MCP_SERVER_HAS_UNKNOWN_FIELD = "mcp server {name!r} has unknown field {value!r}"
+
+MCP_CONFIG_MCP_SERVER_ENABLED_MUST_BE_A_BOOLEAN = "mcp server {name!r}.enabled must be a boolean"
+
+MCP_CONFIG_MCP_SERVER_REQUIRES_EXACTLY_ONE_OF_COMMAND = "mcp server {name!r} requires exactly one of command or url"
+
+MCP_CONFIG_MCP_SERVER_COMMAND_MUST_BE_A_NON = "mcp server {name!r}.command must be a non-empty string"
+
+MCP_CONFIG_MCP_SERVER_HEADERS_IS_ONLY_VALID_WITH = "mcp server {name!r}.headers is only valid with url"
+
+MCP_CONFIG_MCP_SERVER_URL_MUST_BE_A_NON = "mcp server {name!r}.url must be a non-empty string"
+
+MCP_CONFIG_MCP_SERVER_URL_IS_INVALID = "mcp server {name!r}.url is invalid"
+
+MCP_CONFIG_MCP_SERVER_URL_MUST_USE_HTTP_OR = "mcp server {name!r}.url must use http or https"
+
+MCP_CONFIG_MCP_SERVER_URL_MUST_NOT_CONTAIN_USERINFO = "mcp server {name!r}.url must not contain userinfo"
+
+MCP_CONFIG_MCP_SERVER_STDIO_FIELDS_REQUIRE_COMMAND = "mcp server {name!r} stdio fields require command"
+
+MCP_CONFIG_MCP_AGENT_POLICY_MUST_BE_A_JSON = "MCP_AGENT_POLICY must be a JSON object"
+
+MCP_CONFIG_MCP_AGENT_IDS_MAY_CONTAIN_ONLY_LETTERS = "mcp agent ids may contain only letters, numbers, '_' or '-'"
+
+MCP_CONFIG_MCP_AGENT_POLICY_MUST_BE_AN_OBJECT = "mcp agent {agent_id!r} policy must be an object"
+
+MCP_CONFIG_MCP_AGENT_HAS_UNKNOWN_FIELD = "mcp agent {agent_id!r} has unknown field {value!r}"
+
+MCP_CONFIG_MCP_AGENT_MUST_BE_AN_OBJECT = "mcp agent {agent_id!r}.{section} must be an object"
+
+MCP_CONFIG_MCP_AGENT_HAS_UNKNOWN_FIELD_226 = "mcp agent {agent_id!r}.{section} has unknown field {value!r}"
+
+MCP_CONFIG_MCP_TIMEOUT_MUST_BE_A_POSITIVE_NUMBER = "MCP_TIMEOUT must be a positive number, got {value!r}"
+
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}
 for _name, _entry in ENTRIES.items():
