@@ -520,10 +520,11 @@ def _stream_download(
     for. This is what lets max_download_bytes default to unlimited.
     """
     target.parent.mkdir(parents=True, exist_ok=True)
-    partial = target.parent / f".{target.name}.js-partial"
+    fd, partial_name = tempfile.mkstemp(prefix=f".{target.name}.js-partial-", dir=target.parent)
+    partial = Path(partial_name)
     written = 0
     try:
-        with partial.open("wb") as out:
+        with os.fdopen(fd, "wb") as out:
             while True:
                 chunk = read_chunk(_STREAM_CHUNK)
                 if not chunk:

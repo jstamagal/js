@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -113,6 +115,40 @@ def test_file_url_download_writes_to_resolved_path(tmp_path):
     assert result == (
         f"SAVED_RESPONSE path={target} size=11 bytes content-type=application/octet-stream"
     )
+
+
+def test_concurrent_downloads_to_one_destination_publish_complete_files(tmp_path, monkeypatch):
+    sources = [tmp_path / "first.bin", tmp_path / "second.bin"]
+    payloads = [b"first download" * 100, b"second download" * 100]
+    for source, payload in zip(sources, payloads, strict=True):
+        source.write_bytes(payload)
+    barrier = threading.Barrier(2)
+    real_download = process_net._stream_download
+
+    def synchronized_download(read_chunk, *args):
+        first = True
+
+        def read(size):
+            nonlocal first
+            if first:
+                first = False
+                barrier.wait(timeout=10)
+            return read_chunk(size)
+
+        return real_download(read, *args)
+
+    monkeypatch.setattr(process_net, "_stream_download", synchronized_download)
+
+    def fetch(source):
+        return process_net.fetch(source.as_uri(), save="shared.bin",
+                                 context=ToolContext(cwd=tmp_path))
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        results = list(workers.map(fetch, sources))
+
+    assert all(not result.startswith("ERROR:") for result in results), results
+    assert (tmp_path / "shared.bin").read_bytes() in payloads
+    assert set(tmp_path.iterdir()) == {*sources, tmp_path / "shared.bin", tmp_path / "runtime"}
 
 
 def test_file_url_download_is_guarded_by_the_configured_quota(tmp_path):
@@ -431,7 +467,7 @@ def test_a_configured_download_quota_is_enforced_and_leaves_no_partial(tmp_path)
 
     assert result == "ERROR: response exceeds 1024 byte download limit"
     assert not (tmp_path / "copy.bin").exists()
-    assert list(tmp_path.glob(".*js-partial")) == []
+    assert list(tmp_path.glob(".*js-partial*")) == []
 
 
 class StreamingResponse(FakeResponse):
