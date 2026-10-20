@@ -28,6 +28,10 @@ import pydantic
 from ai.models.core import params as ai_params
 
 from . import codex_auth, settings as _settings
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('codex_provider')
+
 
 if TYPE_CHECKING:
     from .logins import Login
@@ -62,7 +66,7 @@ def _client_version(override: str | None = None, detect: bool | None = None) -> 
     return _FALLBACK_CLIENT_VERSION
 _USER_AGENT = f"js/0.1.0 ({platform.system().lower()} {platform.release()}; {platform.machine()})"
 _PROVIDER = codex_auth.CODEX_PROVIDER_ID
-_INTERRUPTED_TOOL_OUTPUT = "[No tool output recorded: the tool call was interrupted before it produced a result.]"
+_INTERRUPTED_TOOL_OUTPUT = _PROMPTS['default_no_tool_output_recorded_the_tool']
 
 
 def _trim_base_url(base_url: str | None) -> str:
@@ -283,7 +287,7 @@ async def _file_part_to_input(part: ai.types.messages.FilePart) -> dict[str, Any
             except Exception:  # noqa: BLE001
                 text = str(data)
         return {"type": "input_text", "text": text}
-    return {"type": "input_text", "text": f"[Unsupported file for Codex: {media_type}]"}
+    return {"type": "input_text", "text": _PROMPTS['file_part_to_input_unsupported_file_for_codex'].format(media_type=media_type)}
 
 
 async def _user_content(parts: list[Any]) -> list[dict[str, Any]]:
@@ -319,7 +323,7 @@ def _repair_tool_pairs(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 {
                     "type": "message",
                     "role": "assistant",
-                    "content": [{"type": "output_text", "text": f"[Previous tool result; call_id={call_id}]: {output}"}],
+                    "content": [{"type": "output_text", "text": _PROMPTS['repair_tool_pairs_previous_tool_result_call_id'].format(call_id=call_id, output=output)}],
                 }
             )
             continue
