@@ -111,3 +111,14 @@ def test_nested_union_coerces_object_properties():
 
     assert actual == {"count": 3}
     assert schema_error(actual, schema) is None
+
+
+def test_registered_strict_mode_disables_repair_and_coercion():
+    import pytest
+    from js import settings
+    from js.tool_args import coerce_to_schema
+
+    settings.bind_live_settings({"TOOL_ARGUMENT_STRICT": True})
+    with pytest.raises(ValueError):
+        repair_jsonish('{"count": 1,}')
+    assert coerce_to_schema({"count": "1"}, {"type": "object", "properties": {"count": {"type": "integer"}}}) == {"count": "1"}

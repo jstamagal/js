@@ -121,6 +121,7 @@ class TurnSetting:
 
 
 TURN_SETTINGS: tuple[TurnSetting, ...] = (
+    TurnSetting("tool_argument_strict", "TOOL_ARGUMENT_STRICT", flag),
     TurnSetting("jail_clean_private_dirs", "JAIL_CLEAN_PRIVATE_DIRS", flag, on_context=True),
     TurnSetting("jail_hide_network_filesystems", "JAIL_HIDE_NETWORK_FILESYSTEMS", flag, on_context=True),
     TurnSetting("jail_hide_operator_home", "JAIL_HIDE_OPERATOR_HOME", flag, on_context=True),

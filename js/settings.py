@@ -140,6 +140,7 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("TOOL_ARGUMENT_STRICT", "bool", group="runtime"),
     SettingSpec("JAIL_CLEAN_PRIVATE_DIRS", "bool", group="shell"),
     SettingSpec("JAIL_HIDE_NETWORK_FILESYSTEMS", "bool", group="shell"),
     SettingSpec("JAIL_HIDE_OPERATOR_HOME", "bool", group="shell"),
