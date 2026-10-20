@@ -230,3 +230,17 @@ def test_a_disabled_skill_is_absent_from_tool_discovery_and_cannot_be_loaded(pro
     assert discovery_load.startswith('ERROR') and skill_load.startswith('ERROR')
     assert 'Body of plain' not in discovery_load + skill_load
     assert 'Body of rust-style' in other
+
+
+def test_file_suite_can_leave_results_unwrapped(tmp_path):
+    from types import SimpleNamespace
+
+    path = tmp_path / "example.txt"
+    path.write_text("content")
+    context = ToolContext(cwd=tmp_path)
+    offers = []
+    context.tool_registry = SimpleNamespace(offer_path_skills=lambda *args: offers.append(args))
+    tool = next(tool for tool in fs.tools(result_wrapper=lambda handler: handler) if tool.name == "read")
+    result = tool.handler(file_path=str(path), context=context)
+    assert "content" in result
+    assert offers == []

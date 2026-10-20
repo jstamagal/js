@@ -2128,12 +2128,12 @@ def _offering_path_skills(handler):
     return wrapped
 
 
-def tools() -> tuple[Tool, ...]:
+def tools(*, result_wrapper=_offering_path_skills) -> tuple[Tool, ...]:
     return (
         Tool(
             "read",
             load_description("read"),
-            _offering_path_skills(fs_read),
+            result_wrapper(fs_read),
             {
                 "file_path": {"type": "string", "description": "Absolute, relative, or ~ path to a file."},
                 "range": {
@@ -2155,7 +2155,7 @@ def tools() -> tuple[Tool, ...]:
         Tool(
             "write",
             load_description("write"),
-            _offering_path_skills(write),
+            result_wrapper(write),
             {
                 "file_path": {"type": "string", "description": "File path to create or overwrite."},
                 "content": {"type": "string", "description": "Complete file content to write."},
@@ -2208,7 +2208,7 @@ def tools() -> tuple[Tool, ...]:
         Tool(
             "patch",
             load_description("patch"),
-            _offering_path_skills(patch),
+            result_wrapper(patch),
             {
                 "file_path": {"type": "string", "description": "File path to edit."},
                 "old_string": {"type": "string", "description": "Exact text to replace. Required unless edits is used."},
