@@ -604,6 +604,24 @@ def test_namespace_probes_preserve_the_default_user_cell_handle(ctx):
 
 
 @needs_kernel
+def test_polling_a_finished_handle_preserves_the_running_cell(ctx, monkeypatch):
+    kmod.kernel(code="answer = 42", context=ctx)
+    session = ctx.kernel_session
+    ctx.kernel_wait_seconds = 0.2
+    kmod.kernel(code="import time\ntime.sleep(60)", context=ctx)
+    running = session.handles["2"]
+    run_cell = kmod.run_cell
+    monkeypatch.setattr(kmod, "run_cell", lambda session, code, timeout, **kwargs:
+                        run_cell(session, code, timeout=0.2, **kwargs))
+
+    kmod.kernel(action="poll", handle="1", context=ctx)
+    kmod.pump(session, time.monotonic() + 0.2)
+
+    assert not running.finished
+    assert kmod.busy_handle(session) is running
+
+
+@needs_kernel
 def test_a_wait_that_runs_out_interrupts_the_cell_and_leaves_the_namespace_intact(ctx):
     kmod.kernel(code="def survivor():\n    return 'alive'\n", context=ctx)
     ctx.kernel_wait_seconds = 0.2

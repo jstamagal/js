@@ -944,8 +944,11 @@ def refresh_namespace(session: KernelSession) -> tuple[list[str], list[str]]:
     name it defined appears without anything having to record the definition.
     `session.namespace` holds the callables and their signatures; `added` and
     `removed` cover every visible name, so an import or a plain value is
-    reported as defined even though it is not callable.
+    reported as defined even though it is not callable. While a cell runs,
+    the last completed listing stays intact.
     """
+    if busy_handle(session) is not None:
+        return [], []
     probe = _NAMESPACE_PROBE % {"noise": set(_IPYTHON_NOISE)}
     result = run_cell(session, probe, timeout=20, store_history=False, marker="__JS_NS__")
     if result.timed_out or result.died or not result.marker:
