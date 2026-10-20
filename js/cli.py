@@ -111,6 +111,10 @@ from .toolkit import policy as tool_policy
 from .toolkit import task_jobs
 from .toolkit.registry import registry_for_roots
 from .toolkit import ToolContext
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('cli')
+
 
 
 class _ShortHelpAction(argparse.Action):
@@ -150,15 +154,14 @@ def _registry_for(cfg) -> object:
 _BOOL_WORDS_ON = {"on", "true", "yes", "1"}
 _BOOL_WORDS_OFF = {"off", "false", "no", "0"}
 _PROMPT_CHANGED_NOTICE = (
-    "<js-reminder>The agent prompt files changed on disk. "
-    "This session keeps the prompt it started with.</js-reminder>"
+    _PROMPTS['default_js_reminder_the_agent_prompt_files']
 )
 
 
-_MODE_PLACES = {"repl": "in interactive chat", "-p": "as a one-shot run"}
+_MODE_PLACES = {"repl": _PROMPTS['default_in_interactive_chat'], "-p": _PROMPTS['default_as_a_one_shot_run']}
 _MODE_PRESENCE = {
-    "repl": "The human is here and can answer.",
-    "-p": "The human is not here and cannot answer.",
+    "repl": _PROMPTS['default_the_human_is_here_and_can'],
+    "-p": _PROMPTS['default_the_human_is_not_here_and'],
 }
 
 
@@ -166,11 +169,10 @@ def _mode_switch_notice(started: str, previous: str, now: str) -> str:
     """The reminder for a turn in mode ``now`` after a turn in ``previous``, in
     a session whose first turn ran in ``started``."""
     if started == now:
-        course = (f"started {_MODE_PLACES[started]}, moved {_MODE_PLACES[previous]}, "
-                  f"and now continues {_MODE_PLACES[now]} again")
+        course = (_PROMPTS['mode_switch_notice_started_moved_and_now_continues_again'].format(MODE_PLACES_started=_MODE_PLACES[started], MODE_PLACES_previous=_MODE_PLACES[previous], MODE_PLACES_now=_MODE_PLACES[now]))
     else:
-        course = f"started {_MODE_PLACES[started]} and now continues {_MODE_PLACES[now]}"
-    return f"<js-reminder>This conversation {course}. {_MODE_PRESENCE[now]}</js-reminder>"
+        course = _PROMPTS['mode_switch_notice_started_and_now_continues'].format(MODE_PLACES_started=_MODE_PLACES[started], MODE_PLACES_now=_MODE_PLACES[now])
+    return _PROMPTS['mode_switch_notice_js_reminder_this_conversation_js_reminder'].format(course=course, MODE_PRESENCE_now=_MODE_PRESENCE[now])
 
 
 def _note_mode_switch(cfg: Config, bundle: attach.UserMessageBundle, mode: str) -> attach.UserMessageBundle:
@@ -189,12 +191,10 @@ def _note_mode_switch(cfg: Config, bundle: attach.UserMessageBundle, mode: str) 
 
 
 _MODEL_SWITCH_NOTICE = (
-    "<js-reminder>The model changed from {previous} to {current}. "
-    "Earlier replies in this conversation came from {previous}.</js-reminder>"
+    _PROMPTS['default_js_reminder_the_model_changed_from']
 )
 _CUT_OFF_NOTICE = (
-    "<js-reminder>The last turn in this conversation was cut off before it finished."
-    "</js-reminder>"
+    _PROMPTS['default_js_reminder_the_last_turn_in']
 )
 
 
@@ -1973,7 +1973,7 @@ def _cmd_quit(arg: str, state: dict, cfg: Config) -> str | None:
         # appended to the previous user message rather than added as a second
         # one: providers with strict role alternation reject back-to-back user
         # turns, and chat templates that tolerate it silently degrade.
-        reminder = f"<js-reminder>User closed the client with the message: {arg}</js-reminder>"
+        reminder = _PROMPTS['cmd_quit_js_reminder_user_closed_the_client'].format(arg=arg)
         _append_closing_note(cfg, state, reminder)
     state["running"] = False
     return None
@@ -2111,9 +2111,9 @@ def _cmd_exec(arg: str, state: dict, cfg: Config) -> str | None:
 # reminder for the next user message and records a `workspace:` mark, so a
 # resumed session works in the same place.
 
-_CD_NOTICE = "<js-reminder>The working directory is now {path}.</js-reminder>"
-_ADD_NOTICE = "<js-reminder>{path} is now visible inside the jail ({access}).</js-reminder>"
-_DROP_NOTICE = "<js-reminder>{path} is no longer visible inside the jail.</js-reminder>"
+_CD_NOTICE = _PROMPTS['default_js_reminder_the_working_directory_is']
+_ADD_NOTICE = _PROMPTS['default_js_reminder_is_now_visible_inside']
+_DROP_NOTICE = _PROMPTS['default_js_reminder_is_no_longer_visible']
 
 
 def _access(bind: _jail.Bind) -> str:
@@ -3264,27 +3264,14 @@ def _run_commit(target: str | None,
         msgs.warn(msgs.SURVEY_FAILED, path=target_dir, error=detail)
         return 1
 
-    helper_stage = f"python -m js.commit_helper -C {shlex.quote(str(target_dir))} stage <file> <hunks|all>"
-    helper_survey = f"python -m js.commit_helper -C {shlex.quote(str(target_dir))} survey"
-    helper_commit = f"python -m js.commit_helper -C {shlex.quote(str(target_dir))} commit <message-file>"
+    helper_stage = _PROMPTS['run_commit_python_m_js_commit_helper_c'].format(shlex_quote_str_target_dir=shlex.quote(str(target_dir)))
+    helper_survey = _PROMPTS['run_commit_python_m_js_commit_helper_c_2'].format(shlex_quote_str_target_dir=shlex.quote(str(target_dir)))
+    helper_commit = _PROMPTS['run_commit_python_m_js_commit_helper_c_3'].format(shlex_quote_str_target_dir=shlex.quote(str(target_dir)))
     prompt = (
-        f"Commit all work in this target directory: {target_dir}\n\n"
-        "The repository has already been initialized if it was missing. "
-        "Use this deterministic staging helper for every commit unit:\n"
-        f"`{helper_stage}`\n"
-        "Use `all` for whole-file staging or comma-separated hunk numbers from the survey "
-        "for tracked text files. To commit a staged unit, write the full commit message "
-        "to a file with the write tool, then run:\n"
-        f"`{helper_commit}`\n"
-        "If you need a fresh snapshot after making changes, run:\n"
-        f"`{helper_survey}`\n\n"
-        "Initial deterministic commit_helper survey:\n"
-        "```text\n"
-        f"{survey}\n"
-        "```"
+        _PROMPTS['run_commit_commit_all_work_in_this_target'].format(target_dir=target_dir, helper_stage=helper_stage, helper_commit=helper_commit, helper_survey=helper_survey, survey=survey)
     )
     if extra_context and extra_context.strip():
-        prompt += f"\n\nOperator context:\n{extra_context.strip()}"
+        prompt += _PROMPTS['run_commit_operator_context'].format(extra_context_strip=extra_context.strip())
 
     return _run_prompt(
         prompt,
