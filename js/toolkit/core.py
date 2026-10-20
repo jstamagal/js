@@ -834,7 +834,10 @@ class ToolContext(_turn_settings.ContextSettings):
             session_hash = hashlib.sha256(str(session).encode("utf-8")).hexdigest()[:16]
             store = (state_dir or state_root()) / safe_agent / "undo" / f"{safe_stem}-{session_hash}"
         with self._snapshot_lock:
-            if store != self.snapshot_store:
+            if store == self.snapshot_store:
+                return
+            # Reads made before the context had a session carry into its first one.
+            if self.snapshot_store is not None:
                 with self._coverage_lock:
                     self.read_paths.clear()
                     self.file_hashes.clear()
@@ -845,13 +848,6 @@ class ToolContext(_turn_settings.ContextSettings):
                     self._read_windows.clear()
                     self._shown_reads.clear()
                     self._offered_reads.clear()
-            if store is None:
-                self.snapshots.clear()
-                self.snapshot_files.clear()
-                self.snapshot_store = None
-                return
-            if store == self.snapshot_store:
-                return
             self.snapshots.clear()
             self.snapshot_files.clear()
             self.snapshot_store = store

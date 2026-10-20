@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import stat
 
 import pytest
@@ -218,6 +219,19 @@ def test_undo_restores_a_patch_after_context_restart(tmp_path):
     assert patched.startswith(f"patched {target}")
     assert restored.startswith(f"restored {target}")
     assert target.read_text(encoding="utf-8") == "before\n"
+
+
+def test_unsaved_session_keeps_undo_between_turns(tmp_path):
+    context = ToolContext(cwd=tmp_path)
+    context.configure_snapshot_store("test-agent", Path(os.devnull), state_dir=tmp_path / "state")
+    target = tmp_path / "created"
+    fs.write(str(target), content="new file", context=context)
+
+    context.configure_snapshot_store("test-agent", Path(os.devnull), state_dir=tmp_path / "state")
+    fs.undo(str(target), context=context)
+
+    assert not target.exists()
+    assert context.snapshot_store is None
 
 
 def test_snapshot_history_is_scoped_to_its_session(tmp_path):
