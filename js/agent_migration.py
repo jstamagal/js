@@ -346,7 +346,6 @@ def _apply(agent_dir: Path, result: Result, old: Path, new_body: str | None) -> 
     taken back out, so a rerun sees the same legacy agent and tries again.
     """
     manifest = agent_dir / persona.AGENT_MANIFEST
-    old_text = old.read_text(encoding="utf-8")
     if not result.manifest_text:
         # Finishing a half-done run: agent.yaml already holds these settings
         # and is the user's file now; only the old manifest changes.
@@ -363,10 +362,7 @@ def _apply(agent_dir: Path, result: Result, old: Path, new_body: str | None) -> 
     try:
         persona.load_agent_manifest(manifest)
     except (OSError, ValueError) as exc:
-        if result.action == "migrate":
-            undo_manifest()
-        else:
-            _write_atomic(old, old_text)
+        undo_manifest()
         return Result(agent_dir, "error", msgs.AGENT_MIGRATE_RESTORED.text(file=old.name, error=_one_line(exc)))
     if result.action != "migrate":
         return result
