@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import tracemalloc
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -667,3 +668,36 @@ def test_existing_media_comparison_uses_bounded_memory(tmp_path):
 
     assert result == destination
     assert peak < 1_000_000
+
+
+def test_failed_upsert_preserves_the_complete_existing_page(tmp_path, monkeypatch):
+    vault = _vault(tmp_path)
+    page = vault / "sources" / "article.md"
+    page.parent.mkdir()
+    original = b"# Article\n\nOriginal research notes.\n"
+    page.write_bytes(original)
+    context = _ctx(tmp_path)
+    fs.read(str(page), context=context)
+    real_open = Path.open
+
+    @contextmanager
+    def open_path(path, mode="r", *args, **kwargs):
+        with real_open(path, mode, *args, **kwargs) as stream:
+            if path.parent == page.parent and mode in ("wb", "xb"):
+                def write(data):
+                    stream.write(data[:16])
+                    stream.flush()
+                    raise OSError("disk full")
+
+                yield SimpleNamespace(write=write)
+            else:
+                yield stream
+
+    monkeypatch.setattr(Path, "open", open_path)
+
+    result = wiki_write(str(vault), "source", "Merged evidence", slug="article",
+                        overwrite=True, context=context)
+
+    assert result.startswith("ERROR:")
+    assert page.read_bytes() == original
+    assert list(page.parent.iterdir()) == [page]

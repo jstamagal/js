@@ -4,6 +4,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import secrets
+import shutil
 from pathlib import Path
 
 from ..core import ToolContext
@@ -135,7 +137,15 @@ def wiki_write(
                             f"distinct {k} that just shares vocabulary.")
             context.snapshot(page)
             data = content.encode("utf-8")
-            page.write_bytes(data)
+            staged = page.with_name(f".{page.name}.{secrets.token_hex(8)}.tmp")
+            try:
+                with staged.open("xb") as stream:
+                    stream.write(data)
+                if existed:
+                    shutil.copymode(page, staged)
+                staged.replace(page)
+            finally:
+                staged.unlink(missing_ok=True)
             # This context wrote every byte, so its next UPSERT needs no read.
             written_hash = hashlib.sha256(data).hexdigest()[:16]
             context.replace_read_coverage(page, written_hash, [], len(content.splitlines()), whole_file=True)
