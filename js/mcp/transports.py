@@ -373,6 +373,7 @@ class StreamableHTTPTransport:
         self._post_tasks: set[asyncio.Task[None]] = set()
         self._request_tasks: set[asyncio.Task[tuple[list[dict[str, Any]], Any | None]]] = set()
         self._get_supported = True
+        self._initializing = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._active: set[Any] = set()
         self._active_lock = threading.Lock()
@@ -414,6 +415,8 @@ class StreamableHTTPTransport:
                 self._diagnostic("was given an invalid JSON message")
             ) from None
         is_request = "method" in message and "id" in message
+        if message.get("method") == "initialize":
+            self._initializing = True
         post = _HTTPPost()
         request_task = asyncio.create_task(
             asyncio.to_thread(self._run_post, payload, is_request, post), name="mcp-http-post"
@@ -423,13 +426,13 @@ class StreamableHTTPTransport:
             messages, stream = await asyncio.shield(request_task)
         except asyncio.CancelledError:
             self._close_active_responses(post)
-            with contextlib.suppress(StreamableHTTPTransportError):
-                _messages, stream = await asyncio.shield(request_task)
-                if stream is not None:
-                    self._release(stream)
+            # DNS and TCP connect can outlive cancellation before a socket is tracked.
+            # Keep the worker owned for close(), without delaying the caller's deadline.
+            request_task.add_done_callback(self._finish_cancelled_post)
             raise
         finally:
-            self._request_tasks.discard(request_task)
+            if not post.cancelled:
+                self._request_tasks.discard(request_task)
         if self._closed:
             if stream is not None:
                 self._release(stream)
@@ -442,7 +445,18 @@ class StreamableHTTPTransport:
             )
             self._post_tasks.add(task)
             task.add_done_callback(self._post_tasks.discard)
+        if message.get("method") == "notifications/initialized":
+            self._initializing = False
         self._ensure_get_stream()
+
+    def _finish_cancelled_post(
+        self, task: asyncio.Task[tuple[list[dict[str, Any]], Any | None]]
+    ) -> None:
+        self._request_tasks.discard(task)
+        with contextlib.suppress(Exception, asyncio.CancelledError):
+            _messages, stream = task.result()
+            if stream is not None:
+                self._release(stream)
 
     async def receive(self) -> dict[str, Any] | None:
         await self.start()
@@ -621,7 +635,7 @@ class StreamableHTTPTransport:
                 await asyncio.sleep(self._retry_seconds)
 
     def _ensure_get_stream(self) -> None:
-        if self._closed or not self._get_supported:
+        if self._closed or not self._get_supported or self._initializing:
             return
         if self._get_task is None or self._get_task.done():
             self._get_task = asyncio.create_task(self._get_loop(), name="mcp-http-notifications")

@@ -3,12 +3,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import socket
 import threading
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
+from js.mcp.client import MCPClient
+from js.mcp.protocol import JSONRPCPeer
 from js.mcp.transports import StreamableHTTPTransport, StreamableHTTPTransportError
 from js.mcp.types import LATEST_PROTOCOL_VERSION
 
@@ -161,6 +164,59 @@ def server(handler=Handler):
 
 def request(method="test/json", request_id=1):
     return {"jsonrpc": "2.0", "id": request_id, "method": method}
+
+
+def test_sse_initialization_defers_get_until_protocol_version_is_negotiated():
+    negotiated = "2025-03-26"
+    early_get = threading.Event()
+
+    class NegotiatingHandler(Handler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            self.state.record("POST", self.headers, body)
+            if body["method"] == "initialize":
+                result = {
+                    "protocolVersion": negotiated,
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "older-server", "version": "1"},
+                }
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                early_get.wait(0.2)
+                payload = {"jsonrpc": "2.0", "id": body["id"], "result": result}
+                self.wfile.write(b"data: " + json.dumps(payload).encode() + b"\n\n")
+                self.wfile.flush()
+            elif self.headers.get("MCP-Protocol-Version") != negotiated:
+                self._body(400, "application/json", b"")
+            elif body["method"] == "notifications/initialized":
+                self._body(202, "application/json", b"")
+            else:
+                payload = {"jsonrpc": "2.0", "id": body["id"], "result": {"tools": []}}
+                self._body(200, "application/json", json.dumps(payload).encode())
+
+        def do_GET(self):
+            self.state.record("GET", self.headers)
+            if self.headers.get("MCP-Protocol-Version") != negotiated:
+                early_get.set()
+                self._body(400, "application/json", b"")
+            else:
+                self._body(405, "application/json", b"")
+
+    async def scenario(url):
+        client = MCPClient(lambda: StreamableHTTPTransport(url, reconnect_attempts=0))
+        try:
+            assert (await client.initialize(timeout=1)).protocol_version == negotiated
+            assert await client.list_tools(timeout=1) == []
+        finally:
+            await client.close()
+
+    with server(NegotiatingHandler) as (state, url):
+        run(scenario(url))
+        assert not early_get.is_set()
+        gets = [headers for method, headers, _body in state.requests if method == "GET"]
+        assert gets and all(headers["Mcp-Protocol-Version"] == negotiated for headers in gets)
 
 
 def test_json_and_sse_post_replies_track_session_and_event_fields():
@@ -339,6 +395,38 @@ def test_cancelled_post_before_headers_remains_owned_through_close():
     with server() as (state, url):
         state.delay_post_headers = True
         run(scenario(state, url))
+
+
+def test_request_deadline_does_not_wait_for_http_dns_cleanup(monkeypatch):
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked_dns(*_args, **_kwargs):
+        entered.set()
+        release.wait(3)
+        raise socket.gaierror("controlled DNS failure")
+
+    monkeypatch.setattr(socket, "getaddrinfo", blocked_dns)
+
+    async def drive():
+        transport = StreamableHTTPTransport("http://127.0.0.1:9/mcp", timeout=1)
+        peer = await JSONRPCPeer.connect(lambda: transport)
+        task = asyncio.create_task(peer.request("slow", timeout=0.01))
+        try:
+            assert await asyncio.to_thread(entered.wait, 1)
+            done, _pending = await asyncio.wait({task}, timeout=0.3)
+            assert task in done
+            with pytest.raises(TimeoutError):
+                await task
+            assert transport._request_tasks
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+            await peer.close()
+        assert not transport._request_tasks
+        assert not transport._active
+
+    run(drive())
 
 
 def test_cancellation_and_close_unblock_long_lived_get():
