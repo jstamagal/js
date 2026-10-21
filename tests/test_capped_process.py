@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import signal
 import threading
+import time
 
 import pytest
 
@@ -158,3 +159,27 @@ def test_a_reader_busy_past_the_grace_keeps_its_pipe_until_it_exits(monkeypatch)
             os.killpg(job.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+
+
+def test_kill_reaches_a_grandchild_that_moved_to_its_own_process_group():
+    # `timeout` puts itself in a new process group inside the session.
+    job = capped_process.start_capped(
+        ["/bin/sh", "-c", "timeout 30 sh -c 'echo $$; exec sleep 30'; true"], cwd=None, cap=4096)
+    deadline = time.monotonic() + 5
+    while not job.stream("stdout").snapshot()[0].strip() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    sleeper = int(job.stream("stdout").snapshot()[0])
+    assert os.getpgid(sleeper) != job.pid
+    job.kill()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            with open(f"/proc/{sleeper}/stat") as f:
+                if f.read().rsplit(")", 1)[1].split()[0] == "Z":
+                    break
+        except FileNotFoundError:
+            break
+        time.sleep(0.01)
+    else:
+        os.kill(sleeper, signal.SIGKILL)
+        pytest.fail("the grandchild outlived the kill")

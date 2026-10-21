@@ -253,10 +253,34 @@ class _StreamCapture:
         return Excerpt(head, tail, (start + len(head), total - len(tail)), total, path)
 
 
+def _session_members(sid: int) -> list[int]:
+    """Pids in session ``sid``, read from /proc (empty where there is none)."""
+    found = []
+    with contextlib.suppress(OSError):
+        for entry in os.scandir("/proc"):
+            if not entry.name.isdigit():
+                continue
+            try:
+                with open(f"/proc/{entry.name}/stat", "rb") as f:
+                    stat = f.read()
+            except OSError:
+                continue
+            # Fields after the command name, which may hold spaces and ')'.
+            fields = stat[stat.rfind(b")") + 2:].split()
+            if len(fields) > 3 and int(fields[3]) == sid:
+                found.append(int(entry.name))
+    return found
+
+
 def _signal_tree(proc: subprocess.Popen) -> None:
-    """SIGKILL the child and its whole process group (grandchildren spawned
-    into the session would otherwise survive a timeout kill and keep the box
-    busy). Returns without waiting for them to die."""
+    """SIGKILL the child and everything in its session. The child leads a new
+    session, and a grandchild that moves to its own process group (``timeout``
+    does, and so does any job-control shell) stays in it; killing the group
+    alone left those running and the box busy. Returns without waiting for
+    them to die."""
+    for pid in _session_members(proc.pid):
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+            os.kill(pid, signal.SIGKILL)
     with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
         os.killpg(proc.pid, signal.SIGKILL)
     with contextlib.suppress(Exception):

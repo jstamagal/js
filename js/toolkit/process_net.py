@@ -114,6 +114,9 @@ _JOBS: dict[str, _ShellJob] = {}
 _JOB_SEQ = 0
 _JOBS_LOCK = threading.Lock()
 KEEP_FINISHED_JOBS = 5
+# Handles of finished jobs dropped from _JOBS, and the owner that ran each, so a
+# later poll on one is told it ended instead of that it never existed.
+_DROPPED: dict[str, str] = {}
 # Jobs a shell call is blocked waiting on right now, keyed by id() of the
 # ToolContext that made the call. A cancelled turn kills these (see
 # interrupt_inflight); a job whose call already returned a handle is not here.
@@ -142,6 +145,7 @@ def _register_job(job: _ShellJob) -> None:
         finished = [j for j in _JOBS.values() if not j.running()]
         for stale in finished[:-KEEP_FINISHED_JOBS] if len(finished) > KEEP_FINISHED_JOBS else []:
             _JOBS.pop(stale.id, None)
+            _DROPPED[stale.id] = stale.owner
 
 
 def _spill_prefix(job_id: str) -> Path:
@@ -440,6 +444,10 @@ def _shell_job_action(action: str, handle: str | None, timeout: int | None, desc
     assert context is not None
     job = _find_job(handle, context.task_owner)
     if job is None:
+        with _JOBS_LOCK:
+            dropped = handle is not None and _DROPPED.get(str(handle)) == context.task_owner
+        if dropped:
+            return f"ERROR: shell job {handle} already finished and its result was returned; nothing left to {action}"
         return f"ERROR: no shell job{' ' + str(handle) if handle else ''} to {action}"
     if action == "kill":
         was_running = job.running()
