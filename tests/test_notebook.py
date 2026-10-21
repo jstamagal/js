@@ -251,6 +251,17 @@ def test_a_notebook_view_read_does_not_authorize_a_raw_patch(nb):
     assert result.startswith("ERROR")
 
 
+def test_edit_notebook_with_maximum_length_filename(nb):
+    path, context = nb
+    path = path.rename(path.with_name("n" * 249 + ".ipynb"))
+    tool("read", context, file_path=str(path))
+
+    result = tool("notebook_edit", context, file_path=str(path), cell_id="a1", new_source="replacement")
+
+    assert not result.startswith("ERROR"), result
+    assert cells_of(path)[0]["source"] == ["replacement"]
+
+
 def test_undo_restores_the_notebook(nb):
     path, context = nb
     before = path.read_bytes()

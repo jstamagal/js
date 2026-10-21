@@ -285,7 +285,7 @@ def notebook_edit(
     temporary = None
     try:
         context.snapshot(target)
-        with tempfile.NamedTemporaryFile(dir=target.parent, prefix=f".{target.name}.",
+        with tempfile.NamedTemporaryFile(dir=target.parent, prefix=".notebook-",
                                          suffix=".tmp", delete=False) as stream:
             temporary = Path(stream.name)
             stream.write(payload)

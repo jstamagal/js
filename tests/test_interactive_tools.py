@@ -503,6 +503,31 @@ def test_local_probe_server_returns_empty_favicon(tmp_path):
         server.server_close()
 
 
+def test_local_probe_directory_listing_respects_jail_hide(tmp_path, monkeypatch):
+    from js import jail
+
+    root = tmp_path / "web"
+    root.mkdir()
+    private = tmp_path / "private"
+    private.mkdir()
+    (root / "public.txt").write_text("public")
+    hidden = root / "private-name.txt"
+    hidden.write_text("secret")
+    monkeypatch.setattr(jail, "ACTIVE", jail.Jail(root=root, private=private, bwrap="bwrap"))
+    context = ToolContext(cwd=root)
+    context.jail_hide = (str(hidden),)
+
+    server, url, _ = browser_module._start_local_server(root, context=context)
+    try:
+        with urllib.request.urlopen(url) as response:
+            listing = response.read().decode()
+        assert "public.txt" in listing
+        assert hidden.name not in listing
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_browser_probe_closes_local_server_when_output_setup_fails(
     tmp_path, monkeypatch
 ):

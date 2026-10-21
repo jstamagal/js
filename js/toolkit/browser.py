@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import html
 import http.server
 import io
 import json
@@ -59,6 +60,31 @@ class _QuietHandler(http.server.SimpleHTTPRequestHandler):
             self.send_error(404)
             return None
         return super().send_head()
+
+    def list_directory(self, path: str) -> Any:
+        if self.context is None:
+            return super().list_directory(path)
+        try:
+            entries = sorted(Path(path).iterdir(), key=lambda entry: entry.name.lower())
+        except OSError:
+            self.send_error(404)
+            return None
+        links = []
+        for entry in entries:
+            try:
+                self.context.resolve_path(entry)
+            except jail.JailError:
+                continue
+            name = entry.name + ("/" if entry.is_dir() else "")
+            links.append(f'<li><a href="{quote(name)}">{html.escape(name)}</a></li>')
+        body = ("<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+                "<title>Directory listing</title></head><body><ul>"
+                + "".join(links) + "</ul></body></html>").encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        return io.BytesIO(body)
 
     def do_GET(self) -> None:
         if self.path.partition("?")[0] == "/favicon.ico":
