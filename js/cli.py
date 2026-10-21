@@ -3721,7 +3721,7 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
     # Logged as the turn starts, not as the line was typed: a line queued
     # behind a running turn joins the transcript where the model sees it.
     if (sink := _transcript_sink(telemetry)) is not None:
-        sink.emit(output.event("transcript_user", text=prompt_text))
+        sink.emit(output.event("transcript_user", text=prompt_text if external_bundle else line))
     steered: list[attach.UserMessageBundle] = []
 
     async def take_steer() -> dict | None:
