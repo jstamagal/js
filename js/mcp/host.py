@@ -9,7 +9,7 @@ import hashlib
 import inspect
 import urllib.parse
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from .. import settings as _settings
@@ -769,6 +769,19 @@ class MCPHost:
     async def before_model_call(self) -> None:
         if self._dirty:
             await self.refresh()
+
+    def server_instructions(self, names: Iterable[str] = (), server: str = "") -> dict[str, str]:
+        """Initialize-time instructions for `server` and the servers behind tool `names`."""
+        servers = {server} if server else set()
+        servers.update(self.remote_tools[name][0] for name in names if name in self.remote_tools)
+        found: dict[str, str] = {}
+        for server_name in sorted(servers):
+            client = self.clients.get(server_name)
+            result = getattr(client, "initialize_result", None) if client is not None else None
+            text = getattr(result, "instructions", None)
+            if isinstance(text, str) and text.strip():
+                found[server_name] = text
+        return found
 
     def load(self, item_id: str) -> list[str] | None:
         """Validate one catalog id; the caller owns the turn-scoped loaded set."""

@@ -464,7 +464,11 @@ class TurnToolSurface:
                 self._mcp_loaded.update(loaded)
                 self._loaded_ids.add(item_id)
                 self._state_changed()
-                return discovery.compact_result({"loaded": loaded, "id": item_id})
+                result: dict[str, object] = {"loaded": loaded, "id": item_id}
+                instructions = self.mcp_host.server_instructions(loaded)
+                if instructions:
+                    result["server_instructions"] = instructions
+                return discovery.compact_result(result)
         tool = self._lazy.get(item_id)
         if tool is not None:
             self._loaded.add(tool.name)

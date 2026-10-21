@@ -3967,11 +3967,19 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
     steer_inbox: list[str] = []
     mcp_host = state.get("mcp_host")
 
+    channel_instructed: set[str] = set()
+
     def channel_message(server: str, params: dict) -> None:
         content = params.get("content")
         if not isinstance(content, str) or not content.strip() or not state["running"]:
             return
         text = f"External MCP channel {json.dumps(server)}\n"
+        if server not in channel_instructed:
+            # The server's rules for its channel ride the first push from it.
+            channel_instructed.add(server)
+            instructions = mcp_host.server_instructions(server=server).get(server)
+            if instructions:
+                text += f"Server instructions: {instructions}\n"
         if isinstance(params.get("meta"), dict):
             text += f"Metadata: {json.dumps(params['meta'], ensure_ascii=False)}\n"
         message = {"role": "user", "content": text + "\n" + content}

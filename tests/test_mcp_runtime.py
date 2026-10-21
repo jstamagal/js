@@ -482,6 +482,27 @@ def test_unscoped_search_discovers_remote_tools(tmp_path, query):
     asyncio.run(drive())
 
 
+def test_loading_remote_tool_returns_server_instructions(tmp_path):
+    class IRCClient(FakeClient):
+        initialize_result = SimpleNamespace(instructions="Silence is the default.")
+
+        async def list_tools(self, *, timeout=None):
+            return [{"name": "send", "description": "Send IRC commands", "inputSchema": {"type": "object"}}]
+
+    async def drive():
+        from js.toolkit.registry import build_default_registry
+
+        server = MCPServer("agentbus", "agentbus", "stdio", command="fake")
+        host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=IRCClient)
+        surface = build_default_registry().select([]).lazy_surface(tmp_path, mcp_host=host)
+        await surface.discover_async(query="agentbus")
+        loaded = json.loads(surface.discover(load="mcp:agentbus__send"))
+        assert loaded["server_instructions"] == {"agentbus": "Silence is the default."}
+        await host.close()
+
+    asyncio.run(drive())
+
+
 def test_prompt_get_preserves_media_content(config):
     async def drive():
         host = MCPHost(config, client_factory=FakeClient)
