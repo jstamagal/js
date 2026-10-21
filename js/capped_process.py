@@ -252,7 +252,8 @@ class _StreamCapture:
         tail = tail[_utf8_start(tail):]
         cut = tail.find(b"\n", 0, _LINE_SNAP)
         tail = tail[cut + 1:] if 0 <= cut < len(tail) - 1 else tail
-        return Excerpt(head, tail, (start + len(head), total - len(tail)), total, path)
+        return Excerpt(head, tail, (start + len(head), total - len(tail)), total,
+                       path if self._spilled else None)
 
 
 def _session_members(sid: int) -> list[int]:

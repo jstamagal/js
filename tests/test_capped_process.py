@@ -11,6 +11,23 @@ from js import capped_process
 from js.capped_process import CappedProcessTimeout, _run_capped
 
 
+def test_excerpt_does_not_advertise_a_spill_that_fails_during_read(tmp_path, monkeypatch):
+    capture = capped_process._StreamCapture(8, tmp_path / "spill.log")
+    capture.feed(b"abcdefghijklmnop")
+
+    def disk_full():
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(capture._file, "flush", disk_full)
+    try:
+        excerpt = capture.excerpt(0, 12)
+        assert excerpt.head == b"abcd"
+        assert excerpt.tail == b"mnop"
+        assert excerpt.path is None
+    finally:
+        capture.close()
+
+
 def test_run_capped_timeout_attaches_captured_stdout_and_stderr():
     with pytest.raises(CappedProcessTimeout) as raised:
         _run_capped(
