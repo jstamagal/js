@@ -4,7 +4,6 @@ on the next user message, and a resumed session is put back where it was."""
 
 from __future__ import annotations
 
-import shutil
 
 import pytest
 
@@ -12,9 +11,9 @@ from js import cli, jail, runtime
 from js import messages as msgs
 from js.toolkit import call_tool, process_net
 from js.toolkit.registry import build_default_registry
+from jail_probe import needs_bwrap
 
 SESSION = "workspace"
-needs_bwrap = pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewrap is not installed")
 
 
 @pytest.fixture

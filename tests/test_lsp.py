@@ -15,10 +15,10 @@ import yaml
 from js import jail
 from js.toolkit import ToolContext, call_tool, lsp as lsp_mod, policy
 from js.toolkit.registry import build_default_registry
+from jail_probe import needs_bwrap
 
 FAKE_SERVER = Path(__file__).with_name("fake_lsp_server.py")
 REPO = Path(__file__).resolve().parents[1]
-needs_bwrap = pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewrap is not installed")
 
 
 @pytest.fixture(autouse=True)

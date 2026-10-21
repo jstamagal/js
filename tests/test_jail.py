@@ -20,10 +20,10 @@ import pytest
 from js import cli, jail, paths, persona, runtime, settings
 from js.toolkit import ToolContext, call_tool, fs, kernel as kmod, process_net, terminal
 from js.toolkit.registry import build_default_registry
+from jail_probe import bwrap_starts, needs_bwrap
 
 from test_subagent_isolation import _fake_stream_result, make_cfg, prompt_dir
 
-needs_bwrap = pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewrap is not installed")
 needs_kernel = pytest.mark.skipif(
     not all(importlib.util.find_spec(name) for name in ("jupyter_client", "ipykernel")),
     reason="jupyter_client/ipykernel not installed",
@@ -44,6 +44,8 @@ def operator_home(tmp_path):
 @pytest.fixture
 def jailed(operator_home, tmp_path, monkeypatch):
     """A jail at tmp_path/foo holding one file, and a ToolContext working there."""
+    if not bwrap_starts():
+        pytest.skip("bubblewrap cannot start a jail here")
     root = tmp_path / "foo"
     root.mkdir()
     (root / "inside.txt").write_text("inside\n")

@@ -8,6 +8,17 @@ cd "$(git rev-parse --show-toplevel)"
 cache_dir="$(git rev-parse --absolute-git-dir)/js-test-cache"
 mkdir -p "$cache_dir"
 
+# What failed, by name, for a red run. A failure can come from where the suite
+# runs (no network, inside a jail) as much as from the change under test.
+red_note() {
+    local failed errors
+    failed=$(grep -c '^FAILED' "$hit.out")
+    errors=$(grep -c '^ERROR' "$hit.out")
+    echo "== RED: $failed failed, $errors errors"
+    grep -E '^(FAILED|ERROR) ' "$hit.out" | cut -d' ' -f1-2 | head -20 | sed 's/^/   /'
+    echo "== Fix the code, not the test: never delete, skip or weaken one to get green."
+}
+
 force=0
 if [ "${1:-}" = "--force" ]; then force=1; shift; fi
 
@@ -23,7 +34,7 @@ if [ $force -eq 0 ] && [ -f "$hit.out" ] && [ -f "$hit.meta" ]; then
     echo "== cached run, tree unchanged: $(cat "$hit.meta")  (just test --force reruns)"
     code=$(cat "$hit.code")
     if [ "$code" != 0 ]; then
-        echo "== RED at $(git log -1 --format='%h (%an, %ar)'): $(grep -c '^FAILED' "$hit.out") failing. Not done until green. Do not delete or edit the test. Cannot pass it? Confess in FAILURES.md: full model name, date, tests, what you tried, 'I could not make this pass.'"
+        red_note
     fi
     exit "$code"
 fi
@@ -34,7 +45,7 @@ code=${PIPESTATUS[0]}
 mv "$tmp" "$hit.out"
 echo "$code" > "$hit.code"
 if [ "$code" != 0 ]; then
-    echo "== RED at $(git log -1 --format='%h (%an, %ar)'): $(grep -c '^FAILED' "$hit.out") failing. Not done until green. Do not delete or edit the test. Cannot pass it? Confess in FAILURES.md: full model name, date, tests, what you tried, 'I could not make this pass.'"
+    red_note
 fi
 echo "$(date '+%Y-%m-%d %H:%M') by ${JS_TEST_ACTOR:-${USER:-?}} on $(hostname) at ${head:0:7}$( [ "$dirty" != "$(printf '' | sha256sum | cut -c1-16)" ] && echo '+dirty')" > "$hit.meta"
 # keep the last 20 runs

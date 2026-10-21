@@ -5,13 +5,12 @@ The schema these tests pin is in docs/headless-json.md."""
 from __future__ import annotations
 
 import json
-import io
 
 import ai
 import ai.types.usage
 import pytest
 
-from js import cli, headless, runtime, usage
+from js import cli, runtime, usage
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit.core import ToolContext
 
