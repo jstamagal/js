@@ -159,7 +159,7 @@ def test_the_server_token_is_sent_when_set(monkeypatch):
 
 def test_repl_first_turn_carries_recalled_memory(monkeypatch):
     from js import attach, cli
-    monkeypatch.setattr(cli.hymem, "recall_block", lambda cfg, query, cwd: "<workspace_memory>m</workspace_memory>")
+    monkeypatch.setattr(cli.hymem, "recall_block", lambda cfg, query, cwd, timeout=None: "<workspace_memory>m</workspace_memory>")
     bundle = attach.build_user_message("join #test", [], SimpleNamespace())
     first = cli._with_first_turn_memory(SimpleNamespace(), [], bundle, "join #test")
     later = cli._with_first_turn_memory(SimpleNamespace(), [{"role": "user", "content": "yo"}], bundle, "join #test")

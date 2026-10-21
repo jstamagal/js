@@ -2137,7 +2137,7 @@ def _with_first_turn_memory(cfg, messages: list[dict], bundle: attach.UserMessag
     the session, as a ``js -p`` run's first message does."""
     if any(m.get("role") == "user" for m in messages):
         return bundle
-    if memory := hymem.recall_block(cfg, prompt, Path.cwd()):
+    if memory := hymem.recall_block(cfg, prompt, Path.cwd(), timeout=hymem.REPL_SEARCH_TIMEOUT):
         return attach.with_note(bundle, memory)
     return bundle
 

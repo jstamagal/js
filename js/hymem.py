@@ -34,6 +34,7 @@ CHUNK_TURNS = 10
 CLIP = 1500                     # chars kept of each user or assistant message sent
 TOOL_CLIP = 300                 # chars kept of each tool result: lessons live in the talk, not the output
 SEARCH_TIMEOUT = 8              # seconds a search waits for the server
+REPL_SEARCH_TIMEOUT = 1         # the same, while someone waits on an interactive first reply
 ADD_TIMEOUT = 5                 # seconds an add waits; the server only queues it
 TOKEN_ENV = "HYMEM_TOKEN"       # the memory server's bearer token, as js/hymem_server.py reads it
 PATH_IN_TEXT = re.compile(r"(?<![\w/~.-])(?:[\w.-]+/)*[\w.-]+\.\w{1,8}(?=[\s:`'\"),;]|$)")
@@ -139,13 +140,14 @@ def _dated(repo: str, memory: dict, text: str, written) -> str:
     return f"(written {str(written)[:10]}{stale}) {text}"
 
 
-def search(cfg, query: str, cwd: str | Path, limit: int | None = None) -> list[str]:
+def search(cfg, query: str, cwd: str | Path, limit: int | None = None,
+           timeout: float = SEARCH_TIMEOUT) -> list[str]:
     """One line per memory that helps ``query`` in ``cwd``'s repository, most
     helpful first. Raises Unavailable when the server or Jev cannot answer."""
     limit = limit or int(_settings.knob_attr(cfg, "hymem_recall_max", "HYMEM_RECALL_MAX") or 8)
     try:
         r = _post(cfg, "/search", {"query": query[:2000], "user_id": _user(cfg), "workspace_id": workspace(cwd),
-                                   "scene": "coding", "limit": limit * 2}, SEARCH_TIMEOUT)
+                                   "scene": "coding", "limit": limit * 2}, timeout)
     except (OSError, ValueError) as exc:
         raise Unavailable(f"the memory server at {_url(cfg)} did not answer: {exc}") from exc
     repo = workspace(cwd)
@@ -162,12 +164,12 @@ def search(cfg, query: str, cwd: str | Path, limit: int | None = None) -> list[s
     return [f"- {text}" for value, text in ranked if value >= floor][:limit]
 
 
-def recall_block(cfg, query: str, cwd: str | Path) -> str:
+def recall_block(cfg, query: str, cwd: str | Path, timeout: float = SEARCH_TIMEOUT) -> str:
     """The memories matching ``query`` as one block for a first message, or ""."""
     if not enabled(cfg) or not query.strip():
         return ""
     try:
-        lines = search(cfg, query, cwd)
+        lines = search(cfg, query, cwd, timeout=timeout)
     except Unavailable:
         return ""
     if not lines:
