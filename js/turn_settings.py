@@ -220,10 +220,6 @@ TURN_SETTINGS: tuple[TurnSetting, ...] = (
     TurnSetting("lsp_timeout_s", "LSP_TIMEOUT", integer, on_context=True),
     TurnSetting("notebook_output_lines", "NOTEBOOK_OUTPUT_LINES_MAX", integer, on_context=True),
     TurnSetting("jev_model", "JEV_MODEL", text, on_context=True),
-    TurnSetting("hymem_url", "HYMEM_URL", optional_text, on_context=True),
-    TurnSetting("hymem_user", "HYMEM_USER", optional_text, on_context=True),
-    TurnSetting("hymem_recall_max", "HYMEM_RECALL_MAX", at_least_one, on_context=True),
-    TurnSetting("hymem_relevance_min", "HYMEM_RELEVANCE_MIN", number, on_context=True),
     TurnSetting("paranoid_mode", "PARANOID_MODE", choice("off", "on", "extra"), on_context=True),
     TurnSetting("skills_disabled", "SKILLS_DISABLED", names, on_context=True),
     # --- on the Config only ---

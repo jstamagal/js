@@ -17,7 +17,7 @@ from .. import output
 from .core import CatalogEntry, Tool
 from .descriptions import render_tool_name_sections
 from . import browser, discovery, fs, kernel, meta, policy, process_net, search, terminal, toolbox, wiki
-from . import hymem, jev, lsp, notebook
+from . import jev, lsp, notebook
 from ..prompt_text import load_catalog
 
 _PROMPTS = load_catalog('toolkit_registry')
@@ -598,7 +598,6 @@ def build_default_registry(
             ("shell", process_net.tools()),
             ("search", search.tools()),
             ("jev", jev.tools()),
-            ("memory", hymem.tools()),
             ("terminal", terminal.tools()),
             ("browser", browser.tools()),
             ("meta", meta.tools(flags)),

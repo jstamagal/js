@@ -1732,8 +1732,6 @@ def _trace_banner(telemetry: Telemetry, request: ModelRequest, context: ToolCont
     if request.effort:
         bits.append(f"effort={request.effort}")
     bits.append(f"vision={'on' if context.vision_enabled else 'off'}")
-    from . import hymem
-    bits.append(f"memory={'on' if hymem.enabled(context) else 'off'}")
     try:
         ntools = len(registry.openai_specs())
     except Exception:  # noqa: BLE001 — registry internals

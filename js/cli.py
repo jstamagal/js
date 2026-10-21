@@ -47,7 +47,6 @@ from . import events
 from . import fset
 from . import exline
 from . import hookexec
-from . import hymem
 from . import login_defaults, logins
 from . import memory as M
 from . import messages as msgs
@@ -1143,8 +1142,6 @@ def _emit_session_event(state: dict, telemetry: runtime.Telemetry, cfg: Config, 
         cwd=str(runtime.T.STOCK_CONTEXT.cwd),
         messages=len(state.get("messages") or []),
     )
-    if event == "session_end":
-        hymem.file(cfg, runtime.T.STOCK_CONTEXT.cwd, final=True)
 
 
 def _apply_saved_login_to_state(state: dict, provider_name: str) -> bool:
@@ -2173,17 +2170,6 @@ def _take_pending_notes(state: dict) -> list[str]:
     return [*queued, *task_jobs.completion_notes(runtime.T.STOCK_CONTEXT.task_owner)]
 
 
-def _with_first_turn_memory(cfg, messages: list[dict], bundle: attach.UserMessageBundle,
-                            prompt: str) -> attach.UserMessageBundle:
-    """``bundle`` carrying the memories that match ``prompt`` when it opens
-    the session, as a ``js -p`` run's first message does."""
-    if any(m.get("role") == "user" for m in messages):
-        return bundle
-    if memory := hymem.recall_block(cfg, prompt, Path.cwd(), timeout=hymem.REPL_SEARCH_TIMEOUT):
-        return attach.with_note(bundle, memory)
-    return bundle
-
-
 def _with_notes(bundle: attach.UserMessageBundle, notes: list[str]) -> attach.UserMessageBundle:
     for note in notes:
         bundle = attach.with_note(bundle, note)
@@ -2839,8 +2825,6 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     user_bundle = _note_model_switch(resume_cfg, user_bundle)
     if cut_off:
         user_bundle = attach.with_note(user_bundle, _CUT_OFF_NOTICE)
-    if memory := hymem.recall_block(cfg, prompt, Path.cwd()):
-        user_bundle = attach.with_note(user_bundle, memory)
     call_stats: list[dict] = []
     turn_kwargs = {
         "model_override": cfg.model,
@@ -2989,7 +2973,6 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 )
             if save:
                 _persist_turn_messages(cfg, messages, reasoning_override)
-                hymem.file(cfg, Path.cwd(), final=True)
         finally:
             if trace_sink is not None:
                 trace_sink.close()
@@ -3754,8 +3737,6 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
         turn_cfg = await loop.run_in_executor(None, _live_cfg_snapshot, cfg, state)
         user_bundle = external_bundle or attach.build_user_message(
             prompt_text, line_attachments, turn_cfg, missing_ok=True)
-        user_bundle = await loop.run_in_executor(
-            None, _with_first_turn_memory, turn_cfg, state["messages"], user_bundle, prompt_text)
     except ValueError as e:
         # AttachmentError / SkillInvocationError (ValueErrors) or a login-gate
         # routing error from re-resolving the live model: degrade to one friendly

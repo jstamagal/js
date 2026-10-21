@@ -32,7 +32,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, TextIO
 
-from . import agent_messages, compaction, headless, hymem, login_defaults, runtime
+from . import agent_messages, compaction, headless, login_defaults, runtime
 from . import memory as M
 from . import persona as P
 from . import swarm, settings as _settings
@@ -218,14 +218,11 @@ class Runner:
             events.emit("agent_start", model=cfg.model, provider=cfg.provider_id, session=str(cfg.session_file),
                         cwd=str(context.cwd))
             await agent_messages.initialize(cfg, prompt_spec, messages, telemetry, system=system, **turn_kwargs)
-            memory = await asyncio.to_thread(hymem.recall_block, cfg, spec.opener, context.cwd)
-            opener = f"{spec.opener}\n\n{memory}" if memory else spec.opener
-            messages.append(M.note_time({"role": "user", "content": opener}))
+            messages.append(M.note_time({"role": "user", "content": spec.opener}))
             async with self.gate:
                 await runtime.run_turn_async(cfg, system, messages, telemetry, **turn_kwargs)
             while not agent.stop_seen:
                 M.persist_messages(cfg.session_file, messages, stamp=stamp)
-                await asyncio.to_thread(hymem.file, cfg, context.cwd, False)
                 await self.compact(cfg, auto, context, system, messages)
                 events.emit("sleep")
                 landed = await agent.sleep_async()
@@ -249,7 +246,6 @@ class Runner:
                 with contextlib.suppress(Exception):
                     M.persist_messages(cfg.session_file, messages,
                                        stamp=M.stamp_for(cfg.model, cfg.provider_id, cfg.reasoning_effort))
-                    hymem.file(cfg, context.cwd, final=True)
             close_terminal_sessions(context)
             events.emit("agent_end", reason=reason)
 
