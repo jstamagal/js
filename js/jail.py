@@ -372,6 +372,7 @@ class Jail:
     bwrap: str
     private: Path                       # holds the jail's /tmp and ~/.js/tmp
     added: list[Bind] = field(default_factory=list)   # /add binds
+    tmp_covered: bool = False           # the last command's /tmp is a read-only bind
 
     @property
     def tmp(self) -> Path:
@@ -495,7 +496,9 @@ class Jail:
         trees."""
         views: dict[str, str] = {}
         for private in dict.fromkeys([self.private, _real(self.private)]):
-            views[str(private / "tmp")] = "/tmp"
+            # Under a /tmp bind the private one shows only at its own path.
+            if not self.tmp_covered:
+                views[str(private / "tmp")] = "/tmp"
             views[str(private / "js-tmp")] = str(paths.user_home() / ".js" / "tmp")
         # A host path ends where a file name character does not follow.
         pattern = "(" + "|".join(re.escape(p) for p in sorted(views, key=len, reverse=True)) + r")(?![\w.-])"
@@ -645,7 +648,8 @@ class Jail:
         # operator left there) covers the private one; temp files go to the
         # private one where it still shows, under the private directory.
         over_tmp = [b for b in explicit if _under(Path("/tmp"), _real(b.path))]
-        if over_tmp and not max(over_tmp, key=lambda b: len(_real(b.path).parts)).rw:
+        self.tmp_covered = bool(over_tmp) and not max(over_tmp, key=lambda b: len(_real(b.path).parts)).rw
+        if self.tmp_covered:
             out += ["--setenv", "TMPDIR", str(self.tmp)]
         if not _binds_whole_root(network):
             out += ["--remount-ro", "/"]

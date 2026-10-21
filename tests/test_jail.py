@@ -475,15 +475,17 @@ def test_spilled_tool_results_stay_readable(jailed):
 
 def test_the_host_tmp_bound_read_only_leaves_temp_files_writable(jailed):
     with tempfile.NamedTemporaryFile("w", dir="/tmp", suffix=".txt") as note:
-        note.write("host-note")
+        note.write("host-note\n")
         note.flush()
         jailed.jail_bind = ("/tmp",)
 
-        code, result = run_shell(f'cat {note.name}; f=$(mktemp) && echo x > "$f" && echo made', jailed)
+        code, result = run_shell(f'cat {note.name}; f=$(mktemp) && echo made > "$f" && echo "$f"', jailed)
+        made = result.strip().splitlines()[-1]
+        _, again = run_shell(f"cat {made}", jailed)
 
     assert code == 0
     assert "host-note" in result
-    assert "made" in result
+    assert "made" in again
 
 
 def test_jail_bind_setting_refuses_a_relative_path():
