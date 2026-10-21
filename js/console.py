@@ -165,6 +165,12 @@ class ToolTrace:
                 opened.exchange.open(display.render_exchange(
                     name, args, None, level=level, preview=display.preview_lines(settings),
                     malformed=malformed, settings=settings))
+            elif display.call_kind(name, args, settings) == "agent":
+                # Plain stdout draws a call once it ends; a subagent run can take
+                # minutes, so it gets a row now too.
+                _print_trace(self._telemetry, display.render_exchange(
+                    name, args, None, level=level, preview=display.preview_lines(settings),
+                    malformed=malformed, settings=settings))
         if opened.exchange is not None and name == "shell":
             threading.Thread(target=self._follow, args=(opened, tool_context, level),
                              name="js-live-output", daemon=True).start()
@@ -251,8 +257,9 @@ class ToolTrace:
                 opened.exchange.close(finished, whole)
                 return
             self.settle(settings)
-            # Plain stdout has no key to unfold a row: every call is shown whole.
-            _print_trace(self._telemetry, whole if whole is not None else finished)
+            # Plain stdout has no key to unfold a row, so what TOOLS_DISPLAY
+            # hides stays hidden; the session file keeps every result whole.
+            _print_trace(self._telemetry, finished)
 
 
 def _print_run_line(fields: list[str]) -> None:

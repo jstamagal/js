@@ -509,11 +509,6 @@
 # Keep-alive pings count as data. 0: wait forever.
 #set STREAM_IDLE_TIMEOUT 300
 
-# js -p: after this many seconds with nothing shown, a line on stderr says
-# what runs now and for how long, and again after each further stretch.
-# 0: off.
-#set PROGRESS_INTERVAL 30
-
 # A reply cut off at its token limit is sent once more with this bigger
 # limit, when that's bigger than what was used and the model allows it.
 # 0: never.

@@ -20,7 +20,6 @@ from typing import Any
 
 import ai
 
-from . import activity
 from . import output
 from . import settings as _settings
 from . import stream_transport
@@ -129,11 +128,10 @@ _sleep = asyncio.sleep
 
 
 async def wait(n: int, budget: Budget, delay: float, exc: BaseException) -> None:
-    """Announce retry `n` and wait `delay` seconds before it, held as a
-    retry wait (`activity`). Every retry of a model call waits here."""
+    """Announce retry `n` and wait `delay` seconds before it. Every retry of a
+    model call waits here."""
     announce(n, budget, delay, exc)
-    with activity.retry_wait(delay):
-        await _sleep(delay)
+    await _sleep(delay)
 
 
 async def call[T](request: Callable[[], Awaitable[T]], budget: Budget) -> T:

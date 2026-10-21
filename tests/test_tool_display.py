@@ -460,3 +460,27 @@ def test_a_quiet_call_shown_only_when_it_returns_unfolds_at_once():
     runtime._trace_result(telemetry, context, "read", "1|nested_line", args={"path": "/w/a.py"})
     assert scroll.toggle_reasoning()
     assert "nested_line" in SGR.sub("", scroll.buffer.text)
+
+
+def test_plain_stdout_keeps_what_tools_display_hides_and_shows_a_subagent_start():
+    import contextlib
+
+    log = io.StringIO()
+    telemetry = runtime.Telemetry(None, transcript_log=TranscriptLogSink([log], []))
+    context = ToolContext(cwd="/tmp")
+    context.config = SimpleNamespace(settings={"TOOLS_DISPLAY": 1, "TOOLS_PREVIEW_LINES": 3})
+    big = "\n".join(f"line {n}" for n in range(500))
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        opened = runtime._trace_call(telemetry, context, "fetch_all", {"url": "x"})
+        runtime._trace_result(telemetry, context, "fetch_all", big, args={"url": "x"}, exchange=opened)
+        tasks = {"tasks": ["review 9b142f1"]}
+        opened = runtime._trace_call(telemetry, context, "coder", tasks)
+        started = _plain(out.getvalue())
+        runtime._trace_result(telemetry, context, "coder", "verdict: problem", args=tasks, exchange=opened)
+        runtime.settle_tool_trace(telemetry)
+
+    shown = _plain(out.getvalue())
+    assert "line 2" in "\n".join(shown) and "line 3" not in "\n".join(shown)
+    assert "line 499" in log.getvalue()
+    assert any("coder" in row for row in started)

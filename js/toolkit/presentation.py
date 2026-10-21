@@ -111,11 +111,14 @@ def call_kind(name: str, args: dict | None, settings: Any = None) -> str:
     quiet    one row, and a run of them folds into one row per tool
     command  its output while it runs, one row once it ends
     diff     the change it made
+    agent    a subagent run: a row when it starts, its result when it ends
     loud     its result
     """
     args = args if isinstance(args, dict) else {}
     if name in _names(settings, "TOOLS_QUIET"):
         return "quiet"
+    if isinstance(args.get("tasks"), list):
+        return "agent"
     if name == "shell":
         return "quiet" if _looks_around(args.get("command"), settings) else "command"
     if name in ("kernel", "terminal_session", "toolbox"):

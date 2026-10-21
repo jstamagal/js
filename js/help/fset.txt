@@ -25,8 +25,10 @@ TOOLS_DISPLAY
     after, a patch shows its diff, a failure its error; 2 every call with
     the first TOOLS_PREVIEW_LINES result lines; 3 every call whole. At 1 and
     2 in the async screen, the reasoning_toggle key, Ctrl-O, unfolds every
-    folded row and preview to its whole form and folds it back. Folding is
-    the screen's: anywhere else every call is shown whole.
+    folded row and preview to its whole form and folds it back. Under js -p
+    nothing unfolds: quiet calls are a row each, hidden lines stay hidden,
+    and a subagent run also gets a row when it starts. The
+    session transcript keeps every call whole.
 
 TOOLS_QUIET
     Tools whose calls TOOLS_DISPLAY 1 shows as one row and folds: a JSON
@@ -38,9 +40,8 @@ SHELL_QUIET
 
 TOOLS_PREVIEW_LINES
     Lines of a result, a diff or a program shown before the rest is hidden
-    at TOOLS_DISPLAY 1 and 2. Only the screen hides them, as a fold the
-    reasoning_toggle key, Ctrl-O, unfolds; anywhere else nothing can unfold
-    it, so the whole result is shown.
+    at TOOLS_DISPLAY 1 and 2. On the screen the reasoning_toggle key, Ctrl-O,
+    unfolds them; under js -p they stay hidden.
 
 MARKDOWN
     Render assistant Markdown on a terminal: finished blocks are highlighted
