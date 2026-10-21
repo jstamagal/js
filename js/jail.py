@@ -641,6 +641,12 @@ class Jail:
         out += ["--bind", str(self.js_tmp), str(home / ".js" / "tmp"),
                 "--bind", str(self.private), str(self.private)]
         out += _read_only_covers(out, [*_network_parents(network, masked), *placeholders])
+        # A read-only bind over /tmp (`"/tmp"` in JAIL_BIND, to read files the
+        # operator left there) covers the private one; temp files go to the
+        # private one where it still shows, under the private directory.
+        over_tmp = [b for b in explicit if _under(Path("/tmp"), _real(b.path))]
+        if over_tmp and not max(over_tmp, key=lambda b: len(_real(b.path).parts)).rw:
+            out += ["--setenv", "TMPDIR", str(self.tmp)]
         if not _binds_whole_root(network):
             out += ["--remount-ro", "/"]
         if cwd is not None:
