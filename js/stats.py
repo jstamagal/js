@@ -70,7 +70,7 @@ def summarize_calls(call_stats: list[dict], *, wall_s: float | None = None) -> d
 def _staging(path: str | Path):
     target = Path(path).resolve(strict=False)
     target.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
+    fd, name = tempfile.mkstemp(dir=target.parent, prefix=".stats-", suffix=".tmp")
     os.close(fd)
     temporary = Path(name)
     try:
