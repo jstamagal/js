@@ -12,7 +12,13 @@ The servers come from the MEMORY_* environment (MEMORY_LLM_BASE_URL,
 MEMORY_LLM_MODEL, MEMORY_EMBEDDER_BASE_URL, MEMORY_EMBEDDER_MODEL, ...);
 MEMORY_DATA_DIR holds the store and the add queue. FILERS threads file the
 queue oldest first, one per writer slot, never two adds of one session at
-once, so a session's chunks land in order. A queued add survives a restart."""
+once, so a session's chunks land in order. A queued add survives a restart.
+An add that fails FAILURES_MAX times while other adds file is moved to the
+failed directory beside the queue; while none file, the writer is down and
+every add waits for it.
+
+With HYMEM_TOKEN set, every call but /health must carry
+`Authorization: Bearer <HYMEM_TOKEN>`; js sends it from the same variable."""
 
 import argparse
 import json
@@ -26,8 +32,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DATA = pathlib.Path(os.environ.setdefault("MEMORY_DATA_DIR", str(pathlib.Path.home() / ".hymem" / "data")))
 QUEUE = DATA.parent / "queue"
+FAILED = DATA.parent / "failed"
 SCENES = {"chat", "working", "coding"}
 FILERS = int(os.environ.get("HYMEM_FILERS", "4"))   # the writer LLM's parallel slots
+FAILURES_MAX = 5
+TOKEN = os.environ.get("HYMEM_TOKEN", "")
 
 for key, value in {
     "MEMORY_MODE": "pro",
@@ -44,6 +53,7 @@ _client_lock = threading.Lock()
 _wake = threading.Condition()
 _taken: set[str] = set()                # queue files being filed
 _busy: set[str] = set()                 # sessions with an add being filed
+_filed_at = 0.0                         # when an add last filed
 
 
 def embedding_dims() -> int:
@@ -90,21 +100,42 @@ def _next() -> tuple[pathlib.Path, dict, str]:
             _wake.wait(60)
 
 
+def file_job(job: pathlib.Path, body: dict) -> bool:
+    """File one queued add. True when the queue is done with it: filed, or
+    moved to FAILED. False when it stays queued to be retried; its failures
+    are counted in it."""
+    global _filed_at
+    try:
+        r = client().add(body["messages"], scene=scene_of(body), user_id=body["user_id"],
+                         session_id=str(body.get("session_id") or "default_session"),
+                         workspace_id=body.get("workspace_id"))
+        ok = r.get("success", True)
+    except Exception as exc:  # noqa: BLE001 - a down LLM is retried, not fatal
+        ok, r = False, {"error_message": f"{type(exc).__name__}: {exc}"}
+    if ok:
+        job.unlink()
+        _filed_at = time.time()
+        print(f"filed {job.name} ({len(body['messages'])} messages, {body.get('workspace_id')})", flush=True)
+        return True
+    failures = int(body.get("failures") or 0) + 1
+    first = float(body.get("first_failure") or time.time())
+    if failures >= FAILURES_MAX and _filed_at > first:
+        FAILED.mkdir(parents=True, exist_ok=True)
+        job.rename(FAILED / job.name)
+        print(f"moved {job.name} to {FAILED} after {failures} failures: {r.get('error_message')}", flush=True)
+        return True
+    partial = job.with_suffix(".tmp")
+    partial.write_text(json.dumps({**body, "failures": failures, "first_failure": first}))
+    partial.replace(job)
+    print(f"retrying {job.name} in 60s: {r.get('error_message')}", flush=True)
+    return False
+
+
 def filer() -> None:
     """File queued adds; one that fails waits and is retried."""
     while True:
         job, body, key = _next()
-        try:
-            r = client().add(body["messages"], scene=scene_of(body), user_id=body["user_id"],
-                             workspace_id=body.get("workspace_id"))
-            ok = r.get("success", True)
-        except Exception as exc:  # noqa: BLE001 - a down LLM is retried, not fatal
-            ok, r = False, {"error_message": f"{type(exc).__name__}: {exc}"}
-        if ok:
-            job.unlink()
-            print(f"filed {job.name} ({len(body['messages'])} messages, {body.get('workspace_id')})", flush=True)
-        else:
-            print(f"retrying {job.name} in 60s: {r.get('error_message')}", flush=True)
+        if not file_job(job, body):
             time.sleep(60)
         with _wake:
             _taken.discard(job.name)
@@ -128,6 +159,8 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(404, {"error": "not found"})
 
     def do_POST(self) -> None:
+        if TOKEN and self.headers.get("Authorization") != f"Bearer {TOKEN}":
+            return self.reply(401, {"error": "HYMEM_TOKEN does not match"})
         try:
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
         except ValueError:

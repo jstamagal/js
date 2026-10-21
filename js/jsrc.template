@@ -550,7 +550,8 @@
 # URL, with TYPESAFE_API_KEY set for Jev, to turn it on; unset either: off.
 # On, sessions are sent to it 10 turns at a time, the first message of
 # `js -p` and of a swarm agent carries the memories matching its task, and
-# the memory_search tool searches them.
+# the memory_search tool searches them. A server started with HYMEM_TOKEN
+# in its environment needs the same HYMEM_TOKEN in js's environment.
 #set -HYMEM_URL
 
 # Whose memories these are on the server. Unset: your login name.

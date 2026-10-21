@@ -311,7 +311,9 @@ HYMEM_URL
     <workspace_memory> block of the memories matching its task; the
     memory_search tool searches them. Memories are keyed by repository, so a
     worktree shares its main checkout's. When the server or Jev does not
-    answer, the run goes on without memories.
+    answer, the run goes on without memories. A server started with
+    HYMEM_TOKEN in its environment takes only calls that carry it; js sends
+    the HYMEM_TOKEN in its own environment.
 
 HYMEM_USER
     Whose memories these are on the server. Unset: the login name.

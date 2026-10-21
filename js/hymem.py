@@ -35,6 +35,7 @@ CLIP = 1500                     # chars kept of each user or assistant message s
 TOOL_CLIP = 300                 # chars kept of each tool result: lessons live in the talk, not the output
 SEARCH_TIMEOUT = 8              # seconds a search waits for the server
 ADD_TIMEOUT = 5                 # seconds an add waits; the server only queues it
+TOKEN_ENV = "HYMEM_TOKEN"       # the memory server's bearer token, as js/hymem_server.py reads it
 PATH_IN_TEXT = re.compile(r"(?<![\w/~.-])(?:[\w.-]+/)*[\w.-]+\.\w{1,8}(?=[\s:`'\"),;]|$)")
 
 
@@ -72,8 +73,12 @@ def workspace(cwd: str | Path) -> str:
 
 
 def _post(cfg, path: str, body: dict, timeout: float) -> dict:
-    req = urllib.request.Request(_url(cfg) + path, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"})
+    """POST ``body`` to the memory server, with HYMEM_TOKEN from the
+    environment as its bearer token when set."""
+    headers = {"Content-Type": "application/json"}
+    if token := os.environ.get(TOKEN_ENV, "").strip():
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(_url(cfg) + path, data=json.dumps(body).encode(), headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.load(r)
 

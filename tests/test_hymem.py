@@ -136,3 +136,22 @@ def test_memory_is_off_without_the_jev_key(monkeypatch):
     assert not hymem.enabled(SimpleNamespace(hymem_url="http://m"))
     monkeypatch.setenv("TYPESAFE_API_KEY", "k")
     assert hymem.enabled(SimpleNamespace(hymem_url="http://m"))
+
+
+def test_the_server_token_is_sent_when_set(monkeypatch):
+    seen = []
+
+    class _Reply:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b"{}"
+
+    monkeypatch.setenv("HYMEM_TOKEN", "sekrit")
+    monkeypatch.setattr(hymem.urllib.request, "urlopen", lambda req, timeout: seen.append(req) or _Reply())
+    hymem._post(SimpleNamespace(hymem_url="http://m"), "/search", {}, 1)
+    assert seen[0].get_header("Authorization") == "Bearer sekrit"
