@@ -178,11 +178,12 @@ class ToolTrace:
         if opened.done.wait(_LIVE_AFTER_S):
             return
         while not opened.done.wait(_LIVE_TICK_S):
-            tail = process_net.live_tail(tool_context, command, display.LIVE_LINES)
+            settings = _tool_settings(tool_context)
+            rows = int(display._setting(settings, "SHELL_LIVE_LINES_MAX"))
+            tail = process_net.live_tail(tool_context, command, rows)
             if tail is None:
                 continue
             lines, seconds = tail
-            settings = _tool_settings(tool_context)
             with output.LOCK:
                 if opened.done.is_set():
                     return

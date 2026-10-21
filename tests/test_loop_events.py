@@ -304,3 +304,21 @@ def test_jsrc_migration_notice_is_an_event(tmp_path, capsys):
     assert [event.name for event in events] == ["migration_notice"]
     assert dict(events[0].fields)["fields"]["path"] == path
     assert capsys.readouterr() == ("", "")
+
+
+def test_running_shell_follows_its_output_tail(monkeypatch):
+    from js import console
+    from js.toolkit import process_net
+    asked = []
+    opened = console._OpenCall("shell", {"command": "sleep 9"})
+
+    def live_tail(context, command, rows):
+        asked.append(rows)
+        opened.done.set()
+        return None
+
+    monkeypatch.setattr(process_net, "live_tail", live_tail)
+    monkeypatch.setattr(console, "_LIVE_AFTER_S", 0)
+    monkeypatch.setattr(console, "_LIVE_TICK_S", 0)
+    console.ToolTrace._follow(None, opened, None, 1)
+    assert asked and asked[0] > 0
