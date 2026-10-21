@@ -78,6 +78,26 @@ def test_the_picker_model_tracks_a_switch_before_the_next_reply(tmp_path):
     assert Q.Session.from_summary(entry).model == "other-model"
 
 
+def test_picker_rebuilds_model_state_cached_before_switches_were_parsed(tmp_path):
+    path = _session(tmp_path / "proj")
+    _say(path, "hello", "reply")
+    switched = M.stamp_for("other-model", "other-provider", "low")
+    record_model_switch(path, stamp=switched, previous=STAMP)
+    transcript = session_text.parse(path)
+    old_summary = transcript.summary()
+    old_summary["last_stamp"] = STAMP
+    info = path.stat()
+    session_index.store(path, old_summary, transcript.search_lines(),
+                        size=info.st_size, mtime_ns=info.st_mtime_ns)
+    with sqlite3.connect(session_index.db_path()) as connection:
+        connection.execute("PRAGMA user_version = 1")
+    session_index._drop_current()
+
+    entry = _by_path(session_index.catalog())[_key(path)]
+    assert entry["last_stamp"] == switched
+    assert Q.Session.from_summary(entry).model == "other-model"
+
+
 def test_a_file_written_behind_the_index_is_caught_up_on_open(tmp_path):
     path = _session(tmp_path / "proj")
     _say(path, "first", "one")

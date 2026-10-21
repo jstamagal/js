@@ -27,7 +27,7 @@ from typing import Any
 
 from . import paths
 
-_SCHEMA = 1
+_SCHEMA = 2  # Rebuild summaries written before model_switch stamps were parsed.
 _MARK_OPEN = "\x01"
 _MARK_CLOSE = "\x02"
 _TOKENIZER = "porter unicode61 remove_diacritics 2"
