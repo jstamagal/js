@@ -150,6 +150,8 @@ def split_repl_attachments(line: str, *, prefix: str = "@") -> tuple[str, list[s
     position-aware — everything else (quotes, repeated spaces, punctuation)
     survives byte-for-byte.
 
+    A bare word that names no file (``@all``, ``@nick``) stays in the text.
+
     Each pasted-image placeholder (`[image #N]`, see `js.clipimage`) in the line
     is an attachment too, after the @path ones; the placeholder stays in the
     text so the model can tell which image the words refer to.
@@ -171,7 +173,7 @@ def split_repl_attachments(line: str, *, prefix: str = "@") -> tuple[str, list[s
     attachments: list[str] = []
     spans: list[tuple[int, int]] = []
     for text, start, end in tokens:
-        if text.startswith(prefix) and text.strip(prefix):
+        if text.startswith(prefix) and text.strip(prefix) and _names_file(text[len(prefix):]):
             if text[len(prefix):] not in attachments:
                 attachments.append(text[len(prefix):])
             spans.append((start, end))
@@ -182,6 +184,13 @@ def split_repl_attachments(line: str, *, prefix: str = "@") -> tuple[str, list[s
     return prompt, attachments + clipimage.placeholders(prompt)
 
 
+def _names_file(raw: str) -> bool:
+    """Whether ``raw`` after the prefix is a file to attach: one that exists,
+    or a path by its shape. A bare word that names no file (``@all``, a nick)
+    is part of the text."""
+    return any(c in raw for c in "/.~") or raw == "-" or _resolve_path(raw, Path.cwd()).exists()
+
+
 def build_user_message(
     prompt: str,
     attachments: Iterable[str] | None,
@@ -189,11 +198,13 @@ def build_user_message(
     *,
     cwd: Path | None = None,
     stdin_attachment: bytes | None = None,
+    missing_ok: bool = False,
 ) -> UserMessageBundle:
     """Build one user message with optional file attachments.
 
     ``runtime_message`` may contain ``ai`` parts for the current provider call.
-    ``history_message`` is always JSONL-lightweight text.
+    ``history_message`` is always JSONL-lightweight text. With ``missing_ok``
+    a file that does not exist becomes a note in the text, not an error.
     """
 
     paths = list(attachments or [])
@@ -208,6 +219,7 @@ def build_user_message(
             cfg,
             cwd=cwd,
             stdin_attachment=stdin_attachment if raw_path == "-" else None,
+            missing_ok=missing_ok,
         )
         text_blocks.append(prepared.text)
         if prepared.file_part is not None:
@@ -243,6 +255,7 @@ def _prepare_attachment(
     *,
     cwd: Path | None,
     stdin_attachment: bytes | None,
+    missing_ok: bool = False,
 ) -> _PreparedAttachment:
     if raw_path == "-":
         if stdin_attachment is None:
@@ -256,7 +269,10 @@ def _prepare_attachment(
     try:
         stat = path.stat()
     except OSError as exc:
-        raise AttachmentError(msgs.ATTACHMENT_NOT_FOUND.said(path=raw_path)) from exc
+        if not missing_ok:
+            raise AttachmentError(msgs.ATTACHMENT_NOT_FOUND.said(path=raw_path)) from exc
+        msgs.warn(msgs.ATTACHMENT_NOT_FOUND, path=raw_path)
+        return _PreparedAttachment(_PROMPTS['prepare_attachment_not_found'].format(path=raw_path))
     if not path.is_file():
         raise AttachmentError(msgs.ATTACHMENT_NOT_A_FILE.said(path=path))
     try:

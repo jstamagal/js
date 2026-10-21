@@ -334,8 +334,8 @@ def test_split_repl_attachments_apostrophe_keeps_escaped_and_plain_paths():
 
 def test_split_repl_attachments_open_quote_in_at_token_is_literal():
     """An @token whose own quote never closes stays literal text, not a run to EOL."""
-    prompt, attachments = attach.split_repl_attachments("see @it's here")
-    assert attachments == ["it's"]
+    prompt, attachments = attach.split_repl_attachments("see @it's.txt here")
+    assert attachments == ["it's.txt"]
     assert prompt == "see  here"
 
 
@@ -401,3 +401,17 @@ def test_truncated_text_attachment_does_not_end_in_a_replacement_char(tmp_path):
     text = bundle.runtime_message["content"]
     assert "[truncated to" in text
     assert "\ufffd" not in text
+
+
+def test_split_repl_attachments_keeps_bare_mention_as_text(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "notes").write_text("x")
+    prompt, attachments = attach.split_repl_attachments("tell @all hi, see @notes and @a.png")
+    assert "@all" in prompt
+    assert attachments == ["notes", "a.png"]
+
+
+def test_repl_missing_attachment_becomes_note(tmp_path):
+    bundle = attach.build_user_message("look", ["gone.png"], _cfg(tmp_path), cwd=tmp_path, missing_ok=True)
+    assert bundle.history_message["content"].startswith("look")
+    assert "gone.png" in bundle.history_message["content"]

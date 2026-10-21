@@ -3714,7 +3714,8 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
         if external_bundle is None:
             prompt_text = _expand_skill_line(prompt_text, state)
         turn_cfg = await loop.run_in_executor(None, _live_cfg_snapshot, cfg, state)
-        user_bundle = external_bundle or attach.build_user_message(prompt_text, line_attachments, turn_cfg)
+        user_bundle = external_bundle or attach.build_user_message(
+            prompt_text, line_attachments, turn_cfg, missing_ok=True)
         user_bundle = await loop.run_in_executor(
             None, _with_first_turn_memory, turn_cfg, state["messages"], user_bundle, prompt_text)
     except ValueError as e:
@@ -3752,7 +3753,8 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
             built = await loop.run_in_executor(
                 None,
                 lambda: attach.build_user_message(
-                    _expand_skill_line(steer_text, state), steer_attachments, turn_cfg
+                    _expand_skill_line(steer_text, state), steer_attachments, turn_cfg,
+                    missing_ok=True,
                 ),
             )
         except ValueError as e:
@@ -4284,7 +4286,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
         try:
             prompt_text = _expand_skill_line(prompt_text, state)
             turn_cfg = _cfg_for_live_state(cfg, state)
-            user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
+            user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg, missing_ok=True)
         except ValueError as e:
             # AttachmentError / SkillInvocationError (ValueErrors) or a login-gate
             # routing error from re-resolving the live model: degrade to one friendly

@@ -4,5 +4,6 @@
   "prepare_image_vision_disabled_image_bytes_not_sent": "{stub} (vision disabled; image bytes not sent)",
   "format_text_attachment_attached_file_bytes": "Attached file: {display_path} ({size} bytes)",
   "format_text_attachment_truncated_to_bytes": " [truncated to {cap} bytes]",
-  "format_text_attachment_text": "{header}\n{fence}\n{text}\n{value_3}"
+  "format_text_attachment_text": "{header}\n{fence}\n{text}\n{value_3}",
+  "prepare_attachment_not_found": "[Attachment {path} not found: nothing was attached.]"
 }
