@@ -2687,7 +2687,10 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 caller_key: str | None = None, announce_generated: bool | None = None,
                 events: headless.JsonEvents | None = None,
                 config_pins: bool = False, swarm: str | None = None) -> int:
-    attachments = list(files or [])
+    # @path in the prompt attaches like it does in the REPL, read here before
+    # any jail, so `-p "@/tmp/prompt.txt"` needs no JAIL_BIND.
+    prompt, named = attach.split_repl_attachments(prompt)
+    attachments = [*(files or []), *named]
     if not prompt.strip() and not attachments:
         msgs.warn(msgs.PROMPT_EMPTY)
         return 2

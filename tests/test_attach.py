@@ -84,6 +84,23 @@ def test_prompt_file_text_attachment_inlines_content(monkeypatch, tmp_path, caps
     assert persisted[0] == {"role": "user", "content": seen[0]}
 
 
+def test_prompt_at_path_attaches_the_file(monkeypatch, tmp_path, capsys):
+    note = tmp_path / "prompt.txt"
+    note.write_text("review these commits\n", encoding="utf-8")
+    cfg = _cfg(tmp_path)
+    seen: list[str] = []
+
+    def stream_model_stub(**kwargs):
+        seen.append(kwargs["messages"][-1].parts[0].text)
+        return _fake_stream_result("AT_OK")
+
+    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
+
+    assert cli._run_prompt(f"@{note}") == 0
+    assert "review these commits" in seen[0]
+
+
 def test_prompt_dash_file_reads_stdin_bytes_as_attachment(monkeypatch):
     calls: list[dict] = []
 
