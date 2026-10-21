@@ -58,6 +58,7 @@ class MCPClient:
         on_resources_changed: NotificationSink | None = None,
         on_resource_updated: NotificationSink | None = None,
         on_prompts_changed: NotificationSink | None = None,
+        on_channel: NotificationSink | None = None,
         log_sink: NotificationSink | None = None,
         progress_sink: NotificationSink | None = None,
         secrets: Iterable[str] = (),
@@ -86,6 +87,7 @@ class MCPClient:
             "notifications/resources/list_changed": on_resources_changed,
             "notifications/resources/updated": on_resource_updated,
             "notifications/prompts/list_changed": on_prompts_changed,
+            "notifications/claude/channel": on_channel,
             "notifications/message": log_sink,
             "notifications/progress": progress_sink,
         }

@@ -351,6 +351,7 @@ class MCPHost:
         self._client_factory = client_factory
         self.telemetry = telemetry
         self.event_sink = event_sink
+        self.channel_sink: Callable[[str, dict[str, Any]], Any] | None = None
         self.request_timeout = float(request_timeout)
         self.clients: dict[str, MCPClient] = {}
         self.remote_tools: dict[str, tuple[str, str, dict[str, Any]]] = {}
@@ -553,12 +554,19 @@ class MCPHost:
         def progress(params: dict[str, Any], name: str = server.name) -> None:
             self._event("mcp_progress", server=name, **_redact_value(params, secrets()))
 
+        async def channel(params: dict[str, Any]) -> None:
+            if self.channel_sink is not None:
+                result = self.channel_sink(server.name, _redact_value(params, secrets()))
+                if inspect.isawaitable(result):
+                    await result
+
         client = self._client_factory(
             transport_factory(server, timeout=self.request_timeout),
             on_tools_changed=lambda _params: changed("tools"),
             on_resources_changed=lambda _params: changed("resources"),
             on_prompts_changed=lambda _params: changed("prompts"),
             on_resource_updated=resource_updated,
+            on_channel=channel,
             log_sink=log,
             progress_sink=progress,
             # The host's encoding-aware scrubber does the client's redaction,

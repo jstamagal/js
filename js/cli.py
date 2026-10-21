@@ -3669,9 +3669,17 @@ async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop,
                 with contextlib.suppress(asyncio.CancelledError):
                     await job.task
                 continue
+            lines = [line]
             if _steer_mode(state) == "batch":
-                line = "\n".join([line, *_take_queued(queue)])
-            await _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, steer_inbox)
+                pending = [line, *_take_queued(queue)]
+                lines = []
+                for item in pending:
+                    if isinstance(item, str) and lines and isinstance(lines[-1], str):
+                        lines[-1] += "\n" + item
+                    else:
+                        lines.append(item)
+            for item in lines:
+                await _run_repl_turn(item, sup, cfg, state, telemetry, prompt_spec, loop, steer_inbox)
             while steer_inbox:
                 leftover = "\n".join(steer_inbox)
                 steer_inbox.clear()
@@ -3682,15 +3690,20 @@ async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop,
 
 async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, steer_inbox: list[str]) -> None:
     """Run ``line`` as one supervised turn and wait for it to end."""
-    prompt_text, line_attachments = attach.split_repl_attachments(line)
+    external_bundle = line if isinstance(line, attach.UserMessageBundle) else None
+    prompt_text, line_attachments = (
+        (external_bundle.history_message["content"], []) if external_bundle is not None
+        else attach.split_repl_attachments(line)
+    )
     _emit_repl_event(
         state, telemetry, "input", text=prompt_text, attachments=line_attachments
     )
     _sync_telemetry_from_live_settings(cfg, state, telemetry)
     try:
-        prompt_text = _expand_skill_line(prompt_text, state)
+        if external_bundle is None:
+            prompt_text = _expand_skill_line(prompt_text, state)
         turn_cfg = await loop.run_in_executor(None, _live_cfg_snapshot, cfg, state)
-        user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
+        user_bundle = external_bundle or attach.build_user_message(prompt_text, line_attachments, turn_cfg)
     except ValueError as e:
         # AttachmentError / SkillInvocationError (ValueErrors) or a login-gate
         # routing error from re-resolving the live model: degrade to one friendly
@@ -3708,7 +3721,7 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
     # Logged as the turn starts, not as the line was typed: a line queued
     # behind a running turn joins the transcript where the model sees it.
     if (sink := _transcript_sink(telemetry)) is not None:
-        sink.emit(output.event("transcript_user", text=line))
+        sink.emit(output.event("transcript_user", text=prompt_text))
     steered: list[attach.UserMessageBundle] = []
 
     async def take_steer() -> dict | None:
@@ -3952,6 +3965,20 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
     supervisor.set_current(sup)
     queue: asyncio.Queue = asyncio.Queue()
     steer_inbox: list[str] = []
+    mcp_host = state.get("mcp_host")
+
+    def channel_message(server: str, params: dict) -> None:
+        content = params.get("content")
+        if not isinstance(content, str) or not content.strip() or not state["running"]:
+            return
+        text = f"External MCP channel {json.dumps(server)}\n"
+        if isinstance(params.get("meta"), dict):
+            text += f"Metadata: {json.dumps(params['meta'], ensure_ascii=False)}\n"
+        message = {"role": "user", "content": text + "\n" + content}
+        queue.put_nowait(attach.UserMessageBundle(message, dict(message)))
+
+    if mcp_host is not None:
+        mcp_host.channel_sink = channel_message
     if prompt_spec.exchanges and not state["messages"]:
         # Runs inside the screen, as the first turn, so its output streams into
         # the scrollback instead of being drawn after the fact.
@@ -4080,6 +4107,8 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
                     with contextlib.suppress(Exception):
                         await task
     finally:
+        if mcp_host is not None:
+            mcp_host.channel_sink = None
         stream_transport.install_sink(None)
         ticker.cancel()
         telemetry.reasoning_factory = previous_reasoning_factory
