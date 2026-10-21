@@ -415,3 +415,14 @@ def test_repl_missing_attachment_becomes_note(tmp_path):
     bundle = attach.build_user_message("look", ["gone.png"], _cfg(tmp_path), cwd=tmp_path, missing_ok=True)
     assert bundle.history_message["content"].startswith("look")
     assert "gone.png" in bundle.history_message["content"]
+
+
+def test_copy_puts_the_answer_n_back_on_the_clipboard(monkeypatch):
+    runs = []
+    monkeypatch.setattr(cli, "_copy_command", lambda: ["clip"])
+    monkeypatch.setattr(cli.subprocess, "run", lambda command, input, **kw: runs.append((command, input)))
+    state = {"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "first answer"},
+                          {"role": "assistant", "content": [{"type": "text", "text": "a long line\nsecond"}]}]}
+    cli._cmd_copy("", state, None)
+    cli._cmd_copy("2", state, None)
+    assert runs == [(["clip"], b"a long line\nsecond\n"), (["clip"], b"first answer\n")]

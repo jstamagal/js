@@ -287,6 +287,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("PASTE_COLLAPSE_CHARS", "int", group="input"),
     SettingSpec("PASTE_IMAGE_COMMAND", "str",
                 empty=EMPTY_NONE, group="input"),
+    SettingSpec("COPY_COMMAND", "str",
+                empty=EMPTY_NONE, group="input"),
     # --- history ---
     SettingSpec("HISTORY_FILE", "str",
                 empty=EMPTY_NONE, group="history"),
@@ -572,7 +574,7 @@ def _coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         if not is_key_name(text):
             return None, msgs.EXPECTED_KEY.said(value=text)
         return " ".join(text.split()), None
-    if spec.key == "PASTE_IMAGE_COMMAND":
+    if spec.key in ("PASTE_IMAGE_COMMAND", "COPY_COMMAND"):
         try:
             words = shlex.split(text)
         except ValueError as exc:

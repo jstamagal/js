@@ -16,6 +16,7 @@ import shlex
 import shutil
 import sys
 import signal
+import subprocess
 import threading
 import textwrap
 import time
@@ -1883,6 +1884,47 @@ def _cmd_cost(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
+def _copy_command() -> list[str] | None:
+    """COPY_COMMAND split into words, else wl-copy under Wayland, else xclip
+    under X11; None when there is no clipboard."""
+    if configured := settings.live_value("COPY_COMMAND"):
+        return shlex.split(str(configured))
+    if os.environ.get("WAYLAND_DISPLAY"):
+        return ["wl-copy"]
+    if os.environ.get("DISPLAY"):
+        return ["xclip", "-selection", "clipboard"]
+    return None
+
+
+def _cmd_copy(arg: str, state: dict, cfg: Config) -> str | None:
+    """The answer ``arg`` back (1, the last, by default) onto the clipboard,
+    as the model wrote it: no wrapping, no marks, no padding."""
+    arg = arg.strip() or "1"
+    if not arg.isdigit() or int(arg) < 1:
+        msgs.say(msgs.COPY_USAGE)
+        return None
+    n = int(arg)
+    answers = [text for m in state["messages"] if m.get("role") == "assistant"
+               if (text := display_mod._content_text(m.get("content"))).strip()]
+    if len(answers) < n:
+        msgs.say(msgs.COPY_NOTHING, n=n)
+        return None
+    command = _copy_command()
+    if command is None:
+        msgs.say(msgs.COPY_NO_CLIPBOARD)
+        return None
+    text = answers[-n].strip("\n") + "\n"
+    try:
+        # wl-copy stays behind to serve the clipboard: no pipes it could hold open.
+        subprocess.run(command, input=text.encode(), stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=5, check=True)
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        msgs.say(msgs.FAILED, error=e)
+        return None
+    msgs.say(msgs.COPY_DONE, n=n, chars=f"{len(text):,}")
+    return None
+
+
 def _cmd_wipe(arg: str, state: dict, cfg: Config) -> str | None:
     bak = M.wipe(cfg.session_file)
     usage_mod.forget(cfg.session_file)
@@ -2286,6 +2328,7 @@ COMMANDS: dict[str, Command] = {
     "turns": Command(lambda arg, state, cfg: msgs.say(msgs.TURNS_COUNT, messages=msgs.plural(len(state["messages"]), "message")),
                      "turns", msgs.CMD_TURNS),
     "cost": Command(_cmd_cost, "cost", msgs.CMD_COST),
+    "copy": Command(_cmd_copy, "copy [N]", msgs.CMD_COPY),
     "session": Command(_cmd_session, "session [query]", msgs.CMD_SESSION, turn_state=True),
     "name": Command(_cmd_name, "name [title]", msgs.CMD_NAME),
     "jobs": Command(_cmd_jobs, "jobs", msgs.CMD_JOBS),

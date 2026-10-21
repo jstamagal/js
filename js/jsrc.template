@@ -250,6 +250,10 @@
 #   example:  set PASTE_IMAGE_COMMAND xclip -selection clipboard -t image/png -o
 #set -PASTE_IMAGE_COMMAND
 
+# Command /copy pipes text into, as the clipboard. Unset: wl-copy under
+# Wayland, else xclip -selection clipboard under X11.
+#   example:  set COPY_COMMAND wl-copy --primary
+
 # A paste longer than this many lines shows in the input line as one
 # [paste #N +X lines] marker so it doesn't flood your screen. The whole
 # text is still sent. 0: no line limit.
