@@ -1,13 +1,24 @@
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
+import sys
+import tracemalloc
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
+
+from js.capped_process import truncation_marker
 from js.toolkit import ToolContext
+from js.toolkit import fs
 from js.toolkit import wiki as wiki_module
 from js.toolkit.core import call_tool
 from js.toolkit.descriptions import load_description
 from js.toolkit.wiki import convert as wiki_convert_module
+from js.toolkit.wiki import helpers as wiki_helpers_module
 from js.toolkit.wiki.convert import wiki_convert
 from js.toolkit.wiki.ops import wiki_finish_ingest
 from js.toolkit.wiki.pages import wiki_write
@@ -105,7 +116,7 @@ def test_wiki_write_frontmatter_overwrite_guard_and_upsert(tmp_path):
         context=context,
     )
     after_blocked = page.read_text(encoding="utf-8")
-    context.remember_read(page, "test")
+    fs.read(str(page), context=context)
     upserted = wiki_write(
         str(vault),
         "concept",
@@ -159,6 +170,24 @@ def test_wiki_write_sanitizes_boolean_metadata_inputs(tmp_path):
     assert 'tags: ["wiki/concept"]' in content
     assert "source_count: 1" in content
     assert "True" not in content
+
+
+def test_wiki_write_overwrite_can_be_undone(tmp_path):
+    vault = _vault(tmp_path)
+    page = vault / "sources" / "article.md"
+    page.parent.mkdir()
+    original = b"# Article\n\nOriginal research notes.\n"
+    page.write_bytes(original)
+    context = _ctx(tmp_path)
+    fs.fs_read(file_path=str(page), context=context)
+
+    written = wiki_write(str(vault), "source", "Merged notes", slug="article",
+                         overwrite=True, context=context)
+    assert not written.startswith("ERROR"), written
+    assert page.read_bytes() != original
+    fs.undo(str(page), context=context)
+
+    assert page.read_bytes() == original
 
 
 def test_wiki_write_near_match_guard_for_shared_entity_and_concept_pages(tmp_path):
@@ -550,3 +579,177 @@ def test_wiki_write_accepts_an_absolute_vault_that_is_the_working_directory(tmp_
 
     assert written.startswith("wrote ")
     assert (tmp_path / "concepts" / "x.md").exists()
+
+
+def test_wiki_upsert_rejects_a_page_changed_since_read(tmp_path):
+    vault = _vault(tmp_path)
+    context = _ctx(tmp_path)
+    wiki_write(str(vault), "concept", "initial", slug="shared", context=context)
+    page = vault / "concepts" / "shared.md"
+    fs.read(str(page), context=context)
+    updated = page.read_text() + "\nAnother worker's evidence.\n"
+    page.write_text(updated)
+
+    result = wiki_write(str(vault), "concept", "stale merge", slug="shared",
+                        overwrite=True, context=context)
+
+    assert page.read_text() == updated
+    assert result.startswith("ERROR:")
+
+
+def test_wiki_upsert_follows_this_contexts_own_upsert(tmp_path):
+    vault = _vault(tmp_path)
+    context = _ctx(tmp_path)
+    wiki_write(str(vault), "concept", "initial", slug="shared", context=context)
+    page = vault / "concepts" / "shared.md"
+    fs.read(str(page), context=context)
+    wiki_write(str(vault), "concept", "first source", slug="shared", source_count=2,
+               overwrite=True, context=context)
+
+    result = wiki_write(str(vault), "concept", "second source", slug="shared", source_count=3,
+                        overwrite=True, context=context)
+
+    assert result.startswith("overwrote"), result
+    assert "second source" in page.read_text()
+
+
+def test_upsert_of_a_missing_slug_still_checks_for_duplicates(tmp_path):
+    vault = _vault(tmp_path)
+    context = _ctx(tmp_path)
+    wiki_write(str(vault), "concept", "canonical", slug="chain-of-draft", context=context)
+
+    result = wiki_write(str(vault), "concept", "duplicate", slug="chain-of-draft-prompting",
+                        overwrite=True, context=context)
+
+    assert not (vault / "concepts" / "chain-of-draft-prompting.md").exists()
+    assert result.startswith("NEAR-MATCH:")
+
+
+@pytest.mark.parametrize("suffix", [".pdf", ".docx"])
+def test_external_conversion_discloses_truncation_within_the_byte_cap(tmp_path, monkeypatch, suffix):
+    document = tmp_path / f"document{suffix}"
+    document.write_bytes(b"document fixture")
+    cap = 1025
+
+    def run(argv, **kwargs):
+        return SimpleNamespace(returncode=0, stdout=("é" * 4000).encode(), stderr=b"",
+                               stdout_truncated=False, stderr_truncated=False)
+
+    monkeypatch.setattr(wiki_helpers_module, "_run_capped", run)
+    monkeypatch.setattr(wiki_convert_module, "_which", lambda binary: f"/usr/bin/{binary}")
+
+    result = wiki_convert(str(document), context=_ctx(tmp_path, max_bytes=cap))
+
+    assert len(result.encode()) <= cap
+    assert truncation_marker(cap, "TOOL_RESULT_MAX") in result
+
+
+@pytest.mark.skipif(shutil.which("file") is None, reason="file is not installed")
+@pytest.mark.parametrize("filename", ["payload:text.bin", "payload:\ntext.bin"])
+def test_binary_classification_ignores_colons_in_the_filename(tmp_path, filename):
+    document = tmp_path / filename
+    document.write_bytes(b"\x00\x01\x02\x03" * 100)
+
+    result = wiki_convert(str(document), context=_ctx(tmp_path))
+
+    assert result.startswith("UNREADABLE/binary:")
+
+
+def test_existing_media_comparison_uses_bounded_memory(tmp_path):
+    vault = _vault(tmp_path)
+    source = tmp_path / "large.mp4"
+    source.write_bytes(b"v" * (4 * 1024 * 1024))
+    assets = vault / "assets"
+    assets.mkdir()
+    destination = assets / source.name
+    shutil.copyfile(source, destination)
+    tracemalloc.start()
+    try:
+        result = wiki_helpers_module.copy_to_assets(source, vault, _ctx(tmp_path))
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert result == destination
+    assert peak < 1_000_000
+
+
+def test_failed_upsert_preserves_the_complete_existing_page(tmp_path, monkeypatch):
+    vault = _vault(tmp_path)
+    page = vault / "sources" / "article.md"
+    page.parent.mkdir()
+    original = b"# Article\n\nOriginal research notes.\n"
+    page.write_bytes(original)
+    context = _ctx(tmp_path)
+    fs.read(str(page), context=context)
+    real_open = Path.open
+
+    @contextmanager
+    def open_path(path, mode="r", *args, **kwargs):
+        with real_open(path, mode, *args, **kwargs) as stream:
+            if path.parent == page.parent and mode in ("wb", "xb"):
+                def write(data):
+                    stream.write(data[:16])
+                    stream.flush()
+                    raise OSError("disk full")
+
+                yield SimpleNamespace(write=write)
+            else:
+                yield stream
+
+    monkeypatch.setattr(Path, "open", open_path)
+
+    result = wiki_write(str(vault), "source", "Merged evidence", slug="article",
+                        overwrite=True, context=context)
+
+    assert result.startswith("ERROR:")
+    assert page.read_bytes() == original
+    assert list(page.parent.iterdir()) == [page]
+
+
+@pytest.mark.parametrize("suffix", [".txt", ".xlsx"])
+def test_file_conversion_reads_only_a_bounded_prefix(tmp_path, monkeypatch, suffix):
+    document = tmp_path / f"large{suffix}"
+    document.write_bytes(b"x" * (4 * 1024 * 1024))
+
+    def run(cmd, context):
+        outdir = Path(cmd[cmd.index("--outdir") + 1])
+        for name in ("First", "Second"):
+            os.link(document, outdir / f"large-{name}.csv")
+        return 0, "", ""
+
+    monkeypatch.setattr(wiki_convert_module, "_which", lambda name: name if name == "soffice" else None)
+    monkeypatch.setattr(wiki_convert_module, "run", run)
+    tracemalloc.start()
+    try:
+        result = wiki_convert(str(document), context=_ctx(tmp_path, max_bytes=1024))
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert "x" * 100 in result
+    assert len(result.encode()) <= 1024
+    assert truncation_marker(1024, "TOOL_RESULT_MAX") in result
+    assert peak < 1_000_000
+
+
+def test_converter_capture_retains_bounded_memory_while_draining_both_streams(tmp_path):
+    script = (
+        "import os\n"
+        "for _ in range(64):\n"
+        "    os.write(1, b'x' * 65536)\n"
+        "    os.write(2, b'y' * 65536)\n"
+    )
+    tracemalloc.start()
+    try:
+        rc, out, err = wiki_helpers_module.run(
+            [sys.executable, "-c", script], _ctx(tmp_path, max_bytes=1024), timeout=10,
+        )
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert rc == 0
+    assert out.startswith("x") and err.startswith("y")
+    assert len(out.encode()) <= 1024 and len(err.encode()) <= 1024
+    assert peak < 1_000_000

@@ -6,6 +6,8 @@ separate runtime concern.
 
 from __future__ import annotations
 
+from . import messages as msgs
+
 import fnmatch
 import json
 import math
@@ -88,7 +90,7 @@ def _pairs_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
-            raise MCPConfigError(f"duplicate object key: {key!r}")
+            raise MCPConfigError(msgs.MCP_CONFIG_DUPLICATE_OBJECT_KEY.format(key=key))
         result[key] = value
     return result
 
@@ -99,9 +101,9 @@ def _json_object(raw: str, setting: str) -> dict[str, Any]:
     except MCPConfigError:
         raise
     except (json.JSONDecodeError, ValueError) as exc:
-        raise MCPConfigError(f"{setting} must be a JSON object") from exc
+        raise MCPConfigError(msgs.MCP_CONFIG_MUST_BE_A_JSON_OBJECT.format(setting=setting)) from exc
     if not isinstance(value, dict):
-        raise MCPConfigError(f"{setting} must be a JSON object")
+        raise MCPConfigError(msgs.MCP_CONFIG_MUST_BE_A_JSON_OBJECT.format(setting=setting))
     return value
 
 
@@ -109,52 +111,52 @@ def _string_map(value: Any, field: str) -> Mapping[str, str]:
     if not isinstance(value, dict) or any(
         not isinstance(key, str) or not isinstance(item, str) for key, item in value.items()
     ):
-        raise MCPConfigError(f"{field} must be an object of string values")
+        raise MCPConfigError(msgs.MCP_CONFIG_MUST_BE_AN_OBJECT_OF_STRING_VALUES.format(field=field))
     return MappingProxyType(dict(value))
 
 
 def _string_list(value: Any, field: str) -> tuple[str, ...]:
     if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
-        raise MCPConfigError(f"{field} must be a list of non-empty strings")
+        raise MCPConfigError(msgs.MCP_CONFIG_MUST_BE_A_LIST_OF_NON_EMPTY.format(field=field))
     return tuple(value)
 
 
 def parse_servers(value: Mapping[str, Any]) -> tuple[tuple[MCPServer, bool], ...]:
     """Validate server definitions, retaining enabled state for policy resolution."""
     if not isinstance(value, Mapping):
-        raise MCPConfigError("MCP_SERVERS must be a JSON object")
+        raise MCPConfigError(msgs.MCP_CONFIG_MCP_SERVERS_MUST_BE_A_JSON_OBJECT.format())
     servers: list[tuple[MCPServer, bool]] = []
     normalized: dict[str, str] = {}
     for name, entry in value.items():
         if not isinstance(name, str) or not name.strip():
-            raise MCPConfigError("mcp server names must be non-empty strings")
+            raise MCPConfigError(msgs.MCP_CONFIG_MCP_SERVER_NAMES_MUST_BE_NON_EMPTY.format())
         normalized_name = normalize_server_name(name)
         if not normalized_name:
-            raise MCPConfigError(f"mcp server name {name!r} has no usable characters")
+            raise MCPConfigError(msgs.MCP_CONFIG_MCP_SERVER_NAME_HAS_NO_USABLE_CHARACTERS.format(name=name))
         previous = normalized.get(normalized_name)
         if previous is not None:
             raise MCPConfigError(
-                f"mcp server names {previous!r} and {name!r} normalize to the same name"
+                msgs.MCP_CONFIG_MCP_SERVER_NAMES_AND_NORMALIZE_TO_THE.format(previous=previous, name=name)
             )
         normalized[normalized_name] = name
         if not isinstance(entry, dict):
-            raise MCPConfigError(f"mcp server {name!r} must be an object")
+            raise MCPConfigError(msgs.MCP_CONFIG_MCP_SERVER_MUST_BE_AN_OBJECT.format(name=name))
         unknown = set(entry) - {"enabled", "command", "args", "env", "url", "headers"}
         if unknown:
-            raise MCPConfigError(f"mcp server {name!r} has unknown field {sorted(unknown)[0]!r}")
+            raise MCPConfigError(msgs.MCP_CONFIG_MCP_SERVER_HAS_UNKNOWN_FIELD.format(name=name, value=sorted(unknown)[0]))
         enabled = entry.get("enabled", True)
         if not isinstance(enabled, bool):
-            raise MCPConfigError(f"mcp server {name!r}.enabled must be a boolean")
+            raise MCPConfigError(msgs.MCP_CONFIG_MCP_SERVER_ENABLED_MUST_BE_A_BOOLEAN.format(name=name))
         has_command = "command" in entry
         has_url = "url" in entry
         if has_command == has_url:
-            raise MCPConfigError(f"mcp server {name!r} requires exactly one of command or url")
+            raise MCPConfigError(msgs.MCP_CONFIG_MCP_SERVER_REQUIRES_EXACTLY_ONE_OF_COMMAND.format(name=name))
         if has_command:
             command = entry["command"]
             if not isinstance(command, str) or not command:
-                raise MCPConfigError(f"mcp server {name!r}.command must be a non-empty string")
+                raise MCPConfigError(msgs.MCP_CONFIG_MCP_SERVER_COMMAND_MUST_BE_A_NON.format(name=name))
             if "headers" in entry:
-                raise MCPConfigError(f"mcp server {name!r}.headers is only valid with url")
+                raise MCPConfigError(msgs.MCP_CONFIG_MCP_SERVER_HEADERS_IS_ONLY_VALID_WITH.format(name=name))
             args = _string_list(entry.get("args", []), f"mcp server {name!r}.args")
             env = _string_map(entry.get("env", {}), f"mcp server {name!r}.env")
             server = MCPServer(
@@ -168,17 +170,17 @@ def parse_servers(value: Mapping[str, Any]) -> tuple[tuple[MCPServer, bool], ...
         else:
             url = entry["url"]
             if not isinstance(url, str) or not url:
-                raise MCPConfigError(f"mcp server {name!r}.url must be a non-empty string")
+                raise MCPConfigError(msgs.MCP_CONFIG_MCP_SERVER_URL_MUST_BE_A_NON.format(name=name))
             try:
                 parsed = urlsplit(url)
             except ValueError as exc:
-                raise MCPConfigError(f"mcp server {name!r}.url is invalid") from exc
+                raise MCPConfigError(msgs.MCP_CONFIG_MCP_SERVER_URL_IS_INVALID.format(name=name)) from exc
             if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-                raise MCPConfigError(f"mcp server {name!r}.url must use http or https")
+                raise MCPConfigError(msgs.MCP_CONFIG_MCP_SERVER_URL_MUST_USE_HTTP_OR.format(name=name))
             if parsed.username is not None or parsed.password is not None:
-                raise MCPConfigError(f"mcp server {name!r}.url must not contain userinfo")
+                raise MCPConfigError(msgs.MCP_CONFIG_MCP_SERVER_URL_MUST_NOT_CONTAIN_USERINFO.format(name=name))
             if "args" in entry or "env" in entry:
-                raise MCPConfigError(f"mcp server {name!r} stdio fields require command")
+                raise MCPConfigError(msgs.MCP_CONFIG_MCP_SERVER_STDIO_FIELDS_REQUIRE_COMMAND.format(name=name))
             headers = _string_map(entry.get("headers", {}), f"mcp server {name!r}.headers")
             server = MCPServer(
                 name=name,
@@ -205,25 +207,25 @@ def _policy_patterns(section: Mapping[str, Any], field: str) -> tuple[str, ...] 
 
 def parse_agents(value: Mapping[str, Any]) -> Mapping[str, MCPPolicy]:
     if not isinstance(value, Mapping):
-        raise MCPConfigError("MCP_AGENT_POLICY must be a JSON object")
+        raise MCPConfigError(msgs.MCP_CONFIG_MCP_AGENT_POLICY_MUST_BE_A_JSON.format())
     result: dict[str, MCPPolicy] = {}
     for agent_id, entry in value.items():
         if not isinstance(agent_id, str) or _AGENT_ID_RE.fullmatch(agent_id) is None:
-            raise MCPConfigError("mcp agent ids may contain only letters, numbers, '_' or '-'")
+            raise MCPConfigError(msgs.MCP_CONFIG_MCP_AGENT_IDS_MAY_CONTAIN_ONLY_LETTERS.format())
         if not isinstance(entry, dict):
-            raise MCPConfigError(f"mcp agent {agent_id!r} policy must be an object")
+            raise MCPConfigError(msgs.MCP_CONFIG_MCP_AGENT_POLICY_MUST_BE_AN_OBJECT.format(agent_id=agent_id))
         unknown = set(entry) - {"servers", "tools"}
         if unknown:
-            raise MCPConfigError(f"mcp agent {agent_id!r} has unknown field {sorted(unknown)[0]!r}")
+            raise MCPConfigError(msgs.MCP_CONFIG_MCP_AGENT_HAS_UNKNOWN_FIELD.format(agent_id=agent_id, value=sorted(unknown)[0]))
         sections: dict[str, dict[str, Any]] = {}
         for section in ("servers", "tools"):
             section_value = entry.get(section, {})
             if not isinstance(section_value, dict):
-                raise MCPConfigError(f"mcp agent {agent_id!r}.{section} must be an object")
+                raise MCPConfigError(msgs.MCP_CONFIG_MCP_AGENT_MUST_BE_AN_OBJECT.format(agent_id=agent_id, section=section))
             section_unknown = set(section_value) - {"allow", "deny"}
             if section_unknown:
                 raise MCPConfigError(
-                    f"mcp agent {agent_id!r}.{section} has unknown field {sorted(section_unknown)[0]!r}"
+                    msgs.MCP_CONFIG_MCP_AGENT_HAS_UNKNOWN_FIELD_226.format(agent_id=agent_id, section=section, value=sorted(section_unknown)[0])
                 )
             sections[section] = section_value
         result[agent_id] = MCPPolicy(
@@ -274,8 +276,8 @@ def _request_timeout(value: Any) -> float | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise MCPConfigError(f"MCP_TIMEOUT must be a positive number, got {value!r}")
+        raise MCPConfigError(msgs.MCP_CONFIG_MCP_TIMEOUT_MUST_BE_A_POSITIVE_NUMBER.format(value=value))
     number = float(value)
     if not (math.isfinite(number) and number > 0):
-        raise MCPConfigError(f"MCP_TIMEOUT must be a positive number, got {value!r}")
+        raise MCPConfigError(msgs.MCP_CONFIG_MCP_TIMEOUT_MUST_BE_A_POSITIVE_NUMBER.format(value=value))
     return number

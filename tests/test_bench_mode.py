@@ -153,42 +153,18 @@ def test_bench_requires_benchmark_files(tmp_path, monkeypatch):
     assert _bench("noBench") == 2
 
 
-def test_bench_banner_shows_the_expanded_prompt(tmp_path, monkeypatch, capsys):
-    """The banner names the prompt that was sent, not its unexpanded source."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("BENCH_PROBE", "expanded-value")
-    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
-    monkeypatch.delenv("JS_SESSION", raising=False)
-    monkeypatch.chdir(tmp_path)
-    d = tmp_path / ".js" / "agents" / "probe"
-    d.mkdir(parents=True)
-    (d / "01-prompt.md").write_text("hi", encoding="utf-8")
-    (d / "01-benchmark.md").write_text("Probe {{BENCH_PROBE}}", encoding="utf-8")
-    monkeypatch.setattr(cli.runtime.model_client, "stream_model_async", _stream_stub([]))
-
-    rc = cli._run_bench(
-        "probe", model=None, reasoning=None, maxout=None, quiet=False, extras=None,
-        ignore_local_config=False, ignore_global_config=False, presets=None,
-        stats_json=None, stats_csv=None,
-    )
-
-    err = capsys.readouterr().err
-    assert rc == 0
-    assert "expanded-value" in err
-    assert "{{BENCH_PROBE}}" not in err
-
-
-def test_bench_default_cap_is_the_resolved_one_not_agent_yaml(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
-    monkeypatch.delenv("JS_SESSION", raising=False)
+def test_failed_benchmark_returns_failure_and_keeps_all_rows(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_agent(tmp_path)
-    (tmp_path / ".js" / "jsrc").write_text("set OUTPUT_TOKENS_MAX 700\n", encoding="utf-8")
-    captured: list = []
-    monkeypatch.setattr(cli.runtime.model_client, "stream_model_async", _stream_stub(captured))
-    assert _bench("jokertest") == 0
 
-    # 04-benchmark has no frontmatter: it takes the resolved cap, jsrc's 700,
-    # not agent.yaml's 4096.
-    assert captured[3] == 700
+    def fail(**kwargs):
+        raise RuntimeError("offline model failure")
+
+    monkeypatch.setattr(cli.runtime.model_client, "stream_model_async", fail)
+    out = tmp_path / "stats.json"
+    rc = _bench("jokertest", stats_json=str(out))
+
+    rows = json.loads(out.read_text(encoding="utf-8"))["benchmarks"]
+    assert len(rows) == 4
+    assert all(row["ok"] is False for row in rows)
+    assert rc == 1

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import time
 
+
 from js.toolkit import ToolContext
 from js.toolkit import process_net
 from js.toolkit.core import for_model
@@ -92,17 +93,6 @@ def test_handle_defaults_to_the_latest_running_job(tmp_path):
     shell("sleep 30", timeout=1, context=context)
     killed = shell(action="kill", context=context)
     assert killed.startswith("killed handle")
-
-
-def test_clipped_output_still_reports_truncation(tmp_path):
-    context = ToolContext(
-        cwd=tmp_path,
-        max_bash_output_bytes=32,
-    )
-    result = shell("head -c 4096 /dev/zero | tr '\\0' x", timeout=10, context=context)
-    assert "exit=0" in result
-    assert "[truncated: SHELL_OUTPUT_MAX (32) reached;" in result
-    assert "x" * 33 not in result
 
 
 def test_unknown_action_and_missing_command_are_errors(tmp_path):

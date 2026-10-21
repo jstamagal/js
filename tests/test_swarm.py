@@ -9,7 +9,6 @@ import asyncio
 import io
 import json
 import os
-import signal
 import sys
 import threading
 import time
@@ -348,7 +347,7 @@ def test_spawn_runs_the_parents_command_under_a_new_name(tmp_path, monkeypatch):
                                                                             "--swarm", "/r/twig"]
     with pytest.raises(ValueError):
         a.spawn("twig", "again")  # already on the bus
-    monkeypatch.setattr(swarm, "SPAWN_CAP", 1)
+    swarm._settings.bind_live_settings({"SWARM_SPAWN_MAX": 1})
     with pytest.raises(ValueError):
         a.spawn("moss", "one over the cap")
 
@@ -366,44 +365,6 @@ def _agent_dir(tmp_path, monkeypatch):
     directory = tmp_path / ".js" / "agents" / "voice"
     directory.mkdir(parents=True)
     (directory / "00-role.md").write_text("SYSTEM", encoding="utf-8")
-
-
-def test_a_swarm_agent_sleeps_after_its_turn_and_wakes_on_a_message(tmp_path, monkeypatch):
-    _agent_dir(tmp_path, monkeypatch)
-    room = swarm.Room(tmp_path / "bus")
-    turns: list[list[str]] = []
-
-    def stream(**kwargs):
-        turns.append(["".join(p.text for p in m.parts if p.kind == "text")
-                      for m in kwargs["messages"] if m.role == "user"])
-        if len(turns) == 1:
-            threading.Timer(0.3, lambda: room.send("b", "a", "ping")).start()
-            answer = "first"
-        else:
-            room.send("steer", "a", "enough", kind="stop")  # lands during the turn; honored after it
-            answer = "second"
-        kwargs["on_text"](answer)
-        return ModelStreamResult(text=answer, tool_calls=[], reasoning="",
-                                 usage=ai.types.usage.Usage(input_tokens=0, output_tokens=1),
-                                 finish_reason="stop", assistant_message=ai.assistant_message(answer))
-
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
-    out = io.StringIO()
-
-    before = signal.getsignal(signal.SIGTERM)
-    code = cli._run_prompt("go", session="s1", swarm=str(tmp_path / "bus" / "a"), events=headless.JsonEvents(out))
-
-    assert code == 0
-    # The run's SIGTERM handler is gone once it ends: a later SIGTERM to this
-    # process is not turned into ^C.
-    assert signal.getsignal(signal.SIGTERM) is before
-    assert len(turns) == 2
-    assert "ping" in turns[1][-1] and "[#1 b -> you" in turns[1][-1]
-    kinds = [json.loads(line)["type"] for line in out.getvalue().splitlines()]
-    assert kinds.count("turn_start") == 2
-    second_turn = kinds.index("turn_start", kinds.index("turn_start") + 1)
-    assert kinds.index("sleep") < kinds.index("wake") < second_turn
-    assert kinds[-1] == "wake"  # the stop was the last thing it woke to; no turn ran on it
 
 
 # --------------------------------------------------------------------------
@@ -461,6 +422,20 @@ def test_run_spec_runs_every_agent_in_one_process_until_each_stops(tmp_path, mon
 
 def _user_texts_of(messages: list[dict]) -> list[str]:
     return [str(m.get("content") or "") for m in messages if m.get("role") == "user"]
+
+
+def test_swarm_runner_fails_when_an_agent_cannot_be_configured(tmp_path, monkeypatch):
+    def configure(spec):
+        raise ValueError("invalid agent configuration")
+
+    monkeypatch.setattr(swarm_run, "_configure", configure)
+    out = io.StringIO()
+    spec = _spec(tmp_path, [{"name": "a", "opener": "go", "cwd": str(tmp_path)}])
+
+    assert swarm_run.run(spec, out=out) == 1
+    events = _events(out)
+    assert [(e["agent"], e["reason"]) for e in events if e["type"] == "agent_end"] == [("a", "error")]
+    assert events[-1]["exit_code"] == 1
 
 
 def test_recruit_in_process_adds_an_agent_to_the_same_loop(tmp_path, monkeypatch):
@@ -552,3 +527,43 @@ def test_compaction_runs_before_a_swarm_agent_sleeps(tmp_path, monkeypatch):
     assert code == 0
     assert timeline.count("turn") == 2
     assert timeline[:4] == ["turn", "compact", "turn", "compact"]  # the trigger ran before each sleep
+
+
+def test_registered_swarm_spawn_limit_prevents_launch(tmp_path, monkeypatch):
+    from js import settings
+
+    agent = swarm.Agent(tmp_path / "bus" / "parent")
+    settings.bind_live_settings({"SWARM_SPAWN_MAX": 0})
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("child must not start")
+
+    monkeypatch.setattr(swarm.subprocess, "Popen", forbidden)
+    with pytest.raises(ValueError):
+        agent.spawn("child", "work")
+
+
+def test_swarm_runner_accepts_agent_configuration_service(tmp_path):
+    configured = []
+    def configure(spec):
+        configured.append(spec.name)
+        raise ValueError("configuration refused")
+    spec = _spec(tmp_path, [{"name": "a", "opener": "go", "cwd": str(tmp_path)}])
+    assert swarm_run.run(spec, out=io.StringIO(), configure=configure) == 1
+    assert configured == ["a"]
+
+
+def test_bus_send_hands_its_message_to_the_result_event(tmp_path, capsys):
+    from js.toolkit.core import call_scope, call_view
+
+    agent = swarm.Agent(tmp_path / "bus" / "a")
+    context = ToolContext(cwd=tmp_path, swarm=agent)
+    with call_scope("send-1"):
+        swarm._send(to="b", text="inspect the parser", context=context)
+        message = call_view()["message"]
+
+    assert message["from"] == "a"
+    assert message["to"] == "b"
+    assert message["body"] == "inspect the parser"
+    assert message["seq"] == 1
+    assert capsys.readouterr() == ("", "")

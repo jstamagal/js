@@ -78,7 +78,14 @@ install:
     uv_bin="$(command -v uv)"
     bin="$HOME/.local/bin"
     launcher="$bin/js"
+    wiki="$bin/wiki"
     marker="# js launcher written by just install"
+    if [ -e "$wiki" ] || [ -L "$wiki" ]; then
+        if [ ! -L "$wiki" ] || [ "$(readlink "$wiki")" != "$repo/tools/wiki" ]; then
+            echo "!! $wiki is not this checkout's wiki symlink — remove it and rerun" >&2
+            exit 1
+        fi
+    fi
     # large wheels over a flaky link: retry the transfer before giving up.
     UV_HTTP_RETRIES="${UV_HTTP_RETRIES:-5}" uv sync --no-dev --inexact {{ browser-extra }}
     # the uv tool install this recipe used to make; its shim sits where the
@@ -102,7 +109,7 @@ install:
     EOF
     chmod 755 "$tmp"
     mv -f "$tmp" "$launcher"
-    ln -sf "$repo/tools/wiki" "$bin/wiki"
+    ln -sf "$repo/tools/wiki" "$wiki"
     # Optional binaries: just install-tool-binaries; browser: just install-browser.
     # put the managed binaries on the operator's PATH too. js itself resolves
     # them by absolute path, but fd/bat/fzf are downloaded for a human and for
@@ -186,7 +193,10 @@ uninstall:
     if uv tool list 2>/dev/null | grep -q '^js '; then
         uv tool uninstall js
     fi
-    rm -f "$HOME/.local/bin/wiki"
+    wiki="$HOME/.local/bin/wiki"
+    if [ -L "$wiki" ] && [ "$(readlink "$wiki")" = "$(pwd -P)/tools/wiki" ]; then
+        rm -f "$wiki"
+    fi
 
 # ── testing ─────────────────────────────────────────────────────────────────
 
@@ -199,12 +209,14 @@ test *args:
     scripts/cached-test.sh {{ args }} uv run {{ browser-extra }} --extra test pytest -q -m "not ai_provider and not vision and not e2e and not live" -p no:cacheprovider -n logical --dist worksteal
 
 # run one test file or node. e.g. just test-file tests/test_picker.py
+[positional-arguments]
 test-file file:
-    uv run {{ browser-extra }} --extra test pytest -q {{ file }}
+    uv run {{ browser-extra }} --extra test pytest -q "$1"
 
 # run tests by pytest marker. e.g. just test-mark "not ai_provider"
+[positional-arguments]
 test-mark marker:
-    uv run {{ browser-extra }} --extra test pytest -q -m "{{ marker }}"
+    uv run {{ browser-extra }} --extra test pytest -q -m "$1"
 
 # live ai_provider suite — needs configured provider creds or a local
 # OpenAI-compatible endpoint. e.g. AI_GATEWAY_API_KEY=... just test-live
@@ -295,21 +307,24 @@ check: lint deps-fresh
 
 # per-tool byte cost of model-facing descriptions and parameter schemas.
 # forwards args: just tool-bytes --surface shell
+[positional-arguments]
 tool-bytes *args:
-    uv run {{ browser-extra }} python -m js.tooldiag {{ args }}
+    uv run {{ browser-extra }} python -m js.tooldiag "$@"
 
 # move agents from 00-tools.yaml / 00*.md frontmatter to agent.yaml and drop
 # tools entries that match no tool, also from existing agent.yaml files. dry
 # run unless --apply; --show prints each agent.yaml. default root: the global
 # agents dir. just migrate-agents --apply ~/.js/agents .js/agents
+[positional-arguments]
 migrate-agents *args:
-    uv run {{ browser-extra }} python scripts/migrate_agents.py {{ args }}
+    uv run {{ browser-extra }} python scripts/migrate_agents.py "$@"
 
 # move the old js config, data and inbox directories into ~/.js, convert the
 # moved agents and file the old sessions by start directory. dry run unless
 # --apply. js does this once by itself on first start.
+[positional-arguments]
 migrate-home *args:
-    uv run python -m js.home {{ args }}
+    uv run python -m js.home "$@"
 
 # ── build / lockfile / housekeeping ─────────────────────────────────────────
 
@@ -390,17 +405,21 @@ toolbench-image:
     docker build -t js-toolbench:latest -f bench/toolbench/Dockerfile bench/toolbench
 
 # mine and print the tasks each suite repo yields; no model, no sandbox
+[positional-arguments]
 toolbench-mine *args:
-    uv run python bench/toolbench/run.py --mine {{ args }}
+    uv run python bench/toolbench/run.py --mine "$@"
 
 # prove the plumbing: RepoRacer's fake agents through the sandbox on one task
+[positional-arguments]
 toolbench-smoke *args:
-    uv run python bench/toolbench/run.py --agents fake-success,fake-noop --tasks 1 --repos click {{ args }}
+    uv run python bench/toolbench/run.py --agents fake-success,fake-noop --tasks 1 --repos click "$@"
 
 # the A/B: default agents (slim vs stock js) on every suite repo
+[positional-arguments]
 toolbench *args:
-    uv run python bench/toolbench/run.py {{ args }}
+    uv run python bench/toolbench/run.py "$@"
 
 # rebuild the summary of a finished run: just toolbench-report bench/toolbench/results/<stamp>
+[positional-arguments]
 toolbench-report dir:
-    uv run python bench/toolbench/run.py --report {{ dir }}
+    uv run python bench/toolbench/run.py --report "$1"

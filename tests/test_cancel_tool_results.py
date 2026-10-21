@@ -190,3 +190,60 @@ def test_cancel_interrupts_a_kernel_cell_left_in_flight(tmp_path, monkeypatch):
     asyncio.run(run())
 
     assert session.interrupts == 1
+
+
+def test_cancel_revokes_a_kernel_tools_pending_approval(tmp_path, monkeypatch):
+    import tempfile
+    from pathlib import Path
+
+    from js.toolkit.kernel_bridge import ToolBridge
+
+    target = tmp_path / "written"
+    messages = [{"role": "user", "content": "run"}]
+
+    with tempfile.TemporaryDirectory(prefix="jsb-") as directory:
+        bridge = ToolBridge(Path(directory) / "tools.sock")
+
+        def cell(context=None):
+            return str(bridge.handle({"op": "call", "token": bridge.token, "tool": "write"}))
+
+        def write(context=None):
+            target.write_text("ran")
+            return "written"
+
+        registry = ToolRegistry((Tool("cell", "test", cell, {}), Tool("write", "test", write, {})), {})
+        context = ToolContext(cwd=tmp_path)
+        bridge.attach(registry, context)
+        monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kw: _result(
+            ("c1", "cell", '{}')))
+
+        async def run():
+            entered = asyncio.Event()
+            release = asyncio.Event()
+
+            async def approve(call):
+                if call["name"] == "write":
+                    entered.set()
+                    await release.wait()
+                return None
+
+            job = asyncio.create_task(runtime.run_turn_async(
+                _cfg(tmp_path), "system", messages, runtime.Telemetry(None),
+                tool_registry=registry, tool_context=context, suppress_output=True, approve=approve))
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+                job.cancel()
+                # Bound the old path's wait while exposing a late decision's side effect.
+                asyncio.get_running_loop().call_later(0.1, release.set)
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(job, 2)
+                assert not target.exists()
+            finally:
+                release.set()
+                job.cancel()
+                await asyncio.gather(job, return_exceptions=True)
+
+        try:
+            asyncio.run(run())
+        finally:
+            bridge.close()

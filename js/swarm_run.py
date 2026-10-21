@@ -19,6 +19,8 @@ is persisted and the exit code is 130.
 
 from __future__ import annotations
 
+from . import messages as msgs
+
 import asyncio
 import contextlib
 import json
@@ -33,7 +35,7 @@ from typing import Any, TextIO
 from . import agent_messages, compaction, headless, hymem, login_defaults, runtime
 from . import memory as M
 from . import persona as P
-from . import swarm
+from . import swarm, settings as _settings
 from .config import from_env
 from .session_catalog import record_session_start
 from .toolkit.core import ToolContext
@@ -118,7 +120,8 @@ def _configure(spec: AgentSpec) -> tuple[Any, str, Any, Any]:
 
 
 class Runner:
-    def __init__(self, root: Path, specs: list[AgentSpec], slots: int | None, out: TextIO) -> None:
+    def __init__(self, root: Path, specs: list[AgentSpec], slots: int | None, out: TextIO, *, configure=None) -> None:
+        self.configure = configure
         self.root = root
         self.specs = specs
         self.spec_slots = slots
@@ -164,8 +167,9 @@ class Runner:
             if name in agent.room.members() or name in self.tasks or (home / "spawned").is_file():
                 raise ValueError(f"{name} is already on the bus")
             spawned = sum(1 for p in self.root.iterdir() if (p / "spawned").is_file()) if self.root.is_dir() else 0
-            if spawned >= swarm.SPAWN_CAP:
-                raise ValueError(f"this bus already has {spawned} recruited agents; the cap is {swarm.SPAWN_CAP}")
+            maximum = int(_settings.live_value("SWARM_SPAWN_MAX"))
+            if spawned >= maximum:
+                raise ValueError(f"this bus already has {spawned} recruited agents; the cap is {maximum}")
             child = replace(parent, name=name, opener=opener,
                             session=f"{parent.session}-{name}" if parent.session else None)
             home.mkdir(parents=True, exist_ok=True)
@@ -177,16 +181,17 @@ class Runner:
 
     async def run_agent(self, spec: AgentSpec) -> None:
         events = AgentEvents(self.out, self.lock, spec.name)
-        agent = swarm.Agent(self.root / spec.name)
-        agent.recruiter = self.recruiter(spec, agent)
         reason = "stopped"
         cfg = None
         messages: list[dict] = []
         context = ToolContext(cwd=Path(spec.cwd).expanduser() if spec.cwd else Path.cwd())
-        context.swarm = agent
         context.net_label = spec.name
         try:
-            cfg, system, prompt_spec, registry = _configure(spec)
+            agent = swarm.Agent(self.root / spec.name)
+            agent.recruiter = self.recruiter(spec, agent)
+            context.swarm = agent
+            configure = _configure if self.configure is None else self.configure
+            cfg, system, prompt_spec, registry = configure(spec)
             if self.gate is None:
                 slots = _slots(cfg, self.spec_slots)
                 self.gate = asyncio.Semaphore(slots) if slots > 0 else contextlib.nullcontext()
@@ -236,6 +241,8 @@ class Runner:
             reason = "cancelled"
         except Exception as exc:  # noqa: BLE001 - one agent's failure ends that agent, not the swarm
             reason = "error"
+            if self.code == 0:
+                self.code = 1
             events.emit("error", message=f"{type(exc).__name__}: {exc}", retryable=False)
         finally:
             if cfg is not None:
@@ -255,6 +262,7 @@ class Runner:
             await compaction.maybe_auto_compact_async(
                 cfg, auto, context, system, messages,
                 lambda: runtime._resolve_context_window(cfg.model, cfg.provider_id, cfg.provider_base_url),
+                emit=compaction.printing(), log_dir=compaction.flight_log_dir(cfg),
             )
 
 
@@ -266,20 +274,20 @@ def load_spec(path: str | os.PathLike[str]) -> tuple[Path, list[AgentSpec], int 
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     root = Path(str(raw.get("root") or "")).expanduser()
     if not str(raw.get("root") or ""):
-        raise ValueError("the spec needs a root: the bus directory")
+        raise ValueError(msgs.SWARM_RUN_THE_SPEC_NEEDS_A_ROOT_THE_BUS.format())
     agents = [AgentSpec.from_dict(d) for d in raw.get("agents") or []]
     if not agents:
-        raise ValueError("the spec names no agents")
+        raise ValueError(msgs.SWARM_RUN_THE_SPEC_NAMES_NO_AGENTS.format())
     names = [a.name for a in agents]
     if len(set(names)) != len(names):
-        raise ValueError(f"agent names repeat: {', '.join(n for n in names if names.count(n) > 1)}")
+        raise ValueError(msgs.SWARM_RUN_AGENT_NAMES_REPEAT.format(value=', '.join(n for n in names if names.count(n) > 1)))
     slots = raw.get("slots")
     return root, agents, None if slots is None else int(slots)
 
 
-def run(path: str | os.PathLike[str], out: TextIO | None = None) -> int:
+def run(path: str | os.PathLike[str], out: TextIO | None = None, *, configure=None) -> int:
     root, agents, slots = load_spec(path)
-    runner = Runner(root, agents, slots, out or sys.stdout)
+    runner = Runner(root, agents, slots, out or sys.stdout, configure=configure)
     return asyncio.run(runner.run())
 
 
@@ -287,5 +295,5 @@ def main(path: str) -> int:
     try:
         return run(path)
     except (OSError, ValueError) as exc:
-        print(f"swarm run: {exc}", file=sys.stderr)
+        print(msgs.SWARM_RUN_FAILED.format(exc=exc), file=sys.stderr)
         return 2

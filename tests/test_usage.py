@@ -89,6 +89,13 @@ def test_a_model_the_catalog_does_not_price_counts_tokens_only():
     assert call.cost is None
 
 
+def test_local_model_named_like_an_api_model_is_not_charged_the_api_price():
+    call = usage.call_usage(_usage(500, 20), model="gpt-5", provider_id="llama.cpp")
+
+    assert (call.input_tokens, call.output_tokens) == (500, 20)
+    assert call.cost is None
+
+
 def test_a_price_tier_applies_from_its_minimum_context():
     tiers = [type("T", (), dict(min_context=0, input=1.0, output=2.0, cache_read=None, cache_write=None)),
              type("T", (), dict(min_context=200_000, input=10.0, output=20.0, cache_read=None, cache_write=None))]

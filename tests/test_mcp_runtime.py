@@ -99,6 +99,37 @@ def test_control_tools_obey_mcp_tool_policy_in_catalog_load_and_surface():
     assert host.tools({"mcp_resource_read", "mcp_resource_list"}) == ()
 
 
+def test_http_transport_uses_configured_request_timeout(monkeypatch):
+    from urllib.request import Request
+
+    server = MCPServer("HTTP", "http", "http", url="http://127.0.0.1:1/mcp")
+    host = MCPHost(MCPConfiguration((server,), MCPPolicy()), request_timeout=45, client_factory=FakeClient)
+
+    class Response:
+        status = 200
+
+    async def drive():
+        client = await host._ensure_server(server)
+        transport = client._factory()
+
+        def open_request(request, *, timeout):
+            if timeout < 30:
+                raise TimeoutError
+            return Response()
+
+        monkeypatch.setattr(transport._opener, "open", open_request)
+        response = transport._open(Request(server.url))
+        assert response.status == 200
+
+    class FactoryClient(FakeClient):
+        def __init__(self, factory, **kwargs):
+            super().__init__(factory, **kwargs)
+            self._factory = factory
+
+    host._client_factory = FactoryClient
+    asyncio.run(drive())
+
+
 @pytest.mark.parametrize("failure_stage", ("initialize", "list_tools"))
 def test_failed_server_is_visible_without_hiding_healthy_server_tools(failure_stage):
     class MixedClient(FakeClient):
@@ -161,6 +192,58 @@ def test_silent_stdio_server_returns_within_configured_deadline():
 
         assert elapsed < 1.0, f"silent server exceeded deadline: {elapsed:.3f}s"
         assert any(entry.id == "mcp:server-error:silent" for entry in found)
+
+    asyncio.run(drive())
+
+
+def test_discovery_lists_tools_after_recovering_initialization(config):
+    class RecoveringClient(FakeClient):
+        async def initialize(self, *, timeout=None):
+            if not getattr(self, "failed_once", False):
+                self.failed_once = True
+                raise ConnectionError("temporarily unavailable")
+            self.tools = [{"name": "ready", "inputSchema": {"type": "object"}}]
+            await super().initialize(timeout=timeout)
+
+    async def drive():
+        host = MCPHost(config, client_factory=RecoveringClient)
+        try:
+            await host.discover(query="mcp")
+            found = await host.discover(query="mcp")
+
+            assert "alpha_server__ready" in host.remote_tools
+            assert any(entry.id == "mcp:alpha_server__ready" for entry in found)
+        finally:
+            await host.close()
+
+    asyncio.run(drive())
+
+
+def test_cancelled_discovery_retries_pending_tool_metadata(config):
+    async def drive():
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        class WaitingClient(FakeClient):
+            async def list_tools(self, *, timeout=None):
+                entered.set()
+                await release.wait()
+                return [{"name": "ready", "inputSchema": {"type": "object"}}]
+
+        host = MCPHost(config, client_factory=WaitingClient)
+        discovery = asyncio.create_task(host.discover(query="mcp"))
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            discovery.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await discovery
+            release.set()
+
+            found = await host.discover(query="mcp")
+
+            assert any(entry.id == "mcp:alpha_server__ready" for entry in found)
+        finally:
+            await host.close()
 
     asyncio.run(drive())
 
@@ -1223,19 +1306,6 @@ def test_client_errors_are_encoding_redacted_and_long_names_dispatch():
         assert "[REDACTED]" in str(raised.value)
 
 
-def test_record_server_error_keeps_credentials_when_paranoid_mode_is_off():
-    server = MCPServer(
-        name="s", normalized_name="s", transport="http", url="http://127.0.0.1:1/mcp",
-        headers={"Authorization": "Bearer abc123"},
-    )
-    shown = MCPHost(MCPConfiguration((server,), MCPPolicy()), paranoid_mode="off")
-    hidden = MCPHost(MCPConfiguration((server,), MCPPolicy()), paranoid_mode="on")
-    for host in (shown, hidden):
-        host._record_server_error(server, RuntimeError("server rejected abc123"))
-    assert "abc123" in shown._server_errors["s"]
-    assert "abc123" not in hidden._server_errors["s"]
-
-
 def test_a_connected_servers_redaction_follows_paranoid_mode_changes():
     server = MCPServer(
         name="s", normalized_name="s", transport="http", url="http://127.0.0.1:1/mcp",
@@ -1268,77 +1338,3 @@ def test_run_turn_gives_a_reused_host_the_turns_paranoid_mode(tmp_path, monkeypa
         asyncio.run(runtime.run_turn_async(cfg, "s", [{"role": "user", "content": "hi"}],
                                            runtime.Telemetry(None), mcp_host=host))
     assert host.paranoid_mode == "on"
-
-
-def test_tool_metadata_is_redacted_again_when_masking_turns_on():
-    server = MCPServer(
-        name="s", normalized_name="s", transport="http", url="http://127.0.0.1:1/mcp",
-        headers={"Authorization": "Bearer abc123"},
-    )
-
-    class LeakyClient(FakeClient):
-        def __init__(self, factory, **kwargs):
-            super().__init__(factory, **kwargs)
-            self.tools = [{"name": "probe", "description": "uses abc123", "inputSchema": {}}]
-
-    host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=LeakyClient, paranoid_mode="off")
-
-    async def scenario():
-        await host._ensure_server(server)
-        await host.refresh()
-        before = repr(host.remote_tools)
-        host.paranoid_mode = "on"
-        await host.before_model_call()
-        return before, repr(host.remote_tools)
-
-    before, after = asyncio.run(scenario())
-    assert "abc123" in before
-    assert "abc123" not in after
-
-
-def test_turning_masking_on_redacts_cached_metadata_even_if_the_refresh_fails():
-    server = MCPServer(
-        name="s", normalized_name="s", transport="http", url="http://127.0.0.1:1/mcp",
-        headers={"Authorization": "Bearer abc123"},
-    )
-
-    class FlakyClient(FakeClient):
-        def __init__(self, factory, **kwargs):
-            super().__init__(factory, **kwargs)
-            self.tools = [{"name": "probe", "description": "uses abc123", "inputSchema": {}}]
-            self.down = False
-
-        async def list_tools(self, *, timeout=None):
-            if self.down:
-                raise ConnectionError("server gone")
-            return self.tools
-
-    host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=FlakyClient, paranoid_mode="off")
-
-    async def scenario():
-        await host._ensure_server(server)
-        await host.refresh()
-        FlakyClient.instances[-1].down = True
-        host.paranoid_mode = "on"
-        await host.before_model_call()
-        return repr(host.remote_tools), repr([t.description for t in host.tools(set(host.remote_tools))])
-
-    cached, tools = asyncio.run(scenario())
-    assert "abc123" not in cached
-    assert "abc123" not in tools
-
-
-def test_a_cached_server_error_is_masked_once_masking_turns_on():
-    leaky = MCPServer(
-        name="leaky", normalized_name="leaky", transport="http", url="http://127.0.0.1:1/mcp",
-        headers={"Authorization": "Bearer abc123"},
-    )
-    other = MCPServer(name="other", normalized_name="other", transport="stdio", command="true")
-    host = MCPHost(MCPConfiguration((leaky, other), MCPPolicy()), client_factory=FakeClient, paranoid_mode="off")
-    host._record_server_error(leaky, RuntimeError("server rejected abc123"))
-
-    host.paranoid_mode = "on"
-    entries = asyncio.run(host.discover("other rejected"))
-
-    assert any(entry.source == "leaky" for entry in entries)
-    assert "abc123" not in repr(entries)

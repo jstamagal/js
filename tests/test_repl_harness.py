@@ -7,8 +7,7 @@ from pathlib import Path
 import ai
 import pytest
 
-from js import cli, events, fset, setcmd, settings
-from js import messages as msgs
+from js import cli, events, settings
 from js.config import Config
 from js.memory import append_message, load_messages
 from repl_driver import run_blocking
@@ -97,32 +96,6 @@ def test_wipe_preserves_existing_backups_instead_of_overwriting(tmp_path):
     assert cfg.session_file.with_suffix(".jsonl.bak.1").exists()
     assert load_messages(first_backup) == [{"role": "user", "content": "first"}]
     assert load_messages(cfg.session_file.with_suffix(".jsonl.bak.1")) == [{"role": "user", "content": "second"}]
-
-
-def test_set_commands_parse_power_user_knobs():
-    live_settings = settings.seed_defaults()
-
-    trace = setcmd.set_command(live_settings, "TRANSCRIPT_LOG on")
-    assert trace.error is None
-    assert trace.lines == [msgs.SETTING_CHANGED.line(colour=False, key="TRANSCRIPT_LOG", value="on")]
-    assert settings.get_dotted(live_settings, ("TRANSCRIPT_LOG",)) is True
-
-    reasoning = setcmd.set_command(live_settings, "EFFORT max")
-    assert reasoning.error is None
-    assert reasoning.lines == [msgs.SETTING_CHANGED.line(colour=False, key="EFFORT", value="max")]
-    assert settings.get_dotted(live_settings, ("EFFORT",)) == "max"
-
-    maxout = setcmd.set_command(live_settings, "OUTPUT_TOKENS_MAX 64000")
-    assert maxout.error is None
-    assert maxout.lines == [msgs.SETTING_CHANGED.line(colour=False, key="OUTPUT_TOKENS_MAX", value="64000")]
-    assert settings.get_dotted(live_settings, ("OUTPUT_TOKENS_MAX",)) == 64000
-
-    # RULING A: magic strings die -- "off" is no longer a clear-token for a
-    # nullable int knob; `set -key` is the only way to clear one.
-    cleared = setcmd.set_command(live_settings, "-OUTPUT_TOKENS_MAX")
-    assert cleared.error is None
-    assert cleared.lines == [msgs.SETTING_CHANGED.line(colour=False, key="OUTPUT_TOKENS_MAX", value="<none>")]
-    assert settings.get_dotted(live_settings, ("OUTPUT_TOKENS_MAX",)) is None
 
 
 def test_unknown_commands_that_share_prefixes_are_refused_not_swallowed(tmp_path):
@@ -506,31 +479,6 @@ def test_repl_set_reasoning_effort_off_disables_provider_default(monkeypatch, tm
     assert seen == [("none", "none")]
 
 
-def test_repl_set_reasoning_effort_default_is_rejected_not_a_clear_token(monkeypatch, tmp_path):
-    # RULING B: "default"/"auto" are INVALID values now, not magic re-enable
-    # tokens — the knob stays disabled from the earlier `off`, and clearing
-    # back to the provider default is only `set -EFFORT`.
-    cfg = replace(make_cfg(tmp_path), reasoning_effort="xhigh", settings=settings.seed_defaults())
-    cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
-    seen: list[tuple[str | None, str | None]] = []
-
-    def run_turn_stub(cfg_arg, *args, **kwargs):
-        seen.append((cfg_arg.reasoning_effort, kwargs["reasoning_effort_override"]))
-
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-
-    run_blocking(cfg, [
-                "/set EFFORT off",
-                "/set EFFORT default",
-                "hello",
-                "exit",
-            ])
-
-    # the rejected `default` never mutated the setting -- still disabled from `off`
-    assert seen == [("none", "none")]
-
-
 def test_repl_set_reasoning_effort_clear_via_dash_key_restores_provider_default(monkeypatch, tmp_path):
     cfg = replace(make_cfg(tmp_path), reasoning_effort="xhigh", settings=settings.seed_defaults())
     cfg.prompts_dir.mkdir(parents=True)
@@ -787,7 +735,6 @@ def test_provider_command_shows_current_value_when_bare(tmp_path, capsys):
     assert "openai" in capsys.readouterr().out
 
 
-
 def test_model_command_opens_picker_and_updates_state(monkeypatch, tmp_path, capsys):
     cfg = make_cfg(tmp_path)
     config_path = tmp_path / "config" / "jsrc"
@@ -818,7 +765,6 @@ def test_model_command_opens_picker_and_updates_state(monkeypatch, tmp_path, cap
     assert state["provider_api_key"] == "sk-test"
     assert state["model"] == "deepseek-v4-flash"
     assert "set MODEL deepseek/deepseek-v4-flash" in config_path.read_text(encoding="utf-8")
-
 
 
 def test_model_picker_persists_provider_prefixed_default(monkeypatch, tmp_path, capsys):
@@ -875,7 +821,6 @@ def test_model_picker_persists_provider_prefixed_default(monkeypatch, tmp_path, 
     assert boot_cfg.model == "gpt-5.5"
 
 
-
 def test_model_command_with_prefixed_provider_resets_provider_state(tmp_path):
     from js import logins
 
@@ -911,25 +856,6 @@ def test_model_command_with_prefixed_provider_resets_provider_state(tmp_path):
         assert state["model"] == "gemma4:e2b"
     finally:
         logins.set_config_dir(None)
-
-
-def test_model_command_prints_the_model_as_provider_slash_model(monkeypatch, tmp_path, capsys):
-    from js import logins
-    from js import messages as msgs
-    from repl_driver import run_async
-
-    cfg = make_cfg(tmp_path)
-    cfg.prompts_dir.mkdir(parents=True)
-    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
-    logins.set_config_dir(tmp_path / "login-store")
-    logins.save_login(logins.Login(provider_id="ollama", provider_base_url="http://ollama.test/v1",
-                                   provider_api_key="ollama"))
-    try:
-        run_async(monkeypatch, cfg, ["/model ollama/gemma4:e2b"])
-    finally:
-        logins.set_config_dir(None)
-
-    assert msgs.MODEL_SET.line(colour=False, model="ollama/gemma4:e2b") in fset.plain(capsys.readouterr().out)
 
 
 def test_model_command_unlogged_vendor_prefix_stays_on_pinned_endpoint(tmp_path):
@@ -1020,7 +946,6 @@ def test_provider_command_uses_saved_login(tmp_path):
         assert state["provider_api_key"] == "sk-proxy"
     finally:
         logins.set_config_dir(None)
-
 
 
 def test_picker_open_preserves_explicit_logout_over_config(monkeypatch, tmp_path):

@@ -502,7 +502,8 @@ Parameters:
 Loads a local skill document by name from known skill paths.
 A skill whose frontmatter sets `disable-model-invocation: true` is user-only:
 the tool refuses it and the user loads it with `/skill <name>` in the REPL.
-The built-in skills in `js/skills/` are the lowest layer.
+The built-in skills in `js/skills/` are the lowest layer. A skill named in
+`SKILLS_DISABLED` is not in the catalog: the tool refuses it like an unknown name.
 
 A skill whose frontmatter sets `paths:` (a list of globs, or one string of
 comma-separated globs) is path-scoped. Globs may be unquoted (`paths: *.rs`,

@@ -13,6 +13,7 @@ nothing more — all routing decisions live here.
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
@@ -55,7 +56,7 @@ def unconfigured_model_message(model: str) -> str:
     return msgs.MODEL_UNCONFIGURED.said(model=model)
 
 
-def _saved_login(provider_id: str | None):
+def _saved_login(provider_id: str | None, *, refresh=None):
     """Return the saved Login for ``provider_id`` (normalized), or None.
 
     Resilient by design: a missing/unreadable login store must never block
@@ -76,13 +77,18 @@ def _saved_login(provider_id: str | None):
     # refreshes inside its own provider; the xAI login rides the plain openai
     # transport, so the only place the token can be renewed before it is spent
     # is here, where the credential is read.
-    try:
-        from . import xai_auth as _xai_auth
+    from . import xai_auth as _xai_auth
 
-        if _xai_auth.is_xai_oauth_provider(normalized):
-            return _xai_auth.ensure_fresh_login(login)
-    except Exception:  # noqa: BLE001 - a stale token still beats no route at all
-        return login
+    if _xai_auth.is_xai_oauth_provider(normalized):
+        try:
+            return (_xai_auth.ensure_fresh_login if refresh is None else refresh)(login)
+        except Exception:
+            # Refresh starts _REFRESH_SKEW_SECONDS before expiry; until the
+            # bearer has actually expired it still authenticates.
+            expires = login.xai_token_expires
+            if login.provider_api_key and expires is not None and time.time() < _xai_auth._expiry_or_zero(expires):
+                return login
+            raise
     return login
 
 
@@ -103,6 +109,8 @@ def resolve_model_route(
     explicit_model: bool = False,
     prefix_overrides_provider: bool = False,
     use_saved_login: bool = True,
+    login_lookup=None,
+    prefix_allowed=None,
 ) -> ModelRoute:
     """Resolve ``requested_model`` into a full route.
 
@@ -130,16 +138,19 @@ def resolve_model_route(
     - ``explicit_model``: when False and no prefix routed, the provider's default
       model may fill in.
     """
+    lookup_login = _saved_login if login_lookup is None else login_lookup
     source = os.environ if env is None else env
     configured_provider_id = providers.normalize_provider_id(configured_provider_id)
 
     parsed_provider_id, parsed_model = providers.parse_model_prefix(str(requested_model))
-    prefix_login = _saved_login(parsed_provider_id) if parsed_provider_id is not None else None
+    prefix_login = lookup_login(parsed_provider_id) if parsed_provider_id is not None else None
     routes_by_prefix = parsed_provider_id is not None and (
         prefix_login is not None
         or parsed_provider_id == configured_provider_id
         or (prefix_overrides_provider and prefix_login is not None)
     )
+    if prefix_allowed is not None:
+        routes_by_prefix = prefix_allowed(parsed_provider_id, configured_provider_id, prefix_login)
     if routes_by_prefix:
         model = parsed_model or str(requested_model)
         provider_id = parsed_provider_id
@@ -174,7 +185,7 @@ def resolve_model_route(
     saved = None
     if provider_id is not None:
         if use_saved_login:
-            saved = _saved_login(provider_id)
+            saved = lookup_login(provider_id)
         elif prefix_login is not None and provider_id == parsed_provider_id:
             # Pinned, switched or unpinned alike: the login is why this routed.
             saved = prefix_login

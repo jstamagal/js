@@ -11,6 +11,8 @@ recalled from history in the same process still carries its image.
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
+from contextvars import ContextVar
 import os
 import re
 import shlex
@@ -24,6 +26,7 @@ from prompt_toolkit.filters import emacs_insert_mode, vi_insert_mode
 from prompt_toolkit.key_binding import DynamicKeyBindings, KeyBindings, KeyBindingsBase
 
 from . import messages as msgs
+from . import output
 from . import settings as _settings
 from .toolkit.fs import _detect_visual_mime
 
@@ -31,7 +34,6 @@ WAYLAND_COMMAND = ("wl-paste", "--type", "image/png")
 X11_COMMAND = ("xclip", "-selection", "clipboard", "-t", "image/png", "-o")
 # Over ssh there is no display; kitty forwards its clipboard through the tty.
 KITTY_COMMAND = ("kitten", "clipboard", "-g", "-m", "image/png", "/dev/stdout")
-READ_TIMEOUT_S = 5.0
 # A name without a suffix, so the paste check takes the mime type from the bytes.
 _DETECT_NAME = Path("clipboard")
 
@@ -39,6 +41,23 @@ _DETECT_NAME = Path("clipboard")
 # long digit run cannot hit int()'s digit limit.
 _PLACEHOLDER = re.compile(r"\[image #([1-9][0-9]{0,8})\]")
 _images: dict[int, bytes] = {}
+
+_STORE: ContextVar[dict | None] = ContextVar("js_image_store", default=None)
+
+
+@contextmanager
+def using_store(store: dict[int, bytes]):
+    """Keep and resolve images in the caller's store for the duration of the body."""
+    token = _STORE.set(store)
+    try:
+        yield store
+    finally:
+        _STORE.reset(token)
+
+
+def _store() -> dict[int, bytes]:
+    store = _STORE.get()
+    return _images if store is None else store
 
 
 class ClipboardError(Exception):
@@ -52,20 +71,21 @@ class ClipboardError(Exception):
 
 
 def placeholder(n: int) -> str:
-    return f"[image #{n}]"
+    return msgs.IMAGE_PLACEHOLDER.format(n=n)
 
 
 def keep(data: bytes) -> str:
     """Keep ``data`` and return the placeholder that names it."""
-    n = len(_images) + 1
-    _images[n] = data
+    store = _store()
+    n = len(store) + 1
+    store[n] = data
     return placeholder(n)
 
 
 def lookup(token: str) -> bytes | None:
     """The bytes a placeholder names; None for any other text."""
     match = _PLACEHOLDER.fullmatch(token)
-    return _images.get(int(match.group(1))) if match else None
+    return _store().get(int(match.group(1))) if match else None
 
 
 def placeholders(text: str) -> list[str]:
@@ -73,7 +93,7 @@ def placeholders(text: str) -> list[str]:
     found: list[str] = []
     for match in _PLACEHOLDER.finditer(text):
         token = match.group(0)
-        if int(match.group(1)) in _images and token not in found:
+        if int(match.group(1)) in _store() and token not in found:
             found.append(token)
     return found
 
@@ -88,12 +108,15 @@ def clipboard_command(settings: Mapping | None, env: Mapping[str, str] | None = 
         # Raises ValueError on an unbalanced quote; read_image reports it.
         return shlex.split(str(configured))
     env = os.environ if env is None else env
-    if env.get("WAYLAND_DISPLAY"):
-        return list(WAYLAND_COMMAND)
-    if env.get("DISPLAY"):
-        return list(X11_COMMAND)
-    if env.get("TERM") == "xterm-kitty":
-        return list(KITTY_COMMAND)
+    backends = {
+        "wayland": (bool(env.get("WAYLAND_DISPLAY")), WAYLAND_COMMAND),
+        "x11": (bool(env.get("DISPLAY")), X11_COMMAND),
+        "kitty": (env.get("TERM") == "xterm-kitty", KITTY_COMMAND),
+    }
+    for name in _settings.knob(settings, "PASTE_IMAGE_BACKENDS"):
+        available, command = backends.get(name, (False, ()))
+        if available:
+            return list(command)
     return None
 
 
@@ -126,7 +149,7 @@ def read_image(
     if shutil.which(argv[0]) is None:
         raise ClipboardError(msgs.CLIPBOARD_TOOL_MISSING, tool=argv[0])
     try:
-        done = run(argv, capture_output=True, timeout=READ_TIMEOUT_S, check=False)
+        done = run(argv, capture_output=True, timeout=float(_settings.knob(settings, "PASTE_IMAGE_TIMEOUT")), check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ClipboardError(msgs.CLIPBOARD_READ_FAILED, tool=argv[0], error=exc) from exc
     data = done.stdout or b""
@@ -178,7 +201,7 @@ async def _say(app, error: ClipboardError) -> None:
     """One line to the operator. The full-screen app routes stdout into its
     scrollback; a prompt session prints above its input line."""
     def show() -> None:
-        msgs.say(error.message, **error.fields)
+        output.notice(error.message, stderr=False, flush=False, **error.fields)
 
     if app.full_screen:
         show()

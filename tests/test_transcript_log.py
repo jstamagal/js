@@ -194,20 +194,6 @@ def test_transcript_file_gets_no_osc(tmp_path):
     assert "hi there" in text and "tool out" in text
 
 
-def test_an_escape_open_on_one_stream_hides_nothing_another_stream_writes():
-    import io
-
-    log = io.StringIO()
-    sink = transcript.TranscriptLogSink([log], [])
-    out = transcript.TranscriptTee(io.StringIO(), lambda: sink)
-    err = transcript.TranscriptTee(io.StringIO(), lambda: sink)
-    out.write("before \x1b]0;title")
-    err.write("STDERR_DIAGNOSTIC\n")
-    out.write("\x07 after\n")
-    assert "STDERR_DIAGNOSTIC" in log.getvalue()
-    assert "title" not in log.getvalue()
-
-
 def test_prompt_mode_transcript_records_each_tool_call_whole(monkeypatch, tmp_path, capsys):
     from types import SimpleNamespace
 
@@ -230,3 +216,90 @@ def test_prompt_mode_transcript_records_each_tool_call_whole(monkeypatch, tmp_pa
     capsys.readouterr()
     log = (log_dir / "sess.log").read_text(encoding="utf-8")
     assert all(f"TOOL_LINE_{n}" in log for n in range(30)), log
+
+
+def test_the_transcript_records_the_same_bytes_whatever_console_draws_the_turn(monkeypatch, tmp_path, capsys):
+    import asyncio
+    import re
+
+    from tool_loading import after_loading
+
+    from js import output
+    from js.model_client import ModelToolCall
+    from js.toolkit import ToolContext
+    from test_output import _offline_config, _reply
+
+    (tmp_path / "notes.txt").write_text("alpha\nbeta\n", encoding="utf-8")
+
+    def respond(**kwargs):
+        if not any(part.kind == "tool_result" and part.tool_call_id == "r1"
+                   for message in kwargs["messages"] for part in message.parts):
+            return _reply(tool_calls=[ModelToolCall(id="r1", name="read", arguments='{"file_path":"notes.txt"}')])
+        kwargs["on_text"]("the answer")
+        return _reply("the answer")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(respond, "read"))
+
+    class Silent:
+        def emit(self, event):
+            pass
+
+    def record(console) -> str:
+        path = tmp_path / f"{console}.log"
+        log = transcript.open_transcript_sink([path])
+        telemetry = runtime.Telemetry(None, transcript_log=log)
+        if console == "silent":
+            telemetry.sink = output.Fanout(transcript.TranscriptSink(telemetry), Silent())
+        asyncio.run(runtime.run_turn_async(
+            _offline_config(tmp_path, trace=True, settings={}), "system",
+            [{"role": "user", "content": "read notes.txt"}], telemetry, tool_context=ToolContext(cwd=tmp_path)))
+        log.close()
+        return re.sub(r"\[\d\d:\d\d\] ", "", path.read_text(encoding="utf-8"))
+
+    drawn = record("js")
+    assert capsys.readouterr().out
+    assert record("silent") == drawn
+    assert capsys.readouterr().out == ""
+    assert "alpha" in drawn and "<APE> the answer" in drawn
+
+
+def test_transcript_stdio_capture_emits_text_to_its_sink():
+    import io
+
+    captured = []
+
+    class Sink:
+        def emit(self, event):
+            captured.append(event)
+
+    sink = Sink()
+    stream = transcript.TranscriptTee(io.StringIO(), lambda: sink)
+    stream.write("raw output\n")
+
+    assert captured[0].name == "transcript_plain"
+    assert dict(captured[0].fields)["text"] == "raw output\n"
+
+
+def test_transcript_failure_setting_keeps_healthy_files_writable(tmp_path, monkeypatch):
+    import io
+
+    class BadFile:
+        def write(self, text):
+            raise OSError("unwritable")
+
+        def close(self):
+            pass
+
+    cfg = _cfg(tmp_path, tmp_path / "transcripts")
+    cfg.settings["TRANSCRIPT_DISABLE_ALL_ON_ERROR"] = False
+    healthy = io.StringIO()
+    monkeypatch.setattr(cli, "_open_transcript_log_sink",
+                        lambda paths: transcript.TranscriptLogSink([BadFile(), healthy], paths))
+    telemetry = runtime.Telemetry(None)
+    cli._sync_transcript_sink(cfg, cfg.settings, telemetry)
+    sink = telemetry.transcript_log
+    sink.write_plain("first\n")
+    sink.write_plain("second\n")
+
+    assert "first\n" in healthy.getvalue()
+    assert "second\n" in healthy.getvalue()

@@ -36,8 +36,9 @@ while you are off doing something else is kept and delivered on the next poll.
 Every result for a finished cell ends with a `NAMESPACE` line listing the
 functions and classes the session defined (`NAMESPACE (none)` when it defined
 none), and a `DEFINED` line for anything this cell added — functions, imports,
-and values alike. That listing is re-derived from the kernel itself on every
-call, so it is accurate even when the conversation that defined a function is no
+and values alike. That listing is re-derived from the kernel itself whenever
+it is idle; polling an older cell while another runs keeps the last completed
+listing. It stays available even when the conversation that defined a function is no
 longer in your context; it is the record of what the session has built.
 A cell that is still running ends with `HANDLE <id> RUNNING` instead, and
 a new `code` submitted while it runs is refused rather than queued behind it:

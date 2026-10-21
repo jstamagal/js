@@ -22,6 +22,7 @@ from typing import Any
 from prompt_toolkit.application import Application
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.formatted_text import StyleAndTextTuples
+from prompt_toolkit.filters import Condition
 from prompt_toolkit.input import Input, create_input
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.keys import Keys
@@ -31,7 +32,7 @@ from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.output import Output, create_output
 from prompt_toolkit.styles import Style
 
-from . import fset
+from . import fset, keys
 from . import messages as msgs
 from . import session_query as Q
 from . import session_store
@@ -82,9 +83,25 @@ def _style() -> Style:
         }
     )
 
-_MOVES = {"up": -1, "k": -1, "down": 1, "j": 1, "pageup": -_PAGE, "pagedown": _PAGE}
-_FIRST = ("home", "g")
-_LAST = ("end", "G")
+_MOVES = {"up": -1, "down": 1, "page_up": -_PAGE, "page_down": _PAGE}
+_NAVIGATION: keys.Keymap = {
+    "up": (("up",), ("k",)), "down": (("down",), ("j",)),
+    "page_up": (("pageup",),), "page_down": (("pagedown",),),
+    "first": (("home",), ("g",)), "last": (("end",), ("G",)),
+}
+_COMMON: keys.Keymap = {"interrupt": (("c-c",),), "choose": (("enter",),)}
+SESSION_KEYMAPS: dict[str, keys.Keymap] = {
+    "list": {**_COMMON, **_NAVIGATION, "view": (("v",),), "search": (("/",),),
+             "messages": (("b",),), "info": (("i",),), "all": (("a",),),
+             "back": (("escape",),), "quit": (("q",),)},
+    "search": {**_COMMON, "up": (("up",),), "down": (("down",),),
+               "page_up": (("pageup",),), "page_down": (("pagedown",),),
+               "back": (("escape",),), "backspace": (("backspace",),),
+               "clear": (("c-u",),), "delete_word": (("c-w",),)},
+    "messages": {**_COMMON, **_NAVIGATION, "resume": (("r",),),
+                 "back": (("escape",), ("q",), ("b",))},
+    "info": {**_COMMON, "back": (("escape",), ("q",), ("i",))},
+}
 
 
 class SessionPicker:
@@ -104,7 +121,9 @@ class SessionPicker:
         rows: Callable[[str], list[Any]] | None = None,
         tokens: Callable[[str], int | None] | None = None,
         messages: Callable[[str], list[dict]] | None = None,
+        keymaps: dict[str, keys.Keymap] | None = None,
     ) -> None:
+        self.keymaps = SESSION_KEYMAPS if keymaps is None else keymaps
         self.sessions = sessions
         self.cwd = str(cwd).rstrip("/") or "/"
         self.home = str(home)
@@ -233,85 +252,89 @@ class SessionPicker:
 
     def press(self, key: str) -> Choice | _Closed | None:
         """Apply one key. A Choice or CLOSED ends the picker; None keeps it open."""
-        if key == "c-c":
+        if keys.action_for(self.keymaps[self.screen], key) == "interrupt":
             return CLOSED
         handler = {"list": self._list_key, "search": self._search_key,
                    "messages": self._messages_key, "info": self._info_key}[self.screen]
         return handler(key)
 
     def _list_key(self, key: str) -> Choice | _Closed | None:
+        action = keys.action_for(self.keymaps[self.screen], key)
         session = self.current()
-        if key in _MOVES:
-            self.move(_MOVES[key])
-        elif key in _FIRST or key in _LAST:
-            self._jump(key in _LAST)
-        elif key == "enter":
+        if action in _MOVES:
+            self.move(_MOVES[action])
+        elif action in ("first", "last"):
+            self._jump(action == "last")
+        elif action == "choose":
             return Choice(RESUME, session) if session is not None else None
-        elif key == "v":
+        elif action == "view":
             self.view = Q.VIEWS[(Q.VIEWS.index(self.view) + 1) % len(Q.VIEWS)]
             self.refresh(self._keep())
-        elif key == "/":
+        elif action == "search":
             self.screen = "search"
-        elif key == "b" and session is not None:
+        elif action == "messages" and session is not None:
             self._open_messages(session)
-        elif key == "i" and session is not None:
+        elif action == "info" and session is not None:
             self._open_info(session)
-        elif key == "a":
+        elif action == "all":
             self.show_all = not self.show_all
             self.refresh(self._keep())
-        elif key == "escape":
+        elif action == "back":
             if not self.query_text:
                 return CLOSED
             self.query_text = ""
             self.refresh(self._keep())
-        elif key == "q":
+        elif action == "quit":
             return CLOSED
         return None
 
     def _search_key(self, key: str) -> Choice | _Closed | None:
+        action = keys.action_for(self.keymaps[self.screen], key)
         text = self.query_text
-        if key in ("up", "down", "pageup", "pagedown"):
-            self.move(_MOVES[key])
+        if action in _MOVES:
+            self.move(_MOVES[action])
             return None
-        if key == "enter":
+        if action == "choose":
             self.screen = "list"
             return None
-        if key == "escape":
+        if action == "back":
             self.query_text = ""
             self.screen = "list"
-        elif key == "backspace":
+        elif action == "backspace":
             self.query_text = text[:-1]
-        elif key == "c-u":
+        elif action == "clear":
             self.query_text = ""
-        elif key == "c-w":
+        elif action == "delete_word":
             self.query_text = text.rstrip()[: len(text.rstrip()) - len(text.rstrip().split(" ")[-1])]
-        elif len(key) == 1 and key.isprintable():
+        elif isinstance(key, str) and len(key) == 1 and key.isprintable():
             self.query_text = text + key
         if self.query_text != text:
             self.refresh()
         return None
 
     def _messages_key(self, key: str) -> Choice | _Closed | None:
+        action = keys.action_for(self.keymaps[self.screen], key)
         session = self.current()
         last = max(0, len(self.message_rows) - 1)
-        if key in _MOVES:
-            self.message_cursor = max(0, min(last, self.message_cursor + _MOVES[key]))
-        elif key in _FIRST or key in _LAST:
-            self.message_cursor = last if key in _LAST else 0
-        elif key == "enter" and session is not None and self.message_rows:
+        if action in _MOVES:
+            self.message_cursor = max(0, min(last, self.message_cursor + _MOVES[action]))
+        elif action in ("first", "last"):
+            self.message_cursor = last if action == "last" else 0
+        elif action == "choose" and session is not None and self.message_rows:
             row = self.message_rows[self.message_cursor]
             return Choice(BRANCH, session, row.number, getattr(row, "id", None))
-        elif key == "r" and session is not None:
+        elif action == "resume" and session is not None:
             return Choice(RESUME, session)
-        elif key in ("escape", "q", "b"):
+        elif action == "back":
             self._back()
         return None
 
     def _info_key(self, key: str) -> Choice | _Closed | None:
+        action = keys.action_for(self.keymaps[self.screen], key)
         session = self.current()
-        if key == "enter" and session is not None:
+        if action == "choose" and session is not None:
             return Choice(RESUME, session)
-        if key in ("escape", "q", "i"):
+        if action == "back":
             self._back()
         return None
 
@@ -323,18 +346,18 @@ class SessionPicker:
             text = msgs.SESSIONS_MESSAGES_TITLE.text(
                 when=Q.when_text(session.when, self.now), agent=session.agent or "-",
                 dir=Q.short_dir(session.cwd, self.home), turns=msgs.plural(session.turns, "turn"))
-            keys = msgs.SESSIONS_MESSAGES_KEYS.text()
+            keys = msgs.SESSIONS_MESSAGES_KEYS.with_keymap(self.keymaps[self.screen], SESSION_KEYMAPS[self.screen]).text()
         elif self.screen == "info" and session is not None:
             text = msgs.SESSIONS_INFO_TITLE.text(when=Q.when_text(session.when, self.now),
                                                  agent=session.agent or "-",
                                                  dir=Q.short_dir(session.cwd, self.home))
-            keys = msgs.SESSIONS_INFO_KEYS.text()
+            keys = msgs.SESSIONS_INFO_KEYS.with_keymap(self.keymaps[self.screen], SESSION_KEYMAPS[self.screen]).text()
         else:
             scope = (msgs.SESSIONS_ALL_KINDS if self.show_all else msgs.SESSIONS_ALL_DIRS).text()
             order = (msgs.SESSIONS_RANKED if self.query.ranked else msgs.SESSIONS_NEWEST).text()
             text = msgs.SESSIONS_TITLE.text(count=len(self.shown()), view=Q.view_name(self.view),
                                             order=order, scope=scope)
-            keys = (msgs.SESSIONS_QUERY_KEYS if self.screen == "search" else msgs.SESSIONS_KEYS).text()
+            keys = (msgs.SESSIONS_QUERY_KEYS if self.screen == "search" else msgs.SESSIONS_KEYS).with_keymap(self.keymaps[self.screen], SESSION_KEYMAPS[self.screen]).text()
         return [("class:title", text), ("", "    "), ("class:keys", keys)]
 
     def subtitle(self) -> StyleAndTextTuples:
@@ -473,6 +496,8 @@ class SessionPicker:
                 key = event.data if len(event.data) == 1 and event.data.isprintable() else ""
             if not key:
                 return
+            if len(event.key_sequence) > 1:
+                key = tuple(names.get(press.key, press.key) for press in event.key_sequence)
             result = self.press(key)
             if isinstance(result, Choice):
                 event.app.exit(result=result)
@@ -480,7 +505,15 @@ class SessionPicker:
                 event.app.exit(result=None)
 
         kb.add(Keys.Any)(dispatch)
-        kb.add("escape", eager=True)(dispatch)
+        kb.add("escape", eager=Condition(
+            lambda: keys.action_for(self.keymaps[self.screen], "escape") is not None,
+        ))(dispatch)
+
+        for keymap in self.keymaps.values():
+            for sequences in keymap.values():
+                for sequence in sequences:
+                    if len(sequence) > 1:
+                        kb.add(*sequence)(dispatch)
 
         body = FormattedTextControl(
             lambda: self.body()[0],
@@ -543,10 +576,12 @@ def load(cwd: str | Path, query: str = "") -> SessionPicker:
     )
 
 
-def pick_session(cwd: str | Path, query: str = "") -> Choice | None:
+def pick_session(cwd: str | Path, query: str = "", *, input=None, output=None, load_picker=None) -> Choice | None:
     """Run the picker on the terminal and return the choice, or None when closed."""
     from . import picker
 
-    state = load(cwd, query)
-    app = state.application(input=create_input(sys.__stdin__), output=create_output(sys.__stdout__))
+    factory = load if load_picker is None else load_picker
+    state = factory(cwd, query)
+    app = state.application(input=create_input(sys.__stdin__) if input is None else input,
+                            output=create_output(sys.__stdout__) if output is None else output)
     return picker.run_modal(app)

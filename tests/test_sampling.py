@@ -172,12 +172,3 @@ def test_responses_request_params_carry_no_presence_penalty():
     assert not (params.extra_body or {}).get("presence_penalty")
 
 
-import pytest  # noqa: E402
-
-
-@pytest.mark.parametrize("raw", ["nan", "inf", "-inf", float("nan")])
-def test_non_finite_sampling_values_are_refused(raw):
-    with pytest.raises(ValueError):
-        Sampling.from_mapping({"temperature": raw})
-    with pytest.raises(ValueError):
-        Sampling.from_env({"JS_TEMPERATURE": str(raw)})

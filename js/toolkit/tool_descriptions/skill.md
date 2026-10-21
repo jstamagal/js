@@ -18,6 +18,8 @@ Rules:
 - The returned text is the skill's procedure, as written by whoever wrote the
   skill.
 - If no local skill matches, the tool returns an error.
+- A skill the operator switched off is not in the catalog; the tool returns
+  the same error for it.
 - A skill whose frontmatter sets `disable-model-invocation: true` is user-only:
   this tool refuses it, and the user loads it with `/skill <name>`.
 - A skill whose frontmatter lists `paths:` globs is offered in a

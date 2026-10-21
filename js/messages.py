@@ -24,17 +24,47 @@ that is a terminal.
 from __future__ import annotations
 
 import argparse
+import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from string import Formatter
 from typing import Any
 
 from . import fset
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('swarm')
+
 
 # The banner slot: what starts every line the client says about its own
 # state, and what $BANNER in a /fset format reads. The BANNER setting sets it
 # (`set_banner`).
 BANNER = "***"
+
+@dataclass
+class Banner:
+    value: str = "***"
+
+
+_BANNER: ContextVar[Banner | None] = ContextVar("js_message_banner", default=None)
+
+
+@contextmanager
+def using_banner(state: Banner):
+    """Render and update this assembly's banner for the duration of the body."""
+    token = _BANNER.set(state)
+    try:
+        yield state
+    finally:
+        _BANNER.reset(token)
+
+
+def current_banner() -> str:
+    state = _BANNER.get()
+    return BANNER if state is None else state.value
+
 
 INFO = "info"
 WARN = "warn"
@@ -46,6 +76,11 @@ SEVERITY_ROLE = {INFO: "", WARN: "COLOR_WARN", GRAVE: "COLOR_ERROR"}
 _FORMATTER = Formatter()
 
 
+def _replace_key_labels(text: str, replacements: dict[str, str]) -> str:
+    pattern = r"(?<![A-Za-z0-9/])(?:" + "|".join(re.escape(label) for label in sorted(replacements, key=len, reverse=True)) + r")(?![A-Za-z0-9/])"
+    return re.sub(pattern, lambda match: replacements[match[0]], text)
+
+
 @dataclass(frozen=True)
 class Message:
     template: str
@@ -53,6 +88,25 @@ class Message:
     banner: bool = True
     # The entry's name in this module, and the name of its /fset format.
     name: str = field(default="", compare=False)
+    key_labels: tuple[tuple[str, str], ...] = field(default=(), compare=False, repr=False)
+
+    def with_keymap(self, keymap: dict, defaults: dict) -> Message:
+        """This hint with changed bindings named from its caller's keymap.
+
+        The shipped labels stay as written while bindings match the defaults.
+        Operator /fset formats retain their own wording.
+        """
+        from .keys import describe
+
+        replacements = {}
+        for label, actions in _HINT_ACTIONS.get(self.name, {}).items():
+            if any(keymap.get(action, ()) != defaults.get(action, ()) for action in actions):
+                sequences = dict.fromkeys(seq for action in actions for seq in keymap.get(action, ()))
+                replacements[label] = "/".join(describe(seq) for seq in sequences) or KEY_UNBOUND
+        if not replacements:
+            return self
+        escaped = {label: text.replace("{", "{{").replace("}", "}}") for label, text in replacements.items()}
+        return replace(self, template=_replace_key_labels(self.template, escaped), key_labels=tuple(replacements.items()))
 
     def text(self, **fields: Any) -> str:
         """The message with its holes filled: no slot, no colour. For a
@@ -71,7 +125,11 @@ class Message:
 
     def format(self) -> str:
         """The entry's /fset format: the one set, else `default_format`."""
-        found = fset.lookup(self.name) if self.name else None
+        if self.key_labels:
+            labels = {label: fset.escape(text) for label, text in self.key_labels}
+            found = fset.lookup(self.name, transform_default=lambda text: _replace_key_labels(text, labels)) if self.name else None
+        else:
+            found = fset.lookup(self.name) if self.name else None
         return self.default_format() if found is None else found
 
     def runs(self, *, whole: str = "", **fields: Any) -> list[fset.Run]:
@@ -148,7 +206,11 @@ def banner(text: str) -> str:
 def set_banner(value: str) -> None:
     """Make ``value``, the BANNER setting, the banner slot."""
     global BANNER
-    BANNER = value
+    state = _BANNER.get()
+    if state is None:
+        BANNER = value
+    else:
+        state.value = value
 
 
 def _holes(template: str, fields: dict[str, Any]) -> list[str | list[fset.Run]]:
@@ -254,7 +316,8 @@ class ArgumentParser(argparse.ArgumentParser):
     """argparse with its headings and its refusal in entries. A bad command
     line prints the usage, then ARGUMENTS_REFUSED on stderr, and exits 2."""
 
-    def __init__(self, *args: Any, add_help: bool = True, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, add_help: bool = True, on_error=None, **kwargs: Any) -> None:
+        self.on_error = on_error
         kwargs.setdefault("formatter_class", _HelpFormatter)
         super().__init__(*args, add_help=False, **kwargs)
         self._positionals.title = ARGS_POSITIONALS.words()
@@ -263,6 +326,8 @@ class ArgumentParser(argparse.ArgumentParser):
             self.add_argument("-h", "--help", action="help", help=OPT_HELP_THIS.words())
 
     def error(self, message: str) -> Any:
+        if self.on_error is not None:
+            return self.on_error(self, message)
         self.print_usage(sys.stderr)
         warn(ARGUMENTS_REFUSED, error=message)
         self.exit(2)
@@ -275,7 +340,7 @@ class _HelpFormatter(argparse.HelpFormatter):
 
 def plural(n: int, word: str) -> str:
     """`n word`, with an s when n is not one."""
-    return f"{n} {word}{'' if n == 1 else 's'}"
+    return (COUNT_ONE if n == 1 else COUNT_MANY).words(number=n, noun=word)
 
 
 # ---------------------------------------------------------------------------
@@ -349,6 +414,9 @@ MIGRATE_NO_LEGACY = Message("No legacy config at {path}", GRAVE)
 MIGRATE_TARGET_EXISTS = Message("{path} already exists. Remove it first to migrate again.", GRAVE)
 MIGRATE_DELETED = Message("{key}: setting deleted. Written as a comment; edit by hand.", WARN)
 MIGRATE_WROTE = Message("Wrote {path} from {legacy}. Review it, then delete {legacy}. This flag is removed in 2 releases.")
+JSRC_RENAMED = Message("{path}: old setting names renamed. The old file is {backup}")
+JSRC_NOT_RENAMED = Message("{path}:{lines}: not migrated, commented out. Edit by hand.", WARN)
+JSRC_NOT_WRITABLE = Message("{path} holds old setting names and cannot be written. Run: {command}", WARN)
 SAVE_FAILED = Message("Not saved: {error}", GRAVE)
 SAVED = Message("Saved {lines} to {path}")
 SAVED_SERVER = Message("Saved {settings} as the {model} defaults of login {provider}")
@@ -413,6 +481,32 @@ DROP_DONE = Message("{path} is no longer visible in the jail.")
 NO_QUEUED_PROMPTS = Message("No queued prompts.")
 ALIAS_TOO_DEEP = Message("alias {name}: nesting too deep.")
 ALIAS_UNKNOWN_COMMAND = Message("alias {name}: unknown command {verb}")
+KEY_UNBOUND = "unbound"
+_HINT_ACTIONS = {
+    "INSTALL_ASK_MODEL": {"p": ("pick",), "a": ("add",)},
+    "INSTALL_ASK_PROVIDER": {"a": ("add",)},
+    "TURN_RUNNING": {"^C": ("interrupt",)},
+    "PRESS_CTRL_C_AGAIN": {"^C": ("interrupt",)},
+    "STARTUP_HINT": {"Ctrl-D": ("eof",)},
+    "PICKER_KEYS": {"↑↓/jk": ("up", "down"), "pgup/pgdn": ("page_up", "page_down"),
+                    "/": ("search",), "enter": ("choose",), "q/esc": ("quit",)},
+    "PICKER_KEYS_CHECKLIST": {"↑↓/jk": ("up", "down"), "/": ("search",), "space": ("toggle",),
+                              "a": ("all",), "n": ("none",), "enter": ("choose",), "q": ("quit",)},
+    "PICKER_KEYS_CHECKLIST_EDIT": {"↑↓/jk": ("up", "down"), "/": ("search",), "space": ("toggle",),
+                                   "a": ("all",), "n": ("none",), "e": ("edit",),
+                                   "enter": ("choose",), "q": ("quit",)},
+    "PICKER_KEYS_SEARCH": {"enter": ("choose",), "esc": ("back",)},
+    "PICK_HELP": {"tab": ("focus",), "↑↓": ("up", "down"), "enter": ("choose",),
+                  "f": ("fetch",), "esc/q": ("quit",)},
+    "SKILLS_KEYS": {"space": ("toggle",), "enter": ("choose",), "/": ("search",), "esc": ("back",)},
+    "SKILLS_QUERY_KEYS": {"enter": ("choose",), "esc": ("back",)},
+    "SESSIONS_KEYS": {"v": ("view",), "/": ("search",), "b": ("messages",),
+                      "i": ("info",), "a": ("all",), "esc": ("back",)},
+    "SESSIONS_QUERY_KEYS": {"enter": ("choose",), "esc": ("back",)},
+    "SESSIONS_MESSAGES_KEYS": {"enter": ("choose",), "r": ("resume",), "esc": ("back",)},
+    "SESSIONS_INFO_KEYS": {"enter": ("choose",), "esc": ("back",)},
+}
+
 TURN_RUNNING = Message("Turn running. {command} would clobber its context. ^C to cancel, or wait.")
 UNKNOWN_COMMAND = Message("Unknown command: {verb}")
 UNKNOWN_SLASH_COMMAND = Message("Invalid command", WARN)
@@ -441,6 +535,7 @@ CMD_PERSONA = Message("Print the system prompt.")
 CMD_TOOLS = Message("Show each tool's state and the entry that decided it. A state is eager, lazy or ban.")
 CMD_SKILL = Message(
     "List skills. With a name, send that skill's instructions with the request. User-only skills work too.")
+CMD_SKILLS = Message("Open the skill picker: switch each skill on or off. Enter sets SKILLS_DISABLED.")
 CMD_TURNS = Message("Count the messages in context.")
 CMD_COST = Message("Show the session's tokens and cost, in total and by model.")
 CMD_SESSION = Message("Open the session picker. Words after it start a search.")
@@ -816,7 +911,7 @@ LOGIN_ASK_KEY = Message("Enter API key")
 LOGIN_ASK_KEY_OPTIONAL = Message("Enter API key. Enter for none")
 LOGIN_ASK_KEY_KEEP = Message("Enter API key. Enter keeps the saved one")
 LOGIN_NO_KEY = Message("Login aborted. No API key given.", GRAVE)
-LOGIN_PLACEHOLDER_KEY = Message("No key given. Storing placeholder 'x'; local endpoints ignore it.")
+LOGIN_PLACEHOLDER_KEY = Message("No key given. Storing placeholder '{key}'; local endpoints ignore it.")
 LOGIN_ASK_HEADERS = Message("Headers k=v,k=v, optional")
 LOGIN_MODEL_ROW = Message("[{index}] {model}", banner=False)
 LOGIN_LISTING_NOT_PROOF = Message("Model listing alone does not prove these credentials can generate.")
@@ -971,6 +1066,8 @@ KEYS_UNBIND_USAGE = Message("unbind needs a key: unbind KEY...")
 KEYS_UNKNOWN_ACTION = Message("unknown action: {action}")
 KEYS_UNKNOWN_VERB = Message("unknown command {verb!r}: expected bind or unbind")
 KEYS_UNREADABLE = Message("{path} not read: {error}")
+# Under the input line after the interrupt or eof key arms the exit.
+EXIT_ARMED = Message("Press {key} again to exit", banner=False)
 
 # --- Agents, tools, skills, settings at load time ----------------------------
 
@@ -1002,7 +1099,7 @@ DIRECTIVE_EXITED = Message("{label}: exited {code}: {stderr}")
 DIRECTIVE_EXITED_SILENT = Message("{label}: exited {code}. No stderr")
 DIRECTIVE_EXITED_OUTPUT_USED = Message("{label}: exited {code}. Its output was used", WARN)
 FLIGHT_AUTOLOG_FAILED = Message("Flight autolog not written: {error}. Flight {path}", GRAVE)
-FLIGHT_NOTICE = Message("Compaction {event} {id}: operation={operation} {detail} flight={path}")
+FLIGHT_NOTICE = Message("Compaction {stage} {id}: operation={operation} {detail} flight={path}")
 
 # --- Settings verbs ----------------------------------------------------------
 
@@ -1034,6 +1131,7 @@ EXPECTED_AT_LEAST = Message("expected a number >= {low}")
 EXPECTED_JSON = Message("expected a JSON value")
 EXPECTED_JSON_OBJECT = Message("expected a JSON object")
 EXPECTED_ENV_NAMES = Message("expected a JSON list of non-empty environment-variable names")
+EXPECTED_SKILL_NAMES = Message("expected a JSON list of non-empty skill names")
 EXPECTED_JSON_LIST = Message("expected a JSON list")
 EXPECTED_ALIAS_PROFILES = Message("expected profiles with match and aliases")
 EXPECTED_NONEMPTY_ALIASES = Message("expected non-empty aliases")
@@ -1159,6 +1257,15 @@ PICK_PROVIDERS = Message("Providers")
 PICK_MODELS = Message("Models")
 PICK_PROVIDER_ROW = Message("● {provider}  {name}")
 
+# --- The skill picker ----------------------------------------------------------
+
+SKILLS_TITLE = Message(" SKILLS  {on} of {total} on", banner=False)
+SKILLS_KEYS = Message("space=on/off  enter=keep  /=search  esc=close", banner=False)
+SKILLS_QUERY_KEYS = Message("enter=keep  esc=clear", banner=False)
+SKILLS_NONE = Message("No skills match.", banner=False)
+SKILLS_ON = Message("[x]", banner=False)
+SKILLS_OFF = Message("[ ]", banner=False)
+
 # --- The session picker --------------------------------------------------------
 
 SESSIONS_TITLE = Message(" SESSIONS  {count} · {view} · {order} · {scope}", banner=False)
@@ -1280,6 +1387,596 @@ FSET_MARK_MODIFIER = Message("a mark takes no variation selector or skin-tone mo
 FSET_VALUE = Message("{name} {value}")
 FSET_EMPTY = Message("{name}")
 
+
+COMPACTING_ROLE = Message("Compacting", banner=False)
+
+CLEARING_OVERFLOW_START = Message("provider overflow; round={round_}; keeping newest {keep_recent} tool results", banner=False)
+
+CLEARING_OVERFLOW_RESULT = Message("cleared {cleared} old tool results; reclaimed {reclaimed} chars", banner=False)
+
+CLEARING_NO_RESULTS = Message("no eligible tool results; summary recovery may follow", banner=False)
+
+CLEARING_BUDGET_START = Message("{value} context budget; keeping newest {keep_recent} tool results", banner=False)
+
+CLEARING_BUDGET_RESULT = Message("cleared {total} old tool results; reclaimed {reclaimed} chars", banner=False)
+
+CLEARING_STILL_OVER_BUDGET = Message("; still over budget", banner=False)
+
+SUMMARY_RESPONSE_INCOMPLETE = Message("summary response incomplete: {value}", banner=False)
+
+SUMMARY_RESPONSE_NO_TEXT = Message("summary response did not contain a completed text summary", banner=False)
+
+COMPACTION_FLIGHT_START = Message("model={compact_model} trigger={value} messages={original_len}", banner=False)
+
+STREAM_IDLE_NO_BYTES = "no response bytes for {seconds:g}s (STREAM_IDLE_TIMEOUT)"
+
+RESPONSES_STREAM_FAILED = Message("OpenAI Responses stream failed", banner=False)
+
+SAMPLING_SAMPLING_MUST_BE_A_NUMBER = Message("sampling.{key} must be a number", banner=False)
+
+SAMPLING_SAMPLING_MUST_BE_A_FINITE_NUMBER = Message("sampling.{key} must be a finite number", banner=False)
+
+SAMPLING_SAMPLING_MUST_BE_AN_INTEGER = Message("sampling.{key} must be an integer", banner=False)
+
+EVENT_HANDLER_COMMAND_UNSUPPORTED = Message("unsupported event handler command: {value}", banner=False)
+
+SETTING_SOURCE_LOGIN = Message("login {provider_id}", banner=False)
+
+SETTING_SOURCE_SESSION = Message("session", banner=False)
+
+SETTING_SOURCE_PROVIDER_DEFAULT = Message("provider default", banner=False)
+
+SETTING_SOURCE_ENVIRONMENT_VARIABLE = Message("env {env_var}", banner=False)
+
+SETTING_SOURCE_ENVIRONMENT = Message("env", banner=False)
+
+SETTING_SOURCE_AGENT_SAMPLING = Message("agent sampling", banner=False)
+
+SETTING_SOURCE_LOGIN_LAYER = Message("login {provider_id} {source}", banner=False)
+
+SETTING_SOURCE_UNSET = Message("unset", banner=False)
+
+LOOP_LOOP_EXPECTS_A_POSITIVE_TURN_COUNT_MINUTES = "--loop expects a positive turn count, minutes (M), or hours (H)"
+
+LOOP_ATTEMPTS_EXHAUSTED = Message("STOP: {completed} completed turns after {attempts} attempts.", banner=False)
+
+LOOP_UNLIMITED = "unlimited"
+
+LOOP_ATTEMPT = Message("\n=== js loop attempt {attempts}, completed {completed}/{value} ===", banner=False)
+
+LOOP_CHILD_STOPPED = Message("STOP: child exited {code}; {completed} turns completed.", banner=False)
+
+LOOP_CHILD_RETRY = "Child exited {code}; retrying in {delay}s ({failures}/{failure_limit} consecutive failures)."
+
+LOOP_STOPPED = Message("Stopped by operator; owned child has exited.", banner=False)
+
+DIRECTIVE_FENCED_DIRECTIVE_BODY_CARRIES_A_LINE_THE = Message("fenced directive body carries a ``` line; the closing fence is ambiguous, so the directive is not run - indent the nested fence four spaces or split the directives", banner=False)
+
+DIRECTIVE_ = Message("!{{{name}}}: {__name__}: {exc}", banner=False)
+
+DIRECTIVE_UNREADABLE_AS_TEXT = "unreadable as text: {path} ({exc})"
+
+SETTING_VALUE_OFF = Message("off", banner=False)
+
+SETTING_VALUE_ON = Message("on", banner=False)
+
+SETTING_VALUE_UNSET = Message("<unset>", banner=False)
+
+SETTING_VALUE_NONE = Message("<none>", banner=False)
+
+SETTING_VALUE_SECRET = Message("<set>", banner=False)
+
+EVENT_HANDLER_REGISTERED = Message("on {prefix}{event} = {handler}", banner=False)
+
+TOOL_SIZE_BYTES = Message("{count} B", banner=False)
+
+TOOL_SIZE_KILOBYTES = Message("{value:.1f} KB", banner=False)
+
+TOOL_SIZE_MEGABYTES = Message("{value:.1f} MB", banner=False)
+
+COUNT_ONE = Message("{number} {noun}", banner=False)
+
+COUNT_MANY = Message("{number} {noun}s", banner=False)
+
+TOOL_EXIT_CODE = Message("exit {exit_code}", banner=False)
+
+TOOL_LINES_OF_TOTAL = Message("{total} of {value}", banner=False)
+
+TOOL_LINES_SHOWN = Message("{shown} shown", banner=False)
+
+TOOL_BYTE_RANGE = Message("bytes {value}-{value2}", banner=False)
+
+TOOL_LINE_RANGE = Message("lines {value}-{value2}", banner=False)
+
+TOOL_FOLD_COUNT = Message("{value} {value2}", banner=False)
+
+TOOL_FOLD_NOUNS = {
+    "read": ("file", "files"),
+    "fs_search": ("search", "searches"),
+    "ast_search": ("search", "searches"),
+    "exa_search": ("search", "searches"),
+    "serper_search": ("search", "searches"),
+    "tavily_search": ("search", "searches"),
+    "docs_search": ("search", "searches"),
+    "fetch": ("page", "pages"),
+    "browse": ("page", "pages"),
+    "shell": ("look", "looks"),
+}
+TOOL_FOLD_DEFAULT_NOUNS = ("call", "calls")
+
+TOOL_LINE_NOUN = Message("line", banner=False)
+
+TOOL_EDIT_NOUN = Message("edit", banner=False)
+
+TOOL_FAILURE_TRIES_LEFT = Message("failed · {left} of {allowed} tries left", banner=False)
+
+STATUS_TOOL_EXTRA = Message(" +{tool_extra}", banner=False)
+
+STATUS_TOOL_ELAPSED = Message("{tool}{extra} {elapsed}s", banner=False)
+
+STATUS_RESPONSE_BYTES = Message("{value:,}B", banner=False)
+
+KEY_ACTION_SUBMIT = "Send the input line (emacs mode)."
+
+KEY_ACTION_HISTORY_SEARCH = Message("Search every prompt in the history; pressed again, the next older match.", banner=False)
+
+KEY_ACTION_EX_OPEN = "Open the ex line (vi normal mode)."
+
+KEY_ACTION_EX_RUN = Message("Run the ex line.", banner=False)
+
+KEY_ACTION_EX_CANCEL = Message("Close the ex line without running it.", banner=False)
+
+KEY_ACTION_INTERRUPT = Message("Cancel the running turn and drop queued prompts; with none, clear the line, and pressed again, quit.", banner=False)
+
+KEY_ACTION_EOF = Message("Delete the next character; on an empty line, quit; at the end of a line, pressed twice, quit.", banner=False)
+
+KEY_ACTION_SUSPEND = Message("Suspend js to the shell.", banner=False)
+
+KEY_ACTION_REASONING_TOGGLE = Message("Collapse or expand reasoning blocks.", banner=False)
+
+KEY_ACTION_REDRAW = Message("Redraw the screen.", banner=False)
+
+KEY_ACTION_SCROLL_UP = Message("Scroll the output up a page.", banner=False)
+
+KEY_ACTION_SCROLL_DOWN = Message("Scroll the output down a page.", banner=False)
+
+KEY_ACTION_COMPLETE = Message("Complete the word at the cursor, or cycle completions.", banner=False)
+
+KEY_CONTROL_PREFIX = Message("Ctrl-", banner=False)
+
+KEY_ESCAPE = Message("Esc", banner=False)
+
+PASTE_MARKER_LINES = "[paste #{n} +{lines} lines]"
+
+PASTE_MARKER_CHARACTERS = "[paste #{n} {value} chars]"
+
+IMAGE_PLACEHOLDER = "[image #{n}]"
+
+CONFIG_AGENT_ID_MUST_CONTAIN_ONLY_LETTERS_NUMBERS = "agent id must contain only letters, numbers, '_' or '-'"
+
+CONFIG_SESSION_PATH_MUST_BE_AN_EXISTING_JSONL = "session path must be an existing .jsonl file: {session}"
+
+CONFIG_SESSION_PATH_MUST_BE_INSIDE = "session path must be inside {root}: {session}"
+
+CONFIG_SESSION_PATH_MUST_BE_INSIDE_273 = "session path must be inside {sessions_dir}: {session}"
+
+CONFIG_SESSION_PATH_MUST_BE_A_JSONL_FILE = "session path must be a .jsonl file: {session}"
+
+CONFIG_SESSION_MUST_IDENTIFY_AN_EXISTING_JSONL_FILE = "session must identify an existing .jsonl file: {session}"
+
+CONFIG_SESSION_PARENT_MUST_BE_A_DIRECTORY = "session parent must be a directory: {session}"
+
+CONFIG_SESSION_PATH_MUST_BE_A_JSONL_FILE_307 = "session path must be a .jsonl file inside {sessions_dir}: {session}"
+
+CONFIG_AGENT_AT_IS_UNREADABLE = "agent {agent_id!r} at {candidate} is unreadable: {strerror}"
+
+EXPECTED_REASONING_EFFORT = "expected {choices}"
+
+EXPECTED_SHELL_QUOTED_COMMAND = Message("expected a shell-quoted command: {exc}", banner=False)
+
+EXPECTED_COMMAND = Message("expected a command", banner=False)
+
+SETTING_NOT_A_HEADER_WANT_NAME_VALUE = "not a header (want 'Name: value'): {entry}"
+
+SETTING_EMPTY_KEY = "empty key: {key!r}"
+
+LOGIN_DEFAULT_NOT_NAME_VALUE_WITH_NAME_ONE_OF = "not NAME=value with NAME one of {value}: {entry}"
+
+LOGIN_DEFAULT_ = "{key}: {error}"
+
+LOGIN_STORE_HELD_BY_ANOTHER_PROCESS_FOR_S = "{store} held by another process for {timeout_s:g}s"
+
+LOGIN_STORE_EXISTS_BUT_FAILED_TO_PARSE_AS_TOML = "{path} exists but failed to parse as TOML ({exc}); refusing to overwrite it. Fix or remove the file by hand, then retry."
+
+LOGIN_STORE_MUST_BE_A_STRING_NOT = "{name} must be a string, not {__name__}"
+
+LOGIN_STORE_PROVIDER_ID_MUST_BE_A_NON_EMPTY = "provider_id must be a non-empty string, not {stored_id!r}"
+
+LOGIN_STORE_PROVIDER_HEADERS_MUST_BE_A_TABLE = "provider_headers must be a table"
+
+LOGIN_STORE_DEFAULTS_MUST_BE_A_TABLE = "defaults must be a table"
+
+LOGIN_STORE_MODEL_DEFAULTS_MUST_BE_A_TABLE_OF = "model_defaults must be a table of tables"
+
+LOGIN_STORE_ = "{path}: {exc}"
+
+LOGIN_STORE__911 = "{value}: {exc}"
+
+LOGIN_SHAPE_CHAT_COMPLETIONS = "OpenAI-compatible chat completions"
+
+LOGIN_SHAPE_RESPONSES = "OpenAI Responses-style endpoint"
+
+LOGIN_SHAPE_ANTHROPIC = "Anthropic-compatible endpoint"
+
+LOGIN_SHAPE_PROXY = "CLIProxyAPI / OpenAI-compatible proxy with optional headers"
+
+LOGIN_PICKER_ROW = "{cursor} {box}{label}{tag}"
+
+LOGIN_PROVIDER_ROW = "{pid:<28} {name} [{source}]"
+
+LOGIN_API_SHAPE_ROW = "{pid}  {desc}"
+
+LOGIN_SAVED_PROVIDER_DETAIL = "{provider_id} — {value} [saved]"
+
+LOGIN_PICKER_CURSOR = ">"
+
+LOGIN_PICKER_SELECTED = "[x] "
+
+LOGIN_PICKER_UNSELECTED = "[ ] "
+
+LOGIN_SOURCE_SAVED = Message("saved", banner=False)
+
+LOGIN_SOURCE_ENVIRONMENT = Message("env", banner=False)
+
+LOGIN_SOURCE_REGISTRY = Message("registry", banner=False)
+
+LOGIN_PICKER_NEEDS_AN_INTERACTIVE_TERMINAL_STDIN_AND_STDOUT = "needs an interactive terminal (stdin and stdout must be a TTY)"
+
+CODEX_OAUTH_OPENAI_CODEX_TOKEN_RESPONSE_DID_NOT_INCLUDE = "OpenAI Codex token response did not include access_token"
+
+CODEX_OAUTH_OPENAI_CODEX_TOKEN_RESPONSE_DID_NOT_INCLUDE_119 = "OpenAI Codex token response did not include refresh_token"
+
+CODEX_OAUTH_OPENAI_CODEX_TOKEN_RESPONSE_DID_NOT_INCLUDE_121 = "OpenAI Codex token response did not include expires_in"
+
+CODEX_OAUTH_OPENAI_CODEX_ACCESS_TOKEN_DID_NOT_INCLUDE = "OpenAI Codex access token did not include chatgpt_account_id"
+
+CODEX_OAUTH_OPENAI_CODEX_TOKEN_REQUEST_FAILED = "OpenAI Codex token request failed: {detail}"
+
+CODEX_OAUTH_OPENAI_CODEX_TOKEN_RESPONSE_WAS_NOT_A = "OpenAI Codex token response was not a JSON object"
+
+CODEX_OAUTH_OPENAI_CODEX_OAUTH_COULD_NOT_BIND_THE = "OpenAI Codex OAuth could not bind the callback port {CALLBACK_PORT} on 127.0.0.1 or ::1"
+
+CODEX_OAUTH_INVALID_CALLBACK = "Invalid callback"
+
+CODEX_OAUTH_OPENAI_CODEX_OAUTH_TIMED_OUT_WAITING_FOR = "OpenAI Codex OAuth timed out waiting for browser callback"
+
+CODEX_OAUTH_OPENAI_CODEX_OAUTH_FAILED = "OpenAI Codex OAuth failed: {received_error}"
+
+CODEX_OAUTH_OPENAI_CODEX_OAUTH_STATE_MISMATCH = "OpenAI Codex OAuth state mismatch"
+
+CODEX_OAUTH_OPENAI_CODEX_DEVICE_AUTHORIZATION_FAILED = "OpenAI Codex device authorization failed: {value}"
+
+CODEX_OAUTH_OPENAI_CODEX_DEVICE_AUTHORIZATION_RESPONSE_WAS_NOT = "OpenAI Codex device authorization response was not a JSON object"
+
+CODEX_OAUTH_OPENAI_CODEX_DEVICE_AUTHORIZATION_RESPONSE_MISSING_DEVICE = "OpenAI Codex device authorization response missing device_auth_id or user_code"
+
+CODEX_OAUTH_OPENAI_CODEX_DEVICE_TOKEN_POLLING_FAILED = "OpenAI Codex device token polling failed: {value}"
+
+CODEX_OAUTH_OPENAI_CODEX_DEVICE_TOKEN_RESPONSE_WAS_NOT = "OpenAI Codex device token response was not a JSON object"
+
+CODEX_OAUTH_OPENAI_CODEX_DEVICE_TOKEN_RESPONSE_MISSING_AUTHORIZATION = "OpenAI Codex device token response missing authorization_code or code_verifier"
+
+CODEX_OAUTH_OPENAI_CODEX_DEVICE_AUTHORIZATION_TIMED_OUT = "OpenAI Codex device authorization timed out"
+
+CODEX_OAUTH_OPENAI_CODEX_LOGIN_HAS_NO_REFRESH_TOKEN = "OpenAI Codex login has no refresh token; run js --login openai-codex again"
+
+CODEX_OAUTH_CANNOT_BE_READ_FIX_IT_BEFORE_THE = "{value} cannot be read; fix it before the OpenAI Codex login can refresh"
+
+CODEX_OAUTH_CANNOT_BE_OPENED_FIX_IT_BEFORE_THE = "{value} cannot be opened ({exc}); fix it before the OpenAI Codex login can refresh"
+
+CODEX_LOGIN_SUCCESS_HTML = "<h1>OpenAI Codex login complete</h1><p>You can close this tab and return to js.</p>"
+
+CODEX_LOGIN_FAILURE_HTML = "<h1>OpenAI Codex login failed</h1><p>Return to js and try again.</p>"
+
+CODEX_REFRESH_REJECTED = "OpenAI Codex refresh token was rejected ({detail}); run js --login openai-codex again"
+
+CODEX_PROVIDER_OPENAI_CODEX_ACCESS_TOKEN_IS_MISSING_CHATGPT = "OpenAI Codex access token is missing chatgpt_account_id"
+
+CODEX_PROVIDER_OPENAI_CODEX_REQUIRES_AN_OAUTH_ACCESS_TOKEN = "OpenAI Codex requires an OAuth access token; run js --login openai-codex"
+
+XAI_OAUTH_XAI_OAUTH_DISCOVERY_RETURNED_A_NON_HTTPS = "xAI OAuth discovery returned a non-HTTPS {field}"
+
+XAI_OAUTH_XAI_OAUTH_HOST_IS_NOT_ON_X = "xAI OAuth {field} host {host!r} is not on x.ai"
+
+XAI_OAUTH_XAI_OAUTH_DISCOVERY_FAILED_HTTP = "xAI OAuth discovery failed: HTTP {status_code}: {value}"
+
+XAI_OAUTH_XAI_OAUTH_DISCOVERY_RETURNED_MALFORMED_JSON = "xAI OAuth discovery returned malformed JSON: {exc}"
+
+XAI_OAUTH_XAI_OAUTH_DISCOVERY_RESPONSE_WAS_NOT_A = "xAI OAuth discovery response was not a JSON object"
+
+XAI_OAUTH_XAI_OAUTH_TOKEN_REQUEST_FAILED_HTTP = "xAI OAuth token request failed: HTTP {status_code}: {value}"
+
+XAI_OAUTH_XAI_OAUTH_TOKEN_RESPONSE_WAS_MALFORMED_JSON = "xAI OAuth token response was malformed JSON: {exc}"
+
+XAI_OAUTH_XAI_OAUTH_TOKEN_RESPONSE_WAS_NOT_A = "xAI OAuth token response was not a JSON object"
+
+XAI_OAUTH_XAI_OAUTH_TOKEN_RESPONSE_OMITTED_ACCESS_TOKEN = "xAI OAuth token response omitted access_token"
+
+XAI_OAUTH_XAI_OAUTH_CODE_EXCHANGE_OMITTED_REFRESH_TOKEN = "xAI OAuth code exchange omitted refresh_token; the login would expire in an hour"
+
+XAI_OAUTH_CANNOT_BE_OPENED_FIX_IT_BEFORE_THE = "{value} cannot be opened ({exc}); fix it before the xAI login can refresh"
+
+XAI_OAUTH_CANNOT_BE_READ_FIX_IT_BEFORE_THE = "{value} cannot be read; fix it before the xAI login can refresh"
+
+XAI_LOGIN_SUCCESS_HTML = "<h1>xAI login complete</h1><p>You can close this tab and return to js.</p>"
+
+XAI_LOGIN_FAILURE_HTML = "<h1>xAI login failed</h1><p>Return to js and try again.</p>"
+
+XAI_REFRESH_REJECTED = "xAI OAuth refresh token was rejected ({detail}); run js --login xai-oauth again"
+
+OAUTH_CALLBACK_COULD_NOT_BIND_THE_CALLBACK_PORT = "{label} could not bind the callback port {port}: {exc}"
+
+OAUTH_CALLBACK_COULD_NOT_BIND_THE_CALLBACK_PORT_ON = "{label} could not bind the callback port {port} on 127.0.0.1 or ::1"
+
+OAUTH_CALLBACK_TIMED_OUT_WAITING_FOR_THE_BROWSER_CALLBACK = "{label} timed out waiting for the browser callback"
+
+OAUTH_CALLBACK_FAILED = "{label} failed: {received_error}"
+
+OAUTH_CALLBACK_STATE_MISMATCH = "{label} state mismatch"
+
+OAUTH_CALLBACK_CALLBACK_CARRIED_NO_AUTHORIZATION_CODE = "{label} callback carried no authorization code"
+
+PROVIDER_ENDPOINT_PROVIDER_HAS_NO_BASE_URL_CONFIGURED_REFUSING = "provider {id!r} has no base URL configured; refusing to fall back to the {sdk!r} SDK default endpoint and credentials. Run `js --login {id2}` or {hint}."
+
+PROVIDER_ENDPOINT_ENV_HINT = Message("set {value}", banner=False)
+
+PROVIDER_ENDPOINT_CONFIGURE_HINT = Message("configure its base URL", banner=False)
+
+ENDPOINT_SPEC_EMPTY_ENDPOINT_SPEC_EXPECTED_MODEL_KEY_SHAPE = "empty endpoint spec; expected model[:key][[shape]][[effort]]@url"
+
+ENDPOINT_SPEC_NO_ENDPOINT_IN_EXPECTED_SOMETHING_LIKE_QWEN = "no @endpoint in {spec!r}; expected something like qwen27b@http://host:8000/v1"
+
+ENDPOINT_SPEC_NO_ENDPOINT_AFTER_IN = "no endpoint after @ in {spec!r}"
+
+ENDPOINT_SPEC_ENDPOINT_HAS_NO_SCHEME_WRITE_HTTP_OR = "endpoint {base_url!r} has no scheme; write http:// or https://"
+
+ENDPOINT_SPEC_EMPTY_IN = "empty [] in {spec!r}"
+
+ENDPOINT_SPEC_TWO_WIRE_SHAPES_IN_AND_ONE_MORE = "two wire shapes in {spec!r}: [{tag}] and one more"
+
+ENDPOINT_SPEC_TWO_REASONING_EFFORTS_IN_AND_ONE_MORE = "two reasoning efforts in {spec!r}: [{tag}] and one more"
+
+ENDPOINT_SPEC_UNKNOWN_TAG_IN_WIRE_SHAPES_ARE_EFFORTS = "unknown tag [{tag}] in {spec!r}; wire shapes are {value}; efforts are {value2}"
+
+ENDPOINT_SPEC_NO_MODEL_ID_IN = "no model id in {spec!r}"
+
+ENDPOINT_SPEC_EMPTY_API_KEY_AFTER_IN = "empty api key after ':' in {spec!r}"
+
+ENDPOINT_SPEC_NO_MODEL_ID_BEFORE_IN = "no model id before ':' in {spec!r}"
+
+TOOL_RELEASE_ARIA_NO_VERIFIED_RELEASE_ASSET_FOR = "aria2: no verified release asset for {system} {machine}"
+
+TOOL_RELEASE_TERMUX_PKG_UNAVAILABLE_RESTORE_PKG_ON_PATH = "Termux: pkg unavailable; restore pkg on PATH and rerun `just install-tool-binaries`"
+
+TOOL_RELEASE_TERMUX_PKG_INSTALL_FAILED_NO_DESKTOP_FALLBACK = "Termux: pkg install failed: {exc}; no desktop fallback"
+
+TOOL_RELEASE_TERMUX_PKG_DID_NOT_PROVIDE_EXECUTABLE_NO = "Termux: pkg did not provide executable {candidate}; no desktop fallback"
+
+TOOL_RELEASE_TERMUX_PACKAGE_EXECUTABLE_RESOLVES_TO_MANAGED_TOOLS = "Termux: package executable {candidate} resolves to managed tools"
+
+TOOL_TERMUX_AST_GREP_MISSING = "ast-grep: no verified Termux release; install a native build separately"
+
+TOOL_TERMUX_OBSCURA_MISSING = "obscura/obscura-worker: no verified Termux release; install native builds separately"
+
+TOOL_VERIFIED_RELEASE_MISSING = "{name}: no verified release asset for {system} {machine}"
+
+TOOL_RELEASE_GLIBC_REQUIRED = "{name}: {value} requires glibc >= {minimum}; found {value2} {version}; no verified musl asset"
+
+TOOL_OBSCURA_RELEASE_MISSING = "obscura: no verified compatible release for {system} {machine} {libc} {version}; pinned x86_64 Linux asset requires glibc >= 2.35; ARM64 Linux/macOS archives await content verification"
+
+TOOL_ARIA2_HOMEBREW_FAILED = "aria2: Homebrew unavailable or `brew install aria2` failed; install Homebrew (https://brew.sh) and rerun `just install`"
+
+TOOLKIT_INCOMPLETE_PREFIX = "toolkit incomplete:\n"
+
+SESSION_PICKER_HEADER = Message("  {value:<{_WHEN}}  {value2:<{_MODE}}  {value3:<{_AGENT}}  {value4:<{_DIR}} {value5:>{_TURNS}}  {value6:<{_LENGTH}} name", banner=False)
+
+SESSION_COLUMN_WHEN = Message("when", banner=False)
+
+SESSION_COLUMN_MODE = Message("mode", banner=False)
+
+SESSION_COLUMN_AGENT = Message("agent", banner=False)
+
+SESSION_COLUMN_DIR = Message("dir", banner=False)
+
+SESSION_COLUMN_TURNS = Message("turns", banner=False)
+
+SESSION_COLUMN_LENGTH = Message("length", banner=False)
+
+AGENT_MANIFEST_DUPLICATE_FILE_FOR_EXCHANGE = "duplicate {role} file for exchange {number}: {path}"
+
+AGENT_MANIFEST_INVALID_YAML_MANIFEST_IN = "invalid YAML manifest in {path}: {exc}"
+
+AGENT_MANIFEST_YAML_MANIFEST_IN_MUST_BE_A_MAPPING = "YAML manifest in {path} must be a mapping"
+
+AGENT_MANIFEST_IS_NO_LONGER_READ = "{legacy} is no longer read; {_MIGRATE_HINT}"
+
+AGENT_MANIFEST_FRONTMATTER_IN_IS_NO_LONGER_READ = "frontmatter in {path} is no longer read; {_MIGRATE_HINT}"
+
+AGENT_MANIFEST_SKILLS_IN_MUST_BE_A_LIST_OF = "skills in {path} must be a list of family:name entries"
+
+AGENT_MANIFEST_SKILLS_ENTRY_IN_IS_NOT_FAMILY_NAME = "skills entry {item!r} in {path} is not family:name or family:*"
+
+AGENT_MANIFEST_FRONTMATTER_IN_IS_MISSING_A_CLOSING = "frontmatter in {path} is missing a closing ---"
+
+AGENT_MANIFEST_INVALID_YAML_FRONTMATTER_IN = "invalid YAML frontmatter in {path}: {exc}"
+
+AGENT_MANIFEST_FRONTMATTER_IN_MUST_BE_A_MAPPING = "frontmatter in {path} must be a mapping"
+
+AGENT_MANIFEST_REASONING_IN_MUST_BE_A_STRING = "reasoning in {path} must be a string"
+
+AGENT_MANIFEST_REASONING_IN = "reasoning in {path}: {error}"
+
+AGENT_MANIFEST_MAX_TOKENS_IN_MUST_BE_AN_INTEGER = "max_tokens in {path} must be an integer"
+
+AGENT_MANIFEST_SAMPLING_FRONTMATTER_IN_MUST_BE_A_MAPPING = "sampling frontmatter in {path} must be a mapping"
+
+AGENT_MANIFEST_UNKNOWN_SAMPLING_KEY_IN_ALLOWED = "unknown sampling key '{key}' in {path}; allowed: {value}"
+
+AGENT_MANIFEST_SAMPLING_IN_MUST_BE_A_NUMBER = "sampling.{key} in {path} must be a number"
+
+AGENT_MANIFEST_UNKNOWN_KEY_S_IN_ALLOWED = "unknown key(s) {value} in {manifest_path}; allowed: {value2}"
+
+AGENT_MANIFEST_PROMPTS_DIRECTORY_MISSING_AT_DROP_MD_PROMPT = "prompts directory missing at {prompts_dir}. Drop .md prompt files and an optional {AGENT_MANIFEST} manifest in there."
+
+AGENT_MANIFEST_PROMPTS_DIRECTORY_HAS_NO_MD_PROMPT_FILES = "prompts directory {prompts_dir} has no .md prompt files or {AGENT_MANIFEST}."
+
+AGENT_MANIFEST_MIGRATION_HINT = "move its settings to agent.yaml beside the prompt (just migrate-agents)"
+
+SKILL_FRONTMATTER_FRONTMATTER_IS_MISSING_A_CLOSING = "frontmatter is missing a closing ---"
+
+SKILL_FRONTMATTER_INVALID_YAML_FRONTMATTER = "invalid YAML frontmatter: {value}"
+
+SKILL_FRONTMATTER_FRONTMATTER_MUST_BE_A_MAPPING = "frontmatter must be a mapping"
+
+SKILL_FRONTMATTER_FRONTMATTER_MUST_BE_A_STRING = "{field} frontmatter must be a string"
+
+SKILL_FRONTMATTER_FRONTMATTER_MUST_BE_TRUE_OR_FALSE = "{field} frontmatter must be true or false"
+
+SKILL_FRONTMATTER_TOOLS_FRONTMATTER_MUST_BE_A_LIST_OF = "tools frontmatter must be a list of strings"
+
+SKILL_FRONTMATTER_TOOLS_FRONTMATTER_MUST_CONTAIN_SAFE_NON_EMPTY = "tools frontmatter must contain safe non-empty strings"
+
+SKILL_FRONTMATTER_TOOLS_FRONTMATTER_CONTAINS_DUPLICATE = "tools frontmatter contains duplicate {tool!r}"
+
+SKILL_FRONTMATTER_PATHS_FRONTMATTER_MUST_BE_A_LIST_OF = "paths frontmatter must be a list of glob strings"
+
+SKILL_FRONTMATTER_UNSAFE_SKILL_NAME = "unsafe skill name {name!r}"
+
+SWARM_SWARM_NAME_MUST_BE_ONE_WORD_OF = "swarm name must be one word of [A-Za-z0-9_.-]: {name!r}"
+
+SWARM_A_MESSAGE_KIND_IS_ONE_WORD_OF = "a message kind is one word of [A-Za-z0-9_.-]: {kind!r}"
+
+SWARM_IS_ALREADY_ON_THE_BUS = "{name} is already on the bus"
+
+SWARM_THIS_BUS_ALREADY_HAS_SPAWNED_AGENTS_THE = "this bus already has {spawned} spawned agents; the cap is {maximum}"
+
+SWARM_SENT = Message("sent #{seq}", banner=False)
+
+SWARM_POSTED = Message("posted #{id}", banner=False)
+
+SWARM_ROSTER_YOU = _PROMPTS['default_you']
+
+SWARM_ROSTER_SILENT = _PROMPTS['default_no_answer_at_rollcall_since']
+
+SWARM_ROSTER_ASLEEP = Message(_PROMPTS['default_asleep'], banner=False)
+
+SWARM_ROSTER_WORKING = Message(_PROMPTS['default_working'], banner=False)
+
+SWARM_ROSTER_EMPTY = _PROMPTS['default_nobody_yet']
+
+SWARM_BOARD_EMPTY = _PROMPTS['default_no_tasks_on_the_board']
+
+SWARM_BOARD_TAKEN = _PROMPTS['default_taken_by']
+
+SWARM_BOARD_DONE = _PROMPTS['default_done_by']
+
+SWARM_BOARD_ROW = _PROMPTS['default_text']
+
+SWARM_BOARD_FROM = _PROMPTS['default_from']
+
+SWARM_ROSTER_HOLDS = Message(_PROMPTS['default_holds'], banner=False)
+
+SWARM_BOARD_OPEN = Message(_PROMPTS['default_open'], banner=False)
+
+SWARM_RUN_THE_SPEC_NEEDS_A_ROOT_THE_BUS = "the spec needs a root: the bus directory"
+
+SWARM_RUN_THE_SPEC_NAMES_NO_AGENTS = "the spec names no agents"
+
+SWARM_RUN_AGENT_NAMES_REPEAT = "agent names repeat: {value}"
+
+SWARM_RUN_FAILED = "swarm run: {exc}"
+
+EVENT_HOOK_UNKNOWN_EVENT = "unknown event: {clean}"
+
+EVENT_HOOK_ON_NEEDS_A_HANDLER = "on needs a handler"
+
+EVENT_HOOK_UNKNOWN_EVENT_149 = "unknown event: {event}"
+
+AGENT_LOCK_ANOTHER_LOCK_RUN_OF_AGENT_IS_RUNNING = "another --lock run of agent {agent_id!r} is running ({path})"
+
+JAIL_SETTING_EMPTY_BIND = "empty bind: {spec!r}"
+
+JAIL_SETTING_BIND_PATH_MUST_BE_ABSOLUTE_OR_START = "bind path must be absolute or start with ~: {spec!r}"
+
+JAIL_SETTING_JAIL_BIND_IS_A_JSON_LIST_OF = "JAIL_BIND is a JSON list of \"path[:rw]\" strings"
+
+JAIL_SETTING_HIDE_PATH_MUST_BE_ABSOLUTE_OR_START = "hide path must be absolute or start with ~: {spec!r}"
+
+JAIL_SETTING_JAIL_HIDE_IS_A_JSON_LIST_OF = "JAIL_HIDE is a JSON list of path strings"
+
+JAIL_SETTING_C_TARGET_IS_NOT_A_DIRECTORY = "-C target is not a directory: {directory}"
+
+JAIL_SETTING_C_IS_NOT_A_JAIL_NAME_A = "-C / is not a jail; name a directory"
+
+JAIL_SETTING_C_RUNS_TOOLS_UNDER_BUBBLEWRAP_AND_BWRAP = "-C runs tools under bubblewrap, and bwrap is not on PATH; install bubblewrap"
+
+JAIL_SETTING_C_IS_INSIDE_A_PATH_HIDDEN_IN = "-C {directory} is inside {inside}, a path hidden in the jail (JAIL_HIDE)"
+
+JAIL_SETTING_C_BUBBLEWRAP_CANNOT_START_A_JAIL = "-C: bubblewrap cannot start a jail: {failure}"
+
+MCP_CONFIG_DUPLICATE_OBJECT_KEY = "duplicate object key: {key!r}"
+
+MCP_CONFIG_MUST_BE_A_JSON_OBJECT = "{setting} must be a JSON object"
+
+MCP_CONFIG_MUST_BE_AN_OBJECT_OF_STRING_VALUES = "{field} must be an object of string values"
+
+MCP_CONFIG_MUST_BE_A_LIST_OF_NON_EMPTY = "{field} must be a list of non-empty strings"
+
+MCP_CONFIG_MCP_SERVERS_MUST_BE_A_JSON_OBJECT = "MCP_SERVERS must be a JSON object"
+
+MCP_CONFIG_MCP_SERVER_NAMES_MUST_BE_NON_EMPTY = "mcp server names must be non-empty strings"
+
+MCP_CONFIG_MCP_SERVER_NAME_HAS_NO_USABLE_CHARACTERS = "mcp server name {name!r} has no usable characters"
+
+MCP_CONFIG_MCP_SERVER_NAMES_AND_NORMALIZE_TO_THE = "mcp server names {previous!r} and {name!r} normalize to the same name"
+
+MCP_CONFIG_MCP_SERVER_MUST_BE_AN_OBJECT = "mcp server {name!r} must be an object"
+
+MCP_CONFIG_MCP_SERVER_HAS_UNKNOWN_FIELD = "mcp server {name!r} has unknown field {value!r}"
+
+MCP_CONFIG_MCP_SERVER_ENABLED_MUST_BE_A_BOOLEAN = "mcp server {name!r}.enabled must be a boolean"
+
+MCP_CONFIG_MCP_SERVER_REQUIRES_EXACTLY_ONE_OF_COMMAND = "mcp server {name!r} requires exactly one of command or url"
+
+MCP_CONFIG_MCP_SERVER_COMMAND_MUST_BE_A_NON = "mcp server {name!r}.command must be a non-empty string"
+
+MCP_CONFIG_MCP_SERVER_HEADERS_IS_ONLY_VALID_WITH = "mcp server {name!r}.headers is only valid with url"
+
+MCP_CONFIG_MCP_SERVER_URL_MUST_BE_A_NON = "mcp server {name!r}.url must be a non-empty string"
+
+MCP_CONFIG_MCP_SERVER_URL_IS_INVALID = "mcp server {name!r}.url is invalid"
+
+MCP_CONFIG_MCP_SERVER_URL_MUST_USE_HTTP_OR = "mcp server {name!r}.url must use http or https"
+
+MCP_CONFIG_MCP_SERVER_URL_MUST_NOT_CONTAIN_USERINFO = "mcp server {name!r}.url must not contain userinfo"
+
+MCP_CONFIG_MCP_SERVER_STDIO_FIELDS_REQUIRE_COMMAND = "mcp server {name!r} stdio fields require command"
+
+MCP_CONFIG_MCP_AGENT_POLICY_MUST_BE_A_JSON = "MCP_AGENT_POLICY must be a JSON object"
+
+MCP_CONFIG_MCP_AGENT_IDS_MAY_CONTAIN_ONLY_LETTERS = "mcp agent ids may contain only letters, numbers, '_' or '-'"
+
+MCP_CONFIG_MCP_AGENT_POLICY_MUST_BE_AN_OBJECT = "mcp agent {agent_id!r} policy must be an object"
+
+MCP_CONFIG_MCP_AGENT_HAS_UNKNOWN_FIELD = "mcp agent {agent_id!r} has unknown field {value!r}"
+
+MCP_CONFIG_MCP_AGENT_MUST_BE_AN_OBJECT = "mcp agent {agent_id!r}.{section} must be an object"
+
+MCP_CONFIG_MCP_AGENT_HAS_UNKNOWN_FIELD_226 = "mcp agent {agent_id!r}.{section} has unknown field {value!r}"
+
+MCP_CONFIG_MCP_TIMEOUT_MUST_BE_A_POSITIVE_NUMBER = "MCP_TIMEOUT must be a positive number, got {value!r}"
+
+JSRC_NOT_MIGRATED = "# js: not migrated"
 
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}

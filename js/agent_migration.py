@@ -20,6 +20,7 @@ runs it over any agent root.
 from __future__ import annotations
 
 import json
+import fcntl
 import os
 import re
 import tempfile
@@ -103,8 +104,7 @@ class Result:
 
 def _convert_entry(raw: Any, keep: Keep) -> str | None:
     """Old selector -> noun:modifier; None for an entry that matches no tool."""
-    text = str(raw).strip()
-    entry = text if ":" in text else f"{text}:eager"
+    entry = policy.legacy_entry(raw)
     return entry if keep(entry) else None
 
 
@@ -311,6 +311,20 @@ def migrate_agent_dir(agent_dir: Path, *, apply: bool = False, keep: Keep | None
     be read or is not UTF-8 makes this agent an error and touches nothing."""
     keep = keep if keep is not None else tool_matcher(default_roots(agent_dir.parent))
     try:
+        fd = os.open(agent_dir, os.O_RDONLY)
+    except OSError as exc:
+        return Result(agent_dir, "error", _one_line(exc))
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return _migrate_agent_dir(agent_dir, apply=apply, keep=keep)
+    except OSError as exc:
+        return Result(agent_dir, "error", _one_line(exc))
+    finally:
+        os.close(fd)
+
+
+def _migrate_agent_dir(agent_dir: Path, *, apply: bool, keep: Keep) -> Result:
+    try:
         result, old, new_body = plan(agent_dir, keep)
     except UnicodeDecodeError as exc:
         return Result(agent_dir, "error", msgs.AGENT_MIGRATE_BAD_YAML.text(
@@ -346,7 +360,6 @@ def _apply(agent_dir: Path, result: Result, old: Path, new_body: str | None) -> 
     taken back out, so a rerun sees the same legacy agent and tries again.
     """
     manifest = agent_dir / persona.AGENT_MANIFEST
-    old_text = old.read_text(encoding="utf-8")
     if not result.manifest_text:
         # Finishing a half-done run: agent.yaml already holds these settings
         # and is the user's file now; only the old manifest changes.
@@ -363,10 +376,7 @@ def _apply(agent_dir: Path, result: Result, old: Path, new_body: str | None) -> 
     try:
         persona.load_agent_manifest(manifest)
     except (OSError, ValueError) as exc:
-        if result.action == "migrate":
-            undo_manifest()
-        else:
-            _write_atomic(old, old_text)
+        undo_manifest()
         return Result(agent_dir, "error", msgs.AGENT_MIGRATE_RESTORED.text(file=old.name, error=_one_line(exc)))
     if result.action != "migrate":
         return result

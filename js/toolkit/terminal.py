@@ -18,6 +18,10 @@ from . import fs
 from .core import Tool, ToolContext
 from .descriptions import load_description
 from .sanitize import int_or_default, text_or_default
+from ..prompt_text import load_catalog
+
+_PROMPTS = load_catalog('toolkit_terminal')
+
 
 _KEY_SEQUENCES = {
     "enter": "\r",
@@ -84,10 +88,10 @@ _CURSOR_COLOUR = (255, 255, 255)
 _LIVE_CHILDREN: set[Any] = set()
 
 
-def _colour(name: str, fallback: tuple[int, int, int]) -> tuple[int, int, int]:
+def _colour(name: str, fallback: tuple[int, int, int], palette=None) -> tuple[int, int, int]:
     if not name or name == "default":
         return fallback
-    named = _ANSI_RGB.get(name)
+    named = (_ANSI_RGB if palette is None else palette).get(name)
     if named is not None:
         return named
     if re.fullmatch(r"[0-9a-fA-F]{6}", name):
@@ -163,14 +167,7 @@ def _observe(
         payload["exit_status"] = child.exitstatus
         payload["signal_status"] = child.signalstatus
     payload["reading"] = (
-        "lines is the rendered terminal screen. nonblank_lines=0 means the user sees "
-        "nothing. lines_changed and screen_responded compare this screen with the "
-        "most recent observation: for send they describe change during the wait window "
-        "after the sent keys, not proof the keys caused it; for look they describe "
-        "passive change since the prior observation. "
-        "terminal_snapshot updates that comparison baseline before a later send. "
-        "still_running is normal for a TUI and suspicious for a one-shot command. "
-        "Use terminal_snapshot to inspect layout and colour."
+        _PROMPTS['observe_lines_is_the_rendered_terminal_screen']
     )
     return _report(payload, context)
 
@@ -200,6 +197,14 @@ def close_terminal_sessions(context: ToolContext) -> None:
     for state in list(context.terminal_sessions.values()):
         _stop_state(state)
     context.terminal_sessions.clear()
+
+
+def _jail_refusal(state: dict[str, Any], session: str, context: ToolContext) -> str | None:
+    if state.get("jail") == jail.shape(context):
+        return None
+    context.terminal_sessions.pop(session, None)
+    _stop_state(state)
+    return (_PROMPTS['jail_refusal_error_terminal_session_was_started_under'].format(session=session))
 
 
 def _cleanup_live_children() -> None:
@@ -273,9 +278,9 @@ def terminal_session(
         workdir = context.resolve_path(cwd) if cwd else context.cwd.resolve()
         if not workdir.is_dir():
             return f"ERROR: no such directory: {workdir}"
-        shell = os.environ.get("SHELL") or "/bin/sh"
+        shell = context.terminal_shell_program or os.environ.get("SHELL") or "/bin/sh"
         env = dict(os.environ)
-        if jail.active() is not None:
+        if jail.active() is not None or not context.terminal_environment_inherit:
             # In the jail the command gets the shell tool's environment: the
             # names in SHELL_ENV_KEEP, so no provider key reaches it.
             env = {key: os.environ[key] for key in context.shell_env_allow if key in os.environ}
@@ -321,13 +326,10 @@ def terminal_session(
     if state is None:
         return f"ERROR: no terminal session named {session!r}; use action=start first"
 
-    if action != "stop" and state.get("jail") != jail.shape(context):
-        # Started under other JAIL_BIND, JAIL_HIDE or SHELL_ENV_KEEP values:
-        # it could still reach what the jail now hides. It is stopped.
-        sessions.pop(session, None)
-        _stop_state(state)
-        return (f"ERROR: terminal session {session!r} was started under other jail settings "
-                "(JAIL_BIND, JAIL_HIDE or SHELL_ENV_KEEP) and is stopped; start it again")
+    if action != "stop":
+        refusal = _jail_refusal(state, session, context)
+        if refusal is not None:
+            return refusal
 
     if action == "stop":
         sessions.pop(session, None)
@@ -359,15 +361,18 @@ def terminal_session(
     return f"ERROR: action must be one of start, send, look, stop, list; got {action!r}"
 
 
-def _draw_screen(screen: Any, path: Path) -> None:
+def _draw_screen(
+    screen: Any, path: Path, *, font_candidates=_FONT_CANDIDATES,
+    palette=None, background=_BACKGROUND, foreground=_FOREGROUND, cursor_colour=_CURSOR_COLOUR,
+) -> None:
     try:
         from PIL import Image, ImageDraw, ImageFont
     except ImportError as exc:
-        raise RuntimeError("terminal_snapshot requires js[vision]; run uv sync --inexact --extra vision") from exc
+        raise RuntimeError(_PROMPTS['draw_screen_terminal_snapshot_requires_js_vision_run']) from exc
 
     size = 16
     font = None
-    for candidate in _FONT_CANDIDATES:
+    for candidate in font_candidates:
         if not Path(candidate).exists():
             continue
         try:
@@ -384,7 +389,7 @@ def _draw_screen(screen: Any, path: Path) -> None:
     image = Image.new(
         "RGB",
         (cell_width * screen.columns + 8, cell_height * screen.lines + 8),
-        _BACKGROUND,
+        background,
     )
     draw = ImageDraw.Draw(image)
     for y in range(screen.lines):
@@ -392,14 +397,14 @@ def _draw_screen(screen: Any, path: Path) -> None:
         for x in range(screen.columns):
             cell = row[x]
             char = cell.data or " "
-            foreground = _colour(getattr(cell, "fg", "default"), _FOREGROUND)
-            background = _colour(getattr(cell, "bg", "default"), _BACKGROUND)
+            cell_foreground = _colour(getattr(cell, "fg", "default"), foreground, palette)
+            cell_background = _colour(getattr(cell, "bg", "default"), background, palette)
             if getattr(cell, "reverse", False):
-                foreground, background = background, foreground
+                cell_foreground, cell_background = cell_background, cell_foreground
             px, py = 4 + x * cell_width, 4 + y * cell_height
-            if background != _BACKGROUND:
+            if cell_background != background:
                 draw.rectangle(
-                    [px, py, px + cell_width, py + cell_height], fill=background
+                    [px, py, px + cell_width, py + cell_height], fill=cell_background
                 )
             if char != " ":
                 bold = bool(getattr(cell, "bold", False))
@@ -407,19 +412,19 @@ def _draw_screen(screen: Any, path: Path) -> None:
                     (px, py),
                     char,
                     font=font,
-                    fill=foreground,
+                    fill=cell_foreground,
                     stroke_width=1 if bold else 0,
-                    stroke_fill=foreground if bold else None,
+                    stroke_fill=cell_foreground if bold else None,
                 )
                 if getattr(cell, "underscore", False):
                     draw.line(
                         [px, py + cell_height - 2, px + cell_width - 1, py + cell_height - 2],
-                        fill=foreground,
+                        fill=cell_foreground,
                     )
                 if getattr(cell, "strikethrough", False):
                     draw.line(
                         [px, py + cell_height // 2, px + cell_width - 1, py + cell_height // 2],
-                        fill=foreground,
+                        fill=cell_foreground,
                     )
     if not getattr(screen.cursor, "hidden", False):
         cursor_x, cursor_y = screen.cursor.x, screen.cursor.y
@@ -427,7 +432,7 @@ def _draw_screen(screen: Any, path: Path) -> None:
             px, py = 4 + cursor_x * cell_width, 4 + cursor_y * cell_height
             draw.rectangle(
                 [px, py, px + cell_width - 1, py + cell_height - 1],
-                outline=_CURSOR_COLOUR,
+                outline=cursor_colour,
                 width=2,
             )
     image.save(path, format="PNG")
@@ -438,6 +443,8 @@ def terminal_snapshot(
     output_path: str | None = "",
     wait_ms: int | None = 100,
     context: ToolContext | None = None,
+    *,
+    renderer=None,
 ) -> str:
     """Render one live PTY screen to PNG and return it through js vision handling."""
     if context is None:
@@ -446,6 +453,9 @@ def terminal_snapshot(
     state = context.terminal_sessions.get(session)
     if state is None:
         return f"ERROR: no terminal session named {session!r}; use terminal_session first"
+    refusal = _jail_refusal(state, session, context)
+    if refusal is not None:
+        return refusal
     raw_output_path = text_or_default(output_path)
     if raw_output_path and Path(raw_output_path).suffix.lower() != ".png":
         return "ERROR: output_path must end in .png"
@@ -460,7 +470,7 @@ def terminal_snapshot(
     try:
         context.snapshot(target)
         target.parent.mkdir(parents=True, exist_ok=True)
-        _draw_screen(state["screen"], target)
+        (_draw_screen if renderer is None else renderer)(state["screen"], target)
     except Exception as exc:
         return f"ERROR: could not render terminal snapshot: {type(exc).__name__}: {exc}"
     state["snapshot_n"] = snapshot_n

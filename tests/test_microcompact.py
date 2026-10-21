@@ -111,6 +111,29 @@ def test_post_compact_rehydration_is_none_without_reads():
     assert compaction._post_compact_rehydration(Ctx()) is None
 
 
+def test_post_compact_rehydration_rechecks_the_jail_after_a_file_becomes_a_symlink(tmp_path, monkeypatch):
+    from js import jail
+    from js.toolkit import ToolContext
+    from js.toolkit.fs import fs_read
+
+    root = tmp_path / "project"
+    root.mkdir()
+    target = root / "notes.txt"
+    target.write_text("project notes")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside the permitted project")
+    private = tmp_path / "private"
+    private.mkdir()
+    monkeypatch.setattr(jail, "ACTIVE", jail.Jail(root=root, bwrap="bwrap", private=private))
+    context = ToolContext(cwd=root)
+    assert "project notes" in fs_read(file_path=str(target), context=context)
+    assert target in context.read_paths
+    target.unlink()
+    target.symlink_to(outside)
+
+    assert compaction._post_compact_rehydration(context) is None
+
+
 # Overflow classification: recovery, microcompaction and the manual /compact path
 # all hang off is_context_overflow_error, so a provider whose phrasing misses
 # every needle gets no recovery at all — which is what happened on llama.cpp, the
@@ -160,7 +183,8 @@ def test_recovery_records_failure_with_original_tool_bodies(monkeypatch, tmp_pat
     monkeypatch.setattr(compaction, "microcompact", fail)
     with pytest.raises(RuntimeError, match="clear failed"):
         compaction.recover_overflow(msgs, 1, cfg=cfg, system="SYSTEM",
-                                    error=ai.ProviderAPIError("context length exceeded"), flight_data={})
+                                    error=ai.ProviderAPIError("context length exceeded"), flight_data={},
+                                    log_dir=compaction.flight_log_dir(cfg), emit=compaction.printing())
     records = [json.loads(line) for line in next((tmp_path / "flights").glob("*.jsonl")).read_text().splitlines()]
     assert records[1]["messages"] == original
     assert records[-2]["messages"] == original
@@ -175,7 +199,9 @@ def test_recovery_records_no_eligible_results(tmp_path, capsys):
     cfg = _compact_test_cfg(tmp_path, {"COMPACTION_LOG_DIR": str(tmp_path / "flights")})
     msgs = _history(2)
     assert compaction.recover_overflow(msgs, 1, cfg=cfg, system="SYSTEM",
-                                      error=ai.ProviderAPIError("context length exceeded"), flight_data={}) == ("summarize", 0, 0)
+                                      error=ai.ProviderAPIError("context length exceeded"), flight_data={},
+                                      log_dir=compaction.flight_log_dir(cfg),
+                                      emit=compaction.printing()) == ("summarize", 0, 0)
     records = [json.loads(line) for line in next((tmp_path / "flights").glob("*.jsonl")).read_text().splitlines()]
     assert records[-1]["event"] == "skipped"
     assert records[1]["messages"] == records[-2]["messages"]

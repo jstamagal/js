@@ -8,6 +8,8 @@ look at it.
 
 from __future__ import annotations
 
+from . import messages as msgs
+
 import fcntl
 
 from . import paths
@@ -28,5 +30,5 @@ def acquire(agent_id: str) -> None:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError as exc:
         lock.close()
-        raise Busy(f"another --lock run of agent {agent_id!r} is running ({path})") from exc
+        raise Busy(msgs.AGENT_LOCK_ANOTHER_LOCK_RUN_OF_AGENT_IS_RUNNING.format(agent_id=agent_id, path=path)) from exc
     _held.append(lock)

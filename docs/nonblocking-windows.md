@@ -89,16 +89,17 @@ Today it is a near-complete REPL. Turn it into an embeddable lib:
 ## Build order (step 1 shipped as the default; `--blocking` opts out)
 
 0. **Event schema + OutputSink** — DONE. `js/output.py`: `OutputEvent`, `Sink`,
-   `StdoutSink`, `agent_identity`. Data contract only; not yet on the hot path.
+   `StdoutSink`, `agent_identity`.
 1. **Async runtime + supervisor** — DONE. `stream_model_async` /
    `run_turn_async` primitives; `js/supervisor.py` job registry; `--nonblocking`
    REPL (`_repl_main`/`_turn_consumer`/`_do_turn`) with `prompt_async` +
    `patch_stdout`; subagent fan-out on the shared loop as cancelable jobs.
    (Supersedes the old worker-thread plan.)
-2. **Wire output through events.** Route `run_turn_async`'s stdout writes
-   through `OutputEvent` → `Sink`; default sink stays byte-for-byte stdout.
-   ← NEXT. The status bar is this step's first consumer: it reads the turn's
-   state from `TurnStatus` on the `ToolContext` instead of parsing stdout.
+2. **Wire output through events.** — DONE for the turn loop (js-2lg.1):
+   `run_turn_async` emits `OutputEvent`s to `Telemetry.sink`; the default sink
+   is `js/console.py`'s `ConsoleSink`, byte-for-byte what js printed. The
+   status bar reads the turn's state from `TurnStatus` on the `ToolContext`
+   instead of parsing stdout.
 3. irciipy as dispatcher: events → ON hooks → rendered text.
 4. `/window` commands + key bindings (`/jobs`, `/cancel` are the seed).
 5. `model!provider@baseurl` identity on every event; window↔source binding.

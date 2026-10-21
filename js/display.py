@@ -22,7 +22,6 @@ import json
 import os
 import re
 import shutil
-import sys
 import time
 from collections import Counter
 from collections.abc import Callable, Iterator
@@ -38,7 +37,12 @@ from rich.theme import Theme as _RichTheme
 
 from . import fset
 from . import messages as msgs
+from . import output
 from . import settings as _settings
+from .toolkit.presentation import (
+    ToolOutput, _BODY_ARG, _UNLISTED_ARGS, _KEY_ARGS, _SAID_ARG, _PATH_ARGS,
+    builtin_lexer, call_kind, tool_output,
+)
 
 _SGR_ONLY = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -414,10 +418,8 @@ def user_line(text: str) -> str:
 
 
 def echo_user(text: str) -> None:
-    """Print `user_line(text)` where the answer will follow, plain on a
-    stream that is not a terminal."""
-    sys.stdout.write(msgs.for_stream(user_line(text)))
-    sys.stdout.flush()
+    """Emit the user text to be echoed where the answer will follow."""
+    output.emit(output.event("user_echo", text=text))
 
 
 def _setting(settings: Any, key: str) -> Any:
@@ -502,9 +504,9 @@ def _markdown_styles(colours: Theme) -> dict[str, str]:
         "markdown.block_quote": colours.dim,
         "markdown.list": colours.highlight,
         "markdown.item.number": colours.highlight,
-        "markdown.h2": f"underline {colours.highlight}",
-        "markdown.h3": f"bold {colours.highlight}",
-        "markdown.h4": f"italic {colours.highlight}",
+        "markdown.h2": f"{fset.setting_value('MARKDOWN_HEADING_TWO_STYLE')} {colours.highlight}",
+        "markdown.h3": f"{fset.setting_value('MARKDOWN_HEADING_THREE_STYLE')} {colours.highlight}",
+        "markdown.h4": f"{fset.setting_value('MARKDOWN_HEADING_FOUR_STYLE')} {colours.highlight}",
         "markdown.link": colours.highlight,
         "markdown.link_url": f"underline {colours.dim}",
         "markdown.table.border": colours.separator,
@@ -538,7 +540,7 @@ class _FoldingTable(TableElement):
             return
         for index, row in enumerate(rows):
             if index:
-                yield Text("\u2500" * min(options.max_width, 3), "markdown.table.border")
+                yield Text(fset.setting_value("TABLE_RULE") * min(options.max_width, 3), "markdown.table.border")
             for column, cell in enumerate(row):
                 heading = headings[column] if column < len(headings) else Text("")
                 yield Text.assemble(heading, " ", cell, overflow="fold") if heading.plain else cell
@@ -603,7 +605,10 @@ def render_markdown(source: str, width: int, settings: Any = None) -> str:
     for token in document.parsed:
         for child in token.children or ():
             if child.type == "code_inline":
-                child.content = f" {child.content} "
+                padding = _setting(settings, "MARKDOWN_INLINE_PADDING")
+                child.content = f"{padding}{child.content}{padding}"
+            elif child.type == "softbreak" and _setting(settings, "MARKDOWN_HARD_BREAKS"):
+                child.type = "hardbreak"
     console.print(document)
     return _rendered_text(console, width).strip("\n") + "\n"
 
@@ -931,36 +936,6 @@ def print_answer(text: str, stream: Any, *, markdown: bool = True) -> None:
 # Tool exchanges
 # --------------------------------------------------------------------------
 
-# The argument each tool carries its program or file body in, shown as a
-# highlighted block under the call header instead of on it.
-_BODY_ARG: dict[str, str] = {
-    "shell": "command",
-    "terminal_session": "command",
-    "kernel": "code",
-    "toolbox": "source",
-    "write": "content",
-    "plan": "content",
-}
-# Arguments the header leaves out: the body, or text the result's diff shows.
-_UNLISTED_ARGS: dict[str, tuple[str, ...]] = {
-    "patch": ("old_string", "new_string", "edits"),
-    "read": ("range",),
-    "shell": ("description",),
-    "send": ("text",),
-    "post_task": ("body",),
-    "finish_task": ("result",),
-}
-_ARG_VALUE_CHARS = 40
-_SHELL_HEADER = re.compile(r"shell=[^\n]*\nexit=(-?\d+)\n")
-_SHELL_SECTION = re.compile(r"^--- (stdout|stderr) ---$")
-_PYTHON_FIRST_LINE = re.compile(r"^\s*(?:\S*/)?python[0-9.]*\b")
-# A `read` result line: `N|` before the file's own text.
-_READ_GUTTER = re.compile(r"^(\d+)\|")
-# The note a paged `read` ends with, written for the model.
-_READ_PAGING = re.compile(r"^\[(\d+) total lines; continue with .*\]$")
-_PATCHED = re.compile(r"^patched .*?\((.*), hash \w+\)$")
-_HUNK = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
-
 # Screen marks of an exchange. `MARK` opens a call that has not finished;
 # a finished one is `OK` or `FAIL`.
 MARK = "…"
@@ -1013,70 +988,10 @@ def for_transcript(rendered: str) -> str:
     """`rendered` as the transcript log records it: plain text without the
     rail, every exchange header opening with `TOOL_MARKER` whatever mark the
     screen drew."""
-    return _HEADER_MARK.sub(f"{TOOL_MARKER} ", _RAILED.sub("", _SGR.sub("", rendered)))
-
-
-@dataclass
-class ToolOutput:
-    """A tool result as the screen shows it: cleaned lines with their stream."""
-
-    lines: list[tuple[str, bool]]  # (text, is_stderr)
-    exit_code: int | None = None
-    is_error: bool = False
-    tries: tuple[int, int] | None = None  # (left, allowed) of a failed call
-
-    @property
-    def text(self) -> str:
-        return "\n".join(line for line, _ in self.lines)
-
-    @property
-    def failed(self) -> bool:
-        return self.is_error or bool(self.exit_code)
-
-
-def result_text(result: Any) -> tuple[str, bool]:
-    """Flatten a tool result to (text, is_error)."""
-    dehydrated = getattr(result, "dehydrated", None)
-    if callable(dehydrated):
-        return dehydrated(), bool(getattr(result, "is_error", False))
-    text = result if isinstance(result, str) else str(result)
-    return text, text.lstrip().startswith("ERROR")
-
-
-# The count `runtime.ToolErrorTracker` appends to a failed result for the model.
-_RETRY_NOTE = re.compile(r"\s*<retry>attempts_left=(\d+), allowed_max_attempts=(\d+)</retry>\s*$")
-
-
-def tool_output(name: str, result: Any) -> ToolOutput:
-    """Parse a result for display. A finished shell result loses its
-    `shell=… exit=… --- stdout ---` envelope; exit is kept apart. A failed
-    call's retry note leaves the text and becomes `tries`."""
-    text, is_error = result_text(result)
-    text = clean(text)
-    tries: tuple[int, int] | None = None
-    note = _RETRY_NOTE.search(text)
-    if note is not None:
-        tries = (int(note.group(1)), int(note.group(2)))
-        text = text[:note.start()]
-    if name == "shell":
-        header = _SHELL_HEADER.match(text)
-        if header is not None:
-            exit_code = int(header.group(1))
-            lines: list[tuple[str, bool]] = []
-            stream: str | None = None
-            for line in text.split("\n"):
-                section = _SHELL_SECTION.match(line)
-                if section is not None:
-                    stream = section.group(1)
-                    continue
-                if stream is not None:
-                    lines.append((line, stream == "stderr"))
-            while lines and not lines[-1][0]:
-                lines.pop()
-            return ToolOutput(lines, exit_code=exit_code or None, is_error=is_error)
-    body = text.rstrip("\n")
-    return ToolOutput([(line, False) for line in body.split("\n")] if body else [],
-                      is_error=is_error, tries=tries)
+    rail = re.compile(rf"^{re.escape(fset.setting_value('EXCHANGE_RAIL'))} ?", re.M)
+    marks = "|".join(re.escape(fset.setting_value(key)) for key in ("EXCHANGE_MARK_RUNNING", "EXCHANGE_MARK_OK", "EXCHANGE_MARK_FAILED"))
+    header = re.compile(rf"^(?:{marks}) +", re.M)
+    return header.sub(f"{TOOL_MARKER} ", rail.sub("", _SGR.sub("", rendered)))
 
 
 def _byte_len(text: str) -> int:
@@ -1085,14 +1000,14 @@ def _byte_len(text: str) -> int:
 
 def _size(count: int) -> str:
     if count < 1024:
-        return f"{count} B"
+        return msgs.TOOL_SIZE_BYTES.words(count=count)
     if count < 1024 * 1024:
-        return f"{count / 1024:.1f} KB"
-    return f"{count / (1024 * 1024):.1f} MB"
+        return msgs.TOOL_SIZE_KILOBYTES.words(value=count / 1024)
+    return msgs.TOOL_SIZE_MEGABYTES.words(value=count / (1024 * 1024))
 
 
 def _count(number: int, noun: str) -> str:
-    return f"{number} {noun}" if number == 1 else f"{number} {noun}s"
+    return msgs.COUNT_ONE.words(number=number, noun=noun) if number == 1 else msgs.COUNT_MANY.words(number=number, noun=noun)
 
 
 def metrics(output: ToolOutput, *, shown: int | None = None, lines: int | None = None,
@@ -1103,46 +1018,18 @@ def metrics(output: ToolOutput, *, shown: int | None = None, lines: int | None =
     file's, for a `read` of one page."""
     parts: list[str] = []
     if output.tries is not None:
-        parts.append(f"failed · {output.tries[0]} of {output.tries[1]} tries left")
+        parts.append(msgs.TOOL_FAILURE_TRIES_LEFT.words(left=output.tries[0], allowed=output.tries[1]))
     if output.exit_code:
-        parts.append(f"exit {output.exit_code}")
+        parts.append(msgs.TOOL_EXIT_CODE.words(exit_code=output.exit_code))
     total = len(output.lines) if lines is None else lines
     if of is not None and of > total:
-        parts.append(f"{total} of {_count(of, 'line')}")
+        parts.append(msgs.TOOL_LINES_OF_TOTAL.words(total=total, value=_count(of, msgs.TOOL_LINE_NOUN.words())))
     else:
-        parts.append(_count(total, "line"))
+        parts.append(_count(total, msgs.TOOL_LINE_NOUN.words()))
     if shown is not None and shown < total:
-        parts.append(f"{shown} shown")
+        parts.append(msgs.TOOL_LINES_SHOWN.words(shown=shown))
     parts.append(_size(_byte_len(output.text)))
     return " · ".join(parts)
-
-
-# The argument that tells one call of a tool from another on its header: the
-# first of these that the call carries. A tool not named here is told apart by
-# its path, when it has one.
-_KEY_ARGS: dict[str, tuple[str, ...]] = {
-    "fs_search": ("pattern",),
-    "ast_search": ("pattern",),
-    "shell": ("command",),
-    "terminal_session": ("command",),
-    "kernel": ("code",),
-    "toolbox": ("source",),
-    "fetch": ("url",),
-    "browse": ("url",),
-    "exa_search": ("query",),
-    "serper_search": ("query",),
-    "tavily_search": ("query",),
-    "docs_search": ("topic",),
-    "tool_discovery": ("query",),
-    "skill": ("name",),
-    "send": ("to",),
-    "claim": ("key",),
-    "release": ("key",),
-    "plan": ("plan_name",),
-    "post_task": ("title",),
-    "task": ("agent_id",),
-}
-_PATH_ARGS = ("file_path", "path")
 
 
 def short_path(path: str) -> str:
@@ -1173,16 +1060,16 @@ def key_argument(name: str, args: dict | None, room: int, whole: bool = False) -
         return ""
     lines = clean(args[key]).strip().split("\n")  # type: ignore[index]
     if whole:
-        return " ⏎ ".join(short_path(line.strip()) if key in _PATH_ARGS else line.strip() for line in lines)
+        return fset.setting_value("ARGUMENT_NEWLINE_MARK").join(short_path(line.strip()) if key in _PATH_ARGS else line.strip() for line in lines)
     text = lines[0].strip()
-    more = "…" if len(lines) > 1 else ""
+    more = fset.setting_value("DISPLAY_ELLIPSIS") if len(lines) > 1 else ""
     if key in _PATH_ARGS:
         text = short_path(text)
     if len(text) + len(more) <= room:
         return text + more
     if key in _PATH_ARGS:
-        return "…" + text[-(room - 1):]
-    return text[:room - 1] + "…"
+        return fset.setting_value("DISPLAY_ELLIPSIS") + text[-(room - 1):]
+    return text[:room - 1] + fset.setting_value("DISPLAY_ELLIPSIS")
 
 
 def _single_line(value: Any, whole: bool = False) -> str:
@@ -1197,10 +1084,11 @@ def _single_line(value: Any, whole: bool = False) -> str:
             text = str(value)
     text = clean(text)
     if whole:
-        return text.replace("\n", " ⏎ ")
+        return text.replace("\n", fset.setting_value("ARGUMENT_NEWLINE_MARK"))
     first, _, rest = text.partition("\n")
-    if rest or len(first) > _ARG_VALUE_CHARS:
-        first = first[:_ARG_VALUE_CHARS - 1] + "…"
+    maximum = int(fset.setting_value("ARGUMENT_CHARACTERS_MAX"))
+    if rest or len(first) > maximum:
+        first = first[:maximum - 1] + fset.setting_value("DISPLAY_ELLIPSIS")
     return first
 
 
@@ -1211,14 +1099,16 @@ def _other_arguments(name: str, args: dict, whole: bool = False) -> str:
     notes: list[str] = []
     span = args.get("range")
     if name == "read" and isinstance(span, dict):
+        span = {key: clean(value) if isinstance(value, str) else value for key, value in span.items()}
+        args = {**args, "range": span}
         if "start_byte" in span or "end_byte" in span:
-            notes.append(f"bytes {span.get('start_byte', 0)}-{span.get('end_byte', '')}")
+            notes.append(msgs.TOOL_BYTE_RANGE.words(value=span.get('start_byte', 0), value2=span.get('end_byte', '')))
         elif "start_line" in span or "end_line" in span:
-            notes.append(f"lines {span.get('start_line', 1)}-{span.get('end_line', '')}")
+            notes.append(msgs.TOOL_LINE_RANGE.words(value=span.get('start_line', 1), value2=span.get('end_line', '')))
     if name == "write" and isinstance(args.get("content"), str):
-        notes.append(_count(len(args["content"].rstrip("\n").split("\n")), "line"))
+        notes.append(_count(len(args["content"].rstrip("\n").split("\n")), msgs.TOOL_LINE_NOUN.words()))
     if name == "patch" and isinstance(args.get("edits"), list):
-        notes.append(_count(len(args["edits"]), "edit"))
+        notes.append(_count(len(args["edits"]), msgs.TOOL_EDIT_NOUN.words()))
     # The whole form leaves out only what it shows elsewhere: the key
     # argument, the body, a message's text.
     shown_elsewhere = (_SAID_ARG.get(name),) if whole else _UNLISTED_ARGS.get(name, ())
@@ -1227,17 +1117,13 @@ def _other_arguments(name: str, args: dict, whole: bool = False) -> str:
             if key not in left_out and value is not None and value != ""]
     if rest:
         notes.append("(" + ", ".join(rest) + ")")
-    return " ".join(notes)
+    return clean(" ".join(notes))
 
 
 def _lexer(name: str, args: dict, body: str) -> str:
-    if name in ("kernel", "toolbox"):
-        return "python"
-    if name in ("shell", "terminal_session"):
-        first = body.lstrip().split("\n", 1)[0]
-        return "python" if _PYTHON_FIRST_LINE.match(first) else "bash"
-    if name == "plan":
-        return "markdown"
+    language = builtin_lexer(name, args, body)
+    if language is not None:
+        return language
     path = args.get("file_path") or args.get("path")
     if isinstance(path, str) and path:
         try:
@@ -1293,8 +1179,10 @@ class _Block:
         give."""
         th = self.theme
         args = args if isinstance(args, dict) else {}
-        row = Text.assemble((f"{self.state} ", f"bold {self.colour()}"),
-                            (f" {clean(name)} ", f"bold {th.accent} on {th.panel}"))
+        mark = fset.setting_value({MARK: "EXCHANGE_MARK_RUNNING", OK: "EXCHANGE_MARK_OK", FAIL: "EXCHANGE_MARK_FAILED"}[self.state])
+        style = fset.setting_value("EXCHANGE_HEADER_STYLE")
+        row = Text.assemble((f"{mark} ", f"{style} {self.colour()}"),
+                            (f" {clean(name)} ", f"{style} {th.accent} on {th.panel}"))
         if malformed:
             row.append_text(Text(" ") + fset.to_rich(msgs.TOOL_ARGS_UNPARSED.body_runs(), th.error))
         if about is None:
@@ -1302,7 +1190,7 @@ class _Block:
             whole = self.whole and _BODY_ARG.get(name) != _key_name(name, args)
             about = key_argument(name, args, 10 ** 6, whole)
         if about:
-            row.append(" " + about, "bold")
+            row.append(" " + about, fset.setting_value("EXCHANGE_ARGUMENT_STYLE"))
         if rest is None:
             rest = _other_arguments(name, args, self.whole)
         if rest:
@@ -1366,7 +1254,7 @@ class _Block:
         if not self.rows:
             return ""
         console = _render_console(self.width)
-        rail = Text.assemble((RAIL + " ", self.colour()))
+        rail = Text.assemble((fset.setting_value("EXCHANGE_RAIL") + " ", self.colour()))
         for row in self.rows:
             console.print(rail + row, soft_wrap=True)
         return console.file.getvalue()  # type: ignore[attr-defined]
@@ -1381,59 +1269,8 @@ def _hidden(count: int) -> list[fset.Run]:
     return msgs.TOOL_MORE_LINES.body_runs(count=count)
 
 
-def _names(settings: Any, key: str) -> frozenset[str]:
-    value = _setting(settings, key)
-    return frozenset(str(item) for item in value) if isinstance(value, (list, tuple)) else frozenset()
-
-
-_SHELL_JOIN = re.compile(r"\s*(?:&&|\|\||;|\|)\s*")
-
-
-def _looks_around(command: Any, settings: Any) -> bool:
-    """A shell command made only of SHELL_QUIET commands, writing nowhere."""
-    if not isinstance(command, str) or not command.strip() or "\n" in command.strip() or ">" in command:
-        return False
-    quiet = _names(settings, "SHELL_QUIET")
-    for part in _SHELL_JOIN.split(command.strip()):
-        words = part.split()
-        if not words or (words[0] not in quiet and " ".join(words[:2]) not in quiet):
-            return False
-    return True
-
-
-def call_kind(name: str, args: dict | None, settings: Any = None) -> str:
-    """What TOOLS_DISPLAY 1 shows of a call.
-
-    quiet    one row, and a run of them folds into one row per tool
-    command  its output while it runs, one row once it ends
-    diff     the change it made
-    loud     its result
-    """
-    args = args if isinstance(args, dict) else {}
-    if name in _names(settings, "TOOLS_QUIET"):
-        return "quiet"
-    if name == "shell":
-        return "quiet" if _looks_around(args.get("command"), settings) else "command"
-    if name in ("kernel", "terminal_session", "toolbox"):
-        return "command"
-    if name in ("patch", "write", "notebook_edit"):
-        return "diff"
-    return "loud"
-
-
 # What a fold row counts, singular and plural; a tool not named counts calls.
-_FOLD_NOUN: dict[str, tuple[str, str]] = {
-    "read": ("file", "files"),
-    "fs_search": ("search", "searches"),
-    "ast_search": ("search", "searches"),
-    "exa_search": ("search", "searches"),
-    "serper_search": ("search", "searches"),
-    "tavily_search": ("search", "searches"),
-    "docs_search": ("search", "searches"),
-    "fetch": ("page", "pages"),
-    "browse": ("page", "pages"),
-    "shell": ("look", "looks"),
-}
+_FOLD_NOUN: dict[str, tuple[str, str]] = msgs.TOOL_FOLD_NOUNS
 _URL_HOST = re.compile(r"^[a-z][a-z0-9+.-]*://([^/?#]+)", re.I)
 
 
@@ -1460,8 +1297,8 @@ def render_fold(name: str, calls: list[dict | None], *, running: int = 0,
     """Finished quiet calls of one tool as one row: `mark [name] N things
     label · label · +K`. `running` of them have not returned."""
     block = _Block(width or block_width(), theme(settings), MARK if running else OK)
-    one, many = _FOLD_NOUN.get(name, ("call", "calls"))
-    about = f"{len(calls)} {one if len(calls) == 1 else many}"
+    one, many = _FOLD_NOUN.get(name, msgs.TOOL_FOLD_DEFAULT_NOUNS)
+    about = msgs.TOOL_FOLD_COUNT.words(value=len(calls), value2=one if len(calls) == 1 else many)
     labels = [label for label in (fold_label(name, args) for args in calls) if label]
     room = block.inner - len(name) - len(about) - 10
     shown: list[str] = []
@@ -1477,62 +1314,21 @@ def render_fold(name: str, calls: list[dict | None], *, running: int = 0,
 
 
 def _read_view(output: ToolOutput, args: dict | None) -> tuple[list[tuple[str, Text]], int | None] | None:
-    """A `read` result as numbered file rows and the file's total line count
-    from the paging note; None when the result has no `N|` lines."""
-    matches = [_READ_GUTTER.match(line) for line, _ in output.lines]
-    if not any(matches):
+    if output.read is None:
         return None
-    total: int | None = None
-    kept: list[tuple[str, str]] = []
-    notes: list[str] = []
-    for (line, _), match in zip(output.lines, matches, strict=True):
-        paging = _READ_PAGING.match(line)
-        if match is not None:
-            kept.append((match.group(1), line[match.end():]))
-        elif paging is not None:
-            total = int(paging.group(1))
-        elif line.strip():
-            notes.append(line)
+    rows, total = output.read
+    kept = [(number, text) for number, text in rows if number]
+    notes = [(number, Text(text)) for number, text in rows if not number]
     code = _highlight([text for _, text in kept], _lexer("read", args or {}, "\n".join(t for _, t in kept)))
-    rows = [(number, text) for (number, _), text in zip(kept, code, strict=True)]
-    return rows + [("", Text(note)) for note in notes], total
+    return [(number, text) for (number, _), text in zip(kept, code, strict=True)] + notes, total
 
 
 def _diff_view(output: ToolOutput, colours: Theme) -> tuple[list[tuple[str, Text]], str] | None:
-    """A `patch` result as numbered diff rows and its summary; None when the
-    result is not `patched … (summary, hash …)` followed by a unified diff."""
-    if not output.lines:
+    if output.diff is None:
         return None
-    summary = _PATCHED.match(output.lines[0][0])
-    if summary is None:
-        return None
-    rows: list[tuple[str, Text]] = []
-    old = new = 0
-    for line, _ in output.lines[1:]:
-        hunk = _HUNK.match(line)
-        if hunk is not None:
-            if rows:
-                rows.append(("", Text("⋯", colours.dim)))
-            old, new = int(hunk.group(1)), int(hunk.group(2))
-        elif line.startswith(("--- ", "+++ ")) and not old and not new:
-            continue
-        elif line.startswith("+"):
-            rows.append((str(new), Text("+ " + line[1:], colours.added)))
-            new += 1
-        elif line.startswith("-"):
-            rows.append((str(old), Text("- " + line[1:], colours.removed)))
-            old += 1
-        elif line.startswith(" "):
-            rows.append((str(new), Text("  " + line[1:], colours.panel_text)))
-            old, new = old + 1, new + 1
-    return rows, summary.group(1)
-
-
-# The argument a call's own text is in, shown at TOOLS_DISPLAY 1 in place of the
-# result, which only acknowledges it.
-_SAID_ARG: dict[str, str] = {"send": "text", "post_task": "body", "finish_task": "result"}
-# Rows of a running command's output kept on screen.
-LIVE_LINES = 6
+    rows, summary = output.diff
+    return [(number, Text(fset.setting_value("DIFF_HUNK_GAP"), colours.dim) if role == "gap"
+             else Text(text, getattr(colours, role))) for number, text, role in rows], summary
 
 
 def _last_line(output: ToolOutput) -> str:
@@ -1580,7 +1376,7 @@ def _finished_brief(block: _Block, name: str, args: dict, output: ToolOutput, ki
     command = kind == "command" or name == "shell"
     if output.failed:
         if command:
-            parts = [f"exit {output.exit_code}"] if output.exit_code else []
+            parts = [msgs.TOOL_EXIT_CODE.words(exit_code=output.exit_code)] if output.exit_code else []
             last = _last_line(output)
             block.header(name, args, malformed=malformed,
                          tail=" · ".join([*parts, last] if last else parts), tail_style=colours.error)
@@ -1677,7 +1473,7 @@ def render_exchange(name: str, args: dict | None, result: Any = None, *, level: 
         if level >= 2:
             _program(block, name, args, level, preview)
         if live:
-            tail = [clean(line) for line in live][-LIVE_LINES:]
+            tail = [clean(line) for line in live][-int(_setting(settings, "SHELL_LIVE_LINES_MAX")):]
             block.panel([Text(line, colours.panel_text) for line in tail])
         return block.render()
     output = tool_output(name, result)

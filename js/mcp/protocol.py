@@ -18,6 +18,7 @@ METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 REQUEST_CANCELLED = -32800
+_CANCEL_SEND_TIMEOUT_S = 0.1
 
 logger = logging.getLogger(__name__)
 
@@ -70,12 +71,11 @@ class JSONRPCPeer:
         self._ids = itertools.count(1)
         self._pending: dict[JSONRPCId, asyncio.Future[Any]] = {}
         self._incoming: dict[JSONRPCId, asyncio.Task[Any]] = {}
-        self._request_handlers: dict[str, RequestHandler] = {}
+        self._request_handlers: dict[str, RequestHandler] = {"ping": lambda _params: {}}
         self._notification_handlers: dict[str, list[NotificationHandler]] = {}
         self._notification_queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
         self._notification_task: asyncio.Task[None] | None = None
         self._reader_task: asyncio.Task[None] | None = None
-        self._write_lock = asyncio.Lock()
         self._closed = False
         self._close_lock = asyncio.Lock()
 
@@ -119,14 +119,14 @@ class JSONRPCPeer:
         if params is not None:
             message["params"] = dict(params)
         try:
-            await self._send(message)
-            if timeout is None:
+            async with asyncio.timeout(timeout):
+                await self._send(message)
                 return await asyncio.shield(future)
-            return await asyncio.wait_for(asyncio.shield(future), timeout)
         except (TimeoutError, asyncio.CancelledError):
             if not future.done() and not self._closed:
                 with contextlib.suppress(Exception):
-                    await self._send_cancelled(request_id)
+                    async with asyncio.timeout(_CANCEL_SEND_TIMEOUT_S):
+                        await self._send_cancelled(request_id)
             raise
         finally:
             self._pending.pop(request_id, None)
@@ -181,10 +181,7 @@ class JSONRPCPeer:
     async def _send(self, message: dict[str, Any]) -> None:
         if self._closed:
             raise PeerClosedError("JSON-RPC peer is closed")
-        async with self._write_lock:
-            if self._closed:
-                raise PeerClosedError("JSON-RPC peer is closed")
-            await self.transport.send(message)
+        await self.transport.send(message)
 
     async def _send_cancelled(self, request_id: JSONRPCId) -> None:
         await self.notify(

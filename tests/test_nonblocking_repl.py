@@ -5,6 +5,7 @@ is neutralized (prompt_toolkit's terminal machinery is its own concern)."""
 
 from __future__ import annotations
 
+
 import pytest
 
 from js import cli

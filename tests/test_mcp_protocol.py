@@ -87,6 +87,33 @@ def test_initialize_orders_handshake_and_advertises_only_implemented_capabilitie
     asyncio.run(drive())
 
 
+def test_server_ping_during_initialization_receives_success():
+    async def drive():
+        transport = FakeTransport()
+        client = MCPClient(lambda: transport)
+        initializing = asyncio.create_task(client.initialize())
+        try:
+            initialize = await transport.next_sent()
+            await transport.server_send({"jsonrpc": "2.0", "id": "heartbeat", "method": "ping"})
+            assert await transport.next_sent() == {
+                "jsonrpc": "2.0", "id": "heartbeat", "result": {},
+            }
+            await transport.server_send({
+                "jsonrpc": "2.0", "id": initialize["id"], "result": {
+                    "protocolVersion": LATEST_PROTOCOL_VERSION,
+                    "capabilities": {}, "serverInfo": {"name": "alive", "version": "1"},
+                },
+            })
+            await initializing
+            assert client.initialized
+        finally:
+            initializing.cancel()
+            await asyncio.gather(initializing, return_exceptions=True)
+            await client.close()
+
+    asyncio.run(drive())
+
+
 def test_close_racing_initialize_closes_late_transport_without_publishing_result():
     async def drive():
         transport = FakeTransport()

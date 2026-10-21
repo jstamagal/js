@@ -16,6 +16,10 @@ from . import messages as msgs
 from . import settings as _settings
 from .config import Config
 from .toolkit.fs import _detect_visual_mime
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('attach')
+
 
 STDIN_ATTACHMENT_NAME = "<stdin>"
 # A name without a suffix, so image detection goes by the magic bytes alone and
@@ -64,7 +68,7 @@ def with_note(bundle: UserMessageBundle, note: str) -> UserMessageBundle:
 _DOUBLE_QUOTE_ESCAPES = '\\"$`\n'
 
 
-def _scan_tokens(line: str, *, quotes_everywhere: bool = True) -> list[tuple[str, int, int]]:
+def _scan_tokens(line: str, *, quotes_everywhere: bool = True, prefix: str = "@") -> list[tuple[str, int, int]]:
     """Split `line` into shell-word tokens, each returned as (unquoted_text, start,
     end) spanning the token's raw location in `line`. Mirrors shlex.split's posix
     quote and backslash handling (so @"a b.png" and @a\\ b.png both name
@@ -83,7 +87,7 @@ def _scan_tokens(line: str, *, quotes_everywhere: bool = True) -> list[tuple[str
         if i >= n:
             break
         start = i
-        if not quotes_everywhere and line[i] != "@":
+        if not quotes_everywhere and not line.startswith(prefix, i):
             while i < n and not line[i].isspace():
                 i += 1
             tokens.append((line[start:i], start, i))
@@ -137,8 +141,8 @@ def _scan_word(line: str, i: int) -> tuple[str, int] | None:
     return "".join(buf), i
 
 
-def split_repl_attachments(line: str) -> tuple[str, list[str]]:
-    """Extract @path tokens from a REPL line.
+def split_repl_attachments(line: str, *, prefix: str = "@") -> tuple[str, list[str]]:
+    """Extract prefixed attachment tokens from a REPL line (default: @path).
 
     Paths with spaces may be shell-quoted as @"path with spaces.png". If no
     attachment token is present, return the original line unchanged. When one
@@ -155,19 +159,21 @@ def split_repl_attachments(line: str) -> tuple[str, list[str]]:
     only the @tokens get quote handling and the rest splits on whitespace.
     """
 
+    if not prefix:
+        return line, clipimage.placeholders(line)
     try:
         shlex.split(line)
     except ValueError:
-        tokens = _scan_tokens(line, quotes_everywhere=False)
+        tokens = _scan_tokens(line, quotes_everywhere=False, prefix=prefix)
     else:
-        tokens = _scan_tokens(line)
+        tokens = _scan_tokens(line, prefix=prefix)
 
     attachments: list[str] = []
     spans: list[tuple[int, int]] = []
     for text, start, end in tokens:
-        if text.startswith("@") and text.strip("@"):
-            if text[1:] not in attachments:
-                attachments.append(text[1:])
+        if text.startswith(prefix) and text.strip(prefix):
+            if text[len(prefix):] not in attachments:
+                attachments.append(text[len(prefix):])
             spans.append((start, end))
 
     prompt = line
@@ -311,14 +317,14 @@ def _prepare_bytes(
     guessed, _ = mimetypes.guess_type(str(path))
     file_type = guessed or "application/octet-stream"
     return _PreparedAttachment(
-        f"ATTACHED_BINARY_FILE {display_path} type={file_type} size={size} bytes (content not inlined)"
+        _PROMPTS['prepare_bytes_attached_binary_file_type_size_bytes'].format(display_path=display_path, file_type=file_type, size=size)
     )
 
 
 def _prepare_image(display_path: str, mime: str, size: int, data: bytes, cfg: Config) -> _PreparedAttachment:
-    stub = f"VISUAL_FILE {display_path} mime={mime} size={size} bytes"
+    stub = _PROMPTS['prepare_image_visual_file_mime_size_bytes'].format(display_path=display_path, mime=mime, size=size)
     if not getattr(cfg, "vision_enabled", False):
-        return _PreparedAttachment(f"{stub} (vision disabled; image bytes not sent)")
+        return _PreparedAttachment(_PROMPTS['prepare_image_vision_disabled_image_bytes_not_sent'].format(stub=stub))
     return _PreparedAttachment(stub, ai.types.messages.FilePart(data=data, media_type=mime))
 
 
@@ -363,10 +369,10 @@ def _looks_text(data: bytes) -> bool:
 
 def _format_text_attachment(display_path: str, text: str, size: int, truncated: bool, cap: int) -> str:
     fence = _fence_for(text)
-    header = f"Attached file: {display_path} ({size} bytes)"
+    header = _PROMPTS['format_text_attachment_attached_file_bytes'].format(display_path=display_path, size=size)
     if truncated:
-        header += f" [truncated to {cap} bytes]"
-    return f"{header}\n{fence}\n{text}\n{fence}"
+        header += _PROMPTS['format_text_attachment_truncated_to_bytes'].format(cap=cap)
+    return _PROMPTS['format_text_attachment_text'].format(header=header, fence=fence, text=text, value_3=fence)
 
 
 def _fence_for(text: str) -> str:

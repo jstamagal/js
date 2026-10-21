@@ -9,9 +9,10 @@ import subprocess
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from ... import jail
-from ...capped_process import truncation_marker
+from ...capped_process import _run_capped, truncation_marker
 from ...text_bytes import cap_text
 from ..core import ToolContext
 
@@ -31,9 +32,10 @@ _ENV_ALLOW = ("PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "PWD", "SHELL")
 
 
 @contextmanager
-def vault_lock(vault_path: Path):
+def vault_lock(vault_path: Path, context: ToolContext):
     vault_path.mkdir(parents=True, exist_ok=True)
-    lock_fd = os.open(str(vault_path / ".wiki.lock"), os.O_CREAT | os.O_RDWR, 0o644)
+    lock_path = context.resolve_path(vault_path / ".wiki.lock", write=True)
+    lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
         yield
@@ -65,31 +67,54 @@ def run(cmd: list[str], context: ToolContext, timeout: int = 300) -> tuple[int, 
     """Run ``cmd`` with the allowlisted environment, in the jail under `js -C`."""
     env = {key: os.environ[key] for key in _ENV_ALLOW if key in os.environ}
     argv = jail.wrap(cmd, context, cwd=context.cwd, env=env)
+    cap = context.max_tool_result_bytes
     try:
-        proc = subprocess.run(argv, capture_output=True, timeout=timeout, env=env)
+        proc = _run_capped(argv, timeout=timeout, cwd=None, env=env, cap=cap)
     except FileNotFoundError:
         return 127, "", f"command not found: {cmd[0]}"
     except subprocess.TimeoutExpired:
         return 124, "", f"timed out after {timeout}s"
     except OSError as exc:
         return 1, "", str(exc)
-    cap = context.max_tool_result_bytes
+    marker = truncation_marker(cap, "TOOL_RESULT_MAX")
     return (
         proc.returncode,
-        proc.stdout[:cap].decode("utf-8", "replace"),
-        proc.stderr[:cap].decode("utf-8", "replace"),
+        cap_text(proc.stdout.decode("utf-8", "replace") + (marker if proc.stdout_truncated else ""), cap, marker),
+        cap_text(proc.stderr.decode("utf-8", "replace") + (marker if proc.stderr_truncated else ""), cap, marker),
     )
 
 
 def read_text(path: Path, cap: int) -> str:
     try:
-        text = path.read_text("utf-8", errors="replace")
+        with path.open(encoding="utf-8", errors="replace") as stream:
+            text = stream.read(cap + 1)
     except OSError as exc:
         return f"ERROR: {exc}"
     return cap_text(text, cap, truncation_marker(cap, "TOOL_RESULT_MAX"))
 
 
-def copy_to_assets(src: Path, vault_path: Path) -> Path | str:
+def _existing_asset(src: Path, dest: Path) -> Path | str:
+    try:
+        with dest.open("rb") as existing, src.open("rb") as incoming:
+            while True:
+                chunk = existing.read(65536)
+                if chunk != incoming.read(65536):
+                    identical = False
+                    break
+                if not chunk:
+                    identical = True
+                    break
+    except OSError as exc:
+        return f"ERROR: could not compare {src} with {dest}: {exc}"
+    if not identical:
+        return (
+            f"ERROR: asset name collision at {dest}: a different file already "
+            f"uses that name; rename {src.name} and convert again"
+        )
+    return dest
+
+
+def copy_to_assets(src: Path, vault_path: Path, context: ToolContext) -> Path | str:
     """Copy a media file into <vault>/assets and return the destination path.
 
     A missing vault or an existing same-named file with different bytes comes
@@ -97,25 +122,21 @@ def copy_to_assets(src: Path, vault_path: Path) -> Path | str:
     """
     if not vault_path.is_dir():
         return f"ERROR: no vault at {vault_path}"
-    assets = vault_path / "assets"
+    assets = context.resolve_path(vault_path / "assets", write=True)
     try:
         assets.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         return f"ERROR: could not create asset directory {assets}: {exc}"
-    dest = assets / src.name
+    dest = context.resolve_path(assets / src.name, write=True)
     if dest.exists():
-        try:
-            identical = dest.read_bytes() == src.read_bytes()
-        except OSError as exc:
-            return f"ERROR: could not compare {src} with {dest}: {exc}"
-        if not identical:
-            return (
-                f"ERROR: asset name collision at {dest}: a different file already "
-                f"uses that name; rename {src.name} and convert again"
-            )
-        return dest
+        return _existing_asset(src, dest)
     try:
-        shutil.copy2(src, dest)
+        with vault_lock(vault_path, context), NamedTemporaryFile(dir=assets, prefix=".wiki-asset-") as staged:
+            shutil.copy2(src, staged.name)
+            try:
+                os.link(staged.name, dest)
+            except FileExistsError:
+                return _existing_asset(src, dest)
     except OSError as exc:
         return f"ERROR: could not copy {src} to {dest}: {exc}"
     return dest

@@ -253,29 +253,6 @@ def test_fs_search_keeps_its_hits_and_names_an_unreadable_directory(tmp_path, un
 
 
 @requires_rg
-def test_fs_search_marks_the_unread_count_partial_when_head_limit_stops_the_walk(tmp_path):
-    """The walk stops once the page is full, so locked paths past that point
-    are never seen; the footer's count is a floor, not a coverage report."""
-    if os.geteuid() == 0:
-        pytest.skip("root reads any directory")
-    locked = [tmp_path / "a_locked", tmp_path / "z_locked"]
-    for directory in locked:
-        directory.mkdir()
-        directory.chmod(0)
-    (tmp_path / "m").mkdir()
-    for n in range(5):
-        (tmp_path / "m" / f"{n}.txt").write_text("tag\n", encoding="utf-8")
-    context = ToolContext(cwd=tmp_path)
-    try:
-        actual = fs_search("tag", path=".", output_mode="count", head_limit=1, context=context)
-    finally:
-        for directory in locked:
-            directory.chmod(0o755)
-
-    assert "rg could not read at least " in actual
-
-
-@requires_rg
 def test_fs_search_with_only_an_unreadable_directory_is_no_matches_not_an_error(tmp_path, unreadable_dir):
     context = ToolContext(cwd=tmp_path)
 

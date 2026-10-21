@@ -6,7 +6,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -41,7 +41,7 @@ def _norm_effort(raw: str | None) -> str | None:
 
 def validate_agent_id(agent_id: str) -> str:
     if not _AGENT_ID_RE.fullmatch(agent_id):
-        raise ValueError("agent id must contain only letters, numbers, '_' or '-'")
+        raise ValueError(msgs.CONFIG_AGENT_ID_MUST_CONTAIN_ONLY_LETTERS_NUMBERS.format())
     return agent_id
 
 
@@ -102,6 +102,10 @@ def vision_enabled_for_model(model: str, settings: dict | None = None) -> bool:
     return _vision_by_name(model)
 
 
+def _require_model() -> str:
+    raise TypeError("Config requires a model")
+
+
 @dataclass(frozen=True)
 class Config(_turn_settings.ConfigSettings):
     """One run's configuration. The per-turn settings are fields of the
@@ -109,20 +113,28 @@ class Config(_turn_settings.ConfigSettings):
 
     ``frozen=True`` only stops field reassignment: ``settings``,
     ``provider_headers`` and ``mcp`` are plain dicts that callers can and do
-    change in place, so a Config is not hashable and not a snapshot."""
+    change in place, so a Config is not hashable and not a snapshot.
 
-    agent_id: str
-    agent_dir: Path
-    model: str
-    provider_id: str | None       # explicit js provider id (e.g. "deepseek")
-    provider_base_url: str | None # explicit provider base URL
-    provider_api_key: str | None   # explicit provider API key
-    reasoning_effort: str | None   # deepseek/o1 thinking: low|medium|high|minimal (None = provider default)
-    debug_log: Path | None
-    history_file: Path
-    sessions_dir: Path
-    session_file: Path
-    prompts_dir: Path
+    ``from_env`` builds the Config a js run uses from jsrc, env and ~/.js.
+    A program can build one in code instead: ``model`` is the one required
+    argument, and every other field has a default. Built that way, the
+    session file is os.devnull, so no session is written; ``agent_dir`` is
+    the agent's state directory and ``prompts_dir`` its directory under the
+    repository's prompts/, neither of them created; the per-turn settings are
+    the `js/jsrc` values unless ``settings`` holds them."""
+
+    agent_id: str = field(default_factory=lambda: _settings.default_value("DEFAULT_AGENT"))
+    agent_dir: Path = None  # type: ignore[assignment]  # None: the agent's state directory
+    model: str = field(default_factory=_require_model)
+    provider_id: str | None = None       # explicit js provider id (e.g. "deepseek")
+    provider_base_url: str | None = None # explicit provider base URL
+    provider_api_key: str | None = None   # explicit provider API key
+    reasoning_effort: str | None = None   # deepseek/o1 thinking: low|medium|high|minimal (None = provider default)
+    debug_log: Path | None = None
+    history_file: Path = field(default_factory=lambda: _paths.prompt_history_file())
+    sessions_dir: Path = field(default_factory=lambda: _session_store.folder_for(Path.cwd().resolve(strict=False)))
+    session_file: Path = field(default_factory=lambda: Path(os.devnull))
+    prompts_dir: Path = None  # type: ignore[assignment]  # None: prompts/<agent_id> in the repository
     provider_headers: dict[str, str] = field(default_factory=dict)
     explicit_model: bool = False  # MODEL was set by JS_MODEL or config (not the built-in default); gates --agent agent.yaml model
     explicit_provider: bool = False  # PROVIDER was set by config/env/CLI extras, not inferred from a model prefix
@@ -146,6 +158,10 @@ class Config(_turn_settings.ConfigSettings):
     layer_resume: dict = field(default_factory=dict, compare=False)
 
     def __post_init__(self) -> None:
+        if self.agent_dir is None:
+            object.__setattr__(self, "agent_dir", _paths.state_root() / self.agent_id)
+        if self.prompts_dir is None:
+            object.__setattr__(self, "prompts_dir", Path(__file__).resolve().parent.parent / "prompts" / self.agent_id)
         # A key that is not a setting (an old name such as retry_attempts)
         # would be read by nothing; refuse it as `set` does.
         unknown = _unknown_setting_keys(self.settings)
@@ -244,21 +260,21 @@ def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = Fal
     # sessions, however, can only be named with relative paths.
     if raw_path.is_absolute():
         if raw_path.suffix != ".jsonl" or not raw_path.is_file():
-            raise ValueError(f"session path must be an existing .jsonl file: {session}")
+            raise ValueError(msgs.CONFIG_SESSION_PATH_MUST_BE_AN_EXISTING_JSONL.format(session=session))
         resolved_path = raw_path.resolve(strict=True)
         if not resolved_path.is_relative_to(resolved_root):
-            raise ValueError(f"session path must be inside {root}: {session}")
+            raise ValueError(msgs.CONFIG_SESSION_PATH_MUST_BE_INSIDE.format(root=root, session=session))
         return raw_path
 
     relative_path = _relative_session_path(session)
     concrete_path = sessions_dir / relative_path
     resolved_path = concrete_path.resolve(strict=False)
     if not resolved_path.is_relative_to(resolved_sessions_dir):
-        raise ValueError(f"session path must be inside {sessions_dir}: {session}")
+        raise ValueError(msgs.CONFIG_SESSION_PATH_MUST_BE_INSIDE_273.format(sessions_dir=sessions_dir, session=session))
 
     if concrete_path.exists():
         if not concrete_path.is_file():
-            raise ValueError(f"session path must be a .jsonl file: {session}")
+            raise ValueError(msgs.CONFIG_SESSION_PATH_MUST_BE_A_JSONL_FILE.format(session=session))
         return concrete_path
 
     found = (
@@ -270,7 +286,7 @@ def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = Fal
         return found
 
     if not create:
-        raise ValueError(f"session must identify an existing .jsonl file: {session}")
+        raise ValueError(msgs.CONFIG_SESSION_MUST_IDENTIFY_AN_EXISTING_JSONL_FILE.format(session=session))
 
     sessions_dir.mkdir(parents=True, exist_ok=True)
     parent = sessions_dir
@@ -280,30 +296,31 @@ def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = Fal
             parent.mkdir()
         except FileExistsError:
             if not parent.is_dir():
-                raise ValueError(f"session parent must be a directory: {session}") from None
+                raise ValueError(msgs.CONFIG_SESSION_PARENT_MUST_BE_A_DIRECTORY.format(session=session)) from None
         if not parent.resolve(strict=True).is_relative_to(resolved_sessions_dir):
-            raise ValueError(f"session path must be inside {sessions_dir}: {session}")
+            raise ValueError(msgs.CONFIG_SESSION_PATH_MUST_BE_INSIDE_273.format(sessions_dir=sessions_dir, session=session))
     try:
         with concrete_path.open("x", encoding="utf-8"):
             pass
     except FileExistsError:
         if not concrete_path.is_file() or not concrete_path.resolve(strict=True).is_relative_to(resolved_sessions_dir):
-            raise ValueError(f"session path must be a .jsonl file inside {sessions_dir}: {session}") from None
+            raise ValueError(msgs.CONFIG_SESSION_PATH_MUST_BE_A_JSONL_FILE_307.format(sessions_dir=sessions_dir, session=session)) from None
     return concrete_path
 
 
-def _select_prompt_dir(agent_id: str, repo_root: Path, global_root: Path, project_root: Path) -> Path:
-    for root in (project_root, global_root, repo_root):
+def _select_prompt_dir(agent_id: str, repo_root: Path, global_root: Path, project_root: Path, *, roots=None) -> Path:
+    roots = (repo_root, global_root, project_root) if roots is None else roots
+    for root in reversed(roots):
         candidate = root / agent_id
         try:
-            if candidate.is_dir() and any(candidate.glob("*.md")):
+            if candidate.is_dir() and any(entry.name.endswith(".md") for entry in candidate.iterdir()):
                 return candidate
         except OSError as exc:
             # Named agent exists but can't be read (symlink onto a sleeping
             # NFS/automount host). Stop here; falling through would silently
             # run a different agent of the same name.
-            raise ValueError(f"agent {agent_id!r} at {candidate} is unreadable: {exc.strerror}") from exc
-    return repo_root / agent_id
+            raise ValueError(msgs.CONFIG_AGENT_AT_IS_UNREADABLE.format(agent_id=agent_id, candidate=candidate, strerror=exc.strerror)) from exc
+    return (roots[0] if roots else repo_root) / agent_id
 
 def _preset_config_paths(
     presets: list[str] | None,
@@ -324,10 +341,12 @@ def _preset_config_paths(
         name = raw.strip()
         if not name:
             continue
+        global_path = _paths.global_config_file().with_name(f"jsrc.{name}")
+        local_path = project_dir / ".js" / f"jsrc.{name}"
         if not ignore_global_config:
-            paths.append(_paths.global_config_file().with_name(f"jsrc.{name}"))
-        if not ignore_local_config:
-            paths.append(project_dir / ".js" / f"jsrc.{name}")
+            paths.append(global_path)
+        if not ignore_local_config and local_path != global_path:
+            paths.append(local_path)
     return paths
 
 
@@ -344,7 +363,7 @@ def set_invocation(*, extras: list[str] | None = None, presets: list[str] | None
                        ignore_local_config=ignore_local_config, ignore_global_config=ignore_global_config)
 
 
-def run_settings(cwd: Path | None = None) -> dict:
+def run_settings(cwd: Path | None = None, *, migrate: bool | None = None) -> dict:
     """The settings a run started in ``cwd`` (default: here) loads: every
     jsrc layer, the environment and this process's command line."""
     paths = jsrc_paths(
@@ -353,7 +372,10 @@ def run_settings(cwd: Path | None = None) -> dict:
         ignore_global_config=_invocation.get("ignore_global_config", False),
         presets=_invocation.get("presets") or None,
     )
-    return _settings.collect_settings(config_paths=paths, extras=_invocation.get("extras") or None)
+    if migrate is False:
+        with _fset.held():
+            return _settings.collect_settings(config_paths=paths, extras=_invocation.get("extras") or None, migrate=False)
+    return _settings.collect_settings(config_paths=paths, extras=_invocation.get("extras") or None, migrate=migrate)
 
 
 def jsrc_paths(
@@ -368,10 +390,14 @@ def jsrc_paths(
     Run from the home directory, the project `.js/` is `~/.js` itself, so its
     jsrc is the global layer and loads there only."""
     paths: list[Path] = []
+    global_path = _paths.global_config_file()
     if not ignore_global_config:
-        paths.append(_paths.global_config_file())
+        paths.append(global_path)
     if not ignore_local_config:
-        paths.extend([project_dir / ".js" / "jsrc", project_dir / ".js" / "jsrc.local"])
+        local_path = project_dir / ".js" / "jsrc"
+        if local_path != global_path:
+            paths.append(local_path)
+        paths.append(project_dir / ".js" / "jsrc.local")
     # Presets layer on top of the base jsrc files (still below env / --extra).
     paths.extend(_preset_config_paths(
         presets,
@@ -417,6 +443,18 @@ def _set_by_invocation(key: str, env: Mapping[str, str], extras: list[str] | Non
     return any(tuple(_settings.parse_extra_arg(arg)[0]) == tuple(spec.path) for arg in extras or ())
 
 
+@dataclass(frozen=True)
+class ConfigAssembly:
+    """Dependencies used to assemble a Config from the invocation layers."""
+
+    prompt_roots: tuple[Path, ...] | None = None
+    collect: Callable | None = None
+    set_banner: Callable | None = None
+    bind_formats: Callable | None = None
+    resolve_route: Callable | None = None
+    missing_login: Callable | None = None
+
+
 def from_env(
     *,
     save_session: bool = True,
@@ -427,6 +465,7 @@ def from_env(
     ignore_local_config: bool = False,
     ignore_global_config: bool = False,
     presets: list[str] | None = None,
+    assembly: ConfigAssembly | None = None,
 ) -> Config:
     """Read jsrc + env + CLI extras once, populate everything explicitly.
 
@@ -440,6 +479,11 @@ def from_env(
     - Provider-specific env vars are scanned so a fresh shell with
       `DEEPSEEK_API_KEY` works without `js --login`.
     """
+    assembly = assembly or ConfigAssembly()
+    collect = _settings.collect_settings if assembly.collect is None else assembly.collect
+    set_banner = msgs.set_banner if assembly.set_banner is None else assembly.set_banner
+    bind_formats = _fset.bind_settings if assembly.bind_formats is None else assembly.bind_formats
+    resolve_route = _routing.resolve_model_route if assembly.resolve_route is None else assembly.resolve_route
     env = os.environ
     pkg = Path(__file__).resolve().parent
     js_root = pkg.parent
@@ -451,29 +495,32 @@ def from_env(
         presets=presets,
     )
 
-    jsrc_settings = _settings.collect_settings(
+    jsrc_settings = collect(
         config_paths=config_paths,
         env={},
         extras=None,
     )
-    js_root_settings = _settings.collect_settings(
+    js_root_settings = collect(
         config_paths=config_paths,
         extras=extras,
     )
     agent_id = agent_from_settings(js_root_settings, agent_id)
-    msgs.set_banner(str(_settings.knob(js_root_settings, "BANNER")))
+    set_banner(str(_settings.knob(js_root_settings, "BANNER")))
     default_model = _settings.default_value("MODEL")
+    from . import model_metadata
+
+    model_metadata.bind_settings(js_root_settings)
     raw_model = _settings.get_dotted(js_root_settings, ("MODEL",)) or default_model
     # Any env name that feeds MODEL makes the model invocation-explicit.
     invocation_explicit_model = any(
         env.get(name) for name in _settings.env_names_for(_settings.SPEC_BY_KEY["MODEL"]))
-    explicit_model = invocation_explicit_model or raw_model != default_model
+    explicit_model = _set_by_invocation("MODEL", env, extras) or raw_model != default_model
     _cfg_provider_id = _settings.get_dotted(js_root_settings, ("PROVIDER",))
     explicit_provider = _cfg_provider_id is not None
     _cfg_base_url = _settings.get_dotted(js_root_settings, ("BASE_URL",))
     _cfg_api_key = _settings.get_dotted(js_root_settings, ("API_KEY",))
     try:
-        route = _routing.resolve_model_route(
+        route = resolve_route(
             raw_model,
             configured_provider_id=_cfg_provider_id,
             configured_base_url=_cfg_base_url,
@@ -482,20 +529,23 @@ def from_env(
             explicit_model=explicit_model,
             prefix_overrides_provider=invocation_explicit_model and not explicit_provider,
         )
-    except _routing.ProviderNotLoggedInError:
-        if invocation_explicit_model:
+    except _routing.ProviderNotLoggedInError as exc:
+        if assembly.missing_login is not None:
+            route = assembly.missing_login(exc, raw_model)
+        elif invocation_explicit_model:
             raise
         # The base/default model names a provider the operator never logged into.
         # Don't fail config-build: a -m override, an agent `model:`, or a later
         # /model may replace it, and a plain run surfaces the friendly
         # not-logged-in error at the model boundary (model_client). Carry NO
         # provider so nothing farms the vendor's env keys in the meantime.
-        route = _routing.ModelRoute(
-            model=raw_model,
-            provider_id=None,
-            base_url=_cfg_base_url,
-            api_key=_cfg_api_key,
-        )
+        else:
+            route = _routing.ModelRoute(
+                model=raw_model,
+                provider_id=None,
+                base_url=_cfg_base_url,
+                api_key=_cfg_api_key,
+            )
     model = route.model
     provider_id = route.provider_id
     provider_base_url = route.base_url
@@ -512,7 +562,7 @@ def from_env(
 
     reasoning_effort = _settings.get_dotted(js_root_settings, ("EFFORT",))
     if reasoning_effort is None and provider_def is not None and provider_def.reasoning_effort:
-        reasoning_effort = provider_def.reasoning_effort
+        reasoning_effort = provider_def.default_effort(js_root_settings)
 
     runtime_debug = bool(_settings.knob(js_root_settings, "DEBUG_LOG"))
 
@@ -540,8 +590,9 @@ def from_env(
         session_file = Path(os.devnull)
     debug = state_dir / "debug.log" if runtime_debug else None
 
-    global_instruction_files = _paths.global_instruction_files()
-    _fset.bind_settings(js_root_settings)
+    global_instruction_files = tuple(_paths.home() / name for name in _settings.knob(js_root_settings, "GLOBAL_INSTRUCTION_FILES"))
+    project_instruction_files = tuple(project_dir / name for name in _settings.knob(js_root_settings, "PROJECT_INSTRUCTION_FILES"))
+    bind_formats(js_root_settings)
 
     return _login_defaults.for_turn(Config(
         agent_id=agent_id,
@@ -556,11 +607,12 @@ def from_env(
         sessions_dir=sessions_dir,
         session_file=session_file,
         history_file=history_file,
-        prompts_dir=_select_prompt_dir(agent_id, js_root / "prompts", _paths.global_agents_dir(), project_dir / ".js" / "agents"),
+        prompts_dir=_select_prompt_dir(agent_id, js_root / "prompts", _paths.global_agents_dir(), project_dir / ".js" / "agents", roots=assembly.prompt_roots),
         vision_enabled=vision_enabled_for_model(model, js_root_settings),
         settings=js_root_settings,
-        prompt_roots=(js_root / "prompts", _paths.global_agents_dir(), project_dir / ".js" / "agents"),
-        agents_files=tuple(p for p in (*global_instruction_files, project_dir / "AGENTS.md", project_dir / "AGENTS.local.md") if p.is_file()),
+        prompt_roots=(js_root / "prompts", _paths.global_agents_dir(), project_dir / ".js" / "agents")
+        if assembly.prompt_roots is None else assembly.prompt_roots,
+        agents_files=tuple(p for p in (*global_instruction_files, *project_instruction_files) if p.is_file()),
         project_dir=project_dir,
         mcp=mcp,
         explicit_model=explicit_model,

@@ -16,8 +16,8 @@ def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(dotenv._paths, "global_env_file", lambda: tmp_path / "no-such-config" / ".env")
     real = dotenv.candidate_files
 
-    def bounded(cwd: Path | None = None) -> list[Path]:
-        return [path for path in real(cwd) if tmp_path in path.parents]
+    def bounded(cwd: Path | None = None, *, settings=None) -> list[Path]:
+        return [path for path in real(cwd, settings=settings) if tmp_path in path.parents]
 
     monkeypatch.setattr(dotenv, "candidate_files", bounded)
 
@@ -60,6 +60,19 @@ def test_load_fills_unset_names_and_never_overrides_real_env(
     applied = dotenv.load(cwd=tmp_path, environ=env)
     assert env == {"TAVILY_API_KEY": "from-shell", "EXA_API_KEY": "from-file"}
     assert tmp_path / ".env" in applied
+
+
+@pytest.mark.parametrize("quote", ["'", '"'])
+def test_load_quoted_key_with_a_trailing_comment(tmp_path, monkeypatch, quote):
+    _isolate(tmp_path, monkeypatch)
+    (tmp_path / ".env").write_text(
+        f"EXA_API_KEY={quote}fixture#key{quote} # account\n", encoding="utf-8"
+    )
+    env = {}
+
+    dotenv.load(cwd=tmp_path, environ=env)
+
+    assert env == {"EXA_API_KEY": "fixture#key"}
 
 
 def test_load_walks_up_and_nearest_file_wins(
@@ -112,4 +125,13 @@ def test_search_tool_reads_a_key_supplied_only_by_dotenv(
     # os.environ is removed again at teardown.
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     dotenv.load(cwd=tmp_path)
-    assert search._key("TAVILY_API_KEY") == "from-dotenv"
+    assert search._key("TAVILY_API_KEY", search.ToolContext(cwd=tmp_path)) == "from-dotenv"
+
+
+def test_registered_setting_can_stop_dotenv_parent_walk(tmp_path):
+    child = tmp_path / "project"
+    child.mkdir()
+    (tmp_path / ".env").write_text("PARENT_VALUE=from-parent\n")
+    env = {}
+    dotenv.load(child, environ=env, settings={"DOTENV_WALK_UP": False})
+    assert "PARENT_VALUE" not in env

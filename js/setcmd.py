@@ -39,10 +39,10 @@ class CommandResult:
 
 def _empty_display(spec: _s.SettingSpec) -> str:
     if spec.empty == _s.EMPTY_OFF:
-        return "off"
+        return msgs.SETTING_VALUE_OFF.words()
     if spec.empty == _s.EMPTY_UNSET:
-        return "<unset>"
-    return "<none>"
+        return msgs.SETTING_VALUE_UNSET.words()
+    return msgs.SETTING_VALUE_NONE.words()
 
 
 def masks_secrets(settings: dict | None) -> bool:
@@ -75,9 +75,9 @@ def render_value(spec: _s.SettingSpec, value, *, masked: bool = True) -> str:
     if value is None:
         return _empty_display(spec)
     if spec.type == "bool":
-        return "on" if value else "off"
+        return msgs.SETTING_VALUE_ON.words() if value else msgs.SETTING_VALUE_OFF.words()
     if spec.secret and masked:
-        return "<set>" if value else _empty_display(spec)
+        return msgs.SETTING_VALUE_SECRET.words() if value else _empty_display(spec)
     if isinstance(value, dict):
         if not value:
             return _empty_display(spec)
@@ -177,7 +177,7 @@ def show_lines_effective(
 # set
 # ---------------------------------------------------------------------------
 
-def apply_set(settings: dict, key: str, raw: str, *, verb: str = "set") -> CommandResult:
+def apply_set(settings: dict, key: str, raw: str, *, verb: str = "set", banner_changed=None) -> CommandResult:
     """Set ``key`` to ``raw`` in ``settings``, coercing per the registry.
     ``verb`` is the command doing it; a setting another verb owns is refused."""
     spec = _s.spec_for(key)
@@ -190,7 +190,7 @@ def apply_set(settings: dict, key: str, raw: str, *, verb: str = "set") -> Comma
         _s.set_dotted(settings, spec.path, value)
         if spec.key == "BANNER":
             # The confirmation already speaks under the new banner.
-            msgs.set_banner(str(value))
+            (msgs.set_banner if banner_changed is None else banner_changed)(str(value))
         return CommandResult(
             handled=True,
             changed=True,
@@ -218,7 +218,7 @@ def apply_set(settings: dict, key: str, raw: str, *, verb: str = "set") -> Comma
             changed=True,
             lines=[msgs.line_for(
                 msgs.SETTING_CHANGED, key=key,
-                value="<set>" if prefix_spec is not None and prefix_spec.secret and masks_secrets(settings)
+                value=msgs.SETTING_VALUE_SECRET.words() if prefix_spec is not None and prefix_spec.secret and masks_secrets(settings)
                 else raw.strip())],
             changed_keys=[key],
         )
@@ -240,7 +240,7 @@ def _delete_dotted(settings: dict, path: tuple[str, ...]) -> bool:
     return False
 
 
-def apply_unset(settings: dict, key: str, baseline: dict | None = None, *, verb: str = "set") -> CommandResult:
+def apply_unset(settings: dict, key: str, baseline: dict | None = None, *, verb: str = "set", banner_changed=None) -> CommandResult:
     """`set -<key>` — clear a setting. With ``baseline`` (the layers below this
     one), the setting takes the baseline's value; a setting the baseline does not
     hold is removed from ``settings``. ``verb`` is the command doing it."""
@@ -266,7 +266,7 @@ def apply_unset(settings: dict, key: str, baseline: dict | None = None, *, verb:
         _s.set_dotted(settings, path, copy.deepcopy(restored))
     after = _s.get_dotted(settings, path, missing)
     if spec is not None and spec.key == "BANNER":
-        msgs.set_banner(str(_s.knob(settings, "BANNER")))
+        (msgs.set_banner if banner_changed is None else banner_changed)(str(_s.knob(settings, "BANNER")))
     changed = before is not after and before != after
     if spec is not None:
         key = spec.key
@@ -276,9 +276,9 @@ def apply_unset(settings: dict, key: str, baseline: dict | None = None, *, verb:
         prefix_spec = _s.parent_spec(key)
         secret = prefix_spec is not None and prefix_spec.secret
         if after is missing:
-            display = "<unset>"
+            display = msgs.SETTING_VALUE_UNSET.words()
         elif secret and masks_secrets(settings):
-            display = "<set>"
+            display = msgs.SETTING_VALUE_SECRET.words()
         else:
             display = str(after)
         name = key
@@ -291,7 +291,7 @@ def apply_unset(settings: dict, key: str, baseline: dict | None = None, *, verb:
     )
 
 
-def set_command(settings: dict, arg: str, baseline: dict | None = None) -> CommandResult:
+def set_command(settings: dict, arg: str, baseline: dict | None = None, *, banner_changed=None) -> CommandResult:
     """`set` shows every value, `set NAME` shows what NAME selects
     (`select`), `set -NAME` clears one (back to its ``baseline`` value, see
     `apply_unset`), `set NAME value` sets one."""
@@ -299,10 +299,10 @@ def set_command(settings: dict, arg: str, baseline: dict | None = None) -> Comma
     if not key:
         return show_lines(settings)
     if key.startswith("-") and len(key) > 1:
-        return apply_unset(settings, key[1:], baseline)
+        return apply_unset(settings, key[1:], baseline, banner_changed=banner_changed)
     if not value:
         return show_lines(settings, key)
-    return apply_set(settings, key, value)
+    return apply_set(settings, key, value, banner_changed=banner_changed)
 
 
 # ---------------------------------------------------------------------------
@@ -396,7 +396,7 @@ def on_command(hooks: _events.EventHooks, arg: str) -> CommandResult:
     except ValueError as e:
         return CommandResult(handled=True, error=str(e))
     prefix = "^" if hook.suppress else ""
-    return CommandResult(handled=True, changed=True, lines=[f"on {prefix}{hook.event} = {hook.handler}"])
+    return CommandResult(handled=True, changed=True, lines=[msgs.EVENT_HANDLER_REGISTERED.words(prefix=prefix, event=hook.event, handler=hook.handler)])
 
 
 # ---------------------------------------------------------------------------

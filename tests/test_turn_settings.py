@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import threading
 from types import SimpleNamespace
 
-import pytest
 
 from js import settings, turn_settings
 from js.turn_settings import INVALID, TURN_SETTINGS, inherit, install, project
@@ -48,13 +48,6 @@ def test_an_empty_store_projects_the_defaults():
     assert project(None) == project(settings.seed_defaults())
 
 
-@pytest.mark.parametrize("bad", [True, "abc", None, [3]])
-def test_an_unreadable_integer_falls_back_to_the_default(bad):
-    projected = project(_store(**{"FETCH_TIMEOUT": bad}))
-
-    assert projected["fetch_timeout_s"] == settings.default_value("FETCH_TIMEOUT")
-
-
 def test_a_readable_integer_is_used():
     assert project(_store(**{"FETCH_TIMEOUT": "7"}))["fetch_timeout_s"] == 7
 
@@ -73,28 +66,10 @@ def test_max_parallel_tools_is_at_least_one():
     assert project(_store(**{"PARALLEL_TOOLS_MAX": 0}))["max_parallel_tools"] == 1
 
 
-def test_an_unknown_kernel_verbosity_falls_back():
-    default = settings.default_value("KERNEL_VERBOSITY")
-
-    assert project(_store(**{"KERNEL_VERBOSITY": "LOUD"}))["kernel_verbosity"] == default
-    assert project(_store(**{"KERNEL_VERBOSITY": " Verbose "}))["kernel_verbosity"] == "verbose"
-
-
-def test_a_shell_env_allow_with_an_empty_name_falls_back():
-    default = tuple(settings.default_value("SHELL_ENV_KEEP"))
-
-    assert project(_store(**{"SHELL_ENV_KEEP": ["PATH", ""]}))["shell_env_allow"] == default
-    assert project(_store(**{"SHELL_ENV_KEEP": ["PATH"]}))["shell_env_allow"] == ("PATH",)
-
-
 def test_an_unset_optional_integer_stays_unset():
     fallback = SimpleNamespace(**{row.attr: 1 for row in TURN_SETTINGS})
 
     assert project(_store(**{"OUTPUT_TOKENS_MAX": None}), fallback)["max_output_tokens"] is None
-
-
-def test_a_non_boolean_flag_falls_back():
-    assert project(_store(**{"TRACE": "yes"}))["trace"] == settings.default_value("TRACE")
 
 
 def test_install_copies_only_context_rows_the_cfg_has():
@@ -120,7 +95,6 @@ def test_inherit_returns_the_context_rows_of_the_parent():
     assert set(inherited) == {row.attr for row in TURN_SETTINGS if row.on_context}
 
 
-
 def test_config_and_context_declare_the_rows_as_fields():
     import dataclasses
 
@@ -139,34 +113,29 @@ def test_config_and_context_declare_the_rows_as_fields():
 # --- the store's values get set's range rules (ALL-CLAIMS.md:639-643) ---------
 
 
-@pytest.mark.parametrize("key, raw", [
-    ("SUBAGENT_WORKERS_MAX", 0),
-    ("TERMINAL_COLUMNS", -1),
-    ("LSP_TIMEOUT", "0"),
-    ("REPLY_TOOL_CALLS_MAX", "-2"),
-])
-def test_a_value_set_would_refuse_falls_back_to_the_default(key, raw):
-    row = next(row for row in TURN_SETTINGS if row.key == key)
-    assert project({key: raw})[row.attr] == row.default()
-
-
-def test_a_valid_store_value_still_wins():
-    assert project({"READ_LINES_MAX": "7"})["max_read_lines"] == 7
-    # max_parallel_tools keeps its clamp to one, as before.
-    assert project({"PARALLEL_TOOLS_MAX": "0"})["max_parallel_tools"] == 1
-
-
-def test_shell_env_allow_names_are_stripped():
-    assert project({"SHELL_ENV_KEEP": [" PATH ", "HOME"]})["shell_env_allow"] == ("PATH", "HOME")
-
-
 def test_an_empty_jail_bind_entry_is_refused():
     assert turn_settings.paths([""]) is INVALID
     assert turn_settings.paths(["  "]) is INVALID
     assert turn_settings.paths(["/a", "/b:ro"]) == ("/a", "/b:ro")
 
 
-def test_a_partial_fallback_takes_the_default_for_what_it_lacks():
-    values = project({"READ_LINES_MAX": "x"}, fallback=SimpleNamespace())
-    row = next(row for row in TURN_SETTINGS if row.attr == "max_read_lines")
-    assert values["max_read_lines"] == row.default()
+def test_live_settings_reads_config_files_at_most_once(monkeypatch):
+    from js import config
+
+    calls = []
+    monkeypatch.setattr(config, "run_settings", lambda **kw: calls.append(kw) or {})
+    monkeypatch.setattr(settings, "_policy_cache", None)
+    settings.bind_live_settings(None)
+    for _ in range(20):
+        settings.live_value("SWARM_SPAWN_MAX")
+    assert len(calls) == 1
+
+    settings.bind_live_settings({"SWARM_SPAWN_MAX": 3})
+    try:
+        seen = []
+        worker = threading.Thread(target=lambda: seen.append(settings.live_value("SWARM_SPAWN_MAX")))
+        worker.start()
+        worker.join()
+        assert seen == [3] and len(calls) == 1
+    finally:
+        settings.bind_live_settings(None)

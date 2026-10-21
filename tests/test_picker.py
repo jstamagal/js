@@ -10,6 +10,15 @@ from prompt_toolkit.output import DummyOutput
 from js import logins, paths, picker, providers
 
 
+def test_model_picker_accepts_action_keys():
+    from prompt_toolkit.input import DummyInput
+
+    state = picker.ModelPicker()
+    app = state.application(input=DummyInput(), output=DummyOutput(), keymap={"focus": (("z",),)})
+    app.key_bindings.get_bindings_for_keys(("z",))[0].handler(None)
+    assert state.focus == "models"
+
+
 def _reset_logins() -> None:
     logins.set_config_dir(paths.login_store_dir())
 
@@ -124,6 +133,36 @@ def test_picker_fetch_action_updates_model_cache(monkeypatch, tmp_path: Path):
         _reset_logins()
 
 
+def test_picker_refresh_keeps_a_model_selected_while_the_fetch_waits(monkeypatch, tmp_path):
+    logins.set_config_dir(tmp_path)
+    logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="offline-key"))
+    logins.cache_models("deepseek", ["initial", "chosen"])
+
+    async def scenario():
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def fetch(_login):
+            started.set()
+            await release.wait()
+            return ["new", "chosen", "initial"]
+
+        monkeypatch.setattr(logins, "fetch_models", fetch)
+        state = picker.ModelPicker(provider_id="deepseek", model="initial")
+        task = asyncio.create_task(state.fetch())
+        await started.wait()
+        state.toggle_focus()
+        state.move(1)
+        release.set()
+        await task
+
+        assert state.selection()["model"] == "chosen"
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        _reset_logins()
+
+
 def test_picker_enter_selects_model(tmp_path: Path):
     logins.set_config_dir(tmp_path)
     logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="sk-test"))
@@ -179,3 +218,15 @@ def test_provider_registry_shapes_for_picker_shortcuts():
     assert providers.provider_for_login("llama.cpp").default_base_url == "http://127.0.0.1:8080/v1"
     assert providers.provider_for_login("mimo-token-plan").append_only is True
     assert providers.provider_for_login("deepseek").reasoning_effort == "xhigh"
+
+
+def test_model_picker_accepts_view_and_terminal_dependencies(monkeypatch):
+    from types import SimpleNamespace
+
+    source, target = object(), object()
+    seen = []
+    state = SimpleNamespace(application=lambda **kwargs: seen.append(kwargs) or "app")
+    monkeypatch.setattr(picker, "run_modal", lambda app: app)
+    result = picker.pick_model(input=source, output=target, picker_factory=lambda **kwargs: state)
+    assert result == "app"
+    assert seen == [{"input": source, "output": target}]

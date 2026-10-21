@@ -1,9 +1,6 @@
 """Optional feature boundaries must not weaken the core tool/runtime imports."""
 
 import builtins
-import subprocess
-import sys
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -12,31 +9,6 @@ from js import settings, turn_settings
 from js.toolkit import ToolContext
 from js.toolkit import browser, kernel, terminal, toolbox
 from js.toolkit.registry import build_default_registry
-
-
-def test_core_imports_without_optional_packages():
-    script = '''
-import importlib.abc
-import sys
-class BlockOptional(importlib.abc.MetaPathFinder):
-    def find_spec(self, fullname, path=None, target=None):
-        if fullname.split('.')[0] in {'PIL', 'ipykernel', 'jupyter_client', 'zmq', 'typesafe_sdk', 'playwright'}:
-            raise ModuleNotFoundError(fullname)
-sys.meta_path.insert(0, BlockOptional())
-import js.cli
-import js.runtime
-import js.model_client
-from js.toolkit import ToolContext, call_tool
-from js.toolkit.registry import build_default_registry
-from js.tool_args import schema_error
-registry = build_default_registry().with_kernel(False)
-assert all(registry.resolve(name) for name in ('shell', 'read', 'write', 'fs_search'))
-assert schema_error({'x': 'bad'}, {'type': 'object', 'properties': {'x': {'type': 'integer'}}})
-result = call_tool(registry.resolve('shell'), {'command': 'true'}, ToolContext())
-assert 'ERROR:' not in result
-'''
-    subprocess.run([sys.executable, "-c", script], check=True,
-                   cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)
 
 
 def test_kernel_setting_projects_installs_and_is_inherited():

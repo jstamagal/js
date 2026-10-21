@@ -2,8 +2,8 @@
 
 Pure functions over the catalog's session summaries (`js.session_index`):
 the kind of a session, the query grammar, the filters, the order, the views
-with branches nested under their parents, and the text of each row. Nothing
-here reads a file or the clock; the caller passes `now`, `home` and `cwd`.
+with branches nested under their parents, and the text of each row. Policy
+comes from registered settings; the caller passes `now`, `home` and `cwd`.
 
 Query grammar, terms combined with AND:
 
@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from . import messages as msgs
-from . import session_store
+from . import session_store, settings as _settings
 from .memory import HARNESS_USER_TAGS
 
 # Kinds. Every kind but SHOWN is hidden until `a`.
@@ -40,9 +40,7 @@ QUICK = "quick"
 SUBAGENT = "subagent"
 SCRIPT = "script"
 
-QUICK_TOOL_CALLS = 2
-QUICK_REPLY_CHARS = 1000
-SCRIPT_MODES = frozenset({"commit"})
+
 
 VIEWS = ("flat", "dir", "agent")
 _VIEW_NAMES = {"flat": msgs.SESSIONS_VIEW_FLAT, "dir": msgs.SESSIONS_VIEW_DIR, "agent": msgs.SESSIONS_VIEW_AGENT}
@@ -165,12 +163,13 @@ def kind(session: Session) -> str:
     if (session.mode == "subagent" or session.parent is not None
             or session_store.is_task(Path(session.path).stem)):
         return SUBAGENT
-    if session.mode in SCRIPT_MODES:
+    if session.mode in _settings.live_value("SESSION_SCRIPT_MODES"):
         return SCRIPT
     if not session.replied:
         return EMPTY
-    if (session.turns <= 1 and session.tool_calls <= QUICK_TOOL_CALLS
-            and session.final_len < QUICK_REPLY_CHARS):
+    if (session.turns <= int(_settings.live_value("SESSION_QUICK_TURNS_MAX"))
+            and session.tool_calls <= int(_settings.live_value("SESSION_QUICK_TOOL_CALLS_MAX"))
+            and session.final_len < int(_settings.live_value("SESSION_QUICK_REPLY_CHARACTERS_MAX"))):
         return QUICK
     return SHOWN
 
@@ -289,7 +288,11 @@ def dir_pattern(text: str, *, home: str, cwd: str) -> DirPattern:
     regex = "".join("(?:/[^/]+)*" if part == "**" else "/" + _component(part) for part in parts)
     plain = parts and not _GLOB.search("".join(parts[:-1]))
     depth = "any" if plain and parts[-1] == "**" else "one" if plain and parts[-1] == "*" else "exact"
-    return DirPattern(text, path, re.compile(f"^{regex or '/'}$"), depth)
+    try:
+        compiled = re.compile(f"^{regex or '/'}$")
+    except re.error:
+        compiled = re.compile(r"(?!)")
+    return DirPattern(text, path, compiled, depth)
 
 
 def _tokens(text: str) -> list[tuple[str, bool]]:
@@ -401,7 +404,7 @@ def visible(session: Session, query: Query, *, show_all: bool) -> bool:
     """Shown sessions always; the hidden kinds with `a`, or when the query
     names their kind or mode."""
     session_kind = kind(session)
-    if session_kind == SHOWN or show_all:
+    if session_kind not in _settings.live_value("SESSION_HIDDEN_KINDS") or show_all:
         return True
     return any(mode in (session_kind, session.mode) for mode in query.modes)
 
@@ -535,30 +538,50 @@ def name_kind_text(session: Session) -> str:
     return session.name if marked == "-" else f"{session.name} · {marked}"
 
 
-_WHEN, _MODE, _AGENT, _DIR, _TURNS, _LENGTH = 12, 4, 16, 28, 5, 6
+@dataclass(frozen=True)
+class RowLayout:
+    when: int = 12
+    mode: int = 4
+    agent: int = 16
+    directory: int = 28
+    turns: int = 5
+    length: int = 6
+    speaker: int = 10
+    indent: str = "   "
+    last_branch: str = "└─ "
+    branch: str = "├─ "
+    number: str = "#{number:04d}"
 
 
-def header_line() -> str:
-    return (f"  {'when':<{_WHEN}}  {'mode':<{_MODE}}  {'agent':<{_AGENT}}  {'dir':<{_DIR}} "
-            f"{'turns':>{_TURNS}}  {'length':<{_LENGTH}} name")
+_STOCK_LAYOUT = RowLayout()
 
 
-def session_line(item: Item, *, now: float, home: str | Path, marker: str = " ") -> str:
+def header_line(*, layout: RowLayout = _STOCK_LAYOUT) -> str:
+    return msgs.SESSION_PICKER_HEADER.words(
+        value=msgs.SESSION_COLUMN_WHEN.words(), _WHEN=layout.when,
+        value2=msgs.SESSION_COLUMN_MODE.words(), _MODE=layout.mode,
+        value3=msgs.SESSION_COLUMN_AGENT.words(), _AGENT=layout.agent,
+        value4=msgs.SESSION_COLUMN_DIR.words(), _DIR=layout.directory,
+        value5=msgs.SESSION_COLUMN_TURNS.words(), _TURNS=layout.turns,
+        value6=msgs.SESSION_COLUMN_LENGTH.words(), _LENGTH=layout.length)
+
+
+def session_line(item: Item, *, now: float, home: str | Path, marker: str = " ", layout: RowLayout = _STOCK_LAYOUT) -> str:
     """A session row: marker, when, mode, agent, dir, turns, length, then the
     session's name when it has one and its kind. A nested branch shows its
     branch point in place of mode, agent and dir."""
     session = item.session
     assert session is not None
-    tail = (f" {session.turns:>{_TURNS}}  {length_text(session):<{_LENGTH}} {name_kind_text(session)}")
+    tail = (f" {session.turns:>{layout.turns}}  {length_text(session):<{layout.length}} {name_kind_text(session)}")
     when = when_text(session.started if session.started is not None else session.when, now)
     if item.depth == 0:
-        return (f"{marker} {when:<{_WHEN}}  {_fit(session.mode or '-', _MODE)}  "
-                f"{_fit(session.agent or '-', _AGENT)}  {_fit(short_dir(session.cwd, home), _DIR)}{tail}")
-    prefix = "   " * (item.depth - 1) + ("└─ " if item.last else "├─ ")
+        return (f"{marker} {when:<{layout.when}}  {_fit(session.mode or '-', layout.mode)}  "
+                f"{_fit(session.agent or '-', layout.agent)}  {_fit(short_dir(session.cwd, home), layout.directory)}{tail}")
+    prefix = layout.indent * (item.depth - 1) + (layout.last_branch if item.last else layout.branch)
     point = msgs.SESSIONS_BRANCH.text(point=session_store.point_label(session.branch_point)
                                       if session.branch_point is not None else "-")
-    span = _MODE + _AGENT + _DIR + 4 - len(prefix)
-    return f"{marker} {prefix}{when:<{_WHEN}}  {_fit(point, span)}{tail}"
+    span = layout.mode + layout.agent + layout.directory + 4 - len(prefix)
+    return f"{marker} {prefix}{when:<{layout.when}}  {_fit(point, span)}{tail}"
 
 
 def excerpt(text: str, spans: tuple[tuple[int, int], ...], *, lead: int = 30,
@@ -575,19 +598,19 @@ def excerpt(text: str, spans: tuple[tuple[int, int], ...], *, lead: int = 30,
     return head + cut + tail, moved
 
 
-def hit_line(number: int | None, who: str, text: str) -> str:
+def hit_line(number: int | None, who: str, text: str, *, layout: RowLayout = _STOCK_LAYOUT) -> str:
     """A search hit's matching row, as it shows under the session."""
-    head = f"#{number:04d} " if isinstance(number, int) and number > 0 else ""
+    head = layout.number.format(number=number) + " " if isinstance(number, int) and number > 0 else ""
     return f"{head}{who}  {' '.join(text.split())}"
 
 
-def message_lines(rows: list[Any]) -> list[str]:
+def message_lines(rows: list[Any], *, layout: RowLayout = _STOCK_LAYOUT) -> list[str]:
     """The message list of a session: number, clock, who and heading per row,
     and the model stamp on the rows where it changes."""
     lines = []
     model = None
     for row in rows:
-        text = f"#{row.number:04d} {clock_text(row.ts)} {row.who:<10} | {' '.join(row.heading().split())}"
+        text = f"{layout.number.format(number=row.number)} {clock_text(row.ts)} {row.who:<{layout.speaker}} | {' '.join(row.heading().split())}"
         if row.model and row.model != model:
             model = row.model
             text += f"  [{model}]"
@@ -598,7 +621,6 @@ def message_lines(rows: list[Any]) -> list[str]:
 
 # The agent's status line begins with 📌 (the 📌🔨🦍 group): what the preview
 # shows for it.
-_STATUS_MARK = "📌"
 _HARNESS_OPEN = tuple(f"<{tag}>" for tag in HARNESS_USER_TAGS)
 _HARNESS_CLOSE = tuple(f"</{tag}>" for tag in HARNESS_USER_TAGS)
 
@@ -647,6 +669,6 @@ def preview(messages: list[Any]) -> tuple[str, str]:
             if lines:
                 said.append(lines)
     pinned = next((line for lines in reversed(said) for line in reversed(lines)
-                   if line.lstrip().startswith(_STATUS_MARK)), None)
+                   if line.lstrip().startswith(_settings.live_value("SESSION_STATUS_MARK"))), None)
     agent = pinned if pinned is not None else (said[-1][-1] if said else "")
     return user, " ".join(agent.split())

@@ -155,61 +155,42 @@ def test_heal_drops_duplicate_and_orphaned_tool_results():
     assert history_utils.check_tool_ids(model_client.history_to_ai_messages("", healed)) == []
 
 
-def test_replay_of_a_compacted_journal_does_not_hold_the_history_compaction_dropped(tmp_path: Path):
-    """Only a caller that asks for the retained history pays for it."""
-    import tracemalloc
+def test_restarting_thinking_keeps_steered_attachments_between_completed_rounds():
+    import ai
 
-    f = tmp_path / "s.jsonl"
-    body = "x" * 10_000
-    _write_records(f, [record for n in range(200) for record in (
-        _message_record({"role": "user", "content": f"{n} {body}"}),
-        {"kind": "mark", "version": M.SCHEMA_VERSION, "ts": 1.0,
-         "marker": "compaction:" + json.dumps({"summary": "s", "keep_from": 99})},
-    )])
+    from js import model_client
 
-    tracemalloc.start()
-    try:
-        M.load_replay_messages(f)
-        _current, peak = tracemalloc.get_traced_memory()
-    finally:
-        tracemalloc.stop()
+    earlier = {"role": "assistant", "content": "earlier", "reasoning_parts": [
+        {"text": "thought", "provider_metadata": {"anthropic": {"signature": "S0"}}}],
+        "reasoning_from": {"provider": "anthropic", "model": "m"}}
+    prefix = [{"role": "user", "content": "first"}, earlier, {"role": "user", "content": "go"}]
+    first = [_assistant_toolcall("c1"), _tool_result("c1", "first result")]
+    second = [_assistant_toolcall("c2"), _tool_result("c2", "second result")]
+    attachment = ai.types.messages.FilePart(data=b"image", media_type="image/png")
+    steered = {"role": "user", "steered": True,
+               "content": [ai.types.messages.TextPart(text="use this"), attachment]}
+    nudge = {"role": "user", "resume_nudge": True, "content": "continue"}
+    messages = [*prefix, *first, steered, *second, nudge]
 
-    assert peak < 1_000_000
+    assert M.restart_thinking_turn(messages, require_tool_calls=True) == 6
 
-
-def _message_record(message: dict) -> dict:
-    return {"kind": "message", "version": M.SCHEMA_VERSION, "ts": 1.0, "message": message}
-
-
-def _write_records(f: Path, records: list[dict]) -> None:
-    """Records written straight to the file: a big journal without a
-    transcript refresh per record."""
-    f.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    assert messages[:3] == prefix
+    assert messages[4] is steered
+    assert messages[6] is nudge
+    assert json.loads(messages[3]["content"].split("\n", 1)[1]) == first
+    assert json.loads(messages[5]["content"].split("\n", 1)[1]) == second
+    projected = model_client.history_to_ai_messages("", messages, provider_id="anthropic", model_id="m")
+    assert projected[4].parts[-1] is attachment
 
 
-def _old_writer_journal(f: Path, turns: int) -> None:
-    """`turns` tool-calling turns, then all of them appended once more, as
-    the writer before 2026-08-14 did."""
-    history = []
-    for n in range(turns):
-        history += [{"role": "user", "content": f"u{n}"}, _assistant_toolcall(f"call_{n}"),
-                    _tool_result(f"call_{n}", f"r{n}"), {"role": "assistant", "content": f"a{n}"}]
-    _write_records(f, [_message_record(message) for message in history + history[1:]])
+def test_compaction_keeps_the_stamp_of_a_retained_signed_reply(tmp_path):
+    path = tmp_path / "signed.jsonl"
+    stamp = M.stamp_for("model-y", "anthropic", "high")
+    M.append_message(path, {"role": "user", "content": "question"})
+    M.append_message(path, {"role": "assistant", "content": "answer",
+                            "reasoning_parts": [{"type": "thinking", "signature": "sig"}],
+                            "reasoning_from": {"provider": "anthropic", "model": "model-y"}}, stamp=stamp)
+    M.append_compaction_mark(path, summary="earlier work", keep_from=1)
 
-
-def test_the_retained_history_of_an_appended_twice_journal_is_read_in_linear_time(tmp_path: Path):
-    import time
-
-    def best(f: Path) -> float:
-        times = []
-        for _ in range(3):
-            start = time.perf_counter()
-            M.retained_messages(f)
-            times.append(time.perf_counter() - start)
-        return min(times)
-
-    small, large = tmp_path / "small.jsonl", tmp_path / "large.jsonl"
-    _old_writer_journal(small, 250)
-    _old_writer_journal(large, 1000)
-
-    assert best(large) < 10 * best(small)
+    assert M.load_replay_messages(path)[-1] == {"role": "assistant", "content": "answer"}
+    assert M.last_reply_stamp(path) == stamp

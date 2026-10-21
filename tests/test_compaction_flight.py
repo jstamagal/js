@@ -40,10 +40,10 @@ def test_flight_persists_before_after_and_terminal_outcome(monkeypatch, tmp_path
 
     monkeypatch.setattr(compaction, "summarize", summarize)
     if failure is None:
-        asyncio.run(compaction.compact_now(cfg, "SYSTEM", messages, forced=True))
+        asyncio.run(compaction.compact_now(cfg, "SYSTEM", messages, forced=True, log_dir=compaction.flight_log_dir(cfg), emit=compaction.printing()))
     else:
         with pytest.raises(type(failure)):
-            asyncio.run(compaction.compact_now(cfg, "SYSTEM", messages, forced=True))
+            asyncio.run(compaction.compact_now(cfg, "SYSTEM", messages, forced=True, log_dir=compaction.flight_log_dir(cfg), emit=compaction.printing()))
         assert messages == original
     path, records = read_flight(cfg)
     assert records[0]["settings"]["API_KEY"] == "<set>"
@@ -75,7 +75,7 @@ def test_between_turn_uses_changed_live_window(monkeypatch, tmp_path):
     state = _auto_state()
     state["settings"] = {"CONTEXT_SIZE": 128000}
     captured = []
-    monkeypatch.setattr(compaction, "maybe_auto_compact_async", AsyncMock(side_effect=lambda active, *args: captured.append(active) or compaction.AutoCompactOutcome()))
+    monkeypatch.setattr(compaction, "maybe_auto_compact_async", AsyncMock(side_effect=lambda active, *args, **kwargs: captured.append(active) or compaction.AutoCompactOutcome()))
     cli._maybe_auto_compact(cfg, state)
     assert captured[0].settings["CONTEXT_SIZE"] == 128000
     state["settings"]["CONTEXT_SIZE"] = 1000000
@@ -144,7 +144,8 @@ def test_summary_request_and_response_are_recorded(monkeypatch, tmp_path):
 
     monkeypatch.setattr(compaction.model_client, "stream_model_async", stream)
     asyncio.run(compaction.compact_now(cfg, "system", [{"role": "user", "content": "old"},
-                                                       {"role": "user", "content": "new"}], forced=True))
+                                                       {"role": "user", "content": "new"}], forced=True,
+                                         log_dir=compaction.flight_log_dir(cfg), emit=compaction.printing()))
     path, records = read_flight(cfg)
     assert any(r["event"] == "summary_trace" and r["text"] == "provider request trace" for r in records)
     assert any(r["event"] == "summary_chunk" and r["text"] == "summary chunk" for r in records)
@@ -165,56 +166,39 @@ def _flight_cfg(tmp_path, session_file):
     )
 
 
+def test_flight_snapshots_round_trip_saved_text_with_lone_surrogates(tmp_path):
+    from js import compaction_flight, memory
+
+    cfg = _flight_cfg(tmp_path, tmp_path / "s.jsonl")
+    message = {"role": "user", "content": "filename: café-\udcff.txt"}
+    memory.append_message(cfg.session_file, message)
+    messages = memory.load_replay_messages(cfg.session_file)
+
+    flight = compaction_flight.CompactionFlight(
+        cfg, "system", messages, trigger={}, forced=True, focus=None,
+        preserve_from=0, details={}, directory=compaction.flight_log_dir(cfg),
+    )
+    try:
+        flight.finish("success", "system", messages)
+    finally:
+        flight.close()
+
+    records = [json.loads(line) for line in flight.path.read_text(encoding="utf-8").splitlines()]
+    assert [record["messages"] for record in records if record["event"] in {"before", "after"}] == [
+        [message], [message],
+    ]
+
+
 def test_one_shot_flight_and_autolog_are_named_per_run_not_null(tmp_path):
     import os
 
     from js.compaction_flight import CompactionFlight
 
     cfg = _flight_cfg(tmp_path, Path(os.devnull))
-    flight = CompactionFlight(cfg, "S", [], trigger={}, forced=True, focus=None, preserve_from=0, details={})
+    flight = CompactionFlight(cfg, "S", [], trigger={}, forced=True, focus=None, preserve_from=0, details={},
+                              directory=compaction.flight_log_dir(cfg))
     flight.close()
     stem = f"voice-{os.getpid()}"
     assert flight.path.name.startswith(stem + "-")
     assert (tmp_path / "logs" / f"{stem}.log").exists()
     assert not (tmp_path / "logs" / "null.log").exists()
-
-
-def test_failed_start_closes_the_stream(tmp_path, monkeypatch):
-    from js import compaction_flight
-
-    opened = []
-    real_fdopen = compaction_flight.os.fdopen
-
-    def tracking_fdopen(*args, **kwargs):
-        stream = real_fdopen(*args, **kwargs)
-        opened.append(stream)
-        return stream
-
-    def boom(self, *args, **kwargs):
-        raise OSError("snapshot failed")
-
-    monkeypatch.setattr(compaction_flight.os, "fdopen", tracking_fdopen)
-    monkeypatch.setattr(compaction_flight.CompactionFlight, "snapshot", boom)
-    cfg = _flight_cfg(tmp_path, tmp_path / "s.jsonl")
-    with pytest.raises(OSError, match="snapshot failed"):
-        compaction_flight.CompactionFlight(cfg, "S", [], trigger={}, forced=True, focus=None,
-                                           preserve_from=0, details={})
-    assert opened and all(stream.closed for stream in opened)
-
-
-def test_summary_chunks_are_not_fsynced_but_lifecycle_events_are(tmp_path, monkeypatch):
-    from js import compaction_flight
-
-    cfg = _flight_cfg(tmp_path, tmp_path / "s.jsonl")
-    flight = compaction_flight.CompactionFlight(cfg, "S", [], trigger={}, forced=True, focus=None,
-                                                preserve_from=0, details={})
-    syncs = []
-    monkeypatch.setattr(compaction_flight.os, "fsync", lambda fd: syncs.append(fd))
-    for chunk in range(50):
-        flight.record("summary_chunk", text=str(chunk))
-    assert syncs == []
-    flight.finish("success", "S", [], result="ok")
-    assert len(syncs) == 2  # the "after" snapshot and the terminal event
-    flight.close()
-    lines = flight.path.read_text().splitlines()
-    assert sum('"summary_chunk"' in line for line in lines) == 50

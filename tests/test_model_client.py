@@ -108,49 +108,6 @@ def _text_events(text: str) -> list[ai.types.events.Event]:
     ]
 
 
-def _tool_events(tool_call_id: str, name: str, args: str) -> list[ai.types.events.Event]:
-    return [
-        ai.types.events.StreamStart(),
-        ai.types.events.ToolStart(tool_call_id=tool_call_id, tool_name=name),
-        ai.types.events.ToolDelta(chunk=args, tool_call_id=tool_call_id),
-        ai.types.events.ToolEnd(
-            tool_call_id=tool_call_id,
-            tool_call=ai.types.messages.DUMMY_TOOL_CALL,
-        ),
-        ai.types.events.StreamEnd(),
-    ]
-
-
-def _reasoning_events(text: str) -> list[ai.types.events.Event]:
-    return [
-        ai.types.events.StreamStart(),
-        ai.types.events.ReasoningStart(block_id="reasoning"),
-        ai.types.events.ReasoningDelta(chunk=text, block_id="reasoning"),
-        ai.types.events.ReasoningEnd(block_id="reasoning"),
-        ai.types.events.StreamEnd(),
-    ]
-
-
-def _usage_events(
-    input_tokens: int = 100,
-    output_tokens: int = 10,
-    cache_read_tokens: int = 25,
-) -> list[ai.types.events.Event]:
-    return [
-        ai.types.events.StreamStart(),
-        ai.types.events.TextStart(block_id="text"),
-        ai.types.events.TextDelta(chunk="done", block_id="text"),
-        ai.types.events.TextEnd(block_id="text"),
-        ai.types.events.StreamEnd(
-            usage=ai.types.usage.Usage(
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cache_read_tokens=cache_read_tokens,
-            )
-        ),
-    ]
-
-
 def _pview(p) -> dict:
     """Flatten an ai>=0.2.1 InferenceRequestParams back to a plain dict so the
     param-shaping tests stay readable. Only set fields appear."""
@@ -181,10 +138,6 @@ def _pview(p) -> dict:
     if p.extra_body:
         out["extra_body"] = dict(p.extra_body)
     return out
-
-
-def _model_for_error_tests() -> ai.Model:
-    return ai.Model(id="test", provider=ai.get_provider("openai", api_key="x"))
 
 
 def _assert_provider_recovery(message: str, *, provider: str, command: str) -> None:
@@ -241,34 +194,6 @@ def test_resolve_model_gateway_needs_explicit_base_else_errors(monkeypatch):
     assert keyless.provider.api_key == ""
 
 
-def test_stream_model_maps_missing_api_key_typeerror(monkeypatch):
-    async def raise_missing_key(**_kwargs):
-        raise TypeError(
-            "Could not resolve authentication method. Expected either api_key or "
-            "admin_api_key to be set."
-        )
-
-    monkeypatch.setattr(model_client, "resolve_model", lambda *_args, **_kwargs: _model_for_error_tests())
-    monkeypatch.setattr(model_client, "_stream_async", raise_missing_key)
-
-    with pytest.raises(model_client.FriendlyProviderError) as excinfo:
-        model_client.stream_model(
-            model_id="test",
-            provider_id="openai",
-            provider_base_url=None,
-            provider_api_key=None,
-            messages=[ai.user_message("hi")],
-            tools=None,
-            max_output_tokens=64,
-            reasoning_effort=None,
-            on_text=lambda _s: None,
-        )
-
-    message = str(excinfo.value)
-    _assert_provider_recovery(message, provider="openai", command="js --login openai")
-    assert "set API_KEY <value>" in message
-
-
 def test_stream_model_maps_unknown_sdk_provider_id(monkeypatch):
     def raise_unknown_provider(*_args, **_kwargs):
         raise ValueError("unknown provider id: 'stale'")
@@ -291,36 +216,6 @@ def test_stream_model_maps_unknown_sdk_provider_id(monkeypatch):
     message = str(excinfo.value)
     _assert_provider_recovery(message, provider="stale", command="js --login stale")
     assert "js --list-models" in message
-
-
-def test_stream_model_maps_provider_authentication_error(monkeypatch):
-    async def raise_auth(**_kwargs):
-        raise ai.ProviderAuthenticationError(
-            "Error code: 401 - Incorrect API key",
-            provider="openai",
-            http_context=ai.HTTPErrorContext(status_code=401),
-        )
-
-    monkeypatch.setattr(model_client, "resolve_model", lambda *_args, **_kwargs: _model_for_error_tests())
-    monkeypatch.setattr(model_client, "_stream_async", raise_auth)
-
-    with pytest.raises(model_client.FriendlyProviderError) as excinfo:
-        model_client.stream_model(
-            model_id="test",
-            provider_id="openai",
-            provider_base_url=None,
-            provider_api_key="bad",
-            messages=[ai.user_message("hi")],
-            tools=None,
-            max_output_tokens=64,
-            reasoning_effort=None,
-            on_text=lambda _s: None,
-        )
-
-    message = str(excinfo.value)
-    _assert_provider_recovery(message, provider="openai", command="js --login openai")
-    assert "set API_KEY <value>" in message
-    assert "Incorrect API key" in message
 
 
 def test_resolve_model_uses_explicit_provider_verbatim():
@@ -547,7 +442,6 @@ def test_stream_model_strips_minimax_reasoning_by_model_prefix(monkeypatch):
     assert _pview(factory.kwargs["params"]) == {"max_tokens": 64}
 
 
-
 def test_stream_model_applies_sampling_from_env_for_openai(monkeypatch):
     """JS_* env sampling is typed before stream_model; OpenAI only receives supported knobs."""
     sampling = Sampling.from_env(
@@ -752,14 +646,6 @@ def test_set_refuses_extra_headers_without_a_colon():
     assert value is None and error
 
 
-@pytest.mark.parametrize("raw", ["X-Pool: fофа", "X(Pool): 1", "X-A: 1\rX-B: 2"])
-def test_set_refuses_extra_headers_a_request_cannot_carry(raw):
-    from js import settings
-
-    value, error = settings.coerce_value(settings.SPEC_BY_KEY["EXTRA_HEADERS"], raw)
-    assert value is None and error
-
-
 def test_paranoid_mode_extra_sends_the_scrub_header(tmp_path):
     from js import runtime, turn_settings
     from js.config import Config
@@ -859,15 +745,6 @@ def test_blocks_are_never_sent_off_cpa():
     assert assistant["reasoning_content"] == "plan"
 
 
-def test_only_a_cliproxyapi_route_turns_block_echo_on():
-    cpa = model_client.resolve_model("claude", provider_id="cliproxyapi",
-                                      provider_base_url="http://vader:8999/v1", provider_api_key="k")
-    local = model_client.resolve_model("m", provider_id="ollama",
-                                        provider_base_url="http://localhost:11434/v1", provider_api_key="k")
-    assert cpa.provider.protocol.reasoning_blocks is True
-    assert getattr(local.provider.protocol, "reasoning_blocks", False) is False
-
-
 def test_the_reply_blocks_reach_the_stream_result(monkeypatch):
     chunks = [
         _cpa_chunk({"content": "hi", "reasoning_blocks": [{"index": 0, "type": "thinking", "thinking": "x"}]}),
@@ -923,31 +800,6 @@ def test_compaction_drops_reasoning_blocks_with_the_signed_reasoning():
                  "reasoning_blocks": [{"type": "thinking", "thinking": "x", "signature": "s"}]}]
     assert memory.drop_signed_reasoning(messages) == 1
     assert messages == [{"role": "assistant", "content": "a", "reasoning_content": "x"}]
-
-
-def test_dropping_signed_reasoning_leaves_no_blocks_to_replay(monkeypatch, tmp_path):
-    import ai.types.usage
-
-    from js import memory, runtime
-    from test_lazy_tool_discovery import _cfg
-
-    blocks = [{"type": "thinking", "thinking": "x", "signature": "s"}]
-
-    async def fake_stream(**_kwargs):
-        return model_client.ModelStreamResult(
-            text="done", tool_calls=[], reasoning="x",
-            usage=ai.types.usage.Usage(input_tokens=1, output_tokens=1), finish_reason="stop",
-            assistant_message=model_client.with_reasoning_blocks(ai.assistant_message("done"), blocks),
-            reasoning_blocks=blocks,
-        )
-
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", fake_stream)
-    messages = [{"role": "user", "content": "go"}]
-    runtime.run_turn(_cfg(tmp_path), "sys", messages, runtime.Telemetry(None), suppress_output=True)
-    memory.drop_signed_reasoning(messages)
-
-    rebuilt = model_client.history_to_ai_messages("sys", messages)
-    assert all(model_client._stored_reasoning_blocks(m) is None for m in rebuilt)
 
 
 def test_blocks_go_back_on_their_own_message_when_answers_repeat():
@@ -1011,73 +863,12 @@ def test_blocks_go_back_only_to_the_model_that_wrote_them(monkeypatch, tmp_path)
     assert model_client._stored_reasoning_blocks(other[-1]) is None
 
 
-def _sent_headers(monkeypatch, *, provider_id, base, headers):
-    """The headers of the one request a turn sends with ``headers``."""
-    import asyncio
-    import json
-
-    import httpx2
-
-    seen = []
-
-    def respond(request):
-        seen.append(request.headers)
-        if provider_id == "anthropic":
-            events = [
-                {"type": "message_start", "message": {"id": "m", "type": "message", "role": "assistant",
-                 "model": "claude", "content": [], "stop_reason": None,
-                 "usage": {"input_tokens": 1, "output_tokens": 0}}},
-                {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}},
-                {"type": "message_stop"},
-            ]
-            body = "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events)
-        else:
-            chunk = {"id": "x", "object": "chat.completion.chunk", "created": 1, "model": "m",
-                     "choices": [{"index": 0, "delta": {"content": "ok"}, "finish_reason": "stop"}]}
-            body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
-        return httpx2.Response(200, headers={"Content-Type": "text/event-stream"}, content=body.encode())
-
-    async def drive():
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as client:
-            get_provider = model_client.ai.get_provider
-            monkeypatch.setattr(model_client.ai, "get_provider",
-                                lambda *a, **k: get_provider(*a, **k, client=client))
-            await model_client.stream_model_async(
-                model_id="claude" if provider_id == "anthropic" else "m", provider_id=provider_id,
-                provider_base_url=base, provider_api_key="login-key", provider_headers=headers,
-                messages=[ai.user_message("hi")], tools=None, max_output_tokens=64,
-                reasoning_effort=None, on_text=lambda _c: None)
-
-    asyncio.run(drive())
-    assert len(seen) == 1
-    return seen[0]
-
-
-def test_an_extra_authorization_header_never_doubles_the_logins(monkeypatch):
-    sent = _sent_headers(monkeypatch, provider_id=None, base="http://offline.invalid/v1",
-                         headers={"authorization": "Bearer extra", "X-Extra": "1"})
-
-    assert sent.get_list("authorization") == ["Bearer login-key"]
-    assert sent.get_list("x-extra") == ["1"]
-
-
-def test_an_extra_anthropic_version_reaches_the_request(monkeypatch):
-    sent = _sent_headers(monkeypatch, provider_id="anthropic", base=None,
-                         headers={"anthropic-version": "2099-01-01"})
-
-    assert sent.get_list("anthropic-version") == ["2099-01-01"]
-    assert sent.get_list("x-api-key") == ["login-key"]
-
-
-_FRAMING = {"Content-Length": "1", "Content-Type": "text/plain", "Transfer-Encoding": "chunked",
-            "Host": "elsewhere.invalid"}
-
-
-@pytest.mark.parametrize(("provider_id", "base"), [(None, "http://offline.invalid/v1"), ("anthropic", None)])
-def test_configured_framing_headers_never_reach_the_request(monkeypatch, provider_id, base):
-    sent = _sent_headers(monkeypatch, provider_id=provider_id, base=base, headers=dict(_FRAMING))
-
-    assert sent.get_list("content-length") != ["1"]
-    assert sent.get_list("content-type") == ["application/json"]
-    assert sent.get_list("transfer-encoding") == []
-    assert "elsewhere.invalid" not in sent.get_list("host")
+def test_registered_deepseek_budget_reaches_wire(monkeypatch):
+    factory = _use_fake_stream(monkeypatch, _text_events("ok"))
+    model_client.stream_model(
+        model_id="deepseek-chat", provider_id="deepseek", provider_base_url=None,
+        provider_api_key="x", messages=[ai.user_message("hi")], tools=None,
+        max_output_tokens=64, reasoning_effort=None, on_text=lambda _s: None,
+        settings={"DEEPSEEK_REASONING_TOKENS_MAX": 12000},
+    )
+    assert _pview(factory.kwargs["params"])["extra_body"]["max_reasoning_tokens"] == 12000

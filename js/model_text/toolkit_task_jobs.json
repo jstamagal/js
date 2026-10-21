@@ -1,0 +1,21 @@
+{
+  "started_text_task": "task",
+  "started_text_tasks": "tasks",
+  "started_text_task_running_in_the_background_handle": "task running in the background (handle {job_id}): {job_count} {plural} for agent `{job_agent_id}`. It keeps running while you work.",
+  "started_text_poll_it_with_action_poll_handle": "Poll it with action=\"poll\", handle=\"{job_id}\", action=\"wait\", handle=\"{value_1}\", timeout=N to block for it, or action=\"kill\", handle=\"{value_2}\" to stop it.",
+  "started_text_when_it_finishes_its_result_is": "When it finishes its result is written to {job_result_path}, and the next user message says so unless you have read it by then.",
+  "started_text_handle_running": "HANDLE {job_id} RUNNING",
+  "report_killed_task_after_s": "killed task {job_id} after {job_elapsed:.0f}s",
+  "report_task_still_running_after_s_of": "task {job_id} still running after {job_elapsed:.0f}s ({job_workers_done} of {job_count} done).",
+  "report_handle_running": "HANDLE {job_id} RUNNING",
+  "report_task_was_cancelled_after_s_it": "task {job_id} was cancelled after {job_elapsed:.0f}s; it has no result",
+  "report_the_result_is_also_at": "; the result is also at {job_result_path}",
+  "report_task_had_already_finished": "task {job_id} had already finished",
+  "report_kill": "kill",
+  "report_task_finished": "task {job_id} finished",
+  "report_after_s": "{prefix} after {job_elapsed:.0f}s{where}\n{job_result}",
+  "completion_notes_js_reminder_background_task_agent_was": "<js-reminder>Background task {job_id} (agent `{job_agent_id}`) was cancelled after {job_elapsed:.0f}s and has no result.</js-reminder>",
+  "completion_notes_its_result_is_at": "Its result is at {job_result_path}",
+  "completion_notes_its_result_could_not_be_saved": "Its result could not be saved to a file",
+  "completion_notes_js_reminder_background_task_agent_finished": "<js-reminder>Background task {job_id} (agent `{job_agent_id}`, {job_count} {task_if_job_count_1_else_tasks}) finished after {job_elapsed:.0f}s. {where}; read it, or call task with action=\"poll\", handle=\"{value_6}\".</js-reminder>"
+}

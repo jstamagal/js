@@ -19,7 +19,7 @@ from prompt_toolkit.application import Application, get_app, run_in_terminal
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.document import Document
 from prompt_toolkit.enums import DEFAULT_BUFFER, EditingMode
-from prompt_toolkit.filters import FilterOrBool, has_focus, is_searching, vi_mode, vi_navigation_mode
+from prompt_toolkit.filters import Condition, FilterOrBool, has_focus, is_searching, vi_mode, vi_navigation_mode
 from prompt_toolkit.formatted_text import ANSI, to_formatted_text
 from prompt_toolkit.key_binding import KeyBindings, KeyBindingsBase, merge_key_bindings
 from prompt_toolkit.key_binding.vi_state import InputMode
@@ -38,8 +38,6 @@ from . import messages as msgs
 from . import session_store
 from .reasoning_display import grey, settled_rows
 
-SCROLLBACK_LINES = 5000
-THROBBER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 TICK_BUSY_S = 0.1
 TICK_IDLE_S = 1.0
 
@@ -108,7 +106,8 @@ def format_count(n: int) -> str:
 
 
 def throbber_frame(now: float) -> str:
-    return THROBBER[int(now / TICK_BUSY_S) % len(THROBBER)]
+    frames = fset.setting_value("SPINNER_FRAMES")
+    return frames[int(now / TICK_BUSY_S) % len(frames)] if frames else ""
 
 
 def turn_centre(status, *, now: float, show_bytes: bool) -> tuple[str, int | None]:
@@ -118,13 +117,13 @@ def turn_centre(status, *, now: float, show_bytes: bool) -> tuple[str, int | Non
     token (when the net channel shows them), then the output-token count.
     """
     if status.tool:
-        extra = f" +{status.tool_extra}" if status.tool_extra else ""
+        extra = msgs.STATUS_TOOL_EXTRA.words(tool_extra=status.tool_extra) if status.tool_extra else ""
         elapsed = int(max(0.0, now - status.tool_started))
-        return f"{status.tool}{extra} {elapsed}s", None
+        return msgs.STATUS_TOOL_ELAPSED.words(tool=status.tool, extra=extra, elapsed=elapsed), None
     if status.compacting:
         return _field(msgs.STATUS_COMPACTING), None
     if show_bytes and status.net_bytes:
-        return f"{status.net_bytes // 100 * 100:,}B", None
+        return msgs.STATUS_RESPONSE_BYTES.words(value=status.net_bytes // 100 * 100), None
     return "", status.output_tokens or None
 
 
@@ -158,7 +157,7 @@ def status_line(
 
     Left `[HH:MM] provider/model context`, centre `throbber phase count` (only
     while `throbber` is set, i.e. a turn runs), right `agent/session cache N%
-    cost`, where `cost` is the session's spend (`usage.status_text`). Each
+    cost`, where `cost` is the session's spend (`usage_display.status_text`). Each
     field is drawn through its /fset format, STATUS_CLOCK and the rest.
     Groups that do not fit give way in a fixed order: cache, then the model's
     head, then the provider, then the centre count, then the cost, then the
@@ -310,7 +309,7 @@ class Scrollback:
 
     def _set_text(self, text: str, cursor: int, *, follow: bool) -> None:
         lines = text.split("\n")
-        trimmed = "\n".join(lines[-(SCROLLBACK_LINES + self._unfolded_rows()):])
+        trimmed = "\n".join(lines[-(int(fset.setting_value("SCROLLBACK_LINES_MAX")) + self._unfolded_rows()):])
         removed = len(text) - len(trimmed)
         if removed:
             for block in self._spans:
@@ -730,7 +729,7 @@ def build_app(
     history,
     completer,
     on_line: Callable[[str], Coroutine],
-    on_interrupt: Callable[[], None],
+    on_interrupt: Callable[[], bool | None],
     on_eof: Callable[[], Awaitable | None],
     status: Callable[[int], str] = lambda width: "",
     status_colours: Callable[[], str] = status_style,
@@ -739,6 +738,12 @@ def build_app(
     key_bindings: KeyBindingsBase | None = None,
     keymap: keys.Keymap | None = None,
     echo: Callable[[str], bool] = lambda line: True,
+    user_line: Callable[[str], str] | None = None,
+    layout_factory: Callable[[Layout], Layout] | None = None,
+    application_factory: Callable | None = None,
+    complete_while_typing: bool = False,
+    complete_tab: Callable | None = None,
+    handler_factory: Callable[[dict[str, Handler]], dict[str, Handler]] | None = None,
 ) -> tuple[Application, Scrollback]:
     """`status(width)` renders the bar; `status_colours()` is its style, read on
     every repaint so a changed setting shows on the next invalidate. In vi mode
@@ -746,17 +751,23 @@ def build_app(
     opens the ex line, whose text goes to ``on_ex``. ``keymap`` names the keys
     of each action (`js.keys`); None is the defaults. The history_search key
     opens a reverse incremental search over ``history``. ``key_bindings`` are
-    added after the screen's own and win a shared key. ``on_eof`` runs on the
-    eof key at an empty input line and ends the app with `app.exit()`; an
-    awaitable it returns runs as the key's handler. A sent line's paste
-    markers (`js.pastes`) are expanded before ``on_line`` gets it; the
+    added after the screen's own and win a shared key. ``on_eof`` quits: it
+    ends the app with `app.exit()`, and an awaitable it returns runs as the
+    key's handler. The interrupt key calls ``on_interrupt``; when that returns
+    false (no turn to cancel), the key clears an input line with text and
+    arms the exit, and on an empty line a press within `EXIT_ARM_TIMEOUT` of
+    the last one quits, else arms. The eof key quits at an empty line,
+    deletes the character under the cursor inside a line, and at the end of
+    a line with text arms the exit, quitting on a second press within the
+    same window. While an exit is armed a row under the input says so. A
+    sent line's paste markers (`js.pastes`) are expanded before ``on_line`` gets it; the
     scrollback echoes the line as typed when ``echo`` of the expanded line is true."""
     scrollback = Scrollback()
     input_buffer = Buffer(
         name=DEFAULT_BUFFER,  # the buffer js.pastes collapses large pastes in
         history=history,
         completer=completer,
-        complete_while_typing=False,
+        complete_while_typing=complete_while_typing,
         enable_history_search=True,
         multiline=vi_mode,
     )
@@ -770,7 +781,7 @@ def build_app(
         input_buffer.reset()
         sent = pastes.expand(line).strip()
         if sent and echo(sent):
-            scrollback.append(display.user_line(line))
+            scrollback.append((display.user_line if user_line is None else user_line)(line))
         await on_line(sent)
 
     editor = InputEditor(input_buffer, submit)
@@ -797,20 +808,70 @@ def build_app(
     def _ex_cancel(event) -> None:
         _ex_close(event.app)
 
-    def _ctrl_d(event):
-        if input_buffer.text:
-            input_buffer.delete()
+    # The action whose next press quits, and the loop time its window closes;
+    # empty when no exit is armed. While it is set, the hint row shows.
+    armed: dict = {}
+
+    def _expire(until: float) -> None:
+        if armed.get("until") == until:
+            armed.clear()
+            get_app().invalidate()
+
+    def _arm(action: str) -> None:
+        loop = asyncio.get_running_loop()
+        until = loop.time() + float(fset.setting_value("EXIT_ARM_TIMEOUT"))
+        armed.update(action=action, until=until)
+        loop.call_at(until, _expire, until)
+
+    def _arm_or_quit(action: str):
+        armed_now = armed.get("action") == action and asyncio.get_running_loop().time() < armed["until"]
+        if armed_now:
+            armed.clear()
+            return on_eof()
+        _arm(action)
+        return None
+
+    def _ctrl_c(event):
+        if on_interrupt():
+            armed.clear()
             return None
-        return on_eof()
+        if event.current_buffer is ex_buffer:
+            armed.clear()
+            _ex_close(event.app)
+            return None
+        if input_buffer.text:
+            input_buffer.reset()
+            _arm("interrupt")
+            return None
+        return _arm_or_quit("interrupt")
+
+    def _ctrl_d(event):
+        if event.current_buffer is ex_buffer:
+            ex_buffer.delete()
+            return None
+        if not input_buffer.text:
+            return on_eof()
+        if input_buffer.document.is_cursor_at_the_end:
+            return _arm_or_quit("eof")
+        input_buffer.delete()
+        return None
+
+    def _exit_hint():
+        sequences = keymap.get(armed.get("action", ""), ())
+        key = keys.describe(sequences[0]) if sequences else ""
+        return ANSI(msgs.EXIT_ARMED.body(key=key))
 
     def _toggle_reasoning(event) -> None:
         if scrollback.toggle_reasoning():
             event.app.invalidate()
 
     def _tab(event) -> None:
+        if complete_tab is not None:
+            complete_tab(event)
+            return
         # The first Tab fills in what every match shares and lists them all;
         # each Tab after that selects the next one.
-        b = input_buffer
+        b = event.current_buffer
         if b.complete_state:
             b.complete_next()
         else:
@@ -820,13 +881,13 @@ def build_app(
         return max(1, get_app().output.get_size().rows - 3)
 
     keymap = keymap if keymap is not None else keys.default_keymap()
-    bind_actions(kb, keymap, {
+    handlers = {
         "submit": Handler(_enter, has_focus(input_buffer) & ~vi_mode),
         "history_search": Handler(keys.history_search, has_focus(input_buffer) | is_searching),
         "ex_open": Handler(_ex_open, has_focus(input_buffer) & vi_navigation_mode),
         "ex_run": Handler(_ex_run, has_focus(ex_buffer)),
         "ex_cancel": Handler(_ex_cancel, has_focus(ex_buffer), eager=True),
-        "interrupt": Handler(lambda event: on_interrupt()),
+        "interrupt": Handler(_ctrl_c),
         "eof": Handler(_ctrl_d),
         "suspend": Handler(lambda event: event.app.suspend_to_background()),
         "reasoning_toggle": Handler(_toggle_reasoning),
@@ -834,7 +895,8 @@ def build_app(
         "scroll_up": Handler(lambda event: scrollback.buffer.cursor_up(count=_page())),
         "scroll_down": Handler(lambda event: scrollback.buffer.cursor_down(count=_page())),
         "complete": Handler(_tab),
-    })
+    }
+    bind_actions(kb, keymap, handlers if handler_factory is None else handler_factory(handlers))
     toggle = keymap.get("reasoning_toggle", ())
     scrollback.toggle_key = keys.describe(toggle[0]) if toggle else ""
 
@@ -876,6 +938,10 @@ def build_app(
                        get_line_prefix=lambda lineno, wrap: to_formatted_text(ANSI(_prompt() if lineno == 0 and not wrap
                                                                                    else " " * display.cells(_prompt())))),
                 ConditionalContainer(
+                    Window(FormattedTextControl(_exit_hint), height=1),
+                    filter=Condition(lambda: bool(armed)),
+                ),
+                ConditionalContainer(
                     Window(BufferControl(buffer=ex_buffer), height=1, get_line_prefix=lambda *_: ":"),
                     filter=has_focus(ex_buffer),
                 ),
@@ -892,7 +958,10 @@ def build_app(
     def _sync_editing_mode(app: Application) -> None:
         app.editing_mode = _editing_mode()
 
-    app = Application(
+    if layout_factory is not None:
+        layout = layout_factory(layout)
+    factory = Application if application_factory is None else application_factory
+    app = factory(
         layout=layout,
         key_bindings=kb if key_bindings is None else merge_key_bindings([kb, key_bindings]),
         style=DynamicStyle(_style),

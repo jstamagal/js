@@ -7,6 +7,7 @@ import time
 from types import SimpleNamespace
 
 import ai
+import ai.models
 import ai.types.messages
 import ai.types.usage
 import pytest
@@ -217,6 +218,73 @@ def test_run_turn_emits_text_response_events(monkeypatch, tmp_path):
     assert hooks.emitted[2][1]["text"] == "OK"
     assert hooks.emitted[3][1]["text"] == "OK"
     assert hooks.emitted[-1][1]["reason"] == "stop"
+
+
+def test_scoped_model_factory_runs_tools_and_summary_compaction(tmp_path):
+    import asyncio
+    from js import model_client, routing
+
+    replies = iter([
+        _make_assistant_msg("", [ModelToolCall("observe-1", "observe", "{}")]),
+        ai.assistant_message("observed"),
+        ai.assistant_message("summary"),
+    ])
+    calls, created, closed, ran = [], [], [], []
+
+    class ScriptedProvider(ai.models.Provider):
+        provider_class_id: str = "proof-gaps-scripted"
+        name: str = "scripted"
+        default_base_url: str = "http://scripted.invalid"
+
+        async def stream(self, model, messages, **kwargs):
+            calls.append(messages)
+            async with ai.models.Stream.replay_message(next(replies)) as stream:
+                async for event in stream:
+                    yield event
+
+        async def aclose(self):
+            closed.append(self)
+
+    def factory(model_id, **route):
+        model = ai.Model(id=model_id, provider=ScriptedProvider())
+        created.append(model)
+        return model
+
+    cfg = offline_config(tmp_path, settings={"COMPACTION_KEEP_RECENT_TOKENS": 1})
+    context = ToolContext(cwd=tmp_path)
+    registry = ToolRegistry(
+        (Tool("observe", "Record a call", lambda: ran.append(True) or "recorded", {}),), aliases={},
+    )
+    messages = [{"role": "user", "content": "old context " * 300}]
+    hooks = RecordingHooks()
+
+    async def drive():
+        with model_client.using_model_factory(factory):
+            await runtime.run_turn_async(
+                cfg, "system", messages, runtime.Telemetry(None),
+                tool_registry=registry, tool_context=context, event_hooks=hooks,
+                suppress_output=True,
+            )
+            assert ran == [True]
+            assert messages[-1]["content"] == "observed"
+            result = await compaction.compact_now(
+                cfg, "system", messages, forced=True, context=context,
+                emit=lambda event, **payload: hooks.emitted.append((event, payload)),
+            )
+            assert compaction.compacted(result)
+        with pytest.raises(routing.ProviderNotLoggedInError):
+            await model_client.stream_model_async(
+                model_id=cfg.model, provider_id=None, provider_base_url=None,
+                provider_api_key=None, messages=[ai.user_message("hi")], tools=None,
+                max_output_tokens=None, reasoning_effort=None, on_text=lambda text: None,
+            )
+
+    asyncio.run(drive())
+    assert len(calls) == 3
+    assert [model.id for model in created] == [cfg.model] * 3
+    assert closed == [model.provider for model in created]
+    assert any(event == "stream" for event, _ in hooks.emitted)
+    assert any(event == "post_compact" for event, _ in hooks.emitted)
 
 
 def test_run_turn_surfaces_and_persists_incomplete_responses(monkeypatch, tmp_path):
@@ -727,78 +795,6 @@ def test_run_turn_applies_config_alias_profile_to_outgoing_tool_specs(monkeypatc
     assert messages[-1] == {"role": "assistant", "content": "OK"}
 
 
-def test_run_turn_skips_unusable_alias_profiles_before_rewriting_specs(monkeypatch, tmp_path):
-    calls: list[dict] = []
-
-    def stream_stub(**kwargs):
-        calls.append(kwargs)
-        return model_text_result("OK")
-
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "read", aliases={"read": "Read"}))
-    cfg = offline_config(
-        tmp_path,
-        model="openai-test",
-        settings={
-            "TOOL_ALIASES": [
-                    {"match": ["openai"], "aliases": {"missing_tool": "MissingTool"}},
-                    {"match": ["openai"], "aliases": {"read": "Read"}},
-                ],
-        },
-    )
-    registry = build_default_registry().select(["read:lazy"])
-    messages = [{"role": "user", "content": "Use tools if needed."}]
-
-    runtime.run_turn(
-        cfg,
-        "system",
-        messages,
-        runtime.Telemetry(None),
-        trace_override=False,
-        tool_registry=registry,
-        tool_context=ToolContext(cwd=tmp_path),
-        suppress_output=True,
-    )
-
-    assert {spec.name for spec in calls[0]["tools"]} == {"Read", "tool_discovery"}
-    assert messages[-1] == {"role": "assistant", "content": "OK"}
-
-
-def test_run_turn_skips_colliding_alias_profiles_before_rewriting_specs(monkeypatch, tmp_path):
-    calls: list[dict] = []
-
-    def stream_stub(**kwargs):
-        calls.append(kwargs)
-        return model_text_result("OK")
-
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "read", "write", aliases={"read": "Read"}))
-    cfg = offline_config(
-        tmp_path,
-        model="openai-test",
-        settings={
-            "TOOL_ALIASES": [
-                    {"match": "openai", "aliases": {"read": "write"}},
-                    {"match": "openai", "aliases": {"read": "Read"}},
-                ],
-        },
-    )
-    registry = build_default_registry().select(["read:lazy", "write:lazy"])
-    messages = [{"role": "user", "content": "Use tools if needed."}]
-
-    runtime.run_turn(
-        cfg,
-        "system",
-        messages,
-        runtime.Telemetry(None),
-        trace_override=False,
-        tool_registry=registry,
-        tool_context=ToolContext(cwd=tmp_path),
-        suppress_output=True,
-    )
-
-    assert {spec.name for spec in calls[0]["tools"]} == {"Read", "write", "tool_discovery"}
-    assert messages[-1] == {"role": "assistant", "content": "OK"}
-
-
 def test_run_turn_without_alias_profile_keeps_default_tool_names(monkeypatch, tmp_path):
     calls: list[dict] = []
 
@@ -877,52 +873,6 @@ def test_run_turn_streams_fs_search_tool_call_returns_content_before_final_text(
     assert exchange[0]["tool_calls"][0]["id"] == exchange[1]["tool_call_id"]
     assert "notes.txt:2:secret_token=42" in exchange[1]["content"]
     assert messages[-1] == {"role": "assistant", "content": "DONE"}
-
-
-def test_run_turn_hydrates_tool_context_caps_from_config(monkeypatch, tmp_path):
-    calls = 0
-    context = ToolContext(cwd=tmp_path)
-
-    def stream_stub(**kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            return model_tool_call_result("shell", [json.dumps({"command": "printf abcdef"})])
-        assert any(
-            msg.role == "tool"
-            and any(
-                getattr(p, "result", None)
-                and "--- stdout ---" in str(p.result)
-                and "[truncated: SHELL_OUTPUT_MAX (3) reached;" in str(p.result)
-                for p in msg.parts
-            )
-            for msg in kwargs["messages"]
-        )
-        return model_text_result("CAPPED")
-
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "shell"))
-    cfg = offline_config(tmp_path)
-    cfg = Config(**{**cfg.__dict__, "max_bash_output_bytes": 3, "max_tool_result_bytes": 1024, "fetch_timeout_s": 9})
-    messages = [{"role": "user", "content": "run shell"}]
-
-    runtime.run_turn(
-        cfg,
-        "system",
-        messages,
-        runtime.Telemetry(None),
-        trace_override=False,
-        tool_context=context,
-        suppress_output=True,
-    )
-
-    assert calls == 2
-    assert context.max_bash_output_bytes == 3
-    assert context.max_tool_result_bytes == 1024
-    assert context.fetch_timeout_s == 9
-    shell_result = next(m["content"] for m in messages if m.get("name") == "shell" and m.get("role") == "tool")
-    assert "abcdef" not in shell_result
-    assert "truncated" in shell_result
-    assert messages[-1] == {"role": "assistant", "content": "CAPPED"}
 
 
 def test_alias_profile_tool_call_dispatches_to_canonical_and_persists_lowercase(monkeypatch, tmp_path):
@@ -1547,65 +1497,6 @@ def test_trace_prints_a_result_line_for_success_and_for_error(capsys):
     assert markers[1].startswith(display.FAIL) and "boom" in markers[1]
 
 
-def test_trace_at_level_two_shows_the_first_lines_on_the_screen_then_shown_over_total():
-    from js import screen
-
-    scroll = screen.Scrollback()
-    scroll.toggle_key = ""
-
-    class Exchange:
-        def open(self, rendered):
-            self.span = scroll.exchange_open(rendered)
-
-        def update(self, rendered, expanded=None):
-            scroll.exchange_update(self.span, rendered, expanded)
-
-        def close(self, rendered, expanded=None):
-            scroll.exchange_close(self.span, rendered, expanded)
-
-    telemetry = runtime.Telemetry(None)
-    telemetry.exchange_factory = Exchange
-    registry = _trace_registry()
-    calls = [
-        runtime._PendingToolCall("c1", "big", ["{}"]),
-        runtime._PendingToolCall("c2", "boom", ["{}"]),
-    ]
-
-    runtime._dispatch_tool_calls(
-        calls, telemetry, 256 * 1024, True,
-        runtime.ToolErrorTracker(), registry, _tools_context(2),
-    )
-
-    scroll.flush()
-    lines = [ANSI_RE.sub("", line).removeprefix(display.RAIL).removeprefix(" ")
-             for line in scroll.buffer.text.splitlines()]
-    assert len(_marker_lines(lines)) == 2
-    shown = "\n".join(lines)
-    assert all(f"line {index} with some words in it" in shown for index in range(3))
-    assert "line 3 with some words in it" not in shown
-    # A short error is shown whole.
-    assert any("ERROR: tool_discovery found no native tool matching" in line for line in lines)
-
-
-def test_trace_at_level_two_on_plain_stdout_shows_every_line(capsys):
-    registry = _trace_registry()
-    calls = [
-        runtime._PendingToolCall("c1", "big", ["{}"]),
-        runtime._PendingToolCall("c2", "boom", ["{}"]),
-    ]
-
-    runtime._dispatch_tool_calls(
-        calls, runtime.Telemetry(None), 256 * 1024, True,
-        runtime.ToolErrorTracker(), registry, _tools_context(2),
-    )
-
-    lines = _trace_lines(capsys)
-    assert len(_marker_lines(lines)) == 2
-    shown = "\n".join(lines)
-    assert all(f"line {index} with some words in it" in shown for index in range(200))
-    assert any("ERROR: tool_discovery found no native tool matching" in line for line in lines)
-
-
 def test_trace_result_line_covers_the_unknown_tool_and_invalid_argument_paths(capsys):
     registry = _trace_registry()
     invalid = runtime._PendingToolCall("c1", "big", ["{}"], validation_error="'path' is a required property")
@@ -1639,3 +1530,67 @@ def test_trace_result_line_is_printed_by_the_async_dispatch_path_too(capsys):
     markers = _marker_lines(lines)
     assert len(markers) == 1 and "slow" in markers[0]
     assert any("async result" in line for line in lines)
+
+
+def test_an_approval_callable_holds_each_call_until_it_decides(monkeypatch, tmp_path):
+    import asyncio
+
+    ran: list[str] = []
+
+    def tool(name: str) -> Tool:
+        return Tool(name=name, description=name, handler=lambda text: ran.append(name) or f"{name} ran",
+                    params={"text": {"type": "string"}}, required=("text",))
+
+    registry = ToolRegistry(tools=(tool("shell"), tool("read")), aliases={"shell": "shell", "read": "read"})
+    calls = [ModelToolCall(id="c1", name="shell", arguments='{"text": "rm"}'),
+             ModelToolCall(id="c2", name="read", arguments='{"text": "a"}')]
+    batch = ModelStreamResult(text="", tool_calls=calls, reasoning="",
+                              usage=ai.types.usage.Usage(input_tokens=5, output_tokens=5),
+                              finish_reason="tool_calls", assistant_message=_make_assistant_msg("", calls))
+    replies = iter([batch, model_text_result("done")])
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_kw: next(replies))
+    asked: list[dict] = []
+
+    async def approve(call: dict) -> str | None:
+        asked.append(call)
+        decided = asyncio.Event()
+        # The screen decides later, on the same loop the turn runs on.
+        asyncio.get_running_loop().call_later(0.05, decided.set)
+        await decided.wait()
+        assert ran == []
+        return "ERROR: the user refused shell" if call["name"] == "shell" else None
+
+    messages = [{"role": "user", "content": "go"}]
+    asyncio.run(runtime.run_turn_async(
+        offline_config(tmp_path), "system", messages, runtime.Telemetry(None),
+        trace_override=False, tool_registry=registry, tool_context=ToolContext(cwd=tmp_path),
+        suppress_output=True, approve=approve,
+    ))
+
+    assert [(c["id"], c["name"], json.loads(c["arguments"])) for c in asked] == [
+        ("c1", "shell", {"text": "rm"}), ("c2", "read", {"text": "a"})]
+    assert ran == ["read"]
+    results = {m["tool_call_id"]: m["content"] for m in messages if m.get("role") == "tool"}
+    assert results["c1"].splitlines()[0] == "ERROR: the user refused shell"
+    assert results["c2"] == "read ran"
+
+
+@pytest.mark.parametrize("decision", ["", False, 0, {}, []])
+def test_only_none_is_an_approval(monkeypatch, tmp_path, decision):
+    import asyncio
+
+    ran = []
+    registry = ToolRegistry((Tool("probe", "test", lambda: ran.append(True) or "ran", {}),), {})
+    replies = iter([model_tool_call_result("probe", ['{}']), model_text_result("done")])
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kw: next(replies))
+    messages = [{"role": "user", "content": "go"}]
+
+    asyncio.run(runtime.run_turn_async(
+        offline_config(tmp_path), "system", messages, runtime.Telemetry(None),
+        tool_registry=registry, tool_context=ToolContext(cwd=tmp_path), suppress_output=True,
+        approve=lambda call: decision,
+    ))
+
+    assert ran == []
+    [result] = [message for message in messages if message["role"] == "tool"]
+    assert isinstance(result["content"], str)

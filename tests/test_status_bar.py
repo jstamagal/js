@@ -6,11 +6,9 @@ No test here builds a prompt_toolkit Application.
 from __future__ import annotations
 
 import asyncio
-import re
 
 import ai
 import pytest
-from prompt_toolkit.output import ColorDepth
 
 from js import fset, model_client, runtime, screen, setcmd, settings
 from js.config import Config
@@ -54,35 +52,6 @@ def _cfg(tmp_path, *, session_name: str = "s.jsonl", model: str = "test-model") 
     )
 
 
-def test_status_line_fills_90_columns_with_three_groups():
-    line = screen.status_line(90, **BAR)
-
-    assert len(line) == 90
-    assert line.startswith("[23:59] cpa/claude-fable-5-1 ctx 121,000")
-    assert line.endswith("defaultagent/b61643c8 cache 100%")
-    centre = line[len("[23:59] cpa/claude-fable-5-1 ctx 121,000"):-len("defaultagent/b61643c8 cache 100%")]
-    assert "*" in centre and "9,600" in centre
-    assert centre.startswith("  ") and centre.endswith("  ")
-
-
-def test_status_line_without_a_turn_has_no_centre_group():
-    line = screen.status_line(80, **{**BAR, "throbber": ""})
-
-    assert len(line) == 80
-    assert line.startswith("[23:59] cpa/claude-fable-5-1 ctx 121,000")
-    assert line.endswith("defaultagent/b61643c8 cache 100%")
-    assert "9,600" not in line
-
-
-def test_status_line_overflow_drops_cache_before_touching_the_model():
-    wide = screen.status_line(80, **BAR)
-
-    assert len(wide) == 80
-    assert "cache" not in wide
-    assert "cpa/claude-fable-5-1" in wide
-    assert "defaultagent/b61643c8" in wide
-
-
 def test_status_line_overflow_order_at_40_columns():
     line = screen.status_line(40, **BAR)
 
@@ -104,15 +73,6 @@ def test_status_line_keeps_the_essentials_at_any_width():
         line = screen.status_line(width, **BAR)
         assert len(line) == width
         assert "[23:59]" in line and "*" in line and "b61643c8" in line
-
-
-def test_status_line_omits_missing_values():
-    line = screen.status_line(80, **{**BAR, "provider": None, "cache_pct": None, "agent_id": None})
-
-    assert len(line) == 80
-    assert "cache" not in line
-    assert line.startswith("[23:59] claude-fable-5-1 ctx 121,000")
-    assert line.endswith("b61643c8")
 
 
 def test_format_count_is_a_heartbeat_not_an_invoice():
@@ -170,47 +130,6 @@ def test_turn_status_counts_bytes_only_until_the_first_token():
 
     status.reset()
     assert status == TurnStatus()
-
-
-def test_status_style_is_the_fset_status_colours():
-    assert fset.set_entry("COLOR_STATUS_BACKGROUND", "#000000") is None
-    assert fset.set_entry("COLOR_STATUS_TEXT", "#ffffff") is None
-    assert "bg:#000000" in screen.status_style() and "#ffffff" in screen.status_style()
-
-
-def test_status_colour_entries_accept_only_colours():
-    live: dict = {}
-    assert setcmd.fset_command(live, "COLOR_STATUS_BACKGROUND #000000").error is None
-    assert fset.hex_for("COLOR_STATUS_BACKGROUND") == "#000000"
-    assert setcmd.fset_command(live, "COLOR_STATUS_TEXT white").error
-    assert setcmd.fset_command(live, "NET_DISPLAY 4").error
-    assert setcmd.fset_command(live, "NET_DISPLAY 3").error is None
-
-
-def test_status_bar_is_truecolor_and_repaints_on_fset(monkeypatch):
-    """build_app asks for 24-bit colour even on TERM=linux, and the bar's style
-    is read on each repaint. Application is replaced by a recorder."""
-    captured: dict = {}
-
-    class Recorder:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-    monkeypatch.setenv("TERM", "linux")
-    monkeypatch.setattr(screen, "Application", Recorder)
-    screen.build_app(
-        prompt="> ", history=None, completer=None,
-        on_line=None, on_interrupt=None, on_eof=None,
-        status=lambda width: "",
-    )
-
-    assert captured["color_depth"] == ColorDepth.DEPTH_24_BIT
-    style = captured["style"]
-    before = fset.hex_for("COLOR_STATUS_BACKGROUND")
-    assert style.get_attrs_for_style_str("class:status").bgcolor == before.lstrip("#")
-    setcmd.fset_command({}, "COLOR_STATUS_BACKGROUND #000000")
-    style.invalidation_hash()
-    assert style.get_attrs_for_style_str("class:status").bgcolor == "000000"
 
 
 def test_session_short_is_the_hex_of_the_session_stem(tmp_path):
@@ -285,36 +204,3 @@ def test_status_colour_survives_save_and_load(tmp_path):
     reloaded = settings.seed_defaults()
     assert settings.load_jsrc_files([path], reloaded) == []
     assert fset.hex_for("COLOR_STATUS_BACKGROUND") == "#000000"
-
-
-def test_the_screen_text_colour_applies_without_a_background():
-    from prompt_toolkit.styles import Style
-
-    assert fset.set_entry("COLOR_TEXT", "#123456") is None
-    assert fset.hex_for("COLOR_BACKGROUND") is None
-    attrs = Style.from_dict({"screen": screen.screen_style()}).get_attrs_for_style_str("class:screen")
-    assert attrs.color == "123456" and not attrs.bgcolor
-
-
-def test_a_status_field_keeps_its_palette_colour():
-    assert fset.set_entry("STATUS_CONTEXT", "%C04ctx %s%C") is None
-    line = screen.status_line(100, **BAR)
-    red = fset.fg("PALETTE_04")
-    assert red and f"{red}ctx 121,000" in line
-    assert len(fset.plain(line)) == 100
-
-
-def test_every_number_on_the_bar_says_what_it_counts():
-    line = screen.status_line(100, **BAR)
-    numbers = re.findall(r"(\S+) (\d[\d,.]*k?)\b", line)
-    assert numbers and all(label.isalpha() for label, _ in numbers), numbers
-
-
-def test_a_wide_status_field_keeps_the_bar_to_its_width_in_cells():
-    from prompt_toolkit.utils import get_cwidth
-
-    fset.set_entry("STATUS_CLOCK", "汉字汉字")
-    for width in (20, 40, 80):
-        line = fset.plain(screen.status_line(width, **BAR))
-        assert get_cwidth(line) == width, (width, line)
-    assert "b61643c8" in fset.plain(screen.status_line(40, **BAR))

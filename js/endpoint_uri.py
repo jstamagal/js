@@ -26,12 +26,16 @@ Both tags are optional and order between them does not matter:
 
 from __future__ import annotations
 
+from . import messages as msgs
+
+from . import settings as _settings
+
 import re
 from dataclasses import dataclass
 
 # An endpoint reached this way is usually a local box that ignores the key, but
 # most OpenAI-shaped servers still require the header to exist.
-DUMMY_KEY = "sk-dummy-key"
+DUMMY_KEY = _settings.default_value("ENDPOINT_DEFAULT_KEY")
 
 _SHAPES = {
     "openai": "openai-completions",
@@ -70,10 +74,10 @@ class EndpointSpec:
         return pairs
 
 
-def parse(spec: str) -> EndpointSpec:
+def parse(spec: str, *, settings: dict | None = None) -> EndpointSpec:
     text = (spec or "").strip()
     if not text:
-        raise EndpointSpecError("empty endpoint spec; expected model[:key][[shape]][[effort]]@url")
+        raise EndpointSpecError(msgs.ENDPOINT_SPEC_EMPTY_ENDPOINT_SPEC_EXPECTED_MODEL_KEY_SHAPE.format())
 
     # Split at the @ that introduces the URL. Prefer one followed by a scheme so
     # a key containing @ does not steal the split; fall back to the last @.
@@ -81,15 +85,14 @@ def parse(spec: str) -> EndpointSpec:
     at = match.start() if match else text.rfind("@")
     if at < 0:
         raise EndpointSpecError(
-            f"no @endpoint in {spec!r}; expected something like "
-            "qwen27b@http://host:8000/v1"
+            msgs.ENDPOINT_SPEC_NO_ENDPOINT_IN_EXPECTED_SOMETHING_LIKE_QWEN.format(spec=spec)
         )
     left, base_url = text[:at], text[at + 1:].strip()
     if not base_url:
-        raise EndpointSpecError(f"no endpoint after @ in {spec!r}")
+        raise EndpointSpecError(msgs.ENDPOINT_SPEC_NO_ENDPOINT_AFTER_IN.format(spec=spec))
     if "://" not in base_url:
         raise EndpointSpecError(
-            f"endpoint {base_url!r} has no scheme; write http:// or https://"
+            msgs.ENDPOINT_SPEC_ENDPOINT_HAS_NO_SCHEME_WRITE_HTTP_OR.format(base_url=base_url)
         )
 
     # Trailing [tag] groups, innermost last. Collected before the key split so a
@@ -103,23 +106,22 @@ def parse(spec: str) -> EndpointSpec:
         tag = tag_match.group(1).strip().lower()
         left = left[: tag_match.start()].rstrip()
         if not tag:
-            raise EndpointSpecError(f"empty [] in {spec!r}")
+            raise EndpointSpecError(msgs.ENDPOINT_SPEC_EMPTY_IN.format(spec=spec))
         if tag in _SHAPES:
             if shape is not None:
-                raise EndpointSpecError(f"two wire shapes in {spec!r}: [{tag}] and one more")
+                raise EndpointSpecError(msgs.ENDPOINT_SPEC_TWO_WIRE_SHAPES_IN_AND_ONE_MORE.format(spec=spec, tag=tag))
             shape = tag
         elif tag in _EFFORTS:
             if effort is not None:
-                raise EndpointSpecError(f"two reasoning efforts in {spec!r}: [{tag}] and one more")
+                raise EndpointSpecError(msgs.ENDPOINT_SPEC_TWO_REASONING_EFFORTS_IN_AND_ONE_MORE.format(spec=spec, tag=tag))
             effort = tag
         else:
             raise EndpointSpecError(
-                f"unknown tag [{tag}] in {spec!r}; wire shapes are "
-                f"{', '.join(sorted(set(_SHAPES)))}; efforts are {', '.join(_EFFORTS)}"
+                msgs.ENDPOINT_SPEC_UNKNOWN_TAG_IN_WIRE_SHAPES_ARE_EFFORTS.format(tag=tag, spec=spec, value=', '.join(sorted(set(_SHAPES))), value2=', '.join(_EFFORTS))
             )
 
     if not left:
-        raise EndpointSpecError(f"no model id in {spec!r}")
+        raise EndpointSpecError(msgs.ENDPOINT_SPEC_NO_MODEL_ID_IN.format(spec=spec))
 
     # Last colon splits the key off. Last, not first, so an ollama-style tagged
     # id keeps its tag: `qwen3:27b:sk-foo` is model `qwen3:27b`, key `sk-foo`.
@@ -128,16 +130,16 @@ def parse(spec: str) -> EndpointSpec:
         model, _, api_key = left.rpartition(":")
         model, api_key = model.strip(), api_key.strip()
         if not api_key:
-            raise EndpointSpecError(f"empty api key after ':' in {spec!r}")
+            raise EndpointSpecError(msgs.ENDPOINT_SPEC_EMPTY_API_KEY_AFTER_IN.format(spec=spec))
         if not model:
-            raise EndpointSpecError(f"no model id before ':' in {spec!r}")
+            raise EndpointSpecError(msgs.ENDPOINT_SPEC_NO_MODEL_ID_BEFORE_IN.format(spec=spec))
     else:
-        model, api_key = left, DUMMY_KEY
+        model, api_key = left, _settings.knob(settings, "ENDPOINT_DEFAULT_KEY")
 
     return EndpointSpec(
         model=model,
         api_key=api_key,
         base_url=base_url,
-        provider_id=_SHAPES[shape or "openai"],
+        provider_id=_SHAPES[shape] if shape else _settings.knob(settings, "ENDPOINT_DEFAULT_SHAPE"),
         reasoning_effort=effort,
     )

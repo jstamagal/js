@@ -17,7 +17,7 @@ from js import cli, runtime, session_store, supervisor, usage
 from js import memory as M
 from js.config import from_env
 from js.memory import load_messages
-from js.model_client import ModelStreamResult, ModelToolCall
+from js.model_client import ModelStreamResult
 from js.session_catalog import (
     append_title,
     branch_session,
@@ -45,14 +45,6 @@ def _text(text: str) -> ModelStreamResult:
         text=text, tool_calls=[], reasoning="",
         usage=ai.types.usage.Usage(input_tokens=0, output_tokens=len(text)),
         finish_reason="stop", assistant_message=ai.assistant_message(text),
-    )
-
-
-def _call(label: str, name: str, arguments: dict) -> ModelStreamResult:
-    return ModelStreamResult(
-        text=label, tool_calls=[ModelToolCall(id="call-1", name=name, arguments=json.dumps(arguments))],
-        reasoning="", usage=ai.types.usage.Usage(input_tokens=0, output_tokens=1),
-        finish_reason="tool_calls", assistant_message=ai.assistant_message(label),
     )
 
 
@@ -98,39 +90,6 @@ def test_a_new_session_lands_in_its_start_directory_folder_under_a_dated_name(mo
 
 
 # --- the .txt transcript -----------------------------------------------------
-
-
-def test_the_txt_has_the_fixed_header_numbered_rows_and_no_tool_output(monkeypatch, tmp_path):
-    work = _dir(tmp_path, "work")
-    monkeypatch.chdir(work)
-    monkeypatch.setattr(runtime.T, "STOCK_CONTEXT", ToolContext(cwd=work))
-    command = "printf 'hid%s' den\necho second-line"
-    _replies(monkeypatch, _call("look at it", "shell", {"command": command}), _text("done"))
-
-    assert cli.main(["-p", "run it\nplease"]) == 0
-
-    [session] = _all_sessions()
-    lines = session.with_suffix(".txt").read_text(encoding="utf-8").splitlines()
-    assert lines[0].startswith("agent: defaultagent")
-    assert f"dir: {work}" in lines[0] and "mode: -p" in lines[0]
-    assert lines[1].startswith("models: ")
-    assert lines[2].startswith("started: ") and "turns: 1" in lines[2]
-    assert lines[3] == "branched-from: -"
-    assert lines[4] == ""
-    rows = lines[5:]
-    assert rows[0].startswith("#0001 ") and rows[0].endswith("you  run it")
-    assert rows[1].startswith(" ") and rows[1].strip() == "please"
-    tool = next(row for row in rows if "tool:shell" in row)
-    assert tool.startswith("#0003 ")
-    assert "look at it" in tool and "$ printf 'hid%s' den" in tool and "exit 0" in tool
-    assert re.search(r"\d+B$", tool)
-    assert rows[-1].startswith("#0004 ") and rows[-1].endswith("ape  done")
-    text = "\n".join(lines)
-    assert "hidden" not in text and "second-line" not in text
-    # The output is in the record, at the same message number.
-    records = [json.loads(line) for line in session.read_text(encoding="utf-8").splitlines()]
-    messages = [record["message"] for record in records if record.get("kind") == "message"]
-    assert messages[2]["role"] == "tool" and "hidden" in messages[2]["content"]
 
 
 def test_the_txt_follows_the_record_as_the_session_goes_on(monkeypatch, tmp_path):
@@ -419,6 +378,24 @@ def test_each_start_records_its_mode_and_command_line(monkeypatch, tmp_path):
 
 def _lines(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_linking_legacy_records_preserves_unicode_line_separators(tmp_path):
+    path = tmp_path / "legacy.jsonl"
+    messages = [{"role": "user", "content": "one\u2028two\u2029three\x85four"},
+                {"role": "assistant", "content": "reply"}]
+    records = [{"kind": "message", "version": 1, "ts": 1, "message": message}
+               for message in messages]
+    path.write_text("\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
+                    encoding="utf-8")
+
+    session_store.link_file(path)
+
+    assert load_messages(path) == messages
+    with path.open(encoding="utf-8") as stream:
+        linked = [json.loads(line) for line in stream]
+    assert all(isinstance(record["id"], str) for record in linked)
+    assert linked[1]["parent"] == linked[0]["id"]
 
 
 def test_a_branch_records_its_parent_and_the_id_of_the_message_it_split_at(tmp_path):

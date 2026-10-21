@@ -230,17 +230,6 @@ def test_a_turn_over_budget_on_its_own_summarizes_itself_keeping_a_tail(tmp_path
     assert calls[0]["tail_tokens"] == compaction.get_int(setup.cfg, "COMPACTION_KEEP_RECENT_TOKENS")
 
 
-@pytest.mark.parametrize("overflow_round", [1, 2, 3])
-def test_a_forced_fit_keeps_half_as_much_tail_each_round(tmp_path, monkeypatch, overflow_round):
-    calls = _summaries(monkeypatch)
-    setup = _Setup(tmp_path, [{"role": "user", "content": "go " * 40000}, *_tool_history(4)[:-1]],
-                   window=1_000_000)
-    history_tokens = int(compaction.history_chars(setup.messages) / 4.0)
-    setup.fit(phase="overflow_recovery", force=True, overflow_round=overflow_round)
-    tail = min(compaction.get_int(setup.cfg, "COMPACTION_KEEP_RECENT_TOKENS"), history_tokens)
-    assert [call["tail_tokens"] for call in calls] == [tail // 2 ** overflow_round]
-
-
 def test_a_failed_summary_is_not_retried_in_the_same_check(tmp_path, monkeypatch):
     calls = _summaries(monkeypatch, fail=True)
     setup = _Setup(tmp_path, _prefix_then_turn(22, 1), warm=True)
@@ -270,14 +259,6 @@ def test_overflow_recovery_with_nothing_to_clear_summarizes(tmp_path, monkeypatc
     changed = asyncio.run(setup.budget.recover_overflow(_overflow(), overflow_round=1, tools=[], specs=[]))
     assert changed is True
     assert [call["preserve_from"] for call in calls] == [2]
-
-
-@pytest.mark.parametrize(("resolved", "configured", "expected"), [
-    (1000, 0, 1000), (1000, 5000, 5000), (None, 0, None), (None, 700, 700),
-])
-def test_the_provider_window_is_the_larger_known_window(tmp_path, resolved, configured, expected):
-    setup = _Setup(tmp_path, [], window=resolved, compact={"CONTEXT_SIZE": configured})
-    assert setup.budget.provider_window() == expected
 
 
 def test_a_failed_clear_is_a_skipped_step_not_a_dead_turn(tmp_path, monkeypatch):

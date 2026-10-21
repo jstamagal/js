@@ -177,6 +177,42 @@ def test_skill_load_returns_instructions_and_activates_allowed_requirements(tmp_
     assert forbidden.resolve("browser_probe") is None
 
 
+def test_turn_and_skill_tool_use_supplied_catalog(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    instructions = "Inspect the assembly's own files.\n"
+    _skill_file(tmp_path / "assembly-skills", "inspect").write_text(
+        "---\ndescription: Inspect assembly files\ntools: [read]\n---\n" + instructions,
+    )
+    catalog = skills_mod.SkillCatalog.discover(
+        project, builtin_dir=tmp_path / "builtin-skills",
+        global_dir=tmp_path / "assembly-skills", user_dir=tmp_path / "user-skills",
+    )
+    registry = build_default_registry().select(["skill:eager", "read:lazy"])
+    context = ToolContext(cwd=project)
+    calls = []
+
+    def stream(**kwargs):
+        assert context.skill_catalog is catalog
+        found = json.loads(context.tool_registry.discover(kind="skill"))["results"]
+        assert [item["id"] for item in found] == ["skill:inspect"]
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return _result(("load-skill", "skill", json.dumps({"name": "inspect"})))
+        assert "read" in [tool.name for tool in kwargs["tools"]]
+        return _result(text="done")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    messages = [{"role": "user", "content": "Inspect the assembly"}]
+    runtime.run_turn(
+        _cfg(tmp_path), "system", messages, runtime.Telemetry(None),
+        tool_registry=registry, tool_context=context, skill_catalog=catalog,
+        suppress_output=True,
+    )
+    assert [m["content"] for m in messages if m["role"] == "tool"] == [instructions]
+    assert len(calls) == 2
+
+
 def test_user_only_skill_is_absent_from_catalog_and_not_loadable(tmp_path):
     skills = tmp_path / ".js" / "skills"
     _skill_file(skills, "secret").write_text(

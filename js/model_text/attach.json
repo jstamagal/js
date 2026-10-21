@@ -1,0 +1,8 @@
+{
+  "prepare_bytes_attached_binary_file_type_size_bytes": "ATTACHED_BINARY_FILE {display_path} type={file_type} size={size} bytes (content not inlined)",
+  "prepare_image_visual_file_mime_size_bytes": "VISUAL_FILE {display_path} mime={mime} size={size} bytes",
+  "prepare_image_vision_disabled_image_bytes_not_sent": "{stub} (vision disabled; image bytes not sent)",
+  "format_text_attachment_attached_file_bytes": "Attached file: {display_path} ({size} bytes)",
+  "format_text_attachment_truncated_to_bytes": " [truncated to {cap} bytes]",
+  "format_text_attachment_text": "{header}\n{fence}\n{text}\n{value_3}"
+}

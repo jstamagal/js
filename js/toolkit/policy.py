@@ -37,9 +37,14 @@ from typing import Any
 
 import yaml
 
-from .. import paths
+from .. import output, paths
+from .. import settings as _settings
 from .. import messages as msgs
 from .core import Tool
+from ..prompt_text import load_catalog
+
+_PROMPTS = load_catalog('toolkit_policy')
+
 
 MODIFIERS = ("eager", "lazy", "ban")
 _GLOB_CHARS = "*?["
@@ -225,15 +230,15 @@ def resolve(tools: Sequence[Tool], rules: Sequence[Rule]) -> tuple[Decision, ...
 
 
 def warn_unmatched(tools: Sequence[Tool], rules: Sequence[Rule], agent_id: str | None = None) -> None:
-    """One stderr line per exact noun that names no tool at all."""
+    """One warning event per exact noun that names no tool at all."""
     for rule in rules:
         if rule.entry.noun == "tag" or rule.entry.is_glob:
             continue
         if not any(rule.matches(tool) for tool in tools):
             if agent_id:
-                msgs.warn(msgs.TOOL_ENTRY_UNMATCHED_FOR, entry=rule.label, agent=agent_id)
+                output.notice(msgs.TOOL_ENTRY_UNMATCHED_FOR, entry=rule.label, agent=agent_id)
             else:
-                msgs.warn(msgs.TOOL_ENTRY_UNMATCHED, entry=rule.label)
+                output.notice(msgs.TOOL_ENTRY_UNMATCHED, entry=rule.label)
 
 
 @dataclass(frozen=True)
@@ -290,8 +295,7 @@ def argument_refusal(tool_name: str, args: Any, bans: Mapping[str, Sequence[str]
         for value in values:
             if fnmatchcase(value, folded) if glob else folded in value:
                 return (
-                    f"ERROR: {tool_name} call refused before running: an argument matches "
-                    f"ban pattern {pattern!r} in tools.yaml."
+                    _PROMPTS['argument_refusal_error_call_refused_before_running_an'].format(tool_name=tool_name, pattern=pattern)
                 )
     return None
 
@@ -314,3 +318,25 @@ def render_table(decisions: Sequence[Decision], bans: Mapping[str, Sequence[str]
         if name in shown:
             lines.append(msgs.line_for(msgs.TOOL_CHAIN_BAN, tool=name, patterns=", ".join(repr(p) for p in patterns)))
     return lines
+
+
+def removal_decision(context: Any, *, permanent: bool | None, size: int) -> tuple[bool, str | None]:
+    """The removal mode and any refusal under the operator's trash policy."""
+    permanent = bool(permanent) or not _settings.knob_attr(context, "remove_trash", "REMOVE_TRASH")
+    maximum = int(_settings.knob_attr(context, "trash_bytes_max", "TRASH_BYTES_MAX"))
+    if not permanent and size > maximum:
+        limit = f"{maximum // (1024 * 1024)} MiB" if maximum % (1024 * 1024) == 0 else f"{maximum} bytes"
+        return permanent, (f"ERROR: target is over the {limit} trash limit ({size} bytes); "
+                           "confirm with the operator and pass permanent=true to delete directly.")
+    return permanent, None
+
+
+def schema_flags(config: Any) -> tuple[str, ...]:
+    """Schema features allowed by this configuration's tool policy."""
+    return () if getattr(config, "lock_subagent_model", False) else ("model_override",)
+
+
+def legacy_entry(raw: Any) -> str:
+    """An old bare selector means a tool on the agent's eager boot surface."""
+    text = str(raw).strip()
+    return text if ":" in text else f"{text}:eager"

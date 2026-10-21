@@ -38,6 +38,7 @@ from __future__ import annotations
 import re
 
 from .. import messages as msgs
+from .. import output
 from collections.abc import Iterable
 from functools import cache
 from pathlib import Path
@@ -72,7 +73,7 @@ def _warn_once(message: str) -> None:
     if message in _WARNED:
         return
     _WARNED.add(message)
-    msgs.warn(msgs.DESCRIPTION_PROBLEM, problem=message)
+    output.notice(msgs.DESCRIPTION_PROBLEM, problem=message)
 
 
 def description_dir() -> Path:

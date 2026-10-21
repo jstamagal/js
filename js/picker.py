@@ -24,8 +24,16 @@ from prompt_toolkit.output import Output, create_output
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame
 
-from . import fset, logins, providers
+from . import fset, keys, logins, providers
 from . import messages as msgs
+
+
+MODEL_KEYMAP: keys.Keymap = {
+    "up": (("up",), ("k",)), "down": (("down",), ("j",)),
+    "page_up": (("pageup",),), "page_down": (("pagedown",),),
+    "focus": (("tab",), ("left",), ("right",)), "choose": (("enter",),),
+    "quit": (("escape",), ("q",), ("c-c",)), "fetch": (("f",),),
+}
 
 
 @dataclass(frozen=True)
@@ -119,7 +127,7 @@ class ModelPicker:
 
     # -- state -------------------------------------------------------------
 
-    def _load_models(self) -> None:
+    def _load_models(self, model: str | None = None) -> None:
         self.model_index = 0
         if not self.provider_rows:
             self.model_rows = []
@@ -130,9 +138,10 @@ class ModelPicker:
         if not self.model_rows:
             self.detail = msgs.PICK_NO_CACHED.text(provider=provider.id)
             return
-        if self._initial_model:
+        wanted = model if model is not None else self._initial_model
+        if wanted:
             for idx, row in enumerate(self.model_rows):
-                if row.id == self._initial_model:
+                if row.id == wanted:
                     self.model_index = idx
                     break
         self.detail = msgs.PICK_PROVIDER_DETAIL.text(provider=provider.id, source=provider.source,
@@ -198,7 +207,9 @@ class ModelPicker:
         try:
             models = await logins.fetch_models(login)
             logins.cache_models(provider.id, models)
-            self._load_models()
+            if self.current_provider() is provider:
+                selected = self.selection()
+                self._load_models(selected["model"] if selected is not None else None)
         except Exception as exc:  # noqa: BLE001
             self.detail = msgs.PICK_FETCH_FAILED.text(error=f"{type(exc).__name__}: {exc}")
 
@@ -236,35 +247,27 @@ class ModelPicker:
         return Frame(Window(control, always_hide_cursor=True), title=title, width=width)
 
     def application(
-        self, *, input: Input | None = None, output: Output | None = None
+        self, *, input: Input | None = None, output: Output | None = None,
+        keymap: keys.Keymap | None = None, handlers: dict | None = None,
     ) -> Application[dict[str, Any] | None]:
         kb = KeyBindings()
+        keymap = MODEL_KEYMAP if keymap is None else keymap
 
-        @kb.add("up")
-        @kb.add("k")
         def _up(event: KeyPressEvent) -> None:
             self.move(-1)
 
-        @kb.add("down")
-        @kb.add("j")
         def _down(event: KeyPressEvent) -> None:
             self.move(1)
 
-        @kb.add("pageup")
         def _page_up(event: KeyPressEvent) -> None:
             self.move(-10)
 
-        @kb.add("pagedown")
         def _page_down(event: KeyPressEvent) -> None:
             self.move(10)
 
-        @kb.add("tab")
-        @kb.add("left")
-        @kb.add("right")
         def _toggle(event: KeyPressEvent) -> None:
             self.toggle_focus()
 
-        @kb.add("enter")
         def _choose(event: KeyPressEvent) -> None:
             if self.focus == "providers":
                 if self.model_rows:
@@ -274,13 +277,9 @@ class ModelPicker:
             if chosen is not None:
                 event.app.exit(result=chosen)
 
-        @kb.add("escape", eager=True)
-        @kb.add("q")
-        @kb.add("c-c")
         def _quit(event: KeyPressEvent) -> None:
             event.app.exit(result=None)
 
-        @kb.add("f")
         def _fetch(event: KeyPressEvent) -> None:
             self.detail = msgs.PICK_FETCHING.text()
 
@@ -289,6 +288,14 @@ class ModelPicker:
                 event.app.invalidate()
 
             event.app.create_background_task(run())
+
+        actions = {"up": _up, "down": _down, "page_up": _page_up, "page_down": _page_down,
+                   "focus": _toggle, "choose": _choose, "quit": _quit, "fetch": _fetch}
+        if handlers is not None:
+            actions.update(handlers)
+        for action, sequences in keymap.items():
+            for sequence in sequences:
+                kb.add(*sequence, eager=sequence == ("escape",))(actions[action])
 
         body = VSplit(
             [
@@ -301,7 +308,7 @@ class ModelPicker:
             [
                 body,
                 Window(FormattedTextControl(lambda: [("class:detail", self.detail)]), height=1),
-                Window(FormattedTextControl([("class:help", msgs.PICK_HELP.text())]), height=1),
+                Window(FormattedTextControl([("class:help", msgs.PICK_HELP.with_keymap(keymap, MODEL_KEYMAP).text())]), height=1),
             ]
         )
         return Application(
@@ -320,18 +327,22 @@ def pick_model(
     provider_base_url: str | None = None,
     provider_api_key: str | None = None,
     model: str | None = None,
+    input=None,
+    output=None,
+    picker_factory=None,
 ) -> dict[str, Any] | None:
     """Run the interactive picker and return the selection, or None on cancel.
     See `run_modal` for how it shares the terminal with the REPL."""
-    state = ModelPicker(
+    factory = ModelPicker if picker_factory is None else picker_factory
+    state = factory(
         provider_id=provider_id,
         provider_base_url=provider_base_url,
         provider_api_key=provider_api_key,
         model=model,
     )
     app = state.application(
-        input=create_input(sys.__stdin__),
-        output=create_output(sys.__stdout__),
+        input=create_input(sys.__stdin__) if input is None else input,
+        output=create_output(sys.__stdout__) if output is None else output,
     )
     return run_modal(app)
 

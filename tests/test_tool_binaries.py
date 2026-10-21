@@ -14,6 +14,24 @@ from js import tool_binaries
 from js.toolkit.core import ToolContext
 
 
+def test_saved_download_leaves_only_its_file_in_the_directory(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    directory = tmp_path / "project"
+    directory.mkdir()
+
+    def start(argv, **kwargs):
+        partial = Path(next(arg[6:] for arg in argv if arg.startswith("--dir=")))
+        (partial / next(arg[6:] for arg in argv if arg.startswith("--out="))).write_bytes(b"payload")
+        return SimpleNamespace(returncode=0, poll=lambda: 0)
+
+    monkeypatch.setattr(tool_binaries.subprocess, "Popen", start)
+    tool_binaries.download_with_aria2("aria2c", "https://example.test/file", directory / "file",
+                                      timeout_s=5)
+
+    assert sorted(path.name for path in directory.iterdir()) == ["file"]
+
+
 def _tar_gz(member: str, content: bytes) -> bytes:
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode="w:gz") as bundle:
@@ -366,3 +384,26 @@ def test_shell_puts_the_managed_binary_directory_first_on_path(tmp_path, monkeyp
 
     assert str(tmp_path / "bin") in result
     assert result.split("--- stdout ---")[-1].strip().startswith(str(tmp_path / "bin"))
+
+
+def test_registered_download_policy_reaches_aria2_arguments(tmp_path):
+    from js import settings
+
+    settings.bind_live_settings({"DOWNLOAD_SPLITS_MAX": 2, "DOWNLOAD_RETRIES_MAX": 1})
+    argv = tool_binaries.aria2_argv("aria2c", "https://example.test/file", tmp_path / "partial", timeout_s=30)
+    assert "--split=2" in argv
+    assert "--max-tries=1" in argv
+
+
+def test_installer_accepts_provisioning_and_notice_services(monkeypatch, tmp_path, capsys):
+    provisioned, notices = [], []
+    monkeypatch.setattr(tool_binaries, "release_plan", lambda: ([], []))
+    monkeypatch.setattr(tool_binaries, "is_termux", lambda: False)
+    monkeypatch.setattr(tool_binaries.platform, "system", lambda: "Darwin")
+    def provision(path):
+        provisioned.append(path)
+        return "/assembly/aria2c"
+    tool_binaries.install_all(tools_dir=tmp_path, provision_brew=provision,
+                              say=lambda *args, **kwargs: notices.append(args))
+    assert provisioned == [tmp_path] and notices
+    assert capsys.readouterr().out == ""

@@ -373,7 +373,6 @@ def test_a_read_of_content_starting_with_error_is_a_value(ctx):
     assert "MISSING RAISED" in result
 
 
-
 def model_read(context: ToolContext, call_id: str, file_path: str) -> str:
     """A read the model makes as call ``call_id``."""
     _, result = runtime._dispatch(

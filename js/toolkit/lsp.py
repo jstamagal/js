@@ -33,6 +33,10 @@ from .. import paths
 from .core import Tool, ToolContext
 from .descriptions import load_description
 from .sanitize import int_or_default
+from ..prompt_text import load_catalog
+
+_PROMPTS = load_catalog('toolkit_lsp')
+
 
 OPERATIONS = ("diagnostics", "definition", "references", "hover")
 
@@ -122,25 +126,26 @@ def workspace_root(path: Path, spec: ServerSpec, context: ToolContext) -> Path:
     """The directory the server treats as its workspace: the nearest ancestor
     holding one of the spec's root markers, else the nearest holding `.git`,
     else the working directory when it holds the file, else the file's
-    directory. The operator's home, its ancestors and `/` are never a root,
+    directory. LSP_ALLOW_HOME_ROOT controls whether the operator's home,
+    its ancestors and `/` can be roots,
     and under `js -C` neither is a directory outside the jail."""
     jail = _jail.active()
     home = paths.user_home().resolve()
-    never = {Path("/"), home}
+    never = set() if context.lsp_allow_home_root else {Path("/"), home}
     for markers in (spec.roots, (".git",)):
         if not markers:
             continue
         for directory in path.parents:
             if jail is not None and not jail.bound(directory, context.jail_bind):
                 break
-            if directory == home:
+            if not context.lsp_allow_home_root and directory == home:
                 break
             if directory in never:
                 continue
             if any((directory / marker).exists() for marker in markers):
                 return directory
     cwd = Path(context.cwd).resolve()
-    if cwd in path.parents and cwd not in never and cwd not in home.parents:
+    if cwd in path.parents and cwd not in never and (context.lsp_allow_home_root or cwd not in home.parents):
         return cwd
     return path.parent
 
@@ -196,6 +201,7 @@ class LanguageServer:
     spec: ServerSpec
     root: Path
     process: subprocess.Popen
+    configuration: Any = field(default=None, repr=False)
     documents: dict[str, _Document] = field(default_factory=dict)
     capabilities: dict = field(default_factory=dict)
     stderr_tail: deque = field(default_factory=lambda: deque(maxlen=_STDERR_LINES))
@@ -317,12 +323,12 @@ class LanguageServer:
                     self._cond.notify_all()
 
     def _answer(self, request_id: Any, method: str, params: Any) -> None:
-        """Reply to a request the server sent. js offers no settings, so a
-        configuration request gets null for every item."""
+        """Reply to a server request with the caller's configuration, null by default."""
         result: Any = None
         if method == "workspace/configuration":
             items = params.get("items") if isinstance(params, dict) else None
-            result = [None] * (len(items) if isinstance(items, list) else 0)
+            result = [self.configuration(item) if self.configuration is not None else None
+                      for item in (items if isinstance(items, list) else [])]
         elif method == "workspace/workspaceFolders":
             result = [{"uri": file_uri(self.root), "name": self.root.name}]
         elif method not in {"client/registerCapability", "client/unregisterCapability",
@@ -564,7 +570,7 @@ def shutdown_servers() -> None:
 def _server_env(context: ToolContext) -> dict[str, str]:
     """The environment a server starts with: js's own, or under `js -C` only
     the names `SHELL_ENV_KEEP` lists."""
-    if _jail.active() is None:
+    if _jail.active() is None and context.lsp_environment_inherit:
         return dict(os.environ)
     allow = tuple(getattr(context, "shell_env_allow", ()) or ())
     return {key: os.environ[key] for key in allow if key in os.environ}
@@ -575,9 +581,12 @@ def server_for(spec: ServerSpec, executable: str, root: Path, context: ToolConte
     """The running server for ``spec`` at ``root``, started and initialized
     when there is none. Raises LspError when it cannot start."""
     jail = _jail.active()
-    key = (spec, str(root), None if jail is None else str(jail.root),
+    env = _server_env(context)
+    configuration = getattr(context, "lsp_configuration", None)
+    key = (spec, executable, str(root), tuple(sorted(env.items())),
+           None if jail is None else str(jail.root),
            tuple(context.jail_bind) if jail is not None else (),
-           tuple(context.jail_hide) if jail is not None else ())
+           tuple(context.jail_hide) if jail is not None else (), id(configuration))
     with _SERVERS_LOCK:
         server = _SERVERS.get(key)
         if server is not None and server.alive:
@@ -585,7 +594,6 @@ def server_for(spec: ServerSpec, executable: str, root: Path, context: ToolConte
         if server is not None:
             del _SERVERS[key]
             server.shutdown()
-        env = _server_env(context)
         # In the jail the command's directory is bound back, and so is every
         # symlink on the way to the file it resolves to.
         command = Path(executable)
@@ -598,13 +606,14 @@ def server_for(spec: ServerSpec, executable: str, root: Path, context: ToolConte
             )
         except OSError as exc:
             raise LspError(f"could not start {executable}: {exc}") from exc
-        server = LanguageServer(spec=spec, root=root, process=process)
+        server = LanguageServer(spec=spec, root=root, process=process,
+                                configuration=configuration)
         server.start_threads()
         try:
             server.initialize(timeout)
         except LspError as exc:
             server.shutdown()
-            hint = " Under -C it runs in the jail; JAIL_BIND adds paths it needs." if jail is not None else ""
+            hint = _PROMPTS['server_for_under_c_it_runs_in_the'] if jail is not None else ""
             raise LspError(f"did not start: {exc}.{hint}") from exc
         _SERVERS[key] = server
         return server
@@ -775,8 +784,7 @@ def lsp(
             if items is None:
                 items = server.wait_diagnostics(uri, version, before, timeout)
             if items is None:
-                return (f"{display}: {spec.name} published no diagnostics within {timeout:g}s "
-                        "(LSP_TIMEOUT); it may still be loading the workspace. Call again.")
+                return (_PROMPTS['lsp_published_no_diagnostics_within_s_lsp'].format(display=display, spec_name=spec.name, timeout=timeout))
             return _format_diagnostics(items, lines, display, spec.name)
         position = _position(lines, line, character, symbol)
         if isinstance(position, str):

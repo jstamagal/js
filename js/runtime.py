@@ -5,9 +5,9 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 import asyncio
 import base64
-import contextlib
 import functools
 import inspect
 import json
@@ -15,7 +15,7 @@ import math
 import hashlib
 import itertools
 import os
-import sys
+import sys  # noqa: F401 - tests patch sys.stdout through runtime.sys
 import threading
 from pathlib import Path
 import time
@@ -28,10 +28,9 @@ from . import login_defaults, model_client, memory
 import ai
 
 from . import context_budget
-from . import display
-from . import fset
 from . import jail as _jail
 from . import messages as msgs
+from . import output
 from .text_bytes import byte_size, byte_prefix, cap_text, well_formed
 from . import model_metadata
 from . import paths
@@ -49,14 +48,20 @@ from .config import Config, vision_enabled_for_model
 from .sampling import Sampling
 from .reasoning_display import ReasoningDisplay
 from . import reasoning as reasoning_rules
-from .toolkit.core import (ToolContext, ToolOutput, ToolResult, as_output, call_is_read_only, call_scope,
+from .toolkit.core import (ToolContext, ToolOutput, ToolResult, as_output, call_is_read_only, call_scope, call_view,
                            call_tool, call_tool_async, registry_scope)
 from .toolkit.registry import ToolRegistry
 from .turn_budget import TurnBudget, TurnConvo, last_user_message_index as _last_user_message_index
 from .turn_surface import SurfaceJournal
 from .turn_stream import StreamSink, TurnEvents
+# The console's printers, reached through runtime by tests of what they print.
+from .console import _print_run_line, _print_trace  # noqa: F401
 from .turn_call import (CallLimits, ModelCaller, ModelReply, ModelRequest, cut_off_by_cap,
                         dangling_arguments)
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('runtime')
+
 
 
 _UNSET = object()
@@ -173,7 +178,9 @@ def _pending_with_name(pc: _PendingToolCall, name: str) -> _PendingToolCall:
     )
 
 
-_CONTEXT_WINDOW_OVERRIDES: dict[str, int] = {}
+_CONTEXT_WINDOW_OVERRIDES: ContextVar[dict[str, int] | None] = ContextVar(
+    "context_window_overrides", default=None,
+)
 
 
 def set_context_window_overrides(raw: Any) -> None:
@@ -185,8 +192,9 @@ def set_context_window_overrides(raw: Any) -> None:
     there is no upstream truth to fetch, only a local fact the operator knows.
     Keys are matched most specific first: "provider/model", then "model".
     """
-    _CONTEXT_WINDOW_OVERRIDES.clear()
+    overrides: dict[str, int] = {}
     if not isinstance(raw, dict):
+        _CONTEXT_WINDOW_OVERRIDES.set(overrides)
         return
 
     def walk(node: Any, prefix: str) -> None:
@@ -205,9 +213,10 @@ def set_context_window_overrides(raw: Any) -> None:
             except (TypeError, ValueError):
                 continue
             if window > 0:
-                _CONTEXT_WINDOW_OVERRIDES[path.lower()] = window
+                overrides[path.lower()] = window
 
     walk(raw, "")
+    _CONTEXT_WINDOW_OVERRIDES.set(overrides)
 
 
 def install_context_window_overrides(cfg: Config) -> None:
@@ -226,7 +235,8 @@ def install_context_window_overrides(cfg: Config) -> None:
 
 
 def _context_window_override(model: str, provider_id: str | None) -> int | None:
-    if not _CONTEXT_WINDOW_OVERRIDES:
+    overrides = _CONTEXT_WINDOW_OVERRIDES.get()
+    if not overrides:
         return None
     name = (model or "").strip().lower()
     keys = []
@@ -234,7 +244,7 @@ def _context_window_override(model: str, provider_id: str | None) -> int | None:
         keys.append(f"{provider_id.strip().lower()}/{name}")
     keys.append(name)
     for key in keys:
-        hit = _CONTEXT_WINDOW_OVERRIDES.get(key)
+        hit = overrides.get(key)
         if hit is not None:
             return hit
     return None
@@ -278,8 +288,7 @@ def _resolve_context_window(
 
 # Sent as a user message after a reply cut off by its output-token cap.
 MAX_OUTPUT_RESUME_NUDGE = (
-    "Output token limit hit. Resume directly, no apology, no recap of what you were doing. "
-    "Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces."
+    _PROMPTS['default_output_token_limit_hit_resume_directly']
 )
 
 
@@ -287,25 +296,27 @@ MAX_OUTPUT_RESUME_NUDGE = (
 # Telemetry
 # --------------------------------------------------------------------------
 
-# Serializes trace and telemetry writes from the threads of one dispatch batch.
-_OUTPUT_LOCK = threading.RLock()
-
-
 @dataclass
 class Telemetry:
     debug_log: object  # Path | None — typed loosely to avoid import cycles
     trace_sink: object = None  # a .write()-able sink for the full request trace, or None
     transcript_log: object = None  # visible transcript sink; never raises
+    # Where the turn's output events go (`output.Sink`); None means js's own:
+    # the transcript record, then the console, which the three factories
+    # below steer.
+    sink: Any = None
+    # Builds the reasoning display for a screen that owns the terminal; None
+    # means reasoning is written to sys.stderr.
     reasoning_factory: Callable[[int], ReasoningDisplay] | None = None
     # Builds the answer Display for a screen that owns the terminal; None means
     # a Display over sys.stdout.
-    display_factory: Callable[[bool], display.Display] | None = None
+    display_factory: Callable[[bool], Any] | None = None
     # Builds the holder of one tool exchange on a screen that can redraw what
     # it has shown: `open(text)` when the call starts, `close(text)` when it
     # ends. None means the exchange is written to sys.stdout as it happens.
     exchange_factory: Callable[[], Any] | None = None
-    # The turn's `ToolTrace`, made on its first traced call.
-    tool_trace: Any = None
+    # js's own sink for this telemetry, made on its first event (`output.sink_of`).
+    own_sink: Any = field(default=None, init=False, repr=False)
 
     def settle_tools(self) -> None:
         settle_tool_trace(self)
@@ -313,12 +324,12 @@ class Telemetry:
     def event(self, kind: str, **fields: Any) -> None:
         rec = {"ts": time.time(), "kind": kind, **fields}
         line = json.dumps(rec, default=str) + "\n"
-        with _OUTPUT_LOCK:
+        with output.LOCK:
             if self.trace_sink is not None:
                 try:
                     self.trace_sink.write("FLIGHT " + line)
                 except OSError as exc:
-                    msgs.warn(msgs.FLIGHT_LOG_FAILED, error=exc)
+                    _notice(self, msgs.FLIGHT_LOG_FAILED, stderr=True, flush=True, error=exc)
             if not self.debug_log:
                 return
             try:
@@ -381,7 +392,7 @@ def _normalize_tool_call_batch(
             arguments = _repair_jsonish(call.arguments())
         except ValueError as exc:
             arguments = {}
-            validation_error = f"could not parse arguments: {exc}"
+            validation_error = _PROMPTS['normalize_tool_call_batch_could_not_parse_arguments'].format(exc=exc)
         else:
             # Before validation, not after: a container or number the model
             # serialized as a string is the right value in the wrong type, and
@@ -403,7 +414,7 @@ def _normalize_tool_call_batch(
         if tool is None:
             validation_error = registry.unavailable_error(canonical_name)
             if scheduled_loads & {f"native:{canonical_name}", f"mcp:{canonical_name}"}:
-                validation_error += " A load in this same response cannot authorize a sibling call."
+                validation_error += _PROMPTS['normalize_tool_call_batch_a_load_in_this_same_response']
         if validation_error is None:
             validation_error = tool_args.schema_error(arguments, schema)
         refused = False
@@ -458,7 +469,10 @@ def _assistant_message_with_tool_calls(
     def _place_suffix() -> None:
         nonlocal suffix
         if suffix:
-            parts.append(ai.types.messages.TextPart(text=suffix))
+            if parts and isinstance(parts[-1], ai.types.messages.TextPart):
+                parts[-1] = parts[-1].model_copy(update={"text": parts[-1].text + suffix})
+            else:
+                parts.append(ai.types.messages.TextPart(text=suffix))
             suffix = ""
 
     for part in message.parts:
@@ -492,12 +506,11 @@ def _incomplete_has_dangling_tool_args(pending_calls: list[_PendingToolCall]) ->
 
 
 def _truncated_tool_call_notice(reason: str, pending_calls: list[_PendingToolCall]) -> str:
-    names = sorted({pc.name or "unknown" for pc in pending_calls})
+    names = sorted({pc.name or _PROMPTS['truncated_tool_call_notice_unknown'] for pc in pending_calls})
     joined = ", ".join(names)
-    suffix = f" for {joined}" if joined else ""
+    suffix = _PROMPTS['truncated_tool_call_notice_for'].format(joined=joined) if joined else ""
     return (
-        f"Response incomplete ({reason}); dropped truncated tool call arguments{suffix}. "
-        "Retry the request or ask for the change in smaller chunks."
+        _PROMPTS['truncated_tool_call_notice_response_incomplete_dropped_truncated_tool_call'].format(reason=reason, suffix=suffix)
     )
 
 
@@ -512,7 +525,7 @@ def _history_tool_result_message(pc: _PendingToolCall, result: Any) -> list[dict
     if not result.startswith(_IMAGE_RESULT_PREFIX):
         return [{"role": "tool", "tool_call_id": pc.id, "name": pc.name, "content": result}]
     parts = result.split("\t", 3)
-    stub = parts[3] if len(parts) == 4 else "VISUAL_FILE (image omitted from history)"
+    stub = parts[3] if len(parts) == 4 else _PROMPTS['history_tool_result_message_visual_file_image_omitted_from_history']
     return [{"role": "tool", "tool_call_id": pc.id, "name": pc.name, "content": stub}]
 
 
@@ -520,276 +533,52 @@ def _history_tool_result_message(pc: _PendingToolCall, result: Any) -> list[dict
 # Tool trace
 # --------------------------------------------------------------------------
 
-def _tool_settings(tool_context: ToolContext | None) -> Any:
-    """Live settings for the display dials; `/fset TOOLS_DISPLAY 3` reaches the next exchange."""
-    context = tool_context or T.STOCK_CONTEXT
-    return getattr(getattr(context, "config", None), "settings", None)
+def _output(telemetry: Telemetry, name: str, /, **fields: Any) -> None:
+    """Emit output event ``name`` to the telemetry's sink."""
+    output.sink_of(telemetry).emit(output.event(name, **fields))
 
 
-def _write_transcript(telemetry: Telemetry, text: str) -> None:
-    write_plain = getattr(getattr(telemetry, "transcript_log", None), "write_plain", None)
-    if callable(write_plain):
-        write_plain(display.for_transcript(text))
-
-
-def _print_trace(telemetry: Telemetry, text: str) -> None:
-    """Write `text` to stdout with the transcript tee muted. Caller holds `_OUTPUT_LOCK`."""
-    if not text:
-        return
-    sink = getattr(telemetry, "transcript_log", None)
-    mute = getattr(sink, "mute_tee", None)
-    with mute() if callable(mute) else contextlib.nullcontext():
-        sys.stdout.write(msgs.for_stream(text))
-        sys.stdout.flush()
-
-
-# Seconds between redraws of a running command's output, and how long a
-# command runs before its output is shown at all.
-_LIVE_TICK_S = 0.5
-_LIVE_AFTER_S = 1.0
-
-
-def _elapsed_text(seconds: float) -> str:
-    whole = int(seconds)
-    return f"{whole}s" if whole < 60 else f"{whole // 60}m {whole % 60:02d}s"
-
-
-@dataclass
-class _Fold:
-    """The quiet calls of one tool in the current run, shown as one row."""
-
-    name: str
-    # Each call as (key, args); the key is the call's own object, so two calls
-    # with equal arguments stay apart.
-    calls: list[tuple[object, dict | None]] = field(default_factory=list)
-    # id(key) -> the whole form of a call that returned, rendered once when it returned.
-    wholes: dict[int, str] = field(default_factory=dict)
-    running: int = 0
-    exchange: Any = None
-
-    def drop(self, key: object) -> None:
-        """Forget the call ``key``."""
-        self.calls = [call for call in self.calls if call[0] is not key]
-        self.wholes.pop(id(key), None)
-
-
-@dataclass
-class _OpenCall:
-    """A call `_trace_call` has shown and `_trace_result` will finish."""
-
-    name: str
-    args: dict | None
-    malformed: bool = False
-    fold: _Fold | None = None
-    exchange: Any = None
-    done: threading.Event = field(default_factory=threading.Event)
-
-
-class ToolTrace:
-    """What one turn shows of its tool calls.
-
-    At TOOLS_DISPLAY 1 the quiet calls between two things that are not quiet are
-    a run: each tool's calls in it share one row. On a screen that can redraw
-    (`Telemetry.exchange_factory`) a row is drawn when its first call starts
-    and redrawn as calls join it; on plain stdout the run is written when it
-    ends. Every finished call is written to the transcript on its own."""
-
-    def __init__(self, telemetry: Telemetry) -> None:
-        self._telemetry = telemetry
-        self._folds: dict[str, _Fold] = {}
-        self._held: list[str] = []  # failed quiet calls of a run not yet written
-
-    def _factory(self) -> Callable[[], Any] | None:
-        return getattr(self._telemetry, "exchange_factory", None)
-
-    def _fold_text(self, fold: _Fold, settings: Any) -> str:
-        if not fold.calls:
-            return ""
-        return display.render_fold(fold.name, [args for _key, args in fold.calls], running=fold.running,
-                                   settings=settings)
-
-    def _draw(self, fold: _Fold, settings: Any) -> None:
-        factory = self._factory()
-        if factory is None:
-            return
-        text = self._fold_text(fold, settings)
-        if fold.exchange is None:
-            fold.exchange = factory()
-            fold.exchange.open(text)
-            if (whole := self._fold_whole(fold)) is not None:
-                # A call that reaches the trace with its result unfolds at once too.
-                fold.exchange.update(text, whole)
-        else:
-            # The calls that have returned unfold at once, before the run ends.
-            fold.exchange.update(text, self._fold_whole(fold))
-
-    def _fold_whole(self, fold: _Fold) -> str | None:
-        """Every call of a fold row whole, as TOOLS_DISPLAY 3 draws it; None
-        for a row left with no call that returned."""
-        if not any(id(key) in fold.wholes for key, _args in fold.calls):
-            return None
-        return "".join(fold.wholes[id(key)] for key, _args in fold.calls if id(key) in fold.wholes)
-
-    def settle(self, settings: Any = None) -> None:
-        """End the run: the next quiet call starts a new row. Caller holds `_OUTPUT_LOCK`."""
-        folds, held = self._folds, self._held
-        self._folds, self._held = {}, []
-        if self._factory() is not None:
-            for fold in folds.values():
-                if fold.exchange is not None and not fold.running:
-                    fold.exchange.close(self._fold_text(fold, settings), self._fold_whole(fold))
-            return
-        _print_trace(self._telemetry, "".join(
-            [self._fold_text(fold, settings) for fold in folds.values()] + held))
-
-    def call(self, tool_context: ToolContext | None, name: str, args: dict | None,
-             malformed: bool) -> _OpenCall | None:
-        settings = _tool_settings(tool_context)
-        level = display.tools_level(settings)
-        if level <= 0:
-            return None
-        opened = _OpenCall(name, args, malformed)
-        with _OUTPUT_LOCK:
-            # Quiet calls fold only on the screen, where the reasoning_toggle key unfolds them.
-            if (level == 1 and not malformed and self._factory() is not None
-                    and display.call_kind(name, args, settings) == "quiet"):
-                fold = self._folds.get(name)
-                if fold is None:
-                    fold = self._folds[name] = _Fold(name)
-                fold.calls.append((opened, args))
-                fold.running += 1
-                opened.fold = fold
-                self._draw(fold, settings)
-                return opened
-            self.settle(settings)
-            factory = self._factory()
-            if factory is not None:
-                opened.exchange = factory()
-                opened.exchange.open(display.render_exchange(
-                    name, args, None, level=level, preview=display.preview_lines(settings),
-                    malformed=malformed, settings=settings))
-        if opened.exchange is not None and name == "shell":
-            threading.Thread(target=self._follow, args=(opened, tool_context, level),
-                             name="js-live-output", daemon=True).start()
-        return opened
-
-    def _follow(self, opened: _OpenCall, tool_context: ToolContext | None, level: int) -> None:
-        """Redraw a running command with the tail of its output until it ends."""
-        from .toolkit import process_net
-
-        command = (opened.args or {}).get("command")
-        if opened.done.wait(_LIVE_AFTER_S):
-            return
-        while not opened.done.wait(_LIVE_TICK_S):
-            tail = process_net.live_tail(tool_context, command, display.LIVE_LINES)
-            if tail is None:
-                continue
-            lines, seconds = tail
-            settings = _tool_settings(tool_context)
-            with _OUTPUT_LOCK:
-                if opened.done.is_set():
-                    return
-                opened.exchange.update(display.render_exchange(
-                    opened.name, opened.args, None, level=level,
-                    preview=display.preview_lines(settings), settings=settings,
-                    live=lines, elapsed=_elapsed_text(seconds)))
-
-    def result(self, tool_context: ToolContext | None, name: str, result: Any, *,
-               args: dict | None, malformed: bool, opened: _OpenCall | None) -> None:
-        settings = _tool_settings(tool_context)
-        level = display.tools_level(settings)
-        if level <= 0:
-            return
-        finished = display.render_exchange(
-            name, args, result, level=level, preview=display.preview_lines(settings),
-            malformed=malformed, settings=settings)
-        # A folded row's or a preview's whole form, for the reasoning_toggle key to unfold.
-        whole = (display.render_exchange(name, args, result, level=3, malformed=malformed, settings=settings)
-                 if level < 3 else None)
-        if whole == finished:
-            whole = None  # shown whole already: nothing to unfold
-        with _OUTPUT_LOCK:
-            if opened is not None:
-                opened.done.set()
-            # The transcript is the record: every call whole, at every level.
-            _write_transcript(self._telemetry, whole if whole is not None else finished)
-            fold = opened.fold if opened is not None else None
-            quiet = (level == 1 and not malformed and self._factory() is not None
-                     and display.call_kind(name, args, settings) == "quiet")
-            failed = display.tool_output(name, result).failed
-            if fold is None and quiet and not failed:
-                fold = self._folds.get(name)
-                if fold is None:
-                    fold = self._folds[name] = _Fold(name)
-                key = opened if opened is not None else object()
-                fold.calls.append((key, args))
-                fold.wholes[id(key)] = whole if whole is not None else finished
-                self._draw(fold, settings)
-                return
-            if fold is not None:
-                fold.running -= 1
-                if failed:
-                    fold.drop(opened)
-                else:
-                    fold.wholes[id(opened)] = whole if whole is not None else finished
-                self._draw(fold, settings)
-                if self._folds.get(fold.name) is not fold and not fold.running and fold.exchange is not None:
-                    # Its run ended while this call ran: the row closes now.
-                    fold.exchange.close(self._fold_text(fold, settings), self._fold_whole(fold))
-                if not failed:
-                    return
-            if fold is not None or (quiet and failed):
-                # A failed quiet call stands on its own row, inside the run.
-                tight = display.render_exchange(
-                    name, args, result, level=level, preview=display.preview_lines(settings),
-                    malformed=malformed, settings=settings)
-                factory = self._factory()
-                if factory is None:
-                    self._held.append(tight)
-                else:
-                    row = factory()
-                    row.open(tight)
-                    row.close(tight, whole)
-                return
-            if opened is not None and opened.exchange is not None:
-                opened.exchange.close(finished, whole)
-                return
-            self.settle(settings)
-            # Plain stdout has no key to unfold a row: every call is shown whole.
-            _print_trace(self._telemetry, whole if whole is not None else finished)
-
-
-def _tool_trace(telemetry: Telemetry) -> ToolTrace:
-    trace = getattr(telemetry, "tool_trace", None)
-    if trace is None:
-        trace = ToolTrace(telemetry)
-        with contextlib.suppress(AttributeError):
-            telemetry.tool_trace = trace
-    return trace
+def _notice(telemetry: Telemetry, message: msgs.Message, *, stderr: bool = False, flush: bool = False,
+            **fields: Any) -> None:
+    """``message`` as a notice event: a line for stdout, or for stderr."""
+    _output(telemetry, "notice", message=message, fields=fields, stderr=stderr, flush=flush)
 
 
 def settle_tool_trace(telemetry: Telemetry) -> None:
     """End the run of quiet tool calls: called before anything else is shown
     and when the turn ends."""
-    trace = getattr(telemetry, "tool_trace", None)
-    if trace is not None:
-        with _OUTPUT_LOCK:
-            trace.settle()
+    with output.LOCK:
+        _output(telemetry, "tools_settle")
 
 
 def _trace_call(telemetry: Telemetry, tool_context: ToolContext | None, name: str,
-                args: dict | None, *, malformed: bool = False) -> Any:
+                args: dict | None, *, malformed: bool = False, traced: bool = True,
+                deferred: bool = False) -> output.Key:
     """Show a call that is starting; returns what `_trace_result` finishes."""
-    return _tool_trace(telemetry).call(tool_context, name, args, malformed)
+    call = output.Key()
+    with output.LOCK:
+        _output(telemetry, "tool_call", call=call, name=name, args=args, malformed=malformed,
+                context=tool_context, traced=traced, deferred=deferred)
+    return call
 
 
 def _trace_result(telemetry: Telemetry, tool_context: ToolContext | None, name: str, result: Any,
                   *, args: dict | None = None, malformed: bool = False,
-                  exchange: Any = None) -> None:
+                  exchange: output.Key | None = None, view: dict | None = None,
+                  traced: bool = True) -> None:
     """Show a finished call. `exchange` is what `_trace_call` returned for it;
-    without one the call is shown whole now."""
-    _tool_trace(telemetry).result(tool_context, name, result, args=args, malformed=malformed,
-                                  opened=exchange)
+    without one the call is shown whole now. `view` is what the tool handed
+    the screen beside its result (`toolkit.core.view`)."""
+    from .toolkit.presentation import tool_output
+
+    screen = tool_output(name, result) if traced else None
+    with output.LOCK:
+        if exchange is None:
+            exchange = _trace_call(telemetry, tool_context, name, args, malformed=malformed,
+                                   traced=traced, deferred=True)
+        _output(telemetry, "tool_result", call=exchange, name=name, args=args, result=result,
+                malformed=malformed, context=tool_context, view=view, screen=screen,
+                traced=traced)
 
 
 def _repair_jsonish(raw: str) -> dict:
@@ -839,13 +628,17 @@ def _sanitize_assistant_message(msg: ai.messages.Message) -> ai.messages.Message
 
 @dataclass
 class ToolErrorTracker:
-    limit: int = 3
+    limit: int = field(default_factory=lambda: _settings.default_value("TOOL_ERRORS_MAX"))
     errors: dict[str, int] = field(default_factory=dict)
     # Under the non-blocking supervisor a turn's leaf tools dispatch in an
     # executor thread while its fan-out calls run as coroutines on the loop; both
     # record into this tracker, so guard the counter against that cross-thread
     # interleave.
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+
+    @classmethod
+    def from_settings(cls, settings: dict | None) -> ToolErrorTracker:
+        return cls(limit=int(_settings.knob(settings, "TOOL_ERRORS_MAX")))
 
     def record(self, tool_name: str, result: str) -> str:
         if isinstance(result, _jail.Refusal):
@@ -857,7 +650,7 @@ class ToolErrorTracker:
             count = self.errors.get(tool_name, 0) + 1
             self.errors[tool_name] = count
             attempts_left = max(self.limit - count, 0)
-            return f"{result}\n<retry>attempts_left={attempts_left}, allowed_max_attempts={self.limit}</retry>"
+            return _PROMPTS['record_retry_attempts_left_allowed_max_attempts'].format(result=result, attempts_left=attempts_left, self_limit=self.limit)
 
     def limit_reached(self) -> bool:
         with self._lock:
@@ -956,14 +749,14 @@ def _without_notice_marks(result: ToolResult) -> ToolResult:
 
 def _media_notice(kind: str, mime: str, reason: str) -> str:
     """js's one notice for a media block it did not send."""
-    notice = f"[{_clip_name(str(kind))} {_clip_name(str(mime))} dropped: {reason}]"
+    notice = _PROMPTS['media_notice_dropped'].format(clip_name_str_kind=_clip_name(str(kind)), clip_name_str_mime=_clip_name(str(mime)), reason=reason)
     return cap_text(notice, _MEDIA_NOTICE_MAX, "]")
 
 
 def _media_names(block: dict) -> tuple[str, str]:
     resource = block.get("resource") if block.get("type") == "resource" else None
     if isinstance(resource, dict):
-        return (f"embedded resource {resource.get('uri', '')}",
+        return (_PROMPTS['media_names_embedded_resource'].format(resource_get_uri=resource.get('uri', '')),
                 str(resource.get("mimeType", "application/octet-stream")))
     return str(block.get("type")), str(block.get("mimeType", "application/octet-stream"))
 
@@ -1015,7 +808,7 @@ def _dehydrate_capped_result(result: ToolResult, budget: int, marker: str) -> To
     else:
         # Some media will not fit: room for the bare marker that says so is
         # kept free first, and media fill what is left.
-        bare = {"type": "text", "text": "[media dropped]", "media_notice": _MEDIA_NOTICE}
+        bare = {"type": "text", "text": _PROMPTS['dehydrate_capped_result_media_dropped'], "media_notice": _MEDIA_NOTICE}
         for block in media:
             if not _overflow([*kept, block, bare], budget, is_error):
                 kept.append(block)
@@ -1024,10 +817,10 @@ def _dehydrate_capped_result(result: ToolResult, budget: int, marker: str) -> To
     if dropped:
         # A media block with no room still says so: its notice, cut to the
         # room there is, at the least a bare marker.
-        joined = "\n".join(_media_notice(*_media_names(block), f"no room in a {budget}-byte result")
+        joined = "\n".join(_media_notice(*_media_names(block), _PROMPTS['dehydrate_capped_result_no_room_in_a_byte_result'].format(budget=budget))
                            for block in dropped)
         cap = budget - _tool_result_content_size(ToolResult(kept, is_error=is_error)) - (1 if kept else 0)
-        for wording in (joined, "[media dropped]"):
+        for wording in (joined, _PROMPTS['dehydrate_capped_result_media_dropped_2']):
             notice = {"type": "text", "text": cap_text(wording, max(cap, 0), "]"), "media_notice": _MEDIA_NOTICE}
             if notice["text"] and not _overflow([*kept, notice], budget, is_error):
                 kept.append(notice)
@@ -1067,8 +860,7 @@ def _cap_media(result: ToolResult, media_max: int | None) -> ToolResult:
         if size > media_max:
             kind, mime = _media_names(block)
             blocks.append({"type": "text", "media_notice": _MEDIA_NOTICE, "text": _media_notice(
-                kind, mime, f"{size} bytes is over TOOL_MEDIA_MAX ({media_max}); "
-                "capture a smaller region or a lower resolution")})
+                kind, mime, _PROMPTS['cap_media_bytes_is_over_tool_media_max'].format(size=size, media_max=media_max))})
         else:
             blocks.append(block)
     return result if blocks == result.blocks else replace(result, blocks=blocks)
@@ -1102,10 +894,9 @@ def _cap_image_marker(result: str, cap_bytes: int | None, media_max: int | None)
         size = 0
     notice = None
     if media_max is not None and size > media_max:
-        notice = _media_notice("image", mime, f"{size} bytes is over TOOL_MEDIA_MAX ({media_max}); "
-                               "capture a smaller region or a lower resolution")
+        notice = _media_notice("image", mime, _PROMPTS['cap_image_marker_bytes_is_over_tool_media_max'].format(size=size, media_max=media_max))
     elif cap_bytes is not None and byte_size(model_client.provider_text(result)) > cap_bytes:
-        notice = _media_notice("image", mime, f"no room in a {cap_bytes}-byte result")
+        notice = _media_notice("image", mime, _PROMPTS['cap_image_marker_no_room_in_a_byte_result'].format(cap_bytes=cap_bytes))
     if notice is None:
         return result
     return cap_text(notice, cap_bytes, "]") if cap_bytes is not None else notice
@@ -1167,7 +958,7 @@ def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None,
         media_context = context if context is not None else T.STOCK_CONTEXT
         result = _cap_media(result, _limit(int(getattr(media_context, "max_tool_media_bytes", 0) or 0)))
         if cap_bytes > 0 and _tool_result_content_size(result) > cap_bytes:
-            marker = f"\n[truncated: TOOL_RESULT_MAX ({cap_bytes}) reached]"
+            marker = _PROMPTS['cap_result_truncated_tool_result_max_reached'].format(cap_bytes=cap_bytes)
             return _dehydrate_capped_result(result, cap_bytes, marker)
         return result
     if not isinstance(result, str):
@@ -1180,13 +971,12 @@ def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None,
     # strict encode meets it next; it reaches the model as `?`.
     result = well_formed(result)
     if inline_cap is None:
-        # Read from the active context rather than threading a fifth argument
-        # through four dispatch signatures; subagent contexts inherit it.
-        inline_cap = int(getattr(T.STOCK_CONTEXT, "max_tool_result_inline_bytes", 0) or 0)
+        active_context = context if context is not None else T.STOCK_CONTEXT
+        inline_cap = int(getattr(active_context, "max_tool_result_inline_bytes", 0) or 0)
     if inline_cap > 0:
         result = spill_oversized_result(result, inline_cap)
     if cap_bytes > 0:
-        return cap_text(result, cap_bytes, f"\n[truncated: TOOL_RESULT_MAX ({cap_bytes}) reached]")
+        return cap_text(result, cap_bytes, _PROMPTS['cap_result_truncated_tool_result_max_reached_2'].format(cap_bytes=cap_bytes))
     return result
 
 
@@ -1231,12 +1021,11 @@ def spill_oversized_result(
         by_byte = json.dumps({"start_byte": next_byte})
         if multiline:
             by_line = json.dumps({"start_line": next_line})
-            how = f"read it on with range {by_byte}, or by line with range {by_line}"
+            how = _PROMPTS['spill_notice_read_it_on_with_range_or'].format(by_byte=by_byte, by_line=by_line)
         else:
-            how = f"read it on with range {by_byte}; it is one line, so only a byte range splits it"
+            how = _PROMPTS['spill_notice_read_it_on_with_range_it'].format(by_byte=by_byte)
         return (
-            f"[result was {total_bytes} bytes, over {limit_name} ({inline_cap}); "
-            f"the full text is at {path} — {how}]"
+            _PROMPTS['spill_notice_result_was_bytes_over_the_full'].format(total_bytes=total_bytes, limit_name=limit_name, inline_cap=inline_cap, path=path, how=how)
         )
 
     # Inline is a spill threshold, not the hard backstop. Keep a usable pointer
@@ -1316,7 +1105,7 @@ def _cap_batch_results(results: list[Any], cap_bytes: int) -> list[Any]:
     sizes = [_result_size(r) for r in results]
     if sum(sizes) <= cap_bytes:
         return results
-    marker = f"\n[truncated: PARALLEL_RESULTS_MAX ({cap_bytes}) reached]"
+    marker = _PROMPTS['cap_batch_results_truncated_parallel_results_max_reached'].format(cap_bytes=cap_bytes)
     allowance = _fair_share_ceiling(sizes, cap_bytes)
     if allowance < 0:
         return results
@@ -1348,8 +1137,7 @@ def _cell_call_observer(telemetry: Telemetry, trace: bool,
         else:
             telemetry.event("tool_exception", tool=name, via="kernel", error=failure,
                             latency_ms=latency_ms)
-        if trace:
-            _trace_result(telemetry, context, name, result, args=args)
+        _trace_result(telemetry, context, name, result, args=args, traced=trace, view=call_view())
 
     return observe
 
@@ -1371,50 +1159,49 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
     try:
         args = _repair_jsonish(raw_args)
     except ValueError as e:
-        if trace and not trace_together:
-            opened = _trace_call(telemetry, tool_context, name, None, malformed=True)
+        opened = _trace_call(telemetry, tool_context, name, None, malformed=True,
+                             traced=trace, deferred=trace_together)
         telemetry.event("tool_error", tool=name, error=f"argparse: {e}")
-        result = f"ERROR: could not parse arguments for {name}: {e}"
+        result = _PROMPTS['dispatch_error_could_not_parse_arguments_for'].format(name=name, e=e)
         if error_tracker is not None:
             result = error_tracker.record(name, result)
-        if trace:
-            _trace_result(telemetry, tool_context, name, result, malformed=True, exchange=opened)
+        _trace_result(telemetry, tool_context, name, result, malformed=True, exchange=opened, traced=trace)
         return {}, result
 
     active_registry = registry or T.STOCK_REGISTRY
     context = tool_context or T.STOCK_CONTEXT
     tool = active_registry.resolve(name)
     trace_name = tool.name if tool is not None else name
-    if trace and not trace_together:
-        opened = _trace_call(telemetry, context, trace_name, args)
+    opened = _trace_call(telemetry, context, trace_name, args, traced=trace, deferred=trace_together)
     if tool is None:
         telemetry.event("tool_unknown", tool=name, args=args)
         result = active_registry.unavailable_error(name)
         capped = _cap_result(result, cap_bytes, context=context)
-        if trace:
-            _trace_result(telemetry, context, trace_name, capped, args=args, exchange=opened)
+        _trace_result(telemetry, context, trace_name, capped, args=args, exchange=opened, traced=trace)
         return args, capped
 
     started = time.time()
+    view = None
     try:
-        with call_scope(call_id), registry_scope(
+        with output.using_sink(output.sink_of(telemetry)), call_scope(call_id), registry_scope(
                 active_registry, _cell_call_observer(telemetry, trace, context)):
             with activity.tool_call(tool.name):
                 result = call_tool(tool, args, context)
+            view = call_view()
         telemetry.event("tool_ok", tool=tool.name, latency_ms=int((time.time() - started) * 1000))
     except Exception as e:  # noqa: BLE001
         telemetry.event("tool_exception", tool=tool.name,
                         error=f"{type(e).__name__}: {e}",
                         latency_ms=int((time.time() - started) * 1000))
-        result = _jail.shown(f"ERROR running {tool.name}: {type(e).__name__}: {e}")
-    output = as_output(result)
-    result = output.model
+        result = _jail.shown(_PROMPTS['dispatch_error_running'].format(tool_name=tool.name, type_e___name=type(e).__name__, e=e))
+    produced = as_output(result)
+    result = produced.model
     if error_tracker is not None and isinstance(result, str):
         result = error_tracker.record(tool.name, result)
     capped = _cap_result(result, cap_bytes, context=context)
     _reconcile_read_delivery(tool.name, args, result, capped, context, call_id)
-    if trace:
-        _trace_result(telemetry, context, tool.name, _operator_sees(output, result), args=args, exchange=opened)
+    _trace_result(telemetry, context, tool.name, _operator_sees(produced, result), args=args, exchange=opened,
+                  view=view, traced=trace)
     return args, capped
 
 
@@ -1508,14 +1295,13 @@ def _dispatch_tool_calls(
             continue
         args = json.loads(pc.arguments())
         telemetry.event("tool_invalid", tool=pc.name, error=pc.validation_error)
-        result = pc.validation_error if pc.unavailable or pc.refused else f"ERROR: invalid arguments for {pc.name}: {pc.validation_error}"
+        result = pc.validation_error if pc.unavailable or pc.refused else _PROMPTS['dispatch_tool_calls_error_invalid_arguments_for'].format(pc_name=pc.name, pc_validation_error=pc.validation_error)
         recorded = _cap_result(result, cap_bytes, context=tool_context)
         if not pc.unavailable:
             recorded = error_tracker.record(pc.name, recorded)
         # A call rejected before dispatch is still an exchange the model sees.
         # It used to be invisible in the trace from both ends.
-        if trace:
-            _trace_result(telemetry, tool_context, pc.name, recorded, args=args)
+        _trace_result(telemetry, tool_context, pc.name, recorded, args=args, traced=trace)
         records[idx] = (args, recorded)
         if progress is not None:
             progress.record(pc, args, recorded)
@@ -1546,7 +1332,7 @@ def _dispatch_tool_calls(
                     args, result = futures[idx].result()
                 except Exception as exc:  # noqa: BLE001
                     args = {}
-                    result = f"ERROR running task: {type(exc).__name__}: {exc}"
+                    result = _PROMPTS['dispatch_tool_calls_error_running_task'].format(type_exc___name=type(exc).__name__, exc=exc)
                 records[idx] = (args, error_tracker.record("task", result))
                 if progress is not None:
                     progress.record(tool_calls[idx], *records[idx])
@@ -1619,25 +1405,22 @@ async def _dispatch_fan_out_async(
     try:
         args = _repair_jsonish(pc.arguments())
     except ValueError as e:
-        if trace and not trace_together:
-            opened = _trace_call(telemetry, tool_context, pc.name, None, malformed=True)
+        opened = _trace_call(telemetry, tool_context, pc.name, None, malformed=True,
+                             traced=trace, deferred=trace_together)
         telemetry.event("tool_error", tool=pc.name, error=f"argparse: {e}")
-        result = f"ERROR: could not parse arguments for {pc.name}: {e}"
+        result = _PROMPTS['dispatch_fan_out_async_error_could_not_parse_arguments_for'].format(pc_name=pc.name, e=e)
         recorded = error_tracker.record(pc.name, result)
-        if trace:
-            _trace_result(telemetry, tool_context, pc.name, recorded, malformed=True, exchange=opened)
+        _trace_result(telemetry, tool_context, pc.name, recorded, malformed=True, exchange=opened, traced=trace)
         return pc, {}, recorded
 
     tool = registry.resolve(pc.name)
     trace_name = tool.name if tool is not None else pc.name
-    if trace and not trace_together:
-        opened = _trace_call(telemetry, tool_context, trace_name, args)
+    opened = _trace_call(telemetry, tool_context, trace_name, args, traced=trace, deferred=trace_together)
     if tool is None:
         telemetry.event("tool_unknown", tool=pc.name, args=args)
         result = registry.unavailable_error(pc.name)
         recorded = _cap_result(result, cap_bytes, context=tool_context)
-        if trace:
-            _trace_result(telemetry, tool_context, trace_name, recorded, args=args, exchange=opened)
+        _trace_result(telemetry, tool_context, trace_name, recorded, args=args, exchange=opened, traced=trace)
         return pc, args, recorded
 
     started = time.time()
@@ -1648,12 +1431,11 @@ async def _dispatch_fan_out_async(
         telemetry.event("tool_exception", tool=tool.name,
                         error=f"{type(e).__name__}: {e}",
                         latency_ms=int((time.time() - started) * 1000))
-        result = _jail.shown(f"ERROR running {tool.name}: {type(e).__name__}: {e}")
+        result = _jail.shown(_PROMPTS['dispatch_fan_out_async_error_running'].format(tool_name=tool.name, type_e___name=type(e).__name__, e=e))
     output = as_output(result)
     recorded = error_tracker.record(tool.name, _cap_result(output.model, cap_bytes, context=tool_context))
-    if trace:
-        _trace_result(telemetry, tool_context, tool.name, _operator_sees(output, output.model), args=args,
-                      exchange=opened)
+    _trace_result(telemetry, tool_context, tool.name, _operator_sees(output, output.model), args=args,
+                  exchange=opened, traced=trace)
     return pc, args, recorded
 
 
@@ -1665,39 +1447,37 @@ async def _dispatch_async_tool(
     try:
         args = _repair_jsonish(pc.arguments())
     except ValueError as exc:
-        result = error_tracker.record(pc.name, f"ERROR: could not parse arguments for {pc.name}: {exc}")
-        if trace:
-            _trace_result(telemetry, tool_context, pc.name, result, malformed=True)
+        result = error_tracker.record(pc.name, _PROMPTS['dispatch_async_tool_error_could_not_parse_arguments_for'].format(pc_name=pc.name, exc=exc))
+        _trace_result(telemetry, tool_context, pc.name, result, malformed=True, traced=trace)
         return pc, {}, result
     tool = registry.resolve(pc.name)
     if tool is None:
         result = registry.unavailable_error(pc.name)
-        if trace:
-            _trace_result(telemetry, tool_context, pc.name, result, args=args)
+        _trace_result(telemetry, tool_context, pc.name, result, args=args, traced=trace)
         return pc, args, result
-    if trace:
-        opened = _trace_call(telemetry, tool_context, tool.name, args)
+    opened = _trace_call(telemetry, tool_context, tool.name, args, traced=trace)
     started = time.time()
+    view = None
     try:
         with call_scope(pc.id), registry_scope(
                 registry, _cell_call_observer(telemetry, trace, tool_context)):
             with activity.tool_call(tool.name):
                 result = await call_tool_async(tool, args, tool_context)
+            view = call_view()
         telemetry.event("tool_ok", tool=tool.name, latency_ms=int((time.time() - started) * 1000))
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001
         telemetry.event("tool_exception", tool=tool.name, error=f"{type(exc).__name__}: {exc}")
-        result = _jail.shown(f"ERROR running {tool.name}: {type(exc).__name__}: {exc}")
+        result = _jail.shown(_PROMPTS['dispatch_async_tool_error_running'].format(tool_name=tool.name, type_exc___name=type(exc).__name__, exc=exc))
     output = as_output(result)
     raw_result = output.model
     result = _cap_result(raw_result, cap_bytes, context=tool_context)
     _reconcile_read_delivery(tool.name, args, raw_result, result, tool_context, pc.id)
     if isinstance(result, str):
         result = error_tracker.record(tool.name, result)
-    if trace:
-        _trace_result(telemetry, tool_context, tool.name, _operator_sees(output, raw_result), args=args,
-                      exchange=opened)
+    _trace_result(telemetry, tool_context, tool.name, _operator_sees(output, raw_result), args=args,
+                  exchange=opened, view=view, traced=trace)
     return pc, args, result
 
 
@@ -1714,6 +1494,8 @@ def _interrupt_inflight(tool_context: ToolContext) -> None:
     from .toolkit import kernel as kernel_tool
     from .toolkit import process_net
 
+    if tool_context.tool_approval is not None:
+        tool_context.tool_approval.cancel()
     kernel_tool.interrupt_inflight(tool_context)
     process_net.interrupt_inflight(tool_context)
 
@@ -1735,18 +1517,16 @@ async def _dispatch_batch(
     an ancestor's worker. Mixed async batches retain model order; pure fan-out
     batches run concurrently with their sync leaves, as before.
     """
-    from . import supervisor
     from .toolkit import meta
 
     progress = progress if progress is not None else _DispatchProgress()
-    current_supervisor = supervisor.get_current()
     fan_out = set()
     async_leaves = set()
     for i, pc in enumerate(tool_calls):
         tool = registry.resolve(pc.name)
         if tool is None or pc.validation_error is not None:
             continue
-        if current_supervisor is not None and meta.is_fan_out_handler(tool.handler):
+        if meta.is_fan_out_handler(tool.handler):
             fan_out.add(i)
         elif inspect.iscoroutinefunction(tool.handler):
             async_leaves.add(i)
@@ -1850,6 +1630,7 @@ def _turn_request(cfg: Config, *, model_override: str | None, provider_id_overri
         extra=routing.provider_extra_params(cfg),
         sampling=sampling,
         cache_key=_cache_key(cfg),
+        settings=getattr(cfg, "settings", None),
     )
 
 
@@ -1886,7 +1667,9 @@ def _cache_key(cfg: Config) -> str | None:
 
 
 def _prepare_turn_context(context: ToolContext, cfg: Config, request: ModelRequest,
-                          registry: ToolRegistry, event_hooks: Any) -> context_budget.TokenState:
+                          registry: ToolRegistry, event_hooks: Any,
+                          approve: event_mod.Approve | event_mod.Approval | None = None,
+                          *, state_dir: Path | None = None) -> context_budget.TokenState:
     """Set ``context`` up for this turn and return its token state, which
     persists across the turns of one context."""
     # Delegation inherits this turn's effective settings, not a fresh env load
@@ -1899,7 +1682,7 @@ def _prepare_turn_context(context: ToolContext, cfg: Config, request: ModelReque
     )
     context.tool_registry = registry
     context.agent_id = cfg.agent_id
-    context.configure_snapshot_store(cfg.agent_id, cfg.session_file)
+    context.configure_snapshot_store(cfg.agent_id, cfg.session_file, state_dir=state_dir)
     _turn_settings.install(context, cfg)
     install_context_window_overrides(cfg)
     context.model = request.model
@@ -1918,15 +1701,21 @@ def _prepare_turn_context(context: ToolContext, cfg: Config, request: ModelReque
         token_state.chars_per_token = chars_per_token
     context.context_budget_state = token_state
     context.vision_enabled = context.config.vision_enabled
-    if event_hooks is not None:
-        # Subagents started through this context answer to its tool_call guards.
-        context.tool_call_hooks = event_hooks
+    # Subagents started through this context answer to this turn's tool_call guards.
+    context.tool_call_hooks = event_hooks
+    # Each turn owns its cancellation scope; child decisions also pass through
+    # the parent's approval on the parent's loop.
+    if isinstance(approve, event_mod.Approval):
+        context.tool_approval = event_mod.Approval(approve.refusal, approve.loop)
+    else:
+        context.tool_approval = (None if approve is None
+                                 else event_mod.Approval(approve, asyncio.get_running_loop()))
     return token_state
 
 
-def _trace_banner(request: ModelRequest, context: ToolContext, registry: ToolRegistry,
+def _trace_banner(telemetry: Telemetry, request: ModelRequest, context: ToolContext, registry: ToolRegistry,
                   resolve_window: Callable[[], int | None]) -> None:
-    """Print the run line: model, provider, window, output cap, effort, vision, tools."""
+    """Show the run line: model, provider, window, output cap, effort, vision, tools."""
     model, provider_id = request.model, request.provider_id
     if provider_id:
         provider_label = provider_id
@@ -1951,14 +1740,7 @@ def _trace_banner(request: ModelRequest, context: ToolContext, registry: ToolReg
     except Exception:  # noqa: BLE001 — registry internals
         ntools = "?"
     bits.append(f"tools={ntools}")
-    _print_run_line(bits)
-
-
-def _print_run_line(fields: list[str]) -> None:
-    """The run line through its format, wrapped between two fields."""
-    parts = msgs.RUN_LINE.runs(fields="".join(display.FIELD_BREAK + display.clean(field) for field in fields))
-    for row in display.field_rows(parts, display.block_width()):
-        print(msgs.for_stream(fset.to_ansi(row)), flush=True)
+    _output(telemetry, "run_line", fields=bits)
 
 
 def _note_user_skill(messages: list[dict], registry: ToolRegistry) -> None:
@@ -2028,9 +1810,7 @@ def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, 
         )
         if batch_stats.capped:
             diagnostic = (
-                "Tool-call batch limit reached: "
-                f"retained {batch_stats.retained} distinct calls and rejected "
-                f"{batch_stats.capped} beyond REPLY_TOOL_CALLS_MAX."
+                _PROMPTS['record_assistant_tool_call_batch_limit_reached_retained'].format(batch_stats_retained=batch_stats.retained, batch_stats_capped=batch_stats.capped)
             )
             batch_diagnostic_suffix = ("\n\n" if text else "") + diagnostic
             text += batch_diagnostic_suffix
@@ -2065,6 +1845,8 @@ def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, 
             pending_calls,
             diagnostic_suffix=batch_diagnostic_suffix,
         )
+        text = assistant_message.text
+        record["content"] = text
     # The signed parts as this turn replays them, after batch normalization.
     signed_reasoning = (
         model_client.signed_reasoning_parts(assistant_message)
@@ -2072,6 +1854,16 @@ def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, 
     )
     if signed_reasoning:
         record["reasoning_parts"] = signed_reasoning
+        record["reasoning_layout"] = [
+            len(part.text) if isinstance(part, ai.types.messages.TextPart) else part.kind
+            for part in assistant_message.parts
+        ]
+        # A signature covers the reply's blocks in their order, so replay puts
+        # each call back before the answer text that followed it.
+        offsets = model_client.tool_call_text_before(assistant_message)
+        for call in record.get("tool_calls", []):
+            if call["id"] in offsets:
+                call["text_before"] = offsets[call["id"]]
     if signed_reasoning or record.get("reasoning_blocks"):
         record["reasoning_from"] = reasoning_rules.reasoning_origin(request.provider_id, request.model)
     existing_metadata = getattr(assistant_message, "provider_metadata", None) or {}
@@ -2114,7 +1906,7 @@ def _send_resume_nudge(messages: list[dict], convo: TurnConvo, *, n: int, limit:
     convo.add([nudge])
     telemetry.event("max_output_resume", model=model, n=n, incomplete_reason=incomplete_reason)
     if not suppress_output:
-        msgs.warn(msgs.MAX_OUTPUT_RESUMING, n=n, limit=limit)
+        _notice(telemetry, msgs.MAX_OUTPUT_RESUMING, stderr=True, flush=True, n=n, limit=limit)
 
 
 async def _record_tool_results(pending_calls: list[_PendingToolCall], *, cfg: Config, trace: bool,
@@ -2129,18 +1921,20 @@ async def _record_tool_results(pending_calls: list[_PendingToolCall], *, cfg: Co
     for THIS turn; messages, persisted and replayed on every future turn,
     carries the dehydrated stub so base64 is billed once."""
     for index, pc in enumerate(pending_calls):
-        emission = events.emit(
-            "tool_call",
-            id=pc.id,
-            name=_canonical_tool_call_name(pc.name, registry),
-            arguments=_canonical_tool_args(pc.arguments()),
-        )
+        call = {"id": pc.id, "name": _canonical_tool_call_name(pc.name, registry),
+                "arguments": _canonical_tool_args(pc.arguments())}
+        emission = events.emit("tool_call", **call)
         refusal = event_mod.refusal_of(emission)
         if refusal and pc.validation_error is None:
             # An `on tool_call` handler refused it: the call never runs
             # and the model reads the refusal as its result.
             pending_calls[index] = replace(pc, validation_error=refusal, refused=True)
             telemetry.event("tool_call_refused", tool=pc.name, refusal=refusal)
+        elif pc.validation_error is None and context.tool_approval is not None:
+            refusal = await context.tool_approval.refusal(call)
+            if refusal is not None:
+                pending_calls[index] = replace(pc, validation_error=refusal, refused=True)
+                telemetry.event("tool_call_refused", tool=pc.name, via="approval", refusal=refusal)
     # Tools are sync (subprocess, file I/O); leaf calls fan out to a worker
     # thread so the shared loop stays free while they execute. Fan-out (task /
     # named-agent) calls are awaited ON the loop instead, so a parent turn
@@ -2223,7 +2017,7 @@ def _record_tool_error_limit(dispatch_records: list[tuple[_PendingToolCall, dict
          if isinstance(result_value, str) and result_value.startswith("ERROR")),
         (dispatch_records[-1][0].name, dispatch_records[-1][2]),
     )
-    failure = f"ERROR: tool retry limit reached after {name}\n{last_error}"
+    failure = _PROMPTS['record_tool_error_limit_error_tool_retry_limit_reached_after'].format(name=name, last_error=last_error)
     convo.ai.append(ai.messages.Message(role="assistant", parts=[ai.types.messages.TextPart(text=failure)]))
     messages.append(memory.note_time({"role": "assistant", "content": failure}))
     events.emit("error", error=failure, retryable=False)
@@ -2241,7 +2035,7 @@ async def _take_steer(steer: Callable[[], dict | None | Awaitable[dict | None]],
         convo.add([steered])
         telemetry.event("steered", message_index=len(messages) - 1)
         if not suppress_output:
-            msgs.say(msgs.STEERED, flush=True)
+            _notice(telemetry, msgs.STEERED, flush=True)
 
 
 async def run_turn_async(cfg: Config, system: str, messages: list[dict],
@@ -2260,7 +2054,10 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
              event_hooks: event_mod.EventHooks | event_mod.RefusableOnly | None = None,
              mcp_host: Any = None,
              steer: Callable[[], dict | None | Awaitable[dict | None]] | None = None,
-             event_sink: Callable[[str, dict], None] | None = None) -> None:
+             event_sink: Callable[[str, dict], None] | None = None,
+             approve: event_mod.Approve | event_mod.Approval | None = None,
+             *, skill_catalog: skills.SkillCatalog | None = None,
+             state_dir: Path | None = None) -> None:
     """One user turn → tool-use loop until the model stops. The real primitive:
     it awaits the model stream and runs tool dispatch in a thread executor, so it
     NEVER blocks the loop — many turns/subagents run concurrently. Mutates
@@ -2276,6 +2073,18 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     totals added to ``turn_end``, and ``usage`` after each model call charged
     to the session (`js.usage`). Subagent turns do not reach it.
 
+    ``approve`` (`events.Approve`) is awaited for each tool call the
+    `tool_call` handlers let through, one call at a time, before the batch
+    runs. It returns None to let the call run, or the line the model reads as
+    the refused call's result. Subagents started in this turn and tool calls
+    from kernel cells answer to it too. None runs every call.
+
+    ``skill_catalog`` supplies this turn's skill discovery policy and the
+    built-in skill tool's catalog. None discovers skills from the usual roots.
+
+    ``state_dir`` is the root of this session's persistent undo store. None
+    uses the usual state root.
+
     Provider overrides let the REPL /prompt mode switch endpoint without
     reloading config; unset values fall back to the Config values. The sync
     ``run_turn`` below wraps this for callers not yet on the async runtime.
@@ -2285,6 +2094,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         sampling = login_defaults.sampling(_overridden(
             cfg, model_override, provider_id_override, provider_base_url_override))
     cfg = _with_login_defaults(cfg, model_override, provider_id_override, provider_base_url_override)
+    model_metadata.bind_settings(getattr(cfg, "settings", None))
     request = _turn_request(
         cfg, model_override=model_override, provider_id_override=provider_id_override,
         provider_base_url_override=provider_base_url_override,
@@ -2304,10 +2114,15 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         mcp_host = MCPHost(cfg.mcp, telemetry=telemetry, paranoid_mode=getattr(cfg, "paranoid_mode", "off"))
     # A fresh registry rechecks current policy and aliases while restoring the
     # session's visibility. Marks survive compaction and process restarts.
-    active_registry = base_registry.aliased(alias_map).lazy_surface(active_context.cwd, mcp_host=mcp_host)
+    active_registry = base_registry.aliased(alias_map).lazy_surface(
+        active_context.cwd, mcp_host=mcp_host, disabled_skills=cfg.skills_disabled,
+        skill_catalog=skill_catalog)
+    active_context.skill_catalog = skill_catalog
     surface = SurfaceJournal(getattr(cfg, "session_file", None), agent_id=cfg.agent_id,
                              cwd=active_context.cwd, registry=active_registry)
-    token_state = _prepare_turn_context(active_context, cfg, request, active_registry, event_hooks)
+    token_state = _prepare_turn_context(active_context, cfg, request, active_registry, event_hooks, approve,
+                                       state_dir=state_dir)
+    turn_approval = active_context.tool_approval
     turn_status = active_context.turn_status
 
     events = TurnEvents(event_hooks, event_sink, telemetry, model=model, provider_id=provider_id)
@@ -2320,7 +2135,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     trace = trace_override if trace_override is not None else cfg.trace
     resolve_window = functools.partial(_resolve_context_window, model, provider_id, request.base_url)
     if trace:
-        _trace_banner(request, active_context, active_registry, resolve_window)
+        _trace_banner(telemetry, request, active_context, active_registry, resolve_window)
 
     sink = StreamSink(telemetry, turn_status, events, settings=getattr(cfg, "settings", None),
                       suppress_output=suppress_output)
@@ -2337,11 +2152,14 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         alias=functools.partial(_aliased_tool_specs, alias_map=alias_map), mcp_host=mcp_host,
         call_stats=call_stats, trace=trace, suppress_output=suppress_output,
     )
-    error_tracker = ToolErrorTracker()
+    error_tracker = ToolErrorTracker.from_settings(getattr(cfg, "settings", None))
 
+    output_token = output.set_sink(output.sink_of(telemetry))
     net_role_token = stream_transport.set_role(
         active_context.net_label, agent=cfg.agent_id, status=turn_status, retries=True,
     )
+    net_output_token = stream_transport.set_output(
+        lambda level, line, fallback: _output(telemetry, "network", level=level, line=line, fallback=fallback))
     usage_token = usage_mod.start(usage_mod.Meter(
         (usage_mod.session_key(getattr(cfg, "session_file", None), active_context),
          *getattr(active_context, "usage_chain", ())),
@@ -2356,7 +2174,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             reply = await caller.call(phase="midturn" if durable_side_effects_started else "preflight")
             if reply is None:
                 stream_transport.report_held_failure()
-                msgs.say(msgs.RETRY_BUDGET_EXHAUSTED)
+                _notice(telemetry, msgs.RETRY_BUDGET_EXHAUSTED)
                 events.end("retry_budget_exhausted")
                 return
             pending_calls, incomplete_reason, dispatch_registry = _record_assistant(
@@ -2372,7 +2190,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 and cut_off_by_cap(incomplete_reason, [])
             )
             if incomplete_reason and not suppress_output and not resuming:
-                msgs.warn(msgs.RESPONSE_INCOMPLETE, reason=incomplete_reason)
+                _notice(telemetry, msgs.RESPONSE_INCOMPLETE, stderr=True, flush=True, reason=incomplete_reason)
             if resuming:
                 resumes_sent += 1
                 _send_resume_nudge(messages, convo, n=resumes_sent, limit=limits.max_output_resumes,
@@ -2397,9 +2215,11 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             if steer is not None and iteration + 1 < cfg.max_tool_iterations:
                 await _take_steer(steer, messages, convo, telemetry, suppress_output)
 
-        msgs.say(msgs.MAX_ITERATIONS, limit=cfg.max_tool_iterations)
+        _notice(telemetry, msgs.MAX_ITERATIONS, limit=cfg.max_tool_iterations)
         events.end("max_iterations")
     except BaseException as _turn_exc:  # noqa: BLE001
+        if turn_approval is not None:
+            turn_approval.cancel()
         # turn_start is emitted unconditionally, so every exit pairs it with
         # exactly one turn_end: cancellation (CancelledError /
         # KeyboardInterrupt) ends "cancelled", an unexpected Exception ends
@@ -2419,9 +2239,10 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     finally:
         sink.close_reasoning()
         settle_tool_trace(telemetry)
-        telemetry.tool_trace = None
         usage_mod.stop(usage_token)
         stream_transport.reset_role(net_role_token)
+        stream_transport.reset_output(net_output_token)
+        output.reset_sink(output_token)
         turn_status.reset()
         if owns_mcp_host and mcp_host is not None:
             await mcp_host.close()
@@ -2435,6 +2256,9 @@ def run_turn(*args, loop_runner: asyncio.Runner | None = None, **kwargs) -> None
     transition. `messages` is still mutated in place, so ^C mid-turn preserves
     partial work exactly as before.
     """
+    # The sync caller also resolves this window between turns, outside the
+    # task context the runner copies for the turn itself.
+    install_context_window_overrides(args[0] if args else kwargs["cfg"])
     if loop_runner is not None:
         return loop_runner.run(run_turn_async(*args, **kwargs))
     return model_client.run_owning_loop(run_turn_async(*args, **kwargs))

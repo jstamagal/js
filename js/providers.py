@@ -7,7 +7,11 @@ prefix parsing.
 
 from __future__ import annotations
 
+from . import messages as msgs
+
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 import time
 from dataclasses import dataclass, field
 from collections.abc import Mapping
@@ -15,7 +19,7 @@ from collections.abc import Mapping
 import modelsdotdev
 from ai.providers.base import _PROVIDER_REGISTRY
 
-from . import codex_auth, xai_auth
+from . import codex_auth, xai_auth, settings as _settings
 
 Transport = str
 
@@ -63,6 +67,11 @@ class ProviderDef:
     @property
     def effective_sdk_provider_id(self) -> str | None:
         return self.sdk_provider_id or self.id
+
+    def default_effort(self, settings: dict | None = None) -> str | None:
+        """The provider default when the run supplies no EFFORT."""
+        return (_settings.knob(settings, "DEEPSEEK_DEFAULT_EFFORT")
+                if self.id == "deepseek" else self.reasoning_effort)
 
     @property
     def login_base_url_field(self) -> bool:
@@ -132,7 +141,7 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         base_env=("DEEPSEEK_BASE_URL",),
         model_env=("DEEPSEEK_MODEL",),
         append_only=True,
-        reasoning_effort="xhigh",
+        reasoning_effort=_settings.default_value("DEEPSEEK_DEFAULT_EFFORT"),
     ),
     _p(
         "ollama",
@@ -483,6 +492,31 @@ for _provider in _BUILTINS:
         _ALIAS[_alias.lower()] = _provider.id
 
 
+_PROVIDERS: ContextVar[tuple[ProviderDef, ...] | None] = ContextVar("js_providers", default=None)
+
+
+@contextmanager
+def using_providers(definitions):
+    """Resolve providers against this assembly's builtin definitions."""
+    token = _PROVIDERS.set(tuple(definitions))
+    try:
+        yield
+    finally:
+        _PROVIDERS.reset(token)
+
+
+def _builtin_by_id() -> dict[str, ProviderDef]:
+    definitions = _PROVIDERS.get()
+    return _BUILTIN_BY_ID if definitions is None else {p.id: p for p in definitions}
+
+
+def _aliases() -> dict[str, str]:
+    definitions = _PROVIDERS.get()
+    if definitions is None:
+        return _ALIAS
+    return {name.lower(): p.id for p in definitions for name in (p.id, *p.aliases)}
+
+
 def _modelsdev_provider_supported(provider: modelsdotdev.Provider) -> bool:
     return provider.id in _PROVIDER_REGISTRY or provider.npm in _PROVIDER_REGISTRY
 
@@ -517,7 +551,7 @@ def _dynamic_login_providers() -> tuple[ProviderDef, ...]:
     global _dynamic
     from . import model_metadata
 
-    key = _catalog_identity()
+    key = (*_catalog_identity(), _PROVIDERS.get())
     now = time.monotonic()
     if _dynamic is not None and _dynamic[0] == key and now - _dynamic[1] < _CATALOG_RECHECK_S:
         return _dynamic[2]
@@ -525,7 +559,7 @@ def _dynamic_login_providers() -> tuple[ProviderDef, ...]:
         model_metadata.ensure_fresh_catalog()
         rows: list[ProviderDef] = []
         for provider in modelsdotdev.iter_providers():
-            if provider.id in _BUILTIN_BY_ID or provider.id.lower() in _ALIAS:
+            if provider.id in _builtin_by_id() or provider.id.lower() in _aliases():
                 continue
             if not _modelsdev_provider_supported(provider):
                 continue
@@ -535,7 +569,7 @@ def _dynamic_login_providers() -> tuple[ProviderDef, ...]:
         # path): routing must still work for builtins and saved logins. Nothing
         # is cached, so the next lookup tries the catalog again.
         return ()
-    _dynamic = (_catalog_identity(), now, tuple(rows))
+    _dynamic = ((*_catalog_identity(), _PROVIDERS.get()), now, tuple(rows))
     return _dynamic[2]
 
 
@@ -559,11 +593,12 @@ def _catalog_identity() -> tuple:
 
 
 def all_providers() -> tuple[ProviderDef, ...]:
-    return _BUILTINS
+    definitions = _PROVIDERS.get()
+    return _BUILTINS if definitions is None else definitions
 
 
 def login_providers() -> tuple[ProviderDef, ...]:
-    return _BUILTINS + _dynamic_login_providers()
+    return all_providers() + _dynamic_login_providers()
 
 
 def normalize_provider_id(provider_id: str | None) -> str | None:
@@ -573,8 +608,9 @@ def normalize_provider_id(provider_id: str | None) -> str | None:
     if not key:
         return None
     lowered = key.lower()
-    if lowered in _ALIAS:
-        return _ALIAS[lowered]
+    aliases = _aliases()
+    if lowered in aliases:
+        return aliases[lowered]
     for provider in _dynamic_login_providers():
         if lowered == provider.id.lower():
             return provider.id
@@ -604,7 +640,7 @@ def _saved_login_provider_def(provider_id: str) -> ProviderDef | None:
     transport: Transport = "custom_anthropic" if sdk == "anthropic" else "custom_openai"
     shape_id = getattr(login, "shape_provider_id", None)
     if shape_id:
-        shape = _BUILTIN_BY_ID.get(normalize_provider_id(shape_id) or shape_id)
+        shape = _builtin_by_id().get(normalize_provider_id(shape_id) or shape_id)
         if shape is not None:
             transport = shape.transport
     return _p(
@@ -623,7 +659,7 @@ def get_provider(provider_id: str | None) -> ProviderDef | None:
     normalized = normalize_provider_id(provider_id)
     if normalized is None:
         return None
-    provider = _BUILTIN_BY_ID.get(normalized)
+    provider = _builtin_by_id().get(normalized)
     if provider is not None:
         return provider
     for candidate in _dynamic_login_providers():
@@ -633,7 +669,7 @@ def get_provider(provider_id: str | None) -> ProviderDef | None:
 
 
 def known_provider_ids() -> set[str]:
-    ids = set(_ALIAS)
+    ids = set(_aliases())
     ids.update(provider.id for provider in login_providers())
     try:
         from . import logins as _logins
@@ -729,14 +765,12 @@ def assert_endpoint_configured(provider: ProviderDef, base_url: str | None) -> N
     if not sdk or sdk == provider.id:
         return
     hint = (
-        f"set {provider.base_url_env[0]}"
+        msgs.PROVIDER_ENDPOINT_ENV_HINT.words(value=provider.base_url_env[0])
         if provider.base_url_env
-        else "configure its base URL"
+        else msgs.PROVIDER_ENDPOINT_CONFIGURE_HINT.words()
     )
     raise ValueError(
-        f"provider {provider.id!r} has no base URL configured; refusing to fall "
-        f"back to the {sdk!r} SDK default endpoint and credentials. Run "
-        f"`js --login {provider.id}` or {hint}."
+        msgs.PROVIDER_ENDPOINT_PROVIDER_HAS_NO_BASE_URL_CONFIGURED_REFUSING.format(id=provider.id, sdk=sdk, id2=provider.id, hint=hint)
     )
 
 

@@ -232,3 +232,32 @@ def test_routing_refreshes_an_expired_bearer_before_handing_it_out(tmp_path, mon
         assert logins.load_logins()[xai_auth.XAI_PROVIDER_ID].provider_api_key == "renewed"
     finally:
         logins.set_config_dir(None)
+
+
+def test_routing_keeps_a_still_valid_bearer_when_an_early_refresh_fails(monkeypatch):
+    logins.save_login(xai_auth.login_from_token(xai_auth.XaiToken(
+        access="still-valid", refresh="refresh-1", expires_at=time.time() + 60,
+        token_endpoint="https://auth.x.ai/oauth/token",
+    )))
+
+    def offline(*_args, **_kwargs):
+        raise OSError("network unreachable")
+
+    monkeypatch.setattr(xai_auth, "refresh_token", offline)
+    route = routing.resolve_model_route("grok-4", configured_provider_id=xai_auth.XAI_PROVIDER_ID)
+
+    assert route.api_key == "still-valid"
+
+
+def test_xai_oauth_can_delegate_notices_without_opening_a_browser(monkeypatch, capsys):
+    notices, opened = [], []
+    monkeypatch.setattr(xai_auth, "discover", lambda: xai_auth.XaiEndpoints("https://auth.test/authorize", "https://auth.test/token"))
+    def callback(**kwargs):
+        kwargs["on_ready"]()
+        return "code"
+    monkeypatch.setattr(xai_auth.oauth_loopback, "wait_for_code", callback)
+    monkeypatch.setattr(xai_auth, "exchange_code_for_token", lambda *args: "token")
+    monkeypatch.setattr(xai_auth, "login_from_token", lambda token: token)
+    assert xai_auth.login_browser(say=lambda *args, **kwargs: notices.append(args),
+                                  open_browser=False, opener=opened.append) == "token"
+    assert notices and opened == [] and capsys.readouterr().out == ""

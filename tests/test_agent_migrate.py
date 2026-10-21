@@ -160,7 +160,6 @@ def test_an_existing_agent_yaml_loses_only_its_dead_entries(tmp_path, capsys):
     assert "grep" in out and "sem_search" in out
 
 
-
 def _keep_all(_entry):
     return True
 
@@ -316,3 +315,17 @@ def test_both_whose_agent_yaml_does_not_load_is_left_alone(tmp_path):
     assert agent_migration.migrate_agent_dir(agent, apply=True, keep=_keep_all).action == "skip"
     for name, text in files.items():
         assert (agent / name).read_text(encoding="utf-8") == text
+
+
+def test_failed_prune_restores_the_original_manifest_bytes(tmp_path):
+    agent = _agent(tmp_path, "invalid", {})
+    manifest = agent / "agent.yaml"
+    original = b"model: worker\r\nmax_tokens: bad\r\ntools: [read:eager, gone:eager]\r\n"
+    manifest.write_bytes(original)
+
+    result = agent_migration.migrate_agent_dir(
+        agent, apply=True, keep=lambda entry: entry != "gone:eager",
+    )
+
+    assert result.action == "error"
+    assert manifest.read_bytes() == original

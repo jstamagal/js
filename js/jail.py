@@ -19,15 +19,18 @@ hostile model. Under `-C`:
   paths (`confine`). Their results name the jail's /tmp and ~/.js/tmp as the
   jail shows them, not the private directory behind them (`shown`).
 
-The jail is process-wide: subagents run in this process and use the same one.
+The stock jail is process-wide; assemblies can scope their own jail state.
 The operator's `exec` commands (js/hookexec.py) are not tools and run on the
 host.
 """
 
 from __future__ import annotations
 
+from . import messages as msgs
+
 import atexit
 import contextlib
+from contextvars import ContextVar
 import itertools
 import os
 import pwd
@@ -35,11 +38,16 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import paths
+from . import paths, settings as _settings
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('jail')
+
 
 # Filesystem types whose mounts are hidden in the jail. `find /` over an NFS
 # home is the sweep the jail exists to stop.
@@ -83,17 +91,17 @@ def parse_bind(spec: str) -> Bind:
             text, rw = text[: -len(suffix)], writable
             break
     if not text:
-        raise ValueError(f"empty bind: {spec!r}")
+        raise ValueError(msgs.JAIL_SETTING_EMPTY_BIND.format(spec=spec))
     path = Path(os.path.expanduser(text))
     if not path.is_absolute():
-        raise ValueError(f"bind path must be absolute or start with ~: {spec!r}")
+        raise ValueError(msgs.JAIL_SETTING_BIND_PATH_MUST_BE_ABSOLUTE_OR_START.format(spec=spec))
     return Bind(Path(os.path.abspath(path)), rw)
 
 
 def parse_binds(specs) -> list[Bind]:
     """The `JAIL_BIND` setting's value as binds. Raises ValueError."""
     if not isinstance(specs, (list, tuple)):
-        raise ValueError("JAIL_BIND is a JSON list of \"path[:rw]\" strings")
+        raise ValueError(msgs.JAIL_SETTING_JAIL_BIND_IS_A_JSON_LIST_OF.format())
     return [parse_bind(item) for item in specs]
 
 
@@ -103,14 +111,14 @@ def parse_hide(spec: str) -> Path:
     text = str(spec).strip()
     path = Path(os.path.expanduser(text)) if text else Path()
     if not text or not path.is_absolute():
-        raise ValueError(f"hide path must be absolute or start with ~: {spec!r}")
+        raise ValueError(msgs.JAIL_SETTING_HIDE_PATH_MUST_BE_ABSOLUTE_OR_START.format(spec=spec))
     return Path(os.path.abspath(path))
 
 
 def parse_hides(specs) -> list[Path]:
     """The `JAIL_HIDE` setting's value as paths. Raises ValueError."""
     if not isinstance(specs, (list, tuple)):
-        raise ValueError("JAIL_HIDE is a JSON list of path strings")
+        raise ValueError(msgs.JAIL_SETTING_JAIL_HIDE_IS_A_JSON_LIST_OF.format())
     return [parse_hide(item) for item in specs]
 
 
@@ -342,8 +350,11 @@ def hidden_roots() -> list[Path]:
     command. A path inside a tree already in the list is not statted either."""
     mounts = _mounts()
     points = {m.point for m in mounts}
-    base = [Path("/home"), *operator_homes(), Path("/run/user"),
-            *(m.point for m in mounts if m.fstype in NETWORK_FS)]
+    base = [Path(value) for value in _settings.live_value("JAIL_BASE_HIDDEN_DIRS")]
+    if _settings.live_value("JAIL_HIDE_OPERATOR_HOME"):
+        base[1:1] = operator_homes()
+    if _settings.live_value("JAIL_HIDE_NETWORK_FILESYSTEMS"):
+        base.extend(m.point for m in mounts if m.fstype in NETWORK_FS)
     candidates = [*base, *(view for tree in base for view in _other_views(tree, mounts))]
     roots: list[Path] = []
     for candidate in sorted(dict.fromkeys(candidates), key=lambda p: len(p.parts)):
@@ -433,7 +444,7 @@ class Jail:
         # `argv` (its `covered` check), so it keeps that bind's access here too.
         areas += [Bind(p, False) for p in self._path_dirs(os.environ.get("PATH", ""))
                   if not any(_under(p, _real(b.path)) for b in explicit)]
-        return areas
+        return list({area.path: area for area in areas}.values())
 
     def _path_dirs(self, path_value: str) -> list[Path]:
         """PATH directories that sit in a hidden tree or under the host /tmp
@@ -495,7 +506,29 @@ class Jail:
         """The host path a file tool uses for ``path``. Raises JailError when
         the jail does not show it, or shows it read-only and ``write`` is set."""
         mapped = self.host_path(path, setting)
-        real = _real(mapped) if follow else _real(mapped.parent) / mapped.name
+        absolute = path if path.is_absolute() else Path.cwd() / path
+        pending = deque(absolute.parts[1:])
+        current = Path("/")
+        links = 0
+        while pending:
+            part = pending.popleft()
+            if part == "..":
+                current = current.parent
+                continue
+            current /= part
+            if not pending and not follow:
+                break
+            try:
+                target = Path(os.readlink(self.host_path(current, setting)))
+            except OSError:
+                continue
+            links += 1
+            if links > 40:
+                raise JailError(_PROMPTS['confine_has_too_many_symbolic_links'].format(path=path))
+            current = Path("/") if target.is_absolute() else current.parent
+            pending.extendleft(reversed(target.parts[1:] if target.is_absolute() else target.parts))
+        resolved = self.host_path(current, setting)
+        real = _real(resolved) if follow else _real(resolved.parent) / resolved.name
         areas = self._areas(setting)
         # The innermost area containing the path decides, as the innermost
         # mount does inside the jail.
@@ -507,18 +540,21 @@ class Jail:
         # there; a missing path in them is a host path the jail does not show.
         private_miss = (not write and _under(mapped, self.private)
                         and not _under(Path(os.path.abspath(path)), self.private)
-                        and not os.path.lexists(mapped))
+                        and not os.path.lexists(real))
         if best is None or private_miss:
             raise JailError(
-                f"{path} is outside the jail: js -C keeps the tools in {self.root} and its bound paths"
+                _PROMPTS['confine_is_outside_the_jail_js_c'].format(path=path, self_root=self.root)
             )
         if self.hidden(real, hide):
-            raise JailError(f"{path} is hidden in the jail (JAIL_HIDE)")
+            raise JailError(_PROMPTS['confine_is_hidden_in_the_jail_jail'].format(path=path))
         # Removing or moving a tree takes everything under it, hidden or not.
         if write and any(h != real and _under(h, real) for h in self.hides(hide)):
-            raise JailError(f"{path} holds a path hidden in the jail (JAIL_HIDE); a tool may not change it")
+            raise JailError(_PROMPTS['confine_holds_a_path_hidden_in_the'].format(path=path))
         if write and not best.rw:
-            raise JailError(f"{path} is read-only in the jail (bound from {best.path})")
+            raise JailError(_PROMPTS['confine_is_read_only_in_the_jail'].format(path=path, best_path=best.path))
+        if write and any(not area.rw and area.path != real and _under(area.path, real)
+                         for area in areas):
+            raise JailError(_PROMPTS['confine_holds_a_read_only_path_in'].format(path=path))
         return real
 
     def bound(self, path: Path, setting: object = ()) -> bool:
@@ -553,7 +589,8 @@ class Jail:
         over it; what js binds inside one is bound again on top."""
         hidden = hidden_roots()
         home = paths.user_home()
-        network = {m.point for m in _mounts() if m.fstype in NETWORK_FS}
+        network = ({m.point for m in _mounts() if m.fstype in NETWORK_FS}
+                   if _settings.live_value("JAIL_HIDE_NETWORK_FILESYSTEMS") else set())
         out = [self.bwrap, "--die-with-parent", "--unshare-ipc", "--unshare-uts",
                "--unshare-cgroup-try", *_root_args(network), "--dev", "/dev"]
         out += ["--bind", str(self.tmp), "/tmp"]
@@ -781,8 +818,28 @@ class Jail:
 ACTIVE: Jail | None = None
 
 
+@dataclass
+class JailState:
+    jail: Jail | None = None
+    environ: dict[str, str] = field(default_factory=dict)
+
+
+_STATE: ContextVar[JailState | None] = ContextVar("js_jail_state", default=None)
+
+
+@contextlib.contextmanager
+def using_state(state: JailState):
+    """Use this assembly's jail and environment marker for the duration of the body."""
+    token = _STATE.set(state)
+    try:
+        yield state
+    finally:
+        _STATE.reset(token)
+
+
 def active() -> Jail | None:
-    return ACTIVE
+    state = _STATE.get()
+    return ACTIVE if state is None else state.jail
 
 
 def shape(source: object) -> tuple:
@@ -791,7 +848,7 @@ def shape(source: object) -> tuple:
     JAIL_BIND, JAIL_HIDE and the kept environment. A process started under
     another shape than the context's now must not run anything more. Without
     a jail there is nothing they shape."""
-    if ACTIVE is None:
+    if active() is None:
         return ()
     hide = getattr(source, "jail_hide", None)
     return (tuple(getattr(source, "jail_bind", ()) or ()),
@@ -801,31 +858,35 @@ def shape(source: object) -> tuple:
 
 def shown(text: str) -> str:
     """``text`` as `Jail.shown` writes it under a jail, else itself."""
-    return text if ACTIVE is None else ACTIVE.shown(text)
+    jail = active()
+    return text if jail is None else jail.shown(text)
 
 
 def hider(context: object) -> Callable[[Path], bool]:
     """Under a jail, a test of whether a path, with its symlinks resolved,
     lies in a `JAIL_HIDE` path of ``context``; the paths are read once."""
-    if ACTIVE is None:
+    jail = active()
+    if jail is None:
         return lambda path: False
-    test = ACTIVE.hidden_test(getattr(context, "jail_hide", None))
+    test = jail.hidden_test(getattr(context, "jail_hide", None))
     return lambda path: test(_real(Path(path)))
 
 
 def hidden_under(root: Path, context: object) -> list[Path]:
     """Under a jail, the `JAIL_HIDE` paths of ``context`` inside host
     directory ``root``: what a tool walking ``root`` on the host leaves out."""
-    if ACTIVE is None:
+    jail = active()
+    if jail is None:
         return []
-    return ACTIVE.hidden_under(root, getattr(context, "jail_hide", None))
+    return jail.hidden_under(root, getattr(context, "jail_hide", None))
 
 
 def scratch_dir() -> Path:
     """Where js puts a scratch file a jailed command must reach: the jail's
     ~/.js/tmp (visible inside at the host path), else js's scratch directory."""
-    if ACTIVE is not None:
-        return ACTIVE.js_tmp
+    jail = active()
+    if jail is not None:
+        return jail.js_tmp
     return paths.tmp_dir()
 
 
@@ -836,7 +897,7 @@ def wrap(argv: list[str], context: object, *, cwd: Path | str | None = None,
     ``env`` is the environment the command gets; its PATH decides which PATH
     directories are bound back. ``context`` is the ToolContext whose
     `JAIL_BIND` and `JAIL_HIDE` apply."""
-    jail = ACTIVE
+    jail = active()
     if jail is None:
         return list(argv)
     path_value = (env if env is not None else os.environ).get("PATH", "")
@@ -852,6 +913,8 @@ def private_root() -> Path:
 
 def _clear_stale_private_dirs() -> None:
     """Remove the private directories of js processes that are gone."""
+    if not _settings.live_value("JAIL_CLEAN_PRIVATE_DIRS"):
+        return
     root = private_root()
     if not root.is_dir():
         return
@@ -875,12 +938,12 @@ def enter(directory: Path | str, *, setting: object = (), hide: object = None) -
     global ACTIVE
     root = _real(Path(directory).expanduser())
     if not root.is_dir():
-        raise JailError(f"-C target is not a directory: {directory}")
+        raise JailError(msgs.JAIL_SETTING_C_TARGET_IS_NOT_A_DIRECTORY.format(directory=directory))
     if root == Path("/"):
-        raise JailError("-C / is not a jail; name a directory")
+        raise JailError(msgs.JAIL_SETTING_C_IS_NOT_A_JAIL_NAME_A.format())
     bwrap = shutil.which("bwrap")
     if bwrap is None:
-        raise JailError("-C runs tools under bubblewrap, and bwrap is not on PATH; install bubblewrap")
+        raise JailError(msgs.JAIL_SETTING_C_RUNS_TOOLS_UNDER_BUBBLEWRAP_AND_BWRAP.format())
     _clear_stale_private_dirs()
     private_root().mkdir(parents=True, exist_ok=True)
     private = Path(tempfile.mkdtemp(prefix=f"{os.getpid()}-", dir=private_root()))
@@ -888,16 +951,21 @@ def enter(directory: Path | str, *, setting: object = (), hide: object = None) -
     inside = next((h for h in jail.hides(hide) if _under(root, h)), None)
     if inside is not None:
         jail.cleanup()
-        raise JailError(f"-C {directory} is inside {inside}, a path hidden in the jail (JAIL_HIDE)")
+        raise JailError(msgs.JAIL_SETTING_C_IS_INSIDE_A_PATH_HIDDEN_IN.format(directory=directory, inside=inside))
     jail.tmp.mkdir()
     jail.js_tmp.mkdir()
     failure = jail.self_test(setting=setting, hide=hide)
     if failure is not None:
         jail.cleanup()
-        raise JailError(f"-C: bubblewrap cannot start a jail: {failure}")
+        raise JailError(msgs.JAIL_SETTING_C_BUBBLEWRAP_CANNOT_START_A_JAIL.format(failure=failure))
     leave()
-    ACTIVE = jail
-    os.environ["JS_JAIL"] = str(root)
+    state = _STATE.get()
+    if state is None:
+        ACTIVE = jail
+        os.environ["JS_JAIL"] = str(root)
+    else:
+        state.jail = jail
+        state.environ["JS_JAIL"] = str(root)
     atexit.register(jail.cleanup)
     return jail
 
@@ -905,7 +973,13 @@ def enter(directory: Path | str, *, setting: object = (), hide: object = None) -
 def leave() -> None:
     """Take this process's tools out of the jail."""
     global ACTIVE
-    if ACTIVE is not None:
-        ACTIVE.cleanup()
-    ACTIVE = None
-    os.environ.pop("JS_JAIL", None)
+    state = _STATE.get()
+    jail = ACTIVE if state is None else state.jail
+    if jail is not None:
+        jail.cleanup()
+    if state is None:
+        ACTIVE = None
+        os.environ.pop("JS_JAIL", None)
+    else:
+        state.jail = None
+        state.environ.pop("JS_JAIL", None)

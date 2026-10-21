@@ -33,15 +33,16 @@ directive without the loader running it. Two ways:
   * a backslash immediately before ANY form -- ``\!{sh ...}``, ``\{{VAR}}``,
     ``\``` ``!sub`` -- emits the directive verbatim, minus the one escape
     backslash. This is the universal escape and the only one for fenced blocks.
-  * an inline ``!{...}`` / ``{{...}}`` wrapped in a markdown backtick code span --
+  * an inline ``!{...}`` / ``{{...}}`` inside a markdown backtick code span --
     e.g. ```` `!{sh ...}` ```` -- is left literal, backticks and all. An
-    ergonomic shortcut for prose; only a FULLY wrapped span is protected (a lone
+    ergonomic shortcut for prose; only a closed span is protected (a lone
     leading backtick still expands).
 """
 
 from __future__ import annotations
 
 import os
+from contextvars import ContextVar
 import re
 import shutil
 import subprocess
@@ -65,6 +66,9 @@ _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _VARIABLE = re.compile(r"(?P<vbs>\\)?(?P<vtick>`)?%%(?P<variable>[A-Za-z_][A-Za-z0-9_]*)%%(?(vtick)`)")
 
 
+_WARNING: ContextVar = ContextVar("js_expansion_warning", default=None)
+
+
 def session_variables(cfg) -> dict[str, str]:
     """Built-in values for the session and effective model in ``cfg``."""
     path = Path(getattr(cfg, "session_file", os.devnull)).expanduser().absolute()
@@ -75,18 +79,16 @@ def session_variables(cfg) -> dict[str, str]:
         "CURRENT_SESSION_MODEL": getattr(cfg, "model", ""),
     }
 
-# One combined scanner: fenced block | inline | env shorthand | built-in. Matched in this
-# order so a ```!fence wins over the inline form. re.sub replaces each match
+# One combined scanner: fenced block | code span | inline | env shorthand | built-in.
+# Explicit ```!fences win over code spans. re.sub replaces each match
 # independently and never re-scans the replacement (single pass / injection-safe).
 #
 # A leading backslash escapes any form: when present the
 # whole match is emitted verbatim minus that backslash (see _resolve) -- the only
-# escape that reaches the fenced block. The inline / env / built-in forms additionally carry
-# an optional leading backtick (itick / etick / vtick); the trailing ``(?(name)`)``
-# matches a closing backtick ONLY when the leading one was captured, so a directive
-# fully wrapped in a backtick code span is matched as a unit and emitted literally,
-# while a directive with no backticks -- or only a stray leading one -- backtracks
-# to the unwrapped form and expands.
+# escape that reaches the fenced block. A code span consumes matching complete
+# backtick runs on one line, keeping every directive inside it literal; a fenced
+# block spans lines, so the directives in it expand. The built-in scanner
+# also recognizes adjacent backticks when substituting inside subsystem bodies.
 #
 # The fenced form additionally must OPEN A LINE, like a real markdown fence: the
 # lookbehind admits only the start of the text or a position straight after a newline
@@ -97,6 +99,7 @@ def session_variables(cfg) -> dict[str, str]:
 _DIRECTIVE = re.compile(
     r"(?:"
     r"(?<![^\n])(?P<find>[ ]{0,3})(?P<bs>\\)?```!(?P<fsub>[A-Za-z0-9_+-]+)[^\n]*\n(?:(?P<fbody>.*?)\n)??[ ]{0,3}```[ \t]*(?=\r?\n|\Z)"
+    r"|(?P<literal_span>(?<![\\`])(?P<span_ticks>`+)(?!`)[^\n]*?(?<!`)(?P=span_ticks)(?!`))"
     r"|(?P<ibs>\\)?(?P<itick>`)?!\{(?P<isub>[A-Za-z0-9_+-]+)(?:[ \t]+(?P<iargs>[^}]*))?\}(?(itick)`)"
     r"|(?P<ebs>\\)?(?P<etick>`)?\{\{(?P<env>[^{}]*?)\}\}(?(etick)`)"
     r"|" + _VARIABLE.pattern +
@@ -114,6 +117,8 @@ def expand_prompt(
     timeout_s: int | None = None,
     max_output_bytes: int | None = None,
     on_error: str = "warn",
+    subsystems: Mapping | None = None,
+    warn=None,
 ) -> str:
     """Expand ``%%VAR%%``, ``{{VAR}}``, inline and fenced subsystem directives.
 
@@ -149,6 +154,11 @@ def expand_prompt(
 
     environ = os.environ if env is None else env
     builtins = variables or {}
+    warning = msgs.warn if warn is None else warn
+    def dispatch(*args):
+        if subsystems is None:
+            return _run_subsystem(*args)
+        return _run_subsystem(*args, subsystems=subsystems)
 
     def _variable(m: re.Match) -> str:
         if m.group("vbs") is not None:
@@ -158,6 +168,8 @@ def expand_prompt(
         return builtins.get(m.group("variable"), m.group(0))
 
     def _resolve(m: re.Match) -> str:
+        if m.group("literal_span") is not None:
+            return m.group(0)
         # \-escaped directive: emit it verbatim, minus the one escape backslash.
         # Each branch carries its own escape group because the fenced branch has to
         # sit behind a line-start lookbehind that a shared leading group would break.
@@ -177,15 +189,13 @@ def expand_prompt(
                 )
                 if re.search(r"(?m)^[ ]{0,3}```", fbody):
                     raise PromptExpansionError(
-                        "fenced directive body carries a ``` line; the closing "
-                        "fence is ambiguous, so the directive is not run - indent "
-                        "the nested fence four spaces or split the directives"
+                        msgs.DIRECTIVE_FENCED_DIRECTIVE_BODY_CARRIES_A_LINE_THE.words()
                     )
                 # Put the markdown indent back. The fence may sit up to three
                 # spaces in because it is nested in a list; dropping the indent
                 # pulls the expansion out of that list and changes the structure
                 # of the prompt the model reads.
-                return m.group("find") + _run_subsystem(
+                return m.group("find") + dispatch(
                     m.group("fsub"),
                     _VARIABLE.sub(_variable, fbody),
                     allow_code,
@@ -198,7 +208,7 @@ def expand_prompt(
             if m.group("itick") is not None or m.group("etick") is not None:
                 return m.group(0)
             if m.group("isub") is not None:
-                return _run_subsystem(
+                return dispatch(
                     m.group("isub"),
                     _VARIABLE.sub(_variable, (m.group("iargs") or "").strip()),
                     allow_code,
@@ -217,10 +227,14 @@ def expand_prompt(
             if on_error == "raise":
                 raise
             # Keep the directive as written, warn, and let startup go on.
-            msgs.warn(msgs.DIRECTIVE_NOT_EXPANDED, error=exc)
+            warning(msgs.DIRECTIVE_NOT_EXPANDED, error=exc)
             return m.group(0)
 
-    return _DIRECTIVE.sub(_resolve, text)
+    token = _WARNING.set(warning)
+    try:
+        return _DIRECTIVE.sub(_resolve, text)
+    finally:
+        _WARNING.reset(token)
 
 
 # --------------------------------------------------------------------------- #
@@ -234,20 +248,26 @@ def _run_subsystem(
     environ: dict,
     timeout_s: int,
     max_output_bytes: int,
+    *,
+    subsystems: Mapping | None = None,
 ) -> str:
+    subsystems = _SUBSYSTEMS if subsystems is None else subsystems
     key = name.lower()
-    spec = _SUBSYSTEMS.get(key)
+    spec = subsystems.get(key)
     if spec is None:
         raise PromptExpansionError(
-            msgs.DIRECTIVE_UNKNOWN_SUBSYSTEM.said(name=name, known=", ".join(sorted(_SUBSYSTEMS)))
+            msgs.DIRECTIVE_UNKNOWN_SUBSYSTEM.said(name=name, known=", ".join(sorted(subsystems)))
         )
     is_code, runner = spec
     if is_code and not allow_code:
         raise PromptExpansionError(msgs.DIRECTIVE_CODE_OFF.said(name=name))
-    if is_code:
-        # Code subsystems run against the real process environment, always.
-        return runner(body, timeout_s=timeout_s, max_output_bytes=max_output_bytes)
-    return runner(body, environ=environ, timeout_s=timeout_s)
+    try:
+        if is_code:
+            # Code subsystems run against the real process environment, always.
+            return runner(body, timeout_s=timeout_s, max_output_bytes=max_output_bytes)
+        return runner(body, environ=environ, timeout_s=timeout_s)
+    except OSError as exc:
+        raise PromptExpansionError(msgs.DIRECTIVE_.words(name=name, __name__=type(exc).__name__, exc=exc)) from exc
 
 
 # ---- read-only subsystems (always on) ----
@@ -259,20 +279,18 @@ def _sub_env(body: str, *, environ: dict, timeout_s: int) -> str:
     return environ.get(name, "")
 
 
-def _sub_file(body: str, *, environ: dict, timeout_s: int) -> str:
+def _sub_file(body: str, *, environ: dict, timeout_s: int, on_missing=None) -> str:
     path = Path(os.path.expanduser(body.strip()))
     try:
         return path.read_text(encoding="utf-8")
-    except OSError:
-        # A missing/unreadable file embeds nothing rather than aborting the
-        # whole prompt, so optional box-info embeds never brick startup.
-        return ""
+    except OSError as exc:
+        return "" if on_missing is None else on_missing(path, exc)
     except ValueError as exc:
         # A non-UTF-8 file raises UnicodeDecodeError (a ValueError), not
         # OSError. Do not embed nothing silently: surface the unreadable
         # include through the standard directive-failure warn, or a path
         # typo hides as an empty embed.
-        raise PromptExpansionError(f"unreadable as text: {path} ({exc})") from None
+        raise PromptExpansionError(msgs.DIRECTIVE_UNREADABLE_AS_TEXT.format(path=path, exc=exc)) from None
 
 
 # ---- code subsystems (gated) ----
@@ -285,7 +303,7 @@ def _decode_capped(data: bytes, *, truncated: bool, max_output_bytes: int) -> st
 
 
 def _run_capture(
-    argv, *, cwd=None, timeout_s: int, label: str, max_output_bytes: int, strict: bool = False
+    argv, *, cwd=None, timeout_s: int, label: str, max_output_bytes: int, strict: bool = False, warn=None
 ) -> str:
     try:
         proc = _run_capped(
@@ -315,7 +333,7 @@ def _run_capture(
         if not strict and stdout:
             # grep with no match or a script ending on a false test exits
             # nonzero after printing what the prompt wants.
-            msgs.warn(msgs.DIRECTIVE_EXITED_OUTPUT_USED, label=label, code=proc.returncode)
+            (warn if warn is not None else _WARNING.get() or msgs.warn)(msgs.DIRECTIVE_EXITED_OUTPUT_USED, label=label, code=proc.returncode)
             return stdout.rstrip("\n")
         err = stderr.strip()
         if err:

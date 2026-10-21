@@ -79,7 +79,6 @@ def test_run_commit_auto_inits_non_repo_and_injects_survey(tmp_path, monkeypatch
     assert calls[0]["kwargs"]["tool_context"].cwd == target.resolve(strict=False)
 
 
-
 def test_run_commit_injects_messy_repo_snapshot_without_crashing(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     repo = tmp_path / "messy"
@@ -190,5 +189,3 @@ def test_run_commit_snapshot_prune_keeps_ten(tmp_path, monkeypatch):
     assert "20200101T000000000000Z" not in remaining
     assert "20200101T000002000000Z" not in remaining
     assert remaining[-1] not in {f"20200101T0000{i:02d}000000Z" for i in range(12)}
-
-

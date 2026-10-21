@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import asdict, is_dataclass
 import hashlib
@@ -10,9 +11,10 @@ import os
 from pathlib import Path
 import time
 import traceback
+from typing import Any
 from uuid import uuid4
 
-from . import paranoid, paths
+from . import output, paranoid, paths
 from . import messages as msgs
 
 ACTIVE_FLIGHT: ContextVar[CompactionFlight | None] = ContextVar("compaction_flight", default=None)
@@ -60,18 +62,47 @@ def _stem(cfg) -> str:
     return Path(session).stem
 
 
+def flight_log_dir(cfg) -> Path:
+    """The directory js writes its flight logs to: ``COMPACTION_LOG_DIR``, or
+    ``~/.js/logs/<agent>/compactions``."""
+    settings = getattr(cfg, "settings", {}) or {}
+    override = settings.get("COMPACTION_LOG_DIR")
+    return Path(override).expanduser() if override else paths.logs_root() / cfg.agent_id / "compactions"
+
+
+NOTICE = "compaction_notice"
+
+
+def printing(emit: Callable[..., Any] | None = None, *,
+             warn: Callable[..., Any] | None = None) -> Callable[..., Any]:
+    """The console adapter for compaction's callback protocol."""
+    from .console import compaction_events
+
+    return compaction_events(emit, warn=warn)
+
+
 class CompactionFlight:
-    def __init__(self, cfg, system, messages, *, trigger, forced, focus, preserve_from, details, operation="summary"):
+    """One compaction attempt. With a ``directory`` it is recorded to a JSONL
+    file there; with None nothing is written. Notices go to ``emit`` as
+    ``NOTICE`` events."""
+
+    def __init__(self, cfg, system, messages, *, trigger, forced, focus, preserve_from, details,
+                 directory: Path | None, emit: Callable[..., Any] | None = None, operation="summary"):
         self.operation = operation
         self.id = uuid4().hex
         self.started = time.monotonic()
         self.cfg = cfg
+        self.emit = emit
+        self.path = None
+        self.stream = None
+        if directory is None:
+            return
         settings = getattr(cfg, "settings", {}) or {}
-        override = settings.get("COMPACTION_LOG_DIR")
-        directory = Path(override).expanduser() if override else paths.logs_root() / cfg.agent_id / "compactions"
+        directory = Path(directory).expanduser()
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path = directory / f"{_stem(cfg)}-{self.id}.jsonl"
-        self.stream = os.fdopen(os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8")
+        self.stream = os.fdopen(os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600),
+                                "w", encoding="utf-8", errors="backslashreplace")
         try:
             self._start(system, messages, settings, operation=operation, trigger=trigger, forced=forced,
                         focus=focus, preserve_from=preserve_from, details=details)
@@ -94,6 +125,8 @@ class CompactionFlight:
         self.snapshot("before", system, messages)
 
     def record(self, event, **payload):
+        if self.stream is None:
+            return
         self.stream.write(json.dumps({"version": 1, "id": self.id, "event": event,
                                       "ts": time.time(), **payload}, ensure_ascii=False, default=_json) + "\n")
         self.stream.flush()
@@ -115,23 +148,33 @@ class CompactionFlight:
                                   "attempt_id": self.id, "flight_path": str(self.path),
                                   "operation": self.operation, "model": self.cfg.model, "session": str(self.cfg.session_file)}, default=_json) + "\n")
                 except OSError as exc:
-                    msgs.warn(msgs.FLIGHT_AUTOLOG_FAILED, error=exc, path=self.path)
+                    notice = output.event("notice", message=msgs.FLIGHT_AUTOLOG_FAILED,
+                                          fields={"error": exc, "path": self.path}, stderr=True, flush=True)
+                    if self.emit is None:
+                        output.emit(notice)
+                    else:
+                        self.emit("compaction_output", output=notice)
 
     def snapshot(self, phase, system, messages):
-        encoded = json.dumps({"system": system, "messages": messages}, ensure_ascii=False, default=_json)
+        if self.stream is None:
+            return
+        encoded = json.dumps({"system": system, "messages": messages}, ensure_ascii=False,
+                             default=_json).encode("utf-8", "backslashreplace")
         self.record(phase, system=system, messages=messages, message_count=len(messages),
-                    utf8_bytes=len(encoded.encode()), sha256=hashlib.sha256(encoded.encode()).hexdigest())
+                    utf8_bytes=len(encoded), sha256=hashlib.sha256(encoded).hexdigest())
 
     def notice(self, event, detail=""):
-        msgs.warn(msgs.FLIGHT_NOTICE, event=event, id=self.id[:12], operation=self.operation, detail=detail,
-                  path=self.path)
+        if self.emit is not None:
+            self.emit(NOTICE, stage=event, id=self.id[:12], operation=self.operation, detail=detail,
+                      path=self.path)
 
     def write(self, text):
         if text:
             self.record("summary_trace", text=text)
 
     def flush(self):
-        self.stream.flush()
+        if self.stream is not None:
+            self.stream.flush()
 
     def finish(self, event, system, messages, **payload):
         self.snapshot("after", system, messages)
@@ -139,4 +182,5 @@ class CompactionFlight:
         self.notice(event, payload.get("error") or payload.get("result", ""))
 
     def close(self):
-        self.stream.close()
+        if self.stream is not None:
+            self.stream.close()

@@ -42,6 +42,12 @@ SECRET_SAMPLES = {
     "EXTRA_HEADERS": f"Authorization: Bearer {SENTINEL}",
     "EXTRA_PARAMS": json.dumps({"api_key": SENTINEL}),
     "MCP_SERVERS": json.dumps({"x": {"command": "srv", "env": {"TOKEN": SENTINEL}}}),
+    "ENDPOINT_DEFAULT_KEY": SENTINEL,
+    "SERPER_API_KEY": SENTINEL,
+    "TAVILY_API_KEY": SENTINEL,
+    "EXA_API_KEY": SENTINEL,
+    "CONTEXT7_API_KEY": SENTINEL,
+    "TYPESAFE_API_KEY": SENTINEL,
 }
 
 
@@ -67,7 +73,8 @@ def test_every_secret_setting_is_masked_everywhere_settings_are_shown(tmp_path):
                       paranoid_mode="on")
         cfg.settings.update(store)
         flight = compaction_flight.CompactionFlight(
-            cfg, "sys", [], trigger="test", forced=True, focus="", preserve_from=0, details={})
+            cfg, "sys", [], trigger="test", forced=True, focus="", preserve_from=0, details={},
+            directory=compaction_flight.flight_log_dir(cfg))
         flight.close()
         assert SENTINEL not in flight.path.read_text(), key
 
@@ -92,10 +99,16 @@ BAD_SECRET_VALUES = {
     "EXTRA_HEADERS escaped": json.dumps(f"X-Ok: 1\n{SENTINEL}"),
     "EXTRA_PARAMS": f"[{SENTINEL}",
     "MCP_SERVERS": f"{{{SENTINEL}",
+    "ENDPOINT_DEFAULT_KEY": None,  # any string is a valid key
+    "SERPER_API_KEY": None,
+    "TAVILY_API_KEY": None,
+    "EXA_API_KEY": None,
+    "CONTEXT7_API_KEY": None,
+    "TYPESAFE_API_KEY": None,
 }
 
 
-def test_an_invalid_value_for_a_secret_setting_is_never_echoed(monkeypatch):
+def test_an_invalid_value_for_a_secret_setting_is_never_echoed(monkeypatch, capsys):
     from js import settings, setcmd
 
     secret_keys = {spec.key for spec in settings.REGISTRY if spec.secret}
@@ -112,8 +125,7 @@ def test_an_invalid_value_for_a_secret_setting_is_never_echoed(monkeypatch):
         with pytest.raises(ValueError) as caught:
             settings.parse_extra_arg(f"{key}={bad}")
         assert SENTINEL not in str(caught.value), key
-        warned: list[str] = []
-        with monkeypatch.context() as patch:
-            patch.setattr(settings.msgs, "warn", lambda *a, **k: warned.append(repr((a, k))))
-            settings.apply_env_overrides({}, {f"JS_{key}": bad})
-        assert warned and not any(SENTINEL in w for w in warned), key
+        capsys.readouterr()
+        settings.apply_env_overrides({}, {f"JS_{key}": bad})
+        warned = capsys.readouterr().err
+        assert warned and SENTINEL not in warned, key

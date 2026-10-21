@@ -39,7 +39,10 @@ persists each completed turn.
 | `js/turn_settings.py` | the settings a turn reads: one row each, projected from the settings store onto `Config` and `ToolContext` |
 | `js/model_client.py` | single import boundary for the Vercel AI Python SDK |
 | `js/runtime.py` | the turn loop (`run_turn_async`), recording replies and tool results, dispatch, provider quirks |
-| `js/turn_stream.py` | a turn's events (`TurnEvents`) and its streamed reply on screen and in the transcript (`StreamSink`) |
+| `js/turn_stream.py` | a turn's events (`TurnEvents`) and its streamed reply as output events (`StreamSink`) |
+| `js/output.py` | output events (`OutputEvent`), the `Sink` a turn emits them to (`Telemetry.sink`), the list of the loop's events and their fields |
+| `js/console.py` | js's console sink (`ConsoleSink`): draws output events on stdout or the screen, folds tool runs (`ToolTrace`) |
+| `js/transcript.py` | the transcript log (`TranscriptLogSink`), its stdout tee, and its record of output events (`TranscriptSink`) |
 | `js/turn_surface.py` | the session file's record of the lazy tool surface, restored per agent and directory |
 | `js/turn_budget.py` | the turn's SDK conversation (`TurnConvo`) and the context budget it is held to (`TurnBudget`) |
 | `js/turn_call.py` | one model call with its retries, overflow recovery, escalated resend and signed-reasoning resend (`ModelCaller`) |
@@ -48,7 +51,7 @@ persists each completed turn.
 | `js/headless.py` | `js -p --json`: runtime events as JSON lines (docs/headless-json.md) |
 | `js/messages.py` | every string the operator reads, as named entries; the banner slot; severity colours |
 | `js/persona.py` | prompt-directory concatenation and `agent.yaml` |
-| `js/events.py` | event names, `on` handler table, handler refusals |
+| `js/events.py` | event names, `on` handler table, handler refusals, the approval a program passes to `run_turn_async` |
 | `js/hookexec.py` | `exec`: runs a command for the command layer; event JSON on stdin, exit 2 refuses |
 | `js/prompt_commands.py` | `~/.js/commands/NAME.md` as `/NAME`, argument placeholders |
 | `js/pastes.py` | large bracketed pastes kept behind `[paste #N ...]` markers |
@@ -188,6 +191,21 @@ callable, so `runtime._resolve_context_window` stays the one place it is
 resolved, and `turn_call` reaches the model through
 `model_client.stream_model_async` on the module.
 
+The loop writes nothing to the screen itself. Every visible thing it produces
+(tool calls and results, the run line, call stats, the answer and the
+reasoning, notices) is an `OutputEvent` with structured fields, sent to
+`Telemetry.sink`; `js/output.py` lists the events. Without a sink of its own a
+telemetry uses js's: the transcript record (`transcript.TranscriptSink`), which
+writes each tool call whole and the answer to the transcript log, then the
+console (`js/console.py`), which draws them as js always has. The run line,
+call stats and notices are recorded from events while transcript stdio capture
+is active; command output continues through its tee on stdout and stderr.
+A program that sets `Telemetry(None, sink=...)` gets the events and js
+prints nothing. Beside the text the model gets, read, patch, write, remove and
+shell hand the screen their result as fields with `toolkit.core.view` (path,
+text before and after, line numbers, exit code, stdout and stderr); the
+tool_result event carries them as `view`.
+
 1. Builds `ai` message and tool parts via `js/model_client`.
 2. Calls `model_client.stream_model(...)`.
 3. Streams events; `model_client` aggregates text, reasoning content, and fragmented tool calls.
@@ -313,8 +331,9 @@ to original tool-call order before being appended. See
 [Dispatch Semantics](tool-system.md#dispatch-semantics) for which calls count
 as read-only and how shared state is kept consistent.
 
-Inside the `task` tool, multiple task strings also run concurrently using a
-thread pool.
+Inside the `task` tool, multiple task strings run concurrently on the parent's
+event loop, limited by `SUBAGENT_WORKERS_MAX`. Cancelling the parent cancels
+its foreground children in both the REPL and one-shot mode.
 
 See [Subagents](subagents.md).
 
@@ -468,16 +487,21 @@ retain phase, context-token count, window and effective input limit.
 
 ### Compaction flight records
 
-Every call to the central compaction function writes a unique attempt under
+Every compaction js runs writes a unique attempt under
 `logs/<agent>/compactions/<session>-<attempt>.jsonl`. `COMPACTION_LOG_DIR`
-changes that directory. Records contain caller stack/PIDs, active model and
+changes that directory. The directory is the `log_dir` argument of
+`compact_now`, `recover_overflow` and `clear_for_budget`; js's callers pass
+`compaction.flight_log_dir(cfg)`, and None writes no record. Records contain caller stack/PIDs, active model and
 settings (secret settings and credential fields masked under `PARANOID_MODE` `on`/`extra`), exact system/messages before and after,
 content hashes, retention decision, summary input/output and provider trace,
 plus success, skip, failure or cancellation. Runtime-triggered records also
 include the tool schemas, request budget and usage anchor. Files are created
 with mode 0600; records are flushed and fsynced before summarization starts.
 
-Terminal START and outcome notices include attempt ID and file path. Session
+Terminal START and outcome notices include attempt ID and file path. They
+reach the caller's `emit` as `compaction_notice` events; `compaction.printing()`
+is the `emit` js passes, which prints them as `*** Compaction ...` lines on
+stderr and hands every other event on. Session
 compaction marks carry that same ID. Budget telemetry also goes to the existing
 request autolog as `FLIGHT` JSON records even when optional runtime debug is off.
 `/set CONTEXT_SIZE N` immediately displays the effective next-request

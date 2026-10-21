@@ -20,11 +20,17 @@ from pathlib import Path
 from collections.abc import Callable, Iterable
 
 from .. import jail
+from .. import settings as _settings
+from . import policy
 from ..tool_binaries import resolve_binary
-from .core import Output, Tool, ToolContext
+from .core import Output, Tool, ToolContext, view as _view
 from .sanitize import int_or_default
 from .wiki.helpers import run
 from .descriptions import load_description
+from ..prompt_text import load_catalog
+
+_PROMPTS = load_catalog('toolkit_fs')
+
 
 
 _TEXT_EXTS = {
@@ -47,7 +53,6 @@ _IMAGE_MIME_BY_EXT = {
     ".gif": "image/gif",
 }
 _IMAGE_RESULT_PREFIX = "IMAGE_RESULT\t"
-_TRASH_MAX_BYTES = 512 * 1024 * 1024
 
 
 def _resolve_path_no_follow(context: ToolContext, raw: str | os.PathLike[str], *,
@@ -55,7 +60,9 @@ def _resolve_path_no_follow(context: ToolContext, raw: str | os.PathLike[str], *
     return context.resolve_path(raw, write=write, follow=False)
 
 
-def _path_size_no_follow(path: Path, *, cap: int = _TRASH_MAX_BYTES + 1) -> int:
+def _path_size_no_follow(path: Path, *, cap: int | None = None) -> int:
+    if cap is None:
+        cap = int(_settings.default_value("TRASH_BYTES_MAX")) + 1
     try:
         if path.is_symlink() or path.is_file():
             return path.lstat().st_size
@@ -203,21 +210,17 @@ def _changed_since_read(
     )
     context.remember_content(target, current_hash, current)
     head = (
-        f"ERROR: {target} changed on disk since it was read (hash {known_hash} when read, "
-        f"{current_hash} now); nothing was written."
+        _PROMPTS['changed_since_read_error_changed_on_disk_since_it'].format(target=target, known_hash=known_hash, current_hash=current_hash)
     )
     if delivered:
-        return f"{head} Diff from what you read to what is there now:\n{diff}Retry to {action} against the current text."
-    spans = _render_line_spans(changed) or "none (lines were only removed)"
+        return _PROMPTS['changed_since_read_diff_from_what_you_read_to'].format(head=head, diff=diff, action=action)
+    spans = _render_line_spans(changed) or _PROMPTS['changed_since_read_none_lines_were_only_removed']
     if not edits_lines:
         return (
-            f"{head} The diff is too large to show; the changed lines are now {spans}. "
-            f"A retry will {action} and discard them (undo restores them); read them first "
-            "if you need what changed."
+            _PROMPTS['changed_since_read_the_diff_is_too_large_to'].format(head=head, spans=spans, action=action)
         )
     return (
-        f"{head} The diff is too large to show; the changed lines are now {spans}. "
-        f"Read those, then retry to {action}."
+        _PROMPTS['changed_since_read_the_diff_is_too_large_to_2'].format(head=head, spans=spans, action=action)
     )
 
 
@@ -396,6 +399,7 @@ def _read_byte_range(target: Path, context: ToolContext, start_byte: int, end_by
     text = buf[start - base:end - base].decode("utf-8", errors="replace")
     if whole is not None:
         _remember_byte_read(target, context, whole, start, end)
+    _view(path=str(target), start_byte=start, end_byte=end, total_bytes=size, text=text)
     if end < size:
         footer = f"[bytes {start}-{end} of {size}; continue with {_read_byte_call(target, end)}]"
     else:
@@ -531,9 +535,7 @@ def fs_read(
     if not ranged and read_cap > 0 and size > read_cap:
         example = _read_call(target, 1, context.max_read_lines)
         return (
-            f"ERROR: file size ({size} bytes) exceeds READ_BYTES_MAX ({read_cap}) "
-            f"for a whole-file read. Read a range instead, e.g. {example} — "
-            f"ranged reads are not subject to this cap."
+            _PROMPTS['fs_read_error_file_size_bytes_exceeds_read'].format(size=size, read_cap=read_cap, example=example)
         )
 
     try:
@@ -548,6 +550,7 @@ def fs_read(
     if total == 0:
         context.remember_read(target, content_hash, total_lines=0, whole_file=True)
         context.remember_content(target, content_hash, data)
+        _view(path=str(target), start_line=0, end_line=0, total_lines=0, lines=[])
         return f"{target} is empty (hash {content_hash})"
 
     # Resolve the window: a reversed range is
@@ -578,10 +581,11 @@ def fs_read(
         whole_file=start == 1 and end == total,
     )
     context.remember_content(target, content_hash, data)
+    _view(path=str(target), start_line=start, end_line=end, total_lines=total, lines=selected)
     suffix = ""
     if end < total:
         suffix = f"\n[{total} total lines; continue with {_read_call(target, end + 1)}]"
-    if earlier is not None:
+    if context.read_deduplicate and earlier is not None:
         return (
             f"Lines {start}-{end} are unchanged since read call {earlier} returned them "
             f"(hash {content_hash}); that result is current.{suffix}"
@@ -612,10 +616,9 @@ def write(file_path: str | None = None, content: str = "", overwrite: bool = Fal
     if not raw_path:
         return "ERROR: file_path is required"
     target = context.resolve_path(raw_path, write=True)
-    if target.exists() and not overwrite:
+    if target.exists() and context.write_require_overwrite and not overwrite:
         return (
-            f"ERROR: {raw_path} already exists. To change part of it use patch; "
-            "to replace it whole, read it first and pass overwrite=true."
+            _PROMPTS['write_error_already_exists_to_change_part'].format(raw_path=raw_path)
         )
     replacing = target.exists()
     if replacing:
@@ -631,8 +634,7 @@ def write(file_path: str | None = None, content: str = "", overwrite: bool = Fal
             # The hash the model expects is its proof of what it replaces: a
             # match needs no read, a mismatch names both and writes nothing.
             guard = None if expected_hash.strip() == current_hash else (
-                f"ERROR: {target} has hash {current_hash}, not the expected {expected_hash.strip()}; "
-                "nothing was written. Read it, then retry."
+                _PROMPTS['write_error_has_hash_not_the_expected'].format(target=target, current_hash=current_hash, expected_hash_strip=expected_hash.strip())
             )
         else:
             guard = _changed_since_read(
@@ -647,6 +649,8 @@ def write(file_path: str | None = None, content: str = "", overwrite: bool = Fal
         data = _write_bytes_preserving_existing_newlines(target, content)
     except OSError as exc:
         return f"ERROR: {exc}"
+    _view(path=str(target), before=current.decode("utf-8", errors="replace") if replacing else None,
+         after=data.decode("utf-8", errors="replace"), bytes=len(data))
     content_hash = _hash_bytes(data)
     # The model wrote every byte of the new content, so the file counts as
     # fully read: a patch can follow without a read in between.
@@ -663,19 +667,23 @@ def remove(path: str, permanent: bool | None = False, context: ToolContext | Non
     if not target.exists() and not target.is_symlink():
         return f"ERROR: no such path: {target}"
     try:
-        size = _path_size_no_follow(target)
-        if not permanent and size > _TRASH_MAX_BYTES:
-            return f"ERROR: target is over the 512 MiB trash limit ({size} bytes); confirm with the operator and pass permanent=true to delete directly."
+        maximum = int(_settings.knob_attr(context, "trash_bytes_max", "TRASH_BYTES_MAX"))
+        size = _path_size_no_follow(target, cap=maximum + 1)
+        permanent, refusal = policy.removal_decision(context, permanent=permanent, size=size)
+        if refusal is not None:
+            return refusal
         _snapshot_remove_target(context, target)
         if not permanent:
             error = _trash_target(target, context)
             if error:
                 context.discard_snapshot(target)
                 return error
+            _view(path=str(target), trashed=True)
             return f"trashed {target}"
         _delete_target_no_follow(target)
     except OSError as exc:
         return f"ERROR: {exc}"
+    _view(path=str(target), trashed=False)
     return f"removed {target}"
 
 
@@ -739,6 +747,8 @@ def undo(path: str, context: ToolContext | None = None) -> str:
                     shutil.rmtree(target)
                 return f"restored deletion state for {target}"
             target.parent.mkdir(parents=True, exist_ok=True)
+            if target.is_symlink():
+                target.unlink()
             mode = None
             coverage = None
             if isinstance(previous, dict):
@@ -794,15 +804,15 @@ def _nearest_hint(text: str, old: str) -> str:
     its number turns a blind retry into a fix."""
     first = next((line for line in old.splitlines() if line.strip()), "").strip()
     if not first:
-        return " Read the file again."
+        return _PROMPTS['nearest_hint_read_the_file_again']
     lines = text.splitlines()
     best = difflib.get_close_matches(first, [line.strip() for line in lines], n=1, cutoff=0.6)
     if not best:
-        return " Nothing similar is in the file; read it again."
+        return _PROMPTS['nearest_hint_nothing_similar_is_in_the_file']
     for number, line in enumerate(lines, 1):
         if line.strip() == best[0]:
-            return f" Closest line is {number}: {line!r}. Anchor old_string on the file as it is now."
-    return " Read the file again."
+            return _PROMPTS['nearest_hint_closest_line_is_anchor_old_string'].format(number=number, line=line)
+    return _PROMPTS['nearest_hint_read_the_file_again_2']
 
 
 def _line_span(text: str, start: int, end: int) -> tuple[int, int]:
@@ -1008,7 +1018,7 @@ def _widen_over_whitespace(
 # An exact match this long is its own proof: the model reproduced the lines
 # byte for byte and they are in the file now, so no prior read is needed.
 # Shorter or fuzzy matches still need the lines shown by a read.
-_SELF_EVIDENT_MIN_CHARS = 24
+
 
 
 def _apply_edit(
@@ -1031,7 +1041,7 @@ def _apply_edit(
 
     ``stale`` is the changed-since-read diff for the file, or None. It is the
     error for an edit that misses, and for one that is not self-evident; an
-    exact match of _SELF_EVIDENT_MIN_CHARS or more is applied without it and
+    exact match of EDIT_READ_BYPASS_CHARACTERS or more is applied without it and
     without the read ledger.
 
     When ``old`` is not in the text exactly, it is matched in _fuzzy_view of
@@ -1052,14 +1062,14 @@ def _apply_edit(
         )
     haystack, needle, origin = text, old_norm, None
     occurrences = _count_overlapping(text, old_norm)
-    if occurrences == 0:
+    if occurrences == 0 and context.edit_fuzzy:
         haystack, origin = _fuzzy_view(text)
         needle = _fuzzy_view(old_norm)[0]
         occurrences = _count_overlapping(haystack, needle) if needle else 0
     if occurrences == 0:
-        return stale or f"ERROR: {label}Could not find match for search text: {old!r}.{_nearest_hint(text, old_norm)}"
+        return stale or _PROMPTS['apply_edit_error_could_not_find_match_for'].format(label=label, old=old, nearest_hint_text_old_norm=_nearest_hint(text, old_norm))
     if occurrences > 1 and not replace_all:
-        return f"ERROR: {label}Multiple matches found for search text: {old!r}. Either provide a more specific search pattern or use replace_all."
+        return _PROMPTS['apply_edit_error_multiple_matches_found_for_search'].format(label=label, old=old)
     positions: list[tuple[int, int]] = []
     cursor = 0
     while True:
@@ -1081,11 +1091,9 @@ def _apply_edit(
     if fuzzy and all(text[start:end] == replacement
                      for (start, end), replacement in zip(positions, replacements, strict=True)):
         return (
-            f"ERROR: {label}old_string matched only after normalising quotes, dashes and "
-            "whitespace, and new_string differs from it only there, so this edit would not "
-            "change the file"
+            _PROMPTS['apply_edit_error_old_string_matched_only_after'].format(label=label)
         )
-    if fuzzy or len(old_norm) < _SELF_EVIDENT_MIN_CHARS:
+    if fuzzy or len(old_norm) < context.edit_read_bypass_characters:
         if stale:
             return stale
         guard = context.require_read(target, "edit it", content_hash=content_hash)
@@ -1228,6 +1236,7 @@ def patch(
         whole_file=was_whole,
     )
     context.remember_content(target, content_hash, data)
+    _view(path=str(target), before=source, after=updated, edits=len(pending), replacements=replacements)
     diff = _unified_diff(source, updated, str(target), str(target))
     if len(diff) > 4000:
         diff = diff[:4000] + "\n... [diff truncated]"
@@ -1275,7 +1284,7 @@ def _iter_files(root: Path, hidden: Callable[[Path], bool] | None = None) -> Ite
                 yield candidate
 
 
-_RG_MISSING = "ERROR: rg (ripgrep) not found in tools/bin or PATH; install the system binary or run `just install-tool-binaries` on a supported platform."
+_RG_MISSING = _PROMPTS['default_error_rg_ripgrep_not_found_in']
 _RG_TIMEOUT_S = 120
 # ripgrep's line for a path its walk could not open or read, e.g.
 # "rg: /a/b: IO error for operation on /a/b: Permission denied (os error 13)".
@@ -1283,7 +1292,7 @@ _RG_TIMEOUT_S = 120
 _RG_WALK_ERROR = re.compile(r"^rg: (?P<path>.+?): (?:.*: )?(?P<reason>[^:]+?) \(os error \d+\)$")
 _RG_WALK_ERRORS_SHOWN = 5
 _AST_GREP_MISSING = (
-    "ERROR: ast-grep not found in tools/bin or PATH; install the system binary or run `just install-tool-binaries` on a supported platform."
+    _PROMPTS['default_error_ast_grep_not_found_in']
 )
 _AST_GREP_TIMEOUT_S = 120
 _AST_GREP_LANGUAGES = (
@@ -1524,7 +1533,7 @@ def fs_search(
     # stamp cannot vouch for a directory-root result: skip the memo for
     # directory roots. A regular-file root's stamp does establish what the hit
     # described (st_ino catches a rename-over that preserves size and mtime).
-    memoized = not stat.S_ISDIR(root_stat.st_mode)
+    memoized = context.search_deduplicate and not stat.S_ISDIR(root_stat.st_mode)
     stamp = _stat_stamp(root) if memoized else None
     cache_key = repr((pattern, str(root), glob, mode, before_context, after_context, context_lines, show_line_numbers, case_insensitive, file_type, head_limit, offset, multiline, stamp))
     cached = context.search_cache.get(cache_key) if memoized else None
@@ -1552,7 +1561,9 @@ def fs_search(
     # some entries are never returned.
     # `--one-file-system` keeps the walk on the filesystem the root is on: a
     # mount point under the root (an NFS share, an automount) is not entered.
-    argv = [rg, "--color=never", "--sort", "path", "--one-file-system"]
+    argv = [rg, "--color=never", "--sort", "path"]
+    if context.search_one_file_system:
+        argv.append("--one-file-system")
     if mode == "files":
         argv.append("--files")
     elif mode == "files_with_matches":
@@ -1958,7 +1969,7 @@ def ast_search(
     # Mirror fs_search: a directory's own stat does not move when a nested file
     # changes, so a directory-root result cannot be vouched for by the root's
     # stamp; only a regular-file root is memoized, keyed on its stamp.
-    memoized = not stat.S_ISDIR(root_stat.st_mode)
+    memoized = context.search_deduplicate and not stat.S_ISDIR(root_stat.st_mode)
     stamp = _stat_stamp(root) if memoized else None
     cache_key = repr(("ast_search", pattern, str(root), language, rewrite, limit, stamp))
     cached = context.search_cache.get(cache_key) if memoized and not apply else None
@@ -1974,7 +1985,7 @@ def ast_search(
         # paths out the same way.
         return _ast_records(binary, query, root, language, rewrite_to, limit + 1, context)
 
-    records, rc, stderr, timed_out, parse_error, used_stdin = search(pattern, rewrite)
+    records, rc, stderr, timed_out, parse_error, _used_stdin = search(pattern, rewrite)
     failure = _ast_failure(rc, stderr, timed_out, parse_error)
     if failure is not None:
         return failure
@@ -1989,7 +2000,7 @@ def ast_search(
             )
         body_var = _body_var(header)
         headed = f"{header}\n    $$${body_var}"
-        records, rc, stderr, timed_out, parse_error, used_stdin = search(headed, None)
+        records, rc, stderr, timed_out, parse_error, _used_stdin = search(headed, None)
         failure = _ast_failure(rc, stderr, timed_out, parse_error)
         if failure is not None:
             return failure
@@ -2038,21 +2049,16 @@ def ast_search(
     for target in prepared:
         context.snapshot(target)
     apply_stderr = ""
-    if used_stdin:
-        rc = 0
+    rc = 0
+    try:
+        for target, (source, _updated) in prepared.items():
+            if _read_regular_bytes(target) != source:
+                return f"ERROR: {target} changed while preparing the structural rewrite"
         for target, (_source, updated) in prepared.items():
-            try:
-                target.write_bytes(updated)
-            except OSError as exc:
-                rc = 1
-                apply_stderr = str(exc)
-                break
-    else:
-        argv = _ast_argv(binary, pattern, root, language, rewrite,
-                         excludes=_hidden_globs(Path(context.cwd), context))
-        argv.remove("--json=stream")
-        argv.insert(-2, "--update-all")
-        rc, _stdout, apply_stderr = run(argv, context=context, timeout=_AST_GREP_TIMEOUT_S)
+            target.write_bytes(updated)
+    except OSError as exc:
+        rc = 1
+        apply_stderr = str(exc)
     context.search_cache.clear()
     if rc != 0:
         detail = apply_stderr.strip()
@@ -2121,26 +2127,26 @@ def _offering_path_skills(handler):
     return wrapped
 
 
-def tools() -> tuple[Tool, ...]:
+def tools(*, result_wrapper=_offering_path_skills) -> tuple[Tool, ...]:
     return (
         Tool(
             "read",
             load_description("read"),
-            _offering_path_skills(fs_read),
+            result_wrapper(fs_read),
             {
-                "file_path": {"type": "string", "description": "Absolute, relative, or ~ path to a file."},
+                "file_path": {"type": "string", "description": _PROMPTS['tools_absolute_relative_or_path_to_a']},
                 "range": {
                     "type": "object",
                     "properties": {
-                        "start_line": {"type": "integer", "description": "Optional 1-based first line for text files."},
-                        "end_line": {"type": "integer", "description": "Optional inclusive 1-based last line for text files."},
-                        "start_byte": {"type": "integer", "description": "0-based offset of the first byte to read, for text files. Use instead of lines."},
-                        "end_byte": {"type": "integer", "description": "Optional 0-based offset one past the last byte to read."},
+                        "start_line": {"type": "integer", "description": _PROMPTS['tools_optional_1_based_first_line_for']},
+                        "end_line": {"type": "integer", "description": _PROMPTS['tools_optional_inclusive_1_based_last_line']},
+                        "start_byte": {"type": "integer", "description": _PROMPTS['tools_0_based_offset_of_the_first']},
+                        "end_byte": {"type": "integer", "description": _PROMPTS['tools_optional_0_based_offset_one_past']},
                     },
                     "additionalProperties": False,
-                    "description": "Optional line range or byte range for partial reads.",
+                    "description": _PROMPTS['tools_optional_line_range_or_byte_range'],
                 },
-                "show_line_numbers": {"type": "boolean", "default": True, "description": "For text output, prefix each line with its line number."},
+                "show_line_numbers": {"type": "boolean", "default": True, "description": _PROMPTS['tools_for_text_output_prefix_each_line']},
             },
             required=("file_path",),
             read_only=True,
@@ -2148,12 +2154,12 @@ def tools() -> tuple[Tool, ...]:
         Tool(
             "write",
             load_description("write"),
-            _offering_path_skills(write),
+            result_wrapper(write),
             {
-                "file_path": {"type": "string", "description": "File path to create or overwrite."},
-                "content": {"type": "string", "description": "Complete file content to write."},
-                "overwrite": {"type": "boolean", "default": False, "description": "Required for existing files after reading them first."},
-                "expected_hash": {"type": "string", "description": "The file's current hash, as a read or write result printed it. A match overwrites with no read."},
+                "file_path": {"type": "string", "description": _PROMPTS['tools_file_path_to_create_or_overwrite']},
+                "content": {"type": "string", "description": _PROMPTS['tools_complete_file_content_to_write']},
+                "overwrite": {"type": "boolean", "default": False, "description": _PROMPTS['tools_required_for_existing_files_after_reading']},
+                "expected_hash": {"type": "string", "description": _PROMPTS['tools_the_file_s_current_hash_as']},
             },
             required=("file_path", "content"),
         ),
@@ -2162,22 +2168,22 @@ def tools() -> tuple[Tool, ...]:
             load_description("fs_search"),
             fs_search,
             {
-                "pattern": {"type": "string", "description": "Content regular expression, or filename glob when output_mode is files."},
-                "path": {"type": "string", "description": "File or directory to search; defaults to the current working directory."},
-                "glob": {"type": "string", "description": "Optional glob filter such as *.py or **/*.tsx."},
-                "output_mode": {"type": "string", "enum": ["files", "content", "files_with_matches", "count"], "default": "files_with_matches", "description": "Result format: filename-glob paths, content-matching lines, paths whose contents match, or per-file content-match counts."},
+                "pattern": {"type": "string", "description": _PROMPTS['tools_content_regular_expression_or_filename_glob']},
+                "path": {"type": "string", "description": _PROMPTS['tools_file_or_directory_to_search_defaults']},
+                "glob": {"type": "string", "description": _PROMPTS['tools_optional_glob_filter_such_as_py']},
+                "output_mode": {"type": "string", "enum": ["files", "content", "files_with_matches", "count"], "default": "files_with_matches", "description": _PROMPTS['tools_result_format_filename_glob_paths_content']},
                 # The handler also takes ripgrep's short spellings (-B/-A/-C/-n/-i and
                 # `type`) through **rg_flags, but only the readable names are declared:
                 # the schema is what the model reads, and declaring both doubled it.
-                "before_context": {"type": "integer", "description": "Lines before each match when output_mode is content."},
-                "after_context": {"type": "integer", "description": "Lines after each match when output_mode is content."},
-                "context_lines": {"type": "integer", "description": "Lines before and after each match when output_mode is content."},
-                "show_line_numbers": {"type": "boolean", "default": True, "description": "Include file:line prefixes for content output."},
-                "case_insensitive": {"type": "boolean", "default": False, "description": "Match without case sensitivity."},
-                "file_type": {"type": "string", "description": "ripgrep type name or bare extension, e.g. rust, py, rs. Cannot be combined with a positive glob."},
-                "head_limit": {"type": "integer", "description": "Maximum number of result entries after offset; must be at least 1."},
-                "offset": {"type": "integer", "description": "Number of result entries to skip before returning output."},
-                "multiline": {"type": "boolean", "default": False, "description": "Allow the regex to span line breaks."},
+                "before_context": {"type": "integer", "description": _PROMPTS['tools_lines_before_each_match_when_output']},
+                "after_context": {"type": "integer", "description": _PROMPTS['tools_lines_after_each_match_when_output']},
+                "context_lines": {"type": "integer", "description": _PROMPTS['tools_lines_before_and_after_each_match']},
+                "show_line_numbers": {"type": "boolean", "default": True, "description": _PROMPTS['tools_include_file_line_prefixes_for_content']},
+                "case_insensitive": {"type": "boolean", "default": False, "description": _PROMPTS['tools_match_without_case_sensitivity']},
+                "file_type": {"type": "string", "description": _PROMPTS['tools_ripgrep_type_name_or_bare_extension']},
+                "head_limit": {"type": "integer", "description": _PROMPTS['tools_maximum_number_of_result_entries_after']},
+                "offset": {"type": "integer", "description": _PROMPTS['tools_number_of_result_entries_to_skip']},
+                "multiline": {"type": "boolean", "default": False, "description": _PROMPTS['tools_allow_the_regex_to_span_line']},
             },
             required=("pattern",),
             read_only=True,
@@ -2187,39 +2193,39 @@ def tools() -> tuple[Tool, ...]:
             load_description("ast_search"),
             ast_search,
             {
-                "pattern": {"type": "string", "description": "ast-grep structural pattern with metavariables such as $NAME and $$$ARGS."},
-                "path": {"type": "string", "description": "File or directory to search; defaults to the current working directory."},
-                "lang": {"type": "string", "enum": list(_AST_GREP_LANGUAGES), "description": "Optional language override; source extensions are inferred when omitted."},
-                "rewrite": {"type": "string", "description": "Optional structural replacement. Supplying it produces a dry-run diff unless apply is true."},
-                "apply": {"type": "boolean", "default": False, "description": "Apply the rewrite to files. False is a non-mutating dry run."},
-                "max_results": {"type": "integer", "default": 100, "description": "Maximum matches returned or rewritten; an apply is refused when more matches exist."},
+                "pattern": {"type": "string", "description": _PROMPTS['tools_ast_grep_structural_pattern_with_metavariables']},
+                "path": {"type": "string", "description": _PROMPTS['tools_file_or_directory_to_search_defaults_2']},
+                "lang": {"type": "string", "enum": list(_AST_GREP_LANGUAGES), "description": _PROMPTS['tools_optional_language_override_source_extensions_are']},
+                "rewrite": {"type": "string", "description": _PROMPTS['tools_optional_structural_replacement_supplying_it_produces']},
+                "apply": {"type": "boolean", "default": False, "description": _PROMPTS['tools_apply_the_rewrite_to_files_false']},
+                "max_results": {"type": "integer", "default": 100, "description": _PROMPTS['tools_maximum_matches_returned_or_rewritten_an']},
             },
             required=("pattern",),
             read_only_when=lambda args: not args.get("apply"),
         ),
-        Tool("remove", load_description("remove"), remove, {"path": {"type": "string", "description": "File or directory path to delete."}, "permanent": {"type": "boolean", "default": False, "description": "Delete directly without the trash; the path is still snapshotted for undo."}}, required=("path",)),
+        Tool("remove", load_description("remove"), remove, {"path": {"type": "string", "description": _PROMPTS['tools_file_or_directory_path_to_delete']}, "permanent": {"type": "boolean", "default": False, "description": _PROMPTS['tools_delete_directly_without_the_trash_the']}}, required=("path",)),
         Tool(
             "patch",
             load_description("patch"),
-            _offering_path_skills(patch),
+            result_wrapper(patch),
             {
-                "file_path": {"type": "string", "description": "File path to edit."},
-                "old_string": {"type": "string", "description": "Exact text to replace. Required unless edits is used."},
-                "new_string": {"type": "string", "description": "Replacement text; must differ from old_string. Required unless edits is used."},
-                "replace_all": {"type": "boolean", "default": False, "description": "Replace every occurrence instead of requiring one unique match."},
+                "file_path": {"type": "string", "description": _PROMPTS['tools_file_path_to_edit']},
+                "old_string": {"type": "string", "description": _PROMPTS['tools_exact_text_to_replace_required_unless']},
+                "new_string": {"type": "string", "description": _PROMPTS['tools_replacement_text_must_differ_from_old']},
+                "replace_all": {"type": "boolean", "default": False, "description": _PROMPTS['tools_replace_every_occurrence_instead_of_requiring']},
                 "edits": {
                     "type": "array",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "old_string": {"type": "string", "description": "Exact text to replace."},
-                            "new_string": {"type": "string", "description": "Replacement text; must differ from old_string."},
-                            "replace_all": {"type": "boolean", "default": False, "description": "Replace every occurrence of this edit."},
+                            "old_string": {"type": "string", "description": _PROMPTS['tools_exact_text_to_replace']},
+                            "new_string": {"type": "string", "description": _PROMPTS['tools_replacement_text_must_differ_from_old_2']},
+                            "replace_all": {"type": "boolean", "default": False, "description": _PROMPTS['tools_replace_every_occurrence_of_this_edit']},
                         },
                         "required": ["old_string", "new_string"],
                         "additionalProperties": False,
                     },
-                    "description": "Several replacements validated and applied in order before one final write. Use instead of old_string/new_string, never alongside them.",
+                    "description": _PROMPTS['tools_several_replacements_validated_and_applied_in'],
                 },
             },
             input_schema={
@@ -2228,29 +2234,29 @@ def tools() -> tuple[Tool, ...]:
                 # _apply_edit already rejects mixing the scalar and batch forms.
                 "type": "object",
                 "properties": {
-                    "file_path": {"type": "string", "description": "File path to edit."},
-                    "old_string": {"type": "string", "description": "Exact text to replace. Pair with new_string, or use edits instead."},
-                    "new_string": {"type": "string", "description": "Replacement text; must differ from old_string."},
-                    "replace_all": {"type": "boolean", "default": False, "description": "Replace every occurrence instead of requiring one unique match."},
+                    "file_path": {"type": "string", "description": _PROMPTS['tools_file_path_to_edit_2']},
+                    "old_string": {"type": "string", "description": _PROMPTS['tools_exact_text_to_replace_pair_with']},
+                    "new_string": {"type": "string", "description": _PROMPTS['tools_replacement_text_must_differ_from_old_3']},
+                    "replace_all": {"type": "boolean", "default": False, "description": _PROMPTS['tools_replace_every_occurrence_instead_of_requiring_2']},
                     "edits": {
                         "type": "array",
                         "minItems": 1,
                         "items": {
                             "type": "object",
                             "properties": {
-                                "old_string": {"type": "string", "description": "Exact text to replace."},
-                                "new_string": {"type": "string", "description": "Replacement text; must differ from old_string."},
-                                "replace_all": {"type": "boolean", "default": False, "description": "Replace every occurrence of this edit."},
+                                "old_string": {"type": "string", "description": _PROMPTS['tools_exact_text_to_replace_2']},
+                                "new_string": {"type": "string", "description": _PROMPTS['tools_replacement_text_must_differ_from_old_4']},
+                                "replace_all": {"type": "boolean", "default": False, "description": _PROMPTS['tools_replace_every_occurrence_of_this_edit_2']},
                             },
                             "required": ["old_string", "new_string"],
                             "additionalProperties": False,
                         },
-                        "description": "Several replacements applied in order before one final write. Use instead of old_string/new_string, never alongside them.",
+                        "description": _PROMPTS['tools_several_replacements_applied_in_order_before'],
                     },
                 },
                 "required": ["file_path"],
                 "additionalProperties": False,
             },
         ),
-        Tool("undo", load_description("undo"), undo, {"path": {"type": "string", "description": "Path whose latest snapshot should be restored."}}, required=("path",)),
+        Tool("undo", load_description("undo"), undo, {"path": {"type": "string", "description": _PROMPTS['tools_path_whose_latest_snapshot_should_be']}}, required=("path",)),
     )

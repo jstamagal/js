@@ -17,7 +17,7 @@ from __future__ import annotations
 import inspect
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import ai
@@ -28,6 +28,7 @@ from . import memory
 from . import messages as msgs
 from . import model_client
 from . import model_metadata
+from . import output
 from . import retry
 from . import settings as _settings
 from . import stream_transport
@@ -98,10 +99,16 @@ class CallLimits:
     stream_idle: float | None
     max_output_escalation: int
     max_output_resumes: int
+    overflow_rounds_max: int = field(default_factory=lambda: _settings.default_value("COMPACTION_OVERFLOW_ROUNDS_MAX"))
+    silent_overflow_recovery: bool = field(default_factory=lambda: _settings.default_value("SILENT_OVERFLOW_RECOVERY"))
+    signed_reasoning_recovery: bool = field(default_factory=lambda: _settings.default_value("SIGNED_REASONING_RECOVERY"))
 
     @classmethod
     def from_settings(cls, settings: dict | None) -> CallLimits:
         return cls(
+            silent_overflow_recovery=bool(_settings.knob(settings, "SILENT_OVERFLOW_RECOVERY")),
+            signed_reasoning_recovery=bool(_settings.knob(settings, "SIGNED_REASONING_RECOVERY")),
+            overflow_rounds_max=int(_settings.knob(settings, "COMPACTION_OVERFLOW_ROUNDS_MAX")),
             retry=retry.Budget.from_settings(settings),
             stream_idle=retry.idle_seconds(settings),
             max_output_escalation=int(_settings.knob(settings, "OUTPUT_TOKENS_RETRY_MAX") or 0),
@@ -124,6 +131,7 @@ class ModelRequest:
     extra: Any = None
     sampling: Sampling | None = None
     cache_key: str | None = None
+    settings: dict | None = None
 
 
 @dataclass
@@ -183,7 +191,7 @@ class ModelCaller:
         # Retries, overflow rounds (a provider rejection or a silent
         # overflow), one escalated resend and its fallback, and one resend
         # without signed reasoning.
-        for attempt in range(limits.retry.attempts + 1 + compaction.MAX_OVERFLOW_ROUNDS + 3):
+        for attempt in range(limits.retry.attempts + 1 + limits.overflow_rounds_max + 3):
             t0 = time.time()
             self._sink.clear()
             try:
@@ -203,7 +211,7 @@ class ModelCaller:
                 shown = self._sink.shown
                 window = self._budget.provider_window()
                 silent = silent_overflow(result.usage, window, cut_by_cap=cut_by_cap)
-                if silent is not None and self._overflow_rounds < compaction.MAX_OVERFLOW_ROUNDS:
+                if limits.silent_overflow_recovery and silent is not None and self._overflow_rounds < limits.overflow_rounds_max:
                     # The provider took more input than the window holds, so
                     # it cut the input: shed history and ask again. A reply
                     # already shown is kept, and the shed history serves the
@@ -244,7 +252,7 @@ class ModelCaller:
                     continue
                 if (
                     compaction.is_context_overflow_error(e)
-                    and self._overflow_rounds < compaction.MAX_OVERFLOW_ROUNDS
+                    and self._overflow_rounds < limits.overflow_rounds_max
                 ):
                     self._overflow_rounds += 1
                     telemetry.event(
@@ -256,13 +264,19 @@ class ModelCaller:
                     )
                     if await self._recover(e):
                         continue
-                if not signed_reasoning_dropped and model_client.is_signed_reasoning_rejection(e):
-                    # The provider refused a replayed signature (an edit js
-                    # made before it, or a system or tool change): replay
-                    # the history without signed reasoning, once.
+                if limits.signed_reasoning_recovery and not signed_reasoning_dropped and model_client.is_signed_reasoning_rejection(e):
                     signed_reasoning_dropped = True
-                    dropped = memory.drop_signed_reasoning(self._convo.messages)
-                    telemetry.event("signed_reasoning_dropped", model=model, messages=dropped,
+                    restarted = (memory.restart_thinking_turn(
+                        self._convo.messages, require_tool_calls=not model_client.is_modified_thinking_rejection(e))
+                                 if model_client.is_anthropic_thinking_rejection(e) else 0)
+                    # A tool continuation requires the original thinking blocks.
+                    # An unrestorable turn becomes fresh user context; completed
+                    # turns and other providers can discard refused signatures.
+                    # A refused signature can be in any earlier turn.
+                    dropped = (memory.drop_signed_reasoning(self._convo.messages)
+                               if not restarted or model_client.is_signature_rejection(e) else 0)
+                    telemetry.event("thinking_turn_restarted" if restarted else "signed_reasoning_dropped",
+                                    model=model, messages=restarted or dropped,
                                     error=f"{type(e).__name__}: {e}")
                     self._convo.rebuild()
                     compaction.history_rewritten(context)
@@ -278,7 +292,7 @@ class ModelCaller:
                                             retry_after=wait, limit=limits.retry.max_wait)
                         self._fail(e, retryable=True)
                         raise
-                    delay = wait if wait is not None else _backoff(transport_retries)
+                    delay = wait if wait is not None else _backoff(transport_retries, limits.retry)
                     transport_retries += 1
                     await retry.wait(transport_retries, limits.retry, delay, e)
                 else:
@@ -322,6 +336,7 @@ class ModelCaller:
             trace_request_schemas=convo.schemas,
             trace_request_from=convo.sent,
             cache_key=request.cache_key,
+            settings=request.settings,
             stream_idle_seconds=self._limits.stream_idle,
         )
         if self._trace_sink is not None:
@@ -387,17 +402,11 @@ class ModelCaller:
                 "finish_reason": finish,
                 "n_tool_calls": n_calls,
             })
-        net = stream_transport.net_level()
-        label = context.net_label
-        if (net >= 3 and (label or not self._suppress)) if net is not None else self._trace:
-            elapsed = time.time() - t0
-            tps = (out_tokens / elapsed) if elapsed > 0 else 0.0
-            cache = ""
-            if context.last_prompt_tokens > 0 and context.last_cached_tokens > 0:
-                cache = f"  cache {100.0 * context.last_cached_tokens / context.last_prompt_tokens:.0f}%"
-            ttft = f"  ttft {int(result.first_token_s * 1000)}ms" if result.first_token_s is not None else ""
-            msgs.say(msgs.CALL_STATS, flush=True, label=f"{label}: " if label else "", ms=int(elapsed * 1000),
-                     finish=finish, tool_calls=n_calls, tokens=out_tokens, tps=tps, ttft=ttft, cache=cache)
+        output.sink_of(self._telemetry).emit(output.event(
+            "call_stats", label=context.net_label, elapsed_s=time.time() - t0, finish=finish, tool_calls=n_calls,
+            tokens=out_tokens, first_token_s=getattr(result, "first_token_s", None),
+            prompt_tokens=context.last_prompt_tokens, cached_tokens=context.last_cached_tokens,
+            trace=self._trace, suppressed=self._suppress))
         return ModelReply(result=result, finish=finish, provider_metadata=provider_metadata,
                           incomplete_reason=incomplete_reason, ai_tools=ai_tools, usage_stale=usage_stale)
 

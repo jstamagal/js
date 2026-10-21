@@ -80,3 +80,15 @@ def test_a_raw_line_separator_inside_a_record_does_not_split_it(tmp_path):
         stream.write(json.dumps(record, ensure_ascii=False) + "\n")
     session_text.refresh(path)
     assert "a\u2028b" in session_store.text_path(path).read_text(encoding="utf-8")
+
+
+def test_registered_setting_can_stop_automatic_text_refresh(tmp_path):
+    from js import settings
+
+    path = _session(tmp_path)
+    text_path = session_store.text_path(path)
+    before = text_path.read_bytes()
+    settings.bind_live_settings({"SESSION_TEXT_AUTO_REFRESH": False})
+    memory.append_message(path, {"role": "assistant", "content": "new reply"})
+    assert text_path.read_bytes() == before
+    assert "new reply" in path.read_text()

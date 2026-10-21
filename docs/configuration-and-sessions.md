@@ -3,6 +3,13 @@
 Configuration is read by `js.config.from_env()` at run start and stored in a
 frozen `Config` dataclass. CLI flags override individual runs where supported.
 
+A program that imports js can build a `Config` in code instead:
+`Config(model=..., provider_id=..., provider_api_key=...)`. `model` is the one
+required argument. Every other field has a default: no session is written
+(the session file is `os.devnull`), and the per-turn settings are the
+`js/jsrc` values unless `settings=` holds them. No jsrc, env var or `~/.js`
+file is read.
+
 ## Config Files And Precedence
 
 `js` reads config in this order, lowest to highest:
@@ -235,6 +242,29 @@ skipped.
 `--migrate-config` is a one-shot conversion for a legacy `config.toml`: it
 writes equivalent `set ...` lines to `jsrc` and exits. The migration path is
 temporary and is removed after 2 releases.
+
+A `jsrc` that still holds the old setting names (`model.id`,
+`limits.max_read_lines`) is rewritten in place the first time config load
+reads it (`settings.load_jsrc_files`, through `rename.migrate_jsrc_file`),
+before any line is parsed. This holds for the global `~/.js/jsrc`, the
+project `.js/jsrc` and `.js/jsrc.local`, and preset files. The rules are
+`js/rename.py`'s, the same as `scripts/rename-settings.py --write`. The
+original is copied first to `jsrc.bak-YYYY-MM-DD` beside it (`.1`, `.2`, ...
+when that name exists; a backup is never overwritten), and one line on stderr
+names the file and the backup. A live line it cannot convert safely (an
+`alias`/`on` body with a shell operator that sets an old name, a deleted
+setting, the old spelling of a name the file also sets by its new one) is
+commented out as `# js: not migrated: <line as written>`, a note such as
+`(setting deleted)` before the colon. A line that only mentions an old name,
+in a value or in a body that does not set it, stays live. The backup and the
+new file are created with the original's permissions.
+One warning lists those line numbers for a hand edit, so startup loads with
+no unknown-setting errors. A file that is already converted is not changed,
+so a second start does nothing. A file or directory js cannot write is left
+as it is, with one warning naming the command to run by hand
+(`scripts/rename-settings.py --write <file>`). The old names are still
+refused as live settings: `set model.id x` typed in the REPL or given with
+`--extra` is an unknown setting.
 
 `--im-a-pussy` opts OUT of the code-running inline prompt directives for the
 run; they are on by default and compile and run arbitrary code from prompt
@@ -665,8 +695,8 @@ provider that is not built in refreshes a stale catalog, as any provider
 lookup does): fresh input, cache reads, cache writes and output each at
 their own rate per million tokens, cache rates falling back to the input rate,
 and the price tier whose `min_context` the prompt reaches. A call that names a
-provider is priced only from that provider's catalog row (or the row its SDK
-or login maps to; a Codex login is priced at OpenAI's API rates), so a local
+provider is priced only from that provider's catalog row (a Codex login is
+priced at OpenAI's API rates), so a local
 server's model is not charged an API price. A call with no provider goes
 through the gateway and takes the routed row. A model with no price counts
 tokens only and adds to `unpriced_calls`.

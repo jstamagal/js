@@ -1,0 +1,4 @@
+{
+  "browse_screenshot_path_size_bytes_obscura_returns": "SCREENSHOT path={shot_path} size={shot_path_stat_st_size} bytes\nobscura returns either a picture or a dump, never both. Call browse again without screenshot to read this page's content.",
+  "browse_error_http_from_the_page_below": "ERROR: HTTP {status} from {redacted_url_url}; the page below is the error response\n{body}"
+}

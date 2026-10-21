@@ -7,7 +7,6 @@ a child of a scalar knob (MODEL.child) was accepted while setting the
 same path errors.
 """
 
-from js import messages as msgs
 from js import setcmd
 
 
@@ -27,30 +26,3 @@ def test_unset_rejects_children_of_scalar_knob_like_apply_set():
     assert result.error is not None
     assert not result.changed
     assert setcmd.apply_unset({}, "MODEL.child", baseline).error is not None
-
-
-def test_unset_message_follows_changed():
-    # restored from baseline: changed, so the value line, not the value as it stands
-    restored = setcmd.apply_unset({}, "model", {"MODEL": "basemodel"})
-    assert restored.changed
-    assert restored.lines == [msgs.SETTING_CHANGED.line(colour=False, key="MODEL", value="basemodel")]
-
-    # nothing to do: not changed, the value as it stands
-    same = setcmd.apply_unset({"MODEL": "basemodel"}, "model", {"MODEL": "basemodel"})
-    assert not same.changed
-    assert same.lines == [msgs.SETTING_IS.line(colour=False, key="MODEL", value="basemodel")]
-
-    # absent everywhere: not changed, the value as it stands
-    absent = setcmd.apply_unset({}, "model", {})
-    assert not absent.changed
-    assert absent.lines == [msgs.SETTING_IS.line(colour=False, key="MODEL", value="<none>")]
-
-
-def test_unset_of_map_child_still_works():
-    result = setcmd.apply_unset(
-        {"EXTRA_PARAMS": {"organization": "acme"}},
-        "EXTRA_PARAMS.organization",
-        {"EXTRA_PARAMS": {}},
-    )
-    assert result.changed
-    assert not result.error

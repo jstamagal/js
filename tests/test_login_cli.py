@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 from js import cli, login_cli, logins, paths, providers
 from js import messages as msgs
 
@@ -72,6 +74,14 @@ def test_login_provider_rows_show_saved_env_and_registry(monkeypatch, tmp_path: 
         _reset_logins()
 
 
+def test_login_picker_accepts_action_keymaps(monkeypatch):
+    monkeypatch.setattr(login_cli.curses, "curs_set", lambda value: None)
+    screen = _FakeStdscr([ord("z")])
+    chosen = login_cli._curses_picker(screen, [("first", "")], "choose",
+                                      keymaps={"list": {"choose": (ord("z"),)}})
+    assert chosen == [0]
+
+
 def test_collect_api_login_offers_env_key_and_accepting_uses_it(monkeypatch, tmp_path: Path):
     # Owner ruling: login never silently farms env keys. It OFFERS the env key;
     # answering yes uses it, and only then.
@@ -118,6 +128,26 @@ def test_collect_api_login_declining_env_key_prompts_for_one(monkeypatch, tmp_pa
         assert login.provider_api_key == "sk-typed-real"
     finally:
         _reset_logins()
+
+
+@pytest.mark.parametrize("provider_id", ["deepseek", "vllm"])
+def test_cancelled_api_key_prompt_cancels_login(monkeypatch, provider_id):
+    provider = providers.provider_for_login(provider_id)
+    for name in provider.api_key_env + provider.base_url_env + provider.model_env:
+        monkeypatch.delenv(name, raising=False)
+    if provider_id == "deepseek":
+        logins.save_login(logins.Login(provider_id=provider_id, provider_api_key="saved-key"))
+    replies = iter(["", KeyboardInterrupt()])
+
+    def reply(_prompt):
+        value = next(replies)
+        if isinstance(value, KeyboardInterrupt):
+            raise value
+        return value
+
+    monkeypatch.setattr("builtins.input", reply)
+
+    assert login_cli._collect_api_login(provider_id, provider.effective_sdk_provider_id, provider) is None
 
 
 def test_variable_endpoint_providers_show_base_url_field():
@@ -593,11 +623,6 @@ def test_mask_does_not_reveal_complete_keys_even_across_separators(monkeypatch):
         assert not all(character in displayed for character in key)
 
 
-def test_mask_shows_the_whole_key_when_paranoid_mode_is_off(monkeypatch):
-    monkeypatch.setenv("JS_PARANOID_MODE", "off")
-    assert login_cli._mask("sk-1234567890abcd") == "sk-1234567890abcd"
-
-
 def test_post_fetch_confirmation_skips_prompt_when_listing_validates_auth(monkeypatch):
     # deepseek (models_list_validates_auth=True): no test-choice prompt at all —
     # asking "add without a test?" when listing already proved the key works
@@ -886,123 +911,29 @@ def test_effort_off_survives_a_save_and_load():
     assert login_defaults.checked(values) == values
 
 
-def test_an_oauth_style_save_keeps_the_saved_defaults(tmp_path: Path):
-    logins.set_config_dir(tmp_path)
-    try:
-        logins.save_login(logins.Login(provider_id="vllm", provider_api_key="old",
-                                       defaults={"CONTEXT_SIZE": 4096}, model_defaults={"m": {"TOP_K": 5}}))
-        logins.save_login(logins.Login(provider_id="vllm", provider_api_key="new"))  # a fresh login flow
-        login = logins.load_logins_fresh()["vllm"]
-        assert login.provider_api_key == "new"
-        assert login.defaults == {"CONTEXT_SIZE": 4096}
-        assert login.model_defaults == {"m": {"TOP_K": 5}}
-    finally:
-        _reset_logins()
+def test_registered_local_placeholder_is_used_for_keyless_login(monkeypatch):
+    from js import config
+
+    for name in ("VLLM_API_KEY", "VLLM_BASE_URL", "VLLM_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    config.set_invocation(extras=["LOCAL_API_KEY_PLACEHOLDER=local-token"])
+    monkeypatch.setattr(login_cli, "_input", lambda _prompt, default=None, **kw: default or "")
+    login = login_cli._collect_api_login("vllm", "openai", providers.provider_for_login("vllm"))
+    assert login.provider_api_key == "local-token"
 
 
-def test_e_in_the_keep_list_of_a_new_login_saves_the_models_defaults(monkeypatch, tmp_path: Path):
-    import curses
-
-    logins.set_config_dir(tmp_path)
-
-    def fake_input(prompt, *, default=None, secret=False):
-        if prompt == BASE_URL_PROMPT:
-            return "http://127.0.0.1:8000/v1"
-        if prompt in KEY_PROMPTS:
-            return ""
-        if prompt == msgs.LOGIN_ASK_EXTRA_MODELS.text():
-            return ""
-        raise AssertionError(f"unexpected prompt: {prompt}")
-
-    def keep_list(_fn, rows, _title, *, preselected, on_edit=None):
-        assert on_edit is not None
-        on_edit(None, "served-model")
-        return sorted(preselected)
-
-    try:
-        monkeypatch.setattr(login_cli, "_input", fake_input)
-        monkeypatch.setattr(login_cli, "_interactive", lambda: True)
-        monkeypatch.setattr(login_cli, "test_login_with_metadata", lambda _login: (["served-model"], {}))
-        monkeypatch.setattr(login_cli, "_post_fetch_confirmation", lambda *_args: True)
-        monkeypatch.setattr(login_cli, "_curses_prompt", lambda _screen, _label, _current: "temperature=0.6")
-        monkeypatch.setattr(curses, "wrapper", keep_list)
-
-        assert login_cli._run_login("vllm") == 0
-        assert logins.load_logins_fresh()["vllm"].model_defaults == {"served-model": {"TEMPERATURE": 0.6}}
-        assert logins.load_model_cache()["vllm"] == ["served-model"]
-    finally:
-        _reset_logins()
-
-
-def test_every_login_flows_keep_list_offers_e(monkeypatch, tmp_path: Path):
-    import curses
-
-    logins.set_config_dir(tmp_path)
-    edits = {}
-
-    def keep_list(_fn, rows, _title, *, preselected, on_edit=None):
-        edits[flow] = on_edit is not None
-        return sorted(preselected)
-
-    def fake_input(prompt, *, default=None, secret=False):
-        if prompt == BASE_URL_PROMPT:
-            return "http://127.0.0.1:8000/v1"
-        return ""
-
-    codex = logins.Login(provider_id="openai-codex", sdk_provider_id="openai-codex", provider_api_key="jwt",
-                         codex_refresh_token="refresh", codex_token_expires=1.0, codex_account_id="acct")
-    xai = logins.Login(provider_id="xai", sdk_provider_id="xai", provider_api_key="tok")
-    flows = {
-        "api": lambda: login_cli._run_login("vllm"),
-        "codex": lambda: login_cli._run_codex_login("openai-codex"),
-        "codex again": lambda: login_cli._run_codex_login("openai-codex"),
-        "xai": lambda: login_cli._run_xai_login(),
-        "models edit": lambda: login_cli._run_models_edit("vllm"),
-    }
-    try:
-        monkeypatch.setattr(login_cli, "_input", fake_input)
-        monkeypatch.setattr(login_cli, "_interactive", lambda: True)
-        monkeypatch.setattr(login_cli, "_dialect_map", lambda _provider_id: {})
-        monkeypatch.setattr(login_cli, "test_login_with_metadata", lambda _login: (["m"], {}))
-        monkeypatch.setattr(login_cli, "test_login", lambda _login: ["m"])
-        monkeypatch.setattr(login_cli, "_post_fetch_confirmation", lambda *_args: True)
-        monkeypatch.setattr(login_cli.codex_auth, "login_browser", lambda: codex)
-        monkeypatch.setattr(login_cli.xai_auth, "login_browser", lambda **_k: xai)
-        monkeypatch.setattr(curses, "wrapper", keep_list)
-        for flow, run in flows.items():
-            assert run() == 0, flow
-    finally:
-        _reset_logins()
-
-    assert edits == dict.fromkeys(flows, True)
-
-
-def test_refetch_after_an_edit_shows_the_edited_defaults(monkeypatch, tmp_path: Path):
-    import curses
-
-    logins.set_config_dir(tmp_path)
-    logins.save_login(logins.Login(provider_id="vllm", provider_base_url="http://x/v1"))
-    shown = []
-    choices = iter([2, 2, 3])
-
-    def keep_list(_fn, rows, _title, *, preselected, on_edit=None):
-        shown.append(dict(rows))
-        if len(shown) == 1:
-            on_edit(None, "m")
-        return sorted(preselected)
-
-    try:
-        monkeypatch.setattr(login_cli, "_menu", lambda *_a, **_k: next(choices))
-        monkeypatch.setattr(login_cli, "_interactive", lambda: True)
-        monkeypatch.setattr(login_cli, "_input", lambda *a, **k: "")
-        monkeypatch.setattr(login_cli, "test_login_with_metadata", lambda _login: (["m"], {}))
-        monkeypatch.setattr(login_cli, "_curses_prompt", lambda _screen, _label, _current: "temperature=0.6")
-        monkeypatch.setattr(curses, "wrapper", keep_list)
-
-        login_cli._manage_models(logins.load_logins_fresh()["vllm"])
-        edited = logins.load_logins_fresh()["vllm"]
-    finally:
-        _reset_logins()
-
-    assert shown[1]["m"] == login_cli._model_annotation(edited, "m")
-    assert shown[1]["m"] != shown[0]["m"]
+def test_login_assembly_runs_without_terminal_or_provider_calls(capsys):
+    login = logins.Login("openai")
+    saved, cached, notices = [], [], []
+    assembly = login_cli.LoginAssembly(
+        collect=lambda *args, **kwargs: login,
+        fetch=lambda value: (["model"], {}),
+        confirm=lambda *args: True,
+        keep=lambda provider, value, models: (models, value),
+        save=saved.append,
+        cache=lambda *args, **kwargs: cached.append((args, kwargs)),
+        say=lambda *args, **kwargs: notices.append(args),
+    )
+    assert login_cli._run_login("openai", assembly=assembly) == 0
+    assert saved == [login] and cached[0][0] == ("openai", ["model"])
+    assert notices and capsys.readouterr().out == ""

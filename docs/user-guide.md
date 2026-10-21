@@ -131,6 +131,7 @@ REPL commands:
 /persona
 /tools                         each tool's state (eager/lazy/ban) and the entry that decided it
 /session [query]               open the session picker
+/skills                        open the skill picker: switch each skill on or off (SKILLS_DISABLED)
 /cost                          the session's tokens and cost, in total and by model
 /cd [dir]                      print or change the session's working directory
 /add <path>[:rw]               under -C, show a path in the jail (read-only, or :rw)
@@ -354,6 +355,11 @@ Ctrl-C cancels the active turn and drops queued and steering lines; `/flush`
 drops them without touching the turn. `exit` or Ctrl-D during a turn does what
 Ctrl-C does, keeping the partial answer and marking the turn interrupted, and
 the screen closes once the turn has ended.
+
+With no turn running, Ctrl-C clears the input line and shows `Press Ctrl-C
+again to exit` under it; a second Ctrl-C within two seconds quits. Ctrl-D quits on an empty line and deletes the character under
+the cursor inside a line; at the end of a line with text it shows the same
+hint, and a second Ctrl-D within two seconds quits.
 
 Resuming a session in the screen shows its last `RESUME_EXCHANGES` exchanges
 (3 by default, 0 for none) as a turn draws them, below the startup lines and

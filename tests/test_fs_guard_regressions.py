@@ -93,3 +93,15 @@ def test_a_written_file_counts_as_fully_read_so_patch_needs_no_read_first(tmp_pa
     assert fs.write(str(target), content="replaced\n", overwrite=True, context=context).startswith("wrote ")
     assert fs.patch(str(target), old_string="replaced", new_string="again", context=context).startswith("patched ")
     assert target.read_text() == "again\n"
+
+
+def test_registered_read_gate_can_allow_an_unread_edit(tmp_path):
+    from types import SimpleNamespace
+    from js import turn_settings
+
+    target = tmp_path / "unread.txt"
+    target.write_text("before\n")
+    context = ToolContext(cwd=tmp_path)
+    turn_settings.install(context, SimpleNamespace(**turn_settings.project({"FILE_REQUIRE_READ": False})))
+    fs.patch(str(target), old_string="before", new_string="after", context=context)
+    assert target.read_text() == "after\n"

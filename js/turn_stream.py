@@ -3,23 +3,19 @@
 `TurnEvents` raises a turn's events to its ON hooks and its event sink, and
 tallies the usage the turn is charged.
 
-`StreamSink` takes the chunks of a streamed reply. It shows the answer in a
-Display and the reasoning in a ReasoningDisplay, tees the answer to the
-transcript log, and keeps what streamed until the assistant record is
-appended, so a turn cancelled mid-stream can still record it.
+`StreamSink` takes the chunks of a streamed reply. It sends them on as output
+events, and keeps what streamed until the assistant record is appended, so a
+turn cancelled mid-stream can still record it.
 """
 
 from __future__ import annotations
 
-import contextlib
-import sys
 from typing import Any
 
-from . import display
 from . import memory
+from . import output
 from . import settings as _settings
 from . import usage as usage_mod
-from .reasoning_display import ReasoningDisplay, StderrReasoning
 
 
 class TurnEvents:
@@ -79,10 +75,12 @@ def reasoning_level(settings: dict | None) -> int:
 
 class StreamSink:
     """``text`` and ``reasoning`` are the ``on_text`` and ``on_reasoning``
-    callbacks of one model call. Each Display opens at its first chunk and
-    finishes at ``close``. Nothing is shown when ``suppress_output`` is set,
-    and no reasoning at REASONING_DISPLAY 0; the text still reaches the turn status
-    and the ``stream`` event."""
+    callbacks of one model call. Each chunk goes to the turn status, and as
+    an ``answer`` or ``reasoning`` output event to the telemetry's sink
+    (`output.sink_of`), which draws the answer and the reasoning; ``close``
+    ends both. The events say ``suppressed`` when ``suppress_output`` is set,
+    and js's console then shows nothing; it shows no reasoning at
+    REASONING_DISPLAY 0. The text also reaches the ``stream`` event."""
 
     def __init__(self, telemetry: Any, turn_status: Any, events: TurnEvents, *,
                  settings: dict | None, suppress_output: bool):
@@ -90,14 +88,18 @@ class StreamSink:
         self._status = turn_status
         self._events = events
         self._suppress = suppress_output
-        self._markdown = display.markdown_enabled(settings)
+        self._markdown = _settings.knob(settings if isinstance(settings, dict) else None, "MARKDOWN") is not False
         self._reasoning_level = reasoning_level(settings)
-        self._transcript = getattr(telemetry, "transcript_log", None)
-        self._answer: display.Display | None = None
-        self._thinking: ReasoningDisplay | None = None
+        self._key = output.Key()
         # Streamed and not yet recorded.
         self._text = ""
         self._reasoning: list[str] = []
+        self._answer_open = False
+        self._reasoning_open = False
+        self._output("stream_open")
+
+    def _output(self, name: str, /, **fields: Any) -> None:
+        output.sink_of(self._telemetry).emit(output.event(name, stream=self._key, **fields))
 
     @property
     def shown(self) -> bool:
@@ -110,69 +112,35 @@ class StreamSink:
         self._text = ""
         self._reasoning.clear()
 
-    def _settle_tools(self) -> None:
-        """Text is about to be shown: the run of quiet tool calls before it ends."""
-        settle = getattr(self._telemetry, "settle_tools", None)
-        if callable(settle):
-            settle()
-
     def reasoning(self, chunk: str) -> None:
         if not chunk:
             return
         self._reasoning.append(chunk)
+        self._reasoning_open = True
         self._status.stream(chunk)
-        if self._suppress or self._reasoning_level == 0:
-            return
-        if self._thinking is None:
-            self._settle_tools()
-            factory = self._telemetry.reasoning_factory
-            self._thinking = (
-                factory(self._reasoning_level) if factory is not None
-                else StderrReasoning(self._reasoning_level, sys.stderr)
-            )
-        self._thinking.append(chunk)
+        self._output("reasoning", text=chunk, level=self._reasoning_level, suppressed=self._suppress)
 
     def text(self, chunk: str) -> None:
         if not chunk:
             return
-        if self._thinking is not None:
-            self._thinking.answer_started()
+        self._answer_open = True
+        self._output("answer_started", suppressed=self._suppress)
         self._text += chunk
         self._status.stream(chunk)
         self._events.emit("stream", text=chunk)
-        if self._suppress:
-            return
-        if self._transcript is not None:
-            write_chunk = getattr(self._transcript, "write_assistant_chunk", None)
-            if callable(write_chunk):
-                write_chunk(chunk)
-        with self._muted_transcript_tee():
-            if self._answer is None:
-                self._settle_tools()
-                factory = self._telemetry.display_factory
-                self._answer = (
-                    factory(self._markdown) if factory is not None
-                    else display.Display.for_stream(sys.stdout, markdown=self._markdown)
-                )
-                self._answer.speaker(*display.agent_speaker())
-            self._answer.chunk("text", chunk)
+        self._output("answer", text=chunk, markdown=self._markdown, suppressed=self._suppress)
 
     def close(self, reasoning_tokens: int | None = None) -> None:
-        """Finish the answer and reasoning Displays of this call."""
-        if not self._suppress and self._answer is not None:
-            if self._transcript is not None:
-                end_stream = getattr(self._transcript, "end_assistant_stream", None)
-                if callable(end_stream):
-                    end_stream()
-            with self._muted_transcript_tee():
-                self._answer.finish()
-        self._answer = None
+        """Finish the answer and reasoning of this call."""
+        if self._answer_open:
+            self._answer_open = False
+            self._output("answer_end", suppressed=self._suppress)
         self.close_reasoning(reasoning_tokens)
 
     def close_reasoning(self, tokens: int | None = None) -> None:
-        if self._thinking is not None:
-            self._thinking.finish(tokens)
-            self._thinking = None
+        if self._reasoning_open:
+            self._reasoning_open = False
+            self._output("reasoning_end", tokens=tokens)
 
     def commit_partial(self, messages: list[dict]) -> None:
         """Append what streamed and was not recorded, as an assistant record
@@ -187,9 +155,3 @@ class StreamSink:
         if partial_reasoning:
             record["reasoning_content"] = partial_reasoning
         messages.append(memory.note_time(record))
-
-    def _muted_transcript_tee(self):
-        mute = getattr(self._transcript, "mute_tee", None)
-        if callable(mute):
-            return mute()
-        return contextlib.nullcontext()

@@ -1,0 +1,6 @@
+{
+  "frame_metrics_browser_probe_image_analysis_requires_js": "browser_probe image analysis requires js[browser]; run uv sync --inexact --extra browser",
+  "browser_probe_error_browser_probe_requires_the_optional": "ERROR: browser_probe requires the optional Playwright backend; install js[browser] (Playwright does not publish musllinux wheels)",
+  "browser_probe_the_probe_failed_before_it_captured": "The probe failed before it captured a frame; do not infer page, WebGL, or visual state from the empty measurements.",
+  "browser_probe_frame_paths_are_pngs_use_read": "Frame paths are PNGs; use read on them when available. dominant_color_share and unique_colors describe each frame. changed_pct_from_previous is the percent of pixels moving by more than eight RGB levels after each interaction. These are measurements, not verdicts."
+}

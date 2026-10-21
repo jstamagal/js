@@ -1,6 +1,10 @@
 # What `/help set NAME` prints: each setting's NAME alone on a line, then
 # its help, indented four spaces. Lines starting with # are comments.
 
+EXIT_ARM_TIMEOUT
+    Seconds an idle interrupt or end-of-file key stays armed for a second
+    press to quit the async REPL.
+
 DEFAULT_AGENT
     Agent a run uses when neither --agent nor --commit names one: a prompt
     directory id, letters, digits, '_' or '-'. Read once at startup, so a
@@ -438,6 +442,14 @@ HTTP_USER_AGENT
 JEV_MODEL
     TypeSafe model the jev tool asks. Needs TYPESAFE_API_KEY.
 
+SKILLS_DISABLED
+    Skills switched off: a JSON list of skill names, matched without
+    regard to case. A disabled skill is out of the tool_discovery catalog,
+    the skill tool refuses it, no path-scoped reminder names it, and
+    /skill <name> refuses it. /skills opens a picker that lists every
+    skill with its source and switches each on or off; enter there sets
+    this list. /save writes it to the global jsrc.
+
 TERMINAL_COLUMNS
     Columns of a terminal_session started without cols.
 
@@ -484,3 +496,369 @@ REPETITION_PENALTY
 
 PRESENCE_PENALTY
     Provider-default presence penalty; unset = do not send.
+
+RETRY_BACKOFF_START
+    Seconds before the first retry of a failed model call that named no
+    Retry-After.
+
+RETRY_BACKOFF_MULTIPLIER
+    Each later retry waits this many times longer than the one before.
+
+RETRY_BACKOFF_MAX
+    Longest wait between retries, in seconds, before jitter.
+
+RETRY_BACKOFF_JITTER
+    Up to this many random seconds added to each retry wait.
+
+SILENT_OVERFLOW_RECOVERY
+    on: a reply that stops short because the context silently overflowed
+    is retried after compaction.
+
+SIGNED_REASONING_RECOVERY
+    on: when a provider rejects replayed signed reasoning, the call is
+    retried once without it.
+
+TOOL_ERRORS_MAX
+    Failures of one tool in a turn before the model is told to stop
+    calling it.
+
+LOOP_ATTEMPTS_MULTIPLIER
+    /loop with a count gives up after count times this many attempts.
+
+LOOP_FAILURES_MAX
+    Consecutive failed /loop runs before the loop stops.
+
+LOOP_BACKOFF_MAX
+    Longest pause between failed /loop runs, in seconds.
+
+TOOL_ARGUMENT_STRICT
+    on: malformed tool arguments are refused instead of repaired.
+
+DEEPSEEK_REASONING_TOKENS_MAX
+    max_reasoning_tokens sent to DeepSeek models when the request sets
+    none.
+
+DEEPSEEK_DEFAULT_EFFORT
+    Reasoning effort for DeepSeek models when EFFORT is unset.
+
+CLAUDE_PROXY_INCLUDE_REASONING
+    include_reasoning sent to a Claude proxy when the request sets none.
+
+ANTHROPIC_PROMPT_CACHE
+    on: Anthropic requests mark the prompt for caching.
+
+ANTHROPIC_THINKING_DISPLAY
+    How adaptive thinking is returned by Anthropic models: summarized or
+    omitted.
+
+ANTHROPIC_REQUIRED_EFFORT
+    Effort sent to an Anthropic model that requires one when EFFORT is
+    unset.
+
+CODEX_TEXT_VERBOSITY
+    Text verbosity sent with Codex requests: low, medium or high.
+
+CODEX_REASONING_SUMMARY
+    Reasoning summary asked of Codex models: auto, concise or detailed.
+
+CODEX_ORIGINATOR
+    originator header sent with Codex requests.
+
+CODEX_USER_AGENT
+    User-Agent sent with Codex requests. Empty = js's own.
+
+CODEX_CLIENT_VERSION
+    Client version sent with Codex requests. Empty = detected, or the
+    built-in one.
+
+CODEX_CLIENT_DETECT
+    on: the Codex client version is read from an installed codex CLI.
+
+COMPACTION_OVERFLOW_ROUNDS_MAX
+    Compaction rounds one call may run to recover from a context overflow.
+
+COMPACTION_OVERFLOW_KEEP_TOOL_RESULTS
+    Recent tool results an overflow compaction keeps whole, split across
+    its rounds.
+
+COMPACTION_HINT_SHELL_PROGRAM
+    Shell that runs the compaction hint command. Empty = $SHELL, else
+    /bin/sh.
+
+COMPACTION_HINT_TIMEOUT
+    Seconds the compaction hint command may run before it is killed.
+
+COMPACTION_SUMMARY_REQUEST_TOKENS_MAX
+    Upper bound on COMPACTION_SUMMARY_TOKENS_MAX for the summary request.
+
+COMPACTION_CONSECUTIVE_MAX
+    Automatic compactions in a row before automatic compaction pauses.
+
+FILE_REQUIRE_READ
+    on: a file must be read in the session before it can be edited or
+    overwritten.
+
+WRITE_REQUIRE_OVERWRITE
+    on: write() refuses an existing file unless the call sets overwrite.
+
+EDIT_READ_BYPASS_CHARACTERS
+    An exact edit whose old text is at least this many characters is
+    applied to an unread file.
+
+EDIT_FUZZY
+    on: an edit whose old text is not found exactly may match after
+    quotes, dashes and whitespace are normalised.
+
+READ_DEDUPLICATE
+    on: rereading an unchanged range returns a short note instead of the
+    text again.
+
+SEARCH_DEDUPLICATE
+    on: repeating an unchanged file search returns a short note instead of
+    the results again.
+
+SEARCH_ONE_FILE_SYSTEM
+    on: directory searches do not cross into other mounted file systems.
+
+NOTEBOOK_REQUIRE_READ
+    on: a notebook must be read before a cell is edited.
+
+NOTEBOOK_CLEAR_OUTPUTS
+    on: editing a code cell clears its outputs and execution count.
+
+SHELL_PIPEFAIL
+    on: shell commands run with pipefail, so a failing stage fails the
+    pipeline.
+
+SHELL_MANAGED_PATH
+    on: js's managed tool directory is put at the front of PATH for shell
+    commands.
+
+SHELL_KILL_UNFINISHED
+    on: a shell command still running when its wait ends is killed instead
+    of left running.
+
+TERMINAL_SHELL_PROGRAM
+    Shell the terminal tool starts. Empty = $SHELL, else /bin/sh.
+
+TERMINAL_ENVIRONMENT_INHERIT
+    on: the terminal tool's shell inherits js's environment when not
+    jailed.
+
+HOOK_SHELL_PROGRAM
+    Shell that runs `on` hook commands. Empty = $SHELL, else /bin/sh.
+
+SWARM_SPAWN_MAX
+    Most agents one swarm bus may spawn.
+
+SUBAGENT_RESULT_SHARE
+    on: parallel subagents split the parent's TOOL_RESULT_MAX, so each
+    reply is capped at its share.
+
+LSP_ENVIRONMENT_INHERIT
+    on: language servers inherit js's environment when not jailed.
+
+LSP_ALLOW_HOME_ROOT
+    on: your home directory or / may be a language server's project root.
+
+TOOLBOX_SEED_EXAMPLES
+    on: listing or loading the toolbox first adds the shipped example
+    tools.
+
+TOOLBOX_REQUIRE_BOUND_NAMES
+    on: a toolbox tool that uses an unbound name is refused.
+
+SERPER_API_KEY
+    Key for serper_search. Empty = the SERPER_API_KEY environment
+    variable.
+
+TAVILY_API_KEY
+    Key for tavily_search. Empty = the TAVILY_API_KEY environment
+    variable.
+
+EXA_API_KEY
+    Key for exa_search. Empty = the EXA_API_KEY environment variable.
+
+CONTEXT7_API_KEY
+    Key for docs_search. Empty = the CONTEXT7_API_KEY environment
+    variable, else the keyless rate limit.
+
+TYPESAFE_API_KEY
+    Key for jev. Empty = the TYPESAFE_API_KEY environment variable.
+
+BROWSE_STEALTH
+    on: browse runs obscura with --stealth.
+
+BROWSE_ALLOW_PRIVATE_NETWORK
+    on: browse may open a private-network IP address.
+
+BROWSER_FALLBACK_FILE
+    Browser executable used when Playwright's own browser is missing.
+
+EXCHANGE_MARK_RUNNING
+    Mark on a tool call that is still running.
+
+EXCHANGE_MARK_OK
+    Mark on a tool call that succeeded.
+
+EXCHANGE_MARK_FAILED
+    Mark on a tool call that failed.
+
+EXCHANGE_RAIL
+    Rail drawn down the left of a tool call's rows.
+
+EXCHANGE_HEADER_STYLE
+    Rich style of a tool call's name.
+
+EXCHANGE_ARGUMENT_STYLE
+    Rich style of a tool call's key argument.
+
+ARGUMENT_CHARACTERS_MAX
+    Characters of a tool argument shown on its one-line row.
+
+ARGUMENT_NEWLINE_MARK
+    Shown in place of a newline inside a one-line tool argument.
+
+DISPLAY_ELLIPSIS
+    Marks text cut to fit.
+
+DIFF_HUNK_GAP
+    Row shown between hunks of a diff.
+
+TABLE_RULE
+    Character of a markdown table's rules.
+
+SHELL_LIVE_LINES_MAX
+    Lines of a running shell command's output shown live.
+
+MARKDOWN_HEADING_TWO_STYLE
+    Rich style of a level-two markdown heading.
+
+MARKDOWN_HEADING_THREE_STYLE
+    Rich style of a level-three markdown heading.
+
+MARKDOWN_HEADING_FOUR_STYLE
+    Rich style of a level-four markdown heading.
+
+MARKDOWN_INLINE_PADDING
+    Padding drawn either side of inline code.
+
+MARKDOWN_HARD_BREAKS
+    on: a single newline in a reply breaks the line.
+
+SPINNER_FRAMES
+    Frames of the busy spinner, one character each.
+
+SCROLLBACK_LINES_MAX
+    Lines the full-screen view keeps in scrollback.
+
+SPELLCHECK_LANGUAGE
+    hunspell dictionary for prompt spelling suggestions.
+
+SPELLCHECK_TIMEOUT
+    Seconds hunspell may take before suggestions are skipped.
+
+PASTE_IMAGE_BACKENDS
+    Clipboard backends tried in order when pasting an image: wayland, x11,
+    kitty.
+
+PASTE_IMAGE_TIMEOUT
+    Seconds one clipboard backend may take.
+
+NOTE_TIMESTAMP_FORMAT
+    strftime format of the timestamp on ex-line notes.
+
+SESSION_HIDDEN_KINDS
+    Session kinds the session list hides unless asked for all: empty,
+    quick, subagent, script.
+
+SESSION_SCRIPT_MODES
+    Run modes whose sessions count as script sessions.
+
+SESSION_QUICK_TURNS_MAX
+    A session with at most this many turns can count as quick.
+
+SESSION_QUICK_TOOL_CALLS_MAX
+    A session with at most this many tool calls can count as quick.
+
+SESSION_QUICK_REPLY_CHARACTERS_MAX
+    A session whose last reply is shorter than this can count as quick.
+
+SESSION_STATUS_MARK
+    In the session list, the last reply line starting with this mark is
+    shown as the session's status.
+
+SESSION_TEXT_AUTO_REFRESH
+    on: a session's text file is rewritten when its journal changes.
+
+GLOBAL_INSTRUCTION_FILES
+    Instruction files read from ~/.js, in order.
+
+PROJECT_INSTRUCTION_FILES
+    Instruction files read from the start directory, in order.
+
+DOTENV_WALK_UP
+    on: .env files are read from the start directory and every parent;
+    off: the start directory only.
+
+JSRC_AUTO_MIGRATE
+    on: old setting names in jsrc files are rewritten at startup.
+
+TMP_AGE_MAX
+    Seconds an entry in ~/.js/tmp may go unmodified before startup removes
+    it.
+
+LOCAL_API_KEY_PLACEHOLDER
+    API key saved for a local server that needs none.
+
+ENDPOINT_DEFAULT_KEY
+    API key for an endpoint URI that names none.
+
+ENDPOINT_DEFAULT_SHAPE
+    Wire shape of an endpoint URI that names none.
+
+MODEL_CATALOG_AUTO_REFRESH
+    on: a stale model catalog is refreshed at startup.
+
+MODEL_CATALOG_AGE_MAX
+    Seconds before the model catalog counts as stale.
+
+MODEL_CONTEXT_PROBE
+    on: a local server is asked for its model's context window.
+
+TOOL_BINARY_PATH_FALLBACK
+    on: a tool binary js has not installed is looked for on PATH.
+
+DOWNLOAD_SPLITS_MAX
+    aria2 --split for tool downloads.
+
+DOWNLOAD_CONNECTIONS_MAX
+    aria2 --max-connection-per-server for tool downloads.
+
+DOWNLOAD_RETRIES_MAX
+    aria2 --max-tries for tool downloads.
+
+DOWNLOAD_RETRY_WAIT
+    aria2 --retry-wait for tool downloads, in seconds.
+
+TOOL_INSTALLER_USER_AGENT
+    User-Agent of tool installer requests.
+
+JAIL_BASE_HIDDEN_DIRS
+    Directories the -C jail always hides.
+
+JAIL_HIDE_OPERATOR_HOME
+    on: the -C jail hides your home directory.
+
+JAIL_HIDE_NETWORK_FILESYSTEMS
+    on: the -C jail hides network file systems.
+
+JAIL_CLEAN_PRIVATE_DIRS
+    on: the -C jail removes private directories left by js processes that
+    are gone.
+
+REMOVE_TRASH
+    Move removed paths to trash unless permanent=true. Default: on.
+
+TRASH_BYTES_MAX
+    Maximum size in bytes accepted by trash removal. Default: 536870912.

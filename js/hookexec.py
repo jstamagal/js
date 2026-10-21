@@ -17,7 +17,11 @@ import subprocess
 import time
 from dataclasses import dataclass
 
-from . import events
+from . import events, settings as _settings
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('hookexec')
+
 
 # The exit status that refuses a refusable event (Claude Code's blocking status).
 REFUSE_STATUS = 2
@@ -57,13 +61,14 @@ def _clip(data: bytes, cap: int) -> str:
 
 def run(command: str, *, cwd: str, timeout: float, cap: int,
         stdin_text: str = "", env: dict[str, str] | None = None) -> ExecOutcome:
-    """Run ``command`` under ``$SHELL -c`` (``/bin/sh`` without one) in its own
+    """Run ``command`` under HOOK_SHELL_PROGRAM, falling back to ``$SHELL``
+    or ``/bin/sh``, in its own
     process group, ``stdin_text`` on stdin, and return by ``timeout`` seconds
     (0 is no limit). At the timeout the whole group is killed. Once the shell
     exits, what it left in the background keeps running and its output stops
     being read after DRAIN_S. Each stream keeps its first ``cap`` bytes; 0
     keeps all."""
-    shell = os.environ.get("SHELL") or "/bin/sh"
+    shell = _settings.live_value("HOOK_SHELL_PROGRAM") or os.environ.get("SHELL") or "/bin/sh"
     stdin_bytes = stdin_text.encode("utf-8", errors="replace")
     proc = subprocess.Popen(
         [shell, "-c", command],
@@ -189,4 +194,13 @@ def refusal(outcome: ExecOutcome, tool: str) -> str:
             line = line.strip()
             if line:
                 return line if line.startswith("ERROR") else f"ERROR: {line}"
-    return f"ERROR: an on tool_call handler refused {tool}."
+    return _PROMPTS['refusal_error_an_on_tool_call_handler'].format(tool=tool)
+
+
+def apply_refusal(call: events.HandlerCall | None, outcome: ExecOutcome) -> bool:
+    """Record a blocking handler outcome on a refusable event."""
+    if (call is None or outcome.returncode != REFUSE_STATUS
+            or call.emission.event not in events.REFUSABLE_EVENTS):
+        return False
+    call.refusal = refusal(outcome, str(call.emission.payload.get("name") or "the call"))
+    return True

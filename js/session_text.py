@@ -1,7 +1,7 @@
 """The readable `.txt` transcript beside each session `.jsonl`.
 
 The `.jsonl` is the record; the `.txt` is rebuilt from it after every write, so
-the two stay in step. Its shape is fixed so ripgrep and head work on it:
+the two stay in step while SESSION_TEXT_AUTO_REFRESH is on (the default). Its shape is fixed so ripgrep and head work on it:
 
     agent: defaultagent   dir: /home/ronald_rump/js   mode: repl
     models: deepseek-v4-flash → xiaomi/mimo-v2.6-pro (#0031)
@@ -28,6 +28,7 @@ records appended since the last one.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
@@ -45,6 +46,14 @@ from .text_bytes import well_formed
 
 USER = "you"
 ASSISTANT = "ape"
+
+@dataclass(frozen=True)
+class TranscriptStyle:
+    user: str = USER
+    assistant: str = ASSISTANT
+    header: Any = None
+
+
 _INDENT = " " * 12
 _EXIT = re.compile(r"^exit=(-?\d+)$", re.MULTILINE)
 _ARG_WIDTH = 200
@@ -217,6 +226,7 @@ class _Transcript:
     calls: dict[str, _Call] = field(default_factory=dict)
     # Record id -> message number, for naming a branch point by its number.
     numbers: dict[str, int] = field(default_factory=dict)
+    style: TranscriptStyle = field(default_factory=TranscriptStyle)
 
     def feed(self, record: Any) -> None:
         if not isinstance(record, dict):
@@ -232,6 +242,10 @@ class _Transcript:
         kind = record.get("kind")
         if kind == "session_metadata":
             self._metadata(record)
+        elif kind == "model_switch":
+            stamp = record.get("stamp")
+            if isinstance(stamp, dict) and isinstance(stamp.get("model"), str) and stamp["model"]:
+                self.last_stamp = dict(stamp)
         elif kind == "message":
             self._message(record.get("message"), ts, record.get("stamp"), replayed=True)
             self._number(record)
@@ -340,14 +354,14 @@ class _Transcript:
             self.replay.append(light)
         if role == "user":
             lines = _lines(_content_text(message.get("content"))) or [""]
-            self.entries[number] = Row(number, role, ts, USER, lines)
+            self.entries[number] = Row(number, role, ts, self.style.user, lines)
         elif role == "assistant":
             model = self._stamp(stamp, number)
             lines = _lines(_content_text(message.get("content")))
             calls = message.get("tool_calls") or []
             if not calls:
                 if lines:
-                    self.entries[number] = Row(number, role, ts, ASSISTANT, lines, model=model)
+                    self.entries[number] = Row(number, role, ts, self.style.assistant, lines, model=model)
                 return
             for index, call in enumerate(calls):
                 if not isinstance(call, dict):
@@ -387,6 +401,8 @@ class _Transcript:
         return sum(1 for row in self.entries.values() if row.role == "user")
 
     def header(self) -> list[str]:
+        if self.style.header is not None:
+            return self.style.header(self)
         if self.models:
             chain = [self.models[0][0], *(f"{model} (#{number:04d})" for model, number in self.models[1:])]
             models = " → ".join(chain)
@@ -444,23 +460,25 @@ class _Transcript:
         return lines
 
 
-def parse(session_file: Path) -> _Transcript:
+def parse(session_file: Path, *, style: TranscriptStyle | None = None) -> _Transcript:
     """The whole of `session_file`, parsed from the start."""
-    transcript = _Transcript()
+    transcript = _Transcript(style=style if style is not None else TranscriptStyle())
     with open(session_file, encoding="utf-8", errors="replace") as stream:
         for line in stream:
             _feed_line(transcript, line)
     return transcript
 
 
-def rows(session_file: Path) -> list[Row]:
+def rows(session_file: Path, *, style: TranscriptStyle | None = None) -> list[Row]:
     """The rows of `session_file` the conversation still holds, in order."""
-    return parse(session_file).rows()
+    transcript = parse(session_file) if style is None else parse(session_file, style=style)
+    return transcript.rows()
 
 
-def render(session_file: Path) -> str:
+def render(session_file: Path, *, style: TranscriptStyle | None = None) -> str:
     """The whole transcript of `session_file`, parsed from the start."""
-    return parse(session_file).text()
+    transcript = parse(session_file) if style is None else parse(session_file, style=style)
+    return transcript.text()
 
 
 def _feed_line(transcript: _Transcript, line: str) -> None:
@@ -508,32 +526,50 @@ def refresh(session_file: Path) -> None:
 
     Only a `.jsonl` gets one. A failure to read or write leaves the `.txt` as
     it was: it is derived, and the record is what matters."""
+    from . import settings
+
+    if not settings.live_value("SESSION_TEXT_AUTO_REFRESH"):
+        return
     session_file = Path(session_file)
     if session_file.suffix != session_store.SUFFIX:
         return
     key = str(session_file.resolve(strict=False))
     with _lock:
         try:
-            info = os.stat(session_file)
-            parsed = _parsed.pop(key, None)
-            if (parsed is None or (parsed.device, parsed.inode) != (info.st_dev, info.st_ino)
-                    or info.st_size < parsed.offset):
-                parsed = _Parsed(info.st_dev, info.st_ino, 0, _Transcript())
-            with open(session_file, "rb") as stream:
-                stream.seek(parsed.offset)
-                data = stream.read()
+            guard = open(f"{session_file}.refresh.lock", "a+b")  # noqa: SIM115 - held through publication
         except OSError:
             return
-        end = data.rfind(b"\n") + 1
-        # "\n" only, as parse() reads: U+2028 inside a JSON string is not a break.
-        for line in data[:end].decode("utf-8", errors="replace").split("\n"):
-            _feed_line(parsed.transcript, line)
-        parsed.offset += end
-        _parsed[key] = parsed
-        while len(_parsed) > _CACHED_FILES:
-            _parsed.popitem(last=False)
-        _write(session_store.text_path(session_file), parsed.transcript.text())
-        _index(session_file, parsed.transcript, size=parsed.offset, mtime_ns=info.st_mtime_ns)
+        with guard:
+            try:
+                fcntl.flock(guard.fileno(), fcntl.LOCK_EX)
+            except OSError:
+                return
+            _refresh(session_file, key)
+
+
+def _refresh(session_file: Path, key: str) -> None:
+    """Read and publish while holding both refresh locks."""
+    try:
+        info = os.stat(session_file)
+        parsed = _parsed.pop(key, None)
+        if (parsed is None or (parsed.device, parsed.inode) != (info.st_dev, info.st_ino)
+                or info.st_size < parsed.offset):
+            parsed = _Parsed(info.st_dev, info.st_ino, 0, _Transcript())
+        with open(session_file, "rb") as stream:
+            stream.seek(parsed.offset)
+            data = stream.read()
+    except OSError:
+        return
+    end = data.rfind(b"\n") + 1
+    # "\n" only, as parse() reads: U+2028 inside a JSON string is not a break.
+    for line in data[:end].decode("utf-8", errors="replace").split("\n"):
+        _feed_line(parsed.transcript, line)
+    parsed.offset += end
+    _parsed[key] = parsed
+    while len(_parsed) > _CACHED_FILES:
+        _parsed.popitem(last=False)
+    _write(session_store.text_path(session_file), parsed.transcript.text())
+    _index(session_file, parsed.transcript, size=parsed.offset, mtime_ns=info.st_mtime_ns)
 
 
 def _index(session_file: Path, transcript: _Transcript, *, size: int, mtime_ns: int) -> None:

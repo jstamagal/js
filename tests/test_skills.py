@@ -275,6 +275,21 @@ def test_user_invocation_ignores_other_lines_and_rejects_unknown_names(tmp_path)
         expand_user_invocation(catalog, "/skill")
 
 
+def test_repl_assembly_supplies_the_skill_invocation_command(tmp_path, monkeypatch):
+    from js import cli, skills
+
+    monkeypatch.chdir(tmp_path)
+    _write(tmp_path / ".js" / "skills" / "secret" / "SKILL.md", _USER_ONLY)
+    state = {"settings": {}, "repl_assembly": cli.ReplAssembly(
+        commands={"use": cli.COMMANDS["skill"]}, skill_command="/use",
+    )}
+    line = "/use secret sharpen this plan"
+    assert cli._handle_command(line, state, None) is False
+    message = cli._expand_skill_line(line, state)
+    assert skills.user_invoked_skill(message) == "secret"
+    assert "user-only body" in message
+
+
 _BUILTIN_NINE = {
     "code-review",
     "codebase-design",
@@ -353,3 +368,18 @@ def test_malformed_skill_warns_on_one_line_once(tmp_path, capsys):
     lines = [line for line in capsys.readouterr().err.splitlines() if line.strip()]
     assert len(lines) == 1
     assert str(bad) in lines[0]
+
+
+def test_project_dirs_that_are_the_global_dirs_keep_the_global_label(tmp_path):
+    # Run from home: project_dir/.agents/skills is the shared global root and
+    # project_dir/.js/skills is the js global root.
+    home = tmp_path / "home"
+    _write(home / ".agents" / "skills" / "shared" / "SKILL.md", "---\ndescription: Shared skill\n---\nBody\n")
+    _write(home / ".js" / "skills" / "native" / "SKILL.md", "---\ndescription: Native skill\n---\nBody\n")
+    catalog = discover_skills(
+        home,
+        builtin_dir=tmp_path / "package",
+        global_dir=home / ".js" / "skills",
+        user_dir=home / ".agents" / "skills",
+    )
+    assert {skill.name: skill.source for skill in catalog.skills} == {"shared": "global", "native": "global"}

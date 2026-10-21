@@ -11,6 +11,7 @@ from js import memory
 from js.session_catalog import (
     acquire_session,
     catalog_sessions,
+    last_stamp,
     record_session_start,
     release_session,
     session_in_flight,
@@ -91,6 +92,23 @@ def test_old_session_lists_with_empty_metadata(tmp_path):
     assert record["cwd"] is None
     assert record["caller_key"] is None
     assert record["job_id"] is None
+
+
+def test_invalid_utf8_keeps_surrounding_records_available_to_catalog_and_resume(tmp_path):
+    root = tmp_path / "sessions"
+    path = root / "agent" / "damaged.jsonl"
+    record_session_start(path, cwd=tmp_path, agent="agent", model="original")
+    with path.open("ab") as stream:
+        stream.write(b"\xff\n")
+    memory.append_message(path, {"role": "user", "content": "question"})
+    stamp = memory.stamp_for("resumed-model", "provider", "high")
+    memory.append_message(path, {"role": "assistant", "content": "reply"}, stamp)
+    source = path.read_bytes()
+
+    assert last_stamp(path) == stamp
+    [entry] = catalog_sessions(root)
+    assert (entry["agent"], entry["user_turns"]) == ("agent", 1)
+    assert path.read_bytes() == source
 
 
 def test_liveness_tracks_acquire_release_and_concurrent_opens(tmp_path):

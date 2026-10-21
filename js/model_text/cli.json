@@ -1,0 +1,21 @@
+{
+  "default_js_reminder_the_agent_prompt_files": "<js-reminder>The agent prompt files changed on disk. This session keeps the prompt it started with.</js-reminder>",
+  "default_in_interactive_chat": "in interactive chat",
+  "default_as_a_one_shot_run": "as a one-shot run",
+  "default_the_human_is_here_and_can": "The human is here and can answer.",
+  "default_the_human_is_not_here_and": "The human is not here and cannot answer.",
+  "mode_switch_notice_started_moved_and_now_continues_again": "started {MODE_PLACES_started}, moved {MODE_PLACES_previous}, and now continues {MODE_PLACES_now} again",
+  "mode_switch_notice_started_and_now_continues": "started {MODE_PLACES_started} and now continues {MODE_PLACES_now}",
+  "mode_switch_notice_js_reminder_this_conversation_js_reminder": "<js-reminder>This conversation {course}. {MODE_PRESENCE_now}</js-reminder>",
+  "default_js_reminder_the_model_changed_from": "<js-reminder>The model changed from {previous} to {current}. Earlier replies in this conversation came from {previous}.</js-reminder>",
+  "default_js_reminder_the_last_turn_in": "<js-reminder>The last turn in this conversation was cut off before it finished.</js-reminder>",
+  "cmd_quit_js_reminder_user_closed_the_client": "<js-reminder>User closed the client with the message: {arg}</js-reminder>",
+  "default_js_reminder_the_working_directory_is": "<js-reminder>The working directory is now {path}.</js-reminder>",
+  "default_js_reminder_is_now_visible_inside": "<js-reminder>{path} is now visible inside the jail ({access}).</js-reminder>",
+  "default_js_reminder_is_no_longer_visible": "<js-reminder>{path} is no longer visible inside the jail.</js-reminder>",
+  "run_commit_python_m_js_commit_helper_c": "python -m js.commit_helper -C {shlex_quote_str_target_dir} stage <file> <hunks|all>",
+  "run_commit_python_m_js_commit_helper_c_2": "python -m js.commit_helper -C {shlex_quote_str_target_dir} survey",
+  "run_commit_python_m_js_commit_helper_c_3": "python -m js.commit_helper -C {shlex_quote_str_target_dir} commit <message-file>",
+  "run_commit_commit_all_work_in_this_target": "Commit all work in this target directory: {target_dir}\n\nThe repository has already been initialized if it was missing. Use this deterministic staging helper for every commit unit:\n`{helper_stage}`\nUse `all` for whole-file staging or comma-separated hunk numbers from the survey for tracked text files. To commit a staged unit, write the full commit message to a file with the write tool, then run:\n`{helper_commit}`\nIf you need a fresh snapshot after making changes, run:\n`{helper_survey}`\n\nInitial deterministic commit_helper survey:\n```text\n{survey}\n```",
+  "run_commit_operator_context": "\n\nOperator context:\n{extra_context_strip}"
+}

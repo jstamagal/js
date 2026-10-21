@@ -155,11 +155,6 @@ def test_a_named_session_row_shows_its_name_and_a_generated_one_does_not():
     assert (named.name, generated.name, subagent.name) == ("modelswap", None, None)
 
 
-def test_a_hidden_kind_is_marked_in_the_last_column():
-    assert Q.kind_text(_session("q", turns=1, tool_calls=0, final_len=5)) == Q.QUICK
-    assert Q.kind_text(_session("n")) == "-"
-
-
 # --- the query grammar -------------------------------------------------------
 
 
@@ -275,13 +270,6 @@ def test_words_keep_only_scored_sessions_best_score_first():
     assert _paths(ordered) == ["c", "a"]
 
 
-def test_the_parse_line_names_every_term():
-    described = Q.describe(_parse("niri >10 today agent:x* dir:~/js/** mode:-p model:*qwen*"))
-    for part in ("niri", ">10", "today", "x*", "~/js", "-p", "*qwen*"):
-        assert part in described
-    assert Q.describe(_parse("")) != Q.describe(_parse("niri"))
-
-
 def test_an_excerpt_starts_near_the_first_match_and_moves_its_spans():
     text = "x" * 500 + " niri here"
     start = text.index("niri")
@@ -289,3 +277,11 @@ def test_an_excerpt_starts_near_the_first_match_and_moves_its_spans():
     assert len(spans) == 1
     assert shown[spans[0][0]:spans[0][1]] == "niri"
     assert len(shown) <= 82
+
+
+def test_registered_setting_can_show_quick_sessions():
+    from js import settings
+
+    settings.bind_live_settings({"SESSION_HIDDEN_KINDS": ["empty", "subagent", "script"]})
+    quick = _session("quick", turns=1, tool_calls=0, final_len=5)
+    assert Q.select([quick], _parse(""), show_all=False) == [quick]

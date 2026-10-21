@@ -1,0 +1,5 @@
+{
+  "default_no_tool_output_recorded_the_tool": "[No tool output recorded: the tool call was interrupted before it produced a result.]",
+  "file_part_to_input_unsupported_file_for_codex": "[Unsupported file for Codex: {media_type}]",
+  "repair_tool_pairs_previous_tool_result_call_id": "[Previous tool result; call_id={call_id}]: {output}"
+}

@@ -25,6 +25,10 @@ from pathlib import Path
 from typing import Any
 
 from .. import paths
+from ..prompt_text import load_catalog
+
+_PROMPTS = load_catalog('toolkit_task_jobs')
+
 
 # Finished jobs kept for a later poll once their result was delivered or noted.
 KEEP_FINISHED_JOBS = 5
@@ -162,6 +166,7 @@ def start(
     owner: str,
     on_done: Callable[[], None] | None = None,
     on_loop: bool = False,
+    schedule: Callable | None = None,
 ) -> TaskJob:
     """Start the fan-out in the background and return its job at once.
 
@@ -192,6 +197,10 @@ def start(
     with _JOBS_LOCK:
         _JOBS[job.id] = job
     label = f"task {job.id} (background)"
+    if schedule is not None:
+        cancel = schedule(run_all(), label, lambda done: _settle(job, done, on_done))
+        job.set_cancel(cancel)
+        return job
     sup = get_current()
     if sup is not None and on_loop:
         tracked = sup.spawn(run_all(), kind="subagent", label=label)
@@ -218,15 +227,12 @@ def start(
 
 
 def started_text(job: TaskJob) -> str:
-    plural = "task" if job.count == 1 else "tasks"
+    plural = _PROMPTS['started_text_task'] if job.count == 1 else _PROMPTS['started_text_tasks']
     return "\n".join([
-        f"task running in the background (handle {job.id}): {job.count} {plural} for agent "
-        f"`{job.agent_id}`. It keeps running while you work.",
-        f"Poll it with action=\"poll\", handle=\"{job.id}\", action=\"wait\", handle=\"{job.id}\", "
-        f"timeout=N to block for it, or action=\"kill\", handle=\"{job.id}\" to stop it.",
-        f"When it finishes its result is written to {job.result_path}, and the next user "
-        "message says so unless you have read it by then.",
-        f"HANDLE {job.id} RUNNING",
+        _PROMPTS['started_text_task_running_in_the_background_handle'].format(job_id=job.id, job_count=job.count, plural=plural, job_agent_id=job.agent_id),
+        _PROMPTS['started_text_poll_it_with_action_poll_handle'].format(job_id=job.id, value_1=job.id, value_2=job.id),
+        _PROMPTS['started_text_when_it_finishes_its_result_is'].format(job_result_path=job.result_path),
+        _PROMPTS['started_text_handle_running'].format(job_id=job.id),
     ])
 
 
@@ -240,19 +246,18 @@ def report(job: TaskJob, action: str, *, was_running: bool = False) -> str:
     was asked for."""
     if action == "kill" and was_running and (job.running() or job.cancelled()):
         job.delivered = True
-        return f"killed task {job.id} after {job.elapsed():.0f}s"
+        return _PROMPTS['report_killed_task_after_s'].format(job_id=job.id, job_elapsed=job.elapsed())
     if job.running():
         return "\n".join([
-            f"task {job.id} still running after {job.elapsed():.0f}s "
-            f"({job.workers_done} of {job.count} done).",
-            f"HANDLE {job.id} RUNNING",
+            _PROMPTS['report_task_still_running_after_s_of'].format(job_id=job.id, job_elapsed=job.elapsed(), job_workers_done=job.workers_done, job_count=job.count),
+            _PROMPTS['report_handle_running'].format(job_id=job.id),
         ])
     job.delivered = True
     if job.cancelled():
-        return f"task {job.id} was cancelled after {job.elapsed():.0f}s; it has no result"
-    where = f"; the result is also at {job.result_path}" if job.saved else ""
-    prefix = f"task {job.id} had already finished" if action == "kill" else f"task {job.id} finished"
-    return f"{prefix} after {job.elapsed():.0f}s{where}\n{job.result()}"
+        return _PROMPTS['report_task_was_cancelled_after_s_it'].format(job_id=job.id, job_elapsed=job.elapsed())
+    where = _PROMPTS['report_the_result_is_also_at'].format(job_result_path=job.result_path) if job.saved else ""
+    prefix = _PROMPTS['report_task_had_already_finished'].format(job_id=job.id) if action == _PROMPTS['report_kill'] else _PROMPTS['report_task_finished'].format(job_id=job.id)
+    return _PROMPTS['report_after_s'].format(prefix=prefix, job_elapsed=job.elapsed(), where=where, job_result=job.result())
 
 
 def wait(job: TaskJob, timeout: float | None) -> None:
@@ -285,15 +290,12 @@ def completion_notes(owner: str) -> list[str]:
             continue
         job.noted = True
         if job.cancelled():
-            notes.append(f"<js-reminder>Background task {job.id} (agent `{job.agent_id}`) was "
-                         f"cancelled after {job.elapsed():.0f}s and has no result.</js-reminder>")
+            notes.append(_PROMPTS['completion_notes_js_reminder_background_task_agent_was'].format(job_id=job.id, job_agent_id=job.agent_id, job_elapsed=job.elapsed()))
             continue
-        where = (f"Its result is at {job.result_path}" if job.saved
-                 else "Its result could not be saved to a file")
+        where = (_PROMPTS['completion_notes_its_result_is_at'].format(job_result_path=job.result_path) if job.saved
+                 else _PROMPTS['completion_notes_its_result_could_not_be_saved'])
         notes.append(
-            f"<js-reminder>Background task {job.id} (agent `{job.agent_id}`, {job.count} "
-            f"{'task' if job.count == 1 else 'tasks'}) finished after {job.elapsed():.0f}s. "
-            f"{where}; read it, or call task with action=\"poll\", handle=\"{job.id}\".</js-reminder>"
+            _PROMPTS['completion_notes_js_reminder_background_task_agent_finished'].format(job_id=job.id, job_agent_id=job.agent_id, job_count=job.count, task_if_job_count_1_else_tasks='task' if job.count == 1 else 'tasks', job_elapsed=job.elapsed(), where=where, value_6=job.id)
         )
     _prune()
     return notes

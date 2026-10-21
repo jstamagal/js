@@ -1,0 +1,9 @@
+{
+  "discovery_tool_intent_or_words_to_search_empty": "Intent or words to search; empty returns a compact index.",
+  "discovery_tool_continue_the_same_search_at_next": "Continue the same search at next_offset from a truncated result.",
+  "discovery_tool_optional_catalog_kind_filter": "Optional catalog kind filter.",
+  "discovery_tool_optional_exact_source_filter": "Optional exact source filter.",
+  "discovery_tool_stable_catalog_id_to_load_such": "Stable catalog id to load, such as native:browser_probe or skill:review.",
+  "catalog_result_error_offset_must_be_a_non": "ERROR: offset must be a non-negative integer",
+  "catalog_result_browse_with_an_empty_query_narrow": "Browse with an empty query; narrow with kind or source."
+}

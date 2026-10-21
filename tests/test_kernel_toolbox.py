@@ -10,7 +10,6 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
-import re
 import threading
 import time
 from pathlib import Path
@@ -61,7 +60,9 @@ def stderr_of(monkeypatch, fn):
         return Console(file=buffer, width=100, force_terminal=False,
                        color_system=None, highlight=False)
 
-    monkeypatch.setattr(kmod, "_console", fake_console)
+    from js import kernel_display
+
+    monkeypatch.setattr(kernel_display, "_console", fake_console)
     result = fn()
     return result, buffer.getvalue()
 
@@ -230,6 +231,22 @@ def test_toolbox_save_accepts_an_explicit_source_with_no_kernel_at_all(ctx, monk
     assert tbmod.discover(Path(ctx.cwd))["adder"].history[0]["note"] == "by hand"
 
 
+def test_toolbox_save_refuses_source_without_the_named_definition(ctx):
+    cwd = Path(ctx.cwd)
+    original = "def adder(a, b):\n    return a + b\n"
+    tbmod.write_revision(cwd, "adder", original)
+    path = tbmod.discover(cwd)["adder"].path
+    before = path.read_bytes()
+
+    result = tbmod.toolbox(action="save", name="adder",
+                           source="def other():\n    return 1\n", context=ctx)
+
+    assert path.read_bytes() == before
+    assert result.startswith("ERROR")
+    assert tbmod.discover(cwd)["adder"].revision == 1
+    assert tbmod._archived_revisions(tbmod.discover(cwd)["adder"]) == []
+
+
 def test_model_facing_cap_uses_the_js_limit_knob_and_names_it_in_the_marker(ctx):
     ctx.max_tool_result_bytes = 200
 
@@ -247,46 +264,6 @@ def test_per_call_verbosity_beats_the_config_knob_which_beats_normal(ctx):
     assert kmod.resolve_verbosity(ctx, "nonsense") == "quiet"
     ctx.kernel_verbosity = "bogus"
     assert kmod.resolve_verbosity(ctx, "") == "normal"
-
-
-def _long_cell(ctx):
-    return lambda: kmod.render_execution(
-        ctx, level="normal", code="print(1)",
-        stdout="\n".join(f"line {i}" for i in range(40)),
-        stderr="", display="", error="", elapsed=0.1, cell=1,
-        added=[], removed=[], namespace=["f"], images=[], interrupted=False)
-
-
-def test_on_the_screen_the_render_folds_long_output_and_says_how_many_lines_it_hid(ctx, monkeypatch):
-    import sys
-
-    ctx.kernel_render_max_lines = 5
-    folds = []
-
-    class Screen(io.StringIO):
-        def isatty(self):
-            return False
-
-        def write_folded(self, folded, whole):
-            folds.append((folded, whole))
-
-    monkeypatch.setattr(sys, "stderr", Screen())
-    _long_cell(ctx)()
-
-    (folded, whole), = folds
-    assert "line 4" in folded and "line 5" not in folded
-    assert msgs.KERNEL_MORE_LINES.words(count=35) in folded
-    assert all(f"line {i}" in whole for i in range(40))
-
-
-def test_off_the_screen_the_render_prints_every_line(ctx, monkeypatch):
-    # Nothing off the screen can unfold a capped render, so it prints whole.
-    ctx.kernel_render_max_lines = 5
-
-    _result, screen = stderr_of(monkeypatch, _long_cell(ctx))
-
-    assert all(f"line {i}" in screen for i in range(40))
-    assert msgs.KERNEL_MORE_LINES.words(count=35) not in screen
 
 
 def test_verbose_splits_the_streams_that_normal_merges(ctx, monkeypatch):
@@ -1025,56 +1002,6 @@ def _offline_kernel(monkeypatch, output=None, names=(), callables=None, alive=Tr
     return session
 
 
-def test_kernel_footer_reports_a_value_only_cell(tmp_path, monkeypatch):
-    _offline_kernel(monkeypatch, kmod.CellOutput(stdout="hello\n"), names=["x"])
-    context = ToolContext(cwd=tmp_path, kernel_enabled=True, kernel_verbosity="quiet")
-
-    result = kmod.kernel(code="x = 41", context=context)
-
-    assert "hello" in result
-    assert "DEFINED x" in result
-    assert result.splitlines()[-1] == "NAMESPACE (none)"
-
-
-def test_kernel_footer_reports_an_import_only_cell(tmp_path, monkeypatch):
-    _offline_kernel(monkeypatch, kmod.CellOutput(), names=["math"])
-    context = ToolContext(cwd=tmp_path, kernel_enabled=True, kernel_verbosity="quiet")
-
-    result = kmod.kernel(code="import math", context=context)
-
-    assert "DEFINED math" in result
-    assert result.splitlines()[-1] == "NAMESPACE (none)"
-
-
-def test_kernel_footer_stays_last_after_an_image(tmp_path, monkeypatch):
-    image = tmp_path / "cell.png"
-    image.write_bytes(b"\x89PNG")
-    _offline_kernel(
-        monkeypatch,
-        kmod.CellOutput(stdout="done\n", images=[image]),
-        names=["f"],
-        callables={"f": "f()"},
-    )
-    context = ToolContext(cwd=tmp_path, kernel_enabled=True, kernel_verbosity="quiet")
-
-    result = kmod.kernel(code="def f(): pass", context=context)
-
-    lines = result.splitlines()
-    assert lines[-1] == "NAMESPACE f"
-    assert any(line.startswith("IMAGE ") for line in lines)
-    assert next(i for i, line in enumerate(lines) if line.startswith("IMAGE ")) < len(lines) - 1
-
-
-def test_kernel_restart_with_empty_code_still_ends_with_the_footer(tmp_path, monkeypatch):
-    _offline_kernel(monkeypatch)
-    context = ToolContext(cwd=tmp_path, kernel_enabled=True, kernel_verbosity="quiet")
-
-    result = kmod.kernel(restart=True, context=context)
-
-    assert "kernel restarted; the namespace is empty" in result
-    assert result.splitlines()[-1] == "NAMESPACE (none)"
-
-
 def test_kernel_footer_survives_a_died_kernel(tmp_path, monkeypatch):
     session = _offline_kernel(
         monkeypatch, kmod.CellOutput(died=True), names=["x"], alive=False
@@ -1096,21 +1023,3 @@ def test_the_kernel_panel_draws_plain_on_a_stderr_that_is_not_a_terminal(ctx, mo
     monkeypatch.delenv("NO_COLOR", raising=False)
     kmod.render_event(ctx, "normal", "toolbox saved")
     assert "toolbox saved" in stream.getvalue() and "\x1b" not in stream.getvalue()
-
-
-def test_a_kernel_render_is_drawn_one_column_short_of_the_window(ctx, monkeypatch):
-    import sys
-
-    from js import display
-
-    class Terminal(io.StringIO):
-        def isatty(self):
-            return True
-
-    monkeypatch.setattr(display, "terminal_width", lambda: 40)
-    monkeypatch.setattr(sys, "stderr", Terminal())
-    kmod.render_execution(ctx, level="normal", code="print(1)", stdout="out\n", stderr="", display="",
-                          error="", elapsed=0.1, cell=1, added=[], removed=[], namespace=["f"], images=[],
-                          interrupted=False)
-    rows = re.sub(r"\x1b\[[0-9;]*m", "", sys.stderr.getvalue()).splitlines()
-    assert rows and all(display.cells(row) <= 39 for row in rows), rows

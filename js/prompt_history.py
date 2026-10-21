@@ -2,7 +2,7 @@
 
 `HISTORY_FILE` (unset = ~/.js/state/history.jsonl) holds one JSON object per
 line: ts (epoch seconds), cwd, session, agent and text. Every js process
-appends to the same file, one whole line per write.
+appends to the same file under an exclusive lock.
 
 `PromptHistory` is that file as a prompt_toolkit history. It loads the newest
 `HISTORY_SIZE` entries. With `HISTORY_ORDER` cwd, Up browses the
@@ -19,6 +19,7 @@ it is loaded after they appear, then removed.
 from __future__ import annotations
 
 import contextlib
+import errno
 import fcntl
 import json
 import os
@@ -112,12 +113,25 @@ def _line(entry: Entry) -> bytes:
     return (text + "\n").encode("utf-8")
 
 
+def _append_lines(fd: int, data: bytes) -> None:
+    size = os.fstat(fd).st_size
+    if size and os.pread(fd, 1, size - 1) != b"\n":
+        data = b"\n" + data
+    remaining = memoryview(data)
+    while remaining:
+        written = os.write(fd, remaining)
+        if not written:
+            raise OSError(errno.EIO, "history write made no progress")
+        remaining = remaining[written:]
+
+
 def append_entry(path: Path, entry: Entry) -> None:
-    """Add ``entry`` to the end of ``path`` in one write."""
+    """Add ``entry`` under the history lock, closing a torn tail first."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
     try:
-        os.write(fd, _line(entry))
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        _append_lines(fd, _line(entry))
     finally:
         os.close(fd)
 
@@ -153,7 +167,7 @@ def import_legacy(path: Path, state_root: Path) -> int:
         return 0
     path.parent.mkdir(parents=True, exist_ok=True)
     added = 0
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         for old in legacy:
@@ -162,7 +176,7 @@ def import_legacy(path: Path, state_root: Path) -> int:
             except (FileNotFoundError, UnicodeError):
                 continue  # another process folded it first
             if entries:
-                os.write(fd, b"".join(_line(entry) for entry in entries))
+                _append_lines(fd, b"".join(_line(entry) for entry in entries))
             added += len(entries)
             with contextlib.suppress(FileNotFoundError):
                 old.unlink()
@@ -177,18 +191,19 @@ class PromptHistory(History):
 
     def __init__(self, path: Path, origin: Callable[[], Origin], *,
                  cwd_first: bool = True, limit: int | None = None,
-                 state_root: Path | None = None) -> None:
+                 state_root: Path | None = None, migrate=None) -> None:
         super().__init__()
         self.path = path
         self._origin = origin
         self._cwd_first = cwd_first
         self._limit = limit
         self._state_root = state_root
+        self._migrate = migrate
 
     def load_history_strings(self) -> Iterable[str]:
         if self._state_root is not None:
             with contextlib.suppress(OSError):
-                import_legacy(self.path, self._state_root)
+                (import_legacy if self._migrate is None else self._migrate)(self.path, self._state_root)
         entries = read_entries(self.path, self._limit)
         return browse_order(entries, self._origin().cwd, cwd_first=self._cwd_first)
 

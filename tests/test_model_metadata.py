@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+
 from js import model_metadata
 
 
@@ -59,6 +60,17 @@ def test_lookup_limits_prefers_exact_provider_match(monkeypatch):
     assert limits.provider_id == "deepseek"
     assert limits.context_window == 1_000_000
     assert limits.max_output_tokens == 384_000
+
+
+def test_output_cap_uses_the_explicit_servers_slashy_model_id():
+    from js import logins
+
+    logins.cache_models(
+        "ollama", ["openai/gpt-5"],
+        metadata={"openai/gpt-5": logins.ModelCacheMetadata(max_output_tokens=1024)},
+    )
+
+    assert model_metadata.resolve_max_output("openai/gpt-5", "ollama") == 1024
 
 
 def test_lookup_limits_pattern_match_rejects_sibling_but_keeps_wrapper(monkeypatch):
@@ -311,3 +323,31 @@ def test_a_pinned_latest_id_takes_its_own_catalog_row(monkeypatch):
     result = model_metadata.lookup_limits("gpt-5.2-chat-latest", "openai")
     assert (result.provider_id, result.context_window) == ("openai", 128000)
     assert "openai:gpt-5.2-chat-latest" in seen
+
+
+def test_registered_setting_can_disable_catalog_refresh(monkeypatch):
+    from contextvars import ContextVar
+
+    monkeypatch.setattr(model_metadata, "_policy_settings", ContextVar("test_metadata_policy", default=None), raising=False)
+    model_metadata.bind_settings({"MODEL_CATALOG_AUTO_REFRESH": False})
+    current = model_metadata.current_catalog_status()
+    calls = []
+    monkeypatch.setattr(model_metadata, "catalog_is_stale", lambda _status: True)
+
+    def refresh(**kwargs):
+        calls.append(kwargs)
+        return current
+
+    monkeypatch.setattr(model_metadata, "refresh_catalog", refresh)
+    assert model_metadata.ensure_fresh_catalog() == current
+    assert calls == []
+
+
+def test_capability_lookup_uses_the_callers_catalog_refresh(monkeypatch):
+    refreshes = []
+    def unexpected():
+        raise AssertionError("default refresh used")
+    monkeypatch.setattr(model_metadata, "ensure_fresh_catalog", unexpected)
+    monkeypatch.setattr(model_metadata, "lookup_limits", lambda *args: SimpleNamespace(context_window=1234))
+    assert model_metadata.context_window("model", refresh=lambda: refreshes.append(True)) == 1234
+    assert refreshes == [True]

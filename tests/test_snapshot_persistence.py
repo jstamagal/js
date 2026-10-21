@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import stat
 
 import pytest
@@ -17,6 +18,37 @@ def _persistent_context(tmp_path, session_name: str) -> ToolContext:
         state_dir=tmp_path / "state",
     )
     return context
+
+
+def test_turn_persists_undo_under_supplied_state_directory(tmp_path, monkeypatch):
+    from js import runtime
+    from test_lazy_tool_discovery import _cfg, _result
+
+    cfg = _cfg(tmp_path)
+    state_dir = tmp_path / "assembly-state"
+    context = ToolContext(cwd=tmp_path)
+    context.configure_snapshot_store(cfg.agent_id, cfg.session_file, state_dir=state_dir)
+    target = tmp_path / "note.txt"
+    original = b"keep this in undo\n"
+    target.write_bytes(original)
+    replies = iter([
+        _result(("remove-note", "remove", '{"path":"note.txt","permanent":true}')),
+        _result(text="done"),
+    ])
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kwargs: next(replies))
+
+    runtime.run_turn(
+        cfg, "system", [{"role": "user", "content": "Remove note.txt"}], runtime.Telemetry(None),
+        tool_registry=build_default_registry().select(["remove:eager"]),
+        tool_context=context, state_dir=state_dir, suppress_output=True,
+    )
+
+    assert not target.exists()
+    assert context.snapshot_store.is_relative_to(state_dir)
+    restarted = ToolContext(cwd=tmp_path)
+    restarted.configure_snapshot_store(cfg.agent_id, cfg.session_file, state_dir=state_dir)
+    fs.undo("note.txt", context=restarted)
+    assert target.read_bytes() == original
 
 
 @pytest.mark.parametrize("restart", [False, True])
@@ -200,6 +232,19 @@ def test_undo_restores_a_patch_after_context_restart(tmp_path):
     assert patched.startswith(f"patched {target}")
     assert restored.startswith(f"restored {target}")
     assert target.read_text(encoding="utf-8") == "before\n"
+
+
+def test_unsaved_session_keeps_undo_between_turns(tmp_path):
+    context = ToolContext(cwd=tmp_path)
+    context.configure_snapshot_store("test-agent", Path(os.devnull), state_dir=tmp_path / "state")
+    target = tmp_path / "created"
+    fs.write(str(target), content="new file", context=context)
+
+    context.configure_snapshot_store("test-agent", Path(os.devnull), state_dir=tmp_path / "state")
+    fs.undo(str(target), context=context)
+
+    assert not target.exists()
+    assert context.snapshot_store is None
 
 
 def test_snapshot_history_is_scoped_to_its_session(tmp_path):

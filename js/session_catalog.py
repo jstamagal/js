@@ -270,7 +270,7 @@ def record_model_switch(session_file: Path, *, stamp: dict[str, Any], previous: 
 
 def _records(path: Path):
     try:
-        with path.open(encoding="utf-8") as stream:
+        with path.open(encoding="utf-8", errors="replace") as stream:
             fcntl.flock(stream.fileno(), fcntl.LOCK_SH)
             lines = stream.readlines()
     except OSError:
@@ -349,7 +349,7 @@ def _session_details(path: Path) -> tuple[int, dict[str, Any] | None]:
     user_turns = 0
     metadata = None
     try:
-        with path.open(encoding="utf-8") as stream:
+        with path.open(encoding="utf-8", errors="replace") as stream:
             fcntl.flock(stream.fileno(), fcntl.LOCK_SH)
             for line in stream:
                 try:

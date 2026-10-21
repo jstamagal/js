@@ -9,8 +9,11 @@ raw JSON still needs a ranged `read` of the lines it edits.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import re
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Any
@@ -64,7 +67,9 @@ def find_cell(cells: list[dict], cell_id: str) -> int | None:
             return index
     match = _INDEXED_ID.fullmatch(wanted)
     if match and int(match.group(1)) < len(cells):
-        return int(match.group(1))
+        index = int(match.group(1))
+        if cell_ids(cells)[index] == wanted:
+            return index
     return None
 
 
@@ -224,7 +229,7 @@ def notebook_edit(
         return f"ERROR: {exc}"
     current_hash = _hash_bytes(data)
     guard = context.require_read(target, f"{mode} a cell of it", content_hash=current_hash)
-    if guard:
+    if context.notebook_require_read and guard:
         return guard
     try:
         notebook = _load(data)
@@ -265,21 +270,35 @@ def notebook_edit(
         cell["source"] = _source_value(new_source, isinstance(cell.get("source"), list) or as_list)
         if kind is not None and kind != cell.get("cell_type"):
             _retype(cell, kind)
-        if cell.get("cell_type") == "code":
+        if context.notebook_clear_outputs and cell.get("cell_type") == "code":
             cell["execution_count"] = None
             cell["outputs"] = []
-        done = f"replaced cell {cell_ids(cells)[index]} ({cell.get('cell_type', 'code')}); its outputs are cleared"
+        done = f"replaced cell {cell_ids(cells)[index]} ({cell.get('cell_type', 'code')})"
+        if context.notebook_clear_outputs:
+            done += "; its outputs are cleared"
 
     original = data.decode("utf-8")
     text = json.dumps(notebook, indent=_indent(original), ensure_ascii=False)
     if original.endswith(("\n", "\r")):
         text += "\n"
     payload = _normalize_line_endings(text, _detect_line_ending(original)).encode("utf-8")
+    temporary = None
     try:
         context.snapshot(target)
-        target.write_bytes(payload)
+        with tempfile.NamedTemporaryFile(dir=target.parent, prefix=f".{target.name}.",
+                                         suffix=".tmp", delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(payload)
+            stream.flush()
+            os.fchmod(stream.fileno(), target.stat().st_mode)
+            os.fsync(stream.fileno())
+        temporary.replace(target)
     except OSError as exc:
         return f"ERROR: {exc}"
+    finally:
+        if temporary is not None:
+            with contextlib.suppress(OSError):
+                temporary.unlink(missing_ok=True)
     new_hash = _hash_bytes(payload)
     # The model knows the notebook it just changed; the raw JSON lines moved,
     # so no line coverage carries over.

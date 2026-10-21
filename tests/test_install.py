@@ -125,6 +125,16 @@ def test_a_routed_default_model_asks_nothing():
     assert ask.asked == []
 
 
+def test_model_setup_accepts_supplied_answer_words():
+    _write_jsrc("set MODEL deepseek/deepseek-v4-flash\n")
+    _login("mimo", ["mimo-v3"])
+    chosen = install.ask_model({}, _answers("choose"),
+                               pick=lambda: {"provider_id": "mimo", "model": "mimo-v3"},
+                               add_provider=pytest.fail, answers={"choose": "pick"})
+    assert chosen == "mimo/mimo-v3"
+    assert install.default_model({}) == ("mimo/mimo-v3", True)
+
+
 def test_a_picked_model_becomes_model_id_in_the_jsrc_and_the_rest_stays():
     _write_jsrc("# mine\nset MODEL deepseek/deepseek-v4-flash\nfset NET_DISPLAY 2\nalias x /help\n")
     _login("mimo", ["mimo-v2", "mimo-v3"])
@@ -149,19 +159,6 @@ def test_with_no_saved_login_the_login_flow_adds_one_then_a_model_is_picked():
     assert len(ask.asked) == 2 and ask.asked[0] != ask.asked[1]
 
 
-def test_adding_the_default_models_provider_ends_the_question():
-    """After `a` logs into the default model's own provider the default routes,
-    so there is nothing left to pick."""
-    _write_jsrc("set MODEL deepseek/deepseek-v4-flash\n")
-    ask = _answers("a")
-
-    chosen = install.ask_model({}, ask, pick=pytest.fail,
-                               add_provider=lambda: _login("deepseek", ["deepseek-v4-flash"]))
-
-    assert chosen is None
-    assert len(ask.asked) == 1
-
-
 def test_enter_or_a_cancelled_pick_leaves_the_jsrc_alone():
     text = "set MODEL deepseek/deepseek-v4-flash\n"
     _write_jsrc(text)
@@ -183,17 +180,6 @@ def test_write_model_id_replaces_an_unset_line_and_appends_when_there_is_none(tm
     assert bare.read_text(encoding="utf-8") == "fset NET_DISPLAY 2\nset MODEL mimo/mimo-v3\n"
 
 
-def test_write_model_id_uncomments_the_template_line_in_place(tmp_path):
-    jsrc = tmp_path / "jsrc"
-    settings.ensure_user_jsrc(jsrc)
-    before = jsrc.read_text(encoding="utf-8").splitlines()
-    settings.write_model_id(jsrc, "mimo/mimo-v3")
-    after = jsrc.read_text(encoding="utf-8").splitlines()
-
-    line = f"#set MODEL {settings.default_value('MODEL')}"
-    assert after == [("set MODEL mimo/mimo-v3" if text == line else text) for text in before]
-
-
 # --- without a terminal -------------------------------------------------------------
 
 
@@ -207,3 +193,14 @@ def test_without_a_terminal_it_names_what_is_missing_and_asks_nothing(monkeypatc
     assert "TYPESAFE_API_KEY" in out and "TAVILY_API_KEY" not in out
     assert paths.global_config_file().is_file()
     assert not paths.global_env_file().exists()
+
+
+def test_installer_accepts_key_catalogue_and_notice_sink(tmp_path, capsys):
+    notices = []
+    env_file = tmp_path / "environment"
+    saved = install.ask_keys({}, env_file, _answers("value"),
+                             keys=(("ASSEMBLY_KEY", "service"),),
+                             say=lambda *args, **kwargs: notices.append((args, kwargs)))
+    assert saved == ["ASSEMBLY_KEY"]
+    assert dotenv.parse(env_file.read_text()) == {"ASSEMBLY_KEY": "value"}
+    assert notices and capsys.readouterr().out == ""

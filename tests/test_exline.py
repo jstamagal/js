@@ -12,7 +12,7 @@ import sys
 
 import pytest
 
-from js import cli, exline, paths, settings
+from js import cli, exline, pastes, paths, settings
 
 
 class FakeEditor:
@@ -29,6 +29,17 @@ class FakeEditor:
 
     async def run(self, argv: list[str]) -> int:
         return subprocess.run(argv, check=False).returncode
+
+
+def test_ex_table_accepts_an_assembly_command():
+    editor = FakeEditor("draft")
+
+    async def clear(arg, editor, dispatch):
+        editor.text = ""
+
+    asyncio.run(exline.run_ex("clear", editor, is_command=lambda verb: False,
+                             dispatch=None, commands={"clear": clear}))
+    assert editor.text == ""
 
 
 def _run(line: str, editor: FakeEditor, dispatched: list[str] | None = None, commands=("set", "quit")):
@@ -60,6 +71,25 @@ def test_w_writes_the_buffer_and_keeps_it(tmp_path):
     assert (paths.notes_dir() / exline.BUFFER_FILE).read_text(encoding="utf-8").strip() == "draft line"
     assert editor.text == "draft line"
     assert editor.sent == []
+
+
+@pytest.mark.parametrize("verb", ["w", "wq", "e"])
+def test_ex_file_operations_include_collapsed_paste_content(tmp_path, monkeypatch, verb):
+    pasted = "\n".join(f"row {n}" for n in range(30))
+    editor = FakeEditor(f"review {pastes.keep(pasted, 10)}")
+    target = tmp_path / "draft.txt"
+    written = []
+
+    async def inspect_file(argv):
+        from pathlib import Path
+
+        written.append(Path(argv[-1]).read_text(encoding="utf-8"))
+        return 0
+
+    monkeypatch.setattr(editor, "run", inspect_file)
+    _run("e" if verb == "e" else f"{verb} {target}", editor)
+    content = written[0] if verb == "e" else target.read_text(encoding="utf-8")
+    assert content.removesuffix("\n") == f"review {pasted}"
 
 
 def test_x_sends_the_buffer():
@@ -212,3 +242,18 @@ def test_an_editor_that_exits_nonzero_leaves_the_buffer_alone(tmp_path, monkeypa
     editor = FakeEditor("original")
     _run("abortive", editor)
     assert editor.text == "original"
+
+
+def test_ex_program_policy_can_refuse_a_program(monkeypatch):
+    editor = FakeEditor("buffer")
+    calls = []
+    monkeypatch.setattr(exline.shutil, "which", lambda name: "/bin/" + name)
+    async def dispatch(line):
+        raise AssertionError(line)
+    def allowed(name):
+        calls.append(name)
+        return False
+    asyncio.run(exline.run_ex("editor", editor, is_command=lambda name: False,
+                              dispatch=dispatch, program_allowed=allowed))
+    assert calls == ["editor"]
+    assert editor.text == "buffer" and editor.sent == []

@@ -84,31 +84,21 @@ def test_from_env_carries_subagent_worker_limit(monkeypatch, tmp_path):
     assert cfg.subagent_max_workers == 3
 
 
-def test_shell_env_allow_defaults_to_existing_safe_set_and_loads_from_jsrc(
-    monkeypatch, tmp_path
-):
-    assert tuple(settings.default_value("SHELL_ENV_KEEP")) == (
-        "PATH",
-        "HOME",
-        "USER",
-        "LANG",
-        "LC_ALL",
-        "TERM",
-        "PWD",
-        "SHELL",
-        "BEADS_ACTOR",
-    )
-    config_dir = _isolated_config_home(monkeypatch, tmp_path)
-    config_dir.mkdir(parents=True)
-    (config_dir / "jsrc").write_text(
-        'set MODEL offline-test-model\n'
-        'set SHELL_ENV_KEEP ["PATH","FORGECODE_TOKEN"]\n',
-        encoding="utf-8",
+def test_config_preserves_positional_constructor(tmp_path):
+    cfg = Config(
+        "test-agent", tmp_path / "agent", "offline-test-model", "test-provider",
+        "http://localhost", "test-key", "low", tmp_path / "debug.log",
+        tmp_path / "history", tmp_path / "sessions", tmp_path / "session.jsonl",
+        tmp_path / "prompts",
     )
 
-    cfg = from_env(save_session=False)
-
-    assert cfg.shell_env_allow == ("PATH", "FORGECODE_TOKEN")
+    assert cfg == Config(
+        agent_id="test-agent", agent_dir=tmp_path / "agent", model="offline-test-model",
+        provider_id="test-provider", provider_base_url="http://localhost",
+        provider_api_key="test-key", reasoning_effort="low", debug_log=tmp_path / "debug.log",
+        history_file=tmp_path / "history", sessions_dir=tmp_path / "sessions",
+        session_file=tmp_path / "session.jsonl", prompts_dir=tmp_path / "prompts",
+    )
 
 
 def test_shell_env_allow_is_live_and_installed_on_the_tool_context(monkeypatch, tmp_path):
@@ -159,3 +149,65 @@ def test_run_turn_copies_subagent_worker_limit_to_tool_context(monkeypatch, tmp_
     )
 
     assert context.subagent_max_workers == 3
+
+
+def test_a_config_built_in_code_runs_a_turn_and_a_compaction_with_an_empty_home(
+        monkeypatch, tmp_path):
+    import asyncio
+
+    import ai.models
+    import ai.types.events
+
+    from js import compaction, model_client
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    requests = []
+
+    def open_stream(**kwargs):
+        requests.append(kwargs["model"])
+
+        async def generate():
+            yield ai.types.events.StreamStart()
+            yield ai.types.events.TextStart(block_id="t")
+            yield ai.types.events.TextDelta(chunk="summary", block_id="t")
+            yield ai.types.events.TextEnd(block_id="t")
+            yield ai.types.events.StreamEnd()
+
+        return ai.models.Stream(generate())
+
+    monkeypatch.setattr(model_client, "_open_stream", open_stream)
+    cfg = Config(model="deepseek-chat", provider_id="deepseek", provider_api_key="test-key",
+                 settings={"COMPACTION_KEEP_RECENT_TOKENS": 1})
+
+    messages = [{"role": "user", "content": "old content " * 100}]
+    asyncio.run(runtime.run_turn_async(cfg, "SYSTEM", messages, runtime.Telemetry(None),
+                                       suppress_output=True))
+    messages.append({"role": "user", "content": "new content"})
+    result = compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True)
+
+    assert compaction.compacted(result)
+    assert [model.id for model in requests] == ["deepseek-chat", "deepseek-chat"]
+    assert list(home.rglob("*")) == []
+
+
+def test_registered_instruction_files_select_project_context(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    rules = tmp_path / "RULES.md"
+    rules.write_text("project instructions")
+    cfg = from_env(save_session=False, extras=[
+        'GLOBAL_INSTRUCTION_FILES=[]', 'PROJECT_INSTRUCTION_FILES=["RULES.md"]',
+    ])
+    assert cfg.agents_files == (rules,)
+
+
+def test_registered_deepseek_effort_reaches_config(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    from js import logins
+
+    logins.save_login(logins.Login(provider_id="deepseek", sdk_provider_id="deepseek", provider_api_key="fixture-key"))
+    cfg = from_env(save_session=False,
+                   extras=["MODEL=deepseek/deepseek-v4-flash", "DEEPSEEK_DEFAULT_EFFORT=low"])
+    assert cfg.reasoning_effort == "low"

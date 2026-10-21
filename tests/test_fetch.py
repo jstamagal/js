@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from js.capped_process import _StreamCapture
 from js.toolkit import ToolContext
 from js.toolkit import fs, process_net
 
@@ -319,44 +318,6 @@ def test_shell_tool_schema_exposes_wait_and_job_actions():
     assert "command" not in tool.required
 
 
-def test_shell_uses_configured_environment_allowlist_and_explains_failure(
-    monkeypatch, tmp_path
-):
-    seen = {}
-
-    class FakeProcess:
-        pid = 1
-        def running(self): return False
-        def elapsed(self): return 0.0
-        def snapshot(self): return b"", b"token lookup failed"
-        def stream(self, name):
-            capture = _StreamCapture(4096)
-            capture.feed(b"token lookup failed" if name == "stderr" else b"")
-            return capture
-        def wait(self, timeout):
-            return process_net.CappedProcessResult(returncode=7, stdout=b"", stderr=b"token lookup failed")
-
-    def start_stub(argv, **kwargs):
-        seen["env"] = kwargs["env"]
-        return FakeProcess()
-
-    monkeypatch.setenv("FORGECODE_TOKEN", "operator-secret")
-    monkeypatch.setenv("OTHER_SECRET", "kept-out")
-    monkeypatch.setattr(process_net, "start_capped", start_stub)
-    context = ToolContext(cwd=tmp_path, shell_program="/bin/sh")
-    context.shell_env_allow = (*process_net._ENV_ALLOW, "FORGECODE_TOKEN")
-
-    result = process_net.shell('use-token "$FORGECODE_TOKEN" "$OTHER_SECRET"', context=context)
-
-    assert seen["env"]["FORGECODE_TOKEN"] == "operator-secret"
-    assert "exit=7" in result
-    assert "environment=filtered" in result
-    assert "allowed=" in result
-    assert "FORGECODE_TOKEN" in result
-    assert "OTHER_SECRET" in result
-    assert "SHELL_ENV_KEEP" in result
-
-
 def test_html_link_prefixed_attribute_does_not_hijack_the_real_href(tmp_path):
     page = tmp_path / "row.html"
     page.write_text(
@@ -431,7 +392,20 @@ def test_a_configured_download_quota_is_enforced_and_leaves_no_partial(tmp_path)
 
     assert result == "ERROR: response exceeds 1024 byte download limit"
     assert not (tmp_path / "copy.bin").exists()
-    assert list(tmp_path.glob(".*js-partial")) == []
+    assert list(tmp_path.glob(".*js-partial*")) == []
+
+
+def test_a_saved_download_gets_the_umask_mode(tmp_path):
+    source = tmp_path / "page.txt"
+    source.write_text("hello")
+    previous = os.umask(0o022)
+    try:
+        result = process_net.fetch(source.as_uri(), save="out.txt", context=ToolContext(cwd=tmp_path))
+    finally:
+        os.umask(previous)
+
+    assert result.startswith("SAVED_RESPONSE ")
+    assert (tmp_path / "out.txt").stat().st_mode & 0o777 == 0o644
 
 
 class StreamingResponse(FakeResponse):
@@ -464,3 +438,22 @@ def test_an_http_save_streams_to_disk_instead_of_reading_the_body(monkeypatch, t
     assert result.startswith(f"SAVED_RESPONSE path={tmp_path / 'blob.bin'} size={len(body)} ")
     assert (tmp_path / "blob.bin").read_bytes() == body
     assert response.reads > 1, "a stream reads in chunks; one read means it buffered"
+
+
+def test_fetch_accepts_a_download_resolver(monkeypatch, tmp_path):
+    selected = []
+    transfers = []
+    def resolve(name):
+        selected.append(name)
+        return "/assembly/aria2c"
+    def download(binary, url, destination, **kwargs):
+        transfers.append(binary)
+        destination.write_bytes(b"payload")
+    monkeypatch.setattr(process_net, "download_with_aria2", download)
+    monkeypatch.setattr(process_net, "_saved_content_type", lambda *args: "text/plain")
+    result = process_net.fetch("https://example.test/file", save="file",
+                               context=ToolContext(cwd=tmp_path), download_resolver=resolve)
+    assert selected == [process_net.ARIA2_EXECUTABLE]
+    assert transfers == ["/assembly/aria2c"]
+    assert (tmp_path / "file").read_bytes() == b"payload"
+    assert not result.startswith("ERROR")

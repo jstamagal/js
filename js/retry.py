@@ -14,14 +14,14 @@ import email.utils
 import math
 import random
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 import ai
 
 from . import activity
-from . import messages as msgs
+from . import output
 from . import settings as _settings
 from . import stream_transport
 
@@ -32,10 +32,19 @@ class Budget:
 
     attempts: int
     max_wait: float
+    backoff_start: float = field(default_factory=lambda: _settings.default_value("RETRY_BACKOFF_START"))
+    backoff_multiplier: float = field(default_factory=lambda: _settings.default_value("RETRY_BACKOFF_MULTIPLIER"))
+    backoff_max: float = field(default_factory=lambda: _settings.default_value("RETRY_BACKOFF_MAX"))
+    backoff_jitter: float = field(default_factory=lambda: _settings.default_value("RETRY_BACKOFF_JITTER"))
+
 
     @classmethod
     def from_settings(cls, settings: dict | None) -> Budget:
         return cls(
+            backoff_start=float(_settings.knob(settings, "RETRY_BACKOFF_START")),
+            backoff_multiplier=float(_settings.knob(settings, "RETRY_BACKOFF_MULTIPLIER")),
+            backoff_max=float(_settings.knob(settings, "RETRY_BACKOFF_MAX")),
+            backoff_jitter=float(_settings.knob(settings, "RETRY_BACKOFF_JITTER")),
             attempts=int(_settings.knob(settings, "RETRY_COUNT_MAX") or 0),
             max_wait=float(_settings.knob(settings, "RETRY_WAIT_MAX") or 0),
         )
@@ -54,10 +63,11 @@ def idle_seconds(settings: dict | None) -> float | None:
     return float(_settings.knob(settings, "STREAM_IDLE_TIMEOUT") or 0) or None
 
 
-def backoff(attempt: int) -> float:
+def backoff(attempt: int, budget: Budget | None = None) -> float:
     """Exponential with jitter: 1s, 2s, 4s ... capped."""
-    base = min(2 ** attempt, 16)
-    return base + random.uniform(0, 1)
+    budget = budget if budget is not None else Budget.from_settings(None)
+    base = min(budget.backoff_start * budget.backoff_multiplier ** attempt, budget.backoff_max)
+    return base + random.uniform(0, budget.backoff_jitter)
 
 
 def _error_chain(exc: BaseException) -> list[BaseException]:
@@ -110,12 +120,9 @@ def retry_after_seconds(exc: BaseException) -> float | None:
 
 
 def announce(n: int, budget: Budget, delay: float, exc: BaseException) -> None:
-    """The network-channel line for retry `n`. A wait of 10s or more shows at
-    level 1, so a long Retry-After does not look like a hang."""
-    stream_transport.say_for_caller(
-        1 if delay >= 10 else 3,
-        msgs.RETRY_WAIT.said(n=n, of=budget.attempts, seconds=delay,
-                             failure=stream_transport.describe_failure(exc)))
+    """Tell the sink which retry will wait, and the failure it follows."""
+    output.emit(output.event("retry_wait", n=n, attempts=budget.attempts, delay=delay,
+                             error=exc, label=stream_transport._role.get().label))
 
 
 _sleep = asyncio.sleep
@@ -140,6 +147,6 @@ async def call[T](request: Callable[[], Awaitable[T]], budget: Budget) -> T:
             asked = retry_after_seconds(exc)
             if not exc.is_retryable or retries >= budget.attempts or budget.too_long(asked):
                 raise
-            delay = asked if asked is not None else backoff(retries)
+            delay = asked if asked is not None else backoff(retries, budget)
             retries += 1
             await wait(retries, budget, delay, exc)

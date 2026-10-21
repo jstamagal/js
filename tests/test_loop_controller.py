@@ -183,3 +183,20 @@ def test_interrupt_kills_detached_group_when_js_ignores_signals(tmp_path: Path):
         if parent.poll() is None:
             parent.kill()
             parent.wait()
+
+
+def test_registered_loop_failure_limit_stops_without_another_child(monkeypatch):
+    from types import SimpleNamespace
+    from js import loop_controller
+
+    calls = []
+
+    def start(*args, **kwargs):
+        calls.append(args)
+        return SimpleNamespace(communicate=lambda **kw: None, returncode=7)
+
+    monkeypatch.setattr(loop_controller.subprocess, "Popen", start)
+    monkeypatch.setattr(loop_controller.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr(loop_controller.time, "sleep", lambda _delay: None)
+    assert loop_controller.run([], "", bench=None, prompt="work", settings={"LOOP_FAILURES_MAX": 1}) == 7
+    assert len(calls) == 1

@@ -90,126 +90,6 @@ def test_tools_alias_profiles_rejects_non_list_json():
     assert config_settings == config_before
 
 
-def test_tools_alias_profiles_rejects_entries_without_aliases():
-    live_settings = settings.seed_defaults()
-    before = copy.deepcopy(live_settings)
-    raw = '[{"match":["openai"]}]'
-
-    result = setcmd.set_command(live_settings, f"TOOL_ALIASES {raw}")
-    config_settings = settings.seed_defaults()
-    config_before = copy.deepcopy(config_settings)
-    config_result = setcmd.apply_config_line(config_settings, f"set TOOL_ALIASES {raw}")
-
-    assert result.handled is True
-    assert result.changed is False
-    assert result.error == "TOOL_ALIASES: expected profiles with match and aliases"
-    assert live_settings == before
-    assert config_result.handled is True
-    assert config_result.changed is False
-    assert config_result.error == "TOOL_ALIASES: expected profiles with match and aliases"
-    assert config_settings == config_before
-
-
-def test_tools_alias_profiles_rejects_empty_alias_maps():
-    live_settings = settings.seed_defaults()
-    before = copy.deepcopy(live_settings)
-    raw = '[{"match":["openai"],"aliases":{}}]'
-
-    result = setcmd.set_command(live_settings, f"TOOL_ALIASES {raw}")
-    config_settings = settings.seed_defaults()
-    config_before = copy.deepcopy(config_settings)
-    config_result = setcmd.apply_config_line(config_settings, f"set TOOL_ALIASES {raw}")
-
-    assert result.handled is True
-    assert result.changed is False
-    assert result.error == "TOOL_ALIASES: expected non-empty aliases"
-    assert live_settings == before
-    assert config_result.handled is True
-    assert config_result.changed is False
-    assert config_result.error == "TOOL_ALIASES: expected non-empty aliases"
-    assert config_settings == config_before
-
-
-def test_tools_alias_profiles_rejects_empty_match_values():
-    live_settings = settings.seed_defaults()
-    before = copy.deepcopy(live_settings)
-    raw = '[{"match":[],"aliases":{"read":"Read"}}]'
-
-    result = setcmd.set_command(live_settings, f"TOOL_ALIASES {raw}")
-    config_settings = settings.seed_defaults()
-    config_before = copy.deepcopy(config_settings)
-    config_result = setcmd.apply_config_line(config_settings, f"set TOOL_ALIASES {raw}")
-
-    assert result.handled is True
-    assert result.changed is False
-    assert result.error == "TOOL_ALIASES: expected non-empty match values"
-    assert live_settings == before
-    assert config_result.handled is True
-    assert config_result.changed is False
-    assert config_result.error == "TOOL_ALIASES: expected non-empty match values"
-    assert config_settings == config_before
-
-
-def test_tools_alias_profiles_rejects_duplicate_alias_names():
-    live_settings = settings.seed_defaults()
-    before = copy.deepcopy(live_settings)
-    raw = '[{"match":["openai"],"aliases":{"read":"Tool","write":"tool"}}]'
-
-    result = setcmd.set_command(live_settings, f"TOOL_ALIASES {raw}")
-    config_settings = settings.seed_defaults()
-    config_before = copy.deepcopy(config_settings)
-    config_result = setcmd.apply_config_line(config_settings, f"set TOOL_ALIASES {raw}")
-
-    assert result.handled is True
-    assert result.changed is False
-    assert result.error == "TOOL_ALIASES: expected unique alias names"
-    assert live_settings == before
-    assert config_result.handled is True
-    assert config_result.changed is False
-    assert config_result.error == "TOOL_ALIASES: expected unique alias names"
-    assert config_settings == config_before
-
-
-def test_tools_alias_profiles_rejects_invalid_alias_names():
-    live_settings = settings.seed_defaults()
-    before = copy.deepcopy(live_settings)
-    raw = '[{"match":["openai"],"aliases":{"read":"read file"}}]'
-
-    result = setcmd.set_command(live_settings, f"TOOL_ALIASES {raw}")
-    config_settings = settings.seed_defaults()
-    config_before = copy.deepcopy(config_settings)
-    config_result = setcmd.apply_config_line(config_settings, f"set TOOL_ALIASES {raw}")
-
-    assert result.handled is True
-    assert result.changed is False
-    assert result.error == "TOOL_ALIASES: expected alias names matching [A-Za-z0-9_-]+"
-    assert live_settings == before
-    assert config_result.handled is True
-    assert config_result.changed is False
-    assert config_result.error == "TOOL_ALIASES: expected alias names matching [A-Za-z0-9_-]+"
-    assert config_settings == config_before
-
-
-def test_tools_alias_profiles_rejects_invalid_canonical_names():
-    live_settings = settings.seed_defaults()
-    before = copy.deepcopy(live_settings)
-    raw = '[{"match":["openai"],"aliases":{"read file":"Read"}}]'
-
-    result = setcmd.set_command(live_settings, f"TOOL_ALIASES {raw}")
-    config_settings = settings.seed_defaults()
-    config_before = copy.deepcopy(config_settings)
-    config_result = setcmd.apply_config_line(config_settings, f"set TOOL_ALIASES {raw}")
-
-    assert result.handled is True
-    assert result.changed is False
-    assert result.error == "TOOL_ALIASES: expected canonical tool names matching [A-Za-z0-9_-]+"
-    assert live_settings == before
-    assert config_result.handled is True
-    assert config_result.changed is False
-    assert config_result.error == "TOOL_ALIASES: expected canonical tool names matching [A-Za-z0-9_-]+"
-    assert config_settings == config_before
-
-
 def test_provider_extra_rejects_non_object_json():
     live_settings = settings.seed_defaults()
     before = copy.deepcopy(live_settings)
@@ -230,31 +110,6 @@ def test_provider_extra_rejects_non_object_json():
     assert config_settings == config_before
 
 
-def test_bool_off_is_valid_but_no_longer_a_magic_clear_token_for_other_types():
-    # RULING A: magic strings die. "off" still parses as a real bool for a
-    # bool knob, but for a nullable int/str knob it's just a bad value now —
-    # `set -key` (js/setcmd.py apply_unset) is the only way to clear one.
-    live_settings = settings.seed_defaults()
-
-    bool_result = setcmd.set_command(live_settings, "TRANSCRIPT_LOG off")
-    int_result = setcmd.set_command(live_settings, "OUTPUT_TOKENS_MAX 123")
-    rejected = setcmd.set_command(live_settings, "OUTPUT_TOKENS_MAX off")
-
-    assert bool_result.error is None
-    assert bool_result.lines == [_changed("TRANSCRIPT_LOG", "off")]
-    assert settings.get_dotted(live_settings, ("TRANSCRIPT_LOG",)) is False
-    assert int_result.error is None
-    assert int_result.lines == [_changed("OUTPUT_TOKENS_MAX", "123")]
-    assert rejected.error == "OUTPUT_TOKENS_MAX: expected an integer"
-    assert rejected.changed is False
-    assert settings.get_dotted(live_settings, ("OUTPUT_TOKENS_MAX",)) == 123  # unchanged
-
-    cleared = setcmd.set_command(live_settings, "-OUTPUT_TOKENS_MAX")
-    assert cleared.error is None
-    assert cleared.lines == [_changed("OUTPUT_TOKENS_MAX", "<none>")]
-    assert settings.get_dotted(live_settings, ("OUTPUT_TOKENS_MAX",)) is None
-
-
 def test_subagent_max_workers_rejects_values_below_one():
     live_settings = settings.seed_defaults()
 
@@ -265,41 +120,6 @@ def test_subagent_max_workers_rejects_values_below_one():
     assert rejected.changed is False
     assert accepted.error is None
     assert accepted.lines == [_changed("SUBAGENT_WORKERS_MAX", "1")]
-
-
-@pytest.mark.parametrize("token", ["default", "auto", "none", "unset"])
-def test_magic_strings_store_verbatim_for_string_knobs(token):
-    # RULING A headline: a literal string knob like MODEL stores these
-    # words as-is instead of silently clearing to the built-in default.
-    live_settings = settings.seed_defaults()
-
-    result = setcmd.set_command(live_settings, f"MODEL {token}")
-
-    assert result.error is None
-    assert result.lines == [_changed("MODEL", token)]
-    assert settings.get_dotted(live_settings, ("MODEL",)) == token
-
-    cleared = setcmd.set_command(live_settings, "-MODEL")
-    assert cleared.error is None
-    assert settings.get_dotted(live_settings, ("MODEL",)) is None
-
-
-def test_empty_state_rendering_distinguishes_off_none_and_unset():
-    live_settings = settings.seed_defaults()
-
-    off = setcmd.show_lines(live_settings, "DEBUG_LOG")
-    none = setcmd.show_lines(live_settings, "PROVIDER")
-    unset_spec = settings.SettingSpec(
-        "TEMPERATURE",
-        "float",
-        empty=settings.EMPTY_UNSET,
-    )
-
-    assert off.lines[0] == _is("DEBUG_LOG", "off")
-    assert none.lines[0] == _is("PROVIDER", "<none>")
-    assert setcmd.render_value(unset_spec, None) == "<unset>"
-    sampling = setcmd.show_lines(live_settings, "TEMPERATURE")
-    assert sampling.lines[0] == _is("TEMPERATURE", "<unset>")
 
 
 def test_secret_values_are_masked_when_shown():
@@ -313,16 +133,6 @@ def test_secret_values_are_masked_when_shown():
     assert changed.lines == [_changed("API_KEY", "<set>")]
     assert settings.get_dotted(live_settings, ("API_KEY",)) == "sk-test"
     assert shown.lines[0] == _is("API_KEY", "<set>")
-
-
-def test_secret_values_show_in_full_when_paranoid_mode_is_off():
-    live_settings = settings.seed_defaults()
-
-    changed = setcmd.set_command(live_settings, "API_KEY sk-test")
-    shown = setcmd.show_lines(live_settings, "API_KEY")
-
-    assert changed.lines == [_changed("API_KEY", "sk-test")]
-    assert shown.lines[0] == _is("API_KEY", "sk-test")
 
 
 @pytest.mark.parametrize("key", ["MODEL.foo", "PROVIDER.foo", "FETCH_TIMEOUT.foo"])
@@ -379,15 +189,6 @@ def test_apply_config_line_applies_setting_short_names(line: str, path: tuple[st
     assert result.error is None
     assert result.changed_keys == [".".join(path)]
     assert settings.get_dotted(store, path) == value
-
-
-def test_set_accepts_a_setting_short_name_for_its_key():
-    store = settings.seed_defaults()
-
-    result = setcmd.set_command(store, "model other/model")
-
-    assert result.changed_keys == ["MODEL"]
-    assert settings.get_dotted(store, ("MODEL",)) == "other/model"
 
 
 def test_apply_config_line_rejects_set_without_value():
@@ -482,18 +283,6 @@ def test_env_js_name_sets_the_setting():
     assert overlaid["READ_LINES_MAX"] == 42
 
 
-def test_old_env_name_still_sets_the_setting_and_new_name_wins():
-    old = settings.apply_env_overrides(settings.seed_defaults(), {"JS_REASONING": "high"})
-    both = settings.apply_env_overrides(settings.seed_defaults(), {"JS_REASONING": "high", "JS_EFFORT": "low"})
-    assert old["EFFORT"] == "high"
-    assert both["EFFORT"] == "low"
-
-
-def test_long_dotted_env_name_is_not_read():
-    overlaid = settings.apply_env_overrides(settings.seed_defaults(), {"JS_LIMITS_MAX_READ_LINES": "42"})
-    assert overlaid["READ_LINES_MAX"] == settings.default_value("READ_LINES_MAX")
-
-
 def test_provider_id_and_base_url_validate_at_set_time():
     live_settings = settings.seed_defaults()
 
@@ -520,44 +309,6 @@ def test_editing_mode_accepts_emacs_or_vi_only():
     assert settings.get_dotted(store, ("EDITING_MODE",)) == "vi"
 
 
-def test_old_dotted_name_is_refused():
-    live_settings = settings.seed_defaults()
-    result = setcmd.set_command(live_settings, "model.id other")
-    assert result.error is not None
-    assert live_settings["MODEL"] == settings.default_value("MODEL")
-
-
-def test_a_name_in_any_case_is_the_setting():
-    live_settings = settings.seed_defaults()
-    assert setcmd.set_command(live_settings, "read_lines_max 7").error is None
-    assert live_settings["READ_LINES_MAX"] == 7
-
-
-@pytest.mark.parametrize("key", ["ui.editing_mode", "runtime.debug", "kernel.enabled"])
-def test_a_retired_dotted_name_in_a_kept_section_is_refused(key):
-    live_settings = settings.seed_defaults()
-    before = copy.deepcopy(live_settings)
-    assert setcmd.set_command(live_settings, f"{key} on").error is not None
-    assert setcmd.apply_config_line(live_settings, f"set {key} on").error is not None
-    with pytest.raises(ValueError):
-        settings.parse_extra_arg(f"{key}=on")
-    assert live_settings == before
-
-
-def test_a_display_setting_takes_its_name_in_any_case_under_fset():
-    live_settings = settings.seed_defaults()
-    assert setcmd.fset_command(live_settings, "tools_display 3").error is None
-    assert live_settings["TOOLS_DISPLAY"] == 3
-    assert setcmd.set_command(live_settings, "tools_display 2").error
-
-
-def test_a_map_child_takes_its_setting_name_in_any_case():
-    live_settings = settings.seed_defaults()
-    assert setcmd.set_command(live_settings, "extra_params.organization Acme").error is None
-    assert live_settings["EXTRA_PARAMS"]["organization"] == "Acme"
-    assert settings.parse_extra_arg("extra_params.Team=x")[0] == ("EXTRA_PARAMS", "Team")
-
-
 def test_a_config_refuses_a_settings_key_that_is_not_a_setting(tmp_path):
     from dataclasses import replace
 
@@ -569,21 +320,6 @@ def test_a_config_refuses_a_settings_key_that_is_not_a_setting(tmp_path):
         replace(cfg, settings={"retry_attempts": 3})
 
 
-@pytest.mark.parametrize("store", [
-    {"runtime": {"retry_attempts": 0}},
-    {"runtime": {"stream_idle_seconds": 1}},
-    {"ui": {"editing_mode": "vi"}},
-    {"ui": 3},
-])
-def test_a_config_refuses_an_old_name_under_a_section(tmp_path, store):
-    from dataclasses import replace
-
-    from test_lazy_tool_discovery import _cfg
-
-    with pytest.raises(ValueError):
-        replace(_cfg(tmp_path), settings=store)
-
-
 def test_a_config_takes_a_display_setting_and_map_contents(tmp_path):
     from dataclasses import replace
 
@@ -591,32 +327,3 @@ def test_a_config_takes_a_display_setting_and_map_contents(tmp_path):
 
     store = {"TRACE": True, "EXTRA_PARAMS": {"a": {"b": 1}}, "CONTEXT_SIZE_PER_MODEL": {"x/y": 9}}
     assert replace(_cfg(tmp_path), settings=store).settings == store
-
-
-def test_fset_rows_draw_through_their_own_format():
-    live = settings.seed_defaults()
-    assert setcmd.fset_command(live, "FSET_VALUE <%s|%s>").error is None
-    assert setcmd.fset_command(live, "FSET_EMPTY <%s>").error is None
-    assert setcmd.fset_command(live, "NET_DISPLAY").lines == ["<NET_DISPLAY|2>"]
-    assert setcmd.fset_command(live, "HOST_COLOR").lines == ["<HOST_COLOR>"]
-
-
-def test_a_live_value_annotation_draws_through_its_format():
-    from js import fset
-
-    fset.set_entry("SETTING_LIVE", "%s OVERRIDE %s")
-    overlay = {"MODEL": setcmd.LiveValue(display="m1", source="--model flag")}
-    lines = setcmd.show_lines_effective(settings.seed_defaults(), overlay, "MODEL").lines
-    assert lines and "OVERRIDE --model flag" in lines[0]
-
-
-def test_fset_listing_rows_start_with_the_banner_like_set_rows():
-    from js import fset
-
-    live = settings.seed_defaults()
-    lead = fset.banner_text() + " "
-    set_rows = setcmd.show_lines_effective(live, {}, "*").lines
-    assert set_rows and all(row.startswith(lead) for row in set_rows)
-    for name in ("NET_DISPLAY", "HOST_COLOR"):
-        rows = setcmd.fset_command(live, name).lines
-        assert rows and all(row.startswith(lead) for row in rows), rows

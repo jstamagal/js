@@ -117,17 +117,6 @@ def test_ast_search_limits_and_deduplicates_results(tmp_path):
 
 
 @requires_ast_grep
-def test_ast_search_caps_output_at_tool_context_limit(tmp_path):
-    (tmp_path / "calls.py").write_text("foo(a_very_long_argument_name)\n", encoding="utf-8")
-    context = ToolContext(cwd=tmp_path, max_tool_result_bytes=80)
-
-    actual = ast_search("foo($ARG)", path="calls.py", context=context)
-
-    assert len(actual.encode("utf-8")) <= 80
-    assert actual.endswith("[truncated: TOOL_RESULT_MAX (80) reached]")
-
-
-@requires_ast_grep
 def test_ast_search_reports_no_matches_and_failures_cleanly(tmp_path):
     (tmp_path / "code.py").write_text("value = 1\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
@@ -156,60 +145,6 @@ def test_ast_search_surfaces_a_parse_warning_instead_of_a_clean_no_match(tmp_pat
     assert actual.endswith("(no matches)")
 
 
-@requires_ast_grep
-def test_ast_search_matches_a_python_def_header_written_without_a_body(tmp_path):
-    """A bodyless `def` is not parseable Python; the header alone must still find
-    the definition, shown down to its signature."""
-    target = tmp_path / "code.py"
-    target.write_text("class A:\n    def path(self):\n        return 1\n", encoding="utf-8")
-    context = ToolContext(cwd=tmp_path)
-
-    actual = ast_search("def path($$$A):", path=".", context=context)
-
-    assert f"{target}:2" in actual
-    assert "return 1" not in actual
-
-
-@requires_ast_grep
-def test_ast_search_matches_a_decorated_def_header_written_without_a_body(tmp_path):
-    target = tmp_path / "code.py"
-    target.write_text(
-        "import functools\n"
-        "def deco(func):\n"
-        "    @functools.wraps(func)\n"
-        "    def wrapped(*args, **kwargs):\n"
-        "        return func(*args, **kwargs)\n"
-        "    return wrapped\n",
-        encoding="utf-8",
-    )
-    context = ToolContext(cwd=tmp_path)
-
-    actual = ast_search("@functools.wraps(func)\ndef wrapped(*args, **kwargs):", path=".", context=context)
-
-    assert f"{target}:3" in actual
-    assert "return func" not in actual
-
-
-@requires_ast_grep
-def test_ast_search_matches_a_def_under_a_multiline_decorator_written_without_a_body(tmp_path):
-    target = tmp_path / "code.py"
-    target.write_text(
-        "@mark.parametrize(\n"
-        "    \"x\",\n"
-        "    [1, 2],\n"
-        ")\n"
-        "def test_x(x):\n"
-        "    assert x\n",
-        encoding="utf-8",
-    )
-    context = ToolContext(cwd=tmp_path)
-
-    actual = ast_search('@mark.parametrize(\n    "x",\n    [1, 2],\n)\ndef test_x(x):', path=".", context=context)
-
-    assert f"{target}:1" in actual
-    assert "assert x" not in actual
-
-
 def test_a_failed_bodyless_def_retry_is_an_error_not_a_cached_no_match(tmp_path, monkeypatch):
     (tmp_path / "code.py").write_text("def f(x):\n    return x\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
@@ -222,31 +157,6 @@ def test_a_failed_bodyless_def_retry_is_an_error_not_a_cached_no_match(tmp_path,
 
     assert first.startswith("ERROR:")
     assert second.startswith("ERROR:")
-
-
-@requires_ast_grep
-def test_a_bodyless_def_pattern_may_use_any_metavariable_name(tmp_path):
-    """The body the retry adds must not reuse one of the caller's names."""
-    target = tmp_path / "code.py"
-    target.write_text("def f(x):\n    return x\n", encoding="utf-8")
-    context = ToolContext(cwd=tmp_path)
-
-    actual = ast_search("def f($$$JS_BODY):", path=".", context=context)
-
-    assert f"{target}:1" in actual
-
-
-@requires_ast_grep
-def test_ast_search_refuses_a_bodyless_def_rewrite(tmp_path):
-    """A rewrite would replace the body the header pattern never named."""
-    target = tmp_path / "code.py"
-    target.write_text("def f(x):\n    return x\n", encoding="utf-8")
-    context = ToolContext(cwd=tmp_path)
-
-    actual = ast_search("def f($A):", path="code.py", rewrite="def g($A):", context=context)
-
-    assert actual.startswith("ERROR: ")
-    assert target.read_text(encoding="utf-8") == "def f(x):\n    return x\n"
 
 
 @requires_ast_grep

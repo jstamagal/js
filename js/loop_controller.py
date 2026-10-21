@@ -1,6 +1,10 @@
 """Repeat complete CLI invocations as fresh, isolated processes."""
 from __future__ import annotations
 
+from . import messages as msgs
+
+from . import settings as _settings
+
 import os
 from pathlib import Path
 import re
@@ -8,10 +12,14 @@ import signal
 import subprocess
 import sys
 import time
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('loop_controller')
+
 
 
 _DURATION = re.compile(r"([1-9][0-9]*)([mMhH])\Z")
-_DEFAULT_PROMPT = "Carry out your assigned task for this fresh session."
+_DEFAULT_PROMPT = _PROMPTS['default_carry_out_your_assigned_task_for']
 
 
 def parse_limit(value: str) -> tuple[int | None, float | None]:
@@ -22,7 +30,7 @@ def parse_limit(value: str) -> tuple[int | None, float | None]:
     match = _DURATION.fullmatch(value)
     if match:
         return None, int(match[1]) * (60 if match[2].lower() == "m" else 3600)
-    raise ValueError("--loop expects a positive turn count, minutes (M), or hours (H)")
+    raise ValueError(msgs.LOOP_LOOP_EXPECTS_A_POSITIVE_TURN_COUNT_MINUTES.format())
 
 
 def child_argv(argv: list[str], limit: str | None = None) -> list[str]:
@@ -99,7 +107,7 @@ def _stop_child(child: subprocess.Popen) -> None:
 
 
 def run(argv: list[str], limit: str, *, bench: str | None, prompt: str | None,
-        child_command: list[str] | None = None) -> int:
+        child_command: list[str] | None = None, settings: dict | None = None) -> int:
     count, seconds = parse_limit(limit)
     command = list(child_command or [sys.executable, "-m", "js"])
     args = child_argv(argv, limit)
@@ -109,14 +117,16 @@ def run(argv: list[str], limit: str, *, bench: str | None, prompt: str | None,
         args += ["-p", _DEFAULT_PROMPT]
     deadline = time.monotonic() + seconds if seconds is not None else None
     completed = failures = attempts = 0
-    max_attempts = count * 3 if count is not None else None
+    max_attempts = count * int(_settings.knob(settings, "LOOP_ATTEMPTS_MULTIPLIER")) if count is not None else None
+    failure_limit = int(_settings.knob(settings, "LOOP_FAILURES_MAX"))
+    backoff_max = int(_settings.knob(settings, "LOOP_BACKOFF_MAX"))
     try:
         while (count is None or completed < count) and (deadline is None or time.monotonic() < deadline):
             if max_attempts is not None and attempts >= max_attempts:
-                print(f"STOP: {completed} completed turns after {attempts} attempts.", file=sys.stderr)
+                print(msgs.LOOP_ATTEMPTS_EXHAUSTED.words(completed=completed, attempts=attempts), file=sys.stderr)
                 return 1
             attempts += 1
-            print(f"\n=== js loop attempt {attempts}, completed {completed}/{count or 'unlimited'} ===", flush=True)
+            print(msgs.LOOP_ATTEMPT.words(attempts=attempts, completed=completed, value=count or msgs.LOOP_UNLIMITED), flush=True)
             child = subprocess.Popen(command + args, start_new_session=True,
                                      stdin=subprocess.PIPE if stdin_data is not None else None)
             try:
@@ -132,15 +142,15 @@ def run(argv: list[str], limit: str, *, bench: str | None, prompt: str | None,
             if code == 130:
                 return 130
             failures += 1
-            if count is not None or failures >= 5:
-                print(f"STOP: child exited {code}; {completed} turns completed.", file=sys.stderr)
+            if count is not None or failures >= failure_limit:
+                print(msgs.LOOP_CHILD_STOPPED.words(code=code, completed=completed), file=sys.stderr)
                 return code or 1
-            delay = min(2 ** (failures - 1), 8)
-            print(f"Child exited {code}; retrying in {delay}s ({failures}/5 consecutive failures).", file=sys.stderr)
+            delay = min(2 ** (failures - 1), backoff_max)
+            print(msgs.LOOP_CHILD_RETRY.format(code=code, delay=delay, failures=failures, failure_limit=failure_limit), file=sys.stderr)
             if deadline is not None and time.monotonic() + delay >= deadline:
                 return code or 1
             time.sleep(delay)
     except KeyboardInterrupt:
-        print("Stopped by operator; owned child has exited.", file=sys.stderr)
+        print(msgs.LOOP_STOPPED.words(), file=sys.stderr)
         return 130
     return 0

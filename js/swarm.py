@@ -42,6 +42,10 @@ in an inbox or the log. A member whose process is gone stays silent.
 
 from __future__ import annotations
 
+from . import messages as msgs
+
+from . import settings as _settings
+
 import contextlib
 import fcntl
 import json
@@ -56,13 +60,16 @@ import weakref
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('swarm')
+
 
 POLL_S = 0.25
 COALESCE_S = 0.3
 PULSE_S = 1.0
 ROLLCALL_WAIT_S = 3.0
 CLAIM_TTL_S = 600.0
-SPAWN_CAP = 8
 STOP = "stop"
 TICK = "tick"
 RETIRE = "retire"
@@ -74,15 +81,15 @@ _NAME = re.compile(r"[A-Za-z0-9_.-]+")
 
 
 def check_name(name: str) -> str:
-    if not _NAME.fullmatch(name or ""):
-        raise ValueError(f"swarm name must be one word of [A-Za-z0-9_.-]: {name!r}")
+    if name in {".", ".."} or not _NAME.fullmatch(name or ""):
+        raise ValueError(msgs.SWARM_SWARM_NAME_MUST_BE_ONE_WORD_OF.format(name=name))
     return name
 
 
 def check_kind(kind: str) -> str:
     kind = (kind or "").strip() or "say"
     if not _NAME.fullmatch(kind):
-        raise ValueError(f"a message kind is one word of [A-Za-z0-9_.-]: {kind!r}")
+        raise ValueError(msgs.SWARM_A_MESSAGE_KIND_IS_ONE_WORD_OF.format(kind=kind))
     return kind
 
 
@@ -297,13 +304,16 @@ class Room:
         """Take `key` for `who` for `ttl` seconds, or renew it. Returns (yours, holder, expires)."""
         check_name(who)
         with self._locked():
-            claims = self._claims()
-            held = claims.get(key)
-            if held is not None and held["holder"] != who:
-                return False, held["holder"], held["expires"]
-            claims[key] = {"holder": who, "expires": time.time() + max(1.0, float(ttl))}
-            self._write_claims(claims)
-            return True, who, claims[key]["expires"]
+            return self._claim_locked(key, who, ttl)
+
+    def _claim_locked(self, key: str, who: str, ttl: float) -> tuple[bool, str, float]:
+        claims = self._claims()
+        held = claims.get(key)
+        if held is not None and held["holder"] != who:
+            return False, held["holder"], held["expires"]
+        claims[key] = {"holder": who, "expires": time.time() + max(1.0, float(ttl))}
+        self._write_claims(claims)
+        return True, who, claims[key]["expires"]
 
     def release(self, key: str, who: str) -> bool:
         with self._locked():
@@ -341,22 +351,24 @@ class Room:
             cells = self._cells()
             cell = Cell(max((c.id for c in cells), default=0) + 1, title.strip(), body, by, time.time())
             self._write_cells([*cells, cell])
-        self.send(by, BROADCAST, f"task #{cell.id}: {cell.title}" + (f"\n{body}" if body.strip() else ""), TASK)
+        self.send(by, BROADCAST, _PROMPTS['post_cell_task'].format(cell_id=cell.id, cell_title=cell.title) + (_PROMPTS['post_cell_text'].format(body=body) if body.strip() else ""), TASK)
         return cell
 
     def take_cell(self, cell_id: int, who: str, ttl: float = CLAIM_TTL_S) -> tuple[bool, str, float]:
         """Take cell `cell_id` for `who`: a claim on its key, renewed by taking again."""
-        cell = self.cell(cell_id)
-        if cell is None:
-            raise KeyError(cell_id)
-        if cell.status == "done":
-            return False, cell.holder, 0.0
-        yours, holder, expires = self.claim(cell.key, who, ttl)
-        if yours:
-            with self._locked():
+        check_name(who)
+        with self._locked():
+            cells = self._cells()
+            cell = next((c for c in cells if c.id == cell_id), None)
+            if cell is None:
+                raise KeyError(cell_id)
+            if cell.status == "done":
+                return False, cell.holder, 0.0
+            yours, holder, expires = self._claim_locked(cell.key, who, ttl)
+            if yours:
                 self._write_cells([replace(c, status="taken", holder=who) if c.id == cell_id else c
-                                   for c in self._cells()])
-        return yours, holder, expires
+                                   for c in cells])
+            return yours, holder, expires
 
     def finish_cell(self, cell_id: int, who: str, result: str = "") -> Cell:
         """Mark the cell done with `result`, free its claim, tell everyone with a `done` message."""
@@ -372,7 +384,7 @@ class Room:
             if done.key in claims:
                 del claims[done.key]
                 self._write_claims(claims)
-        self.send(who, BROADCAST, f"done #{done.id}: {done.title}" + (f"\n{result}" if result.strip() else ""), DONE)
+        self.send(who, BROADCAST, _PROMPTS['finish_cell_done'].format(done_id=done.id, done_title=done.title) + (_PROMPTS['finish_cell_text'].format(result=result) if result.strip() else ""), DONE)
         return done
 
     def cell(self, cell_id: int) -> Cell | None:
@@ -475,13 +487,13 @@ def _pulse(ref: weakref.ref[Agent]) -> None:
 
 def render(msgs: list[Msg], me: str) -> str:
     """The messages as the model reads them."""
-    lines = ["--- messages ---"]
+    lines = [_PROMPTS['render_messages']]
     for m in msgs:
-        to = "you" if m.to == me else m.to
-        kind = "" if m.kind == "say" else f" {m.kind}"
-        seq = f"#{m.seq}" if m.seq else ""
-        stamp = time.strftime("%H:%M:%S", time.localtime(m.ts))
-        lines.append(f"[{seq}{kind} {m.sender} -> {to} {stamp}]".replace("[ ", "["))
+        to = _PROMPTS['render_you'] if m.to == me else m.to
+        kind = "" if m.kind == _PROMPTS['render_say'] else _PROMPTS['render_text'].format(m_kind=m.kind)
+        seq = _PROMPTS['render_text_2'].format(m_seq=m.seq) if m.seq else ""
+        stamp = time.strftime(_PROMPTS['render_h_m_s'], time.localtime(m.ts))
+        lines.append(_PROMPTS['render_text_3'].format(seq=seq, kind=kind, m_sender=m.sender, to=to, stamp=stamp).replace(_PROMPTS['render_text_4'], _PROMPTS['render_text_5']))
         lines.append(m.body.rstrip())
         lines.append("")
     return "\n".join(lines).rstrip()
@@ -493,31 +505,38 @@ def roster(room: Room, me: str | None = None) -> str:
     for key, claim in room.claims().items():
         held.setdefault(claim["holder"], []).append(key)
     lines = []
+    members = []
     for name in room.members():
         bits = [name]
         if name == me:
-            bits.append("(you)")
+            bits.append(msgs.SWARM_ROSTER_YOU.format())
         silent = None if name == me else room.silent_since(name)
+        state = "silent" if silent is not None else "asleep" if room.asleep(name) else "working"
+        members.append({"name": name, "self": name == me, "state": state,
+                        "silent_since": silent, "claims": sorted(held.get(name, []))})
         if silent is not None:
-            bits.append(f"no answer at rollcall since {_clock(silent)}")
+            bits.append(msgs.SWARM_ROSTER_SILENT.format(value=_clock(silent)))
         else:
-            bits.append("asleep" if room.asleep(name) else "working")
+            bits.append(msgs.SWARM_ROSTER_ASLEEP.words() if state == "asleep" else msgs.SWARM_ROSTER_WORKING.words())
         if held.get(name):
-            bits.append("holds " + ", ".join(sorted(held[name])))
+            bits.append(msgs.SWARM_ROSTER_HOLDS.words(claims=", ".join(sorted(held[name]))))
         lines.append(" ".join(bits))
-    return "\n".join(lines) or "(nobody yet)"
+    _view(members=members)
+    return "\n".join(lines) or msgs.SWARM_ROSTER_EMPTY.format()
 
 
 def board(room: Room) -> str:
     """The work board as the model and the operator read it."""
     lines = []
-    for c in room.cells():
-        state = {"open": "open", "taken": f"taken by {c.holder}", "done": f"done by {c.holder}"}[c.status]
-        lines.append(f"#{c.id} [{state}] {c.title}" + (f" (from {c.by})" if c.by else ""))
+    cells = room.cells()
+    _view(tasks=[cell.as_dict() for cell in cells])
+    for c in cells:
+        state = {"open": msgs.SWARM_BOARD_OPEN.words(), "taken": msgs.SWARM_BOARD_TAKEN.format(holder=c.holder), "done": msgs.SWARM_BOARD_DONE.format(holder=c.holder)}[c.status]
+        lines.append(msgs.SWARM_BOARD_ROW.format(id=c.id, state=state, title=c.title) + (msgs.SWARM_BOARD_FROM.format(by=c.by) if c.by else ""))
         first = (c.result if c.status == "done" else c.body).strip().splitlines()
         if first:
-            lines.append(f"    {first[0][:160]}")
-    return "\n".join(lines) or "(no tasks on the board)"
+            lines.append(_PROMPTS['board_text'].format(first_0_160=first[0][:160]))
+    return "\n".join(lines) or msgs.SWARM_BOARD_EMPTY.format()
 
 
 def sibling_argv(argv: list[str], swarm: str, name: str) -> list[str]:
@@ -656,7 +675,7 @@ class Agent:
 
     def _tick(self) -> Msg:
         self.alarm = None
-        return Msg(0, time.time(), CLOCK, self.name, TICK, "The time you asked to be woken after has passed.")
+        return Msg(0, time.time(), CLOCK, self.name, TICK, _PROMPTS['tick_the_time_you_asked_to_be'])
 
     def wake_message(self, msgs: list[Msg]) -> dict:
         return {"role": "user", "content": render(msgs, self.name)}
@@ -679,15 +698,16 @@ class Agent:
     def spawn(self, name: str, opener: str, argv: list[str] | None = None) -> subprocess.Popen:
         """Start a sibling agent NAME on this bus: this process's own command with
         a new name and session, the opener as its first prompt. Its events land in
-        ROOT/NAME/events.jsonl. At most SPAWN_CAP spawned agents per bus."""
+        ROOT/NAME/events.jsonl. SWARM_SPAWN_MAX bounds spawned agents per bus."""
         check_name(name)
         root = self.room.root
         home = root / name
         if name in self.room.members() or (home / "spawned").is_file():
-            raise ValueError(f"{name} is already on the bus")
+            raise ValueError(msgs.SWARM_IS_ALREADY_ON_THE_BUS.format(name=name))
         spawned = sum(1 for p in root.iterdir() if (p / "spawned").is_file()) if root.is_dir() else 0
-        if spawned >= SPAWN_CAP:
-            raise ValueError(f"this bus already has {spawned} spawned agents; the cap is {SPAWN_CAP}")
+        maximum = int(_settings.live_value("SWARM_SPAWN_MAX"))
+        if spawned >= maximum:
+            raise ValueError(msgs.SWARM_THIS_BUS_ALREADY_HAS_SPAWNED_AGENTS_THE.format(spawned=spawned, maximum=maximum))
         home.mkdir(parents=True, exist_ok=True)
         cmd = sibling_argv(sys.argv if argv is None else argv, str(home), name)
         with open(home / "events.jsonl", "ab") as out, open(home / "stderr", "ab") as err:
@@ -701,7 +721,13 @@ class Agent:
 
 # ---------------------------------------------------------------- the tools --swarm puts on the surface
 
-_OFF_BUS = "ERROR: this agent is not on a swarm bus (run js with --swarm ROOT/NAME)"
+_OFF_BUS = _PROMPTS['default_error_this_agent_is_not_on']
+
+
+def _view(**fields: Any) -> None:
+    from .toolkit.core import view
+
+    view(**fields)
 
 
 def _agent(context: Any) -> Agent | None:
@@ -719,14 +745,16 @@ def _send(to: str = "", text: str = "", kind: str = "say", context: Any = None) 
     to = str(to or "").strip()
     text = str(text or "")
     if not to:
-        return "ERROR: to is required: an agent name, or * for everyone else"
+        return _PROMPTS['send_error_to_is_required_an_agent']
     if not text.strip():
-        return "ERROR: text is empty"
+        return _PROMPTS['send_error_text_is_empty']
     try:
         msg = agent.send(to, text, str(kind or "say"))
     except ValueError as exc:
-        return f"ERROR: {exc}"
-    return f"sent #{msg.seq} to {'everyone' if to == BROADCAST else to}"
+        return _PROMPTS['send_error'].format(exc=exc)
+    _view(message={"seq": msg.seq, "ts": msg.ts, "from": msg.sender,
+                   "to": msg.to, "kind": msg.kind, "body": msg.body})
+    return _PROMPTS['send_sent_to'].format(msg_seq=msg.seq, everyone_if_to_BROADCAST_else_to='everyone' if to == BROADCAST else to)
 
 
 def _who(context: Any = None) -> str:
@@ -742,15 +770,16 @@ def _claim(key: str = "", ttl: Any = None, context: Any = None) -> str:
         return _OFF_BUS
     key = str(key or "").strip()
     if not key:
-        return "ERROR: key is empty: name the file, area or task you are taking"
+        return _PROMPTS['claim_error_key_is_empty_name_the']
     try:
         seconds = CLAIM_TTL_S if ttl in (None, "") else float(ttl)
     except (TypeError, ValueError):
-        return f"ERROR: ttl must be a number of seconds, not {ttl!r}"
+        return _PROMPTS['claim_error_ttl_must_be_a_number'].format(ttl=ttl)
     yours, holder, expires = agent.room.claim(key, agent.name, seconds)
+    _view(key=key, claimed=yours, holder=holder, expires=expires)
     if yours:
-        return f"{key} is yours until {_clock(expires)}; claim it again to keep it longer"
-    return f"{key} is held by {holder} until {_clock(expires)}"
+        return _PROMPTS['claim_is_yours_until_claim_it_again'].format(key=key, clock_expires=_clock(expires))
+    return _PROMPTS['claim_is_held_by_until'].format(key=key, holder=holder, clock_expires=_clock(expires))
 
 
 def _release(key: str = "", context: Any = None) -> str:
@@ -758,7 +787,9 @@ def _release(key: str = "", context: Any = None) -> str:
     if agent is None:
         return _OFF_BUS
     key = str(key or "").strip()
-    return f"released {key}" if agent.room.release(key, agent.name) else f"you do not hold {key}"
+    released = agent.room.release(key, agent.name)
+    _view(key=key, released=released)
+    return _PROMPTS['release_released'].format(key=key) if released else _PROMPTS['release_you_do_not_hold'].format(key=key)
 
 
 def _subscribe(kind: str = "", off: Any = False, context: Any = None) -> str:
@@ -768,8 +799,9 @@ def _subscribe(kind: str = "", off: Any = False, context: Any = None) -> str:
     try:
         kinds = agent.room.subscribe(agent.name, str(kind or ""), on=not _truthy(off))
     except ValueError as exc:
-        return f"ERROR: {exc}"
-    return "subscribed to: " + (", ".join(sorted(kinds)) if kinds else "nothing")
+        return _PROMPTS['subscribe_error'].format(exc=exc)
+    _view(subscriptions=sorted(kinds))
+    return _PROMPTS['subscribe_subscribed_to'] + (_PROMPTS['subscribe_text'].join(sorted(kinds)) if kinds else _PROMPTS['subscribe_nothing'])
 
 
 def _truthy(value: Any) -> bool:
@@ -783,15 +815,15 @@ def _wake_me(seconds: Any = None, context: Any = None) -> str:
     try:
         s = float(seconds)
     except (TypeError, ValueError):
-        return f"ERROR: seconds must be a number, not {seconds!r}"
+        return _PROMPTS['wake_me_error_seconds_must_be_a_number'].format(seconds=seconds)
     left = None if agent.alarm is None else agent.alarm - time.monotonic()
     if s > 0 and left is not None and left > 0:
-        return (f"an alarm is already set, {left:.0f} s from now, and it stays set when a message wakes you; "
-                "nothing changed. Stop calling tools to sleep. Messages wake you by themselves.")
+        return (_PROMPTS['wake_me_an_alarm_is_already_set_s'].format(left=left))
     agent.wake_me(s)
+    _view(seconds=s, alarm=agent.alarm)
     if s <= 0:
-        return "alarm cleared"
-    return f"you will be woken in {s:g} s if nothing lands first; stop calling tools to sleep"
+        return _PROMPTS['wake_me_alarm_cleared']
+    return _PROMPTS['wake_me_you_will_be_woken_in_s'].format(s=s)
 
 
 def _retire(handoff: str = "", context: Any = None) -> str:
@@ -800,9 +832,10 @@ def _retire(handoff: str = "", context: Any = None) -> str:
         return _OFF_BUS
     handoff = str(handoff or "")
     if not handoff.strip():
-        return "ERROR: handoff is empty: say what you did, what is left, and where things are"
+        return _PROMPTS['retire_error_handoff_is_empty_say_what']
     msg = agent.retire(handoff)
-    return f"retired; your handoff is #{msg.seq}. This turn is your last: finish and stop calling tools"
+    _view(retired=True, handoff=handoff, seq=msg.seq)
+    return _PROMPTS['retire_retired_your_handoff_is_this_turn'].format(msg_seq=msg.seq)
 
 
 def _recruit(name: str = "", opener: str = "", context: Any = None) -> str:
@@ -811,15 +844,16 @@ def _recruit(name: str = "", opener: str = "", context: Any = None) -> str:
         return _OFF_BUS
     name, opener = str(name or "").strip(), str(opener or "")
     if not opener.strip():
-        return "ERROR: opener is empty: the new agent needs to be told who it is and what to do"
+        return _PROMPTS['recruit_error_opener_is_empty_the_new']
     try:
         if agent.recruiter is not None:
             agent.recruiter(name, opener)
         else:
             agent.spawn(name, opener)
     except (ValueError, OSError) as exc:
-        return f"ERROR: {exc}"
-    return f"started {name}; it is on the bus as {name} and reads your opener first"
+        return _PROMPTS['recruit_error'].format(exc=exc)
+    _view(recruited=name, opener=opener)
+    return _PROMPTS['recruit_started_it_is_on_the_bus'].format(name=name, value_1=name)
 
 
 def _post_task(title: str = "", body: str = "", context: Any = None) -> str:
@@ -828,9 +862,10 @@ def _post_task(title: str = "", body: str = "", context: Any = None) -> str:
         return _OFF_BUS
     title = str(title or "").strip()
     if not title:
-        return "ERROR: title is empty: say in one line what needs doing"
+        return _PROMPTS['post_task_error_title_is_empty_say_in']
     cell = agent.room.post_cell(agent.name, title, str(body or ""))
-    return f"posted task #{cell.id}: {cell.title}; everyone was told"
+    _view(task=cell.as_dict())
+    return _PROMPTS['post_task_posted_task_everyone_was_told'].format(cell_id=cell.id, cell_title=cell.title)
 
 
 def _cell_id(raw: Any) -> int | None:
@@ -846,17 +881,18 @@ def _take_task(id: Any = None, context: Any = None) -> str:  # noqa: A002 - the 
         return _OFF_BUS
     cell_id = _cell_id(id)
     if cell_id is None:
-        return f"ERROR: id must be a task number, not {id!r}"
+        return _PROMPTS['take_task_error_id_must_be_a_task'].format(id=id)
     try:
         yours, holder, expires = agent.room.take_cell(cell_id, agent.name)
     except KeyError:
-        return f"no task #{cell_id} on the board"
+        return _PROMPTS['take_task_no_task_on_the_board'].format(cell_id=cell_id)
     cell = agent.room.cell(cell_id)
+    _view(task=cell.as_dict(), taken=yours, holder=holder, expires=expires)
     if yours:
-        return f"task #{cell_id} is yours until {_clock(expires)}: {cell.title}\n{cell.body}".rstrip()
+        return _PROMPTS['take_task_task_is_yours_until'].format(cell_id=cell_id, clock_expires=_clock(expires), cell_title=cell.title, cell_body=cell.body).rstrip()
     if cell.status == "done":
-        return f"task #{cell_id} is already done by {holder}"
-    return f"task #{cell_id} is held by {holder} until {_clock(expires)}"
+        return _PROMPTS['take_task_task_is_already_done_by'].format(cell_id=cell_id, holder=holder)
+    return _PROMPTS['take_task_task_is_held_by_until'].format(cell_id=cell_id, holder=holder, clock_expires=_clock(expires))
 
 
 def _finish_task(id: Any = None, result: str = "", context: Any = None) -> str:  # noqa: A002
@@ -865,12 +901,13 @@ def _finish_task(id: Any = None, result: str = "", context: Any = None) -> str: 
         return _OFF_BUS
     cell_id = _cell_id(id)
     if cell_id is None:
-        return f"ERROR: id must be a task number, not {id!r}"
+        return _PROMPTS['finish_task_error_id_must_be_a_task'].format(id=id)
     try:
         cell = agent.room.finish_cell(cell_id, agent.name, str(result or ""))
     except KeyError:
-        return f"no task #{cell_id} on the board"
-    return f"task #{cell.id} done; everyone was told"
+        return _PROMPTS['finish_task_no_task_on_the_board'].format(cell_id=cell_id)
+    _view(task=cell.as_dict())
+    return _PROMPTS['finish_task_task_done_everyone_was_told'].format(cell_id=cell.id)
 
 
 def _tasks(context: Any = None) -> str:
@@ -886,43 +923,43 @@ def tools() -> tuple:
 
     return (
         Tool("send", load_description("send"), _send, {
-            "to": {"type": "string", "description": "An agent's name, or * for everyone else on the bus."},
-            "text": {"type": "string", "description": "The message."},
+            "to": {"type": "string", "description": _PROMPTS['tools_an_agent_s_name_or_for']},
+            "text": {"type": "string", "description": _PROMPTS['tools_the_message']},
             "kind": {"type": "string", "default": "say",
-                     "description": "say (default), ask, reply, done, or a short word the troop agrees on."},
+                     "description": _PROMPTS['tools_say_default_ask_reply_done_or']},
         }, required=("to", "text"), source="swarm"),
         Tool("who", load_description("who"), _who, {}, read_only=True, source="swarm"),
         Tool("claim", load_description("claim"), _claim, {
-            "key": {"type": "string", "description": "What you are taking: a file, a module, a task line."},
-            "ttl": {"type": "number", "description": f"Seconds the claim lasts. Default {CLAIM_TTL_S:g}."},
+            "key": {"type": "string", "description": _PROMPTS['tools_what_you_are_taking_a_file']},
+            "ttl": {"type": "number", "description": _PROMPTS['tools_seconds_the_claim_lasts_default'].format(CLAIM_TTL_S=CLAIM_TTL_S)},
         }, required=("key",), source="swarm"),
         Tool("release", load_description("release"), _release, {
-            "key": {"type": "string", "description": "The key you claimed."},
+            "key": {"type": "string", "description": _PROMPTS['tools_the_key_you_claimed']},
         }, required=("key",), source="swarm"),
         Tool("subscribe", load_description("subscribe"), _subscribe, {
-            "kind": {"type": "string", "description": "A message kind, as passed to send."},
-            "off": {"type": "boolean", "default": False, "description": "True to unsubscribe."},
+            "kind": {"type": "string", "description": _PROMPTS['tools_a_message_kind_as_passed_to']},
+            "off": {"type": "boolean", "default": False, "description": _PROMPTS['tools_true_to_unsubscribe']},
         }, required=("kind",), source="swarm"),
         Tool("wake_me", load_description("wake_me"), _wake_me, {
-            "seconds": {"type": "number", "description": "How long to wait. 0 clears a pending alarm."},
+            "seconds": {"type": "number", "description": _PROMPTS['tools_how_long_to_wait_0_clears']},
         }, required=("seconds",), source="swarm"),
         Tool("retire", load_description("retire"), _retire, {
-            "handoff": {"type": "string", "description": "What you did, what is left, where things are."},
+            "handoff": {"type": "string", "description": _PROMPTS['tools_what_you_did_what_is_left']},
         }, required=("handoff",), source="swarm"),
         Tool("recruit", load_description("recruit"), _recruit, {
-            "name": {"type": "string", "description": "The new agent's name: one word, not yet on the bus."},
-            "opener": {"type": "string", "description": "Its first prompt: who it is, the goal, what to do first."},
+            "name": {"type": "string", "description": _PROMPTS['tools_the_new_agent_s_name_one']},
+            "opener": {"type": "string", "description": _PROMPTS['tools_its_first_prompt_who_it_is']},
         }, required=("name", "opener"), source="swarm"),
         Tool("post_task", load_description("post_task"), _post_task, {
-            "title": {"type": "string", "description": "One line: what needs doing."},
-            "body": {"type": "string", "default": "", "description": "What the taker needs to know: where, how, done when."},
+            "title": {"type": "string", "description": _PROMPTS['tools_one_line_what_needs_doing']},
+            "body": {"type": "string", "default": "", "description": _PROMPTS['tools_what_the_taker_needs_to_know']},
         }, required=("title",), source="swarm"),
         Tool("take_task", load_description("take_task"), _take_task, {
-            "id": {"type": "integer", "description": "The task number from the board."},
+            "id": {"type": "integer", "description": _PROMPTS['tools_the_task_number_from_the_board']},
         }, required=("id",), source="swarm"),
         Tool("finish_task", load_description("finish_task"), _finish_task, {
-            "id": {"type": "integer", "description": "The task number from the board."},
-            "result": {"type": "string", "default": "", "description": "What came of it: where the work is, what was found."},
+            "id": {"type": "integer", "description": _PROMPTS['tools_the_task_number_from_the_board_2']},
+            "result": {"type": "string", "default": "", "description": _PROMPTS['tools_what_came_of_it_where_the']},
         }, required=("id",), source="swarm"),
         Tool("tasks", load_description("tasks"), _tasks, {}, read_only=True, source="swarm"),
     )
@@ -940,7 +977,6 @@ def with_bus_tools(registry):
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
-    from . import messages as msgs
 
     ap = argparse.ArgumentParser(prog="python -m js.swarm", description=msgs.SWARM_CLI.words())
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -967,7 +1003,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "send":
         body = a.text if a.text not in (None, "-") else sys.stdin.read()
         msg = Room(a.root).send(a.sender, a.to, body, a.kind)
-        print(f"sent #{msg.seq}")
+        print(msgs.SWARM_SENT.words(seq=msg.seq))
     elif a.cmd == "members":
         print(roster(Room(a.root)))
     elif a.cmd == "quiet":
@@ -977,7 +1013,7 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "post":
         body = a.body if a.body != "-" else sys.stdin.read()
         cell = Room(a.root).post_cell(a.by, a.title, body)
-        print(f"posted #{cell.id}")
+        print(msgs.SWARM_POSTED.words(id=cell.id))
     else:
         from . import swarm_run
 

@@ -520,7 +520,7 @@ def test_browser_probe_closes_local_server_when_output_setup_fails(
     monkeypatch.setattr(
         browser_module,
         "_start_local_server",
-        lambda path: (FakeServer(), "http://127.0.0.1:12345/index.html", path.parent),
+        lambda path, *, context: (FakeServer(), "http://127.0.0.1:12345/index.html", path.parent),
     )
     context = ToolContext(cwd=tmp_path)
 

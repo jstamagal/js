@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from contextlib import contextmanager
 from pathlib import Path
 import asyncio
+import fcntl
 import os
 from typing import Any
 
@@ -20,6 +22,22 @@ from .core import Tool, ToolContext
 from . import task_jobs
 from .descriptions import load_description
 from .sanitize import int_or_default, text_or_default
+from ..prompt_text import load_catalog
+
+_PROMPTS = load_catalog('toolkit_meta')
+
+
+
+@dataclass(frozen=True)
+class SubagentAssembly:
+    """Services and output policy shared by a parent's delegated turns."""
+
+    config_factory: Any = None
+    registry_factory: Any = None
+    worker: Any = None
+    turn: Any = None
+    write_latest: Any = None
+    suppress_output: bool = True
 
 
 def _filename_limit(directory: Path) -> int:
@@ -60,12 +78,14 @@ def plan(
     return f"plan {action} at {target}" if existed else f"plan written to {target}"
 
 
-def skill(name: str, context: ToolContext | None = None) -> str:
+def skill(name: str, context: ToolContext | None = None, *, user_command: str = "/skill") -> str:
     assert context is not None
-    catalog = discover_skills(context.cwd)
+    catalog = context.skill_catalog
+    if catalog is None:
+        catalog = discover_skills(context.cwd, disabled=context.skills_disabled)
     metadata = catalog.get(name)
     if metadata is not None and not metadata.model_invocable:
-        return f"ERROR: skill {metadata.name!r} is user-only; the user loads it with /skill {metadata.name}"
+        return f"ERROR: skill {metadata.name!r} is user-only; the user loads it with {user_command} {metadata.name}"
     loaded = load_skill(catalog, name, tool_registry=getattr(context, "tool_registry", None))
     if loaded is not None:
         return loaded.render()
@@ -80,34 +100,50 @@ def _child_context(parent: ToolContext, registry: Any, agent: str) -> ToolContex
     # A subagent gets its own kernel (kernel_session stays None) but the
     # parent's per-turn settings, kernel verbosity among them.
     child = ToolContext(cwd=parent.cwd, model=getattr(parent, "model", ""), **_turn_settings.inherit(parent))
+    child.subagent_assembly = parent.subagent_assembly
     child.tool_registry = registry
     child.agent_id = agent
     child.task_depth = getattr(parent, "task_depth", 0) + 1
     return child
 
 
-def _session_file_for_id(agent_dir: Path, sessions_dir: Path, session_id: str) -> Path:
+def _session_file_for_id(agent_dir: Path, sessions_dir: Path, session_id: str, *, write_latest=None) -> Path:
     raw = Path(session_id).expanduser()
     if raw.is_absolute():
-        resolved = raw.resolve(strict=False)
-        if resolved.suffix != ".jsonl" or not resolved.is_relative_to(sessions_dir.resolve(strict=False)):
-            raise ValueError(f"session path must be a .jsonl file inside {sessions_dir}: {session_id}")
         path = raw
     else:
         path = sessions_dir / (raw if raw.suffix else raw.with_suffix(".jsonl"))
         if path.suffix != ".jsonl":
             raise ValueError(f"session_id must resolve to a .jsonl file: {session_id}")
+    resolved = path.resolve(strict=False)
+    if resolved.suffix != ".jsonl" or not resolved.is_relative_to(sessions_dir.resolve(strict=False)):
+        raise ValueError(f"session path must be a .jsonl file inside {sessions_dir}: {session_id}")
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
         path.write_text("", encoding="utf-8")
-    session_store.write_latest(agent_dir, path)
+    (session_store.write_latest if write_latest is None else write_latest)(agent_dir, path)
     return path
 
 
-def _reserve_worker_session(agent_dir: Path, sessions_dir: Path) -> Path:
+def _reserve_worker_session(agent_dir: Path, sessions_dir: Path, *, write_latest=None) -> Path:
     session_file = session_store.reserve(sessions_dir, session_store.task_name)
-    session_store.write_latest(agent_dir, session_file)
+    (session_store.write_latest if write_latest is None else write_latest)(agent_dir, session_file)
     return session_file
+
+
+@contextmanager
+def _worker_session(session_file: Path):
+    """Hold one worker's conversation through replay, execution and persistence."""
+    if session_file == Path(os.devnull):
+        yield
+        return
+    lock_path = session_file.resolve().with_suffix(".task.lock")
+    with lock_path.open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ValueError(f"worker session is already running: {session_file}") from exc
+        yield
 
 
 def _select_agent_prompt_dir(agent: str, prompt_roots: tuple[Path, ...]) -> Path:
@@ -121,7 +157,7 @@ def _select_agent_prompt_dir(agent: str, prompt_roots: tuple[Path, ...]) -> Path
             raise ValueError(f"agent {agent!r} at {candidate} is unreadable: {exc.strerror}") from exc
     return (prompt_roots[0] if prompt_roots else Path("prompts")) / agent
 
-def _agent_cfg(parent_cfg: Any, agent: str, session_id: str | None) -> Any:
+def _agent_cfg(parent_cfg: Any, agent: str, session_id: str | None, *, write_latest=None) -> Any:
     from ..mcp_config import resolve as resolve_mcp
 
     # The per-agent data dir holds that agent's latest.json and input history.
@@ -139,8 +175,8 @@ def _agent_cfg(parent_cfg: Any, agent: str, session_id: str | None) -> Any:
         session_file = parent_file
     else:
         sessions_dir = session_store.subagent_folder(parent_file)
-        session_file = (_session_file_for_id(agent_dir, sessions_dir, session_id) if session_id
-                        else _reserve_worker_session(agent_dir, sessions_dir))
+        session_file = (_session_file_for_id(agent_dir, sessions_dir, session_id, write_latest=write_latest) if session_id
+                        else _reserve_worker_session(agent_dir, sessions_dir, write_latest=write_latest))
     return replace(
         parent_cfg,
         agent_id=agent,
@@ -170,6 +206,8 @@ async def _run_one_task_async(
     from .. import routing
     from .terminal import close_terminal_sessions
 
+    assembly = parent_context.subagent_assembly or SubagentAssembly()
+    turn = run_turn_async if assembly.turn is None else assembly.turn
     prompt = _task_text(item)
     if not prompt:
         return "ERROR task is empty"
@@ -186,7 +224,9 @@ async def _run_one_task_async(
     except (FileNotFoundError, ValueError) as exc:
         return f"ERROR could not load agent {agent!r}: {exc}"
 
-    cfg = P.apply_agent_max_tokens(_agent_cfg(parent_cfg, agent, task_session_id), prompt_spec)
+    cfg = P.apply_agent_max_tokens(
+        _agent_cfg(parent_cfg, agent, task_session_id, write_latest=assembly.write_latest), prompt_spec
+    )
 
     # Subagent model precedence (operator-locked order):
     #   tool-call model (main agent wins, unless lock_subagent_model) >
@@ -242,51 +282,57 @@ async def _run_one_task_async(
     if getattr(cfg, "layer_jsrc", None) is None and prompt_spec.reasoning_effort is not None:
         # A Config with no layers resolves nothing: agent.yaml's reasoning is its effort.
         cfg = replace(cfg, reasoning_effort=prompt_spec.reasoning_effort)
-    prompt_spec = P._expand_spec(prompt_spec, cfg)
+    with _worker_session(Path(cfg.session_file)):
+        prompt_spec = P._expand_spec(prompt_spec, cfg)
 
-    registry = full_registry.select(prompt_spec.tool_selectors, agent_id=agent)
-    system = prompt_spec.system
-    sampling = login_defaults.sampling(cfg)
+        registry = full_registry.select(prompt_spec.tool_selectors, agent_id=agent)
+        system = prompt_spec.system
+        sampling = login_defaults.sampling(cfg)
 
-    child_context = _child_context(parent_context, registry, agent)
-    child_context.config = cfg
-    from ..usage import session_key
+        child_context = _child_context(parent_context, registry, agent)
+        child_context.config = cfg
+        from ..usage import session_key
 
-    child_context.usage_chain = (session_key(Path(parent_cfg.session_file), parent_context),
-                                 *getattr(parent_context, "usage_chain", ()))
-    child_context.net_label = f"Subagent {idx}"
-    if Path(cfg.session_file) != Path(os.devnull):
-        from ..session_catalog import record_session_start
+        child_context.usage_chain = (session_key(Path(parent_cfg.session_file), parent_context),
+                                     *getattr(parent_context, "usage_chain", ()))
+        child_context.net_label = f"Subagent {idx}"
+        if Path(cfg.session_file) != Path(os.devnull):
+            from ..session_catalog import record_session_start
 
-        record_session_start(cfg.session_file, cwd=child_context.cwd, agent=agent, model=cfg.model,
-                             mode="subagent", parent=parent_cfg.session_file)
-    messages = M.load_replay_messages(cfg.session_file)
-    parent_hooks = getattr(parent_context, "tool_call_hooks", None)
-    telemetry = Telemetry(debug_log=cfg.debug_log)
-    turn_kwargs = {
-        "trace_override": False,
-        "tool_registry": registry,
-        "tool_context": child_context,
-        "suppress_output": True,
-        "sampling": sampling,
-        "event_hooks": None if parent_hooks is None else RefusableOnly(parent_hooks),
-    }
-    try:
-        await agent_messages.initialize(cfg, prompt_spec, messages, telemetry, **turn_kwargs)
-        messages.append(M.note_time({"role": "user", "content": prompt}))
-        await run_turn_async(
-            cfg,
-            system,
-            messages,
-            telemetry,
-            **turn_kwargs,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return f"ERROR {type(exc).__name__}: {exc}"
-    finally:
-        close_terminal_sessions(child_context)
-        M.persist_messages(cfg.session_file, messages,
-                           stamp=M.stamp_for(cfg.model, cfg.provider_id, cfg.reasoning_effort))
+            record_session_start(cfg.session_file, cwd=child_context.cwd, agent=agent, model=cfg.model,
+                                 mode="subagent", parent=parent_cfg.session_file)
+        messages = M.load_replay_messages(cfg.session_file)
+        parent_hooks = getattr(parent_context, "tool_call_hooks", None)
+        parent_approval = getattr(parent_context, "tool_approval", None)
+        telemetry = Telemetry(debug_log=cfg.debug_log)
+        turn_kwargs = {
+            "trace_override": False,
+            "tool_registry": registry,
+            "tool_context": child_context,
+            "suppress_output": assembly.suppress_output,
+            "sampling": sampling,
+            "event_hooks": None if parent_hooks is None else RefusableOnly(parent_hooks),
+            "approve": parent_approval,
+        }
+        try:
+            await agent_messages.initialize(cfg, prompt_spec, messages, telemetry, **turn_kwargs)
+            messages.append(M.note_time({"role": "user", "content": prompt}))
+            await turn(
+                cfg,
+                system,
+                messages,
+                telemetry,
+                **turn_kwargs,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return f"ERROR {type(exc).__name__}: {exc}"
+        finally:
+            close_terminal_sessions(child_context)
+            if child_context.kernel_session is not None:
+                child_context.kernel_session.shutdown()
+                child_context.kernel_session = None
+            M.persist_messages(cfg.session_file, messages,
+                               stamp=M.stamp_for(cfg.model, cfg.provider_id, cfg.reasoning_effort))
 
     final = ""
     for msg in reversed(messages):
@@ -304,7 +350,7 @@ async def _run_one_task_async(
     # fixed budget, not silent starvation.) Read the parent context: the child's
     # runtime rewrites child_context.max_tool_result_bytes mid-turn.
     budget = int(getattr(parent_context, "max_tool_result_bytes", 0) or 0)
-    if budget > 0:
+    if budget > 0 and parent_context.subagent_result_share:
         cap = budget // max(1, total)
         final = cap_text(final, cap, f"\n[truncated: TOOL_RESULT_MAX ({cap}) reached]")
     return final
@@ -438,23 +484,32 @@ def _prepare_fan_out(
     if getattr(context, "task_depth", 0) >= max_depth:
         return f"ERROR: task recursion depth limit reached ({max_depth})", None
 
-    from ..config import from_env
+    from ..config import from_env, validate_agent_id
     from .registry import build_default_registry
 
-    parent_cfg = getattr(context, "config", None) or from_env(save_session=True)
+    try:
+        validate_agent_id(agent_id)
+    except ValueError as exc:
+        return f"ERROR: {exc}", None
+
+    assembly = context.subagent_assembly or SubagentAssembly()
+    config_factory = from_env if assembly.config_factory is None else assembly.config_factory
+    registry_factory = build_default_registry if assembly.registry_factory is None else assembly.registry_factory
+    worker = _run_one_task_async if assembly.worker is None else assembly.worker
+    parent_cfg = getattr(context, "config", None) or config_factory(save_session=True)
     # Honor the subagent-model lock at every depth: when locked, rebuild the
     # nested registry without the `model_override` flag so the task tool's
     # `model` param is gone from the schema/description, not just ignored
     # (mirrors cli._registry_for).
     reg_flags = () if getattr(parent_cfg, "lock_subagent_model", False) else ("model_override",)
-    full_registry = build_default_registry(getattr(parent_cfg, "prompt_roots", None), flags=reg_flags)
+    full_registry = registry_factory(getattr(parent_cfg, "prompt_roots", None), flags=reg_flags)
     total = len(normalized_items)
     gate = asyncio.Semaphore(_subagent_worker_cap(context, total))
 
     def _coro(idx: int, item: Any):
         async def _gated() -> str:
             async with gate:
-                return await _run_one_task_async(
+                return await worker(
                     idx, total, item, context, parent_cfg, full_registry, agent_id, session_id, model
                 )
 
@@ -572,10 +627,10 @@ async def task_async(
     timeout: int | None = None,
     context: ToolContext | None = None,
 ) -> str:
-    """Async twin of :func:`task` for the non-blocking REPL: awaits child turns
+    """Async twin of :func:`task`: awaits child turns
     on the caller's loop via :func:`_fan_out_async` instead of blocking a
-    dispatch thread. The runtime routes fan-out calls here when a supervisor is
-    live (see ``runtime._dispatch_batch``)."""
+    dispatch thread. The runtime routes fan-out calls here
+    (see ``runtime._dispatch_batch``)."""
     assert context is not None
     action = _job_action(action)
     if action != "run":
@@ -640,37 +695,36 @@ def named_agent_tool(agent_id: str, description: str | None = None) -> Tool:
     run_named_agent._js_agent_id = agent_id  # type: ignore[attr-defined]
 
     text = description or (
-        f"Run the `{agent_id}` agent as a subagent. Provide one or more task strings; "
-        "the agent loads its own persona and selected tool surface."
+        _PROMPTS['named_agent_tool_run_the_agent_as_a_subagent'].format(agent_id=agent_id)
     )
     return Tool(
         agent_id,
         text,
         run_named_agent,
-        {"tasks": {"type": "array", "items": {"type": "string"}, "description": "One or more clear, detailed task prompts to run in parallel."}},
+        {"tasks": {"type": "array", "items": {"type": "string"}, "description": _PROMPTS['named_agent_tool_one_or_more_clear_detailed_task']}},
         required=("tasks",),
     )
 
 
 def _task_params(flags: tuple[str, ...]) -> dict:
     params = {
-        "tasks": {"type": "array", "items": {"type": "string"}, "description": "One or more clear, detailed task prompts to run in parallel."},
-        "agent_id": {"type": "string", "description": "Worker agent id; loads that agent's persona and selected tools."},
-        "session_id": {"type": "string", "description": "Optional session id for a worker context."},
-        "background": {"type": "boolean", "default": False, "description": "Return a handle at once and run the workers in the background."},
-        "action": {"type": "string", "enum": ["run", "poll", "wait", "kill"], "default": "run", "description": "run starts workers; poll, wait and kill act on a background handle."},
-        "handle": {"type": "string", "description": "Background task id from a HANDLE line, for poll/wait/kill."},
-        "timeout": {"type": "integer", "description": "Seconds a wait blocks; without it, wait blocks until the task ends."},
+        "tasks": {"type": "array", "items": {"type": "string"}, "description": _PROMPTS['task_params_one_or_more_clear_detailed_task']},
+        "agent_id": {"type": "string", "description": _PROMPTS['task_params_worker_agent_id_loads_that_agent']},
+        "session_id": {"type": "string", "description": _PROMPTS['task_params_optional_session_id_for_a_worker']},
+        "background": {"type": "boolean", "default": False, "description": _PROMPTS['task_params_return_a_handle_at_once_and']},
+        "action": {"type": "string", "enum": ["run", "poll", "wait", "kill"], "default": "run", "description": _PROMPTS['task_params_run_starts_workers_poll_wait_and']},
+        "handle": {"type": "string", "description": _PROMPTS['task_params_background_task_id_from_a_handle']},
+        "timeout": {"type": "integer", "description": _PROMPTS['task_params_seconds_a_wait_blocks_without_it']},
     }
     if "model_override" in flags:
-        params["model"] = {"type": "string", "description": "Model for the subagent(s), same string as --model. Set it when the operator names one; omit otherwise."}
+        params["model"] = {"type": "string", "description": _PROMPTS['task_params_model_for_the_subagent_s_same']}
     return params
 
 
 def tools(flags: tuple[str, ...] = ("model_override",)) -> tuple[Tool, ...]:
     return (
-        Tool("plan", load_description("plan"), plan, {"plan_name": {"type": "string", "description": "Plan name used in the filename."}, "version": {"type": "string", "description": "Version suffix used in the filename."}, "content": {"type": "string", "description": "Markdown plan body to persist."}, "overwrite": {"type": "boolean", "default": False, "description": "Replace an existing plan with the same name and version."}}, required=("plan_name", "version", "content")),
-        Tool("skill", load_description("skill"), skill, {"name": {"type": "string", "description": "Local skill name to load."}}, required=("name",), read_only=True),
+        Tool("plan", load_description("plan"), plan, {"plan_name": {"type": "string", "description": _PROMPTS['tools_plan_name_used_in_the_filename']}, "version": {"type": "string", "description": _PROMPTS['tools_version_suffix_used_in_the_filename']}, "content": {"type": "string", "description": _PROMPTS['tools_markdown_plan_body_to_persist']}, "overwrite": {"type": "boolean", "default": False, "description": _PROMPTS['tools_replace_an_existing_plan_with_the']}}, required=("plan_name", "version", "content")),
+        Tool("skill", load_description("skill"), skill, {"name": {"type": "string", "description": _PROMPTS['tools_local_skill_name_to_load']}}, required=("name",), read_only=True),
         Tool(
             "task",
             load_description("task", flags=flags),

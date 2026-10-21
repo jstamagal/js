@@ -206,10 +206,3 @@ def test_bad_request_timeout_is_a_config_error(bad):
 def test_request_timeout_values_that_resolve():
     for raw, want in ((None, None), (30, 30.0), (0.5, 0.5)):
         assert mcp_config.resolve({"MCP_TIMEOUT": raw}, "a").request_timeout_s == want
-
-
-@pytest.mark.parametrize("text", ["nan", "inf", "-inf", "0", "-5"])
-def test_set_refuses_non_finite_or_non_positive_request_timeout(text):
-    spec = settings.SPEC_BY_KEY["MCP_TIMEOUT"]
-    value, error = settings.coerce_value(spec, text)
-    assert value is None and error

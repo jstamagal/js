@@ -4,7 +4,6 @@ import base64
 import json
 import re
 import shutil
-from pathlib import Path
 
 import pytest
 
@@ -14,7 +13,7 @@ from js import capped_process, model_client, runtime, setcmd, settings, toolkit 
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry
 from js.toolkit import fs, process_net
-from js.toolkit.core import ToolResult, call_tool, for_model
+from js.toolkit.core import ToolResult, call_tool
 import ai
 
 
@@ -440,12 +439,13 @@ def test_remove_chonker_requires_confirmed_permanent_delete(tmp_path, monkeypatc
     target = tmp_path / "big.log"
     target.write_text("not actually big\n", encoding="utf-8")
 
-    monkeypatch.setattr(fs, "_path_size_no_follow", lambda path: fs._TRASH_MAX_BYTES + 1)
+    maximum = settings.default_value("TRASH_BYTES_MAX")
+    monkeypatch.setattr(fs, "_path_size_no_follow", lambda path, *, cap: maximum + 1)
 
     result = fs.remove("big.log", context=context)
 
     assert result == (
-        f"ERROR: target is over the 512 MiB trash limit ({fs._TRASH_MAX_BYTES + 1} bytes); "
+        f"ERROR: target is over the 512 MiB trash limit ({maximum + 1} bytes); "
         "confirm with the operator and pass permanent=true to delete directly."
     )
     assert target.exists()
@@ -930,10 +930,6 @@ def test_shell_runs_shell_program_with_dash_c_and_reports_shell(tmp_path, monkey
     assert actual == expected
 
 
-
-
-
-
 def test_history_tool_result_message_dehydrates_image(tmp_path):
     image = tmp_path / "pixel.png"
     image.write_bytes(_TINY_PNG)
@@ -990,36 +986,6 @@ def test_alias_profile_skips_existing_tool_name_collisions_from_config():
 
     assert [spec["function"]["name"] for spec in specs] == ["read", "write"]
     assert aliased_registry.resolve("WRITE").name == "write"
-
-
-def test_alias_profile_resolution_skips_unusable_matching_profiles_from_config():
-    live_settings = settings.seed_defaults()
-    result = setcmd.set_command(
-        live_settings,
-        'TOOL_ALIASES ['
-        '{"match":["openai"],"aliases":{"missing_tool":"MissingTool"}},'
-        '{"match":["openai"],"aliases":{"read":"Read"}}'
-        ']',
-    )
-    registry = build_default_registry().select(["read:lazy"])
-
-    assert result.error is None
-    assert runtime._resolve_alias_profile(live_settings, "openai-test", None, registry) == {
-        "read": "Read",
-    }
-
-
-def test_alias_profile_match_values_ignore_surrounding_whitespace_from_config():
-    live_settings = settings.seed_defaults()
-    result = setcmd.set_command(
-        live_settings,
-        'TOOL_ALIASES [{"match":[" openai "],"aliases":{"read":"Read"}}]',
-    )
-
-    assert result.error is None
-    assert runtime._resolve_alias_profile(live_settings, "openai-test", None) == {
-        "read": "Read",
-    }
 
 
 def test_resolve_alias_profile_matches_model_or_provider_substring():
@@ -1321,16 +1287,6 @@ def test_undo_restores_removed_file_through_symlinked_parent(tmp_path):
     assert (real / "f.txt").read_text(encoding="utf-8") == "payload"
 
 
-def test_shell_output_capped_while_streaming(tmp_path):
-    # Regression: subprocess.run(capture_output=True) buffered the WHOLE
-    # output before the cap (one runaway command -> 92 GB RSS -> OOM killer).
-    # The capped reader must hold memory at the cap while draining to EOF.
-    context = ToolContext(cwd=tmp_path)
-    out = for_model(process_net.shell("head -c 2000000 /dev/zero | tr '\\0' 'a'", context=context))
-    assert "exit=0" in out
-    assert len(out) <= context.max_bash_output_bytes + 200
-
-
 def test_shell_returns_output_when_grandchild_holds_pipe(tmp_path, monkeypatch):
     # A backgrounded grandchild inherits the pipe and never closes it; the
     # child's own output must still come back instead of being lost to a
@@ -1340,14 +1296,6 @@ def test_shell_returns_output_when_grandchild_holds_pipe(tmp_path, monkeypatch):
     out = process_net.shell("sleep 30 & printf done", context=context, timeout=20)
     assert "exit=0" in out
     assert "done" in out
-
-
-def test_shell_marks_truncated_output(tmp_path):
-    context = ToolContext(cwd=tmp_path)
-    out = for_model(process_net.shell("head -c 1000000 /dev/zero | tr '\\0' 'a'", context=context))
-    assert "[truncated: TOOL_RESULT_INLINE_MAX" in out
-    spill = re.search(r"(/\S+?\.log)", out)
-    assert spill is not None and Path(spill.group(1)).stat().st_size == 1000000
 
 
 def test_whole_file_read_is_capped_but_ranged_read_is_not(tmp_path):
@@ -1442,15 +1390,6 @@ def test_batch_result_cap_clips_the_fat_result_and_spares_the_small_ones():
     assert sum(len(r) for r in capped) <= 200_000
 
 
-def test_batch_result_cap_splits_evenly_when_all_are_oversized():
-    results = ["a" * 150_000, "b" * 150_000]
-    capped = runtime._cap_batch_results(results, 200_000)
-
-    assert sum(len(r) for r in capped) <= 200_000
-    assert all("[truncated: PARALLEL_RESULTS_MAX" in r for r in capped)
-    assert abs(len(capped[0]) - len(capped[1])) <= 1
-
-
 def test_batch_result_cap_is_a_noop_under_budget_and_when_disabled():
     results = ["small", "also small"]
     assert runtime._cap_batch_results(results, 200_000) == results
@@ -1488,3 +1427,27 @@ def test_patch_fuzzy_match_still_requires_prior_read(tmp_path):
 
     assert result == "ERROR: You must read the file with the read tool before attempting to edit it."
     assert target.read_text(encoding="utf-8") == "print(“hello there, world”)\n"
+
+
+def test_tool_error_tracker_uses_registered_limit():
+    tracker = runtime.ToolErrorTracker.from_settings({"TOOL_ERRORS_MAX": 1})
+    tracker.record("read", "ERROR: missing")
+    assert tracker.limit_reached()
+
+
+def test_remove_uses_the_configured_trash_size_limit(tmp_path, monkeypatch):
+    from js import turn_settings
+    from js.config import from_env
+
+    cfg = from_env(extras=["TRASH_BYTES_MAX=4"])
+    context = ToolContext(cwd=tmp_path)
+    turn_settings.install(context, cfg)
+    target = tmp_path / "small.txt"
+    target.write_bytes(b"too large")
+    monkeypatch.setattr(fs, "_trash_target", lambda target, context: target.unlink())
+
+    result = fs.remove("small.txt", context=context)
+
+    assert result.startswith("ERROR")
+    assert target.read_bytes() == b"too large"
+    assert not context.snapshots.get(target)

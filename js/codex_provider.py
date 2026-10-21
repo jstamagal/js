@@ -7,6 +7,8 @@ Codex model listing, Responses-style streaming, and function tool calls.
 
 from __future__ import annotations
 
+from . import messages as msgs
+
 import asyncio
 import base64
 import functools
@@ -25,7 +27,11 @@ import httpx
 import pydantic
 from ai.models.core import params as ai_params
 
-from . import codex_auth
+from . import codex_auth, settings as _settings
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('codex_provider')
+
 
 if TYPE_CHECKING:
     from .logins import Login
@@ -40,11 +46,13 @@ _FALLBACK_CLIENT_VERSION = "0.145.0"
 
 
 @functools.cache
-def _client_version() -> str:
-    override = os.environ.get("JS_CODEX_CLIENT_VERSION", "").strip()
+def _client_version(override: str | None = None, detect: bool | None = None) -> str:
+    override = (os.environ.get("JS_CODEX_CLIENT_VERSION", "") if override is None else override).strip()
     if override:
         return override
-    exe = shutil.which("codex")
+    if detect is None:
+        detect = _settings.default_value("CODEX_CLIENT_DETECT")
+    exe = shutil.which("codex") if detect else None
     if exe:
         try:
             proc = subprocess.run(
@@ -56,10 +64,9 @@ def _client_version() -> str:
         except (OSError, subprocess.SubprocessError):
             pass
     return _FALLBACK_CLIENT_VERSION
-_ORIGINATOR = "pi"
 _USER_AGENT = f"js/0.1.0 ({platform.system().lower()} {platform.release()}; {platform.machine()})"
 _PROVIDER = codex_auth.CODEX_PROVIDER_ID
-_INTERRUPTED_TOOL_OUTPUT = "[No tool output recorded: the tool call was interrupted before it produced a result.]"
+_INTERRUPTED_TOOL_OUTPUT = _PROMPTS['default_no_tool_output_recorded_the_tool']
 
 
 def _trim_base_url(base_url: str | None) -> str:
@@ -81,7 +88,7 @@ def _account_id_from_token(access_token: str, account_id: str | None = None) -> 
         return account_id
     decoded_account_id, _email = codex_auth.token_profile(access_token)
     if not decoded_account_id:
-        raise ai.ConfigurationError("OpenAI Codex access token is missing chatgpt_account_id")
+        raise ai.ConfigurationError(msgs.CODEX_PROVIDER_OPENAI_CODEX_ACCESS_TOKEN_IS_MISSING_CHATGPT.format())
     return decoded_account_id
 
 
@@ -100,13 +107,13 @@ def _with_own_headers(extra: dict[str, str], own: dict[str, str]) -> dict[str, s
     return {**{k: v for k, v in own.items() if k.lower() not in taken}, **kept}
 
 
-def _codex_headers(access_token: str, account_id: str, *, stream: bool) -> dict[str, str]:
+def _codex_headers(access_token: str, account_id: str, *, stream: bool, settings: dict | None = None) -> dict[str, str]:
     headers = {
         "Authorization": f"Bearer {access_token}",
         "chatgpt-account-id": account_id,
         "OpenAI-Beta": "responses=experimental",
-        "originator": _ORIGINATOR,
-        "User-Agent": _USER_AGENT,
+        "originator": _settings.knob(settings, "CODEX_ORIGINATOR"),
+        "User-Agent": _settings.knob(settings, "CODEX_USER_AGENT") or _USER_AGENT,
     }
     if stream:
         headers["accept"] = "text/event-stream"
@@ -280,7 +287,7 @@ async def _file_part_to_input(part: ai.types.messages.FilePart) -> dict[str, Any
             except Exception:  # noqa: BLE001
                 text = str(data)
         return {"type": "input_text", "text": text}
-    return {"type": "input_text", "text": f"[Unsupported file for Codex: {media_type}]"}
+    return {"type": "input_text", "text": _PROMPTS['file_part_to_input_unsupported_file_for_codex'].format(media_type=media_type)}
 
 
 async def _user_content(parts: list[Any]) -> list[dict[str, Any]]:
@@ -316,7 +323,7 @@ def _repair_tool_pairs(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 {
                     "type": "message",
                     "role": "assistant",
-                    "content": [{"type": "output_text", "text": f"[Previous tool result; call_id={call_id}]: {output}"}],
+                    "content": [{"type": "output_text", "text": _PROMPTS['repair_tool_pairs_previous_tool_result_call_id'].format(call_id=call_id, output=output)}],
                 }
             )
             continue
@@ -356,7 +363,7 @@ def replayed_reasoning_item(provider_metadata: Mapping[str, Any] | None) -> dict
     return dict(item)
 
 
-async def _messages_to_codex(messages: list[ai.messages.Message]) -> tuple[str | None, list[dict[str, Any]]]:
+async def _messages_to_codex(messages: list[ai.messages.Message], *, repair_tool_pairs=None) -> tuple[str | None, list[dict[str, Any]]]:
     instructions: str | None = None
     items: list[dict[str, Any]] = []
     for msg in messages:
@@ -375,18 +382,15 @@ async def _messages_to_codex(messages: list[ai.messages.Message]) -> tuple[str |
                 items.append({"type": "message", "role": "user", "content": content})
             continue
         if msg.role == "assistant":
-            text = _text_from_parts(msg.parts)
             produced: list[dict[str, Any]] = []
-            text_sent = False
             for part in msg.parts:
                 if isinstance(part, ai.types.messages.ReasoningPart):
                     reasoning_item = replayed_reasoning_item(part.provider_metadata)
                     if reasoning_item is not None:
                         produced.append(reasoning_item)
                 elif isinstance(part, ai.types.messages.TextPart):
-                    if not text_sent and text.strip():
-                        produced.append({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]})
-                        text_sent = True
+                    if part.text.strip():
+                        produced.append({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": part.text}]})
                 elif isinstance(part, ai.types.messages.ToolCallPart):
                     produced.append(
                         {
@@ -417,7 +421,8 @@ async def _messages_to_codex(messages: list[ai.messages.Message]) -> tuple[str |
         if msg.role == "internal":
             continue
         raise ValueError(f"unsupported Codex message role: {msg.role!r}")
-    return instructions, _repair_tool_pairs(items)
+    repair = _repair_tool_pairs if repair_tool_pairs is None else repair_tool_pairs
+    return instructions, repair(items)
 
 
 def _tools_to_codex(tools: Sequence[ai.types.tools.Tool] | None) -> list[dict[str, Any]] | None:
@@ -473,13 +478,15 @@ async def _build_body_async(
     tools: Sequence[ai.types.tools.Tool] | None,
     params: ai_params.InferenceRequestParams | None,
 ) -> dict[str, Any]:
-    instructions, input_items = await _messages_to_codex(messages)
+    settings = getattr(getattr(model, "provider", None), "_settings", None)
+    repair = getattr(getattr(model, "provider", None), "_repair_tool_pairs", None)
+    instructions, input_items = await _messages_to_codex(messages, repair_tool_pairs=repair)
     body: dict[str, Any] = {
         "model": model.id,
         "input": input_items,
         "stream": True,
         "store": False,
-        "text": {"verbosity": "low"},
+        "text": {"verbosity": _settings.knob(settings, "CODEX_TEXT_VERBOSITY")},
         "include": ["reasoning.encrypted_content"],
     }
     if instructions:
@@ -489,7 +496,7 @@ async def _build_body_async(
         body["tools"] = codex_tools
     effort = _effort_from_params(params)
     if effort is not None:
-        body["reasoning"] = {"effort": effort, "summary": "detailed"}
+        body["reasoning"] = {"effort": effort, "summary": _settings.knob(settings, "CODEX_REASONING_SUMMARY")}
     # Codex rejects caller-supplied output caps; forward only the sampling knobs
     # the codex transport admitted into params.sampling.
     temperature, top_p = _sampling_from_params(params)
@@ -497,6 +504,10 @@ async def _build_body_async(
         body["temperature"] = temperature
     if top_p is not None:
         body["top_p"] = top_p
+    if params is not None and params.cache is not None and params.cache.key is not None:
+        body["prompt_cache_key"] = params.cache.key
+    if params is not None and params.extra_body:
+        body.update(params.extra_body)
     return body
 
 
@@ -542,6 +553,8 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
     # Headers every request also carries (the login's, EXTRA_HEADERS,
     # PARANOID_MODE's); the OAuth and account headers win over them.
     _extra_headers: dict[str, str] = pydantic.PrivateAttr(default_factory=dict)
+    _settings: dict = pydantic.PrivateAttr(default_factory=dict)
+    _repair_tool_pairs: Any = pydantic.PrivateAttr(default=None)
 
     def __init__(
         self,
@@ -553,15 +566,21 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
         base_url: str | None = None,
         login: Login | None = None,
         client: httpx.AsyncClient | None = None,
+        settings: dict | None = None,
+        repair_tool_pairs=None,
     ) -> None:
         if not access_token:
-            raise ai.ConfigurationError("OpenAI Codex requires an OAuth access token; run js --login openai-codex")
+            raise ai.ConfigurationError(msgs.CODEX_PROVIDER_OPENAI_CODEX_REQUIRES_AN_OAUTH_ACCESS_TOKEN.format())
         resolved_account_id = _account_id_from_token(access_token, account_id)
         super().__init__(
             name=_PROVIDER,
             default_base_url=_trim_base_url(base_url),
             api_key_value=access_token,
         )
+        from . import config
+
+        self._settings = config.run_settings() if settings is None else settings
+        self._repair_tool_pairs = repair_tool_pairs
         self._access_token = access_token
         self._refresh_token = refresh_token
         self._expires_at = expires_at
@@ -573,13 +592,13 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
         self._set_client(client or httpx.AsyncClient(timeout=_CLIENT_TIMEOUT))
 
     @classmethod
-    def from_login(cls, login: Login) -> OpenAICodexProvider:
+    def from_login(cls, login: Login, *, base_url: str | None = None) -> OpenAICodexProvider:
         return cls(
             access_token=login.provider_api_key or "",
             refresh_token=login.codex_refresh_token,
             expires_at=login.codex_token_expires,
             account_id=login.codex_account_id,
-            base_url=login.provider_base_url,
+            base_url=base_url or login.provider_base_url,
             login=login,
         )
 
@@ -648,13 +667,15 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
     async def list_models(self) -> list[str]:
         access, account_id = await self._ensure_access()
         base = _trim_base_url(self.base_url)
-        headers = _with_own_headers(self._extra_headers, _codex_headers(access, account_id, stream=False))
+        headers = _with_own_headers(self._extra_headers, _codex_headers(access, account_id, stream=False, settings=self._settings))
         errors: list[str] = []
         for path in _MODEL_PATHS:
             try:
                 response = await self.client.get(
                     f"{base}{path}",
-                    params={"client_version": await asyncio.to_thread(_client_version)},
+                    params={"client_version": await asyncio.to_thread(
+                        _client_version, _settings.knob(self._settings, "CODEX_CLIENT_VERSION") or None,
+                        _settings.knob(self._settings, "CODEX_CLIENT_DETECT"))},
                     headers=headers,
                 )
             except httpx.TimeoutException as exc:
@@ -730,9 +751,10 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
     ) -> AsyncGenerator[ai.events.Event]:
         access, account_id = await self._ensure_access()
         body = await _build_body_async(model, messages, tools, params)
-        headers = _with_own_headers(self._extra_headers, _codex_headers(access, account_id, stream=True))
+        headers = _with_own_headers(self._extra_headers, _codex_headers(access, account_id, stream=True, settings=self._settings))
         url = responses_url(self.base_url)
-        text_open = False
+        text_block: str | None = None
+        text_count = 0
         # The open reasoning block, keyed by its reasoning item id, and the ids
         # already closed: an item's encrypted content arrives on its
         # output_item.done, which can land after text closed the block.
@@ -753,7 +775,7 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
             call = _ToolCall(item_id=item_id, call_id=call_id, name=str(item.get("name") or ""))
             tools_by_item[item_id] = call
             tool_order.append(call)
-            return [ai.events.ToolStart(tool_call_id=call_id, tool_name=call.name)]
+            return [*close_text(), *close_reasoning(), ai.events.ToolStart(tool_call_id=call_id, tool_name=call.name)]
 
         def tool_for(raw: Mapping[str, Any]) -> _ToolCall | None:
             item_id = raw.get("item_id")
@@ -789,11 +811,18 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
             out.append(ai.events.ToolEnd(tool_call_id=call.call_id, tool_call=ai.types.messages.DUMMY_TOOL_CALL))
             return out
 
+        def close_text() -> list[ai.events.Event]:
+            nonlocal text_block
+            if text_block is None:
+                return []
+            block_id, text_block = text_block, None
+            return [ai.events.TextEnd(block_id=block_id)]
+
         def open_reasoning(block_id: str) -> list[ai.events.Event]:
             nonlocal reasoning_block
             if reasoning_block == block_id:
                 return []
-            out = close_reasoning()
+            out = [*close_text(), *close_reasoning()]
             reasoning_block = block_id
             out.append(ai.events.ReasoningStart(block_id=block_id))
             return out
@@ -844,6 +873,10 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                         continue
                     if event_type in {"response.reasoning_summary_part.done", "response.output_item.done"}:
                         item = raw.get("item")
+                        if event_type == "response.output_item.done" and isinstance(item, dict) and item.get("type") == "message":
+                            for ev in close_text():
+                                yield ev
+                            continue
                         if event_type == "response.output_item.done" and isinstance(item, dict) and item.get("type") in {"function_call", "custom_tool_call"}:
                             args = item.get("arguments") if item.get("type") == "function_call" else item.get("input")
                             item_id = str(item.get("id") or item.get("call_id") or "")
@@ -864,10 +897,11 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                         if isinstance(delta, str) and delta:
                             for ev in close_reasoning():
                                 yield ev
-                            if not text_open:
-                                text_open = True
-                                yield ai.events.TextStart(block_id="text")
-                            yield ai.events.TextDelta(block_id="text", chunk=delta)
+                            if text_block is None:
+                                text_count += 1
+                                text_block = f"text-{text_count}"
+                                yield ai.events.TextStart(block_id=text_block)
+                            yield ai.events.TextDelta(block_id=text_block, chunk=delta)
                         continue
                     if event_type in {"response.function_call_arguments.delta", "response.custom_tool_call_input.delta"}:
                         delta = raw.get("delta")
@@ -898,9 +932,8 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                             provider_metadata = {"incomplete": True, "incomplete_reason": reason}
                         for ev in close_reasoning():
                             yield ev
-                        if text_open:
-                            text_open = False
-                            yield ai.events.TextEnd(block_id="text")
+                        for ev in close_text():
+                            yield ev
                         for call in tool_order:
                             for ev in end_tool(call, None):
                                 yield ev
@@ -948,13 +981,23 @@ def provider_from_login_or_token(
     provider_api_key: str | None,
     provider_headers: dict[str, str] | None = None,
 ) -> OpenAICodexProvider:
-    """The Codex provider for the saved login, else for ``provider_api_key``.
-    Its requests also carry ``provider_headers``."""
+    """The Codex provider for the selected token, with its saved refresh state.
+    A token of the saved login's account selects the saved login, whose token
+    is the current one after a refresh rotated it. Its requests also carry
+    ``provider_headers``."""
     from . import logins
 
     login = logins.load_logins().get(codex_auth.CODEX_PROVIDER_ID)
+    saved_account = None
     if login is not None and login.provider_api_key:
-        provider = OpenAICodexProvider.from_login(login)
+        saved_account = login.codex_account_id or codex_auth.token_profile(login.provider_api_key)[0]
+    if login is not None and login.provider_api_key and (
+        not provider_api_key
+        or provider_api_key == login.provider_api_key
+        or (saved_account is not None
+            and codex_auth.token_profile(provider_api_key)[0] == saved_account)
+    ):
+        provider = OpenAICodexProvider.from_login(login, base_url=provider_base_url)
     else:
         provider = OpenAICodexProvider(
             access_token=provider_api_key or "",

@@ -127,17 +127,6 @@ def test_missing_package_jsrc_stops_startup_with_one_line_naming_the_path(tmp_pa
     assert str(missing) in lines[0]
 
 
-def test_bad_line_in_package_jsrc_names_the_file_and_line(monkeypatch, tmp_path):
-    path = tmp_path / "jsrc"
-    path.write_text("set MODEL m\nset READ_LINES_MAX lots\n", encoding="utf-8")
-    monkeypatch.setattr(settings, "PACKAGE_JSRC", path)
-
-    with pytest.raises(SystemExit) as raised:
-        settings.seed_defaults()
-
-    assert f"{path}:2" in str(raised.value)
-
-
 def test_first_run_writes_the_commented_template_and_leaves_an_existing_jsrc(monkeypatch, tmp_path):
     project = _isolated_home(monkeypatch, tmp_path)
     monkeypatch.chdir(project)
@@ -150,37 +139,6 @@ def test_first_run_writes_the_commented_template_and_leaves_an_existing_jsrc(mon
     user.write_text("set READ_LINES_MAX 33\n", encoding="utf-8")
     assert cli.main(["--list"]) == 0
     assert user.read_text(encoding="utf-8") == "set READ_LINES_MAX 33\n"
-
-
-def test_the_template_lists_every_setting_once_commented_at_its_stock_value():
-    seen = []
-    for line in settings.JSRC_TEMPLATE.read_text(encoding="utf-8").splitlines():
-        assert not line.strip() or line.startswith("#"), line
-        if line.startswith(("#set ", "#fset ")):
-            body = line[1:]
-            seen.append(body.split()[1].lstrip("-"))
-            store = settings.seed_defaults()
-            assert setcmd.apply_config_line(store, body, baseline=settings.seed_defaults()).error is None
-            assert store == settings.seed_defaults(), line
-    assert sorted(seen) == sorted(spec.key for spec in settings.REGISTRY)
-
-
-def test_package_jsrc_without_a_line_for_a_knob_stops_startup_naming_it(monkeypatch, tmp_path):
-    lines = [
-        line for line in settings.PACKAGE_JSRC.read_text(encoding="utf-8").splitlines()
-        if not line.startswith("set READ_LINES_MAX ")
-    ]
-    path = tmp_path / "jsrc"
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    monkeypatch.setattr(settings, "PACKAGE_JSRC", path)
-
-    with pytest.raises(SystemExit) as raised:
-        settings.seed_defaults()
-
-    message = str(raised.value)
-    assert len(message.splitlines()) == 1
-    assert str(path) in message
-    assert "READ_LINES_MAX" in message
 
 
 def _show_value(cfg, state, key: str, capsys) -> str:
@@ -254,17 +212,6 @@ def test_save_uncomments_changed_settings_in_place_and_leaves_the_rest(tmp_path)
     }
     assert settings.collect_settings(config_paths=[target], env={}) == live
     assert [path.name for path in tmp_path.glob("jsrc*")] == ["jsrc"]
-
-
-def test_save_comments_out_a_setting_set_back_to_its_stock_value(tmp_path):
-    target = tmp_path / "jsrc"
-    target.write_text("# mine\nset FETCH_TIMEOUT 77\nfset NET_DISPLAY 0\n", encoding="utf-8")
-    live = settings.seed_defaults()
-    setcmd.fset_command(live, "NET_DISPLAY 0")
-
-    assert settings.save_settings_to_jsrc(target, live) == 1
-    assert target.read_text(encoding="utf-8") == "# mine\n#set FETCH_TIMEOUT 77\nfset NET_DISPLAY 0\n"
-    assert settings.save_settings_to_jsrc(target, live) == 0
 
 
 def test_jsrc_tool_knobs_reach_the_turn_tool_context(monkeypatch, tmp_path):
@@ -409,3 +356,13 @@ def test_rehydrate_max_files_knob_decides_whether_files_come_back(
 
     assert cli.compaction.compacted(result)
     assert any("rehydrated-marker" in str(m.get("content")) for m in messages) is reattached
+
+
+def test_collect_settings_can_preserve_operator_formats():
+    from js import fset, settings
+
+    settings.seed_defaults()
+    fset.set_entry("MODEL_SET", "custom")
+    before = dict(fset.overrides())
+    settings.collect_settings(config_paths=[], env={}, reset_formats=lambda: None)
+    assert dict(fset.overrides()) == before

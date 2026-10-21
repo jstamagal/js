@@ -56,3 +56,20 @@ def test_jev_without_an_api_key_is_an_error(tmp_path, monkeypatch):
     out = jev.jev("text", [{"question": "x?"}], context=ToolContext(cwd=tmp_path))
 
     assert out.startswith("ERROR:")
+
+
+def test_registered_typesafe_key_reaches_client(tmp_path, monkeypatch):
+    import typesafe_sdk
+    from js import turn_settings
+
+    seen = {}
+
+    def client(**kwargs):
+        seen.update(kwargs)
+        return _Client({}, [])
+
+    monkeypatch.setattr(typesafe_sdk, "TypeSafeClient", client)
+    context = ToolContext(cwd=tmp_path)
+    turn_settings.install(context, SimpleNamespace(**turn_settings.project({"TYPESAFE_API_KEY": "configured-key"})))
+    jev.jev("state", [{"question": "ready?"}], context=context)
+    assert seen["api_key"] == "configured-key"

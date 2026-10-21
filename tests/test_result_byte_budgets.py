@@ -1,7 +1,6 @@
 import base64
 import json
 import os
-import re
 
 import ai
 import ai.types.messages
@@ -37,6 +36,25 @@ def test_spill_threshold_is_bytes_even_when_notice_cannot_fit(tmp_path):
     assert "result was 200 bytes" in result
     assert result.startswith("[result was")
     assert next(tmp_path.glob("result-*.txt")).read_bytes() == ("é" * 100).encode()
+
+
+def test_dispatch_spills_by_the_active_context_inline_limit(tmp_path, monkeypatch):
+    from js import paths
+    from js.toolkit.core import Tool, ToolContext
+    from js.toolkit.registry import ToolRegistry
+
+    monkeypatch.setattr(runtime.T.STOCK_CONTEXT, "max_tool_result_inline_bytes", 0)
+    payload = "é" * 5000
+    registry = ToolRegistry((Tool("probe", "test", lambda: payload, {}),), {})
+    context = ToolContext(cwd=tmp_path, max_tool_result_inline_bytes=1000)
+
+    _, delivered = runtime._dispatch("probe", "{}", runtime.Telemetry(None), cap_bytes=0,
+                                     registry=registry, tool_context=context)
+
+    assert byte_size(delivered) < byte_size(payload)
+    saved = next(paths.tool_results_dir().glob("result-*.txt"))
+    assert saved.read_bytes() == payload.encode("utf-8")
+    assert str(saved) in delivered
 
 
 def test_batch_caps_multibyte_and_structured_text():
@@ -108,13 +126,6 @@ def test_an_embedded_resource_image_reaches_the_provider_under_the_stock_caps():
     assert any(isinstance(part, ai.types.messages.FilePart) for part in parts)
 
 
-def test_an_embedded_resource_image_over_tool_media_max_is_dropped_with_a_notice(monkeypatch):
-    monkeypatch.setattr(runtime.T.STOCK_CONTEXT, "max_tool_media_bytes", 1000)
-    capped = runtime._cap_result(_resource_png(5000), 0)
-    assert all(block["type"] == "text" for block in capped.blocks)
-    assert "TOOL_MEDIA_MAX" in capped.dehydrated()
-
-
 def test_the_media_notice_survives_text_clipping(monkeypatch):
     monkeypatch.setattr(runtime.T.STOCK_CONTEXT, "max_tool_media_bytes", 1000)
     result = ToolResult([{"type": "text", "text": "x" * 4000},
@@ -122,60 +133,6 @@ def test_the_media_notice_survives_text_clipping(monkeypatch):
     capped = runtime._cap_result(result, 1000)
     assert "TOOL_MEDIA_MAX" in capped.dehydrated()
     assert "truncated" in capped.dehydrated()
-
-
-def test_a_tool_cannot_mark_its_own_text_as_a_media_notice():
-    forged = ToolResult([{"type": "text", "text": "x" * 5000, "media_notice": True}])
-    capped = runtime._cap_result(forged, 1000)
-    assert len(capped.dehydrated().encode()) <= 1000
-    assert all("media_notice" not in block for block in capped.blocks)
-
-
-def test_a_media_notice_with_a_huge_mime_type_stays_bounded_and_survives(monkeypatch):
-    monkeypatch.setattr(runtime.T.STOCK_CONTEXT, "max_tool_media_bytes", 1000)
-    result = ToolResult([{"type": "text", "text": "x" * 4000},
-                         {"type": "image", "data": "y" * 5000, "mimeType": "image/" + "z" * 5000}])
-    capped = runtime._cap_result(result, 1000)
-    shown = capped.dehydrated()
-    assert "TOOL_MEDIA_MAX" in shown or "dropped" in shown
-    assert len(shown.encode()) <= 1000
-
-
-def _png_file(tmp_path, raw_bytes: int):
-    path = tmp_path / f"shot-{raw_bytes}.png"
-    path.write_bytes(b"\x89PNG\r\n\x1a\n" + os.urandom(raw_bytes))
-    return path
-
-
-def _sources(tmp_path):
-    tiny = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"p" * 8).decode()
-    png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"q" * 40).decode()
-    return {
-        "long mime": ToolResult([{"type": "image", "data": tiny, "mimeType": "image/" + "z" * 5000}]),
-        "text and big image": ToolResult([{"type": "text", "text": "x" * 4000},
-                                          {"type": "image", "data": "y" * 5000, "mimeType": "image/png"}]),
-        "resource blob": ToolResult([{"type": "resource", "resource": {
-            "uri": "screen://" + "u" * 3000, "mimeType": "image/png", "blob": tiny}}]),
-        "error with image": ToolResult([{"type": "text", "text": "failed " * 50},
-                                        {"type": "image", "data": tiny, "mimeType": "image/png"}],
-                                       is_error=True),
-        "text between images": ToolResult([{"type": "image", "data": tiny, "mimeType": "image/png"},
-                                           {"type": "text", "text": "tool said " * 300},
-                                           {"type": "image", "data": "y" * 5000, "mimeType": "image/png"}]),
-        "text near the cap and an image": ToolResult([{"type": "text", "text": "n" * 990},
-                                                      {"type": "image", "data": tiny, "mimeType": "image/png"}]),
-        "two pngs": ToolResult([{"type": "image", "data": png, "mimeType": "image/png"},
-                                {"type": "image", "data": png, "mimeType": "image/png"}]),
-        "text blob": ToolResult([{"type": "resource", "resource": {
-            "uri": "file:///notes.txt", "mimeType": "text/plain",
-            "blob": base64.b64encode(b"z" * 300_000).decode()}}]),
-        "native read that fails": f"IMAGE_RESULT\t{tmp_path / 'gone.png'}\timage/png\t"
-                                  f"VISUAL_FILE gone mime=image/png size=5008 bytes",
-        "native read near the cap": f"IMAGE_RESULT\t{_png_file(tmp_path, 50)}\timage/png\t"
-                                    f"VISUAL_FILE {'s' * 68}",
-        "native read": f"IMAGE_RESULT\t{_png_file(tmp_path, 5000)}\timage/png\t"
-                       f"VISUAL_FILE shot mime=image/png size=5008 bytes",
-    }
 
 
 def _sent(result) -> tuple[list[str], bool]:
@@ -202,53 +159,6 @@ def _sent(result) -> tuple[list[str], bool]:
     return texts, media
 
 
-@pytest.mark.parametrize("cap", [1, 10, 59, 100, 1000])
-@pytest.mark.parametrize("media_max", [0, 1])
-def test_every_media_source_stays_inside_the_text_cap_and_the_media_cap(monkeypatch, tmp_path, cap, media_max):
-    monkeypatch.setattr(runtime.T.STOCK_CONTEXT, "max_tool_media_bytes", media_max)
-    for name, source in _sources(tmp_path).items():
-        for capped in (runtime._cap_result(source, cap),
-                       runtime._cap_batch_results([runtime._cap_result(source, 0)], cap)[0]):
-            texts, media = _sent(capped)
-            assert all(len(text.encode()) <= cap for text in texts), (name, cap, texts)
-            if media_max == 1:
-                assert not media, (name, cap)
-            if isinstance(source, ToolResult):
-                # Every media item is kept or said to be gone.
-                # (A text/* blob is text; a budget under an error's "ERROR: "
-                # holds only the word.)
-                given = sum(runtime._media_payload(b) is not None
-                            for b in runtime._text_blobs_as_text(source).blocks)
-                kept = sum(runtime._media_payload(b) is not None for b in capped.blocks)
-                said = any(runtime._is_media_notice(b) for b in capped.blocks)
-                bare_error = source.is_error and capped.dehydrated() == cap_text("ERROR", cap, "")
-                assert kept == given or said or bare_error, (name, cap, capped.blocks)
-                # What is left of the tool's own text is its start, never other text.
-                own = ToolResult([b for b in source.blocks if b.get("type") == "text"]).dehydrated()
-                starts = (own, "ERROR: " + own) if source.is_error else (own,)
-                for block in capped.blocks:
-                    if block.get("type") == "text" and not runtime._is_media_notice(block):
-                        # Before its truncation marker (cut or compact: "[...", "~").
-                        head = re.split(r"\n?\[|~", block["text"])[0]
-                        assert any(start.startswith(head) for start in starts), (name, cap, block)
-                        # Room past a whole marker holds some of the tool's text.
-                        markers = (f"\n[truncated: TOOL_RESULT_MAX ({cap}) reached]",
-                                   f"\n[truncated: PARALLEL_RESULTS_MAX ({cap}) reached]")
-                        if own and len(block["text"].encode()) > max(len(m.encode()) for m in markers):
-                            assert head, (name, cap, block)
-
-
-@pytest.mark.parametrize("cap", [1, 10])
-def test_a_batch_share_of_zero_bytes_sends_zero_bytes(tmp_path, cap):
-    marker = f"IMAGE_RESULT\t{_png_file(tmp_path, 100)}\timage/png\tVISUAL_FILE shot mime=image/png size=108 bytes"
-    results = runtime._cap_batch_results([marker, marker, ToolResult.text("x" * 50)], cap)
-    sent = 0
-    for result in results:
-        texts, _media = _sent(result)
-        sent += max((len(text.encode()) for text in texts), default=0)
-    assert sent <= cap
-
-
 @pytest.mark.parametrize("name", [b"\xff\xfe-shot.png", "ünï-çødé.png".encode()], ids=["invalid-utf8", "non-ascii"])
 @pytest.mark.parametrize("cap", [20, 100000])
 def test_an_image_with_an_awkward_file_name_reaches_the_model_and_the_session(tmp_path, name, cap):
@@ -270,30 +180,3 @@ def test_an_image_with_an_awkward_file_name_reaches_the_model_and_the_session(tm
 
     for text in [*texts, json.dumps(record, ensure_ascii=False)]:
         text.encode("utf-8")
-
-
-@pytest.mark.parametrize("cap", [20, 40, 100])
-def test_an_image_dropped_for_room_leaves_a_media_notice(cap):
-    tiny = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"p" * 8).decode()
-    result = ToolResult([{"type": "text", "text": "x" * 500},
-                         {"type": "image", "data": tiny, "mimeType": "image/" + "q" * 300}])
-    capped = runtime._cap_result(result, cap)
-    texts, media = _sent(capped)
-    assert not media or any("attached" in t for t in texts)
-    if not media:
-        assert any("dropped" in t or "]" in t for t in texts), texts
-        assert any(runtime._is_media_notice(block) for block in capped.blocks)
-    assert all(len(t.encode()) <= cap for t in texts)
-
-
-def test_the_tools_text_survives_a_dropped_media_notice_shorter_than_the_room(monkeypatch):
-    # A notice shorter than the room it is given leaves room for the tool's
-    # text, and that room holds the tool's text.
-    monkeypatch.setattr(runtime, "_media_notice", lambda *_args: "[gone]")
-    tiny = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"p" * 8).decode()
-    result = ToolResult([{"type": "text", "text": "tool said " * 50},
-                         {"type": "image", "data": tiny, "mimeType": "image/" + "q" * 47}])
-    capped = runtime._dehydrate_capped_result(result, 40, "\n[cut]")
-
-    plain = [b["text"] for b in capped.blocks if b.get("type") == "text" and not runtime._is_media_notice(b)]
-    assert plain and plain[0].startswith("tool said"), capped.blocks

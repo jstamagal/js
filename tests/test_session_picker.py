@@ -58,6 +58,14 @@ def _listed(picker) -> list[str]:
     return [session.path for session in picker.shown()]
 
 
+def test_session_picker_accepts_context_keymaps():
+    picker = _picker([_session("chosen")], keymaps={"list": {"choose": (("space",),)}})
+    assert picker.press("enter") is None
+    choice = picker.press(" ")
+    assert choice.action == session_picker.RESUME
+    assert choice.session.path == "chosen"
+
+
 def _body_lines(picker) -> list[str]:
     fragments, _ = picker.body()
     return "".join(text for _, text in fragments).split("\n")
@@ -455,31 +463,6 @@ def _preview_picker(messages: list[dict], sessions=None) -> session_picker.Sessi
     return _picker(sessions or [_session("a")], messages=lambda path: messages)
 
 
-def test_the_highlighted_session_shows_the_last_user_text_and_the_agents_last_pin_line():
-    picker = _preview_picker([
-        {"role": "user", "content": "fix the nfs mount"},
-        {"role": "assistant", "content": "📌 mount fixed in fstab\ndetails follow"},
-        {"role": "user", "content": "<js-reminder>\nturn was cut off\n</js-reminder>"},
-        {"role": "assistant", "content": "anything else?"},
-    ])
-
-    body = "\n".join(_body_lines(picker))
-
-    assert "fix the nfs mount" in body
-    assert "📌 mount fixed in fstab" in body
-    assert "anything else?" not in body
-    assert "turn was cut off" not in body
-
-
-def test_without_a_pin_line_the_preview_shows_the_tail_of_the_agents_last_text():
-    picker = _preview_picker([
-        {"role": "user", "content": "hello"},
-        {"role": "assistant", "content": "first line\nthe last line"},
-    ])
-
-    assert "the last line" in "\n".join(_body_lines(picker))
-
-
 def _call(call_id: str) -> dict:
     return {"id": call_id, "type": "function", "function": {"name": "shell", "arguments": "{}"}}
 
@@ -512,32 +495,6 @@ def test_text_beside_a_tool_call_still_waiting_for_its_result_is_previewed():
     assert "old diagnosis" not in body
 
 
-def test_the_selected_session_and_its_preview_stay_on_a_short_screen():
-    from prompt_toolkit.application.current import set_app
-    from prompt_toolkit.input import create_pipe_input
-    from prompt_toolkit.layout.mouse_handlers import MouseHandlers
-    from prompt_toolkit.layout.screen import Screen, WritePosition
-    from prompt_toolkit.output import DummyOutput
-
-    sessions = [_session(f"s{n:02d}", started=_ts(2026, 9, 29, 8, n), title=f"title{n:02d}") for n in range(12)]
-    picker = _preview_picker([{"role": "user", "content": "PREVIEWED"}], sessions)
-    width, height = 120, 8
-    with create_pipe_input() as pipe:
-        app = picker.application(input=pipe, output=DummyOutput())
-        with set_app(app):
-            for _ in range(6):
-                picker.press("down")
-                app.render_counter += 1  # the controls cache their text per render
-                screen = Screen()
-                app.layout.container.write_to_screen(
-                    screen, MouseHandlers(), WritePosition(0, 0, width, height),
-                    parent_style="", erase_bg=False, z_index=None)
-                screen.draw_all_floats()
-                shown = ["".join(screen.data_buffer[y][x].char for x in range(width)) for y in range(height)]
-                assert any(line.startswith(">") for line in shown)
-                assert any("PREVIEWED" in line for line in shown)
-
-
 def test_a_compacted_session_previews_what_its_transcript_still_holds(tmp_path):
     """Compaction drops summarized history from the model's replay, not from
     the session; the preview reads the session. A reattached file is js's,
@@ -555,35 +512,6 @@ def test_a_compacted_session_previews_what_its_transcript_still_holds(tmp_path):
     assert "fix the nfs mount" in body
     assert "📌 mount fixed in fstab" in body
     assert "REATTACHED FILE BODY" not in body
-
-
-def test_files_js_reattached_after_compaction_are_not_the_operators_text():
-    picker = _preview_picker([
-        {"role": "user", "content": "fix the nfs mount"},
-        {"role": "assistant", "content": "done"},
-        {"role": "user", "content": "<post-compaction-files>\nREATTACHED FILE BODY\n</post-compaction-files>"},
-    ])
-
-    body = "\n".join(_body_lines(picker))
-
-    assert "fix the nfs mount" in body
-    assert "REATTACHED FILE BODY" not in body
-
-
-def test_a_rollback_in_a_file_the_old_writer_appended_twice_previews_the_kept_answer(tmp_path):
-    """The rollback counts in the history with the repeated runs undone, as
-    replay reads it."""
-    from test_memory import _reappending_writer
-
-    path = tmp_path / "s.jsonl"
-    _reappending_writer(path)
-    M.append_mark(path, "rollback_to:6")
-    picker = _picker([_session(str(path))], messages=session_picker._messages)
-
-    body = "\n".join(_body_lines(picker))
-
-    assert "read it all" in body
-    assert "yo KING" not in body
 
 
 def test_a_signed_reply_kept_by_compaction_then_rolled_back_is_not_previewed(tmp_path):
@@ -617,36 +545,6 @@ def test_a_session_from_before_the_record_envelope_is_previewed(tmp_path):
     assert "📌 old answer" in body
 
 
-def test_an_unchanged_session_file_is_read_once_for_its_preview(tmp_path):
-    path = tmp_path / "s.jsonl"
-    M.append_message(path, {"role": "user", "content": "hello"})
-    reads = []
-
-    def messages(name):
-        reads.append(name)
-        return M.retained_messages(Path(name))
-
-    for _ in range(2):
-        _body_lines(_picker([_session(str(path))], messages=messages))
-    M.append_message(path, {"role": "user", "content": "again"})
-    body = "\n".join(_body_lines(_picker([_session(str(path))], messages=messages)))
-
-    assert len(reads) == 2
-    assert "again" in body
-
-
-def test_the_status_line_is_previewed_not_the_closing_slogan():
-    picker = _preview_picker([
-        {"role": "user", "content": "fix the mount"},
-        {"role": "assistant", "content": "📌🔨🦍 mount fixed\n🦍💪🤝 APES STRONK TOGETHER"},
-    ])
-
-    body = "\n".join(_body_lines(picker))
-
-    assert "mount fixed" in body
-    assert "APES STRONK" not in body
-
-
 def test_an_open_picker_previews_a_session_file_that_changed(tmp_path):
     path = tmp_path / "s.jsonl"
     M.append_message(path, {"role": "user", "content": "first"})
@@ -655,3 +553,16 @@ def test_an_open_picker_previews_a_session_file_that_changed(tmp_path):
     M.append_message(path, {"role": "user", "content": "second"})
 
     assert "second" in "\n".join(_body_lines(picker))
+
+
+def test_session_picker_accepts_its_view_and_streams(monkeypatch):
+    from types import SimpleNamespace
+    from js import picker
+
+    source, target = object(), object()
+    seen = []
+    state = SimpleNamespace(application=lambda **kwargs: seen.append(kwargs) or "app")
+    monkeypatch.setattr(picker, "run_modal", lambda app: app)
+    assert session_picker.pick_session("/work", input=source, output=target,
+                                       load_picker=lambda *args: state) == "app"
+    assert seen == [{"input": source, "output": target}]

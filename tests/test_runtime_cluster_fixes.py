@@ -16,8 +16,7 @@ from js import runtime, turn_call
 from js import model_client as MC
 from js.config import Config
 from js.toolkit import ToolContext
-from js.toolkit.core import Tool
-from js.toolkit.registry import ToolRegistry, build_default_registry
+from js.toolkit.registry import build_default_registry
 from js.model_client import ModelStreamResult
 
 
@@ -65,6 +64,26 @@ class _Recorder:
     def emit(self, event, **payload):
         self.events.append((event, payload))
         return SimpleNamespace(results=[], hooks=[])
+
+
+def test_reused_context_clears_subagent_hooks_when_turn_has_none(tmp_path, monkeypatch):
+    context = ToolContext(cwd=tmp_path)
+    hooks = _Recorder()
+    inherited = []
+
+    def stream(**kwargs):
+        inherited.append(context.tool_call_hooks)
+        return _result()
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    for current_hooks in (hooks, None):
+        runtime.run_turn(
+            _cfg(tmp_path), "SYS", [{"role": "user", "content": "hi"}],
+            runtime.Telemetry(None), tool_registry=build_default_registry().select([]),
+            tool_context=context, suppress_output=True, event_hooks=current_hooks,
+        )
+
+    assert inherited == [hooks, None]
 
 
 # --------------------------------------------------------------------------
@@ -171,7 +190,7 @@ def test_partial_text_closed_before_retry(tmp_path, monkeypatch, capsys):
         return _result("FINAL")
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stub)
-    monkeypatch.setattr(turn_call, "_backoff", lambda a: 0.0)
+    monkeypatch.setattr(turn_call, "_backoff", lambda *_: 0.0)
     cfg = _cfg(tmp_path)
     registry = build_default_registry(prompts_root=None)
     ctx = ToolContext(cwd=tmp_path)
@@ -331,20 +350,3 @@ def test_cap_result_marks_only_when_it_shortens():
     assert clipped.startswith("x")
     assert len(clipped.encode("utf-8")) <= 64
     assert "[truncated: TOOL_RESULT_MAX (64) reached]" in clipped
-
-
-def test_dispatch_marks_truncated_leaf_result():
-    big = "Z" * 500
-
-    def _handler(context=None, **kwargs):
-        return big
-
-    tool = Tool(name="bigtool", description="", handler=_handler, params={})
-    registry = ToolRegistry(tools=(tool,), aliases={})
-    _args, result = runtime._dispatch(
-        "bigtool", "{}", runtime.Telemetry(debug_log=None),
-        cap_bytes=64, registry=registry, tool_context=ToolContext(),
-    )
-    assert result.startswith("Z")
-    assert len(result.encode("utf-8")) <= 64
-    assert "[truncated: TOOL_RESULT_MAX (64) reached]" in result

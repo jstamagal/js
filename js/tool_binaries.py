@@ -11,6 +11,7 @@ through PATH (notably, ``sg`` on this box is not ast-grep).
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import json
 import math
 import os
@@ -29,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import messages as msgs
+from . import output, paths, settings as _settings
 
 
 TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools" / "bin"
@@ -140,7 +142,7 @@ def aria2_release(machine: str | None = None, system: str | None = None) -> Down
         ),
     }
     if system != "Linux" or machine not in hashes:
-        raise InstallError(f"aria2: no verified release asset for {system} {machine}")
+        raise InstallError(msgs.TOOL_RELEASE_ARIA_NO_VERIFIED_RELEASE_ASSET_FOR.format(system=system, machine=machine))
     asset = f"aria2-{machine}-linux-musl_static.zip"
     archive_hash, executable_hash = hashes[machine]
     return DownloadTool(
@@ -161,20 +163,20 @@ def resolve_binary(executable: str) -> str | None:
     managed = TOOLS_DIR / executable
     if managed.is_file() and os.access(managed, os.X_OK):
         return str(managed)
-    return shutil.which(executable)
+    return shutil.which(executable) if _settings.live_value("TOOL_BINARY_PATH_FALLBACK") else None
 
 
 # The purposes warn_urllib_fallback has reported in this process.
 _URLLIB_FALLBACK_REPORTED: set[str] = set()
 
 
-def warn_urllib_fallback(purpose: str) -> None:
+def warn_urllib_fallback(purpose: str, *, emit: Callable | None = None) -> None:
     """Make loss of aria2c's transfer guarantees visible without changing
-    results: once per purpose per process, on stderr."""
+    results: one output event per purpose per process."""
     if purpose in _URLLIB_FALLBACK_REPORTED:
         return
     _URLLIB_FALLBACK_REPORTED.add(purpose)
-    msgs.warn(msgs.URLLIB_FALLBACK, purpose=purpose)
+    (emit or output.notice)(msgs.URLLIB_FALLBACK, purpose=purpose)
 
 
 def aria2_argv(
@@ -201,11 +203,11 @@ def aria2_argv(
         "--continue=true",
         "--allow-overwrite=true",
         "--auto-file-renaming=false",
-        "--split=8",
-        "--max-connection-per-server=8",
+        f"--split={_settings.live_value('DOWNLOAD_SPLITS_MAX')}",
+        f"--max-connection-per-server={_settings.live_value('DOWNLOAD_CONNECTIONS_MAX')}",
         "--min-split-size=1M",
-        "--max-tries=5",
-        "--retry-wait=1",
+        f"--max-tries={_settings.live_value('DOWNLOAD_RETRIES_MAX')}",
+        f"--retry-wait={_settings.live_value('DOWNLOAD_RETRY_WAIT')}",
         f"--connect-timeout={connect_timeout}",
         f"--timeout={socket_timeout}",
         "--file-allocation=none",
@@ -309,7 +311,41 @@ def download_with_aria2(
     before_publish: Callable[[], None] | None = None,
 ) -> None:
     """Download to a resumable hidden partial and atomically publish on success."""
+    started = time.monotonic()
     destination.parent.mkdir(parents=True, exist_ok=True)
+    # The persistent lock inode covers partials, identity metadata and publication.
+    # It lives in js's tmp directory, keyed by the destination, not beside it.
+    locks = paths.tmp_dir() / "aria2-locks"
+    locks.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha256(str(destination.resolve(strict=False)).encode()).hexdigest()
+    lock_path = locks / f"{key}.lock"
+    with lock_path.open("ab") as lock:
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                remaining = timeout_s - (time.monotonic() - started)
+                if remaining <= 0:
+                    raise DownloadError(
+                        f"aria2c timed out after {timeout_s:g}s waiting to download {url}"
+                    ) from None
+                time.sleep(min(0.05, remaining))
+        _download_with_aria2(binary, url, destination, timeout_s=timeout_s, headers=headers,
+                             max_bytes=max_bytes, before_publish=before_publish, started=started)
+
+
+def _download_with_aria2(
+    binary: str,
+    url: str,
+    destination: Path,
+    *,
+    timeout_s: float,
+    headers: dict[str, str] | None,
+    max_bytes: int | None,
+    before_publish: Callable[[], None] | None,
+    started: float,
+) -> None:
     partial = _partial_download_path(destination)
     control = Path(f"{partial}.aria2")
     metadata = Path(f"{partial}.js-meta")
@@ -335,7 +371,6 @@ def download_with_aria2(
         stream.write(identity)
     temporary_metadata.chmod(0o600)
     os.replace(temporary_metadata, metadata)
-    started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="js-aria2-") as private, \
             tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
         input_file = None
@@ -403,11 +438,11 @@ def _download(url: str, destination: Path) -> None:
             url,
             destination,
             timeout_s=120,
-            headers={"User-Agent": "js-tool-installer/0.1"},
+            headers={"User-Agent": _settings.live_value("TOOL_INSTALLER_USER_AGENT")},
         )
         return
     warn_urllib_fallback("the tool-binary installer")
-    request = urllib.request.Request(url, headers={"User-Agent": "js-tool-installer/0.1"})
+    request = urllib.request.Request(url, headers={"User-Agent": _settings.live_value("TOOL_INSTALLER_USER_AGENT")})
     with urllib.request.urlopen(request, timeout=120) as response, destination.open("wb") as output:
         shutil.copyfileobj(response, output)
 
@@ -512,8 +547,8 @@ def release_plan() -> tuple[list[DownloadTool], list[str]]:
     """Select verified native assets; never substitute a compatibility layer."""
     if is_termux():
         return [], [
-            "ast-grep: no verified Termux release; install a native build separately",
-            "obscura/obscura-worker: no verified Termux release; install native builds separately",
+            msgs.TOOL_TERMUX_AST_GREP_MISSING.format(),
+            msgs.TOOL_TERMUX_OBSCURA_MISSING.format(),
         ]
     system = platform.system()
     machine = platform.machine().lower()
@@ -530,13 +565,12 @@ def release_plan() -> tuple[list[DownloadTool], list[str]]:
         row = next((r for r in rows if r["executable"] == name
                     and r["system"] == system and r["machine"] == machine), None)
         if row is None:
-            missing.append(f"{name}: no verified release asset for {system} {machine}")
+            missing.append(msgs.TOOL_VERIFIED_RELEASE_MISSING.format(name=name, system=system, machine=machine))
             continue
         minimum = row["minimum_glibc"]
         if minimum and (libc != "glibc" or not version or
                         tuple(map(int, version.split("."))) < tuple(map(int, minimum.split(".")))):
-            missing.append(f"{name}: {row['asset']} requires glibc >= {minimum}; "
-                           f"found {libc or 'unknown libc'} {version}; no verified musl asset")
+            missing.append(msgs.TOOL_RELEASE_GLIBC_REQUIRED.format(name=name, value=row['asset'], minimum=minimum, value2=libc or 'unknown libc', version=version))
             continue
         specs.append(DownloadTool(**{k: v for k, v in row.items()
                                      if k not in ("system", "machine", "minimum_glibc")}))
@@ -545,29 +579,28 @@ def release_plan() -> tuple[list[DownloadTool], list[str]]:
     ):
         specs.append(next(s for s in DOWNLOAD_TOOLS if s.name == "obscura"))
     else:
-        missing.append(f"obscura: no verified compatible release for {system} {machine} "
-                       f"{libc} {version}; pinned x86_64 Linux asset requires glibc >= 2.35; "
-                       "ARM64 Linux/macOS archives await content verification")
+        missing.append(msgs.TOOL_OBSCURA_RELEASE_MISSING.format(system=system, machine=machine, libc=libc, version=version))
     return specs, missing
 
 
-def _provision_aria2_via_brew(tools_dir: Path) -> str | None:
+def _provision_aria2_via_brew(tools_dir: Path, *, run=None) -> str | None:
     """macOS: no verified static release exists, so aria2 comes from Homebrew.
 
     Returns the installed executable path, or None when brew cannot provide it.
     """
+    runner = subprocess.run if run is None else run
     brew = shutil.which("brew")
     if brew is None:
         return None
     candidate = shutil.which(ARIA2_EXECUTABLE)
     if candidate is None:
         try:
-            subprocess.run([brew, "install", "aria2"], check=True, timeout=600)
+            runner([brew, "install", "aria2"], check=True, timeout=600)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
             return None
         candidate = shutil.which(ARIA2_EXECUTABLE)
     if candidate is None:
-        prefix = subprocess.run([brew, "--prefix"], capture_output=True, text=True).stdout.strip()
+        prefix = runner([brew, "--prefix"], capture_output=True, text=True).stdout.strip()
         brewed = Path(prefix) / "bin" / ARIA2_EXECUTABLE
         candidate = str(brewed) if brewed.is_file() else None
     if candidate is None:
@@ -580,23 +613,24 @@ def _provision_aria2_via_brew(tools_dir: Path) -> str | None:
     return str(target)
 
 
-def _provision_termux_tools(tools_dir: Path) -> Path:
+def _provision_termux_tools(tools_dir: Path, *, run=None) -> Path:
     """Link package-owned Android executables, resolving outside managed PATH."""
+    runner = subprocess.run if run is None else run
     pkg = shutil.which("pkg")
     if pkg is None:
-        raise InstallError("Termux: pkg unavailable; restore pkg on PATH and rerun `just install-tool-binaries`")
+        raise InstallError(msgs.TOOL_RELEASE_TERMUX_PKG_UNAVAILABLE_RESTORE_PKG_ON_PATH.format())
     packages = {"aria2": "aria2c", "bat": "bat", "fd": "fd", "fzf": "fzf", "ripgrep": "rg"}
     try:
-        subprocess.run([pkg, "install", "-y", *packages], check=True, timeout=600)
+        runner([pkg, "install", "-y", *packages], check=True, timeout=600)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
-        raise InstallError(f"Termux: pkg install failed: {exc}; no desktop fallback") from exc
+        raise InstallError(msgs.TOOL_RELEASE_TERMUX_PKG_INSTALL_FAILED_NO_DESKTOP_FALLBACK.format(exc=exc)) from exc
     package_bin = Path(pkg).resolve().parent
     candidates = {name: package_bin / name for name in packages.values()}
     for name, candidate in candidates.items():
         if not candidate.is_file() or not os.access(candidate, os.X_OK):
-            raise InstallError(f"Termux: pkg did not provide executable {candidate}; no desktop fallback")
+            raise InstallError(msgs.TOOL_RELEASE_TERMUX_PKG_DID_NOT_PROVIDE_EXECUTABLE_NO.format(candidate=candidate))
         if candidate.resolve().is_relative_to(tools_dir.resolve()):
-            raise InstallError(f"Termux: package executable {candidate} resolves to managed tools")
+            raise InstallError(msgs.TOOL_RELEASE_TERMUX_PACKAGE_EXECUTABLE_RESOLVES_TO_MANAGED_TOOLS.format(candidate=candidate))
     tools_dir.mkdir(parents=True, exist_ok=True)
     for name, candidate in candidates.items():
         target = tools_dir / name
@@ -647,21 +681,24 @@ def _adopt_termux_native_builds(tools_dir: Path, package_bin: Path, missing: lis
     return still_missing
 
 
-def install_all(*, tools_dir: Path = TOOLS_DIR) -> None:
+def install_all(*, tools_dir: Path = TOOLS_DIR, say=None, provision_brew=None,
+                provision_termux=None, downloader=None) -> None:
+    announce = msgs.say if say is None else say
+    brew = _provision_aria2_via_brew if provision_brew is None else provision_brew
+    termux = _provision_termux_tools if provision_termux is None else provision_termux
     specs, missing = release_plan()
     if is_termux():
-        package_bin = _provision_termux_tools(tools_dir)
+        package_bin = termux(tools_dir)
         missing = _adopt_termux_native_builds(tools_dir, package_bin, missing)
 
     if platform.system() == "Darwin" and not any(s.executable == ARIA2_EXECUTABLE for s in specs):
-        brewed = _provision_aria2_via_brew(tools_dir)
+        brewed = brew(tools_dir)
         if brewed is not None:
-            msgs.say(msgs.TOOL_PRESENT_BREW, name="aria2", path=brewed)
+            announce(msgs.TOOL_PRESENT_BREW, name="aria2", path=brewed)
             missing = [m for m in missing if not m.startswith("aria2:")]
         else:
             missing = [m for m in missing if not m.startswith("aria2:")] + [
-                "aria2: Homebrew unavailable or `brew install aria2` failed; "
-                "install Homebrew (https://brew.sh) and rerun `just install`"
+                msgs.TOOL_ARIA2_HOMEBREW_FAILED.format()
             ]
 
     def download(url: str, destination: Path) -> None:
@@ -669,30 +706,30 @@ def install_all(*, tools_dir: Path = TOOLS_DIR) -> None:
         aria_spec = next((s for s in specs if s.executable == ARIA2_EXECUTABLE), None)
         if aria_spec is not None and _is_current(managed, aria_spec.executable_sha256):
             download_with_aria2(str(managed), url, destination, timeout_s=120,
-                                headers={"User-Agent": "js-tool-installer/0.1"})
+                                headers={"User-Agent": _settings.live_value("TOOL_INSTALLER_USER_AGENT")})
         else:
             # Bootstrap is independent of PATH (including unrelated system aria2).
-            request = urllib.request.Request(url, headers={"User-Agent": "js-tool-installer/0.1"})
+            request = urllib.request.Request(url, headers={"User-Agent": _settings.live_value("TOOL_INSTALLER_USER_AGENT")})
             with urllib.request.urlopen(request, timeout=120) as response:
                 with destination.open("wb") as output:
                     shutil.copyfileobj(response, output)
 
-    msgs.say(msgs.TOOL_DIR, path=tools_dir)
+    announce(msgs.TOOL_DIR, path=tools_dir)
     for spec in specs:
         target = tools_dir / spec.executable
         if _is_current(target, spec.executable_sha256) and all(
             _is_current(tools_dir / name, checksum)
             for _member, name, checksum in spec.companions
         ):
-            msgs.say(msgs.TOOL_PRESENT, name=spec.name, version=spec.version, path=target,
+            announce(msgs.TOOL_PRESENT, name=spec.name, version=spec.version, path=target,
                      sha=spec.executable_sha256)
             continue
-        msgs.say(msgs.TOOL_DOWNLOAD, name=spec.name, version=spec.version, asset=spec.asset, url=spec.url)
-        state = install_download(spec, tools_dir=tools_dir, downloader=download)
-        msgs.say(msgs.TOOL_INSTALLED, state=state, path=target, asset_sha=spec.asset_sha256,
+        announce(msgs.TOOL_DOWNLOAD, name=spec.name, version=spec.version, asset=spec.asset, url=spec.url)
+        state = install_download(spec, tools_dir=tools_dir, downloader=download if downloader is None else downloader)
+        announce(msgs.TOOL_INSTALLED, state=state, path=target, asset_sha=spec.asset_sha256,
                  sha=spec.executable_sha256)
     if missing:
-        raise InstallError("toolkit incomplete:\n" + "\n".join(missing))
+        raise InstallError(msgs.TOOLKIT_INCOMPLETE_PREFIX.format() + "\n".join(missing))
 
 def main() -> int:
     try:

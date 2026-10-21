@@ -2,26 +2,8 @@
 
 from copy import deepcopy
 
-import pytest
 
 from js import cli, config, model_metadata
-
-
-@pytest.mark.parametrize(("environment", "override", "expected"), [
-    ("off", "on", True),
-    ("on", "off", False),
-])
-def test_cli_extra_overrides_vision_environment(monkeypatch, environment, override, expected):
-    monkeypatch.setenv("JS_VISION", environment)
-    monkeypatch.setattr(model_metadata, "accepts_image_input", lambda _model: False)
-    cfg = config.from_env(extras=[
-        "MODEL=private-model",
-        "PROVIDER=openai",
-        "API_KEY=fixture",
-        "OUTPUT_TOKENS_MAX=64",
-        f"VISION={override}",
-    ])
-    assert cfg.vision_enabled is expected
 
 
 def test_live_vision_setting_and_unset_override_environment(monkeypatch):

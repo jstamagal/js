@@ -1,0 +1,20 @@
+{
+  "render_finished_shell": "shell={job_shell_path}",
+  "render_finished_exit": "exit={result_returncode}",
+  "render_finished_description": "description={description}",
+  "render_finished_none": "<none>",
+  "render_finished_none_2": "<none>",
+  "render_finished_environment_filtered_unset_allowed_present_names": "environment=filtered unset={join_filtered} allowed={allowed_names} present={present_names}; names not allowed by SHELL_ENV_KEEP or the env parameter are unset",
+  "text_stdout": "--- stdout ---\n{stdout}",
+  "text_stderr": "--- stderr ---\n{stderr}",
+  "text_no_output": "(no output)",
+  "render_running_command_still_running_after_s_handle": "command still running after {waited:.0f}s (handle {job_id}, pid {job_process_pid}). It keeps running. Poll it with action=\"poll\", handle=\"{value_3}\" for new output, action=\"wait\", handle=\"{value_4}\", timeout=N to block for it, or action=\"kill\", handle=\"{value_5}\" to stop it.",
+  "text_stdout_so_far": "--- stdout so far ---\n{stdout}",
+  "text_stderr_so_far": "--- stderr so far ---\n{stderr}",
+  "inline_read_limit_error_error_response_exceeds_byte_inline_read": "ERROR: response exceeds {DOWNLOAD_MAX_BYTES} byte inline read limit; use save= to stream the full response to disk",
+  "fetch_file_url_error_file_exceeds_byte_read_limit": "ERROR: file exceeds {DOWNLOAD_MAX_BYTES} byte read limit; use save= or fs_read",
+  "fetch_file_url_error_file_exceeds_byte_read_limit_2": "ERROR: file exceeds {DOWNLOAD_MAX_BYTES} byte read limit; use save= or fs_read",
+  "tools_seconds_this_call_blocks_before_returning": "Seconds this call blocks before returning a handle. The command is never killed by this.",
+  "tools_job_id_from_a_handle_line": "Job id from a HANDLE line, for poll/wait/kill.",
+  "tools_variable_names_to_pass_through_the": "Variable names to pass through. The child environment is filtered by default."
+}

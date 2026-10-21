@@ -19,19 +19,24 @@ Precedence, lowest to highest:
 from __future__ import annotations
 
 import copy
+import fcntl
 import json
 import math
 import os
 import re
 import shlex
 import sys
+import tempfile
 from dataclasses import dataclass
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Any
 
 from . import reasoning as _reasoning
 from . import messages as msgs
+from . import output
 
 # What a line typed while a turn runs does: now = join the running turn at its
 # next tool boundary, batch = one message after the turn, one = one turn per line.
@@ -136,6 +141,116 @@ def setting_help() -> dict[str, str]:
 
 # Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("REMOVE_TRASH", "bool", group="tools"),
+    SettingSpec("TRASH_BYTES_MAX", "int", group="tools"),
+    SettingSpec("TOOL_ARGUMENT_STRICT", "bool", group="runtime"),
+    SettingSpec("JAIL_CLEAN_PRIVATE_DIRS", "bool", group="shell"),
+    SettingSpec("JAIL_HIDE_NETWORK_FILESYSTEMS", "bool", group="shell"),
+    SettingSpec("JAIL_HIDE_OPERATOR_HOME", "bool", group="shell"),
+    SettingSpec("JAIL_BASE_HIDDEN_DIRS", "json", group="shell"),
+    SettingSpec("HOOK_SHELL_PROGRAM", "str", group="events"),
+    SettingSpec("SWARM_SPAWN_MAX", "int", group="shell"),
+    SettingSpec("SESSION_TEXT_AUTO_REFRESH", "bool", group="history"),
+    SettingSpec("SESSION_STATUS_MARK", "str", group="history"),
+    SettingSpec("SESSION_QUICK_REPLY_CHARACTERS_MAX", "int", group="history"),
+    SettingSpec("SESSION_QUICK_TOOL_CALLS_MAX", "int", group="history"),
+    SettingSpec("SESSION_QUICK_TURNS_MAX", "int", group="history"),
+    SettingSpec("SESSION_SCRIPT_MODES", "json", group="history"),
+    SettingSpec("SESSION_HIDDEN_KINDS", "json", group="history"),
+    SettingSpec("TOOL_INSTALLER_USER_AGENT", "str", group="tools"),
+    SettingSpec("DOWNLOAD_RETRY_WAIT", "int", group="tools"),
+    SettingSpec("DOWNLOAD_RETRIES_MAX", "int", group="tools"),
+    SettingSpec("DOWNLOAD_CONNECTIONS_MAX", "int", group="tools"),
+    SettingSpec("DOWNLOAD_SPLITS_MAX", "int", group="tools"),
+    SettingSpec("TOOL_BINARY_PATH_FALLBACK", "bool", group="tools"),
+    SettingSpec("TMP_AGE_MAX", "float", group="runtime"),
+    SettingSpec("DOTENV_WALK_UP", "bool", group="runtime"),
+    SettingSpec("ENDPOINT_DEFAULT_SHAPE", "str", group="providers"),
+    SettingSpec("ENDPOINT_DEFAULT_KEY", "str", secret=True, group="providers"),
+    SettingSpec("MODEL_CONTEXT_PROBE", "bool", group="runtime"),
+    SettingSpec("MODEL_CATALOG_AGE_MAX", "float", group="runtime"),
+    SettingSpec("MODEL_CATALOG_AUTO_REFRESH", "bool", group="runtime"),
+    SettingSpec("DEEPSEEK_DEFAULT_EFFORT", "str", group="providers"),
+    SettingSpec("CODEX_CLIENT_DETECT", "bool", group="providers"),
+    SettingSpec("CODEX_CLIENT_VERSION", "str", group="providers"),
+    SettingSpec("CODEX_USER_AGENT", "str", group="providers"),
+    SettingSpec("CODEX_ORIGINATOR", "str", group="providers"),
+    SettingSpec("CODEX_REASONING_SUMMARY", "str", group="providers"),
+    SettingSpec("CODEX_TEXT_VERBOSITY", "str", group="providers"),
+    SettingSpec("LOCAL_API_KEY_PLACEHOLDER", "str", group="providers"),
+    SettingSpec("JSRC_AUTO_MIGRATE", "bool", group="runtime"),
+    SettingSpec("PROJECT_INSTRUCTION_FILES", "json", group="runtime"),
+    SettingSpec("GLOBAL_INSTRUCTION_FILES", "json", group="runtime"),
+    SettingSpec("PASTE_IMAGE_TIMEOUT", "float", group="input"),
+    SettingSpec("PASTE_IMAGE_BACKENDS", "json", group="input"),
+    SettingSpec("NOTE_TIMESTAMP_FORMAT", "str", group="input"),
+    SettingSpec("SPELLCHECK_TIMEOUT", "float", group="input"),
+    SettingSpec("SPELLCHECK_LANGUAGE", "str", group="input"),
+    SettingSpec("SPINNER_FRAMES", "str", group="display"),
+    SettingSpec("SCROLLBACK_LINES_MAX", "int", group="display"),
+    SettingSpec("MARKDOWN_HARD_BREAKS", "bool", group="display"),
+    SettingSpec("MARKDOWN_INLINE_PADDING", "str", group="display"),
+    SettingSpec("EXCHANGE_ARGUMENT_STYLE", "str", group="display"),
+    SettingSpec("EXCHANGE_HEADER_STYLE", "str", group="display"),
+    SettingSpec("MARKDOWN_HEADING_FOUR_STYLE", "str", group="display"),
+    SettingSpec("MARKDOWN_HEADING_THREE_STYLE", "str", group="display"),
+    SettingSpec("MARKDOWN_HEADING_TWO_STYLE", "str", group="display"),
+    SettingSpec("SHELL_LIVE_LINES_MAX", "int", group="display"),
+    SettingSpec("ARGUMENT_CHARACTERS_MAX", "int", group="display"),
+    SettingSpec("DIFF_HUNK_GAP", "str", group="display"),
+    SettingSpec("DISPLAY_ELLIPSIS", "str", group="display"),
+    SettingSpec("ARGUMENT_NEWLINE_MARK", "str", group="display"),
+    SettingSpec("TABLE_RULE", "str", group="display"),
+    SettingSpec("EXCHANGE_RAIL", "str", group="display"),
+    SettingSpec("EXCHANGE_MARK_FAILED", "str", group="display"),
+    SettingSpec("EXCHANGE_MARK_OK", "str", group="display"),
+    SettingSpec("EXCHANGE_MARK_RUNNING", "str", group="display"),
+    SettingSpec("LOOP_BACKOFF_MAX", "int", group="runtime"),
+    SettingSpec("LOOP_FAILURES_MAX", "int", group="runtime"),
+    SettingSpec("LOOP_ATTEMPTS_MULTIPLIER", "int", group="runtime"),
+    SettingSpec("NOTEBOOK_CLEAR_OUTPUTS", "bool", group="notebook"),
+    SettingSpec("NOTEBOOK_REQUIRE_READ", "bool", group="notebook"),
+    SettingSpec("LSP_ALLOW_HOME_ROOT", "bool", group="lsp"),
+    SettingSpec("LSP_ENVIRONMENT_INHERIT", "bool", group="lsp"),
+    SettingSpec("TOOLBOX_REQUIRE_BOUND_NAMES", "bool", group="tools"),
+    SettingSpec("TOOLBOX_SEED_EXAMPLES", "bool", group="tools"),
+    SettingSpec("TYPESAFE_API_KEY", "str", secret=True, group="tools"),
+    SettingSpec("SUBAGENT_RESULT_SHARE", "bool", group="tools"),
+    SettingSpec("BROWSER_FALLBACK_FILE", "str", group="tools"),
+    SettingSpec("TERMINAL_ENVIRONMENT_INHERIT", "bool", group="tools"),
+    SettingSpec("TERMINAL_SHELL_PROGRAM", "str", group="tools"),
+    SettingSpec("BROWSE_ALLOW_PRIVATE_NETWORK", "bool", group="tools"),
+    SettingSpec("BROWSE_STEALTH", "bool", group="tools"),
+    SettingSpec("CONTEXT7_API_KEY", "str", secret=True, group="tools"),
+    SettingSpec("EXA_API_KEY", "str", secret=True, group="tools"),
+    SettingSpec("TAVILY_API_KEY", "str", secret=True, group="tools"),
+    SettingSpec("SERPER_API_KEY", "str", secret=True, group="tools"),
+    SettingSpec("SHELL_KILL_UNFINISHED", "bool", group="shell"),
+    SettingSpec("SHELL_MANAGED_PATH", "bool", group="shell"),
+    SettingSpec("SHELL_PIPEFAIL", "bool", group="shell"),
+    SettingSpec("SEARCH_ONE_FILE_SYSTEM", "bool", group="tools"),
+    SettingSpec("SEARCH_DEDUPLICATE", "bool", group="tools"),
+    SettingSpec("READ_DEDUPLICATE", "bool", group="tools"),
+    SettingSpec("EDIT_FUZZY", "bool", group="tools"),
+    SettingSpec("EDIT_READ_BYPASS_CHARACTERS", "int", group="tools"),
+    SettingSpec("WRITE_REQUIRE_OVERWRITE", "bool", group="tools"),
+    SettingSpec("FILE_REQUIRE_READ", "bool", group="tools"),
+    SettingSpec("TOOL_ERRORS_MAX", "int", group="runtime"),
+    SettingSpec("ANTHROPIC_REQUIRED_EFFORT", "str", group="runtime"),
+    SettingSpec("ANTHROPIC_THINKING_DISPLAY", "str", group="runtime"),
+    SettingSpec("ANTHROPIC_PROMPT_CACHE", "bool", group="runtime"),
+    SettingSpec("CLAUDE_PROXY_INCLUDE_REASONING", "bool", group="runtime"),
+    SettingSpec("DEEPSEEK_REASONING_TOKENS_MAX", "int", group="runtime"),
+    SettingSpec("COMPACTION_CONSECUTIVE_MAX", "int", group="compaction"),
+    SettingSpec("COMPACTION_SUMMARY_REQUEST_TOKENS_MAX", "int", group="compaction"),
+    SettingSpec("COMPACTION_HINT_TIMEOUT", "int", group="compaction"),
+    SettingSpec("COMPACTION_HINT_SHELL_PROGRAM", "str", group="compaction"),
+    SettingSpec("COMPACTION_OVERFLOW_KEEP_TOOL_RESULTS", "int", group="compaction"),
+    SettingSpec("COMPACTION_OVERFLOW_ROUNDS_MAX", "int", group="compaction"),
+    SettingSpec("RETRY_BACKOFF_JITTER", "float", group="runtime"),
+    SettingSpec("RETRY_BACKOFF_MAX", "float", group="runtime"),
+    SettingSpec("RETRY_BACKOFF_MULTIPLIER", "float", group="runtime"),
+    SettingSpec("RETRY_BACKOFF_START", "float", group="runtime"),
     # --- agent ---
     SettingSpec("DEFAULT_AGENT", "str", group="models"),
     # --- model ---
@@ -166,6 +281,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("KERNEL_VERBOSITY", "str", group="display", command="fset"),
     SettingSpec("KERNEL_LINES_MAX", "int", group="display", command="fset"),
     SettingSpec("EDITING_MODE", "str", group="input"),
+    SettingSpec("EXIT_ARM_TIMEOUT", "float", group="input"),
     SettingSpec("PASTE_IMAGE_KEY", "str", group="input"),
     SettingSpec("PASTE_COLLAPSE_LINES", "int", group="input"),
     SettingSpec("PASTE_COLLAPSE_CHARS", "int", group="input"),
@@ -217,6 +333,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
     # --- jail ---
     SettingSpec("JAIL_BIND", "json", group="shell"),
     SettingSpec("JAIL_HIDE", "json", group="shell"),
+    SettingSpec("SILENT_OVERFLOW_RECOVERY", "bool", group="runtime"),
+    SettingSpec("SIGNED_REASONING_RECOVERY", "bool", group="runtime"),
     # --- runtime ---
     SettingSpec("DEBUG_LOG", "bool", empty=EMPTY_OFF, group="runtime"),
     SettingSpec("PARALLEL_TOOLS_MAX", "int", group="runtime"),
@@ -229,6 +347,11 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("STEER_MODE", "str", group="runtime"),
     SettingSpec("REQUEST_LOG", "bool", empty=EMPTY_OFF, group="runtime"),
     SettingSpec("REQUEST_LOG_DIR", "str", empty=EMPTY_NONE, group="runtime"),
+    SettingSpec("TRANSCRIPT_USER_LABEL", "str", group="runtime"),
+    SettingSpec("TRANSCRIPT_ASSISTANT_LABEL", "str", group="runtime"),
+    SettingSpec("TRANSCRIPT_SPEAKER_FORMAT", "str", group="runtime"),
+    SettingSpec("TRANSCRIPT_TIMESTAMP_FORMAT", "str", group="runtime"),
+    SettingSpec("TRANSCRIPT_DISABLE_ALL_ON_ERROR", "bool", group="runtime"),
     SettingSpec("TRANSCRIPT_LOG", "bool", empty=EMPTY_OFF, group="runtime"),
     # --- hymem ---
     SettingSpec("HYMEM_URL", "str", group="runtime"),
@@ -275,6 +398,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 empty=EMPTY_NONE, group="tools"),
     SettingSpec("HTTP_USER_AGENT", "str", group="tools"),
     SettingSpec("JEV_MODEL", "str", group="tools"),
+    SettingSpec("SKILLS_DISABLED", "json", group="tools"),
     SettingSpec("TERMINAL_COLUMNS", "int", group="tools"),
     SettingSpec("TERMINAL_ROWS", "int", group="tools"),
     # --- lsp ---
@@ -349,7 +473,7 @@ def is_key_name(value: object) -> bool:
 # default/auto/unset synonyms. Clearing the setting back to provider-default is
 # `set -EFFORT`, never a magic value here.
 REASONING_EFFORT_VALUES: tuple[str, ...] = ("off", *_reasoning.EFFORT_LADDER[1:])
-_REASONING_EFFORT_ERROR = "expected " + "|".join(REASONING_EFFORT_VALUES)
+_REASONING_EFFORT_ERROR = msgs.EXPECTED_REASONING_EFFORT.format(choices="|".join(REASONING_EFFORT_VALUES))
 
 
 def steer_mode(value: Any) -> str:
@@ -452,9 +576,9 @@ def _coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         try:
             words = shlex.split(text)
         except ValueError as exc:
-            return None, f"expected a shell-quoted command: {exc}"
+            return None, msgs.EXPECTED_SHELL_QUOTED_COMMAND.words(exc=exc)
         if not words:
-            return None, "expected a command"
+            return None, msgs.EXPECTED_COMMAND.words()
         return text, None
     if spec.key == "EXTRA_HEADERS" and text:
         try:
@@ -533,6 +657,11 @@ def _coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
                 not isinstance(item, str) or not item.strip() for item in value
             ):
                 return None, msgs.EXPECTED_ENV_NAMES.said()
+        if spec.key == "SKILLS_DISABLED":
+            if not isinstance(value, list) or any(
+                not isinstance(item, str) or not item.strip() for item in value
+            ):
+                return None, msgs.EXPECTED_SKILL_NAMES.said()
         if spec.key in {"JAIL_BIND", "JAIL_HIDE"}:
             from . import jail
 
@@ -572,7 +701,7 @@ def parse_header_lines(text: str | None) -> dict[str, str]:
         name, sep, value = entry.partition(":")
         name, value = name.strip(), value.strip()
         if not sep or not _HEADER_NAME.fullmatch(name) or not _HEADER_VALUE.fullmatch(value):
-            raise ValueError(f"not a header (want 'Name: value'): {entry}")
+            raise ValueError(msgs.SETTING_NOT_A_HEADER_WANT_NAME_VALUE.format(entry=entry))
         headers[name] = value
     return headers
 
@@ -634,7 +763,7 @@ def get_dotted(settings: dict, path: tuple[str, ...], default: Any = None) -> An
 def _parse_dotted_key(key: str) -> tuple[str, ...]:
     parts = tuple(p for p in key.split(".") if p)
     if not parts:
-        raise ValueError(f"empty key: {key!r}")
+        raise ValueError(msgs.SETTING_EMPTY_KEY.format(key=key))
     return parts
 
 
@@ -755,7 +884,7 @@ def env_value(spec: SettingSpec, env: Mapping[str, str], missing: Any = None, *,
             # garbage in the env: skip rather than clobber a working value,
             # but say so — a silently dropped JS_BASE_URL costs an evening
             if warn:
-                msgs.warn(msgs.ENV_SETTING_IGNORED, name=name, error=error)
+                output.notice(msgs.ENV_SETTING_IGNORED, name=name, error=error)
             continue
         return value
     return missing
@@ -769,18 +898,23 @@ def env_value(spec: SettingSpec, env: Mapping[str, str], missing: Any = None, *,
 _package_cache: tuple[Path, dict] | None = None
 
 
-def _package_settings() -> dict:
+def _defaults_error(message: msgs.Message, **fields) -> BaseException:
+    return DefaultsError(msgs.line_for(message, file=sys.stderr, **fields))
+
+
+def _package_settings(*, error_factory=None) -> dict:
     """The settings `js/jsrc` sets, read once per path. Raises `DefaultsError`
     naming the file when it is missing, a line in it does not apply, or a
     registered setting has no line in it."""
     global _package_cache
+    fail = _defaults_error if error_factory is None else error_factory
     path = PACKAGE_JSRC
     if _package_cache is not None and _package_cache[0] == path:
         return _package_cache[1]
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
-        raise DefaultsError(msgs.line_for(msgs.DEFAULTS_MISSING, file=sys.stderr, path=path)) from None
+        raise fail(msgs.DEFAULTS_MISSING, path=path) from None
     from . import setcmd  # lazy: setcmd imports this module
 
     settings: dict = {}
@@ -789,8 +923,7 @@ def _package_settings() -> dict:
         result = setcmd.apply_config_line(settings, raw)
         if result.error or not result.handled:
             problem = result.error or msgs.DEFAULTS_NOT_A_SET_LINE.said()
-            raise DefaultsError(msgs.line_for(msgs.DEFAULTS_BAD_LINE, file=sys.stderr, location=f"{path}:{lineno}",
-                                              error=problem))
+            raise fail(msgs.DEFAULTS_BAD_LINE, location=f"{path}:{lineno}", error=problem)
         parsed = setcmd.split_command(raw)
         if parsed is not None:
             name = setcmd.first_word(parsed[1])[0] if parsed[0] in ("set", "fset") else parsed[0]
@@ -799,14 +932,15 @@ def _package_settings() -> dict:
                 listed.add(spec.key)
     unlisted = [spec.key for spec in REGISTRY if spec.key not in listed]
     if unlisted:
-        raise DefaultsError(msgs.line_for(msgs.DEFAULTS_UNLISTED, file=sys.stderr, path=path, keys=", ".join(unlisted)))
+        raise fail(msgs.DEFAULTS_UNLISTED, path=path, keys=", ".join(unlisted))
     _package_cache = (path, settings)
     return settings
 
 
-def seed_defaults() -> dict:
+def seed_defaults(*, error_factory=None) -> dict:
     """A fresh copy of the settings `js/jsrc` sets: the bottom config layer."""
-    return copy.deepcopy(_package_settings())
+    source = _package_settings() if error_factory is None else _package_settings(error_factory=error_factory)
+    return copy.deepcopy(source)
 
 
 def default_value(key: str) -> Any:
@@ -832,6 +966,43 @@ def knob_attr(obj: Any, attr: str, key: str) -> Any:
     value when ``obj`` has no such attribute."""
     value = getattr(obj, attr, None)
     return default_value(key) if value is None else value
+
+
+_live_settings: ContextVar[dict | None] = ContextVar("js_live_settings", default=None)
+
+
+# The store bound last in any context: a thread started without a copy of
+# the binding context reads it.
+_process_settings: dict | None = None
+# Startup policy read once per cwd, environment and invocation.
+_policy_cache: tuple[tuple, dict] | None = None
+
+
+def bind_live_settings(settings: dict | None) -> None:
+    """Bind the current invocation or turn's live store in this execution context."""
+    global _process_settings
+    _live_settings.set(settings)
+    _process_settings = settings
+
+
+def _startup_policy() -> dict:
+    global _policy_cache
+    from . import config
+
+    key = (os.getcwd(), frozenset(os.environ.items()), repr(sorted(config._invocation.items())))
+    if _policy_cache is None or _policy_cache[0] != key:
+        _policy_cache = (key, config.run_settings(migrate=False))
+    return _policy_cache[1]
+
+
+def live_value(key: str, settings: dict | None = None) -> Any:
+    """Read explicit settings, the bound turn store, or startup policy without migration."""
+    store = settings if settings is not None else _live_settings.get()
+    if store is None:
+        store = _process_settings
+    if store is None:
+        store = _startup_policy()
+    return knob(store, key)
 
 
 # ---------------------------------------------------------------------------
@@ -891,14 +1062,43 @@ def _apply_jsrc(path: Path, settings: dict, stack: list[Path], warnings: list[st
     return None
 
 
-def load_jsrc_files(paths: list[Path], settings: dict) -> list[str]:
-    """Apply each existing jsrc script's settings onto ``settings`` in order.
-    Returns a list of human-readable warnings (bad lines) — a single typo
-    never aborts the boot."""
+def _auto_migrate(paths: list[Path], settings: dict, env: dict[str, str] | None,
+                  extras: list[str] | None) -> bool:
+    """Resolve migration policy before any source file is rewritten."""
+    from . import fset
+
+    probe = copy.deepcopy(settings)
+    with fset.held():
+        for path in paths:
+            if path.is_file():
+                _apply_jsrc(path.resolve(strict=False), probe, [], [])
+    spec = SPEC_BY_KEY["JSRC_AUTO_MIGRATE"]
+    enabled = env_value(spec, os.environ if env is None else env, knob(probe, spec.key))
+    for extra in extras or ():
+        name, separator, raw = extra.partition("=")
+        if separator and name.strip() == spec.key:
+            value, error = coerce_value(spec, raw)
+            if error is None:
+                enabled = value
+    return bool(enabled)
+
+
+def load_jsrc_files(paths: list[Path], settings: dict, *, env: dict[str, str] | None = None,
+                    extras: list[str] | None = None, migrate: bool | None = None) -> list[str]:
+    """Apply each existing jsrc script's settings onto ``settings`` in order,
+    each first rewritten from the old setting names when it still holds them
+    (`rename.migrate_jsrc_file`). Returns a list of human-readable warnings
+    (bad lines) — a single typo never aborts the boot."""
+    from .rename import migrate_jsrc_file  # lazy: rename imports this module
+
+    migrate = _auto_migrate(paths, settings, env, extras) if migrate is None else migrate
     warnings: list[str] = []
     for path in paths:
         if path.exists():
-            _apply_jsrc(path.resolve(strict=False), settings, [], warnings)
+            target = path.resolve(strict=False)
+            if migrate:
+                migrate_jsrc_file(target)
+            _apply_jsrc(target, settings, [], warnings)
     return warnings
 
 
@@ -912,21 +1112,25 @@ def collect_settings(
     config_paths: list[Path] | None = None,
     env: dict[str, str] | None = None,
     extras: list[str] | None = None,
+    migrate: bool | None = None,
+    *,
+    defaults=None,
+    reset_formats=None,
 ) -> dict:
     """Run precedence: js/jsrc < jsrc files (in order) < env < CLI extras.
 
     ``config_paths`` defaults to ``~/.js/jsrc``. ``js.config.from_env``
     passes the global, project, and project-local files explicitly.
     """
-    settings = seed_defaults()
+    settings = (seed_defaults if defaults is None else defaults)()
     from . import fset
 
     # The /fset entries the jsrc files set are rebuilt with the settings.
-    fset.reset()
+    (fset.reset if reset_formats is None else reset_formats)()
 
     from . import paths as _paths
     paths = config_paths if config_paths is not None else [_paths.global_config_file()]
-    load_jsrc_files(paths, settings)
+    load_jsrc_files(paths, settings, env=env, extras=extras, migrate=migrate)
 
     apply_env_overrides(settings, env=env)
     if extras:
@@ -1018,6 +1222,8 @@ def jsrc_text(name: str, text: str) -> str:
 def _config_line_value(spec: SettingSpec, value: Any) -> str:
     """Render ``value`` as the right-hand side of a `set <key> <value>` line,
     so a saved line reloads to the same value (`jsrc_text`)."""
+    if spec.key == "EFFORT" and value == "none":
+        value = "off"
     return jsrc_text(spec.key, config_value_text(value))
 
 
@@ -1112,15 +1318,28 @@ def _edited_jsrc_lines(lines: list[str], wanted: dict[str, str | None], extra_li
     return lines + tail, changed + len(tail)
 
 
+@contextmanager
+def _locked_jsrc(path: Path) -> Iterator[None]:
+    """Hold the config directory across a jsrc read, edit and write."""
+    fd = os.open(path.resolve(strict=False).parent, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
 def _write_jsrc_lines(path: Path, wanted: dict[str, str | None], extra_lines: list[str],
                       unsets: dict[str, str] | None = None) -> int:
     """Edit the jsrc at ``path`` in place (`_edited_jsrc_lines`). Returns how
     many lines changed."""
-    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-    lines, changed = _edited_jsrc_lines(lines, wanted, extra_lines, unsets or {})
-    if changed:
-        _write_lines(path, lines)
-    return changed
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _locked_jsrc(path):
+        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+        lines, changed = _edited_jsrc_lines(lines, wanted, extra_lines, unsets or {})
+        if changed:
+            _write_lines(path, lines)
+        return changed
 
 
 def _serialized(lines: list[str]) -> str:
@@ -1128,8 +1347,18 @@ def _serialized(lines: list[str]) -> str:
 
 
 def _write_lines(path: Path, lines: list[str]) -> None:
+    path = path.resolve(strict=False)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_serialized(lines), encoding="utf-8")
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    os.close(fd)
+    staging = Path(name)
+    try:
+        staging.write_text(_serialized(lines), encoding="utf-8")
+        if path.exists():
+            staging.chmod(path.stat().st_mode & 0o7777)
+        os.replace(staging, path)
+    finally:
+        staging.unlink(missing_ok=True)
 
 
 def _reloaded(path: Path, text: str) -> tuple[dict, dict[str, str]]:
@@ -1168,6 +1397,14 @@ def save_settings_to_jsrc(
     one gets its line, or its clearing line, appended, which nothing after
     it can set back. ``extra_lines`` are `on` and `alias` lines. No copy of
     the file is made. Returns how many lines changed."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _locked_jsrc(path):
+        return _save_settings_to_jsrc(path, settings, extra_lines=extra_lines)
+
+
+def _save_settings_to_jsrc(
+    path: Path, settings: dict, *, extra_lines: list[str] | None = None,
+) -> int:
     from . import fset  # lazy: fset reads settings
 
     wanted: dict[str, str | None] = {}
@@ -1213,4 +1450,4 @@ def ensure_user_jsrc(path: Path) -> bool:
 def write_model_id(path: Path, model_id: str) -> None:
     """Make ``model_id`` the `MODEL` the jsrc at ``path`` sets, in place
     (`_write_jsrc_lines`). Raises OSError."""
-    _write_jsrc_lines(path, {"MODEL": f"set MODEL {model_id}"}, [])
+    _write_jsrc_lines(path, {"MODEL": _set_line(SPEC_BY_KEY["MODEL"], model_id)}, [])

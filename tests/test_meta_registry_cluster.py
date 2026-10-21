@@ -181,3 +181,33 @@ def test_good_exact_and_glob_selectors_still_resolve(capsys):
     assert "read" in names
     assert "wiki_write" in names and "wiki_convert" in names
     assert capsys.readouterr().err == ""
+
+
+def test_registry_accepts_assembly_suites_without_stock_agents():
+    from js.toolkit import Tool
+    from js.toolkit.registry import build_default_registry
+
+    tool = Tool("custom", "custom tool", lambda **kwargs: "ok", {})
+    registry = build_default_registry(prompts_root=(), suites=(("assembly", (tool,)),))
+    assert tuple(registry.by_name) == ("custom",)
+    assert registry.resolve("custom").source == "assembly"
+
+
+def test_fan_out_accepts_assembly_services():
+    context = ToolContext()
+    cfg = types.SimpleNamespace(lock_subagent_model=False, prompt_roots=())
+    registry = object()
+    seen = []
+    async def worker(idx, total, item, parent, parent_cfg, full_registry, *args):
+        seen.append((parent, parent_cfg, full_registry))
+        return item.upper()
+    context.subagent_assembly = meta.SubagentAssembly(
+        config_factory=lambda **kwargs: cfg,
+        registry_factory=lambda *args, **kwargs: registry,
+        worker=worker,
+    )
+    error, prepared = meta._prepare_fan_out(["work"], "worker", None, "", context)
+    assert error is None
+    items, factory = prepared
+    assert asyncio.run(factory(*items[0])) == "WORK"
+    assert seen == [(context, cfg, registry)]

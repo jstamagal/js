@@ -1,8 +1,11 @@
 """wiki_write: create or UPSERT a wiki page with correct frontmatter."""
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import secrets
+import shutil
 from pathlib import Path
 
 from ..core import ToolContext
@@ -92,33 +95,7 @@ def wiki_write(
         )
     if not vp.is_dir():
         return f"ERROR: no vault at {vp}"
-    folder = vp / KIND_FOLDER[k]
-    folder.mkdir(exist_ok=True)
     s = slugify(slug or title)
-    page = folder / f"{s}.md"
-    existed = page.exists()
-    if existed and not overwrite:
-        return (f"EXISTS: {page} already exists. Read it, merge (keep old content, add the new "
-                f"link, bump source_count), then call again with overwrite=true. This prevents clobber.")
-    if existed:
-        guard = context.require_read(page, "overwrite it")
-        if guard:
-            return guard
-
-    # Near-match guard for entity/concept: refuse silently-different slugs that
-    # describe the same thing (e.g. -prompting / -method / -specs variants).
-    # Synthesis can be near-similar legitimately; source has a 1:1 raw mapping
-    # anyway and is allowed.
-    if not page.exists() and not overwrite and not override_dedup and k in ("entity", "concept"):
-        near = _find_near_matches(folder, s)
-        if near:
-            listed = "\n  ".join(str(p) for p in near[:5])
-            return (f"NEAR-MATCH: existing page(s) likely cover this same {k}:\n  {listed}\n"
-                    f"Read the closest one, UPSERT into IT (add the new source link, bump "
-                    f"source_count, merge body) with overwrite=true.\n"
-                    f"Only pass override_dedup=true if you are CERTAIN this is a genuinely "
-                    f"distinct {k} that just shares vocabulary.")
-
     ptype = KIND_TYPE[k]
     tag_list = [KIND_TAG[ptype]] + [t.strip() for t in tags.split(",") if t.strip()]
     fm = ["---", f"type: {ptype}", f"tags: {json.dumps(tag_list, ensure_ascii=False)}"]
@@ -133,8 +110,46 @@ def wiki_write(
     head = f"# {title}" if title else f"# {s}"
     content = "\n".join(fm) + "\n\n" + head + "\n\n" + body.strip() + "\n"
     try:
-        with vault_lock(vp):
-            page.write_text(content, encoding="utf-8")
+        with vault_lock(vp, context):
+            folder = context.resolve_path(vp / KIND_FOLDER[k], write=True)
+            page = context.resolve_path(folder / f"{s}.md", write=True)
+            folder.mkdir(exist_ok=True)
+            existed = page.exists()
+            if existed and not overwrite:
+                return (f"EXISTS: {page} already exists. Read it, merge (keep old content, add the new "
+                        f"link, bump source_count), then call again with overwrite=true. This prevents clobber.")
+            if existed:
+                content_hash = hashlib.sha256(page.read_bytes()).hexdigest()[:16]
+                guard = context.require_read(page, "overwrite it", content_hash=content_hash)
+                if guard:
+                    return guard
+
+            # Entity and concept slugs are checked under the vault lock so
+            # concurrent writers see every page already published.
+            if not existed and not override_dedup and k in ("entity", "concept"):
+                near = _find_near_matches(folder, s)
+                if near:
+                    listed = "\n  ".join(str(p) for p in near[:5])
+                    return (f"NEAR-MATCH: existing page(s) likely cover this same {k}:\n  {listed}\n"
+                            f"Read the closest one, UPSERT into IT (add the new source link, bump "
+                            f"source_count, merge body) with overwrite=true.\n"
+                            f"Only pass override_dedup=true if you are CERTAIN this is a genuinely "
+                            f"distinct {k} that just shares vocabulary.")
+            context.snapshot(page)
+            data = content.encode("utf-8")
+            staged = page.with_name(f".{page.name}.{secrets.token_hex(8)}.tmp")
+            try:
+                with staged.open("xb") as stream:
+                    stream.write(data)
+                if existed:
+                    shutil.copymode(page, staged)
+                staged.replace(page)
+            finally:
+                staged.unlink(missing_ok=True)
+            # This context wrote every byte, so its next UPSERT needs no read.
+            written_hash = hashlib.sha256(data).hexdigest()[:16]
+            context.replace_read_coverage(page, written_hash, [], len(content.splitlines()), whole_file=True)
+            context.remember_content(page, written_hash, data)
     except OSError as exc:
         return f"ERROR: {exc}"
     return f"{'overwrote' if existed else 'wrote'} {page} (type: {ptype})"

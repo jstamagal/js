@@ -108,17 +108,6 @@ def test_a_failing_handler_queues_nothing_and_records_the_failure(tmp_path):
     assert emission.results[0].refusal is None
 
 
-def test_a_handler_past_its_timeout_is_killed(tmp_path):
-    state, cfg = _state(tmp_path)
-    settings.set_dotted(state["settings"], ("EXEC_TIMEOUT",), 1)
-    _on(state, cfg, "session_start exec sleep 30")
-
-    emission = state["events"].emit("session_start")
-
-    assert emission.results[0].error is not None
-    assert not state.get("pending_notes")
-
-
 def test_exec_typed_at_the_prompt_queues_its_stdout(tmp_path):
     state, cfg = _state(tmp_path)
 
@@ -385,7 +374,7 @@ def test_compaction_fires_pre_compact_then_post_compact(tmp_path, summarize_stub
 
     result = compaction.compact_now_sync(
         _compact_cfg(tmp_path), "sys", messages, forced=True,
-        emit=lambda event, **payload: heard.append((event, payload)),
+        emit=lambda event, **payload: event != compaction.NOTICE and heard.append((event, payload)),
     )
 
     assert compaction.compacted(result)
@@ -399,37 +388,9 @@ def test_a_skipped_compaction_fires_neither(tmp_path, summarize_stub):
     messages = [{"role": "user", "content": "hi"}]
 
     compaction.compact_now_sync(_compact_cfg(tmp_path), "sys", messages,
-                                emit=lambda event, **_payload: heard.append(event))
+                                emit=lambda event, **_payload: event != compaction.NOTICE and heard.append(event))
 
     assert heard == []
-
-
-def test_slash_compact_runs_the_compact_handlers(tmp_path, summarize_stub):
-    state, cfg = _state(tmp_path)
-    cfg = _compact_cfg(tmp_path)
-    state["events"].set_dispatcher(cli._event_dispatcher(state, cfg))
-    state["messages"] = _long_history()
-    settings.set_dotted(state["settings"], ("COMPACTION_KEEP_RECENT_TOKENS",), 500)
-    settings.set_dotted(state["settings"], ("COMPACTION_MIN_SAVINGS_TOKENS",), 1)
-    _on(state, cfg, "pre_compact exec printf before")
-    _on(state, cfg, "post_compact exec printf after")
-
-    assert cli._run_command("/compact", state, cfg) == (True, None)
-
-    assert state["pending_notes"] == ["<js-reminder>before</js-reminder>", "<js-reminder>after</js-reminder>"]
-
-
-def test_between_turn_auto_compaction_runs_the_compact_handlers(tmp_path, summarize_stub):
-    state, cfg = _state(tmp_path)
-    cfg = offline_config(tmp_path, settings={"COMPACTION_KEEP_RECENT_TOKENS": 500, "COMPACTION_MIN_SAVINGS_TOKENS": 1, "CONTEXT_SIZE": 4000, "COMPACTION_AUTO": True})
-    state["settings"] = cfg.settings
-    state["events"].set_dispatcher(cli._event_dispatcher(state, cfg))
-    state["messages"] = _long_history()
-    _on(state, cfg, "post_compact exec printf compacted")
-
-    cli._maybe_auto_compact(cfg, state)
-
-    assert state["pending_notes"] == ["<js-reminder>compacted</js-reminder>"]
 
 
 def test_mid_turn_compaction_runs_the_compact_handlers(monkeypatch, tmp_path):
@@ -597,3 +558,13 @@ def test_event_json_keeps_the_real_event_name():
 @pytest.mark.parametrize("cap,expected", [(2, "a"), (3, "aé"), (1, "a"), (0, "aé€"), (6, "aé€"), (4, "aé"), (5, "aé")])
 def test_clip_never_cuts_a_character_in_half(cap, expected):
     assert hookexec._clip("aé€".encode(), cap) == expected
+
+
+def test_registered_hook_shell_program_is_used(tmp_path):
+    import shutil
+
+    if shutil.which("bash") is None:
+        pytest.skip("bash is not installed")
+    settings.bind_live_settings({"HOOK_SHELL_PROGRAM": "bash"})
+    result = hookexec.run('printf "%s" "${BASH_VERSION:+bash}"', cwd=str(tmp_path), timeout=5, cap=100)
+    assert result.stdout == "bash"

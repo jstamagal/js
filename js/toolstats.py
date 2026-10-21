@@ -114,7 +114,8 @@ def summarize(path: Path) -> dict:
                         parsed = json.loads(arguments) if isinstance(arguments, str) else dict(arguments)
                     except (json.JSONDecodeError, TypeError, ValueError):
                         parsed = {}
-                    habits.update(classify_shell_command(str(parsed.get("command") or "")))
+                    if isinstance(parsed, dict):
+                        habits.update(classify_shell_command(str(parsed.get("command") or "")))
         elif role == "tool":
             content = message.get("content")
             text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)

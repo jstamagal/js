@@ -81,10 +81,6 @@ def _fake_stream_result(text: str) -> ModelStreamResult:
     )
 
 
-def test_package_default_agent_is_defaultagent():
-    assert settings.default_value("DEFAULT_AGENT") == "defaultagent"
-
-
 @pytest.mark.parametrize(("js_agent", "argv", "expected"), LAYERS)
 def test_config_resolves_agent_by_layer(monkeypatch, tmp_path, js_agent, argv, expected):
     _home(monkeypatch, tmp_path, js_agent)

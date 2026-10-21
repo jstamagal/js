@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import atexit
 import base64
-import io
 import json
 import math
 import os
@@ -44,12 +43,11 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .. import fset as _fset
+from .. import output
 from .. import jail
 from .. import messages as msgs
 from .. import paths
@@ -59,16 +57,15 @@ from . import kernel_bridge
 from .core import Tool, ToolContext, ToolOutput, current_observer, current_registry
 from .descriptions import load_description
 from .sanitize import int_or_default, text_or_default
+from ..prompt_text import load_catalog
+
+_PROMPTS = load_catalog('toolkit_kernel')
+
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 MISSING_DEPS = (
-    "ERROR: the kernel tool needs the {missing} package{plural}, which "
-    "{verb} not importable in this environment. Install js[kernel], or run "
-    "`uv sync --inexact --extra kernel` in this checkout. Enable it with "
-    "`/set PYTHON_KERNEL on`. The extra is declared in pyproject.toml; "
-    "`just sync` includes it for development, while `just install` creates the launcher. "
-    "Every other tool is unaffected."
+    _PROMPTS['default_error_the_kernel_tool_needs_the']
 )
 
 # Names IPython and js put in the user namespace themselves (`tools` is the js
@@ -160,224 +157,30 @@ def resolve_verbosity(context: Any, override: str = "") -> str:
     return _settings.default_value("KERNEL_VERBOSITY")
 
 
-def render_max_lines(context: Any) -> int:
-    value = int_or_default(getattr(context, "kernel_render_max_lines", None),
-                           _settings.default_value("KERNEL_LINES_MAX"), minimum=1)
-    return value
-
-
-# --------------------------------------------------------------------------
-# Terminal rendering
-#
-# Two audiences, two renderings. The MODEL gets the return value of `kernel()`:
-# always complete, always the same shape, capped only by
-# TOOL_RESULT_MAX. The OPERATOR gets a rich panel on stderr whose
-# detail the verbosity knob controls.
-#
-# stderr, not stdout, so `js -p '...' | jq` keeps working while the panel still
-# reaches a terminal. Verbosity deliberately does NOT reshape the model-facing
-# string: a display knob that silently deleted the NAMESPACE line would break
-# the one property this whole tool rests on.
-# --------------------------------------------------------------------------
-
-
-def _style(role: str) -> str:
-    """Rich style for /fset colour entry ``role``; "" when it has none."""
-    return _fset.hex_for(role) or ""
-
-
-def _piece(runs: list, style: str = "") -> Any:
-    """A message's colour runs (`Message.body_runs`) as rich text on ``style``."""
-    return _fset.to_rich(runs, style)
-
-
-def _console() -> Any:
-    """Where the kernel panel draws: stderr, in the colour it takes
-    (`messages.color_system`), one column short of the window as every
-    block js draws (`display.block_width`)."""
-    from rich.console import Console
-
-    from ..display import block_width
-
-    system = msgs.color_system(sys.stderr)
-    return Console(file=sys.stderr, width=block_width(), soft_wrap=False, highlight=False, color_system=system,
-                   force_terminal=system is not None, no_color=system is None)
-
-
-def _clip(text: str, limit: int | None) -> tuple[str, int]:
-    lines = text.splitlines()
-    if limit is None or len(lines) <= limit:
-        return text, 0
-    return "\n".join(lines[:limit]), len(lines) - limit
-
-
-def _drawn(draw: Callable[[Any, int | None], None], limit: int | None) -> str:
-    """What ``draw`` prints with sections capped at ``limit`` lines, as text
-    for stderr."""
-    from rich.console import Console
-
-    from ..display import block_width
-
-    system = msgs.color_system(sys.stderr)
-    console = Console(file=io.StringIO(), width=block_width(), soft_wrap=False, highlight=False,
-                      color_system=system, force_terminal=system is not None, no_color=system is None)
-    draw(console, limit)
-    return console.file.getvalue()
-
-
-def _show(draw: Callable[[Any, int | None], None], limit: int) -> None:
-    """Print a kernel render. KERNEL_LINES_MAX caps it only on the screen,
-    as a fold the reasoning_toggle key unfolds to the whole render; anywhere
-    else nothing can unfold it, so it prints whole."""
-    folded = getattr(sys.stderr, "write_folded", None)
-    if callable(folded):
-        capped, whole = _drawn(draw, limit), _drawn(draw, None)
-        if capped != whole:
-            folded(capped, whole)
-            return
-    draw(_console(), None)
-
-
-def render_execution(
-    context: Any,
-    *,
-    level: str,
-    code: str,
-    stdout: str,
-    stderr: str,
-    display: str,
-    error: str,
-    elapsed: float,
-    cell: int,
-    added: list[str],
-    removed: list[str],
-    namespace: list[str],
-    images: list[Path],
-    interrupted: bool,
-) -> None:
-    if level == "quiet" and not error and not interrupted:
-        return
-    from ..display import clean
-
-    code, stdout, stderr, display, error = (clean(part) for part in (code, stdout, stderr, display, error))
-    _show(lambda console, limit: _draw_execution(
-        console, limit, level=level, code=code, stdout=stdout, stderr=stderr, display=display, error=error,
-        elapsed=elapsed, cell=cell, added=added, removed=removed, namespace=namespace, images=images,
-        interrupted=interrupted), render_max_lines(context))
-
-
-def _draw_execution(console: Any, limit: int | None, *, level: str, code: str, stdout: str, stderr: str,
-                    display: str, error: str, elapsed: float, cell: int, added: list[str], removed: list[str],
-                    namespace: list[str], images: list[Path], interrupted: bool) -> None:
-    """One kernel call's render on ``console``, each section capped at
-    ``limit`` lines (None for whole)."""
-    from rich.panel import Panel
-    from rich.syntax import Syntax
-    from rich.table import Table
-    from rich.text import Text
-
-    dim = _style("COLOR_DIM")
-
-    if level == "quiet":
-        # Severity is the colour: warn for an interrupt, error for a failure.
-        style = "bold " + _style("COLOR_WARN" if interrupted and not error else "COLOR_ERROR")
-        body, hidden = _clip(error, limit) if error else ("", 0)
-        said = Text(" " + body) if error else Text(" ") + _piece(msgs.KERNEL_CELL_INTERRUPTED.body_runs())
-        console.print(_piece(msgs.KERNEL_CELL.body_runs(cell=cell), style=style) + said)
-        if hidden:
-            console.print(Text("  ") + _piece(msgs.KERNEL_MORE_LINES.body_runs(count=hidden), style=dim))
-        return
-
-    grid = Table.grid(padding=(0, 1))
-    grid.add_column(no_wrap=True, style="bold " + _style("COLOR_ACCENT"))
-    grid.add_column(overflow="fold")
-
-    shown_code, code_hidden = _clip(code.strip(), limit)
-    grid.add_row("code", Syntax(shown_code, "python", theme=_fset.code_style(),
-                                word_wrap=True, background_color="default"))
-    if code_hidden:
-        grid.add_row("", _piece(msgs.KERNEL_MORE_CODE_LINES.body_runs(count=code_hidden), style=dim))
-
-    if level == "verbose":
-        sections = (("stdout", stdout, ""), ("stderr", stderr, _style("COLOR_WARN")),
-                    ("display", display, _style("COLOR_ACCENT")))
-    else:
-        merged = "".join(part for part in (stdout, stderr, display) if part)
-        sections = (("out", merged, ""),)
-
-    for label, body, style in sections:
-        if not body.strip():
-            continue
-        shown, hidden = _clip(body.rstrip("\n"), limit)
-        grid.add_row(label, Text(shown, style=style or None))
-        if hidden:
-            grid.add_row("", _piece(msgs.KERNEL_MORE_LINES.body_runs(count=hidden),
-                                  style=dim))
-
-    if error:
-        shown, hidden = _clip(error.rstrip("\n"), limit)
-        grid.add_row("error", Text(shown, style=_style("COLOR_ERROR")))
-        if hidden:
-            grid.add_row("", _piece(msgs.KERNEL_MORE_LINES.body_runs(count=hidden),
-                                  style=dim))
-    if interrupted:
-        grid.add_row("stopped", _piece(msgs.KERNEL_STOPPED.body_runs(), style="bold " + _style("COLOR_WARN")))
-    if added:
-        grid.add_row("defined", Text(", ".join(added), style=_style("COLOR_OK")))
-    if removed:
-        grid.add_row("gone", Text(", ".join(removed), style=_style("COLOR_ERROR")))
-    grid.add_row("namespace", Text(", ".join(namespace)) if namespace else _piece(msgs.NONE_VALUE.body_runs()))
-    for image in images:
-        grid.add_row("image", Text(str(image), style=_style("COLOR_ACCENT")))
-
-    console.print(Panel(grid, title=_piece(msgs.KERNEL_PANEL_TITLE.body_runs(cell=cell)),
-                        subtitle=f"{elapsed:.2f}s", title_align="left",
-                        subtitle_align="right", border_style=_style("COLOR_SEPARATOR")))
+def render_execution(context: Any, **fields: Any) -> None:
+    """Emit the execution's fields for the sink to render."""
+    output.emit(output.event("kernel_execution", context=context, **fields))
 
 
 def render_event(context: Any, level: str, message: str, *, style: str = "COLOR_ACCENT",
                  verbose_only: bool = False) -> None:
-    """Lifecycle/activity note made of text: kernel died, tool saved, a
-    toolbox listing. The text is cleaned; see `render_note`."""
-    from ..display import clean
-
-    lines = [[("", line)] for line in clean(message).splitlines()]
-    render_note(context, level, lines, style=style, verbose_only=verbose_only)
+    """Emit a lifecycle or activity note as text."""
+    output.emit(output.event("kernel_note", context=context, kind="event", level=level,
+                             content=message, style=style, verbose_only=verbose_only))
 
 
 def render_entry(context: Any, level: str, runs: list, *, style: str = "COLOR_ACCENT",
                  verbose_only: bool = False) -> None:
-    """Lifecycle note from an entry's colour runs (`Message.body_runs`), drawn
-    as its format says: kernel started, restarted."""
-    render_note(context, level, _fset.split_lines(runs), style=style, verbose_only=verbose_only)
+    """Emit a catalogue entry's colour runs."""
+    output.emit(output.event("kernel_note", context=context, kind="entry", level=level,
+                             content=runs, style=style, verbose_only=verbose_only))
 
 
 def render_note(context: Any, level: str, lines: list, *, style: str = "COLOR_ACCENT",
                 verbose_only: bool = False) -> None:
-    """Lines of colour runs as `· ` notes in ``style``, the /fset colour entry
-    a run without its own colour is drawn in.
-
-    Multi-line messages print one line per line. Folding them onto one line with
-    separators is how a five-tool toolbox listing became an unreadable ribbon.
-    """
-    if level == "quiet":
-        return
-    if verbose_only and level != "verbose":
-        return
-    from rich.text import Text
-
-    dim = _style("COLOR_DIM")
-    lines = lines or [[]]
-
-    def draw(console: Any, limit: int | None) -> None:
-        shown = lines if limit is None else lines[:limit]
-        for runs in shown:
-            console.print(Text("· ", style=dim) + _piece(runs, _style(style)))
-        if len(shown) < len(lines):
-            console.print(Text("  ") + _piece(msgs.KERNEL_EVENT_MORE_LINES.body_runs(count=len(lines) - len(shown)),
-                                              style=dim))
-
-    _show(draw, render_max_lines(context))
+    """Emit a note's lines of colour runs."""
+    output.emit(output.event("kernel_note", context=context, kind="note", level=level,
+                             content=lines, style=style, verbose_only=verbose_only))
 
 
 # --------------------------------------------------------------------------
@@ -547,6 +350,8 @@ class KernelSession:
             self.start()
             return
         self.manager.restart_kernel(now=True)
+        if self.client is not None:
+            self.client.stop_channels()
         self.client = self.manager.blocking_client()
         self.client.start_channels()
         self.client.wait_for_ready(timeout=60)
@@ -635,7 +440,7 @@ def missing_dependencies() -> str:
 def get_session(context: Any) -> tuple[KernelSession | None, str, bool]:
     """(session, error, started_now). Never raises; a failure comes back as text."""
     if not getattr(context, "kernel_enabled", False):
-        return None, "ERROR: kernel/toolbox disabled; use /set PYTHON_KERNEL on (requires js[kernel]).", False
+        return None, _PROMPTS['get_session_error_kernel_toolbox_disabled_use_set'], False
     problem = missing_dependencies()
     if problem:
         return None, problem, False
@@ -881,14 +686,17 @@ def run_cell(session: KernelSession, code: str, timeout: int, *,
     is interrupted, never restarted.
     """
     started = time.monotonic()
+    last = session.last
     handle = session.submit(code, store_history=store_history)
+    session.last = last
     collect_until(session, handle, started + timeout)
     if not handle.finished and not handle.died:
         handle.timed_out = True
         interrupt_and_collect(session, handle)
     result = _render_messages(session, handle.messages, marker)
     handle.delivered = len(handle.messages)
-    session.forget(handle)
+    if handle.finished or handle.died:
+        session.forget(handle)
     if not handle.died:
         _drain_shell(session, time.monotonic() + 1)
     result.timed_out = handle.timed_out
@@ -941,8 +749,11 @@ def refresh_namespace(session: KernelSession) -> tuple[list[str], list[str]]:
     name it defined appears without anything having to record the definition.
     `session.namespace` holds the callables and their signatures; `added` and
     `removed` cover every visible name, so an import or a plain value is
-    reported as defined even though it is not callable.
+    reported as defined even though it is not callable. While a cell runs,
+    the last completed listing stays intact.
     """
+    if busy_handle(session) is not None:
+        return [], []
     probe = _NAMESPACE_PROBE % {"noise": set(_IPYTHON_NOISE)}
     result = run_cell(session, probe, timeout=20, store_history=False, marker="__JS_NS__")
     if result.timed_out or result.died or not result.marker:
@@ -1031,9 +842,7 @@ def _died(context: ToolContext, session: KernelSession, level: str, notes: list[
     session.handles = {}
     session.current = ""
     message = (
-        f"ERROR: the kernel died during execution (cell {cell}). "
-        "Everything defined in this session is gone; call again with restart=true "
-        "and rebuild."
+        _PROMPTS['died_error_the_kernel_died_during_execution'].format(cell=cell)
     )
     render_event(context, level, message, style="COLOR_ERROR")
     return "\n".join([*notes, message, "NAMESPACE (none)"])
@@ -1041,11 +850,8 @@ def _died(context: ToolContext, session: KernelSession, level: str, notes: list[
 
 def _busy(context: ToolContext, session: KernelSession, level: str, notes: list[str],
           live: CellHandle) -> str:
-    message = (f"ERROR: the previous cell is still running ({live.first_line()}); "
-               "interrupt it or wait")
-    hint = (f'handle {live.id}: action="poll" for new output, action="interrupt" to stop it, '
-            'action="wait" to block for it. A cell blocked in a syscall that ignores '
-            "SIGINT needs restart=true")
+    message = (_PROMPTS['busy_error_the_previous_cell_is_still'].format(live_first_line=live.first_line()))
+    hint = (_PROMPTS['busy_handle_action_poll_for_new_output'].format(live_id=live.id))
     render_event(context, level, message, style="COLOR_ERROR")
     return cap_for_model("\n".join([*notes, message, hint, f"HANDLE {live.id} RUNNING"]), context)
 
@@ -1080,7 +886,7 @@ def kernel(
     if context is None:
         return "ERROR: missing ToolContext"
     if not context.kernel_enabled:
-        return "ERROR: kernel/toolbox disabled; use /set PYTHON_KERNEL on (requires js[kernel])."
+        return _PROMPTS['kernel_error_kernel_toolbox_disabled_use_set']
     code = text_or_default(code)
     limit = _positive_seconds(timeout, 120.0)
     mode = text_or_default(action, "run").strip().lower() or "run"
@@ -1113,14 +919,13 @@ def kernel(
     if mode in ("poll", "interrupt", "wait"):
         live = pick_handle(session, target)
         if live is None:
-            message = (f"ERROR: no cell {('handle ' + target) if target else 'is running'}; "
-                       "nothing to poll, interrupt, or wait for")
+            message = (_PROMPTS['kernel_error_no_cell_nothing_to_poll'].format(value_0='handle ' + target if target else 'is running'))
             render_event(context, level, message, style="COLOR_ERROR")
             return cap_for_model("\n".join([*notes, message]), context)
         if mode == "poll":
             output = poll_cell(session, live)
-            status = (f"cell {live.id} finished ({live.age():.1f}s)." if live.finished
-                      else f"cell {live.id} is still running ({live.age():.1f}s).")
+            status = (_PROMPTS['kernel_cell_finished_s'].format(live_id=live.id, live_age=live.age()) if live.finished
+                      else _PROMPTS['kernel_cell_is_still_running_s'].format(live_id=live.id, live_age=live.age()))
             return _report(context, session, level, notes, live, output, status=status)
         if mode == "interrupt":
             already_finished = live.finished
@@ -1128,21 +933,19 @@ def kernel(
                 interrupt_and_collect(session, live)
             output = poll_cell(session, live)
             if already_finished:
-                status = f"cell {live.id} had already finished ({live.age():.1f}s)."
+                status = _PROMPTS['kernel_cell_had_already_finished_s'].format(live_id=live.id, live_age=live.age())
             elif live.finished:
-                status = f"interrupt sent to cell {live.id}; it stopped ({live.age():.1f}s)."
+                status = _PROMPTS['kernel_interrupt_sent_to_cell_it_stopped'].format(live_id=live.id, live_age=live.age())
             else:
-                status = (f"interrupt sent to cell {live.id}; it is still running "
-                          f"({live.age():.1f}s).")
+                status = (_PROMPTS['kernel_interrupt_sent_to_cell_it_is'].format(live_id=live.id, live_age=live.age()))
             return _report(context, session, level, notes, live, output, status=status)
         output = wait_cell(session, live, limit)
-        status = (f"cell {live.id} finished ({live.age():.1f}s)." if live.finished
-                  else f"cell {live.id} is still running ({live.age():.1f}s).")
+        status = (_PROMPTS['kernel_cell_finished_s_2'].format(live_id=live.id, live_age=live.age()) if live.finished
+                  else _PROMPTS['kernel_cell_is_still_running_s_2'].format(live_id=live.id, live_age=live.age()))
         return _report(
             context, session, level, notes, live, output, status=status,
             timed_out_note=(
-                f"INTERRUPTED after {limit:g}s. The cell was stopped with a KeyboardInterrupt; "
-                "the namespace and everything defined in it are intact."
+                _PROMPTS['kernel_interrupted_after_s_the_cell_was'].format(limit=limit)
                 if live.timed_out else ""),
         )
 
@@ -1189,8 +992,7 @@ def kernel(
         parts: list[str] = list(notes)
         if live.timed_out:
             parts.append(
-                f"INTERRUPTED after {limit:g}s. The cell was stopped with a KeyboardInterrupt; "
-                "the namespace and everything defined in it are intact."
+                _PROMPTS['kernel_interrupted_after_s_the_cell_was_2'].format(limit=limit)
             )
         parts.extend(_output_parts(output))
         # Images are reported before the footer so every result really does end with
@@ -1204,8 +1006,7 @@ def kernel(
 
     parts = [
         *notes,
-        f"cell {session.executions} is still running after {window:.1f}s (handle {live.id}). "
-        f'Poll it with action="poll", handle="{live.id}"; interrupt it with action="interrupt".',
+        _PROMPTS['kernel_cell_is_still_running_after_s'].format(session_executions=session.executions, window=window, live_id=live.id, value_3=live.id),
         *_output_parts(output),
         f"HANDLE {live.id} RUNNING",
     ]

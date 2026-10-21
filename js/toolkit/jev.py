@@ -13,15 +13,19 @@ from typing import Any
 
 from .core import Tool, ToolContext
 from .descriptions import load_description
+from ..prompt_text import load_catalog
+
+_PROMPTS = load_catalog('toolkit_jev')
+
 
 API_KEY_ENV = "TYPESAFE_API_KEY"
 KINDS = ("noul", "choice", "score")
 
 
-def _client(model: str) -> Any:
+def _client(model: str, api_key: str | None = None) -> Any:
     from typesafe_sdk import TypeSafeClient
 
-    return TypeSafeClient(model=model)
+    return TypeSafeClient(model=model, api_key=api_key)
 
 
 def _state(raw: str) -> Any:
@@ -56,7 +60,10 @@ def _question(item: Any) -> dict[str, Any] | str:
     options = item.get("options") or []
     if not isinstance(options, list) or len(options) < 2:
         return f"a {kind} question needs at least two options"
-    asked["criteria"] = _options(options) if kind == "choice" else [str(o) for o in options]
+    criteria = _options(options) if kind == "choice" else [str(o) for o in options]
+    if kind == "choice" and len(criteria) != len(options):
+        return "choice option names must be unique"
+    asked["criteria"] = criteria
     return asked
 
 
@@ -100,14 +107,15 @@ def jev(
         if check_order and built["type"] == "choice":
             reversed_criteria = dict(reversed(list(built["criteria"].items())))
             asked[f"q{n}_reversed"] = dict(built, criteria=reversed_criteria)
-    if not os.environ.get(API_KEY_ENV, "").strip():
+    configured_key = context.typesafe_api_key.strip()
+    if not (configured_key or os.environ.get(API_KEY_ENV, "").strip()):
         return f"ERROR: {API_KEY_ENV} is not set"
     model = getattr(context, "jev_model", None) or "jev-latest"
     try:
-        with _client(model) as client:
+        with (_client(model, api_key=configured_key) if configured_key else _client(model)) as client:
             response = client.system_one(_state(state), asked)
     except ImportError:
-        return "ERROR: typesafe-sdk is not installed; run `just sync`"
+        return _PROMPTS['jev_error_typesafe_sdk_is_not_installed']
     except Exception as exc:  # noqa: BLE001 - the SDK's errors reach the model as text
         return f"ERROR: {type(exc).__name__}: {exc}"
     answers = getattr(response, "answers", None) or {}
@@ -121,8 +129,8 @@ def jev(
         flipped = answers.get(f"{key}_reversed")
         if flipped is not None:
             stable = _field(flipped, "choice") == _field(answers[key], "choice")
-            verdict = "stable" if stable else "FLIPPED: order-sensitive, do not trust"
-            lines.append(f"   reversed: {_format(flipped)}; order check: {verdict}")
+            verdict = _PROMPTS['jev_stable'] if stable else _PROMPTS['jev_flipped_order_sensitive_do_not_trust']
+            lines.append(_PROMPTS['jev_reversed_order_check'].format(format_flipped=_format(flipped), verdict=verdict))
     return "\n".join(lines)
 
 

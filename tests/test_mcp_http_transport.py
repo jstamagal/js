@@ -35,6 +35,7 @@ class State:
         self.post_started = threading.Event()
         self.release_post = threading.Event()
         self.post_finished = threading.Event()
+        self.long_post_followup = False
 
     def record(self, method, headers, body=None):
         with self.lock:
@@ -87,6 +88,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(payload)
                 self.wfile.flush()
+                if self.state.long_post_followup:
+                    self.state.release_post.wait(3)
+                    self.wfile.write(b'data: {"jsonrpc":"2.0","method":"still-streaming"}\n\n')
+                    self.wfile.flush()
                 self.state.stop.wait(3)
             else:
                 self._body(200, "text/event-stream; charset=utf-8", payload, session=True)
@@ -109,7 +114,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(b"id: event-one\nretry: 1\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"first\"}\n\n")
             self.wfile.flush()
             return
-        if self.state.timeout_reconnect and self.state.gets == 1:
+        if self.state.gets <= self.state.timeout_reconnect:
             self.state.stop.wait(0.2)
             return
         notification = self.state.notification
@@ -139,9 +144,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def server():
+def server(handler=Handler):
     state = State()
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     httpd.state = state
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()

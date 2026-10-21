@@ -1,0 +1,4 @@
+{
+  "server_for_under_c_it_runs_in_the": " Under -C it runs in the jail; JAIL_BIND adds paths it needs.",
+  "lsp_published_no_diagnostics_within_s_lsp": "{display}: {spec_name} published no diagnostics within {timeout:g}s (LSP_TIMEOUT); it may still be loading the workspace. Call again."
+}

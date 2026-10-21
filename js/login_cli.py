@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 import curses
 import os
 import sys
 from getpass import getpass
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
 import ai
@@ -26,16 +26,21 @@ from .logins import (
     save_login,
     test_login,
     test_login_with_metadata,
+    update_login,
 )
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('login_cli')
+
 
 _API_SHAPES: list[tuple[str, str, str]] = [
-    ("openai-completions", "openai", "OpenAI-compatible chat completions"),
-    ("openai-responses", "openai", "OpenAI Responses-style endpoint"),
-    ("anthropic-custom", "anthropic", "Anthropic-compatible endpoint"),
-    ("cliproxyapi", "openai", "CLIProxyAPI / OpenAI-compatible proxy with optional headers"),
+    ("openai-completions", "openai", msgs.LOGIN_SHAPE_CHAT_COMPLETIONS.format()),
+    ("openai-responses", "openai", msgs.LOGIN_SHAPE_RESPONSES.format()),
+    ("anthropic-custom", "anthropic", msgs.LOGIN_SHAPE_ANTHROPIC.format()),
+    ("cliproxyapi", "openai", msgs.LOGIN_SHAPE_PROXY.format()),
 ]
 _API_SHAPE_IDS = {shape_id for shape_id, _sdk, _desc in _API_SHAPES}
-_SECONDARY_TEST_PROMPT = "1+1="
+_SECONDARY_TEST_PROMPT = _PROMPTS['default_1_1']
 _MODEL_LIST_LIMIT = 20
 
 
@@ -65,6 +70,39 @@ def _use_terminal_colors() -> None:
         curses.use_default_colors()
 
 
+CursesKeymap = Mapping[str, tuple[int, ...]]
+_CURSES_TEXT_KEYS: CursesKeymap = {
+    "choose": (10, 13, curses.KEY_ENTER), "back": (27, 3),
+    "backspace": (curses.KEY_BACKSPACE, 127, 8),
+}
+LOGIN_KEYMAPS: dict[str, CursesKeymap] = {
+    "list": {"search": (ord("/"),), "up": (curses.KEY_UP, ord("k")),
+             "down": (curses.KEY_DOWN, ord("j")), "page_up": (curses.KEY_PPAGE,),
+             "page_down": (curses.KEY_NPAGE,), "first": (curses.KEY_HOME,), "last": (curses.KEY_END,),
+             "toggle": (ord(" "),), "edit": (ord("e"),), "all": (ord("a"), ord("A")),
+             "none": (ord("n"), ord("N")), "choose": (10, 13, curses.KEY_ENTER),
+             "quit": (ord("q"), 27, 3)},
+    "search": {"choose": (10, 13, curses.KEY_ENTER), "back": (27,), "quit": (3,),
+               "backspace": (curses.KEY_BACKSPACE, 127, 8)},
+}
+
+
+def _curses_action(keymap: CursesKeymap, key: int) -> str | None:
+    return next((action for action, values in keymap.items() if key in values), None)
+
+
+def _curses_hint(message: msgs.Message, keymap: CursesKeymap, defaults: CursesKeymap) -> msgs.Message:
+    names = {curses.KEY_UP: "up", curses.KEY_DOWN: "down", curses.KEY_PPAGE: "pageup",
+             curses.KEY_NPAGE: "pagedown", curses.KEY_ENTER: "enter", 10: "enter", 13: "enter",
+             27: "escape", 3: "c-c", ord(" "): "space"}
+
+    def convert(table):
+        return {action: tuple((names.get(key, chr(key)),) for key in values)
+                for action, values in table.items()}
+
+    return message.with_keymap(convert(keymap), convert(defaults))
+
+
 def _curses_picker(
     stdscr: curses.window,
     rows: list[tuple[str, str]],
@@ -73,6 +111,7 @@ def _curses_picker(
     preselected: set[int] | None = None,
     details: list[list[str]] | None = None,
     on_edit: Callable[[curses.window, str], str | None] | None = None,
+    keymaps: Mapping[str, CursesKeymap] | None = None,
 ) -> list[int] | None:
     """Searchable chooser/checklist; selections always use original row indices.
 
@@ -81,6 +120,7 @@ def _curses_picker(
     With ``on_edit``, e calls it with the row's label and shows the
     annotation it returns on the row.
     """
+    keymaps = LOGIN_KEYMAPS if keymaps is None else keymaps
     rows = list(rows)
     _use_terminal_colors()
     curses.curs_set(0)
@@ -109,10 +149,10 @@ def _curses_picker(
         start = max(0, idx - page + 1)
         for off, original in enumerate(matches[start:start + page]):
             label, annotation = rows[original]
-            cursor = ">" if start + off == idx else " "
-            box = ("[x] " if original in selected else "[ ] ") if multiple else ""
+            cursor = msgs.LOGIN_PICKER_CURSOR.format() if start + off == idx else " "
+            box = (msgs.LOGIN_PICKER_SELECTED.format() if original in selected else msgs.LOGIN_PICKER_UNSELECTED.format()) if multiple else ""
             tag = f"  {annotation}" if annotation else ""
-            draw(off + 2, f"{cursor} {box}{label}{tag}")
+            draw(off + 2, msgs.LOGIN_PICKER_ROW.format(cursor=cursor, box=box, label=label, tag=tag))
         if not matches:
             draw(2, msgs.PICKER_NO_MATCHES.text())
         for off, line in enumerate(detail):
@@ -122,59 +162,62 @@ def _curses_picker(
         help_text = msgs.PICKER_KEYS_CHECKLIST if multiple else msgs.PICKER_KEYS
         if multiple and on_edit is not None:
             help_text = msgs.PICKER_KEYS_CHECKLIST_EDIT
-        draw(h - 1, (msgs.PICKER_KEYS_SEARCH if searching else help_text).text())
+        context = "search" if searching else "list"
+        hint = msgs.PICKER_KEYS_SEARCH if searching else help_text
+        draw(h - 1, _curses_hint(hint, keymaps[context], LOGIN_KEYMAPS[context]).text())
         stdscr.refresh()
         try:
             key = stdscr.getch()
         except KeyboardInterrupt:
             return None
+        action = _curses_action(keymaps[context], key)
         if searching:
-            if key in (10, 13, curses.KEY_ENTER):
+            if action == "choose":
                 searching = False
-            elif key == 27:
+            elif action == "back":
                 query = ""
                 searching = False
-            elif key == 3:
+            elif action == "quit":
                 return None
-            elif key in (curses.KEY_BACKSPACE, 127, 8):
+            elif action == "backspace":
                 query = query[:-1]
             elif 32 <= key < 256 and chr(key).isprintable():
                 query += chr(key)
             idx = 0
             continue
-        if key == ord("/"):
+        if action == "search":
             searching = True
             query = ""
-        elif key in (curses.KEY_UP, ord("k")):
+        elif action == "up":
             idx = max(0, idx - 1)
-        elif key in (curses.KEY_DOWN, ord("j")):
+        elif action == "down":
             idx = min(len(matches) - 1, idx + 1)
-        elif key == curses.KEY_PPAGE:
+        elif action == "page_up":
             idx = max(0, idx - page)
-        elif key == curses.KEY_NPAGE:
+        elif action == "page_down":
             idx = min(len(matches) - 1, idx + page)
-        elif key == curses.KEY_HOME:
+        elif action == "first":
             idx = 0
-        elif key == curses.KEY_END:
+        elif action == "last":
             idx = len(matches) - 1
-        elif multiple and key == ord(" ") and matches:
+        elif multiple and action == "toggle" and matches:
             original = matches[idx]
             selected.discard(original) if original in selected else selected.add(original)
-        elif on_edit is not None and key == ord("e") and matches:
+        elif on_edit is not None and action == "edit" and matches:
             original = matches[idx]
             annotation = on_edit(stdscr, rows[original][0])
             if annotation is not None:
                 rows[original] = (rows[original][0], annotation)
-        elif multiple and key in (ord("a"), ord("A")):
+        elif multiple and action == "all":
             selected.update(matches)
-        elif multiple and key in (ord("n"), ord("N")):
+        elif multiple and action == "none":
             selected.difference_update(matches)
-        elif key in (10, 13, curses.KEY_ENTER):
+        elif action == "choose":
             if multiple:
                 return sorted(selected)
             if matches:
                 return [matches[idx]]
-        elif key in (ord("q"), 27, 3):
+        elif action == "quit":
             return None
 
 
@@ -229,6 +272,7 @@ def _curses_multiselect(
     *,
     preselected: set[int],
     on_edit: Callable[[curses.window, str], str | None] | None = None,
+    keymaps: Mapping[str, CursesKeymap] | None = None,
 ) -> list[int] | None:
     """Spacebar checklist with / filtering; None means cancel."""
     if not rows:
@@ -243,6 +287,7 @@ def _select_models_to_cache(
     annotate_dialects: bool = True,
     saved: Login | None = None,
     pending: list[Login] | None = None,
+    noninteractive=None,
 ) -> list[str] | None:
     """Curate which fetched models to cache. None == user cancelled.
 
@@ -255,7 +300,7 @@ def _select_models_to_cache(
     if not models:
         return models
     if not _interactive():
-        return models
+        return models if noninteractive is None else noninteractive(provider_id, models)
     dialects = _dialect_map(provider_id) if annotate_dialects else {}
     cache = load_model_cache()
     cached = cache.get(provider_id, [])
@@ -295,18 +340,18 @@ def _menu(*args, **kwargs):
     """`curses.wrapper` for a picker; NoTerminalError instead of a curses crash
     when there is no terminal."""
     if not _interactive():
-        raise NoTerminalError("needs an interactive terminal (stdin and stdout must be a TTY)")
+        raise NoTerminalError(msgs.LOGIN_PICKER_NEEDS_AN_INTERACTIVE_TERMINAL_STDIN_AND_STDOUT.format())
     return curses.wrapper(*args, **kwargs)
 
 
-def _login_provider_rows() -> list[tuple[str, str, str]]:
+def _login_provider_rows(*, hidden=("openai-completions", "openai-responses")) -> list[tuple[str, str, str]]:
     saved = load_logins()
     rows: list[tuple[str, str, str]] = []
     seen: set[str] = set()
 
     for provider_id, _login in sorted(saved.items()):
         provider = providers.get_provider(provider_id)
-        rows.append((provider_id, provider.display_name if provider else provider_id, "saved"))
+        rows.append((provider_id, provider.display_name if provider else provider_id, msgs.LOGIN_SOURCE_SAVED.words()))
         seen.add(provider_id)
 
     env_rows: list[tuple[str, str, str]] = []
@@ -316,11 +361,11 @@ def _login_provider_rows() -> list[tuple[str, str, str]]:
             continue
         # openai-completions / openai-responses live under <add custom provider>;
         # a top-level row is a duplicate path to the same shape.
-        if provider.id in ("openai-completions", "openai-responses"):
+        if provider.id in hidden:
             continue
         env_configured = providers.first_env(provider.api_key_env + provider.base_url_env + provider.model_env) is not None
         target = env_rows if env_configured else registry_rows
-        target.append((provider.id, provider.display_name, "env" if env_configured else "registry"))
+        target.append((provider.id, provider.display_name, msgs.LOGIN_SOURCE_ENVIRONMENT.words() if env_configured else msgs.LOGIN_SOURCE_REGISTRY.words()))
         seen.add(provider.id)
 
     env_rows.sort(key=lambda row: row[1].lower())
@@ -330,7 +375,7 @@ def _login_provider_rows() -> list[tuple[str, str, str]]:
 
 def _select_provider() -> str | None:
     rows = _login_provider_rows()
-    items = [msgs.LOGIN_ADD_CUSTOM.text(), *[f"{pid:<28} {name} [{source}]" for pid, name, source in rows]]
+    items = [msgs.LOGIN_ADD_CUSTOM.text(), *[msgs.LOGIN_PROVIDER_ROW.format(pid=pid, name=name, source=source) for pid, name, source in rows]]
     sys.stdout.flush()
     idx = _menu(_curses_menu, items, msgs.LOGIN_PICK_PROVIDER.text())
     if idx is None:
@@ -341,7 +386,7 @@ def _select_provider() -> str | None:
 
 
 def _select_api_shape() -> tuple[str, str] | None:
-    items = [f"{pid}  {desc}" for pid, _sdk, desc in _API_SHAPES]
+    items = [msgs.LOGIN_API_SHAPE_ROW.format(pid=pid, desc=desc) for pid, _sdk, desc in _API_SHAPES]
     sys.stdout.flush()
     idx = _menu(_curses_menu, items, msgs.LOGIN_PICK_SHAPE.text())
     if idx is None:
@@ -350,13 +395,14 @@ def _select_api_shape() -> tuple[str, str] | None:
     return pid, sdk
 
 
-def _input(prompt: str, *, default: str | None = None, secret: bool = False) -> str | None:
+def _input(prompt: str, *, default: str | None = None, secret: bool = False, read=None, read_secret=None, write=None) -> str | None:
     label = prompt if default in (None, "") else f"{prompt} [{default}]"
     try:
         hidden = secret and paranoid.masks(paranoid.mode())
-        value = getpass(f"{label}: ") if hidden else input(f"{label}: ")
+        reader = (getpass if read_secret is None else read_secret) if hidden else (input if read is None else read)
+        value = reader(f"{label}: ")
     except (EOFError, KeyboardInterrupt):
-        print()
+        (print if write is None else write)()
         return None
     stripped = value.strip()
     if stripped:
@@ -383,12 +429,19 @@ def _env_key_name(provider: providers.ProviderDef, env: dict[str, str]) -> str |
     return None
 
 
+
+def _accept_env_key(answer: str) -> bool:
+    return answer.strip().lower() in {"y", "yes"}
+
 def _collect_api_login(
     provider_id: str,
     sdk_provider_id: str | None,
     provider: providers.ProviderDef,
     *,
     shape_provider_id: str | None = None,
+    accept_env_key: Callable[[str], bool] | None = None,
+    env_key_default: str = "n",
+    env_key_question: msgs.Message = msgs.LOGIN_ASK_ENV_KEY,
 ) -> Login | None:
     existing = load_logins().get(providers.normalize_provider_id(provider_id) or provider_id)
     env = os.environ
@@ -421,25 +474,29 @@ def _collect_api_login(
     base_url = entered_base_url or None
 
     if env_key_name and env_key:
-        answer = _input(msgs.LOGIN_ASK_ENV_KEY.text(name=env_key_name, key=_mask(env_key)), default="n")
+        answer = _input(env_key_question.text(name=env_key_name, key=_mask(env_key)), default=env_key_default)
         if answer is None:
             return None
-        if answer.strip().lower() in {"y", "yes"}:
+        if (accept_env_key or _accept_env_key)(answer):
             api_key = env_key
 
     keyless_ok = provider.local or not provider.established
     if provider.requires_api_key and not api_key:
         prompt = msgs.LOGIN_ASK_KEY_OPTIONAL if keyless_ok else msgs.LOGIN_ASK_KEY
         api_key = _input(prompt.text(), secret=True)
+        if api_key is None:
+            return None
         if not api_key:
             if not keyless_ok:
                 msgs.warn(msgs.LOGIN_NO_KEY)
                 return None
             # Keyless local endpoint: the openai wire still demands SOME token.
-            api_key = "x"
-            msgs.say(msgs.LOGIN_PLACEHOLDER_KEY)
+            api_key = config.run_settings()["LOCAL_API_KEY_PLACEHOLDER"]
+            msgs.say(msgs.LOGIN_PLACEHOLDER_KEY, key=api_key)
     elif api_key and existing is not None and api_key == existing.provider_api_key:
         entered = _input(msgs.LOGIN_ASK_KEY_KEEP.text(), secret=True)
+        if entered is None:
+            return None
         if entered:
             api_key = entered
 
@@ -477,48 +534,61 @@ def _display_models(models: list[str]) -> None:
         msgs.say(msgs.MORE_ROWS, count=len(models) - len(shown))
 
 
-def _secondary_test_choice(models: list[str], *, require_test: bool) -> str | None | bool:
+def _test_answer(choice: str, models: list[str]) -> str | bool | None:
+    if not choice:
+        return True
+    if choice.lower() in {"q", "quit", "exit"}:
+        return False
+    if choice.lower() == "t":
+        return models[0]
+    if choice in models:
+        return choice
+    if choice.isdigit():
+        index = int(choice) - 1
+        if 0 <= index < min(len(models), _MODEL_LIST_LIMIT):
+            return models[index]
+    return None
+
+
+def _secondary_test_choice(models: list[str], *, require_test: bool, read=None, say=None, write=None,
+                           interpret: Callable[[str, list[str]], str | bool | None] | None = None,
+                           question: msgs.Message = msgs.LOGIN_ASK_TEST) -> str | None | bool:
+    announce = msgs.say if say is None else say
+    reader = input if read is None else read
     if not models:
         return True
     # Enter always means "add it, I don't care to test"; a model number means
     # "test that one first". require_test only adds a heads-up that the listing
     # didn't prove the key can generate — it never forces a test.
     if require_test:
-        msgs.say(msgs.LOGIN_LISTING_NOT_PROOF)
-    prompt = msgs.LOGIN_ASK_TEST.text()
+        announce(msgs.LOGIN_LISTING_NOT_PROOF)
+    prompt = question.text()
     while True:
         try:
-            choice = input(prompt).strip()
+            choice = reader(prompt).strip()
         except (EOFError, KeyboardInterrupt):
-            print()
+            (print if write is None else write)()
             return False
-        if not choice:
-            return True
-        if choice.lower() in {"q", "quit", "exit"}:
-            return False
-        if choice.lower() == "t":
-            return models[0]
-        if choice in models:
-            return choice
-        if choice.isdigit():
-            index = int(choice) - 1
-            if 0 <= index < min(len(models), _MODEL_LIST_LIMIT):
-                return models[index]
-        msgs.say(msgs.LOGIN_TEST_CHOICES)
+        result = (interpret or _test_answer)(choice, models)
+        if result is not None:
+            return result
+        announce(msgs.LOGIN_TEST_CHOICES)
 
-def _run_secondary_test(login: Login, provider: providers.ProviderDef, model_id: str) -> bool:
+def _run_secondary_test(login: Login, provider: providers.ProviderDef, model_id: str, *, settings=None, say=None) -> bool:
     # Seeing a real answer back IS the confirmation; a further "hit enter to
     # add" after that just re-asked the same question the model number already
     # answered, so it's gone — a bad answer or an exception is still visible
     # right here, and Ctrl-C still works anywhere above this point.
-    msgs.say(msgs.LOGIN_TEST_USER, prompt=_SECONDARY_TEST_PROMPT)
+    announce = msgs.say if say is None else say
+    announce(msgs.LOGIN_TEST_USER, prompt=_SECONDARY_TEST_PROMPT)
     chunks: list[str] = []
 
     def on_text(chunk: str) -> None:
         chunks.append(chunk)
 
     try:
-        run = SimpleNamespace(**turn_settings.project(config.run_settings()))
+        settings = config.run_settings() if settings is None else settings
+        run = SimpleNamespace(**turn_settings.project(settings))
         result = model_client.stream_model(
             model_id=model_id,
             provider_id=login.provider_id,
@@ -528,22 +598,23 @@ def _run_secondary_test(login: Login, provider: providers.ProviderDef, model_id:
             messages=[ai.user_message(_SECONDARY_TEST_PROMPT)],
             tools=None,
             max_output_tokens=None,
-            reasoning_effort=provider.reasoning_effort,
+            reasoning_effort=provider.default_effort(settings),
             on_text=on_text,
             retry_budget=retry.Budget.from_settings(None),
             stream_idle_seconds=retry.idle_seconds(None),
+            settings=settings,
         )
     except Exception as exc:  # noqa: BLE001
-        msgs.say(msgs.LOGIN_TEST_FAILED, error=f"{type(exc).__name__}: {exc}")
+        announce(msgs.LOGIN_TEST_FAILED, error=f"{type(exc).__name__}: {exc}")
         return False
 
     answer = result.text.strip() or "".join(chunks).strip()
-    msgs.say(msgs.LOGIN_TEST_ANSWER, answer=answer)
+    announce(msgs.LOGIN_TEST_ANSWER, answer=answer)
     return True
 
-def _post_fetch_confirmation(login: Login, provider: providers.ProviderDef, models: list[str]) -> bool | None:
+def _post_fetch_confirmation(login: Login, provider: providers.ProviderDef, models: list[str], *, listing_proves_auth=None) -> bool | None:
     _display_models(models)
-    if provider.models_list_validates_auth:
+    if (provider.models_list_validates_auth if listing_proves_auth is None else listing_proves_auth(provider)):
         # Listing already proved the credentials work — asking "add without a
         # test, or verify first?" here is a prompt with only one sane answer.
         return True
@@ -625,7 +696,7 @@ def _say_provider_added(provider_id: str, email: str | None, model_count: int) -
 def _provider_details(login: Login, model_count: int) -> list[str]:
     provider = providers.get_provider(login.provider_id)
     return [
-        f"{login.provider_id} — {provider.display_name if provider else login.provider_id} [saved]",
+        msgs.LOGIN_SAVED_PROVIDER_DETAIL.format(provider_id=login.provider_id, value=provider.display_name if provider else login.provider_id),
         msgs.LOGIN_DETAIL_BASE_URL.text(url=login.provider_base_url or msgs.BUILTIN_VALUE.text()),
         msgs.LOGIN_DETAIL_KEY.text(key=_mask(login.provider_api_key) if login.provider_api_key else msgs.NONE_VALUE.text()),
         msgs.LOGIN_DETAIL_CACHED.text(models=msgs.plural(model_count, "cached model")),
@@ -650,7 +721,7 @@ def _edit_defaults(login: Login) -> None:
             break
         except ValueError as exc:
             msgs.say(msgs.LOGIN_BAD_DEFAULTS, error=exc)
-    save_login(replace(login, defaults=values))
+    update_login(login.provider_id, lambda current: replace(current, defaults=values))
 
 
 def _model_annotation(login: Login | None, model_id: str, tag: str = "") -> str:
@@ -680,22 +751,27 @@ def _model_defaults_editor(provider_id: str, pending: list[Login] | None = None,
             values = {} if raw.strip() == "-" else login_defaults.parse(raw)
         except ValueError:
             return None
-        model_defaults = {k: v for k, v in (login.model_defaults or {}).items() if k != model_id}
-        if values:
-            model_defaults[model_id] = values
-        updated = replace(login, model_defaults=model_defaults)
+        def change(current):
+            model_defaults = {k: v for k, v in (current.model_defaults or {}).items() if k != model_id}
+            if values:
+                model_defaults[model_id] = values
+            return replace(current, model_defaults=model_defaults)
+
         if pending:
+            updated = change(login)
             pending[0] = updated
         else:
-            save_login(updated)
+            updated = update_login(provider_id, change)
         return _model_annotation(updated, model_id, (tags or {}).get(model_id, ""))
 
     return edit
 
 
-def _curses_prompt(stdscr: curses.window, prompt: str, default: str) -> str | None:
+def _curses_prompt(stdscr: curses.window, prompt: str, default: str, *,
+                   keymap: CursesKeymap | None = None) -> str | None:
     """A line of text typed on the bottom row, starting from ``default``.
     Enter returns it, escape returns None."""
+    keymap = _CURSES_TEXT_KEYS if keymap is None else keymap
     h, w = stdscr.getmaxyx()
     text = default
     curses.curs_set(1)
@@ -708,11 +784,12 @@ def _curses_prompt(stdscr: curses.window, prompt: str, default: str) -> str | No
                 stdscr.addstr(h - 1, 0, line)
             stdscr.refresh()
             key = stdscr.getch()
-            if key in (10, 13, curses.KEY_ENTER):
+            action = _curses_action(keymap, key)
+            if action == "choose":
                 return text
-            if key in (27, 3):
+            if action == "back":
                 return None
-            if key in (curses.KEY_BACKSPACE, 127, 8):
+            if action == "backspace":
                 text = text[:-1]
             elif 32 <= key < 256 and chr(key).isprintable():
                 text += chr(key)
@@ -740,12 +817,15 @@ def _edit_saved_provider(login: Login) -> None:
             parsed = {k.strip(): v.strip() for k, v in (part.split("=", 1) for part in parts)}
             break
         msgs.say(msgs.LOGIN_BAD_HEADERS)
-    save_login(replace(
-        login,
-        provider_base_url=None if base == "-" else base or None,
-        provider_api_key=None if key == "-" else key or login.provider_api_key,
-        provider_headers=parsed,
-    ))
+    changes = {}
+    url = None if base == "-" else base or None
+    if url != login.provider_base_url:
+        changes["provider_base_url"] = url
+    if key:
+        changes["provider_api_key"] = None if key == "-" else key
+    if headers:
+        changes["provider_headers"] = parsed
+    update_login(login.provider_id, lambda current: replace(current, **changes))
 
 
 def _manage_providers() -> int:
@@ -829,7 +909,31 @@ def _manage_saved_provider(provider_id: str) -> None:
             return
 
 
-def _run_login(provider_id: str | None = None) -> int:
+@dataclass(frozen=True)
+class LoginAssembly:
+    """Services for collecting, checking, curating and saving an API login."""
+
+    collect: Callable | None = None
+    fetch: Callable | None = None
+    confirm: Callable | None = None
+    keep: Callable | None = None
+    save: Callable | None = None
+    cache: Callable | None = None
+    say: Callable | None = None
+    warn: Callable | None = None
+    unreachable: Callable | None = None
+
+
+def _run_login(provider_id: str | None = None, *, assembly: LoginAssembly | None = None) -> int:
+    assembly = assembly or LoginAssembly()
+    collect = _collect_api_login if assembly.collect is None else assembly.collect
+    fetch = test_login_with_metadata if assembly.fetch is None else assembly.fetch
+    confirm = _post_fetch_confirmation if assembly.confirm is None else assembly.confirm
+    keep = _keep_list if assembly.keep is None else assembly.keep
+    save = save_login if assembly.save is None else assembly.save
+    cache = cache_models if assembly.cache is None else assembly.cache
+    say = msgs.say if assembly.say is None else assembly.say
+    warn = msgs.warn if assembly.warn is None else assembly.warn
     if provider_id is None:
         return _manage_providers()
     raw_provider_id = provider_id
@@ -850,46 +954,48 @@ def _run_login(provider_id: str | None = None) -> int:
     if xai_auth.is_xai_oauth_provider(provider_id):
         return _run_xai_login()
 
-    login = _collect_api_login(provider_id, sdk_provider_id, provider, shape_provider_id=shape_provider_id)
+    login = collect(provider_id, sdk_provider_id, provider, shape_provider_id=shape_provider_id)
     if login is None:
         return 0
 
-    msgs.say(msgs.LOGIN_FETCHING)
+    say(msgs.LOGIN_FETCHING)
     try:
-        models, model_metadata = test_login_with_metadata(login)
+        models, model_metadata = fetch(login)
     except Exception as exc:  # noqa: BLE001
+        if assembly.unreachable is not None:
+            return assembly.unreachable(login, exc)
         # A server that is down now is still saved; its models come later
         # through Models > Re-fetch.
-        msgs.warn(msgs.LOGIN_MODELS_UNREACHABLE, error=f"{type(exc).__name__}: {exc}")
+        warn(msgs.LOGIN_MODELS_UNREACHABLE, error=f"{type(exc).__name__}: {exc}")
         base = login.provider_base_url or ""
         if "404" in str(exc) and base and not base.rstrip("/").endswith("/v1"):
-            msgs.warn(msgs.LOGIN_TRY_V1, base=base, suggested=f"{base.rstrip('/')}/v1")
+            warn(msgs.LOGIN_TRY_V1, base=base, suggested=f"{base.rstrip('/')}/v1")
         try:
-            save_login(login)
+            save(login)
         except LoginsCorruptError as save_exc:
-            msgs.warn(msgs.LOGIN_NOT_SAVED, error=save_exc)
+            warn(msgs.LOGIN_NOT_SAVED, error=save_exc)
             return 1
         canonical_id = providers.normalize_provider_id(provider_id) or provider_id
-        msgs.say(msgs.PROVIDER_ADDED, provider=canonical_id, models=msgs.plural(0, "model"))
+        say(msgs.PROVIDER_ADDED, provider=canonical_id, models=msgs.plural(0, "model"))
         return 0
 
-    confirmed = _post_fetch_confirmation(login, provider, models)
+    confirmed = confirm(login, provider, models)
     if confirmed is None:
         return 0
     if confirmed is False:
         return 1
 
     canonical_id = providers.normalize_provider_id(provider_id) or provider_id
-    to_cache, login = _keep_list(canonical_id, login, models)
+    to_cache, login = keep(canonical_id, login, models)
     if to_cache is None:
         return 0
     try:
-        save_login(login)
-        cache_models(canonical_id, to_cache, metadata=model_metadata)
+        save(login)
+        cache(canonical_id, to_cache, metadata=model_metadata)
     except LoginsCorruptError as exc:
-        msgs.warn(msgs.LOGIN_NOT_SAVED, error=exc)
+        warn(msgs.LOGIN_NOT_SAVED, error=exc)
         return 1
-    msgs.say(msgs.PROVIDER_ADDED, provider=canonical_id, models=msgs.plural(len(to_cache), "model"))
+    say(msgs.PROVIDER_ADDED, provider=canonical_id, models=msgs.plural(len(to_cache), "model"))
     return 0
 
 

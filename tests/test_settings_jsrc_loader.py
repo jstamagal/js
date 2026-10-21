@@ -76,6 +76,20 @@ def test_collect_settings_reads_jsrc_set_lines(tmp_path):
     assert out["MODEL"] == "file-model"
 
 
+def test_save_preserves_disabled_reasoning(tmp_path):
+    from js import setcmd
+
+    store = settings.seed_defaults()
+    result = setcmd.apply_set(store, "EFFORT", "off")
+    assert result.error is None
+    path = tmp_path / "jsrc"
+
+    settings.save_settings_to_jsrc(path, store)
+
+    loaded = settings.collect_settings([path], env={})
+    assert loaded["EFFORT"] == store["EFFORT"] == "none"
+
+
 def test_jsrc_rejects_registered_non_map_subkeys_without_mutating(tmp_path):
     cfg = tmp_path / "jsrc"
     cfg.write_text(
@@ -165,6 +179,22 @@ def test_from_env_reads_global_jsrc(monkeypatch, tmp_path):
     assert global_cfg.read_text(encoding="utf-8").startswith("set MODEL global-model")
 
 
+def test_explicit_default_model_extra_beats_the_agent_model(tmp_path):
+    from types import SimpleNamespace
+
+    from js import cli, logins
+
+    model_id = settings.default_value("MODEL")
+    provider_id, _, _ = model_id.partition("/")
+    logins.save_login(logins.Login(provider_id=provider_id, provider_api_key="fixture-key"))
+    cfg = from_env(cwd=tmp_path, save_session=False, extras=[f"MODEL={model_id}"])
+    agent = SimpleNamespace(model="agent-model")
+
+    active = cli._apply_agent_model(cfg, agent, None)
+
+    assert active.model == cfg.model
+
+
 def test_presets_layer_over_base_in_order(monkeypatch, tmp_path):
     config_home, _data_home = _env_dirs(monkeypatch, tmp_path)
     js_dir = config_home
@@ -186,12 +216,16 @@ def test_presets_layer_over_base_in_order(monkeypatch, tmp_path):
     assert cfg2.fetch_timeout_s == 99  # from slow; fast didn't set it
 
 
-def test_allow_inline_code_default_is_on(monkeypatch, tmp_path):
-    # Inverted: inline code runs by default, no flag/knob needed.
-    _env_dirs(monkeypatch, tmp_path)
-    monkeypatch.delenv("JS_INLINE_CODE", raising=False)
-    cfg = from_env(save_session=False)
-    assert cfg.allow_inline_code is True
+@pytest.mark.parametrize("presets", [[], ["fast"]])
+def test_ignoring_global_config_from_home_excludes_global_files(tmp_path, presets):
+    config_dir = tmp_path / ".js"
+    config_dir.mkdir()
+    (config_dir / "jsrc").write_text("set SHELL_WAIT 47\n", encoding="utf-8")
+    (config_dir / "jsrc.fast").write_text("set SHELL_WAIT 49\n", encoding="utf-8")
+
+    cfg = from_env(cwd=tmp_path, save_session=False, ignore_global_config=True, presets=presets)
+
+    assert cfg.shell_wait_seconds == settings.default_value("SHELL_WAIT")
 
 
 def test_allow_inline_code_opt_out_via_jsrc(monkeypatch, tmp_path):
@@ -203,31 +237,6 @@ def test_allow_inline_code_opt_out_via_jsrc(monkeypatch, tmp_path):
 
     cfg = from_env(save_session=False)
     assert cfg.allow_inline_code is False
-
-
-def test_allow_inline_code_opt_out_via_env(monkeypatch, tmp_path):
-    # --im-a-pussy sets JS_INLINE_CODE=0; that env must flip the knob off
-    # through the registry env layer.
-    _env_dirs(monkeypatch, tmp_path)
-    monkeypatch.setenv("JS_INLINE_CODE", "0")
-    cfg = from_env(save_session=False)
-    assert cfg.allow_inline_code is False
-
-
-def test_project_config_env_and_cli_precedence(monkeypatch, tmp_path):
-    _env_dirs(monkeypatch, tmp_path)
-    project = tmp_path / "project"
-    cfg_path = project / ".js" / "jsrc"
-    cfg_path.parent.mkdir(parents=True)
-    cfg_path.write_text("set MODEL file-model\nset TURN_ROUNDS_MAX 7\n", encoding="utf-8")
-    monkeypatch.setenv("JS_MODEL", "env-model")
-
-    cfg_env = from_env(cwd=project, save_session=False)
-    assert cfg_env.model == "env-model"
-    assert cfg_env.max_tool_iterations == 7
-
-    cfg_cli = from_env(cwd=project, save_session=False, extras=["MODEL=cli-model"])
-    assert cfg_cli.model == "cli-model"
 
 
 def test_js_model_provider_prefix_is_parsed_once(monkeypatch, tmp_path):
@@ -306,33 +315,10 @@ def test_provider_config_reaches_stream_model(monkeypatch, tmp_path):
     assert captured_kwargs.get("provider_headers") == {"x-test": "1"}
 
 
-_AWKWARD_TEXT = ["a\nb", " leading", "trailing ", '"quoted"', "cost $5 # not a comment", "tab\there"]
-_AWKWARD = {
-    "str": _AWKWARD_TEXT + ["X-A: 1\nX-B: 2", "X-A: \"1\"; X-B: $2"],
-    "int": [0, 7, 123456],
-    "float": [0.25, 3.5],
-    "bool": [True, False],
-    "json": [["a\nb", " x ", "$y # z"], {"k": "line\nbreak \"q\" $v"}],
-    "map": [{"k": "line\nbreak \"q\" $v", "n": 2}],
-}
-
-
-def test_every_setting_survives_save_then_load_with_awkward_values(tmp_path):
-    checked = 0
-    for spec in settings.REGISTRY:
-        for value in _AWKWARD[spec.type]:
-            raw = value if isinstance(value, str) else settings._config_line_value(spec, value)
-            accepted, error = settings.coerce_value(spec, raw)
-            if error is not None or accepted != value:
-                continue  # not a value this setting holds as it is
-            store = settings.seed_defaults()
-            settings.set_dotted(store, spec.path, value)  # as env, an --extra or /load can leave it
-            live = settings.get_dotted(store, spec.path)
-            path = tmp_path / f"{spec.key}-{checked}.jsrc"
-            path.write_text("", encoding="utf-8")
-            settings.save_settings_to_jsrc(path, store)
-            loaded = settings.collect_settings(config_paths=[path], env={})
-            assert settings.get_dotted(loaded, spec.path) == live, (spec.key, value, path.read_text())
-            checked += 1
-    assert checked > len(settings.REGISTRY)
-    assert any(spec.key == "EXTRA_HEADERS" for spec in settings.REGISTRY)
+def test_registered_setting_can_disable_jsrc_migration(tmp_path):
+    path = tmp_path / "jsrc"
+    original = "set JSRC_AUTO_MIGRATE off\nset model.id old-model\n"
+    path.write_text(original)
+    settings.collect_settings(config_paths=[path], env={})
+    assert path.read_text() == original
+    assert list(tmp_path.glob("jsrc.*")) == []

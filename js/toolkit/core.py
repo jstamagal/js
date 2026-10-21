@@ -29,6 +29,11 @@ from .. import jail as _jail
 from .. import settings as _settings
 from .. import turn_settings as _turn_settings
 from ..paths import state_root
+from ..skills import SkillCatalog
+from ..prompt_text import load_catalog
+
+_PROMPTS = load_catalog('toolkit_core')
+
 
 
 Handler = Callable[..., Any]
@@ -50,6 +55,8 @@ _CALL_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("js_tool_c
 # False while the running call's result goes to code (a kernel cell) rather
 # than to the model's history.
 _FOR_MODEL: contextvars.ContextVar[bool] = contextvars.ContextVar("js_tool_call_for_model", default=True)
+# What the running call's tool hands the screen beside its result (`view`).
+_VIEW: contextvars.ContextVar[dict | None] = contextvars.ContextVar("js_tool_call_view", default=None)
 _anonymous_calls = itertools.count()
 
 
@@ -59,11 +66,28 @@ def call_scope(call_id: str, *, for_model: bool = True):
     result goes to code rather than to the model's history."""
     token = _CALL_ID.set(call_id)
     model_token = _FOR_MODEL.set(for_model)
+    view_token = _VIEW.set({})
     try:
         yield
     finally:
+        _VIEW.reset(view_token)
         _FOR_MODEL.reset(model_token)
         _CALL_ID.reset(token)
+
+
+def view(**fields: Any) -> None:
+    """Hand the screen structured fields that describe the running call's
+    result (a path, the text before and after, line numbers, an exit code),
+    beside the text the model gets. Outside a `call_scope` it does nothing."""
+    holder = _VIEW.get()
+    if holder is not None:
+        holder.update(fields)
+
+
+def call_view() -> dict | None:
+    """What the running call's tool handed the screen with `view`, or None."""
+    holder = _VIEW.get()
+    return dict(holder) if holder else None
 
 
 # The registry the running tool call was dispatched through. The kernel's tool
@@ -299,19 +323,19 @@ class ToolResult:
             if kind == "text":
                 lines.append(str(block.get("text", "")))
             elif kind in {"image", "audio"}:
-                lines.append(f"[{kind} {block.get('mimeType', 'application/octet-stream')} omitted from history]")
+                lines.append(_PROMPTS['dehydrated_omitted_from_history'].format(kind=kind, value_1=block.get('mimeType', 'application/octet-stream')))
             elif kind == "resource_link":
-                lines.append(f"[resource link {block.get('name', '')}: {block.get('uri', '')}]")
+                lines.append(_PROMPTS['dehydrated_resource_link'].format(block_get_name=block.get('name', ''), block_get_uri=block.get('uri', '')))
             elif kind == "resource":
                 resource = block.get("resource")
                 if isinstance(resource, dict):
                     uri = resource.get("uri", "")
                     text = resource.get("text")
-                    lines.append(f"[embedded resource {uri}]" + (f"\n{text}" if isinstance(text, str) else " [binary omitted]"))
+                    lines.append(_PROMPTS['dehydrated_embedded_resource'].format(uri=uri) + (_PROMPTS['dehydrated_text'].format(text=text) if isinstance(text, str) else _PROMPTS['dehydrated_binary_omitted']))
             elif kind == "structured":
                 lines.append(compact_json(block.get("value")))
             else:
-                lines.append(f"[{kind} content omitted from history]")
+                lines.append(_PROMPTS['dehydrated_content_omitted_from_history'].format(kind=kind))
         value = "\n".join(lines)
         return f"ERROR: {value}" if self.is_error and not value.startswith("ERROR") else value
 
@@ -446,10 +470,16 @@ class ToolContext(_turn_settings.ContextSettings):
     vision_enabled: bool = False
     model: str = ""                       # model id, for toolbox revision provenance
     kernel_session: Any = None            # the live IPython kernel, one per process
+    lsp_configuration: Any = field(default=None, repr=False)
+    subagent_assembly: Any = field(default=None, repr=False)
+    skill_catalog: SkillCatalog | None = field(default=None, repr=False)
     swarm: Any = None                     # js.swarm.Agent when this process runs with --swarm
     # The `on` table whose tool_call handlers vet the calls of subagents started
     # through this context; set by the turn that runs with it.
     tool_call_hooks: Any = field(default=None, repr=False)
+    # The approval (js.events.Approval) that holds the calls of this turn, of
+    # the subagents it starts and of its kernel cells; None runs every call.
+    tool_approval: Any = field(default=None, repr=False)
     read_paths: set[Path] = field(default_factory=set)
     file_hashes: dict[Path, str] = field(default_factory=dict)
     read_ranges: dict[Path, list[tuple[int, int]]] = field(default_factory=dict)
@@ -620,14 +650,15 @@ class ToolContext(_turn_settings.ContextSettings):
         content_hash: str | None = None,
         seen_ranges: list[tuple[int, int]] | None = None,
     ) -> str | None:
+        if not self.file_require_read:
+            return None
         with self._coverage_lock:
             if path not in self.read_paths:
-                return f"ERROR: You must read the file with the read tool before attempting to {action}."
+                return _PROMPTS['require_read_error_you_must_read_the_file'].format(action=action)
             known_hash = self.file_hashes.get(path)
             if content_hash is not None and known_hash != content_hash:
                 return (
-                    f"ERROR: {path} changed since it was read (hash {known_hash} when read, "
-                    f"{content_hash} now); read it again before attempting to {action}."
+                    _PROMPTS['require_read_error_changed_since_it_was_read'].format(path=path, known_hash=known_hash, content_hash=content_hash, action=action)
                 )
             unseen = [span for span in line_ranges or [] if not self._ranges_cover(path, *span, seen_ranges)]
         if unseen:
@@ -834,13 +865,20 @@ class ToolContext(_turn_settings.ContextSettings):
             session_hash = hashlib.sha256(str(session).encode("utf-8")).hexdigest()[:16]
             store = (state_dir or state_root()) / safe_agent / "undo" / f"{safe_stem}-{session_hash}"
         with self._snapshot_lock:
-            if store is None:
-                self.snapshots.clear()
-                self.snapshot_files.clear()
-                self.snapshot_store = None
-                return
             if store == self.snapshot_store:
                 return
+            # Reads made before the context had a session carry into its first one.
+            if self.snapshot_store is not None:
+                with self._coverage_lock:
+                    self.read_paths.clear()
+                    self.file_hashes.clear()
+                    self.read_ranges.clear()
+                    self.read_line_totals.clear()
+                    self.fully_read_paths.clear()
+                    self.known_content.clear()
+                    self._read_windows.clear()
+                    self._shown_reads.clear()
+                    self._offered_reads.clear()
             self.snapshots.clear()
             self.snapshot_files.clear()
             self.snapshot_store = store
@@ -886,7 +924,7 @@ class ToolContext(_turn_settings.ContextSettings):
                 metadata = json.loads((path_dir / "path.json").read_text(encoding="utf-8"))
                 target = Path(metadata["path"])
                 if not target.is_absolute():
-                    raise ValueError("snapshot target is not absolute")
+                    raise ValueError(_PROMPTS['load_snapshots_snapshot_target_is_not_absolute'])
             except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
                 continue
             try:
@@ -916,7 +954,7 @@ class ToolContext(_turn_settings.ContextSettings):
             too_large = _snapshot_raw_size(snapshot) > _SNAPSHOT_MAX_DISK_BYTES
             encoded = b"" if too_large else _encode_snapshot(path, snapshot)
             if too_large or len(encoded) > _SNAPSHOT_MAX_DISK_BYTES:
-                reason = f"snapshot exceeds the {_SNAPSHOT_MAX_DISK_BYTES // (1024 * 1024)} MiB session undo cap"
+                reason = _PROMPTS['persist_snapshot_snapshot_exceeds_the_mib_session_undo'].format(SNAPSHOT_MAX_DISK_BYTES_1024_1024=_SNAPSHOT_MAX_DISK_BYTES // (1024 * 1024))
                 encoded = json.dumps(
                     {
                         "version": _SNAPSHOT_FORMAT_VERSION,
@@ -925,14 +963,14 @@ class ToolContext(_turn_settings.ContextSettings):
                     },
                     separators=(",", ":"),
                 ).encode("utf-8")
-                self._notice_snapshot(f"{reason}; this undo is available only until the process exits")
+                self._notice_snapshot(_PROMPTS['persist_snapshot_this_undo_is_available_only_until'].format(reason=reason))
             stamp = f"{time.time_ns():020d}-{secrets.token_hex(6)}.snapshot"
             entry = path_dir / stamp
             self._atomic_write(entry, encoded)
             self._prune_snapshot_store()
             return entry if entry.exists() else None
         except OSError as exc:
-            self._notice_snapshot(f"could not persist undo snapshot for {path}: {exc}")
+            self._notice_snapshot(_PROMPTS['persist_snapshot_could_not_persist_undo_snapshot_for'].format(path=path, exc=exc))
             return None
 
     def _forget_snapshot_file(self, victim: Path) -> None:
@@ -1050,7 +1088,7 @@ class ToolContext(_turn_settings.ContextSettings):
                         },
                     }
         except OSError as exc:
-            reason = f"could not capture undo snapshot for {path}: {exc}"
+            reason = _PROMPTS['snapshot_could_not_capture_undo_snapshot_for'].format(path=path, exc=exc)
             content = {"kind": "unavailable", "reason": reason}
             self._notice_snapshot(reason)
         self.record_snapshot(path, content)
@@ -1104,7 +1142,7 @@ def call_tool(tool: Tool, args: dict[str, Any], context: ToolContext) -> Any:
         return _jail.Refusal(f"ERROR: {exc}")
     notices = context.consume_snapshot_notices()
     if notices:
-        rendered = "\n".join(f"WARNING: {notice}" for notice in notices)
+        rendered = "\n".join(_PROMPTS['call_tool_warning'].format(notice=notice) for notice in notices)
         result = each_part(result, lambda text: _with_notices(text, rendered))
     return each_part(result, _as_jail_shows)
 

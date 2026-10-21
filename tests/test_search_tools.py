@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from js.capped_process import CappedProcessResult, truncation_marker
-from js.toolkit import search
+from js.toolkit import fs, search
 from js.toolkit.core import ToolContext
 
 
@@ -466,3 +466,48 @@ def test_browse_normalizes_dump(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
     actual = search.browse("https://example.com", dump=dump, context=ToolContext(cwd=tmp_path))
 
     assert actual == "normalized markdown"
+
+
+def test_browse_screenshot_overwrite_can_be_undone(monkeypatch, tmp_path):
+    target = tmp_path / "screenshot.png"
+    original = b"original screenshot bytes"
+    target.write_bytes(original)
+    context = ToolContext(cwd=tmp_path)
+
+    def run(argv, **_kwargs):
+        Path(argv[argv.index("--screenshot") + 1]).write_bytes(b"new screenshot bytes")
+        return CappedProcessResult(0, b"", b"")
+
+    _browse_stub(monkeypatch, run)
+
+    result = search.browse("https://example.test/", screenshot=str(target), context=context)
+    assert not result.startswith("ERROR"), result
+    assert target.read_bytes() != original
+    fs.undo(str(target), context=context)
+
+    assert target.read_bytes() == original
+
+
+def test_registered_serper_key_reaches_request(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from js import turn_settings
+
+    monkeypatch.setenv("SERPER_API_KEY", "legacy-key")
+    calls = _responses(monkeypatch, b'{"organic":[]}')
+    context = ToolContext(cwd=tmp_path)
+    turn_settings.install(context, SimpleNamespace(**turn_settings.project({"SERPER_API_KEY": "configured-key"})))
+    search.serper_search("query", context=context)
+    assert calls[0][0].get_header("X-api-key") == "configured-key"
+
+
+def test_docs_search_can_keep_authorization_on_refusal(monkeypatch, tmp_path):
+    calls = []
+    def refuse(request, timeout):
+        calls.append(request)
+        raise urllib.error.HTTPError(request.full_url, 401, "unauthorized", {}, io.BytesIO(b""))
+    monkeypatch.setenv("CONTEXT7_API_KEY", "secret")
+    monkeypatch.setattr(search.urllib.request, "urlopen", refuse)
+    result = search.docs_search("example", context=ToolContext(cwd=tmp_path), retry_without_auth_on=())
+    assert len(calls) == 1
+    assert calls[0].get_header("Authorization") == "Bearer secret"
+    assert result.startswith("ERROR")

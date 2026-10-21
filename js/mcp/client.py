@@ -135,6 +135,9 @@ class MCPClient:
                         f"server selected unsupported MCP protocol version "
                         f"{result.protocol_version!r}"
                     )
+                set_version = getattr(peer.transport, "set_protocol_version", None)
+                if set_version is not None:
+                    set_version(result.protocol_version)
                 await peer.notify("notifications/initialized")
                 async with self._lifecycle_lock:
                     if self._closed or self.peer is not peer or peer.closed:
@@ -305,13 +308,25 @@ class MCPClient:
         items: list[dict[str, Any]] = []
         cursor: str | None = None
         seen: set[str] = set()
+        page_peer: JSONRPCPeer | None = None
+
+        def prepare_page() -> None:
+            nonlocal page_peer
+            current = self._require_peer()
+            if current is not page_peer:
+                items.clear()
+                seen.clear()
+                params.pop("cursor", None)
+                page_peer = current
+
         while True:
             params: dict[str, Any] = {}
             if cursor is not None:
                 params["cursor"] = cursor
             self._add_progress_token(params, progress_token)
             raw = await self._safe_request(
-                method, params or None, timeout, lambda: self._require_capability(capability)
+                method, params, timeout, lambda: self._require_capability(capability),
+                before_request=prepare_page,
             )
             try:
                 if not isinstance(raw, dict):
@@ -337,14 +352,16 @@ class MCPClient:
         timeout: float | None,
         require_capability: Callable[[], None],
     ) -> Any:
+        peer: JSONRPCPeer | None = None
         try:
             await self._ensure_ready(require_capability, timeout)
-            return await self._require_peer().request(method, params, timeout=timeout)
+            peer = self._require_peer()
+            return await peer.request(method, params, timeout=timeout)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            if self._is_transport_failure(exc):
-                await self._discard_peer()
+            if peer is not None and self._is_transport_failure(exc):
+                await self._discard_peer(peer)
             self._raise_redacted(exc)
 
     async def _safe_request(
@@ -353,20 +370,27 @@ class MCPClient:
         params: Mapping[str, Any] | None,
         timeout: float | None,
         require_capability: Callable[[], None],
+        *,
+        before_request: Callable[[], None] | None = None,
     ) -> Any:
         self._require_previously_initialized()
         for attempt in range(self._reconnect_attempts + 1):
+            peer: JSONRPCPeer | None = None
             try:
                 if not self.initialized:
                     await self.initialize(timeout=timeout)
                 require_capability()
-                return await self._require_peer().request(method, params, timeout=timeout)
+                if before_request is not None:
+                    before_request()
+                peer = self._require_peer()
+                return await peer.request(method, params, timeout=timeout)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 if not self._is_transport_failure(exc) or attempt >= self._reconnect_attempts:
                     self._raise_redacted(exc)
-                await self._discard_peer()
+                if peer is not None:
+                    await self._discard_peer(peer)
                 await self._sleep_before_retry(attempt)
         raise AssertionError("unreachable")
 
@@ -387,7 +411,6 @@ class MCPClient:
             except Exception as exc:
                 if not self._is_transport_failure(exc) or attempt >= self._reconnect_attempts:
                     self._raise_redacted(exc)
-                await self._discard_peer()
                 await self._sleep_before_retry(attempt)
 
     def _configure_peer(self, peer: JSONRPCPeer) -> None:
@@ -424,8 +447,10 @@ class MCPClient:
 
         return handle
 
-    async def _discard_peer(self) -> None:
+    async def _discard_peer(self, expected_peer: JSONRPCPeer | None = None) -> None:
         async with self._lifecycle_lock:
+            if expected_peer is not None and self.peer is not expected_peer:
+                return
             peer, self.peer = self.peer, None
             self.initialize_result = None
         if peer is not None:

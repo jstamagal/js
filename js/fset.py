@@ -145,7 +145,7 @@ def theme_name() -> str:
     return name if name in themes() else defaults().get(THEME, "")
 
 
-def lookup(name: str) -> str | None:
+def lookup(name: str, *, transform_default=None) -> str | None:
     """Entry ``name``'s value: the operator's, the theme's, else the default;
     None when none of them sets it."""
     if name in _overrides:
@@ -155,7 +155,8 @@ def lookup(name: str) -> str | None:
     theme = theme_entries(theme_name())
     if name in theme:
         return theme[name]
-    return defaults().get(name)
+    value = defaults().get(name)
+    return transform_default(value) if value is not None and transform_default is not None else value
 
 
 def entry_value(name: str) -> str | None:
@@ -193,10 +194,20 @@ def held() -> Iterator[None]:
         _overrides.update(saved)
 
 
+def setting_value(name: str):
+    """A registered setting from the bound live store, or its shipped default."""
+    from . import settings as _s
+
+    return _s.knob(_settings, name)
+
+
 def bind_settings(settings: dict | None) -> None:
     """The live settings `$NAME` reads."""
     global _settings
     _settings = settings
+    from . import settings as _s
+
+    _s.bind_live_settings(settings)
 
 
 def _setting(name: str) -> str | None:
@@ -247,7 +258,7 @@ def banner_text() -> str:
     reports its state."""
     from . import messages as _msgs  # lazy: messages imports this
 
-    return _msgs.BANNER
+    return _msgs.current_banner()
 
 
 # ---------------------------------------------------------------------------

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from .toolkit.core import compact_json
+from . import settings as _settings
 
 
 def _strip_commas_outside_strings(text: str) -> str:
@@ -54,6 +55,11 @@ def _close_object(text: str) -> str | None:
 
 def repair_jsonish(raw: str) -> dict:
     """Best-effort repair for common model-emitted argument JSON."""
+    if _settings.live_value("TOOL_ARGUMENT_STRICT"):
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            raise ValueError(f"tool args must be an object, got {type(parsed).__name__}")
+        return parsed
     if not raw:
         return {}
     stripped = raw.strip()
@@ -131,7 +137,7 @@ def coerce_to_schema(value: object, schema: object) -> object:
     is not an integer; ``"yes"`` is not a boolean). Anything else is returned
     unchanged, so a genuinely wrong argument still fails validation.
     """
-    if not isinstance(schema, dict):
+    if _settings.live_value("TOOL_ARGUMENT_STRICT") or not isinstance(schema, dict):
         return value
     declared = schema.get("type")
     types = list(declared) if isinstance(declared, list) else [declared]
@@ -178,15 +184,34 @@ def coerce_to_schema(value: object, schema: object) -> object:
     if isinstance(value, dict):
         properties = schema.get("properties")
         if isinstance(properties, dict):
-            return {
+            value = {
                 key: coerce_to_schema(item, properties[key]) if key in properties else item
                 for key, item in value.items()
             }
-        return value
     if isinstance(value, list):
         items = schema.get("items")
         if isinstance(items, dict):
-            return [coerce_to_schema(item, items) for item in value]
+            value = [coerce_to_schema(item, items) for item in value]
+    if isinstance(value, (dict, list)):
+        branches = [
+            branch
+            for variants in (schema.get("anyOf"), schema.get("oneOf"))
+            if isinstance(variants, list)
+            for branch in variants
+            if isinstance(branch, dict) and "$ref" not in branch
+        ]
+        if branches:
+            from referencing.exceptions import Unresolvable
+
+            try:
+                if schema_error(value, schema) is None:
+                    return value
+                for branch in branches:
+                    candidate = coerce_to_schema(value, branch)
+                    if schema_error(candidate, schema) is None:
+                        return candidate
+            except Unresolvable:
+                pass
     return value
 
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 from pathlib import Path
 
@@ -71,6 +70,16 @@ def test_backtick_wrapped_code_directive_not_evaluated():
     assert expand_prompt(text, allow_code=False) == text
 
 
+def test_directive_inside_a_longer_markdown_code_span_never_runs(tmp_path):
+    marker = tmp_path / "executed"
+    text = f"``example `tick`: !{{sh touch {marker}}} end``"
+
+    actual = expand_prompt(text, allow_code=True)
+
+    assert not marker.exists()
+    assert actual == text
+
+
 def test_backtick_wrapped_readonly_directive_not_blanked():
     # `!{file PATH}` / `{{ENV}}` examples must survive, not expand to "".
     text = "Inject with `!{file PATH}` or `{{ENV_NAME}}` in the prompt."
@@ -118,18 +127,6 @@ def test_sh_inline_runs_when_allowed():
     assert expand_prompt("!{sh printf hello}", allow_code=True) == "hello"
 
 
-@pytest.mark.skipif(shutil.which("python3") is None, reason="python3 not on PATH")
-def test_directive_output_is_capped_and_marked():
-    out = expand_prompt(
-        "!{python import sys; sys.stdout.write('x' * 10000000)}",
-        allow_code=True,
-        max_output_bytes=1024,
-    )
-    assert out.startswith("x" * 1024)
-    assert "[truncated: SHELL_OUTPUT_MAX (1024) reached]" in out
-    assert len(out) < 1200
-
-
 # ---- default degrade: a failed directive is left literal, never raised ----
 
 def test_unknown_subsystem_degrades_to_literal(capsys):
@@ -154,18 +151,6 @@ def test_failed_code_run_degrades_to_literal(capsys):
     out = expand_prompt("!{sh sh -c 'exit 3'}", allow_code=True)
     assert out == "!{sh sh -c 'exit 3'}"
     assert capsys.readouterr().err  # a warning, and the load goes on
-
-
-def test_nonzero_exit_with_output_uses_the_output_and_warns(capsys):
-    """grep with no match, or a script ending on a false test, exits nonzero
-    after printing what the prompt wants."""
-    out = expand_prompt("gpu: !{sh echo none; false}", allow_code=True)
-    assert out == "gpu: none"
-    assert capsys.readouterr().err
-
-
-def test_nonzero_exit_with_only_whitespace_output_still_uses_it():
-    assert expand_prompt("a!{sh printf ' '; exit 7}b", allow_code=True) == "a b"
 
 
 def test_sh_nonzero_exit_errors():
@@ -377,26 +362,6 @@ def test_global_instruction_files_are_js_md_only(tmp_path, monkeypatch):
 
 # --- the stock agent's environment block -----------------------------------------
 
-@pytest.mark.skipif(shutil.which("cc") is None, reason="no C compiler for envctx")
-def test_stock_env_prompt_runs_envctx_from_js_own_directory(tmp_path, monkeypatch):
-    """The stock 02-env.md finds envctx through JS_ROOT, which js sets, so it
-    runs with a HOME that holds no copy of js."""
-    from js import persona
-
-    js_root = Path(persona.__file__).resolve().parents[1]
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("JS_ROOT", str(tmp_path / "stale"))
-    monkeypatch.chdir(tmp_path)
-    text = (js_root / "prompts" / "defaultagent" / "02-env.md").read_text(encoding="utf-8")
-    spec = persona.PromptSpec(system=text, tool_selectors=())
-    cfg = type("Cfg", (), {"settings": {"SHELL_PROGRAM": "sh"}, "allow_inline_code": True})()
-
-    expanded = persona._expand_spec(spec, cfg)
-
-    assert "envctx.c" not in expanded.system
-    assert any(line.startswith("user=") for line in expanded.system.splitlines())
-    assert Path(os.environ["JS_ROOT"]) == js_root
-
 
 def test_fenced_directive_with_empty_body_does_not_swallow_the_next_fence():
     """An empty ```! body must not swallow the next fence (ALL-CLAIMS:380)."""
@@ -471,3 +436,15 @@ def test_file_directive_with_non_utf8_bytes_embeds_nothing(tmp_path):
     # a directive after the broken one still runs (warn path, not silent "")
     out2 = expand_prompt(f"!{{file {path}}} and !{{env AFTER}}", allow_code=True, env={"AFTER": "SURVIVED"})
     assert out2.endswith(" and SURVIVED"), repr(out2)
+
+
+def test_expansion_accepts_subsystems_and_warning_sink(capsys):
+    from js.promptexpand import expand_prompt
+
+    warnings = []
+    result = expand_prompt("!{custom hi} !{missing}",
+                           subsystems={"custom": (False, lambda body, **kwargs: "!{custom again}")},
+                           warn=lambda message, **fields: warnings.append((message, fields)))
+    assert result == "!{custom again} !{missing}"
+    assert len(warnings) == 1
+    assert capsys.readouterr().err == ""

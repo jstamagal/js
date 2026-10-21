@@ -216,17 +216,29 @@ replaying. If the provider still refuses a replayed signature ("Invalid
 `signature` in `thinking` block", or Codex's `invalid_encrypted_content` for an
 item another account produced), the request is retried once with no signed
 reasoning in the history, and the history keeps none from then on, on disk too.
+An Anthropic tool continuation requires its original thinking blocks. If the
+provider refuses those blocks, or says the latest assistant message's blocks
+"cannot be modified", js recasts that assistant turn's visible replies, calls
+and completed results as fresh user context and retries once. Earlier turns
+keep their signed blocks, except after a refused signature, which can belong to
+any of them; completed tools are not dispatched again. The
+rewritten context is persisted.
+This also recovers an older tool continuation with no stored blocks when
+Anthropic reports that it expected `thinking` or `redacted_thinking` first.
 
-Anthropic `redacted_thinking` blocks are lost in the `ai` SDK (0.5.2), in both
-directions. Its stream parser (`ai/providers/anthropic/protocol.py`) has no
-case for the block type, so the block produces no event and no
-`ReasoningPart`, and js never sees it. Its message serializer writes an
-assistant reasoning part only as a `thinking` block with a `signature`, so it
-cannot send a `redacted_thinking` block even if js stored one. A reply that
-held one is therefore replayed without it. When the provider refuses that
-replay, the retry above resends without signed reasoning
-(`tests/test_thinking_wire.py`). Keeping the block needs SDK support for it on
-both the parse and the serialize side.
+A reply's text, thinking blocks and tool calls replay in the order the response
+held them: each tool call of a record with signed reasoning stores
+`text_before`, the answer text that came before it, when answer text follows it.
+The record's `reasoning_layout` keeps text block lengths and part kinds so
+adjacent and empty text blocks retain their positions too. Older records use
+the stored offsets.
+
+The `ai` SDK (0.5.2) omits Anthropic `redacted_thinking` in its parser and
+serializer. js's Anthropic protocol adapter emits an empty reasoning part
+carrying the whole opaque block in provider metadata, stores it in
+`reasoning_parts`, and serializes it back as `redacted_thinking` in its original
+position. This applies to live tool continuations and resumed sessions
+(`tests/test_thinking_wire.py`).
 
 ### Reasoning display
 
@@ -420,8 +432,10 @@ pickers (e.g. the Go picker), all printing a single line to stdout:
   (saved login with no built-in def).
 - `python -m js --logins-json` — only saved logins, with `has_api_key` /
   `has_codex_refresh_token` booleans. The Codex refresh token is always nulled
-  in the output, and Codex providers' `provider_api_key` is nulled too, so the
-  bridge never leaks long-lived secrets.
+  in the output, and Codex providers' `provider_api_key` is nulled too.
+  With `PARANOID_MODE on` or `extra`, API keys and xAI refresh tokens are
+  nulled and provider headers are empty. With it off, other providers'
+  credentials remain available for a picker to reconnect.
 - `python -m js --models-json <provider>` — the (filtered) model list for a
   provider; omit the provider to use the effective configured provider.
 

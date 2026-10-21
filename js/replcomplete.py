@@ -33,10 +33,10 @@ from collections.abc import Callable, Iterable, Mapping
 
 from prompt_toolkit.completion import Completer, Completion
 
+from . import fset
 from . import events
 from . import settings as _settings
 
-CMDCHAR = "/"
 _TRAILING_TOKEN = re.compile(r"\S*$")  # run of non-space chars before the cursor
 
 # `/set <key> <value>` — keys whose value is a known small enum get their
@@ -50,21 +50,22 @@ def _prefix(pool: Iterable[str], token: str) -> list[str]:
     return sorted({c for c in pool if c.startswith(token)})
 
 
-def value_candidates(key: str, token: str) -> list[str]:
+def value_candidates(key: str, token: str, enums: Mapping | None = None) -> list[str]:
     """Known-good values for `key` (e.g. reasoning-effort stops), prefix-matched."""
-    values = _VALUE_ENUM_KNOBS.get(key.upper())
+    values = (_VALUE_ENUM_KNOBS if enums is None else enums).get(key.upper())
     if values is None:
         return []
     return _prefix(values, token.lower())
 
 
-def command_candidates(token: str, verbs: Iterable[str], bare_words: Iterable[str] = ()) -> list[str]:
+def command_candidates(token: str, verbs: Iterable[str], bare_words: Iterable[str] = (), *,
+                       command_prefix: str = "/") -> list[str]:
     """First-word completion over the table's verbs. Prefix match; a slashless
     word gets an implicit ``/`` so ``comp`` completes to ``/compact``.
     ``bare_words`` are commands typed without the ``/`` (``exit``); they
     complete as themselves."""
-    word = token[len(CMDCHAR):] if token.startswith(CMDCHAR) else token
-    found = {CMDCHAR + verb for verb in verbs if verb.startswith(word)}
+    word = token[len(command_prefix):] if token.startswith(command_prefix) else token
+    found = {command_prefix + verb for verb in verbs if verb.startswith(word)}
     found.update(bare for bare in bare_words if bare.startswith(token))
     return sorted(found)
 
@@ -80,7 +81,7 @@ def path_candidates(token: str) -> list[str]:
     raw = token[1:] if at else token
     base = os.path.expanduser(raw)
     try:
-        hits = glob.glob(base + "*")
+        hits = glob.glob(glob.escape(base) + "*")
     except OSError:
         return []
     prefix = "@" if at else ""
@@ -94,7 +95,7 @@ def event_candidates(token: str) -> list[str]:
     return [prefix + event for event in _prefix(events.CANONICAL_EVENT_NAMES, raw)]
 
 
-def hunspell_suggest(word: str, *, lang: str = "en_US") -> list[str]:
+def hunspell_suggest(word: str, *, lang: str | None = None) -> list[str]:
     """Spelling suggestions for one word via ``hunspell -a``. Returns [] for a
     correct word, an empty/non-alpha token, or if hunspell/the dict is missing
     (so the REPL never breaks when ``hunspell-<lang>`` isn't installed)."""
@@ -102,11 +103,11 @@ def hunspell_suggest(word: str, *, lang: str = "en_US") -> list[str]:
         return []
     try:
         proc = subprocess.run(
-            ["hunspell", "-a", "-d", lang],
+            ["hunspell", "-a", "-d", lang if lang is not None else fset.setting_value("SPELLCHECK_LANGUAGE")],
             input=word + "\n",
             capture_output=True,
             text=True,
-            timeout=2,
+            timeout=float(fset.setting_value("SPELLCHECK_TIMEOUT")),
         )
     except (OSError, subprocess.SubprocessError):
         return []
@@ -136,13 +137,21 @@ class JsCompleter(Completer):
         spell: Callable[[str], list[str]] | None = None,
         bare_words: Iterable[str] = (),
         fset_names: Iterable[str] = (),
+        path_completion: Callable[[str], list[str] | None] | None = None,
+        unknown_arguments: Callable[[str, str], list[str]] | None = None,
+        value_enums: Mapping | None = None,
+        command_prefix: str = "/",
     ) -> None:
+        self._command_prefix = command_prefix
         self._commands = commands
         self._fset_names = tuple(fset_names)
         self._bare_words = tuple(bare_words)
         self._setting_keys = tuple(setting_keys)
         self._names = names
         self._spell = spell
+        self._path_completion = path_completion
+        self._unknown_arguments = unknown_arguments
+        self._value_enums = value_enums
 
     def candidates(self, text_before_cursor: str) -> tuple[list[str], int]:
         """Pure-ish: (candidate list, token length) for the text left of cursor."""
@@ -150,16 +159,20 @@ class JsCompleter(Completer):
         before = text_before_cursor[: len(text_before_cursor) - len(token)]
         table = self._commands()
         if before.strip() == "":  # nothing but whitespace before -> first word
-            return command_candidates(token, table, self._bare_words), len(token)
+            return command_candidates(token, table, self._bare_words, command_prefix=self._command_prefix), len(token)
         words = before.split()
-        head = words[0].removeprefix(CMDCHAR).lower()
-        if looks_like_path(token):
-            return path_candidates(token), len(token)
+        head = words[0].removeprefix(self._command_prefix).lower()
+        paths = (self._path_completion(token) if self._path_completion is not None
+                 else path_candidates(token) if looks_like_path(token) else None)
+        if paths is not None:
+            return paths, len(token)
         if head not in table:
+            if self._unknown_arguments is not None:
+                return self._unknown_arguments(head, token), len(token)
             return (self._spell(token) if self._spell is not None else []), len(token)
         source = table[head]
         if source == "set" and len(words) >= 2:
-            return value_candidates(words[1], token), len(token)
+            return value_candidates(words[1], token, self._value_enums), len(token)
         if source in ("set", "keys"):
             # `set` takes a setting name in any case. A lowercase prefix gets
             # its matches in lowercase, so the part they share can be filled in.

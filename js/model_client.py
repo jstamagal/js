@@ -7,6 +7,7 @@ This is the canonical provider boundary for the migration.
 
 from __future__ import annotations
 
+
 import asyncio
 import base64
 import contextvars
@@ -18,13 +19,14 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from typing import Any, Literal
 from types import SimpleNamespace
-from collections.abc import AsyncIterator, Callable, Sequence
-from contextlib import AsyncExitStack, asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from contextlib import AsyncExitStack, aclosing, asynccontextmanager, contextmanager
 
 import ai
 import httpx2
 
 from . import codex_auth, codex_provider, messages as msgs, activity, paranoid, providers, reasoning, retry, routing, stream_transport, tool_args
+from . import settings as _settings
 from .sampling import Sampling
 from .text_bytes import byte_prefix, cap_text
 import ai.types.messages
@@ -33,7 +35,12 @@ import ai.types.usage
 import ai.models
 from ai.models.core import params as ai_params
 from ai.providers import history_utils
-from ai.providers.openai.protocol import OpenAIChatCompletionsProtocol
+from ai.providers.anthropic.protocol import AnthropicMessagesProtocol
+from ai.providers.openai.protocol import OpenAIChatCompletionsProtocol, OpenAIResponsesProtocol
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('model_client')
+
 
 
 @dataclass(frozen=True)
@@ -75,7 +82,7 @@ class StreamIdleError(ai.ProviderTimeoutError):
 
     def __init__(self, seconds: float, *, provider: str | None = None) -> None:
         super().__init__(
-            f"no response bytes for {seconds:g}s (STREAM_IDLE_TIMEOUT)",
+            msgs.STREAM_IDLE_NO_BYTES.format(seconds=seconds),
             provider=provider, is_retryable=True,
         )
         self.seconds = seconds
@@ -152,9 +159,18 @@ def _transport_error(exc: BaseException, *, provider_id: str | None) -> ai.Provi
 
 # Anthropic's 400 for a replayed thinking block it will not accept: "Invalid
 # `signature` in `thinking` block. The block is bound to a different
-# conversation. ..." (the preserved-thinking prefix check) or the same leading
-# clause alone (an undecryptable signature).
-_SIGNED_REASONING_REJECTIONS = ("invalid `signature` in `thinking` block", "bound to a different conversation")
+# conversation. ..." (the preserved-thinking prefix check), the same leading
+# clause alone (an undecryptable signature), or "`thinking` or
+# `redacted_thinking` blocks in the latest assistant message cannot be
+# modified" (the last reply's blocks differ from the response, as when the
+# `ai` SDK lost a redacted_thinking block).
+_MODIFIED_THINKING_REJECTION = "in the latest assistant message cannot be modified"
+_SIGNATURE_REJECTIONS = ("invalid `signature` in `thinking` block", "bound to a different conversation")
+_SIGNED_REASONING_REJECTIONS = (
+    *_SIGNATURE_REJECTIONS,
+    _MODIFIED_THINKING_REJECTION,
+    "expected `thinking` or `redacted_thinking`, but found",
+)
 # The Responses API's 400 for a replayed reasoning item it cannot decrypt (an
 # item from another account or organization): code ``invalid_encrypted_content``,
 # message "The encrypted content for item rs_... could not be verified" or
@@ -178,6 +194,28 @@ def is_signed_reasoning_rejection(exc: BaseException) -> bool:
     return any(needle in haystack for needle in _SIGNED_REASONING_REJECTIONS)
 
 
+def is_anthropic_thinking_rejection(exc: BaseException) -> bool:
+    """Whether Anthropic refused the thinking blocks of a replayed turn."""
+    if not isinstance(exc, ai.ProviderBadRequestError):
+        return False
+    haystack = f"{exc} {getattr(exc, 'body', '')}".lower()
+    return any(needle in haystack for needle in _SIGNED_REASONING_REJECTIONS)
+
+
+def is_signature_rejection(exc: BaseException) -> bool:
+    """Whether Anthropic refused a thinking signature, which may belong to any
+    earlier turn of the history."""
+    haystack = f"{exc} {getattr(exc, 'body', '')}".lower()
+    return (isinstance(exc, ai.ProviderBadRequestError)
+            and any(needle in haystack for needle in _SIGNATURE_REJECTIONS))
+
+
+def is_modified_thinking_rejection(exc: BaseException) -> bool:
+    """Whether Anthropic requires restoration of the latest assistant turn."""
+    haystack = f"{exc} {getattr(exc, 'body', '')}".lower()
+    return is_anthropic_thinking_rejection(exc) and _MODIFIED_THINKING_REJECTION in haystack
+
+
 def incomplete_reason_from_metadata(provider_metadata: Any) -> str | None:
     """Return a stable incomplete reason from provider metadata, if present.
 
@@ -190,12 +228,15 @@ def incomplete_reason_from_metadata(provider_metadata: Any) -> str | None:
     """
     if not isinstance(provider_metadata, dict):
         return None
-    reason = provider_metadata.get("incomplete_reason")
-    details = provider_metadata.get("incomplete_details")
-    if reason is None and isinstance(details, dict):
-        reason = details.get("reason")
-    if provider_metadata.get("incomplete") or reason is not None:
-        return str(reason or "unknown")
+    for metadata in (provider_metadata, provider_metadata.get("openai")):
+        if not isinstance(metadata, dict):
+            continue
+        reason = metadata.get("incomplete_reason")
+        details = metadata.get("incomplete_details")
+        if reason is None and isinstance(details, dict):
+            reason = details.get("reason")
+        if metadata.get("incomplete") or metadata.get("status") == "incomplete" or reason is not None:
+            return str(reason or "unknown")
     return None
 
 
@@ -354,6 +395,110 @@ class _ReasoningContentProtocol(OpenAIChatCompletionsProtocol):
         return super().stream(view, model, messages, **kwargs)
 
 
+class _RedactedThinkingStream:
+    """Expose the native snapshot and queue redacted blocks the ai parser skips."""
+
+    def __init__(self, stream: Any, pending: list[Any]) -> None:
+        self._stream = stream
+        self._pending = pending
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
+
+    async def __aiter__(self):
+        async for event in self._stream:
+            if event.type == "content_block_start" and event.content_block.type == "redacted_thinking":
+                block = event.content_block.model_dump(exclude_none=True)
+                self._pending.extend([
+                    ai.events.ReasoningStart(block_id=str(event.index)),
+                    ai.events.ReasoningEnd(block_id=str(event.index), provider_metadata={
+                        "anthropic": {"redacted_thinking": block}}),
+                ])
+            yield event
+
+
+class _AnthropicThinkingProtocol(AnthropicMessagesProtocol):
+    """Round-trip opaque redacted blocks through ai 0.5.2's reasoning parts."""
+
+    protocol_class_id: Literal["js_anthropic_thinking"] = "js_anthropic_thinking"
+
+    async def stream(self, client: Any, model: ai.Model, messages: list[ai.messages.Message], **kwargs: Any):
+        redacted: dict[str, dict] = {}
+        projected = []
+        for message in messages:
+            parts = []
+            for part in message.parts:
+                metadata = getattr(part, "provider_metadata", None) or {}
+                block = (metadata.get("anthropic") or {}).get("redacted_thinking")
+                if isinstance(part, ai.types.messages.ReasoningPart) and isinstance(block, dict):
+                    # Let the SDK place the part through its normal serializer;
+                    # replace this request-local marker before sending the body.
+                    marker = uuid.uuid4().hex
+                    redacted[marker] = block
+                    part = ai.thinking("", provider_metadata={"anthropic": {"signature": marker}})
+                parts.append(part)
+            projected.append(message.model_copy(update={"parts": parts}))
+
+        pending: list[Any] = []
+
+        @asynccontextmanager
+        async def open_message(**api_kwargs: Any):
+            for message in api_kwargs["messages"]:
+                content = message.get("content")
+                if isinstance(content, list):
+                    message["content"] = [redacted.get(block.get("signature"), block)
+                                          if block.get("type") == "thinking" else block for block in content]
+            async with client.messages.stream(**api_kwargs) as stream:
+                yield _RedactedThinkingStream(stream, pending)
+
+        view = SimpleNamespace(messages=SimpleNamespace(stream=open_message))
+        async with aclosing(super().stream(view, model, projected, **kwargs)) as stream:
+            async for event in stream:
+                for redacted_event in pending:
+                    yield redacted_event
+                pending.clear()
+                yield event
+
+
+
+
+class _CheckedResponsesStream:
+    def __init__(self, stream: Any, provider: str) -> None:
+        self._stream = stream
+        self._provider = provider
+
+    async def __aiter__(self):
+        async with self._stream:
+            async for event in self._stream:
+                kind = _field(event, "type")
+                if kind in {"response.failed", "error"}:
+                    error = (_field(_field(event, "response"), "error")
+                             if kind == "response.failed" else event)
+                    code = _field(error, "code")
+                    body = event if isinstance(event, dict) else event.model_dump(exclude_none=True)
+                    raise ai.ProviderAPIError(
+                        _field(error, "message") or msgs.RESPONSES_STREAM_FAILED.words(),
+                        provider=self._provider, body=body, code=code,
+                        param=_field(error, "param"), error_type=_field(error, "type"),
+                        is_retryable=code in {"server_error", "internal_error", "model_error", "rate_limit_exceeded"},
+                    )
+                yield event
+
+
+class _ResponsesProtocol(OpenAIResponsesProtocol):
+    """Keep Responses stream failures intact before SDK event normalization."""
+
+    protocol_class_id: Literal["js_openai_responses"] = "js_openai_responses"
+
+    def stream(self, client: Any, model: ai.Model, messages: list[ai.messages.Message], **kwargs: Any):
+        async def create(**api_kwargs: Any):
+            stream = await client.responses.create(**api_kwargs)
+            return _CheckedResponsesStream(stream, kwargs["provider"])
+
+        view = SimpleNamespace(responses=SimpleNamespace(create=create))
+        return super().stream(view, model, messages, **kwargs)
+
+
 # Headers the request body decides; a configured one is dropped before the
 # SDK sees it.
 _FRAMING_HEADERS = frozenset({"content-type", "content-length", "transfer-encoding", "host"})
@@ -381,6 +526,27 @@ def turn_headers(headers: dict[str, str] | None, cfg: Any) -> dict[str, str]:
     then ``cfg``'s EXTRA_HEADERS, then what PARANOID_MODE adds."""
     merged = with_extra_headers(headers, getattr(cfg, "extra_headers", None))
     return with_extra_headers(merged, paranoid.wire_headers(getattr(cfg, "paranoid_mode", "off")))
+
+
+_model_factory: contextvars.ContextVar[Callable[..., ai.Model] | None] = contextvars.ContextVar(
+    "js_model_factory", default=None,
+)
+
+
+@contextmanager
+def using_model_factory(factory: Callable[..., ai.Model]) -> Iterator[None]:
+    """Build streamed models with ``factory`` in this scope and its child tasks.
+
+    The factory takes the same arguments as ``resolve_model``: positional
+    ``model_id`` and keyword provider id, base URL, API key and headers.
+    Each call transfers a model to js, which closes its provider after streaming.
+    Turns and summary compaction share this scope; nested scopes restore it.
+    """
+    token = _model_factory.set(factory)
+    try:
+        yield
+    finally:
+        _model_factory.reset(token)
 
 
 def resolve_model(
@@ -450,9 +616,11 @@ def resolve_model(
     # mimo, ollama, llama.cpp, custom OpenAI-compatible bases) 404s on /responses.
     # Pin chat-completions for those; only the explicit Responses transport keeps
     # the new default.
-    protocol = None
+    protocol = _AnthropicThinkingProtocol() if sdk_provider_id == "anthropic" else None
     transport = provider_def.transport if provider_def is not None else None
-    if sdk_provider_id == "openai" and transport != "custom_responses":
+    if sdk_provider_id == "openai" and transport == "custom_responses":
+        protocol = _ResponsesProtocol()
+    elif sdk_provider_id == "openai":
         custom_base = providers.is_custom_base_url(provider_def, provider_base_url)
         operator_endpoint = provider_def is not None and (
             provider_def.local or not provider_def.established
@@ -518,6 +686,17 @@ def _strip_reasoning_parts(messages: list[ai.messages.Message]) -> list[ai.messa
     return out
 
 
+def _without_empty_text_parts(messages: list[ai.messages.Message]) -> list[ai.messages.Message]:
+    out: list[ai.messages.Message] = []
+    for message in messages:
+        parts = [part for part in message.parts
+                 if not (isinstance(part, ai.types.messages.TextPart) and not part.text)]
+        if parts:
+            out.append(message if len(parts) == len(message.parts)
+                       else message.model_copy(update={"parts": parts}))
+    return out
+
+
 def _is_message_part(value: Any) -> bool:
     return hasattr(value, "kind")
 
@@ -572,6 +751,20 @@ def signed_reasoning_parts(message: ai.messages.Message) -> list[dict] | None:
     return out if signed else None
 
 
+def tool_call_text_before(message: ai.messages.Message) -> dict[str, int]:
+    """The characters of answer text before each tool call that has answer
+    text after it in the response, by call id. A call missing here came after
+    all of the text."""
+    offsets: dict[str, int] = {}
+    text_before = 0
+    for part in message.parts:
+        if isinstance(part, ai.types.messages.ToolCallPart):
+            offsets[part.tool_call_id] = text_before
+        elif isinstance(part, ai.types.messages.TextPart):
+            text_before += len(part.text)
+    return {call_id: offset for call_id, offset in offsets.items() if offset < text_before}
+
+
 def _replayed_signed_parts(msg: dict, provider_id: str | None, model_id: str | None) -> list[dict] | None:
     parts = msg.get("reasoning_parts")
     if not isinstance(parts, list) or not parts:
@@ -587,23 +780,70 @@ def _after_calls(entry: dict, calls: list) -> int:
     return min(after if isinstance(after, int) and after > 0 else 0, len(calls))
 
 
-def _text_with_leading_signed_parts(content: Any, leading: list[dict]) -> list[Any]:
-    """The answer text with the signed parts that preceded every call placed
-    back at their ``text_before`` offsets."""
+def _text_before(item: dict, default: int) -> int:
+    offset = item.get("text_before")
+    return offset if isinstance(offset, int) and offset >= 0 else default
+
+
+def _signed_reply_parts(content: Any, calls: list, signed: list[dict], layout: Any = None) -> list[Any]:
+    """An assistant record with signed reasoning as the parts of the response
+    it came from, in their order: each tool call at its ``text_before`` offset
+    in the answer text (after all of the text when it has none), and each
+    signed part between the same calls and at the same place in the text."""
     if not isinstance(content, str):
-        return [_signed_part(entry) for entry in leading] + (_coerce_parts(content) if content else [])
-    parts: list[Any] = []
+        parts: list[Any] = [_signed_part(entry) for entry in signed if _after_calls(entry, calls) == 0]
+        parts.extend(_coerce_parts(content) if content else [])
+        for index, tc in enumerate(calls, start=1):
+            parts.append(_tool_call_part(tc))
+            parts.extend(_signed_part(entry) for entry in signed if _after_calls(entry, calls) == index)
+        return parts
+    end = len(content)
+    if (isinstance(layout, list)
+            and all(type(item) is int and item >= 0 or item in ("reasoning", "tool_call") for item in layout)
+            and layout.count("reasoning") == len(signed)
+            and layout.count("tool_call") == len(calls)
+            and sum(item for item in layout if type(item) is int) == end):
+        thoughts = iter(signed)
+        tools = iter(calls)
+        parts = []
+        position = 0
+        for item in layout:
+            if item == "reasoning":
+                parts.append(_signed_part(next(thoughts)))
+            elif item == "tool_call":
+                parts.append(_tool_call_part(next(tools)))
+            else:
+                parts.append(ai.types.messages.TextPart(text=content[position:position + item]))
+                position += item
+        return parts
+    # (calls before, text before, 0 for a signed part and 1 for a call, part):
+    # a signed part at the same place as a call came before it, or it would
+    # count that call.
+    items: list[tuple[int, int, int, Any]] = [
+        (_after_calls(entry, calls), _text_before(entry, 0), 0, _signed_part(entry)) for entry in signed
+    ]
+    items += [(index, _text_before(tc, end), 1, _tool_call_part(tc)) for index, tc in enumerate(calls)]
+    items.sort(key=lambda item: item[:3])
+    parts = []
     position = 0
-    for entry in leading:
-        offset = entry.get("text_before")
-        offset = min(max(offset if isinstance(offset, int) else 0, position), len(content))
+    for _calls, offset, _kind, part in items:
+        offset = min(max(offset, position), end)
         if offset > position:
             parts.append(ai.types.messages.TextPart(text=content[position:offset]))
             position = offset
-        parts.append(_signed_part(entry))
-    if position < len(content):
+        parts.append(part)
+    if position < end:
         parts.append(ai.types.messages.TextPart(text=content[position:]))
     return parts
+
+
+def _tool_call_part(tc: dict) -> ai.types.messages.ToolCallPart:
+    fn = tc.get("function", {})
+    return ai.types.messages.ToolCallPart(
+        tool_call_id=tc.get("id", ""),
+        tool_name=fn.get("name", ""),
+        tool_args=tool_args.sdk_safe_tool_args(fn.get("arguments", "")),
+    )
 
 
 def _signed_part(entry: dict) -> ai.types.messages.ReasoningPart:
@@ -659,28 +899,14 @@ def history_to_ai_messages(
             signed = _replayed_signed_parts(msg, provider_id, model_id)
             content = msg.get("content")
             if signed is not None:
-                parts.extend(_text_with_leading_signed_parts(
-                    content, [entry for entry in signed if _after_calls(entry, calls) == 0]))
+                parts.extend(_signed_reply_parts(content, calls, signed, msg.get("reasoning_layout")))
             else:
                 reasoning_text = msg.get("reasoning_content")
                 if reasoning_text and (preserve_reasoning or msg.get("tool_calls")):
                     parts.append(ai.thinking(str(reasoning_text)))
                 if content:
                     parts.extend(_coerce_parts(content))
-            for index, tc in enumerate(calls, start=1):
-                fn = tc.get("function", {})
-                parts.append(
-                    ai.types.messages.ToolCallPart(
-                        tool_call_id=tc.get("id", ""),
-                        tool_name=fn.get("name", ""),
-                        tool_args=tool_args.sdk_safe_tool_args(fn.get("arguments", "")),
-                    )
-                )
-                if signed is not None:
-                    parts.extend(
-                        _signed_part(entry) for entry in signed
-                        if _after_calls(entry, calls) == index
-                    )
+                parts.extend(_tool_call_part(tc) for tc in calls)
             assistant = ai.assistant_message(*parts)
             provider_metadata = msg.get("provider_metadata")
             if isinstance(provider_metadata, dict):
@@ -720,7 +946,7 @@ def _image_result_payload(result: str) -> tuple[str, str, bytes] | str | None:
         return None
     parts = result.split("\t", 3)
     if len(parts) != 4:
-        return "ERROR: malformed image result marker"
+        return _PROMPTS['image_result_payload_error_malformed_image_result_marker']
     _, raw_path, mime, stub = parts
     try:
         data = Path(raw_path).read_bytes()
@@ -730,7 +956,7 @@ def _image_result_payload(result: str) -> tuple[str, str, bytes] | str | None:
 
 
 def _visual_read_error(raw_path: str, exc: OSError) -> str:
-    return f"ERROR: could not read visual result {raw_path}: {exc}"
+    return _PROMPTS['visual_read_error_error_could_not_read_visual_result'].format(raw_path=raw_path, exc=exc)
 
 
 def _build_tool_result_part(
@@ -789,10 +1015,10 @@ def _mixed_result_parts(result: Any) -> tuple[str, list[Any], bool]:
             try:
                 data = base64.b64decode(str(block.get("data", "")), validate=True)
             except (ValueError, TypeError):
-                text.append(f"ERROR: invalid {kind} content")
+                text.append(_PROMPTS['mixed_result_parts_error_invalid_content'].format(kind=kind))
                 continue
             mime = str(block.get("mimeType", "application/octet-stream"))
-            text.append(f"[{kind} {mime} attached]")
+            text.append(_PROMPTS['mixed_result_parts_attached'].format(kind=kind, mime=mime))
             media.append(ai.types.messages.FilePart(data=data, media_type=mime))
         elif kind == "resource":
             resource = block.get("resource")
@@ -800,18 +1026,18 @@ def _mixed_result_parts(result: Any) -> tuple[str, list[Any], bool]:
                 continue
             uri = resource.get("uri", "")
             if isinstance(resource.get("text"), str):
-                text.append(f"[embedded resource {uri}]\n{resource['text']}")
+                text.append(_PROMPTS['mixed_result_parts_embedded_resource'].format(uri=uri, resource_text=resource['text']))
             elif resource.get("blob") is not None:
                 try:
                     data = base64.b64decode(str(resource["blob"]), validate=True)
                 except (ValueError, TypeError):
-                    text.append(f"ERROR: invalid embedded resource {uri}")
+                    text.append(_PROMPTS['mixed_result_parts_error_invalid_embedded_resource'].format(uri=uri))
                     continue
                 mime = str(resource.get("mimeType", "application/octet-stream"))
-                text.append(f"[embedded resource {uri} {mime} attached]")
+                text.append(_PROMPTS['mixed_result_parts_embedded_resource_attached'].format(uri=uri, mime=mime))
                 media.append(ai.types.messages.FilePart(data=data, media_type=mime))
         elif kind == "resource_link":
-            text.append(f"[resource link {block.get('name', '')}: {block.get('uri', '')}]")
+            text.append(_PROMPTS['mixed_result_parts_resource_link'].format(block_get_name=block.get('name', ''), block_get_uri=block.get('uri', '')))
         elif kind == "structured":
             text.append(json.dumps(block.get("value"), ensure_ascii=False, separators=(",", ":"), sort_keys=True))
     return "\n".join(text), media, result.is_error
@@ -829,7 +1055,7 @@ def media_label(tool_call_id: str, text: str) -> str:
     batch's media messages all follow its tool messages, so the label names
     the call and the first line of the result's text."""
     head = cap_text(text.split("\n", 1)[0], MEDIA_LABEL_HEAD_MAX, "…")
-    return f"[media of tool result {byte_prefix(tool_call_id, MEDIA_LABEL_ID_MAX)}: {head}]"
+    return _PROMPTS['media_label_media_of_tool_result'].format(value_0=byte_prefix(tool_call_id, MEDIA_LABEL_ID_MAX), head=head)
 
 
 def provider_text(result: Any) -> str:
@@ -841,7 +1067,7 @@ def provider_text(result: Any) -> str:
     if isinstance(result, str) and result.startswith("IMAGE_RESULT\t"):
         parts = result.split("\t", 3)
         if len(parts) != 4:
-            return "ERROR: malformed image result marker"
+            return _PROMPTS['provider_text_error_malformed_image_result_marker']
         try:
             with open(parts[1], "rb"):
                 pass
@@ -932,6 +1158,18 @@ def _sdk_client(model: ai.Model) -> Any:
     return None
 
 
+def _http_client(model: ai.Model) -> Any:
+    """The provider's HTTP client when it exposes per-request event hooks."""
+    sdk_client = _sdk_client(model)
+    if sdk_client is not None:
+        return sdk_client._client
+    if isinstance(model.provider, codex_provider.OpenAICodexProvider):
+        client = model.provider.client
+        if hasattr(client, "event_hooks"):
+            return client
+    return None
+
+
 @asynccontextmanager
 async def _open_stream(
     *,
@@ -957,10 +1195,13 @@ async def _open_stream(
         sdk_client = _sdk_client(model)
         if sdk_client is not None:
             sdk_client.max_retries = 0
+        http_client = _http_client(model)
+        if http_client is not None:
             await cleanup.enter_async_context(stream_transport.own_responses(
-                sdk_client._client, stream_transport.current_call(),
+                http_client, stream_transport.current_call(),
                 on_request=on_request, on_bytes=on_bytes,
             ))
+        if sdk_client is not None:
             headers = dict(getattr(model.provider, "headers", None) or {})
             if headers:
                 hooks = sdk_client._client.event_hooks["request"]
@@ -1032,7 +1273,7 @@ async def _stream_async(
     # response headers but not the SDK's own setup before the request (its
     # first request in a process imports the SDK). For a provider whose
     # requests js does not see, it starts at once.
-    sees_request = _sdk_client(model) is not None
+    sees_request = _http_client(model) is not None
     deadline = asyncio.timeout(None if sees_request else idle)
     try:
         async with deadline:
@@ -1074,6 +1315,8 @@ async def _stream_async(
     incomplete_reason = incomplete_reason_from_metadata(provider_metadata)
     if incomplete_reason is None and finish_reason == _OUTPUT_CAP_FINISH:
         incomplete_reason = "max_output_tokens"
+    if incomplete_reason is None and finish_reason == "content_filter":
+        incomplete_reason = "content_filter"
     tool_calls = [
         ModelToolCall(
             id=part.tool_call_id,
@@ -1302,6 +1545,7 @@ async def stream_model_async(
     trace_request_from: int = 0,
     cache_key: str | None = None,
     stream_idle_seconds: float | None = None,
+    settings: dict | None = None,
 ) -> ModelStreamResult:
     """Async entry point: stream one model turn on the CALLER'S event loop.
 
@@ -1319,7 +1563,10 @@ async def stream_model_async(
             **(provider_headers or {}),
         }
     try:
-        model = resolve_model(
+        factory = _model_factory.get()
+        if factory is None:
+            factory = resolve_model
+        model = factory(
             model_id,
             provider_id=provider_id,
             provider_base_url=provider_base_url,
@@ -1333,6 +1580,8 @@ async def stream_model_async(
         if friendly is not None:
             raise friendly from exc
         raise
+    if settings is not None and isinstance(model.provider, codex_provider.OpenAICodexProvider):
+        model.provider._settings = settings
     # The provider owns an HTTP client from here on; every exit below, including
     # a failure while the request is still being assembled, must close it.
     try:
@@ -1356,6 +1605,7 @@ async def stream_model_async(
             thinking_budget=thinking_budget,
             cache_key=cache_key,
             stream_idle_seconds=stream_idle_seconds,
+            settings=settings,
         )
     finally:
         try:
@@ -1385,6 +1635,7 @@ async def _stream_with_model(
     thinking_budget: int | None,
     cache_key: str | None,
     stream_idle_seconds: float | None,
+    settings: dict | None,
 ) -> ModelStreamResult:
     # Per-provider params: this is the canonical place to encode quirks. We build
     # a structured ``InferenceRequestParams`` (ai>=0.2.1); the SDK translates each
@@ -1424,6 +1675,15 @@ async def _stream_with_model(
     is_minimax = provider_name.startswith("minimax") or model_name.startswith("minimax") or "minimax" in model_name
 
     is_anthropic_wire = sdk_provider_name == "anthropic" or provider_name == "anthropic"
+    if is_anthropic_wire:
+        messages = _without_empty_text_parts(messages)
+        systems = [message for message in messages if message.role == "system"]
+        if len(systems) > 1:
+            system = "\n\n".join("".join(part.text for part in message.parts
+                                       if isinstance(part, ai.types.messages.TextPart))
+                                   for message in systems)
+            messages = [ai.system_message(system),
+                        *(message for message in messages if message.role != "system")]
     output_max_tokens = max_output_tokens if sends_max_output(provider_id) else None
 
     reasoning_params: ai_params.ReasoningParams | None = None
@@ -1432,7 +1692,7 @@ async def _stream_with_model(
         # setting as thinking: adaptive plus an effort on the models that take
         # it, a token budget on the rest (js/reasoning.py). A `thinking` set in
         # EXTRA_PARAMS wins.
-        plan = reasoning.anthropic_thinking(model_name, reasoning_effort, max_output_tokens, thinking_budget)
+        plan = reasoning.anthropic_thinking(model_name, reasoning_effort, max_output_tokens, thinking_budget, settings=settings)
         own_thinking = "thinking" not in extra_body
         if plan is not None:
             if plan.thinking is not None:
@@ -1489,7 +1749,7 @@ async def _stream_with_model(
     # `js --model nvidia/deepseek-ai/deepseek-v4-pro-0813 -p foo` returned
     # 400 Unsupported parameter(s): `max_reasoning_tokens`.
     if is_deepseek_wire and reasoning_effort != "none":
-        extra_body.setdefault("max_reasoning_tokens", 32_000)
+        extra_body.setdefault("max_reasoning_tokens", _settings.knob(settings, "DEEPSEEK_REASONING_TOKENS_MAX"))
 
     # Claude omits its thinking text unless the request asks for it. On the
     # Anthropic wire `reasoning.anthropic_thinking` asks with display=summarized;
@@ -1497,7 +1757,7 @@ async def _stream_with_model(
     # which the proxy maps onto the same display. Without it a Claude turn shows
     # no reasoning and the session keeps none to replay.
     if not is_anthropic_wire and reasoning.claude_model(model_name) and reasoning_effort != "none":
-        extra_body.setdefault("include_reasoning", True)
+        extra_body.setdefault("include_reasoning", _settings.knob(settings, "CLAUDE_PROXY_INCLUDE_REASONING"))
 
     # Prompt caching. Every turn resends the whole conversation, so the prefix it
     # shares with the previous turn is the bulk of each request, and the three
@@ -1525,7 +1785,7 @@ async def _stream_with_model(
         sdk_provider_name=sdk_provider_name,
         base_url=provider_base_url,
     )
-    if is_anthropic_wire:
+    if is_anthropic_wire and _settings.knob(settings, "ANTHROPIC_PROMPT_CACHE"):
         cache_params = ai_params.CacheParams()
     elif cache_key and accepts_cache_key:
         cache_params = ai_params.CacheParams(key=cache_key)

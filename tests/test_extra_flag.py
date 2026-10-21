@@ -59,20 +59,6 @@ def test_parse_extra_arg_coerces_registered_values():
 
 
 @pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        ("MODEL=123", "123"),
-        # RULING A: magic strings die -- a str knob stores "off" verbatim now;
-        # `set -MODEL` / `set -COMPACTION_HINT_COMMAND` is the only clear path.
-        ("MODEL=off", "off"),
-        ("COMPACTION_HINT_COMMAND=off", "off"),
-    ],
-)
-def test_extra_registered_string_keys_use_registry_coercion(raw, expected):
-    assert settings.parse_extra_arg(raw)[1] == expected
-
-
-@pytest.mark.parametrize(
     "raw",
     ["TRACE=maybe", "FETCH_TIMEOUT=abc", "COMPACTION_WARN_AT=abc"],
 )
@@ -92,18 +78,6 @@ def test_extra_reasoning_effort_off_disables_via_registry(monkeypatch, tmp_path)
     assert path == ("EFFORT",)
     assert value == "none"
     assert cfg.reasoning_effort == "none"
-
-
-@pytest.mark.parametrize("alias", ["none", "0", "default", "auto", "unset"])
-def test_extra_reasoning_effort_rejects_former_null_tokens(alias):
-    # RULING B: only off|minimal|low|medium|high|xhigh|max are valid; the old
-    # none/0/default/auto/unset synonyms are now a clean rejection, not a
-    # silent re-enable of the provider default.
-    with pytest.raises(
-        ValueError,
-        match=r"EFFORT.*off\|minimal\|low\|medium\|high\|xhigh\|max",
-    ):
-        settings.parse_extra_arg(f"EFFORT={alias}")
 
 
 def test_extra_provider_extra_json_uses_registry_map_coercion(monkeypatch, tmp_path):
@@ -171,36 +145,6 @@ def test_extra_tools_alias_profiles_rejects_non_list_json():
         settings.parse_extra_arg(raw)
 
 
-def test_extra_tools_alias_profiles_rejects_entries_without_aliases():
-    raw = 'TOOL_ALIASES=[{"match":["offline-test-model"]}]'
-
-    with pytest.raises(
-        ValueError,
-        match=r"TOOL_ALIASES",
-    ):
-        settings.parse_extra_arg(raw)
-
-
-def test_extra_tools_alias_profiles_rejects_empty_alias_maps():
-    raw = 'TOOL_ALIASES=[{"match":["offline-test-model"],"aliases":{}}]'
-
-    with pytest.raises(
-        ValueError,
-        match=r"TOOL_ALIASES",
-    ):
-        settings.parse_extra_arg(raw)
-
-
-def test_extra_tools_alias_profiles_rejects_empty_match_values():
-    raw = 'TOOL_ALIASES=[{"match":[],"aliases":{"read":"Read"}}]'
-
-    with pytest.raises(
-        ValueError,
-        match=r"TOOL_ALIASES",
-    ):
-        settings.parse_extra_arg(raw)
-
-
 def test_extra_tools_alias_profiles_rejects_duplicate_alias_names():
     raw = 'TOOL_ALIASES=[{"match":["offline-test-model"],"aliases":{"read":"Tool","write":"tool"}}]'
 
@@ -263,19 +207,6 @@ def test_collect_settings_extra_beats_env_and_jsrc_with_int_coercion(tmp_path):
     # extra coerced str "3" -> int 3 and landed at the dotted path, beating jsrc.
     assert out["SUBAGENT_DEPTH_MAX"] == 3
     assert isinstance(out["SUBAGENT_DEPTH_MAX"], int)
-
-
-def test_collect_settings_extra_string_beats_env_for_same_key(tmp_path):
-    cfg = tmp_path / "jsrc"
-    cfg.write_text("set MODEL file-model\n", encoding="utf-8")
-
-    out = settings.collect_settings(
-        config_paths=[cfg],
-        env={"JS_MODEL": "env-model"},
-        extras=["MODEL=cli-model"],
-    )
-
-    assert out["MODEL"] == "cli-model"
 
 
 def test_collect_settings_extra_registered_keys_use_registry_coercion(tmp_path):

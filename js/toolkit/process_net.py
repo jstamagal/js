@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import jail
-from .. import paths
+from .. import output, paths
 from .. import settings as _settings
 from ..capped_process import (
     CappedProcess,
@@ -36,11 +36,15 @@ from ..tool_binaries import (
     resolve_binary,
     warn_urllib_fallback,
 )
-from .core import Tool, ToolContext, ToolOutput
+from .core import Tool, ToolContext, ToolOutput, view as _view
 from .descriptions import load_description
 from .fs import _detect_visual_mime, _image_marker, _read_regular_bytes
 from .sanitize import int_or_default, text_or_default
 from .search import _absolutize
+from ..prompt_text import load_catalog
+
+_PROMPTS = load_catalog('toolkit_process_net')
+
 
 
 # The js/jsrc SHELL_ENV_KEEP, for a context whose own value is not a list.
@@ -78,8 +82,10 @@ def _resolve_shell(program: str) -> str | None:
     return shutil.which(program)
 
 
-def _shell_argv(shell_path: str, command: str) -> list[str]:
-    flags = ["-o", "pipefail"] if Path(shell_path).name in _PIPEFAIL_SHELLS else []
+def _shell_argv(shell_path: str, command: str, pipefail: bool | None = None) -> list[str]:
+    if pipefail is None:
+        pipefail = _settings.default_value("SHELL_PIPEFAIL")
+    flags = ["-o", "pipefail"] if pipefail and Path(shell_path).name in _PIPEFAIL_SHELLS else []
     return [shell_path, *flags, "-c", command]
 
 
@@ -116,8 +122,9 @@ _BLOCKING: dict[int, list[_ShellJob]] = {}
 
 class _ShellJob:
     def __init__(self, job_id: str, command: str, process: CappedProcess,
-                 shell_path: str, keep_ansi: bool, cap: int) -> None:
+                 shell_path: str, keep_ansi: bool, cap: int, owner: str) -> None:
         self.id = job_id
+        self.owner = owner
         self.command = command
         self.process = process
         self.shell_path = shell_path
@@ -150,14 +157,15 @@ def _next_job_id() -> str:
         return str(_JOB_SEQ)
 
 
-def _find_job(handle: str | None) -> _ShellJob | None:
+def _find_job(handle: str | None, owner: str) -> _ShellJob | None:
     with _JOBS_LOCK:
+        mine = [job for job in _JOBS.values() if job.owner == owner]
         if handle:
-            return _JOBS.get(str(handle))
-        running = [j for j in _JOBS.values() if j.running()]
+            return next((job for job in mine if job.id == str(handle)), None)
+        running = [j for j in mine if j.running()]
         if running:
             return running[-1]
-        return next(reversed(_JOBS.values()), None) if _JOBS else None
+        return mine[-1] if mine else None
 
 
 @contextlib.contextmanager
@@ -309,28 +317,28 @@ def _render_finished(job: _ShellJob, result: CappedProcessResult, description: s
                      allowed: set[str], safe_env: dict[str, str], context: Any, *,
                      since_last: bool, preface: str = "") -> str | ToolOutput:
     parts = [preface] if preface else []
-    parts += [f"shell={job.shell_path}", f"exit={result.returncode}"]
+    parts += [_PROMPTS['render_finished_shell'].format(job_shell_path=job.shell_path), _PROMPTS['render_finished_exit'].format(result_returncode=result.returncode)]
     if description:
-        parts.append(f"description={description}")
+        parts.append(_PROMPTS['render_finished_description'].format(description=description))
     filtered = _filtered_references(job.command, allowed)
     if filtered:
-        allowed_names = ",".join(sorted(allowed)) or "<none>"
-        present_names = ",".join(sorted(safe_env)) or "<none>"
+        allowed_names = ",".join(sorted(allowed)) or _PROMPTS['render_finished_none']
+        present_names = ",".join(sorted(safe_env)) or _PROMPTS['render_finished_none_2']
         parts.append(
-            "environment=filtered "
-            f"unset={','.join(filtered)} allowed={allowed_names} present={present_names}; "
-            "names not allowed by SHELL_ENV_KEEP or the env parameter are unset"
+            _PROMPTS['render_finished_environment_filtered_unset_allowed_present_names'].format(join_filtered=','.join(filtered), allowed_names=allowed_names, present_names=present_names)
         )
     (stdout, stderr), whole = _job_output(job, context, "\n".join(parts), since_last=since_last)
+    _view(command=job.command, handle=job.id, running=False, exit_code=result.returncode,
+         stdout=(whole or (stdout, stderr))[0], stderr=(whole or (stdout, stderr))[1])
 
     def text(stdout: str, stderr: str) -> str:
         rows = list(parts)
         if stdout:
-            rows.append(f"--- stdout ---\n{stdout}")
+            rows.append(_PROMPTS['text_stdout'].format(stdout=stdout))
         if stderr:
-            rows.append(f"--- stderr ---\n{stderr}")
+            rows.append(_PROMPTS['text_stderr'].format(stderr=stderr))
         if not stdout and not stderr:
-            rows.append("(no output)")
+            rows.append(_PROMPTS['text_no_output'])
         return "\n".join(rows)
 
     return text(stdout, stderr) if whole is None else ToolOutput(text(stdout, stderr), text(*whole))
@@ -338,19 +346,18 @@ def _render_finished(job: _ShellJob, result: CappedProcessResult, description: s
 
 def _render_running(job: _ShellJob, waited: float, context: Any) -> str | ToolOutput:
     head = (
-        f"command still running after {waited:.0f}s (handle {job.id}, pid {job.process.pid}). "
-        f"It keeps running. Poll it with action=\"poll\", handle=\"{job.id}\" for new output, "
-        f"action=\"wait\", handle=\"{job.id}\", timeout=N to block for it, "
-        f"or action=\"kill\", handle=\"{job.id}\" to stop it."
+        _PROMPTS['render_running_command_still_running_after_s_handle'].format(waited=waited, job_id=job.id, job_process_pid=job.process.pid, value_3=job.id, value_4=job.id, value_5=job.id)
     )
     (stdout, stderr), whole = _job_output(job, context, head, since_last=True)
+    _view(command=job.command, handle=job.id, running=True, exit_code=None,
+         stdout=(whole or (stdout, stderr))[0], stderr=(whole or (stdout, stderr))[1])
 
     def text(stdout: str, stderr: str) -> str:
         parts = [head]
         if stdout:
-            parts.append(f"--- stdout so far ---\n{stdout}")
+            parts.append(_PROMPTS['text_stdout_so_far'].format(stdout=stdout))
         if stderr:
-            parts.append(f"--- stderr so far ---\n{stderr}")
+            parts.append(_PROMPTS['text_stderr_so_far'].format(stderr=stderr))
         parts.append(f"HANDLE {job.id} RUNNING")
         return "\n".join(parts)
 
@@ -387,7 +394,7 @@ def shell(
     # The managed binaries are downloaded for a command to call by name, so the
     # directory holding them leads PATH. Without this fd, bat and fzf are
     # installed and unreachable.
-    if "PATH" in allowed:
+    if context.shell_managed_path and "PATH" in allowed:
         managed_bin = str(TOOLS_DIR)
         inherited = safe_env.get("PATH", "")
         safe_env["PATH"] = f"{managed_bin}{os.pathsep}{inherited}" if inherited else managed_bin
@@ -401,7 +408,7 @@ def shell(
     context.invalidate_search_cache()
     job_id = _next_job_id()
     try:
-        argv = jail.wrap(_shell_argv(shell_path, command), context, cwd=workdir,
+        argv = jail.wrap(_shell_argv(shell_path, command, context.shell_pipefail), context, cwd=workdir,
                          env=safe_env, extra_ro=(Path(shell_path),))
         process = start_capped(
             argv,
@@ -412,11 +419,13 @@ def shell(
         )
     except OSError as exc:
         return f"ERROR: {exc}"
-    job = _ShellJob(job_id, command, process, shell_path, keep_ansi, cap)
+    job = _ShellJob(job_id, command, process, shell_path, keep_ansi, cap, context.task_owner)
     job.allowed, job.safe_env = allowed, safe_env
     _register_job(job)
     with _blocking_on(context, job):
         result = process.wait(wait_s)
+    if result is None and context.shell_kill_unfinished:
+        result = process.kill()
     if result is None:
         # The command outlived the window. It is NOT killed: a long build or
         # test run finishing on its own beats one killed at an arbitrary
@@ -428,7 +437,8 @@ def shell(
 
 def _shell_job_action(action: str, handle: str | None, timeout: int | None, description: str | None,
                       context: ToolContext | None = None) -> str:
-    job = _find_job(handle)
+    assert context is not None
+    job = _find_job(handle, context.task_owner)
     if job is None:
         return f"ERROR: no shell job{' ' + str(handle) if handle else ''} to {action}"
     if action == "kill":
@@ -441,6 +451,8 @@ def _shell_job_action(action: str, handle: str | None, timeout: int | None, desc
     wait_s = 0 if action == "poll" else int_or_default(timeout, int(context.shell_wait_seconds), minimum=1)
     with _blocking_on(context, job):
         result = job.process.wait(wait_s)
+    if result is None and action == "wait" and context.shell_kill_unfinished:
+        result = job.process.kill()
     if result is None:
         return _render_running(job, job.process.elapsed(), context)
     return _render_finished(job, result, description, job.allowed, job.safe_env, context, since_last=True)
@@ -492,8 +504,7 @@ class _FetchTimeoutError(Exception):
 
 def _inline_read_limit_error() -> str:
     return (
-        f"ERROR: response exceeds {_DOWNLOAD_MAX_BYTES} byte inline read limit; "
-        "use save= to stream the full response to disk"
+        _PROMPTS['inline_read_limit_error_error_response_exceeds_byte_inline_read'].format(DOWNLOAD_MAX_BYTES=_DOWNLOAD_MAX_BYTES)
     )
 
 
@@ -517,10 +528,11 @@ def _stream_download(
     for. This is what lets max_download_bytes default to unlimited.
     """
     target.parent.mkdir(parents=True, exist_ok=True)
-    partial = target.parent / f".{target.name}.js-partial"
+    partial = target.parent / f".{target.name}.js-partial-{secrets.token_hex(6)}"
+    fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
     written = 0
     try:
-        with partial.open("wb") as out:
+        with os.fdopen(fd, "wb") as out:
             while True:
                 chunk = read_chunk(_STREAM_CHUNK)
                 if not chunk:
@@ -712,14 +724,18 @@ def _aria_payload(
     response_url: str,
     raw: bool | None,
     context: ToolContext,
+    deadline: float,
 ) -> str:
     with tempfile.TemporaryDirectory(prefix="js-fetch-", dir=paths.tmp_dir()) as raw_temp:
         destination = Path(raw_temp) / "response"
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise _FetchTimeoutError
         download_with_aria2(
             binary,
             url,
             destination,
-            timeout_s=context.download_timeout_s,
+            timeout_s=remaining,
             headers=headers,
             max_bytes=_DOWNLOAD_MAX_BYTES,
         )
@@ -870,10 +886,10 @@ def _fetch_file_url(
         # not land in RAM, and _read_regular_bytes refuses devices/FIFOs whose
         # st_size is 0 and whose read never reaches EOF.
         if size > _DOWNLOAD_MAX_BYTES:
-            return f"ERROR: file exceeds {_DOWNLOAD_MAX_BYTES} byte read limit; use save= or fs_read"
+            return _PROMPTS['fetch_file_url_error_file_exceeds_byte_read_limit'].format(DOWNLOAD_MAX_BYTES=_DOWNLOAD_MAX_BYTES)
         data = _read_regular_bytes(path, _DOWNLOAD_MAX_BYTES + 1)
         if len(data) > _DOWNLOAD_MAX_BYTES:
-            return f"ERROR: file exceeds {_DOWNLOAD_MAX_BYTES} byte read limit; use save= or fs_read"
+            return _PROMPTS['fetch_file_url_error_file_exceeds_byte_read_limit_2'].format(DOWNLOAD_MAX_BYTES=_DOWNLOAD_MAX_BYTES)
         truncated = len(data) > context.max_tool_result_bytes
     except Exception as exc:  # noqa: BLE001
         return f"ERROR: {type(exc).__name__}: {exc}"
@@ -899,6 +915,8 @@ def fetch(
     json_body: Any = None,
     save: str | None = None,
     context: ToolContext | None = None,
+    *,
+    download_resolver=None,
 ) -> str:
     if context is None:
         return "ERROR: missing ToolContext"
@@ -918,7 +936,8 @@ def fetch(
             return _fetch_file_url(url, raw=raw, save_target=save_target, context=context)
 
         aria_eligible = _aria_eligible(method_name, data, parsed.scheme)
-        aria2c = resolve_binary(ARIA2_EXECUTABLE) if aria_eligible else None
+        resolver = resolve_binary if download_resolver is None else download_resolver
+        aria2c = resolver(ARIA2_EXECUTABLE) if aria_eligible else None
         if save_target is not None and aria2c is not None:
             download_started = time.monotonic()
             download_with_aria2(
@@ -946,7 +965,7 @@ def fetch(
                 f"content-type={content_type or 'unknown'}"
             )
         if save_target is not None and aria_eligible:
-            warn_urllib_fallback("fetch(save=...)")
+            warn_urllib_fallback("fetch(save=...)", emit=output.notice)
 
         req = urllib.request.Request(
             url,
@@ -988,7 +1007,7 @@ def fetch(
                 truncated = len(payload) > limit
                 is_transfer = truncated or not _is_text_response(content_type, payload)
                 if is_transfer:
-                    warn_urllib_fallback("fetch() response transfer")
+                    warn_urllib_fallback("fetch() response transfer", emit=output.notice)
                 if too_large and is_transfer:
                     return _inline_read_limit_error()
             response_url = str(getattr(resp, "geturl", lambda: url)() or url)
@@ -1007,6 +1026,7 @@ def fetch(
                 response_url=response_url,
                 raw=raw,
                 context=context,
+                deadline=request_deadline,
             )
         return _format_payload(
             data=payload,
@@ -1041,15 +1061,15 @@ def tools() -> tuple[Tool, ...]:
                 "cwd": {"type": "string"},
                 "timeout": {
                     "type": "integer",
-                    "description": "Seconds this call blocks before returning a handle. The command is never killed by this.",
+                    "description": _PROMPTS['tools_seconds_this_call_blocks_before_returning'],
                 },
                 "action": {"type": "string", "enum": ["run", "poll", "wait", "kill"], "default": "run"},
-                "handle": {"type": "string", "description": "Job id from a HANDLE line, for poll/wait/kill."},
+                "handle": {"type": "string", "description": _PROMPTS['tools_job_id_from_a_handle_line']},
                 "keep_ansi": {"type": "boolean", "default": False},
                 "env": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Variable names to pass through. The child environment is filtered by default.",
+                    "description": _PROMPTS['tools_variable_names_to_pass_through_the'],
                 },
                 "description": {"type": "string"},
             },

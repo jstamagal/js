@@ -101,3 +101,11 @@ def test_the_unknown_tag_error_lists_the_valid_tags():
     message = str(exc.value)
     for valid in ("openai", "responses", "anthropic", "xhigh", "max"):
         assert valid in message
+
+
+def test_registered_endpoint_defaults_fill_omitted_key_and_shape():
+    spec = parse("model@http://endpoint.test/v1", settings={
+        "ENDPOINT_DEFAULT_KEY": "local-key", "ENDPOINT_DEFAULT_SHAPE": "anthropic-custom",
+    })
+    assert spec.api_key == "local-key"
+    assert spec.provider_id == "anthropic-custom"

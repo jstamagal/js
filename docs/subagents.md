@@ -25,9 +25,11 @@ Schema:
 Rules:
 
 - `agent_id` is required to start workers.
+- Agent IDs contain only letters, numbers, underscores, and hyphens.
 - `tasks` must be a list of strings.
 - Empty task strings are ignored; an all-empty list is an error.
 - `session_id` is optional and resumes that worker agent session.
+- A session with an active worker refuses another concurrent run.
 - Recursive task depth defaults to `2` and is set by `SUBAGENT_DEPTH_MAX` in
   config or `--extra SUBAGENT_DEPTH_MAX=N`. (There is no `JS_TASK_MAX_DEPTH`
   env var.)
@@ -58,26 +60,31 @@ There are two layers of parallelism:
 
 1. If the assistant emits multiple `task` tool calls in the same turn, the
    runtime dispatches those `task` calls concurrently.
-2. Inside one `task` call, each task string runs concurrently in a thread pool.
+2. Inside one `task` call, each task string runs as a coroutine on the parent's
+   event loop, limited by `SUBAGENT_WORKERS_MAX`.
 
 Result order is stable. Output is returned in the order of the input task list.
 
 If a child fails, the result slot for that child contains `ERROR ...`. Successful
 sibling results are kept. A failing child does not sink its siblings.
 
-Non-task tools in a turn run sequentially.
+Foreground child turns share the parent's event loop in both the REPL and
+one-shot mode, so cancelling the parent cancels its foreground children.
+Synchronous leaf tools run in dispatch threads; read-only groups can run in
+parallel.
 
 ## Worker Session State
 
 For each child task:
 
 1. The parent config is copied with `dataclasses.replace`.
-2. `agent_id`, `agent_dir`, `history_file`, `sessions_dir`, `session_file`, and
-   `prompts_dir` are changed for the child agent.
-3. If `session_id` is provided, that child session is opened or created under
-   the child agent.
+2. `agent_id`, `agent_dir`, `sessions_dir`, `session_file`, and `prompts_dir`
+   are changed for the child agent.
+3. If `session_id` is provided, that child session is opened or created inside
+   the parent session's subagent directory.
 4. Otherwise a fresh `task-<timestamp>-<random>.jsonl` is reserved.
-5. The child's new messages are appended to that child session after success.
+5. The child's new messages are persisted on success, error, or cancellation.
+   Its terminal sessions and private Python kernel are closed when it exits.
 
 ## Tool Surface Isolation
 
@@ -90,8 +97,8 @@ The child loads:
 ```
 
 Then selects tools from the full registry using that agent's `agent.yaml`
-`tools:` entries. If the prompt directory is missing, the worker runs with an
-empty system prompt and no tools.
+`tools:` entries. A missing prompt directory returns an error before creating
+a worker session.
 
 Child contexts copy:
 

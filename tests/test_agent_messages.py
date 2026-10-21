@@ -117,6 +117,46 @@ def test_resume_keeps_seeded_history_without_duplicating_it(tmp_path, monkeypatc
     assert ("assistant", "example reply") in requests[1]
 
 
+def test_headless_resume_keeps_the_original_expanded_system_prompt(tmp_path, monkeypatch):
+    directory = _agent(tmp_path, monkeypatch, {"01-user.md": "opening"})
+    prompt = directory / "00-role.md"
+    prompt.write_text("SYSTEM {{SESSION_CLOCK}}", encoding="utf-8")
+    requests = _model(monkeypatch, ["opening reply", "first reply", "second reply"])
+    monkeypatch.setenv("SESSION_CLOCK", "first")
+    assert cli._run_prompt("first", session="seeded") == 0
+    monkeypatch.setenv("SESSION_CLOCK", "second")
+    prompt.write_text("CHANGED SYSTEM {{SESSION_CLOCK}}", encoding="utf-8")
+    assert cli._run_prompt("second", session="seeded") == 0
+
+    assert [request[0] for request in requests] == [("system", "SYSTEM first\n")] * 3
+    assert memory.load_system_prompt(_saved(tmp_path)) == "SYSTEM first\n"
+
+
+def test_headless_no_save_resume_leaves_the_saved_session_untouched(tmp_path, monkeypatch):
+    _agent(tmp_path, monkeypatch, {})
+    requests = _model(monkeypatch, ["saved reply", "temporary reply"])
+    assert cli._run_prompt("saved question", session="seeded") == 0
+    session = _saved(tmp_path)
+    before = session.read_bytes()
+
+    assert cli._run_prompt("temporary question", session="seeded", save=False) == 0
+
+    assert ("assistant", "saved reply") in requests[1]
+    assert session.read_bytes() == before
+
+
+def test_empty_headless_reply_does_not_reprint_a_previous_answer(tmp_path, monkeypatch, capsys):
+    _agent(tmp_path, monkeypatch, {})
+    _model(monkeypatch, ["previous answer", ""])
+    assert cli._run_prompt("first question", session="seeded") == 0
+    capsys.readouterr()
+
+    rc = cli._run_prompt("second question", session="seeded")
+
+    assert rc == 1
+    assert "previous answer" not in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("blocking", [True, False])
 def test_repl_initializes_before_the_first_typed_message(tmp_path, monkeypatch, blocking):
     _agent(tmp_path, monkeypatch, {"01-user.md": "opening"})

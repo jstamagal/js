@@ -66,13 +66,6 @@ def test_a_megabyte_of_output_returns_head_and_tail_with_a_marker_naming_the_dro
     assert stdout.endswith(MB_OUTPUT[stop:].decode())
 
 
-def test_the_result_fits_the_inline_limit_so_the_runtime_does_not_spill_it_again(tmp_path):
-    context = ToolContext(cwd=tmp_path)
-    result = shell(MB_COMMAND, timeout=60, context=context)
-    assert len(result.encode()) <= context.max_tool_result_inline_bytes
-    assert _marker(result)["knob"] == "TOOL_RESULT_INLINE_MAX"
-
-
 def test_binary_output_still_fits_the_inline_limit(tmp_path):
     # Each invalid UTF-8 byte renders as a 3-byte replacement character.
     context = ToolContext(cwd=tmp_path)

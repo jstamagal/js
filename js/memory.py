@@ -12,6 +12,8 @@ transcript up to date (`js.session_text`)."""
 
 from __future__ import annotations
 
+import contextlib
+import errno
 import fcntl
 import hashlib
 import json
@@ -24,10 +26,75 @@ from pathlib import Path
 from typing import Any, Literal
 
 from . import messages as msgs
+from . import output
 from . import session_store
 from . import session_text
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('memory')
+
 
 SCHEMA_VERSION = 1
+
+_owned_records: dict[tuple[int, str], set[str]] = {}
+
+
+def _file_key(path: Path) -> str:
+    return str(path.resolve(strict=False))
+
+
+class _Snapshot(list):
+    """Live history with the journal position it was read or saved from."""
+
+    def __init__(self, messages: list[dict], path: Path, revision: tuple[int, int, int] | None) -> None:
+        super().__init__(messages)
+        self.path = _file_key(path)
+        self.revision = revision
+
+    def copy(self) -> _Snapshot:
+        return _Snapshot(self, Path(self.path), self.revision)
+
+
+@contextlib.contextmanager
+def _save_lock(path: Path):
+    """Serialize history-changing transactions across processes."""
+    if path == Path(os.devnull):
+        yield
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(f"{_file_key(path)}.save.lock", "a+b") as guard:
+        fcntl.flock(guard.fileno(), fcntl.LOCK_EX)
+        yield
+
+
+def _revision(stream) -> tuple[int, int, int]:
+    info = os.fstat(stream.fileno())
+    return info.st_dev, info.st_ino, info.st_size
+
+
+def _check_snapshot(path: Path, messages: list[dict]) -> None:
+    if not isinstance(messages, _Snapshot) or messages.path != _file_key(path):
+        return
+    owned = _owned_records.get((os.getpid(), messages.path), set())
+    with _open_locked(path, "r") as stream:
+        current = _revision(stream)
+        previous = messages.revision
+        if previous is not None and (current[:2] != previous[:2] or current[2] < previous[2]):
+            raise OSError(errno.ESTALE, "session changed; reload before saving", str(path))
+        # Text streams seek by byte offsets at record boundaries.
+        stream.seek(previous[2] if previous is not None else 0)
+        for line in stream:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            changes_history = record.get("kind") == "message" or (
+                record.get("kind") == "mark" and _rewrites_history(record.get("marker")))
+            record_id = record.get("id")
+            if changes_history and (not isinstance(record_id, str) or record_id not in owned):
+                raise OSError(errno.ESTALE, "session changed; reload before saving", str(path))
 
 
 @dataclass
@@ -134,7 +201,7 @@ def _heal_orphaned_tool_calls(messages: list[dict]) -> list[dict]:
                     "role": "tool",
                     "tool_call_id": cid,
                     "name": (call.get("function") or {}).get("name", ""),
-                    "content": "ERROR: tool result was not recorded (session interrupted)",
+                    "content": _PROMPTS['heal_orphaned_tool_calls_error_tool_result_was_not_recorded'],
                 })
     return healed
 
@@ -148,8 +215,53 @@ def balance_orphaned_tool_calls(messages: list[dict]) -> list[dict]:
 
 # An assistant message's reasoning: the text, and the signed parts with the
 # provider and model they came from (`model_client.signed_reasoning_parts`).
-_REASONING_KEYS = frozenset({"reasoning_content", "reasoning_parts", "reasoning_from", "reasoning_blocks"})
-SIGNED_REASONING_KEYS = ("reasoning_parts", "reasoning_from", "reasoning_blocks")
+_REASONING_KEYS = frozenset({"reasoning_content", "reasoning_parts", "reasoning_from", "reasoning_blocks", "reasoning_layout"})
+SIGNED_REASONING_KEYS = ("reasoning_parts", "reasoning_from", "reasoning_blocks", "reasoning_layout")
+
+
+def restart_thinking_turn(messages: list[dict], *, require_tool_calls: bool) -> int:
+    """Recast an unrestorable assistant turn as user context with completed results.
+
+    Earlier turns keep their signed blocks. The new user context contains the
+    visible replies, calls and results so the next reply can use work already done.
+    """
+    latest = next((i for i in range(len(messages) - 1, -1, -1)
+                   if messages[i].get("role") == "assistant"), None)
+    if latest is None or (require_tool_calls and not messages[latest].get("tool_calls")):
+        return 0
+
+    def opens_turn(msg: dict) -> bool:
+        return msg.get("role") == "user" and not msg.get("steered") and not msg.get("resume_nudge")
+
+    start = 0
+    for index in range(latest - 1, -1, -1):
+        msg = messages[index]
+        if opens_turn(msg):
+            start = index + 1
+            break
+    end = next((i for i in range(latest + 1, len(messages)) if opens_turn(messages[i])), len(messages))
+    tail = messages[start:end]
+    rewritten: list[dict] = []
+    context: list[dict] = []
+
+    def flush_context() -> None:
+        if context:
+            rewritten.append(note_time({"role": "user", "content": (
+                _PROMPTS['flush_context_continue_from_this_previous_assistant_context']
+                + json.dumps(context, ensure_ascii=False)
+            )}))
+            context.clear()
+
+    for msg in tail:
+        if msg.get("role") == "user":
+            flush_context()
+            rewritten.append(msg)
+        else:
+            context.append({key: value for key, value in msg.items()
+                            if key in {"role", "content", "tool_calls", "tool_call_id", "name"}})
+    flush_context()
+    messages[start:end] = rewritten
+    return len(tail)
 
 
 def drop_signed_reasoning(messages: list[dict], start: int = 0) -> int:
@@ -247,11 +359,17 @@ def load_replay_messages(memory_file: Path) -> list[dict]:
     reasoning, and `model_client.history_to_ai_messages` applies the transport's
     replay policy.
     """
-    messages, skipped_versions = _replay(memory_file)
+    memory_file = Path(memory_file)
+    try:
+        with _open_locked(memory_file, "r") as stream:
+            messages, skipped_versions = _replay(memory_file)
+            revision = _revision(stream)
+    except FileNotFoundError:
+        messages, skipped_versions, revision = [], 0, None
     if skipped_versions:
-        msgs.warn(msgs.SESSION_RECORDS_SKIPPED, path=memory_file,
+        output.notice(msgs.SESSION_RECORDS_SKIPPED, path=memory_file,
                   records=f"{skipped_versions} record{'' if skipped_versions == 1 else 's'}", version=SCHEMA_VERSION)
-    return messages
+    return _Snapshot(messages, memory_file, revision)
 
 
 def _compared(message: dict) -> dict:
@@ -544,6 +662,11 @@ def _replay_records(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | No
                         tail = messages[keep_from:]
                         originals = list(tail)
                         drop_signed_reasoning(tail)
+                        if stamps is not None:
+                            for original, copy in zip(originals, tail, strict=True):
+                                entry = stamps.get(id(original))
+                                if copy is not original and entry is not None and entry[0] is original:
+                                    stamps[id(copy)] = (copy, entry[1])
                         if log is not None:
                             log.copied(originals, tail)
                         messages[:] = [_compaction_summary_message(data["summary"]),
@@ -590,13 +713,22 @@ def load_messages(memory_file: Path, *, preserve_reasoning: bool = False) -> lis
     """The `load_replay_messages` history. ``preserve_reasoning=True`` returns it
     unchanged; the default projects it to tool-call reasoning only."""
     messages = load_replay_messages(memory_file)
-    return messages if preserve_reasoning else _strip_orphan_reasoning(messages)
+    if not preserve_reasoning:
+        messages[:] = _strip_orphan_reasoning(messages)
+    return messages
 
 
 def _append(memory_file: Path, rec: Record, *, refresh: bool = True) -> None:
-    session_store.append(memory_file, rec.as_dict())
+    with _save_lock(memory_file):
+        _append_owned(memory_file, rec)
     if refresh:
         session_text.refresh(memory_file)
+
+
+def _append_owned(memory_file: Path, rec: Record) -> None:
+    linked = session_store.append(memory_file, rec.as_dict())
+    if "id" in linked:
+        _owned_records.setdefault((os.getpid(), _file_key(memory_file)), set()).add(linked["id"])
 
 
 def stamp_for(model: str | None, provider: str | None, reasoning: str | None) -> dict:
@@ -645,19 +777,29 @@ def append_message(memory_file: Path, message: dict, stamp: dict | None = None) 
 
 def persist_messages(memory_file: Path, messages: list[dict], stamp: dict | None = None) -> None:
     """Append the live suffix, retaining replaced records in the journal.
-    Each appended assistant message carries `stamp`."""
-    persisted = _without_answer_reasoning_text(load_replay_messages(memory_file))
-    comparable = _without_answer_reasoning_text(messages)
-    common = 0
-    for old, new in zip(persisted, comparable):
-        if old != new:
-            break
-        common += 1
-    if common < len(persisted):
-        _append(memory_file, Record(kind="mark", ts=time.time(), marker=f"rollback_to:{common}"), refresh=False)
-    for message in messages[common:]:
-        _append(memory_file, _message_record(message, stamp), refresh=False)
-    if common < len(persisted) or messages[common:]:
+    Each appended assistant message carries `stamp`. A loaded snapshot with
+    unseen history changes raises ESTALE before any replacement is written."""
+    with _save_lock(memory_file):
+        if memory_file.exists():
+            _check_snapshot(memory_file, messages)
+        elif isinstance(messages, _Snapshot) and messages.revision is not None:
+            raise OSError(errno.ESTALE, "session removed; reload before saving", str(memory_file))
+        persisted = _without_answer_reasoning_text(load_replay_messages(memory_file))
+        comparable = _without_answer_reasoning_text(messages)
+        common = 0
+        for old, new in zip(persisted, comparable):
+            if old != new:
+                break
+            common += 1
+        changed = common < len(persisted) or bool(messages[common:])
+        if common < len(persisted):
+            _append_owned(memory_file, Record(kind="mark", ts=time.time(), marker=f"rollback_to:{common}"))
+        for message in messages[common:]:
+            _append_owned(memory_file, _message_record(message, stamp))
+        if isinstance(messages, _Snapshot) and memory_file.exists():
+            with _open_locked(memory_file, "r") as stream:
+                messages.revision = _revision(stream)
+    if changed:
         session_text.refresh(memory_file)
 
 
@@ -890,8 +1032,8 @@ def append_tool_surface(memory_file: Path, state: dict) -> None:
     append_mark(memory_file, 'tool_surface:' + json.dumps(state, separators=(',', ':')))
 
 
-def load_tool_surface(memory_file: Path) -> dict | None:
-    """Read the latest surface snapshot after the last session reset."""
+def load_tool_surface(memory_file: Path, *, scope: dict | None = None) -> dict | None:
+    """Read the latest matching surface snapshot after the last session reset."""
     try:
         with _open_locked(memory_file, 'r') as stream:
             lines = stream.readlines()
@@ -914,5 +1056,6 @@ def load_tool_surface(memory_file: Path) -> dict | None:
         except json.JSONDecodeError:
             continue
         if isinstance(state, dict) and state.get('version') == 1:
-            return state
+            if scope is None or all(state.get(key) == value for key, value in scope.items()):
+                return state
     return None

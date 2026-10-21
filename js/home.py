@@ -55,7 +55,7 @@ from typing import TextIO
 
 from . import agent_migration
 from . import messages as msgs
-from . import paths
+from . import paths, settings as _settings
 from . import session_catalog
 from . import session_store
 from . import session_text
@@ -86,7 +86,7 @@ _DATA_ENTRIES = {
 }
 
 # `~/.js/tmp` entries untouched for this long are removed at startup.
-TMP_MAX_AGE_SECONDS = 24 * 60 * 60
+TMP_MAX_AGE_SECONDS = _settings.default_value("TMP_AGE_MAX")
 
 
 @dataclass(frozen=True)
@@ -539,13 +539,13 @@ def _file_latest(folder: Path, targets: dict[Path, Path]) -> None:
     old = payload.get("session_file") if isinstance(payload, dict) else None
     old_parts = Path(old).parts if isinstance(old, str) else ()
     moved = next((new for path, new in targets.items()
-                  if path.is_relative_to(folder) and new.is_file()
+                  if path.is_relative_to(folder) and not path.exists() and new.is_file()
                   and old_parts[-len(path.relative_to(folder).parts) - 1:]
                   == (folder.name, *path.relative_to(folder).parts)), None)
     if moved is not None:
         session_store.write_latest(paths.state_root() / folder.name, moved)
-    with contextlib.suppress(OSError):
-        latest.unlink()
+        with contextlib.suppress(OSError):
+            latest.unlink()
 
 
 def refile_sessions(*, apply: bool) -> Iterator[Step]:
@@ -626,11 +626,13 @@ def _locked_home() -> Iterator[None]:
         os.close(fd)
 
 
-def migrate_once(out: TextIO | None = None) -> list[Step]:
+def migrate_once(out: TextIO | None = None, *, on_step=None, on_error=None, should_migrate=None) -> list[Step]:
     """The startup migration: runs when an old location exists and the marker
     does not, then writes the marker. With nothing to move it touches nothing.
     Each step is printed as it is done."""
     marker = paths.home_migration_marker()
+    if should_migrate is not None and not should_migrate(marker):
+        return []
     if marker.exists() or not any(os.path.lexists(path) for path in paths.legacy_homes().values()):
         return []
     stream = out if out is not None else sys.stderr
@@ -641,18 +643,24 @@ def migrate_once(out: TextIO | None = None) -> list[Step]:
                 return []
             for step in steps(apply=True):
                 done.append(step)
-                msgs.say_said(describe(step, apply=True), file=stream)
+                if on_step is None:
+                    msgs.say_said(describe(step, apply=True), file=stream)
+                else:
+                    on_step(step)
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.write_text(time.strftime("%Y-%m-%dT%H:%M:%S%z") + "\n", encoding="utf-8")
     except OSError as exc:
-        msgs.say(msgs.HOME_MIGRATION_FAILED, file=stream, home=_short(paths.home()), error=exc)
+        if on_error is None:
+            msgs.say(msgs.HOME_MIGRATION_FAILED, file=stream, home=_short(paths.home()), error=exc)
+        else:
+            on_error(exc)
     return done
 
 
-def sweep_tmp(now: float | None = None) -> list[Path]:
-    """Remove top-level `~/.js/tmp` entries not modified for TMP_MAX_AGE_SECONDS."""
+def sweep_tmp(now: float | None = None, *, settings: dict | None = None) -> list[Path]:
+    """Remove top-level `~/.js/tmp` entries not modified for TMP_AGE_MAX seconds."""
     root = paths.home() / "tmp"
-    cutoff = (time.time() if now is None else now) - TMP_MAX_AGE_SECONDS
+    cutoff = (time.time() if now is None else now) - float(_settings.live_value("TMP_AGE_MAX", settings))
     removed: list[Path] = []
     try:
         entries = list(os.scandir(root))

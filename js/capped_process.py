@@ -10,6 +10,10 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from .prompt_text import load_catalog
+
+_PROMPTS = load_catalog('capped_process')
+
 
 
 # After the process exits, how long its reader threads get to drain the pipes
@@ -126,13 +130,13 @@ class _StreamCapture:
             handle.write(self._head)
             handle.write(self._tail)
             handle.flush()
+            if self._closed:
+                handle.close()
         except OSError:
             self._spill_failed = True
             return
         self._spilled = True
-        if self._closed:
-            handle.close()
-        else:
+        if not self._closed:
             self._file = handle
 
     def feed(self, chunk: bytes) -> None:
@@ -165,8 +169,11 @@ class _StreamCapture:
         with self._lock:
             self._closed = True
             if self._file is not None:
-                with contextlib.suppress(OSError):
+                try:
                     self._file.close()
+                except OSError:
+                    self._spill_failed = True
+                    self._spilled = False
                 self._file = None
 
     def ensure_spilled(self) -> Path | None:
@@ -205,14 +212,19 @@ class _StreamCapture:
             if start >= tail_start:
                 return bytes(self._tail[start - tail_start:end - tail_start])
             if self._spilled and self.spill_path is not None:
-                if self._file is not None:
-                    self._file.flush()
                 try:
+                    if self._file is not None:
+                        self._file.flush()
                     with open(self.spill_path, "rb") as spilled:
                         spilled.seek(start)
                         return spilled.read(end - start)
                 except OSError:
-                    pass
+                    self._spill_failed = True
+                    self._spilled = False
+                    if self._file is not None:
+                        with contextlib.suppress(OSError):
+                            self._file.close()
+                        self._file = None
             kept = bytes(self._head[start:min(end, head_len)])
             if end > tail_start:
                 kept += bytes(self._tail[max(start, tail_start) - tail_start:end - tail_start])
@@ -452,4 +464,4 @@ def _run_capped(
 
 
 def truncation_marker(cap: int, knob: str = "SHELL_OUTPUT_MAX") -> str:
-    return f"[truncated: {knob} ({cap}) reached]"
+    return _PROMPTS['truncation_marker_truncated_reached'].format(knob=knob, cap=cap)

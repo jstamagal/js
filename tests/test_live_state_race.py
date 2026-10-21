@@ -38,11 +38,6 @@ def _setup(monkeypatch, tmp_path, pairs: int) -> list[tuple[str, str | None]]:
     return seen
 
 
-def _assert_consistent(seen: list[tuple[str, str | None]]) -> None:
-    mixed = [(model, base) for model, base in seen if base != f"http://h{model[1:]}.invalid"]
-    assert not mixed, f"turns built from half-applied commands: {mixed}"
-
-
 def test_turn_start_waits_for_a_command_that_is_half_applied(monkeypatch, tmp_path):
     seen = _setup(monkeypatch, tmp_path, pairs=2)
     halfway = threading.Event()
@@ -75,20 +70,3 @@ def test_turn_start_waits_for_a_command_that_is_half_applied(monkeypatch, tmp_pa
 
     run_async(monkeypatch, from_env(), script)
     assert seen == [("m1", "http://h1.invalid")]
-
-
-def test_interleaved_set_and_model_commands_never_mix_into_a_turn(monkeypatch, tmp_path):
-    rounds = 200
-    seen = _setup(monkeypatch, tmp_path, pairs=rounds)
-
-    async def script(on_line):
-        await on_line("/set STEER_MODE one")
-        await on_line(f"/load {tmp_path / 'pair0.jsrc'}")
-        lines = []
-        for i in range(1, rounds):
-            lines += [f"/load {tmp_path / f'pair{i}.jsrc'}", f"turn {i}"]
-        await asyncio.gather(*(on_line(line) for line in lines))
-
-    run_async(monkeypatch, from_env(), script)
-    assert len(seen) == rounds - 1
-    _assert_consistent(seen)

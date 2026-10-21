@@ -347,7 +347,7 @@ async def _collect_provider_stream(provider: codex_provider.OpenAICodexProvider)
 
 
 def test_codex_provider_lists_models_and_streams_responses_shape(monkeypatch):
-    monkeypatch.setattr(codex_provider, "_client_version", lambda: "0.145.0")
+    monkeypatch.setattr(codex_provider, "_client_version", lambda *args: "0.145.0")
     client = _FakeCodexHttpClient()
     provider = codex_provider.OpenAICodexProvider(
         access_token=_fake_jwt(),
@@ -988,70 +988,87 @@ def test_codex_requests_carry_the_provider_headers(monkeypatch):
     assert sent["X-JS-Scrub"] == "on" and sent["X-Pool"] == "fofa"
 
 
-def test_codex_oauth_authorization_wins_over_an_extra_header_of_any_case(monkeypatch):
-    from js import logins
-
+def test_saved_codex_login_keeps_the_requests_explicit_base_url(monkeypatch):
+    login = codex_auth.login_from_token(codex_auth.CodexToken(
+        access=_fake_jwt(), refresh="refresh", expires_at=time.time() + 3600,
+        account_id="acct_123",
+    ))
+    logins.save_login(login)
     client = _FakeCodexHttpClient()
-    monkeypatch.setattr(logins, "load_logins", lambda: {})
-    real = codex_provider.OpenAICodexProvider.__init__
+    initialize = codex_provider.OpenAICodexProvider.__init__
 
     def with_fake_client(self, **kwargs):
-        real(self, **{**kwargs, "client": client})
+        initialize(self, **{**kwargs, "client": client})
 
     monkeypatch.setattr(codex_provider.OpenAICodexProvider, "__init__", with_fake_client)
-    token = _fake_jwt()
     model_client.stream_model(
         model_id="gpt-5.5", provider_id="openai-codex",
-        provider_base_url="https://chatgpt.com/backend-api", provider_api_key=token,
-        provider_headers={"authorization": "Bearer extra"},
+        provider_base_url="https://codex.example.test/backend-api",
+        provider_api_key=login.provider_api_key,
         messages=[ai.user_message("ping")], tools=None, max_output_tokens=None,
         reasoning_effort=None, on_text=lambda _c: None,
     )
-    sent = client.stream_calls[0]["headers"]
-    auth = [value for name, value in sent.items() if name.lower() == "authorization"]
-    assert auth == [f"Bearer {token}"]
+
+    assert client.stream_calls[0]["url"] == "https://codex.example.test/backend-api/codex/responses"
+    assert logins.load_logins()["openai-codex"].provider_base_url == login.provider_base_url
 
 
-def test_a_user_agent_or_originator_from_extra_headers_is_kept(monkeypatch):
-    from js import logins
-
+def test_codex_extra_params_reach_the_http_body(monkeypatch):
     client = _FakeCodexHttpClient()
-    monkeypatch.setattr(logins, "load_logins", lambda: {})
-    real = codex_provider.OpenAICodexProvider.__init__
-
-    def with_fake_client(self, **kwargs):
-        real(self, **{**kwargs, "client": client})
-
-    monkeypatch.setattr(codex_provider.OpenAICodexProvider, "__init__", with_fake_client)
+    monkeypatch.setattr(
+        codex_provider, "provider_from_login_or_token",
+        lambda **_kwargs: _provider_with_client(client),
+    )
     model_client.stream_model(
         model_id="gpt-5.5", provider_id="openai-codex",
         provider_base_url="https://chatgpt.com/backend-api", provider_api_key=_fake_jwt(),
-        provider_headers={"user-agent": "mine/1", "Originator": "mine"},
+        provider_extra={"extra_body": {"text": {"verbosity": "high"}}, "service_tier": "priority"},
         messages=[ai.user_message("ping")], tools=None, max_output_tokens=None,
         reasoning_effort=None, on_text=lambda _c: None,
     )
-    sent = {k.lower(): v for k, v in client.stream_calls[0]["headers"].items()}
-    assert sent["user-agent"] == "mine/1" and sent["originator"] == "mine"
-    assert len([k for k in client.stream_calls[0]["headers"] if k.lower() == "user-agent"]) == 1
+
+    body = client.stream_calls[0]["json"]
+    assert body["text"] == {"verbosity": "high"}
+    assert body["service_tier"] == "priority"
 
 
-def test_configured_framing_headers_never_reach_a_codex_request(monkeypatch):
-    from js import logins
-
+def test_codex_session_cache_key_reaches_the_http_body(monkeypatch):
     client = _FakeCodexHttpClient()
-    monkeypatch.setattr(logins, "load_logins", lambda: {})
-    real = codex_provider.OpenAICodexProvider.__init__
-
-    def with_fake_client(self, **kwargs):
-        real(self, **{**kwargs, "client": client})
-
-    monkeypatch.setattr(codex_provider.OpenAICodexProvider, "__init__", with_fake_client)
+    monkeypatch.setattr(
+        codex_provider, "provider_from_login_or_token",
+        lambda **_kwargs: _provider_with_client(client),
+    )
     model_client.stream_model(
         model_id="gpt-5.5", provider_id="openai-codex",
         provider_base_url="https://chatgpt.com/backend-api", provider_api_key=_fake_jwt(),
-        provider_headers={"Content-Length": "1", "Transfer-Encoding": "chunked", "Host": "elsewhere.invalid"},
+        cache_key="js-agent-session-1",
         messages=[ai.user_message("ping")], tools=None, max_output_tokens=None,
         reasoning_effort=None, on_text=lambda _c: None,
     )
-    sent = {k.lower(): v for k, v in client.stream_calls[0]["headers"].items()}
-    assert {"content-length", "transfer-encoding", "host"}.isdisjoint(sent)
+
+    assert client.stream_calls[0]["json"]["prompt_cache_key"] == "js-agent-session-1"
+
+
+def test_browser_oauth_accepts_input_and_notice_services(monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    notices, opened, registered = [], [], []
+    source = object()
+    server = SimpleNamespace(server_close=lambda: None)
+    selector = SimpleNamespace(
+        register=lambda *args: registered.append(args),
+        select=lambda **kwargs: [(SimpleNamespace(data=None, fd=7), None)],
+        close=lambda: None,
+    )
+    monkeypatch.setattr(codex_auth, "_bind_callback_servers", lambda cls: [server])
+    monkeypatch.setattr(codex_auth.selectors, "DefaultSelector", lambda: selector)
+    monkeypatch.setattr(codex_auth.secrets, "token_urlsafe", lambda size: "state")
+    monkeypatch.setattr(codex_auth, "exchange_code_for_token", lambda *args: "token")
+    monkeypatch.setattr(codex_auth, "login_from_token", lambda token: token)
+    result = codex_auth.login_browser(
+        stdin=source, read=lambda *args: b"http://localhost:1455/auth/callback?code=code&state=state\n",
+        say=lambda *args, **kwargs: notices.append(args), open_browser=False, opener=opened.append,
+    )
+    assert result == "token" and notices and opened == []
+    assert any(args[0] is source for args in registered)
+    assert capsys.readouterr().out == ""

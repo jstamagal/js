@@ -135,3 +135,16 @@ def test_catalog_alias_rows_are_not_listed_twice(monkeypatch):
     monkeypatch.setattr(providers, "_dynamic", None)
     ids = {provider.id.lower() for provider in providers._dynamic_login_providers()}
     assert not ids & set(providers._ALIAS)
+
+
+def test_provider_definitions_can_belong_to_an_assembly():
+    from dataclasses import replace
+    from js import providers
+
+    before = providers.all_providers()
+    custom = replace(before[0], id="assembly", aliases=("mine",))
+    with providers.using_providers((custom,)):
+        assert providers.all_providers() == (custom,)
+        assert providers.get_provider("mine") is custom
+        assert providers.parse_model_prefix("mine/model") == ("assembly", "model")
+    assert providers.all_providers() is before

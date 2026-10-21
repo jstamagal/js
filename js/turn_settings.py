@@ -28,6 +28,15 @@ from . import settings as _settings
 INVALID: Any = object()
 
 
+def number(raw: Any) -> Any:
+    if raw is None or isinstance(raw, bool):
+        return INVALID
+    try:
+        return float(raw)
+    except (TypeError, ValueError, OverflowError):
+        return INVALID
+
+
 def integer(raw: Any) -> Any:
     if raw is None or isinstance(raw, bool):
         return INVALID
@@ -44,15 +53,6 @@ def at_least_one(raw: Any) -> Any:
 
 def optional_integer(raw: Any) -> Any:
     return None if raw is None else integer(raw)
-
-
-def number(raw: Any) -> Any:
-    if raw is None or isinstance(raw, bool):
-        return INVALID
-    try:
-        return float(raw)
-    except (TypeError, ValueError, OverflowError):
-        return INVALID
 
 
 def flag(raw: Any) -> Any:
@@ -121,6 +121,74 @@ class TurnSetting:
 
 
 TURN_SETTINGS: tuple[TurnSetting, ...] = (
+    TurnSetting("remove_trash", "REMOVE_TRASH", flag, on_context=True),
+    TurnSetting("trash_bytes_max", "TRASH_BYTES_MAX", integer, on_context=True),
+    TurnSetting("tool_argument_strict", "TOOL_ARGUMENT_STRICT", flag),
+    TurnSetting("jail_clean_private_dirs", "JAIL_CLEAN_PRIVATE_DIRS", flag, on_context=True),
+    TurnSetting("jail_hide_network_filesystems", "JAIL_HIDE_NETWORK_FILESYSTEMS", flag, on_context=True),
+    TurnSetting("jail_hide_operator_home", "JAIL_HIDE_OPERATOR_HOME", flag, on_context=True),
+    TurnSetting("jail_base_hidden_dirs", "JAIL_BASE_HIDDEN_DIRS", paths, on_context=True),
+    TurnSetting("hook_shell_program", "HOOK_SHELL_PROGRAM", text),
+    TurnSetting("swarm_spawn_max", "SWARM_SPAWN_MAX", integer),
+    TurnSetting("session_text_auto_refresh", "SESSION_TEXT_AUTO_REFRESH", flag),
+    TurnSetting("download_retry_wait", "DOWNLOAD_RETRY_WAIT", integer),
+    TurnSetting("download_retries_max", "DOWNLOAD_RETRIES_MAX", integer),
+    TurnSetting("download_connections_max", "DOWNLOAD_CONNECTIONS_MAX", integer),
+    TurnSetting("download_splits_max", "DOWNLOAD_SPLITS_MAX", integer),
+    TurnSetting("tool_binary_path_fallback", "TOOL_BINARY_PATH_FALLBACK", flag),
+    TurnSetting("model_context_probe", "MODEL_CONTEXT_PROBE", flag),
+    TurnSetting("model_catalog_age_max", "MODEL_CATALOG_AGE_MAX", number),
+    TurnSetting("model_catalog_auto_refresh", "MODEL_CATALOG_AUTO_REFRESH", flag),
+    TurnSetting("deepseek_default_effort", "DEEPSEEK_DEFAULT_EFFORT", text),
+    TurnSetting("codex_client_detect", "CODEX_CLIENT_DETECT", flag),
+    TurnSetting("codex_client_version", "CODEX_CLIENT_VERSION", text),
+    TurnSetting("codex_user_agent", "CODEX_USER_AGENT", text),
+    TurnSetting("codex_originator", "CODEX_ORIGINATOR", text),
+    TurnSetting("codex_reasoning_summary", "CODEX_REASONING_SUMMARY", text),
+    TurnSetting("codex_text_verbosity", "CODEX_TEXT_VERBOSITY", text),
+    TurnSetting("notebook_clear_outputs", "NOTEBOOK_CLEAR_OUTPUTS", flag, on_context=True),
+    TurnSetting("notebook_require_read", "NOTEBOOK_REQUIRE_READ", flag, on_context=True),
+    TurnSetting("lsp_allow_home_root", "LSP_ALLOW_HOME_ROOT", flag, on_context=True),
+    TurnSetting("lsp_environment_inherit", "LSP_ENVIRONMENT_INHERIT", flag, on_context=True),
+    TurnSetting("toolbox_require_bound_names", "TOOLBOX_REQUIRE_BOUND_NAMES", flag, on_context=True),
+    TurnSetting("toolbox_seed_examples", "TOOLBOX_SEED_EXAMPLES", flag, on_context=True),
+    TurnSetting("typesafe_api_key", "TYPESAFE_API_KEY", text, on_context=True),
+    TurnSetting("subagent_result_share", "SUBAGENT_RESULT_SHARE", flag, on_context=True),
+    TurnSetting("browser_fallback_file", "BROWSER_FALLBACK_FILE", text, on_context=True),
+    TurnSetting("terminal_environment_inherit", "TERMINAL_ENVIRONMENT_INHERIT", flag, on_context=True),
+    TurnSetting("terminal_shell_program", "TERMINAL_SHELL_PROGRAM", text, on_context=True),
+    TurnSetting("browse_allow_private_network", "BROWSE_ALLOW_PRIVATE_NETWORK", flag, on_context=True),
+    TurnSetting("browse_stealth", "BROWSE_STEALTH", flag, on_context=True),
+    TurnSetting("context7_api_key", "CONTEXT7_API_KEY", text, on_context=True),
+    TurnSetting("exa_api_key", "EXA_API_KEY", text, on_context=True),
+    TurnSetting("tavily_api_key", "TAVILY_API_KEY", text, on_context=True),
+    TurnSetting("serper_api_key", "SERPER_API_KEY", text, on_context=True),
+    TurnSetting("shell_kill_unfinished", "SHELL_KILL_UNFINISHED", flag, on_context=True),
+    TurnSetting("shell_managed_path", "SHELL_MANAGED_PATH", flag, on_context=True),
+    TurnSetting("shell_pipefail", "SHELL_PIPEFAIL", flag, on_context=True),
+    TurnSetting("search_one_file_system", "SEARCH_ONE_FILE_SYSTEM", flag, on_context=True),
+    TurnSetting("search_deduplicate", "SEARCH_DEDUPLICATE", flag, on_context=True),
+    TurnSetting("read_deduplicate", "READ_DEDUPLICATE", flag, on_context=True),
+    TurnSetting("edit_fuzzy", "EDIT_FUZZY", flag, on_context=True),
+    TurnSetting("edit_read_bypass_characters", "EDIT_READ_BYPASS_CHARACTERS", integer, on_context=True),
+    TurnSetting("write_require_overwrite", "WRITE_REQUIRE_OVERWRITE", flag, on_context=True),
+    TurnSetting("file_require_read", "FILE_REQUIRE_READ", flag, on_context=True),
+    TurnSetting("tool_errors_max", "TOOL_ERRORS_MAX", integer),
+    TurnSetting("anthropic_required_effort", "ANTHROPIC_REQUIRED_EFFORT", text),
+    TurnSetting("anthropic_thinking_display", "ANTHROPIC_THINKING_DISPLAY", text),
+    TurnSetting("anthropic_prompt_cache", "ANTHROPIC_PROMPT_CACHE", flag),
+    TurnSetting("claude_proxy_include_reasoning", "CLAUDE_PROXY_INCLUDE_REASONING", flag),
+    TurnSetting("deepseek_reasoning_tokens_max", "DEEPSEEK_REASONING_TOKENS_MAX", integer),
+    TurnSetting("compaction_consecutive_max", "COMPACTION_CONSECUTIVE_MAX", integer),
+    TurnSetting("compaction_summary_request_tokens_max", "COMPACTION_SUMMARY_REQUEST_TOKENS_MAX", integer),
+    TurnSetting("compaction_hint_timeout", "COMPACTION_HINT_TIMEOUT", integer),
+    TurnSetting("compaction_hint_shell_program", "COMPACTION_HINT_SHELL_PROGRAM", text),
+    TurnSetting("compaction_overflow_keep_tool_results", "COMPACTION_OVERFLOW_KEEP_TOOL_RESULTS", integer),
+    TurnSetting("compaction_overflow_rounds_max", "COMPACTION_OVERFLOW_ROUNDS_MAX", integer),
+    TurnSetting("retry_backoff_jitter", "RETRY_BACKOFF_JITTER", number),
+    TurnSetting("retry_backoff_max", "RETRY_BACKOFF_MAX", number),
+    TurnSetting("retry_backoff_multiplier", "RETRY_BACKOFF_MULTIPLIER", number),
+    TurnSetting("retry_backoff_start", "RETRY_BACKOFF_START", number),
     # --- on the ToolContext ---
     TurnSetting("max_read_lines", "READ_LINES_MAX", integer, on_context=True),
     TurnSetting("max_file_bytes", "FILE_BYTES_MAX", integer, on_context=True),
@@ -157,7 +225,10 @@ TURN_SETTINGS: tuple[TurnSetting, ...] = (
     TurnSetting("hymem_recall_max", "HYMEM_RECALL_MAX", at_least_one, on_context=True),
     TurnSetting("hymem_relevance_min", "HYMEM_RELEVANCE_MIN", number, on_context=True),
     TurnSetting("paranoid_mode", "PARANOID_MODE", choice("off", "on", "extra"), on_context=True),
+    TurnSetting("skills_disabled", "SKILLS_DISABLED", names, on_context=True),
     # --- on the Config only ---
+    TurnSetting("silent_overflow_recovery", "SILENT_OVERFLOW_RECOVERY", flag),
+    TurnSetting("signed_reasoning_recovery", "SIGNED_REASONING_RECOVERY", flag),
     TurnSetting("max_tool_iterations", "TURN_ROUNDS_MAX", integer),
     TurnSetting("max_tool_calls_per_message", "REPLY_TOOL_CALLS_MAX", integer),
     TurnSetting("max_tool_results_per_turn_bytes", "PARALLEL_RESULTS_MAX", integer),
@@ -173,6 +244,11 @@ TURN_SETTINGS: tuple[TurnSetting, ...] = (
     TurnSetting("allow_inline_code", "INLINE_CODE", flag),
     TurnSetting("debug_autolog", "REQUEST_LOG", flag),
     TurnSetting("debug_autolog_dir", "REQUEST_LOG_DIR", optional_text),
+    TurnSetting("transcript_user_label", "TRANSCRIPT_USER_LABEL", text),
+    TurnSetting("transcript_assistant_label", "TRANSCRIPT_ASSISTANT_LABEL", text),
+    TurnSetting("transcript_speaker_format", "TRANSCRIPT_SPEAKER_FORMAT", text),
+    TurnSetting("transcript_timestamp_format", "TRANSCRIPT_TIMESTAMP_FORMAT", text),
+    TurnSetting("transcript_disable_all_on_error", "TRANSCRIPT_DISABLE_ALL_ON_ERROR", flag),
     TurnSetting("transcript_log", "TRANSCRIPT_LOG", flag),
     TurnSetting("transcript_log_dir", "TRANSCRIPT_LOG_DIR", optional_text),
 )

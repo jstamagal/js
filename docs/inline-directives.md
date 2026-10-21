@@ -158,9 +158,10 @@ expand.
 A prompt that documents the syntax to itself needs to show a directive without
 running it. A backslash immediately before any form (`\!{sh ...}`, `\{{VAR}}`,
 `` \``` ``!sub) emits it verbatim minus the escape backslash — the universal
-escape, and the only one for fenced blocks. An inline `!{...}` / `{{...}}`
-fully wrapped in a markdown backtick code span is also left literal, backticks
-and all.
+escape, and the only one for fenced blocks. Directives inside a closed Markdown
+backtick code span on one line stay literal, backticks and all. Matching delimiter runs may
+contain several backticks, so a span can include examples with shorter backtick
+runs inside it.
 
 ## Single-pass / injection safety
 

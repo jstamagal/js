@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from dataclasses import replace
 
 import ai
@@ -76,6 +77,41 @@ def _anthropic_events(model: str, *, thought: str = _THOUGHT, signature: str = _
     return events
 
 
+def _reply_events(model: str, *, blocks: list[dict], stop: str) -> list[dict]:
+    """The stream of a reply whose content is ``blocks``, as Anthropic sends it."""
+    events: list[dict] = [
+        {"type": "message_start", "message": {
+            "id": "msg_1", "type": "message", "role": "assistant", "model": model, "content": [],
+            "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": 5, "output_tokens": 1}}},
+    ]
+    for n, block in enumerate(blocks):
+        if block["type"] == "thinking":
+            events.append({"type": "content_block_start", "index": n,
+                           "content_block": {"type": "thinking", "thinking": "", "signature": ""}})
+            if block["thinking"]:
+                events.append({"type": "content_block_delta", "index": n,
+                               "delta": {"type": "thinking_delta", "thinking": block["thinking"]}})
+            events.append({"type": "content_block_delta", "index": n,
+                           "delta": {"type": "signature_delta", "signature": block["signature"]}})
+        elif block["type"] == "text":
+            events += [{"type": "content_block_start", "index": n, "content_block": {"type": "text", "text": ""}},
+                       {"type": "content_block_delta", "index": n,
+                        "delta": {"type": "text_delta", "text": block["text"]}}]
+        elif block["type"] == "redacted_thinking":
+            events.append({"type": "content_block_start", "index": n, "content_block": block})
+        else:
+            events += [{"type": "content_block_start", "index": n, "content_block": {
+                           "type": "tool_use", "id": block["id"], "name": block["name"], "input": {}}},
+                       {"type": "content_block_delta", "index": n, "delta": {
+                           "type": "input_json_delta", "partial_json": json.dumps(block["input"])}}]
+        events.append({"type": "content_block_stop", "index": n})
+    events += [
+        {"type": "message_delta", "delta": {"stop_reason": stop, "stop_sequence": None}, "usage": {"output_tokens": 5}},
+        {"type": "message_stop"},
+    ]
+    return events
+
+
 class _Wire:
     """A mock Anthropic endpoint: records each request body, answers from a script."""
 
@@ -84,22 +120,43 @@ class _Wire:
         self.script = list(script or [])
         self.bodies: list[dict] = []
         self.headers: list[httpx2.Headers] = []
+        self.original_replies: dict[str, list[dict]] = {}
+        self.latest_reply: list[dict] | None = None
 
     refuse: frozenset[int] = frozenset()
+    # A body this returns true for is refused too.
+    refuse_when: Callable[[dict], bool] | None = None
+    # Anthropic's 400 for a thinking block bound to another conversation.
+    refusal = ("messages.1.content.0: Invalid `signature` in `thinking` block. "
+               "The block is bound to a different conversation.")
 
     def respond(self, request: httpx2.Request) -> httpx2.Response:
         self.headers.append(request.headers)
-        if len(self.bodies) in self.refuse:
-            # Anthropic's 400 for a thinking block bound to another conversation.
+        body = json.loads(request.content)
+        assistants = _assistant_blocks(body)
+        if assistants:
+            latest = assistants[-1]
+            original = next((self.original_replies[b["id"]] for b in latest
+                             if b["type"] == "tool_use" and b["id"] in self.original_replies), self.latest_reply)
+            if original is not None:
+                def thinking_positions(blocks):
+                    return [(n, b) for n, b in enumerate(blocks)
+                            if b["type"] in {"thinking", "redacted_thinking"}]
+
+                if thinking_positions(latest) != thinking_positions(original):
+                    self.bodies.append(body)
+                    return httpx2.Response(400, json={"type": "error", "error": {
+                        "type": "invalid_request_error", "message":
+                        "`thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified"}})
+        if len(self.bodies) in self.refuse or (self.refuse_when is not None and self.refuse_when(body)):
             self.bodies.append(json.loads(request.content))
             return httpx2.Response(400, json={"type": "error", "error": {
-                "type": "invalid_request_error",
-                "message": "messages.1.content.0: Invalid `signature` in `thinking` block. "
-                           "The block is bound to a different conversation."}})
+                "type": "invalid_request_error", "message": self.refusal}})
         self.bodies.append(json.loads(request.content))
         kwargs = self.script.pop(0) if self.script else {}
-        return httpx2.Response(200, headers={"Content-Type": "text/event-stream"},
-                               content=_sse(_anthropic_events(self.model, **kwargs)))
+        events = (_reply_events(self.model, **kwargs) if "blocks" in kwargs
+                  else _anthropic_events(self.model, **kwargs))
+        return httpx2.Response(200, headers={"Content-Type": "text/event-stream"}, content=_sse(events))
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         client = httpx2.AsyncClient(transport=httpx2.MockTransport(self.respond))
@@ -554,15 +611,13 @@ def test_a_second_refusal_in_one_request_is_raised(claude):
     assert len(wire.bodies) == 3
 
 
-# ai 0.5.2 has no redacted_thinking support: its stream parser emits no event
-# for the block and its message serializer writes only `thinking` blocks, so
-# the block never reaches the history and is never replayed. When the replay
-# that lacks it is refused, the signed-reasoning retry resends without any.
+# The js Anthropic adapter carries opaque blocks through the SDK as signed
+# reasoning parts, including their positions among text and calls.
 
 _REDACTED = "REDACTED-opaque-1"
 
 
-def test_a_redacted_thinking_block_is_not_kept_or_replayed(claude):
+def test_a_redacted_thinking_block_is_kept_and_replayed(claude):
     cfg, wire, context = claude
     wire.script = [{"redacted": _REDACTED}, {}]
     messages = [{"role": "user", "content": "first"}]
@@ -571,9 +626,13 @@ def test_a_redacted_thinking_block_is_not_kept_or_replayed(claude):
     _turn(cfg, messages, context)
 
     assert messages[1]["reasoning_parts"] == [
+        {"text": "", "provider_metadata": {"anthropic": {"redacted_thinking": {
+            "type": "redacted_thinking", "data": _REDACTED}}}},
         {"text": _THOUGHT, "provider_metadata": {"anthropic": {"signature": _SIGNATURE}}},
     ]
-    assert _assistant_blocks(wire.bodies[1]) == [[_SIGNED_BLOCK, {"type": "text", "text": "ok"}]]
+    assert _assistant_blocks(wire.bodies[1]) == [[
+        {"type": "redacted_thinking", "data": _REDACTED}, _SIGNED_BLOCK, {"type": "text", "text": "ok"},
+    ]]
 
 
 def test_a_refused_replay_without_its_redacted_block_is_resent_without_signed_thinking(claude):
@@ -589,6 +648,64 @@ def test_a_refused_replay_without_its_redacted_block_is_resent_without_signed_th
     assert _assistant_blocks(wire.bodies[2]) == [[{"type": "text", "text": "ok"}]]
     assert "reasoning_parts" not in messages[1]
     assert messages[-1]["content"] == "ok"
+
+
+def test_a_latest_message_the_provider_calls_modified_is_restarted_with_its_visible_context(claude):
+    cfg, wire, context = claude
+    wire.script = [{"redacted": _REDACTED}, {}]
+    wire.latest_reply = [{"type": "redacted_thinking", "data": _REDACTED},
+                         _SIGNED_BLOCK, {"type": "text", "text": "ok"}]
+    messages = [{"role": "user", "content": "first"}]
+    _turn(cfg, messages, context)
+    messages[1]["reasoning_parts"] = messages[1]["reasoning_parts"][1:]
+    messages.append({"role": "user", "content": "next"})
+    _turn(cfg, messages, context)
+
+    assert len(wire.bodies) == 3
+    assert _assistant_blocks(wire.bodies[2]) == []
+    user_parts = wire.bodies[2]["messages"][-1]["content"]
+    previous = json.loads(user_parts[1]["text"].split("\n", 1)[1])
+    assert previous == [{"role": "assistant", "content": "ok"}]
+    assert user_parts[-1] == {"type": "text", "text": "next"}
+    assert "reasoning_parts" not in messages[1]
+
+
+@pytest.mark.parametrize("lost_redacted", [False, True])
+def test_a_tool_continuation_keeps_original_thinking_or_restarts_with_completed_results(claude, lost_redacted):
+    cfg, wire, context = claude
+    reply = [
+        {"type": "redacted_thinking", "data": _REDACTED},
+        _SIGNED_BLOCK,
+        {"type": "text", "text": "A"},
+        {"type": "tool_use", "id": "toolu_1", "name": "no_such_tool", "input": {"path": "a"}},
+        {"type": "redacted_thinking", "data": "second opaque block"},
+        {"type": "thinking", "thinking": "", "signature": "S2"},
+        {"type": "text", "text": "B"},
+    ]
+    wire.script = [{"blocks": reply, "stop": "tool_use"}, {}]
+    wire.original_replies["toolu_1"] = reply
+    messages = [{"role": "user", "content": "go"}]
+    _turn(replace(cfg, max_tool_iterations=1), messages, context)
+    if lost_redacted:
+        # A record from a session whose parser lost the opaque blocks.
+        messages[1]["reasoning_parts"] = [p for p in messages[1]["reasoning_parts"]
+                                           if "redacted_thinking" not in p.get("provider_metadata", {}).get("anthropic", {})]
+    memory.persist_messages(cfg.session_file, messages, memory.stamp_for(cfg.model, cfg.provider_id, cfg.reasoning_effort))
+    messages = memory.load_messages(cfg.session_file)
+    completed_result = messages[-1]["content"]
+    _turn(cfg, messages, context)
+
+    assert messages[-1]["content"] == "ok"
+    assert len(wire.bodies) == (3 if lost_redacted else 2)
+    if lost_redacted:
+        assert _assistant_blocks(wire.bodies[-1]) == []
+        recovered = wire.bodies[-1]["messages"][-1]["content"]
+        completed = json.loads(recovered[-1]["text"].split("\n", 1)[1])
+        assert completed[-1]["content"] == completed_result
+        assert completed[-1]["tool_call_id"] == "toolu_1"
+        assert json.loads(completed[0]["tool_calls"][0]["function"]["arguments"]) == {"path": "a"}
+    else:
+        assert _assistant_blocks(wire.bodies[-1]) == [reply]
 
 
 def _signed(text: str, sig: str) -> ai.types.messages.ReasoningPart:
@@ -643,6 +760,49 @@ def test_text_between_signed_thinking_blocks_replays_in_the_order_it_came(monkey
     assert [b["type"] for b in _assistant_blocks(wire.bodies[0])[0]] == ["thinking", "text", "thinking", "tool_use"]
 
 
+def test_a_reply_cut_off_after_its_tool_calls_replays_with_its_blocks_in_order(claude):
+    cfg, wire, context = claude
+    reply = [
+        {"type": "thinking", "thinking": "", "signature": "S1"},
+        {"type": "text", "text": "Reading the first file."},
+        {"type": "tool_use", "id": "toolu_1", "name": "no_such_tool", "input": {"path": "a"}},
+        {"type": "text", "text": "Now the second."},
+        {"type": "thinking", "thinking": "progress note", "signature": "S2"},
+        {"type": "tool_use", "id": "toolu_2", "name": "no_such_tool", "input": {"path": "b"}},
+    ]
+    wire.script = [{"blocks": reply, "stop": "tool_use"}, {}]
+    messages = [{"role": "user", "content": "go"}]
+    _turn(replace(cfg, max_tool_iterations=1), messages, context)
+    messages.append({"role": "user", "content": "go on"})
+    _turn(cfg, messages, context)
+
+    assert _assistant_blocks(wire.bodies[1])[-1] == reply
+
+
+def test_a_capped_batch_stores_text_in_the_same_order_as_its_call_offsets(claude):
+    cfg, wire, context = claude
+    reply = [
+        _SIGNED_BLOCK,
+        {"type": "text", "text": "A"},
+        {"type": "tool_use", "id": "toolu_1", "name": "no_such_tool", "input": {"path": "a"}},
+        {"type": "text", "text": "B"},
+        {"type": "tool_use", "id": "toolu_2", "name": "no_such_tool", "input": {"path": "b"}},
+    ]
+    wire.script = [{"blocks": reply, "stop": "tool_use"}, {}]
+    messages = [{"role": "user", "content": "go"}]
+    _turn(replace(cfg, max_tool_iterations=1, max_tool_calls_per_message=1), messages, context)
+    record = messages[1]
+    messages.append({"role": "user", "content": "go on"})
+    _turn(cfg, messages, context)
+
+    replayed = _assistant_blocks(wire.bodies[1])[0]
+    assert [b["type"] for b in replayed] == ["thinking", "text", "tool_use", "text"]
+    assert replayed[-1] == {"type": "text", "text": "B"}
+    assert record["content"] == replayed[1]["text"] + "B"
+    assert replayed[1]["text"].startswith("A")
+    assert replayed[2] == reply[2]
+
+
 def test_a_drop_of_signed_reasoning_on_a_final_answer_survives_resume(tmp_path):
     session = tmp_path / "session.jsonl"
     answer = {**_signed_call(1), "content": "done"}
@@ -669,3 +829,78 @@ def test_the_thinking_budget_setting_replaces_the_effort_budget(claude):
 
     assert wire.bodies[0]["thinking"] == {"type": "enabled", "budget_tokens": 4000}
     assert wire.bodies[0]["max_tokens"] == 32000
+
+
+def test_resume_preserves_adjacent_text_blocks_and_drops_empty_ones_before_thinking(claude):
+    # Anthropic refuses an empty text block, so replay leaves it out; every
+    # thinking block still goes back unchanged and in its order.
+    cfg, wire, context = claude
+    reply = [
+        _SIGNED_BLOCK,
+        {"type": "text", "text": "A"},
+        {"type": "text", "text": "B"},
+        {"type": "thinking", "thinking": "next", "signature": "S2"},
+        {"type": "tool_use", "id": "toolu_1", "name": "no_such_tool", "input": {}},
+        {"type": "text", "text": ""},
+        {"type": "thinking", "thinking": "", "signature": "S3"},
+    ]
+    sent = [block for block in reply if block != {"type": "text", "text": ""}]
+    wire.script = [{"blocks": reply, "stop": "tool_use"}, {}]
+    wire.original_replies = {"toolu_1": sent}
+    messages = [{"role": "user", "content": "go"}]
+    _turn(replace(cfg, max_tool_iterations=1), messages, context)
+    memory.persist_messages(cfg.session_file, messages)
+    resumed = memory.load_replay_messages(cfg.session_file)
+
+    _turn(cfg, resumed, context)
+
+    assert len(wire.bodies) == 2
+    assert _assistant_blocks(wire.bodies[-1]) == [sent]
+
+
+def test_a_tool_continuation_whose_earlier_signature_is_refused_recovers_in_one_retry(claude):
+    cfg, wire, context = claude
+    wire.refuse_when = lambda body: '"S0"' in json.dumps(body)
+    origin = {"provider": "anthropic", "model": "claude-sonnet-4-5"}
+    messages = [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "earlier", "reasoning_from": origin,
+         "reasoning_parts": [{"text": "t0", "provider_metadata": {"anthropic": {"signature": "S0"}}}]},
+        {"role": "user", "content": "go"},
+        {**_signed_call(1), "reasoning_from": origin},
+        _result(1),
+    ]
+
+    _turn(cfg, messages, context)
+
+    assert len(wire.bodies) == 2
+    assert messages[-1]["content"] == "ok"
+
+
+def test_a_legacy_tool_turn_without_stored_blocks_recovers_missing_thinking(claude):
+    cfg, wire, context = claude
+    wire.refuse = frozenset({0})
+    wire.refusal = (
+        "messages.1.content.0: Expected `thinking` or `redacted_thinking`, but found `tool_use`. "
+        "When `thinking` is enabled, a final `assistant` message must start with a thinking block."
+    )
+    messages = [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": "", "tool_calls": [{
+            "id": "old_call", "type": "function",
+            "function": {"name": "no_such_tool", "arguments": '{"path":"old"}'},
+        }]},
+        {"role": "tool", "tool_call_id": "old_call", "name": "no_such_tool", "content": "already done"},
+    ]
+    memory.persist_messages(cfg.session_file, messages)
+    resumed = memory.load_replay_messages(cfg.session_file)
+
+    _turn(cfg, resumed, context)
+
+    assert len(wire.bodies) == 2
+    assert _assistant_blocks(wire.bodies[1]) == []
+    recovered = json.loads(wire.bodies[1]["messages"][-1]["content"][-1]["text"].split("\n", 1)[1])
+    assert recovered == messages[1:]
+    assert resumed[-1]["content"] == "ok"
+    memory.persist_messages(cfg.session_file, resumed)
+    assert memory.load_replay_messages(cfg.session_file) == resumed

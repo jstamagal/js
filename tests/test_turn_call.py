@@ -22,7 +22,7 @@ from js.turn_stream import StreamSink, TurnEvents
 
 @pytest.fixture(autouse=True)
 def no_waiting(monkeypatch):
-    monkeypatch.setattr(turn_call, "_backoff", lambda _n: 0)
+    monkeypatch.setattr(turn_call, "_backoff", lambda _n, _budget: 0)
     monkeypatch.setattr(turn_call.model_metadata, "resolve_max_output", lambda *a, **k: None)
 
 
@@ -291,3 +291,30 @@ def test_escalation_respects_window_when_usage_has_no_prompt_tokens():
     assert caller._escalation(_Usage(), 1000, 9000) == 8000
     # window smaller than the escalation: room binds it
     assert caller._escalation(_Usage(), 1000, 5000) == 5000
+
+
+def test_silent_overflow_recovery_can_be_disabled(tmp_path, monkeypatch):
+    turn = _Turn(tmp_path, monkeypatch, [_done("kept", input_tokens=5000), _done("resent")],
+                 budget=_Budget(window=4000))
+    turn.caller._limits = CallLimits.from_settings({"SILENT_OVERFLOW_RECOVERY": False})
+    assert turn.call().result.text == "kept"
+    assert turn.budget.recoveries == []
+
+
+def test_overflow_recovery_uses_registered_round_limit(tmp_path, monkeypatch):
+    turn = _Turn(tmp_path, monkeypatch, [_overflow(), _overflow(), _done()])
+    turn.caller._limits = CallLimits.from_settings({"COMPACTION_OVERFLOW_ROUNDS_MAX": 1})
+    with pytest.raises(ai.ProviderAPIError):
+        turn.call()
+    assert len(turn.budget.recoveries) == 1
+
+
+def test_call_statistics_reach_the_sink_when_console_stats_are_hidden(tmp_path, monkeypatch, capsys):
+    turn = _Turn(tmp_path, monkeypatch, [_done()])
+    emitted = []
+    turn.telemetry.sink = SimpleNamespace(emit=emitted.append)
+    turn.call()
+    stats = [dict(event.fields) for event in emitted if event.name == "call_stats"]
+    assert len(stats) == 1
+    assert stats[0]["tokens"] == 5
+    assert capsys.readouterr() == ("", "")

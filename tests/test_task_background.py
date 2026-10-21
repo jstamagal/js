@@ -317,3 +317,23 @@ def test_kill_under_the_supervisor_does_not_block_the_loop(workers, ctx, loop_su
     assert handle in killed and "RUNNING" not in killed
     assert time.monotonic() - began < task_jobs.KILL_GRACE_S
     assert workers.cancelled.wait(5)
+
+
+def test_background_task_accepts_its_scheduler(monkeypatch):
+    from concurrent.futures import Future
+
+    monkeypatch.setattr(task_jobs, "_JOBS", {})
+    scheduled = []
+    def schedule(coro, label, settle):
+        scheduled.append(label)
+        outcome = Future()
+        outcome.set_result(asyncio.run(coro))
+        settle(outcome)
+        return outcome.cancel
+    async def worker(idx, item):
+        return item.upper()
+    job = task_jobs.start([(1, "work")], worker, lambda results: results[0],
+                          agent_id="worker", depth=1, owner="caller", schedule=schedule)
+    assert len(scheduled) == 1
+    assert job.result() == "WORK"
+    assert job.result_path.read_text() == "WORK"

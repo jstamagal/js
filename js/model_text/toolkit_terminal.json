@@ -1,0 +1,5 @@
+{
+  "observe_lines_is_the_rendered_terminal_screen": "lines is the rendered terminal screen. nonblank_lines=0 means the user sees nothing. lines_changed and screen_responded compare this screen with the most recent observation: for send they describe change during the wait window after the sent keys, not proof the keys caused it; for look they describe passive change since the prior observation. terminal_snapshot updates that comparison baseline before a later send. still_running is normal for a TUI and suspicious for a one-shot command. Use terminal_snapshot to inspect layout and colour.",
+  "jail_refusal_error_terminal_session_was_started_under": "ERROR: terminal session {session!r} was started under other jail settings (JAIL_BIND, JAIL_HIDE or SHELL_ENV_KEEP) and is stopped; start it again",
+  "draw_screen_terminal_snapshot_requires_js_vision_run": "terminal_snapshot requires js[vision]; run uv sync --inexact --extra vision"
+}

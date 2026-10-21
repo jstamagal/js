@@ -13,7 +13,6 @@ prompt cache as broken.
 
 from __future__ import annotations
 
-import sys
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -22,6 +21,7 @@ from typing import Any
 from . import compaction
 from . import messages as msgs
 from . import model_client
+from . import output
 from . import stream_transport
 
 
@@ -109,6 +109,11 @@ class TurnBudget:
         self._emit = emit
         self._resolve_window = resolve_window
         self._max_out = max_out
+
+    def _warn(self, message: msgs.Message, **fields: Any) -> None:
+        """``message`` as a stderr notice to the telemetry's output sink."""
+        output.sink_of(self._telemetry).emit(output.event(
+            "notice", message=message, fields=fields, stderr=True, flush=True))
 
     def context_window(self) -> int:
         """The window the budget holds requests to; 0 when none is known."""
@@ -235,6 +240,7 @@ class TurnBudget:
                          "usage_anchor": vars(self._tokens).get("_anchor"),
                          "tools": tools,
                          "ai_messages": self._convo.ai},
+            log_dir=compaction.flight_log_dir(self._cfg), emit=compaction.printing(warn=self._warn),
         )
         if action == "cleared":
             self._rewritten()
@@ -260,10 +266,11 @@ class TurnBudget:
             cleared, chars = compaction.clear_for_budget(
                 messages, cfg=self._cfg, system=self._convo.system, trigger=check.trigger,
                 flight_data=check.flight_data, over_budget=check.over_budget,
+                log_dir=compaction.flight_log_dir(self._cfg), emit=compaction.printing(warn=self._warn),
             )
         except Exception as exc:  # noqa: BLE001 - an optional step never kills the turn
             messages[:] = before  # microcompact edits in place; keep memory and disk alike
-            msgs.warn(msgs.COMPACTION_FAILED, error=f"{type(exc).__name__}: {exc}")
+            self._warn(msgs.COMPACTION_FAILED, error=f"{type(exc).__name__}: {exc}")
             self._telemetry.event("context_clear_failed", phase=check.phase,
                                   error=f"{type(exc).__name__}: {exc}")
             return False
@@ -285,18 +292,19 @@ class TurnBudget:
         before_chars = compaction.history_chars(messages)
         self._status.compacting = True
         try:
-            with stream_transport.net_role("Compacting"):
+            with stream_transport.net_role(msgs.COMPACTING_ROLE.words()):
                 result = await compaction.compact_now(
                     cfg, self._convo.system, messages, focus=focus, forced=True,
                     preserve_from=preserve_from, trigger=check.trigger, flight_data=check.flight_data,
-                    tail_tokens=tail_tokens, context=context, emit=self._emit,
+                    tail_tokens=tail_tokens, context=context, emit=compaction.printing(self._emit, warn=self._warn),
+                    log_dir=compaction.flight_log_dir(cfg),
                 )
         except Exception as exc:  # noqa: BLE001
-            msgs.warn(msgs.COMPACTION_FAILED, error=f"{type(exc).__name__}: {exc}")
+            self._warn(msgs.COMPACTION_FAILED, error=f"{type(exc).__name__}: {exc}")
             self._telemetry.event("context_compaction_failed", phase=check.phase,
                                   error=f"{type(exc).__name__}: {exc}")
             if (paused := compaction.record_auto_failure(cfg, context)) is not None:
-                msgs.say_said(paused, file=sys.stderr, flush=True)
+                self._warn(paused.message, **paused.fields)
             check.summary_failed = True
             return False
         finally:

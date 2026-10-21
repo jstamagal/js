@@ -8,6 +8,20 @@ from prompt_toolkit.key_binding.key_bindings import _parse_key
 
 from js import keys, screen
 
+
+def test_assembly_action_can_be_bound_and_run_in_blocking_prompt():
+    from types import SimpleNamespace
+    from prompt_toolkit.buffer import Buffer
+
+    actions = (*keys.ACTIONS, keys.Action("clear", keys.INPUT, (), ""))
+    keymap, errors = keys.parse("bind c-w clear", "/keys", actions=actions)
+    assert errors == []
+    buffer = Buffer()
+    buffer.text = "unfinished"
+    kb = keys.prompt_bindings(keymap, handlers={"clear": lambda event: event.current_buffer.reset()})
+    kb.get_bindings_for_keys((_parse_key("c-w"),))[0].handler(SimpleNamespace(current_buffer=buffer))
+    assert buffer.text == ""
+
 # The keys the async screen answered to before the keys file existed, with
 # Ctrl-R moved to history_search and reasoning_toggle on Ctrl-O.
 DEFAULTS = {
