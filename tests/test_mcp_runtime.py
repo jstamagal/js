@@ -463,6 +463,25 @@ def test_turn_surface_exact_server_source_connects_only_that_server(tmp_path, so
     asyncio.run(drive())
 
 
+@pytest.mark.parametrize("query", ["agentbus", "IRC"])
+def test_unscoped_search_discovers_remote_tools(tmp_path, query):
+    class IRCClient(FakeClient):
+        async def list_tools(self, *, timeout=None):
+            return [{"name": "send", "description": "Send IRC commands", "inputSchema": {"type": "object"}}]
+
+    async def drive():
+        from js.toolkit.registry import build_default_registry
+
+        server = MCPServer("agentbus", "agentbus", "stdio", command="fake")
+        host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=IRCClient)
+        surface = build_default_registry().select([]).lazy_surface(tmp_path, mcp_host=host)
+        found = json.loads(await surface.discover_async(query=query))["results"]
+        assert any(entry["id"] == "mcp:agentbus__send" for entry in found)
+        await host.close()
+
+    asyncio.run(drive())
+
+
 def test_prompt_get_preserves_media_content(config):
     async def drive():
         host = MCPHost(config, client_factory=FakeClient)
