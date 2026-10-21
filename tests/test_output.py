@@ -172,3 +172,19 @@ def test_tool_result_event_carries_screen_fields_without_rendering(capsys):
     assert result.exit_code == 7
     assert result.lines == [("out", False), ("err", True)]
     assert capsys.readouterr() == ("", "")
+
+
+def test_the_run_line_says_whether_workspace_memory_is_on(tmp_path, monkeypatch):
+    from js import hymem, runtime
+
+    def respond(**kwargs):
+        kwargs["on_text"]("ok")
+        return _reply("ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", respond)
+    for on in (True, False):
+        monkeypatch.setattr(hymem, "enabled", lambda cfg, on=on: on)
+        sink = _Sink()
+        _run(_offline_config(tmp_path, trace=True, settings={}), tmp_path, sink, "hi")
+        fields = sink.named("run_line")[0]["fields"]
+        assert f"memory={'on' if on else 'off'}" in fields

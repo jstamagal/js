@@ -1715,7 +1715,7 @@ def _prepare_turn_context(context: ToolContext, cfg: Config, request: ModelReque
 
 def _trace_banner(telemetry: Telemetry, request: ModelRequest, context: ToolContext, registry: ToolRegistry,
                   resolve_window: Callable[[], int | None]) -> None:
-    """Show the run line: model, provider, window, output cap, effort, vision, tools."""
+    """Show the run line: model, provider, window, output cap, effort, vision, memory, tools."""
     model, provider_id = request.model, request.provider_id
     if provider_id:
         provider_label = provider_id
@@ -1735,6 +1735,8 @@ def _trace_banner(telemetry: Telemetry, request: ModelRequest, context: ToolCont
     if request.effort:
         bits.append(f"effort={request.effort}")
     bits.append(f"vision={'on' if context.vision_enabled else 'off'}")
+    from . import hymem
+    bits.append(f"memory={'on' if hymem.enabled(context) else 'off'}")
     try:
         ntools = len(registry.openai_specs())
     except Exception:  # noqa: BLE001 — registry internals
