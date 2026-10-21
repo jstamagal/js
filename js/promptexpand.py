@@ -100,7 +100,7 @@ def session_variables(cfg) -> dict[str, str]:
 _DIRECTIVE = re.compile(
     r"(?:"
     r"(?<![^\n])(?P<find>[ ]{0,3})(?P<bs>\\)?```!(?P<fsub>[A-Za-z0-9_+-]+)[^\n]*\n(?:(?P<fbody>.*?)\n)??[ ]{0,3}```[ \t]*(?=\r?\n|\Z)"
-    r"|(?P<literal_span>(?<![\\`])(?P<span_ticks>`+)(?!`)[^\n]*?(?<!`)(?P=span_ticks)(?!`))"
+    r"|(?P<literal_span>(?<![\\`])(?:\\\\)*(?P<span_ticks>`+)(?!`)[^\n]*?(?<!`)(?P=span_ticks)(?!`))"
     r"|(?P<ibs>\\)?(?P<itick>`)?!\{(?P<isub>[A-Za-z0-9_+-]+)(?:[ \t]+(?P<iargs>[^}]*))?\}(?(itick)`)"
     r"|(?P<ebs>\\)?(?P<etick>`)?\{\{(?P<env>[^{}]*?)\}\}(?(etick)`)"
     r"|" + _VARIABLE.pattern +

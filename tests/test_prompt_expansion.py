@@ -80,6 +80,12 @@ def test_directive_inside_a_longer_markdown_code_span_never_runs(tmp_path):
     assert actual == text
 
 
+def test_code_span_after_escaped_backslash_never_runs():
+    text = r"\\`example !{sh printf EXECUTED} end`"
+
+    assert expand_prompt(text, allow_code=True) == text
+
+
 def test_backtick_wrapped_readonly_directive_not_blanked():
     # `!{file PATH}` / `{{ENV}}` examples must survive, not expand to "".
     text = "Inject with `!{file PATH}` or `{{ENV_NAME}}` in the prompt."
