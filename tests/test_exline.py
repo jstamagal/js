@@ -92,6 +92,21 @@ def test_ex_file_operations_include_collapsed_paste_content(tmp_path, monkeypatc
     assert content.removesuffix("\n") == f"review {pasted}"
 
 
+def test_external_edit_preserves_literal_markers_inside_collapsed_pastes(monkeypatch):
+    with pastes.using_store({}):
+        literal = pastes.keep("other pasted content", 10)
+        pasted = f"quoted marker: {literal}\n" + "row\n" * 12 + "last row"
+        editor = FakeEditor(pastes.keep(pasted, 10))
+
+        async def unchanged(argv):
+            return 0
+
+        monkeypatch.setattr(editor, "run", unchanged)
+        asyncio.run(exline.edit_buffer(editor, ["unused"]))
+
+        assert pastes.expand(editor.text) == pasted
+
+
 def test_x_sends_the_buffer():
     editor = FakeEditor("send me")
 

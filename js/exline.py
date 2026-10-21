@@ -61,7 +61,9 @@ async def edit_buffer(editor: Editor, argv: list[str], path: Path | None = None)
         status = await editor.run([*argv, str(path)])
         # A nonzero exit (vim's :cq) means abort: keep the buffer as it was.
         if status in (None, 0) and path.is_file():
-            editor.text = path.read_text(encoding="utf-8").removesuffix("\n")
+            text = path.read_text(encoding="utf-8").removesuffix("\n")
+            # File contents are literal; protect embedded markers from expansion on submit.
+            editor.text = pastes.keep(text, 0) if pastes.expand(text) != text else text
     finally:
         if temp:
             path.unlink(missing_ok=True)
