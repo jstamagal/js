@@ -65,10 +65,14 @@ def test_cpa_anthropic_cache_stream_reaches_transport(monkeypatch, enabled):
 
     def respond(request):
         wire = json.loads(request.content)
+        # CPA adds block breakpoints itself; a top-level automatic breakpoint
+        # can become a fifth one on the second turn and reject the request.
+        assert "cache_control" not in wire
+        content = wire["messages"][-1]["content"]
         if enabled:
-            assert wire["cache_control"] == {"type": "ephemeral"}
+            assert content[-1]["cache_control"] == {"type": "ephemeral"}
         else:
-            assert "cache_control" not in wire
+            assert content == "ping"
         assert "prompt_cache_key" not in wire
         return _anthropic_reply()
 
@@ -78,7 +82,8 @@ def test_cpa_anthropic_cache_stream_reaches_transport(monkeypatch, enabled):
     )
     with providers.using_providers([provider]):
         result = _stream(
-            monkeypatch, "cpa-ant", respond, [ai.user_message("ping")],
+            monkeypatch, "cpa-ant", respond,
+            [ai.user_message("yo"), ai.assistant_message("hello"), ai.user_message("ping")],
             cache_key="js-session", settings={"ANTHROPIC_PROMPT_CACHE": enabled},
         )
     assert result.text == "ok"

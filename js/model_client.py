@@ -421,6 +421,7 @@ class _AnthropicThinkingProtocol(AnthropicMessagesProtocol):
     """Round-trip opaque redacted blocks through ai 0.5.2's reasoning parts."""
 
     protocol_class_id: Literal["js_anthropic_thinking"] = "js_anthropic_thinking"
+    explicit_prompt_cache: bool = False
 
     async def stream(self, client: Any, model: ai.Model, messages: list[ai.messages.Message], **kwargs: Any):
         redacted: dict[str, dict] = {}
@@ -443,13 +444,26 @@ class _AnthropicThinkingProtocol(AnthropicMessagesProtocol):
 
         @asynccontextmanager
         async def open_message(**api_kwargs: Any):
-            # Automatic caching is an API body field; older native SDKs do not
-            # expose it as a stream keyword. extra_body works with both SDKs.
-            if "cache_control" in api_kwargs:
+            # An explicit message breakpoint covers the tools, system and history
+            # prefix. CPA counts block breakpoints when enforcing its cache limit.
+            cache_control = api_kwargs.pop("cache_control", None)
+            if cache_control is not None and not self.explicit_prompt_cache:
                 api_kwargs["extra_body"] = {
-                    "cache_control": api_kwargs.pop("cache_control"),
+                    "cache_control": cache_control,
                     **(api_kwargs.get("extra_body") or {}),
                 }
+            elif cache_control is not None:
+                for message in reversed(api_kwargs["messages"]):
+                    content = message.get("content")
+                    if isinstance(content, str) and content:
+                        content = [{"type": "text", "text": content}]
+                        message["content"] = content
+                    if isinstance(content, list):
+                        block = next((block for block in reversed(content)
+                                      if block.get("type") not in {"thinking", "redacted_thinking"}), None)
+                        if block is not None:
+                            block["cache_control"] = cache_control
+                            break
             for message in api_kwargs["messages"]:
                 content = message.get("content")
                 if isinstance(content, list):
@@ -623,7 +637,10 @@ def resolve_model(
     # mimo, ollama, llama.cpp, custom OpenAI-compatible bases) 404s on /responses.
     # Pin chat-completions for those; only the explicit Responses transport keeps
     # the new default.
-    protocol = _AnthropicThinkingProtocol() if sdk_provider_id == "anthropic" else None
+    protocol = (
+        _AnthropicThinkingProtocol(explicit_prompt_cache=canonical_id != "anthropic")
+        if sdk_provider_id == "anthropic" else None
+    )
     transport = provider_def.transport if provider_def is not None else None
     if sdk_provider_id == "openai" and transport == "custom_responses":
         protocol = _ResponsesProtocol()
@@ -1770,7 +1787,8 @@ async def _stream_with_model(
     # shares with the previous turn is the bulk of each request, and the three
     # providers in use want three different things:
     #   Anthropic caches only what a cache_control breakpoint covers, so the
-    #     request has to ask; the SDK's top-level form covers tools + system.
+    #     request has to ask. Direct Anthropic uses automatic caching; compatible
+    #     providers get an explicit message breakpoint covering the whole prefix.
     #   OpenAI-compatible endpoints cache long prefixes automatically. There is no
     #     breakpoint to set, but prompt_cache_key pins a conversation to the machine
     #     holding its prefix, which is what makes the hit rate hold up across turns.
