@@ -483,7 +483,9 @@ def _collect_api_login(
     keyless_ok = provider.local or not provider.established
     if provider.requires_api_key and not api_key:
         prompt = msgs.LOGIN_ASK_KEY_OPTIONAL if keyless_ok else msgs.LOGIN_ASK_KEY
-        api_key = _input(prompt.text(), secret=True)
+        # An empty default keeps a bare Enter an answer; only cancellation in
+        # _input yields None.
+        api_key = _input(prompt.text(), default="", secret=True)
         if api_key is None:
             return None
         if not api_key:
@@ -494,7 +496,9 @@ def _collect_api_login(
             api_key = config.run_settings()["LOCAL_API_KEY_PLACEHOLDER"]
             msgs.say(msgs.LOGIN_PLACEHOLDER_KEY, key=api_key)
     elif api_key and existing is not None and api_key == existing.provider_api_key:
-        entered = _input(msgs.LOGIN_ASK_KEY_KEEP.text(), secret=True)
+        # An empty default keeps a bare Enter an answer; only cancellation in
+        # _input yields None.
+        entered = _input(msgs.LOGIN_ASK_KEY_KEEP.text(), default="", secret=True)
         if entered is None:
             return None
         if entered:

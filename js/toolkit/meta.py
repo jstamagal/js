@@ -151,7 +151,7 @@ def _select_agent_prompt_dir(agent: str, prompt_roots: tuple[Path, ...]) -> Path
     for root in reversed(prompt_roots):
         candidate = root / agent
         try:
-            if candidate.is_dir() and any(candidate.glob("*.md")):
+            if candidate.is_dir() and any(entry.name.endswith(".md") for entry in candidate.iterdir()):
                 return candidate
         except OSError as exc:
             raise ValueError(f"agent {agent!r} at {candidate} is unreadable: {exc.strerror}") from exc

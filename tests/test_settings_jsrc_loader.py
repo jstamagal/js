@@ -228,6 +228,22 @@ def test_ignoring_global_config_from_home_excludes_global_files(tmp_path, preset
     assert cfg.shell_wait_seconds == settings.default_value("SHELL_WAIT")
 
 
+def test_ignoring_global_config_holds_under_another_name_for_home(tmp_path, monkeypatch):
+    # The home directory reached by a second name is the same directory, so
+    # its jsrc is still the global layer --ignore-global excludes.
+    home = tmp_path / "home"
+    (home / ".js").mkdir(parents=True)
+    (home / ".js" / "jsrc").write_text("set SHELL_WAIT 47\n", encoding="utf-8")
+    (home / ".js" / "jsrc.fast").write_text("set SHELL_WAIT 49\n", encoding="utf-8")
+    second_name = tmp_path / "home-link"
+    second_name.symlink_to(home, target_is_directory=True)
+    monkeypatch.setenv("HOME", str(second_name))
+
+    for presets in ([], ["fast"]):
+        cfg = from_env(cwd=home, save_session=False, ignore_global_config=True, presets=presets)
+        assert cfg.shell_wait_seconds == settings.default_value("SHELL_WAIT")
+
+
 def test_allow_inline_code_opt_out_via_jsrc(monkeypatch, tmp_path):
     # Deliberate opt-out through the config knob.
     config_home, _data_home = _env_dirs(monkeypatch, tmp_path)

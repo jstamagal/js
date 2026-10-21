@@ -150,6 +150,32 @@ def test_cancelled_api_key_prompt_cancels_login(monkeypatch, provider_id):
     assert login_cli._collect_api_login(provider_id, provider.effective_sdk_provider_id, provider) is None
 
 
+def test_empty_api_key_reply_answers_instead_of_cancelling(monkeypatch, tmp_path: Path):
+    # A bare Enter reaches _input as an empty string, which returns the default;
+    # None is the cancellation sentinel. "Enter for none" and "Enter keeps the
+    # saved one" must stay answers.
+    logins.set_config_dir(tmp_path)
+    logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="saved-key"))
+    for name in ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEEPSEEK_MODEL",
+                 "VLLM_API_KEY", "VLLM_BASE_URL", "VLLM_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+
+    def enter(_prompt):
+        return ""
+
+    monkeypatch.setattr("builtins.input", enter)
+    monkeypatch.setattr(login_cli, "getpass", enter)
+    try:
+        kept = login_cli._collect_api_login("deepseek", "deepseek", providers.provider_for_login("deepseek"))
+        assert kept is not None
+        assert kept.provider_api_key == "saved-key"
+        keyless = login_cli._collect_api_login("vllm", "openai", providers.provider_for_login("vllm"))
+        assert keyless is not None
+        assert keyless.provider_api_key
+    finally:
+        _reset_logins()
+
+
 def test_variable_endpoint_providers_show_base_url_field():
     for provider_id in (
         "llama.cpp",

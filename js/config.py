@@ -322,6 +322,16 @@ def _select_prompt_dir(agent_id: str, repo_root: Path, global_root: Path, projec
             raise ValueError(msgs.CONFIG_AGENT_AT_IS_UNREADABLE.format(agent_id=agent_id, candidate=candidate, strerror=exc.strerror)) from exc
     return (roots[0] if roots else repo_root) / agent_id
 
+
+def _same_config_path(one: Path, other: Path) -> bool:
+    """True when two jsrc paths name the same file, however each is spelled.
+
+    The home directory reached through a second name (a symlink to it, or a
+    physical cwd where `$HOME` is the link) is still the home directory: its
+    jsrc is the global layer, so the project branch must not add it back."""
+    return one == other or one.resolve(strict=False) == other.resolve(strict=False)
+
+
 def _preset_config_paths(
     presets: list[str] | None,
     project_dir: Path,
@@ -345,7 +355,7 @@ def _preset_config_paths(
         local_path = project_dir / ".js" / f"jsrc.{name}"
         if not ignore_global_config:
             paths.append(global_path)
-        if not ignore_local_config and local_path != global_path:
+        if not ignore_local_config and not _same_config_path(local_path, global_path):
             paths.append(local_path)
     return paths
 
@@ -395,7 +405,7 @@ def jsrc_paths(
         paths.append(global_path)
     if not ignore_local_config:
         local_path = project_dir / ".js" / "jsrc"
-        if local_path != global_path:
+        if not _same_config_path(local_path, global_path):
             paths.append(local_path)
         paths.append(project_dir / ".js" / "jsrc.local")
     # Presets layer on top of the base jsrc files (still below env / --extra).

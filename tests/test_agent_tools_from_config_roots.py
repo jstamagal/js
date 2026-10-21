@@ -15,8 +15,11 @@ the bug was that the path was never passed.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from js import cli
 from js.toolkit.registry import registry_for_roots
@@ -237,3 +240,25 @@ def test_selecting_an_unreachable_agent_stops_with_a_plain_error(tmp_path, monke
 
     with pytest.raises(ValueError, match="asleep.*No such device"):
         _select_prompt_dir("asleep", tmp_path / "repo", root, tmp_path / "project")
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can list an unreadable directory")
+def test_task_child_of_an_unlistable_project_agent_does_not_fall_back(tmp_path):
+    """The task worker's dir lookup refuses like the main agent's: a project agent
+    whose directory cannot be listed must not become the global agent of the same
+    name, which would run a different agent silently."""
+    from js.toolkit.meta import _select_agent_prompt_dir
+
+    repo_root = tmp_path / "repo" / "prompts"
+    global_root = tmp_path / "global" / "agents"
+    project_root = tmp_path / "project" / ".js" / "agents"
+    _agent_dir(repo_root, "worker")
+    _agent_dir(global_root, "worker")
+    project_agent = _agent_dir(project_root, "worker")
+
+    project_agent.chmod(0)
+    try:
+        with pytest.raises(ValueError, match="worker.*Permission denied"):
+            _select_agent_prompt_dir("worker", (repo_root, global_root, project_root))
+    finally:
+        project_agent.chmod(0o700)
