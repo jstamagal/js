@@ -18,6 +18,7 @@ What a server that is down was not sent is sent by a later run."""
 from __future__ import annotations
 
 import getpass
+import hashlib
 import json
 import os
 import re
@@ -25,6 +26,7 @@ import subprocess
 import urllib.request
 from pathlib import Path
 
+from . import memory as M
 from . import paths as _paths
 from . import settings as _settings
 
@@ -171,16 +173,10 @@ def recall_block(cfg, query: str, cwd: str | Path) -> str:
 
 
 def _messages(session: Path) -> list[dict]:
-    """The session's messages in OpenAI shape, bodies clipped."""
+    """The session's messages in OpenAI shape, bodies clipped: its whole
+    history, compacted turns included, without what a rollback took back."""
     out = []
-    for line in session.open(errors="replace"):
-        try:
-            o = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(o, dict) or o.get("kind") != "message" or not isinstance(o.get("message"), dict):
-            continue
-        m = o["message"]
+    for m in M.retained_messages(session):
         keep = {k: m[k] for k in ("role", "content", "tool_calls", "tool_call_id", "name") if k in m}
         if isinstance(keep.get("content"), list):
             keep["content"] = "\n".join(p.get("text", "") for p in keep["content"] if isinstance(p, dict))
@@ -228,6 +224,37 @@ def chunks(messages: list[dict], start: int, final: bool):
             yield len(messages), messages[users[n]:]
 
 
+def _key(message: dict) -> str:
+    return hashlib.sha256(json.dumps(message, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def _resume_at(mark: Path, messages: list[dict], keys: list[str]) -> int | None:
+    """Where filing goes on from: after what the mark says was sent, or, when
+    a rollback took back part of that, at the start of the turn it changed.
+    None while that rollback has nothing new after it yet. The mark holds the
+    key of each message sent; one that cannot be read counts as nothing sent."""
+    try:
+        sent = json.loads(mark.read_text()) if mark.is_file() else []
+    except (OSError, ValueError):
+        sent = []
+    if isinstance(sent, int):           # marks written before the keys: a message count
+        return min(sent, len(messages))
+    if not isinstance(sent, list):
+        sent = []
+    same = 0
+    for old, new in zip(sent, keys):
+        if old != new:
+            break
+        same += 1
+    if same == len(sent):
+        return same
+    if same == len(messages):
+        return None
+    while same > 0 and messages[same].get("role") != "user":
+        same -= 1
+    return same
+
+
 def file(cfg, cwd: str | Path, final: bool) -> None:
     """Send what the server has not had of the session: whole chunks, and the
     rest when ``final``. Stops at the first add the server does not take."""
@@ -235,12 +262,18 @@ def file(cfg, cwd: str | Path, final: bool) -> None:
     if not enabled(cfg) or not session.is_file():
         return
     mark = _paths.state_root() / "hymem" / (session.stem + ".sent")
-    sent = int(mark.read_text()) if mark.is_file() else 0
-    for end, chunk in chunks(_messages(session), sent, final):
+    messages = _messages(session)
+    keys = [_key(m) for m in messages]
+    start = _resume_at(mark, messages, keys)
+    if start is None:
+        return
+    for end, chunk in chunks(messages, start, final):
         try:
             _post(cfg, "/add", {"messages": chunk, "user_id": _user(cfg), "workspace_id": workspace(cwd),
                                 "scene": "coding", "session_id": session.stem}, ADD_TIMEOUT)
         except (OSError, ValueError):
             return
         mark.parent.mkdir(parents=True, exist_ok=True)
-        mark.write_text(str(end))
+        partial = mark.with_suffix(".sent.tmp")
+        partial.write_text(json.dumps(keys[:end]))
+        partial.replace(mark)

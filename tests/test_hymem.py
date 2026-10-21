@@ -6,6 +6,7 @@ import subprocess
 from types import SimpleNamespace
 
 from js import hymem
+from js import memory as M
 from js.toolkit import jev
 
 
@@ -14,6 +15,46 @@ def _turns(n):
     for i in range(n):
         out += [{"role": "user", "content": f"u{i}"}, {"role": "assistant", "content": f"a{i}"}]
     return out
+
+
+def _filing(monkeypatch, tmp_path):
+    """A memory server that records each add's message contents; returns
+    (cfg for ``session.jsonl`` in ``tmp_path``, the adds)."""
+    adds = []
+    monkeypatch.setenv("TYPESAFE_API_KEY", "k")
+    monkeypatch.setattr(hymem._paths, "state_root", lambda: tmp_path / "state")
+    monkeypatch.setattr(hymem, "_post", lambda cfg, path, body, timeout: adds.append(
+        [m["content"] for m in body["messages"]]) or {"queued": "x"})
+    cfg = SimpleNamespace(hymem_url="http://m", hymem_user="u", session_file=str(tmp_path / "session.jsonl"))
+    return cfg, adds
+
+
+def test_a_rolled_back_answer_is_never_filed(monkeypatch, tmp_path):
+    cfg, adds = _filing(monkeypatch, tmp_path)
+    session = tmp_path / "session.jsonl"
+    M.persist_messages(session, [{"role": "user", "content": "u0"}, {"role": "assistant", "content": "wrong"}])
+    M.persist_messages(session, [{"role": "user", "content": "u0"}, {"role": "assistant", "content": "right"}])
+    hymem.file(cfg, tmp_path, final=True)
+    assert adds == [["u0", "right"]]
+
+
+def test_a_rollback_into_what_was_sent_files_that_turn_again(monkeypatch, tmp_path):
+    cfg, adds = _filing(monkeypatch, tmp_path)
+    session = tmp_path / "session.jsonl"
+    M.persist_messages(session, [{"role": "user", "content": "u0"}, {"role": "assistant", "content": "wrong"}])
+    hymem.file(cfg, tmp_path, final=True)
+    M.persist_messages(session, [{"role": "user", "content": "u0"}, {"role": "assistant", "content": "right"}])
+    hymem.file(cfg, tmp_path, final=True)
+    assert adds == [["u0", "wrong"], ["u0", "right"]]
+
+
+def test_a_damaged_sent_mark_does_not_stop_the_run(monkeypatch, tmp_path):
+    cfg, adds = _filing(monkeypatch, tmp_path)
+    M.persist_messages(tmp_path / "session.jsonl", _turns(1))
+    (tmp_path / "state" / "hymem").mkdir(parents=True)
+    (tmp_path / "state" / "hymem" / "session.sent").write_text("")
+    hymem.file(cfg, tmp_path, final=True)
+    assert adds == [["u0", "a0"]]
 
 
 def test_a_running_session_sends_only_whole_chunks_and_the_rest_at_the_end():
