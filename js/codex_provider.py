@@ -389,7 +389,7 @@ async def _messages_to_codex(messages: list[ai.messages.Message], *, repair_tool
                     if reasoning_item is not None:
                         produced.append(reasoning_item)
                 elif isinstance(part, ai.types.messages.TextPart):
-                    if part.text.strip():
+                    if part.text:
                         produced.append({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": part.text}]})
                 elif isinstance(part, ai.types.messages.ToolCallPart):
                     produced.append(

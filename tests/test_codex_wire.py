@@ -59,6 +59,40 @@ def test_assistant_text_stays_on_each_side_of_encrypted_reasoning(monkeypatch):
     _stream(monkeypatch, respond, [message])
 
 
+def test_replayed_whitespace_between_encrypted_reasoning_items_is_preserved(monkeypatch):
+    first = {
+        "type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "signed-1",
+    }
+    second = {**first, "id": "rs_2", "encrypted_content": "signed-2"}
+    live = ai.assistant_message(
+        ai.types.messages.TextPart(text="hello"),
+        ai.thinking("", provider_metadata={"openai-codex": {"item": first}}),
+        ai.types.messages.TextPart(text="\n\n"),
+        ai.thinking("", provider_metadata={"openai-codex": {"item": second}}),
+        ai.types.messages.TextPart(text="world"),
+    )
+    record = {
+        "role": "assistant", "content": "hello\n\nworld",
+        "reasoning_parts": model_client.signed_reasoning_parts(live),
+        "reasoning_from": {"provider": "openai-codex", "model": "test"},
+    }
+    messages = model_client.history_to_ai_messages(
+        "SYSTEM", [record], provider_id="openai-codex", model_id="test",
+    )
+
+    def respond(request):
+        assert json.loads(request.content)["input"] == [
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "hello"}]},
+            first,
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "\n\n"}]},
+            second,
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "world"}]},
+        ]
+        return _completed()
+
+    _stream(monkeypatch, respond, messages)
+
+
 def test_explicit_codex_token_selects_its_own_account(monkeypatch):
     claims = {"https://api.openai.com/auth": {"chatgpt_account_id": "acct_explicit"}}
     payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
