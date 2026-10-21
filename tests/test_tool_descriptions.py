@@ -170,7 +170,7 @@ def test_named_agent_tools_are_generated_from_prompt_dirs():
         assert tool is not None, name
         assert tool.name == name
         assert tool.required == ("tasks",), name
-        assert set(tool.params) == {"tasks"}, name
+        assert set(tool.params) == {"tasks", "model", "reasoning"}, name
 
     assert [tool.name for tool in registry.select([f"{name}:eager" for name in prompt_agents]).tools] == prompt_agents
 

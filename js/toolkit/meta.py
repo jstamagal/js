@@ -198,6 +198,7 @@ async def _run_one_task_async(
     agent_id: str,
     global_session_id: str | None,
     model: str = "",
+    reasoning: str = "",
 ) -> str:
     from .. import memory as M
     from .. import persona as P
@@ -282,6 +283,9 @@ async def _run_one_task_async(
     if getattr(cfg, "layer_jsrc", None) is None and prompt_spec.reasoning_effort is not None:
         # A Config with no layers resolves nothing: agent.yaml's reasoning is its effort.
         cfg = replace(cfg, reasoning_effort=prompt_spec.reasoning_effort)
+    if reasoning:
+        # The tool call's reasoning wins, as its model does.
+        cfg = replace(cfg, reasoning_effort=reasoning)
     with _worker_session(Path(cfg.session_file)):
         prompt_spec = P._expand_spec(prompt_spec, cfg)
 
@@ -455,6 +459,7 @@ def _prepare_fan_out(
     session_id: str | None,
     model: str,
     context: ToolContext,
+    reasoning: str = "",
 ) -> tuple[str, None] | tuple[None, tuple[list[tuple[int, Any]], Any]]:
     """Validate a task/named-agent call and build (indexed_items, coro_factory).
 
@@ -510,7 +515,8 @@ def _prepare_fan_out(
         async def _gated() -> str:
             async with gate:
                 return await worker(
-                    idx, total, item, context, parent_cfg, full_registry, agent_id, session_id, model
+                    idx, total, item, context, parent_cfg, full_registry, agent_id, session_id, model,
+                    **({"reasoning": reasoning} if reasoning else {}),
                 )
 
         return _gated()
@@ -584,6 +590,7 @@ def task(
     handle: str | None = None,
     timeout: int | None = None,
     context: ToolContext | None = None,
+    reasoning: str = "",
 ) -> str:
     assert context is not None
     action = _job_action(action)
@@ -600,7 +607,8 @@ def task(
         return task_jobs.report(job, action, was_running=was_running)
     agent_id = str(agent_id).strip()
     model = str(model or "").strip()
-    error, prepared = _prepare_fan_out(tasks, agent_id, session_id, model, context)
+    reasoning = str(reasoning or "").strip().lower()
+    error, prepared = _prepare_fan_out(tasks, agent_id, session_id, model, context, reasoning)
     if prepared is None:
         return error  # type: ignore[return-value]
     indexed_items, coro_factory = prepared
@@ -626,6 +634,7 @@ async def task_async(
     handle: str | None = None,
     timeout: int | None = None,
     context: ToolContext | None = None,
+    reasoning: str = "",
 ) -> str:
     """Async twin of :func:`task`: awaits child turns
     on the caller's loop via :func:`_fan_out_async` instead of blocking a
@@ -646,7 +655,8 @@ async def task_async(
         return task_jobs.report(job, action, was_running=was_running)
     agent_id = str(agent_id).strip()
     model = str(model or "").strip()
-    error, prepared = _prepare_fan_out(tasks, agent_id, session_id, model, context)
+    reasoning = str(reasoning or "").strip().lower()
+    error, prepared = _prepare_fan_out(tasks, agent_id, session_id, model, context, reasoning)
     if prepared is None:
         return error  # type: ignore[return-value]
     indexed_items, coro_factory = prepared
@@ -682,12 +692,14 @@ async def dispatch_fan_out_async(tool: Tool, args: dict[str, Any], context: Tool
         handle=args.get("handle"),
         timeout=args.get("timeout"),
         context=context,
+        reasoning=args.get("reasoning", ""),
     )
 
 
 def named_agent_tool(agent_id: str, description: str | None = None) -> Tool:
-    def run_named_agent(tasks: list[Any], context: ToolContext | None = None) -> str:
-        return task(tasks=tasks, agent_id=agent_id, context=context)
+    def run_named_agent(tasks: list[Any], model: str = "", reasoning: str = "",
+                        context: ToolContext | None = None) -> str:
+        return task(tasks=tasks, agent_id=agent_id, model=model, reasoning=reasoning, context=context)
 
     # Tag so the runtime recognizes this as fan-out and awaits it on-loop under a
     # supervisor (like the `task` tool); `_js_agent_id` carries the fixed worker.
@@ -701,7 +713,9 @@ def named_agent_tool(agent_id: str, description: str | None = None) -> Tool:
         agent_id,
         text,
         run_named_agent,
-        {"tasks": {"type": "array", "items": {"type": "string"}, "description": _PROMPTS['named_agent_tool_one_or_more_clear_detailed_task']}},
+        {"tasks": {"type": "array", "items": {"type": "string"}, "description": _PROMPTS['named_agent_tool_one_or_more_clear_detailed_task']},
+         "model": {"type": "string", "description": _PROMPTS['task_params_model_for_the_subagent_s_same']},
+         "reasoning": {"type": "string", "description": _PROMPTS['named_agent_tool_reasoning']}},
         required=("tasks",),
     )
 

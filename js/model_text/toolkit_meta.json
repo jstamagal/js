@@ -13,5 +13,6 @@
   "tools_version_suffix_used_in_the_filename": "Version suffix used in the filename.",
   "tools_markdown_plan_body_to_persist": "Markdown plan body to persist.",
   "tools_replace_an_existing_plan_with_the": "Replace an existing plan with the same name and version.",
-  "tools_local_skill_name_to_load": "Local skill name to load."
+  "tools_local_skill_name_to_load": "Local skill name to load.",
+  "named_agent_tool_reasoning": "Reasoning effort for the subagent(s): minimal, low, medium, high, xhigh or max. Set it when the operator names one; omit otherwise."
 }

@@ -505,7 +505,7 @@ def test_named_agent_tool_runs_agent_with_only_tasks_input(monkeypatch, tmp_path
     actual = call_tool(tool, {"tasks": ["hello from named tool"]}, ToolContext(cwd=tmp_path))
 
     assert tool.required == ("tasks",)
-    assert set(tool.params) == {"tasks"}
+    assert set(tool.params) == {"tasks", "model", "reasoning"}
     assert actual == "NAMED_AGENT_DONE"
     assert "WORKER SYSTEM" in str(seen["system"])
     assert set(seen["tools"]) == {"plan", "tool_discovery"}
@@ -710,3 +710,20 @@ def test_registered_setting_can_disable_child_reply_share(monkeypatch, tmp_path)
     parent.max_tool_result_bytes = 64
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kwargs: _fake_stream_result("X" * 500))
     assert task(["reply"], agent_id="worker", context=parent) == "X" * 500
+
+
+def test_named_agent_tool_call_sets_the_subagent_model_and_reasoning(monkeypatch, tmp_path):
+    prompts = prompt_dir(tmp_path, "worker", "tools:\n  - plan:lazy\n", "WORKER SYSTEM\n")
+    patch_from_env(monkeypatch, tmp_path, prompts.parent)
+    tool = build_default_registry(prompts_root=prompts.parent).resolve("worker")
+    seen: dict[str, object] = {}
+
+    def completion_stub(**kwargs):
+        seen["model"], seen["effort"] = kwargs["model_id"], kwargs["reasoning_effort"]
+        return _fake_stream_result("DONE")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(completion_stub, "plan", expected_native={"plan"}))
+
+    call_tool(tool, {"tasks": ["hi"], "model": "named-model", "reasoning": "LOW"}, ToolContext(cwd=tmp_path))
+
+    assert seen == {"model": "named-model", "effort": "low"}
