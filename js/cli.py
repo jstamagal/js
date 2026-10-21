@@ -2131,6 +2131,17 @@ def _take_pending_notes(state: dict) -> list[str]:
     return [*queued, *task_jobs.completion_notes(runtime.T.STOCK_CONTEXT.task_owner)]
 
 
+def _with_first_turn_memory(cfg, messages: list[dict], bundle: attach.UserMessageBundle,
+                            prompt: str) -> attach.UserMessageBundle:
+    """``bundle`` carrying the memories that match ``prompt`` when it opens
+    the session, as a ``js -p`` run's first message does."""
+    if any(m.get("role") == "user" for m in messages):
+        return bundle
+    if memory := hymem.recall_block(cfg, prompt, Path.cwd()):
+        return attach.with_note(bundle, memory)
+    return bundle
+
+
 def _with_notes(bundle: attach.UserMessageBundle, notes: list[str]) -> attach.UserMessageBundle:
     for note in notes:
         bundle = attach.with_note(bundle, note)
@@ -3704,6 +3715,8 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
             prompt_text = _expand_skill_line(prompt_text, state)
         turn_cfg = await loop.run_in_executor(None, _live_cfg_snapshot, cfg, state)
         user_bundle = external_bundle or attach.build_user_message(prompt_text, line_attachments, turn_cfg)
+        user_bundle = await loop.run_in_executor(
+            None, _with_first_turn_memory, turn_cfg, state["messages"], user_bundle, prompt_text)
     except ValueError as e:
         # AttachmentError / SkillInvocationError (ValueErrors) or a login-gate
         # routing error from re-resolving the live model: degrade to one friendly

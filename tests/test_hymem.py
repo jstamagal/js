@@ -155,3 +155,13 @@ def test_the_server_token_is_sent_when_set(monkeypatch):
     monkeypatch.setattr(hymem.urllib.request, "urlopen", lambda req, timeout: seen.append(req) or _Reply())
     hymem._post(SimpleNamespace(hymem_url="http://m"), "/search", {}, 1)
     assert seen[0].get_header("Authorization") == "Bearer sekrit"
+
+
+def test_repl_first_turn_carries_recalled_memory(monkeypatch):
+    from js import attach, cli
+    monkeypatch.setattr(cli.hymem, "recall_block", lambda cfg, query, cwd: "<workspace_memory>m</workspace_memory>")
+    bundle = attach.build_user_message("join #test", [], SimpleNamespace())
+    first = cli._with_first_turn_memory(SimpleNamespace(), [], bundle, "join #test")
+    later = cli._with_first_turn_memory(SimpleNamespace(), [{"role": "user", "content": "yo"}], bundle, "join #test")
+    assert "<workspace_memory>" in json.dumps(first.runtime_message)
+    assert later is bundle
