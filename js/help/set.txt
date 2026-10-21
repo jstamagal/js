@@ -609,6 +609,10 @@ SHELL_KILL_UNFINISHED
     on: a shell command still running when its wait ends is killed instead
     of left running.
 
+KILL_LOG_FILE
+    Where js logs every process tree it kills: the time, the command, the
+    pids hit and the js calls that led to it. Unset = ~/.js/state/kill.log.
+
 TERMINAL_SHELL_PROGRAM
     Shell the terminal tool starts. Empty = $SHELL, else /bin/sh.
 

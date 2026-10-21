@@ -900,6 +900,10 @@
 # left running.
 #set SHELL_KILL_UNFINISHED off
 
+# Where js logs every process tree it kills: the time, the command, the pids
+# hit and the js calls that led to it. Unset = ~/.js/state/kill.log.
+#set -KILL_LOG_FILE
+
 # Shell the terminal tool starts. Empty = $SHELL, else /bin/sh.
 #set TERMINAL_SHELL_PROGRAM ""
 

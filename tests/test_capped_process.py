@@ -183,3 +183,12 @@ def test_kill_reaches_a_grandchild_that_moved_to_its_own_process_group():
     else:
         os.kill(sleeper, signal.SIGKILL)
         pytest.fail("the grandchild outlived the kill")
+
+
+def test_a_kill_is_logged_with_its_command(tmp_path, monkeypatch):
+    log = tmp_path / "kill.log"
+    monkeypatch.setenv("JS_KILL_LOG_FILE", str(log))
+    job = capped_process.start_capped(["/bin/sh", "-c", "sleep 30"], cwd=None, cap=4096)
+    job.kill()
+    assert f"pid={job.pid}" in log.read_text()
+    assert "sleep 30" in log.read_text()

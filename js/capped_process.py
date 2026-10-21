@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import contextlib
 import os
+import shlex
 import signal
 import subprocess
 import threading
 import time
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from .prompt_text import load_catalog
@@ -272,13 +274,36 @@ def _session_members(sid: int) -> list[int]:
     return found
 
 
+def _log_kill(proc: subprocess.Popen, members: list[int]) -> None:
+    """Append one line to KILL_LOG_FILE (unset = ~/.js/state/kill.log): when,
+    which command, the pids hit, and the js calls that led to the kill."""
+    from . import paths
+    from . import settings as _settings
+
+    path = Path(_settings.live_value("KILL_LOG_FILE") or paths.state_root() / "kill.log").expanduser()
+    args = proc.args if isinstance(proc.args, (list, tuple)) else [str(proc.args)]
+    args = [str(a) for a in args]
+    # A jailed command is the bwrap argv; what ran is after its "--".
+    command = shlex.join(args[args.index("--") + 1:] if "--" in args else args)
+    frames = traceback.extract_stack()[:-2][-10:]
+    via = " < ".join(f"{Path(f.filename).stem}.{f.name}" for f in reversed(frames))
+    line = (f"{time.strftime('%Y-%m-%d %H:%M:%S')} js={os.getpid()} pid={proc.pid} "
+            f"session={members} cmd={command[:300]!r} via {via}\n")
+    with contextlib.suppress(OSError):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line)
+
+
 def _signal_tree(proc: subprocess.Popen) -> None:
     """SIGKILL the child and everything in its session. The child leads a new
     session, and a grandchild that moves to its own process group (``timeout``
     does, and so does any job-control shell) stays in it; killing the group
     alone left those running and the box busy. Returns without waiting for
     them to die."""
-    for pid in _session_members(proc.pid):
+    members = _session_members(proc.pid)
+    _log_kill(proc, members)
+    for pid in members:
         with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
             os.kill(pid, signal.SIGKILL)
     with contextlib.suppress(ProcessLookupError, PermissionError, OSError):

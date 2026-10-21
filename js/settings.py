@@ -226,6 +226,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("TAVILY_API_KEY", "str", secret=True, group="tools"),
     SettingSpec("SERPER_API_KEY", "str", secret=True, group="tools"),
     SettingSpec("SHELL_KILL_UNFINISHED", "bool", group="shell"),
+    SettingSpec("KILL_LOG_FILE", "str", empty=EMPTY_NONE, group="shell"),
     SettingSpec("SHELL_MANAGED_PATH", "bool", group="shell"),
     SettingSpec("SHELL_PIPEFAIL", "bool", group="shell"),
     SettingSpec("SEARCH_ONE_FILE_SYSTEM", "bool", group="tools"),
