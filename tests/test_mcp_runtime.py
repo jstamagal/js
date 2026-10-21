@@ -1103,6 +1103,39 @@ def test_malformed_remote_input_schemas_fall_back_to_valid_object_schemas():
     asyncio.run(drive())
 
 
+def test_patterned_context_argument_reaches_remote_server(config, tmp_path):
+    from js.toolkit.core import call_tool_async
+
+    schema = {
+        "type": "object",
+        "patternProperties": {"^context$": {"type": "string"}},
+        "additionalProperties": False,
+        "required": ["context"],
+    }
+
+    async def drive():
+        host = MCPHost(config, client_factory=FakeClient)
+        client = FakeClient(None)
+        host.clients["Alpha Server"] = client
+        host.remote_tools["alpha_server__patterned"] = (
+            "Alpha Server", "patterned", {"inputSchema": schema},
+        )
+        tool = host.tools({"alpha_server__patterned"})[0]
+        registry = ToolRegistry((tool,), {})
+        specs = model_client.tool_specs_to_ai_tools(registry.openai_specs())
+        assert specs[0].spec.params == schema
+        calls, stats = runtime._normalize_tool_call_batch([
+            runtime._PendingToolCall(
+                "tc", tool.name, [json.dumps({"context": "remote-value"})],
+            ),
+        ], registry, 1)
+        assert stats.invalid == 0
+        await call_tool_async(tool, json.loads(calls[0].arguments()), ToolContext(cwd=tmp_path))
+        assert client.calls == [("patterned", {"context": "remote-value"})]
+
+    asyncio.run(drive())
+
+
 def test_normalized_remote_name_collisions_are_disambiguated_and_visible():
     class CollisionClient(FakeClient):
         def __init__(self, factory, **kwargs):

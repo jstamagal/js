@@ -1122,10 +1122,13 @@ def call_tool(tool: Tool, args: dict[str, Any], context: ToolContext) -> Any:
     sig = inspect.signature(tool.handler)
     known = set(sig.parameters)
     has_var_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in sig.parameters.values())
-    # "context" is the ToolContext injection slot only when the tool does not
-    # declare it in its model-facing schema (remote MCP schemas may require a
-    # real property with that name; its value must reach the server).
-    declares_context = "context" in tool.params
+    # Full-schema **kwargs handlers carry model arguments, including a
+    # "context" key admitted by patternProperties or additionalProperties.
+    # An explicitly named context parameter remains the injection slot unless
+    # it is also a declared model-facing property.
+    declares_context = "context" in tool.params or (
+        tool.input_schema is not None and has_var_kwargs and "context" not in known
+    )
     filtered: dict[str, Any] = {}
     for key, value in args.items():
         if key not in known and not has_var_kwargs:
