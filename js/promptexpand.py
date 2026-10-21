@@ -46,6 +46,7 @@ from contextvars import ContextVar
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from collections.abc import Mapping
@@ -184,7 +185,7 @@ def expand_prompt(
                 # the author never wrote (the prefix before the stray ``` runs,
                 # then the expansion fails). Leave the directive literal.
                 fbody = "\n".join(
-                    line.removesuffix("\r")
+                    line.removesuffix("\r").removeprefix(m.group("find"))
                     for line in (m.group("fbody") or "").replace("\r\n", "\n").split("\n")
                 )
                 if re.search(r"(?m)^[ ]{0,3}```", fbody):
@@ -416,8 +417,8 @@ _SUBSYSTEMS: dict = {
     "file": (False, _sub_file),
     "sh": (True, _sub_sh),
     "bash": (True, _sub_bash),
-    "python": (True, _interpreted("!{python}", ["python3"], ".py")),
-    "py": (True, _interpreted("!{py}", ["python3"], ".py")),
+    "python": (True, _interpreted("!{python}", [sys.executable], ".py")),
+    "py": (True, _interpreted("!{py}", [sys.executable], ".py")),
     "node": (True, _interpreted("!{node}", ["node"], ".js")),
     "js": (True, _interpreted("!{js}", ["node"], ".js")),
     "c": (True, _compiled("!{c}", "cc", ".c")),

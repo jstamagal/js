@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
+import json
 from pathlib import Path, PurePosixPath
 import re
 from typing import Any
@@ -417,10 +418,10 @@ def _split_frontmatter(text: str) -> tuple[dict[str, Any], str, int]:
     try:
         manifest = yaml.safe_load(yaml_text) if yaml_text.strip() else {}
     except yaml.YAMLError as exc:
-        # An unquoted glob such as `paths: *.rs` reads as a YAML alias; a
-        # second parse quotes the paths globs.
+        # Installed skills use plain descriptions with colons and unquoted
+        # path globs. Quote those scalar values before retrying YAML.
         try:
-            manifest = yaml.safe_load(_quote_path_globs(yaml_text))
+            manifest = yaml.safe_load(_quote_plain_description(_quote_path_globs(yaml_text)))
         except yaml.YAMLError:
             raise ValueError(msgs.SKILL_FRONTMATTER_INVALID_YAML_FRONTMATTER.format(value=_yaml_problem(exc))) from exc
     if manifest is None:
@@ -428,6 +429,16 @@ def _split_frontmatter(text: str) -> tuple[dict[str, Any], str, int]:
     if not isinstance(manifest, dict):
         raise ValueError(msgs.SKILL_FRONTMATTER_FRONTMATTER_MUST_BE_A_MAPPING.format())
     return manifest, text[end:], end
+
+
+def _quote_plain_description(yaml_text: str) -> str:
+    def quote(match: re.Match[str]) -> str:
+        value = match.group(2)
+        if value and value[0] not in "\"'|>[]{&*!%@`" and ": " in value:
+            return match.group(1) + json.dumps(value)
+        return match.group(0)
+
+    return re.sub(r"^(description:[ \t]*)([^\r\n]*)", quote, yaml_text, flags=re.MULTILINE)
 
 
 _YAML_SPECIAL = re.compile(r"[{}\[\]*&#!|>%@`]|: ")
@@ -505,6 +516,8 @@ def _tools_field(manifest: dict[str, Any]) -> tuple[str, ...]:
     value = manifest.get("tools")
     if value is None:
         return ()
+    if isinstance(value, str):
+        value = value.split(",")
     if not isinstance(value, list):
         raise ValueError(msgs.SKILL_FRONTMATTER_TOOLS_FRONTMATTER_MUST_BE_A_LIST_OF.format())
     tools: list[str] = []

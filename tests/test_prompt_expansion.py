@@ -178,6 +178,20 @@ def test_fence_python_block():
     assert expand_prompt(text, allow_code=True) == "42"
 
 
+@pytest.mark.parametrize("subsystem", ["python", "py"])
+def test_python_directive_uses_harness_interpreter(subsystem, monkeypatch):
+    import sys
+
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    directive = f"!{{{subsystem} import sys; print(sys.executable)}}"
+    assert expand_prompt(directive, allow_code=True, on_error="raise") == sys.executable
+
+
+def test_python_fence_nested_in_list_removes_markdown_indent():
+    text = "- result:\n  ```!python\n  if True:\n      print(42)\n  ```"
+    assert expand_prompt(text, allow_code=True, on_error="raise") == "- result:\n  42"
+
+
 @pytest.mark.skipif(not shutil.which("python3"), reason="python3 not on PATH")
 def test_inline_python_runs_in_invocation_cwd(tmp_path, monkeypatch):
     # An env-probing directive must see the dir js was launched from, not the

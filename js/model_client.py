@@ -443,6 +443,13 @@ class _AnthropicThinkingProtocol(AnthropicMessagesProtocol):
 
         @asynccontextmanager
         async def open_message(**api_kwargs: Any):
+            # Automatic caching is an API body field; older native SDKs do not
+            # expose it as a stream keyword. extra_body works with both SDKs.
+            if "cache_control" in api_kwargs:
+                api_kwargs["extra_body"] = {
+                    "cache_control": api_kwargs.pop("cache_control"),
+                    **(api_kwargs.get("extra_body") or {}),
+                }
             for message in api_kwargs["messages"]:
                 content = message.get("content")
                 if isinstance(content, list):

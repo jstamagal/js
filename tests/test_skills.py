@@ -207,6 +207,29 @@ def test_frontmatter_closing_delimiter_is_found_beyond_metadata_prefix(tmp_path)
     assert metadata.description == "Large valid manifest"
 
 
+def test_plain_description_with_colon_is_discovered_and_loadable(tmp_path):
+    package = tmp_path / "package"
+    description = 'Build charts. The user never runs charts: you build the deck and hand them a launcher.'
+    _write(package / "charts" / "SKILL.md", f"---\nname: charts\ndescription: {description}\n---\nbody\n")
+
+    catalog = _catalog(tmp_path / "project", package, tmp_path / "global")
+
+    assert catalog.get("charts") is not None
+    assert catalog.get("charts").description == description
+    assert catalog.load("charts") == "body\n"
+
+
+def test_comma_separated_tools_are_discovered_and_loaded(tmp_path):
+    package = tmp_path / "package"
+    _write(package / "automation" / "SKILL.md", "---\ntools: Read, Glob, Grep, Bash\n---\nbody\n")
+
+    catalog = _catalog(tmp_path / "project", package, tmp_path / "global")
+
+    assert catalog.get("automation") is not None
+    assert catalog.get("automation").tools == ("Read", "Glob", "Grep", "Bash")
+    assert catalog.load("automation") == "body\n"
+
+
 def test_search_is_case_insensitive_term_based_and_deterministic(tmp_path):
     package = tmp_path / "package"
     _write(package / "zulu" / "SKILL.md", "---\ndescription: Release database safely\n---\nbody")

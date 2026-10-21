@@ -7,7 +7,7 @@ import ai
 import httpx2
 import pytest
 
-from js import model_client
+from js import model_client, providers
 
 
 def _anthropic_reply():
@@ -47,6 +47,41 @@ def _stream(monkeypatch, provider, respond, messages, **kwargs):
             )
 
     return asyncio.run(drive())
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_cpa_anthropic_cache_stream_reaches_transport(monkeypatch, enabled):
+    from anthropic.resources.messages import AsyncMessages
+
+    sdk_stream = AsyncMessages.stream
+
+    def stream_without_cache_keyword(self, **kwargs):
+        # Older Anthropic clients accept new API fields only through extra_body.
+        if "cache_control" in kwargs:
+            raise TypeError("AsyncMessages.stream() got an unexpected keyword argument 'cache_control'")
+        return sdk_stream(self, **kwargs)
+
+    monkeypatch.setattr(AsyncMessages, "stream", stream_without_cache_keyword)
+
+    def respond(request):
+        wire = json.loads(request.content)
+        if enabled:
+            assert wire["cache_control"] == {"type": "ephemeral"}
+        else:
+            assert "cache_control" not in wire
+        assert "prompt_cache_key" not in wire
+        return _anthropic_reply()
+
+    provider = providers.ProviderDef(
+        id="cpa-ant", display_name="CPA Anthropic", transport="http",
+        sdk_provider_id="anthropic",
+    )
+    with providers.using_providers([provider]):
+        result = _stream(
+            monkeypatch, "cpa-ant", respond, [ai.user_message("ping")],
+            cache_key="js-session", settings={"ANTHROPIC_PROMPT_CACHE": enabled},
+        )
+    assert result.text == "ok"
 
 
 def test_anthropic_tool_continuation_omits_empty_text_blocks(monkeypatch):
