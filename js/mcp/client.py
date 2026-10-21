@@ -311,17 +311,27 @@ class MCPClient:
         cursor: str | None = None
         seen: set[str] = set()
         page_peer: JSONRPCPeer | None = None
+        restart_count = 0
 
         def prepare_page() -> None:
-            nonlocal page_peer
+            nonlocal page_peer, restart_count
             current = self._require_peer()
             if current is not page_peer:
+                if page_peer is not None:
+                    restart_count += 1
                 items.clear()
                 seen.clear()
                 params.pop("cursor", None)
                 page_peer = current
 
         while True:
+            if restart_count > self._reconnect_attempts:
+                self._raise_redacted(
+                    TransportError(
+                        f"{method} did not finish: the connection kept dropping "
+                        f"across {restart_count} restarts"
+                    )
+                )
             params: dict[str, Any] = {}
             if cursor is not None:
                 params["cursor"] = cursor

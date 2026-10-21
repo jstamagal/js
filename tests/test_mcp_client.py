@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from js.mcp.client import CapabilityError, MCPClient, MCPClientError
+from js.mcp.client import CapabilityError, MCPClient, MCPClientError, TransportError
 from js.mcp.types import LATEST_PROTOCOL_VERSION
 
 
@@ -324,6 +324,30 @@ def test_safe_operation_retries_when_transport_dies_during_request():
         assert result.contents[0]["text"] == "text"
         assert len(requests(server, "resources/read")) == 2
         await client.close()
+
+    asyncio.run(drive())
+
+
+def test_pagination_gives_up_when_every_restart_drops_the_connection():
+    class FailingCursorServer(SpecServer):
+        def handle(self, method, params):
+            if method != "tools/list":
+                return super().handle(method, params)
+            connection = len(self.connections) - 1
+            if "cursor" in params:
+                return {"tools": [{"name": "second"}]}
+            self.die_on = (connection, "tools/list")
+            return {"tools": [{"name": "first"}], "nextCursor": "next"}
+
+    async def drive():
+        server = FailingCursorServer()
+        client = await initialized_client(server)
+        try:
+            with pytest.raises(TransportError, match="restarts"):
+                await asyncio.wait_for(client.list_tools(), 5)
+            assert len(server.connections) <= 5
+        finally:
+            await client.close()
 
     asyncio.run(drive())
 
