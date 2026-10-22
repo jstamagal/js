@@ -10,6 +10,7 @@ from __future__ import annotations
 from . import messages as msgs
 
 import os
+import re
 from contextlib import contextmanager
 from contextvars import ContextVar
 import time
@@ -683,9 +684,9 @@ def known_provider_ids() -> set[str]:
 def parse_model_prefix(model: str | None) -> tuple[str | None, str | None]:
     """Return (provider_id, model_id) when model starts with a known provider id.
 
-    Only the first slash segment is considered. Unknown slashy model ids are left
-    untouched because OpenRouter, Hugging Face, and Ollama model ids commonly
-    contain slashes that are part of the real model name.
+    Only the first slash segment is validated as a provider name and considered.
+    Unknown slashy model ids are left untouched because OpenRouter, Hugging Face,
+    and Ollama model ids commonly contain slashes that are part of the real model name.
     """
 
     if not model:
@@ -693,6 +694,8 @@ def parse_model_prefix(model: str | None) -> tuple[str | None, str | None]:
     if "/" not in model:
         return None, model
     first, rest = model.split("/", 1)
+    if first and re.fullmatch(r"[A-Za-z0-9_.-]+", first) is None:
+        raise ValueError(f"Invalid provider name: {first!r}; use letters, digits, '.', '_' or '-'.")
     provider_id = normalize_provider_id(first)
     if provider_id and get_provider(provider_id) is not None and rest:
         return provider_id, rest

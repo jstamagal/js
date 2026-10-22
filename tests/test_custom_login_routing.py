@@ -85,6 +85,25 @@ def test_prefix_splits_on_saved_login_with_path_model():
     assert providers.parse_model_prefix(f"booty/{GGUF}") == ("booty", GGUF)
 
 
+def test_malformed_provider_prefix_does_not_fall_back_to_default():
+    _save_custom_login("cpa")
+    route = resolve_model_route(
+        "cpa/hyper/Qwen3.8-2.4T-A95B",
+        configured_provider_id="deepseek",
+        env={},
+        explicit_model=True,
+    )
+    assert route.provider_id == "cpa"
+    assert route.model == "hyper/Qwen3.8-2.4T-A95B"
+    with pytest.raises(ValueError):
+        resolve_model_route(
+            "'cpa/gpt-6.1-sol",
+            configured_provider_id="deepseek",
+            env={},
+            explicit_model=True,
+        )
+
+
 def test_unknown_prefix_still_passes_through_whole():
     assert providers.parse_model_prefix("nope/some-model") == (None, "nope/some-model")
 
