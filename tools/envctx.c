@@ -552,7 +552,7 @@ int main(void) {
   double up = 0;
   if (slurp("/proc/uptime", buf, sizeof buf))
     up = strtod(buf, NULL);
-  printf("### ENV %s | host=%s up=%dd%dh\n", ts, un.nodename, (int)(up / 86400),
+  printf("ENV %s host=%s up=%dd%dh\n", ts, un.nodename, (int)(up / 86400),
          (int)(up / 3600) % 24);
 
   /* ---- os ---- */
@@ -601,10 +601,19 @@ int main(void) {
       while (*p && *p != '\n' && i < sizeof cpumodel - 1)
         cpumodel[i++] = *p++;
       cpumodel[i] = 0;
-      /* trim marketing noise */
+      /* trim marketing noise: " with ...", " Processor", " 16-Core" */
       char *cut = strstr(cpumodel, " with ");
       if (cut)
         *cut = 0;
+      if ((cut = strstr(cpumodel, " Processor")))
+        *cut = 0;
+      if ((cut = strstr(cpumodel, "-Core"))) {
+        char *sp = cut;
+        while (sp > cpumodel && sp[-1] != ' ')
+          sp--;
+        if (sp > cpumodel && !cut[5])
+          sp[-1] = 0;
+      }
     }
   }
   long mt = -1, ma = -1;
@@ -614,15 +623,7 @@ int main(void) {
   }
   char load[64] = "?";
   if (slurp("/proc/loadavg", buf, sizeof buf)) {
-    sscanf(buf, "%63[^\n]", load);
-    char *third = load;
-    int sp = 0;
-    for (char *p = load; *p; p++)
-      if (*p == ' ' && ++sp == 3) {
-        *p = 0;
-        break;
-      }
-    (void)third;
+    sscanf(buf, "%63s", load); /* 1-minute average */
   }
   human((double)mt * 1024, b2, sizeof b2);
   human((double)ma * 1024, b3, sizeof b3);
@@ -638,8 +639,7 @@ int main(void) {
   /* ---- session ---- */
   /* js exports JS_SHELL: the shell its shell tool runs commands in
      (SHELL_PROGRAM), which need not be the operator's login $SHELL. */
-  const char *sh = getenv("JS_SHELL"), *term = getenv("TERM"),
-             *venv = getenv("VIRTUAL_ENV");
+  const char *sh = getenv("JS_SHELL"), *venv = getenv("VIRTUAL_ENV");
   if (!sh || !*sh)
     sh = getenv("SHELL");
   /* js exports JS_JAIL under `js -C DIR`: the directory the tools are kept in */
@@ -647,19 +647,9 @@ int main(void) {
   char jb[1024] = "";
   if (jail && *jail)
     tilde(jail, jb, sizeof jb);
-  int pathdirs = 0, envn = 0;
-  const char *P = getenv("PATH");
-  if (P)
-    for (const char *p = P; *p; p++)
-      if (*p == ':')
-        pathdirs++;
-  extern char **environ;
-  for (char **e = environ; *e; e++)
-    envn++;
   const char *jsmode = getenv("JS_MODE");
-  printf("user=%s shell=%s term=%s pkg=%s path=%d env=%d%s%s%s%s%s%s%s%s%s\n",
-         getenv("USER") ? getenv("USER") : "?", sh ? sh : "?",
-         term ? term : "-", pkgmgr(), pathdirs + 1, envn,
+  printf("user=%s shell=%s pkg=%s%s%s%s%s%s%s%s%s%s\n",
+         getenv("USER") ? getenv("USER") : "?", sh ? sh : "?", pkgmgr(),
          jsmode ? " mode=" : "", jsmode ? jsmode : "",
          jb[0] ? " confined=" : "", jb,
          venv ? " venv=" : "",
@@ -830,9 +820,23 @@ int main(void) {
       printf("git branch=%s", branch);
       if (upstream[0])
         printf(" <-%s", upstream);
-      if (ab[0])
+      if (ab[0] && strcmp(ab, "+0 -0"))
         printf(" %s", ab);
-      printf(" head=%s dirty=%dM/%dA/%dD/%d?", head, mod, add, del, unt);
+      /* last_commit carries the hash; head= only when there is none */
+      if (!logline[0])
+        printf(" head=%s", head);
+      if (mod || add || del || unt) {
+        printf(" dirty=");
+        if (mod)
+          printf("%dM", mod);
+        if (add)
+          printf("%dA", add);
+        if (del)
+          printf("%dD", del);
+        if (unt)
+          printf("%d?", unt);
+      } else
+        printf(" clean");
       if (cfl)
         printf(" CONFLICTS=%d", cfl);
       if (stg)
@@ -843,7 +847,13 @@ int main(void) {
         printf(" unmerged=%s", unmerged);
       if (remote[0]) {
         scrub(remote, b2, sizeof b2);
-        printf(" remote=%s", b2);
+        char *r = b2;
+        if (!strncmp(r, "https://", 8))
+          r += 8;
+        size_t rl = strlen(r);
+        if (rl > 4 && !strcmp(r + rl - 4, ".git"))
+          r[rl - 4] = 0;
+        printf(" remote=%s", r);
       }
       /* in-progress operations are high-signal for an agent */
       char p[1536];
@@ -887,9 +897,9 @@ int main(void) {
                                   "rustc",   "go",   "uv",     "just",
                                   "rg",      "jq",   "docker", "fd",
                                   NULL};
-    char fp[2048];
-    fp[0] = 0;
-    size_t fl = 0;
+    /* "v2;" is the rendered-line format; bumping it orphans old cache files */
+    char fp[2048] = "v2;";
+    size_t fl = strlen(fp);
     for (int i = 0; TOOLS[i]; i++) {
       /* search $PATH, not just the system bindirs: the version line below is
          produced by `command -v`, so anything it can find must be fingerprinted
@@ -929,7 +939,6 @@ int main(void) {
       tools[0] = 0;
       if (t) {
         char line[256];
-        int col = 0;
         while (fgets(line, sizeof line, t)) {
           chomp(line);
           if (!line[0])
@@ -960,8 +969,6 @@ int main(void) {
                                   (int)nl, line, j ? num : eq + 1);
           } else
             o += (size_t)snprintf(tools + o, sizeof tools - o, " %s", line);
-          if (++col % 6 == 0)
-            o += (size_t)snprintf(tools + o, sizeof tools - o, "\n     ");
           if (o >= sizeof tools - 80)
             break;
         }
@@ -1004,9 +1011,7 @@ int main(void) {
     build_skiplist();
     struct hist h[HIST_MAX];
     int n = read_history(h, want);
-    printf("recent_shell(scrubbed, oldest first):\n");
-    if (!n)
-      printf("  (unavailable)\n");
+    printf("recent_shell(scrubbed, oldest first):%s\n", n ? "" : " -");
     for (int i = 0; i < n; i++) {
       scrub(h[i].cmd, b2, sizeof b2);
       char age[32] = "";
@@ -1014,15 +1019,16 @@ int main(void) {
         long dt = (long)now - h[i].ts;
         if (dt < 0)
           dt = 0;
-        if (dt < 3600)
-          snprintf(age, sizeof age, "%ldm", dt / 60);
+        if (dt < 60)
+          snprintf(age, sizeof age, "now ");
+        else if (dt < 3600)
+          snprintf(age, sizeof age, "-%ldm ", dt / 60);
         else if (dt < 86400)
-          snprintf(age, sizeof age, "%ldh", dt / 3600);
+          snprintf(age, sizeof age, "-%ldh ", dt / 3600);
         else
-          snprintf(age, sizeof age, "%ldd", dt / 86400);
+          snprintf(age, sizeof age, "-%ldd ", dt / 86400);
       }
-      printf("  %d%s%s%s %.180s%s\n", i + 1, age[0] ? " (-" : "", age,
-             age[0] ? ")" : "", b2, strlen(b2) > 180 ? ".." : "");
+      printf("  %s%.180s%s\n", age, b2, strlen(b2) > 180 ? ".." : "");
     }
   }
 
@@ -1031,15 +1037,14 @@ int main(void) {
      guessing from the parent chain. Absent means envctx ran outside js. */
   const char *jm = getenv("JS_MODE");
   if (!jm || strcmp(jm, "repl"))
-    printf("rule: js is%s in one-shot mode (not interactive chat): "
-           "NEVER end the turn on a question — end on doing it.\n",
-           jm ? "" : " possibly");
+    printf("rule: %sone-shot mode, not chat: NEVER end turn on a question; "
+           "end on doing it.\n",
+           jm ? "" : "possibly ");
   const char *jd = getenv("JS_JAIL");
   if (jd && *jd) {
     char jt[1024];
-    printf("rule: you are confined to %s (js -C): commands run in a jail where "
-           "the home directory is hidden and /tmp is private, and file tools "
-           "refuse paths outside %s and its bound paths.\n",
+    printf("rule: confined to %s (js -C): jailed commands, home hidden, /tmp "
+           "private; file tools refuse paths outside %s and its bound paths.\n",
            tilde(jd, jt, sizeof jt), jt);
   }
   return 0;
