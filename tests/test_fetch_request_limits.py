@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import http.server
+import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -42,9 +43,19 @@ class _LimitHandler(http.server.BaseHTTPRequestHandler):
         pass
 
 
+class _LimitServer(http.server.ThreadingHTTPServer):
+    # fetch hangs up mid-body on purpose; server_close joins the handler
+    # threads so their writes end inside the test that started them
+    daemon_threads = False
+
+    def handle_error(self, request, client_address) -> None:
+        if not isinstance(sys.exc_info()[1], ConnectionError):
+            super().handle_error(request, client_address)
+
+
 @contextlib.contextmanager
 def _server() -> Iterator[str]:
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _LimitHandler)
+    server = _LimitServer(("127.0.0.1", 0), _LimitHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
