@@ -464,10 +464,6 @@
 #            start and stop
 #fset KERNEL_VERBOSITY normal
 
-# Enable kernel and toolbox after installing the kernel extra:
-#   uv sync --extra kernel
-#set PYTHON_KERNEL off
-
 # Most lines shown per part of a kernel result on screen, so one huge
 # output can't scroll everything away. The model still gets all of it.
 #fset KERNEL_LINES_MAX 24

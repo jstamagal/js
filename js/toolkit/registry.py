@@ -106,8 +106,7 @@ class ToolRegistry:
         eager or lazy, with tools.yaml's tags and argument bans applied.
         `warn` prints the one-line notice for entries that match no tool."""
         config = config if config is not None else policy.load_tools_config()
-        chosen = policy.select(self.tools, entries or (), config, agent_id=agent_id, warn=warn,
-                               unavailable=self.unavailable_errors)
+        chosen = policy.select(self.tools, entries or (), config, agent_id=agent_id, warn=warn)
         selected = tuple(tool for tool in self.tools if tool.name in chosen.eager | chosen.lazy)
         known_names = self.known_names or frozenset(self.by_name)
         return replace(
@@ -115,22 +114,6 @@ class ToolRegistry:
             lazy=chosen.lazy,
             unavailable_errors=dict(self.unavailable_errors),
             arg_bans=dict(config.bans),
-        )
-
-    def with_kernel(self, enabled: bool) -> ToolRegistry:
-        """Apply the session feature gate before publishing or discovering tools."""
-        if enabled:
-            return self
-        blocked = {"kernel", "toolbox"}
-        return replace(
-            self,
-            tools=tuple(tool for tool in self.tools if tool.name not in blocked),
-            lazy=self.lazy - blocked,
-            known_names=(self.known_names or frozenset(self.by_name)) | blocked,
-            unavailable_errors={**self.unavailable_errors, **{
-                name: _PROMPTS['with_kernel_error_kernel_toolbox_disabled_use_set']
-                for name in blocked
-            }},
         )
 
     def argument_refusal(self, name: str, args: Any) -> str | None:

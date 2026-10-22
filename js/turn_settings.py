@@ -207,7 +207,6 @@ TURN_SETTINGS: tuple[TurnSetting, ...] = (
     TurnSetting("user_agent", "HTTP_USER_AGENT", text, on_context=True),
     TurnSetting("terminal_cols", "TERMINAL_COLUMNS", integer, on_context=True),
     TurnSetting("terminal_rows", "TERMINAL_ROWS", integer, on_context=True),
-    TurnSetting("kernel_enabled", "PYTHON_KERNEL", flag, on_context=True),
     TurnSetting("kernel_verbosity", "KERNEL_VERBOSITY", choice("quiet", "normal", "verbose"), on_context=True),
     TurnSetting("kernel_render_max_lines", "KERNEL_LINES_MAX", integer, on_context=True),
     TurnSetting("kernel_wait_seconds", "PYTHON_KERNEL_WAIT", integer, on_context=True),

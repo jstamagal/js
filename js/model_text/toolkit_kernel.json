@@ -1,10 +1,8 @@
 {
-  "default_error_the_kernel_tool_needs_the": "ERROR: the kernel tool needs the {missing} package{plural}, which {verb} not importable in this environment. Install js[kernel], or run `uv sync --inexact --extra kernel` in this checkout. Enable it with `/set PYTHON_KERNEL on`. The extra is declared in pyproject.toml; `just sync` includes it for development, while `just install` creates the launcher. Every other tool is unaffected.",
-  "get_session_error_kernel_toolbox_disabled_use_set": "ERROR: kernel/toolbox disabled; use /set PYTHON_KERNEL on (requires js[kernel]).",
+  "default_error_the_kernel_tool_needs_the": "ERROR: the kernel tool needs the {missing} package{plural}, which {verb} not importable in this environment. Install js[kernel], or run `uv sync --inexact --extra kernel` in this checkout. The extra is declared in pyproject.toml; `just sync` includes it for development, while `just install` creates the launcher. Every other tool is unaffected.",
   "died_error_the_kernel_died_during_execution": "ERROR: the kernel died during execution (cell {cell}). Everything defined in this session is gone; call again with restart=true and rebuild.",
   "busy_error_the_previous_cell_is_still": "ERROR: the previous cell is still running ({live_first_line}); interrupt it or wait",
   "busy_handle_action_poll_for_new_output": "handle {live_id}: action=\"poll\" for new output, action=\"interrupt\" to stop it, action=\"wait\" to block for it. A cell blocked in a syscall that ignores SIGINT needs restart=true",
-  "kernel_error_kernel_toolbox_disabled_use_set": "ERROR: kernel/toolbox disabled; use /set PYTHON_KERNEL on (requires js[kernel]).",
   "kernel_error_no_cell_nothing_to_poll": "ERROR: no cell {value_0}; nothing to poll, interrupt, or wait for",
   "kernel_cell_finished_s": "cell {live_id} finished ({live_age:.1f}s).",
   "kernel_cell_is_still_running_s": "cell {live_id} is still running ({live_age:.1f}s).",

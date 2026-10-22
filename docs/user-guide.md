@@ -30,8 +30,7 @@ model runs. `just uninstall` removes the launcher and the `wiki` symlink.
 
 Heavy features are explicit extras: `uv sync --no-dev --extra kernel`,
 `--extra vision`, or `--extra browser` (combine flags as needed).
-Enable kernel/toolbox with `/set PYTHON_KERNEL on`; it defaults off.
-The setting is applied at turn boundaries, like other turn settings.
+An agent has kernel/toolbox when its agent.yaml lists them.
 Managed CLI binaries are opt-in via `just install-tool-binaries` on supported
 platforms; otherwise tools use PATH. Chromium is separately opt-in via
 `just --set browser-extra '--extra browser' install-browser`.

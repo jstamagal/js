@@ -229,24 +229,13 @@ def resolve(tools: Sequence[Tool], rules: Sequence[Rule]) -> tuple[Decision, ...
     return tuple(decisions)
 
 
-def warn_unmatched(
-    tools: Sequence[Tool],
-    rules: Sequence[Rule],
-    agent_id: str | None = None,
-    unavailable: Mapping[str, str] | None = None,
-) -> None:
-    """One warning event per exact noun that names no tool at all. A noun in
-    ``unavailable`` names a real tool a setting turned off; its warning
-    carries that reason instead."""
+def warn_unmatched(tools: Sequence[Tool], rules: Sequence[Rule], agent_id: str | None = None) -> None:
+    """One warning event per exact noun that names no tool at all."""
     for rule in rules:
         if rule.entry.noun == "tag" or rule.entry.is_glob:
             continue
         if not any(rule.matches(tool) for tool in tools):
-            reason = (unavailable or {}).get(rule.entry.noun)
-            if reason:
-                output.notice(msgs.TOOL_ENTRY_UNAVAILABLE, entry=rule.label,
-                              reason=reason.removeprefix("ERROR: "))
-            elif agent_id:
+            if agent_id:
                 output.notice(msgs.TOOL_ENTRY_UNMATCHED_FOR, entry=rule.label, agent=agent_id)
             else:
                 output.notice(msgs.TOOL_ENTRY_UNMATCHED, entry=rule.label)
@@ -267,11 +256,10 @@ def select(
     agent_id: str | None = None,
     where: str = "",
     warn: bool = True,
-    unavailable: Mapping[str, str] | None = None,
 ) -> Selection:
     rules = expand(entries, config, where or (f"agent {agent_id!r}" if agent_id else "tools"))
     if warn:
-        warn_unmatched(tools, rules, agent_id, unavailable)
+        warn_unmatched(tools, rules, agent_id)
     decisions = resolve(tools, rules)
     return Selection(
         eager=frozenset(d.tool.name for d in decisions if d.modifier == "eager"),

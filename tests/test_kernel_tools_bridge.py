@@ -28,7 +28,7 @@ needs_kernel = pytest.mark.skipif(
 def ctx(tmp_path):
     work = tmp_path / "work"
     work.mkdir()
-    context = ToolContext(cwd=work, kernel_enabled=True)
+    context = ToolContext(cwd=work)
     context.kernel_verbosity = "quiet"
     context.kernel_wait_seconds = 30
     yield context

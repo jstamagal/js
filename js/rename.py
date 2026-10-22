@@ -115,7 +115,6 @@ RENAMED_SETTINGS: dict[str, str] = {
     "limits.subagent_max_workers": "SUBAGENT_WORKERS_MAX",
     "shell.program": "SHELL_PROGRAM",
     "shell.wait_seconds": "SHELL_WAIT",
-    "kernel.enabled": "PYTHON_KERNEL",
     "kernel.wait_seconds": "PYTHON_KERNEL_WAIT",
     "swarm.slots": "SWARM_ACTIVE_MAX",
     "jail.bind": "JAIL_BIND",
@@ -199,7 +198,6 @@ RENAMED_ENV: dict[str, str] = {
     "JS_MAX_BASH_OUTPUT_BYTES": "JS_SHELL_OUTPUT_MAX",
     "JS_MAX_TOOL_RESULT_BYTES": "JS_TOOL_RESULT_MAX",
     "JS_MAX_DOWNLOAD_BYTES": "JS_DOWNLOAD_MAX",
-    "JS_KERNEL_ENABLED": "JS_PYTHON_KERNEL",
 }
 
 

@@ -51,7 +51,7 @@ def jailed(operator_home, tmp_path, monkeypatch):
     (root / "inside.txt").write_text("inside\n")
     monkeypatch.chdir(root)
     jail.enter(root)
-    context = ToolContext(cwd=root, kernel_enabled=True)
+    context = ToolContext(cwd=root)
     context.jail_bind = ()
     return context
 
