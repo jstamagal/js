@@ -1060,6 +1060,18 @@ def cache_models(
         _write_model_cache_records(records)
 
 
+def remove_cached_model(provider_id: str, model_id: str) -> bool:
+    """Remove one saved model, preserving other providers and metadata."""
+    with hold_login_lock():
+        records = _read_model_cache_records()
+        record = records.get(provider_id)
+        if record is None or model_id not in record['models']:
+            return False
+        record['models'] = [model for model in record['models'] if model != model_id]
+        _write_model_cache_records(records)
+        return True
+
+
 def clear_model_cache(provider_id: str) -> None:
     with hold_login_lock():
         records = _read_model_cache_records()

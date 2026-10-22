@@ -384,6 +384,21 @@ def apply_agent_max_tokens(cfg, prompt_spec):
 
 
 def load_configured_prompt_spec(cfg, *, expand: bool = True) -> PromptSpec:
+    from .cli_options import current
+    options = current()
+    if options.chat:
+        spec = PromptSpec(system=options.prompt_text(), tool_selectors=())
+        return _finish_configured_spec(spec, cfg, expand)
+    if options.replaces_prompt:
+        roots = tuple(getattr(cfg, 'prompt_roots', ()))
+        repo = roots[0] if roots else Path(__file__).resolve().parents[1] / 'prompts'
+        global_root = roots[1] if len(roots) > 1 else Path.home() / '.js' / 'agents'
+        manifest = global_root / 'defaultagent' / AGENT_MANIFEST
+        if not manifest.is_file():
+            manifest = repo / 'defaultagent' / AGENT_MANIFEST
+        base = load_agent_manifest(manifest)
+        spec = PromptSpec(system=options.prompt_text(), tool_selectors=base.tool_selectors)
+        return _finish_configured_spec(spec, cfg, expand)
     roots = tuple(getattr(cfg, "prompt_roots", ()))
     if len(roots) >= 3:
         spec = load_agent_prompt_spec(
@@ -391,13 +406,22 @@ def load_configured_prompt_spec(cfg, *, expand: bool = True) -> PromptSpec:
             repo_prompts_root=roots[0],
             global_agents_root=roots[1],
             project_agents_root=roots[2],
-            agents_files=getattr(cfg, "agents_files", ()),
+            agents_files=() if options.no_agents_md else getattr(cfg, "agents_files", ()),
         )
     else:
         spec = load_prompt_spec(cfg.prompts_dir)
-        agents_parts = _existing_text_parts(list(getattr(cfg, "agents_files", ())))
+        agents_parts = [] if options.no_agents_md else _existing_text_parts(list(getattr(cfg, "agents_files", ())))
         if agents_parts:
             spec = _with_system(spec, "\n\n".join([*agents_parts, spec.system.rstrip()]).rstrip() + "\n")
+    return _finish_configured_spec(spec, cfg, expand)
+
+
+def _finish_configured_spec(spec: PromptSpec, cfg, expand: bool) -> PromptSpec:
+    from .cli_options import current
+    options = current()
+    if options.append_system_prompt:
+        spec = _with_system(spec, '\n\n'.join((spec.system.rstrip(), *options.append_system_prompt)))
+    spec = replace(spec, tool_selectors=options.selectors(spec.tool_selectors))
     # Tag references resolve against tools.yaml here, so a bad tag or a tag
     # cycle fails the prompt load with one line instead of a later traceback.
     policy.expand(spec.tool_selectors, policy.load_tools_config(), f"agent {getattr(cfg, 'agent_id', '')!r}")
@@ -466,7 +490,16 @@ def expand_agent_text(text: str, cfg) -> str:
 
 def _expand_spec(spec: PromptSpec, cfg) -> PromptSpec:
     """Expand directives in the assembled system prompt, retaining its source."""
-    system = expand_agent_text(spec.system, cfg)
+    from .cli_options import current
+    options = current()
+    text = spec.system
+    if options.you_are:
+        text = f'You are {cfg.model.rsplit("/", 1)[-1]} running inside the js agent'
+        if not options.noenv and not options.chat:
+            text += '\n\n!{sh sh "$JS_ROOT/tools/envctx.c"}'
+        if options.append_system_prompt:
+            text += '\n\n' + '\n\n'.join(options.append_system_prompt)
+    system = expand_agent_text(text, cfg)
     if system == spec.system:
         return spec
     return replace(spec, system=system, source=spec.source)

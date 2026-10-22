@@ -323,6 +323,9 @@ def discover_skills(
     setting; case does not matter) is left out of the catalog.
     """
 
+    from .cli_options import current
+    if current().no_skills:
+        return SkillCatalog()
     builtin_root = builtin_dir or BUILTIN_SKILLS_DIR
     global_root = global_dir or paths.global_skills_dir()
     user_root = user_dir or paths.shared_skills_dir()

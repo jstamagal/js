@@ -531,6 +531,10 @@ static const char *pkgmgr(void) {
 }
 
 int main(void) {
+  const char *noenv = getenv("JS_NOENV");
+  if (noenv && (!strcasecmp(noenv, "true") || !strcasecmp(noenv, "on") ||
+                !strcasecmp(noenv, "yes") || !strcmp(noenv, "1")))
+    return 0;
   setvbuf(stdout, malloc(1 << 16), _IOFBF, 1 << 16);
   char buf[1 << 16], b2[LINE], b3[LINE];
 

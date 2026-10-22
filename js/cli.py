@@ -2672,7 +2672,8 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 stats_json: str | None = None, stats_csv: str | None = None,
                 caller_key: str | None = None, announce_generated: bool | None = None,
                 events: headless.JsonEvents | None = None,
-                config_pins: bool = False, swarm: str | None = None) -> int:
+                config_pins: bool = False, swarm: str | None = None,
+                call_stats: list[dict] | None = None) -> int:
     # @path in the prompt attaches like it does in the REPL, read here before
     # any jail, so `-p "@/tmp/prompt.txt"` needs no JAIL_BIND.
     prompt, named = attach.split_repl_attachments(prompt)
@@ -2764,7 +2765,8 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             reasoning_override = _stamped_reasoning(resumed)
     if prompt_spec is not None:
         recorded_system = M.load_system_prompt(cfg.session_file)
-        if recorded_system is None:
+        from .cli_options import current
+        if recorded_system is None or current().changes_prompt or current().chat:
             prompt_spec = P._expand_spec(prompt_spec, cfg)
             system = prompt_spec.system
         else:
@@ -2825,7 +2827,8 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
     user_bundle = _note_model_switch(resume_cfg, user_bundle)
     if cut_off:
         user_bundle = attach.with_note(user_bundle, _CUT_OFF_NOTICE)
-    call_stats: list[dict] = []
+    if call_stats is None:
+        call_stats = []
     turn_kwargs = {
         "model_override": cfg.model,
         "provider_id_override": cfg.provider_id,
@@ -3507,6 +3510,47 @@ def _print_model_list(provider_arg: str | None, cfg: Config | None) -> int:
         for model_id in model_ids:
             print(f"{pid}/{model_id}" if pid else model_id)
     return 0
+
+
+def _run_model_bench(args: argparse.Namespace, presets: list[str]) -> int:
+    cfg = _from_env(None, save_session=False, extras=args.extras, agent_id=args.agent,
+                    ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global,
+                    presets=presets)
+    prompt = ('Respond with EXACTLY the full text of the first 5 sections of Article I '
+              'of the United States Constitution. No introduction or commentary.')
+    rows = []
+    failed = False
+    for provider in _list_models_provider_ids(None, cfg):
+        try:
+            models = _models_cached_or_live(provider, cfg)
+        except Exception as exc:  # noqa: BLE001 - continue benchmarking other providers
+            msgs.warn(msgs.MODEL_LIST_FAILED, provider=provider, error=str(exc))
+            failed = True
+            continue
+        for model in models:
+            route = f'{provider}/{model}'
+            print(f'Benchmarking {route}', file=sys.stderr)
+            started = time.perf_counter()
+            calls = []
+            try:
+                code = _run_prompt(prompt, model=route, agent=args.agent, save=False,
+                                   reasoning=args.reasoning, maxout=args.max_out,
+                                   extras=args.extras, ignore_local_config=args.ignore_local,
+                                   ignore_global_config=args.ignore_global, presets=presets,
+                                   show_continue=False, call_stats=calls)
+                error = None if code == 0 else 'No assistant response'
+            except Exception as exc:  # noqa: BLE001 - one sick model must not stop the list
+                code, error = 1, str(exc)
+            row = {'name': route, 'ok': code == 0, 'error': error,
+                   **stats.summarize_calls(calls, wall_s=time.perf_counter() - started)}
+            rows.append(row)
+            print(_bench_row_line(row))
+            failed |= code != 0
+    if args.stats_json:
+        stats.write_json(args.stats_json, {'turns': rows})
+    if args.stats_csv:
+        stats.write_csv(args.stats_csv, rows)
+    return int(failed or not rows)
 
 
 def _models_json(provider_id: str | None, cfg: Config | None = None) -> dict:
@@ -4644,6 +4688,27 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("-q", "--quiet", action="store_true", help=msgs.OPT_QUIET.words())
     parser.add_argument("-r", "--reasoning", help=msgs.OPT_REASONING.words())
     parser.add_argument("--max-out", dest="max_out", type=int, help=msgs.OPT_MAX_OUT.words())
+    prompt_group = parser.add_mutually_exclusive_group()
+    prompt_group.add_argument('--system-prompt-file', '-spf', metavar='PATH',
+                              help='Use one file as the full system prompt (inline directives supported).')
+    prompt_group.add_argument('--system-prompt', '-sp', metavar='TEXT',
+                              help='Use TEXT as the full system prompt.')
+    prompt_group.add_argument('--you-are', action='store_true',
+                              help='Identify the selected model with a minimal system prompt.')
+    parser.add_argument('--append-system-prompt', '-asp', action='append', default=[], metavar='TEXT',
+                        help='Append TEXT to the selected system prompt.')
+    parser.add_argument('--noenv', action='store_true', help='Suppress envctx output.')
+    parser.add_argument('--chat', action='store_true', help='Send no tools or envctx unless tools are explicitly selected.')
+    parser.add_argument('--with-tools', metavar='SELECTORS', help='Select only these comma-separated tools, optionally :eager or :lazy.')
+    parser.add_argument('--without-tools', metavar='NAMES', help='Exclude these comma-separated tool names or globs.')
+    parser.add_argument('--tools', metavar='JSON', help='Use a JSON list of tool-policy selectors.')
+    parser.add_argument('--no-agents-md', action='store_true', help='Do not load JS.md or AGENTS.md instruction files.')
+    parser.add_argument('--no-skills', action='store_true', help='Disable skill discovery and the skill tool.')
+    parser.add_argument('--no-mcp', action='store_true', help='Disable MCP servers.')
+    parser.add_argument('--bare', action='store_true', help='Use slim without envctx, skills, or MCP.')
+    parser.add_argument('--verify', nargs='?', const='', metavar='AGENT', help='Validate configuration, agents, and reachable skills without executing prompts.')
+    parser.add_argument('--bench-models', action='store_true', help='Benchmark each saved model with Article I, sections 1–5.')
+    parser.add_argument('--remove-if-fail', nargs='?', const='', metavar='CONDITIONS', help='Remove saved models on slow_decode[:TPS],slow_ttft[:SECONDS],failure.')
     parser.add_argument("--bench", metavar="AGENT", help=msgs.OPT_BENCH.words())
     parser.add_argument("--loop", nargs="?", const="", metavar="N|NM|NH", help=msgs.OPT_LOOP.words())
     parser.add_argument("--lock", action="store_true", help=msgs.OPT_LOCK.words())
@@ -4690,9 +4755,26 @@ def _main(argv: list[str] | None = None) -> int:
                                        settings=loop_settings)
         except (ValueError, OSError) as exc:
             parser.error(str(exc))
-    if _json_run_requested(args):
-        return _json_run(lambda: _run_args(args, dispatch_argv))
-    return _run_args(args, dispatch_argv)
+    from .cli_options import RunOptions, invocation
+    if args.bare:
+        args.agent = 'slim'
+    options = RunOptions(
+        system_prompt_file=args.system_prompt_file, system_prompt=args.system_prompt,
+        append_system_prompt=tuple(args.append_system_prompt), you_are=args.you_are,
+        noenv=args.noenv or args.bare, chat=args.chat, with_tools=args.with_tools,
+        no_agents_md=args.no_agents_md, no_skills=args.no_skills or args.bare,
+        no_mcp=args.no_mcp or args.bare,
+        without_tools=args.without_tools, tools=args.tools, remove_if_fail=args.remove_if_fail,
+    )
+    try:
+        options.selectors(())
+        with invocation(options):
+            if _json_run_requested(args):
+                return _json_run(lambda: _run_args(args, dispatch_argv))
+            return _run_args(args, dispatch_argv)
+    except (ValueError, OSError) as exc:
+        msgs.warn(msgs.FAILED, error=exc)
+        return 2
 
 
 def _json_run_requested(args: argparse.Namespace) -> bool:
@@ -4785,6 +4867,15 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     ):
         msgs.warn(msgs.JSON_NEEDS_LIST)
         return 2
+    if args.verify is not None:
+        from .verify import verify
+        errors = verify(args.verify or None)
+        for error in errors:
+            print(error, file=sys.stderr)
+        print(f'Verification: {len(errors)} error(s).')
+        return int(bool(errors))
+    if args.bench_models:
+        return _run_model_bench(args, presets)
     if args.list:
         ambiguous = any(
             (
@@ -4972,7 +5063,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     except ValueError as exc:
         msgs.warn(msgs.FAILED, error=exc)
         return 2
-    if P.has_benchmarks(automatic_dir):
+    from .cli_options import current
+    if not current().replaces_prompt and not current().chat and P.has_benchmarks(automatic_dir):
         if args.json:
             msgs.warn(msgs.JSON_NEEDS_LIST)
             return 2
@@ -5076,7 +5168,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     # at the end instead. The change is judged on the files before directive
     # expansion, since expanded output such as a clock differs on every launch.
     recorded_system = M.load_system_prompt(cfg.session_file)
-    if recorded_system is not None:
+    if recorded_system is not None and not (current().changes_prompt or current().chat):
         system = recorded_system
     active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
     try:
@@ -5095,7 +5187,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         msgs.say(msgs.RESUME_MODEL_FALLBACK, stamped=unreachable_stamp,
                  model=_stamp_label(cfg.model, cfg.provider_id))
     prompt_spec = P._expand_spec(prompt_spec, cfg)
-    if recorded_system is None:
+    if recorded_system is None or current().changes_prompt or current().chat:
         system = prompt_spec.system
 
     keymap, key_errors = keys_mod.load(keys_mod.keys_file(cfg.settings))
