@@ -1,4 +1,4 @@
-Execute Python in a persistent IPython kernel. State survives between calls.
+Execute Python in a persistent IPython kernel (Jupyter). State survives between calls.
 
 One kernel runs for the whole session. Everything a cell defines — functions,
 classes, imports, open connections, loaded dataframes — is still there on the
