@@ -600,7 +600,7 @@ def render_markdown(source: str, width: int, settings: Any = None) -> str:
     """ANSI rendering of Markdown source at `width` columns: no blank lines
     before or after, ending in one newline. Inline code is a chip: its text in
     COLOR_CODE on COLOR_PANEL, a space of padding each side."""
-    console = _render_console(width, _markdown_styles(theme(settings)), fset.hex_for("COLOR_AGENT"))
+    console = _render_console(width, _markdown_styles(theme(settings)), fset.hex_for("COLOR_TEXT"))
     document = _Markdown(source, code_theme=fset.code_style(), hyperlinks=False)
     for token in document.parsed:
         for child in token.children or ():
@@ -791,8 +791,8 @@ class Display:
         return spaces
 
     def _paint(self, text: str) -> str:
-        """Answer text in COLOR_AGENT, on a stream that takes colour."""
-        return fset.paint("COLOR_AGENT", text) if self._colour else text
+        """Answer text in COLOR_TEXT, on a stream that takes colour."""
+        return fset.paint("COLOR_TEXT", text) if self._colour else text
 
     def _flush_word(self) -> str:
         """The held word placed on the current row, or on a new one under
