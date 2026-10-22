@@ -329,7 +329,6 @@ REGISTRY: tuple[SettingSpec, ...] = (
     # --- swarm ---
     SettingSpec("SWARM_ACTIVE_MAX", "int", group="shell"),
     # --- kernel ---
-    SettingSpec("PYTHON_KERNEL", "bool", group="shell"),
     SettingSpec("SHELL_PROGRAM", "str", group="shell"),
     SettingSpec("SHELL_WAIT", "int", group="shell"),
     SettingSpec("PYTHON_KERNEL_WAIT", "int", group="shell"),

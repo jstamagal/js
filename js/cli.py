@@ -136,9 +136,7 @@ def _error_text(e: BaseException) -> str:
 
 
 def _registry_for(cfg) -> object:
-    return registry_for_roots(getattr(cfg, "prompt_roots", ()) or (), flags=tool_policy.schema_flags(cfg)).with_kernel(
-        getattr(cfg, "kernel_enabled", False)
-    )
+    return registry_for_roots(getattr(cfg, "prompt_roots", ()) or (), flags=tool_policy.schema_flags(cfg))
 
 # --------------------------------------------------------------------------
 # Runtime knobs: name -> (type, label, description)
@@ -1536,7 +1534,7 @@ def _apply_settings_result(result: setcmd.CommandResult, state: dict, cfg: Confi
                 record_model_switch(session, stamp=stamp, previous=previous)
     if _changed_provider_key(keys):
         _sync_provider_from_live_settings(state, keys)
-    if _changed_lock_subagent_model_key(keys) or "PYTHON_KERNEL" in keys:
+    if _changed_lock_subagent_model_key(keys):
         _sync_tool_registry_from_live_settings(cfg, state)
     if "BANNER" in keys:
         msgs.set_banner(str(settings.knob(state["settings"], "BANNER")))

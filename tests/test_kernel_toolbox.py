@@ -40,7 +40,7 @@ def ctx(tmp_path, monkeypatch):
     work = tmp_path / "work"
     work.mkdir()
     monkeypatch.setattr(tbmod._paths, "global_toolbox_dir", lambda: tmp_path / "config" / "toolbox")
-    context = ToolContext(cwd=work, kernel_enabled=True)
+    context = ToolContext(cwd=work)
     context.model = "test-model"
     context.kernel_verbosity = "quiet"
     context.kernel_wait_seconds = 1
@@ -1008,7 +1008,7 @@ def test_kernel_footer_survives_a_died_kernel(tmp_path, monkeypatch):
     session = _offline_kernel(
         monkeypatch, kmod.CellOutput(died=True), names=["x"], alive=False
     )
-    context = ToolContext(cwd=tmp_path, kernel_enabled=True, kernel_verbosity="quiet")
+    context = ToolContext(cwd=tmp_path, kernel_verbosity="quiet")
 
     result = kmod.kernel(code="import os\nos._exit(1)", context=context)
 
@@ -1027,11 +1027,15 @@ def test_the_kernel_panel_draws_plain_on_a_stderr_that_is_not_a_terminal(ctx, mo
     assert "toolbox saved" in stream.getvalue() and "\x1b" not in stream.getvalue()
 
 
-def test_selecting_a_gated_off_tool_says_it_is_off_not_missing(monkeypatch):
+def test_an_agent_listing_kernel_and_toolbox_gets_them_with_default_settings(monkeypatch):
+    from types import SimpleNamespace
+
+    from js import cli
     from js.toolkit import policy
 
     seen = []
     monkeypatch.setattr(policy.output, "notice", lambda message, **_fields: seen.append(message))
-    build_default_registry().with_kernel(False).select(["kernel:eager", "toolbox:eager"])
+    surface = cli._registry_for(SimpleNamespace(prompt_roots=())).select(["kernel:eager", "toolbox:eager"])
 
-    assert seen == [msgs.TOOL_ENTRY_UNAVAILABLE, msgs.TOOL_ENTRY_UNAVAILABLE]
+    assert {"kernel", "toolbox"} <= set(surface.by_name)
+    assert seen == []

@@ -549,10 +549,8 @@ let it build its own. They do not replace the hardened tools, do not wrap them,
 and do not import their rails. The shipped `twotool` agent
 (`js --agent twotool`) is this mode: `kernel`, `toolbox`, `shell`, nothing else.
 
-Both are gated by `PYTHON_KERNEL`, off by default. Install `js[kernel]` or run
-`uv sync --no-dev --extra kernel`, then `/set PYTHON_KERNEL on` (and `/save`
-to persist it). `/set PYTHON_KERNEL off` removes both from subsequent turns,
-including subagents; it does not interrupt an already-running turn or cell.
+An agent has them when its agent.yaml lists them, like any other tool. Install
+`js[kernel]` or run `uv sync --no-dev --extra kernel` for their packages.
 Jupyter's `jupyter_client` and `ipykernel` are optional, not base dependencies.
 Without them enabled tools return an ERROR naming the missing package and
 installation extra instead of a traceback; core js remains usable.

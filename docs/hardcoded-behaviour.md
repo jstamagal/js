@@ -233,7 +233,6 @@ branch the audit was made on; they move as the code changes.
 | `js/toolkit/core.py` | ToolContext._persist_snapshot / snapshot / call_tool | policy | Model-facing text is loaded from `js/model_text/toolkit_core.json`; selection and execution policy are unchanged. | js-2lg.35 |
 | `js/toolkit/core.py` | ToolResult.dehydrated | policy | Model-facing text is loaded from `js/model_text/toolkit_core.json`; selection and execution policy are unchanged. | js-2lg.35 |
 | `js/toolkit/registry.py` | ToolRegistry.unavailable_error | policy | Model-facing text is loaded from `js/model_text/toolkit_registry.json`; selection and execution policy are unchanged. | js-2lg.36 |
-| `js/toolkit/registry.py` | ToolRegistry.with_kernel | policy | Model-facing text is loaded from `js/model_text/toolkit_registry.json`; selection and execution policy are unchanged. | js-2lg.36 |
 | `js/toolkit/registry.py` | TurnToolSurface._unavailable_errors | policy | Model-facing text is loaded from `js/model_text/toolkit_registry.json`; selection and execution policy are unchanged. | js-2lg.36 |
 | `js/toolkit/registry.py` | TurnToolSurface.offer_path_skills | policy | Model-facing text is loaded from `js/model_text/toolkit_registry.json`; selection and execution policy are unchanged. | js-2lg.36 |
 | `js/toolkit/registry.py` | TurnToolSurface.discover_async / discover / _load | policy | Model-facing text is loaded from `js/model_text/toolkit_registry.json`; selection and execution policy are unchanged. | js-2lg.36 |

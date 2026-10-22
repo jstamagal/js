@@ -40,10 +40,8 @@ supported platforms. `just sync` is the developer setup and includes test extras
 Install optional features with `uv sync --no-dev --extra kernel`, `--extra vision`,
 or `--extra browser` (combine flags to retain multiple extras).
 Package installers can use `js[kernel,vision,browser]` instead of `js`.
-The kernel/toolbox pair is disabled by default: `/set PYTHON_KERNEL on` enables
-it after installation; `/set PYTHON_KERNEL off` disables both, including in
-subagents on subsequent turns, and `/save` persists the setting. Like other
-turn settings, changing it does not interrupt an already-running turn or cell. `vision` supplies Pillow for terminal snapshots;
+An agent has `kernel` and `toolbox` when its agent.yaml lists them, like any
+other tool. `vision` supplies Pillow for terminal snapshots;
 `browser` includes it plus Playwright. Browser binaries are a separate opt-in:
 `just --set browser-extra '--extra browser' install-browser`.
 The `jev` tool, part of the core install, needs `TYPESAFE_API_KEY`.

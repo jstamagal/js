@@ -209,10 +209,6 @@ SWARM_ACTIVE_MAX
     How many agents of an in-process swarm may be mid-turn at once; 0 is no
     cap.
 
-PYTHON_KERNEL
-    Enable the persistent Python kernel and toolbox. Requires the kernel
-    extra.
-
 SHELL_PROGRAM
     Program the `shell` tool runs commands with: a name looked up on PATH,
     or a path. bash and zsh run with `-o pipefail`, so a pipeline fails when

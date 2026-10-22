@@ -439,8 +439,6 @@ def missing_dependencies() -> str:
 
 def get_session(context: Any) -> tuple[KernelSession | None, str, bool]:
     """(session, error, started_now). Never raises; a failure comes back as text."""
-    if not getattr(context, "kernel_enabled", False):
-        return None, _PROMPTS['get_session_error_kernel_toolbox_disabled_use_set'], False
     problem = missing_dependencies()
     if problem:
         return None, problem, False
@@ -885,8 +883,6 @@ def kernel(
 ) -> str:
     if context is None:
         return "ERROR: missing ToolContext"
-    if not context.kernel_enabled:
-        return _PROMPTS['kernel_error_kernel_toolbox_disabled_use_set']
     code = text_or_default(code)
     limit = _positive_seconds(timeout, 120.0)
     mode = text_or_default(action, "run").strip().lower() or "run"

@@ -1,5 +1,4 @@
 {
-  "toolbox_error_kernel_toolbox_disabled_use_set": "ERROR: kernel/toolbox disabled; use /set PYTHON_KERNEL on (requires js[kernel]).",
   "toolbox_without_a_kernel_save_needs_the": "{problem}\nWithout a kernel, save needs the definition passed explicitly in `source`.",
   "toolbox_hoisted_into_the_file": "hoisted into the file: ",
   "toolbox_error_no_source_found_for_define": "ERROR: no source found for {name!r}. Define it in the kernel first, or pass the definition in `source`.",

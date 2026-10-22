@@ -2101,7 +2101,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     )
     model, provider_id = request.model, request.provider_id
     convo = TurnConvo(system, messages, provider_id=provider_id, model=model)
-    base_registry = (tool_registry or T.STOCK_REGISTRY).with_kernel(cfg.kernel_enabled)
+    base_registry = tool_registry or T.STOCK_REGISTRY
     alias_map = _resolve_alias_profile(getattr(cfg, "settings", {}) or {}, model, provider_id, base_registry)
     active_context = tool_context or T.STOCK_CONTEXT
     owns_mcp_host = mcp_host is None
