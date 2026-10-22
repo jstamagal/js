@@ -325,8 +325,10 @@ def test_both_tools_are_registered_with_their_model_facing_descriptions():
 
     assert registry.resolve("kernel").name == "kernel"
     assert registry.resolve("toolbox").name == "toolbox"
-    assert "persistent IPython kernel" in registry.resolve("kernel").description
-    assert "outlive the session" in registry.resolve("toolbox").description
+    descriptions = Path(kmod.__file__).parent / "tool_descriptions"
+    for name in ("kernel", "toolbox"):
+        expected = (descriptions / f"{name}.md").read_text().strip()
+        assert registry.resolve(name).description == expected
 
 
 def test_the_kernel_description_changes_when_toolbox_shares_the_surface():
@@ -1023,3 +1025,13 @@ def test_the_kernel_panel_draws_plain_on_a_stderr_that_is_not_a_terminal(ctx, mo
     monkeypatch.delenv("NO_COLOR", raising=False)
     kmod.render_event(ctx, "normal", "toolbox saved")
     assert "toolbox saved" in stream.getvalue() and "\x1b" not in stream.getvalue()
+
+
+def test_selecting_a_gated_off_tool_says_it_is_off_not_missing(monkeypatch):
+    from js.toolkit import policy
+
+    seen = []
+    monkeypatch.setattr(policy.output, "notice", lambda message, **_fields: seen.append(message))
+    build_default_registry().with_kernel(False).select(["kernel:eager", "toolbox:eager"])
+
+    assert seen == [msgs.TOOL_ENTRY_UNAVAILABLE, msgs.TOOL_ENTRY_UNAVAILABLE]

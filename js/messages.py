@@ -1082,6 +1082,7 @@ AGENT_NAME_IS_TOOL = Message("Agent {agent!r}: name collides with a builtin tool
                              WARN)
 TOOL_ENTRY_UNMATCHED = Message("Tool entry {entry!r} matched no tool. Ignored.", WARN)
 TOOL_ENTRY_UNMATCHED_FOR = Message("Tool entry {entry!r} for agent {agent!r} matched no tool. Ignored.", WARN)
+TOOL_ENTRY_UNAVAILABLE = Message("Tool entry {entry!r} names a tool that is turned off: {reason}", WARN)
 DESCRIPTION_PROBLEM = Message("description: {problem}", WARN)
 DESCRIPTION_NESTED_BLOCK = Message("{label}nested {{{{#if}}}}/{{{{#unless}}}} block is unsupported. Kept as written.")
 DESCRIPTION_BLOCK_NAMES_NO_TOOL = Message("{label}conditional block names no tool. Kept as written.")

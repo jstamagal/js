@@ -106,7 +106,8 @@ class ToolRegistry:
         eager or lazy, with tools.yaml's tags and argument bans applied.
         `warn` prints the one-line notice for entries that match no tool."""
         config = config if config is not None else policy.load_tools_config()
-        chosen = policy.select(self.tools, entries or (), config, agent_id=agent_id, warn=warn)
+        chosen = policy.select(self.tools, entries or (), config, agent_id=agent_id, warn=warn,
+                               unavailable=self.unavailable_errors)
         selected = tuple(tool for tool in self.tools if tool.name in chosen.eager | chosen.lazy)
         known_names = self.known_names or frozenset(self.by_name)
         return replace(
