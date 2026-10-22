@@ -6,6 +6,7 @@ import contextlib
 from collections.abc import Callable, Mapping
 import curses
 import os
+import re
 import sys
 from getpass import getpass
 from dataclasses import dataclass, replace
@@ -23,6 +24,7 @@ from .logins import (
     load_logins,
     load_model_cache,
     remove_login,
+    rename_login,
     save_login,
     test_login,
     test_login_with_metadata,
@@ -112,6 +114,8 @@ def _curses_picker(
     details: list[list[str]] | None = None,
     on_edit: Callable[[curses.window, str], str | None] | None = None,
     keymaps: Mapping[str, CursesKeymap] | None = None,
+    typeahead: bool = False,
+    on_action: Callable[[str, int], bool] | None = None,
 ) -> list[int] | None:
     """Searchable chooser/checklist; selections always use original row indices.
 
@@ -131,7 +135,9 @@ def _curses_picker(
     query = ""
     searching = False
     while True:
-        matches = [i for i, row in enumerate(rows) if query.casefold() in " ".join(row).casefold()]
+        matches = [i for i, row in enumerate(rows)
+                   if (any(word.startswith(query.casefold()) for word in " ".join(row).casefold().split())
+                       if typeahead else query.casefold() in " ".join(row).casefold())]
         idx = max(0, min(idx, len(matches) - 1))
         stdscr.clear()
         h, w = stdscr.getmaxyx()
@@ -165,12 +171,29 @@ def _curses_picker(
         context = "search" if searching else "list"
         hint = msgs.PICKER_KEYS_SEARCH if searching else help_text
         draw(h - 1, _curses_hint(hint, keymaps[context], LOGIN_KEYMAPS[context]).text())
+        if on_action is not None and not searching:
+            draw(h - 1, msgs.LOGIN_PROVIDER_KEYS.text())
+        elif typeahead and not searching:
+            draw(h - 1, msgs.LOGIN_TYPEAHEAD_KEYS.text())
         stdscr.refresh()
         try:
             key = stdscr.getch()
         except KeyboardInterrupt:
             return None
         action = _curses_action(keymaps[context], key)
+        if typeahead and not searching:
+            if key in (curses.KEY_BACKSPACE, 127, 8):
+                query = query[:-1]
+                idx = 0
+                continue
+            if 32 <= key < 256 and chr(key).isprintable() and key != ord("/"):
+                query += chr(key)
+                idx = 0
+                continue
+        if on_action is not None and key in (ord("r"), ord("d")) and not searching and matches:
+            if on_action(chr(key), matches[idx]):
+                return [matches[idx]]
+            continue
         if searching:
             if action == "choose":
                 searching = False
@@ -223,8 +246,10 @@ def _curses_picker(
 
 def _curses_menu(
     stdscr: curses.window, items: list[str], title: str, *, details: list[list[str]] | None = None,
+    typeahead: bool = False, on_action: Callable[[str, int], bool] | None = None,
 ) -> int | None:
-    chosen = _curses_picker(stdscr, [(item, "") for item in items], title, details=details)
+    chosen = _curses_picker(stdscr, [(item, "") for item in items], title, details=details,
+                            typeahead=typeahead, on_action=on_action)
     return chosen[0] if chosen else None
 
 
@@ -377,7 +402,7 @@ def _select_provider() -> str | None:
     rows = _login_provider_rows()
     items = [msgs.LOGIN_ADD_CUSTOM.text(), *[msgs.LOGIN_PROVIDER_ROW.format(pid=pid, name=name, source=source) for pid, name, source in rows]]
     sys.stdout.flush()
-    idx = _menu(_curses_menu, items, msgs.LOGIN_PICK_PROVIDER.text())
+    idx = _menu(_curses_menu, items, msgs.LOGIN_PICK_PROVIDER.text(), typeahead=True)
     if idx is None:
         return None
     if idx == 0:
@@ -413,6 +438,9 @@ def _input(prompt: str, *, default: str | None = None, secret: bool = False, rea
 def _ask_custom_provider() -> tuple[str, str, str, providers.ProviderDef] | None:
     provider_id = _input(msgs.LOGIN_ASK_CUSTOM_ID.text())
     if not provider_id:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", provider_id):
+        msgs.warn(msgs.LOGIN_FAILED, error="Provider names must use letters, digits, '.', '_' or '-'.")
         return None
     selected = _select_api_shape()
     if selected is None:
@@ -832,6 +860,13 @@ def _edit_saved_provider(login: Login) -> None:
     update_login(login.provider_id, lambda current: replace(current, **changes))
 
 
+def _rename_saved_provider(provider_id: str) -> str:
+    name = _input(msgs.LOGIN_RENAME.text(), default=provider_id)
+    if name and rename_login(provider_id, name):
+        return providers.normalize_provider_id(name) or name
+    return provider_id
+
+
 def _manage_providers() -> int:
     while True:
         saved = load_logins()
@@ -841,7 +876,16 @@ def _manage_providers() -> int:
         items.extend(_provider_details(saved[pid], len(cached.get(pid, [])))[0] for pid in ids)
         items.append(msgs.LOGIN_ADD_REGISTRY.text())
         details = [[], *[_provider_details(saved[pid], len(cached.get(pid, []))) for pid in ids], []]
-        choice = _menu(_curses_menu, items, msgs.LOGIN_MANAGE_PROVIDERS.text(), details=details)
+        requested = []
+
+        def action(key, index):
+            if 1 <= index <= len(ids):
+                requested.append(key)
+                return True
+            return False
+
+        choice = _menu(_curses_menu, items, msgs.LOGIN_MANAGE_PROVIDERS.text(), details=details,
+                       on_action=action)
         if choice is None:
             return 0
         if choice == 0 or choice == len(items) - 1:
@@ -851,8 +895,13 @@ def _manage_providers() -> int:
             continue
         provider_id = ids[choice - 1]
         try:
-            _manage_saved_provider(provider_id)
-        except LoginsCorruptError as exc:
+            if requested == ["r"]:
+                _rename_saved_provider(provider_id)
+            elif requested == ["d"]:
+                _run_logout(provider_id)
+            else:
+                _manage_saved_provider(provider_id)
+        except (LoginsCorruptError, ValueError) as exc:
             msgs.warn(msgs.LOGIN_PROVIDER_NOT_CHANGED, error=exc)
             return 1
 
@@ -898,8 +947,20 @@ def _manage_saved_provider(provider_id: str) -> None:
         details = _provider_details(login, len(load_model_cache().get(provider_id, [])))
         actions = [msgs.LOGIN_UPDATE.text(), msgs.LOGIN_MODELS.text(), msgs.LOGIN_DEFAULTS.text(),
                    msgs.LOGIN_BACK.text(), msgs.LOGIN_REMOVE.text()]
+        requested = []
+
+        def action(key, _index):
+            requested.append(key)
+            return True
+
         choice = _menu(_curses_menu, actions, msgs.LOGIN_MANAGE_ONE.text(provider=provider_id),
-                       details=[details] * len(actions))
+                       details=[details] * len(actions), on_action=action)
+        if requested == ["r"]:
+            provider_id = _rename_saved_provider(provider_id)
+            continue
+        if requested == ["d"]:
+            _run_logout(provider_id)
+            return
         if choice is None or choice == 3:
             return
         if choice == 0:

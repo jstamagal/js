@@ -759,6 +759,55 @@ def _normalize_provider_id(provider_id: str) -> str:
     return providers.normalize_provider_id(provider_id) or provider_id
 
 
+def rename_login(provider_id: str, new_provider_id: str) -> bool:
+    """Move a saved login and its cache under the store lock, refusing collisions."""
+    import re
+
+    provider_id = _normalize_provider_id(provider_id)
+    new_provider_id = new_provider_id.strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", new_provider_id):
+        raise ValueError("Provider names must use letters, digits, '.', '_' or '-'.")
+    new_provider_id = _normalize_provider_id(new_provider_id)
+    with hold_login_lock():
+        store = _read_store(strict=True)
+        login = get_login(provider_id)
+        if login is None:
+            return False
+        if provider_id == new_provider_id:
+            return True
+        if login.codex_refresh_token or login.xai_refresh_token:
+            raise ValueError("OAuth providers cannot be renamed: their names select the authentication flow.")
+        with _cache_path().open("r", encoding="utf-8") if _cache_path().exists() else contextlib.nullcontext() as f:
+            cache = json.load(f) if f is not None else {}
+        if not isinstance(cache, dict):
+            raise ValueError("Model cache must be an object; provider unchanged.")
+        data = _serialize(store, store.logins)
+        occupied = {*data, *cache, *(p.id for p in providers.login_providers())}
+        if any(name.casefold() == new_provider_id.casefold() for name in occupied):
+            raise ValueError(f"Provider name {new_provider_id!r} is already in use.")
+        provider = next((p for p in providers.login_providers() if p.id == provider_id), None)
+        renamed = replace(login, provider_id=new_provider_id,
+                          sdk_provider_id=login.sdk_provider_id or (provider.effective_sdk_provider_id if provider else None),
+                          shape_provider_id=login.shape_provider_id or (provider.id if provider else None),
+                          provider_base_url=login.provider_base_url or (provider.default_base_url if provider else None))
+        row = data.pop(provider_id)
+        row.update({k: v for k, v in asdict(renamed).items() if v not in (None, {}, [])})
+        data[new_provider_id] = row
+        # Publish credentials before moving cache: a failed cache write can roll
+        # back the login file without removing the source cache.
+        original = _serialize(store, store.logins)
+        _write_logins_toml(data)
+        try:
+            if provider_id in cache:
+                cache[new_provider_id] = cache.pop(provider_id)
+                _write_raw_model_cache(cache)
+        except BaseException:
+            _write_logins_toml(original)
+            raise
+    forget_memory_login(provider_id)
+    return True
+
+
 def remove_login(provider_id: str) -> bool:
     """Remove a provider login. Returns True if it existed.
 
@@ -942,6 +991,11 @@ def _write_model_cache_records(records: dict[str, dict[str, Any]]) -> None:
             payload[provider_id] = {"models": models, "metadata": filtered_metadata}
         else:
             payload[provider_id] = models
+    _write_raw_model_cache(payload)
+
+
+def _write_raw_model_cache(payload: dict[str, Any]) -> None:
+    _ensure_config_dir()
     path = _cache_path()
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
     try:
