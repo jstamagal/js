@@ -931,6 +931,13 @@ def history_to_ai_messages(
                 if content:
                     parts.extend(_coerce_parts(content))
                 parts.extend(_tool_call_part(tc) for tc in calls)
+            if not calls and not any(isinstance(part, ai.types.messages.TextPart) and part.text
+                                     for part in parts):
+                # A reply cancelled while it was still thinking holds only
+                # reasoning. Providers refuse an assistant message with no
+                # content and no tool calls (llama.cpp: "Assistant message must
+                # contain either 'content' or 'tool_calls'"), so it is not sent.
+                continue
             assistant = ai.assistant_message(*parts)
             provider_metadata = msg.get("provider_metadata")
             if isinstance(provider_metadata, dict):
