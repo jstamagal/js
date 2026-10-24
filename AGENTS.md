@@ -24,40 +24,8 @@ owner says remove, it is gone — deleted, not renamed, no compatibility alias.
 3. **Make the change in a worktree.** The `~/js` checkout stays on main: the
    `js` on PATH runs whatever it has checked out, so a branch left there
    changes the js the owner uses. Work on a branch in its own worktree:
-   `git worktree add ../js-<topic> -b <topic>`.
-4. **One bug, one test, one seam.** Write one test that fails on the bug.
-   Fix the bug. Run that test. Then run the test file for the seam you
-   touched (`just test-file tests/test_<seam>.py`). That is the whole loop.
-   A second test needs a second distinct behavior to pin. Wording, comments,
-   docstrings and messages get no test. Do not run `just test` after an
-   edit: it runs 2400+ tests on every logical core and lags the box. Run it
-   once before a merge. It is cached per tree state — an unchanged tree
-   replays the last run and says who ran it, so rerunning tells you nothing
-   new. Whose change broke a test does not matter; "it was failing before
-   me" is not a state of the tree, it is a description of you walking past
-   it. Do not delete the test. Do not edit the test to pass. If you cannot
-   make it pass, the only other way out is a written confession: append to
-   `FAILURES.md` at the repo root your full model name, the date, the failing
-   test names, what you tried, and the sentence "I could not make this pass."
-   A confession is public and permanent; that is the point. The suite has
-   never found a bug here; using js and auditing it have. `just test-live`'s
-   e2e is the one that resembles use; run it now and then.
-5. **`just lint`** before calling it clean. ruff is the gate.
-6. Commit regularly. It's local. It's trivially undone (`git revert`, `--amend`), so it needs no permission — commit free, quiet, often.
-   Commits are authored by whoever made them. The owner is
-   `John Stamagal <jstamagal@gmail.com>` and that is the global config. A model
-   commits as itself, name and vendor, set per command with
-   `-c user.name=... -c user.email=...`: `Claude Fable 5.1 <claude@anthropic>`,
-   `Qwen <qwen@alibaba>`. The commit agent is
-   `js commit agent <jstamagal+agent@gmail.com>`.
-7. **Merge it.** A branch nobody merged is organized forgetting — the work is
-   not done while it sits unmerged. Merge to main when green; if main moved
-   underneath, review then merge. Never park work on a branch silently: 28
-   commits rotted that way once. Saying "awaiting review" once and moving on
-   counts as silent. Once merged, remove the worktree and delete the branch.
-8. **Say where the work is.** The owner does not do git. End every report
-   with one plain line: the branch the work is on, whether main has it,
-   whether it is pushed. Anything he has to run, give as the exact command.
+   `git worktree add ~/.js/worktrees/js-<topic> -b <topic>`.
+4. **`just lint`** before calling it clean. ruff is the gate.
 
 ## Privacy 
 - Keep our chat out of the files unless its relavent.
