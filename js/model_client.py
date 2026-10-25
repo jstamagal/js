@@ -25,7 +25,7 @@ from contextlib import AsyncExitStack, aclosing, asynccontextmanager, contextman
 import ai
 import httpx2
 
-from . import codex_auth, codex_provider, messages as msgs, paranoid, providers, reasoning, retry, routing, stream_transport, tool_args
+from . import codex_auth, codex_provider, media, messages as msgs, paranoid, providers, reasoning, retry, routing, stream_transport, tool_args
 from . import settings as _settings
 from .sampling import Sampling
 from .text_bytes import byte_prefix, cap_text
@@ -875,9 +875,22 @@ def _signed_part(entry: dict) -> ai.types.messages.ReasoningPart:
     return ai.thinking(entry["text"], provider_metadata=metadata if isinstance(metadata, dict) else None)
 
 
+def _file_parts(record: dict, vision: bool) -> list[ai.types.messages.FilePart]:
+    """The file parts for the media a history record lists; none without
+    ``vision``. A part whose bytes the store no longer has is left out."""
+    if not vision:
+        return []
+    parts = []
+    for part in record.get(media.MEDIA_KEY) or ():
+        data = media.load(part) if media.is_part(part) else None
+        if data is not None:
+            parts.append(ai.types.messages.FilePart(data=data, media_type=part["mime"]))
+    return parts
+
+
 def history_to_ai_messages(
     system: str, messages: list[dict], *, provider_id: str | None = None,
-    model_id: str | None = None,
+    model_id: str | None = None, vision: bool = False,
 ) -> list[ai.messages.Message]:
     """Convert the harness JSONL history into ``ai.messages.Message`` objects.
 
@@ -894,6 +907,13 @@ def history_to_ai_messages(
       ``reasoning_from`` is this ``provider_id`` and ``model_id``; so do
       Claude's thinking blocks (``reasoning_blocks``).
     * ``role == "tool"`` -> ``ai.tool_message`` with a ``ToolResultPart``.
+
+    With ``vision``, the media a user record lists (`js.media`) follow its
+    text as file parts. A tool record's media go in a user message after the
+    last tool message of its batch: tool results must stay contiguous, and
+    the providers' tool-result converters send text only. The same records
+    give the same messages on every turn, so the provider's prompt cache
+    keeps matching past an image.
     """
     provider = providers.get_provider(provider_id)
     sdk_id = provider.effective_sdk_provider_id if provider is not None else provider_id
@@ -903,19 +923,24 @@ def history_to_ai_messages(
     out: list[ai.messages.Message] = []
     if system:
         out.append(ai.system_message(system))
+    batch_media: list[ai.messages.Message] = []
 
     for msg in messages:
         role = msg.get("role")
+        if role != "tool" and batch_media:
+            out.extend(batch_media)
+            batch_media = []
         if role == "system":
             # History system entries are rare; treat like explicit system text.
             out.append(ai.system_message(str(msg.get("content", ""))))
             continue
         if role == "user":
             content = msg.get("content", "")
-            if isinstance(content, str):
+            files = _file_parts(msg, vision)
+            if isinstance(content, str) and not files:
                 out.append(ai.user_message(content))
             else:
-                out.append(ai.user_message(*_coerce_parts(content)))
+                out.append(ai.user_message(*(_coerce_parts(content) if content else []), *files))
             continue
         if role == "assistant":
             parts: list[Any] = []
@@ -965,9 +990,14 @@ def history_to_ai_messages(
                     is_error=is_error,
                 )
             )
+            files = _file_parts(msg, vision)
+            if files:
+                label = media_label(str(msg.get("tool_call_id", "")), str(content or ""))
+                batch_media.append(ai.user_message(ai.types.messages.TextPart(text=label), *files))
             continue
         raise ValueError(f"unsupported history role: {role!r}")
 
+    out.extend(batch_media)
     return out
 
 
@@ -1037,7 +1067,7 @@ def _mixed_result_parts(result: Any) -> tuple[str, list[Any], bool]:
     if not isinstance(result, ToolResult):
         return str(result), [], False
     text: list[str] = []
-    media: list[Any] = []
+    files: list[Any] = []
     for block in result.blocks:
         kind = block.get("type")
         if kind == "text":
@@ -1050,7 +1080,7 @@ def _mixed_result_parts(result: Any) -> tuple[str, list[Any], bool]:
                 continue
             mime = str(block.get("mimeType", "application/octet-stream"))
             text.append(_PROMPTS['mixed_result_parts_attached'].format(kind=kind, mime=mime))
-            media.append(ai.types.messages.FilePart(data=data, media_type=mime))
+            files.append(ai.types.messages.FilePart(data=data, media_type=mime))
         elif kind == "resource":
             resource = block.get("resource")
             if not isinstance(resource, dict):
@@ -1066,12 +1096,16 @@ def _mixed_result_parts(result: Any) -> tuple[str, list[Any], bool]:
                     continue
                 mime = str(resource.get("mimeType", "application/octet-stream"))
                 text.append(_PROMPTS['mixed_result_parts_embedded_resource_attached'].format(uri=uri, mime=mime))
-                media.append(ai.types.messages.FilePart(data=data, media_type=mime))
+                files.append(ai.types.messages.FilePart(data=data, media_type=mime))
         elif kind == "resource_link":
             text.append(_PROMPTS['mixed_result_parts_resource_link'].format(block_get_name=block.get('name', ''), block_get_uri=block.get('uri', '')))
         elif kind == "structured":
             text.append(json.dumps(block.get("value"), ensure_ascii=False, separators=(",", ":"), sort_keys=True))
-    return "\n".join(text), media, result.is_error
+    joined = "\n".join(text)
+    if result.is_error and not joined.startswith("ERROR"):
+        # A history tool record is an error when its text says so.
+        joined = f"ERROR: {joined}"
+    return joined, files, result.is_error
 
 
 # The longest tool call id a media label names; the text budgets count every
@@ -1106,58 +1140,41 @@ def provider_text(result: Any) -> str:
             # The file is gone or unreadable: the error is what is sent.
             return _visual_read_error(parts[1], exc)
         return f"{parts[3]}\n{media_label(widest, parts[3])}"
-    text, media, _is_error = _mixed_result_parts(result)
-    return f"{text}\n{media_label(widest, text)}" if media else text
+    text, files, _is_error = _mixed_result_parts(result)
+    return f"{text}\n{media_label(widest, text)}" if files else text
+
+
+def tool_result_record(tool_call_id: str, tool_name: str, result: Any) -> dict:
+    """The history record of a completed tool call: its text, and the media
+    it returned (a native read's image, a tool's image or audio blocks) kept
+    in `js.media` and listed under ``media.MEDIA_KEY``. The model gets the
+    record through `history_to_ai_messages`, this turn and every later one."""
+    record = {"role": "tool", "tool_call_id": tool_call_id, "name": tool_name}
+    files: list[tuple[bytes, str]] = []
+    if isinstance(result, str):
+        payload = _image_result_payload(result)
+        if payload is None:
+            text = result
+        elif isinstance(payload, str):
+            text = payload
+        else:
+            text, mime, data = payload
+            files.append((data, mime))
+    else:
+        text, parts, _is_error = _mixed_result_parts(result)
+        files.extend((part.data, part.media_type) for part in parts)
+    record["content"] = text
+    if files:
+        record[media.MEDIA_KEY] = [media.store(data, mime) for data, mime in files]
+    return record
 
 
 def build_tool_result_messages(
-    tool_call_id: str, tool_name: str, result: Any
+    tool_call_id: str, tool_name: str, result: Any, *, vision: bool = True,
 ) -> list[ai.messages.Message]:
-    """Provider-facing messages for a completed tool call.
-
-    Image markers must be visible as a normal user message with a ``FilePart``;
-    OpenAI/Anthropic tool-result converters stringify ``ToolResultPart.result``.
-    Persisted history still receives only the dehydrated text stub.
-    """
-    if not isinstance(result, str):
-        text, media, is_error = _mixed_result_parts(result)
-        if not media and not hasattr(result, "blocks"):
-            return [build_tool_result_message(tool_call_id, tool_name, result)]
-        messages = [ai.tool_message(ai.tool_result_part(
-            tool_call_id, result=text, tool_name=tool_name, is_error=is_error
-        ))]
-        if media:
-            messages.append(ai.user_message(ai.types.messages.TextPart(text=media_label(tool_call_id, text)), *media))
-        return messages
-    payload = _image_result_payload(result)
-    if payload is None:
-        return [build_tool_result_message(tool_call_id, tool_name, result)]
-    if isinstance(payload, str):
-        return [
-            ai.tool_message(
-                ai.tool_result_part(
-                    tool_call_id,
-                    result=payload,
-                    tool_name=tool_name,
-                    is_error=True,
-                )
-            )
-        ]
-    stub, mime, data = payload
-    return [
-        ai.tool_message(
-            ai.tool_result_part(
-                tool_call_id,
-                result=stub,
-                tool_name=tool_name,
-                is_error=False,
-            )
-        ),
-        ai.user_message(
-            ai.types.messages.TextPart(text=media_label(tool_call_id, stub)),
-            ai.types.messages.FilePart(data=data, media_type=mime),
-        ),
-    ]
+    """Provider-facing messages for a completed tool call: its
+    `tool_result_record` as `history_to_ai_messages` sends it."""
+    return history_to_ai_messages("", [tool_result_record(tool_call_id, tool_name, result)], vision=vision)
 
 
 def _lay_headers(sdk_client: Any, headers: dict[str, str]):

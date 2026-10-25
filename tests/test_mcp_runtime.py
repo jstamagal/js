@@ -765,9 +765,7 @@ def test_successful_server_data_is_redacted_everywhere(config):
         history = []
         for index, (_spec, value) in enumerate(outputs):
             provider_messages.extend(model_client.build_tool_result_messages(str(index), "mcp", value))
-            history.extend(runtime._history_tool_result_message(
-                runtime._PendingToolCall(str(index), "mcp"), value
-            ))
+            history.append(model_client.tool_result_record(str(index), "mcp", value))
         exposed = repr((catalog, outputs, provider_messages, history, events))
         assert "SENTINEL" not in exposed
         assert "[REDACTED]" in exposed
@@ -832,7 +830,7 @@ def test_runtime_delivers_all_mcp_events_through_strict_hooks(monkeypatch, confi
     asyncio.run(drive())
 
 
-def test_structured_result_provider_media_and_dehydrated_history():
+def test_structured_result_provider_media_and_history_media_ref():
     result = ToolResult([
         {"type": "text", "text": "hello"},
         {"type": "image", "data": base64.b64encode(b"image-bytes").decode(), "mimeType": "image/png"},
@@ -842,9 +840,14 @@ def test_structured_result_provider_media_and_dehydrated_history():
     messages = model_client.build_tool_result_messages("tc", "remote", result)
     assert [message.role for message in messages] == ["tool", "user"]
     assert messages[1].parts[-1].data == b"image-bytes"
-    history = runtime._history_tool_result_message(runtime._PendingToolCall("tc", "remote"), result)
-    assert history[0]["content"] == 'hello\n[image image/png omitted from history]\n[embedded resource file:///x]\nembedded\n{"b":2,"a":1}'
-    assert "image-bytes" not in repr(history)
+    record = model_client.tool_result_record("tc", "remote", result)
+    assert "image-bytes" not in repr(record)
+    assert [part["mime"] for part in record["media"]] == ["image/png"]
+    # The record alone rebuilds the same provider messages.
+    def wire(msgs):
+        return [(m.role, [(p.kind, getattr(p, "result", None), getattr(p, "text", None), getattr(p, "data", None))
+                          for p in m.parts]) for m in msgs]
+    assert wire(model_client.history_to_ai_messages("", [record], vision=True)) == wire(messages)
 
 
 def test_mcp_safe_media_is_preserved_and_invalid_media_is_suppressed():
@@ -908,9 +911,7 @@ def test_mcp_credential_media_is_suppressed_from_provider_and_history(kind, resu
         )
 
     messages = model_client.build_tool_result_messages("tc", "remote", result)
-    history = runtime._history_tool_result_message(
-        runtime._PendingToolCall("tc", "remote"), result
-    )
+    history = [model_client.tool_result_record("tc", "remote", result)]
 
     assert all(
         not isinstance(part, model_client.ai.types.messages.FilePart)

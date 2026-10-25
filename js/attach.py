@@ -9,9 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import Iterable
 
-import ai
-
 from . import clipimage
+from . import media
 from . import messages as msgs
 from . import settings as _settings
 from .config import Config
@@ -37,32 +36,10 @@ class AttachmentError(ValueError):
     """Raised when a requested attachment cannot be prepared."""
 
 
-@dataclass(frozen=True)
-class UserMessageBundle:
-    """Provider-facing and history-safe versions of one user message."""
-
-    runtime_message: dict
-    history_message: dict
-
-
-def with_note(bundle: UserMessageBundle, note: str) -> UserMessageBundle:
-    """``bundle`` with ``note`` appended to its text, in both versions."""
-    history_text = bundle.history_message.get("content") or ""
-    text = f"{history_text}\n\n{note}" if history_text else note
-    runtime_content = bundle.runtime_message.get("content")
-    if isinstance(runtime_content, list):
-        parts = list(runtime_content)
-        if parts and isinstance(parts[0], ai.types.messages.TextPart):
-            parts[0] = ai.types.messages.TextPart(text=text)
-        else:
-            parts.insert(0, ai.types.messages.TextPart(text=text))
-        runtime_content = parts
-    else:
-        runtime_content = text
-    return UserMessageBundle(
-        runtime_message={**bundle.runtime_message, "content": runtime_content},
-        history_message={**bundle.history_message, "content": text},
-    )
+def with_note(message: dict, note: str) -> dict:
+    """``message`` with ``note`` appended to its text."""
+    previous = message.get("content") or ""
+    return {**message, "content": f"{previous}\n\n{note}" if previous else note}
 
 
 _DOUBLE_QUOTE_ESCAPES = '\\"$`\n'
@@ -199,17 +176,19 @@ def build_user_message(
     cwd: Path | None = None,
     stdin_attachment: bytes | None = None,
     missing_ok: bool = False,
-) -> UserMessageBundle:
+) -> dict:
     """Build one user message with optional file attachments.
 
-    ``runtime_message`` may contain ``ai`` parts for the current provider call.
-    ``history_message`` is always JSONL-lightweight text. With ``missing_ok``
-    a file that does not exist becomes a note in the text, not an error.
+    An attached image is a media part (`js.media`) in the message's
+    ``media``; the model gets it after the text. The same message is what the
+    model gets on every turn and what the session keeps. With
+    ``missing_ok`` a file that does not exist becomes a note in the text, not
+    an error.
     """
 
     paths = list(attachments or [])
     text_blocks: list[str] = []
-    file_parts: list[ai.types.messages.FilePart] = []
+    file_parts: list[dict] = []
     if prompt:
         text_blocks.append(prompt)
 
@@ -230,23 +209,14 @@ def build_user_message(
         raise AttachmentError(msgs.PROMPT_EMPTY.said())
 
     if file_parts:
-        content: list[object] = []
-        if text:
-            content.append(ai.types.messages.TextPart(text=text))
-        content.extend(file_parts)
-        runtime_content: str | list[object] = content
-    else:
-        runtime_content = text
-
-    history_message = {"role": "user", "content": text}
-    runtime_message = {"role": "user", "content": runtime_content}
-    return UserMessageBundle(runtime_message=runtime_message, history_message=history_message)
+        return {"role": "user", "content": text, media.MEDIA_KEY: file_parts}
+    return {"role": "user", "content": text}
 
 
 @dataclass(frozen=True)
 class _PreparedAttachment:
     text: str
-    file_part: ai.types.messages.FilePart | None = None
+    file_part: dict | None = None
 
 
 def _prepare_attachment(
@@ -341,7 +311,7 @@ def _prepare_image(display_path: str, mime: str, size: int, data: bytes, cfg: Co
     stub = _PROMPTS['prepare_image_visual_file_mime_size_bytes'].format(display_path=display_path, mime=mime, size=size)
     if not getattr(cfg, "vision_enabled", False):
         return _PreparedAttachment(_PROMPTS['prepare_image_vision_disabled_image_bytes_not_sent'].format(stub=stub))
-    return _PreparedAttachment(stub, ai.types.messages.FilePart(data=data, media_type=mime))
+    return _PreparedAttachment(stub, media.store(data, mime))
 
 
 def _resolve_path(raw_path: str, cwd: Path) -> Path:

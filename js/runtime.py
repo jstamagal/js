@@ -516,18 +516,6 @@ def _truncated_tool_call_notice(reason: str, pending_calls: list[_PendingToolCal
 _IMAGE_RESULT_PREFIX = "IMAGE_RESULT\t"
 
 
-def _history_tool_result_message(pc: _PendingToolCall, result: Any) -> list[dict]:
-    """Persistence form of a tool result. Image markers collapse to their text stub so the
-    base64 payload is sent once (the turn it is read) and never re-billed on history replay."""
-    if isinstance(result, ToolResult):
-        return [{"role": "tool", "tool_call_id": pc.id, "name": pc.name, "content": result.dehydrated()}]
-    if not result.startswith(_IMAGE_RESULT_PREFIX):
-        return [{"role": "tool", "tool_call_id": pc.id, "name": pc.name, "content": result}]
-    parts = result.split("\t", 3)
-    stub = parts[3] if len(parts) == 4 else _PROMPTS['history_tool_result_message_visual_file_image_omitted_from_history']
-    return [{"role": "tool", "tool_call_id": pc.id, "name": pc.name, "content": stub}]
-
-
 # --------------------------------------------------------------------------
 # Tool trace
 # --------------------------------------------------------------------------
@@ -1914,9 +1902,9 @@ async def _record_tool_results(pending_calls: list[_PendingToolCall], *, cfg: Co
     """Run the batch and append its results to the history and the convo.
     Returns the (call, arguments, result) records of the calls that ran.
 
-    convo.ai carries the heavy form (image bytes embedded in tool messages)
-    for THIS turn; messages, persisted and replayed on every future turn,
-    carries the dehydrated stub so base64 is billed once."""
+    Each result becomes one history record (`model_client.tool_result_record`)
+    and the convo is built from those records, so later turns and a resumed
+    session send the same messages this turn does."""
     for index, pc in enumerate(pending_calls):
         call = {"id": pc.id, "name": _canonical_tool_call_name(pc.name, registry),
                 "arguments": _canonical_tool_args(pc.arguments())}
@@ -1976,13 +1964,7 @@ async def _record_tool_results(pending_calls: list[_PendingToolCall], *, cfg: Co
             reconciled.append((pc, args, new_result))
         dispatch_records = reconciled
         context.settle_reads()
-        # A batch's tool results must stay contiguous: the SDK's history
-        # check ends the pending tool-call window at the first following
-        # user/assistant message, so an image's user FilePart inserted
-        # between two tool results orphans every later one. Collect the
-        # batch's tool messages first, then the media that follows it.
-        batch_tool_msgs: list[ai.messages.Message] = []
-        batch_media_msgs: list[ai.messages.Message] = []
+        records: list[dict] = []
         for pc, _args, result_value in dispatch_records:
             canonical_pc = _pending_with_name(pc, _canonical_tool_call_name(pc.name, registry))
             events.emit(
@@ -1991,16 +1973,11 @@ async def _record_tool_results(pending_calls: list[_PendingToolCall], *, cfg: Co
                 name=canonical_pc.name,
                 result=result_value,
             )
-            for built in model_client.build_tool_result_messages(pc.id, pc.name, result_value):
-                if built.role == "tool":
-                    batch_tool_msgs.append(built)
-                else:
-                    batch_media_msgs.append(built)
-            done_at = progress.finished.get(pc.id)
-            messages.extend(memory.note_time(item, done_at)
-                            for item in _history_tool_result_message(canonical_pc, result_value))
-        convo.ai.extend(batch_tool_msgs)
-        convo.ai.extend(batch_media_msgs)
+            record = model_client.tool_result_record(pc.id, canonical_pc.name, result_value)
+            records.append(memory.note_time(record, progress.finished.get(pc.id)))
+        messages.extend(records)
+        # One add for the batch: its media follow all of its tool messages.
+        convo.add(records)
     return dispatch_records
 
 
@@ -2100,7 +2077,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         sampling=sampling,
     )
     model, provider_id = request.model, request.provider_id
-    convo = TurnConvo(system, messages, provider_id=provider_id, model=model)
+    convo = TurnConvo(system, messages, provider_id=provider_id, model=model,
+                      vision=vision_enabled_for_model(model, getattr(cfg, "settings", None)))
     base_registry = tool_registry or T.STOCK_REGISTRY
     alias_map = _resolve_alias_profile(getattr(cfg, "settings", {}) or {}, model, provider_id, base_registry)
     active_context = tool_context or T.STOCK_CONTEXT

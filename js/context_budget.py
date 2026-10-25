@@ -188,6 +188,11 @@ def estimate_message_tokens(message: Any, *, chars_per_token: float = 4.0) -> in
             total += sum(_part_tokens(part, chars_per_token=chars_per_token) for part in content)
         else:
             total += estimate_text_tokens(content, chars_per_token=chars_per_token)
+        # Media parts (`js.media`) go to the model as file parts.
+        for part in message.get("media") or []:
+            if isinstance(part, dict):
+                total += estimate_text_tokens(f"{part.get('mime', '')} {part.get('size', 0)} bytes",
+                                              chars_per_token=chars_per_token)
         blocks = message.get("reasoning_blocks")
         reasoning = message.get("reasoning_content")
         if blocks:

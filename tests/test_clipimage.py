@@ -15,7 +15,7 @@ from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
-from js import attach, clipimage, screen, settings
+from js import attach, clipimage, model_client, screen, settings
 from js import messages as msgs
 from js.config import Config
 
@@ -143,10 +143,9 @@ def test_pasted_image_reaches_the_model_as_an_at_path_image_does(tmp_path, visio
 
     def parts(line: str) -> list:
         prompt, attachments = attach.split_repl_attachments(line)
-        content = attach.build_user_message(prompt, attachments, cfg, cwd=tmp_path).runtime_message["content"]
-        if not isinstance(content, list):
-            return []
-        return [(p.data, p.media_type) for p in content if isinstance(p, ai.types.messages.FilePart)]
+        message = attach.build_user_message(prompt, attachments, cfg, cwd=tmp_path)
+        [user] = model_client.history_to_ai_messages("", [message], vision=vision)
+        return [(p.data, p.media_type) for p in user.parts if isinstance(p, ai.types.messages.FilePart)]
 
     pasted = parts(f"describe {token}")
     from_path = parts("describe @shot.png")

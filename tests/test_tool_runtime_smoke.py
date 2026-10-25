@@ -930,18 +930,27 @@ def test_shell_runs_shell_program_with_dash_c_and_reports_shell(tmp_path, monkey
     assert actual == expected
 
 
-def test_history_tool_result_message_dehydrates_image(tmp_path):
+def test_tool_result_record_keeps_image_as_media_ref(tmp_path):
+    from js import media
+
     image = tmp_path / "pixel.png"
     image.write_bytes(_TINY_PNG)
     marker = f"IMAGE_RESULT\t{image}\timage/png\tVISUAL_FILE stub"
-    pc = runtime._PendingToolCall(id="c1", name="read")
     b64 = base64.b64encode(_TINY_PNG).decode("ascii")
 
-    msgs = runtime._history_tool_result_message(pc, marker)
+    record = model_client.tool_result_record("c1", "read", marker)
 
-    assert msgs == [{"role": "tool", "tool_call_id": "c1", "name": "read", "content": "VISUAL_FILE stub"}]
-    assert b64 not in str(msgs)
-    assert runtime._history_tool_result_message(pc, "plain done")[0]["content"] == "plain done"
+    assert record["content"] == "VISUAL_FILE stub"
+    [part] = record["media"]
+    assert media.load(part) == _TINY_PNG
+    assert b64 not in json.dumps(record)
+    # The image outlives its file: replay reads the store, not the path.
+    image.unlink()
+    wire = model_client.history_to_ai_messages("", [record], vision=True)
+    assert [m.role for m in wire] == ["tool", "user"]
+    assert wire[1].parts[-1].data == _TINY_PNG
+    assert model_client.tool_result_record("c1", "read", "plain done") == {
+        "role": "tool", "tool_call_id": "c1", "name": "read", "content": "plain done"}
 
 
 def test_tool_display_keys_are_canonical_tool_names():

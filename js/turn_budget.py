@@ -40,11 +40,13 @@ class TurnConvo:
     history replaces ``ai`` with a new list, so a flight record holding the
     old list keeps what was sent before the rewrite."""
 
-    def __init__(self, system: str, messages: list[dict], *, provider_id: str | None, model: str):
+    def __init__(self, system: str, messages: list[dict], *, provider_id: str | None, model: str,
+                 vision: bool = False):
         self.system = system
         self.messages = messages
         self._provider_id = provider_id
         self._model = model
+        self._vision = vision
         self.ai: list[Any] = []
         self.rebuild()
 
@@ -53,6 +55,7 @@ class TurnConvo:
         from its first message with the tool schemas."""
         self.ai = model_client.history_to_ai_messages(
             self.system, self.messages, provider_id=self._provider_id, model_id=self._model,
+            vision=self._vision,
         )
         self.sent = 0
         self.schemas = True
@@ -60,7 +63,7 @@ class TurnConvo:
     def add(self, records: list[dict]) -> None:
         """Append history records already appended to ``messages``."""
         self.ai.extend(model_client.history_to_ai_messages(
-            "", records, provider_id=self._provider_id, model_id=self._model,
+            "", records, provider_id=self._provider_id, model_id=self._model, vision=self._vision,
         ))
 
     def traced(self) -> None:

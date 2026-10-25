@@ -565,25 +565,6 @@ def test_a_keep_tail_compaction_drops_the_signed_thinking_it_keeps(monkeypatch, 
     assert resumed == messages
 
 
-def test_signed_thinking_after_a_user_message_that_lost_its_attachment_is_not_replayed():
-    from js import cli
-
-    runtime_message = {"role": "user", "content": [ai.types.messages.TextPart(text="see"),
-                                                   ai.types.messages.FilePart(data=b"png", media_type="image/png")]}
-    history_message = {"role": "user", "content": "see"}
-    messages = [runtime_message, _signed_call(1), _result(1)]
-    cli._replace_runtime_user_message(messages, runtime_message, history_message, 0)
-
-    assert messages[0] == history_message
-    assert "reasoning_parts" not in messages[1]
-
-    plain = {"role": "user", "content": "see"}
-    messages = [plain, _signed_call(1), _result(1)]
-    cli._replace_runtime_user_message(messages, plain, dict(plain), 0)
-
-    assert "reasoning_parts" in messages[1]
-
-
 def test_a_refused_signature_is_retried_once_without_signed_thinking(claude):
     cfg, wire, context = claude
     wire.refuse = frozenset({1})

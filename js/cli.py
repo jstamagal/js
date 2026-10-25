@@ -166,19 +166,19 @@ def _mode_switch_notice(started: str, previous: str, now: str) -> str:
     return _PROMPTS['mode_switch_notice_js_reminder_this_conversation_js_reminder'].format(course=course, MODE_PRESENCE_now=_MODE_PRESENCE[now])
 
 
-def _note_mode_switch(cfg: Config, bundle: attach.UserMessageBundle, mode: str) -> attach.UserMessageBundle:
+def _note_mode_switch(cfg: Config, message: dict, mode: str) -> dict:
     """Record that this turn runs in ``mode`` ("repl" or "-p"). When the last
     turn ran in the other mode, this turn's user message carries the
     mode-switch reminder, which names the mode of the session's first turn."""
     if cfg.session_file == Path(os.devnull):
-        return bundle
+        return message
     previous = M.record_turn_mode(cfg.session_file, mode)
     if previous is None:
-        return bundle
+        return message
     started = M.first_turn_mode(cfg.session_file)
     if started not in _MODE_PLACES:
         started = previous
-    return attach.with_note(bundle, _mode_switch_notice(started, previous, mode))
+    return attach.with_note(message, _mode_switch_notice(started, previous, mode))
 
 
 _MODEL_SWITCH_NOTICE = (
@@ -193,19 +193,19 @@ def _stamp_label(model: str | None, provider: str | None) -> str:
     return f"{provider}/{model}" if provider else str(model)
 
 
-def _note_model_switch(cfg: Config, bundle: attach.UserMessageBundle) -> attach.UserMessageBundle:
+def _note_model_switch(cfg: Config, message: dict) -> dict:
     """When the session's newest reply came from a model other than the one
     ``cfg`` runs this turn on, this turn's user message carries the
     model-switch reminder. A stamp without a provider compares on the model id."""
     if cfg.session_file == Path(os.devnull):
-        return bundle
+        return message
     stamp = M.last_reply_stamp(cfg.session_file)
     if stamp is None:
-        return bundle
+        return message
     provider = stamp.get("provider") if isinstance(stamp.get("provider"), str) else None
     if stamp["model"] == cfg.model and (provider is None or provider == cfg.provider_id):
-        return bundle
-    return attach.with_note(bundle, _MODEL_SWITCH_NOTICE.format(
+        return message
+    return attach.with_note(message, _MODEL_SWITCH_NOTICE.format(
         previous=_stamp_label(stamp["model"], provider),
         current=_stamp_label(cfg.model, cfg.provider_id),
     ))
@@ -243,30 +243,6 @@ def _from_env(
 
 def _append_turn(cfg: Config, message: dict) -> None:
     M.append_message(cfg.session_file, message)
-
-
-def _replace_runtime_user_message(
-    messages: list[dict],
-    runtime_message: dict,
-    history_message: dict,
-    fallback_index: int,
-) -> None:
-    """Swap the provider-facing user message for its history form. When the two
-    differ (attached files), the signed reasoning after it is dropped: it was
-    produced with the provider-facing form in front of it."""
-    index = None
-    if 0 <= fallback_index < len(messages) and messages[fallback_index] == runtime_message:
-        index = fallback_index
-    else:
-        for idx in range(len(messages) - 1, -1, -1):
-            if messages[idx] == runtime_message:
-                index = idx
-                break
-    if index is None:
-        return
-    messages[index] = history_message
-    if history_message != runtime_message:
-        M.drop_signed_reasoning(messages, index + 1)
 
 
 def _session_stamp(cfg: Config, reasoning: str | None = None) -> dict:
@@ -2168,10 +2144,10 @@ def _take_pending_notes(state: dict) -> list[str]:
     return [*queued, *task_jobs.completion_notes(runtime.T.STOCK_CONTEXT.task_owner)]
 
 
-def _with_notes(bundle: attach.UserMessageBundle, notes: list[str]) -> attach.UserMessageBundle:
+def _with_notes(message: dict, notes: list[str]) -> dict:
     for note in notes:
-        bundle = attach.with_note(bundle, note)
-    return bundle
+        message = attach.with_note(message, note)
+    return message
 
 
 def _requeue_notes(state: dict, notes) -> None:
@@ -2810,7 +2786,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             cwd=str(Path.cwd()), usage=usage_mod.totals(cfg.session_file).as_dict(),
         )
     try:
-        user_bundle = attach.build_user_message(
+        user_message = attach.build_user_message(
             prompt,
             attachments,
             attachment_cfg,
@@ -2821,10 +2797,10 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             msgs.warn(msgs.FAILED, error=e)
         return 2
     if save:
-        user_bundle = _note_mode_switch(cfg, user_bundle, "-p")
-    user_bundle = _note_model_switch(resume_cfg, user_bundle)
+        user_message = _note_mode_switch(cfg, user_message, "-p")
+    user_message = _note_model_switch(resume_cfg, user_message)
     if cut_off:
-        user_bundle = attach.with_note(user_bundle, _CUT_OFF_NOTICE)
+        user_message = attach.with_note(user_message, _CUT_OFF_NOTICE)
     if call_stats is None:
         call_stats = []
     turn_kwargs = {
@@ -2851,14 +2827,13 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         sink_paths.append(Path(debug_file))
     trace_sink = _open_debug_trace_sink(sink_paths)
     telemetry.trace_sink = trace_sink
-    user_started = False
     turn_transcript = _transcript_sink(telemetry)
 
     # -d shows the conversation as the REPL draws it: each user line, typed or
     # fired from the agent's files, ahead of the answer it got.
     echo_user = display_mod.echo_user if debug else None
     def turns() -> None:
-        nonlocal before_len, user_started
+        nonlocal before_len
         if prompt_spec is not None and prompt_spec.exchanges and not messages:
             model_client.run_owning_loop(agent_messages.initialize(
                 cfg, prompt_spec, messages, replace(telemetry, transcript_log=turn_transcript),
@@ -2867,10 +2842,9 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 tool_context=tool_context, echo_user=echo_user, **turn_kwargs,
             ))
         before_len = len(messages)
-        messages.append(user_bundle.runtime_message)
-        user_started = True
+        messages.append(user_message)
         if save:
-            _append_turn(cfg, user_bundle.history_message)
+            _append_turn(cfg, user_message)
         if turn_transcript is not None:
             turn_transcript.emit(output.event("transcript_user", text=prompt))
         if echo_user is not None:
@@ -2968,10 +2942,6 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             return 1
     finally:
         try:
-            if user_started:
-                _replace_runtime_user_message(
-                    messages, user_bundle.runtime_message, user_bundle.history_message, before_len,
-                )
             if save:
                 _persist_turn_messages(cfg, messages, reasoning_override)
         finally:
@@ -3614,17 +3584,8 @@ async def _close_session_mcp_host(state: dict) -> None:
         await host.close()
 
 
-def _restore_history_forms(messages: list[dict], user_bundle, steered: list, before_len: int) -> None:
-    """Swap the turn's provider-facing user messages for their history forms."""
-    _replace_runtime_user_message(messages, user_bundle.runtime_message,
-                                  user_bundle.history_message, before_len)
-    for bundle in steered:
-        _replace_runtime_user_message(messages, bundle.runtime_message,
-                                      bundle.history_message, before_len)
-
-
-async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, before_len, loop,
-                   steer=None, steered=(), notes=()) -> None:
+async def _do_turn(cfg, state, telemetry, prompt_spec, user_message, turn_cfg, loop,
+                   steer=None, notes=()) -> None:
     """One main turn on the async loop. Runs the turn, syncs live-settings
     deltas, persists new messages, then awaits auto-compaction. Owns cancellation
     ENTIRELY: on ^C the turn Task is cancelled, and this handler — never the
@@ -3632,10 +3593,9 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
     legacy blocking KeyboardInterrupt path, then re-raises so the job ends
     cancelled.
 
-    ``steer`` hands the runtime lines typed during the turn; ``steered`` holds
-    the bundles it has handed over, so their history forms are persisted.
-    ``notes`` are the queued reminders ``user_bundle`` carries; a discarded
-    turn puts them back in the queue.
+    ``steer`` hands the runtime lines typed during the turn. ``notes`` are
+    the queued reminders ``user_message`` carries; a discarded turn puts
+    them back in the queue.
     """
     try:
         before_turn_model = _model_from_live_settings(state["settings"])
@@ -3670,23 +3630,21 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
         if after_turn_lock != before_turn_lock:
             _sync_tool_registry_from_live_settings(cfg, state)
         _sync_telemetry_from_live_settings(cfg, state, telemetry)
-        _restore_history_forms(state["messages"], user_bundle, steered, before_len)
         _persist_turn_messages(turn_cfg, state["messages"])
         await _maybe_auto_compact_async(turn_cfg, state)
     except asyncio.CancelledError:
         _emit_repl_event(state, telemetry, "cancel", reason="cancelled")
         _sync_telemetry_from_live_settings(cfg, state, telemetry)
-        if _turn_has_progress(state["messages"], user_bundle.runtime_message):
+        if _turn_has_progress(state["messages"], user_message):
             print()
             msgs.say(msgs.TURN_INTERRUPTED_KEPT)
-            _restore_history_forms(state["messages"], user_bundle, steered, before_len)
             _persist_turn_messages(turn_cfg, state["messages"])
             M.append_mark(cfg.session_file, "turn_interrupted")
             state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
         else:
             print()
             msgs.say(msgs.TURN_ABORTED)
-            _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
+            _discard_unstarted_turn(cfg, state["messages"], user_message)
             _requeue_notes(state, notes)
             M.append_mark(cfg.session_file, "turn_aborted")
         raise
@@ -3695,11 +3653,10 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, be
         if isinstance(e, OSError) and e.errno == errno.ESTALE:
             state["messages"] = M.load_replay_messages(turn_cfg.session_file)
             return
-        if _turn_has_progress(state["messages"], user_bundle.runtime_message):
-            _restore_history_forms(state["messages"], user_bundle, steered, before_len)
+        if _turn_has_progress(state["messages"], user_message):
             _persist_turn_messages(turn_cfg, state["messages"])
         else:
-            _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
+            _discard_unstarted_turn(cfg, state["messages"], user_message)
             _requeue_notes(state, notes)
         M.append_mark(cfg.session_file, f"error: {msgs.words_of(_error_text(e))}")
 
@@ -3764,9 +3721,9 @@ async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop,
 
 async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, steer_inbox: list[str]) -> None:
     """Run ``line`` as one supervised turn and wait for it to end."""
-    external_bundle = line if isinstance(line, attach.UserMessageBundle) else None
+    external_message = line if isinstance(line, dict) else None
     prompt_text, line_attachments = (
-        (external_bundle.history_message["content"], []) if external_bundle is not None
+        (external_message["content"], []) if external_message is not None
         else attach.split_repl_attachments(line)
     )
     _emit_repl_event(
@@ -3774,10 +3731,10 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
     )
     _sync_telemetry_from_live_settings(cfg, state, telemetry)
     try:
-        if external_bundle is None:
+        if external_message is None:
             prompt_text = _expand_skill_line(prompt_text, state)
         turn_cfg = await loop.run_in_executor(None, _live_cfg_snapshot, cfg, state)
-        user_bundle = external_bundle or attach.build_user_message(
+        user_message = external_message or attach.build_user_message(
             prompt_text, line_attachments, turn_cfg, missing_ok=True)
     except ValueError as e:
         # AttachmentError / SkillInvocationError (ValueErrors) or a login-gate
@@ -3785,19 +3742,17 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
         # line, keep the REPL.
         msgs.say(msgs.FAILED, error=e)
         return
-    user_bundle = _note_mode_switch(cfg, user_bundle, "repl")
-    user_bundle = _note_model_switch(turn_cfg, user_bundle)
+    user_message = _note_mode_switch(cfg, user_message, "repl")
+    user_message = _note_model_switch(turn_cfg, user_message)
     notes = _take_pending_notes(state)
-    user_bundle = _with_notes(user_bundle, notes)
+    user_message = _with_notes(user_message, notes)
     state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
-    before_len = len(state["messages"])
-    state["messages"].append(user_bundle.runtime_message)
-    _append_turn(cfg, user_bundle.history_message)
+    state["messages"].append(user_message)
+    _append_turn(cfg, user_message)
     # Logged as the turn starts, not as the line was typed: a line queued
     # behind a running turn joins the transcript where the model sees it.
     if (sink := _transcript_sink(telemetry)) is not None:
-        sink.emit(output.event("transcript_user", text=prompt_text if external_bundle else line))
-    steered: list[attach.UserMessageBundle] = []
+        sink.emit(output.event("transcript_user", text=prompt_text if external_message else line))
 
     async def take_steer() -> dict | None:
         # The inbox is loop-owned: it is read and cleared here, on the loop.
@@ -3821,18 +3776,13 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
         except ValueError as e:
             msgs.say(msgs.FAILED, error=e)
             return None
-        bundle = attach.UserMessageBundle(
-            {**built.runtime_message, "steered": True},
-            {**built.history_message, "steered": True},
-        )
-        steered.append(bundle)
         if (sink := _transcript_sink(telemetry)) is not None:
             sink.emit(output.event("transcript_user", text=text))
-        return bundle.runtime_message
+        return {**built, "steered": True}
 
     job = sup.spawn(
-        _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, before_len, loop,
-                 steer=take_steer, steered=steered, notes=notes),
+        _do_turn(cfg, state, telemetry, prompt_spec, user_message, turn_cfg, loop,
+                 steer=take_steer, notes=notes),
         kind="turn",
         label=prompt_text[:40],
     )
@@ -4059,7 +4009,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         if isinstance(params.get("meta"), dict):
             text += f"Metadata: {json.dumps(params['meta'], ensure_ascii=False)}\n"
         message = {"role": "user", "content": text + "\n" + content}
-        queue.put_nowait(attach.UserMessageBundle(message, dict(message)))
+        queue.put_nowait(message)
 
     if mcp_host is not None:
         mcp_host.channel_sink = channel_message
@@ -4347,7 +4297,7 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
         try:
             prompt_text = _expand_skill_line(prompt_text, state)
             turn_cfg = _cfg_for_live_state(cfg, state)
-            user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg, missing_ok=True)
+            user_message = attach.build_user_message(prompt_text, line_attachments, turn_cfg, missing_ok=True)
         except ValueError as e:
             # AttachmentError / SkillInvocationError (ValueErrors) or a login-gate
             # routing error from re-resolving the live model: degrade to one friendly
@@ -4355,14 +4305,13 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
             msgs.say(msgs.FAILED, error=e)
             continue
 
-        user_bundle = _note_mode_switch(cfg, user_bundle, "repl")
-        user_bundle = _note_model_switch(turn_cfg, user_bundle)
+        user_message = _note_mode_switch(cfg, user_message, "repl")
+        user_message = _note_model_switch(turn_cfg, user_message)
         notes = _take_pending_notes(state)
-        user_bundle = _with_notes(user_bundle, notes)
+        user_message = _with_notes(user_message, notes)
         state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
-        before_len = len(state["messages"])
-        state["messages"].append(user_bundle.runtime_message)
-        _append_turn(cfg, user_bundle.history_message)
+        state["messages"].append(user_message)
+        _append_turn(cfg, user_message)
         try:
             before_turn_model = _model_from_live_settings(state["settings"])
             before_turn_provider = _provider_from_live_settings(state["settings"])
@@ -4400,18 +4349,12 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
             if after_turn_lock != before_turn_lock:
                 _sync_tool_registry_from_live_settings(cfg, state)
             _sync_telemetry_from_live_settings(cfg, state, telemetry)
-            _replace_runtime_user_message(
-                state["messages"],
-                user_bundle.runtime_message,
-                user_bundle.history_message,
-                before_len,
-            )
             _persist_turn_messages(turn_cfg, state["messages"])
             _maybe_auto_compact(turn_cfg, state)
         except KeyboardInterrupt:
             _emit_repl_event(state, telemetry, "cancel", reason="keyboard_interrupt")
             _sync_telemetry_from_live_settings(cfg, state, telemetry)
-            if _turn_has_progress(state["messages"], user_bundle.runtime_message):
+            if _turn_has_progress(state["messages"], user_message):
                 # Turn did real work (assistant/tool messages beyond the user
                 # prompt) before ^C landed. Keep it: persist the partial turn,
                 # then heal any orphaned tool_calls in memory so the next turn is
@@ -4419,12 +4362,6 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
                 # would silently re-truncate this turn on the next session load.
                 print()
                 msgs.say(msgs.TURN_INTERRUPTED_KEPT)
-                _replace_runtime_user_message(
-                    state["messages"],
-                    user_bundle.runtime_message,
-                    user_bundle.history_message,
-                    before_len,
-                )
                 _persist_turn_messages(turn_cfg, state["messages"])
                 M.append_mark(cfg.session_file, "turn_interrupted")
                 state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
@@ -4433,17 +4370,15 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
                 # the bare user prompt (rollback removes it on reload too).
                 print()
                 msgs.say(msgs.TURN_ABORTED)
-                _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
+                _discard_unstarted_turn(cfg, state["messages"], user_message)
                 _requeue_notes(state, notes)
                 M.append_mark(cfg.session_file, "turn_aborted")
         except Exception as e:  # noqa: BLE001
             msgs.say(msgs.FAILED, error=_error_text(e))
-            if _turn_has_progress(state["messages"], user_bundle.runtime_message):
-                _replace_runtime_user_message(state["messages"], user_bundle.runtime_message,
-                                              user_bundle.history_message, before_len)
+            if _turn_has_progress(state["messages"], user_message):
                 _persist_turn_messages(turn_cfg, state["messages"])
             else:
-                _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
+                _discard_unstarted_turn(cfg, state["messages"], user_message)
                 _requeue_notes(state, notes)
             M.append_mark(cfg.session_file, f"error: {msgs.words_of(_error_text(e))}")
     _emit_session_event(state, telemetry, cfg, "session_end")

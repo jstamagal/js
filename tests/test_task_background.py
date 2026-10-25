@@ -13,7 +13,7 @@ import types
 
 import pytest
 
-from js import attach, cli, runtime, supervisor
+from js import cli, runtime, supervisor
 from js.toolkit import ToolContext
 from js.toolkit import meta, task_jobs
 from js.toolkit.registry import ToolRegistry
@@ -91,12 +91,12 @@ def _notes(ctx: ToolContext) -> list[str]:
     return task_jobs.completion_notes(ctx.task_owner)
 
 
-def _sent(state: dict, bundle: attach.UserMessageBundle) -> attach.UserMessageBundle:
-    return cli._with_notes(bundle, cli._take_pending_notes(state))
+def _sent(state: dict, message: dict) -> dict:
+    return cli._with_notes(message, cli._take_pending_notes(state))
 
 
-def _bundle() -> attach.UserMessageBundle:
-    return attach.UserMessageBundle({"role": "user", "content": "next"}, {"role": "user", "content": "next"})
+def _bundle() -> dict:
+    return {"role": "user", "content": "next"}
 
 
 def _subagent_ctx() -> ToolContext:
@@ -169,13 +169,13 @@ def test_a_finished_unread_task_is_named_in_the_next_user_message(workers, ctx):
     job.future.result(timeout=5)
 
     sent = _sent({}, _bundle())
-    text = sent.runtime_message["content"]
+    text = sent["content"]
     assert text.startswith("next")
     note = re.search(r"<js-reminder>(.*?)</js-reminder>", text, re.S).group(1)
     assert job.id in note and str(job.result_path) in note
     # Only once.
     again = _sent({}, _bundle())
-    assert "<js-reminder>" not in again.runtime_message["content"]
+    assert "<js-reminder>" not in again["content"]
 
 
 def test_a_result_already_read_gets_no_reminder(workers, ctx):
@@ -219,7 +219,7 @@ def test_reset_drops_the_reminder_for_tasks_of_the_old_conversation(workers, ctx
     _job(handle, ctx).future.result(timeout=5)
     cfg = types.SimpleNamespace(session_file=tmp_path / "session.jsonl")
     cli._cmd_reset("", {"messages": []}, cfg)
-    assert "<js-reminder>" not in _sent({}, _bundle()).runtime_message["content"]
+    assert "<js-reminder>" not in _sent({}, _bundle())["content"]
 
 
 def test_finished_subagent_tasks_do_not_pile_up(workers, ctx):

@@ -317,10 +317,10 @@ def test_text_attachment_cap_follows_its_knob(monkeypatch, tmp_path):
     cfg = from_env(save_session=False, cwd=project)
     (project / "a.txt").write_text("q" * 100, encoding="utf-8")
 
-    bundle = attach.build_user_message("look", ["a.txt"], cfg, cwd=project)
+    content = attach.build_user_message("look", ["a.txt"], cfg, cwd=project)["content"]
 
-    assert "q" * 10 in bundle.history_message["content"]
-    assert "q" * 11 not in bundle.history_message["content"]
+    assert "q" * 10 in content
+    assert "q" * 11 not in content
 
 
 @pytest.mark.parametrize(("max_files", "reattached"), [("0", False), ("5", True)])

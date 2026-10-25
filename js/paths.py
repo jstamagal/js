@@ -113,6 +113,11 @@ def tool_results_dir() -> Path:
     return state_root() / "tool-results"
 
 
+def media_dir() -> Path:
+    """The image and media bytes sessions send, one file per sha256 (`js.media`)."""
+    return state_root() / "media"
+
+
 def commit_backups_dir() -> Path:
     return state_root() / "commit-backups"
 

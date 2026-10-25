@@ -162,7 +162,6 @@ def _sent(result) -> tuple[list[str], bool]:
 @pytest.mark.parametrize("name", [b"\xff\xfe-shot.png", "ünï-çødé.png".encode()], ids=["invalid-utf8", "non-ascii"])
 @pytest.mark.parametrize("cap", [20, 100000])
 def test_an_image_with_an_awkward_file_name_reaches_the_model_and_the_session(tmp_path, name, cap):
-    from types import SimpleNamespace
 
     from js.toolkit import fs
     from js.toolkit.core import ToolContext
@@ -176,7 +175,7 @@ def test_an_image_with_an_awkward_file_name_reaches_the_model_and_the_session(tm
 
     capped = runtime._cap_result(marker, cap)
     texts, _media = _sent(capped)
-    record = runtime._history_tool_result_message(SimpleNamespace(id="c1", name="read"), capped)
+    record = model_client.tool_result_record("c1", "read", capped)
 
     for text in [*texts, json.dumps(record, ensure_ascii=False)]:
         text.encode("utf-8")

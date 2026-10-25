@@ -27,6 +27,7 @@ import ai
 
 from . import context_budget
 from . import jail
+from . import media
 from .compaction_flight import ACTIVE_FLIGHT, CompactionFlight
 from .compaction_flight import NOTICE as NOTICE, flight_log_dir as flight_log_dir, printing as printing
 from . import memory as M
@@ -271,8 +272,9 @@ def microcompact(
 
     Leaves the newest ``keep_recent`` tool results untouched (the model is
     usually still working with those) and ignores results already small enough
-    that clearing them buys nothing. Signed reasoning after the first cleared
-    result is dropped (`memory.drop_signed_reasoning`). Returns
+    that clearing them buys nothing; a result carrying media (`js.media`) is
+    always worth clearing, and loses its media too. Signed reasoning after the
+    first cleared result is dropped (`memory.drop_signed_reasoning`). Returns
     (results_cleared, chars_reclaimed).
     """
     indexes = [
@@ -289,11 +291,14 @@ def microcompact(
     first: int | None = None
     for i in indexes:
         body = messages[i]["content"]
-        if len(body) < min_chars:
+        has_media = bool(messages[i].get(media.MEDIA_KEY))
+        if len(body) < min_chars and not has_media:
             continue
-        messages[i] = {**messages[i], "content": MICROCOMPACT_CLEARED_MESSAGE}
+        cleared_record = {**messages[i], "content": MICROCOMPACT_CLEARED_MESSAGE}
+        cleared_record.pop(media.MEDIA_KEY, None)
+        messages[i] = cleared_record
         cleared += 1
-        reclaimed += len(body) - len(MICROCOMPACT_CLEARED_MESSAGE)
+        reclaimed += max(0, len(body) - len(MICROCOMPACT_CLEARED_MESSAGE))
         first = i if first is None else first
     if first is not None:
         M.drop_signed_reasoning(messages, first + 1)

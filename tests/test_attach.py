@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 from pathlib import Path
 
 import ai
 
-from js import attach, cli, model_client, runtime
+from js import attach, cli, media, model_client, runtime
 from js.config import Config
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
@@ -371,20 +372,24 @@ def test_image_suffix_without_image_bytes_is_text(tmp_path):
     """A `.png` holding text is not sent as image/png; it is inlined as text."""
     fake = tmp_path / "fake.png"
     fake.write_text("hello", encoding="utf-8")
-    bundle = attach.build_user_message("look", [str(fake)], _cfg(tmp_path, vision=True))
-    assert isinstance(bundle.runtime_message["content"], str)
-    assert "Attached file:" in bundle.runtime_message["content"]
-    assert "hello" in bundle.runtime_message["content"]
+    message = attach.build_user_message("look", [str(fake)], _cfg(tmp_path, vision=True))
+    assert "media" not in message
+    assert "Attached file:" in message["content"]
+    assert "hello" in message["content"]
 
 
 def test_real_png_still_attaches_as_image(tmp_path):
     png = tmp_path / "shot.png"
     png.write_bytes(_TINY_PNG)
-    bundle = attach.build_user_message("look", [str(png)], _cfg(tmp_path, vision=True))
-    parts = bundle.runtime_message["content"]
-    assert isinstance(parts, list)
-    assert parts[-1].media_type == "image/png"
-    assert parts[-1].data == _TINY_PNG
+    message = attach.build_user_message("look", [str(png)], _cfg(tmp_path, vision=True))
+    [part] = message["media"]
+    assert part["mime"] == "image/png"
+    assert media.load(part) == _TINY_PNG
+    # The session keeps the reference; the model gets the bytes, every turn.
+    [user] = model_client.history_to_ai_messages("", [message], vision=True)
+    assert user.parts[-1].media_type == "image/png"
+    assert user.parts[-1].data == _TINY_PNG
+    assert _TINY_PNG not in json.dumps(message).encode()
 
 
 def test_image_that_grows_past_limit_after_stat_is_refused(tmp_path, monkeypatch):
@@ -414,8 +419,7 @@ def test_truncated_text_attachment_does_not_end_in_a_replacement_char(tmp_path):
     note = tmp_path / "long.txt"
     note.write_bytes(b"x" + ("é" * 50000).encode("utf-8"))  # odd offset: the cap lands mid-character
     cfg = _cfg(tmp_path)
-    bundle = attach.build_user_message("read", [str(note)], cfg)
-    text = bundle.runtime_message["content"]
+    text = attach.build_user_message("read", [str(note)], cfg)["content"]
     assert "[truncated to" in text
     assert "\ufffd" not in text
 
@@ -429,9 +433,9 @@ def test_split_repl_attachments_keeps_bare_mention_as_text(tmp_path, monkeypatch
 
 
 def test_repl_missing_attachment_becomes_note(tmp_path):
-    bundle = attach.build_user_message("look", ["gone.png"], _cfg(tmp_path), cwd=tmp_path, missing_ok=True)
-    assert bundle.history_message["content"].startswith("look")
-    assert "gone.png" in bundle.history_message["content"]
+    message = attach.build_user_message("look", ["gone.png"], _cfg(tmp_path), cwd=tmp_path, missing_ok=True)
+    assert message["content"].startswith("look")
+    assert "gone.png" in message["content"]
 
 
 def test_copy_puts_the_answer_n_back_on_the_clipboard(monkeypatch):

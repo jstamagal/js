@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from js import attach, cli, compaction, events, hookexec, runtime, settings
+from js import cli, compaction, events, hookexec, runtime, settings
 from js.memory import load_messages
 from js.toolkit import Tool, ToolContext, ToolRegistry
 from test_runtime_offline_integration import _budget_config, model_text_result, model_tool_call_result, offline_config
@@ -42,8 +42,7 @@ def _on(state, cfg, line: str) -> None:
 
 
 def _user_text(state, text: str) -> str:
-    bundle = attach.UserMessageBundle({"role": "user", "content": text}, {"role": "user", "content": text})
-    return cli._with_notes(bundle, cli._take_pending_notes(state)).runtime_message["content"]
+    return cli._with_notes({"role": "user", "content": text}, cli._take_pending_notes(state))["content"]
 
 
 # --- exec ----------------------------------------------------------------------
