@@ -272,6 +272,64 @@ def test_cli_rejects_debug_and_debug_file_combination(monkeypatch):
     assert cli.main(["--debug", "--debug-file", "/tmp/js-debug.log", "-p", "ignored"]) == 2
 
 
+def _capture_run_args(monkeypatch):
+    """Stand in for the run: record the parsed args instead of starting one."""
+    seen = {}
+
+    def fake(args, dispatch_argv):
+        seen["args"] = args
+        return 0
+
+    monkeypatch.setattr(cli, "_run_args", fake)
+    return seen
+
+
+def test_sysf_alias_sets_system_prompt_file_and_names_no_session(monkeypatch, tmp_path):
+    # argparse used to read -sysf as -s with the value "ysf": a session named ysf,
+    # resumed on every rerun. -sysf is now a defined alias of --system-prompt-file.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    seen = _capture_run_args(monkeypatch)
+    prompt_file = tmp_path / "rr.md"
+    prompt_file.write_text("be terse\n")
+
+    assert cli.main(["-sysf", str(prompt_file), "--printonly", "a"]) == 0
+
+    assert seen["args"].system_prompt_file == str(prompt_file)
+    assert seen["args"].session is None
+
+
+def test_unknown_single_dash_word_is_refused_with_a_suggestion(monkeypatch, tmp_path, capsys):
+    # Any other unknown multi-letter single-dash word would be split by argparse
+    # into a short option plus a glued value. It is refused before parsing.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    seen = _capture_run_args(monkeypatch)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["-sysx", "FILE", "-p", "ignored"])
+
+    assert exc.value.code == 2
+    assert "args" not in seen
+    assert "-sysf" in capsys.readouterr().err
+    sessions = tmp_path / ".js" / "sessions"
+    assert not any(sessions.rglob("*.jsonl"))
+
+
+@pytest.mark.parametrize("argv", [["-spf", "FILE"], ["-asp", "TEXT"], ["-qn"]])
+def test_defined_short_aliases_and_boolean_clusters_still_parse(monkeypatch, tmp_path, argv):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    seen = _capture_run_args(monkeypatch)
+    argv = [str(tmp_path / "spf.txt") if a == "FILE" else a for a in argv]
+
+    assert cli.main(argv) == 0
+
+    args = seen["args"]
+    assert args.session is None
+    if argv[0] == "-spf":
+        assert args.system_prompt_file == argv[1]
+    if argv[0] == "-asp":
+        assert args.append_system_prompt == [argv[1]]
+
+
 def test_config_existing_session_id_loads_with_and_without_suffix(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)

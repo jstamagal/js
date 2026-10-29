@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import contextlib
 import copy
+import difflib
 import errno
 import functools
 import io
@@ -4622,7 +4623,7 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("-r", "--reasoning", help=msgs.OPT_REASONING.words())
     parser.add_argument("--max-out", dest="max_out", type=int, help=msgs.OPT_MAX_OUT.words())
     prompt_group = parser.add_mutually_exclusive_group()
-    prompt_group.add_argument('--system-prompt-file', '-spf', metavar='PATH',
+    prompt_group.add_argument('--system-prompt-file', '-spf', '-sysf', metavar='PATH',
                               help=msgs.OPT_SYSTEM_PROMPT_FILE.words())
     prompt_group.add_argument('--system-prompt', '-sp', metavar='TEXT',
                               help=msgs.OPT_SYSTEM_PROMPT.words())
@@ -4673,6 +4674,7 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--printonly", dest="printonly", metavar="LETTERS[:COUNT][:PATH]", nargs="?", const="a",
                         help=msgs.OPT_PRINTONLY.words())
     parser.add_argument("target", nargs="?", help=msgs.OPT_TARGET.words())
+    _refuse_glued_short_options(parser, dispatch_argv)
     args = parser.parse_args(argv)
     if args.loop is not None:
         from . import loop_controller
@@ -4708,6 +4710,34 @@ def _main(argv: list[str] | None = None) -> int:
     except (ValueError, OSError) as exc:
         msgs.warn(msgs.FAILED, error=exc)
         return 2
+
+
+_NEGATIVE_NUMBER = re.compile(r"-\d+|-\d*\.\d+")
+
+
+def _refuse_glued_short_options(parser: argparse.ArgumentParser, argv: list[str]) -> None:
+    """Exit 2 on a single-dash word that is not a defined option. argparse reads
+    one as the short option its first letters name, with the rest glued on as
+    the value: `-sysf FILE` is `-s ysf`, a session. Boolean short flags may
+    cluster (`-qn`); a word with a value-taking letter in it is refused."""
+    known = parser._option_string_actions
+    for token in argv:
+        if token == "--":
+            break
+        name = token.partition("=")[0]
+        if (not token.startswith("-") or token.startswith("--") or len(token) < 2
+                or " " in token or name in known or _NEGATIVE_NUMBER.fullmatch(token)):
+            continue
+        letters = [known.get("-" + letter) for letter in name[1:]]
+        if letters and all(action is not None and action.nargs == 0 for action in letters):
+            continue
+        suggestion = difflib.get_close_matches(name, [o for o in known if not o.startswith("--")], n=1, cutoff=0.5)
+        if not suggestion:
+            parser.error(msgs.UNKNOWN_OPTION.text(option=token))
+        action = known[suggestion[0]]
+        longs = [o for o in action.option_strings if o.startswith("--")]
+        shown = " / ".join([suggestion[0], *longs])
+        parser.error(msgs.UNKNOWN_OPTION_DID_YOU_MEAN.text(option=token, suggestion=shown))
 
 
 def _json_run_requested(args: argparse.Namespace) -> bool:
