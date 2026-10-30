@@ -1706,8 +1706,10 @@ def _trace_banner(telemetry: Telemetry, request: ModelRequest, context: ToolCont
         provider_label = provider_id
         base = request.base_url or "provider-default"
     else:
-        provider_label = "ai-sdk"
-        base = model.split(":")[0] if ":" in model else "ai-gateway"
+        # model_client.resolve_model sends a model with no provider to its
+        # base URL as an OpenAI-compatible endpoint.
+        provider_label = "openai-compatible"
+        base = request.base_url or "none"
     # ctx is the number that decides when compaction fires and how much room
     # is left to work in; max_out only bounds one reply. Showing the second
     # without the first invites reading 128000 as the window.

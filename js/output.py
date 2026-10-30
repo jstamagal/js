@@ -70,7 +70,7 @@ def agent_identity(model: str, provider: str | None, base_url: str | None) -> st
     to it by glob (`opus*!anthropic@*`). Subagent N is just another identity.
     """
     nick = model or "?"
-    user = provider or "ai-sdk"
+    user = provider or "openai-compatible"
     host = (base_url or "default").removeprefix("https://").removeprefix("http://").rstrip("/")
     return f"{nick}!{user}@{host}"
 

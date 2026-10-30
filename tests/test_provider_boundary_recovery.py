@@ -155,6 +155,25 @@ def test_runtime_banner_and_budget_share_configured_window(monkeypatch, tmp_path
     assert str(window) in capsys.readouterr().out
 
 
+def test_run_line_names_the_base_url_a_model_with_no_provider_goes_to(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: None)
+    cfg = replace(_config(tmp_path), trace=True, provider_id=None, provider_base_url="http://local.test:8080/v1")
+
+    async def sdk(**kwargs):
+        assert kwargs["model"].provider.base_url == "http://local.test:8080/v1"
+        return _result(text="ok")
+
+    monkeypatch.setattr(model_client, "_stream_async", sdk)
+    asyncio.run(runtime.run_turn_async(
+        cfg, "system", [{"role": "user", "content": "hello"}], runtime.Telemetry(None),
+        tool_registry=build_default_registry().select([]),
+        tool_context=ToolContext(cwd=tmp_path),
+    ))
+    run_line = capsys.readouterr().out
+    assert "base=http://local.test:8080/v1" in run_line
+    assert "ai-gateway" not in run_line
+
+
 def test_in_turn_compaction_announces_and_records_trigger(monkeypatch, tmp_path, capsys):
     cfg = replace(_config(tmp_path), max_output_tokens=500,
                   settings={"CONTEXT_SIZE": 10000, "COMPACTION_KEEP_RECENT_TOKENS": 100, "COMPACTION_HEADROOM_TOKENS": 100, "COMPACTION_REPLY_RESERVE_TOKENS": 500})
