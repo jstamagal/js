@@ -217,7 +217,6 @@ def test_provider_registry_shapes_for_picker_shortcuts():
     assert providers.provider_for_login("ollama").effective_sdk_provider_id == "openai"
     assert providers.provider_for_login("llama.cpp").default_base_url == "http://127.0.0.1:8080/v1"
     assert providers.provider_for_login("mimo-token-plan").append_only is True
-    assert providers.provider_for_login("deepseek").reasoning_effort == "xhigh"
 
 
 def test_model_picker_accepts_view_and_terminal_dependencies(monkeypatch):

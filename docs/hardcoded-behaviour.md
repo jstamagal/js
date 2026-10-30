@@ -178,7 +178,6 @@ branch the audit was made on; they move as the code changes.
 | `js/codex_provider.py:479,489` | _build_body_async | default | text.verbosity "low" and reasoning summary "detailed" are fixed in code. | js-2lg.154 |
 | `js/codex_provider.py:59-60,108-109` | _codex_headers | default | The originator "pi" and the User-Agent "js/0.1.0" are fixed in code; HTTP_USER_AGENT does not apply here. | js-2lg.154 |
 | `js/codex_provider.py:44,47-58` | _client_version | default | JS_CODEX_CLIENT_VERSION is an env-only setting, and otherwise the part runs `codex --version` as a subprocess. | js-2lg.154 |
-| `js/providers.py:135` | _BUILTINS (deepseek) | default | DeepSeek's default reasoning effort "xhigh" is fixed in the registry and is not a setting. | js-2lg.161 |
 | `js/model_metadata.py:33,517-539` | ensure_fresh_catalog | policy | The models.dev catalog refreshes itself over the network when older than 8 hours, with one try per process; neither the age nor the auto-refresh is a setting. | js-2lg.164 |
 | `js/model_metadata.py:335-368` | probe_local_context_window | policy | Local servers get HTTP probes for their context window automatically, with no setting to turn it off. | js-2lg.164 |
 | `js/endpoint_uri.py:34,135,141` | parse | default | A spec with no key gets "sk-dummy-key", and the default wire shape is openai-completions; both are fixed in code. | js-2lg.168 |

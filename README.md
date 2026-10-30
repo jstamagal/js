@@ -99,7 +99,7 @@ project `.js/jsrc`, then project `.js/jsrc.local`; env vars override files and
 CLI `--extra key=value` overrides env. On its first run js writes `~/.js/jsrc`:
 every setting, described, with an example, commented out at its stock value.
 Only the lines you uncomment, or `/save` uncomments, set anything.
-`js/jsrc` sets `MODEL` to `deepseek/deepseek-v4-flash`;
+`js/jsrc` sets `MODEL` to `cpa/claude-opus-5-5` and `EFFORT` to `medium`;
 `JS_MODEL` overrides it. Explicit
 `set PROVIDER`, `BASE_URL` and `API_KEY` are opt-in only; `JS_PROVIDER`, `JS_BASE_URL`,
 and `JS_API_KEY` are env overrides. Official SDK env vars (`AI_GATEWAY_API_KEY`,

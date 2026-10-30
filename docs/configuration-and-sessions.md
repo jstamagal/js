@@ -249,15 +249,14 @@ reads it (`settings.load_jsrc_files`, through `rename.migrate_jsrc_file`),
 before any line is parsed. This holds for the global `~/.js/jsrc`, the
 project `.js/jsrc` and `.js/jsrc.local`, and preset files. The rules are
 `js/rename.py`'s, the same as `scripts/rename-settings.py --write`. The
-original is copied first to `jsrc.bak-YYYY-MM-DD` beside it (`.1`, `.2`, ...
-when that name exists; a backup is never overwritten), and one line on stderr
-names the file and the backup. A live line it cannot convert safely (an
+file is rewritten with no copy kept, and one line on stderr names it. A live
+line it cannot convert safely (an
 `alias`/`on` body with a shell operator that sets an old name, a deleted
 setting, the old spelling of a name the file also sets by its new one) is
 commented out as `# js: not migrated: <line as written>`, a note such as
 `(setting deleted)` before the colon. A line that only mentions an old name,
-in a value or in a body that does not set it, stays live. The backup and the
-new file are created with the original's permissions.
+in a value or in a body that does not set it, stays live. The new file keeps
+the original's permissions.
 One warning lists those line numbers for a hand edit, so startup loads with
 no unknown-setting errors. A file that is already converted is not changed,
 so a second start does nothing. A file or directory js cannot write is left

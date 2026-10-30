@@ -139,7 +139,6 @@ TURN_SETTINGS: tuple[TurnSetting, ...] = (
     TurnSetting("model_context_probe", "MODEL_CONTEXT_PROBE", flag),
     TurnSetting("model_catalog_age_max", "MODEL_CATALOG_AGE_MAX", number),
     TurnSetting("model_catalog_auto_refresh", "MODEL_CATALOG_AUTO_REFRESH", flag),
-    TurnSetting("deepseek_default_effort", "DEEPSEEK_DEFAULT_EFFORT", text),
     TurnSetting("codex_client_detect", "CODEX_CLIENT_DETECT", flag),
     TurnSetting("codex_client_version", "CODEX_CLIENT_VERSION", text),
     TurnSetting("codex_user_agent", "CODEX_USER_AGENT", text),

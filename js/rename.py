@@ -34,7 +34,6 @@ edited by hand.
 
 from __future__ import annotations
 
-import datetime
 import os
 import re
 import shlex
@@ -612,32 +611,14 @@ def _create(path: Path, data: bytes, mode: int) -> None:
         raise
 
 
-def _backup(path: Path, data: bytes, mode: int) -> Path:
-    """``data`` written to a new file beside ``path`` named for today
-    (`jsrc.bak-YYYY-MM-DD`, then `.1`, `.2`, ...), never over a file that
-    exists, one another js start made at the same moment included."""
-    base = f"{path.name}.bak-{datetime.date.today().isoformat()}"
-    number = 0
-    while True:
-        candidate = path.with_name(f"{base}.{number}" if number else base)
-        if not os.path.lexists(candidate):
-            try:
-                _create(candidate, data, mode)
-                return candidate
-            except FileExistsError:
-                pass
-        number += 1
-
-
 def _notice(message: msgs.Message, stream: TextIO, **fields) -> None:
     output.emit(output.event("migration_notice", message=message, fields=fields, stream=stream))
 
 
 def migrate_jsrc_file(path: Path, out: TextIO | None = None) -> bool:
     """Rewrite the jsrc at ``path`` in place by `migrate_jsrc_text` when that
-    changes it, after copying it to a dated backup beside it. Prints one line
-    naming the file and the backup, and one warning naming the lines it
-    commented out. A file or directory js cannot write is left as it is, with
+    changes it. Prints one line naming the file, and one warning naming the
+    lines it commented out. A file or directory js cannot write is left as it is, with
     one warning per process naming the command to run by hand. Returns
     whether the file was rewritten."""
     stream = out if out is not None else sys.stderr
@@ -666,7 +647,6 @@ def _migrate_jsrc_file(path: Path, stream: TextIO) -> bool:
     temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
         mode = stat.S_IMODE(os.stat(path).st_mode)
-        backup = _backup(path, old, mode)
         temp.unlink(missing_ok=True)
         _create(temp, new.encode("utf-8"), mode)
         os.replace(temp, path)
@@ -674,7 +654,7 @@ def _migrate_jsrc_file(path: Path, stream: TextIO) -> bool:
         temp.unlink(missing_ok=True)
         _notice(msgs.JSRC_NOT_WRITABLE, stream, path=path, command=_command(path))
         return False
-    _notice(msgs.JSRC_RENAMED, stream, path=path, backup=backup)
+    _notice(msgs.JSRC_RENAMED, stream, path=path)
     if commented:
         _notice(msgs.JSRC_NOT_RENAMED, stream, path=path, lines=",".join(map(str, commented)))
     return True

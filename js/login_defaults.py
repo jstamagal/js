@@ -294,6 +294,8 @@ def saved_jsrc_values(cfg: Any) -> dict[str, Any]:
 def saved_layer(cfg: Any) -> dict[str, Any]:
     """What `/save server` writes as ``cfg``'s model defaults: the effective
     value of every `KEYS` setting that comes from the jsrc, the model's own
-    defaults or `/set`."""
+    defaults or `/set`. A jsrc value that is js's own default is not one."""
     values, sources = resolve(layers_of(cfg))
-    return {key: value for key, value in values.items() if sources[key] in _MODEL_LAYERS}
+    return {key: value for key, value in values.items()
+            if sources[key] in _MODEL_LAYERS
+            and not (sources[key] == "jsrc" and value == _settings.default_value(key))}

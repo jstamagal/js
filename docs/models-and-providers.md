@@ -1,10 +1,10 @@
 # Models And Providers
 
 `js` uses the Vercel AI Python SDK (`ai`) as the provider adapter. The built-in
-default model is `deepseek/deepseek-v4-flash`. Model routing follows three patterns:
-a slash prefix (`provider/model-id`) routes directly to the named provider, matching
-against known-provider ids (deepseek, openai, etc.); a colon prefix (`provider:model-id`)
-uses the SDK's direct-routing form; truly unprefixed ids route through AI Gateway.
+default model is `cpa/claude-opus-5-5`, at effort `medium`. Model routing follows two
+patterns: a slash prefix (`provider/model-id`) routes directly to the named provider,
+matching against known-provider ids and saved logins; an unprefixed id goes to
+`PROVIDER`, or with none set, to `BASE_URL` as an OpenAI-compatible endpoint.
 
 ## Provider Routing
 
@@ -20,7 +20,7 @@ Configuration precedence is:
 Model env vars:
 
 ```bash
-export JS_MODEL=deepseek/deepseek-v4-flash
+export JS_MODEL=cpa/claude-opus-5-5
 ```
 
 Optional explicit provider config in `jsrc`:
@@ -33,9 +33,9 @@ set API_KEY sk-local
 
 When `PROVIDER` is set, the provider is constructed explicitly with the given
 base URL and API key. When unset, js routes the model id as follows: a slash prefix
-(e.g. `deepseek/deepseek-v4-flash`) matching a known provider goes directly to that
-provider; a colon prefix (e.g. `openai:gpt-4o`) uses the SDK's direct-routing form;
-truly unprefixed ids route through AI Gateway via `ai.get_model(model_id)`. Direct
+(e.g. `cpa/claude-opus-5-5`) matching a known provider or saved login goes directly
+to that provider; an unprefixed id with a `BASE_URL` goes there as an
+OpenAI-compatible endpoint, and with neither it is an error. Direct
 providers use their default endpoint and official SDK env vars (`OPENAI_API_KEY`,
 `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, etc.).
 
@@ -360,7 +360,7 @@ for providers that need a friendlier first-class login name:
 
 | Provider id | Notes |
 | --- | --- |
-| `deepseek` | DeepSeek direct API. Append-only tool-call history, `max_reasoning_tokens=32000` for reasoning. `DEEPSEEK_API_KEY` in the environment auto-selects this provider with `deepseek-v4-flash` and `reasoning_effort=xhigh`. |
+| `deepseek` | DeepSeek direct API. Append-only tool-call history, `max_reasoning_tokens=32000` for reasoning. `DEEPSEEK_API_KEY` in the environment auto-selects this provider with `deepseek-flash`. |
 | `llama` | Llama API gateway endpoint. |
 | `llama.cpp` / `llamacpp` | Local llama.cpp OpenAI-compatible shortcut at `http://127.0.0.1:8080/v1`. |
 | `opencode-go` | opencode.ai Zen "go" plan over the **OpenAI-compatible** transport (`sdk=openai`, base `https://opencode.ai/zen/go/v1`, key env `OPENCODE_GO_API_KEY`, base env `OPENCODE_GO_BASE_URL`). Model list is filtered to the GLM/Kimi/DeepSeek/MiMo set this transport serves. |

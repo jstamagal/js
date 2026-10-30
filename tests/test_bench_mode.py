@@ -93,6 +93,9 @@ def test_run_bench_writes_stats_and_resolves_max_tokens(tmp_path, monkeypatch):
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.chdir(tmp_path)
     _write_agent(tmp_path)
+    # A model whose output limit the catalog knows, so an uncapped row resolves to it.
+    (tmp_path / ".js").mkdir(exist_ok=True)
+    (tmp_path / ".js" / "jsrc").write_text("set MODEL deepseek/deepseek-v4-flash\n", encoding="utf-8")
 
     captured: list = []
     monkeypatch.setattr(cli.runtime.model_client, "stream_model_async", _stream_stub(captured))

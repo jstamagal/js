@@ -38,13 +38,13 @@ Playwright has no Android or musllinux wheels; leave it out on those platforms.
 `python -m js` also runs the CLI.
 
 ## Basic Configuration
-Built-in default model is `deepseek/deepseek-v4-flash`; override it with
-`JS_MODEL`, `MODEL` in `jsrc`, or `--model` for one run.
+Built-in default model is `cpa/claude-opus-5-5` at effort `medium`; override it
+with `JS_MODEL`, `MODEL` in `jsrc`, or `--model` for one run.
 
-AI Gateway / default routing:
+Picking a model for every run in a shell:
 
 ```bash
-export JS_MODEL="deepseek/deepseek-v4-flash"
+export JS_MODEL="cpa/claude-opus-5-5"
 js -p "summarize this repo"
 ```
 

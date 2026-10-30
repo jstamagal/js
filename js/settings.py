@@ -170,7 +170,6 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("MODEL_CONTEXT_PROBE", "bool", group="runtime"),
     SettingSpec("MODEL_CATALOG_AGE_MAX", "float", group="runtime"),
     SettingSpec("MODEL_CATALOG_AUTO_REFRESH", "bool", group="runtime"),
-    SettingSpec("DEEPSEEK_DEFAULT_EFFORT", "str", group="providers"),
     SettingSpec("CODEX_CLIENT_DETECT", "bool", group="providers"),
     SettingSpec("CODEX_CLIENT_VERSION", "str", group="providers"),
     SettingSpec("CODEX_USER_AGENT", "str", group="providers"),

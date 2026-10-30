@@ -505,9 +505,6 @@ DEEPSEEK_REASONING_TOKENS_MAX
     max_reasoning_tokens sent to DeepSeek models when the request sets
     none.
 
-DEEPSEEK_DEFAULT_EFFORT
-    Reasoning effort for DeepSeek models when EFFORT is unset.
-
 CLAUDE_PROXY_INCLUDE_REASONING
     include_reasoning sent to a Claude proxy when the request sets none.
 

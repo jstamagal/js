@@ -8,10 +8,10 @@
 
 # --- model ---
 set DEFAULT_AGENT defaultagent
-set MODEL deepseek/deepseek-v4-flash
+set MODEL cpa/claude-opus-5-5
 set -OUTPUT_TOKENS_MAX
 set -CONTEXT_SIZE
-set -EFFORT
+set EFFORT medium
 set -THINKING_BUDGET
 set -VISION
 
@@ -335,8 +335,6 @@ set CODEX_USER_AGENT ""
 set CODEX_CLIENT_VERSION ""
 
 set CODEX_CLIENT_DETECT on
-
-set DEEPSEEK_DEFAULT_EFFORT xhigh
 
 set MODEL_CATALOG_AUTO_REFRESH on
 

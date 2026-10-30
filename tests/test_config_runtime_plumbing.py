@@ -202,12 +202,3 @@ def test_registered_instruction_files_select_project_context(tmp_path, monkeypat
     ])
     assert cfg.agents_files == (rules,)
 
-
-def test_registered_deepseek_effort_reaches_config(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    from js import logins
-
-    logins.save_login(logins.Login(provider_id="deepseek", sdk_provider_id="deepseek", provider_api_key="fixture-key"))
-    cfg = from_env(save_session=False,
-                   extras=["MODEL=deepseek/deepseek-v4-flash", "DEEPSEEK_DEFAULT_EFFORT=low"])
-    assert cfg.reasoning_effort == "low"

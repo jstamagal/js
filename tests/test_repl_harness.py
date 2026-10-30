@@ -448,7 +448,9 @@ def test_repl_set_reasoning_effort_updates_turn_config(monkeypatch, tmp_path):
 
 
 def test_repl_preserves_provider_default_reasoning_effort(monkeypatch, tmp_path):
-    cfg = replace(make_cfg(tmp_path), reasoning_effort="xhigh", settings=settings.seed_defaults())
+    live = settings.seed_defaults()
+    settings.set_dotted(live, ("EFFORT",), None)
+    cfg = replace(make_cfg(tmp_path), reasoning_effort="xhigh", settings=live)
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     seen: list[tuple[str | None, str | None]] = []
@@ -479,7 +481,7 @@ def test_repl_set_reasoning_effort_off_disables_provider_default(monkeypatch, tm
     assert seen == [("none", "none")]
 
 
-def test_repl_set_reasoning_effort_clear_via_dash_key_restores_provider_default(monkeypatch, tmp_path):
+def test_repl_set_reasoning_effort_clear_via_dash_key_restores_the_default(monkeypatch, tmp_path):
     cfg = replace(make_cfg(tmp_path), reasoning_effort="xhigh", settings=settings.seed_defaults())
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
@@ -497,7 +499,8 @@ def test_repl_set_reasoning_effort_clear_via_dash_key_restores_provider_default(
                 "exit",
             ])
 
-    assert seen == [("xhigh", "xhigh")]
+    default = settings.default_value("EFFORT")
+    assert seen == [(default, default)]
 
 
 def test_repl_set_runtime_trace_updates_turn_config(monkeypatch, tmp_path):

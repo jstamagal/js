@@ -72,7 +72,7 @@ def _load(path):
     return loaded, settings.load_jsrc_files([path], loaded)
 
 
-def test_an_old_names_jsrc_loads_with_the_new_names_and_a_backup(tmp_path):
+def test_an_old_names_jsrc_loads_with_the_new_names_and_no_copy(tmp_path):
     from js import settings
 
     rc = tmp_path / "rc"
@@ -86,8 +86,7 @@ def test_an_old_names_jsrc_loads_with_the_new_names_and_a_backup(tmp_path):
     assert settings.knob(loaded, "MODEL") == "old/model"
     assert settings.knob(loaded, "READ_LINES_MAX") == 77
     assert jsrc.read_text(encoding="utf-8") == "set MODEL old/model\nset READ_LINES_MAX 77\n"
-    backups = [path for path in rc.iterdir() if path != jsrc]
-    assert [path.read_text(encoding="utf-8") for path in backups] == [_OLD_JSRC]
+    assert list(rc.iterdir()) == [jsrc]
 
 
 def test_a_second_load_changes_nothing(tmp_path):
@@ -101,21 +100,6 @@ def test_a_second_load_changes_nothing(tmp_path):
     _load(jsrc)
 
     assert {path: path.read_text(encoding="utf-8") for path in rc.iterdir()} == after
-
-
-def test_an_existing_backup_is_kept(tmp_path):
-    rc = tmp_path / "rc"
-    rc.mkdir()
-    jsrc = rc / "jsrc"
-    jsrc.write_text(_OLD_JSRC, encoding="utf-8")
-    _load(jsrc)
-    first = {path: path.read_text(encoding="utf-8") for path in rc.iterdir() if path != jsrc}
-    jsrc.write_text("set agent forge\n", encoding="utf-8")
-
-    _load(jsrc)
-
-    assert all(path.read_text(encoding="utf-8") == text for path, text in first.items())
-    assert len(list(rc.iterdir())) == 3
 
 
 def test_a_new_names_jsrc_that_mentions_an_old_name_is_left_as_it_is(tmp_path):

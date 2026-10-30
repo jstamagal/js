@@ -41,10 +41,10 @@
 # The model js talks to when you don't pass -m. Write it as
 # provider/model. The provider part is the name of a login in
 # ~/.js/logins/logins.toml or a provider js knows. A bare model name with no
-# provider/ in front goes to the Vercel AI Gateway.
+# provider/ in front goes to PROVIDER, or with none set, to BASE_URL as an
+# OpenAI-compatible endpoint.
 #   example:  set MODEL cpa/claude-opus-5-5
-#   example:  set MODEL deepseek/deepseek-v4-flash
-#set MODEL deepseek/deepseek-v4-flash
+#set MODEL cpa/claude-opus-5-5
 
 # How hard the model thinks before it answers. From least to most:
 #   off      no thinking at all
@@ -58,7 +58,7 @@
 # Unset: the provider's own default for that model. An agent's agent.yaml
 # can set its own effort, and a one-shot `js -p` uses that.
 #   example:  set EFFORT medium
-#set -EFFORT
+#set EFFORT medium
 
 # Largest reply the model may write in one call, in tokens. Thinking counts
 # toward it. Unset: the model's own limit from the model catalog, or no
@@ -612,7 +612,7 @@
 #set COMPACTION_CACHE_TTL 300
 
 # The model that writes the summary. "same" means the one you're using.
-#   example:  set COMPACTION_EXTERNAL_MODEL deepseek/deepseek-v4-flash
+#   example:  set COMPACTION_EXTERNAL_MODEL cpa/claude-haiku-5-5
 #set COMPACTION_EXTERNAL_MODEL same
 
 # Longest summary allowed, in tokens. It can't go over 8192.
@@ -783,9 +783,6 @@
 
 # max_reasoning_tokens sent to DeepSeek models when the request sets none.
 #set DEEPSEEK_REASONING_TOKENS_MAX 32000
-
-# Reasoning effort for DeepSeek models when EFFORT is unset.
-#set DEEPSEEK_DEFAULT_EFFORT xhigh
 
 # include_reasoning sent to a Claude proxy when the request sets none.
 #set CLAUDE_PROXY_INCLUDE_REASONING on
