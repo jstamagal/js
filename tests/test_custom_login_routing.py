@@ -243,6 +243,27 @@ def test_explicit_model_same_saved_prefix_routes_to_saved_login(monkeypatch, tmp
     assert actual.provider_api_key == "x"
 
 
+@pytest.mark.parametrize("base_url", [None, "http://override.test/v1"])
+def test_model_flag_to_another_provider_routes_as_js_model_does(monkeypatch, tmp_path, base_url):
+    _isolate_config(monkeypatch, tmp_path)
+    logins.save_login(Login(provider_id="alpha", sdk_provider_id="openai",
+                            provider_base_url="http://alpha.test/v1", provider_api_key="a"))
+    _save_custom_login("testes")
+    config_file = tmp_path / "home" / ".js" / "jsrc"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text("set MODEL alpha/m\n", encoding="utf-8")
+    if base_url is not None:
+        monkeypatch.setenv("JS_BASE_URL", base_url)
+
+    by_flag = cli._resolve_cli_model_override(from_env(cwd=tmp_path, save_session=False), "testes/other")
+    monkeypatch.setenv("JS_MODEL", "testes/other")
+    by_env = from_env(cwd=tmp_path, save_session=False)
+
+    assert by_flag.provider_id == by_env.provider_id == "testes"
+    assert by_flag.provider_base_url == by_env.provider_base_url == (base_url or BASE_URL)
+    assert by_flag.provider_api_key == by_env.provider_api_key == "x"
+
+
 def test_pinned_gateway_unknown_prefix_passes_through_whole_model_id():
     route = resolve_model_route(
         "unknown-vendor/model-name",

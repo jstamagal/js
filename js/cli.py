@@ -2557,16 +2557,7 @@ def _apply_agent_model(cfg: Config, prompt_spec, model: str | None, *, config_pi
     jsrc `MODEL` pins only when ``config_pins``."""
     if not _agent_model_applies(cfg, prompt_spec, model, config_pins=config_pins):
         return cfg
-    agent_model = prompt_spec.model
-    route = routing.resolve_model_route(
-        agent_model,
-        configured_provider_id=cfg.provider_id,
-        configured_base_url=cfg.provider_base_url,
-        configured_api_key=cfg.provider_api_key,
-        configured_headers=getattr(cfg, "provider_headers", {}),
-        explicit_model=True,
-        prefix_overrides_provider=not getattr(cfg, "explicit_provider", False),
-    )
+    route = _model_route(cfg, prompt_spec.model)
     return replace(
         cfg,
         model=route.model,
@@ -3439,10 +3430,24 @@ def _logins_json() -> list[dict]:
     return rows
 
 
-def _resolve_cli_model_override(cfg: Config, model: str | None) -> Config:
-    if model is None:
-        return cfg
-    route = routing.resolve_model_route(
+def _model_route(cfg: Config, model: str) -> routing.ModelRoute:
+    """Route a model chosen after startup (-m, agent.yaml `model:`) as
+    JS_MODEL routes it. With no PROVIDER set, a provider prefix picks the
+    provider, and a BASE_URL or API_KEY set for the run goes with it; the
+    base and key the startup model's provider resolved do not."""
+    explicit_provider = getattr(cfg, "explicit_provider", False)
+    prefix, _ = providers.parse_model_prefix(model)
+    if prefix is not None and not explicit_provider:
+        store = getattr(cfg, "settings", None) or {}
+        return routing.resolve_model_route(
+            model,
+            configured_base_url=settings.get_dotted(store, ("BASE_URL",)),
+            configured_api_key=settings.get_dotted(store, ("API_KEY",)),
+            env=os.environ,
+            explicit_model=True,
+            prefix_overrides_provider=True,
+        )
+    return routing.resolve_model_route(
         model,
         configured_provider_id=cfg.provider_id,
         configured_base_url=cfg.provider_base_url,
@@ -3450,8 +3455,14 @@ def _resolve_cli_model_override(cfg: Config, model: str | None) -> Config:
         configured_headers=getattr(cfg, "provider_headers", {}),
         env=os.environ,
         explicit_model=True,
-        prefix_overrides_provider=not getattr(cfg, "explicit_provider", False),
+        prefix_overrides_provider=not explicit_provider,
     )
+
+
+def _resolve_cli_model_override(cfg: Config, model: str | None) -> Config:
+    if model is None:
+        return cfg
+    route = _model_route(cfg, model)
     return replace(
         cfg,
         model=route.model,
