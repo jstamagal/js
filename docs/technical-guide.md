@@ -228,7 +228,13 @@ first token stands in when the transport cannot say). Who is calling (main
 turn, `Subagent N`, `Compacting`) is a context variable set by
 `run_turn_async` and the compaction call sites. `run_turn_async` retries, so
 its role holds each request failure instead of printing it: the next request
-drops it, and the turn prints it (level 1) only when it gives up. After each
+drops it, and the turn prints it (level 1) only when it gives up. The retry
+itself prints at every level (`retry.wait` emits `retry_wait`, a
+`retry_tick` per second and `retry_done`; `retry_gave_up` when the budget is
+spent): the console prints the failure and the wait, and counts it down on
+stderr under `-p` or on the status bar through `TurnStatus`. An Anthropic
+`error` event inside a stream that answered 200 is retried as the status its
+type stands for (`model_client.error_status`). After each
 response `compaction.note_response` compares its cache-read tokens with the
 previous response of the same conversation and model; a drop of more than 5%
 and at least 2000 tokens prints one cache-break line at level 2. A compaction or

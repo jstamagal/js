@@ -16,8 +16,8 @@ REASONING_DISPLAY
 NET_DISPLAY
     Network display in the async screen: 0 nothing, 1 failures, 2 also
     Connecting/Connected lines and a response byte counter on the status bar
-    until the first token, 3 also retries, catalog refreshes and per-call
-    stream stats.
+    until the first token, 3 also catalog refreshes and per-call stream
+    stats. Retries and the line that gives up on them print at every level.
 
 TOOLS_DISPLAY
     Tool exchange display: 0 nothing; 1 what matters: quiet calls fold into

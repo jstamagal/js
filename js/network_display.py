@@ -40,6 +40,53 @@ def draw(level: int, line: str, *, fallback: bool = False) -> None:
             pass
 
 
+def always(line: object) -> None:
+    """Draw a notice whatever NET_DISPLAY says: through the installed channel,
+    else on stderr."""
+    from . import stream_transport
+
+    sink = stream_transport._sink
+    if sink is not None:
+        sink.emit(_net_line(line))
+    else:
+        print(msgs.for_stream(_net_line(line), sys.stderr), file=sys.stderr, flush=True)
+
+
+# The line of the wait being counted down, from the seconds left; None when none.
+_countdown = None
+
+
+def countdown_start(line_for, seconds: float) -> None:
+    """Count a wait down on one stderr row, redrawn in place and erased when
+    it ends. Only on a terminal with no channel installed (`js -p`): the
+    REPL's status bar counts its retries down."""
+    global _countdown
+    from . import stream_transport
+
+    try:
+        tty = sys.stderr.isatty()
+    except (AttributeError, ValueError, OSError):
+        tty = False
+    if stream_transport._sink is not None or not tty:
+        return
+    _countdown = line_for
+    countdown_tick(seconds)
+
+
+def countdown_tick(seconds: float) -> None:
+    if _countdown is not None:
+        sys.stderr.write("\r\033[2K" + msgs.for_stream(_net_line(_countdown(seconds)), sys.stderr))
+        sys.stderr.flush()
+
+
+def countdown_end() -> None:
+    global _countdown
+    if _countdown is not None:
+        _countdown = None
+        sys.stderr.write("\r\033[2K")
+        sys.stderr.flush()
+
+
 def _net_line(line: str) -> str:
     """A network line on the screen: its entry's runs, COLOR_WARN where the
     format sets no colour."""
@@ -62,13 +109,14 @@ def describe_failure(exc: BaseException) -> str:
         seen.add(id(current))
         chain.append(current)
         current = current.__cause__ or current.__context__
+    from . import model_client
+
     for err in chain:
-        status = getattr(getattr(err, "http_context", None), "status_code", None)
+        status = model_client.error_status(err)
         if status is None:
             status = getattr(err, "status_code", None)
         if isinstance(status, int):
-            first_line = next(iter(str(err).splitlines()), "")
-            reason = str(getattr(err, "code", None) or getattr(err, "type", None) or first_line[:80])
+            reason = _capped(model_client.error_message(err))
             return f"{fset.fg('COLOR_ERROR')}{status}{fset.fg('COLOR_WARN')} {reason}".rstrip()
     for err in chain:
         text = str(err)
@@ -96,7 +144,11 @@ def _one_line(err: BaseException) -> str:
     """``err`` as one capped line: a provider error often carries a
     multi-line JSON body, and the failure is one banner line. Whitespace runs,
     newlines included, become one space, so a JSON body still reads."""
-    line = " ".join(str(err).split())
+    return _capped(str(err))
+
+
+def _capped(text: str) -> str:
+    line = " ".join(text.split())
     return line if len(line) <= _DETAIL_WIDTH else line[:_DETAIL_WIDTH - 1] + "…"
 
 

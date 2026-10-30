@@ -28,6 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import ai
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.key_binding import merge_key_bindings
@@ -128,12 +129,26 @@ class _ShortHelpAction(argparse.Action):
 
 def _error_text(e: BaseException) -> str:
     """``e`` for a failure line: a provider's own one-line message as it is,
-    any other error after its kind; a `said()` entry inside either keeps its
-    format (`msgs.of_error`)."""
+    a provider's status failure as its status and message, any other error
+    after its kind; a `said()` entry inside either keeps its format
+    (`msgs.of_error`)."""
     said = msgs.of_error(e)
     if isinstance(e, routing.ProviderNotLoggedInError):
         return said
+    if isinstance(e, ai.ProviderStatusError) and (status := model_client.error_status(e)) is not None:
+        return msgs.ERROR_OF_STATUS.said(status=status, error=model_client.error_message(e))
     return msgs.ERROR_OF_KIND.said(kind=type(e).__name__, error=said)
+
+
+def _blocking_stdio() -> None:
+    """Clear O_NONBLOCK on stdin, stdout and stderr. Every program in a
+    terminal shares one open file description, and one that set it
+    non-blocking (nvim and node do, through libuv) can leave it so; a write
+    bigger than the terminal's buffer then stops part way with EAGAIN."""
+    for fd in (0, 1, 2):
+        with contextlib.suppress(OSError):
+            if not os.get_blocking(fd):
+                os.set_blocking(fd, True)
 
 
 def _registry_for(cfg) -> object:
@@ -659,7 +674,7 @@ class _StdoutTee:
     def write(self, text: str) -> None:
         try:
             self._primary.write(text)
-        except Exception:
+        except transcript_mod.READER_GONE:
             pass
         self._sink.emit(output.event("debug_text", text=text))
 
@@ -668,13 +683,13 @@ class _StdoutTee:
         try:
             write = getattr(self._primary, "write_unlogged", self._primary.write)
             write(text)
-        except Exception:
+        except transcript_mod.READER_GONE:
             pass
 
     def flush(self) -> None:
         try:
             self._primary.flush()
-        except Exception:
+        except transcript_mod.READER_GONE:
             pass
         self._sink.flush()
 
@@ -2634,7 +2649,18 @@ def _raise_keyboard_interrupt(*_args) -> None:
 
 
 @_session_scope
-def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
+def _run_prompt(prompt: str, **kwargs) -> int:
+    """One `-p` run (`_prompt_run`). Once its session is open, the Continue
+    line prints on every exit: an answer, no answer, an error, ^C."""
+    opened: dict = {}
+    try:
+        return _prompt_run(prompt, opened=opened, **kwargs)
+    finally:
+        if (say_continue := opened.get("say")) is not None:
+            say_continue()
+
+
+def _prompt_run(prompt: str, model: str | None = None, debug: bool = False,
                 debug_file: str | None = None,
                 agent: str | None = None, session: str | None = None, save: bool = True,
                 system_override: str | None = None, resume_prefix: str | None = None,
@@ -2648,7 +2674,7 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
                 caller_key: str | None = None, announce_generated: bool | None = None,
                 events: headless.JsonEvents | None = None,
                 config_pins: bool = False, swarm: str | None = None,
-                call_stats: list[dict] | None = None) -> int:
+                call_stats: list[dict] | None = None, opened: dict | None = None) -> int:
     # @path in the prompt attaches like it does in the REPL, read here before
     # any jail, so `-p "@/tmp/prompt.txt"` needs no JAIL_BIND.
     prompt, named = attach.split_repl_attachments(prompt)
@@ -2694,6 +2720,11 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
         )
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
     _sync_transcript_sink(cfg, getattr(cfg, "settings", {}) or {}, telemetry)
+    if save and show_continue and opened is not None:
+        hint = _session_hint_arg(cfg)
+        # `model` is read when the line prints: a resumed session's spec by then.
+        opened["say"] = lambda: _say_continue(telemetry, hint, resume_prefix=resume_prefix,
+                                              agent=agent, model=model)
 
     prompt_spec = None
     if system_override is not None:
@@ -2952,63 +2983,72 @@ def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
             if previous_sigterm is not None:
                 signal.signal(signal.SIGTERM, previous_sigterm)
 
-    answer = None
-    for message in reversed(messages):
-        if message.get("role") == "user":
-            break
-        if message.get("role") == "assistant" and message.get("content"):
-            answer = message
-            break
+    answer = _turn_answer(messages)
 
     if stats_json or stats_csv:
-        error = None if answer is not None else msgs.NO_ASSISTANT_RESPONSE.words()
+        error = None if answer else msgs.NO_ANSWER.words()
         row = {"name": "prompt", "prompt": prompt, "max_tokens": cfg.max_output_tokens if maxout is None else maxout,
-               "ok": answer is not None, "error": error, **stats.summarize_calls(call_stats, wall_s=time.time() - _t_wall)}
+               "ok": bool(answer), "error": error, **stats.summarize_calls(call_stats, wall_s=time.time() - _t_wall)}
         payload = {"agent": cfg.agent_id, "model": cfg.model, "provider": cfg.provider_id, "turns": [row]}
         if stats_json:
             stats.write_json(stats_json, payload)
         if stats_csv:
             stats.write_csv(stats_csv, [row])
 
-    if answer is not None:
-        # In debug, run_turn already streamed the answer live to stdout — a
-        # second print here is the double-print bug. Only print when the
-        # stream was suppressed (non-debug one-shot/pipe).
+    if not answer:
         with _transcript_stdio(telemetry):
-            if not debug:
-                content = answer["content"].strip()
-                if (sink := _transcript_sink(telemetry)) is not None:
-                    sink.emit(output.event("transcript_assistant", text=content))
-                if events is None:
-                    with _mute_transcript_tee(_transcript_sink(telemetry)):
-                        display_mod.print_answer(
-                            content, sys.stdout,
-                            markdown=display_mod.markdown_enabled(getattr(cfg, "settings", None)),
-                        )
-            if save:
-                _maybe_auto_compact(cfg, {
-                    "system": system,
-                    "messages": messages,
-                    "model": cfg.model,
-                })
-                if show_continue:
-                    hint = _session_hint_arg(cfg)
-                    cont = resume_prefix or "js"
-                    # Plain -p has no resume_prefix; a resume runs the `DEFAULT_AGENT`
-                    # setting unless told otherwise, so a non-default agent MUST
-                    # be echoed or the session continues under the wrong agent.
-                    # (wiki/commit already fold the agent into resume_prefix.)
-                    if resume_prefix is None and agent:
-                        cont += f" --agent {shlex.quote(agent)}"
-                    if model:
-                        cont += f" --model {shlex.quote(model)}"
-                    cont += f" --session {hint}"
-                    msgs.warn(msgs.CONTINUE_HINT, command=cont)
-        return 0
-
+            msgs.warn(msgs.NO_ANSWER)
+        return 1
+    # In debug, run_turn already streamed the answer live to stdout — a
+    # second print here is the double-print bug. Only print when the
+    # stream was suppressed (non-debug one-shot/pipe).
     with _transcript_stdio(telemetry):
-        msgs.warn(msgs.NO_ASSISTANT_RESPONSE)
-    return 1
+        if not debug:
+            if (sink := _transcript_sink(telemetry)) is not None:
+                sink.emit(output.event("transcript_assistant", text=answer))
+            if events is None:
+                _blocking_stdio()
+                with _mute_transcript_tee(_transcript_sink(telemetry)):
+                    display_mod.print_answer(
+                        answer, sys.stdout,
+                        markdown=display_mod.markdown_enabled(getattr(cfg, "settings", None)),
+                    )
+        if save:
+            _maybe_auto_compact(cfg, {
+                "system": system,
+                "messages": messages,
+                "model": cfg.model,
+            })
+    return 0
+
+
+def _turn_answer(messages: list[dict]) -> str:
+    """The answer of the turn that ended ``messages``: the text of its last
+    assistant message, "" when that message has none."""
+    for message in reversed(messages):
+        role = message.get("role")
+        if role == "user":
+            break
+        if role == "assistant":
+            content = message.get("content")
+            return content.strip() if isinstance(content, str) else ""
+    return ""
+
+
+def _say_continue(telemetry: runtime.Telemetry, hint: str, *, resume_prefix: str | None,
+                  agent: str | None, model: str | None) -> None:
+    cont = resume_prefix or "js"
+    # Plain -p has no resume_prefix; a resume runs the `DEFAULT_AGENT`
+    # setting unless told otherwise, so a non-default agent MUST
+    # be echoed or the session continues under the wrong agent.
+    # (wiki/commit already fold the agent into resume_prefix.)
+    if resume_prefix is None and agent:
+        cont += f" --agent {shlex.quote(agent)}"
+    if model:
+        cont += f" --model {shlex.quote(model)}"
+    cont += f" --session {hint}"
+    with _transcript_stdio(telemetry):
+        msgs.warn(msgs.CONTINUE_HINT, command=cont)
 
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
@@ -3507,7 +3547,7 @@ def _run_model_bench(args: argparse.Namespace, presets: list[str]) -> int:
                                    extras=args.extras, ignore_local_config=args.ignore_local,
                                    ignore_global_config=args.ignore_global, presets=presets,
                                    show_continue=False, call_stats=calls)
-                error = None if code == 0 else 'No assistant response'
+                error = None if code == 0 else msgs.NO_ANSWER.words()
             except Exception as exc:  # noqa: BLE001 - one sick model must not stop the list
                 code, error = 1, str(exc)
             row = {'name': route, 'ok': code == 0, 'error': error,
@@ -4577,6 +4617,7 @@ def main(argv: list[str] | None = None) -> int:
 @_session_scope
 def _main(argv: list[str] | None = None) -> int:
     dispatch_argv = argv if argv is not None else sys.argv[1:]
+    _blocking_stdio()
     # Before anything reads or writes ~/.js: move the old locations in, once,
     # then make sure every directory of the layout and the user jsrc are there.
     _home.migrate_once()

@@ -270,7 +270,7 @@ def _retrying(tmp_path, attempts: int):
     return dataclasses.replace(_cfg(tmp_path), settings={"RETRY_COUNT_MAX": attempts})
 
 
-def test_turn_that_gives_up_on_dns_prints_one_line_at_level_1(monkeypatch, sink, tmp_path):
+def test_turn_that_gives_up_on_dns_prints_every_attempt_at_level_1(monkeypatch, sink, tmp_path):
     lines, level = sink
     level["value"] = 1
     calls = _flaky_model(monkeypatch, [_dns_failure() for _ in range(5)])
@@ -279,7 +279,9 @@ def test_turn_that_gives_up_on_dns_prints_one_line_at_level_1(monkeypatch, sink,
         _turn(tmp_path, ToolContext(cwd=tmp_path), cfg=_retrying(tmp_path, 2))
 
     assert len(calls) > 1                       # the runtime retried
-    assert len(_naming(lines, "nowhere.invalid")) == 1
+    # One line per retry, then the failure the runtime gave up on.
+    assert len(_naming(lines, "nowhere.invalid")) == len(calls)
+    assert any("Gave up after 2 retries" in _plain(line) for line in lines)
 
 
 def test_turn_retries_show_at_level_3_and_end_with_the_failure(monkeypatch, sink, tmp_path):
@@ -299,7 +301,7 @@ def test_turn_retries_show_at_level_3_and_end_with_the_failure(monkeypatch, sink
     assert len(failures) == len(calls)
 
 
-def test_turn_that_recovers_by_retry_prints_nothing_at_level_1(monkeypatch, sink, tmp_path):
+def test_turn_that_recovers_by_retry_prints_the_retry_at_level_1(monkeypatch, sink, tmp_path):
     lines, level = sink
     level["value"] = 1
     calls = _flaky_model(monkeypatch, [_dns_failure()])
@@ -307,7 +309,7 @@ def test_turn_that_recovers_by_retry_prints_nothing_at_level_1(monkeypatch, sink
     _turn(tmp_path, ToolContext(cwd=tmp_path))
 
     assert len(calls) == 2
-    assert _naming(lines, "nowhere.invalid") == []
+    assert len(_naming(lines, "nowhere.invalid")) == 1
 
 
 def test_a_multi_line_provider_error_is_one_capped_banner_line():

@@ -273,15 +273,18 @@ whole name, cut short with `…` when nothing else is left to drop. Its
 colours are `/fset COLOR_STATUS_BACKGROUND #rrggbb` and `/fset COLOR_STATUS_TEXT #rrggbb`, drawn
 in truecolor on every terminal, including the Linux console.
 
-`NET_DISPLAY` sets how much of the network shows, 0 to 3. At 1 only failures print
-(`*** DNS failure: host`, `*** 429 ...`, timeouts), once, when js stops
-retrying, and so does a retry that waits 10s or more; at 2 (the default) each
+`NET_DISPLAY` sets how much of the network shows, 0 to 3. Retries print at
+every level, 0 included: each one names the failure it follows and its wait,
+the wait counts down (on its own line under `-p`, on the status bar in the
+screen), and `*** Gave up after N retries.` prints when js stops. At 1 only
+failures print (`*** DNS failure: host`, `*** 429 ...`, timeouts), once,
+when js stops retrying; at 2 (the default) each
 model request, including subagents and compaction, also prints
 `*** Connecting` and `*** Connected ... Nms`, the bar counts response
 bytes until the first token arrives, and a response that read more than 5%
 (and at least 2000 tokens) less from the prompt cache than the one before it
 prints one `*** Prompt cache break` line with both counts and the seconds
-since that request; at 3 each retry, models.dev catalog
+since that request; at 3 models.dev catalog
 refreshes and the per-call stream stats line (`ms finish tok tok/s cache`)
 print as well. In the screen that stats
 line follows `NET_DISPLAY`; `-p` and `--blocking` still show it with `-d`.

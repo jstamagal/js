@@ -290,6 +290,7 @@ class ModelCaller:
                         if too_long:
                             telemetry.event("retry_after_too_long", model=model,
                                             retry_after=wait, limit=limits.retry.max_wait)
+                        retry.gave_up(transport_retries)
                         self._fail(e, retryable=True)
                         raise
                     delay = wait if wait is not None else _backoff(transport_retries, limits.retry)

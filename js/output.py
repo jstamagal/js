@@ -25,6 +25,9 @@ The loop's events, and their fields:
     notice         message, fields, stderr, flush
     network        level, line (text, Said, Failure or LabelledLine), fallback
     retry_wait     n, attempts, delay, error, label
+    retry_tick     left: seconds of the retry's wait still to go
+    retry_done     (none): the retry's wait ended, waited out or cancelled
+    retry_gave_up  n, label: retries made before the caller stopped
     user_echo      text
     kernel_execution context, level, code, stdout, stderr, display, error,
                    elapsed, cell, added, removed, namespace, images, interrupted

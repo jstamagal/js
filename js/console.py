@@ -368,7 +368,28 @@ class ConsoleSink:
                                     failure=network_display.Failure(error))
         if label:
             line = network_display.LabelledLine(label, line)
-        network_display.draw(1 if delay >= 10 else 3, line)
+        with _muted_tee(getattr(self._telemetry, "transcript_log", None)):
+            network_display.always(line)
+        if not label and delay >= 1:
+            network_display.countdown_start(
+                lambda left: msgs.RETRY_COUNTDOWN.said(n=n, of=attempts, seconds=left), delay)
+
+    def _on_retry_tick(self, *, left: float) -> None:
+        from . import network_display
+
+        network_display.countdown_tick(left)
+
+    def _on_retry_done(self) -> None:
+        from . import network_display
+
+        network_display.countdown_end()
+
+    def _on_retry_gave_up(self, *, n: int, label: str) -> None:
+        from . import network_display
+
+        line = msgs.RETRY_GAVE_UP.said(n=n)
+        with _muted_tee(getattr(self._telemetry, "transcript_log", None)):
+            network_display.always(network_display.LabelledLine(label, line) if label else line)
 
     def _on_kernel_execution(self, *, context: Any, **fields: Any) -> None:
         from . import kernel_display

@@ -146,6 +146,65 @@ def _friendly_provider_error(
     return None
 
 
+# Anthropic's error types and the HTTP status each stands for. A stream that
+# already answered 200 reports a failure as an `error` event, and the SDK
+# raises it with the stream's status, 200. A proxy relays an upstream failure
+# the same way.
+_ERROR_TYPE_STATUS = {
+    "invalid_request_error": 400,
+    "authentication_error": 401,
+    "billing_error": 402,
+    "permission_error": 403,
+    "not_found_error": 404,
+    "request_too_large": 413,
+    "rate_limit_error": 429,
+    "api_error": 500,
+    "timeout_error": 504,
+    "overloaded_error": 529,
+}
+
+
+def _error_detail(exc: BaseException) -> dict:
+    """The provider's error object in ``exc``'s body: the `error` member of an
+    Anthropic body, or the body itself (the OpenAI SDKs keep the inner object)."""
+    body = getattr(exc, "body", None)
+    if not isinstance(body, dict):
+        return {}
+    inner = body.get("error")
+    return inner if isinstance(inner, dict) else body
+
+
+def error_status(exc: BaseException) -> int | None:
+    """The HTTP status ``exc`` stands for: its response's, or for an error
+    event in a stream that answered 200, the status of the event's type."""
+    status = getattr(getattr(exc, "http_context", None), "status_code", None)
+    if not isinstance(status, int):
+        return None
+    if status < 400:
+        return _ERROR_TYPE_STATUS.get(_error_detail(exc).get("type"), status)
+    return status
+
+
+def error_message(exc: BaseException) -> str:
+    """The provider's own message in ``exc``: its body's `message`, else its
+    error code, else the error's text, as one line."""
+    message = _error_detail(exc).get("message")
+    if not (isinstance(message, str) and message.strip()):
+        message = getattr(exc, "code", None) or str(exc)
+    return " ".join(str(message).split()) or type(exc).__name__
+
+
+def _restate_error_event(exc: BaseException) -> None:
+    """Retry an error event the way its status would be retried: the SDK
+    takes the 200 of the stream it arrived in for a success that cannot be
+    retried."""
+    if not isinstance(exc, ai.ProviderStatusError):
+        return
+    status = error_status(exc)
+    if status is not None and status != exc.http_context.status_code:
+        exc.is_retryable = status in (408, 409, 429) or status >= 500
+
+
 def _transport_error(exc: BaseException, *, provider_id: str | None) -> ai.ProviderConnectionError | None:
     """The retryable SDK error for a connection lost or timed out while the
     stream was being read, else None. The provider SDKs wrap transport errors
@@ -1927,6 +1986,7 @@ async def _stream_with_model(
     except routing.ProviderNotLoggedInError:
         raise
     except Exception as exc:
+        _restate_error_event(exc)
         if net_call is not None:
             net_call.failed(exc)
         friendly = _friendly_provider_error(exc, provider_id=provider_id)

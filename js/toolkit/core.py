@@ -408,6 +408,9 @@ class TurnStatus:
     tool_started: float = 0.0    # time.monotonic() when the batch started
     compacting: bool = False
     net_bytes: int = 0           # response bytes of this call before its first token
+    retry: int = 0               # the retry being waited for; 0 when none
+    retry_of: int = 0            # the retries the budget allows
+    retry_at: float = 0.0        # time.monotonic() when that retry is sent
     _settled: int = field(default=0, repr=False)     # tokens of the finished calls
     _chars: int = field(default=0, repr=False)       # streamed chars of this call
     _token_seen: bool = field(default=False, repr=False)
@@ -443,6 +446,16 @@ class TurnStatus:
         self.tool = ""
         self.tool_extra = 0
         self.tool_started = 0.0
+
+    def retry_wait(self, n: int, of: int, delay: float) -> None:
+        self.retry_at = time.monotonic() + delay
+        self.retry_of = of
+        self.retry = n
+
+    def retry_done(self) -> None:
+        self.retry = 0
+        self.retry_of = 0
+        self.retry_at = 0.0
 
     def reset(self) -> None:
         for name, spec in self.__dataclass_fields__.items():

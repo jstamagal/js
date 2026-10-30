@@ -351,6 +351,8 @@ def plural(n: int, word: str) -> str:
 FAILED = Message("{error}", GRAVE)
 # An error that is not js's own, named by its kind.
 ERROR_OF_KIND = Message("{kind}: {error}", banner=False)
+# A provider's failure: the HTTP status it stands for and the provider's message.
+ERROR_OF_STATUS = Message("{status} {error}", banner=False)
 FAILED_WARN = Message("{error}", WARN)
 # A command's refusal that is not an entry of its own: a settings verb's
 # complaint, or a script line's.
@@ -768,7 +770,7 @@ PROMPT_EMPTY = Message("Prompt is empty.", GRAVE)
 TURN_INTERRUPTED = Message("Turn interrupted.", WARN)
 TURN_INTERRUPTED_KEPT = Message("Turn interrupted. Partial work kept.", WARN)
 TURN_ABORTED = Message("Turn aborted.", WARN)
-NO_ASSISTANT_RESPONSE = Message("No assistant response.", GRAVE)
+NO_ANSWER = Message("The model returned no answer.", GRAVE)
 CONTINUE_HINT = Message("Continue: {command}")
 
 # One-shot: what a turn is doing, while nothing else shows it.
@@ -883,6 +885,8 @@ RESPONSE_INCOMPLETE = Message("Response incomplete: {reason}", WARN)
 MAX_OUTPUT_ESCALATED = Message("Reply hit its output cap of {before}; sending again with {after}.")
 MAX_OUTPUT_RESUMING = Message("Reply hit its output cap; asking the model to resume, {n} of {limit}.", WARN)
 RETRY_WAIT = Message("Retry {n}/{of} in {seconds:.1f}s: {failure}")
+RETRY_GAVE_UP = Message("Gave up after {n} retries.", GRAVE)
+RETRY_COUNTDOWN = Message("Retry {n}/{of} in {seconds:.0f}s")
 STEERED = Message("Steered.")
 FLIGHT_LOG_FAILED = Message("Flight log not written: {error}", GRAVE)
 COMPACTION_FAILED = Message("Compaction failed: {error}", GRAVE)
@@ -1537,6 +1541,8 @@ STATUS_TOOL_EXTRA = Message(" +{tool_extra}", banner=False)
 STATUS_TOOL_ELAPSED = Message("{tool}{extra} {elapsed}s", banner=False)
 
 STATUS_RESPONSE_BYTES = Message("{value:,}B", banner=False)
+
+STATUS_RETRY = Message("retry {n}/{of} in {seconds:.0f}s", banner=False)
 
 KEY_ACTION_SUBMIT = "Send the input line (emacs mode)."
 

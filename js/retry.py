@@ -124,14 +124,33 @@ def announce(n: int, budget: Budget, delay: float, exc: BaseException) -> None:
                              error=exc, label=stream_transport._role.get().label))
 
 
+def gave_up(retries: int) -> None:
+    """Tell the sink the caller stopped retrying a retryable failure."""
+    output.emit(output.event("retry_gave_up", n=retries, label=stream_transport._role.get().label))
+
+
 _sleep = asyncio.sleep
 
 
 async def wait(n: int, budget: Budget, delay: float, exc: BaseException) -> None:
-    """Announce retry `n` and wait `delay` seconds before it. Every retry of a
-    model call waits here."""
+    """Announce retry `n` and wait `delay` seconds before it, a `retry_tick`
+    with the seconds left after each second of it. Every retry of a model
+    call waits here; ^C ends the wait like any other."""
     announce(n, budget, delay, exc)
-    await _sleep(delay)
+    status = stream_transport._role.get().status
+    if status is not None:
+        status.retry_wait(n, budget.attempts, delay)
+    left = delay
+    try:
+        while left > 0:
+            step = min(1.0, left)
+            await _sleep(step)
+            left -= step
+            output.emit(output.event("retry_tick", left=left))
+    finally:
+        if status is not None:
+            status.retry_done()
+        output.emit(output.event("retry_done"))
 
 
 async def call[T](request: Callable[[], Awaitable[T]], budget: Budget) -> T:
@@ -143,7 +162,10 @@ async def call[T](request: Callable[[], Awaitable[T]], budget: Budget) -> T:
             return await request()
         except ai.ProviderAPIError as exc:
             asked = retry_after_seconds(exc)
-            if not exc.is_retryable or retries >= budget.attempts or budget.too_long(asked):
+            if not exc.is_retryable:
+                raise
+            if retries >= budget.attempts or budget.too_long(asked):
+                gave_up(retries)
                 raise
             delay = asked if asked is not None else backoff(retries, budget)
             retries += 1

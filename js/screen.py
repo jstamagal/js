@@ -113,9 +113,13 @@ def throbber_frame(now: float) -> str:
 def turn_centre(status, *, now: float, show_bytes: bool) -> tuple[str, int | None]:
     """(phase, output_tokens) for the bar's centre group from a TurnStatus.
 
-    A running tool wins, then compaction, then response bytes before the first
-    token (when the net channel shows them), then the output-token count.
+    A retry's wait wins, then a running tool, then compaction, then response
+    bytes before the first token (when the net channel shows them), then the
+    output-token count.
     """
+    if status.retry:
+        left = max(0.0, status.retry_at - now)
+        return msgs.STATUS_RETRY.words(n=status.retry, of=status.retry_of, seconds=left), None
     if status.tool:
         extra = msgs.STATUS_TOOL_EXTRA.words(tool_extra=status.tool_extra) if status.tool_extra else ""
         elapsed = int(max(0.0, now - status.tool_started))

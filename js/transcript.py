@@ -218,6 +218,11 @@ class ToolRecordsOnly:
         self._sink.flush()
 
 
+# A write to a stream whose reader has gone (`js -p | head`) or that is closed:
+# the text has nowhere to go. Any other write failure is raised.
+READER_GONE = (BrokenPipeError, ValueError)
+
+
 class TranscriptTee:
     """Write to a real stream and the current transcript sink."""
 
@@ -228,7 +233,7 @@ class TranscriptTee:
     def write(self, text: str) -> None:
         try:
             self._primary.write(text)
-        except Exception:
+        except READER_GONE:
             pass
         sink = self._sink_getter()
         if sink is not None:
@@ -239,13 +244,13 @@ class TranscriptTee:
         try:
             write = getattr(self._primary, "write_unlogged", self._primary.write)
             write(text)
-        except Exception:
+        except READER_GONE:
             pass
 
     def flush(self) -> None:
         try:
             self._primary.flush()
-        except Exception:
+        except READER_GONE:
             pass
         sink = self._sink_getter()
         if sink is not None:
@@ -318,6 +323,20 @@ class TranscriptSink:
 
         if fallback and stream_transport._sink is None:
             self._plain(network_display._net_line(line) + "\n", stderr=True)
+
+    def _on_retry_wait(self, *, n: int, attempts: int, delay: float, error: BaseException, label: str) -> None:
+        from . import network_display
+
+        line = msgs.RETRY_WAIT.said(n=n, of=attempts, seconds=delay, failure=network_display.Failure(error))
+        self._plain(network_display._net_line(network_display.LabelledLine(label, line) if label else line)
+                    + "\n", stderr=True)
+
+    def _on_retry_gave_up(self, *, n: int, label: str) -> None:
+        from . import network_display
+
+        line = msgs.RETRY_GAVE_UP.said(n=n)
+        self._plain(network_display._net_line(network_display.LabelledLine(label, line) if label else line)
+                    + "\n", stderr=True)
 
     def _on_tool_result(self, *, name: str, args: dict | None, result: Any, malformed: bool,
                         context: Any, traced: bool = True, **_fields: Any) -> None:
