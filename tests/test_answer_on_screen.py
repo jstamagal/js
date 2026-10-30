@@ -46,6 +46,10 @@ def _without_answer(stream: bytes) -> bytes:
     return b"\n\n".join(event for event in events if b'"index":1' not in event)
 
 
+class _Stalled(bytes):
+    """A reply that sends its bytes and then goes quiet without ending."""
+
+
 class _Replay(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - http.server's name
         self.rfile.read(int(self.headers["Content-Length"]))
@@ -53,6 +57,12 @@ class _Replay(BaseHTTPRequestHandler):
         body = replies.pop(0) if len(replies) > 1 else replies[0]
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
+        if isinstance(body, _Stalled):
+            self.end_headers()
+            self.wfile.write(body)
+            self.wfile.flush()
+            time.sleep(60)
+            return
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -240,3 +250,15 @@ def test_ctrl_c_during_a_retry_wait_ends_the_run_with_the_continue_line(tmp_path
     assert code == 130, screen[-2000:]
     assert time.monotonic() - started < 25
     assert screen.index(CONTINUE) > screen.index(INTERRUPTED)
+
+
+def test_a_stream_that_goes_quiet_times_out_with_the_continue_line(tmp_path, serve):
+    url = serve(_Stalled(STREAM.split(b"\n\n", 1)[0] + b"\n\n"))
+    started = time.monotonic()
+    code, drawn = _on_terminal(_argv(), _env(tmp_path, url, STREAM_IDLE_TIMEOUT="1", RETRY_COUNT_MAX="0"),
+                               tmp_path)
+    screen = _screen(drawn)
+
+    assert code == 1, screen[-2000:]
+    assert time.monotonic() - started < 30
+    assert CONTINUE in screen
