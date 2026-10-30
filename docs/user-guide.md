@@ -222,10 +222,11 @@ Review $1. Focus on ${2:-correctness}; list findings worst first.
 > /review js/cli.py "error paths"
 ```
 
-`/save` writes into the global jsrc, in place: each setting not at its stock
-value gets its line uncommented with your value, a live line for a setting
-back at stock is commented out, and `on` handlers and aliases not yet in the
-file are appended. Every other line stays as it is, and no backup is made. A
+`/save` writes what you changed this session into the global jsrc, in place:
+each setting you changed gets its line uncommented with your value, a live line
+for a setting you set back to stock is commented out, and `on` handlers and
+aliases you added are appended. Nothing from the environment, a login or the
+defaults goes in, every other line stays as it is, and no backup is made. A
 value a line cannot hold as it is (nothing, a line break, space at either
 end, a leading `"`) is written as a JSON string literal, `"first\nsecond"`, and a
 setting or format given a JSON string literal takes the string it spells,
@@ -252,8 +253,8 @@ working directory back, and under the same `-C` it puts the `/add` paths back.
 `/reset` clears the in-process conversation and writes a `session_reset` mark to
 the JSONL so future loads ignore older messages in that file.
 
-`/wipe` rotates the active session file to `.jsonl.bak`, `.jsonl.bak.1`, and so
-on, then clears the in-process messages.
+`/wipe` moves the conversation to a new session file in the same directory,
+which can be resumed like any session, then clears the in-process messages.
 
 Reasoning streams in and folds to one line, `N tok reasoning`, when the answer
 starts: `REASONING_DISPLAY` 1, the default. `0` hides it, `2` leaves it visible,
@@ -678,7 +679,7 @@ The memory layer is append-only JSONL plus control marks:
 - `rollback_to:N`: future loads truncate the loaded message list to `N`.
 - `compaction:{...}`: future loads rebuild context as the unchanged system
   prompt, one `<compaction-summary>` user message, and a safe recent tail.
-- `/wipe`: rotates the whole file to `.bak`, `.bak.1`, etc.
+- `/wipe`: moves the whole file to a new session in the same directory.
 
 Use `/compact [focus]` in the REPL or `js --compact <session>` offline to append
 a compaction mark without rewriting the JSONL file. `/compact -m <model>` makes

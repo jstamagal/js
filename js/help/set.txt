@@ -769,9 +769,6 @@ DOTENV_WALK_UP
     on: .env files are read from the start directory and every parent;
     off: the start directory only.
 
-JSRC_AUTO_MIGRATE
-    on: old setting names in jsrc files are rewritten at startup.
-
 TMP_AGE_MAX
     Seconds an entry in ~/.js/tmp may go unmodified before startup removes
     it.

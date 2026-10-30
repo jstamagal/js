@@ -80,7 +80,7 @@ def test_save_puts_a_changed_line_after_a_load_that_would_override_it(tmp_path):
     live = settings.seed_defaults()
     settings.set_dotted(live, ("BANNER",), "-!-")
     fset.set_entry("THEME", "paper")
-    settings.save_settings_to_jsrc(path, live)
+    settings.save_settings_to_jsrc(path, live, keys=["BANNER"], fset_names=["THEME"])
     fset.reset()
     loaded = settings.seed_defaults()
     settings.load_jsrc_files([path], loaded)

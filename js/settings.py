@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from typing import Any
 
 from . import reasoning as _reasoning
@@ -177,7 +177,6 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("CODEX_REASONING_SUMMARY", "str", group="providers"),
     SettingSpec("CODEX_TEXT_VERBOSITY", "str", group="providers"),
     SettingSpec("LOCAL_API_KEY_PLACEHOLDER", "str", group="providers"),
-    SettingSpec("JSRC_AUTO_MIGRATE", "bool", group="runtime"),
     SettingSpec("PROJECT_INSTRUCTION_FILES", "json", group="runtime"),
     SettingSpec("GLOBAL_INSTRUCTION_FILES", "json", group="runtime"),
     SettingSpec("PASTE_IMAGE_TIMEOUT", "float", group="input"),
@@ -986,7 +985,7 @@ def _startup_policy() -> dict:
 
     key = (os.getcwd(), frozenset(os.environ.items()), repr(sorted(config._invocation.items())))
     if _policy_cache is None or _policy_cache[0] != key:
-        _policy_cache = (key, config.run_settings(migrate=False))
+        _policy_cache = (key, config.run_settings(held=True))
     return _policy_cache[1]
 
 
@@ -1057,43 +1056,14 @@ def _apply_jsrc(path: Path, settings: dict, stack: list[Path], warnings: list[st
     return None
 
 
-def _auto_migrate(paths: list[Path], settings: dict, env: dict[str, str] | None,
-                  extras: list[str] | None) -> bool:
-    """Resolve migration policy before any source file is rewritten."""
-    from . import fset
-
-    probe = copy.deepcopy(settings)
-    with fset.held():
-        for path in paths:
-            if path.is_file():
-                _apply_jsrc(path.resolve(strict=False), probe, [], [])
-    spec = SPEC_BY_KEY["JSRC_AUTO_MIGRATE"]
-    enabled = env_value(spec, os.environ if env is None else env, knob(probe, spec.key))
-    for extra in extras or ():
-        name, separator, raw = extra.partition("=")
-        if separator and name.strip() == spec.key:
-            value, error = coerce_value(spec, raw)
-            if error is None:
-                enabled = value
-    return bool(enabled)
-
-
-def load_jsrc_files(paths: list[Path], settings: dict, *, env: dict[str, str] | None = None,
-                    extras: list[str] | None = None, migrate: bool | None = None) -> list[str]:
-    """Apply each existing jsrc script's settings onto ``settings`` in order,
-    each first rewritten from the old setting names when it still holds them
-    (`rename.migrate_jsrc_file`). Returns a list of human-readable warnings
-    (bad lines) — a single typo never aborts the boot."""
-    from .rename import migrate_jsrc_file  # lazy: rename imports this module
-
-    migrate = _auto_migrate(paths, settings, env, extras) if migrate is None else migrate
+def load_jsrc_files(paths: list[Path], settings: dict) -> list[str]:
+    """Apply each existing jsrc script's settings onto ``settings`` in order.
+    Returns a list of human-readable warnings (bad lines) — a single typo
+    never aborts the boot."""
     warnings: list[str] = []
     for path in paths:
         if path.exists():
-            target = path.resolve(strict=False)
-            if migrate:
-                migrate_jsrc_file(target)
-            _apply_jsrc(target, settings, [], warnings)
+            _apply_jsrc(path.resolve(strict=False), settings, [], warnings)
     return warnings
 
 
@@ -1107,7 +1077,6 @@ def collect_settings(
     config_paths: list[Path] | None = None,
     env: dict[str, str] | None = None,
     extras: list[str] | None = None,
-    migrate: bool | None = None,
     *,
     defaults=None,
     reset_formats=None,
@@ -1125,7 +1094,7 @@ def collect_settings(
 
     from . import paths as _paths
     paths = config_paths if config_paths is not None else [_paths.global_config_file()]
-    load_jsrc_files(paths, settings, env=env, extras=extras, migrate=migrate)
+    load_jsrc_files(paths, settings)
 
     apply_env_overrides(settings, env=env)
     if extras:
@@ -1233,9 +1202,6 @@ def _set_line(spec: SettingSpec, value: Any) -> str:
 # How `_jsrc_key` names an `fset` line for an entry `js.fset` holds.
 FSET_KEY = "fset:"
 
-# The commented user jsrc js writes on first run: every setting at its stock
-# value under a description, all of it commented out.
-JSRC_TEMPLATE = Path(__file__).with_name("jsrc.template")
 
 
 def _jsrc_key(line: str) -> tuple[str | None, bool]:
@@ -1324,18 +1290,6 @@ def _locked_jsrc(path: Path) -> Iterator[None]:
         os.close(fd)
 
 
-def _write_jsrc_lines(path: Path, wanted: dict[str, str | None], extra_lines: list[str],
-                      unsets: dict[str, str] | None = None) -> int:
-    """Edit the jsrc at ``path`` in place (`_edited_jsrc_lines`). Returns how
-    many lines changed."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with _locked_jsrc(path):
-        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-        lines, changed = _edited_jsrc_lines(lines, wanted, extra_lines, unsets or {})
-        if changed:
-            _write_lines(path, lines)
-        return changed
-
 
 def _serialized(lines: list[str]) -> str:
     return "\n".join(lines) + "\n"
@@ -1379,70 +1333,80 @@ def _at_stock(spec: SettingSpec, value: Any) -> bool:
     return value == spec.default or (value in (None, "") and spec.default in (None, ""))
 
 
+def changed_keys(before: dict, after: dict) -> list[str]:
+    """The registered settings whose value differs between two stores."""
+    return [spec.key for spec in REGISTRY if knob(before, spec.key) != knob(after, spec.key)]
+
+
+def changed_fset_names(before: Mapping[str, str]) -> list[str]:
+    """The /fset entries that differ from ``before`` (`fset.overrides()` then)."""
+    from . import fset  # lazy: fset reads settings
+
+    now = fset.overrides()
+    return sorted(name for name in set(now) | set(before) if now.get(name) != before.get(name))
+
+
+def save_changes(path: Path, before: dict, after: dict, *, fset_before: Mapping[str, str],
+                 extra_lines: list[str] | None = None) -> int:
+    """Write into the jsrc at ``path`` what changed since ``before`` and
+    ``fset_before``: the settings that differ in ``after``, the /fset
+    entries that differ now, and ``extra_lines`` (`save_settings_to_jsrc`)."""
+    return save_settings_to_jsrc(path, after, keys=changed_keys(before, after),
+                                 fset_names=changed_fset_names(fset_before), extra_lines=extra_lines)
+
+
 def save_settings_to_jsrc(
     path: Path,
     settings: dict,
     *,
+    keys: Iterable[str],
+    fset_names: Iterable[str] = (),
     extra_lines: list[str] | None = None,
 ) -> int:
-    """Write ``settings`` and the /fset entries into the jsrc at ``path``,
-    editing it in place (`_edited_jsrc_lines`). The edited file is then
+    """Write the settings named in ``keys`` and the /fset entries named in
+    ``fset_names`` into the jsrc at ``path``, editing it in place
+    (`_edited_jsrc_lines`); every other line is left as it is. A setting or
+    entry back at js's own default loses its line. The edited file is then
     loaded in memory the way a fresh start loads it, files it loads
-    included; each setting or entry that comes back different from the live
-    one gets its line, or its clearing line, appended, which nothing after
-    it can set back. ``extra_lines`` are `on` and `alias` lines. No copy of
-    the file is made. Returns how many lines changed."""
+    included; each named setting or entry that comes back different from the
+    live one gets its line, or its clearing line, appended, which nothing
+    after it can set back. ``extra_lines`` are `on` and `alias` lines. With
+    nothing to write, no file is made. No copy of the file is made. Returns
+    how many lines changed."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with _locked_jsrc(path):
-        return _save_settings_to_jsrc(path, settings, extra_lines=extra_lines)
+        return _save_settings_to_jsrc(path, settings, list(keys), list(fset_names), extra_lines or [])
 
 
-def _save_settings_to_jsrc(
-    path: Path, settings: dict, *, extra_lines: list[str] | None = None,
-) -> int:
+def _save_settings_to_jsrc(path: Path, settings: dict, keys: list[str], fset_names: list[str],
+                           extra_lines: list[str]) -> int:
     from . import fset  # lazy: fset reads settings
 
     wanted: dict[str, str | None] = {}
     unsets: dict[str, str] = {}
-    for spec in REGISTRY:
-        value = knob(settings, spec.key)
-        unsets[spec.key] = _set_line(spec, None)
-        wanted[spec.key] = None if _at_stock(spec, value) else _set_line(spec, value)
-    existing = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-    for key, _live in map(_jsrc_key, existing):
-        if key is not None and key.startswith(FSET_KEY):
-            wanted[key] = None
-            unsets[key] = f"fset -{key[len(FSET_KEY):]}"
+    for key in keys:
+        spec = SPEC_BY_KEY[key]
+        value = knob(settings, key)
+        unsets[key] = _set_line(spec, None)
+        wanted[key] = None if _at_stock(spec, value) else _set_line(spec, value)
     entries = fset.overrides()
-    for name, value in entries.items():
-        wanted[FSET_KEY + name] = f"fset {name} {jsrc_text(name, value)}"
-    lines, changed = _edited_jsrc_lines(existing, wanted, extra_lines or [], unsets)
+    for name in fset_names:
+        unsets[FSET_KEY + name] = f"fset -{name}"
+        wanted[FSET_KEY + name] = (f"fset {name} {jsrc_text(name, entries[name])}"
+                                   if name in entries else None)
+    existing = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    lines, changed = _edited_jsrc_lines(existing, wanted, extra_lines, unsets)
 
     loaded, loaded_entries = _reloaded(path, _serialized(lines))
     tail: list[str] = []
-    for spec in REGISTRY:
-        value, back = knob(settings, spec.key), knob(loaded, spec.key)
+    for key in keys:
+        spec = SPEC_BY_KEY[key]
+        value, back = knob(settings, key), knob(loaded, key)
         if not (back == value or (_at_stock(spec, value) and _at_stock(spec, back))):
-            tail.append(wanted[spec.key] or unsets[spec.key])
-    for name in sorted(set(entries) | set(loaded_entries)):
+            tail.append(wanted[key] or unsets[key])
+    for name in fset_names:
         if loaded_entries.get(name) != entries.get(name):
-            tail.append(wanted.get(FSET_KEY + name) or f"fset -{name}")
+            tail.append(wanted[FSET_KEY + name] or unsets[FSET_KEY + name])
     if changed or tail:
         _write_lines(path, lines + tail)
     return changed + len(tail)
-
-
-def ensure_user_jsrc(path: Path) -> bool:
-    """Copy `JSRC_TEMPLATE` to ``path`` when there is no file there. Returns
-    whether it wrote one."""
-    if path.exists():
-        return False
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(JSRC_TEMPLATE.read_text(encoding="utf-8"), encoding="utf-8")
-    return True
-
-
-def write_model_id(path: Path, model_id: str) -> None:
-    """Make ``model_id`` the `MODEL` the jsrc at ``path`` sets, in place
-    (`_write_jsrc_lines`). Raises OSError."""
-    _write_jsrc_lines(path, {"MODEL": _set_line(SPEC_BY_KEY["MODEL"], model_id)}, [])

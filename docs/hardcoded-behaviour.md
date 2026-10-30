@@ -173,7 +173,6 @@ branch the audit was made on; they move as the code changes.
 | `js/clipimage.py:81-97` | clipboard_command | default | The fallback chain wl-paste, then xclip, then kitten when PASTE_IMAGE_COMMAND is unset is fixed in code. | js-2lg.127 |
 | `js/clipimage.py:34` | READ_TIMEOUT_S | default | The clipboard read timeout of 5 s exists only in code. | js-2lg.127 |
 | `js/config.py:565,585` | from_env | default | The instruction files a run loads (JS.md, JS.local.md, AGENTS.md, AGENTS.local.md) are fixed in code and are not a setting. | js-2lg.136 |
-| `js/settings.py:909` | load_jsrc_files | policy | Every settings load rewrites old-name jsrc files in place (rename.migrate_jsrc_file), with a backup and a line on stderr; this auto-migration is not a setting and has no callback. | js-2lg.140 |
 | `js/login_cli.py:441-443` | _collect_api_login | policy | A keyless local endpoint gets the placeholder key "x" automatically. | js-2lg.148 |
 | `js/codex_provider.py:479,489` | _build_body_async | default | text.verbosity "low" and reasoning summary "detailed" are fixed in code. | js-2lg.154 |
 | `js/codex_provider.py:59-60,108-109` | _codex_headers | default | The originator "pi" and the User-Agent "js/0.1.0" are fixed in code; HTTP_USER_AGENT does not apply here. | js-2lg.154 |
@@ -193,7 +192,6 @@ branch the audit was made on; they move as the code changes.
 | `js/hookexec.py:66` | run | default | Runs /exec and on-handler commands under $SHELL or /bin/sh and ignores the SHELL_PROGRAM setting. | js-2lg.201 |
 | `js/jail.py:47-50,336-356` | hidden_roots | policy | Always hides /home, the operator's home, /run/user and every network filesystem, with no setting. | js-2lg.205 |
 | `js/jail.py:879-893,910` | _clear_stale_private_dirs / enter | policy | Deletes the private directories of dead js processes automatically on every jail entry. | js-2lg.205 |
-| `js/rename.py:633-676` | migrate_jsrc_file | policy | Rewrites and backs up each loaded jsrc automatically (called from settings.py:909), with no setting to turn it off. | js-2lg.211 |
 | `js/tool_args.py:55-90,118-209` | repair_jsonish / coerce_to_schema | policy | Always repairs malformed tool-call JSON and coerces string arguments to the schema type, with no strict mode. | js-2lg.214 |
 
 ## S6 tool-policy
@@ -347,7 +345,6 @@ branch the audit was made on; they move as the code changes.
 | `js/agent_lock.py:31` | acquire | presentation | Builds the Busy error text inline. | js-2lg.203 |
 | `js/jail.py:87,90,97,107,114,904,906,909,917,923` | parse_bind / parse_binds / parse_hide / parse_hides / enter | presentation | Builds setting and -C error text inline instead of taking it from messages.py. | js-2lg.207 |
 | `js/mcp_config.py:91,102,104,112,118,125-280` | _pairs_object / _json_object / _string_map / _string_list / parse_servers / parse_agents / _request_timeout | presentation | Builds every MCP configuration error message inline. | js-2lg.208 |
-| `js/rename.py:544,583` | migrate_jsrc_text | presentation | Writes the fixed comment wording "# js: not migrated" into the operator's jsrc. | js-2lg.212 |
 
 ## S9 commands-keymap
 

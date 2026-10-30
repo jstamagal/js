@@ -136,14 +136,14 @@ def test_rebuilding_the_index_keeps_sessions_with_lone_surrogates_searchable(tmp
     assert path.read_bytes() == source
 
 
-def test_a_wiped_or_deleted_session_leaves_the_catalog(tmp_path):
+def test_a_wiped_session_is_catalogued_where_it_moved_and_a_deleted_one_leaves(tmp_path):
     wiped = _session(tmp_path / "a")
     _say(wiped, "hello", "hi")
     deleted = _session(tmp_path / "b")
     _say(deleted, "bye", "ok")
-    M.wipe(wiped)
+    moved = M.wipe(wiped)
     deleted.unlink()
-    assert _by_path(session_index.catalog()) == {}
+    assert set(_by_path(session_index.catalog())) == {_key(moved)}
 
 
 def test_subagent_runs_and_titles_are_catalogued(tmp_path):

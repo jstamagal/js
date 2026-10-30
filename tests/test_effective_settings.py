@@ -144,11 +144,11 @@ def _effective_store() -> dict:
     return store
 
 
-def test_save_round_trip_reproduces_effective_values(tmp_path):
+def test_save_round_trip_reproduces_the_values_it_is_given(tmp_path):
     store = _effective_store()
     path = tmp_path / "jsrc"
 
-    settings.save_settings_to_jsrc(path, store)
+    settings.save_settings_to_jsrc(path, store, keys=["MODEL", "PROVIDER", "BASE_URL", "API_KEY", "TEMPERATURE"])
 
     reloaded = settings.collect_settings(config_paths=[path], env={})
     for key in (

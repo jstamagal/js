@@ -1,12 +1,12 @@
-"""What `just install` asks the operator: the keys js uses and the default model.
+"""What `just install` asks the operator: the keys js uses and a provider for
+the default model.
 
 Each key in `KEYS` that is in neither the environment nor ~/.js/.env is asked
 for in the terminal; an answer is appended to ~/.js/.env, which is kept at mode
 600, and Enter skips the key. When the `MODEL` js starts with has no
-provider to run on, the operator picks a saved login and one of its models, or
-adds a provider through the login flow, and the pick becomes `MODEL` in
-~/.js/jsrc. A rerun asks only about what is still missing. Without a terminal
-nothing is asked: the missing keys and an unrouted model are named instead.
+provider to run on, the operator can add a provider through the login flow.
+A rerun asks only about what is still missing. Without a terminal nothing is
+asked: the missing keys and an unrouted model are named instead.
 
     uv run python -m js.install
 """
@@ -20,7 +20,7 @@ from getpass import getpass
 from pathlib import Path
 from typing import Any
 
-from . import dotenv, home, logins, paranoid, paths, providers, routing
+from . import dotenv, home, logins, paranoid, paths, routing
 from . import messages as msgs
 from . import settings as settings_mod
 
@@ -124,7 +124,7 @@ def _say_unrouted(model_id: str | None, *, say=None) -> None:
         announce(msgs.INSTALL_MODEL_UNSET)
 
 
-MODEL_ANSWERS: Mapping[str, str] = {"a": "add", "p": "pick"}
+MODEL_ANSWERS: Mapping[str, str] = {"a": "add"}
 
 
 def _model_question(message: msgs.Message, answers: Mapping[str, str]) -> str:
@@ -135,17 +135,15 @@ def _model_question(message: msgs.Message, answers: Mapping[str, str]) -> str:
     return message.with_keymap(keymap(answers), keymap(MODEL_ANSWERS)).words()
 
 
-def ask_model(environ: Mapping[str, str], ask: Ask, *, pick: Callable[[], dict | None],
-              add_provider: Callable[[], Any], say=None,
-              answers: Mapping[str, str] | None = None) -> str | None:
-    """When the default model does not route: offer the saved logins to pick
-    a model from, and the login flow to add a provider, until a model is
-    picked or the operator skips. Returns the `MODEL` saved, or None."""
+def ask_model(environ: Mapping[str, str], ask: Ask, *, add_provider: Callable[[], Any], say=None,
+              answers: Mapping[str, str] | None = None) -> None:
+    """When the default model does not route: offer the login flow to add a
+    provider until the default model routes or the operator skips."""
     answers = MODEL_ANSWERS if answers is None else answers
     announce = msgs.say if say is None else say
     model_id, routes = default_model(environ)
     if routes:
-        return None
+        return
     _say_unrouted(model_id, say=announce)
     while True:
         saved = logins.load_logins()
@@ -155,26 +153,15 @@ def ask_model(environ: Mapping[str, str], ask: Ask, *, pick: Callable[[], dict |
                                                          models=msgs.plural(len(cache.get(provider_id, [])), "model"))
                              for provider_id in sorted(saved))
             announce(msgs.INSTALL_LOGINS, logins=rows)
-            answer = ask(_model_question(msgs.INSTALL_ASK_MODEL, answers))
-        else:
-            answer = ask(_model_question(msgs.INSTALL_ASK_PROVIDER, answers))
-        choice = (answer or "").strip().lower()
+        choice = (ask(_model_question(msgs.INSTALL_ASK_PROVIDER, answers)) or "").strip().lower()
         if not choice:
-            return None
-        action = answers.get(choice)
-        if action == "add":
+            return
+        if answers.get(choice) == "add":
             add_provider()
             # The new login may be the default model's provider: then the
-            # default routes and there is nothing left to pick.
+            # default routes and there is nothing left to ask.
             if default_model(environ)[1]:
-                return None
-        elif action == "pick" and saved:
-            selected = pick()
-            if selected:
-                chosen = providers.qualified_model_id(selected.get("provider_id"), selected["model"])
-                settings_mod.write_model_id(paths.global_config_file(), chosen)
-                announce(msgs.MODEL_SAVED_AS_DEFAULT, model=chosen)
-                return chosen
+                return
 
 
 def _asker(read: Callable[[str], str], *, write=None) -> Ask:
@@ -187,12 +174,6 @@ def _asker(read: Callable[[str], str], *, write=None) -> Ask:
     return ask
 
 
-def _pick() -> dict | None:
-    from . import picker
-
-    return picker.pick_model()
-
-
 def _add_provider() -> None:
     from . import login_cli
 
@@ -203,7 +184,6 @@ def main(argv: list[str] | None = None, environ: MutableMapping[str, str] | None
     env = os.environ if environ is None else environ
     home.migrate_once()
     paths.ensure_home()
-    settings_mod.ensure_user_jsrc(paths.global_config_file())
     env_file = paths.global_env_file()
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         missing = missing_keys(env, env_file)
@@ -217,7 +197,7 @@ def main(argv: list[str] | None = None, environ: MutableMapping[str, str] | None
         ask_keys(env, env_file, _asker(getpass if paranoid.masks(paranoid.mode()) else input))
     except Cancelled:
         return 130
-    ask_model(env, _asker(input), pick=_pick, add_provider=_add_provider)
+    ask_model(env, _asker(input), add_provider=_add_provider)
     return 0
 
 

@@ -1,9 +1,8 @@
 """Moving files from the old setting names to the new ones.
 
 `js --migrate-config` (`renamed_key`, `renamed_value`) and
-scripts/rename-settings.py use it, and config load rewrites each jsrc it
-loads with it once (`migrate_jsrc_file`); `set`, jsrc and --extra take only
-the new names.
+scripts/rename-settings.py use it; `set`, jsrc and --extra take only the new
+names.
 
 Only a jsrc file is rewritten (`kind_of`): a `jsrc`, a `.jsrc*`, an `.irc`,
 and the jsrc `js --migrate-config` writes. `rename_old_names` changes such a
@@ -34,18 +33,11 @@ edited by hand.
 
 from __future__ import annotations
 
-import os
 import re
 import shlex
-import stat
-import sys
 from collections.abc import Iterator
-from pathlib import Path
-from typing import TextIO
 
-from . import messages as msgs
-from . import output
-from .settings import SPEC_BY_KEY, _locked_jsrc, parse_bool
+from .settings import SPEC_BY_KEY, parse_bool
 
 # The names settings had before they were UPPER_SNAKE. `set`, jsrc and
 # --extra take only the new names.
@@ -531,133 +523,6 @@ def rename_old_names(text: str) -> tuple[str, list[tuple[int, str]]]:
         if name in twice:
             notes.setdefault(number, " (set twice)")
     return "\n".join(out), sorted(notes.items())
-
-
-# ---------------------------------------------------------------------------
-# A jsrc js loads: rewritten in place once
-# ---------------------------------------------------------------------------
-
-# What starts a live jsrc line `migrate_jsrc_text` could not convert, now a
-# comment.
-NOT_MIGRATED = msgs.JSRC_NOT_MIGRATED.format()
-
-_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "rename-settings.py"
-
-# The files this process already warned it cannot write.
-_UNWRITABLE_WARNED: set[Path] = set()
-
-
-# A `set` of an old or deleted setting name where a command starts: the line
-# start, after a shell operator, or an `alias` / `on` body.
-_OLD_COMMAND = re.compile(
-    r"(?:^|[;&|(`]|\b(?:alias|on)\s+\S+(?:\s+=)?)\s*/?set\s+-?[\"']?(?:"
-    + "|".join(re.escape(key) for key in sorted(RENAMED_SETTINGS, key=len, reverse=True))
-    + "|" + _DELETED_NAME + r")(?!\w)", re.IGNORECASE)
-
-
-def migrate_jsrc_text(text: str) -> tuple[str, list[int]]:
-    """jsrc ``text`` as `rename_old_names` rewrites it, and the numbers of the
-    live lines it reports that are commented out behind NOT_MIGRATED as they
-    were written: a line the rename made a comment (a deleted setting), a
-    line that still sets an old name (`_OLD_COMMAND`), and an old spelling
-    of a name the file also sets by its new one, so what loads is what the
-    new spelling sets. A reported line that only mentions an old name, in a
-    value or a body that sets nothing, stays live as renamed, and a comment
-    stays as it is: they set nothing old."""
-    new, notes = rename_old_names(text)
-    old_lines = text.split("\n")
-    new_lines = new.split("\n")
-    assigns = [(number, name, old) for number, line in enumerate(old_lines, 1)
-               for name, old in _assigns(line)]
-    twice = _twice([(name, old) for _number, name, old in assigns])
-    old_spelling = {number for number, name, old in assigns if name in twice and old != name}
-    commented: list[int] = []
-    for number, note in notes:
-        line = old_lines[number - 1]
-        renamed = new_lines[number - 1]
-        if line.lstrip().startswith("#"):
-            continue
-        if renamed.lstrip().startswith("#") or _OLD_COMMAND.search(renamed) or number in old_spelling:
-            new_lines[number - 1] = f"{NOT_MIGRATED}{note}: {line}"
-            commented.append(number)
-    return "\n".join(new_lines), commented
-
-
-def _assigns(line: str) -> list[tuple[str, str]]:
-    """(new name, name as written) for the top-level `set` of jsrc ``line``."""
-    found: list[tuple[str, str]] = []
-    _migrated(line, found)
-    return found
-
-
-def _command(path: Path) -> str:
-    """The command that rewrites ``path`` by hand."""
-    return f"{shlex.quote(str(_SCRIPT))} --write {shlex.quote(str(path))}"
-
-
-def _create(path: Path, data: bytes, mode: int) -> None:
-    """Write ``data`` to a new file at ``path`` with permissions ``mode``,
-    synced to disk. Raises FileExistsError when anything is at ``path``; no
-    one but the owner can read the file before it has ``mode``."""
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fchmod(handle.fileno(), mode)
-            os.fsync(handle.fileno())
-    except BaseException:
-        path.unlink(missing_ok=True)
-        raise
-
-
-def _notice(message: msgs.Message, stream: TextIO, **fields) -> None:
-    output.emit(output.event("migration_notice", message=message, fields=fields, stream=stream))
-
-
-def migrate_jsrc_file(path: Path, out: TextIO | None = None) -> bool:
-    """Rewrite the jsrc at ``path`` in place by `migrate_jsrc_text` when that
-    changes it. Prints one line naming the file, and one warning naming the
-    lines it commented out. A file or directory js cannot write is left as it is, with
-    one warning per process naming the command to run by hand. Returns
-    whether the file was rewritten."""
-    stream = out if out is not None else sys.stderr
-    try:
-        path = path.resolve(strict=False)
-        with _locked_jsrc(path):
-            return _migrate_jsrc_file(path, stream)
-    except OSError:
-        return False
-
-
-def _migrate_jsrc_file(path: Path, stream: TextIO) -> bool:
-    try:
-        old = path.read_bytes()
-        text = old.decode("utf-8")
-    except (OSError, UnicodeError):
-        return False
-    new, commented = migrate_jsrc_text(text)
-    if new == text:
-        return False
-    if not (os.access(path, os.W_OK) and os.access(path.parent, os.W_OK)):
-        if path not in _UNWRITABLE_WARNED:
-            _UNWRITABLE_WARNED.add(path)
-            _notice(msgs.JSRC_NOT_WRITABLE, stream, path=path, command=_command(path))
-        return False
-    temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        mode = stat.S_IMODE(os.stat(path).st_mode)
-        temp.unlink(missing_ok=True)
-        _create(temp, new.encode("utf-8"), mode)
-        os.replace(temp, path)
-    except OSError:
-        temp.unlink(missing_ok=True)
-        _notice(msgs.JSRC_NOT_WRITABLE, stream, path=path, command=_command(path))
-        return False
-    _notice(msgs.JSRC_RENAMED, stream, path=path)
-    if commented:
-        _notice(msgs.JSRC_NOT_RENAMED, stream, path=path, lines=",".join(map(str, commented)))
-    return True
 
 
 # ---------------------------------------------------------------------------

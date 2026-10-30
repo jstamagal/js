@@ -127,14 +127,13 @@ def test_missing_package_jsrc_stops_startup_with_one_line_naming_the_path(tmp_pa
     assert str(missing) in lines[0]
 
 
-def test_first_run_writes_the_commented_template_and_leaves_an_existing_jsrc(monkeypatch, tmp_path):
+def test_a_start_writes_no_jsrc_and_leaves_an_existing_one_alone(monkeypatch, tmp_path):
     project = _isolated_home(monkeypatch, tmp_path)
     monkeypatch.chdir(project)
     user = tmp_path / "home" / ".js" / "jsrc"
 
     assert cli.main(["--list"]) == 0
-    assert user.read_text(encoding="utf-8") == settings.JSRC_TEMPLATE.read_text(encoding="utf-8")
-    assert settings.collect_settings(config_paths=[user], env={}) == settings.seed_defaults()
+    assert not user.exists()
 
     user.write_text("set READ_LINES_MAX 33\n", encoding="utf-8")
     assert cli.main(["--list"]) == 0
@@ -194,14 +193,14 @@ def test_live_set_dash_returns_to_the_session_start_value_in_show_turn_and_save(
 
 def test_save_uncomments_changed_settings_in_place_and_leaves_the_rest(tmp_path):
     target = tmp_path / "jsrc"
-    settings.ensure_user_jsrc(target)
-    target.write_text(target.read_text(encoding="utf-8") + "# my note\n", encoding="utf-8")
+    template = Path(settings.__file__).with_name("jsrc.template").read_text(encoding="utf-8")
+    target.write_text(template + "# my note\n", encoding="utf-8")
     before = target.read_text(encoding="utf-8").splitlines()
     live = settings.seed_defaults()
     setcmd.set_command(live, "FETCH_TIMEOUT 77")
     setcmd.set_command(live, "PROVIDER deepseek")
 
-    assert settings.save_settings_to_jsrc(target, live) == 2
+    assert settings.save_settings_to_jsrc(target, live, keys=["FETCH_TIMEOUT", "PROVIDER"]) == 2
     after = target.read_text(encoding="utf-8").splitlines()
     changed = {before[i]: after[i] for i in range(len(before)) if before[i] != after[i]}
 

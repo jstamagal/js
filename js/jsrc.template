@@ -1076,9 +1076,6 @@
 # start directory only.
 #set DOTENV_WALK_UP on
 
-# on: old setting names in jsrc files are rewritten at startup.
-#set JSRC_AUTO_MIGRATE on
-
 # Seconds an entry in ~/.js/tmp may go unmodified before startup removes it.
 #set TMP_AGE_MAX 86400
 

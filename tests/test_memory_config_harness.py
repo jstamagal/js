@@ -74,24 +74,23 @@ def test_memory_loader_heals_orphaned_tool_calls(tmp_path):
     assert actual[0] == {"role": "user", "content": "go"}
 
 
-def test_memory_append_mark_append_message_and_wipe_rotate_session(tmp_path):
+def test_memory_append_mark_append_message_and_wipe_moves_session(tmp_path):
     session = tmp_path / "agent" / "sessions" / "active.jsonl"
 
     memory.append_mark(session, "session_start")
     memory.append_message(session, {"role": "user", "content": "hello"})
     memory.append_message(session, {"role": "assistant", "content": "world"})
     actual_messages = memory.load_messages(session)
-    actual_backup = memory.wipe(session)
+    moved = memory.wipe(session)
 
     expected_messages = [
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "world"},
     ]
     assert actual_messages == expected_messages
-    assert actual_backup == session.with_suffix(".jsonl.bak")
+    assert moved.parent == session.parent and moved.suffix == ".jsonl"
     assert not session.exists()
-    assert actual_backup.exists()
-    assert memory.load_messages(actual_backup) == expected_messages
+    assert memory.load_messages(moved) == expected_messages
 
 
 def test_from_env_jsrc_boolean_numeric_settings_fall_back_to_defaults(monkeypatch, tmp_path):

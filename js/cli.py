@@ -993,28 +993,23 @@ def _live_settings_overlay_for_state(cfg: Config, state: dict) -> dict[str, setc
     return overlay
 
 
-def _effective_settings_snapshot(cfg: Config, state: dict) -> dict:
-    """A copy of the live settings store with the off-store live values (flag
-    model, login provider, env/manifest sampling) folded in — what `/save` writes
-    so a reload reproduces the running configuration. A value the saved login's
-    server or model defaults put in is not the live state's to save: the login
-    keeps it, so the snapshot holds the jsrc-layer value, or none."""
-    eff = copy.deepcopy(state["settings"]) if isinstance(state.get("settings"), dict) else {}
-    turn_cfg = _cfg_for_live_state(cfg, state)
-    live_model = state.get("model")
-    if isinstance(live_model, str) and live_model:
-        settings.set_dotted(eff, ("MODEL",), live_model)
-    settings.set_dotted(eff, ("PROVIDER",), turn_cfg.provider_id)
-    settings.set_dotted(eff, ("BASE_URL",), turn_cfg.provider_base_url)
-    settings.set_dotted(eff, ("API_KEY",), turn_cfg.provider_api_key)
-    # The login-default settings save their jsrc and `/set` layers only.
-    saved = login_defaults.saved_jsrc_values(turn_cfg)
-    for key in login_defaults.KEYS:
-        if key in saved:
-            eff[key] = saved[key]
-        else:
-            eff.pop(key, None)
-    return eff
+def _rc_lines(state: dict) -> list[str]:
+    """The session's `on` and `alias` lines, as a jsrc writes them."""
+    hooks = state.get("events")
+    lines = setcmd.event_lines(hooks) if hooks is not None else []
+    return lines + [f"alias {name} {body}" for name, body in (state.get("aliases") or {}).items()]
+
+
+def _mark_saved(state: dict) -> None:
+    """Record the settings, /fset entries, `on` and `alias` lines and model as
+    they stand now: what `/save` compares against, so it writes only what
+    the operator changed after this."""
+    state["saved"] = {
+        "settings": copy.deepcopy(state.get("settings") or {}),
+        "fset": fset.overrides(),
+        "lines": _rc_lines(state),
+        "model": (state.get("provider_id"), state.get("model")),
+    }
 
 
 
@@ -1202,15 +1197,6 @@ def _models_for_provider(provider_id: str | None, base_url: str | None, api_key:
     return logins.test_login(_login_for_provider(provider_id, base_url, api_key))
 
 
-def _persist_default_model_id(model_id: str) -> tuple[Path | None, str | None]:
-    config_path = _paths.global_config_file()
-    try:
-        settings.write_model_id(config_path, model_id)
-    except OSError as exc:
-        return None, f"{type(exc).__name__}: {exc}"
-    return config_path, None
-
-
 def _set_provider_state(state: dict, provider_id: str) -> None:
     canonical_id = providers.normalize_provider_id(provider_id) or provider_id
     if _apply_saved_login_to_state(state, canonical_id):
@@ -1272,17 +1258,11 @@ def _pick_model_into_state(state: dict, cfg: Config) -> None:
     state["provider_api_key"] = selected.get("provider_api_key")
     state["provider_headers"] = dict(selected.get("provider_headers") or {})
     state["model"] = selected["model"]
-    default_model_id = providers.qualified_model_id(selected.get("provider_id"), selected["model"])
+    chosen = providers.qualified_model_id(selected.get("provider_id"), selected["model"])
     if isinstance(state.get("settings"), dict):
-        settings.set_dotted(state["settings"], ("MODEL",), default_model_id)
-    state["model_source"] = None  # the pick was persisted into the store
-
-    _saved_path, save_error = _persist_default_model_id(default_model_id)
-    chosen = default_model_id
-    if save_error:
-        msgs.say(msgs.MODEL_NOT_SAVED_AS_DEFAULT, model=chosen, error=save_error)
-    else:
-        msgs.say(msgs.MODEL_SAVED_AS_DEFAULT, model=chosen)
+        settings.set_dotted(state["settings"], ("MODEL",), chosen)
+    state["model_source"] = None  # the store now holds the pick; /save writes it
+    msgs.say(msgs.MODEL_SET, model=chosen)
 
 
 def _cmd_models(arg: str, state: dict, cfg: Config) -> str | None:
@@ -1670,21 +1650,36 @@ def _cmd_load(arg: str, state: dict, cfg: Config) -> str | None:
 
 
 def _cmd_save(arg: str, state: dict, cfg: Config) -> str | None:
-    """Write the changed settings, `on` handlers and aliases into the global
-    jsrc, editing it in place. `/save server` writes this session's model
+    """Write what the operator changed this session into the global jsrc,
+    editing it in place: the settings `/set` changed, the model `/model`
+    picked, the /fset entries changed, and new `on` and `alias` lines.
+    Nothing else goes in. `/save server` writes this session's model
     settings into the saved login as the active model's defaults."""
     if arg.strip().lower() == "server":
         return _save_server(cfg, state)
-    eff = _effective_settings_snapshot(cfg, state)
-    hooks = state.get("events")
-    extra = setcmd.event_lines(hooks) if hooks is not None else []
-    extra += [f"alias {name} {body}" for name, body in (state.get("aliases") or {}).items()]
+    saved = state.get("saved") or {
+        "settings": cfg.settings if isinstance(cfg.settings, dict) else {},
+        "fset": {}, "lines": [], "model": (cfg.provider_id, cfg.model),
+    }
+    live = copy.deepcopy(state.get("settings") or {})
+    keys = settings.changed_keys(saved["settings"], live)
+    provider_id, model = state.get("provider_id"), state.get("model")
+    if (provider_id, model) != saved["model"] and "MODEL" not in keys and isinstance(model, str) and model:
+        settings.set_dotted(live, ("MODEL",), providers.qualified_model_id(provider_id, model))
+        keys.append("MODEL")
+    fset_names = settings.changed_fset_names(saved["fset"])
+    extra = [line for line in _rc_lines(state) if line not in saved["lines"]]
+    if not (keys or fset_names or extra):
+        msgs.say(msgs.SAVE_NOTHING)
+        return None
     path = _paths.global_config_file()
     try:
-        count = settings.save_settings_to_jsrc(path, eff, extra_lines=extra)
+        count = settings.save_settings_to_jsrc(path, live, keys=keys, fset_names=fset_names,
+                                               extra_lines=extra)
     except OSError as exc:
         return msgs.SAVE_FAILED.said(error=f"{type(exc).__name__}: {exc}")
     msgs.say(msgs.SAVED, lines=msgs.plural(count, "line"), path=path)
+    _mark_saved(state)
     return None
 
 
@@ -4619,11 +4614,10 @@ def _main(argv: list[str] | None = None) -> int:
     dispatch_argv = argv if argv is not None else sys.argv[1:]
     _blocking_stdio()
     # Before anything reads or writes ~/.js: move the old locations in, once,
-    # then make sure every directory of the layout and the user jsrc are there.
+    # then make sure every directory of the layout is there.
     _home.migrate_once()
     with contextlib.suppress(OSError):
         _paths.ensure_home()
-        settings.ensure_user_jsrc(_paths.global_config_file())
     _home.sweep_tmp()
     # Handle login/logout before argparse so they don't require a valid agent/config.
     # None of them take -C, so the cwd is already final and .env can load here;
@@ -4725,7 +4719,7 @@ def _main(argv: list[str] | None = None) -> int:
                     Path(args.cd).expanduser().resolve() if args.cd else Path.cwd(),
                     ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global,
                     presets=[name for spec in args.presets for name in spec.split(",") if name.strip()],
-                ), extras=args.extras, migrate=False,
+                ), extras=args.extras,
             )
             return loop_controller.run(dispatch_argv, args.loop, bench=args.bench, prompt=args.prompt,
                                        settings=loop_settings)
@@ -4805,7 +4799,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
                     Path(args.cd).expanduser().resolve() if args.cd else Path.cwd(),
                     ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global,
                     presets=[name for spec in args.presets for name in spec.split(",") if name.strip()],
-                ), extras=args.extras, migrate=False,
+                ), extras=args.extras,
             )
             args.extras = endpoint_uri.parse(args.url, settings=endpoint_settings).as_settings() + list(args.extras)
         except endpoint_uri.EndpointSpecError as exc:
@@ -5267,6 +5261,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         ignore_global_config=args.ignore_global,
         presets=presets,
     ))
+    _mark_saved(state)
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
     state["mcp_host"] = _session_mcp_host(cfg, telemetry)
     # Attach the debug autolog sink before the first turn (both REPL

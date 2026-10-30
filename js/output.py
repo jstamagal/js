@@ -32,7 +32,6 @@ The loop's events, and their fields:
     kernel_execution context, level, code, stdout, stderr, display, error,
                    elapsed, cell, added, removed, namespace, images, interrupted
     kernel_note    context, kind (event/entry/note), level, content, style, verbose_only
-    migration_notice message, fields, stream
 
 ``call`` ties a tool_result to its tool_call; ``stream`` ties the chunks of
 one turn's streamed reply together; ``context`` is the call's ToolContext.

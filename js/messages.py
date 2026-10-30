@@ -385,8 +385,6 @@ CLEARING_FLIGHT_FAILED = Message("Tool-result clearing: flight log not opened: {
 # --- Model and provider ------------------------------------------------------
 
 MODEL_SET = Message("Model: {model}")
-MODEL_SAVED_AS_DEFAULT = Message("Default model: {model}")
-MODEL_NOT_SAVED_AS_DEFAULT = Message("Model: {model}. Not saved as default: {error}", GRAVE)
 MODELS_LIMIT_NOT_A_NUMBER = Message("/models: {value!r} is not a number.")
 NO_PROVIDER = Message("No provider set. Use /provider <id> first.")
 MODELS_NOT_LISTED = Message("Models not listed: {error}", GRAVE)
@@ -416,11 +414,9 @@ MIGRATE_NO_LEGACY = Message("No legacy config at {path}", GRAVE)
 MIGRATE_TARGET_EXISTS = Message("{path} already exists. Remove it first to migrate again.", GRAVE)
 MIGRATE_DELETED = Message("{key}: setting deleted. Written as a comment; edit by hand.", WARN)
 MIGRATE_WROTE = Message("Wrote {path} from {legacy}. Review it, then delete {legacy}. This flag is removed in 2 releases.")
-JSRC_RENAMED = Message("{path}: old setting names renamed.")
-JSRC_NOT_RENAMED = Message("{path}:{lines}: not migrated, commented out. Edit by hand.", WARN)
-JSRC_NOT_WRITABLE = Message("{path} holds old setting names and cannot be written. Run: {command}", WARN)
 SAVE_FAILED = Message("Not saved: {error}", GRAVE)
 SAVED = Message("Saved {lines} to {path}")
+SAVE_NOTHING = Message("Nothing changed this session. Nothing saved.")
 SAVED_SERVER = Message("Saved {settings} as the {model} defaults of login {provider}")
 SAVE_NO_SERVER = Message("Not saved: no saved login for {provider}. js --login adds one.", GRAVE)
 NO_ALIASES = Message("No aliases.")
@@ -435,7 +431,7 @@ LOAD_NEEDS_ONE_PATH = Message("load needs exactly one path.")
 SCRIPT_LINE_FAILED = Message("{path}:{lineno}: {error}")
 LOADED = Message("Loaded {path}")
 RESET_DONE = Message("Cleared in-process. Session log preserved.")
-WIPE_ROTATED = Message("Memory rotated to {path}")
+WIPE_ROTATED = Message("The conversation moved to session {path}")
 WIPE_NOTHING = Message("No memory file to rotate.")
 PERSONA_TRUNCATED = Message("Truncated. {size} bytes in all.")
 BLOCKING_NO_JOBS = Message("{command} is unavailable under --blocking.")
@@ -489,7 +485,6 @@ ALIAS_TOO_DEEP = Message("alias {name}: nesting too deep.")
 ALIAS_UNKNOWN_COMMAND = Message("alias {name}: unknown command {verb}")
 KEY_UNBOUND = "unbound"
 _HINT_ACTIONS = {
-    "INSTALL_ASK_MODEL": {"p": ("pick",), "a": ("add",)},
     "INSTALL_ASK_PROVIDER": {"a": ("add",)},
     "TURN_RUNNING": {"^C": ("interrupt",)},
     "PRESS_CTRL_C_AGAIN": {"^C": ("interrupt",)},
@@ -523,7 +518,7 @@ CMD_HELP = Message("Show this message. help set NAME explains a setting.")
 CMD_SET = Message("List settings, a group or a *_FILE wildcard, show one, or change one. set -NAME clears one.")
 CMD_FSET = Message("List what js looks like, show one entry, or change one. fset -NAME clears one.")
 CMD_SHOW = Message("List every setting and its effective value.")
-CMD_SAVE = Message("Write your changed settings, handlers and aliases into the global jsrc, in place. /save server writes the model settings into the saved login.")
+CMD_SAVE = Message("Write what you changed this session (settings, model, /fset, handlers, aliases) into the global jsrc, in place. /save server writes the model settings into the saved login.")
 CMD_LOAD = Message("Run each line of a file as a command. source is the same command.")
 CMD_ON = Message("List or register an event handler.")
 CMD_ALIAS = Message("List, show or define a command alias. alias -name removes one.")
@@ -536,7 +531,7 @@ CMD_LOGIN = Message("Load or save a provider login.")
 CMD_LOGOUT = Message("Clear provider credentials for this session.")
 CMD_MODELS = Message("List the provider's models.")
 CMD_RESET = Message("Clear the conversation in-process. The session log keeps it.")
-CMD_WIPE = Message("Rotate the session file away and clear the conversation.")
+CMD_WIPE = Message("Move the conversation to a new session file and clear it here.")
 CMD_PERSONA = Message("Print the system prompt.")
 CMD_TOOLS = Message("Show each tool's state and the entry that decided it. A state is eager, lazy or ban.")
 CMD_SKILL = Message(
@@ -1002,7 +997,6 @@ INSTALL_MODEL_UNROUTED = Message("Default model {model} has no provider to run o
 INSTALL_MODEL_UNSET = Message("No default model is set", WARN)
 INSTALL_LOGINS = Message("Saved logins: {logins}")
 INSTALL_LOGIN_ROW = Message("{provider} with {models}", banner=False)
-INSTALL_ASK_MODEL = Message("p picks a login and a model, a adds a provider, Enter skips")
 INSTALL_ASK_PROVIDER = Message("a adds a provider, Enter skips")
 
 # --- Tool binaries -----------------------------------------------------------
@@ -2003,8 +1997,6 @@ MCP_CONFIG_MCP_AGENT_MUST_BE_AN_OBJECT = "mcp agent {agent_id!r}.{section} must 
 MCP_CONFIG_MCP_AGENT_HAS_UNKNOWN_FIELD_226 = "mcp agent {agent_id!r}.{section} has unknown field {value!r}"
 
 MCP_CONFIG_MCP_TIMEOUT_MUST_BE_A_POSITIVE_NUMBER = "MCP_TIMEOUT must be a positive number, got {value!r}"
-
-JSRC_NOT_MIGRATED = "# js: not migrated"
 
 # Every entry by name; each knows its own, for its /fset format.
 ENTRIES: dict[str, Message] = {name: value for name, value in globals().items() if isinstance(value, Message)}

@@ -9,7 +9,7 @@ import stat
 
 import pytest
 
-from js import dotenv, install, logins, paths, settings
+from js import dotenv, install, logins, paths
 
 
 def _answers(*replies):
@@ -121,63 +121,36 @@ def test_a_routed_default_model_asks_nothing():
     _login("deepseek", ["deepseek-v4-flash"])
     ask = _answers()
 
-    assert install.ask_model({}, ask, pick=pytest.fail, add_provider=pytest.fail) is None
+    assert install.ask_model({}, ask, add_provider=pytest.fail) is None
     assert ask.asked == []
 
 
 def test_model_setup_accepts_supplied_answer_words():
-    _write_jsrc("set MODEL deepseek/deepseek-v4-flash\n")
-    _login("mimo", ["mimo-v3"])
-    chosen = install.ask_model({}, _answers("choose"),
-                               pick=lambda: {"provider_id": "mimo", "model": "mimo-v3"},
-                               add_provider=pytest.fail, answers={"choose": "pick"})
-    assert chosen == "mimo/mimo-v3"
+    _write_jsrc("set MODEL mimo/mimo-v3\n")
+    install.ask_model({}, _answers("new"), add_provider=lambda: _login("mimo", ["mimo-v3"]),
+                      answers={"new": "add"})
     assert install.default_model({}) == ("mimo/mimo-v3", True)
 
 
-def test_a_picked_model_becomes_model_id_in_the_jsrc_and_the_rest_stays():
-    _write_jsrc("# mine\nset MODEL deepseek/deepseek-v4-flash\nfset NET_DISPLAY 2\nalias x /help\n")
-    _login("mimo", ["mimo-v2", "mimo-v3"])
-
-    chosen = install.ask_model({}, _answers("p"), pick=lambda: {"provider_id": "mimo", "model": "mimo-v3"},
-                               add_provider=pytest.fail)
-
-    assert chosen == "mimo/mimo-v3"
-    assert paths.global_config_file().read_text(encoding="utf-8") == (
-        "# mine\nset MODEL mimo/mimo-v3\nfset NET_DISPLAY 2\nalias x /help\n")
-    assert install.default_model({}) == ("mimo/mimo-v3", True)
-
-
-def test_with_no_saved_login_the_login_flow_adds_one_then_a_model_is_picked():
-    _write_jsrc("set MODEL deepseek/deepseek-v4-flash\n")
-    ask = _answers("a", "p")
-
-    chosen = install.ask_model({}, ask, pick=lambda: {"provider_id": "mimo", "model": "mimo-v3"},
-                               add_provider=lambda: _login("mimo", ["mimo-v3"]))
-
-    assert chosen == "mimo/mimo-v3"
-    assert len(ask.asked) == 2 and ask.asked[0] != ask.asked[1]
-
-
-def test_enter_or_a_cancelled_pick_leaves_the_jsrc_alone():
-    text = "set MODEL deepseek/deepseek-v4-flash\n"
+def test_the_login_flow_runs_until_the_default_routes_and_the_jsrc_is_left_alone():
+    text = "# mine\nset MODEL mimo/mimo-v3\nfset NET_DISPLAY 2\nalias x /help\n"
     _write_jsrc(text)
-    _login("mimo", ["mimo-v3"])
+    _login("deepseek", ["deepseek-flash"])
+    ask = _answers("a")
 
-    assert install.ask_model({}, _answers("p", ""), pick=lambda: None, add_provider=pytest.fail) is None
+    install.ask_model({}, ask, add_provider=lambda: _login("mimo", ["mimo-v3"]))
+
+    assert len(ask.asked) == 1
+    assert install.default_model({}) == ("mimo/mimo-v3", True)
     assert paths.global_config_file().read_text(encoding="utf-8") == text
 
 
-def test_write_model_id_replaces_an_unset_line_and_appends_when_there_is_none(tmp_path):
-    jsrc = tmp_path / "jsrc"
-    jsrc.write_text("fset NET_DISPLAY 2\nset -MODEL\n", encoding="utf-8")
-    settings.write_model_id(jsrc, "mimo/mimo-v3")
-    assert jsrc.read_text(encoding="utf-8") == "fset NET_DISPLAY 2\nset MODEL mimo/mimo-v3\n"
+def test_enter_skips_and_leaves_the_jsrc_alone():
+    text = "set MODEL mimo/mimo-v3\n"
+    _write_jsrc(text)
 
-    bare = tmp_path / "bare"
-    bare.write_text("fset NET_DISPLAY 2", encoding="utf-8")
-    settings.write_model_id(bare, "mimo/mimo-v3")
-    assert bare.read_text(encoding="utf-8") == "fset NET_DISPLAY 2\nset MODEL mimo/mimo-v3\n"
+    assert install.ask_model({}, _answers(""), add_provider=pytest.fail) is None
+    assert paths.global_config_file().read_text(encoding="utf-8") == text
 
 
 # --- without a terminal -------------------------------------------------------------
@@ -191,7 +164,7 @@ def test_without_a_terminal_it_names_what_is_missing_and_asks_nothing(monkeypatc
 
     out = capsys.readouterr().out
     assert "TYPESAFE_API_KEY" in out and "TAVILY_API_KEY" not in out
-    assert paths.global_config_file().is_file()
+    assert not paths.global_config_file().exists()
     assert not paths.global_env_file().exists()
 
 

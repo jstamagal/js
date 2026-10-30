@@ -34,15 +34,18 @@ lives. A setting it leaves unset is written `set -<key>`. If `js/jsrc` is
 missing, leaves out a registered setting, or holds a line that does not apply,
 js stops at startup with one line naming the file.
 
-When there is no `~/.js/jsrc`, js writes one on startup, a copy of
-`js/jsrc.template`: every setting in sections, each described with examples,
-all commented out at its stock value. Nothing in it is live, so a default
-changed in `js/jsrc` still reaches the box. `/save` edits the file in place:
-a setting not at its stock value gets its line uncommented with the live value
-(or appended, when the file has no line for it), a live line for a setting back
-at stock is commented out, and `on` handlers and aliases not in the file yet
-are appended. Every other line is left alone and no backup is made. Picking a
-default model in the model picker writes `MODEL` the same way.
+js never writes `~/.js/jsrc` on its own; only `/save` does, so the file holds
+only what the operator set and a default changed in `js/jsrc` still reaches
+the box. `js/jsrc.template` lists every setting in sections, each described
+with examples, at its stock value. `/save` writes what changed in the session
+since it started (or since the last `/save`): the settings `/set` changed, the
+model `/model` or the picker chose, the `/fset` entries changed, and `on`
+handlers and aliases added. Nothing the environment, a login or js's defaults
+put in is written. It edits the file in place: a changed setting gets its line
+uncommented or rewritten with the live value (or appended, when the file has
+no line for it), a live line for a setting back at stock is commented out, and
+every other line is left alone. No backup is made. With nothing changed, no
+file is written.
 
 `PROVIDER`, `BASE_URL`, and `API_KEY` are unset in
 `js/jsrc`. When `PROVIDER` is set, the provider is constructed explicitly with
@@ -243,27 +246,11 @@ skipped.
 writes equivalent `set ...` lines to `jsrc` and exits. The migration path is
 temporary and is removed after 2 releases.
 
-A `jsrc` that still holds the old setting names (`model.id`,
-`limits.max_read_lines`) is rewritten in place the first time config load
-reads it (`settings.load_jsrc_files`, through `rename.migrate_jsrc_file`),
-before any line is parsed. This holds for the global `~/.js/jsrc`, the
-project `.js/jsrc` and `.js/jsrc.local`, and preset files. The rules are
-`js/rename.py`'s, the same as `scripts/rename-settings.py --write`. The
-file is rewritten with no copy kept, and one line on stderr names it. A live
-line it cannot convert safely (an
-`alias`/`on` body with a shell operator that sets an old name, a deleted
-setting, the old spelling of a name the file also sets by its new one) is
-commented out as `# js: not migrated: <line as written>`, a note such as
-`(setting deleted)` before the colon. A line that only mentions an old name,
-in a value or in a body that does not set it, stays live. The new file keeps
-the original's permissions.
-One warning lists those line numbers for a hand edit, so startup loads with
-no unknown-setting errors. A file that is already converted is not changed,
-so a second start does nothing. A file or directory js cannot write is left
-as it is, with one warning naming the command to run by hand
-(`scripts/rename-settings.py --write <file>`). The old names are still
-refused as live settings: `set model.id x` typed in the REPL or given with
-`--extra` is an unknown setting.
+js never rewrites a `jsrc` it loads. A line that still uses an old setting
+name (`model.id`, `limits.max_read_lines`) is an unknown setting at load,
+the same as `set model.id x` typed in the REPL or given with `--extra`.
+`scripts/rename-settings.py --write <file>` rewrites such a file to the new
+names when you run it; the rules are `js/rename.py`'s.
 
 `--im-a-pussy` opts OUT of the code-running inline prompt directives for the
 run; they are on by default and compile and run arbitrary code from prompt
@@ -294,7 +281,7 @@ project.
 
 ```text
 ~/.js/
-  jsrc                   # the user layer; js writes it on first run, /save edits it in place
+  jsrc                   # the user layer; only /save writes it, in place
   .env
   JS.md                  # always-on operator context, whatever dir js runs in
   JS.local.md
@@ -708,17 +695,12 @@ means some calls had no price, and a session with no priced call shows its
 token count instead. `js -p --json` carries the same figures in its `usage`
 events ([Headless JSON Events](headless-json.md)).
 
-## Wipe And Backups
+## Wipe
 
-`/wipe` rotates the active file:
-
-```text
-session.jsonl      -> session.jsonl.bak
-session.jsonl      -> session.jsonl.bak.1
-session.jsonl      -> session.jsonl.bak.2
-```
-
-Existing backups are preserved. The in-process REPL message list is cleared.
+`/wipe` moves the active session file, and its `.txt` beside it, to a new
+session name in the same directory. The moved conversation is a session of
+its own and can be resumed. The in-process REPL message list is cleared. No
+backup file is made.
 
 ## Compaction
 

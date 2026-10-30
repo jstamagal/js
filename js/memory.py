@@ -1010,21 +1010,18 @@ def append_compaction_mark(memory_file: Path, *, summary: str, keep_from: int, f
 
 
 def wipe(memory_file: Path) -> Path | None:
-    """Rotate the memory file to a .bak suffix. Returns the .bak path or None."""
+    """Move the memory file, and its text beside it, to a new session under
+    a fresh name in the same directory, leaving ``memory_file`` gone. Returns
+    the new session's path, or None when there was nothing to move."""
     if memory_file == Path(os.devnull) or not memory_file.exists():
         return None
-    bak = memory_file.with_suffix(memory_file.suffix + ".bak")
-    if bak.exists():
-        idx = 1
-        while True:
-            candidate = memory_file.with_suffix(memory_file.suffix + f".bak.{idx}")
-            if not candidate.exists():
-                bak = candidate
-                break
-            idx += 1
-    memory_file.rename(bak)
+    moved = session_store.reserve(memory_file.parent)
+    os.replace(memory_file, moved)
+    text = session_store.text_path(memory_file)
+    if text.exists():
+        os.replace(text, session_store.text_path(moved))
     session_text.forget(memory_file)
-    return bak
+    return moved
 
 
 def append_tool_surface(memory_file: Path, state: dict) -> None:

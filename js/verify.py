@@ -39,7 +39,7 @@ def verify(agent: str | None = None) -> list[str]:
         for path in sorted(configs):
             if path.is_file():
                 def validate_config(path=path):
-                    errors.extend(settings.load_jsrc_files([path], settings.seed_defaults(), migrate=False))
+                    errors.extend(settings.load_jsrc_files([path], settings.seed_defaults()))
                 check(path, validate_config)
         directories = set()
         for root in roots:

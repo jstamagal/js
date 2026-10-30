@@ -84,7 +84,7 @@ def test_save_preserves_disabled_reasoning(tmp_path):
     assert result.error is None
     path = tmp_path / "jsrc"
 
-    settings.save_settings_to_jsrc(path, store)
+    settings.save_settings_to_jsrc(path, store, keys=["EFFORT"])
 
     loaded = settings.collect_settings([path], env={})
     assert loaded["EFFORT"] == store["EFFORT"] == "none"
@@ -331,9 +331,9 @@ def test_provider_config_reaches_stream_model(monkeypatch, tmp_path):
     assert captured_kwargs.get("provider_headers") == {"x-test": "1"}
 
 
-def test_registered_setting_can_disable_jsrc_migration(tmp_path):
+def test_loading_a_jsrc_with_old_names_leaves_it_as_written(tmp_path):
     path = tmp_path / "jsrc"
-    original = "set JSRC_AUTO_MIGRATE off\nset model.id old-model\n"
+    original = "set model.id old-model\n"
     path.write_text(original)
     settings.collect_settings(config_paths=[path], env={})
     assert path.read_text() == original

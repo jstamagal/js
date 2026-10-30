@@ -69,7 +69,11 @@ def test_refresh_model_catalog_command_forces_refresh(tmp_path, monkeypatch, cap
     assert seen == ["forced"]
 
 
-def test_wipe_command_rotates_file_and_clears_in_process_messages(tmp_path):
+def _other_sessions(cfg) -> list:
+    return sorted(path for path in cfg.session_file.parent.glob("*.jsonl") if path != cfg.session_file)
+
+
+def test_wipe_moves_the_conversation_to_a_new_session_and_clears_it_here(tmp_path):
     cfg = make_cfg(tmp_path)
     append_message(cfg.session_file, {"role": "user", "content": "old"})
     state = {"messages": [{"role": "user", "content": "old"}]}
@@ -79,23 +83,23 @@ def test_wipe_command_rotates_file_and_clears_in_process_messages(tmp_path):
     assert handled is True
     assert state["messages"] == []
     assert not cfg.session_file.exists()
-    assert cfg.session_file.with_suffix(".jsonl.bak").exists()
+    moved = _other_sessions(cfg)
+    assert len(moved) == 1
+    assert load_messages(moved[0]) == [{"role": "user", "content": "old"}]
 
 
-def test_wipe_preserves_existing_backups_instead_of_overwriting(tmp_path):
+def test_each_wipe_keeps_its_conversation_in_a_session_of_its_own(tmp_path):
     cfg = make_cfg(tmp_path)
     append_message(cfg.session_file, {"role": "user", "content": "first"})
     cli._handle_command("/wipe", {"messages": [{"role": "user", "content": "first"}]}, cfg)
-    first_backup = cfg.session_file.with_suffix(".jsonl.bak")
     append_message(cfg.session_file, {"role": "user", "content": "second"})
 
     handled = cli._handle_command("/wipe", {"messages": [{"role": "user", "content": "second"}]}, cfg)
 
     assert handled is True
-    assert first_backup.exists()
-    assert cfg.session_file.with_suffix(".jsonl.bak.1").exists()
-    assert load_messages(first_backup) == [{"role": "user", "content": "first"}]
-    assert load_messages(cfg.session_file.with_suffix(".jsonl.bak.1")) == [{"role": "user", "content": "second"}]
+    kept = sorted(load_messages(path)[0]["content"] for path in _other_sessions(cfg))
+    assert kept == ["first", "second"]
+    assert not list(cfg.session_file.parent.glob("*.bak*"))
 
 
 def test_unknown_commands_that_share_prefixes_are_refused_not_swallowed(tmp_path):
@@ -767,10 +771,10 @@ def test_model_command_opens_picker_and_updates_state(monkeypatch, tmp_path, cap
     assert state["provider_id"] == "deepseek"
     assert state["provider_api_key"] == "sk-test"
     assert state["model"] == "deepseek-v4-flash"
-    assert "set MODEL deepseek/deepseek-v4-flash" in config_path.read_text(encoding="utf-8")
+    assert not config_path.exists()
 
 
-def test_model_picker_persists_provider_prefixed_default(monkeypatch, tmp_path, capsys):
+def test_a_picked_model_reaches_the_jsrc_only_through_save(monkeypatch, tmp_path, capsys):
     from js import logins
 
     # The real picker offers logged-in providers. Its stub must establish the
@@ -815,7 +819,10 @@ def test_model_picker_persists_provider_prefixed_default(monkeypatch, tmp_path, 
     assert state["provider_base_url"] == "https://chatgpt.com/backend-api"
     assert state["model"] == "gpt-5.5"
     assert settings.get_dotted(state["settings"], ("MODEL",)) == "openai-codex/gpt-5.5"
-    assert config_path.read_text(encoding="utf-8").splitlines()[0] == "set MODEL openai-codex/gpt-5.5"
+    assert config_path.read_text(encoding="utf-8") == "set MODEL deepseek/deepseek-v4-flash\n"
+
+    assert cli._handle_command("/save", state, cfg) is True
+    assert config_path.read_text(encoding="utf-8") == "set MODEL openai-codex/gpt-5.5\n"
 
     from js.config import from_env
 

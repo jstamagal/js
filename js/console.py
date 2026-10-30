@@ -407,9 +407,6 @@ class ConsoleSink:
         sys.stdout.write(msgs.for_stream(display.user_line(text)))
         sys.stdout.flush()
 
-    def _on_migration_notice(self, *, message: msgs.Message, fields: dict, stream: Any) -> None:
-        msgs.say(message, file=stream, **fields)
-
     # The streamed reply
 
     def _on_stream_open(self, *, stream: output.Key) -> None:

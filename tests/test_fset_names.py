@@ -63,7 +63,7 @@ def test_a_literal_dollar_survives_save_and_reload(tmp_path):
     live = settings.seed_defaults()
     settings.set_dotted(live, ("BANNER",), "$MODEL costs $$5")
     path = tmp_path / "jsrc"
-    settings.save_settings_to_jsrc(path, live)
+    settings.save_settings_to_jsrc(path, live, keys=["BANNER"])
     loaded = settings.seed_defaults()
     assert settings.load_jsrc_files([path], loaded) == []
     assert settings.knob(loaded, "BANNER") == "$MODEL costs $$5"
@@ -79,7 +79,7 @@ def test_a_display_setting_line_expands_like_set_and_a_saved_dollar_reloads(tmp_
     live = settings.seed_defaults()
     settings.set_dotted(live, ("SHELL_QUIET",), ["echo $HOME"])
     saved = tmp_path / "saved"
-    settings.save_settings_to_jsrc(saved, live)
+    settings.save_settings_to_jsrc(saved, live, keys=["SHELL_QUIET"])
     again = settings.seed_defaults()
     assert settings.load_jsrc_files([saved], again) == []
     assert settings.knob(again, "SHELL_QUIET") == ["echo $HOME"]

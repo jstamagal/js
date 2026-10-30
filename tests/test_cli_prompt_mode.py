@@ -129,9 +129,8 @@ def test_cli_rejects_unsafe_agent_id_argument(monkeypatch, tmp_path):
     actual = cli.main(["--agent", "../../etc", "-p", "ignored"])
 
     assert actual == 2
-    # Every start lays out ~/.js and its jsrc; a refused id adds nothing to it or beside it.
-    assert sorted(p for p in (tmp_path / ".js").rglob("*")) == sorted(
-        [*_paths.layout_dirs(), _paths.global_config_file()])
+    # Every start lays out ~/.js and writes no jsrc; a refused id adds nothing to it or beside it.
+    assert sorted(p for p in (tmp_path / ".js").rglob("*")) == sorted(_paths.layout_dirs())
     assert not (tmp_path / "etc").exists()
 
 

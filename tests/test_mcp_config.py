@@ -125,7 +125,7 @@ def test_save_round_trips_actual_secret_server_configuration(tmp_path):
     assert result.error is None
     path = tmp_path / "jsrc"
 
-    settings.save_settings_to_jsrc(path, live)
+    settings.save_settings_to_jsrc(path, live, keys=["MCP_SERVERS"])
     saved = path.read_text(encoding="utf-8")
     reloaded = settings.collect_settings(config_paths=[path], env={})
 

@@ -198,7 +198,7 @@ def test_status_colour_survives_save_and_load(tmp_path):
     live = settings.seed_defaults()
     assert setcmd.fset_command(live, "COLOR_STATUS_BACKGROUND #000000").error is None
     path = tmp_path / "jsrc"
-    settings.save_settings_to_jsrc(path, live)
+    settings.save_settings_to_jsrc(path, live, keys=[], fset_names=["COLOR_STATUS_BACKGROUND"])
     fset.reset()
 
     reloaded = settings.seed_defaults()
