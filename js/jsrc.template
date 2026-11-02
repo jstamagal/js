@@ -493,9 +493,9 @@
 
 # How many times js retries a request that failed in a way worth retrying:
 # rate limited (429), a server error (5xx), or a stream that dropped or
-# went quiet. It waits as long as the provider asks, otherwise 1s, 2s, 4s,
-# 8s, then 16s each time. 0: give up on the first error.
-#set RETRY_COUNT_MAX 10
+# went quiet. It waits as long as the provider asks, otherwise 8s each time.
+# 0: give up on the first error.
+#set RETRY_COUNT_MAX 3
 
 # Longest wait js accepts when a provider says "retry after N seconds". If
 # it asks for longer, js fails right away instead. 0: wait as long as asked.
@@ -747,16 +747,16 @@
 
 # Seconds before the first retry of a failed model call that named no Retry-
 # After.
-#set RETRY_BACKOFF_START 1
+#set RETRY_BACKOFF_START 8
 
 # Each later retry waits this many times longer than the one before.
-#set RETRY_BACKOFF_MULTIPLIER 2
+#set RETRY_BACKOFF_MULTIPLIER 1
 
 # Longest wait between retries, in seconds, before jitter.
-#set RETRY_BACKOFF_MAX 16
+#set RETRY_BACKOFF_MAX 8
 
 # Up to this many random seconds added to each retry wait.
-#set RETRY_BACKOFF_JITTER 1
+#set RETRY_BACKOFF_JITTER 0
 
 # on: a reply that stops short because the context silently overflowed is
 # retried after compaction.

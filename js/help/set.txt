@@ -250,8 +250,8 @@ PARALLEL_TOOLS_MAX
 RETRY_COUNT_MAX
     Retries of one model request after a retryable failure: a 429, a 5xx, a
     dropped or idle stream. Each waits what the provider's Retry-After or
-    retry-after-ms header asks, else 1s, 2s, 4s ... up to 16s. 0 fails on
-    the first error.
+    retry-after-ms header asks, else 8s each time by default. Defaults to
+    3 retries. 0 fails on the first error.
 
 RETRY_WAIT_MAX
     Longest Retry-After wait honoured. A provider asking for longer fails

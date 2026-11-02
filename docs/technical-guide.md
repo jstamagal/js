@@ -254,9 +254,9 @@ compacts. The meter's callback adds the call to the turn's totals, which
 Provider request retry:
 
 - A failure with SDK `ProviderAPIError.is_retryable` is retried up to
-  `RETRY_COUNT_MAX` times (default 10). Each retry waits what the
+  `RETRY_COUNT_MAX` times (default 3). Each retry waits what the
   response's `retry-after-ms` or `Retry-After` header asks (seconds or an HTTP
-  date), else 1s, 2s, 4s ... up to 16s plus jitter. A wait longer than
+  date), else a flat 8s by default (no jitter). A wait longer than
   `RETRY_WAIT_MAX` (default 120, 0 means no limit) fails the
   request at once. `_open_stream` sets the OpenAI and Anthropic SDK clients'
   `max_retries` to 0, so these retries are the only ones. The turn runs them

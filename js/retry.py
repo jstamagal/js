@@ -63,7 +63,7 @@ def idle_seconds(settings: dict | None) -> float | None:
 
 
 def backoff(attempt: int, budget: Budget | None = None) -> float:
-    """Exponential with jitter: 1s, 2s, 4s ... capped."""
+    """Configured capped backoff with jitter; defaults to a flat 8s."""
     budget = budget if budget is not None else Budget.from_settings(None)
     base = min(budget.backoff_start * budget.backoff_multiplier ** attempt, budget.backoff_max)
     return base + random.uniform(0, budget.backoff_jitter)
