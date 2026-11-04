@@ -19,9 +19,23 @@
   Rebuilds automatically when this file is newer than the cached binary.
   Set CC to pick a compiler.  ENVCTX_HIST=n changes the shell-history count;
   ENVCTX_HIST=0 leaves shell history out entirely.
+
+  The scrubber reads its key prefixes and entropy rules from the file named
+  by JS_SECRET_PATTERNS, which js exports.  Unset, it is
+  ~/.js/secret-patterns when that exists, else defaults/secret-patterns
+  beside tools/.
 //
 set -e
 _src=$0
+if [ -z "$JS_SECRET_PATTERNS" ]; then
+  case $_src in *[/]*) _dir=${_src%[/]*} ;; *) _dir=. ;; esac
+  if [ -f "$HOME/.js/secret-patterns" ]; then
+    JS_SECRET_PATTERNS=$HOME/.js/secret-patterns
+  else
+    JS_SECRET_PATTERNS=$_dir/../defaults/secret-patterns
+  fi
+  export JS_SECRET_PATTERNS
+fi
 _cache=$HOME/.js/cache
 _bin=$_cache/envctx.bin
 if [ ! -x "$_bin" ] || [ "$_src" -nt "$_bin" ]; then
@@ -145,16 +159,182 @@ static void human(double bytes, char *out, size_t cap) {
 
 /* ---------- secret scrubbing ------------------------------------------
    Hand-rolled because importing scrubadub costs ~1.5s; this costs ~0us.
-   Token-wise redaction: emails, IPs, phones, known key prefixes, JWTs,
-   URL userinfo, KEY=secret pairs, and long high-entropy blobs.           */
+   Token-wise redaction: emails, IPs, phones, URL userinfo, KEY=secret
+   pairs, and the key prefixes and entropy rules of the secret-patterns
+   file named by $JS_SECRET_PATTERNS (format documented at its top).      */
 
-static const char *KEY_PREFIX[] = {
-    "sk-",   "sk_live_", "sk_test_", "rk_live_", "pk_live_",    "ghp_",
-    "gho_",  "ghu_",     "ghs_",     "ghr_",     "github_pat_", "glpat-",
-    "xoxb-", "xoxp-",    "xoxa-",    "xapp-",    "AKIA",        "ASIA",
-    "AIza",  "ya29.",    "hf_",      "r8_",      "sbp_",        "dop_v1_",
-    "npm_",  "pypi-",    "SG.",      "shpat_",   "anthropic-",  "Bearer",
-    NULL};
+#define PAT_MAX 128
+
+struct charset {
+  char name[32];
+  unsigned char in[256];
+};
+struct prefix_rule {
+  char prefix[64];
+  size_t min, max;
+  int cls;
+};
+struct entropy_rule {
+  size_t min;
+  int kinds, cls;
+};
+struct exempt_rule {
+  size_t len;
+  int cls;
+};
+
+static struct charset CLASSES[PAT_MAX];
+static struct prefix_rule PREFIXES[PAT_MAX];
+static struct entropy_rule ENTROPY[PAT_MAX];
+static struct exempt_rule EXEMPT[PAT_MAX];
+static int NCLASSES, NPREFIXES, NENTROPY, NEXEMPT;
+
+static void pattern_error(const char *path, int line, const char *what,
+                          const char *field) {
+  if (line)
+    fprintf(stderr, "envctx: %s:%d: %s%s%s\n", path, line, what,
+            field ? ": " : "", field ? field : "");
+  else
+    fprintf(stderr, "envctx: %s: %s\n", path, what);
+  exit(1);
+}
+
+static size_t pattern_number(const char *path, int line, const char *f) {
+  if (!f)
+    pattern_error(path, line, "missing number", NULL);
+  char *end;
+  long v = strtol(f, &end, 10);
+  if (!isdigit((unsigned char)*f) || *end || v < 0 || v > 1 << 20)
+    pattern_error(path, line, "not a number", f);
+  return (size_t)v;
+}
+
+static int pattern_class(const char *path, int line, const char *f) {
+  if (!f)
+    pattern_error(path, line, "missing class name", NULL);
+  for (int i = 0; i < NCLASSES; i++)
+    if (!strcmp(CLASSES[i].name, f))
+      return i;
+  pattern_error(path, line, "unknown class", f);
+  return -1;
+}
+
+static void load_patterns(void) {
+  const char *path = getenv("JS_SECRET_PATTERNS");
+  if (!path || !*path)
+    pattern_error("JS_SECRET_PATTERNS", 0, "not set", NULL);
+  FILE *f = fopen(path, "r");
+  if (!f)
+    pattern_error(path, 0, "cannot read the secret-patterns file", NULL);
+  char raw[LINE];
+  int ln = 0;
+  while (fgets(raw, sizeof raw, f)) {
+    ln++;
+    chomp(raw);
+    char *kind = strtok(raw, " \t");
+    if (!kind || *kind == '#')
+      continue;
+    char *a = strtok(NULL, " \t"), *b = strtok(NULL, " \t");
+    char *c = strtok(NULL, " \t"), *d = strtok(NULL, " \t");
+    char *extra = NULL;
+    if (!strcmp(kind, "class")) {
+      if (!a || !b)
+        pattern_error(path, ln, "class needs NAME CHARS", NULL);
+      extra = c;
+      if (NCLASSES >= PAT_MAX || strlen(a) >= sizeof CLASSES[0].name)
+        pattern_error(path, ln, "too many classes or name too long", a);
+      struct charset *cs = &CLASSES[NCLASSES++];
+      memset(cs, 0, sizeof *cs);
+      snprintf(cs->name, sizeof cs->name, "%s", a);
+      for (size_t i = 0; b[i]; i++) {
+        unsigned char lo = (unsigned char)b[i];
+        if (b[i + 1] == '-' && b[i + 2]) {
+          unsigned char hi = (unsigned char)b[i + 2];
+          if (hi < lo)
+            pattern_error(path, ln, "backwards range", b);
+          for (unsigned ch = lo; ch <= hi; ch++)
+            cs->in[ch] = 1;
+          i += 2;
+        } else
+          cs->in[lo] = 1;
+      }
+    } else if (!strcmp(kind, "prefix")) {
+      if (!a || NPREFIXES >= PAT_MAX ||
+          strlen(a) >= sizeof PREFIXES[0].prefix)
+        pattern_error(path, ln, "prefix needs PREFIX MIN MAX CLASS", a);
+      struct prefix_rule *r = &PREFIXES[NPREFIXES++];
+      snprintf(r->prefix, sizeof r->prefix, "%s", a);
+      r->min = pattern_number(path, ln, b);
+      r->max = pattern_number(path, ln, c);
+      r->cls = pattern_class(path, ln, d);
+      extra = strtok(NULL, " \t");
+    } else if (!strcmp(kind, "entropy")) {
+      if (NENTROPY >= PAT_MAX)
+        pattern_error(path, ln, "too many entropy rules", NULL);
+      struct entropy_rule *r = &ENTROPY[NENTROPY++];
+      r->min = pattern_number(path, ln, a);
+      r->kinds = (int)pattern_number(path, ln, b);
+      r->cls = pattern_class(path, ln, c);
+      extra = d;
+    } else if (!strcmp(kind, "exempt")) {
+      if (NEXEMPT >= PAT_MAX)
+        pattern_error(path, ln, "too many exempt rules", NULL);
+      struct exempt_rule *r = &EXEMPT[NEXEMPT++];
+      r->len = pattern_number(path, ln, a);
+      r->cls = pattern_class(path, ln, b);
+      extra = c;
+    } else
+      pattern_error(path, ln, "unknown rule", kind);
+    if (extra)
+      pattern_error(path, ln, "extra field", extra);
+  }
+  fclose(f);
+}
+
+static int all_in(const char *t, int cls) {
+  for (const unsigned char *p = (const unsigned char *)t; *p; p++)
+    if (!CLASSES[cls].in[*p])
+      return 0;
+  return 1;
+}
+
+/* the longest prefix rule that matches `t`, or NULL */
+static const char *match_prefix(const char *t) {
+  const char *best = NULL;
+  size_t bl = 0, n = strlen(t);
+  for (int i = 0; i < NPREFIXES; i++) {
+    const struct prefix_rule *r = &PREFIXES[i];
+    size_t pl = strlen(r->prefix);
+    if (pl <= bl || strncmp(t, r->prefix, pl))
+      continue;
+    size_t rest = n - pl;
+    if (rest >= r->min && rest <= r->max && all_in(t + pl, r->cls)) {
+      best = r->prefix;
+      bl = pl;
+    }
+  }
+  return best;
+}
+
+static int match_entropy(const char *t) {
+  size_t n = strlen(t);
+  for (int i = 0; i < NEXEMPT; i++)
+    if (n == EXEMPT[i].len && all_in(t, EXEMPT[i].cls))
+      return 0;
+  int lo = 0, up = 0, dg = 0;
+  for (const char *p = t; *p; p++) {
+    lo |= islower((unsigned char)*p) != 0;
+    up |= isupper((unsigned char)*p) != 0;
+    dg |= isdigit((unsigned char)*p) != 0;
+  }
+  if (!dg)
+    return 0;
+  for (int i = 0; i < NENTROPY; i++)
+    if (n >= ENTROPY[i].min && lo + up + dg >= ENTROPY[i].kinds &&
+        all_in(t, ENTROPY[i].cls))
+      return 1;
+  return 0;
+}
 
 static const char *SECRET_KEY[] = {
     "password", "passwd",     "secret",      "token", "apikey",
@@ -212,38 +392,6 @@ static int looks_phone(const char *t) {
   return digits >= 10 && digits <= 13 && seps >= 1;
 }
 
-/* long mixed-case+digit run with no path/word structure => probably a secret */
-static int looks_blob(const char *t) {
-  size_t n = strlen(t);
-  if (n < 28)
-    return 0;
-  int lo = 0, up = 0, dg = 0, other = 0, hex = 1;
-  for (const char *p = t; *p; p++) {
-    if (islower((unsigned char)*p))
-      lo++;
-    else if (isupper((unsigned char)*p))
-      up++;
-    else if (isdigit((unsigned char)*p))
-      dg++;
-    else if (*p == '_' || *p == '-' || *p == '+' || *p == '/' || *p == '=')
-      other++;
-    else
-      return 0; /* contains . / : etc -> path or url, leave it */
-    if (!(isdigit((unsigned char)*p) || (*p >= 'a' && *p <= 'f')))
-      hex = 0;
-  }
-  if (!dg)
-    return 0;
-  /* full git SHA1: pure lowercase hex, exactly 40 chars. Common in shell
-     history and not a secret. 64-hex stays redacted: too many real tokens
-     share that shape, and a scrubber errs toward redaction. */
-  if (hex && n == 40)
-    return 0;
-  if (n >= 40 && dg && (lo || up))
-    return 1;
-  return up && lo && dg && n >= 32;
-}
-
 static void scrub_token(const char *t, char *out, size_t cap) {
   /* KEY=VALUE with a sensitive-looking key */
   const char *eq = strchr(t, '=');
@@ -259,14 +407,9 @@ static void scrub_token(const char *t, char *out, size_t cap) {
         return;
       }
   }
-  for (int i = 0; KEY_PREFIX[i]; i++)
-    if (!strncmp(t, KEY_PREFIX[i], strlen(KEY_PREFIX[i])) &&
-        strlen(t) > strlen(KEY_PREFIX[i]) + 6) {
-      snprintf(out, cap, "<key:%s..>", KEY_PREFIX[i]);
-      return;
-    }
-  if (!strncmp(t, "eyJ", 3) && strlen(t) > 24) {
-    snprintf(out, cap, "<jwt>");
+  const char *pre = match_prefix(t);
+  if (pre) {
+    snprintf(out, cap, "<key:%s..>", pre);
     return;
   }
   const char *at = strchr(t, '@');
@@ -302,7 +445,7 @@ static void scrub_token(const char *t, char *out, size_t cap) {
     snprintf(out, cap, "<phone>");
     return;
   }
-  if (looks_blob(t)) {
+  if (match_entropy(t)) {
     snprintf(out, cap, "<secret:%zub>", strlen(t));
     return;
   }
@@ -556,6 +699,7 @@ int main(void) {
   if (noenv && (!strcasecmp(noenv, "true") || !strcasecmp(noenv, "on") ||
                 !strcasecmp(noenv, "yes") || !strcmp(noenv, "1")))
     return 0;
+  load_patterns();
   setvbuf(stdout, malloc(1 << 16), _IOFBF, 1 << 16);
   char buf[1 << 16], b2[LINE], b3[LINE];
 
