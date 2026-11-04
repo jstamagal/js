@@ -15,6 +15,7 @@ import math
 import hashlib
 import itertools
 import os
+import socket
 import sys  # noqa: F401 - tests patch sys.stdout through runtime.sys
 import threading
 from pathlib import Path
@@ -1700,7 +1701,7 @@ def _prepare_turn_context(context: ToolContext, cfg: Config, request: ModelReque
 
 def _trace_banner(telemetry: Telemetry, request: ModelRequest, context: ToolContext, registry: ToolRegistry,
                   resolve_window: Callable[[], int | None]) -> None:
-    """Show the run line: model, provider, window, output cap, effort, vision, memory, tools."""
+    """Show the run line: host, model, provider, window, output cap, effort, vision, memory, tools."""
     model, provider_id = request.model, request.provider_id
     if provider_id:
         provider_label = provider_id
@@ -1714,7 +1715,8 @@ def _trace_banner(telemetry: Telemetry, request: ModelRequest, context: ToolCont
     # is left to work in; max_out only bounds one reply. Showing the second
     # without the first invites reading 128000 as the window.
     ctx = compaction.configured_context_window(context.config, resolve_window)
-    bits = [f"model={model}",
+    bits = [f"host={socket.gethostname()}",
+            f"model={model}",
             f"provider={provider_label}",
             f"base={base}",
             f"ctx={ctx if ctx else 'unknown'}",
