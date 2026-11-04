@@ -230,7 +230,7 @@ def test_ignoring_global_config_from_home_excludes_global_files(tmp_path, preset
 
 def test_ignoring_global_config_holds_under_another_name_for_home(tmp_path, monkeypatch):
     # The home directory reached by a second name is the same directory, so
-    # its jsrc is still the global layer --ignore-global excludes.
+    # its jsrc is still the global layer --no-global-config excludes.
     home = tmp_path / "home"
     (home / ".js").mkdir(parents=True)
     (home / ".js" / "jsrc").write_text("set SHELL_WAIT 47\n", encoding="utf-8")

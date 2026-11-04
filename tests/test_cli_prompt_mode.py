@@ -283,50 +283,69 @@ def _capture_run_args(monkeypatch):
     return seen
 
 
-def test_sysf_alias_sets_system_prompt_file_and_names_no_session(monkeypatch, tmp_path):
-    # argparse used to read -sysf as -s with the value "ysf": a session named ysf,
-    # resumed on every rerun. -sysf is now a defined alias of --system-prompt-file.
-    monkeypatch.setenv("HOME", str(tmp_path))
-    seen = _capture_run_args(monkeypatch)
-    prompt_file = tmp_path / "rr.md"
-    prompt_file.write_text("be terse\n")
-
-    assert cli.main(["-sysf", str(prompt_file), "--printonly", "a"]) == 0
-
-    assert seen["args"].system_prompt_file == str(prompt_file)
-    assert seen["args"].session is None
-
-
-def test_unknown_single_dash_word_is_refused_with_a_suggestion(monkeypatch, tmp_path, capsys):
-    # Any other unknown multi-letter single-dash word would be split by argparse
-    # into a short option plus a glued value. It is refused before parsing.
+@pytest.mark.parametrize("word", ["-sysf", "-spf", "-sp", "-asp", "-sysx"])
+def test_unknown_single_dash_word_is_refused(monkeypatch, tmp_path, capsys, word):
+    # argparse would split an unknown multi-letter single-dash word into a short
+    # option plus a glued value (`-sysf` as `-s ysf`, a session). It is refused
+    # before parsing, and nothing is suggested in its place.
     monkeypatch.setenv("HOME", str(tmp_path))
     seen = _capture_run_args(monkeypatch)
 
     with pytest.raises(SystemExit) as exc:
-        cli.main(["-sysx", "FILE", "-p", "ignored"])
+        cli.main([word, "FILE", "-p", "ignored"])
 
     assert exc.value.code == 2
     assert "args" not in seen
-    assert "-sysf" in capsys.readouterr().err
+    refusal = capsys.readouterr().err.strip().splitlines()[-1]
+    assert word in refusal
+    assert "--system-prompt" not in refusal
     sessions = tmp_path / ".js" / "sessions"
     assert not any(sessions.rglob("*.jsonl"))
 
 
-@pytest.mark.parametrize("argv", [["-spf", "FILE"], ["-asp", "TEXT"], ["-qn"]])
-def test_defined_short_aliases_and_boolean_clusters_still_parse(monkeypatch, tmp_path, argv):
+def test_boolean_short_flags_cluster(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     seen = _capture_run_args(monkeypatch)
-    argv = [str(tmp_path / "spf.txt") if a == "FILE" else a for a in argv]
 
-    assert cli.main(argv) == 0
+    assert cli.main(["-qn"]) == 0
 
     args = seen["args"]
     assert args.session is None
-    if argv[0] == "-spf":
-        assert args.system_prompt_file == argv[1]
-    if argv[0] == "-asp":
-        assert args.append_system_prompt == [argv[1]]
+    assert args.quiet and args.no_save
+
+
+def test_long_option_prefix_is_not_expanded(monkeypatch, tmp_path, capsys):
+    # `--logins` once ran `--logins-json`.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    seen = _capture_run_args(monkeypatch)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--logins"])
+
+    assert exc.value.code == 2
+    assert "args" not in seen
+    assert "--logins" in capsys.readouterr().err
+
+
+def test_positional_word_outside_commit_mode_is_refused(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    seen = _capture_run_args(monkeypatch)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["-p", "hi", "stray"])
+
+    assert exc.value.code == 2
+    assert "args" not in seen
+    assert "stray" in capsys.readouterr().err
+
+
+def test_positional_target_reaches_commit_mode(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    seen = {}
+    monkeypatch.setattr(cli, "_run_commit", lambda target, **kw: seen.setdefault("target", target) and 0)
+
+    assert cli.main(["--commit", "some/path"]) == 0
+    assert seen["target"] == "some/path"
 
 
 def test_config_existing_session_id_loads_with_and_without_suffix(monkeypatch, tmp_path):
@@ -1530,3 +1549,41 @@ def test_one_shot_model_override_sends_that_models_saved_sampling(monkeypatch, t
 
     assert cli._run_prompt("foo", model="testes/b") == 0
     assert seen["sampling"].temperature == 0.9
+
+
+def test_bare_with_agent_is_refused_naming_both(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    seen = _capture_run_args(monkeypatch)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--bare", "--agent", "defaultagent", "-p", "hi"])
+
+    assert exc.value.code == 2
+    assert "args" not in seen
+    refusal = capsys.readouterr().err.strip().splitlines()[-1]
+    assert "--bare" in refusal and "--agent" in refusal
+
+
+@pytest.mark.parametrize("flag,dest", [
+    ("--no-env", "no_env"),
+    ("--no-local-config", "no_local_config"),
+    ("--no-global-config", "no_global_config"),
+])
+def test_renamed_switches_parse(monkeypatch, tmp_path, flag, dest):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    seen = _capture_run_args(monkeypatch)
+
+    assert cli.main([flag, "-p", "hi"]) == 0
+    assert getattr(seen["args"], dest) is True
+
+
+@pytest.mark.parametrize("flag", ["--noenv", "--ignore-local", "--ignore-global", "--remove-if-fail"])
+def test_removed_switches_are_unknown(monkeypatch, tmp_path, flag):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    seen = _capture_run_args(monkeypatch)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main([flag, "-p", "hi"])
+
+    assert exc.value.code == 2
+    assert "args" not in seen

@@ -361,7 +361,7 @@ def _preset_config_paths(
 
 
 # What this process's command line adds to the settings it loads: --extra
-# (and the flags turned into it), --preset and the --ignore-* switches. The
+# (and the flags turned into it), --preset and the --no-*-config switches. The
 # CLI records them once (`set_invocation`); `run_settings` loads with them.
 _invocation: dict = {}
 

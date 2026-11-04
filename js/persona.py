@@ -497,7 +497,7 @@ def _expand_spec(spec: PromptSpec, cfg) -> PromptSpec:
     text = spec.system
     if options.you_are:
         text = f'You are {cfg.model.rsplit("/", 1)[-1]} running inside the js agent'
-        if not options.noenv and not options.chat:
+        if not options.no_env and not options.chat:
             text += '\n\n!{sh sh "$JS_ROOT/tools/envctx.c"}'
         if options.append_system_prompt:
             text += '\n\n' + '\n\n'.join(options.append_system_prompt)
