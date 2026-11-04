@@ -824,3 +824,68 @@ REMOVE_TRASH
 
 TRASH_BYTES_MAX
     Maximum size in bytes accepted by trash removal. Default: 536870912.
+
+REASONING_DISPLAY
+    Reasoning display: 0 hidden; 1, the default, streams, then folds to
+    `N tok reasoning` when the answer starts; 2 leave visible; 3 leave
+    visible with the provider's token count. The count is the provider's or none.
+    The reasoning_toggle key, Ctrl-O unless KEYBINDS_FILE moves it, folds
+    and unfolds it in the async screen. Folding is the screen's: in js -p
+    and the blocking REPL, 1 to 3 print the text and then the count line.
+    Display only; session reasoning is always retained.
+
+NET_DISPLAY
+    Network display in the async screen: 0 nothing, 1 failures, 2 also
+    Connecting/Connected lines and a response byte counter on the status bar
+    until the first token, 3 also catalog refreshes and per-call stream
+    stats. Retries and the line that gives up on them print at every level.
+
+TOOLS_DISPLAY
+    Tool exchange display: 0 nothing; 1 what matters: quiet calls fold into
+    one row per tool, a command shows its output while it runs and one row
+    after, a patch shows its diff, a failure its error; 2 every call with
+    the first TOOLS_PREVIEW_LINES result lines; 3 every call whole. At 1 and
+    2 in the async screen, the reasoning_toggle key, Ctrl-O, unfolds every
+    folded row and preview to its whole form and folds it back. Under js -p
+    nothing unfolds: quiet calls are a row each, hidden lines stay hidden,
+    and a subagent run also gets a row when it starts. The
+    session transcript keeps every call whole.
+
+TOOLS_QUIET
+    Tools whose calls TOOLS_DISPLAY 1 shows as one row and folds: a JSON
+    list of tool names.
+
+SHELL_QUIET
+    Shell commands TOOLS_DISPLAY 1 treats as quiet, by first word or first
+    two: a JSON list.
+
+TOOLS_PREVIEW_LINES
+    Lines of a result, a diff or a program shown before the rest is hidden
+    at TOOLS_DISPLAY 1 and 2. On the screen the reasoning_toggle key, Ctrl-O,
+    unfolds them; under js -p they stay hidden.
+
+MARKDOWN
+    Render assistant Markdown on a terminal: finished blocks are highlighted
+    once, the open block stays live. Off writes the text as it arrives.
+    Output that is not a terminal is always plain text.
+
+RESUME_EXCHANGES
+    Exchanges of a resumed session the REPL shows before its prompt, drawn
+    as a turn draws them. 0 shows none.
+
+TRACE
+    Pretty-print the tool-call trace line as the model runs.
+
+KERNEL_VERBOSITY
+    How much of each kernel/toolbox call is rendered to your terminal.
+    quiet: errors and interrupts only. normal: code, output, timing,
+    namespace. verbose: stdout, stderr and display split out, plus kernel
+    lifecycle and toolbox activity. Affects only what you see; the model
+    always receives the full result.
+
+KERNEL_LINES_MAX
+    Line cap per section of the kernel's terminal render, so a 4000-line
+    cell cannot scroll the screen away. Only the screen caps it, as a fold
+    the reasoning_toggle key, Ctrl-O, unfolds to the whole render; anywhere
+    else nothing can unfold it, so it prints whole. The hidden count is
+    shown, and the model still gets the untrimmed output.

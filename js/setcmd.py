@@ -1,8 +1,7 @@
 """Settings verbs for the command table in ``js.cli``.
 
 `set`, `show` and `on` operate on a settings dict and an event-hook table,
-using the registry in `js.settings`; `fset` on the entries /fset owns: the
-registry's `command="fset"` settings and `js.fset`. The REPL's command table calls these;
+using the registry in `js.settings`; `fset` on the entries `js.fset` holds. The REPL's command table calls these;
 config loading (jsrc, before the REPL exists) calls `apply_config_line`.
 
 Callers own all I/O: every function returns a `CommandResult`; the REPL prints
@@ -91,8 +90,8 @@ def render_value(spec: _s.SettingSpec, value, *, masked: bool = True) -> str:
 
 
 def _set_specs() -> list[_s.SettingSpec]:
-    """The settings `set` owns; the rest are /fset's."""
-    return [spec for spec in _s.REGISTRY if spec.command == "set"]
+    """Every setting `set` owns."""
+    return list(_s.REGISTRY)
 
 
 def select(name: str | None) -> tuple[list[_s.SettingSpec], bool] | None:
@@ -155,8 +154,6 @@ def show_lines_effective(
     if selected is None:
         return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.said(key=key))
     specs, one = selected
-    if one and specs[0].command != "set":
-        return CommandResult(handled=True, error=msgs.SETTING_IS_FSET.said(key=specs[0].key))
     lines: list[str] = []
     width = max(len(spec.key) for spec in specs)
     masked = masks_secrets(settings)
@@ -177,12 +174,9 @@ def show_lines_effective(
 # set
 # ---------------------------------------------------------------------------
 
-def apply_set(settings: dict, key: str, raw: str, *, verb: str = "set", banner_changed=None) -> CommandResult:
-    """Set ``key`` to ``raw`` in ``settings``, coercing per the registry.
-    ``verb`` is the command doing it; a setting another verb owns is refused."""
+def apply_set(settings: dict, key: str, raw: str, *, banner_changed=None) -> CommandResult:
+    """Set ``key`` to ``raw`` in ``settings``, coercing per the registry."""
     spec = _s.spec_for(key)
-    if spec is not None and spec.command != verb:
-        return CommandResult(handled=True, error=msgs.SETTING_IS_FSET.said(key=spec.key))
     if spec is not None:
         value, error = _s.coerce_value(spec, raw)
         if error is not None:
@@ -240,13 +234,11 @@ def _delete_dotted(settings: dict, path: tuple[str, ...]) -> bool:
     return False
 
 
-def apply_unset(settings: dict, key: str, baseline: dict | None = None, *, verb: str = "set", banner_changed=None) -> CommandResult:
+def apply_unset(settings: dict, key: str, baseline: dict | None = None, *, banner_changed=None) -> CommandResult:
     """`set -<key>` — clear a setting. With ``baseline`` (the layers below this
     one), the setting takes the baseline's value; a setting the baseline does not
-    hold is removed from ``settings``. ``verb`` is the command doing it."""
+    hold is removed from ``settings``."""
     spec = _s.spec_for(key)
-    if spec is not None and spec.command != verb:
-        return CommandResult(handled=True, error=msgs.SETTING_IS_FSET.said(key=spec.key))
     if spec is None:
         key = _s.child_key(key)
     path = spec.path if spec is not None else tuple(p for p in key.split(".") if p)
@@ -309,18 +301,10 @@ def set_command(settings: dict, arg: str, baseline: dict | None = None, *, banne
 # fset
 # ---------------------------------------------------------------------------
 
-def _fset_specs() -> list[_s.SettingSpec]:
-    return [spec for spec in _s.REGISTRY if spec.command == "fset"]
-
-
 def fset_rows(settings: dict, pattern: str | None = None) -> list[str]:
     """`NAME value` for every /fset entry, or those ``pattern`` matches
     (`*` and `?` wildcards; a bare name matches itself)."""
     rows: list[str] = []
-    for spec in _fset_specs():
-        if pattern is None or fnmatch.fnmatchcase(spec.key, pattern):
-            value = render_value(spec, _s.knob(settings, spec.key))
-            rows.append(msgs.line_for(msgs.FSET_VALUE, name=spec.key, value=value))
     for name in _fset.names():
         if pattern is None or fnmatch.fnmatchcase(name, pattern):
             value = _fset.lookup(name)
@@ -333,22 +317,11 @@ def fset_rows(settings: dict, pattern: str | None = None) -> list[str]:
 
 def fset_command(settings: dict, arg: str, baseline: dict | None = None) -> CommandResult:
     """`fset` lists every entry, `fset NAME` (or a `*` pattern) shows them,
-    `fset -NAME` clears one, `fset NAME value` sets one. A display level is a
-    setting in ``settings``; any other entry is `js.fset`'s."""
+    `fset -NAME` clears one, `fset NAME value` sets one."""
     name, value = first_word(arg)
     name = name.upper()
     if not name:
         return CommandResult(handled=True, lines=fset_rows(settings))
-    spec = _s.spec_for(name.lstrip("-"))
-    if spec is not None and spec.command == "fset":
-        if name.startswith("-"):
-            return apply_unset(settings, spec.key, baseline, verb="fset")
-        if not value:
-            return CommandResult(handled=True, lines=fset_rows(settings, spec.key))
-        result = apply_set(settings, spec.key, value, verb="fset")
-        if result.error is None:
-            result.lines = fset_rows(settings, spec.key)
-        return result
     if name.startswith("-") and len(name) > 1:
         if not _fset.is_name(name[1:]):
             return CommandResult(handled=True, error=msgs.FSET_UNKNOWN.said(name=name[1:]))

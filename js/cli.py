@@ -5316,8 +5316,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     keymap, key_errors = keys_mod.load(keys_mod.keys_file(cfg.settings))
     completer = replcomplete.JsCompleter(
         commands=lambda: _command_completions(state),
-        setting_keys=[spec.key for spec in settings.REGISTRY if spec.command == "set"],
-        fset_names=[*(spec.key for spec in settings.REGISTRY if spec.command == "fset"), *fset.names()],
+        setting_keys=[spec.key for spec in settings.REGISTRY],
+        fset_names=fset.names(),
         names=lambda: sorted(set(providers.known_provider_ids()) | set(logins.load_logins())),
         spell=replcomplete.hunspell_suggest,
         bare_words=QUIT_WORDS,

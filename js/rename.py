@@ -350,8 +350,7 @@ def _literal_value(old: str, value: str) -> str:
 
 def is_fset(new: str) -> bool:
     """Whether new name ``new`` is an /fset entry, set with `fset`."""
-    spec = SPEC_BY_KEY.get(new)
-    return new.startswith("COLOR_") or (spec is not None and spec.command == "fset")
+    return new.startswith("COLOR_")
 
 
 # ---------------------------------------------------------------------------

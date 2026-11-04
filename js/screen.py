@@ -78,13 +78,12 @@ def status_style() -> str:
 
 
 def screen_style() -> str:
-    """The whole screen's prompt_toolkit style: COLOR_TEXT, on
-    COLOR_BACKGROUND when the theme sets one, else on the terminal's own."""
+    """The whole screen's prompt_toolkit style: the terminal's own text, on
+    COLOR_BACKGROUND when it is set, else on the terminal's own."""
     if not fset.colour_on():
         return ""
     bg = fset.hex_for("COLOR_BACKGROUND")
-    fg = fset.hex_for("COLOR_TEXT")
-    return " ".join(filter(None, (f"bg:{bg}" if bg else "", fg or "")))
+    return f"bg:{bg}" if bg else ""
 
 
 def accent_clock(line: str) -> str:

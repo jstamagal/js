@@ -1,7 +1,8 @@
 # What `/help fset NAME` prints: each /fset entry's NAME alone on a line,
 # then its help, indented four spaces. Lines starting with # are comments.
 # A colour is #rrggbb, a palette slot 00-98, or $NAME of another colour;
-# a|b takes the first that resolves. PALETTE_00..PALETTE_98 are the mIRC
+# a|b takes the first that resolves; empty is the terminal's own colour.
+# Each COLOR_* is a palette slot in js/fset, so a theme's palette repaints it. PALETTE_00..PALETTE_98 are the mIRC
 # palette; every message's format is named after its js/messages.py entry.
 # FORMAT and PALETTE below are not entries: they explain every format and
 # every palette slot.
@@ -36,78 +37,16 @@ PALETTE
     to white. A theme changes what a slot looks like, so a format that names
     slot 04 for failures shows the theme's red.
 
-REASONING_DISPLAY
-    Reasoning display: 0 hidden; 1, the default, streams, then folds to
-    `N tok reasoning` when the answer starts; 2 leave visible; 3 leave
-    visible with the provider's token count. The count is the provider's or none.
-    The reasoning_toggle key, Ctrl-O unless KEYBINDS_FILE moves it, folds
-    and unfolds it in the async screen. Folding is the screen's: in js -p
-    and the blocking REPL, 1 to 3 print the text and then the count line.
-    Display only; session reasoning is always retained.
-
-NET_DISPLAY
-    Network display in the async screen: 0 nothing, 1 failures, 2 also
-    Connecting/Connected lines and a response byte counter on the status bar
-    until the first token, 3 also catalog refreshes and per-call stream
-    stats. Retries and the line that gives up on them print at every level.
-
-TOOLS_DISPLAY
-    Tool exchange display: 0 nothing; 1 what matters: quiet calls fold into
-    one row per tool, a command shows its output while it runs and one row
-    after, a patch shows its diff, a failure its error; 2 every call with
-    the first TOOLS_PREVIEW_LINES result lines; 3 every call whole. At 1 and
-    2 in the async screen, the reasoning_toggle key, Ctrl-O, unfolds every
-    folded row and preview to its whole form and folds it back. Under js -p
-    nothing unfolds: quiet calls are a row each, hidden lines stay hidden,
-    and a subagent run also gets a row when it starts. The
-    session transcript keeps every call whole.
-
-TOOLS_QUIET
-    Tools whose calls TOOLS_DISPLAY 1 shows as one row and folds: a JSON
-    list of tool names.
-
-SHELL_QUIET
-    Shell commands TOOLS_DISPLAY 1 treats as quiet, by first word or first
-    two: a JSON list.
-
-TOOLS_PREVIEW_LINES
-    Lines of a result, a diff or a program shown before the rest is hidden
-    at TOOLS_DISPLAY 1 and 2. On the screen the reasoning_toggle key, Ctrl-O,
-    unfolds them; under js -p they stay hidden.
-
-MARKDOWN
-    Render assistant Markdown on a terminal: finished blocks are highlighted
-    once, the open block stays live. Off writes the text as it arrives.
-    Output that is not a terminal is always plain text.
-
-RESUME_EXCHANGES
-    Exchanges of a resumed session the REPL shows before its prompt, drawn
-    as a turn draws them. 0 shows none.
-
-TRACE
-    Pretty-print the tool-call trace line as the model runs.
-
-KERNEL_VERBOSITY
-    How much of each kernel/toolbox call is rendered to your terminal.
-    quiet: errors and interrupts only. normal: code, output, timing,
-    namespace. verbose: stdout, stderr and display split out, plus kernel
-    lifecycle and toolbox activity. Affects only what you see; the model
-    always receives the full result.
-
-KERNEL_LINES_MAX
-    Line cap per section of the kernel's terminal render, so a 4000-line
-    cell cannot scroll the screen away. Only the screen caps it, as a fold
-    the reasoning_toggle key, Ctrl-O, unfolds to the whole render; anywhere
-    else nothing can unfold it, so it prints whole. The hidden count is
-    shown, and the model still gets the untrimmed output.
-
 THEME
-    The built-in theme: a palette, colours and formats under the entries set
-    here. claude, crush, bitchx, github, paper or splash3.
+    A palette under the entries set here: the file ~/.js/themes/THEME, else
+    the built-in js/themes/THEME (claude, crush, bitchx, github, paper,
+    splash3). A theme file holds fset PALETTE_nn #rrggbb lines and nothing
+    else. Empty, the default, is no theme: the palette is js/fset's. A
+    name with no file, or a file with any other line, is refused.
 
 HOST_COLOR
     This box's colour, for the prompt, the speaker marks and the status
-    bar's accent. Empty leaves the theme's own.
+    bar's accent. Empty leaves js/fset's own.
 
 CODE_STYLE
     The Pygments style code in answers and tool exchanges is highlighted in.
@@ -124,11 +63,8 @@ MARK_GAP
     there.
 
 COLOR_BACKGROUND
-    The screen's background in the async REPL. Empty leaves the terminal's
-    own.
-
-COLOR_TEXT
-    Ordinary text js draws itself.
+    The screen's background in the async REPL. Empty, the default, leaves
+    the terminal's own.
 
 COLOR_DIM
     Metadata: arguments, line numbers, metrics.
