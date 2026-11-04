@@ -4712,7 +4712,7 @@ def _main(argv: list[str] | None = None) -> int:
     if args.target is not None and not args.commit:
         parser.error(msgs.UNEXPECTED_ARGUMENT.text(word=args.target))
     if args.bare and args.agent is not None:
-        parser.error(msgs.FLAGS_EXCLUSIVE.text(first='--bare', second='--agent'))
+        parser.error(msgs.BARE_WITH_AGENT.text())
     if args.loop is not None:
         from . import loop_controller
         try:
