@@ -24,8 +24,8 @@ MODEL
     Default model id; unprefixed ids route through AI Gateway.
 
 OUTPUT_TOKENS_MAX
-    Per-call max_tokens; unset = models.dev metadata when known, else no
-    explicit cap.
+    Per-call max_tokens; unset = not sent, except on the Anthropic wire,
+    which sends ANTHROPIC_OUTPUT_TOKENS_MAX.
 
 CONTEXT_SIZE
     Override the active model's context window. Unset = local runtime
@@ -33,15 +33,16 @@ CONTEXT_SIZE
     multi-model setup use CONTEXT_SIZE_PER_MODEL instead.
 
 EFFORT
-    Thinking effort: off|minimal|low|medium|high|xhigh|max. off disables
-    thinking. Any other value is rejected. Clear with `set -EFFORT`. A
-    subagent's agent.yaml reasoning beats the effort it inherits from its
-    parent, never an EFFORT from env, a flag or /set.
+    Thinking effort word, sent as typed: off|minimal|low|medium|high|
+    xhigh|max or any other word. A model js recognizes may take a ladder
+    word as its nearest effort; the run line shows what was sent. Clear
+    with `set -EFFORT`. A subagent's agent.yaml reasoning beats the effort
+    it inherits from its parent, never an EFFORT from env, a flag or /set.
 
 THINKING_BUDGET
-    Thinking budget in tokens on the Anthropic wire, for the models that
-    take a budget: Claude 4.5 and earlier, MiniMax, opencode-go. Unset =
-    derived from EFFORT. Adaptive models and effort off ignore it.
+    Thinking budget in tokens on the Anthropic wire, sent as thinking
+    enabled with budget_tokens. Unset = no budget sent. Temperature and
+    top_k are not sent while it is in force.
 
 VISION
     Send image bytes to the active model: on/off; unset = detect from
@@ -129,7 +130,7 @@ EXTRA_PARAMS
     Free-form extra params passed through to the provider SDK.
 
 TURN_ROUNDS_MAX
-    Max tool calls per turn before the loop gives up.
+    Max tool calls per turn before the loop gives up. Also --max-turns.
 
 REPLY_TOOL_CALLS_MAX
     Maximum distinct tool calls accepted from one assistant message;
@@ -477,6 +478,38 @@ REPETITION_PENALTY
 PRESENCE_PENALTY
     Provider-default presence penalty; unset = do not send.
 
+MIN_P
+    min_p sampling; unset = do not send. Sent in the request body.
+
+TOP_N_SIGMA
+    top_n_sigma sampling; unset = do not send. Sent in the request body.
+
+XTC_PROBABILITY
+    XTC cut chance; unset = do not send. Sent in the request body.
+
+XTC_THRESHOLD
+    XTC cut threshold; unset = do not send. Sent in the request body.
+
+DRY_MULTIPLIER
+    DRY penalty strength; unset = do not send. Sent in the request body.
+
+DRY_BASE
+    DRY penalty growth base; unset = do not send. Sent in the request body.
+
+DRY_ALLOWED_LENGTH
+    Longest repeat DRY allows unpenalized; unset = do not send.
+
+DRY_PENALTY_LAST_N
+    Tokens DRY looks back over; unset = do not send.
+
+DRY_SEQUENCE_BREAKERS
+    JSON list of strings that break a DRY repeat; unset = do not send.
+
+TEMPLATE_KWARGS
+    key=value entries split by ',' sent as chat_template_kwargs, e.g.
+    enable_thinking=false. A value is read as JSON; one that is not JSON
+    is a string. Also --template-kwargs.
+
 RETRY_BACKOFF_START
     Seconds before the first retry of a failed model call that named no
     Retry-After.
@@ -515,11 +548,16 @@ TOOL_ARGUMENT_STRICT
     on: malformed tool arguments are refused instead of repaired.
 
 DEEPSEEK_REASONING_TOKENS_MAX
-    max_reasoning_tokens sent to DeepSeek models when the request sets
-    none.
+    max_reasoning_tokens sent to DeepSeek's own endpoint when the request
+    sets none. The run line shows it under this name.
+
+ANTHROPIC_OUTPUT_TOKENS_MAX
+    max_tokens sent on the Anthropic wire, which requires one, when
+    OUTPUT_TOKENS_MAX is unset.
 
 CLAUDE_PROXY_INCLUDE_REASONING
-    include_reasoning sent to a Claude proxy when the request sets none.
+    on: every OpenAI chat-format request carries include_reasoning: true,
+    which a Claude proxy needs to return Claude's thinking.
 
 ANTHROPIC_PROMPT_CACHE
     on: Anthropic requests mark the prompt for caching.
@@ -529,8 +567,8 @@ ANTHROPIC_THINKING_DISPLAY
     omitted.
 
 ANTHROPIC_REQUIRED_EFFORT
-    Effort sent to an Anthropic model that requires one when EFFORT is
-    unset.
+    Effort sent instead of off to an Anthropic model that cannot turn
+    thinking off: Fable, Mythos, Claude 5.5 and later.
 
 CODEX_TEXT_VERBOSITY
     Text verbosity sent with Codex requests: low, medium or high.

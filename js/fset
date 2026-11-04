@@ -158,6 +158,7 @@ fset ARGUMENTS_REFUSED %C04%G%C $0-
 fset UNKNOWN_OPTION %C04%G%C unknown option $0-
 fset UNKNOWN_OPTION_DID_YOU_MEAN %C04%G%C unknown option $0 (did you mean $1-?)
 fset BAD_REASONING %C04%G%C --reasoning $0: $1-
+fset BAD_FLAG_VALUE %C04%G%C $0 $1: $2-
 fset PROMPT_EMPTY %C04%G%C Prompt is empty.
 fset NO_ANSWER %C04%G%C The model returned no answer.
 fset NO_BENCHMARKS %C04%G%C Agent $0- has no NN-benchmark.md files.

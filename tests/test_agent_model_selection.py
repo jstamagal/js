@@ -182,7 +182,7 @@ def test_apply_agent_model_noops_without_frontmatter_model(tmp_path):
 
 @pytest.mark.parametrize(
     ("manifest_value", "expected"),
-    [("high", "high"), ("off", "none")],
+    [("high", "high"), ("off", "off"), ("spoon", "spoon")],
 )
 def test_subagent_frontmatter_reasoning_effort(monkeypatch, tmp_path, manifest_value, expected):
     prompts = _write_agent_dir(
@@ -196,13 +196,13 @@ def test_subagent_frontmatter_reasoning_effort(monkeypatch, tmp_path, manifest_v
     assert seen["reasoning_effort"] == expected
 
 
-def test_subagent_rejects_invalid_frontmatter_reasoning_effort(tmp_path):
+def test_subagent_rejects_a_frontmatter_reasoning_effort_that_is_not_one_word(tmp_path):
     prompts = _write_agent_dir(
         tmp_path / "invalid-reasoning" / "prompts",
-        manifest="reasoning: enormous\ntools: []\n",
+        manifest="reasoning: very enormous\ntools: []\n",
     )
 
-    with pytest.raises(ValueError, match=r"off\|minimal\|low\|medium\|high\|xhigh\|max"):
+    with pytest.raises(ValueError, match="very enormous"):
         persona.load_prompt_spec(prompts)
 
 

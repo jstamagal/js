@@ -3,7 +3,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from js import persona
-from js.sampling import Sampling, call_params
+import pytest
+
+from js import model_client
+from js.sampling import Sampling
 
 
 _JS_SAMPLING_ENV = ("JS_TEMPERATURE", "JS_TOP_P", "JS_TOP_K", "JS_REPETITION_PENALTY", "JS_PRESENCE_PENALTY")
@@ -49,53 +52,67 @@ def test_sampling_from_mapping_coerces_known_keys_and_ignores_unknown():
     assert sampling == Sampling(temperature=0.3, top_k=32)
 
 
-def test_call_params_filters_anthropic_wire():
-    sampling = Sampling(
-        temperature=0.7,
-        top_p=0.9,
-        top_k=50,
-        repetition_penalty=1.1,
-        presence_penalty=1.2,
-    )
-
-    assert call_params(sampling, "anthropic") == {
-        "temperature": 0.7,
-        "top_p": 0.9,
-        "top_k": 50,
-    }
+_EVERY = Sampling(
+    temperature=0.7, top_p=0.9, top_k=50, min_p=0.05, top_n_sigma=1.0,
+    xtc_probability=0.5, xtc_threshold=0.1, dry_multiplier=0.8, dry_base=1.75,
+    dry_allowed_length=2, dry_penalty_last_n=-1, dry_sequence_breakers=("\n", ":"),
+    repetition_penalty=1.1, presence_penalty=1.2,
+)
 
 
-def test_call_params_filters_openai_wire():
-    sampling = Sampling(
-        temperature=0.7,
-        top_p=0.9,
-        top_k=50,
-        repetition_penalty=1.1,
-        presence_penalty=1.2,
-    )
+def _sent(provider_id, sampling, model="some-model"):
+    """(the wire's own sampling fields, extra_body) a request carries."""
+    params = model_client.build_request_params(
+        model_id=model, provider_id=provider_id, provider_base_url=None,
+        max_output_tokens=None, reasoning_effort=None, sampling=sampling)
+    if params is None:
+        return {}, {}
+    top = {}
+    samplers = params.sampling if isinstance(params.sampling, dict) else {}
+    for value in samplers.values():
+        for name in ("temperature", "top_p", "top_k", "presence_penalty"):
+            field = getattr(value, name, None)
+            if isinstance(field, (int, float)) and not isinstance(field, bool):
+                top[name] = field
+    return top, dict(params.extra_body or {})
 
-    assert call_params(sampling, "openai") == {
-        "temperature": 0.7,
-        "top_p": 0.9,
-        "presence_penalty": 1.2,
-    }
+
+_NONSTANDARD = {
+    "min_p": 0.05, "top_n_sigma": 1.0, "xtc_probability": 0.5, "xtc_threshold": 0.1,
+    "dry_multiplier": 0.8, "dry_base": 1.75, "dry_allowed_length": 2, "dry_penalty_last_n": -1,
+    "dry_sequence_breakers": ["\n", ":"], "repetition_penalty": 1.1,
+}
 
 
-def test_call_params_maps_openai_compatible_extensions_to_extra_body():
-    sampling = Sampling(
-        temperature=0.7,
-        top_p=0.9,
-        top_k=50,
-        repetition_penalty=1.1,
-        presence_penalty=1.2,
-    )
+def test_the_anthropic_wire_sends_every_set_field_in_the_body():
+    top, extra = _sent("anthropic", _EVERY)
 
-    assert call_params(sampling, "deepseek") == {
-        "temperature": 0.7,
-        "top_p": 0.9,
-        "presence_penalty": 1.2,
-        "extra_body": {"top_k": 50, "repetition_penalty": 1.1},
-    }
+    assert top == {}
+    assert {key: extra[key] for key in (*_NONSTANDARD, "presence_penalty", "temperature", "top_p", "top_k")} == {
+        **_NONSTANDARD, "presence_penalty": 1.2, "temperature": 0.7, "top_p": 0.9, "top_k": 50}
+
+
+@pytest.mark.parametrize("provider_id", ["openai", "deepseek", "vllm", None])
+def test_the_chat_wire_sends_every_set_field(provider_id):
+    top, extra = _sent(provider_id, _EVERY)
+
+    assert top == {"temperature": 0.7, "top_p": 0.9, "presence_penalty": 1.2}
+    assert {key: extra[key] for key in (*_NONSTANDARD, "top_k")} == {**_NONSTANDARD, "top_k": 50}
+
+
+def test_the_responses_wire_sends_presence_penalty_in_extra_body():
+    top, extra = _sent("openai-codex", Sampling(temperature=0.7, top_p=0.9, presence_penalty=1.2))
+
+    assert top == {"temperature": 0.7, "top_p": 0.9}
+    assert extra["presence_penalty"] == 1.2
+
+
+@pytest.mark.parametrize("provider_id", ["anthropic", "openai", "openai-codex", "vllm", None])
+def test_unset_sampling_fields_are_absent_from_the_request(provider_id):
+    top, extra = _sent(provider_id, Sampling(temperature=0.3))
+
+    assert {**top, **extra}["temperature"] == 0.3
+    assert not set(extra) & {*_NONSTANDARD, "top_k", "presence_penalty", "top_p"}
 
 
 def test_turn_sampling_precedence():
@@ -116,13 +133,6 @@ def test_turn_sampling_precedence():
         repetition_penalty=1.05,
         presence_penalty=1.2,
     )
-
-
-def test_call_params_unknown_transport_sends_nothing():
-    sampling = Sampling(temperature=0.7, top_p=0.9, top_k=50)
-
-    assert call_params(sampling, None) == {}
-    assert call_params(sampling, "gateway") == {}
 
 
 def test_loading_prompt_spec_sampling_does_not_mutate_os_environ(monkeypatch, tmp_path):
@@ -150,25 +160,28 @@ def test_loading_prompt_spec_sampling_does_not_mutate_os_environ(monkeypatch, tm
     assert spec.sampling == {"temperature": 0.2, "top_p": 0.75}
 
 
-def test_call_params_responses_transports_send_no_presence_penalty():
-    """openai's AsyncResponses.create has no presence_penalty (TypeError on
-    every turn), and Codex reads only temperature and top_p."""
-    sampling = Sampling(temperature=0.7, top_p=0.9, top_k=50, repetition_penalty=1.1, presence_penalty=1.2)
-    for transport in ("custom_responses", "codex_oauth"):
-        assert call_params(sampling, transport) == {"temperature": 0.7, "top_p": 0.9}, transport
-    assert call_params(sampling, "openai")["presence_penalty"] == 1.2
+def test_agent_yaml_sampling_takes_every_sampling_setting(tmp_path):
+    prompts = tmp_path / "agent"
+    prompts.mkdir()
+    (prompts / "agent.yaml").write_text(
+        "sampling:\n"
+        "  min_p: 0.05\n"
+        "  dry_allowed_length: 2\n"
+        "  dry_sequence_breakers: [\"\\n\", \":\"]\n",
+        encoding="utf-8",
+    )
+    (prompts / "01.md").write_text("SYSTEM\n", encoding="utf-8")
+    cfg = SimpleNamespace(prompt_roots=(), prompts_dir=prompts, agents_files=(), allow_inline_code=False)
+
+    spec = persona.load_configured_prompt_spec(cfg)
+
+    assert spec.sampling == {"min_p": 0.05, "dry_allowed_length": 2, "dry_sequence_breakers": ["\n", ":"]}
 
 
-def test_responses_request_params_carry_no_presence_penalty():
-    from js import model_client
+def test_the_sampling_keys_are_the_settings_and_the_flags():
+    from js import cli, settings
+    from js.sampling import SAMPLING_FIELDS
 
-    sampling = Sampling(temperature=0.5, presence_penalty=1.2)
-    params = model_client._build_inference_params(
-        sampling, "custom_responses", reasoning=None, output=None, extra_body={})
-    samplers = params.sampling or {}
-    names = {type(value).__name__ for value in samplers.values()}
-    assert any("Temperature" in name for name in names)
-    assert not any("Presence" in name for name in names)
-    assert not (params.extra_body or {}).get("presence_penalty")
-
-
+    assert set(persona._SAMPLING_KEYS) == set(SAMPLING_FIELDS)
+    assert all(settings.SPEC_BY_KEY[field.upper()].group == "sampling" for field in SAMPLING_FIELDS)
+    assert {(field, field.upper()) for field in SAMPLING_FIELDS} <= set(cli.SETTING_FLAGS)

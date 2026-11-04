@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -14,9 +15,9 @@ import yaml
 from .promptexpand import expand_prompt, session_variables
 from .toolkit import policy
 from . import messages as msgs
-from . import output
 from . import settings
 from . import secret_patterns
+from .sampling import SAMPLING_FIELDS
 
 
 @dataclass(frozen=True)
@@ -199,16 +200,9 @@ def _coerce_tool_selectors(path: Path, raw: Any) -> tuple[str, ...]:
     return policy.parse_entries(raw, str(path))
 
 
-# Sampling params an agent may set in its YAML manifest. Transport-specific
-# filtering happens later from the typed Sampling object; loading a prompt spec
-# must never mutate process environment.
-_SAMPLING_KEYS = (
-    "temperature",
-    "top_p",
-    "top_k",
-    "repetition_penalty",
-    "presence_penalty",
-)
+# Sampling settings an agent may set under `sampling:` in agent.yaml: the
+# sampling settings' own names, in lower case.
+_SAMPLING_KEYS = SAMPLING_FIELDS
 
 
 def _coerce_reasoning_effort(path: Path, raw: Any) -> str | None:
@@ -216,7 +210,7 @@ def _coerce_reasoning_effort(path: Path, raw: Any) -> str | None:
         return None
     # PyYAML's YAML 1.1 resolver parses an unquoted `off` as False.
     if raw is False:
-        return "none"
+        return "off"
     if not isinstance(raw, str):
         raise ValueError(msgs.AGENT_MANIFEST_REASONING_IN_MUST_BE_A_STRING.format(path=path))
     spec = settings.SPEC_BY_KEY["EFFORT"]
@@ -248,12 +242,15 @@ def _coerce_sampling(path: Path, raw: Any) -> dict[str, Any]:
             raise ValueError(
                 msgs.AGENT_MANIFEST_UNKNOWN_SAMPLING_KEY_IN_ALLOWED.format(key=key, path=path, value=', '.join(_SAMPLING_KEYS))
             )
-        if isinstance(val, bool) or not isinstance(val, (int, float)):
+        if isinstance(val, list):
+            text = json.dumps(val)
+        elif isinstance(val, bool) or not isinstance(val, (int, float)):
             raise ValueError(msgs.AGENT_MANIFEST_SAMPLING_IN_MUST_BE_A_NUMBER.format(key=key, path=path))
-        value, error = settings.coerce_value(settings.SPEC_BY_KEY[key.upper()], str(val))
+        else:
+            text = str(val)
+        value, error = settings.coerce_value(settings.SPEC_BY_KEY[key.upper()], text)
         if error is not None:
-            output.notice(msgs.ENV_SETTING_IGNORED, name=f"sampling.{key} in {path}", error=error)
-            continue
+            raise ValueError(msgs.AGENT_MANIFEST_SAMPLING_IN.format(key=key, path=path, error=error))
         out[key] = value
     return out
 

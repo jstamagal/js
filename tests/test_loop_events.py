@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from js import output, stream_transport
 
 
@@ -268,16 +270,12 @@ def test_skipped_session_records_emit_a_warning(tmp_path, capsys):
     assert capsys.readouterr() == ("", "")
 
 
-def test_ignored_sampling_value_emits_a_warning(tmp_path, capsys):
+def test_a_bad_agent_sampling_value_is_an_error_naming_it(tmp_path):
     from js import persona
 
-    events = []
     path = tmp_path / "agent.yaml"
-    with output.using_sink(SimpleNamespace(emit=events.append)):
-        assert persona._coerce_sampling(path, {"temperature": -1}) == {}
-    assert len(events) == 1
-    assert dict(events[0].fields)["fields"]["name"] == f"sampling.temperature in {path}"
-    assert capsys.readouterr() == ("", "")
+    with pytest.raises(ValueError, match="sampling.temperature"):
+        persona._coerce_sampling(path, {"temperature": -1})
 
 
 def test_skill_discovery_warning_is_an_event(monkeypatch, capsys):

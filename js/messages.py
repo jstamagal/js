@@ -686,8 +686,14 @@ OPT_NO_SAVE = Message(
     "and the next run must re-read context.")
 OPT_QUIET = Message("Suppress the resume hint after a one-shot prompt.")
 OPT_REASONING = Message(
-    "Thinking effort: off|minimal|low|medium|high|xhigh|max. off disables thinking. Any other value is rejected.")
+    "Thinking effort word, sent as typed: off|minimal|low|medium|high|xhigh|max or any other word. "
+    "A model js recognizes may take it as its nearest effort; the banner shows what was sent.")
 OPT_MAX_OUT = Message("Max output tokens per call.")
+OPT_MAX_TURNS = Message("Set TURN_ROUNDS_MAX, the most model calls one turn makes.")
+OPT_TEMPLATE_KWARGS = Message(
+    "Set TEMPLATE_KWARGS: key=value entries sent as chat_template_kwargs, e.g. enable_thinking=false. "
+    "A value is read as JSON; one that is not JSON is a string.")
+OPT_SETTING_FLAG = Message("Set {setting} for this run.")
 OPT_SYSTEM_PROMPT_FILE = Message(
     "Use one file as the full system prompt, with inline directives, and defaultagent's tools. "
     "No agent directory, *-env.md or AGENTS.md.")
@@ -799,6 +805,7 @@ LIST_NO = Message("no")
 # --- One-shot and startup ----------------------------------------------------
 
 BAD_REASONING = Message("--reasoning {value}: {error}")
+BAD_FLAG_VALUE = Message("{flag} {value}: {error}")
 PROMPT_EMPTY = Message("Prompt is empty.")
 TURN_INTERRUPTED = Message("Turn interrupted.")
 TURN_INTERRUPTED_KEPT = Message("Turn interrupted. Partial work kept.")
@@ -1220,6 +1227,10 @@ EXPECTED_JSON_OBJECT = Message("expected a JSON object")
 EXPECTED_ENV_NAMES = Message("expected a JSON list of non-empty environment-variable names")
 EXPECTED_SKILL_NAMES = Message("expected a JSON list of non-empty skill names")
 EXPECTED_JSON_LIST = Message("expected a JSON list")
+EXPECTED_EFFORT_WORD = Message("expected one word, got {value!r}")
+EXPECTED_TEMPLATE_KWARGS = Message("expected key=value entries split by ',', got {entry!r}")
+TEMPLATE_KWARGS_TWICE = Message("{key!r} is given twice")
+EXPECTED_STRING_LIST = Message("expected a JSON list of strings")
 EXPECTED_ALIAS_PROFILES = Message("expected profiles with match and aliases")
 EXPECTED_NONEMPTY_ALIASES = Message("expected non-empty aliases")
 EXPECTED_NONEMPTY_MATCH = Message("expected non-empty match values")
@@ -1515,6 +1526,8 @@ SAMPLING_SAMPLING_MUST_BE_A_FINITE_NUMBER = Message("sampling.{key} must be a fi
 
 SAMPLING_SAMPLING_MUST_BE_AN_INTEGER = Message("sampling.{key} must be an integer", banner=False)
 
+SAMPLING_MUST_BE_A_LIST_OF_STRINGS = Message("sampling.{key} must be a JSON list of strings", banner=False)
+
 EVENT_HANDLER_COMMAND_UNSUPPORTED = Message("unsupported event handler command: {value}", banner=False)
 
 SETTING_SOURCE_LOGIN = Message("login {provider_id}", banner=False)
@@ -1673,8 +1686,6 @@ CONFIG_SESSION_PARENT_MUST_BE_A_DIRECTORY = "session parent must be a directory:
 CONFIG_SESSION_PATH_MUST_BE_A_JSONL_FILE_307 = "session path must be a .jsonl file inside {sessions_dir}: {session}"
 
 CONFIG_AGENT_AT_IS_UNREADABLE = "agent {agent_id!r} at {candidate} is unreadable: {strerror}"
-
-EXPECTED_REASONING_EFFORT = "expected {choices}"
 
 EXPECTED_SHELL_QUOTED_COMMAND = Message("expected a shell-quoted command: {exc}", banner=False)
 
@@ -1931,6 +1942,8 @@ AGENT_MANIFEST_SAMPLING_FRONTMATTER_IN_MUST_BE_A_MAPPING = "sampling frontmatter
 AGENT_MANIFEST_UNKNOWN_SAMPLING_KEY_IN_ALLOWED = "unknown sampling key '{key}' in {path}; allowed: {value}"
 
 AGENT_MANIFEST_SAMPLING_IN_MUST_BE_A_NUMBER = "sampling.{key} in {path} must be a number"
+
+AGENT_MANIFEST_SAMPLING_IN = "sampling.{key} in {path}: {error}"
 
 AGENT_MANIFEST_UNKNOWN_KEY_S_IN_ALLOWED = "unknown key(s) {value} in {manifest_path}; allowed: {value2}"
 

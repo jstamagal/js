@@ -106,6 +106,7 @@ def test_deepseek_reasoning_budget_uses_extra_body_when_enabled(monkeypatch):
 
     assert _pview(captured["params"]) == {
         "max_tokens": 64,
+        "reasoning_effort": "high",
         "extra_body": {"max_reasoning_tokens": 32_000},
     }
 
@@ -115,13 +116,14 @@ def test_deepseek_reasoning_budget_is_omitted_when_reasoning_is_off(monkeypatch)
         monkeypatch,
         provider_id="deepseek",
         model_id="deepseek-chat",
-        reasoning_effort="none",
+        reasoning_effort="off",
     )
 
-    assert _pview(captured["params"]) == {"max_tokens": 64}
+    # DeepSeek serves no "none" stop: its table takes off to the nearest, low.
+    assert _pview(captured["params"]) == {"max_tokens": 64, "reasoning_effort": "low"}
 
 
-def test_anthropic_wire_drops_openai_and_vllm_penalties(monkeypatch):
+def test_anthropic_wire_sends_every_set_sampling_field_in_the_body(monkeypatch):
     captured = _capture_stream_call(
         monkeypatch,
         provider_id="opencode-go-anthropic",
@@ -137,13 +139,12 @@ def test_anthropic_wire_drops_openai_and_vllm_penalties(monkeypatch):
 
     assert _pview(captured["params"]) == {
         "max_tokens": 64,
-        "temperature": 0.7,
-        "top_p": 0.9,
-        "top_k": 50,
+        "extra_body": {"temperature": 0.7, "top_p": 0.9, "top_k": 50,
+                       "repetition_penalty": 1.1, "presence_penalty": 1.2},
     }
 
 
-def test_openai_wire_emits_reasoning_effort_and_supported_sampling(monkeypatch):
+def test_openai_wire_emits_reasoning_effort_and_every_set_sampling_field(monkeypatch):
     captured = _capture_stream_call(
         monkeypatch,
         provider_id="openai",
@@ -164,6 +165,7 @@ def test_openai_wire_emits_reasoning_effort_and_supported_sampling(monkeypatch):
         "temperature": 0.7,
         "top_p": 0.9,
         "presence_penalty": 1.2,
+        "extra_body": {"top_k": 50, "repetition_penalty": 1.1},
     }
 
 

@@ -482,7 +482,7 @@ def test_repl_set_reasoning_effort_off_disables_provider_default(monkeypatch, tm
 
     run_blocking(cfg, ["/set EFFORT off", "hello", "exit"])
 
-    assert seen == [("none", "none")]
+    assert seen == [("off", "off")]
 
 
 def test_repl_set_reasoning_effort_clear_via_dash_key_restores_the_default(monkeypatch, tmp_path):

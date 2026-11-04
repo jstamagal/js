@@ -170,7 +170,8 @@ class _Wire:
 
 def _send(monkeypatch, *, provider: str, model: str, effort: str | None,
           max_out: int | None, base: str | None = None,
-          extra: dict | None = None, sampling: Sampling | None = None) -> dict:
+          extra: dict | None = None, sampling: Sampling | None = None,
+          budget: int | None = None) -> dict:
     wire = _Wire(model)
     wire.install(monkeypatch)
 
@@ -179,7 +180,7 @@ def _send(monkeypatch, *, provider: str, model: str, effort: str | None,
             model_id=model, provider_id=provider, provider_base_url=base,
             provider_api_key="fixture", messages=[ai.user_message("hi")], tools=None,
             max_output_tokens=max_out, reasoning_effort=effort, on_text=lambda _c: None,
-            provider_extra=extra, sampling=sampling,
+            provider_extra=extra, sampling=sampling, thinking_budget=budget,
         )
 
     asyncio.run(drive())
@@ -197,16 +198,14 @@ def _thinking_fields(body: dict) -> dict:
     ("opencode-go-anthropic", "https://opencode.ai/zen/go", "qwen3.7-plus"),
     ("minimax", "https://api.minimax.io/anthropic/v1", "MiniMax-M2"),
 ])
-def test_every_anthropic_sdk_provider_sends_a_thinking_budget(monkeypatch, provider, base, model):
+def test_a_model_without_adaptive_thinking_gets_the_effort_word_and_no_invented_budget(
+        monkeypatch, provider, base, model):
     body = _send(monkeypatch, provider=provider, base=base, model=model, effort="high", max_out=32000)
 
-    assert _thinking_fields(body) == {
-        "thinking": {"type": "enabled", "budget_tokens": 16384},
-        "max_tokens": 32000,
-    }
+    assert _thinking_fields(body) == {"output_config": {"effort": "high"}, "max_tokens": 32000}
 
 
-def test_a_saved_login_on_the_anthropic_sdk_sends_a_thinking_budget(monkeypatch, tmp_path):
+def test_a_saved_login_on_the_anthropic_sdk_sends_the_effort_word(monkeypatch, tmp_path):
     monkeypatch.setattr(logins, "_CONFIG_DIR_OVERRIDE", tmp_path / "login-store")
     logins.save_login(Login(
         provider_id="myclaude", sdk_provider_id="anthropic",
@@ -214,50 +213,35 @@ def test_a_saved_login_on_the_anthropic_sdk_sends_a_thinking_budget(monkeypatch,
     ))
 
     body = _send(monkeypatch, provider="myclaude", base="http://claude.test", model="some-model",
-                 effort="low", max_out=8000)
+                 effort="spoon", max_out=8000)
 
-    assert _thinking_fields(body) == {
-        "thinking": {"type": "enabled", "budget_tokens": 2048},
-        "max_tokens": 8000,
-    }
+    assert _thinking_fields(body) == {"output_config": {"effort": "spoon"}, "max_tokens": 8000}
 
 
-@pytest.mark.parametrize(("effort", "budget"), [
-    ("minimal", 1024), ("low", 2048), ("medium", 8192), ("high", 16384), ("xhigh", 24576), ("max", 32000),
-])
-def test_the_budget_follows_the_reasoning_setting(monkeypatch, effort, budget):
-    body = _send(monkeypatch, provider="anthropic", model="claude-haiku-4-5", effort=effort, max_out=64000)
+@pytest.mark.parametrize("model", ["claude-haiku-4-5", "MiniMax-M2", "claude-opus-4-8"])
+def test_the_thinking_budget_is_sent_only_when_set(monkeypatch, model):
+    body = _send(monkeypatch, provider="anthropic", model=model, effort="high", max_out=64000, budget=5000)
 
-    assert body["thinking"] == {"type": "enabled", "budget_tokens": budget}
+    assert body["thinking"] == {"type": "enabled", "budget_tokens": 5000}
 
 
-def test_the_budget_leaves_room_for_the_answer_under_the_output_cap(monkeypatch):
-    body = _send(monkeypatch, provider="anthropic", model="claude-haiku-4-5", effort="high", max_out=4096)
+def test_off_on_an_unrecognized_model_is_sent_as_typed(monkeypatch):
+    body = _send(monkeypatch, provider="anthropic", model="claude-sonnet-4-5", effort="off", max_out=32000)
 
-    assert _thinking_fields(body) == {
-        "thinking": {"type": "enabled", "budget_tokens": 3072},
-        "max_tokens": 4096,
-    }
+    assert _thinking_fields(body) == {"output_config": {"effort": "off"}, "max_tokens": 32000}
 
 
-def test_no_thinking_when_the_output_cap_has_no_room_for_a_budget(monkeypatch):
-    body = _send(monkeypatch, provider="anthropic", model="claude-haiku-4-5", effort="high", max_out=1500)
+def test_an_unset_output_cap_sends_the_anthropic_output_setting(monkeypatch):
+    from js import settings
 
-    assert "thinking" not in body
-    assert body["max_tokens"] == 1500
-
-
-def test_an_unknown_output_cap_is_raised_above_the_budget(monkeypatch):
     body = _send(monkeypatch, provider="minimax", base="https://api.minimax.io/anthropic/v1",
                  model="MiniMax-M2", effort="medium", max_out=None)
 
-    assert body["thinking"] == {"type": "enabled", "budget_tokens": 8192}
-    assert body["max_tokens"] > 8192
+    assert body["max_tokens"] == settings.default_value("ANTHROPIC_OUTPUT_TOKENS_MAX")
 
 
-@pytest.mark.parametrize("effort", [None, "none"])
-def test_a_budget_model_gets_no_thinking_when_reasoning_is_unset_or_none(monkeypatch, effort):
-    body = _send(monkeypatch, provider="anthropic", model="claude-sonnet-4-5", effort=effort, max_out=32000)
+def test_an_unset_effort_sends_no_thinking(monkeypatch):
+    body = _send(monkeypatch, provider="anthropic", model="claude-sonnet-4-5", effort=None, max_out=32000)
 
     assert "thinking" not in body
     assert "output_config" not in body
@@ -270,6 +254,7 @@ def test_a_budget_model_gets_no_thinking_when_reasoning_is_unset_or_none(monkeyp
     ("claude-sonnet-4-6", "xhigh", "high"),
     ("claude-opus-5-5", "max", "max"),
     ("claude-fable-5-1", "medium", "medium"),
+    ("claude-opus-5-5", "spoon", "spoon"),
 ])
 def test_an_adaptive_model_gets_adaptive_thinking_and_an_effort(monkeypatch, model, effort, sent):
     body = _send(monkeypatch, provider="anthropic", model=model, effort=effort, max_out=64000)
@@ -281,16 +266,17 @@ def test_an_adaptive_model_gets_adaptive_thinking_and_an_effort(monkeypatch, mod
     }
 
 
-def test_none_disables_thinking_where_the_model_accepts_it(monkeypatch):
-    body = _send(monkeypatch, provider="anthropic", model="claude-opus-4-8", effort="none", max_out=64000)
+@pytest.mark.parametrize("effort", ["off", "none"])
+def test_off_disables_thinking_where_the_model_accepts_it(monkeypatch, effort):
+    body = _send(monkeypatch, provider="anthropic", model="claude-opus-4-8", effort=effort, max_out=64000)
 
     assert body["thinking"] == {"type": "disabled"}
     assert "output_config" not in body
 
 
 @pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1"])
-def test_none_is_the_lowest_effort_on_a_model_that_always_thinks(monkeypatch, model):
-    body = _send(monkeypatch, provider="anthropic", model=model, effort="none", max_out=64000)
+def test_off_is_the_required_effort_on_a_model_that_always_thinks(monkeypatch, model):
+    body = _send(monkeypatch, provider="anthropic", model=model, effort="off", max_out=64000)
 
     assert "thinking" not in body
     assert body["output_config"] == {"effort": "low"}
@@ -304,22 +290,21 @@ def test_thinking_in_provider_extra_wins(monkeypatch):
     assert body["thinking"] == mine
 
 
-def test_a_budget_in_provider_extra_gets_max_tokens_above_it_when_the_cap_is_unknown(monkeypatch):
-    mine = {"type": "enabled", "budget_tokens": 40000}
-    body = _send(monkeypatch, provider="minimax", base="https://api.minimax.io/anthropic/v1",
-                 model="MiniMax-M2", effort="high", max_out=None, extra={"thinking": mine})
-
-    assert body["thinking"] == mine
-    assert body["max_tokens"] > 40000
-
-
 def test_budget_thinking_sends_no_temperature_or_top_k(monkeypatch):
+    sampling = Sampling(temperature=0.2, top_k=40)
+    body = _send(monkeypatch, provider="anthropic", model="claude-sonnet-4-5", effort="high",
+                 max_out=32000, sampling=sampling, budget=4000)
+
+    assert body["thinking"]["type"] == "enabled"
+    assert "temperature" not in body and "top_k" not in body
+
+
+def test_without_a_budget_temperature_and_top_k_are_sent(monkeypatch):
     sampling = Sampling(temperature=0.2, top_k=40)
     body = _send(monkeypatch, provider="anthropic", model="claude-sonnet-4-5", effort="high",
                  max_out=32000, sampling=sampling)
 
-    assert body["thinking"]["type"] == "enabled"
-    assert "temperature" not in body and "top_k" not in body
+    assert body["temperature"] == 0.2 and body["top_k"] == 40
 
 
 _BASES = {"opencode-go-anthropic": "https://opencode.ai/zen/go", "minimax": "https://api.minimax.io/anthropic/v1"}

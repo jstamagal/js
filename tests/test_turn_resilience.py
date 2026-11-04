@@ -453,12 +453,12 @@ def test_still_cut_off_after_escalation_gets_three_resume_nudges(monkeypatch, tm
 
 
 def test_resume_nudge_that_finishes_ends_the_turn_normally(monkeypatch, tmp_path):
-    # The cap is already the model's limit, so there is no larger cap to try.
+    # The cap set is already the model's limit, so there is no larger cap to try.
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
     calls = _scripted_model(monkeypatch, [_cut("first half"), _done("second half")])
     messages = [{"role": "user", "content": "go"}]
 
-    asyncio.run(_run(_config(tmp_path), messages))
+    asyncio.run(_run(_config(tmp_path, max_output_tokens=4096), messages))
 
     assert [c["max_output_tokens"] for c in calls] == [4096, 4096]
     assert [m["content"] for m in messages] == [
@@ -483,7 +483,7 @@ def test_cut_off_tool_call_is_dropped_and_the_model_resumes(monkeypatch, tmp_pat
     calls = _scripted_model(monkeypatch, [_cut("", dangling), _done("smaller pieces")])
     messages = [{"role": "user", "content": "go"}]
 
-    asyncio.run(_run(_config(tmp_path), messages))
+    asyncio.run(_run(_config(tmp_path, max_output_tokens=4096), messages))
 
     assert len(calls) == 2
     assert "tool_calls" not in messages[1]

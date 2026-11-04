@@ -35,6 +35,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from typing import Any
 
 from . import reasoning as _reasoning
+from . import sampling as _sampling
 from . import messages as msgs
 from . import output
 
@@ -236,6 +237,7 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("ANTHROPIC_PROMPT_CACHE", "bool", group="runtime"),
     SettingSpec("CLAUDE_PROXY_INCLUDE_REASONING", "bool", group="runtime"),
     SettingSpec("DEEPSEEK_REASONING_TOKENS_MAX", "int", group="runtime"),
+    SettingSpec("ANTHROPIC_OUTPUT_TOKENS_MAX", "int", group="runtime"),
     SettingSpec("COMPACTION_CONSECUTIVE_MAX", "int", group="compaction"),
     SettingSpec("COMPACTION_SUMMARY_REQUEST_TOKENS_MAX", "int", group="compaction"),
     SettingSpec("COMPACTION_HINT_TIMEOUT", "int", group="compaction"),
@@ -415,6 +417,26 @@ REGISTRY: tuple[SettingSpec, ...] = (
                 empty=EMPTY_UNSET, group="sampling"),
     SettingSpec("PRESENCE_PENALTY", "float",
                 empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("MIN_P", "float",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("TOP_N_SIGMA", "float",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("XTC_PROBABILITY", "float",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("XTC_THRESHOLD", "float",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("DRY_MULTIPLIER", "float",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("DRY_BASE", "float",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("DRY_ALLOWED_LENGTH", "int",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("DRY_PENALTY_LAST_N", "int",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("DRY_SEQUENCE_BREAKERS", "json",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("TEMPLATE_KWARGS", "str",
+                empty=EMPTY_UNSET, group="sampling"),
 )
 
 SPEC_BY_KEY: dict[str, SettingSpec] = {spec.key: spec for spec in REGISTRY}
@@ -459,13 +481,10 @@ def is_key_name(value: object) -> bool:
         return False
     return True
 
-# The only values `EFFORT` accepts: the effort ladder in
-# js/reasoning.py, with its bottom stop "none" spelled "off" (stored as the
-# literal "none"). Everything else is rejected outright — no
-# default/auto/unset synonyms. Clearing the setting back to provider-default is
-# `set -EFFORT`, never a magic value here.
+# The effort words js knows: the ladder in js/reasoning.py, its bottom stop
+# spelled "off". `EFFORT` takes any one word and stores it as typed; these
+# are what completion offers.
 REASONING_EFFORT_VALUES: tuple[str, ...] = ("off", *_reasoning.EFFORT_LADDER[1:])
-_REASONING_EFFORT_ERROR = msgs.EXPECTED_REASONING_EFFORT.format(choices="|".join(REASONING_EFFORT_VALUES))
 
 
 def steer_mode(value: Any) -> str:
@@ -495,6 +514,11 @@ _SAMPLING_RANGES: dict[str, tuple[float | None, float | None]] = {
     "TOP_P": (0.0, 1.0),
     "REPETITION_PENALTY": (0.0, None),
     "PRESENCE_PENALTY": (-2.0, 2.0),
+    "MIN_P": (0.0, 1.0),
+    "XTC_PROBABILITY": (0.0, 1.0),
+    "XTC_THRESHOLD": (0.0, 1.0),
+    "DRY_MULTIPLIER": (0.0, None),
+    "DRY_BASE": (0.0, None),
 }
 
 
@@ -532,10 +556,15 @@ def _without_value(error: str, raw: str) -> str:
 def _coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
     text = _unquoted(spec, raw.strip())
     if spec.key == "EFFORT":
-        v = text.lower()
-        if v not in REASONING_EFFORT_VALUES:
-            return None, _REASONING_EFFORT_ERROR
-        return ("none" if v == "off" else v), None
+        if not text or len(text.split()) != 1:
+            return None, msgs.EXPECTED_EFFORT_WORD.said(value=text)
+        return text, None
+    if spec.key == "TEMPLATE_KWARGS" and text:
+        try:
+            _sampling.parse_template_kwargs(text)
+        except ValueError as exc:
+            return None, str(exc)
+        return text, None
     if spec.key == "STEER_MODE":
         v = text.lower()
         if v not in STEER_MODES:
@@ -649,6 +678,9 @@ def _coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
                 not isinstance(item, str) or not item.strip() for item in value
             ):
                 return None, msgs.EXPECTED_ENV_NAMES.said()
+        if spec.key == "DRY_SEQUENCE_BREAKERS":
+            if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+                return None, msgs.EXPECTED_STRING_LIST.said()
         if spec.key == "SKILLS_DISABLED":
             if not isinstance(value, list) or any(
                 not isinstance(item, str) or not item.strip() for item in value
@@ -1208,8 +1240,6 @@ def jsrc_text(name: str, text: str) -> str:
 def _config_line_value(spec: SettingSpec, value: Any) -> str:
     """Render ``value`` as the right-hand side of a `set <key> <value>` line,
     so a saved line reloads to the same value (`jsrc_text`)."""
-    if spec.key == "EFFORT" and value == "none":
-        value = "off"
     return jsrc_text(spec.key, config_value_text(value))
 
 
