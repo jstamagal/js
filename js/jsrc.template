@@ -493,8 +493,11 @@
 ################################################################################
 
 # How many times js retries a request that failed in a way worth retrying:
-# rate limited (429), a server error (5xx), or a stream that dropped or
-# went quiet. It waits as long as the provider asks, otherwise 8s each time.
+# rate limited (429), a gateway that could not reach the server (502, 503,
+# 504), no response at all (refused, no connection in CONNECT_TIMEOUT, or
+# dropped before any header), or a stream that went quiet past
+# STREAM_IDLE_TIMEOUT. A 500 or any other 4xx fails at once. It waits as
+# long as the provider asks, otherwise 8s each time.
 # 0: give up on the first error.
 #set RETRY_COUNT_MAX 3
 
@@ -502,8 +505,20 @@
 # it asks for longer, js fails right away instead. 0: wait as long as asked.
 #set RETRY_WAIT_MAX 120
 
-# A request that gets no data for this many seconds is dropped and retried.
-# Keep-alive pings count as data. 0: wait forever.
+# Seconds to make the connection (TCP and TLS). A slow path such as Tor or
+# WireGuard needs more than a LAN. No connection in time is retried.
+# 0: wait forever.
+#set CONNECT_TIMEOUT 15
+
+# Seconds from sending a request to the first byte back: the prefill, which
+# takes a slow local box a long time on a big prompt. The screen counts this
+# wait up and ^C cancels it. When it runs out the request fails once and is
+# not retried, since a resend starts the prefill over. 0: wait forever.
+#set FIRST_BYTE_TIMEOUT 0
+
+# After the first byte, a request that gets no data for this many seconds is
+# dropped and retried. Keep-alive pings and reasoning count as data.
+# 0: wait forever.
 #set STREAM_IDLE_TIMEOUT 300
 
 # A reply cut off at its token limit is sent once more with this bigger

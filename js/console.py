@@ -409,7 +409,7 @@ class ConsoleSink:
         from . import network_display
 
         line = msgs.RETRY_WAIT.said(n=n, of=attempts, seconds=delay,
-                                    failure=network_display.Failure(error))
+                                    failure=network_display.describe_failure(error))
         if label:
             line = network_display.LabelledLine(label, line)
         with _muted_tee(getattr(self._telemetry, "transcript_log", None)):
@@ -428,10 +428,24 @@ class ConsoleSink:
 
         network_display.countdown_end()
 
-    def _on_retry_gave_up(self, *, n: int, label: str) -> None:
+    def _on_first_byte_tick(self, *, waited: float) -> None:
         from . import network_display
 
-        line = msgs.RETRY_GAVE_UP.said(n=n)
+        if network_display.counting():
+            network_display.countdown_tick(waited)
+        else:
+            network_display.countdown_start(
+                lambda seconds: msgs.FIRST_BYTE_COUNTER.said(waited=msgs.duration(seconds)), waited)
+
+    def _on_first_byte_done(self) -> None:
+        from . import network_display
+
+        network_display.countdown_end()
+
+    def _on_retry_gave_up(self, *, n: int, error: BaseException, label: str) -> None:
+        from . import network_display
+
+        line = msgs.RETRY_GAVE_UP.said(n=n, failure=network_display.describe_failure(error))
         with _muted_tee(getattr(self._telemetry, "transcript_log", None)):
             network_display.always(network_display.LabelledLine(label, line) if label else line)
 

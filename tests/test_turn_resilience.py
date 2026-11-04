@@ -219,12 +219,103 @@ def test_retry_after_reads_seconds_milliseconds_and_http_dates():
 # --------------------------------------------------------------------------
 
 
-def test_a_connection_dropped_mid_stream_is_retried(tmp_path):
-    server, messages, error = _served_turn(tmp_path, [_dropped("Green"), _answer("recovered")])
+def _closed():
+    """Reads the request and closes the connection without a header."""
+    async def step(reader, writer):
+        return False
+    return step
+
+
+def _after(seconds: float, step):
+    """`step`, after `seconds` of silence."""
+    async def delayed(reader, writer):
+        await asyncio.sleep(seconds)
+        return await step(reader, writer)
+    return delayed
+
+
+def _stalled(text: str, seconds: float):
+    """Streams one chunk carrying `text`, then is silent for `seconds`."""
+    async def step(reader, writer):
+        first = {"id": "r", "object": "chat.completion.chunk", "created": 1, "model": "m",
+                 "choices": [{"index": 0, "delta": {"role": "assistant", "content": text},
+                              "finish_reason": None}]}
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n")
+        writer.write(_chunk(b"data: " + json.dumps(first).encode() + b"\n\n"))
+        await writer.drain()
+        await asyncio.sleep(seconds)
+        return False
+    return step
+
+
+@pytest.mark.parametrize("code", [429, 502, 503, 504])
+def test_a_rate_limit_or_gateway_status_is_retried(tmp_path, code):
+    server, messages, error = _served_turn(tmp_path, [_status(code, {}), _answer("recovered")])
 
     assert error is None
     assert messages[-1] == {"role": "assistant", "content": "recovered"}
     assert len(server.arrivals) == 2
+
+
+@pytest.mark.parametrize("code", [500, 400, 404, 408, 409, 422])
+def test_a_500_or_other_4xx_fails_at_once(tmp_path, code):
+    server, _messages, error = _served_turn(tmp_path, [_status(code, {}), _answer("never")])
+
+    assert isinstance(error, ai.ProviderAPIError) and not error.is_retryable
+    assert len(server.arrivals) == 1
+
+
+def test_a_connection_closed_before_any_header_is_retried(tmp_path):
+    server, messages, error = _served_turn(tmp_path, [_closed(), _answer("recovered")])
+
+    assert error is None
+    assert messages[-1] == {"role": "assistant", "content": "recovered"}
+    assert len(server.arrivals) == 2
+
+
+def test_a_connection_dropped_after_its_headers_is_not_retried(tmp_path):
+    server, _messages, error = _served_turn(tmp_path, [_dropped("Green"), _answer("never")])
+
+    assert isinstance(error, ai.ProviderConnectionError) and not error.is_retryable
+    assert len(server.arrivals) == 1
+
+
+def test_a_long_prefill_is_not_idle(tmp_path):
+    """Silence before the first byte is the prefill: STREAM_IDLE_TIMEOUT
+    starts only at the first byte."""
+    server, messages, error = _served_turn(
+        tmp_path, [_after(1.0, _answer("prefilled"))], {"STREAM_IDLE_TIMEOUT": 0.3})
+
+    assert error is None
+    assert messages[-1] == {"role": "assistant", "content": "prefilled"}
+    assert len(server.arrivals) == 1
+
+
+def test_a_prefill_past_first_byte_timeout_fails_once_naming_it(tmp_path):
+    server, _messages, error = _served_turn(
+        tmp_path, [_after(2.0, _answer("late"))], {"FIRST_BYTE_TIMEOUT": 0.3})
+
+    assert isinstance(error, model_client.FirstByteTimeoutError) and not error.is_retryable
+    assert "FIRST_BYTE_TIMEOUT" in str(error)
+    assert len(server.arrivals) == 1
+
+
+def test_a_stream_idle_after_its_first_byte_is_retried(tmp_path):
+    server, messages, error = _served_turn(
+        tmp_path, [_stalled("Gr", 2.0), _answer("recovered")], {"STREAM_IDLE_TIMEOUT": 0.3})
+
+    assert error is None
+    assert messages[-1] == {"role": "assistant", "content": "recovered"}
+    assert len(server.arrivals) == 2
+
+
+def test_keepalives_keep_a_stream_alive(tmp_path):
+    server, messages, error = _served_turn(
+        tmp_path, [_answer("kept", keepalive=4, interval=0.2)], {"STREAM_IDLE_TIMEOUT": 0.5})
+
+    assert error is None
+    assert messages[-1] == {"role": "assistant", "content": "kept"}
+    assert len(server.arrivals) == 1
 
 
 class _ScrollbackLive:
@@ -663,8 +754,8 @@ def test_a_compaction_summary_survives_a_429(tmp_path):
     assert len(server.arrivals) == 2
 
 
-def test_a_compaction_summary_survives_a_dropped_connection(tmp_path):
-    server, summary = _served_summary(tmp_path, [_dropped("the sum"), _answer("the summary")])
+def test_a_compaction_summary_survives_a_connection_closed_before_any_header(tmp_path):
+    server, summary = _served_summary(tmp_path, [_closed(), _answer("the summary")])
 
     assert summary == "the summary"
     assert len(server.arrivals) == 2

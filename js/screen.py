@@ -112,11 +112,11 @@ def throbber_frame(now: float) -> str:
     return frames[int(now / TICK_BUSY_S) % len(frames)] if frames else ""
 
 
-def turn_centre(status, *, now: float, show_bytes: bool) -> tuple[str, int | None]:
+def turn_centre(status, *, now: float) -> tuple[str, int | None]:
     """(phase, output_tokens) for the bar's centre group from a TurnStatus.
 
-    A retry's wait wins, then a running tool, then compaction, then response
-    bytes before the first token (when the net channel shows them), then the
+    A retry's wait wins, then a running tool, then compaction, then the wait
+    for a request's first byte once it passes a second, then the
     output-token count.
     """
     if status.retry:
@@ -128,8 +128,8 @@ def turn_centre(status, *, now: float, show_bytes: bool) -> tuple[str, int | Non
         return msgs.STATUS_TOOL_ELAPSED.words(tool=status.tool, extra=extra, elapsed=elapsed), None
     if status.compacting:
         return _field(msgs.STATUS_COMPACTING), None
-    if show_bytes and status.net_bytes:
-        return msgs.STATUS_RESPONSE_BYTES.words(value=status.net_bytes // 100 * 100), None
+    if status.waiting_since and now - status.waiting_since >= 1:
+        return msgs.STATUS_FIRST_BYTE_WAIT.words(waited=msgs.duration(now - status.waiting_since)), None
     return "", status.output_tokens or None
 
 

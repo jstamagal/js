@@ -23,6 +23,7 @@ from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from contextlib import AsyncExitStack, aclosing, asynccontextmanager, contextmanager
 
 import ai
+import httpx
 import httpx2
 
 from . import codex_auth, codex_provider, media, messages as msgs, paranoid, providers, reasoning, retry, routing, stream_transport, tool_args
@@ -76,16 +77,50 @@ class FriendlyProviderError(routing.ProviderNotLoggedInError):
     """Provider-boundary failure already formatted for one-line user display."""
 
 
-class StreamIdleError(ai.ProviderTimeoutError):
-    """A model request went `seconds` without a response byte and was aborted.
-    Retryable: the runtime sends the request again under its retry budget."""
+class RequestTimeoutError(ai.ProviderTimeoutError):
+    """A model request ran out one of js's clocks (`retry.StreamLimits`);
+    `setting` names the setting that set it, and its text says so."""
+
+    setting = ""
+    text = ""
+
+    def __init__(self, seconds: float, *, provider: str | None = None, retryable: bool) -> None:
+        super().__init__(self.text.format(seconds=seconds), provider=provider, is_retryable=retryable)
+        self.seconds = seconds
+
+
+class StreamIdleError(RequestTimeoutError):
+    """A model request went `seconds` without a response byte after its first
+    and was aborted. Retryable: the runtime sends the request again under its
+    retry budget."""
+
+    setting = "STREAM_IDLE_TIMEOUT"
+    text = msgs.STREAM_IDLE_NO_BYTES
 
     def __init__(self, seconds: float, *, provider: str | None = None) -> None:
-        super().__init__(
-            msgs.STREAM_IDLE_NO_BYTES.format(seconds=seconds),
-            provider=provider, is_retryable=True,
-        )
-        self.seconds = seconds
+        super().__init__(seconds, provider=provider, retryable=True)
+
+
+class FirstByteTimeoutError(RequestTimeoutError):
+    """A model request went `seconds` from being sent without its first
+    response byte. Not retried: a resend starts the prefill over."""
+
+    setting = "FIRST_BYTE_TIMEOUT"
+    text = msgs.FIRST_BYTE_NONE
+
+    def __init__(self, seconds: float, *, provider: str | None = None) -> None:
+        super().__init__(seconds, provider=provider, retryable=False)
+
+
+class ConnectTimeoutError(RequestTimeoutError):
+    """A model request's TCP or TLS handshake took longer than `seconds`.
+    Retryable: no response came."""
+
+    setting = "CONNECT_TIMEOUT"
+    text = msgs.CONNECT_TIMED_OUT
+
+    def __init__(self, seconds: float, *, provider: str | None = None) -> None:
+        super().__init__(seconds, provider=provider, retryable=True)
 
 
 def sends_max_output(provider_id: str | None) -> bool:
@@ -194,26 +229,75 @@ def error_message(exc: BaseException) -> str:
     return " ".join(str(message).split()) or type(exc).__name__
 
 
-def _restate_error_event(exc: BaseException) -> None:
-    """Retry an error event the way its status would be retried: the SDK
-    takes the 200 of the stream it arrived in for a success that cannot be
-    retried."""
-    if not isinstance(exc, ai.ProviderStatusError):
-        return
+# The statuses a failed model request is sent again for. Every other status,
+# 500 and every 4xx included, fails at once.
+RETRY_STATUSES = frozenset({429, 502, 503, 504})
+
+# The HTTP status an OpenAI Responses stream error's `code` stands for: the
+# stream answered 200 and names its failure only by code.
+_ERROR_CODE_STATUS = {
+    "rate_limit_exceeded": 429,
+    "server_error": 500,
+    "internal_error": 500,
+    "model_error": 500,
+}
+
+
+def failure_status(exc: BaseException) -> int | None:
+    """The status a failed request stands for: `error_status`, else the
+    status of its error code or error type."""
     status = error_status(exc)
-    if status is not None and status != exc.http_context.status_code:
-        exc.is_retryable = status in (408, 409, 429) or status >= 500
+    if status is not None:
+        return status
+    for name in (getattr(exc, "code", None), getattr(exc, "type", None)):
+        if isinstance(name, str):
+            status = _ERROR_CODE_STATUS.get(name) or _ERROR_TYPE_STATUS.get(name)
+            if status is not None:
+                return status
+    return None
 
 
-def _transport_error(exc: BaseException, *, provider_id: str | None) -> ai.ProviderConnectionError | None:
-    """The retryable SDK error for a connection lost or timed out while the
-    stream was being read, else None. The provider SDKs wrap transport errors
-    raised while sending the request; one raised mid-stream (a peer closing
-    inside a chunk) reaches js as the raw httpx2 error."""
-    if not isinstance(exc, httpx2.TransportError):
-        return None
-    kind = ai.ProviderTimeoutError if isinstance(exc, httpx2.TimeoutException) else ai.ProviderConnectionError
-    return kind(f"{type(exc).__name__}: {exc}", provider=_provider_label(provider_id, exc), is_retryable=True)
+def retryable(exc: BaseException, *, responded: bool) -> bool:
+    """Whether a failed model request is sent again: js's rule, the one every
+    retrying caller reads through `is_retryable`. A status in RETRY_STATUSES
+    is; a request that got no response (refused, CONNECT_TIMEOUT, dropped
+    before any header, `responded` False) is; a stream that went quiet past
+    STREAM_IDLE_TIMEOUT is. FIRST_BYTE_TIMEOUT and everything else is not."""
+    if isinstance(exc, RequestTimeoutError):
+        return bool(exc.is_retryable)
+    status = failure_status(exc)
+    if status is not None:
+        return status in RETRY_STATUSES
+    return isinstance(exc, ai.ProviderConnectionError) and not responded
+
+
+def _connect_timeout(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    seen: list[BaseException] = []
+    while current is not None and all(current is not e for e in seen):
+        if isinstance(current, (httpx2.ConnectTimeout, httpx.ConnectTimeout)):
+            return True
+        seen.append(current)
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _request_failure(exc: BaseException, *, provider: str | None, limits: retry.StreamLimits,
+                     responded: bool) -> BaseException:
+    """The error a failed model request leaves this module as, its
+    `is_retryable` set by `retryable`. A handshake past CONNECT_TIMEOUT is a
+    ConnectTimeoutError. The provider SDKs wrap transport errors raised while
+    sending the request; one raised mid-stream (a peer closing inside a
+    chunk) arrives as the raw httpx2 error and becomes the SDK's connection
+    error."""
+    if limits.connect is not None and _connect_timeout(exc):
+        return ConnectTimeoutError(limits.connect, provider=provider)
+    if isinstance(exc, httpx2.TransportError):
+        kind = ai.ProviderTimeoutError if isinstance(exc, httpx2.TimeoutException) else ai.ProviderConnectionError
+        exc = kind(f"{type(exc).__name__}: {exc}", provider=provider or "default")
+    if isinstance(exc, ai.ProviderAPIError):
+        exc.is_retryable = retryable(exc, responded=responded)
+    return exc
 
 
 # Anthropic's 400 for a replayed thinking block it will not accept: "Invalid
@@ -560,7 +644,6 @@ class _CheckedResponsesStream:
                         _field(error, "message") or msgs.RESPONSES_STREAM_FAILED.words(),
                         provider=self._provider, body=body, code=code,
                         param=_field(error, "param"), error_type=_field(error, "type"),
-                        is_retryable=code in {"server_error", "internal_error", "model_error", "rate_limit_exceeded"},
                     )
                 yield event
 
@@ -1301,7 +1384,9 @@ async def _open_stream(
     tools: Sequence[ai.types.tools.Tool] | None,
     params: ai_params.InferenceRequestParams | None = None,
     on_request: Callable[[], None] | None = None,
+    on_response: Callable[[], None] | None = None,
     on_bytes: Callable[[], None] | None = None,
+    connect_timeout: float | None = None,
 ) -> AsyncIterator[ai.models.Stream]:
     """Open an SDK stream through one js-owned, patchable boundary.
 
@@ -1309,8 +1394,11 @@ async def _open_stream(
     Keeping the test seam here lets offline tests supply a public
     :class:`ai.models.Stream` without reaching into SDK internals.
 
-    ``on_request`` is called as each HTTP request is sent and ``on_bytes`` for
-    each response body chunk the transport reads.
+    ``on_request`` is called as each HTTP request is sent, ``on_response`` as
+    its response headers arrive and ``on_bytes`` for each response body chunk
+    the transport reads. Each request's handshake is bounded by
+    ``connect_timeout`` (None: no limit) and its reads by nothing: the
+    first-byte and idle clocks of `_stream_async` bound those silences.
     The OpenAI and Anthropic SDK clients retry nothing themselves: every retry
     runs under js's budget (js/retry.py).
     """
@@ -1322,7 +1410,8 @@ async def _open_stream(
         if http_client is not None:
             await cleanup.enter_async_context(stream_transport.own_responses(
                 http_client, stream_transport.current_call(),
-                on_request=on_request, on_bytes=on_bytes,
+                on_request=on_request, on_response=on_response, on_bytes=on_bytes,
+                timeout={"connect": connect_timeout, "read": None},
             ))
         if sdk_client is not None:
             headers = dict(getattr(model.provider, "headers", None) or {})
@@ -1363,11 +1452,13 @@ _reasoning_sink: contextvars.ContextVar[Callable[[str], None] | None] = contextv
     "js_reasoning_sink", default=None,
 )
 
-# STREAM_IDLE_TIMEOUT for the `stream_model_async` call running in this
-# context; None or 0 leaves the stream without a watchdog.
-_idle_seconds: contextvars.ContextVar[float | None] = contextvars.ContextVar(
-    "js_stream_idle_seconds", default=None,
+# The clocks of the `stream_model_async` call running in this context.
+_limits: contextvars.ContextVar[retry.StreamLimits] = contextvars.ContextVar(
+    "js_stream_limits", default=retry.StreamLimits(),
 )
+
+# The response events that carry model output.
+_OUTPUT_EVENTS = (ai.events.TextDelta, ai.events.ReasoningDelta, ai.events.ToolDelta)
 
 
 async def _stream_async(
@@ -1389,25 +1480,53 @@ async def _stream_async(
     first_token_s: float | None = None
     stream_provider_metadata: dict[str, Any] | None = None
     finish_reason: str | None = None
-    idle = _idle_seconds.get() or None
+    limits = _limits.get()
+    provider = getattr(model.provider, "name", None)
     loop = asyncio.get_running_loop()
-    # The idle deadline starts when the request is sent and moves forward on
-    # every response byte and every event, so it covers the wait for the
-    # response headers but not the SDK's own setup before the request (its
-    # first request in a process imports the SDK). For a provider whose
-    # requests js does not see, it starts at once.
+    # Two clocks share one deadline. From the request being sent to the first
+    # response body byte it is FIRST_BYTE_TIMEOUT (the prefill runs here);
+    # from that byte on, STREAM_IDLE_TIMEOUT, moved forward on every byte and
+    # every event. The SDK's own setup before the request (its first request
+    # in a process imports the SDK) is on neither. For a provider whose
+    # requests js does not see, the first clock starts at once and the first
+    # event is the first byte.
     sees_request = _http_client(model) is not None
-    deadline = asyncio.timeout(None if sees_request else idle)
+    deadline = asyncio.timeout(None)
+    waiting = stream_transport.FirstByteWait()
+    responded = False
+    first_byte = False
+
+    def sent() -> None:
+        if first_byte:
+            return
+        if limits.first_byte is not None and not deadline.expired():
+            deadline.reschedule(loop.time() + limits.first_byte)
+        waiting.start()
+
+    def alive() -> None:
+        nonlocal first_byte, responded
+        if not first_byte:
+            first_byte = responded = True
+            waiting.end()
+        if deadline.expired():
+            return
+        deadline.reschedule(None if limits.idle is None else loop.time() + limits.idle)
+
+    def headers() -> None:
+        nonlocal responded
+        responded = True
+
     try:
         async with deadline:
-
-            def alive() -> None:
-                if idle is not None and not deadline.expired():
-                    deadline.reschedule(loop.time() + idle)
-
-            async with _open_stream(**kwargs, on_request=alive, on_bytes=alive) as stream:
+            if not sees_request:
+                sent()
+            async with _open_stream(**kwargs, on_request=sent, on_response=headers, on_bytes=alive,
+                                    connect_timeout=limits.connect) as stream:
                 async for event in stream:
-                    alive()
+                    # A transport js sees marks the first byte itself; an
+                    # event before it (a stream start on the headers) is not one.
+                    if first_byte or not sees_request or isinstance(event, _OUTPUT_EVENTS):
+                        alive()
                     event_metadata = getattr(event, "provider_metadata", None)
                     if isinstance(event_metadata, dict):
                         stream_provider_metadata = event_metadata
@@ -1422,9 +1541,16 @@ async def _stream_async(
     except Exception as exc:
         # The expired deadline cancelled the read; asyncio.timeout reports that
         # as TimeoutError, and an SDK may have wrapped it on the way out.
-        if idle is not None and deadline.expired():
-            raise StreamIdleError(idle, provider=getattr(model.provider, "name", None)) from exc
-        raise
+        if deadline.expired():
+            if first_byte:
+                raise StreamIdleError(limits.idle, provider=provider) from exc
+            raise FirstByteTimeoutError(limits.first_byte, provider=provider) from exc
+        failure = _request_failure(exc, provider=provider, limits=limits, responded=responded)
+        if failure is exc:
+            raise
+        raise failure from exc
+    finally:
+        waiting.end()
     elapsed_s = time.perf_counter() - start
 
     text = stream.text
@@ -1666,7 +1792,7 @@ async def stream_model_async(
     trace_request_schemas: bool = True,
     trace_request_from: int = 0,
     cache_key: str | None = None,
-    stream_idle_seconds: float | None = None,
+    stream_limits: retry.StreamLimits | None = None,
     settings: dict | None = None,
 ) -> ModelStreamResult:
     """Async entry point: stream one model turn on the CALLER'S event loop.
@@ -1676,8 +1802,8 @@ async def stream_model_async(
     so many turns/subagents can run concurrently on one shared loop. The sync
     ``stream_model`` below wraps this for callers not yet on the async runtime.
 
-    ``stream_idle_seconds`` (None or 0: no limit) aborts the request with
-    :class:`StreamIdleError` once that long passes without a response byte.
+    ``stream_limits`` are the request's clocks (`retry.StreamLimits`; None:
+    none): CONNECT_TIMEOUT, FIRST_BYTE_TIMEOUT and STREAM_IDLE_TIMEOUT.
     """
     if (providers.normalize_provider_id(provider_id) or "") in _OPENCODE_GO_PROVIDERS:
         provider_headers = {
@@ -1726,7 +1852,7 @@ async def stream_model_async(
             provider_extra=provider_extra,
             thinking_budget=thinking_budget,
             cache_key=cache_key,
-            stream_idle_seconds=stream_idle_seconds,
+            stream_limits=stream_limits,
             settings=settings,
         )
     finally:
@@ -1756,7 +1882,7 @@ async def _stream_with_model(
     provider_extra: dict[str, Any] | None,
     thinking_budget: int | None,
     cache_key: str | None,
-    stream_idle_seconds: float | None,
+    stream_limits: retry.StreamLimits | None,
     settings: dict | None,
 ) -> ModelStreamResult:
     # Per-provider params: this is the canonical place to encode quirks. We build
@@ -1975,7 +2101,7 @@ async def _stream_with_model(
                 _on_reasoning(chunk)
 
     reasoning_token = _reasoning_sink.set(on_reasoning)
-    idle_token = _idle_seconds.set(stream_idle_seconds)
+    limits_token = _limits.set(stream_limits or retry.StreamLimits())
     collected = ReasoningBlocks()
     blocks_token = _reasoning_blocks_sink.set(collected)
     try:
@@ -1994,19 +2120,15 @@ async def _stream_with_model(
     except routing.ProviderNotLoggedInError:
         raise
     except Exception as exc:
-        _restate_error_event(exc)
         if net_call is not None:
             net_call.failed(exc)
         friendly = _friendly_provider_error(exc, provider_id=provider_id)
         if friendly is not None:
             raise friendly from exc
-        dropped = _transport_error(exc, provider_id=provider_id)
-        if dropped is not None:
-            raise dropped from exc
         raise
     finally:
         _reasoning_blocks_sink.reset(blocks_token)
-        _idle_seconds.reset(idle_token)
+        _limits.reset(limits_token)
         _reasoning_sink.reset(reasoning_token)
         stream_transport.reset_call(net_token)
 

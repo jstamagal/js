@@ -186,7 +186,12 @@ fset STDIN_ATTACHMENT_NOT_PIPED %C04%G%C -f - requires piped stdin bytes.
 fset NO_SUCH_AGENT %C04%G%C No such agent: $0. Looked in project .js/agents, $1, and repo prompts. Create $2-/ with NN-*.md prompt files and an optional agent.yaml manifest.
 fset RETRY_BUDGET_EXHAUSTED %C04%G%C Tool-loop retry budget exhausted.
 fset MAX_ITERATIONS %C04%G%C Tool loop hit max iterations: $0-
-fset RETRY_GAVE_UP %C04%G%C Gave up after $0- retries.
+fset RETRY_GAVE_UP %C04%G%C Gave up after $0 retries: $1-
+fset NET_FAILURE_STATUS %C04$0-%C
+fset NET_FAILURE_TYPE %C04$0-%C
+fset NET_DNS_FAILURE %C04DNS failure%C
+fset NET_TIMEOUT %C04Timeout%C
+fset NET_CONNECT_FAILED %C04Connection failed%C
 fset FLIGHT_LOG_FAILED %C04%G%C Flight log not written: $0-
 fset COMPACTION_FAILED %C04%G%C Compaction failed: $0-
 fset LOGIN_NO_KEY %C04%G%C Login aborted. No API key given.

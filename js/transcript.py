@@ -337,14 +337,14 @@ class TranscriptSink:
     def _on_retry_wait(self, *, n: int, attempts: int, delay: float, error: BaseException, label: str) -> None:
         from . import network_display
 
-        line = msgs.RETRY_WAIT.said(n=n, of=attempts, seconds=delay, failure=network_display.Failure(error))
+        line = msgs.RETRY_WAIT.said(n=n, of=attempts, seconds=delay, failure=network_display.describe_failure(error))
         self._plain(network_display._net_line(network_display.LabelledLine(label, line) if label else line)
                     + "\n", stderr=True)
 
-    def _on_retry_gave_up(self, *, n: int, label: str) -> None:
+    def _on_retry_gave_up(self, *, n: int, error: BaseException, label: str) -> None:
         from . import network_display
 
-        line = msgs.RETRY_GAVE_UP.said(n=n)
+        line = msgs.RETRY_GAVE_UP.said(n=n, failure=network_display.describe_failure(error))
         self._plain(network_display._net_line(network_display.LabelledLine(label, line) if label else line)
                     + "\n", stderr=True)
 

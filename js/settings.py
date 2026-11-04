@@ -336,6 +336,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("PARALLEL_TOOLS_MAX", "int", group="runtime"),
     SettingSpec("RETRY_COUNT_MAX", "int", group="runtime"),
     SettingSpec("RETRY_WAIT_MAX", "float", group="runtime"),
+    SettingSpec("CONNECT_TIMEOUT", "float", group="runtime"),
+    SettingSpec("FIRST_BYTE_TIMEOUT", "float", group="runtime"),
     SettingSpec("STREAM_IDLE_TIMEOUT", "float", group="runtime"),
     SettingSpec("OUTPUT_TOKENS_RETRY_MAX", "int", group="runtime"),
     SettingSpec("OUTPUT_RESUMES_MAX", "int", group="runtime"),
@@ -482,7 +484,7 @@ def parse_bool(raw: str) -> bool | None:
 
 
 _NONNEGATIVE_KNOBS = frozenset({
-    "RETRY_COUNT_MAX", "RETRY_WAIT_MAX", "STREAM_IDLE_TIMEOUT",
+    "RETRY_COUNT_MAX", "RETRY_WAIT_MAX", "CONNECT_TIMEOUT", "FIRST_BYTE_TIMEOUT", "STREAM_IDLE_TIMEOUT",
     "OUTPUT_TOKENS_RETRY_MAX", "OUTPUT_RESUMES_MAX",
 })
 
