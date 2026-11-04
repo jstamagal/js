@@ -68,7 +68,7 @@ def test_every_style_js_opens_on_a_speaker_line_is_closed(monkeypatch):
                 fset.set_entry("COLOR_USER_MARK", "$NOT_A_COLOUR")
                 fset.set_entry("COLOR_AGENT_MARK", "$NOT_A_COLOUR")
             for text in (display.user_line("hello"), display.prompt(), display.agent_speaker()[0],
-                         msgs.SAVE_FAILED.line(error="x"), fset.render("%C04a%C b %s", ["c"])):
+                         msgs.SAVE_FAILED.line(error="x"), fset.render("%C04a%C b $0", ["c"])):
                 assert _closed(text), (no_color, mark_colour, repr(text))
 
 
@@ -94,7 +94,7 @@ def test_every_fallback_printer_writes_plain_text_to_a_stream_that_is_not_a_term
     out, err = io.StringIO(), io.StringIO()
     monkeypatch.setattr(sys, "stdout", out)
     monkeypatch.setattr(sys, "stderr", err)
-    fset.set_entry("RUN_LINE", "%C04run %s")
+    fset.set_entry("RUN_LINE", "%C04run $0-")
     stream_transport.say_or_print(3, msgs.CATALOG_UPDATING.said())
     runtime._print_run_line(["model=m", "ctx=1"])
     runtime._print_trace(runtime.Telemetry(None), display.render_exchange("shell", {"command": "x"}, None, level=1))

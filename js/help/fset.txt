@@ -3,6 +3,38 @@
 # A colour is #rrggbb, a palette slot 00-98, or $NAME of another colour;
 # a|b takes the first that resolves. PALETTE_00..PALETTE_98 are the mIRC
 # palette; every message's format is named after its js/messages.py entry.
+# FORMAT and PALETTE below are not entries: they explain every format and
+# every palette slot.
+
+FORMAT
+    Every message's format is named after its js/messages.py entry: /fset
+    MODEL_SET shows it, /fset MODEL_SET text changes it. A format is
+    literal text, colour codes, the banner glyph and holes. The event hands
+    its format one line of text, split on single spaces into words numbered
+    from 0. Every field but the last is one word; only the last may contain
+    spaces. $0 to $9 is that word; $N- is word N through the end of the
+    line; $* is the whole line. A format may use any word, in any order, or
+    leave any out. A - right after $N reads as $N-: $N%C- is the word, then
+    a dash. %Cnn draws what follows in palette slot nn, 00 to 98
+    (see PALETTE); %C goes back to the terminal's own colour. %G is the
+    banner glyph, the BANNER setting. %% is a %, $$ a $. Any other % or $
+    code, a slot past 98, or a word the event does not pass is refused when
+    the format is set. Example: %C04%G%C Unknown setting: %C04$0%C draws
+    the glyph red, the words in the terminal's colour and the setting's
+    name red. A message's default format is its text with $N for each
+    field and $N- for the last, after %G and a space when it is a line
+    where js reports its own state; js/fset draws a failure's glyph in
+    slot 04 and a warning's in slot 07.
+
+PALETTE
+    nn in %Cnn, and a two-digit colour value, is a slot of the mIRC
+    99-colour palette, PALETTE_00 to PALETTE_98, each a #rrggbb js sends as
+    24-bit colour. 00 white, 01 black, 02 blue, 03 green, 04 red, 05 brown,
+    06 purple, 07 orange, 08 yellow, 09 light green, 10 cyan, 11 light
+    cyan, 12 light blue, 13 pink, 14 grey, 15 light grey; 16 to 87 are six
+    rows of twelve hues, darkest first, and 88 to 98 a grey ramp from black
+    to white. A theme changes what a slot looks like, so a format that names
+    slot 04 for failures shows the theme's red.
 
 REASONING_DISPLAY
     Reasoning display: 0 hidden; 1, the default, streams, then folds to
@@ -113,14 +145,11 @@ COLOR_AGENT
 COLOR_AGENT_MARK
     The agent's speaker mark.
 
-COLOR_SYSTEM
-    $BANNER on the lines where js reports its own state.
-
 COLOR_WARN
-    The values of a warning, and standard error in a tool exchange.
+    Standard error in a tool exchange.
 
 COLOR_ERROR
-    The values of a failure, a failed call's mark and its error text.
+    A failed call's mark and its error text.
 
 COLOR_OK
     A finished call's mark.
