@@ -1361,7 +1361,6 @@ async def _stream_async(
     params: ai_params.InferenceRequestParams | None,
     on_text: Callable[[str], None],
 ) -> ModelStreamResult:
-    from . import model_health
     on_reasoning = _reasoning_sink.get()
     kwargs: dict[str, Any] = {
         "model": model,
@@ -1390,18 +1389,12 @@ async def _stream_async(
                 if idle is not None and not deadline.expired():
                     deadline.reschedule(loop.time() + idle)
 
-            def request_sent() -> None:
-                model_health.sent()
-                alive()
-
-            async with _open_stream(**kwargs, on_request=request_sent, on_bytes=alive) as stream:
+            async with _open_stream(**kwargs, on_request=alive, on_bytes=alive) as stream:
                 async for event in stream:
                     alive()
                     event_metadata = getattr(event, "provider_metadata", None)
                     if isinstance(event_metadata, dict):
                         stream_provider_metadata = event_metadata
-                    if isinstance(event, (ai.events.TextDelta, ai.events.ReasoningDelta, ai.events.ToolDelta)):
-                        model_health.token(assistant=isinstance(event, (ai.events.TextDelta, ai.events.ToolDelta)))
                     if isinstance(event, ai.events.TextDelta):
                         if first_token_s is None:
                             first_token_s = time.perf_counter() - start
@@ -1970,14 +1963,13 @@ async def _stream_with_model(
     collected = ReasoningBlocks()
     blocks_token = _reasoning_blocks_sink.set(collected)
     try:
-        from . import model_health
-        result = await model_health.watch(_stream_async(
+        result = await _stream_async(
             model=model,
             messages=messages,
             tools=tools,
             params=params,
             on_text=on_text,
-        ), provider_id, model_id)
+        )
         blocks = collected.blocks()
         if blocks is None:
             return result
