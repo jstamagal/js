@@ -207,9 +207,11 @@ def test_named_session_creation_respects_save_flag_and_updates_latest(monkeypatc
     monkeypatch.delenv("JS_SESSION", raising=False)
 
     with pytest.raises(ValueError):
-        from_env(session="batch/slice01", save_session=False)
+        from_env(session="batch/slice01", save_session=False, create_session=True)
+    with pytest.raises(ValueError):
+        from_env(session="batch/slice01", save_session=True)
 
-    actual = from_env(session="batch/slice01", save_session=True)
+    actual = from_env(session="batch/slice01", save_session=True, create_session=True)
     latest = json.loads((actual.agent_dir / "latest.json").read_text(encoding="utf-8"))
 
     assert actual.session_file == actual.sessions_dir / "batch" / "slice01.jsonl"

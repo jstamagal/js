@@ -10,6 +10,8 @@ import re
 
 import pytest
 
+from conftest import start_session
+
 from js import cli, runtime
 from js.config import from_env
 from js.memory import load_messages, load_replay_messages
@@ -144,6 +146,7 @@ def test_an_empty_session_says_so_in_the_scrollback(monkeypatch, tmp_path):
 
     terminal = _Recorder()
     _install_screen(monkeypatch, script, terminal)
+    start_session("nothing-here")
     assert cli.main(["--session", "nothing-here"]) == 0
 
     assert "Empty session" in seen[0]

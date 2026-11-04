@@ -647,7 +647,7 @@ OPT_DEBUG_FILE = Message(
     "prints to stdout. REQUEST_LOG always writes the same trace under logs/<agent>/<session>.log.")
 OPT_SESSION = Message(
     "--session NAME: resume NAME, looking in this directory's sessions first, then in all of them."
-    " Not found: start it. Bare, open the session picker.")
+    " No session matches NAME: exit 2. Bare, open the session picker.")
 OPT_SESSION_KEY = Message("Derive a stable session name from agent, cwd and caller key.")
 OPT_NO_SAVE = Message(
     "Expensive throwaway prompt or pipe run. Nothing is saved, resume is unavailable, "
@@ -1601,7 +1601,7 @@ CONFIG_SESSION_PATH_MUST_BE_INSIDE_273 = "session path must be inside {sessions_
 
 CONFIG_SESSION_PATH_MUST_BE_A_JSONL_FILE = "session path must be a .jsonl file: {session}"
 
-CONFIG_SESSION_MUST_IDENTIFY_AN_EXISTING_JSONL_FILE = "session must identify an existing .jsonl file: {session}"
+CONFIG_SESSION_MUST_IDENTIFY_AN_EXISTING_JSONL_FILE = "no session matches {session}"
 
 CONFIG_SESSION_PARENT_MUST_BE_A_DIRECTORY = "session parent must be a directory: {session}"
 

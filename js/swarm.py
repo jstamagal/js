@@ -539,6 +539,21 @@ def board(room: Room) -> str:
     return "\n".join(lines) or msgs.SWARM_BOARD_EMPTY.format()
 
 
+def _start_sibling_session(cmd: list[str]) -> None:
+    """Create the session a sibling command names with --session, in this
+    directory's sessions: `--session` resumes only a session that exists."""
+    from . import config, session_store
+
+    session = None
+    for i, tok in enumerate(cmd):
+        if tok in ("-s", "--session") and i + 1 < len(cmd):
+            session = cmd[i + 1]
+        elif tok.startswith("--session="):
+            session = tok.split("=", 1)[1]
+    if session:
+        config.resolve_session_file(session_store.folder_for(Path.cwd()), session, create=True)
+
+
 def sibling_argv(argv: list[str], swarm: str, name: str) -> list[str]:
     """The command of a sibling of this process: `argv` run again as `python -m js`
     with the --swarm path, the session name and the prompt replaced. The sibling
@@ -710,6 +725,7 @@ class Agent:
             raise ValueError(msgs.SWARM_THIS_BUS_ALREADY_HAS_SPAWNED_AGENTS_THE.format(spawned=spawned, maximum=maximum))
         home.mkdir(parents=True, exist_ok=True)
         cmd = sibling_argv(sys.argv if argv is None else argv, str(home), name)
+        _start_sibling_session(cmd)
         with open(home / "events.jsonl", "ab") as out, open(home / "stderr", "ab") as err:
             proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=out, stderr=err, start_new_session=True)
         proc.stdin.write(opener.encode("utf-8"))

@@ -5,6 +5,8 @@ from pathlib import Path
 
 import ai
 import pytest
+
+from conftest import start_session
 import ai.types.usage
 
 from js import cli, logins, model_metadata, persona, runtime
@@ -507,6 +509,7 @@ def test_one_shot_config_pins_keeps_jsrc_model_and_effort(monkeypatch, tmp_path)
 
 def test_resumed_one_shot_stays_on_its_stamp_when_manifest_changes(monkeypatch, tmp_path):
     seen = _one_shot_home(monkeypatch, tmp_path)
+    start_session("kept")
     assert cli._run_prompt("foo", agent="pinned", session="kept") == 0
     assert seen == {"model": "agent-model", "effort": "low"}
 

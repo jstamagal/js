@@ -23,6 +23,7 @@ def replay(monkeypatch, tmp_path):
     cfg = from_env(
         agent_id="replay",
         session="replay",
+        create_session=True,
         extras=[
             "MODEL=qwen3.8-27b",
             "PROVIDER=openai",

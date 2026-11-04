@@ -13,7 +13,7 @@ with the session id and cost), with js's own names.
 
 ```bash
 js -p "summarize README.md" --json | jq -c 'select(.type == "tool_call")'
-js -p "next step" --json --session reviews/parser-fix
+js -p "next step" --json --session-key parser-fix
 ```
 
 ## Events
