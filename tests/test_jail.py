@@ -668,7 +668,7 @@ def test_system_prompt_commands_see_the_shell_program(tmp_path):
 def test_envctx_reports_the_tool_shell_and_the_jail(tmp_path):
     envctx = Path(__file__).resolve().parent.parent / "tools" / "envctx.c"
     env = {**os.environ, "JS_SHELL": "/usr/bin/tool-shell", "SHELL": "/usr/bin/login-shell",
-           "JS_JAIL": str(tmp_path / "foo"), "JS_MODE": "repl"}
+           "JS_JAIL": str(tmp_path / "foo")}
 
     out = subprocess.run(["sh", str(envctx)], env=env, capture_output=True, text=True, timeout=60).stdout
 

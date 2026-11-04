@@ -411,11 +411,32 @@ static void build_skiplist(void) {
   }
 }
 
+/* a leading NAME=value word, as in `JS_PROVIDER=x js -p foo` */
+static int is_assignment(const char *w, size_t n) {
+  if (!n || !(isalpha((unsigned char)*w) || *w == '_'))
+    return 0;
+  for (size_t i = 1; i < n; i++) {
+    if (w[i] == '=')
+      return 1;
+    if (!(isalnum((unsigned char)w[i]) || w[i] == '_'))
+      return 0;
+  }
+  return 0;
+}
+
 static int skip_cmd(const char *cmd) {
-  while (*cmd == ' ' || *cmd == '\t')
-    cmd++;
+  for (;;) {
+    while (*cmd == ' ' || *cmd == '\t')
+      cmd++;
+    size_t w = 0;
+    while (cmd[w] && cmd[w] != ' ' && cmd[w] != '\t')
+      w++;
+    if (!is_assignment(cmd, w))
+      break;
+    cmd += w;
+  }
   size_t n = 0;
-  while (cmd[n] && cmd[n] != ' ')
+  while (cmd[n] && cmd[n] != ' ' && cmd[n] != '\t')
     n++;
   char first[128];
   if (n > sizeof first - 1)
@@ -1037,13 +1058,6 @@ int main(void) {
   }
 
   /* ---- standing rules for the agent reading this context ---- */
-  /* js sets JS_MODE itself (repl or headless), so trust it rather than
-     guessing from the parent chain. Absent means envctx ran outside js. */
-  const char *jm = getenv("JS_MODE");
-  if (!jm || strcmp(jm, "repl"))
-    printf("rule: %sone-shot mode, not chat: NEVER end turn on a question; "
-           "end on doing it.\n",
-           jm ? "" : "possibly ");
   const char *jd = getenv("JS_JAIL");
   if (jd && *jd) {
     char jt[1024];

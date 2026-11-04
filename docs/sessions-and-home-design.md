@@ -278,8 +278,8 @@ reverse).
 Why: on 2026-09-29 a `-p` session resumed in the REPL kept acting one-shot.
 The system prompt said `mode=repl`, but the replayed reasoning from the `-p`
 turn said "one-shot mode", and the model extended it to "do not chain shell
-calls", a rule that exists nowhere in js. The only one-shot rule js sends is
-`tools/envctx.c:1017` ("NEVER end the turn on a question").
+calls", a rule that exists nowhere in js. js sends no one-shot rule of its
+own: how a turn ends belongs in the operator's prompt files.
 
 ## 4. Shell tool
 
