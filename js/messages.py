@@ -625,10 +625,12 @@ OPT_AGENT = Message(
     "Internal agent id. Sessions live in ~/.js/sessions/<start dir>, runtime state in ~/.js/state/<agent>.")
 OPT_MODEL = Message("Override the configured or env model for this session or prompt.")
 OPT_URL = Message(
-    "Reach an endpoint with no saved login in one string: model[:api-key][[shape]][[effort]]@url. "
-    "Shape is openai, the default, responses or anthropic. Effort is the usual off..max ladder. "
-    "The key defaults to a dummy. E.g. qwen27b@http://foo/v1  |  "
-    "claude-sonnet-5:sk-foo[anthropic][max]@http://localhost:8317. "
+    "Reach an endpoint with no saved login in one string: [wire+]scheme://model[:key]@host/path. "
+    "Wire is openai+, responses+ or anthropic+; with none, a path ending in /v1 is OpenAI "
+    "chat-completions and anything else is Anthropic. The text after the last colon is the key "
+    "when it looks like one; otherwise it stays in the model. No key: JS_API_KEY, else a dummy. "
+    "No @: the model is JS_MODEL. E.g. http://qwen3:27b@box:11434/v1  |  "
+    "anthropic+https://deepseek-v4-pro:sk-xxxx@api.deepseek.com/anthropic. "
     "Desugars to --extra MODEL/PROVIDER/BASE_URL/API_KEY, "
     "so an explicit --extra still wins.")
 OPT_CD = Message(
@@ -822,6 +824,7 @@ PRINTONLY_NOT_WRITTEN = Message("--printonly: {path} not written: {error}. Print
 # --- Command-line flags ------------------------------------------------------
 
 BAD_URL_SPEC = Message("-u: {error}", GRAVE)
+BAD_BASE_URL = Message("JS_BASE_URL: {error}", GRAVE)
 JAIL_REFUSED = Message("{error}", GRAVE)
 JSON_NEEDS_LIST = Message("--json requires -p, pipe mode or --list.", GRAVE)
 LIST_EXCLUSIVE = Message("--list does not combine with run or session options.", GRAVE)
@@ -1771,27 +1774,31 @@ PROVIDER_ENDPOINT_ENV_HINT = Message("set {value}", banner=False)
 
 PROVIDER_ENDPOINT_CONFIGURE_HINT = Message("configure its base URL", banner=False)
 
-ENDPOINT_SPEC_EMPTY_ENDPOINT_SPEC_EXPECTED_MODEL_KEY_SHAPE = "empty endpoint spec; expected model[:key][[shape]][[effort]]@url"
+ENDPOINT_EMPTY = "empty endpoint URL; expected [wire+]scheme://model[:key]@host/path"
 
-ENDPOINT_SPEC_NO_ENDPOINT_IN_EXPECTED_SOMETHING_LIKE_QWEN = "no @endpoint in {spec!r}; expected something like qwen27b@http://host:8000/v1"
+ENDPOINT_BRACKET = "'[' in {spec!r}: the wire goes in the scheme (anthropic+https://...), effort goes in -r"
 
-ENDPOINT_SPEC_NO_ENDPOINT_AFTER_IN = "no endpoint after @ in {spec!r}"
+ENDPOINT_NO_SCHEME = "no scheme in {spec!r}; expected [wire+]scheme://model[:key]@host/path"
 
-ENDPOINT_SPEC_ENDPOINT_HAS_NO_SCHEME_WRITE_HTTP_OR = "endpoint {base_url!r} has no scheme; write http:// or https://"
+ENDPOINT_UNKNOWN_WIRE = "unknown wire {wire!r}+; wires are {wires}"
 
-ENDPOINT_SPEC_EMPTY_IN = "empty [] in {spec!r}"
+ENDPOINT_UNKNOWN_SCHEME = "scheme {scheme!r} in {spec!r}; write http:// or https://"
 
-ENDPOINT_SPEC_TWO_WIRE_SHAPES_IN_AND_ONE_MORE = "two wire shapes in {spec!r}: [{tag}] and one more"
+ENDPOINT_EMPTY_AFTER_COLON = "nothing after the last ':' before '@' in {spec!r}"
 
-ENDPOINT_SPEC_TWO_REASONING_EFFORTS_IN_AND_ONE_MORE = "two reasoning efforts in {spec!r}: [{tag}] and one more"
+ENDPOINT_NO_MODEL_BEFORE_AT = "no model before '@' in {spec!r}"
 
-ENDPOINT_SPEC_UNKNOWN_TAG_IN_WIRE_SHAPES_ARE_EFFORTS = "unknown tag [{tag}] in {spec!r}; wire shapes are {value}; efforts are {value2}"
+ENDPOINT_NO_HOST = "no host in {spec!r}"
 
-ENDPOINT_SPEC_NO_MODEL_ID_IN = "no model id in {spec!r}"
+ENDPOINT_NO_MODEL = "no model in {spec!r} and no JS_MODEL; write scheme://model@host/path"
 
-ENDPOINT_SPEC_EMPTY_API_KEY_AFTER_IN = "empty api key after ':' in {spec!r}"
+ENDPOINT_ENV_MODEL_DIFFERS = "model {url!r} in the URL, JS_MODEL is {env!r}"
 
-ENDPOINT_SPEC_NO_MODEL_ID_BEFORE_IN = "no model id before ':' in {spec!r}"
+ENDPOINT_ENV_KEY_DIFFERS = "the key in the URL differs from JS_API_KEY"
+
+ENDPOINT_ENV_PROVIDER_DIFFERS = "wire {wire}+ in the URL is provider {provider!r}, JS_PROVIDER is {env!r}"
+
+ENDPOINT_ENV_NO_MODEL = "no model in the URL and JS_MODEL is unset; write scheme://model@host/path"
 
 TOOL_RELEASE_ARIA_NO_VERIFIED_RELEASE_ASSET_FOR = "aria2: no verified release asset for {system} {machine}"
 

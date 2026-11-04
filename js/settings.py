@@ -165,7 +165,6 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("TOOL_BINARY_PATH_FALLBACK", "bool", group="tools"),
     SettingSpec("TMP_AGE_MAX", "float", group="runtime"),
     SettingSpec("DOTENV_WALK_UP", "bool", group="runtime"),
-    SettingSpec("ENDPOINT_DEFAULT_SHAPE", "str", group="providers"),
     SettingSpec("ENDPOINT_DEFAULT_KEY", "str", secret=True, group="providers"),
     SettingSpec("MODEL_CONTEXT_PROBE", "bool", group="runtime"),
     SettingSpec("MODEL_CATALOG_AGE_MAX", "float", group="runtime"),
@@ -857,12 +856,36 @@ def apply_env_overrides(settings: dict, env: dict[str, str] | None = None) -> di
     """Overlay JS_* env vars onto ``settings``: each setting's ``JS_<KEY>``,
     or its older env name when ``JS_<KEY>`` is not set."""
     source = env if env is not None else os.environ
+    endpoint = _env_endpoint(source)
     for spec in REGISTRY:
+        if endpoint is not None and spec.key in endpoint:
+            if endpoint[spec.key] is not _SKIP_ENV:
+                set_dotted(settings, spec.path, endpoint[spec.key])
+            continue
         missing = object()
         value = env_value(spec, source, missing, warn=True)
         if value is not missing:
             set_dotted(settings, spec.path, value)
     return settings
+
+
+_SKIP_ENV = object()
+
+
+def _env_endpoint(env: Mapping[str, str]) -> dict[str, Any] | None:
+    """MODEL, PROVIDER, BASE_URL and API_KEY from a ``JS_BASE_URL`` written in
+    the ``-u`` form; None for a plain base URL, or one js cannot read (named)."""
+    from . import endpoint_uri  # lazy: endpoint_uri imports this module
+
+    try:
+        spec = endpoint_uri.from_env(env)
+    except endpoint_uri.EndpointSpecError as exc:
+        output.notice(msgs.ENV_SETTING_IGNORED, name="JS_BASE_URL", error=exc)
+        return {"BASE_URL": _SKIP_ENV}
+    if spec is None:
+        return None
+    return {"MODEL": spec.model, "PROVIDER": spec.provider_id,
+            "BASE_URL": spec.base_url, "API_KEY": spec.api_key}
 
 
 def env_value(spec: SettingSpec, env: Mapping[str, str], missing: Any = None, *, warn: bool = False) -> Any:

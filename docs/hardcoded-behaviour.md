@@ -179,7 +179,6 @@ branch the audit was made on; they move as the code changes.
 | `js/codex_provider.py:44,47-58` | _client_version | default | JS_CODEX_CLIENT_VERSION is an env-only setting, and otherwise the part runs `codex --version` as a subprocess. | js-2lg.154 |
 | `js/model_metadata.py:33,517-539` | ensure_fresh_catalog | policy | The models.dev catalog refreshes itself over the network when older than 8 hours, with one try per process; neither the age nor the auto-refresh is a setting. | js-2lg.164 |
 | `js/model_metadata.py:335-368` | probe_local_context_window | policy | Local servers get HTTP probes for their context window automatically, with no setting to turn it off. | js-2lg.164 |
-| `js/endpoint_uri.py:34,135,141` | parse | default | A spec with no key gets "sk-dummy-key", and the default wire shape is openai-completions; both are fixed in code. | js-2lg.168 |
 | `js/dotenv.py:52-63,80` | candidate_files / load | policy | .env files are read from the start directory up to the filesystem root and fill os.environ; the walk-up is fixed in code. | js-2lg.169 |
 | `js/home.py:89,652-673` | sweep_tmp | default | The ~/.js/tmp auto-clean age (24 hours) is fixed in code and is not a setting. | js-2lg.171 |
 | `js/tool_binaries.py:161-166` | resolve_binary | policy | It falls back to PATH when the managed binary is missing; the fallback is fixed in code. | js-2lg.175 |
@@ -333,7 +332,7 @@ branch the audit was made on; they move as the code changes.
 | `js/xai_auth.py:87,92,104-110,174-183,243,368,445,452,457` | _validate_endpoint / discover / _post_token_form / exchange_code_for_token / relogin_error / ensure_fresh_login | presentation | The OAuth errors, including "run js --login xai-oauth again", are built in code. | js-2lg.157 |
 | `js/oauth_loopback.py:119,121,157,159,161,163` | wait_for_code | presentation | The callback errors are built in code from the label. | js-2lg.159 |
 | `js/providers.py:731-740` | assert_endpoint_configured | presentation | The refusal text, including "Run `js --login ...`", is built in code. | js-2lg.162 |
-| `js/endpoint_uri.py:76,83-86,89,91-93,106,109,113,116-119,122,131,133` | parse | presentation | The -u spec errors are worded for a terminal in code. | js-2lg.167 |
+| `js/messages.py` `ENDPOINT_*` | endpoint_uri.split, from_env | presentation | The -u and JS_BASE_URL errors are worded for a terminal in code. | js-2lg.167 |
 | `js/tool_binaries.py:145,550-551,568,573-574,583-585,622,627,632,634,698-699,730` | aria2_release / release_plan / _provision_termux_tools / install_all | presentation | The missing-tool and refusal texts are built in code. | js-2lg.177 |
 | `js/session_query.py:545-547` | header_line | presentation | Builds the picker column header words ("when mode agent dir turns length name") inline, not from messages.py. | js-2lg.182 |
 | `js/persona.py:79,114,118,125,133,140,145,155,158,168,172,199,203,214,222,226-227,230,336-337,353-354,363` | _load_exchanges / _load_yaml_manifest / _refuse_legacy_manifest / _coerce_* / _split_frontmatter / load_agent_manifest / load_prompt_spec | presentation | Builds manifest and prompt-directory error text inline instead of taking it from messages.py. | js-2lg.186 |
