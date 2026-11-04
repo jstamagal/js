@@ -45,8 +45,6 @@ def verify(agent: str | None = None) -> list[str]:
         for root in roots:
             if root.is_dir():
                 directories.update(path for path in root.iterdir() if path.is_dir())
-        directories.update(path.parent for path in home.rglob('agent.yaml'))
-        directories.update(path.parent for path in home.rglob('agents.yaml'))
         directories = sorted(directories)
 
     for directory in directories:
