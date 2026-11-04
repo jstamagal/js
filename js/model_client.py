@@ -629,6 +629,22 @@ def using_model_factory(factory: Callable[..., ai.Model]) -> Iterator[None]:
         _model_factory.reset(token)
 
 
+def wire_name(provider_id: str | None) -> str:
+    """The API ``resolve_model`` speaks for ``provider_id``, in the ``-u`` wire
+    names: openai (chat-completions), responses, anthropic, or the SDK id."""
+    if provider_id is None:
+        return "openai"
+    canonical_id = providers.normalize_provider_id(provider_id) or provider_id
+    if codex_auth.is_codex_provider(canonical_id):
+        return "responses"
+    provider_def = providers.get_provider(provider_id)
+    sdk = (provider_def.effective_sdk_provider_id if provider_def is not None else None) or canonical_id
+    if sdk == "openai":
+        transport = provider_def.transport if provider_def is not None else None
+        return "responses" if transport == "custom_responses" else "openai"
+    return sdk
+
+
 def resolve_model(
     model_id: str,
     *,

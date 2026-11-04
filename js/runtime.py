@@ -1714,7 +1714,13 @@ def _trace_banner(telemetry: Telemetry, request: ModelRequest, context: ToolCont
     # is left to work in; max_out only bounds one reply. Showing the second
     # without the first invites reading 128000 as the window.
     ctx = compaction.configured_context_window(context.config, resolve_window)
+    # key=none: no key, or the ENDPOINT_DEFAULT_KEY stand-in. The key itself
+    # is never shown.
+    dummy_key = _settings.knob(request.settings, "ENDPOINT_DEFAULT_KEY")
+    key_state = "set" if request.api_key and request.api_key != dummy_key else "none"
     bits = [f"model={model}",
+            f"key={key_state}",
+            f"wire={model_client.wire_name(provider_id)}",
             f"provider={provider_label}",
             f"base={base}",
             f"ctx={ctx if ctx else 'unknown'}",

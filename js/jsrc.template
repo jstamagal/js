@@ -1085,9 +1085,6 @@
 # API key for an endpoint URI that names none.
 #set ENDPOINT_DEFAULT_KEY sk-dummy-key
 
-# Wire shape of an endpoint URI that names none.
-#set ENDPOINT_DEFAULT_SHAPE openai-completions
-
 # on: a stale model catalog is refreshed at startup.
 #set MODEL_CATALOG_AUTO_REFRESH on
 
