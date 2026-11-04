@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import socket
+
 from js.output import OutputEvent, StdoutSink
 
 
@@ -150,7 +152,9 @@ def test_a_turn_with_its_own_sink_gets_every_visible_thing_as_fields_and_prints_
 
     shown = capsys.readouterr()
     assert (shown.out, shown.err) == ("", "")
-    assert sink.named("run_line")[0]["fields"][0] == "model=offline-model"
+    fields = sink.named("run_line")[0]["fields"]
+    assert fields[0] == f"host={socket.gethostname()}"
+    assert "model=offline-model" in fields
     started = [event for event in sink.named("tool_call") if event["name"] == "read"]
     finished = [event for event in sink.named("tool_result") if event["name"] == "read"]
     assert [event["args"] for event in started] == [{"file_path": "notes.txt"}]

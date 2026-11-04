@@ -15,6 +15,7 @@ import math
 import hashlib
 import itertools
 import os
+import socket
 import sys  # noqa: F401 - tests patch sys.stdout through runtime.sys
 import threading
 from pathlib import Path
@@ -1700,7 +1701,7 @@ def _prepare_turn_context(context: ToolContext, cfg: Config, request: ModelReque
 
 def _trace_banner(telemetry: Telemetry, request: ModelRequest, context: ToolContext, registry: ToolRegistry,
                   resolve_window: Callable[[], int | None]) -> None:
-    """Show the run line: model, provider, window, output cap, effort, vision, memory, tools."""
+    """Show the run line: host, model, provider, window, output cap, effort, vision, memory, tools."""
     model, provider_id = request.model, request.provider_id
     if provider_id:
         provider_label = provider_id
@@ -1718,7 +1719,8 @@ def _trace_banner(telemetry: Telemetry, request: ModelRequest, context: ToolCont
     # is never shown.
     dummy_key = _settings.knob(request.settings, "ENDPOINT_DEFAULT_KEY")
     key_state = "set" if request.api_key and request.api_key != dummy_key else "none"
-    bits = [f"model={model}",
+    bits = [f"host={socket.gethostname()}",
+            f"model={model}",
             f"key={key_state}",
             f"wire={model_client.wire_name(provider_id)}",
             f"provider={provider_label}",
