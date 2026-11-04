@@ -169,8 +169,8 @@
 # Ctrl-O folds and unfolds the thinking whatever the level. Only the screen
 # folds: in js -p and the blocking REPL, 1 to 3 print the thinking and then
 # its token count. The thinking is kept either way.
-#   example:  fset REASONING_DISPLAY 2
-#fset REASONING_DISPLAY 1
+#   example:  set REASONING_DISPLAY 2
+#set REASONING_DISPLAY 1
 
 # Network chatter, on screen.
 #   0  nothing, not even errors
@@ -178,8 +178,8 @@
 #   2  also "Connecting" and "Connected" lines, and a byte counter in the
 #      status bar until the first word of the answer arrives
 #   3  also retries, model catalog refreshes and per-call stream stats
-#   example:  fset NET_DISPLAY 0
-#fset NET_DISPLAY 2
+#   example:  set NET_DISPLAY 0
+#set NET_DISPLAY 2
 
 # How tool calls look on screen.
 #   0  you don't see them
@@ -189,35 +189,35 @@
 #   2  every call, with the first few lines of each result
 #      (TOOLS_PREVIEW_LINES)
 #   3  every call, with its whole result
-#   example:  fset TOOLS_DISPLAY 2
-#fset TOOLS_DISPLAY 1
+#   example:  set TOOLS_DISPLAY 2
+#set TOOLS_DISPLAY 1
 
 # How many lines of a result or a diff TOOLS_DISPLAY 1 and 2 show before hiding
 # the rest.
-#   example:  fset TOOLS_PREVIEW_LINES 30
-#fset TOOLS_PREVIEW_LINES 12
+#   example:  set TOOLS_PREVIEW_LINES 30
+#set TOOLS_PREVIEW_LINES 12
 
 # Tools TOOLS_DISPLAY 1 counts as quick: each folds into one row instead of
 # showing its result. A JSON list of tool names.
-#   example:  fset TOOLS_QUIET ["read", "fs_search"]
-#fset TOOLS_QUIET ["read", "fs_search", "ast_search", "lsp", "fetch", "browse", "browser_probe", "exa_search", "serper_search", "tavily_search", "docs_search", "claim", "release", "subscribe", "wake_me", "who", "tasks", "take_task", "tool_discovery", "skill", "undo", "terminal_snapshot"]
+#   example:  set TOOLS_QUIET ["read", "fs_search"]
+#set TOOLS_QUIET ["read", "fs_search", "ast_search", "lsp", "fetch", "browse", "browser_probe", "exa_search", "serper_search", "tavily_search", "docs_search", "claim", "release", "subscribe", "wake_me", "who", "tasks", "take_task", "tool_discovery", "skill", "undo", "terminal_snapshot"]
 
 # Shell commands TOOLS_DISPLAY 1 counts as quick, matched by the command's first
 # word or first two words. A JSON list.
-#   example:  fset SHELL_QUIET ["ls", "cat", "git status"]
-#fset SHELL_QUIET ["cd", "ls", "cat", "head", "tail", "wc", "pwd", "tree", "stat", "file", "which", "find", "fd", "grep", "rg", "du", "df", "ps", "echo", "sort", "uniq", "git status", "git log", "git diff", "git show", "git branch"]
+#   example:  set SHELL_QUIET ["ls", "cat", "git status"]
+#set SHELL_QUIET ["cd", "ls", "cat", "head", "tail", "wc", "pwd", "tree", "stat", "file", "which", "find", "fd", "grep", "rg", "du", "df", "ps", "echo", "sort", "uniq", "git status", "git log", "git diff", "git show", "git branch"]
 
 # Draw the model's Markdown (headings, bold, code blocks) on screen.
 #   on   each block is drawn formatted once it's finished
 #   off  raw text exactly as it arrives
 # Output going to a pipe or a file is always raw.
-#   example:  fset MARKDOWN off
-#fset MARKDOWN on
+#   example:  set MARKDOWN off
+#set MARKDOWN on
 
 # When you resume a session, how many of its last exchanges are shown
 # again before the prompt. 0 shows none.
-#   example:  fset RESUME_EXCHANGES 10
-#fset RESUME_EXCHANGES 3
+#   example:  set RESUME_EXCHANGES 10
+#set RESUME_EXCHANGES 3
 
 # Keys on the input line.
 #   emacs  Enter sends the line
@@ -230,7 +230,8 @@
 # --- colours, palette and formats ---
 
 # How everything looks is /fset: `/fset` lists it, `/fset THEME bitchx`
-# picks a built-in theme (claude, crush, bitchx, github, paper, splash3),
+# picks a palette from ~/.js/themes, else a built-in one (claude, crush,
+# bitchx, github, paper, splash3); no theme is set by default.
 # `/fset COLOR_STATUS_BACKGROUND #1e1e2e` changes one colour, and /save
 # writes your fset lines here.
 #   example:  fset HOST_COLOR #0000aa
@@ -462,11 +463,11 @@
 #   normal   code, output, timing, variables
 #   verbose  also stdout, stderr and displays split apart, plus kernel
 #            start and stop
-#fset KERNEL_VERBOSITY normal
+#set KERNEL_VERBOSITY normal
 
 # Most lines shown per part of a kernel result on screen, so one huge
 # output can't scroll everything away. The model still gets all of it.
-#fset KERNEL_LINES_MAX 24
+#set KERNEL_LINES_MAX 24
 
 # How long a kernel call waits for its code before handing the model a
 # handle to check back with. The code keeps running.
@@ -548,7 +549,7 @@
 
 # In `js -p`, print a short line for each tool call while it runs.
 #   off  you only see the final answer
-#fset TRACE on
+#set TRACE on
 
 # Write a record of every internal event to state/<agent>/debug.log. Only
 # for chasing a js bug.

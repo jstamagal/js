@@ -24,7 +24,7 @@ from .toolkit.core import ToolContext
 
 
 def _tool_settings(tool_context: ToolContext | None) -> Any:
-    """Live settings for the display dials; `/fset TOOLS_DISPLAY 3` reaches the next exchange."""
+    """Live settings for the display dials; `/set TOOLS_DISPLAY 3` reaches the next exchange."""
     context = tool_context or T.STOCK_CONTEXT
     return getattr(getattr(context, "config", None), "settings", None)
 

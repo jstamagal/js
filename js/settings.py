@@ -75,7 +75,7 @@ EMPTY_UNSET = "unset"    # param deliberately not sent; provider default wins ("
 class SettingSpec:
     """One setting. ``key`` is its name, UPPER_SNAKE (`MODEL`). The key is
     the storage path in the settings dict, split on dots, and the name its
-    ``command``, `set` or `fset`, takes. Its env var is ``JS_<KEY>``
+    `set` takes. Its env var is ``JS_<KEY>``
     (`canonical_env_name`)."""
 
     key: str
@@ -86,7 +86,6 @@ class SettingSpec:
     secret: bool = False        # mask the value in `show`
     aliases: tuple[str, ...] = ()  # jsrc verbs that set ``key``: `model X` is `set MODEL X`
     group: str = ""             # what `/set <group>` lists it under; "" = the dotted section
-    command: str = "set"        # the verb that owns it: `set`, or `fset` for how js looks
 
     @property
     def path(self) -> tuple[str, ...]:
@@ -103,10 +102,8 @@ class SettingSpec:
 
     @property
     def doc(self) -> str:
-        """This setting's help: its entry in `js/help/set.txt`, or
-        `js/help/fset.txt` for one /fset owns; "" when it has none."""
-        if self.command == "fset":
-            return read_help(FSET_HELP_FILE).get(self.key, "")
+        """This setting's help: its entry in `js/help/set.txt`; "" when it
+        has none."""
         return setting_help().get(self.key, "")
 
 
@@ -268,17 +265,17 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("MOTD_FILE", "str", empty=EMPTY_NONE, group="startup"),
     SettingSpec("MOTD_DIR", "str", empty=EMPTY_NONE, group="startup"),
     # --- display: /fset entries ---
-    SettingSpec("REASONING_DISPLAY", "int", group="display", command="fset"),
-    SettingSpec("NET_DISPLAY", "int", group="display", command="fset"),
-    SettingSpec("TOOLS_DISPLAY", "int", group="display", command="fset"),
-    SettingSpec("TOOLS_QUIET", "json", group="display", command="fset"),
-    SettingSpec("SHELL_QUIET", "json", group="display", command="fset"),
-    SettingSpec("TOOLS_PREVIEW_LINES", "int", group="display", command="fset"),
-    SettingSpec("MARKDOWN", "bool", group="display", command="fset"),
-    SettingSpec("RESUME_EXCHANGES", "int", group="display", command="fset"),
-    SettingSpec("TRACE", "bool", empty=EMPTY_OFF, group="display", command="fset"),
-    SettingSpec("KERNEL_VERBOSITY", "str", group="display", command="fset"),
-    SettingSpec("KERNEL_LINES_MAX", "int", group="display", command="fset"),
+    SettingSpec("REASONING_DISPLAY", "int", group="display"),
+    SettingSpec("NET_DISPLAY", "int", group="display"),
+    SettingSpec("TOOLS_DISPLAY", "int", group="display"),
+    SettingSpec("TOOLS_QUIET", "json", group="display"),
+    SettingSpec("SHELL_QUIET", "json", group="display"),
+    SettingSpec("TOOLS_PREVIEW_LINES", "int", group="display"),
+    SettingSpec("MARKDOWN", "bool", group="display"),
+    SettingSpec("RESUME_EXCHANGES", "int", group="display"),
+    SettingSpec("TRACE", "bool", empty=EMPTY_OFF, group="display"),
+    SettingSpec("KERNEL_VERBOSITY", "str", group="display"),
+    SettingSpec("KERNEL_LINES_MAX", "int", group="display"),
     SettingSpec("EDITING_MODE", "str", group="input"),
     SettingSpec("EXIT_ARM_TIMEOUT", "float", group="input"),
     SettingSpec("PASTE_IMAGE_KEY", "str", group="input"),
@@ -1195,8 +1192,8 @@ def _set_line(spec: SettingSpec, value: Any) -> str:
     """`set <key> <value>`, or `set -<key>` when ``value`` is None; `fset`
     for an entry /fset owns. An empty value is written `""`."""
     if value is None:
-        return f"{spec.command} -{spec.key}"
-    return f"{spec.command} {spec.key} {_config_line_value(spec, value)}"
+        return f"set -{spec.key}"
+    return f"set {spec.key} {_config_line_value(spec, value)}"
 
 
 # How `_jsrc_key` names an `fset` line for an entry `js.fset` holds.

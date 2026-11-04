@@ -257,7 +257,7 @@ def test_repl_input_hook_dispatches_before_run_turn(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
 
-    run_blocking(cfg, ["/on input fset TRACE on", "hello", "exit"])
+    run_blocking(cfg, ["/on input set TRACE on", "hello", "exit"])
 
     assert trace_overrides == [True]
 
@@ -518,7 +518,7 @@ def test_repl_set_runtime_trace_updates_turn_config(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
 
-    run_blocking(cfg, ["/fset TRACE on", "hello", "exit"])
+    run_blocking(cfg, ["/set TRACE on", "hello", "exit"])
 
     assert traces == [True]
 

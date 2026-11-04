@@ -1,11 +1,35 @@
 # js/fset: the /fset defaults. Every line here is an `fset NAME value` line,
-# the same lines a jsrc carries and /save writes. A theme (js/themes/<THEME>)
-# sits over these; the operator's own fset lines sit over the theme.
+# the same lines a jsrc carries and /save writes. A theme (THEME, a file of
+# PALETTE_nn lines in ~/.js/themes or js/themes) sits over these; the
+# operator's own fset lines sit over the theme. No theme is set here.
 #
 # A message's format defaults to its js/messages.py text; the ones below
 # differ from it.
 
-fset THEME crush
+# What each part of the screen is drawn in: a palette slot, so a theme's
+# palette repaints it. Empty is the terminal's own colour.
+fset COLOR_BACKGROUND ""
+fset COLOR_DIM 14
+fset COLOR_USER ""
+fset COLOR_USER_MARK $HOST_COLOR|11
+fset COLOR_AGENT 13
+fset COLOR_AGENT_MARK $HOST_COLOR|$COLOR_AGENT
+fset COLOR_WARN 07
+fset COLOR_ERROR 04
+fset COLOR_OK 03
+fset COLOR_TOOL 10
+fset COLOR_TOOL_OUTPUT ""
+fset COLOR_PANEL ""
+fset COLOR_ACCENT 12
+fset COLOR_ADDED 03
+fset COLOR_REMOVED 04
+fset COLOR_CODE 06
+fset COLOR_REASONING 94
+fset COLOR_SEPARATOR 93
+fset COLOR_STATUS_BACKGROUND 02
+fset COLOR_STATUS_TEXT 00
+fset COLOR_STATUS_ACCENT $HOST_COLOR|08
+fset CODE_STYLE default
 
 # The speaker marks, alone in column 0, and the spaces before their text.
 fset MARK_USER ❯

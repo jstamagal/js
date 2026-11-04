@@ -113,7 +113,7 @@ REPL commands:
 /logout                        clear provider/baseurl/apikey for this session
 /models [max]                  list available models from the active provider
 /set [key [val]]              list settings, show one, or change one
-/fset [NAME [value]]          list how js looks: formats, palette, colours, theme, display levels
+/fset [NAME [value]]          list how js looks: formats, palette, colours, theme
 /show [key]                   list all current config values or one key
 /save                         write your changed settings into the global jsrc
 /load <file>                  run each line of a file as a command (also /source)
@@ -121,9 +121,9 @@ REPL commands:
 /alias [name [command]]       list, show or define a command alias
 /exec <command>               run a shell command; its stdout goes with the next message
 /set EFFORT high
-/fset REASONING_DISPLAY 2     show reasoning and leave it visible (1, the default, folds it)
-/fset TOOLS_DISPLAY 3         show every tool call and its whole result
-/fset TOOLS_DISPLAY 1         fold reads and searches, show diffs, running commands and failures
+/set REASONING_DISPLAY 2     show reasoning and leave it visible (1, the default, folds it)
+/set TOOLS_DISPLAY 3         show every tool call and its whole result
+/set TOOLS_DISPLAY 1         fold reads and searches, show diffs, running commands and failures
 /set COMPACTION_AUTO off
 /on turn_start set COMPACTION_AUTO off
 /turns
@@ -342,7 +342,7 @@ first line of a command, a URL). Exchanges stack with no blank row between.
 On the REPL screen an exchange is redrawn in place as it changes, and Ctrl-O
 unfolds a folded row or preview. Elsewhere (`js -p`, a pipe) nothing can unfold
 a row, so every call is printed whole when it finishes, at every level but 0.
-A saved transcript keeps every call whole too. The colours are /fset `COLOR_*` entries (`/fset COLOR_TOOL #1fb4ff`); `/fset THEME bitchx` picks a built-in theme. In
+A saved transcript keeps every call whole too. The colours are /fset `COLOR_*` entries (`/fset COLOR_TOOL #1fb4ff`); `/fset THEME bitchx` picks a palette, from `~/.js/themes/` first and then the built-ins; none is set by default. In
 a saved transcript every call is recorded on its own and its header starts
 with `>`, so `grep '] > shell'` finds every shell call made at `TOOLS_DISPLAY` 1 or
 higher (the `]` keeps `<USER>` lines out). Tool output, tool arguments and
@@ -351,7 +351,7 @@ terminal sees them.
 
 Assistant Markdown is rendered on a terminal: each finished block (paragraph,
 list, fenced code) is highlighted once and stays put; only the block still
-being written is redrawn. `/fset MARKDOWN off` writes the text as it arrives.
+being written is redrawn. `/set MARKDOWN off` writes the text as it arrives.
 Output that is not a terminal, such as `js -p ... | less`, is plain text.
 
 Ctrl-C cancels the active turn and drops queued and steering lines; `/flush`
