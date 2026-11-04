@@ -40,9 +40,9 @@ def test_prompt_spec_uses_most_specific_agent_and_stacks_agents_files(tmp_path):
     (repo / "prompts" / "worker").mkdir(parents=True)
     (home / ".js" / "agents" / "worker").mkdir(parents=True)
     (project / ".js" / "agents" / "worker").mkdir(parents=True)
-    (repo / "prompts" / "worker" / "01.md").write_text("REPO", encoding="utf-8")
-    (home / ".js" / "agents" / "worker" / "01.md").write_text("GLOBAL", encoding="utf-8")
-    (project / ".js" / "agents" / "worker" / "01.md").write_text("PROJECT", encoding="utf-8")
+    (repo / "prompts" / "worker" / "01-prompt.md").write_text("REPO", encoding="utf-8")
+    (home / ".js" / "agents" / "worker" / "01-prompt.md").write_text("GLOBAL", encoding="utf-8")
+    (project / ".js" / "agents" / "worker" / "01-prompt.md").write_text("PROJECT", encoding="utf-8")
     for root, name in [(home / ".js", "GLOBAL"), (project, "PROJECT")]:
         (root / "AGENTS.md").write_text(f"{name} AGENTS", encoding="utf-8")
         (root / "AGENTS.local.md").write_text(f"{name} LOCAL", encoding="utf-8")
@@ -66,11 +66,11 @@ def test_agent_discovery_unions_roots_with_project_shadowing(tmp_path):
     proj = tmp_path / "project"
     for root, body in [(repo, "repo"), (glob, "global"), (proj, "project")]:
         (root / "same").mkdir(parents=True)
-        (root / "same" / "01.md").write_text(body, encoding="utf-8")
+        (root / "same" / "01-prompt.md").write_text(body, encoding="utf-8")
     (glob / "global_only").mkdir()
-    (glob / "global_only" / "01.md").write_text("g", encoding="utf-8")
+    (glob / "global_only" / "01-prompt.md").write_text("g", encoding="utf-8")
     (proj / "project_only").mkdir()
-    (proj / "project_only" / "01.md").write_text("p", encoding="utf-8")
+    (proj / "project_only" / "01-prompt.md").write_text("p", encoding="utf-8")
 
     reg = build_default_registry(prompts_root=[repo, glob, proj])
     same = persona.load_agent_prompt_spec(

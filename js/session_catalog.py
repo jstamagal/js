@@ -227,13 +227,15 @@ def record_session_start(
     parent: Path | str | None = None,
     branched_from: dict[str, Any] | None = None,
     ts: float | None = None,
+    chat: bool = False,
 ) -> None:
     """Append non-message session start metadata to a conversation JSONL file.
 
     *agent* and *model* are recorded so a later resume with no flags can come
     back on what was actually in use rather than the config default. *parent*
     is the session file a subagent run belongs to, recorded as `parent_session`;
-    *branched_from* is `{"session": <parent path>, "message": <message id>}`."""
+    *branched_from* is `{"session": <parent path>, "message": <message id>}`.
+    *chat* records `"chat": true` for a --chat run."""
     record = {
         "kind": _METADATA_KIND,
         "version": _METADATA_VERSION,
@@ -248,6 +250,8 @@ def record_session_start(
         record["mode"] = mode
     if command is not None:
         record["command"] = list(command)
+    if chat:
+        record["chat"] = True
     if parent is not None:
         record["parent_session"] = str(parent)
     if branched_from is not None:

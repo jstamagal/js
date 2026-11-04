@@ -21,7 +21,7 @@ def _agent(tmp_path, monkeypatch, files):
     monkeypatch.setattr(runtime.T, "STOCK_CONTEXT", ToolContext(cwd=tmp_path))
     directory = tmp_path / ".js" / "agents" / "voice"
     directory.mkdir(parents=True)
-    (directory / "00-role.md").write_text("SYSTEM", encoding="utf-8")
+    (directory / "00-prompt.md").write_text("SYSTEM", encoding="utf-8")
     for name, content in files.items():
         (directory / name).write_bytes(content.encode("utf-8"))
     return directory
@@ -54,18 +54,27 @@ def _saved(tmp_path):
     return session_store.folder_for(tmp_path) / "seeded.jsonl"
 
 
-def test_message_keywords_are_separate_from_ordinary_prompt_files(tmp_path, monkeypatch):
+def test_only_keyword_files_load_and_other_markdown_is_not_read(tmp_path, monkeypatch):
     directory = _agent(tmp_path, monkeypatch, {
         "1-user.md": "USER",
         "1-agent.md": "ASSISTANT",
         "2-benchmark.md": "BENCHMARK",
-        "02-ape.md": "APE",
+        "02-env.md": "ENV",
+        "README.md": "README",
+        "CHANGELOG.md": "CHANGELOG",
+        "03-notes.md": "NOTES",
     })
     source = tmp_path / "troop.md"
     source.write_text("TROOP", encoding="utf-8")
-    (directory / "01-troop.md").symlink_to(source)
+    (directory / "01-prompt.md").symlink_to(source)
     spec = persona.load_prompt_spec(directory)
-    assert spec.system == "SYSTEM\n\nTROOP\n\nAPE\n"
+    assert spec.system == "SYSTEM\n\nTROOP\n\nENV\n"
+
+
+def test_env_files_can_be_left_out_and_prompt_files_replaced(tmp_path, monkeypatch):
+    directory = _agent(tmp_path, monkeypatch, {"01-prompt.md": "MORE", "02-env.md": "ENV"})
+    assert persona.load_prompt_spec(directory, env=False).system == "SYSTEM\n\nMORE\n"
+    assert persona.load_prompt_spec(directory, prompt="OTHER").system == "OTHER\n\nENV\n"
 
 
 def test_pairs_seed_exact_contents_and_agent_only_files_seed_assistant(tmp_path, monkeypatch):
@@ -119,7 +128,7 @@ def test_resume_keeps_seeded_history_without_duplicating_it(tmp_path, monkeypatc
 
 def test_headless_resume_keeps_the_original_expanded_system_prompt(tmp_path, monkeypatch):
     directory = _agent(tmp_path, monkeypatch, {"01-user.md": "opening"})
-    prompt = directory / "00-role.md"
+    prompt = directory / "00-prompt.md"
     prompt.write_text("SYSTEM {{SESSION_CLOCK}}", encoding="utf-8")
     requests = _model(monkeypatch, ["opening reply", "first reply", "second reply"])
     monkeypatch.setenv("SESSION_CLOCK", "first")

@@ -7,7 +7,7 @@ snippets.
 
 Expansion happens at the persona-load chokepoint
 (`js/persona.py:_expand_spec`), so it applies to the full assembled system
-prompt: ordinary `*.md` prompt files in the agent's directory, the global
+prompt: the `*-prompt.md` and `*-env.md` files in the agent's directory, the global
 `JS.md` / `JS.local.md`, and the start directory's `AGENTS.md` /
 `AGENTS.local.md`. User/agent message files and benchmarks expand separately
 when reached. The implementation is `js/promptexpand.py`.
@@ -149,7 +149,7 @@ left literal in the prompt (no error); `{{VAR}}`, `!{env}`, and `!{file}` still
 expand.
 
 > **Security note.** By default `js` compiles and runs arbitrary code taken
-> from your prompt files (the agent's `*.md` and any stacked `AGENTS.md`).
+> from your prompt files (the agent's `*-prompt.md` and `*-env.md`, and any stacked `AGENTS.md`).
 > Treat a prompt directory as executable input: only add prompt dirs you wrote
 > or fully trust, or run with `--im-a-pussy` / `INLINE_CODE off`.
 

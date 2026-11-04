@@ -76,8 +76,8 @@ def test_apply_writes_agent_yaml_and_the_agent_loads_the_same_settings(tmp_path)
 
 
 def test_column_zero_list_and_flow_list_both_migrate(tmp_path):
-    col0 = _agent(tmp_path, "col0", {"00-tools.yaml": "tools:\n- read\n- shell\n", "01.md": "X\n"})
-    flow = _agent(tmp_path, "flow", {"00-tools.yaml": "tools: [read, \"*\"]\n", "01.md": "X\n"})
+    col0 = _agent(tmp_path, "col0", {"00-tools.yaml": "tools:\n- read\n- shell\n", "01-prompt.md": "X\n"})
+    flow = _agent(tmp_path, "flow", {"00-tools.yaml": "tools: [read, \"*\"]\n", "01-prompt.md": "X\n"})
 
     for agent in (col0, flow):
         assert agent_migrate.migrate_agent_dir(agent, apply=True).action == "migrate"
@@ -88,8 +88,8 @@ def test_column_zero_list_and_flow_list_both_migrate(tmp_path):
 
 def test_frontmatter_zero_markdown_moves_to_agent_yaml_and_keeps_its_body(tmp_path):
     agent = _agent(tmp_path, "legacy", {
-        "00-tools.md": "---\ntools:\n  - shell\nmodel: m1\n---\nLEGACY BODY\n",
-        "01.md": "BODY\n",
+        "00-prompt.md": "---\ntools:\n  - shell\nmodel: m1\n---\nLEGACY BODY\n",
+        "01-prompt.md": "BODY\n",
     })
 
     assert agent_migrate.migrate_agent_dir(agent, apply=True).action == "migrate"
@@ -101,8 +101,8 @@ def test_frontmatter_zero_markdown_moves_to_agent_yaml_and_keeps_its_body(tmp_pa
 
 
 def test_existing_agent_yaml_and_bad_yaml_are_left_alone(tmp_path):
-    both = _agent(tmp_path, "both", {"00-tools.yaml": "tools: [read]\n", "agent.yaml": "tools: []\n", "01.md": "X\n"})
-    broken = _agent(tmp_path, "broken", {"00-tools.yaml": "omni/x\nreasoning_effort: high\n", "01.md": "X\n"})
+    both = _agent(tmp_path, "both", {"00-tools.yaml": "tools: [read]\n", "agent.yaml": "tools: []\n", "01-prompt.md": "X\n"})
+    broken = _agent(tmp_path, "broken", {"00-tools.yaml": "omni/x\nreasoning_effort: high\n", "01-prompt.md": "X\n"})
 
     assert agent_migrate.migrate_agent_dir(both, apply=True).action == "skip"
     assert agent_migrate.migrate_agent_dir(broken, apply=True).action == "error"
@@ -113,8 +113,8 @@ def test_existing_agent_yaml_and_bad_yaml_are_left_alone(tmp_path):
 
 def test_main_walks_a_root_skips_symlinks_and_only_writes_with_apply(tmp_path, capsys):
     root = tmp_path / "agents"
-    agent = _agent(root, "builder", {"00-tools.yaml": "tools: [read]\n", "01.md": "X\n"})
-    elsewhere = _agent(tmp_path / "remote", "shared", {"00-tools.yaml": "tools: [read]\n", "01.md": "X\n"})
+    agent = _agent(root, "builder", {"00-tools.yaml": "tools: [read]\n", "01-prompt.md": "X\n"})
+    elsewhere = _agent(tmp_path / "remote", "shared", {"00-tools.yaml": "tools: [read]\n", "01-prompt.md": "X\n"})
     (root / "shared").symlink_to(elsewhere)
 
     assert agent_migrate.main([str(root)]) == 0
@@ -143,8 +143,8 @@ def test_entries_that_match_no_tool_are_dropped_and_the_rest_kept(tmp_path):
 def test_an_existing_agent_yaml_loses_only_its_dead_entries(tmp_path, capsys):
     root = tmp_path / "agents"
     text = "# keep me\nmodel: m1\ntools:\n  - read:eager  # files\n  - grep:eager\n  - sem_search:lazy\n"
-    agent = _agent(root, "old", {"agent.yaml": text, "01.md": "X\n"})
-    clean = _agent(root, "clean", {"agent.yaml": "tools:\n  - read:eager\n", "01.md": "X\n"})
+    agent = _agent(root, "old", {"agent.yaml": text, "01-prompt.md": "X\n"})
+    clean = _agent(root, "clean", {"agent.yaml": "tools:\n  - read:eager\n", "01-prompt.md": "X\n"})
 
     assert agent_migrate.main([str(root)]) == 0
     assert (agent / "agent.yaml").read_text(encoding="utf-8") == text
@@ -169,7 +169,7 @@ def test_message_and_benchmark_frontmatter_are_content_not_manifests(tmp_path):
     for name, head in (("00-user.md", "model: user-text"), ("00-agent.md", "model: seed"),
                        ("00-benchmark.md", "max_tokens: 42")):
         text = f"---\n{head}\n---\nBODY\n"
-        agent = _agent(tmp_path, name.removesuffix(".md"), {name: text, "01.md": "X\n"})
+        agent = _agent(tmp_path, name.removesuffix(".md"), {name: text, "01-prompt.md": "X\n"})
         result = agent_migration.migrate_agent_dir(agent, apply=True, keep=_keep_all)
         assert result.action == "none", name
         assert (agent / name).read_text(encoding="utf-8") == text
@@ -191,9 +191,9 @@ def test_legacy_yaml_beside_message_and_benchmark_files_migrates(tmp_path):
 def test_undecodable_agent_is_an_error_and_later_agents_still_migrate(tmp_path):
     """ALL-CLAIMS:20: one non-UTF-8 file must not kill the whole root."""
     root = tmp_path / "agents"
-    bad = _agent(root, "a_bad", {"01.md": "X\n"})
+    bad = _agent(root, "a_bad", {"01-prompt.md": "X\n"})
     (bad / "00-tools.yaml").write_bytes(b"tools: [\xff]\n")
-    good = _agent(root, "b_good", {"00-tools.yaml": "tools: [read]\n", "01.md": "X\n"})
+    good = _agent(root, "b_good", {"00-tools.yaml": "tools: [read]\n", "01-prompt.md": "X\n"})
     results = agent_migration.migrate_root(root, apply=True, keep=_keep_all)
     assert [r.action for r in results] == ["error", "migrate"]
     assert "00-tools.yaml" in results[0].message
@@ -223,19 +223,19 @@ def _refuse(monkeypatch, target, *, attr="replace"):
 
 
 def test_failed_manifest_write_leaves_the_legacy_agent_and_a_rerun_finishes(tmp_path, monkeypatch):
-    agent = _agent(tmp_path, "fault", {"00-tools.yaml": "tools: [read]\n", "01.md": "X\n"})
+    agent = _agent(tmp_path, "fault", {"00-tools.yaml": "tools: [read]\n", "01-prompt.md": "X\n"})
     with monkeypatch.context() as m:
         _refuse(m, agent / "agent.yaml")
         assert agent_migration.migrate_agent_dir(agent, apply=True, keep=_keep_all).action == "error"
     assert (agent / "00-tools.yaml").read_text(encoding="utf-8") == "tools: [read]\n"
-    assert sorted(p.name for p in agent.iterdir()) == ["00-tools.yaml", "01.md"]
+    assert sorted(p.name for p in agent.iterdir()) == ["00-tools.yaml", "01-prompt.md"]
     assert agent_migration.migrate_agent_dir(agent, apply=True, keep=_keep_all).action == "migrate"
     assert (agent / "agent.yaml").exists() and not (agent / "00-tools.yaml").exists()
 
 
 def test_failed_legacy_removal_takes_agent_yaml_back_out(tmp_path, monkeypatch):
     """ALL-CLAIMS:22: a crash between writes must not leave `skip BOTH` forever."""
-    agent = _agent(tmp_path, "fault", {"00-tools.yaml": "tools: [read]\n", "01.md": "X\n"})
+    agent = _agent(tmp_path, "fault", {"00-tools.yaml": "tools: [read]\n", "01-prompt.md": "X\n"})
     with monkeypatch.context() as m:
         _refuse(m, agent / "00-tools.yaml", attr="unlink")
         assert agent_migration.migrate_agent_dir(agent, apply=True, keep=_keep_all).action == "error"

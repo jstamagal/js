@@ -51,7 +51,7 @@ def test_ordinary_system_files_have_current_session_values(tmp_path, monkeypatch
     monkeypatch.chdir(tmp_path)
     agent = tmp_path / ".js" / "agents" / "troop-matriarch"
     agent.mkdir(parents=True)
-    (agent / "01-troop.md").write_text(
+    (agent / "01-prompt.md").write_text(
         "%%CURRENT_SESSION%%\n%%CURRENT_SESSION_FULLPATH%%\n"
         "%%CURRENT_SESSION_AGENT%%\n%%CURRENT_SESSION_MODEL%%\n", encoding="utf-8",
     )
@@ -72,7 +72,7 @@ def test_system_variable_uses_the_model_selected_for_the_run(tmp_path, monkeypat
     agent = tmp_path / ".js" / "agents" / "voice"
     agent.mkdir(parents=True)
     (agent / "agent.yaml").write_text("model: ollama/agent-model\n", encoding="utf-8")
-    (agent / "01-role.md").write_text("model=%%CURRENT_SESSION_MODEL%%", encoding="utf-8")
+    (agent / "01-prompt.md").write_text("model=%%CURRENT_SESSION_MODEL%%", encoding="utf-8")
     cfg = replace(from_env(save_session=False, agent_id="voice"), explicit_model=False)
     monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
     seen = []
@@ -99,7 +99,7 @@ def test_printonly_variable_uses_the_model_selected_for_the_run(tmp_path, monkey
     agent = tmp_path / ".js" / "agents" / "voice"
     agent.mkdir(parents=True)
     (agent / "agent.yaml").write_text("model: ollama/agent-model\n", encoding="utf-8")
-    (agent / "01-role.md").write_text("model=%%CURRENT_SESSION_MODEL%%", encoding="utf-8")
+    (agent / "01-prompt.md").write_text("model=%%CURRENT_SESSION_MODEL%%", encoding="utf-8")
     (agent / "01-benchmark.md").write_text("model=%%CURRENT_SESSION_MODEL%%", encoding="utf-8")
     cfg = replace(from_env(save_session=False, agent_id="voice"), explicit_model=False)
     monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)

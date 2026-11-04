@@ -581,7 +581,7 @@ def from_env(
 
     from .cli_options import current
     options = current()
-    mcp = None if options.no_mcp or options.chat else mcp_config.resolve(js_root_settings, agent_id)
+    mcp = None if options.skips_mcp else mcp_config.resolve(js_root_settings, agent_id)
 
     # Sessions are filed by the directory js started in; what belongs to the
     # agent across directories (its latest session) lives in its state dir.
@@ -625,7 +625,7 @@ def from_env(
         settings=js_root_settings,
         prompt_roots=(js_root / "prompts", _paths.global_agents_dir(), project_dir / ".js" / "agents")
         if assembly.prompt_roots is None else assembly.prompt_roots,
-        agents_files=() if options.no_agents_md or options.chat or options.replaces_prompt else tuple(
+        agents_files=() if options.skips_agents_md else tuple(
             p for p in (*global_instruction_files, *project_instruction_files) if p.is_file()),
         project_dir=project_dir,
         mcp=mcp,
