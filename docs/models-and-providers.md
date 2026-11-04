@@ -159,37 +159,49 @@ REPL:
 /set EFFORT xhigh   # deepseek-native models
 ```
 
-Accepted effort values are `off|minimal|low|medium|high|xhigh|max`.
-`off` is stored as `"none"`; `/set -EFFORT` restores the provider
-default. Other spellings are rejected. Supported values are snapped to the
-nearest effort that the selected endpoint actually serves.
+`EFFORT` takes any one word and sends it as typed; `/set -EFFORT` restores
+the provider default. Where js recognizes the model by name (the family tables
+in `js/reasoning.py`, Codex, adaptive Claude) a word on the ladder
+`off|minimal|low|medium|high|xhigh|max` is snapped to the nearest effort that
+model serves (`off` is the ladder's `none`). Any other word, and every word
+for a model js does not recognize, goes out verbatim, `off` and `spoon`
+included; the endpoint answers for it. The run line shows the effort the
+request carries, read back from the built request.
 
-DeepSeek gets `max_reasoning_tokens=32000` when reasoning is enabled so it can
-use its full reasoning budget without capping total output earlier than necessary.
-For direct OpenAI-compatible transports this is sent through `extra_body`, not as
-an invalid top-level SDK kwarg. A MiniMax model on an OpenAI-shaped endpoint gets
-no reasoning object, because that adapter rejects it.
+DeepSeek's own endpoint gets `max_reasoning_tokens` from
+`DEEPSEEK_REASONING_TOKENS_MAX` (default 32000) unless the effort is off. It is
+sent through `extra_body`, and the run line shows it under the setting's name.
+The `minimax` provider gets no effort on the OpenAI chat wire.
 
 Every provider on the Anthropic Messages wire (`anthropic`, `anthropic-custom`,
 `opencode-go-anthropic`, `minimax`, and any saved login with sdk `anthropic`)
-takes the effort as thinking (`js/reasoning.py`):
+carries the effort as `output_config.effort` (`js/reasoning.py`):
 
 - Claude 4.6 and later, Fable and Mythos get
-  `thinking: {"type": "adaptive", "display": "summarized"}` and
-  `output_config.effort`, snapped to the stops the model serves (no `xhigh` on
-  4.6). `off` sends `thinking: {"type": "disabled"}`; on the models that always
-  think (Fable, Mythos, Claude 5.5 and later) it sends effort `low` instead.
-- Every other model gets `thinking: {"type": "enabled", "budget_tokens": N}`:
-  minimal 1024, low 2048, medium 8192, high 16384, xhigh 24576, max 32000.
-  `THINKING_BUDGET` replaces that number for every effort. The
-  budget leaves 1024 tokens of `max_tokens` for the answer; with no known output
-  cap, `max_tokens` is the budget plus 8192. `off` sends no thinking. With a
-  budget, js sends no `TEMPERATURE` or `TOP_K`: Anthropic
-  rejects either alongside budget thinking.
+  `thinking: {"type": "adaptive", "display": "summarized"}` with the effort
+  snapped to the stops the model serves (no `xhigh` on 4.6). `off` sends
+  `thinking: {"type": "disabled"}`; on the models that always think (Fable,
+  Mythos, Claude 5.5 and later) it sends `ANTHROPIC_REQUIRED_EFFORT` (`low`)
+  instead, and the run line shows `low`.
+- Every other model gets the effort word as typed and no `thinking`.
+- `THINKING_BUDGET`, when set, makes `thinking`
+  `{"type": "enabled", "budget_tokens": N}` on any model. js never picks a
+  budget itself. While a budget is in force js sends no `TEMPERATURE` or
+  `TOP_K`: Anthropic rejects either alongside budget thinking.
+- `max_tokens` is required on this wire: `OUTPUT_TOKENS_MAX` when set,
+  `ANTHROPIC_OUTPUT_TOKENS_MAX` (default 64000) otherwise.
 
-A `thinking` object in `EXTRA_PARAMS` replaces the one js builds. When it
-carries a `budget_tokens` and the model's output cap is unknown, `max_tokens`
-is that budget plus 8192.
+A `thinking` object in `EXTRA_PARAMS` replaces the one js builds.
+
+`CLAUDE_PROXY_INCLUDE_REASONING on` adds `include_reasoning: true` to every
+OpenAI chat-format request, which a Claude proxy (CLIProxyAPI) needs to return
+Claude's thinking. It is off by default.
+
+`TEMPLATE_KWARGS` (`--template-kwargs k=v,...`) is sent as
+`chat_template_kwargs`, for example `enable_thinking=false`, llama.cpp's
+per-request thinking switch. A value is read as JSON; one that is not JSON is
+a string. An entry that is not `key=value`, or a key given twice, is an error
+naming it, and a `-p` run exits 2.
 
 Session replay retains archived reasoning. OpenAI chat-completions transports
 (including llama.cpp) replay reasoning on every assistant message, including
@@ -275,26 +287,27 @@ Config/script and REPL:
 set TEMPERATURE 0.6
 set TOP_P 0.95
 set TOP_K 64
+set MIN_P 0.05
 set REPETITION_PENALTY 1.05
 set PRESENCE_PENALTY 1.2
+set DRY_MULTIPLIER 0.8
+set DRY_SEQUENCE_BREAKERS ["\n", ":"]
 ```
 
-Environment:
-
-```bash
-export JS_TEMPERATURE=0.6
-export JS_TOP_P=0.95
-export JS_TOP_K=64
-export JS_REPETITION_PENALTY=1.05
-export JS_PRESENCE_PENALTY=1.2
-```
+The sampling settings are `TEMPERATURE TOP_P TOP_K MIN_P TOP_N_SIGMA
+XTC_PROBABILITY XTC_THRESHOLD DRY_MULTIPLIER DRY_BASE DRY_ALLOWED_LENGTH
+DRY_PENALTY_LAST_N DRY_SEQUENCE_BREAKERS REPETITION_PENALTY PRESENCE_PENALTY`.
+Each is also a flag (`--temperature`, `--min-p`, `--dry-sequence-breakers`,
+...), an env var (`JS_MIN_P`, ...) and an agent.yaml `sampling:` key in lower
+case. A value that is not one the setting takes is an error naming it.
 
 Agent manifests (`agent.yaml`) may set the same keys:
 
 ```yaml
 sampling:
   temperature: 0.6
-  top_p: 0.95
+  min_p: 0.05
+  dry_sequence_breakers: ["\n", ":"]
 ```
 
 Precedence for a turn is:
@@ -302,19 +315,18 @@ Precedence for a turn is:
 1. `jsrc` set-script sampling
 2. agent manifest `sampling:`
 3. `JS_*` sampling env vars
-4. CLI/live overrides (`--extra TEMPERATURE=...`, REPL `/set ...`)
+4. flags (`--temperature ...`, `--extra TEMPERATURE=...`), REPL `/set ...`
 
-Wire filtering is provider-family specific:
+Every set field is sent; an unset one never is. The fields a wire's SDK takes
+as its own parameters go there, every other one goes in `extra_body` under its
+lower-case name, which puts it at the top of the request body all the same:
 
-- Anthropic wires (`anthropic`, `custom_anthropic`) send top-level
-  `temperature`, `top_p`, and `top_k`; penalties are dropped.
-- OpenAI wires (`openai`, `custom_responses`, `codex_oauth`) send top-level
-  `temperature`, `top_p`, and `presence_penalty`; `top_k` and
-  `repetition_penalty` are dropped.
-- OpenAI-compatible wires (`openai_compatible`, `custom_openai`, `deepseek`,
-  `ollama`, `llama.cpp`, `cliproxyapi`) send top-level `temperature`, `top_p`,
-  and `presence_penalty`; `top_k` and `repetition_penalty` go in `extra_body`.
-- Unknown or SDK-gateway transports send no sampling params.
+- OpenAI chat wires: `temperature`, `top_p`, `presence_penalty` as parameters.
+- Responses wires (`custom_responses`, Codex): `temperature`, `top_p`.
+- Anthropic wires: none (the anthropic SDK's stream call takes no sampling
+  parameter), so every field rides `extra_body`.
+
+A server that rejects a field answers with its own error.
 
 ## Max Output Tokens
 
@@ -324,8 +336,8 @@ Order:
 2. `JS_OUTPUT_TOKENS_MAX` (or the older `JS_MAX_OUTPUT_TOKENS`)
 3. `OUTPUT_TOKENS_MAX` in `jsrc`
 4. agent manifest `max_tokens:` in `agent.yaml`
-5. models.dev metadata for the active model/provider
-6. if the catalog has no match, no explicit cap is sent
+5. unset: no cap is sent, except on the Anthropic wire, which requires one and
+   gets `ANTHROPIC_OUTPUT_TOKENS_MAX`
 
 A reply cut off by this cap is sent again once with
 `OUTPUT_TOKENS_RETRY_MAX` tokens (default 64000, never above the model's
