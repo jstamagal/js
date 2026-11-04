@@ -319,6 +319,7 @@ class ArgumentParser(argparse.ArgumentParser):
     def __init__(self, *args: Any, add_help: bool = True, on_error=None, **kwargs: Any) -> None:
         self.on_error = on_error
         kwargs.setdefault("formatter_class", _HelpFormatter)
+        kwargs.setdefault("allow_abbrev", False)
         super().__init__(*args, add_help=False, **kwargs)
         self._positionals.title = ARGS_POSITIONALS.words()
         self._optionals.title = ARGS_OPTIONS.words()
@@ -611,7 +612,8 @@ ARGS_POSITIONALS = Message("Arguments")
 ARGS_OPTIONS = Message("Options")
 ARGUMENTS_REFUSED = Message("{error}", GRAVE)
 UNKNOWN_OPTION = Message("unknown option {option}", GRAVE)
-UNKNOWN_OPTION_DID_YOU_MEAN = Message("unknown option {option} (did you mean {suggestion}?)", GRAVE)
+FLAGS_EXCLUSIVE = Message("{first} and {second} cannot be used together", GRAVE)
+UNEXPECTED_ARGUMENT = Message("unexpected argument '{word}'", GRAVE)
 OPT_HELP_THIS = Message("Show this help and exit.")
 OPT_HELP = Message("Show the short usage guide and exit.")
 OPT_HELP_FULL = Message("Show the complete option reference and exit.")
@@ -658,7 +660,7 @@ OPT_SYSTEM_PROMPT_FILE = Message("Use one file as the full system prompt, with i
 OPT_SYSTEM_PROMPT = Message("Use TEXT as the full system prompt.")
 OPT_YOU_ARE = Message("Identify the selected model with a minimal system prompt.")
 OPT_APPEND_SYSTEM_PROMPT = Message("Append TEXT to the selected system prompt.")
-OPT_NOENV = Message("Suppress envctx output.")
+OPT_NO_ENV = Message("Suppress envctx output.")
 OPT_CHAT = Message("Omit agent and instruction files, envctx, and tools. Explicit tool selections still apply.")
 OPT_WITH_TOOLS = Message("Select only these comma-separated tools, optionally :eager or :lazy.")
 OPT_WITHOUT_TOOLS = Message("Exclude these comma-separated tool names or globs.")
@@ -669,7 +671,6 @@ OPT_NO_MCP = Message("Disable MCP servers.")
 OPT_BARE = Message("Use slim without envctx, skills, or MCP.")
 OPT_VERIFY = Message("Validate configuration, agents, and reachable skills without executing prompts.")
 OPT_BENCH_MODELS = Message("Benchmark each saved model with Article I, sections 1–5.")
-OPT_REMOVE_IF_FAIL = Message("Remove saved models on slow_decode[:TPS],slow_ttft[:SECONDS],failure.")
 OPT_BENCH = Message(
     "Benchmark mode: run AGENT's NN-benchmark.md turns each on a clean slate without a session, "
     "measuring TTFT, tok/s and turn time. Pair with --stats-json or --stats-csv.")
@@ -690,8 +691,8 @@ OPT_PRESET = Message(
     "Layer jsrc.<name> preset files on top of the base config, in order. The last wins. "
     "Comma-list and/or repeatable: --preset fast,debug. Looks for jsrc.<name> beside the global jsrc "
     "and in project .js/. Still below env and --extra.")
-OPT_IGNORE_LOCAL = Message("Ignore project .js/jsrc and .js/jsrc.local.")
-OPT_IGNORE_GLOBAL = Message("Ignore the platform jsrc.")
+OPT_NO_LOCAL_CONFIG = Message("Ignore project .js/jsrc and .js/jsrc.local.")
+OPT_NO_GLOBAL_CONFIG = Message("Ignore the platform jsrc.")
 OPT_MIGRATE_CONFIG = Message("One-shot: convert a legacy config.toml to jsrc, then exit.")
 OPT_LIST = Message("List saved sessions without loading config or contacting a provider.")
 OPT_LAST = Message("Resume the most recently used session for this agent.")

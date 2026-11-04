@@ -3,8 +3,7 @@ from dataclasses import replace
 import pytest
 
 from js import persona, skills
-from js import cli, model_health, verify
-import asyncio
+from js import cli, verify
 from types import SimpleNamespace
 from js.config import Config
 from js.cli_options import RunOptions, invocation
@@ -50,7 +49,7 @@ def test_identity_uses_resolved_model_and_append_expands_once(tmp_path):
     manifest.mkdir()
     (manifest / 'agent.yaml').write_text('tools: []')
     cfg = Config(model='before', prompt_roots=(tmp_path, tmp_path, tmp_path))
-    with invocation(RunOptions(you_are=True, noenv=True, append_system_prompt=('tail',))):
+    with invocation(RunOptions(you_are=True, no_env=True, append_system_prompt=('tail',))):
         spec = persona.load_configured_prompt_spec(cfg, expand=False)
         spec = persona._expand_spec(spec, replace(cfg, model='cpa/hyper/glm-5.3'))
     assert spec.system == 'You are glm-5.3 running inside the js agent\n\ntail'
@@ -72,38 +71,6 @@ def test_no_skills_removes_access_and_skips_discovery(tmp_path, monkeypatch):
     with invocation(RunOptions(no_skills=True)):
         assert not skills.discover_skills(tmp_path).skills
         assert RunOptions(no_skills=True).selectors(('skill:eager',)) == ('skill:ban', 'skill:eager')
-
-
-def test_health_waits_for_failure_deadline_and_ignores_immediate_errors(monkeypatch):
-    removed = []
-    monkeypatch.setattr(model_health.logins, 'remove_cached_model', lambda *key: removed.append(key))
-
-    async def exercise():
-        session = model_health.HealthSession(model_health.RemovalPolicy(failure=True, slow_ttft=0.01))
-        async def invalid():
-            model_health.sent()
-            raise ValueError('unknown model')
-        with pytest.raises(ValueError):
-            await model_health.HealthCall(session, 'p', 'invalid').run(invalid())
-        async def silent():
-            model_health.sent()
-            await asyncio.sleep(1)
-        with pytest.raises(TimeoutError):
-            await model_health.HealthCall(session, 'p', 'silent').run(silent())
-        session.finish()
-    asyncio.run(exercise())
-    assert removed == [('p', 'silent')]
-
-
-def test_health_aggregates_decode_and_requires_received_tokens(monkeypatch):
-    removed = []
-    monkeypatch.setattr(model_health.logins, 'remove_cached_model', lambda *key: removed.append(key))
-    session = model_health.HealthSession(model_health.RemovalPolicy.parse('slow_decode:10'))
-    session.models[('p', 'fast')] = model_health.Measurement(tokens=100, decode_s=5, received=True)
-    session.models[('p', 'slow')] = model_health.Measurement(tokens=100, decode_s=20, received=True)
-    session.models[('p', 'unknown')] = model_health.Measurement(tokens=100, decode_s=20)
-    session.finish()
-    assert removed == [('p', 'slow')]
 
 
 def test_verify_reports_bad_manifest_without_executing_prompt(tmp_path, monkeypatch):
@@ -128,7 +95,7 @@ def test_bench_models_visits_each_model_and_continues_after_error(monkeypatch):
             raise ValueError('unknown model')
         return 0
     monkeypatch.setattr(cli, '_run_prompt', run)
-    args = SimpleNamespace(extras=[], agent=None, ignore_local=False, ignore_global=False,
+    args = SimpleNamespace(extras=[], agent=None, no_local_config=False, no_global_config=False,
                            reasoning=None, max_out=None, stats_json=None, stats_csv=None)
     assert cli._run_model_bench(args, []) == 1
     assert visited == ['p/bad', 'p/good']

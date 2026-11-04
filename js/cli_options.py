@@ -18,7 +18,7 @@ class RunOptions:
     system_prompt: str | None = None
     append_system_prompt: tuple[str, ...] = ()
     you_are: bool = False
-    noenv: bool = False
+    no_env: bool = False
     chat: bool = False
     no_agents_md: bool = False
     no_skills: bool = False
@@ -26,7 +26,6 @@ class RunOptions:
     with_tools: str | None = None
     without_tools: str | None = None
     tools: str | None = None
-    remove_if_fail: str | None = None
 
     @property
     def replaces_prompt(self) -> bool:
@@ -75,19 +74,13 @@ def current() -> RunOptions:
 
 @contextlib.contextmanager
 def invocation(options: RunOptions):
-    from .model_health import HealthSession, RemovalPolicy, _session
-    health = HealthSession(RemovalPolicy.parse(options.remove_if_fail)) if options.remove_if_fail is not None else None
-    health_token = _session.set(health)
     token = _current.set(options)
     previous = os.environ.get('JS_NOENV')
-    if options.noenv or options.chat:
+    if options.no_env or options.chat:
         os.environ['JS_NOENV'] = '1'
     try:
         yield
     finally:
-        _session.reset(health_token)
-        if health is not None:
-            health.finish()
         _current.reset(token)
         if previous is None:
             os.environ.pop('JS_NOENV', None)

@@ -458,8 +458,8 @@ every mode (`-p`, REPL, `--commit`, ...):
 
 ```bash
 js -C /path/to/repo -p "summarize this repo"
-js --ignore-local -p "prompt"
-js --ignore-global -p "prompt"
+js --no-local-config -p "prompt"
+js --no-global-config -p "prompt"
 ```
 
 `-C <dir>` keeps the agent in `<dir>`. js changes into the directory before
@@ -502,10 +502,10 @@ working directory without a jail, `cd <dir> && js`.
 Under `-C` the system prompt's `envctx` line says `confined=<dir>` and adds a
 rule line telling the model it is confined.
 
-`--ignore-local` ignores the project config files `.js/jsrc` and
+`--no-local-config` ignores the project config files `.js/jsrc` and
 `.js/jsrc.local`.
 
-`--ignore-global` ignores `~/.js/jsrc`. The defaults in the package's
+`--no-global-config` ignores `~/.js/jsrc`. The defaults in the package's
 `js/jsrc` still apply.
 
 `--migrate-config` runs the one-shot legacy-to-`jsrc` conversion and exits; see

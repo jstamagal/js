@@ -6,7 +6,6 @@ import argparse
 import asyncio
 import contextlib
 import copy
-import difflib
 import errno
 import functools
 import io
@@ -457,8 +456,8 @@ def _invocation_agent(args: argparse.Namespace, presets: list[str]) -> str:
     return resolve_agent_id(
         args.agent or ("commit" if args.commit else None),
         extras=args.extras,
-        ignore_local_config=args.ignore_local,
-        ignore_global_config=args.ignore_global,
+        ignore_local_config=args.no_local_config,
+        ignore_global_config=args.no_global_config,
         presets=presets,
     )
 
@@ -3518,7 +3517,7 @@ def _print_model_list(provider_arg: str | None, cfg: Config | None) -> int:
 
 def _run_model_bench(args: argparse.Namespace, presets: list[str]) -> int:
     cfg = _from_env(None, save_session=False, extras=args.extras, agent_id=args.agent,
-                    ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global,
+                    ignore_local_config=args.no_local_config, ignore_global_config=args.no_global_config,
                     presets=presets)
     prompt = ('Respond with EXACTLY the full text of the first 5 sections of Article I '
               'of the United States Constitution. No introduction or commentary.')
@@ -3539,8 +3538,8 @@ def _run_model_bench(args: argparse.Namespace, presets: list[str]) -> int:
             try:
                 code = _run_prompt(prompt, model=route, agent=args.agent, save=False,
                                    reasoning=args.reasoning, maxout=args.max_out,
-                                   extras=args.extras, ignore_local_config=args.ignore_local,
-                                   ignore_global_config=args.ignore_global, presets=presets,
+                                   extras=args.extras, ignore_local_config=args.no_local_config,
+                                   ignore_global_config=args.no_global_config, presets=presets,
                                    show_continue=False, call_stats=calls)
                 error = None if code == 0 else msgs.NO_ANSWER.words()
             except Exception as exc:  # noqa: BLE001 - one sick model must not stop the list
@@ -4658,15 +4657,15 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("-r", "--reasoning", help=msgs.OPT_REASONING.words())
     parser.add_argument("--max-out", dest="max_out", type=int, help=msgs.OPT_MAX_OUT.words())
     prompt_group = parser.add_mutually_exclusive_group()
-    prompt_group.add_argument('--system-prompt-file', '-spf', '-sysf', metavar='PATH',
+    prompt_group.add_argument('--system-prompt-file', metavar='PATH',
                               help=msgs.OPT_SYSTEM_PROMPT_FILE.words())
-    prompt_group.add_argument('--system-prompt', '-sp', metavar='TEXT',
+    prompt_group.add_argument('--system-prompt', metavar='TEXT',
                               help=msgs.OPT_SYSTEM_PROMPT.words())
     prompt_group.add_argument('--you-are', action='store_true',
                               help=msgs.OPT_YOU_ARE.words())
-    parser.add_argument('--append-system-prompt', '-asp', action='append', default=[], metavar='TEXT',
+    parser.add_argument('--append-system-prompt', action='append', default=[], metavar='TEXT',
                         help=msgs.OPT_APPEND_SYSTEM_PROMPT.words())
-    parser.add_argument('--noenv', action='store_true', help=msgs.OPT_NOENV.words())
+    parser.add_argument('--no-env', action='store_true', help=msgs.OPT_NO_ENV.words())
     parser.add_argument('--chat', action='store_true', help=msgs.OPT_CHAT.words())
     parser.add_argument('--with-tools', metavar='SELECTORS', help=msgs.OPT_WITH_TOOLS.words())
     parser.add_argument('--without-tools', metavar='NAMES', help=msgs.OPT_WITHOUT_TOOLS.words())
@@ -4677,7 +4676,6 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument('--bare', action='store_true', help=msgs.OPT_BARE.words())
     parser.add_argument('--verify', nargs='?', const='', metavar='AGENT', help=msgs.OPT_VERIFY.words())
     parser.add_argument('--bench-models', action='store_true', help=msgs.OPT_BENCH_MODELS.words())
-    parser.add_argument('--remove-if-fail', nargs='?', const='', metavar='CONDITIONS', help=msgs.OPT_REMOVE_IF_FAIL.words())
     parser.add_argument("--bench", metavar="AGENT", help=msgs.OPT_BENCH.words())
     parser.add_argument("--loop", nargs="?", const="", metavar="N|NM|NH", help=msgs.OPT_LOOP.words())
     parser.add_argument("--lock", action="store_true", help=msgs.OPT_LOCK.words())
@@ -4688,8 +4686,8 @@ def _main(argv: list[str] | None = None) -> int:
                         help=msgs.OPT_EXTRA.words())
     parser.add_argument("--preset", dest="presets", action="append", default=[], metavar="NAME[,NAME...]",
                         help=msgs.OPT_PRESET.words())
-    parser.add_argument("--ignore-local", action="store_true", help=msgs.OPT_IGNORE_LOCAL.words())
-    parser.add_argument("--ignore-global", action="store_true", help=msgs.OPT_IGNORE_GLOBAL.words())
+    parser.add_argument("--no-local-config", action="store_true", help=msgs.OPT_NO_LOCAL_CONFIG.words())
+    parser.add_argument("--no-global-config", action="store_true", help=msgs.OPT_NO_GLOBAL_CONFIG.words())
     parser.add_argument("--migrate-config", action="store_true", help=msgs.OPT_MIGRATE_CONFIG.words())
     parser.add_argument("--list", action="store_true", help=msgs.OPT_LIST.words())
     parser.add_argument("--last", action="store_true", help=msgs.OPT_LAST.words())
@@ -4711,13 +4709,17 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("target", nargs="?", help=msgs.OPT_TARGET.words())
     _refuse_glued_short_options(parser, dispatch_argv)
     args = parser.parse_args(argv)
+    if args.target is not None and not args.commit:
+        parser.error(msgs.UNEXPECTED_ARGUMENT.text(word=args.target))
+    if args.bare and args.agent is not None:
+        parser.error(msgs.FLAGS_EXCLUSIVE.text(first='--bare', second='--agent'))
     if args.loop is not None:
         from . import loop_controller
         try:
             loop_settings = settings.collect_settings(
                 config_paths=jsrc_paths(
                     Path(args.cd).expanduser().resolve() if args.cd else Path.cwd(),
-                    ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global,
+                    ignore_local_config=args.no_local_config, ignore_global_config=args.no_global_config,
                     presets=[name for spec in args.presets for name in spec.split(",") if name.strip()],
                 ), extras=args.extras,
             )
@@ -4731,10 +4733,10 @@ def _main(argv: list[str] | None = None) -> int:
     options = RunOptions(
         system_prompt_file=args.system_prompt_file, system_prompt=args.system_prompt,
         append_system_prompt=tuple(args.append_system_prompt), you_are=args.you_are,
-        noenv=args.noenv or args.bare, chat=args.chat, with_tools=args.with_tools,
+        no_env=args.no_env or args.bare, chat=args.chat, with_tools=args.with_tools,
         no_agents_md=args.no_agents_md, no_skills=args.no_skills or args.bare,
         no_mcp=args.no_mcp or args.bare,
-        without_tools=args.without_tools, tools=args.tools, remove_if_fail=args.remove_if_fail,
+        without_tools=args.without_tools, tools=args.tools,
     )
     try:
         options.selectors(())
@@ -4766,13 +4768,7 @@ def _refuse_glued_short_options(parser: argparse.ArgumentParser, argv: list[str]
         letters = [known.get("-" + letter) for letter in name[1:]]
         if letters and all(action is not None and action.nargs == 0 for action in letters):
             continue
-        suggestion = difflib.get_close_matches(name, [o for o in known if not o.startswith("--")], n=1, cutoff=0.5)
-        if not suggestion:
-            parser.error(msgs.UNKNOWN_OPTION.text(option=token))
-        action = known[suggestion[0]]
-        longs = [o for o in action.option_strings if o.startswith("--")]
-        shown = " / ".join([suggestion[0], *longs])
-        parser.error(msgs.UNKNOWN_OPTION_DID_YOU_MEAN.text(option=token, suggestion=shown))
+        parser.error(msgs.UNKNOWN_OPTION.text(option=token))
 
 
 def _json_run_requested(args: argparse.Namespace) -> bool:
@@ -4797,7 +4793,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
             endpoint_settings = settings.collect_settings(
                 config_paths=jsrc_paths(
                     Path(args.cd).expanduser().resolve() if args.cd else Path.cwd(),
-                    ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global,
+                    ignore_local_config=args.no_local_config, ignore_global_config=args.no_global_config,
                     presets=[name for spec in args.presets for name in spec.split(",") if name.strip()],
                 ), extras=args.extras,
             )
@@ -4812,7 +4808,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     args.extras = [*args.extras, *flag_extras]
     presets = [name for spec in args.presets for name in spec.split(",") if name.strip()]
     set_invocation(extras=args.extras, presets=presets,
-                   ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global)
+                   ignore_local_config=args.no_local_config, ignore_global_config=args.no_global_config)
     if args.session == "":
         # A bare --session opens the picker; the chosen session is resumed in
         # its own directory and agent, jailed there when it started under -C.
@@ -4916,7 +4912,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     if presets:
         # Resolve against the now-final cwd (after any -C). A name that matches no
         # file anywhere is almost certainly a typo — say so rather than no-op.
-        _warn_unmatched_presets(presets, ignore_local=args.ignore_local, ignore_global=args.ignore_global)
+        _warn_unmatched_presets(presets, ignore_local=args.no_local_config, ignore_global=args.no_global_config)
     if args.login is not None:
         from . import login_cli
         return login_cli.main([args.login] if args.login else [])
@@ -4937,8 +4933,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
                     save_session=False,
                     extras=args.extras,
                     agent_id=args.agent,
-                    ignore_local_config=args.ignore_local,
-                    ignore_global_config=args.ignore_global,
+                    ignore_local_config=args.no_local_config,
+                    ignore_global_config=args.no_global_config,
                 )
             return _print_json(_models_json(provider_arg, cfg))
         except Exception as e:  # noqa: BLE001
@@ -4954,8 +4950,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
                     save_session=False,
                     extras=args.extras,
                     agent_id=args.agent,
-                    ignore_local_config=args.ignore_local,
-                    ignore_global_config=args.ignore_global,
+                    ignore_local_config=args.no_local_config,
+                    ignore_global_config=args.no_global_config,
                 )
             return _print_model_list(provider_arg, cfg)
         except Exception as e:  # noqa: BLE001
@@ -4997,7 +4993,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     if args.printonly is not None:
         return _printonly_run(
             args.printonly, agent=cli_agent, session=args.session, model=args.model, extras=args.extras,
-            ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global,
+            ignore_local_config=args.no_local_config, ignore_global_config=args.no_global_config,
             presets=presets,
         )
 
@@ -5022,8 +5018,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
             return 2
         return _run_bench(args.bench, model=args.model, reasoning=args.reasoning,
                           maxout=args.max_out, quiet=args.quiet, extras=args.extras,
-                          ignore_local_config=args.ignore_local,
-                          ignore_global_config=args.ignore_global, presets=presets,
+                          ignore_local_config=args.no_local_config,
+                          ignore_global_config=args.no_global_config, presets=presets,
                           stats_json=args.stats_json, stats_csv=args.stats_csv,
                           debug=args.debug)
 
@@ -5049,8 +5045,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
                            session=args.session, save=not args.no_save,
                            reasoning=args.reasoning, maxout=args.max_out,
                            extra_context=extra_context, extras=args.extras,
-                           ignore_local_config=args.ignore_local,
-                           ignore_global_config=args.ignore_global, presets=presets)
+                           ignore_local_config=args.no_local_config,
+                           ignore_global_config=args.no_global_config, presets=presets)
 
     try:
         automatic_agent = _invocation_agent(args, presets)
@@ -5069,7 +5065,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         return _run_bench(
             automatic_agent, model=args.model, reasoning=args.reasoning,
             maxout=args.max_out, quiet=args.quiet, extras=args.extras,
-            ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global,
+            ignore_local_config=args.no_local_config, ignore_global_config=args.no_global_config,
             presets=presets, stats_json=args.stats_json, stats_csv=args.stats_csv, debug=args.debug,
         )
 
@@ -5109,8 +5105,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
                      reasoning=args.reasoning, maxout=args.max_out,
                      show_continue=not args.quiet,
                      extras=args.extras,
-                     ignore_local_config=args.ignore_local,
-                     ignore_global_config=args.ignore_global,
+                     ignore_local_config=args.no_local_config,
+                     ignore_global_config=args.no_global_config,
                      files=args.files,
                      stdin_attachment=stdin_attachment,
                      presets=presets,
@@ -5128,8 +5124,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
             save_session=not args.no_save,
             extras=args.extras,
             agent_id=cli_agent,
-            ignore_local_config=args.ignore_local,
-            ignore_global_config=args.ignore_global,
+            ignore_local_config=args.no_local_config,
+            ignore_global_config=args.no_global_config,
             presets=presets,
         )
     except ValueError as e:
@@ -5257,8 +5253,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         _queue_note(state, _CUT_OFF_NOTICE)
     rc_errors = _run_rc_commands(state, cfg, jsrc_paths(
         Path(getattr(cfg, "project_dir", None) or Path.cwd()),
-        ignore_local_config=args.ignore_local,
-        ignore_global_config=args.ignore_global,
+        ignore_local_config=args.no_local_config,
+        ignore_global_config=args.no_global_config,
         presets=presets,
     ))
     _mark_saved(state)
