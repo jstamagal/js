@@ -310,12 +310,18 @@ window shows that subagent's model, agent, session and turn.
 `NET_DISPLAY` sets how much of the network shows, 0 to 3. Retries print at
 every level, 0 included: each one names the failure it follows and its wait,
 the wait counts down (on its own line under `-p`, on the status bar in the
-screen), and `*** Gave up after N retries.` prints when js stops. At 1 only
-failures print (`*** DNS failure: host`, `*** 429 ...`, timeouts), once,
-when js stops retrying; at 2 (the default) each
+screen), and `*** Gave up after N retries: <last failure>` prints when js
+stops. js retries a 429, 502, 503 or 504, a request that got no response
+(refused, no connection in `CONNECT_TIMEOUT`, dropped before any header),
+and a stream quiet for `STREAM_IDLE_TIMEOUT` after its first byte; a 500,
+any other 4xx and a connection dropped mid-reply fail at once. While a
+request waits for its first byte (the prefill) the bar, or a stderr row
+under `-p`, counts `waiting for first byte 4m12s`; ^C cancels it, and
+`FIRST_BYTE_TIMEOUT` (default 0, no limit) fails it once, unretried. At 1
+a failure js does not retry prints too (`*** DNS failure: host`,
+`*** 500 ...`, timeouts); at 2 (the default) each
 model request, including subagents and compaction, also prints
-`*** Connecting` and `*** Connected ... Nms`, the bar counts response
-bytes until the first token arrives, and a response that read more than 5%
+`*** Connecting` and `*** Connected ... Nms`, and a response that read more than 5%
 (and at least 2000 tokens) less from the prompt cache than the one before it
 prints one `*** Prompt cache break` line with both counts and the seconds
 since that request; at 3 models.dev catalog
