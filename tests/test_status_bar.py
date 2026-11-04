@@ -11,6 +11,7 @@ import ai
 import pytest
 
 from js import fset, model_client, runtime, screen, setcmd, settings
+from js import messages as msgs
 from js.config import Config
 from js.model_client import ModelStreamResult
 from js.toolkit.core import ToolContext, TurnStatus
@@ -82,49 +83,45 @@ def test_format_count_is_a_heartbeat_not_an_invoice():
     assert screen.format_count(123_456) == "123.5k"
 
 
-def test_turn_centre_prefers_tool_then_compaction_then_bytes_then_tokens():
+def test_turn_centre_prefers_tool_then_compaction_then_first_byte_wait_then_tokens():
     status = TurnStatus()
-    status.call_started()
-    status.add_bytes(2345)
+    status.first_byte_wait(10.0)
 
-    phase, count = screen.turn_centre(status, now=0.0, show_bytes=True)
-    assert "2,300" in phase and count is None
-    phase, count = screen.turn_centre(status, now=0.0, show_bytes=False)
-    assert phase == "" and count is None
+    phase, count = screen.turn_centre(status, now=10.5)
+    assert phase == "" and count is None          # under a second: nothing yet
+    phase, count = screen.turn_centre(status, now=10.0 + 252)
+    assert "4m12s" in phase and count is None
 
+    status.first_byte_done()
     status.stream("x" * 400)
-    phase, count = screen.turn_centre(status, now=0.0, show_bytes=True)
+    phase, count = screen.turn_centre(status, now=300.0)
     assert phase == "" and count == 100
 
     status.compacting = True
-    phase, count = screen.turn_centre(status, now=0.0, show_bytes=True)
+    phase, count = screen.turn_centre(status, now=300.0)
     assert phase and count is None
 
     status.tool_begin(["shell", "read", "read"])
     status.tool_started = 100.0
-    phase, count = screen.turn_centre(status, now=112.4, show_bytes=True)
+    phase, count = screen.turn_centre(status, now=112.4)
     assert "shell" in phase and "+2" in phase and "12s" in phase and count is None
 
 
-def test_turn_status_counts_bytes_only_until_the_first_token():
-    status = TurnStatus()
-    status.call_started()
-    status.add_bytes(100)
-    status.add_bytes(200)
-    assert status.net_bytes == 300
+def test_durations_read_like_a_running_clock():
+    assert msgs.duration(7.9) == "7s"
+    assert msgs.duration(252) == "4m12s"
+    assert msgs.duration(3600 + 4 * 60 + 2) == "1h04m02s"
 
+
+def test_turn_status_estimates_tokens_until_the_provider_counts_them():
+    status = TurnStatus()
     status.stream("abcdefgh")
-    assert status.net_bytes == 0
     assert status.output_tokens == 2
-    status.add_bytes(500)
-    assert status.net_bytes == 0
 
     status.settle(40)
     assert status.output_tokens == 40
-    status.call_started()
-    status.add_bytes(7)
     status.stream("abcd")
-    assert status.net_bytes == 0 and status.output_tokens == 41
+    assert status.output_tokens == 41
     status.settle(0)                      # no usage: the estimate stands
     assert status.output_tokens == 41
 

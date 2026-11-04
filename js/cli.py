@@ -3947,9 +3947,7 @@ def _status_bar_line(cfg: Config, state: dict, turn_active: bool, width: int) ->
     phase, output_tokens, throbber = "", None, ""
     if turn_active:
         throbber = screen.throbber_frame(now)
-        phase, output_tokens = screen.turn_centre(
-            context.turn_status, now=now, show_bytes=_live_level(state, "NET_DISPLAY") >= 2,
-        )
+        phase, output_tokens = screen.turn_centre(context.turn_status, now=now)
     return screen.status_line(
         width,
         clock=time.strftime("%H:%M"),

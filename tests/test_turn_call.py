@@ -118,7 +118,7 @@ class _Turn:
         self.caller = ModelCaller(
             ModelRequest(model="m", provider_id=provider_id, base_url=None, api_key=None,
                          effort=None, max_out=max_out),
-            CallLimits(retry=retry.Budget(attempts=attempts, max_wait=max_wait), stream_idle=None,
+            CallLimits(retry=retry.Budget(attempts=attempts, max_wait=max_wait), stream=retry.StreamLimits(),
                        max_output_escalation=escalation, max_output_resumes=0),
             convo=self.convo, budget=self.budget,
             sink=StreamSink(self.telemetry, status, events, settings={}, suppress_output=True),
@@ -259,8 +259,8 @@ def test_a_refused_signature_is_dropped_once_and_the_history_replayed(tmp_path, 
 
 
 def test_call_limits_read_the_resilience_settings():
-    limits = CallLimits.from_settings({"RETRY_COUNT_MAX": 4, "RETRY_WAIT_MAX": 60, "STREAM_IDLE_TIMEOUT": 0, "OUTPUT_TOKENS_RETRY_MAX": 32000, "OUTPUT_RESUMES_MAX": 2})
-    assert limits == CallLimits(retry=retry.Budget(attempts=4, max_wait=60.0), stream_idle=None,
+    limits = CallLimits.from_settings({"RETRY_COUNT_MAX": 4, "RETRY_WAIT_MAX": 60, "STREAM_IDLE_TIMEOUT": 0, "CONNECT_TIMEOUT": 30, "FIRST_BYTE_TIMEOUT": 600, "OUTPUT_TOKENS_RETRY_MAX": 32000, "OUTPUT_RESUMES_MAX": 2})
+    assert limits == CallLimits(retry=retry.Budget(attempts=4, max_wait=60.0), stream=retry.StreamLimits(connect=30.0, first_byte=600.0),
                                 max_output_escalation=32000, max_output_resumes=2)
 
 
@@ -278,7 +278,7 @@ def test_escalation_respects_window_when_usage_has_no_prompt_tokens():
     caller = ModelCaller.__new__(ModelCaller)
     caller._request = request
     caller._limits = CallLimits(
-        retry=retry.Budget(attempts=1, max_wait=0), stream_idle=None,
+        retry=retry.Budget(attempts=1, max_wait=0), stream=retry.StreamLimits(),
         max_output_escalation=8000, max_output_resumes=0,
     )
     caller._context = SimpleNamespace(last_output_tokens=500)

@@ -34,8 +34,11 @@ FIRST_ITEM = "Body buffered because streaming was never enabled"
 LAST_ITEM = "Idle connection silently dropped by a middlebox"
 # What cpa streams when its upstream connection dies after it answered 200.
 UPSTREAM_DROPPED = (
-    b'event: error\ndata: {"type":"error","error":{"type":"api_error","message":'
+    b'event: error\ndata: {"type":"error","error":{"type":"timeout_error","message":'
     b'"read tcp 10.158.243.173:41446->160.79.104.10:443: read: connection timed out"}}\n\n'
+)
+UPSTREAM_FAILED = (
+    b'event: error\ndata: {"type":"error","error":{"type":"api_error","message":"model crashed"}}\n\n'
 )
 _ANSI = re.compile(rb"\x1b\[[0-9;?]*[A-Za-z]")
 
@@ -50,11 +53,20 @@ class _Stalled(bytes):
     """A reply that sends its bytes and then goes quiet without ending."""
 
 
+class _Prefilled(bytes):
+    """A reply that comes after `PREFILL_S` seconds of silence."""
+
+
+PREFILL_S = 2.5
+
+
 class _Replay(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - http.server's name
         self.rfile.read(int(self.headers["Content-Length"]))
         replies = self.server.replies
         body = replies.pop(0) if len(replies) > 1 else replies[0]
+        if isinstance(body, _Prefilled):
+            time.sleep(PREFILL_S)
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         if isinstance(body, _Stalled):
@@ -155,7 +167,7 @@ DROPPED_MESSAGE = "read tcp 10.158.243.173:41446->160.79.104.10:443: read: conne
 
 
 def _retry_line(n: int, of: int, seconds: float) -> str:
-    return msgs.RETRY_WAIT.words(n=n, of=of, seconds=seconds, failure=f"500 {DROPPED_MESSAGE}")
+    return msgs.RETRY_WAIT.words(n=n, of=of, seconds=seconds, failure=f"504 {DROPPED_MESSAGE}")
 
 
 # The terminal falls behind where the answer is written: plain -p reprints it
@@ -226,16 +238,25 @@ def test_a_call_that_keeps_failing_gives_up_in_one_plain_line_and_says_continue(
     code, drawn = _on_terminal(_argv(), _env(tmp_path, url, RETRY_COUNT_MAX="2", RETRY_BACKOFF_START="0",
                                              RETRY_BACKOFF_JITTER="0"), tmp_path)
     screen = _screen(drawn)
-    gave_up = msgs.RETRY_GAVE_UP.words(n=2)
+    # The give-up line names the failure: its status and the provider's
+    # message, not the error's dict.
+    gave_up = msgs.RETRY_GAVE_UP.words(n=2, failure=f"504 {DROPPED_MESSAGE}")
 
     assert code == 1
     assert _retry_line(1, 2, 0) in screen and _retry_line(2, 2, 0) in screen
     assert gave_up in screen
-    # The failure itself: its status and the provider's message, not the error's dict.
-    last = screen[screen.index(gave_up) + len(gave_up):]
-    assert f"500 {DROPPED_MESSAGE}" in last
     assert "{'type'" not in screen
-    assert last.index(CONTINUE) > last.index(DROPPED_MESSAGE)
+    assert screen.index(CONTINUE) > screen.index(gave_up)
+
+
+def test_an_upstream_500_event_fails_without_a_retry(tmp_path, serve):
+    url = serve(UPSTREAM_FAILED, STREAM)
+    code, drawn = _on_terminal(_argv(), _env(tmp_path, url, RETRY_COUNT_MAX="3", RETRY_BACKOFF_START="0",
+                                             RETRY_BACKOFF_JITTER="0"), tmp_path)
+    screen = _screen(drawn)
+
+    assert code == 1, screen[-2000:]
+    assert _retry_line(1, 3, 0) not in screen and LAST_ITEM not in screen
 
 
 def test_ctrl_c_during_a_retry_wait_ends_the_run_with_the_continue_line(tmp_path, serve):
@@ -250,6 +271,17 @@ def test_ctrl_c_during_a_retry_wait_ends_the_run_with_the_continue_line(tmp_path
     assert code == 130, screen[-2000:]
     assert time.monotonic() - started < 25
     assert screen.index(CONTINUE) > screen.index(INTERRUPTED)
+
+
+def test_a_long_prefill_is_counted_up_and_answered(tmp_path, serve):
+    url = serve(_Prefilled(STREAM))
+    code, drawn = _on_terminal(_argv(), _env(tmp_path, url, STREAM_IDLE_TIMEOUT="1", RETRY_COUNT_MAX="0"),
+                               tmp_path)
+    screen = _screen(drawn)
+
+    assert code == 0, screen[-2000:]
+    assert msgs.FIRST_BYTE_COUNTER.words(waited=msgs.duration(1)) in screen
+    assert LAST_ITEM in screen
 
 
 def test_a_stream_that_goes_quiet_times_out_with_the_continue_line(tmp_path, serve):

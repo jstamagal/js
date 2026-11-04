@@ -174,4 +174,4 @@ def test_responses_failure_retains_the_provider_error(monkeypatch):
         _stream(monkeypatch, "openai-responses", respond, [ai.user_message("ping")])
     assert caught.value.code == "server_error"
     assert caught.value.body["response"]["error"] == error
-    assert caught.value.is_retryable
+    assert not caught.value.is_retryable          # server_error stands for a 500

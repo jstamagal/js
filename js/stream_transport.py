@@ -4,13 +4,15 @@ httpx2 2.12's default response stream closes the pool entry but not its active
 byte iterator (pydantic/httpx2#1195). This response-local wrapper closes both.
 Recheck the adapter when that upstream iterator ownership is repaired.
 
-The same wrapper sees every response byte, which is what the NET_DISPLAY channel
-counts. The channel prints only while a sink is installed (the async REPL
-screen); everywhere else each hook is a no-op.
+The same wrapper sees every response byte: the first one ends the wait
+`FirstByteWait` shows, and the NET_DISPLAY channel reports the handshake. The
+channel prints only while a sink is installed (the async REPL screen);
+everywhere else each hook is a no-op.
 """
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import contextvars
 import time
@@ -52,7 +54,7 @@ class FailureHold:
 @dataclass(frozen=True)
 class NetRole:
     """Who is calling: the main turn (label ""), "Subagent N", or "Compacting".
-    `status` is the TurnStatus the response bytes are counted into. With a
+    `status` is the TurnStatus that shows the wait for a first byte. With a
     `hold`, failures wait for the caller's verdict instead of printing."""
 
     label: str = ""
@@ -172,8 +174,6 @@ class NetCall:
         self._sent = False
         if role.hold is not None:
             role.hold.pending = None
-        if role.status is not None:
-            role.status.call_started()
         say(2, self._connecting_line())
 
     def _connecting_line(self) -> str:
@@ -205,8 +205,6 @@ class NetCall:
 
     def received(self, n: int) -> None:
         self.connected()
-        if self._role.status is not None:
-            self._role.status.add_bytes(n)
 
     def first_token(self) -> None:
         self.connected()
@@ -223,6 +221,44 @@ class NetCall:
             if event.endswith("connect_tcp.complete") and self._url.startswith("https:"):
                 return
             self.connected()
+
+
+class FirstByteWait:
+    """The wait from a model request being sent to its first response byte:
+    the prefill. The calling role's TurnStatus shows it on the status bar;
+    the main turn's also emits a `first_byte_tick` with the seconds waited
+    after each second of it and `first_byte_done` when it ends, which count
+    it up on stderr under `js -p`."""
+
+    def __init__(self) -> None:
+        self._role = _role.get()
+        self._started: float | None = None
+        self._ticker: Any = None
+
+    def start(self) -> None:
+        if self._started is not None:
+            return
+        self._started = time.monotonic()
+        if self._role.status is not None:
+            self._role.status.first_byte_wait(self._started)
+        if not self._role.label:
+            self._ticker = asyncio.get_running_loop().create_task(self._tick())
+
+    async def _tick(self) -> None:
+        while True:
+            await asyncio.sleep(1.0)
+            output.emit(output.event("first_byte_tick", waited=time.monotonic() - (self._started or 0)))
+
+    def end(self) -> None:
+        if self._started is None:
+            return
+        self._started = None
+        if self._role.status is not None:
+            self._role.status.first_byte_done()
+        if self._ticker is not None:
+            self._ticker.cancel()
+            self._ticker = None
+            output.emit(output.event("first_byte_done"))
 
 
 _call: contextvars.ContextVar[NetCall | None] = contextvars.ContextVar("js_net_call", default=None)
@@ -282,14 +318,19 @@ class _OwnedCoreStream:
 @asynccontextmanager
 async def own_responses(client: httpx2.AsyncClient | httpx.AsyncClient, call: NetCall | None = None,
                         on_request: Callable[[], None] | None = None,
-                        on_bytes: Callable[[], None] | None = None):
+                        on_bytes: Callable[[], None] | None = None,
+                        on_response: Callable[[], None] | None = None,
+                        timeout: dict[str, float | None] | None = None):
     """Close this model request's byte iterators when its stream scope exits.
     With a `call`, its handshake and response bytes feed the network channel.
-    `on_request` is called as each request is sent and `on_bytes` for every
-    response chunk read."""
+    `on_request` is called as each request is sent, `on_response` as its
+    headers arrive and `on_bytes` for every response chunk read. `timeout`
+    replaces those parts of each request's own (`connect`, `read`, ...)."""
     async with AsyncExitStack() as cleanup:
 
         async def own(response: httpx2.Response) -> None:
+            if on_response is not None:
+                on_response()
             stream: AsyncIterable[bytes] = response.stream
             if isinstance(stream, (BoundAsyncStream, HttpxBoundAsyncStream)):
                 stream = stream._stream
@@ -299,6 +340,9 @@ async def own_responses(client: httpx2.AsyncClient | httpx.AsyncClient, call: Ne
                 cleanup.push_async_callback(wrapper.aclose)
 
         async def trace(request: httpx2.Request) -> None:
+            if timeout is not None:
+                request.extensions = {**request.extensions,
+                                      "timeout": {**request.extensions.get("timeout", {}), **timeout}}
             if on_request is not None:
                 on_request()
             if call is not None:
@@ -307,7 +351,7 @@ async def own_responses(client: httpx2.AsyncClient | httpx.AsyncClient, call: Ne
 
         response_hooks = client.event_hooks["response"]
         request_hooks = (client.event_hooks["request"]
-                         if call is not None or on_request is not None else [])
+                         if call is not None or on_request is not None or timeout is not None else [])
         response_hooks.append(own)
         request_hooks.append(trace)
         try:

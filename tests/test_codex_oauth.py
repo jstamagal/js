@@ -840,25 +840,33 @@ def test_a_call_with_no_deltas_takes_its_done_arguments():
 def test_stream_errors_keep_their_message_and_code_so_retry_can_see_them(event, message):
     """ALL-CLAIMS codex_provider.py:93 HIGH: response.failed nests its error
     under `response`, a flat error has `code` at top level; both came out as
-    'OpenAI Codex stream failed' with code None, so is_retryable was always
-    False and a transient server_error was never retried."""
+    'OpenAI Codex stream failed' with code None. The code is what the retry
+    rule reads: server_error stands for a 500, which is not retried."""
     with pytest.raises(ai.ProviderAPIError) as caught:
         _drain([event])
     assert caught.value.message == message
     assert caught.value.code == "server_error"
-    assert caught.value.is_retryable is True
+    assert model_client.failure_status(caught.value) == 500
+    assert not model_client.retryable(caught.value, responded=True)
 
 
-def test_a_stream_that_ends_without_a_terminal_event_raises_retryable():
+def test_a_rate_limit_code_is_retried_as_a_429():
+    with pytest.raises(ai.ProviderAPIError) as caught:
+        _drain([{"type": "error", "code": "rate_limit_exceeded", "message": "slow down", "param": None}])
+    assert model_client.failure_status(caught.value) == 429
+    assert model_client.retryable(caught.value, responded=True)
+
+
+def test_a_stream_that_ends_without_a_terminal_event_raises():
     """ALL-CLAIMS codex_provider.py:97 (doc #372, ruhondo #378): a broken pipe
     used to end as a clean StreamEnd, so a cut answer or a half tool call
-    passed as finished."""
+    passed as finished. The connection broke after its headers: not retried."""
     with pytest.raises(ai.ProviderResponseError) as caught:
         _drain([
             {"type": "response.output_item.added", "item": _call_item("item_A", "call_A", "write")},
             {"type": "response.function_call_arguments.delta", "item_id": "item_A", "delta": '{"path": "a'},
         ])
-    assert caught.value.is_retryable is True
+    assert not model_client.retryable(caught.value, responded=True)
 
 
 def test_the_owned_client_bounds_silence_not_total_time():
@@ -901,7 +909,7 @@ def test_a_silent_server_times_out_as_a_retryable_provider_error(monkeypatch):
 
     with pytest.raises(ai.ProviderTimeoutError) as caught:
         asyncio.run(asyncio.wait_for(run(), 10))
-    assert caught.value.is_retryable is True
+    assert model_client.retryable(caught.value, responded=False)   # no response came
     listener.close()
 
 

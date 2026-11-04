@@ -56,10 +56,25 @@ class Budget:
         return wait is not None and 0 < self.max_wait < wait
 
 
-def idle_seconds(settings: dict | None) -> float | None:
-    """STREAM_IDLE_TIMEOUT as `stream_model_async` takes it: None for
-    no watchdog."""
-    return float(_settings.knob(settings, "STREAM_IDLE_TIMEOUT") or 0) or None
+@dataclass(frozen=True)
+class StreamLimits:
+    """The clocks one model request runs under, in seconds; None is no limit.
+    `connect` bounds the TCP and TLS handshake (CONNECT_TIMEOUT), `first_byte`
+    the silence from sending the request to the first response byte, prefill
+    included (FIRST_BYTE_TIMEOUT), and `idle` the silence between two response
+    bytes after the first (STREAM_IDLE_TIMEOUT)."""
+
+    connect: float | None = None
+    first_byte: float | None = None
+    idle: float | None = None
+
+    @classmethod
+    def from_settings(cls, settings: dict | None) -> StreamLimits:
+        def seconds(key: str) -> float | None:
+            return float(_settings.knob(settings, key) or 0) or None
+
+        return cls(connect=seconds("CONNECT_TIMEOUT"), first_byte=seconds("FIRST_BYTE_TIMEOUT"),
+                   idle=seconds("STREAM_IDLE_TIMEOUT"))
 
 
 def backoff(attempt: int, budget: Budget | None = None) -> float:
@@ -124,9 +139,14 @@ def announce(n: int, budget: Budget, delay: float, exc: BaseException) -> None:
                              error=exc, label=stream_transport._role.get().label))
 
 
-def gave_up(retries: int) -> None:
-    """Tell the sink the caller stopped retrying a retryable failure."""
-    output.emit(output.event("retry_gave_up", n=retries, label=stream_transport._role.get().label))
+def gave_up(retries: int, exc: BaseException) -> None:
+    """Tell the sink the caller stopped retrying a retryable failure, and
+    which failure was the last. The give-up line names it, so the role's
+    held failure line is dropped."""
+    hold = stream_transport._role.get().hold
+    if hold is not None:
+        hold.pending = None
+    output.emit(output.event("retry_gave_up", n=retries, error=exc, label=stream_transport._role.get().label))
 
 
 _sleep = asyncio.sleep
@@ -165,7 +185,7 @@ async def call[T](request: Callable[[], Awaitable[T]], budget: Budget) -> T:
             if not exc.is_retryable:
                 raise
             if retries >= budget.attempts or budget.too_long(asked):
-                gave_up(retries)
+                gave_up(retries, exc)
                 raise
             delay = asked if asked is not None else backoff(retries, budget)
             retries += 1

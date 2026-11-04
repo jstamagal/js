@@ -174,6 +174,23 @@ def test_run_line_names_the_base_url_a_model_with_no_provider_goes_to(monkeypatc
     assert "ai-gateway" not in run_line
 
 
+def test_run_line_shows_the_connect_and_first_byte_timeouts(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: None)
+    cfg = replace(_config(tmp_path), trace=True, settings={"CONNECT_TIMEOUT": 41, "FIRST_BYTE_TIMEOUT": 613})
+
+    async def sdk(**kwargs):
+        return _result(text="ok")
+
+    monkeypatch.setattr(model_client, "_stream_async", sdk)
+    asyncio.run(runtime.run_turn_async(
+        cfg, "system", [{"role": "user", "content": "hello"}], runtime.Telemetry(None),
+        tool_registry=build_default_registry().select([]),
+        tool_context=ToolContext(cwd=tmp_path),
+    ))
+    run_line = capsys.readouterr().out
+    assert "41" in run_line and "613" in run_line
+
+
 def test_in_turn_compaction_announces_and_records_trigger(monkeypatch, tmp_path, capsys):
     cfg = replace(_config(tmp_path), max_output_tokens=500,
                   settings={"CONTEXT_SIZE": 10000, "COMPACTION_KEEP_RECENT_TOKENS": 100, "COMPACTION_HEADROOM_TOKENS": 100, "COMPACTION_REPLY_RESERVE_TOKENS": 500})
