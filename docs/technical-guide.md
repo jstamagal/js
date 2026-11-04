@@ -65,8 +65,14 @@ persists each completed turn.
 
 ## Prompt Loading
 
-System-prompt files (`*.md`, minus the user/agent and benchmark files below) are sorted by filename and
-concatenated with blank lines. The manifest is `agent.yaml` in the same
+An agent directory's `.md` files are named by the last word of the stem:
+`NN-prompt.md`, `NN-env.md`, `NN-benchmark.md`, `NN-user.md`, `NN-agent.md`.
+Only those load; any other `.md` (README, CHANGELOG, notes) is not read. The
+system prompt is the `*-prompt.md` and `*-env.md` files, sorted by filename and
+concatenated with blank lines. `--system-prompt TEXT` stands in for the
+`*-prompt.md` files and keeps everything else about the agent; `--no-env`,
+`--you-are`, `--chat` and `--system-prompt-file` leave out the `*-env.md`
+files. The manifest is `agent.yaml` in the same
 directory:
 
 ```yaml

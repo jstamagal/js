@@ -93,7 +93,7 @@ Child agents do not inherit the parent's selected tool surface.
 The child loads:
 
 ```text
-<root>/<agent_id>/*.md  # root is repo prompts/, ~/.js/agents/, or project .js/agents/
+<root>/<agent_id>/*-prompt.md, *-env.md  # root is repo prompts/, ~/.js/agents/, or project .js/agents/
 ```
 
 Then selects tools from the full registry using that agent's `agent.yaml`

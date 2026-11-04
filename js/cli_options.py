@@ -3,12 +3,11 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
-import json
 import os
-from fnmatch import fnmatchcase
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import messages as msgs
 from .toolkit import policy
 
 
@@ -17,52 +16,80 @@ class RunOptions:
     system_prompt_file: str | None = None
     system_prompt: str | None = None
     append_system_prompt: tuple[str, ...] = ()
-    you_are: bool = False
+    # --you-are: None when absent, the TEXT after it (or '') when given.
+    you_are: str | None = None
     no_env: bool = False
     chat: bool = False
+    # The agent named on the command line with --agent; --chat takes its persona from it.
+    agent: str | None = None
     no_agents_md: bool = False
     no_skills: bool = False
     no_mcp: bool = False
-    with_tools: str | None = None
-    without_tools: str | None = None
+    no_tools: bool = False
     tools: str | None = None
 
     @property
     def replaces_prompt(self) -> bool:
-        return self.system_prompt_file is not None or self.system_prompt is not None or self.you_are
+        return self.system_prompt_file is not None or self.system_prompt is not None or self.you_are is not None
 
     @property
     def changes_prompt(self) -> bool:
         return self.replaces_prompt or bool(self.append_system_prompt)
 
+    @property
+    def zero_tools(self) -> bool:
+        """The run starts from no tools; only --tools adds any."""
+        return self.no_tools or self.chat or self.you_are is not None
+
+    @property
+    def skips_env(self) -> bool:
+        """No `*-env.md` file loads and envctx prints nothing."""
+        return self.no_env or self.chat or self.you_are is not None or self.system_prompt_file is not None
+
+    @property
+    def skips_agents_md(self) -> bool:
+        return (self.no_agents_md or self.chat or self.you_are is not None
+                or self.system_prompt_file is not None)
+
+    @property
+    def skips_skills(self) -> bool:
+        return self.no_skills or self.zero_tools
+
+    @property
+    def skips_mcp(self) -> bool:
+        return self.no_mcp or self.zero_tools
+
     def selectors(self, original: tuple[str, ...]) -> tuple[str, ...]:
-        entries = () if self.chat else original
         if self.tools is not None:
-            entries = policy.parse_entries(json.loads(self.tools), '--tools')
-        if self.with_tools is not None:
-            entries = policy.parse_entries([
-                item.strip() if ':' in item else f'{item.strip()}:eager'
-                for item in self.with_tools.split(',')
-            ], '--with-tools')
+            entries = tool_list(self.tools)
+        elif self.zero_tools:
+            entries = ()
+        else:
+            entries = original
         if self.no_skills:
             entries = ('skill:ban', *entries)
-        if self.without_tools is not None:
-            names = [item.strip() for item in self.without_tools.split(',')]
-            if any(not name or ':' in name for name in names):
-                raise ValueError('--without-tools requires comma-separated tool names or globs')
-            config = policy.load_tools_config()
-            rules = policy.expand(entries, config, '--without-tools')
-            # Flatten tags so explicit exclusions precede even named tag members.
-            entries = tuple(rule.entry.text for rule in rules
-                            if not any(any(char in name for char in '*?[')
-                                       and fnmatchcase(rule.entry.noun, name.lower()) for name in names))
-            entries = tuple(f'{name}:ban' for name in names) + entries
         return entries
 
     def prompt_text(self) -> str:
         if self.system_prompt_file is not None:
             return Path(self.system_prompt_file).expanduser().read_text(encoding='utf-8')
         return self.system_prompt or ''
+
+
+def tool_list(text: str) -> tuple[str, ...]:
+    """`--tools shell,fetch:lazy,web*`: tool names, globs or tags, each eager
+    unless it says `:eager` or `:lazy`."""
+    entries = []
+    for item in text.split(','):
+        item = item.strip()
+        noun, sep, modifier = item.partition(':')
+        if noun.strip().lower() == 'tag':
+            entries.append(item)
+            continue
+        if not noun.strip() or (sep and modifier.strip() not in ('eager', 'lazy')):
+            raise ValueError(msgs.TOOLS_LIST_ENTRY.text(entry=item))
+        entries.append(item if sep else f'{item}:eager')
+    return policy.parse_entries(entries, '--tools')
 
 
 _current: contextvars.ContextVar[RunOptions] = contextvars.ContextVar('js_run_options', default=RunOptions())
@@ -76,7 +103,7 @@ def current() -> RunOptions:
 def invocation(options: RunOptions):
     token = _current.set(options)
     previous = os.environ.get('JS_NOENV')
-    if options.no_env or options.chat:
+    if options.skips_env:
         os.environ['JS_NOENV'] = '1'
     try:
         yield

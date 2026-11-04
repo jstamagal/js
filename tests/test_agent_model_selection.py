@@ -61,7 +61,7 @@ def _write_agent_dir(
     prompts = root / agent_id
     prompts.mkdir(parents=True)
     (prompts / "agent.yaml").write_text(manifest, encoding="utf-8")
-    (prompts / "01-body.md").write_text(body, encoding="utf-8")
+    (prompts / "01-prompt.md").write_text(body, encoding="utf-8")
     return prompts
 
 
