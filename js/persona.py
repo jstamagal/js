@@ -16,6 +16,7 @@ from .toolkit import policy
 from . import messages as msgs
 from . import output
 from . import settings
+from . import secret_patterns
 
 
 @dataclass(frozen=True)
@@ -479,6 +480,7 @@ def expand_agent_text(text: str, cfg) -> str:
     # prompts/ and tools/, so a prompt reaches `$JS_ROOT/tools/envctx.c`
     # wherever js is installed.
     os.environ["JS_ROOT"] = str(Path(__file__).resolve().parents[1])
+    secret_patterns.export_env()
     return expand_prompt(
         text,
         allow_code=allow_code,

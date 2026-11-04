@@ -39,6 +39,17 @@ def home() -> Path:
     return user_home() / ".js"
 
 
+def defaults_dir() -> Path:
+    """js's stock setup, laid out like ``~/.js``, beside the js package."""
+    return Path(__file__).resolve().parents[1] / "defaults"
+
+
+def home_or_default(name: str) -> Path:
+    """``name`` under the home when that file exists, else under defaults."""
+    own = home() / name
+    return own if own.is_file() else defaults_dir() / name
+
+
 def global_config_file() -> Path:
     return home() / "jsrc"
 
