@@ -114,9 +114,146 @@ fset PALETTE_97 #E2E2E2
 fset PALETTE_98 #FFFFFF
 
 # REPL startup.
-fset STARTUP_TITLE %C11me — js agent
-fset STARTUP_AGENT %C13Agent:%C  %s
-fset STARTUP_MODEL %C13Model:%C  %s
-fset STARTUP_PROMPT %C13Prompt:%C %s
-fset STARTUP_MEMORY %C13Memory:%C %s
-fset STARTUP_HINT %C09Type exit or Ctrl-D to quit. /help lists commands.
+fset STARTUP_TITLE %C11me%C — js agent
+fset STARTUP_AGENT %C13Agent:%C  $0-
+fset STARTUP_MODEL %C13Model:%C  $0-
+fset STARTUP_PROMPT %C13Prompt:%C $0-
+fset STARTUP_MEMORY %C13Memory:%C $0-
+
+# Failures: the glyph in red, palette slot 04.
+fset FAILED %C04%G%C $0-
+fset CLEARING_FLIGHT_FAILED %C04%G%C Tool-result clearing: flight log not opened: $0-
+fset MODELS_NOT_LISTED %C04%G%C Models not listed: $0-
+fset CATALOG_REFRESH_FAILED %C04%G%C Model catalog not refreshed: $0-
+fset MIGRATE_NO_LEGACY %C04%G%C No legacy config at $0-
+fset MIGRATE_TARGET_EXISTS %C04%G%C $0- already exists. Remove it first to migrate again.
+fset SAVE_FAILED %C04%G%C Not saved: $0-
+fset SAVE_NO_SERVER %C04%G%C Not saved: no saved login for $0-. js --login adds one.
+fset LOAD_UNREADABLE %C04%G%C load: $0 not read: $1-
+fset ARGUMENTS_REFUSED %C04%G%C $0-
+fset UNKNOWN_OPTION %C04%G%C unknown option $0-
+fset UNKNOWN_OPTION_DID_YOU_MEAN %C04%G%C unknown option $0 (did you mean $1-?)
+fset BAD_REASONING %C04%G%C --reasoning $0: $1-
+fset PROMPT_EMPTY %C04%G%C Prompt is empty.
+fset NO_ANSWER %C04%G%C The model returned no answer.
+fset NO_BENCHMARKS %C04%G%C Agent $0- has no NN-benchmark.md files.
+fset BENCH_FAILED %C04%G%C $0: $1-
+fset COMMIT_TARGET_MISSING %C04%G%C Commit target does not exist: $0-
+fset COMMIT_TARGET_NOT_DIR %C04%G%C Commit target is not a directory: $0-
+fset GIT_INIT_FAILED %C04%G%C git init failed in $0: $1-
+fset SURVEY_FAILED %C04%G%C Commit survey failed for $0: $1-
+fset PRINTONLY_NO_CONFIG %C04%G%C --printonly: config not built: $0-
+fset PRINTONLY_NO_PROMPT %C04%G%C --printonly: prompt not loaded: $0-
+fset PRINTONLY_SECTION_FAILED %C04%G%C --printonly: section $0 unavailable: $1-
+fset BAD_URL_SPEC %C04%G%C -u: $0-
+fset JAIL_REFUSED %C04%G%C $0-
+fset JSON_NEEDS_LIST %C04%G%C --json requires -p, pipe mode or --list.
+fset LIST_EXCLUSIVE %C04%G%C --list does not combine with run or session options.
+fset LAST_WITH_SESSION %C04%G%C --last and --session are mutually exclusive.
+fset NO_PREVIOUS_SESSION %C04%G%C No previous session for agent: $0-
+fset DEBUG_FLAGS_EXCLUSIVE %C04%G%C --debug and --debug-file are mutually exclusive.
+fset MODES_EXCLUSIVE %C04%G%C --commit and --compact are mutually exclusive.
+fset FILE_NEEDS_PROMPT_MODE %C04%G%C -f/--file works only with a prompt or a pipe. Use @path in the REPL.
+fset FILE_NEEDS_PROMPT %C04%G%C -f/--file requires -p/--prompt or piped input. Use @path in the REPL.
+fset BENCH_EXCLUSIVE %C04%G%C --bench is its own mode. Name the agent as --bench AGENT, without --agent or a built-in mode.
+fset COMMIT_WITH_AGENT %C04%G%C --commit always uses the built-in commit agent. Omit --agent.
+fset STDIN_TWICE %C04%G%C stdin cannot be both the prompt and an attachment.
+fset STDIN_ATTACHMENT_NOT_PIPED %C04%G%C -f - requires piped stdin bytes.
+fset NO_SUCH_AGENT %C04%G%C No such agent: $0. Looked in project .js/agents, $1, and repo prompts. Create $2-/ with NN-*.md prompt files and an optional agent.yaml manifest.
+fset RETRY_BUDGET_EXHAUSTED %C04%G%C Tool-loop retry budget exhausted.
+fset MAX_ITERATIONS %C04%G%C Tool loop hit max iterations: $0-
+fset RETRY_GAVE_UP %C04%G%C Gave up after $0- retries.
+fset FLIGHT_LOG_FAILED %C04%G%C Flight log not written: $0-
+fset COMPACTION_FAILED %C04%G%C Compaction failed: $0-
+fset LOGIN_NO_KEY %C04%G%C Login aborted. No API key given.
+fset LOGIN_TEST_FAILED %C04%G%C Secondary test failed: $0-
+fset LOGIN_PROVIDER_NOT_CHANGED %C04%G%C Provider not changed: $0-
+fset LOGIN_FAILED %C04%G%C Login failed: $0-
+fset LOGIN_NOT_SAVED %C04%G%C Login not saved: $0-
+fset LOGIN_NO_CACHED_MODELS %C04%G%C No cached models for $0-
+fset LOGOUT_FAILED %C04%G%C Logout failed: $0-
+fset NOT_LOGGED_IN %C04%G%C Not logged in to $0-
+fset TOOL_INSTALL_FAILED %C04%G%C Tool install failed: $0-
+fset HOME_MIGRATION_FAILED %C04%G%C Move into $0 failed: $1-
+fset EX_UNKNOWN %C04%G%C Not an editor command, js command or program: $0-
+fset EX_FAILED %C04%G%C :$0: $1-
+fset TOOLSTATS_NO_SESSION %C04%G%C toolstats: no session found.
+fset TOOLDIAG_NO_TOOLS %C04%G%C tooldiag: the surface matched no tools.
+fset FLIGHT_AUTOLOG_FAILED %C04%G%C Flight autolog not written: $0. Flight $1-
+fset DEFAULTS_MISSING %C04%G%C Defaults file missing: $0-
+fset DEFAULTS_BAD_LINE %C04%G%C $0: $1-
+fset DEFAULTS_UNLISTED %C04%G%C $0: no line for $1-
+fset GIT_NOT_A_REPO %C04%G%C Not a git repository: $0-
+fset GIT_FAILED %C04%G%C Git failed in $0: git $1: $2-
+fset STAGE_NO_CHANGES %C04%G%C $0- has no pending changes.
+fset STAGE_UNTRACKED %C04%G%C $0- is untracked. Use `stage $0- all`. Hunk specs work only for tracked text diffs.
+fset STAGE_BAD_SPEC %C04%G%C Hunks must be comma-separated numbers or all. Got $0-.
+fset STAGE_NO_HUNKS %C04%G%C No unstaged text hunks in $0-. A binary, rename or mode change, or already staged: use `stage $0- all`.
+fset STAGE_OUT_OF_RANGE %C04%G%C Hunks $0 out of range. $1 has $2-.
+fset STAGE_APPLY_FAILED "%C04%G%C $0\nFallback: `stage $1- all`"
+fset MESSAGE_FILE_UNREADABLE %C04%G%C Message file not read: $0-
+fset MESSAGE_FILE_EMPTY %C04%G%C Commit message file is empty: $0-
+
+# Warnings: the glyph in orange, palette slot 07.
+fset FAILED_WARN %C07%G%C $0-
+fset TOOL_SURFACE_KEPT %C07%G%C $0-. Tool surface unchanged.
+fset AUTO_COMPACT_ARMED %C07%G%C Context $0- full. Auto-compaction armed.
+fset AUTO_COMPACT_PAUSED %C07%G%C Auto-compaction paused after two compactions in a row. It resumes when context drops below the trigger.
+fset AUTO_COMPACT_BREAKER %C07%G%C Auto-compaction paused after $0- failed summaries in a row. /compact retries it.
+fset SUMMARY_SPLIT %C07%G%C Summary too large. Summarizing both halves, depth $0-.
+fset MIGRATE_DELETED %C07%G%C $0-: setting deleted. Written as a comment; edit by hand.
+fset CANCELLING %C07%G%C Cancelling $0-
+fset SESSION_NOT_SAVED_TITLE %C07%G%C This session is not saved. Nothing to title.
+fset UNKNOWN_SLASH_COMMAND %C07%G%C Invalid command
+fset EXEC_EXITED %C07%G%C exec: $0 exited $1: $2-
+fset EXEC_TIMED_OUT %C07%G%C exec: $0 killed after $1-s.
+fset EXEC_FAILED %C07%G%C exec: $0 did not start: $1-
+fset TURN_INTERRUPTED %C07%G%C Turn interrupted.
+fset TURN_INTERRUPTED_KEPT %C07%G%C Turn interrupted. Partial work kept.
+fset TURN_ABORTED %C07%G%C Turn aborted.
+fset SNAPSHOT_FAILED %C07%G%C Worktree snapshot failed: $0-
+fset MODEL_LIST_FAILED %C07%G%C $0: models not listed: $1-
+fset PRESET_NOT_FOUND %C07%G%C --preset $0: no jsrc.$0. Looked in $1-.
+fset PRESET_NO_CONFIG_DIRS %C07%G%C --preset $0-: no jsrc.$0-. Every config dir is ignored.
+fset BINARY_MISSING %C07%G%C $0 not in tools/bin or PATH. $1- uses it. just install provisions it.
+fset DROPPED_QUEUED %C07%G%C Dropped $0-.
+fset PRINTONLY_BAD_COUNT %C07%G%C --printonly: $0- is not a count. Ignored.
+fset PRINTONLY_LETTER_NOT_IMPLEMENTED %C07%G%C --printonly: $0- is not implemented. Skipped.
+fset PRINTONLY_UNKNOWN_LETTER %C07%G%C --printonly: unknown letter $0-. Skipped.
+fset PRINTONLY_NOT_WRITTEN %C07%G%C --printonly: $0 not written: $1-. Printing to stdout.
+fset CLIPBOARD_NONE %C07%G%C No clipboard: no Wayland or X11 display. PASTE_IMAGE_COMMAND names a command that prints the image.
+fset CLIPBOARD_TOOL_MISSING %C07%G%C Clipboard image not read: $0- is not installed.
+fset CLIPBOARD_READ_FAILED %C07%G%C Clipboard image not read: $0: $1-
+fset CLIPBOARD_NO_IMAGE %C07%G%C No image on the clipboard.
+fset CLIPBOARD_IMAGE_TOO_LARGE %C07%G%C Clipboard image is $0 bytes. The maximum is $1- bytes.
+fset NOT_SAVED_NO_RESUME %C07%G%C Session not saved. Resume unavailable.
+fset RESUME_MODEL_FALLBACK %C07%G%C No login for $0, the model this session last ran on. Continuing on $1-.
+fset EMPTY_SESSION %C07%G%C Empty session. Nothing to resume: $0-
+fset RESPONSE_INCOMPLETE %C07%G%C Response incomplete: $0-
+fset MAX_OUTPUT_RESUMING %C07%G%C Reply hit its output cap; asking the model to resume, $0 of $1-.
+fset CATALOG_UPDATE_FAILED %C07%G%C models.dev cache not refreshed: $0-
+fset LOGIN_BAD_HEADERS %C07%G%C Headers must use k=v,k=v. Nothing saved yet.
+fset LOGIN_MODELS_UNREACHABLE %C07%G%C Could not list models: $0-. Saving the server anyway.
+fset LOGIN_BAD_DEFAULTS %C07%G%C $0-. Nothing saved yet.
+fset LOGIN_TRY_V1 %C07%G%C $0 does not end in /v1. OpenAI-compatible servers usually serve at $1-
+fset OAUTH_BAD_CALLBACK %C07%G%C Callback URL invalid or its state does not match. Paste the URL from this login attempt.
+fset OAUTH_REFRESH_NOT_SAVED %C07%G%C Refreshed $0 login not saved: $1-
+fset INSTALL_KEYS_MISSING %C07%G%C Not set: $0. Run just install in a terminal to save them to $1-
+fset INSTALL_MODEL_UNROUTED %C07%G%C Default model $0- has no provider to run on
+fset INSTALL_MODEL_UNSET %C07%G%C No default model is set
+fset URLLIB_FALLBACK %C07%G%C aria2c unavailable. $0- falls back to urllib: no segmented transfer, no resume across attempts.
+fset HOME_REFUSED %C07%G%C Refused $0: $1-
+fset HOME_WOULD_REFUSE %C07%G%C Would refuse $0: $1-
+fset HOME_LEFT %C07%G%C Left $0: $1-
+fset HOME_WOULD_LEAVE %C07%G%C Would leave $0: $1-
+fset SESSION_RECORDS_SKIPPED %C07%G%C $0: skipped $1 from an incompatible schema version. No migration to $2- yet. History may be incomplete.
+fset AGENT_DIR_UNREADABLE %C07%G%C Agent dir $0 unreadable: $1-. Skipped.
+fset AGENT_NAME_IS_TOOL %C07%G%C Agent $0: name collides with a builtin tool. Not exposed as a tool. Rename $1/$2-.
+fset TOOL_ENTRY_UNMATCHED %C07%G%C Tool entry $0- matched no tool. Ignored.
+fset TOOL_ENTRY_UNMATCHED_FOR %C07%G%C Tool entry $0 for agent $1- matched no tool. Ignored.
+fset DESCRIPTION_PROBLEM %C07%G%C description: $0-
+fset ENV_SETTING_IGNORED %C07%G%C $0: $1-. Ignored.
+fset DIRECTIVE_NOT_EXPANDED %C07%G%C Directive not expanded: $0-
+fset DIRECTIVE_EXITED_OUTPUT_USED %C07%G%C $0: exited $1-. Its output was used
+fset SESSIONS_NEEDS_TERMINAL %C07%G%C The session picker needs a terminal. Name a session: --session NAME.
+fset SESSIONS_DIR_GONE %C07%G%C The session's directory $0 is gone. Resuming in $1-.

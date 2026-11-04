@@ -89,9 +89,9 @@ def test_a_format_line_keeps_its_dollar_names_for_when_it_is_drawn(tmp_path):
     from js import fset
 
     path = tmp_path / "jsrc"
-    path.write_text("fset MODEL_SET $BANNER now %s\n", encoding="utf-8")
+    path.write_text("fset MODEL_SET %G now $$0 $0\n", encoding="utf-8")
     assert settings.load_jsrc_files([path], settings.seed_defaults()) == []
-    assert fset.lookup("MODEL_SET") == "$BANNER now %s"
+    assert fset.lookup("MODEL_SET") == "%G now $$0 $0"
 
 
 def _replay(tmp_path, jsrc):

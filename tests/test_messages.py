@@ -1,5 +1,5 @@
 """js/messages.py: every operator-facing string is a named entry, banner lines
-go through the slot, and severity is colour, never a word."""
+go through the slot, and colour comes only from a format."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def _plain(text: str) -> str:
 
 
 def test_format_specs_and_conversions_survive_painting():
-    entry = msgs.Message("{fullness:.0%} {name!r}", msgs.WARN)
+    entry = msgs.Message("{fullness:.0%} {name!r}")
     assert _plain(entry.line(fullness=0.5, name="x")) == msgs.banner(entry.text(fullness=0.5, name="x"))
 
 

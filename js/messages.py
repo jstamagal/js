@@ -6,19 +6,19 @@ model reads, are not here. The commit helper's entries are: the operator runs
 it, and the commit agent reads the same output through a shell.
 
 An entry's name is also its /fset format's (`js.fset`): the screen shows a
-message through that format, which by default is the entry's text with a `%s`
-per hole.
+message through that format. The entry's fields are its distinct holes, in
+the order the text first uses them; the format gets them as words `$0`,
+`$1`, ... (`js.fset.words`). By default the format is the entry's text with
+`$N` for each field and `$N-` for the last, led by `%G ` for a banner entry.
 
 A `Message` is in one register:
 
-  banner   the client reporting its own state: `$BANNER`, the BANNER setting,
-           a space, then the text. No template carries the slot literally.
+  banner   the client reporting its own state: the banner glyph, the BANNER
+           setting, a space, then the text.
   plain    content: tables, lists, headings, prompts the operator answers.
 
-Severity is colour, never a word. `WARN` paints in COLOR_WARN and `GRAVE` in
-COLOR_ERROR, and only the holes: the values that tell the operator what
-happened. A message without holes is painted whole. `say` paints only a stream
-that is a terminal.
+Colour is the format's: `js/fset` gives some entries a coloured glyph.
+`say` draws colour only on a stream that is a terminal.
 """
 
 from __future__ import annotations
@@ -66,13 +66,6 @@ def current_banner() -> str:
     return BANNER if state is None else state.value
 
 
-INFO = "info"
-WARN = "warn"
-GRAVE = "grave"
-
-# The colour entry each severity paints in; INFO paints nothing.
-SEVERITY_ROLE = {INFO: "", WARN: "COLOR_WARN", GRAVE: "COLOR_ERROR"}
-
 _FORMATTER = Formatter()
 
 
@@ -84,7 +77,6 @@ def _replace_key_labels(text: str, replacements: dict[str, str]) -> str:
 @dataclass(frozen=True)
 class Message:
     template: str
-    severity: str = INFO
     banner: bool = True
     # The entry's name in this module, and the name of its /fset format.
     name: str = field(default="", compare=False)
@@ -113,14 +105,28 @@ class Message:
         channel that is not the screen, or that adds the slot itself."""
         return self.template.format(**fields)
 
+    def fields(self) -> list[tuple[str, str, str | None]]:
+        """The entry's fields: each distinct hole of its text, as (name,
+        spec, conversion), in the order the text first uses it."""
+        found: list[tuple[str, str, str | None]] = []
+        for _literal, name, spec, conversion in _FORMATTER.parse(self.template):
+            if name is not None and (name, spec or "", conversion) not in found:
+                found.append((name, spec or "", conversion))
+        return found
+
     def default_format(self) -> str:
-        """The /fset format this entry has when nothing sets one: `$BANNER`
-        for a banner entry, then the template with a `%s` per hole."""
-        parts = ["$BANNER "] if self.banner else []
-        for literal, name, _spec, _conversion in _FORMATTER.parse(self.template):
+        """The /fset format this entry has when nothing sets one: `%G ` for a
+        banner entry, then the text with `$N` for field N and `$N-` for the
+        last."""
+        fields = self.fields()
+        parts = ["%G "] if self.banner else []
+        for literal, name, spec, conversion in _FORMATTER.parse(self.template):
+            if literal.startswith("-") and parts and parts[-1].startswith("$") and not parts[-1].endswith("-"):
+                parts.append("%C")  # a - right after $N would read as $N-
             parts.append(fset.escape(literal))
             if name is not None:
-                parts.append("%s")
+                index = fields.index((name, spec or "", conversion))
+                parts.append(f"${index}-" if index == len(fields) - 1 else f"${index}")
         return "".join(parts)
 
     def format(self) -> str:
@@ -132,13 +138,10 @@ class Message:
             found = fset.lookup(self.name) if self.name else None
         return self.default_format() if found is None else found
 
-    def runs(self, *, whole: str = "", **fields: Any) -> list[fset.Run]:
-        """The message through its /fset format as colour runs (`js.fset.runs`),
-        severity the colour where the format sets none, else colour entry
-        ``whole``. Every output target draws from these."""
-        holes = _holes(self.template, fields)
-        role = SEVERITY_ROLE[self.severity]
-        return fset.runs(self.format(), holes, hole=role if holes else "", whole=whole or ("" if holes else role))
+    def runs(self, **fields: Any) -> list[fset.Run]:
+        """The message through its /fset format as colour runs (`js.fset.runs`).
+        Every output target draws from these."""
+        return fset.runs(self.format(), fset.words(_holes(self, fields)))
 
     def line(self, *, colour: bool = True, **fields: Any) -> str:
         """The message as the screen shows it, through its /fset format.
@@ -152,18 +155,15 @@ class Message:
         return fset.to_plain(self.runs(**fields))
 
     def body_runs(self, **fields: Any) -> list[fset.Run]:
-        """The entry's runs without the `$BANNER` its default format leads
-        with: a piece of a row, or a line for a channel that adds the slot
-        itself. A format set by the operator or a theme is drawn as written,
-        a `$BANNER` it writes included."""
-        fmt = self.format()
-        if fmt == self.default_format() and fmt.startswith("$BANNER "):
-            fmt = fmt[len("$BANNER "):]
-        return fset.runs(fmt, _holes(self.template, fields))
+        """The entry's runs without the banner glyph its format leads with
+        (`%G `, alone or in one colour): a piece of a row, or a line for a
+        channel that adds the glyph itself."""
+        fmt = _LEADING_GLYPH.sub("", self.format(), count=1)
+        return fset.runs(fmt, fset.words(_holes(self, fields)))
 
     def words(self, **fields: Any) -> str:
         """The entry's wording through its /fset format, plain and without a
-        leading `$BANNER`: for a channel that takes text and no colour, such
+        leading banner glyph: for a channel that takes text and no colour, such
         as an argument parser's help or an input prompt."""
         return fset.to_plain(self.body_runs(**fields))
 
@@ -173,7 +173,7 @@ class Message:
 
     def said(self, **fields: Any) -> Said:
         """`text()` that keeps its entry, so a printer shows it with this
-        entry's slot and severity."""
+        entry's format."""
         return Said(self, fields)
 
 
@@ -213,19 +213,21 @@ def set_banner(value: str) -> None:
         state.value = value
 
 
-def _holes(template: str, fields: dict[str, Any]) -> list[str | list[fset.Run]]:
-    """The template's holes filled from ``fields``, in order, as text. A
-    `said()` entry in a hole, or an error raised with one, is drawn through
+# A format's leading banner glyph: `%G ` alone, or in one colour.
+_LEADING_GLYPH = re.compile(r"^(?:%C\d\d)?%G(?:%C)? ")
+
+
+def _holes(message: Message, fields: dict[str, Any]) -> list[fset.Word]:
+    """The entry's fields filled from ``fields``, in order, as text. A
+    `said()` entry in a field, or an error raised with one, is drawn through
     its own format: its colour runs, which keep their colours whatever the
     target (`fset.runs`)."""
-    values: list[str | list[fset.Run]] = []
-    for _literal, name, spec, conversion in _FORMATTER.parse(template):
-        if name is None:
-            continue
+    values: list[fset.Word] = []
+    for name, spec, conversion in message.fields():
         value = _FORMATTER.get_field(name, (), fields)[0]
         if isinstance(value, BaseException) and len(value.args) == 1 and isinstance(value.args[0], Said):
             value = value.args[0]
-        spec = _FORMATTER.vformat(spec or "", (), fields)
+        spec = _FORMATTER.vformat(spec, (), fields)
         if isinstance(value, Said) and conversion is None:
             values.append(_said_runs(value, spec))
             continue
@@ -349,12 +351,12 @@ def plural(n: int, word: str) -> str:
 # ---------------------------------------------------------------------------
 
 # Any failure whose text is already a whole sentence (an exception, a returned error).
-FAILED = Message("{error}", GRAVE)
+FAILED = Message("{error}")
 # An error that is not js's own, named by its kind.
 ERROR_OF_KIND = Message("{kind}: {error}", banner=False)
 # A provider's failure: the HTTP status it stands for and the provider's message.
 ERROR_OF_STATUS = Message("{status} {error}", banner=False)
-FAILED_WARN = Message("{error}", WARN)
+FAILED_WARN = Message("{error}")
 # A command's refusal that is not an entry of its own: a settings verb's
 # complaint, or a script line's.
 COMMAND_REFUSED = Message("{error}")
@@ -365,7 +367,7 @@ RESUME_HINT = Message("Resume: {command}")
 
 # --- Tool surface ------------------------------------------------------------
 
-TOOL_SURFACE_KEPT = Message("{error}. Tool surface unchanged.", WARN)
+TOOL_SURFACE_KEPT = Message("{error}. Tool surface unchanged.")
 
 # --- Compaction --------------------------------------------------------------
 
@@ -375,20 +377,20 @@ COMPACTED = Message("Compacted. Kept the tail from message {keep_from}/{total}. 
 COMPACT_SKIPPED_NO_PREFIX = Message("Compaction skipped: no new prefix to summarize.")
 COMPACT_SKIPPED_SAVINGS = Message("Compaction skipped: saves {savings} tokens, needs {required}.")
 COMPACTION_DONE = Message("{result}")
-AUTO_COMPACT_ARMED = Message("Context {fullness:.0%} full. Auto-compaction armed.", WARN)
+AUTO_COMPACT_ARMED = Message("Context {fullness:.0%} full. Auto-compaction armed.")
 AUTO_COMPACT_PAUSED = Message(
-    "Auto-compaction paused after two compactions in a row. It resumes when context drops below the trigger.", WARN)
+    "Auto-compaction paused after two compactions in a row. It resumes when context drops below the trigger.")
 AUTO_COMPACT_BREAKER = Message(
-    "Auto-compaction paused after {failures} failed summaries in a row. /compact retries it.", WARN)
-SUMMARY_SPLIT = Message("Summary too large. Summarizing both halves, depth {depth}.", WARN)
-CLEARING_FLIGHT_FAILED = Message("Tool-result clearing: flight log not opened: {error}", GRAVE)
+    "Auto-compaction paused after {failures} failed summaries in a row. /compact retries it.")
+SUMMARY_SPLIT = Message("Summary too large. Summarizing both halves, depth {depth}.")
+CLEARING_FLIGHT_FAILED = Message("Tool-result clearing: flight log not opened: {error}")
 
 # --- Model and provider ------------------------------------------------------
 
 MODEL_SET = Message("Model: {model}")
 MODELS_LIMIT_NOT_A_NUMBER = Message("/models: {value!r} is not a number.")
 NO_PROVIDER = Message("No provider set. Use /provider <id> first.")
-MODELS_NOT_LISTED = Message("Models not listed: {error}", GRAVE)
+MODELS_NOT_LISTED = Message("Models not listed: {error}")
 MODEL_ROW = Message("  {model}", banner=False)
 MORE_ROWS = Message("{count} more.", banner=False)
 PROVIDER_IS = Message("Provider: {provider}")
@@ -402,7 +404,7 @@ API_KEY_CLEARED = Message("API key: cleared")
 LOGIN_UNKNOWN_PROVIDER = Message(
     "/login: {name!r} is not a known provider. Name the provider type: /login {name} <apikey> <baseurl> <provider>")
 LOGIN_SAVED = Message("Login saved and active: {provider}")
-CATALOG_REFRESH_FAILED = Message("Model catalog not refreshed: {error}", GRAVE)
+CATALOG_REFRESH_FAILED = Message("Model catalog not refreshed: {error}")
 CATALOG_REFRESHED = Message("models.dev catalog refreshed at {stamp}: {providers} providers, {models} models. {path}")
 
 # --- Commands ----------------------------------------------------------------
@@ -411,15 +413,15 @@ USAGE = Message("Usage: {usage}")
 
 # --- Config migration --------------------------------------------------------
 
-MIGRATE_NO_LEGACY = Message("No legacy config at {path}", GRAVE)
-MIGRATE_TARGET_EXISTS = Message("{path} already exists. Remove it first to migrate again.", GRAVE)
-MIGRATE_DELETED = Message("{key}: setting deleted. Written as a comment; edit by hand.", WARN)
+MIGRATE_NO_LEGACY = Message("No legacy config at {path}")
+MIGRATE_TARGET_EXISTS = Message("{path} already exists. Remove it first to migrate again.")
+MIGRATE_DELETED = Message("{key}: setting deleted. Written as a comment; edit by hand.")
 MIGRATE_WROTE = Message("Wrote {path} from {legacy}. Review it, then delete {legacy}. This flag is removed in 2 releases.")
-SAVE_FAILED = Message("Not saved: {error}", GRAVE)
+SAVE_FAILED = Message("Not saved: {error}")
 SAVED = Message("Saved {lines} to {path}")
 SAVE_NOTHING = Message("Nothing changed this session. Nothing saved.")
 SAVED_SERVER = Message("Saved {settings} as the {model} defaults of login {provider}")
-SAVE_NO_SERVER = Message("Not saved: no saved login for {provider}. js --login adds one.", GRAVE)
+SAVE_NO_SERVER = Message("Not saved: no saved login for {provider}. js --login adds one.")
 NO_ALIASES = Message("No aliases.")
 ALIAS_ROW = Message("alias {name} {body}", banner=False)
 NO_ALIAS = Message("No alias {name}.")
@@ -427,7 +429,7 @@ ALIAS_IS_COMMAND = Message("alias {name}: {name} is a command.")
 LOAD_TOO_DEEP = Message("load: nesting too deep.")
 LOAD_CYCLE = Message("load: cycle at {path}")
 LOAD_NOT_FOUND = Message("load: no script at {path}")
-LOAD_UNREADABLE = Message("load: {path} not read: {error}", GRAVE)
+LOAD_UNREADABLE = Message("load: {path} not read: {error}")
 LOAD_NEEDS_ONE_PATH = Message("load needs exactly one path.")
 SCRIPT_LINE_FAILED = Message("{path}:{lineno}: {error}")
 LOADED = Message("Loaded {path}")
@@ -448,11 +450,11 @@ WINDOW_STATE_FINISHED = Message("finished", banner=False)
 WINDOW_MARK_CURRENT = Message("*", banner=False)
 WINDOW_MARK_ACTIVE = Message("+", banner=False)
 WINDOW_QUEUED = Message("Queued for {agent}'s next model call.")
-NO_SUCH_WINDOW = Message("No window {number}.", WARN)
-WINDOW_MAIN_STAYS = Message("Window 1 is the main conversation; it stays.", WARN)
-WINDOW_STILL_RUNNING = Message("Window {number} still runs {agent}. Ctrl-C there cancels it.", WARN)
+NO_SUCH_WINDOW = Message("No window {number}.")
+WINDOW_MAIN_STAYS = Message("Window 1 is the main conversation; it stays.")
+WINDOW_STILL_RUNNING = Message("Window {number} still runs {agent}. Ctrl-C there cancels it.")
 NO_JOB_TO_CANCEL = Message("No matching job to cancel.")
-CANCELLING = Message("Cancelling {jobs}", WARN)
+CANCELLING = Message("Cancelling {jobs}")
 NO_SUCH_SKILL = Message("No skill named {name!r}.")
 SKILL_IS_A_TURN = Message("skill <name> [request] is a turn. Type it at the input line.")
 HELP_HEADING = Message("Commands:", banner=False)
@@ -479,7 +481,7 @@ COST_PARTLY_PRICED = Message("{cost} + {calls} with no price")
 SESSION_TITLED = Message("Session titled: {title}")
 SESSION_TITLE = Message("{title}")
 SESSION_UNTITLED = Message("This session has no title. /name <text> gives it one.")
-SESSION_NOT_SAVED_TITLE = Message("This session is not saved. Nothing to title.", WARN)
+SESSION_NOT_SAVED_TITLE = Message("This session is not saved. Nothing to title.")
 CWD_IS = Message("{path}")
 CD_DONE = Message("Working directory: {path}")
 CD_NOT_A_DIR = Message("/cd: not a directory: {path}")
@@ -524,7 +526,7 @@ _HINT_ACTIONS = {
 
 TURN_RUNNING = Message("Turn running. {command} would clobber its context. ^C to cancel, or wait.")
 UNKNOWN_COMMAND = Message("Unknown command: {verb}")
-UNKNOWN_SLASH_COMMAND = Message("Invalid command", WARN)
+UNKNOWN_SLASH_COMMAND = Message("Invalid command")
 
 # --- /help: what each command does -------------------------------------------
 
@@ -576,9 +578,9 @@ CMD_EXEC = Message(
 # --- /exec -------------------------------------------------------------------
 EXEC_QUEUED = Message("exec: {lines} queued for the next message.")
 EXEC_NO_OUTPUT = Message("exec: no output.")
-EXEC_EXITED = Message("exec: {command} exited {status}: {detail}", WARN)
-EXEC_TIMED_OUT = Message("exec: {command} killed after {seconds}s.", WARN)
-EXEC_FAILED = Message("exec: {command} did not start: {error}", WARN)
+EXEC_EXITED = Message("exec: {command} exited {status}: {detail}")
+EXEC_TIMED_OUT = Message("exec: {command} killed after {seconds}s.")
+EXEC_FAILED = Message("exec: {command} did not start: {error}")
 
 # --- js --help ----------------------------------------------------------------
 
@@ -624,12 +626,12 @@ SHORT_HELP = Message(
 ARGS_USAGE_PREFIX = Message("Usage: ")
 ARGS_POSITIONALS = Message("Arguments")
 ARGS_OPTIONS = Message("Options")
-ARGUMENTS_REFUSED = Message("{error}", GRAVE)
-UNKNOWN_OPTION = Message("unknown option {option}", GRAVE)
-BARE_WITH_AGENT = Message("--bare and --agent cannot be used together", GRAVE)
-TOOLS_LIST_ENTRY = Message("--tools: {entry!r} is not NAME, NAME:eager or NAME:lazy", GRAVE)
-TOOLS_ENTRY_MATCHES_NOTHING = Message("--tools: {entry!r} matches no tool", GRAVE)
-UNEXPECTED_ARGUMENT = Message("unexpected argument '{word}'", GRAVE)
+ARGUMENTS_REFUSED = Message("{error}")
+UNKNOWN_OPTION = Message("unknown option {option}")
+BARE_WITH_AGENT = Message("--bare and --agent cannot be used together")
+TOOLS_LIST_ENTRY = Message("--tools: {entry!r} is not NAME, NAME:eager or NAME:lazy")
+TOOLS_ENTRY_MATCHES_NOTHING = Message("--tools: {entry!r} matches no tool")
+UNEXPECTED_ARGUMENT = Message("unexpected argument '{word}'")
 OPT_HELP_THIS = Message("Show this help and exit.")
 OPT_HELP = Message("Show the short usage guide and exit.")
 OPT_HELP_FULL = Message("Show the complete option reference and exit.")
@@ -784,41 +786,41 @@ LIST_NO = Message("no")
 
 # --- One-shot and startup ----------------------------------------------------
 
-BAD_REASONING = Message("--reasoning {value}: {error}", GRAVE)
-PROMPT_EMPTY = Message("Prompt is empty.", GRAVE)
-TURN_INTERRUPTED = Message("Turn interrupted.", WARN)
-TURN_INTERRUPTED_KEPT = Message("Turn interrupted. Partial work kept.", WARN)
-TURN_ABORTED = Message("Turn aborted.", WARN)
-NO_ANSWER = Message("The model returned no answer.", GRAVE)
+BAD_REASONING = Message("--reasoning {value}: {error}")
+PROMPT_EMPTY = Message("Prompt is empty.")
+TURN_INTERRUPTED = Message("Turn interrupted.")
+TURN_INTERRUPTED_KEPT = Message("Turn interrupted. Partial work kept.")
+TURN_ABORTED = Message("Turn aborted.")
+NO_ANSWER = Message("The model returned no answer.")
 CONTINUE_HINT = Message("Continue: {command}")
 
 # One-shot: what a turn is doing, while nothing else shows it.
 
 # --- Benchmarks --------------------------------------------------------------
 
-NO_BENCHMARKS = Message("Agent {agent!r} has no NN-benchmark.md files.", GRAVE)
+NO_BENCHMARKS = Message("Agent {agent!r} has no NN-benchmark.md files.")
 BENCH_START = Message("bench {name}: {prompt}")
-BENCH_FAILED = Message("{name}: {error}", GRAVE)
+BENCH_FAILED = Message("{name}: {error}")
 BENCH_ROW = Message("{name}: {tokens} tok  {tps:.1f} tok/s  ttft {ttft}  wall {wall:.2f}s")
 STATS_WRITTEN = Message("Stats: {path}")
 
 # --- Commit agent ------------------------------------------------------------
 
-COMMIT_TARGET_MISSING = Message("Commit target does not exist: {path}", GRAVE)
-COMMIT_TARGET_NOT_DIR = Message("Commit target is not a directory: {path}", GRAVE)
-GIT_INIT_FAILED = Message("git init failed in {path}: {error}", GRAVE)
-SNAPSHOT_FAILED = Message("Worktree snapshot failed: {error}", WARN)
+COMMIT_TARGET_MISSING = Message("Commit target does not exist: {path}")
+COMMIT_TARGET_NOT_DIR = Message("Commit target is not a directory: {path}")
+GIT_INIT_FAILED = Message("git init failed in {path}: {error}")
+SNAPSHOT_FAILED = Message("Worktree snapshot failed: {error}")
 SNAPSHOT_SAVED = Message("Worktree snapshot saved: {path}")
-SURVEY_FAILED = Message("Commit survey failed for {path}: {error}", GRAVE)
+SURVEY_FAILED = Message("Commit survey failed for {path}: {error}")
 SURVEY_EXITED = Message("commit_helper survey exited {code}")
 
 # --- Model listing, presets, binaries ---------------------------------------
 
 NO_LOGINS = Message("No providers logged in. Run js --login <provider>.")
-MODEL_LIST_FAILED = Message("{provider}: models not listed: {error}", WARN)
-PRESET_NOT_FOUND = Message("--preset {name}: no jsrc.{name}. Looked in {looked}.", WARN)
-PRESET_NO_CONFIG_DIRS = Message("--preset {name}: no jsrc.{name}. Every config dir is ignored.", WARN)
-BINARY_MISSING = Message("{name} not in tools/bin or PATH. {user} uses it. just install provisions it.", WARN)
+MODEL_LIST_FAILED = Message("{provider}: models not listed: {error}")
+PRESET_NOT_FOUND = Message("--preset {name}: no jsrc.{name}. Looked in {looked}.")
+PRESET_NO_CONFIG_DIRS = Message("--preset {name}: no jsrc.{name}. Every config dir is ignored.")
+BINARY_MISSING = Message("{name} not in tools/bin or PATH. {user} uses it. just install provisions it.")
 
 # --- The REPL ----------------------------------------------------------------
 
@@ -826,55 +828,55 @@ NO_SKILLS = Message("No skills found.")
 SKILL_ROW = Message("{name} {source} {description}", banner=False)
 SKILL_ROW_USER_ONLY = Message("{name} user-only {source} {description}", banner=False)
 SKILL_HINT = Message("/skill <name> [request] sends one with your request.")
-DROPPED_QUEUED = Message("Dropped {prompts}.", WARN)
+DROPPED_QUEUED = Message("Dropped {prompts}.")
 QUEUED = Message("Queued. {ahead} ahead.")
 PRESS_CTRL_C_AGAIN = Message("Press ^C again to exit.")
 
 # --- --printonly -------------------------------------------------------------
 
-PRINTONLY_BAD_COUNT = Message("--printonly: {count!r} is not a count. Ignored.", WARN)
-PRINTONLY_LETTER_NOT_IMPLEMENTED = Message("--printonly: {letter!r} is not implemented. Skipped.", WARN)
-PRINTONLY_UNKNOWN_LETTER = Message("--printonly: unknown letter {letter!r}. Skipped.", WARN)
-PRINTONLY_NO_CONFIG = Message("--printonly: config not built: {error}", GRAVE)
-PRINTONLY_NO_PROMPT = Message("--printonly: prompt not loaded: {error}", GRAVE)
+PRINTONLY_BAD_COUNT = Message("--printonly: {count!r} is not a count. Ignored.")
+PRINTONLY_LETTER_NOT_IMPLEMENTED = Message("--printonly: {letter!r} is not implemented. Skipped.")
+PRINTONLY_UNKNOWN_LETTER = Message("--printonly: unknown letter {letter!r}. Skipped.")
+PRINTONLY_NO_CONFIG = Message("--printonly: config not built: {error}")
+PRINTONLY_NO_PROMPT = Message("--printonly: prompt not loaded: {error}")
 PRINTONLY_NO_BENCHMARKS = Message("No NN-benchmark.md files.")
 PRINTONLY_NO_EXCHANGES = Message("No NN-user.md / NN-agent.md files.")
-PRINTONLY_SECTION_FAILED = Message("--printonly: section {section} unavailable: {error}", GRAVE)
-PRINTONLY_NOT_WRITTEN = Message("--printonly: {path} not written: {error}. Printing to stdout.", WARN)
+PRINTONLY_SECTION_FAILED = Message("--printonly: section {section} unavailable: {error}")
+PRINTONLY_NOT_WRITTEN = Message("--printonly: {path} not written: {error}. Printing to stdout.")
 
 # --- Command-line flags ------------------------------------------------------
 
-BAD_URL_SPEC = Message("-u: {error}", GRAVE)
-BAD_BASE_URL = Message("JS_BASE_URL: {error}", GRAVE)
-JAIL_REFUSED = Message("{error}", GRAVE)
-JSON_NEEDS_LIST = Message("--json requires -p, pipe mode or --list.", GRAVE)
-LIST_EXCLUSIVE = Message("--list does not combine with run or session options.", GRAVE)
-LAST_WITH_SESSION = Message("--last and --session are mutually exclusive.", GRAVE)
-NO_PREVIOUS_SESSION = Message("No previous session for agent: {agent}", GRAVE)
-DEBUG_FLAGS_EXCLUSIVE = Message("--debug and --debug-file are mutually exclusive.", GRAVE)
-MODES_EXCLUSIVE = Message("--commit and --compact are mutually exclusive.", GRAVE)
-FILE_NEEDS_PROMPT_MODE = Message("-f/--file works only with a prompt or a pipe. Use @path in the REPL.", GRAVE)
-FILE_NEEDS_PROMPT = Message("-f/--file requires -p/--prompt or piped input. Use @path in the REPL.", GRAVE)
-BENCH_EXCLUSIVE = Message("--bench is its own mode. Name the agent as --bench AGENT, without --agent or a built-in mode.", GRAVE)
-COMMIT_WITH_AGENT = Message("--commit always uses the built-in commit agent. Omit --agent.", GRAVE)
-STDIN_TWICE = Message("stdin cannot be both the prompt and an attachment.", GRAVE)
-STDIN_ATTACHMENT_NOT_PIPED = Message("-f - requires piped stdin bytes.", GRAVE)
+BAD_URL_SPEC = Message("-u: {error}")
+BAD_BASE_URL = Message("JS_BASE_URL: {error}")
+JAIL_REFUSED = Message("{error}")
+JSON_NEEDS_LIST = Message("--json requires -p, pipe mode or --list.")
+LIST_EXCLUSIVE = Message("--list does not combine with run or session options.")
+LAST_WITH_SESSION = Message("--last and --session are mutually exclusive.")
+NO_PREVIOUS_SESSION = Message("No previous session for agent: {agent}")
+DEBUG_FLAGS_EXCLUSIVE = Message("--debug and --debug-file are mutually exclusive.")
+MODES_EXCLUSIVE = Message("--commit and --compact are mutually exclusive.")
+FILE_NEEDS_PROMPT_MODE = Message("-f/--file works only with a prompt or a pipe. Use @path in the REPL.")
+FILE_NEEDS_PROMPT = Message("-f/--file requires -p/--prompt or piped input. Use @path in the REPL.")
+BENCH_EXCLUSIVE = Message("--bench is its own mode. Name the agent as --bench AGENT, without --agent or a built-in mode.")
+COMMIT_WITH_AGENT = Message("--commit always uses the built-in commit agent. Omit --agent.")
+STDIN_TWICE = Message("stdin cannot be both the prompt and an attachment.")
+STDIN_ATTACHMENT_NOT_PIPED = Message("-f - requires piped stdin bytes.")
 # Raised as exception text and shown through FAILED.
 ATTACHMENT_NOT_FOUND = Message("Attachment not found: {path}")
 ATTACHMENT_NOT_A_FILE = Message("Attachment is not a regular file: {path}")
 ATTACHMENT_UNREADABLE = Message("Attachment {path} not read: {error}")
 ATTACHMENT_IMAGE_TOO_LARGE = Message("Image attachment {path} is {size} bytes. The maximum is {limit} bytes.")
 # The paste-image key (js.clipimage): one line, and the input line is unchanged.
-CLIPBOARD_NONE = Message("No clipboard: no Wayland or X11 display. PASTE_IMAGE_COMMAND names a command that prints the image.", WARN)
-CLIPBOARD_TOOL_MISSING = Message("Clipboard image not read: {tool} is not installed.", WARN)
-CLIPBOARD_READ_FAILED = Message("Clipboard image not read: {tool}: {error}", WARN)
-CLIPBOARD_NO_IMAGE = Message("No image on the clipboard.", WARN)
-CLIPBOARD_IMAGE_TOO_LARGE = Message("Clipboard image is {size} bytes. The maximum is {limit} bytes.", WARN)
+CLIPBOARD_NONE = Message("No clipboard: no Wayland or X11 display. PASTE_IMAGE_COMMAND names a command that prints the image.")
+CLIPBOARD_TOOL_MISSING = Message("Clipboard image not read: {tool} is not installed.")
+CLIPBOARD_READ_FAILED = Message("Clipboard image not read: {tool}: {error}")
+CLIPBOARD_NO_IMAGE = Message("No image on the clipboard.")
+CLIPBOARD_IMAGE_TOO_LARGE = Message("Clipboard image is {size} bytes. The maximum is {limit} bytes.")
 SESSION_NAME_UNSAFE = Message("Session name is not a safe relative path: {session}")
 SESSION_NAME_TRAVERSAL = Message("Session name has an empty or traversal component: {session}")
 SESSION_NAME_ABSOLUTE = Message("Session name is not a relative path: {session}")
 SESSION_NAME_SUFFIX = Message("Session name has a suffix other than .jsonl: {session}")
-NOT_SAVED_NO_RESUME = Message("Session not saved. Resume unavailable.", WARN)
+NOT_SAVED_NO_RESUME = Message("Session not saved. Resume unavailable.")
 
 # --- REPL startup ------------------------------------------------------------
 
@@ -886,26 +888,26 @@ STARTUP_PROMPT = Message("Prompt: {prompt}", banner=False)
 STARTUP_MEMORY = Message("Memory: {memory}", banner=False)
 STARTUP_HINT = Message("Type exit or Ctrl-D to quit. /help lists commands.", banner=False)
 RESUMED_MODEL = Message("Model: {model}")
-RESUME_MODEL_FALLBACK = Message("No login for {stamped}, the model this session last ran on. Continuing on {model}.", WARN)
+RESUME_MODEL_FALLBACK = Message("No login for {stamped}, the model this session last ran on. Continuing on {model}.")
 RESUMED = Message("Resumed: {messages}.")
-EMPTY_SESSION = Message("Empty session. Nothing to resume: {path}", WARN)
+EMPTY_SESSION = Message("Empty session. Nothing to resume: {path}")
 PROMPT_CHANGED = Message("Agent prompt changed on disk. Session keeps the one it started with.")
 NO_SUCH_AGENT = Message(
     "No such agent: {agent}. Looked in project .js/agents, {agents_dir}, and repo prompts. "
-    "Create {new_dir}/ with NN-*.md prompt files and an optional agent.yaml manifest.", GRAVE)
+    "Create {new_dir}/ with NN-*.md prompt files and an optional agent.yaml manifest.")
 
 # --- A turn ------------------------------------------------------------------
 
 # The turn's own report lines. `label` is "" or the caller's, "Subagent 2: ".
 RUN_LINE = Message("run  {fields}")
 CALL_STATS = Message("{label}{ms}ms  finish={finish}  tool_calls={tool_calls}  {tokens} tok  {tps:.1f} tok/s{ttft}{cache}")
-RETRY_BUDGET_EXHAUSTED = Message("Tool-loop retry budget exhausted.", GRAVE)
-MAX_ITERATIONS = Message("Tool loop hit max iterations: {limit}", GRAVE)
-RESPONSE_INCOMPLETE = Message("Response incomplete: {reason}", WARN)
+RETRY_BUDGET_EXHAUSTED = Message("Tool-loop retry budget exhausted.")
+MAX_ITERATIONS = Message("Tool loop hit max iterations: {limit}")
+RESPONSE_INCOMPLETE = Message("Response incomplete: {reason}")
 MAX_OUTPUT_ESCALATED = Message("Reply hit its output cap of {before}; sending again with {after}.")
-MAX_OUTPUT_RESUMING = Message("Reply hit its output cap; asking the model to resume, {n} of {limit}.", WARN)
+MAX_OUTPUT_RESUMING = Message("Reply hit its output cap; asking the model to resume, {n} of {limit}.")
 RETRY_WAIT = Message("Retry {n}/{of} in {seconds:.1f}s: {failure}")
-RETRY_GAVE_UP = Message("Gave up after {n} retries.", GRAVE)
+RETRY_GAVE_UP = Message("Gave up after {n} retries.")
 RETRY_COUNTDOWN = Message("Retry {n}/{of} in {seconds:.0f}s")
 STEERED = Message("Steered.")
 
@@ -928,8 +930,8 @@ SUBAGENT_OUTCOME_OK = Message("ok", banner=False)
 SUBAGENT_OUTCOME_ERROR = Message("error", banner=False)
 SUBAGENT_OUTCOME_CANCELLED = Message("cancelled", banner=False)
 SUBAGENT_TOKENS = Message("  {prompt_tokens:,} tok in  {output_tokens:,} tok out", banner=False)
-FLIGHT_LOG_FAILED = Message("Flight log not written: {error}", GRAVE)
-COMPACTION_FAILED = Message("Compaction failed: {error}", GRAVE)
+FLIGHT_LOG_FAILED = Message("Flight log not written: {error}")
+COMPACTION_FAILED = Message("Compaction failed: {error}")
 
 # --- The network channel -----------------------------------------------------
 
@@ -948,7 +950,7 @@ NET_DNS_FAILURE = Message("DNS failure")
 NET_TIMEOUT = Message("Timeout")
 NET_CONNECT_FAILED = Message("Connection failed")
 CATALOG_UPDATING = Message("Updating the models.dev cache.")
-CATALOG_UPDATE_FAILED = Message("models.dev cache not refreshed: {error}", WARN)
+CATALOG_UPDATE_FAILED = Message("models.dev cache not refreshed: {error}")
 
 # --- Login -------------------------------------------------------------------
 
@@ -973,7 +975,7 @@ LOGIN_ASK_ENV_KEY = Message("Found ENV:{name} {key}. Use it? [y/N]")
 LOGIN_ASK_KEY = Message("Enter API key")
 LOGIN_ASK_KEY_OPTIONAL = Message("Enter API key. Enter for none")
 LOGIN_ASK_KEY_KEEP = Message("Enter API key. Enter keeps the saved one")
-LOGIN_NO_KEY = Message("Login aborted. No API key given.", GRAVE)
+LOGIN_NO_KEY = Message("Login aborted. No API key given.")
 LOGIN_PLACEHOLDER_KEY = Message("No key given. Storing placeholder '{key}'; local endpoints ignore it.")
 LOGIN_ASK_HEADERS = Message("Headers k=v,k=v, optional")
 LOGIN_MODEL_ROW = Message("[{index}] {model}", banner=False)
@@ -981,7 +983,7 @@ LOGIN_LISTING_NOT_PROOF = Message("Model listing alone does not prove these cred
 LOGIN_ASK_TEST = Message("[enter] adds without a test. A model number verifies it first. q cancels: ")
 LOGIN_TEST_CHOICES = Message("Enter adds, q cancels, a model number or exact model id tests it.")
 LOGIN_TEST_USER = Message("[user] {prompt}")
-LOGIN_TEST_FAILED = Message("Secondary test failed: {error}", GRAVE)
+LOGIN_TEST_FAILED = Message("Secondary test failed: {error}")
 LOGIN_TEST_ANSWER = Message("[assistant] {answer}")
 LOGIN_DETAIL_BASE_URL = Message("Base URL: {url}")
 LOGIN_DETAIL_KEY = Message("API key: {key}")
@@ -990,12 +992,12 @@ LOGIN_DETAIL_HEADERS = Message("Headers: {headers}")
 LOGIN_EDIT_BASE_URL = Message("Base URL. Enter keeps saved, - clears")
 LOGIN_EDIT_KEY = Message("API key. Enter keeps saved, - clears")
 LOGIN_EDIT_HEADERS = Message("Headers k=v,k=v. Enter keeps saved, - clears")
-LOGIN_BAD_HEADERS = Message("Headers must use k=v,k=v. Nothing saved yet.", WARN)
+LOGIN_BAD_HEADERS = Message("Headers must use k=v,k=v. Nothing saved yet.")
 LOGIN_MANAGE_PROVIDERS = Message("Manage providers")
 LOGIN_PROVIDER_KEYS = Message("↑↓/jk move  / search  enter select  r rename  d delete  q/esc back")
 LOGIN_TYPEAHEAD_KEYS = Message("Type to filter  ↑↓ move  backspace erase  enter select  esc back")
 LOGIN_RENAME = Message("New provider id")
-LOGIN_PROVIDER_NOT_CHANGED = Message("Provider not changed: {error}", GRAVE)
+LOGIN_PROVIDER_NOT_CHANGED = Message("Provider not changed: {error}")
 LOGIN_MODELS_SELECT = Message("Select / deselect cached models")
 LOGIN_MODELS_ADD = Message("Add model ids")
 LOGIN_MODELS_REFETCH = Message("Re-fetch live model list")
@@ -1009,37 +1011,36 @@ LOGIN_UPDATE = Message("Update URL / API key / headers")
 LOGIN_MODELS = Message("Models")
 LOGIN_REMOVE = Message("Remove provider")
 LOGIN_MANAGE_ONE = Message("Manage {provider}")
-LOGIN_FAILED = Message("Login failed: {error}", GRAVE)
-LOGIN_MODELS_UNREACHABLE = Message("Could not list models: {error}. Saving the server anyway.", WARN)
+LOGIN_FAILED = Message("Login failed: {error}")
+LOGIN_MODELS_UNREACHABLE = Message("Could not list models: {error}. Saving the server anyway.")
 LOGIN_DEFAULTS = Message("Defaults")
 LOGIN_DETAIL_DEFAULTS = Message("Defaults: {defaults}")
 LOGIN_EDIT_DEFAULTS = Message("Defaults NAME=value,NAME=value. NAME is one of {names}. Enter keeps saved, - clears")
 LOGIN_EDIT_MODEL_DEFAULTS = Message("{model} defaults NAME=value,NAME=value, - clears: ")
-LOGIN_BAD_DEFAULTS = Message("{error}. Nothing saved yet.", WARN)
-LOGIN_TRY_V1 = Message("{base} does not end in /v1. OpenAI-compatible servers usually serve at {suggested}", WARN)
-LOGIN_NOT_SAVED = Message("Login not saved: {error}", GRAVE)
+LOGIN_BAD_DEFAULTS = Message("{error}. Nothing saved yet.")
+LOGIN_TRY_V1 = Message("{base} does not end in /v1. OpenAI-compatible servers usually serve at {suggested}")
+LOGIN_NOT_SAVED = Message("Login not saved: {error}")
 PROVIDER_ADDED = Message("Provider added: {provider}. Cached {models}.")
 PROVIDER_ADDED_AS = Message("Provider added: {provider} as {email}. Cached {models}.")
-LOGIN_NO_CACHED_MODELS = Message("No cached models for {provider}", GRAVE)
+LOGIN_NO_CACHED_MODELS = Message("No cached models for {provider}")
 LOGIN_CACHE_EDIT_CANCELLED = Message("Model cache edit cancelled. {provider} unchanged.")
 LOGIN_CACHED = Message("Cached {models} for {provider}")
-LOGOUT_FAILED = Message("Logout failed: {error}", GRAVE)
+LOGOUT_FAILED = Message("Logout failed: {error}")
 LOGGED_OUT = Message("Logged out of {provider}")
-NOT_LOGGED_IN = Message("Not logged in to {provider}", GRAVE)
+NOT_LOGGED_IN = Message("Not logged in to {provider}")
 OAUTH_OPENING = Message("Opening the browser for {service} login. If it does not open, visit:\n{url}")
 OAUTH_PASTE_CALLBACK = Message(
     "Over SSH, or if the callback page cannot connect, paste the full callback URL here and press Enter.")
-OAUTH_BAD_CALLBACK = Message("Callback URL invalid or its state does not match. Paste the URL from this login attempt.",
-                             WARN)
+OAUTH_BAD_CALLBACK = Message("Callback URL invalid or its state does not match. Paste the URL from this login attempt.")
 OAUTH_DEVICE = Message("{service} login\n  URL:  {url}\n  Code: {code}\nWaiting for authorization.")
-OAUTH_REFRESH_NOT_SAVED = Message("Refreshed {service} login not saved: {error}", WARN)
+OAUTH_REFRESH_NOT_SAVED = Message("Refreshed {service} login not saved: {error}")
 
 # --- just install ------------------------------------------------------------
 INSTALL_ASK_KEY = Message("{name} for {use}. Enter skips")
 INSTALL_KEY_SAVED = Message("Saved {name} to {path}")
-INSTALL_KEYS_MISSING = Message("Not set: {names}. Run just install in a terminal to save them to {path}", WARN)
-INSTALL_MODEL_UNROUTED = Message("Default model {model} has no provider to run on", WARN)
-INSTALL_MODEL_UNSET = Message("No default model is set", WARN)
+INSTALL_KEYS_MISSING = Message("Not set: {names}. Run just install in a terminal to save them to {path}")
+INSTALL_MODEL_UNROUTED = Message("Default model {model} has no provider to run on")
+INSTALL_MODEL_UNSET = Message("No default model is set")
 INSTALL_LOGINS = Message("Saved logins: {logins}")
 INSTALL_LOGIN_ROW = Message("{provider} with {models}", banner=False)
 INSTALL_ASK_PROVIDER = Message("a adds a provider, Enter skips")
@@ -1051,9 +1052,9 @@ TOOL_PRESENT_BREW = Message("Present: {name} from Homebrew at {path}")
 TOOL_PRESENT = Message("Present: {name} {version} at {path}, sha256 {sha}")
 TOOL_DOWNLOAD = Message("Download: {name} {version}, {asset}\n  {url}")
 TOOL_INSTALLED = Message("{state}: {path}. Asset sha256 {asset_sha}, executable sha256 {sha}")
-TOOL_INSTALL_FAILED = Message("Tool install failed: {error}", GRAVE)
+TOOL_INSTALL_FAILED = Message("Tool install failed: {error}")
 URLLIB_FALLBACK = Message(
-    "aria2c unavailable. {purpose} falls back to urllib: no segmented transfer, no resume across attempts.", WARN)
+    "aria2c unavailable. {purpose} falls back to urllib: no segmented transfer, no resume across attempts.")
 
 # --- Moving into ~/.js -------------------------------------------------------
 
@@ -1063,8 +1064,8 @@ HOME_REMOVED_DUPLICATE = Message("Removed {source}: identical to {target}")
 HOME_WOULD_REMOVE_DUPLICATE = Message("Would remove {source}: identical to {target}")
 HOME_REMOVED_EMPTY = Message("Removed empty {source}")
 HOME_WOULD_REMOVE_EMPTY = Message("Would remove empty {source}")
-HOME_REFUSED = Message("Refused {source}: {reason}", WARN)
-HOME_WOULD_REFUSE = Message("Would refuse {source}: {reason}", WARN)
+HOME_REFUSED = Message("Refused {source}: {reason}")
+HOME_WOULD_REFUSE = Message("Would refuse {source}: {reason}")
 HOME_KIND_LINK = Message("a symlink")
 HOME_KIND_DIR = Message("a directory")
 HOME_KIND_FILE = Message("a file")
@@ -1078,7 +1079,7 @@ HOME_TARGET_OTHER_KIND = Message("{target} already exists as {kind}. This is {so
 HOME_OLD_COPY_LEFT = Message("copied to {target}, but the old copy is left: {error}")
 HOME_NOT_MOVED = Message("not moved to {target}: {error}")
 HOME_NOT_A_DIR = Message("is {kind}, not a directory. Move it by hand")
-HOME_MIGRATION_FAILED = Message("Move into {home} failed: {error}", GRAVE)
+HOME_MIGRATION_FAILED = Message("Move into {home} failed: {error}")
 HOME_NOTHING_TO_MOVE = Message("Nothing to move into {home}.")
 HOME_RELINKED = Message("Relinked {source} to {target}")
 HOME_WOULD_RELINK = Message("Would relink {source} to {target}")
@@ -1086,8 +1087,8 @@ HOME_CONVERTED = Message("Converted {source}: {reason}")
 HOME_WOULD_CONVERT = Message("Would convert {source}: {reason}")
 HOME_DROPPED = Message("Dropped from {source}, matching no tool: {reason}")
 HOME_WOULD_DROP = Message("Would drop from {source}, matching no tool: {reason}")
-HOME_LEFT = Message("Left {source}: {reason}", WARN)
-HOME_WOULD_LEAVE = Message("Would leave {source}: {reason}", WARN)
+HOME_LEFT = Message("Left {source}: {reason}")
+HOME_WOULD_LEAVE = Message("Would leave {source}: {reason}")
 HOME_REFILED = Message("Filed {reason} from {source} by start directory")
 HOME_WOULD_REFILE = Message("Would file {reason} from {source} by start directory")
 HOME_SESSION_IN_USE = Message("a js process has it open")
@@ -1115,13 +1116,13 @@ SESSION_NOT_RESERVED = Message("No free session name in {directory}")
 SESSION_BRANCH_NO_MESSAGE = Message("{path} has no message {message}")
 SESSION_RECORDS_SKIPPED = Message(
     "{path}: skipped {records} from an incompatible schema version. No migration to {version} yet. "
-    "History may be incomplete.", WARN)
+    "History may be incomplete.")
 
 # --- The ex line -------------------------------------------------------------
 
 BUFFER_WRITTEN = Message("Buffer written to {path}. Not sent.")
-EX_UNKNOWN = Message("Not an editor command, js command or program: {verb}", GRAVE)
-EX_FAILED = Message(":{verb}: {error}", GRAVE)
+EX_UNKNOWN = Message("Not an editor command, js command or program: {verb}")
+EX_FAILED = Message(":{verb}: {error}")
 
 # --- The keys file -----------------------------------------------------------
 
@@ -1136,22 +1137,21 @@ EXIT_ARMED = Message("Press {key} again to exit", banner=False)
 
 # --- Agents, tools, skills, settings at load time ----------------------------
 
-TOOLSTATS_NO_SESSION = Message("toolstats: no session found.", GRAVE)
-TOOLDIAG_NO_TOOLS = Message("tooldiag: the surface matched no tools.", GRAVE)
-AGENT_DIR_UNREADABLE = Message("Agent dir {path} unreadable: {error}. Skipped.", WARN)
-AGENT_NAME_IS_TOOL = Message("Agent {agent!r}: name collides with a builtin tool. Not exposed as a tool. Rename {root}/{agent}.",
-                             WARN)
-TOOL_ENTRY_UNMATCHED = Message("Tool entry {entry!r} matched no tool. Ignored.", WARN)
-TOOL_ENTRY_UNMATCHED_FOR = Message("Tool entry {entry!r} for agent {agent!r} matched no tool. Ignored.", WARN)
-DESCRIPTION_PROBLEM = Message("description: {problem}", WARN)
+TOOLSTATS_NO_SESSION = Message("toolstats: no session found.")
+TOOLDIAG_NO_TOOLS = Message("tooldiag: the surface matched no tools.")
+AGENT_DIR_UNREADABLE = Message("Agent dir {path} unreadable: {error}. Skipped.")
+AGENT_NAME_IS_TOOL = Message("Agent {agent!r}: name collides with a builtin tool. Not exposed as a tool. Rename {root}/{agent}.")
+TOOL_ENTRY_UNMATCHED = Message("Tool entry {entry!r} matched no tool. Ignored.")
+TOOL_ENTRY_UNMATCHED_FOR = Message("Tool entry {entry!r} for agent {agent!r} matched no tool. Ignored.")
+DESCRIPTION_PROBLEM = Message("description: {problem}")
 DESCRIPTION_NESTED_BLOCK = Message("{label}nested {{{{#if}}}}/{{{{#unless}}}} block is unsupported. Kept as written.")
 DESCRIPTION_BLOCK_NAMES_NO_TOOL = Message("{label}conditional block names no tool. Kept as written.")
 DESCRIPTION_UNBALANCED = Message("{label}unbalanced {{{{#if}}}}/{{{{#unless}}}} tag. Kept as written.")
 SKILL_SKIPPED = Message("Skill {path} skipped: {error}")
 SKILL_DUPLICATE = Message("Skill {path} skipped: {root} already has a skill named {name!r} at {prior}")
 SKILL_OVERRIDES = Message("Skill {name!r} at {path} is used in place of {prior}")
-ENV_SETTING_IGNORED = Message("{name}: {error}. Ignored.", WARN)
-DIRECTIVE_NOT_EXPANDED = Message("Directive not expanded: {error}", WARN)
+ENV_SETTING_IGNORED = Message("{name}: {error}. Ignored.")
+DIRECTIVE_NOT_EXPANDED = Message("Directive not expanded: {error}")
 # Why a directive was not expanded: the {error} hole of DIRECTIVE_NOT_EXPANDED.
 DIRECTIVE_UNKNOWN_SUBSYSTEM = Message("Unknown inline subsystem {name!r}. Known: {known}")
 DIRECTIVE_CODE_OFF = Message(
@@ -1162,8 +1162,8 @@ DIRECTIVE_NOT_ON_PATH = Message("{label}: {program!r} not found on PATH")
 DIRECTIVE_TIMED_OUT = Message("{label}: timed out after {seconds}s")
 DIRECTIVE_EXITED = Message("{label}: exited {code}: {stderr}")
 DIRECTIVE_EXITED_SILENT = Message("{label}: exited {code}. No stderr")
-DIRECTIVE_EXITED_OUTPUT_USED = Message("{label}: exited {code}. Its output was used", WARN)
-FLIGHT_AUTOLOG_FAILED = Message("Flight autolog not written: {error}. Flight {path}", GRAVE)
+DIRECTIVE_EXITED_OUTPUT_USED = Message("{label}: exited {code}. Its output was used")
+FLIGHT_AUTOLOG_FAILED = Message("Flight autolog not written: {error}. Flight {path}")
 FLIGHT_NOTICE = Message("Compaction {stage} {id}: operation={operation} {detail} flight={path}")
 
 # --- Settings verbs ----------------------------------------------------------
@@ -1305,10 +1305,10 @@ KERNEL_STOPPED = Message("SIGINT sent. Namespace intact.")
 KERNEL_PANEL_TITLE = Message("Kernel cell {cell}")
 KERNEL_STARTED = Message("Kernel started in {cwd}")
 KERNEL_RESTARTED = Message("Kernel restarted. Namespace cleared.")
-DEFAULTS_MISSING = Message("Defaults file missing: {path}", GRAVE)
+DEFAULTS_MISSING = Message("Defaults file missing: {path}")
 DEFAULTS_NOT_A_SET_LINE = Message("not a set line")
-DEFAULTS_BAD_LINE = Message("{location}: {error}", GRAVE)
-DEFAULTS_UNLISTED = Message("{path}: no line for {keys}", GRAVE)
+DEFAULTS_BAD_LINE = Message("{location}: {error}")
+DEFAULTS_UNLISTED = Message("{path}: no line for {keys}")
 
 # --- The model picker --------------------------------------------------------
 
@@ -1381,10 +1381,10 @@ SESSIONS_INFO_BRANCH = Message("branched", banner=False)
 SESSIONS_INFO_BRANCH_VALUE = Message("from {parent} at {point}", banner=False)
 SESSIONS_INFO_PARENT = Message("subagent of", banner=False)
 SESSIONS_INFO_KIND = Message("kind", banner=False)
-SESSIONS_NEEDS_TERMINAL = Message("The session picker needs a terminal. Name a session: --session NAME.", WARN)
+SESSIONS_NEEDS_TERMINAL = Message("The session picker needs a terminal. Name a session: --session NAME.")
 SESSIONS_ALREADY_HERE = Message("Already in that session.")
 SESSIONS_SWITCHING = Message("Switching to session {name} in {dir}")
-SESSIONS_DIR_GONE = Message("The session's directory {dir} is gone. Resuming in {cwd}.", WARN)
+SESSIONS_DIR_GONE = Message("The session's directory {dir} is gone. Resuming in {cwd}.")
 SESSIONS_BRANCHED = Message("Branched {parent} at {point} into {name}")
 
 # --- The commit helper ---------------------------------------------------------
@@ -1404,8 +1404,8 @@ COMMIT_HELPER_HELP = Message(
     "  commit <message-file> [--amend]\n"
     "      Commit the staged changes with the message read from a file.", banner=False)
 COMMIT_HELPER_USAGE = Message("Usage: python3 -m js.commit_helper {usage}", banner=False)
-GIT_NOT_A_REPO = Message("Not a git repository: {repo}", GRAVE)
-GIT_FAILED = Message("Git failed in {repo}: git {argv}: {detail}", GRAVE)
+GIT_NOT_A_REPO = Message("Not a git repository: {repo}")
+GIT_FAILED = Message("Git failed in {repo}: git {argv}: {detail}")
 GIT_EXIT = Message("exit {code}")
 SURVEY_HEADING = Message("=== Survey: {repo} ===", banner=False)
 SURVEY_BRANCH = Message("Branch: {branch}", banner=False)
@@ -1430,18 +1430,18 @@ SURVEY_LOG = Message("\n-- Recent log --", banner=False)
 SURVEY_NO_HISTORY = Message("No history.", banner=False)
 STAGED_WHOLE = Message("Staged whole file: {path}")
 STAGED_HUNKS = Message("Staged {path}: hunks {hunks} of {total}")
-STAGE_NO_CHANGES = Message("{path} has no pending changes.", GRAVE)
+STAGE_NO_CHANGES = Message("{path} has no pending changes.")
 STAGE_UNTRACKED = Message(
-    "{path} is untracked. Use `stage {path} all`. Hunk specs work only for tracked text diffs.", GRAVE)
-STAGE_BAD_SPEC = Message("Hunks must be comma-separated numbers or all. Got {spec!r}.", GRAVE)
+    "{path} is untracked. Use `stage {path} all`. Hunk specs work only for tracked text diffs.")
+STAGE_BAD_SPEC = Message("Hunks must be comma-separated numbers or all. Got {spec!r}.")
 STAGE_NO_HUNKS = Message(
     "No unstaged text hunks in {path}. A binary, rename or mode change, or already staged: "
-    "use `stage {path} all`.", GRAVE)
-STAGE_OUT_OF_RANGE = Message("Hunks {bad} out of range. {path} has {count}.", GRAVE)
-STAGE_APPLY_FAILED = Message("{detail}\nFallback: `stage {path} all`", GRAVE)
+    "use `stage {path} all`.")
+STAGE_OUT_OF_RANGE = Message("Hunks {bad} out of range. {path} has {count}.")
+STAGE_APPLY_FAILED = Message("{detail}\nFallback: `stage {path} all`")
 GIT_APPLY_FAILED = Message("git apply failed")
-MESSAGE_FILE_UNREADABLE = Message("Message file not read: {error}", GRAVE)
-MESSAGE_FILE_EMPTY = Message("Commit message file is empty: {path}", GRAVE)
+MESSAGE_FILE_UNREADABLE = Message("Message file not read: {error}")
+MESSAGE_FILE_EMPTY = Message("Commit message file is empty: {path}")
 COMMITTED = Message("Committed.")
 
 # --- /fset ---------------------------------------------------------------------
@@ -1451,8 +1451,12 @@ FSET_UNKNOWN = Message("Unknown /fset entry: {name}")
 FSET_REFUSED = Message("{name}: {error}")
 FSET_NO_CODE_STYLE = Message("no Pygments style {value!r}")
 FSET_MARK_MODIFIER = Message("a mark takes no variation selector or skin-tone modifier")
-FSET_VALUE = Message("{name} {value}")
-FSET_EMPTY = Message("{name}")
+FSET_BAD_CODE = Message("{code!r} is not a format code: a format takes %Cnn, %C, %G, %%, $N, $N-, $* and $$")
+FSET_BAD_SLOT = Message("{code} names no palette slot: slots are 00 to 98")
+FSET_BAD_HOLE = Message("{hole} names no word this event passes: its words are $0 to ${last}")
+FSET_NO_HOLES = Message("{hole} names no word: this event passes none")
+FSET_VALUE = Message("{name}: {value}")
+FSET_EMPTY = Message("{name}:")
 
 
 COMPACTING_ROLE = Message("Compacting", banner=False)
