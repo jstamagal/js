@@ -779,9 +779,6 @@ LOCAL_API_KEY_PLACEHOLDER
 ENDPOINT_DEFAULT_KEY
     API key for an endpoint URI that names none.
 
-ENDPOINT_DEFAULT_SHAPE
-    Wire shape of an endpoint URI that names none.
-
 MODEL_CATALOG_AUTO_REFRESH
     on: a stale model catalog is refreshed at startup.
 

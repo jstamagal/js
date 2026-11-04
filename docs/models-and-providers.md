@@ -47,6 +47,38 @@ Provider env overrides (always win over `jsrc` files):
 | `JS_BASE_URL` | Overrides `BASE_URL` |
 | `JS_API_KEY` | Overrides `API_KEY` |
 
+### Endpoint URLs: `-u` and `JS_BASE_URL`
+
+`js -u` takes an endpoint with no saved login in one string, and
+`JS_BASE_URL` takes the same form:
+
+    [wire+]scheme://model[:key]@host[:port]/path
+
+    js -u http://qwen3:27b@box:11434/v1
+    js -u http://qwen3.8-27b:sk-foo-bar@box/v1
+    js -u https://nex-agi/nex-n2.5-pro:free:sk-or-xxxx@openrouter.ai/api/v1
+    js -u anthropic+https://deepseek-v4-pro:sk-xxxx@api.deepseek.com/anthropic
+
+- Wire: `openai+` (chat-completions), `responses+` or `anthropic+`. An unknown
+  prefix is an error. With no prefix, a path ending in `/v1` is OpenAI
+  chat-completions and anything else is Anthropic. The prefix is stripped from
+  the base URL.
+- Model and key: everything between `://` and the last `@`. The text after the
+  last colon is the key when `secret-patterns` (`defaults/secret-patterns`, or
+  `~/.js/secret-patterns`) calls it a secret; otherwise it stays in the model,
+  so `:free`, `:27b` and `:Q4_K_M` survive. A key it misses goes in
+  `JS_API_KEY`. No key: `JS_API_KEY`, else `ENDPOINT_DEFAULT_KEY`.
+- No `@`: the model is `JS_MODEL`; with no `JS_MODEL` it is an error.
+- A `[` is an error: the wire goes in the scheme and effort goes in `-r`.
+- `-u` beats `JS_MODEL`, `JS_API_KEY` and `JS_PROVIDER`. In `JS_BASE_URL`, a
+  model or key that differs from `JS_MODEL` / `JS_API_KEY`, or a wire prefix
+  that contradicts `JS_PROVIDER`, stops the run (exit 2) naming both. A plain
+  `JS_BASE_URL` with no model and no prefix is a base URL, as before.
+- An explicit `-m provider/model` for a provider with a login beats an exported
+  `JS_BASE_URL`: the run uses that login's URL and key.
+- The run line shows `model=`, `key=set` or `key=none`, and `wire=`; never the
+  key.
+
 Official SDK env vars (`AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`,
 `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`) are read directly by `ai-python`
 providers and do not need to be copied into `provider.*` config.

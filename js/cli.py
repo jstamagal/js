@@ -4801,9 +4801,18 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
                     presets=[name for spec in args.presets for name in spec.split(",") if name.strip()],
                 ), extras=args.extras,
             )
-            args.extras = endpoint_uri.parse(args.url, settings=endpoint_settings).as_settings() + list(args.extras)
+            args.extras = endpoint_uri.parse(
+                args.url, settings=endpoint_settings, env=os.environ).as_settings() + list(args.extras)
         except endpoint_uri.EndpointSpecError as exc:
             msgs.warn(msgs.BAD_URL_SPEC, error=exc)
+            return 2
+    else:
+        # The env layer reads a JS_BASE_URL in the -u form; one it cannot
+        # read, or one another JS_ variable contradicts, stops the run here.
+        try:
+            endpoint_uri.from_env(os.environ)
+        except endpoint_uri.EndpointSpecError as exc:
+            msgs.warn(msgs.BAD_BASE_URL, error=exc)
             return 2
     flag_extras, flag_error = _setting_flag_extras(args)
     if flag_error is not None:
