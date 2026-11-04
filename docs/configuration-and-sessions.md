@@ -419,17 +419,18 @@ current directory's folder and prints a resume command after the answer. This
 is the normal choice for an agent driver: use the same session for review and
 correction rounds so the model does not have to re-read all prior context.
 
-`--session NAME` resumes an existing session or creates that safe relative name
-in the current directory's folder when absent. An existing name is looked up in
-the current directory's folder first, then in every folder, so a named session
-resumes from any directory. A name that more than one other folder holds is
-refused with the paths. A generated name also resumes from a unique tail of
-four or more characters. Names may use `/` to group work:
+`--session NAME` resumes an existing session. A name that matches no session
+is an error (exit 2); it does not start one. The name is looked up in the
+current directory's folder first, then in every folder, so a session resumes
+from any directory. A name that more than one other folder holds is refused
+with the paths. A generated name also resumes from a unique tail of four or
+more characters. `--session-key KEY` names a session that starts the first time
+the key is used:
 
 ```bash
-js --session reviews/parser-fix -p "implement the first pass"
-js --session reviews/parser-fix -p "apply the review corrections"
 js --session 6d65 -p "resume 2026-09-29T0802-6d65"
+js --session-key parser-fix -p "implement the first pass"
+js --session-key parser-fix -p "apply the review corrections"
 ```
 
 `--session` with no name, and `/session` in the REPL, open the session picker

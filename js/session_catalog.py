@@ -222,6 +222,7 @@ def record_session_start(
     job_id: str | int | None = None,
     agent: str | None = None,
     model: str | None = None,
+    provider: str | None = None,
     mode: str | None = None,
     command: list[str] | None = None,
     parent: Path | str | None = None,
@@ -230,8 +231,9 @@ def record_session_start(
 ) -> None:
     """Append non-message session start metadata to a conversation JSONL file.
 
-    *agent* and *model* are recorded so a later resume with no flags can come
-    back on what was actually in use rather than the config default. *parent*
+    *agent*, *model* and *provider* are recorded so a later resume with no
+    flags can come back on what was actually in use rather than the config
+    default; *model* is the bare model id, *provider* the id it ran on. *parent*
     is the session file a subagent run belongs to, recorded as `parent_session`;
     *branched_from* is `{"session": <parent path>, "message": <message id>}`."""
     record = {
@@ -244,6 +246,8 @@ def record_session_start(
         "agent": agent,
         "model": model,
     }
+    if provider is not None:
+        record["provider"] = provider
     if mode is not None:
         record["mode"] = mode
     if command is not None:
@@ -313,8 +317,17 @@ def last_stamp(session_file: Path) -> dict[str, Any] | None:
             if isinstance(stamp.get("model"), str) and stamp["model"]:
                 last = stamp
         elif kind == _METADATA_KIND and isinstance(record.get("model"), str) and record["model"]:
-            last = {"model": record["model"]}
+            last = _metadata_stamp(record)
     return last
+
+
+def _metadata_stamp(record: dict[str, Any]) -> dict[str, Any]:
+    """The stamp a start record stands for: its model, with its provider
+    when one was recorded."""
+    stamp: dict[str, Any] = {"model": record["model"]}
+    if isinstance(record.get("provider"), str) and record["provider"]:
+        stamp["provider"] = record["provider"]
+    return stamp
 
 
 def branch_session(parent_file: Path, message: str, *, cwd: Path | str, agent: str | None = None,
@@ -340,7 +353,7 @@ def branch_session(parent_file: Path, message: str, *, cwd: Path | str, agent: s
         stream.writelines(kept)
     stamp = last_stamp(branch)
     record_session_start(branch, cwd=cwd, agent=agent, model=stamp.get("model") if stamp else None,
-                         mode=mode, command=command,
+                         provider=stamp.get("provider") if stamp else None, mode=mode, command=command,
                          branched_from={"session": str(parent_file), "message": message})
     return branch
 

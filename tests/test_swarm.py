@@ -17,6 +17,8 @@ from pathlib import Path
 import ai
 import ai.types.usage
 import pytest
+
+from conftest import start_session
 from ai.providers import history_utils
 
 from js import cli, headless, memory, runtime, swarm, swarm_run
@@ -521,6 +523,7 @@ def test_compaction_runs_before_a_swarm_agent_sleeps(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda cfg, state: timeline.append("compact"))
 
+    start_session("s1")
     code = cli._run_prompt("go", session="s1", swarm=str(tmp_path / "bus" / "a"),
                            events=headless.JsonEvents(io.StringIO()))
 

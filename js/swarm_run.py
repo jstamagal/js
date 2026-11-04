@@ -98,7 +98,8 @@ def _configure(spec: AgentSpec) -> tuple[Any, str, Any, Any]:
 
     extras = [f"{k}={v}" for k, v in spec.opts.items()]
     cwd = Path(spec.cwd).expanduser() if spec.cwd else Path.cwd()
-    cfg = from_env(save_session=True, extras=extras, agent_id=spec.agent, session=spec.session, cwd=cwd)
+    cfg = from_env(save_session=True, create_session=True, extras=extras, agent_id=spec.agent,
+                   session=spec.session, cwd=cwd)
     prompt_spec = P.load_configured_prompt_spec(cfg, expand=False)
     cfg = cli._apply_agent_model(cfg, prompt_spec, spec.model, config_pins=False)
     cfg = cli._resolve_cli_model_override(cfg, spec.model)
@@ -199,7 +200,7 @@ class Runner:
             messages = M.load_replay_messages(cfg.session_file)
             if not messages and Path(cfg.session_file) != Path(os.devnull):
                 record_session_start(cfg.session_file, cwd=context.cwd, agent=cfg.agent_id, model=cfg.model,
-                                     mode="swarm")
+                                     provider=cfg.provider_id, mode="swarm")
             turn_kwargs: dict[str, Any] = {
                 "model_override": cfg.model,
                 "provider_id_override": cfg.provider_id,

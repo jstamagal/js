@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import start_session
+
 from js import cli, login_defaults, logins, messages as msgs, providers
 from js.config import from_env
 from js.logins import Login
@@ -607,6 +609,7 @@ def test_a_resumed_session_keeps_its_saved_effort_on_its_model(monkeypatch, tmp_
         messages.append({"role": "assistant", "content": "ok"})
 
     monkeypatch.setattr(cli.runtime, "run_turn", fake_run_turn)
+    start_session("kept")
     assert cli._run_prompt("first", session="kept", model="testes/b", reasoning="low") == 0
 
     assert cli._run_prompt("again", session="kept") == 0

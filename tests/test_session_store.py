@@ -13,6 +13,8 @@ from pathlib import Path
 import ai
 import pytest
 
+from conftest import start_session
+
 from js import cli, runtime, session_store, supervisor, usage
 from js import memory as M
 from js.config import from_env
@@ -95,6 +97,7 @@ def test_a_new_session_lands_in_its_start_directory_folder_under_a_dated_name(mo
 def test_the_txt_follows_the_record_as_the_session_goes_on(monkeypatch, tmp_path):
     monkeypatch.chdir(_dir(tmp_path, "work"))
     _replies(monkeypatch, _text("first answer"))
+    start_session("ongoing")
     assert cli.main(["--session", "ongoing", "-p", "one"]) == 0
     _replies(monkeypatch, _text("second answer"))
 
@@ -231,6 +234,7 @@ def test_a_prompt_run_resumes_on_the_last_stamp_too(monkeypatch, tmp_path):
         return _text("OK")
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    start_session("carry")
     assert cli.main(["--session", "carry", "--model", "model-y", "-p", "one"]) == 0
 
     assert cli.main(["--session", "carry", "-p", "two"]) == 0
@@ -246,12 +250,52 @@ def test_a_prompt_run_records_its_model_flag_in_the_start_record(monkeypatch, tm
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
 
+    start_session("flagged")
     assert cli.main(["--session", "flagged", "--model", "model-y", "-p", "one"]) == 1
 
     [session] = _all_sessions()
     # The turn wrote no stamp, so the start is what a resume comes back on.
     assert first_metadata(session)["model"] == "model-y"
     assert last_stamp(session)["model"] == "model-y"
+
+
+def test_a_start_record_keeps_the_provider_a_resume_comes_back_on(monkeypatch, tmp_path):
+    monkeypatch.chdir(_dir(tmp_path, "work"))
+    from js import logins
+
+    logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="sk-test"))
+    calls: list[dict] = []
+
+    def stream(**kwargs):
+        calls.append(kwargs)
+        raise RuntimeError("provider down")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+
+    start_session("died")
+    assert cli.main(["--session", "died", "--model", "deepseek/deepseek-v4-pro", "-p", "one"]) == 1
+    [session] = _all_sessions()
+    assert first_metadata(session)["model"] == "deepseek-v4-pro"
+    assert first_metadata(session)["provider"] == "deepseek"
+
+    assert cli.main(["--session", "died", "-p", "two"]) == 1
+    assert (calls[-1]["provider_id"], calls[-1]["model_id"]) == ("deepseek", "deepseek-v4-pro")
+
+
+def test_a_session_name_that_matches_nothing_is_an_error(monkeypatch, tmp_path):
+    monkeypatch.chdir(_dir(tmp_path, "work"))
+    _replies(monkeypatch, _text("OK"))
+
+    assert cli.main(["--session", "typo", "-p", "hi"]) == 2
+    assert _all_sessions() == []
+
+
+def test_a_session_key_starts_its_session(monkeypatch, tmp_path):
+    monkeypatch.chdir(_dir(tmp_path, "work"))
+    _replies(monkeypatch, _text("OK"))
+
+    assert cli.main(["--session-key", "caller", "-p", "hi"]) == 0
+    assert len(_all_sessions()) == 1
 
 
 def _capture_repl_state(monkeypatch) -> list[dict]:
@@ -308,6 +352,7 @@ def test_a_no_save_repl_writes_no_session_and_lists_none(monkeypatch, tmp_path, 
 
 def test_a_no_save_repl_on_a_named_session_reads_it_and_writes_nothing(monkeypatch, tmp_path):
     monkeypatch.chdir(_dir(tmp_path, "work"))
+    start_session("kept")
     _repl(monkeypatch, ["--session", "kept"], ["hello"], [])
     [session] = _all_sessions()
     before = session.read_bytes()
@@ -364,6 +409,8 @@ def test_each_start_records_its_mode_and_command_line(monkeypatch, tmp_path):
     monkeypatch.chdir(_dir(tmp_path, "work"))
     _replies(monkeypatch, _text("OK"))
 
+    for name in ("oneshot", "piped", "chat"):
+        start_session(name)
     assert cli.main(["--session", "oneshot", "-p", "hi"]) == 0
     monkeypatch.setattr(cli.sys, "stdin", io.StringIO("piped words"))
     assert cli.main(["--session", "piped"]) == 0
@@ -515,6 +562,7 @@ def test_replay_ignores_ids_and_parents(tmp_path):
 
 def test_name_pins_a_title_on_the_session(monkeypatch, tmp_path, capsys):
     monkeypatch.chdir(_dir(tmp_path, "work"))
+    start_session("titled")
     _repl(monkeypatch, ["--session", "titled"], ["/name fbcon lag", "hello"], [])
     capsys.readouterr()
 
@@ -531,6 +579,7 @@ def test_name_pins_a_title_on_the_session(monkeypatch, tmp_path, capsys):
 def test_session_name_resumes_from_any_directory(monkeypatch, tmp_path):
     _replies(monkeypatch, _text("OK"))
     monkeypatch.chdir(_dir(tmp_path, "a"))
+    start_session("shared")
     assert cli.main(["--session", "shared", "-p", "one"]) == 0
     monkeypatch.chdir(_dir(tmp_path, "b"))
 

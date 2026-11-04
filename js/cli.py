@@ -246,8 +246,11 @@ def _from_env(
     ignore_global_config: bool = False,
     presets: list[str] | None = None,
 ) -> Config:
+    # Only a --session-key name is started when no session has it yet; any
+    # other session name must already exist.
     return from_env(
         save_session=save_session,
+        create_session=getattr(_session_leases, "caller_key", None) is not None,
         extras=extras,
         session=session,
         agent_id=agent_id,
@@ -335,12 +338,14 @@ def _activate_saved_session(
         return
     effective_key = caller_key if caller_key is not None else getattr(_session_leases, "caller_key", None)
     start = getattr(_session_leases, "start", None) or {}
+    provider, bare = _recorded_model(model, cfg)
     record_session_start(
         cfg.session_file,
         cwd=Path.cwd(),
         caller_key=effective_key,
         agent=cfg.agent_id,
-        model=model or cfg.model,
+        model=bare,
+        provider=provider,
         mode=start.get("mode"),
         command=start.get("command"),
     )
@@ -368,6 +373,20 @@ def _latest_session_name(agent_id: str) -> str | None:
     than resurrected, so --last never creates an empty session."""
     latest = session_store.read_latest(_paths.state_root() / agent_id)
     return str(latest) if latest is not None else None
+
+
+def _recorded_model(model: str | None, cfg: Config) -> tuple[str | None, str | None]:
+    """(provider, model id) a session start records for the --model value
+    `model`, or for the configured model when there is none. A value without a
+    known provider prefix records no provider: which one it lands on is
+    resolved later."""
+    if not model:
+        return cfg.provider_id, cfg.model
+    try:
+        provider, bare = providers.parse_model_prefix(model)
+    except ValueError:
+        return None, model
+    return provider, bare
 
 
 def _resume_model_spec(stamp: dict, cfg: Config) -> str | None:

@@ -469,6 +469,7 @@ class ConfigAssembly:
 def from_env(
     *,
     save_session: bool = True,
+    create_session: bool = False,
     extras: list[str] | None = None,
     agent_id: str | None = None,
     session: str | None = None,
@@ -479,6 +480,9 @@ def from_env(
     assembly: ConfigAssembly | None = None,
 ) -> Config:
     """Read jsrc + env + CLI extras once, populate everything explicitly.
+
+    `session` (else `JS_SESSION`) names an existing session; with
+    `create_session` a name no session has is started as a new one.
 
     Provider/model resolution is centralized here:
 
@@ -594,7 +598,7 @@ def from_env(
 
     session_name = session if session is not None else env.get("JS_SESSION")
     if session_name is not None:
-        session_file = resolve_session_file(sessions_dir, session_name, create=save_session)
+        session_file = resolve_session_file(sessions_dir, session_name, create=save_session and create_session)
         if save_session:
             _session_store.write_latest(state_dir, session_file)
     elif save_session:

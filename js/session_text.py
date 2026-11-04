@@ -277,6 +277,8 @@ class _Transcript:
             self.parent = record["parent_session"]
         if isinstance(record.get("model"), str) and record["model"]:
             self.last_stamp = {"model": record["model"]}
+            if isinstance(record.get("provider"), str) and record["provider"]:
+                self.last_stamp["provider"] = record["provider"]
             if self.first_model is None:
                 self.first_model = record["model"]
         if self.branch is None and session_store.branch_parent(record) is not None:
