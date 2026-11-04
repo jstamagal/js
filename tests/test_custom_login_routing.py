@@ -432,21 +432,25 @@ def test_a_setting_flag_beats_the_saved_login_defaults(monkeypatch, tmp_path, at
 
     from js import login_defaults, settings
 
-    values = {"EFFORT": "max", "OUTPUT_TOKENS_MAX": 42}
-    login_values = {"EFFORT": "low", "OUTPUT_TOKENS_MAX": 1000}
+    values = {"EFFORT": "max", "OUTPUT_TOKENS_MAX": 42, "TURN_ROUNDS_MAX": 7,
+              "TEMPLATE_KWARGS": "enable_thinking=false", "DRY_SEQUENCE_BREAKERS": '["\\n", ":"]'}
+    login_values = {"EFFORT": "low", "OUTPUT_TOKENS_MAX": 1000, "TEMPERATURE": 0.9, "TOP_K": 9,
+                    "DRY_SEQUENCE_BREAKERS": ["x"]}
     _isolate_config(monkeypatch, tmp_path)
     _two_model_login(a=login_values, b=login_values)
     monkeypatch.setenv("JS_MODEL", "testes/a")
     args = argparse.Namespace(**{name: None for name, _key in cli.SETTING_FLAGS})
-    setattr(args, attr, str(values[key]))
+    value = str(values.get(key, "0.5" if settings.SPEC_BY_KEY[key].type == "float" else 3))
+    setattr(args, attr, value)
     extras, error = cli._setting_flag_extras(args)
     assert error is None
 
     cfg = from_env(cwd=tmp_path, save_session=False, extras=extras)
     turn = login_defaults.for_turn(replace_model(cfg, "b"))
 
-    assert login_defaults.sources_of(cfg)[key] == "flag"
-    expected = settings.coerce_value(settings.SPEC_BY_KEY[key], str(values[key]))[0]
+    if key in login_defaults.KEYS:
+        assert login_defaults.sources_of(cfg)[key] == "flag"
+    expected = settings.coerce_value(settings.SPEC_BY_KEY[key], value)[0]
     assert turn.settings[key] == expected
 
 
@@ -715,7 +719,7 @@ def test_a_child_session_stamps_the_effort_its_turn_resolves(monkeypatch, tmp_pa
     assert seen["stamp"]["reasoning"] == "low"
 
 
-def test_an_out_of_range_agent_sampling_value_is_refused_at_load_and_not_sent(monkeypatch, tmp_path, capsys):
+def test_an_out_of_range_agent_sampling_value_is_a_load_error_naming_it(monkeypatch, tmp_path):
     from dataclasses import replace
 
     from js import persona
@@ -725,13 +729,9 @@ def test_an_out_of_range_agent_sampling_value_is_refused_at_load_and_not_sent(mo
     monkeypatch.setenv("JS_MODEL", "testes/served")
     agent = _agent_dir(tmp_path, "worker", "sampling:\n  top_p: 2.0\n  temperature: 0.4\ntools: []\n")
     cfg = from_env(cwd=tmp_path, save_session=False)
-    spec = persona.load_configured_prompt_spec(replace(cfg, agent_id="worker", prompts_dir=agent), expand=False)
 
-    assert "top_p" in capsys.readouterr().err
-    sent = login_defaults.sampling(cli._cfg_for_live_state(cfg, {"settings": dict(cfg.settings), "prompt_spec": spec}))
-
-    assert sent.top_p is None
-    assert sent.temperature == 0.4
+    with pytest.raises(ValueError, match="top_p"):
+        persona.load_configured_prompt_spec(replace(cfg, agent_id="worker", prompts_dir=agent), expand=False)
 
 
 def test_a_child_whose_manifest_omits_reasoning_keeps_the_parent_agents(monkeypatch, tmp_path):

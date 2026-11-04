@@ -27,6 +27,7 @@ import httpx2
 
 from . import codex_auth, codex_provider, media, messages as msgs, paranoid, providers, reasoning, retry, routing, stream_transport, tool_args
 from . import settings as _settings
+from . import sampling as sampling_mod
 from .sampling import Sampling
 from .text_bytes import byte_prefix, cap_text
 import ai.types.messages
@@ -89,8 +90,8 @@ class StreamIdleError(ai.ProviderTimeoutError):
 
 
 def sends_max_output(provider_id: str | None) -> bool:
-    """Whether a request to this provider carries max_output_tokens. The Codex
-    endpoint takes no output cap, so a request there is sent without one."""
+    """Whether a request to this provider can carry max_output_tokens. The
+    Codex endpoint takes no output cap."""
     provider_def = providers.get_provider(provider_id)
     provider_name = (provider_def.id if provider_def is not None else (provider_id or "")).lower()
     return not codex_auth.is_codex_provider(provider_name)
@@ -1455,11 +1456,8 @@ async def _stream_async(
 
 
 def _sampler_map(values: dict) -> dict:
-    """Encode the TOP-LEVEL sampling knobs this transport accepts as ai>=0.2.1
-    SamplerParamsMap entries (keyed by param class). Knobs ``call_params`` routed
-    into ``extra_body`` (top_k/repetition_penalty on the openai-compatible family)
-    stay OUT of here: the OpenAI protocol hard-raises on TopK/RepetitionPenalty
-    param classes, so those ride through as raw extra_body instead."""
+    """The sampling fields a wire takes as its own parameters, as ai>=0.2.1
+    SamplerParamsMap entries (keyed by param class)."""
     out: dict = {}
     if "temperature" in values:
         out[ai_params.TemperatureSamplerParams] = ai_params.TemperatureSamplerParams(
@@ -1469,19 +1467,15 @@ def _sampler_map(values: dict) -> dict:
         out[ai_params.TopPSamplerParams] = ai_params.TopPSamplerParams(top_p=values["top_p"])
     if "top_k" in values:
         out[ai_params.TopKSamplerParams] = ai_params.TopKSamplerParams(top_k=values["top_k"])
-    rep: dict[str, float] = {}
-    if "repetition_penalty" in values:
-        rep["repetition_penalty"] = values["repetition_penalty"]
     if "presence_penalty" in values:
-        rep["presence_penalty"] = values["presence_penalty"]
-    if rep:
-        out[ai_params.RepetitionPenaltyParams] = ai_params.RepetitionPenaltyParams(**rep)
+        out[ai_params.RepetitionPenaltyParams] = ai_params.RepetitionPenaltyParams(
+            presence_penalty=values["presence_penalty"])
     return out
 
 
 def _build_inference_params(
     sampling: Sampling,
-    transport: str | None,
+    standard: frozenset[str],
     *,
     reasoning: ai_params.ReasoningParams | None,
     output: ai_params.OutputParams | None,
@@ -1489,11 +1483,12 @@ def _build_inference_params(
     cache: ai_params.CacheParams | None = None,
 ) -> ai_params.InferenceRequestParams | None:
     """Assemble an ``InferenceRequestParams`` from the parts, or None when there
-    is nothing to send (so the provider keeps every default)."""
+    is nothing to send (so the provider keeps every default). The ``standard``
+    sampling fields go as the wire's own parameters, every other set one in
+    ``extra_body``; EXTRA_PARAMS (``extra_body``) wins a clash."""
     kwargs: dict[str, Any] = {}
-    values = dict(sampling.call_params(transport))
-    sampler_extra = values.pop("extra_body", {}) or {}
-    sampler_map = _sampler_map(values)
+    top, sampler_extra = sampling.split(standard)
+    sampler_map = _sampler_map(top)
     if sampler_map:
         kwargs["sampling"] = sampler_map
     if reasoning is not None:
@@ -1508,6 +1503,221 @@ def _build_inference_params(
     if not kwargs:
         return None
     return ai_params.InferenceRequestParams(**kwargs)
+
+
+@dataclass(frozen=True)
+class _Route:
+    """Which wire one request to a provider and model goes out on."""
+
+    provider_name: str
+    sdk_provider_name: str
+    transport: str | None
+    explicit_provider: bool
+    codex: bool
+    anthropic_wire: bool
+    responses_wire: bool
+    deepseek_wire: bool
+    minimax: bool
+
+
+def _route(provider_id: str | None, model_id: str) -> _Route:
+    provider_def = providers.get_provider(provider_id)
+    provider_name = (provider_def.id if provider_def is not None else (provider_id or "")).lower()
+    sdk_provider_name = (
+        provider_def.effective_sdk_provider_id
+        if provider_def is not None and provider_def.effective_sdk_provider_id
+        else (provider_id or "")
+    ).lower()
+    model_name = model_id.lower()
+    explicit_provider = provider_id is not None
+    codex = codex_auth.is_codex_provider(provider_name)
+    transport = provider_def.transport if provider_def is not None else None
+    return _Route(
+        provider_name=provider_name,
+        sdk_provider_name=sdk_provider_name,
+        transport=transport,
+        explicit_provider=explicit_provider,
+        codex=codex,
+        anthropic_wire=sdk_provider_name == "anthropic" or provider_name == "anthropic",
+        responses_wire=codex or transport == "custom_responses",
+        # Whether the ENDPOINT takes DeepSeek's extras, which is not whether the
+        # model is a DeepSeek model: `nvidia/deepseek-ai/deepseek-v4-pro-0813`
+        # is one hosted elsewhere, and DeepSeek's private extras there are a 400.
+        # With no provider the model id is the only signal there is.
+        deepseek_wire=provider_name == "deepseek" or sdk_provider_name == "deepseek" or (
+            not explicit_provider and "deepseek" in model_name),
+        minimax=provider_name.startswith("minimax"),
+    )
+
+
+# The sampling fields each wire's SDK takes as its own parameters; every other
+# set field goes in ``extra_body`` under its own name, which puts it at the top
+# of the request body all the same. The anthropic SDK's messages.stream() takes
+# no sampling parameter at all (a TypeError before anything is sent), so the
+# Anthropic wire sends every one through ``extra_body``.
+_ANTHROPIC_SAMPLING: frozenset[str] = frozenset()
+_RESPONSES_SAMPLING = frozenset({"temperature", "top_p"})
+_CHAT_SAMPLING = frozenset({"temperature", "top_p", "presence_penalty"})
+
+
+def build_request_params(
+    *,
+    model_id: str,
+    provider_id: str | None,
+    provider_base_url: str | None,
+    max_output_tokens: int | None,
+    reasoning_effort: str | None,
+    thinking_budget: int | None = None,
+    provider_extra: dict[str, Any] | None = None,
+    sampling: Sampling | None = None,
+    cache_key: str | None = None,
+    settings: dict | None = None,
+) -> ai_params.InferenceRequestParams | None:
+    """The ``InferenceRequestParams`` one model call sends, or None when it
+    sends none. The SDK translates each field to the provider's wire shape.
+    `wire_fields` reads back from it what went out."""
+    # EXTRA_PARAMS is free-form raw passthrough. In the structured model every
+    # raw kwarg rides extra_body, so fold a nested ``extra_body`` key up and carry
+    # any sibling keys alongside it.
+    extra_body: dict[str, Any] = {}
+    _provider_extra = dict(provider_extra or {})
+    _nested_extra_body = _provider_extra.pop("extra_body", None)
+    if isinstance(_nested_extra_body, dict):
+        extra_body.update(_nested_extra_body)
+    extra_body.update(_provider_extra)
+    route = _route(provider_id, model_id)
+    model_name = model_id.lower()
+    sampling = sampling or Sampling()
+
+    reasoning_params: ai_params.ReasoningParams | None = None
+    if route.anthropic_wire:
+        # The Anthropic wire requires max_tokens: OUTPUT_TOKENS_MAX when set,
+        # ANTHROPIC_OUTPUT_TOKENS_MAX otherwise.
+        output_max_tokens = (max_output_tokens if max_output_tokens is not None
+                             else _settings.knob(settings, "ANTHROPIC_OUTPUT_TOKENS_MAX"))
+        # A `thinking` set in EXTRA_PARAMS wins over the one js/reasoning.py plans.
+        plan = reasoning.anthropic_thinking(model_name, reasoning_effort, thinking_budget, settings=settings)
+        if plan is not None:
+            if plan.thinking is not None:
+                extra_body.setdefault("thinking", plan.thinking)
+            if plan.effort is not None:
+                reasoning_params = ai_params.ReasoningParams(effort=plan.effort)
+        thinking = extra_body.get("thinking")
+        if isinstance(thinking, dict) and thinking.get("type") == "enabled":
+            # The operator's own budget is in force. Budget thinking takes no
+            # temperature or top_k: Anthropic answers either with a 400.
+            sampling = replace(sampling, temperature=None, top_k=None)
+        standard = _ANTHROPIC_SAMPLING
+    else:
+        output_max_tokens = None if route.codex else max_output_tokens
+        if reasoning_effort is not None and not route.minimax:
+            # The effort word as typed, snapped where js knows the model family
+            # (js/reasoning.py). With no provider the call goes to a gateway,
+            # which normalizes the word itself.
+            if route.codex:
+                allowed: frozenset[str] | None = reasoning.CODEX_EFFORTS
+            elif route.explicit_provider:
+                allowed = reasoning.supported_efforts(model_name)
+            else:
+                allowed = None
+            reasoning_params = ai_params.ReasoningParams(
+                effort=reasoning.translate_effort(reasoning_effort, allowed))
+        standard = _RESPONSES_SAMPLING if route.responses_wire else _CHAT_SAMPLING
+
+    output_params = (
+        ai_params.OutputParams(max_tokens=output_max_tokens)
+        if output_max_tokens is not None
+        else None
+    )
+
+    # DeepSeek's own reasoning budget, as an extra_body field. Gated on the WIRE,
+    # not the model id: an endpoint that validates its inputs rejects the whole
+    # request over a key it does not know (`nvidia/deepseek-ai/...`: 400
+    # Unsupported parameter(s): `max_reasoning_tokens`).
+    if route.deepseek_wire and reasoning.ladder_stop(reasoning_effort) != "none":
+        extra_body.setdefault("max_reasoning_tokens", _settings.knob(settings, "DEEPSEEK_REASONING_TOKENS_MAX"))
+
+    # Claude omits its thinking text unless the request asks for it. On the
+    # Anthropic wire `reasoning.anthropic_thinking` asks with display=summarized;
+    # on the chat-completions wire (CLIProxyAPI in front of Claude) the ask is
+    # include_reasoning, sent whenever CLAUDE_PROXY_INCLUDE_REASONING is on.
+    if (not route.anthropic_wire and not route.responses_wire
+            and _settings.knob(settings, "CLAUDE_PROXY_INCLUDE_REASONING")):
+        extra_body.setdefault("include_reasoning", True)
+
+    template_kwargs = _settings.knob(settings, "TEMPLATE_KWARGS")
+    if template_kwargs:
+        extra_body.setdefault("chat_template_kwargs", sampling_mod.parse_template_kwargs(template_kwargs))
+
+    # Prompt caching. Every turn resends the whole conversation, so the prefix it
+    # shares with the previous turn is the bulk of each request, and the three
+    # providers in use want three different things:
+    #   Anthropic caches only what a cache_control breakpoint covers, so the
+    #     request has to ask. Direct Anthropic uses automatic caching; compatible
+    #     providers get an explicit message breakpoint covering the whole prefix.
+    #   OpenAI-compatible endpoints cache long prefixes automatically. There is no
+    #     breakpoint to set, but prompt_cache_key pins a conversation to the machine
+    #     holding its prefix, which is what makes the hit rate hold up across turns.
+    #   DeepSeek caches on disk automatically from token zero, with no request-side
+    #     control at all, so it takes the same key harmlessly.
+    # `prompt_cache_key` is an OpenAI extension, not part of the OpenAI-compatible
+    # shape everyone implements, so what decides it is which ENDPOINT is being
+    # called, not which SDK shape talks to it. `sdk="openai"` is the wire for
+    # ollama, vLLM, llama.cpp, mimo, xAI and every `JS_BASE_URL` redirect, none of
+    # which are OpenAI; asking the wire sent the key to all of them, and an
+    # endpoint that validates its inputs rejects the whole request rather than
+    # dropping a key it does not know (observed:
+    # `JS_PROVIDER=openai JS_BASE_URL=https://integrate.api.nvidia.com/v1`, 400
+    # `Unsupported parameter(s): prompt_cache_key`). Ask the host instead. Losing
+    # the hint on an unlisted endpoint costs cache hit rate; sending it costs the
+    # entire request.
+    accepts_cache_key = route.codex or accepts_prompt_cache_key(
+        provider_name=route.provider_name,
+        sdk_provider_name=route.sdk_provider_name,
+        base_url=provider_base_url,
+    )
+    if route.anthropic_wire and _settings.knob(settings, "ANTHROPIC_PROMPT_CACHE"):
+        cache_params = ai_params.CacheParams()
+    elif cache_key and accepts_cache_key:
+        cache_params = ai_params.CacheParams(key=cache_key)
+    else:
+        cache_params = None
+
+    return _build_inference_params(
+        sampling,
+        standard,
+        reasoning=reasoning_params,
+        output=output_params,
+        extra_body=extra_body,
+        cache=cache_params,
+    )
+
+
+def wire_fields(params: ai_params.InferenceRequestParams | None) -> dict[str, Any]:
+    """What a request built by `build_request_params` carries for its output
+    cap and thinking, read back from it: ``max_out``, ``effort`` (the word
+    sent), ``thinking`` (a disabled or budgeted ``thinking`` object), and
+    ``DEEPSEEK_REASONING_TOKENS_MAX``. A field the request does not carry is
+    absent."""
+    out: dict[str, Any] = {}
+    if params is None:
+        return out
+    output = params.output
+    if isinstance(output, ai_params.OutputParams) and isinstance(output.max_tokens, int):
+        out["max_out"] = output.max_tokens
+    reasoning_params = params.reasoning
+    if isinstance(reasoning_params, ai_params.ReasoningParams) and isinstance(reasoning_params.effort, str):
+        out["effort"] = reasoning_params.effort
+    extra = params.extra_body or {}
+    thinking = extra.get("thinking")
+    if isinstance(thinking, dict):
+        if thinking.get("type") == "disabled":
+            out["thinking"] = "disabled"
+        elif isinstance(thinking.get("budget_tokens"), int):
+            out["thinking"] = f"budget:{thinking['budget_tokens']}"
+    if "max_reasoning_tokens" in extra:
+        out["DEEPSEEK_REASONING_TOKENS_MAX"] = extra["max_reasoning_tokens"]
+    return out
 
 
 def _debug_json(value: Any) -> str:
@@ -1750,45 +1960,8 @@ async def _stream_with_model(
     stream_idle_seconds: float | None,
     settings: dict | None,
 ) -> ModelStreamResult:
-    # Per-provider params: this is the canonical place to encode quirks. We build
-    # a structured ``InferenceRequestParams`` (ai>=0.2.1); the SDK translates each
-    # field to the provider's wire shape, so js no longer hand-routes sampling
-    # knobs into top-level-vs-extra_body per transport — it declares intent and
-    # lets the provider drop what it can't take.
-    # EXTRA_PARAMS is free-form raw passthrough. In the structured model every
-    # raw kwarg rides extra_body, so fold a nested ``extra_body`` key up and carry
-    # any sibling keys alongside it.
-    extra_body: dict[str, Any] = {}
-    _provider_extra = dict(provider_extra or {})
-    _nested_extra_body = _provider_extra.pop("extra_body", None)
-    if isinstance(_nested_extra_body, dict):
-        extra_body.update(_nested_extra_body)
-    extra_body.update(_provider_extra)
-    provider_def = providers.get_provider(provider_id)
-    provider_name = (provider_def.id if provider_def is not None else (provider_id or "")).lower()
-    sdk_provider_name = (
-        provider_def.effective_sdk_provider_id
-        if provider_def is not None and provider_def.effective_sdk_provider_id
-        else (provider_id or "")
-    ).lower()
-    model_name = model_id.lower()
-    explicit_provider = provider_id is not None
-    is_codex = codex_auth.is_codex_provider(provider_name)
-    # Two different questions, and they are not the same question:
-    # The old `is_deepseek` asked "is this a DeepSeek model?" and was used to
-    # decide "does this endpoint take DeepSeek's extras?" — a different question.
-    # A DeepSeek model hosted by someone else answers yes to the first and no to
-    # the second. `nvidia/deepseek-ai/deepseek-v4-pro-0813` is exactly that, and
-    # sending DeepSeek's private extras to NVIDIA is a 400.
-    is_deepseek_wire = provider_name == "deepseek" or sdk_provider_name == "deepseek" or (
-        # Implicit gateway path (`deepseek/deepseek-v3` with no provider): the
-        # caller named no endpoint, so the model id is the only signal there is.
-        not explicit_provider and "deepseek" in model_name
-    )
-    is_minimax = provider_name.startswith("minimax") or model_name.startswith("minimax") or "minimax" in model_name
-
-    is_anthropic_wire = sdk_provider_name == "anthropic" or provider_name == "anthropic"
-    if is_anthropic_wire:
+    route = _route(provider_id, model_id)
+    if route.anthropic_wire:
         messages = _without_empty_text_parts(messages)
         systems = [message for message in messages if message.role == "system"]
         if len(systems) > 1:
@@ -1797,122 +1970,18 @@ async def _stream_with_model(
                                    for message in systems)
             messages = [ai.system_message(system),
                         *(message for message in messages if message.role != "system")]
-    output_max_tokens = max_output_tokens if sends_max_output(provider_id) else None
 
-    reasoning_params: ai_params.ReasoningParams | None = None
-    if is_anthropic_wire:
-        # Every provider on the Anthropic Messages wire takes the reasoning
-        # setting as thinking: adaptive plus an effort on the models that take
-        # it, a token budget on the rest (js/reasoning.py). A `thinking` set in
-        # EXTRA_PARAMS wins.
-        plan = reasoning.anthropic_thinking(model_name, reasoning_effort, max_output_tokens, thinking_budget, settings=settings)
-        own_thinking = "thinking" not in extra_body
-        if plan is not None:
-            if plan.thinking is not None:
-                extra_body.setdefault("thinking", plan.thinking)
-            if plan.effort is not None:
-                reasoning_params = ai_params.ReasoningParams(effort=plan.effort)
-            if plan.max_tokens is not None and own_thinking:
-                output_max_tokens = plan.max_tokens
-        thinking = extra_body.get("thinking")
-        extra_budget = thinking.get("budget_tokens") if isinstance(thinking, dict) and not own_thinking else None
-        if isinstance(extra_budget, int) and max_output_tokens is None:
-            # A budget from EXTRA_PARAMS on a model with no known output cap:
-            # max_tokens has to sit above it.
-            output_max_tokens = extra_budget + reasoning.ANTHROPIC_UNKNOWN_CAP_ANSWER
-        if sampling is not None and isinstance(thinking, dict) and thinking.get("type") == "enabled":
-            # Budget thinking takes no temperature or top_k: Anthropic answers
-            # either with a 400.
-            sampling = replace(sampling, temperature=None, top_k=None)
-    elif reasoning_effort is not None and not is_minimax:
-        # Direct DeepSeek steers reasoning via its own budget (below), not the
-        # OpenAI effort knob. Codex and any openai-SDK endpoint take the effort
-        # knob — snapped to the stops the target actually serves
-        # (js/reasoning.py), so the one dial fits each.
-        steers_via_effort = is_codex or sdk_provider_name == "openai" or not explicit_provider
-        if steers_via_effort:
-            if is_codex:
-                allowed: frozenset[str] | None = reasoning.CODEX_EFFORTS
-            elif explicit_provider and sdk_provider_name == "openai":
-                allowed = reasoning.supported_efforts(model_name)
-            else:
-                allowed = None  # gateway / implicit: let it self-normalize
-            effort = reasoning.snap_effort(reasoning_effort, allowed)
-            if effort == "none":
-                # Disable explicitly only where "none" is a real stop (glm) or on
-                # the implicit/gateway path that historically disabled; for an
-                # unknown explicit model, omit the knob and take its default
-                # rather than send a non-standard reasoning_effort="none".
-                if not explicit_provider or (allowed is not None and "none" in allowed):
-                    reasoning_params = ai_params.ReasoningParams(effort=None)
-            elif effort is not None:
-                reasoning_params = ai_params.ReasoningParams(effort=effort)
-
-    output_params = (
-        ai_params.OutputParams(max_tokens=output_max_tokens)
-        if output_max_tokens is not None
-        else None
-    )
-
-    # DeepSeek gets the maximum reasoning budget by default as an extra_body
-    # field. Gated on the WIRE, not the model id: this is DeepSeek's own
-    # extension, and an endpoint that validates its inputs rejects the whole
-    # request rather than dropping the key it does not know. It is not the
-    # harmless passthrough the previous comment here claimed —
-    # `js --model nvidia/deepseek-ai/deepseek-v4-pro-0813 -p foo` returned
-    # 400 Unsupported parameter(s): `max_reasoning_tokens`.
-    if is_deepseek_wire and reasoning_effort != "none":
-        extra_body.setdefault("max_reasoning_tokens", _settings.knob(settings, "DEEPSEEK_REASONING_TOKENS_MAX"))
-
-    # Claude omits its thinking text unless the request asks for it. On the
-    # Anthropic wire `reasoning.anthropic_thinking` asks with display=summarized;
-    # behind an OpenAI-shaped proxy (CLIProxyAPI) the ask is include_reasoning,
-    # which the proxy maps onto the same display. Without it a Claude turn shows
-    # no reasoning and the session keeps none to replay.
-    if not is_anthropic_wire and reasoning.claude_model(model_name) and reasoning_effort != "none":
-        extra_body.setdefault("include_reasoning", _settings.knob(settings, "CLAUDE_PROXY_INCLUDE_REASONING"))
-
-    # Prompt caching. Every turn resends the whole conversation, so the prefix it
-    # shares with the previous turn is the bulk of each request, and the three
-    # providers in use want three different things:
-    #   Anthropic caches only what a cache_control breakpoint covers, so the
-    #     request has to ask. Direct Anthropic uses automatic caching; compatible
-    #     providers get an explicit message breakpoint covering the whole prefix.
-    #   OpenAI-compatible endpoints cache long prefixes automatically. There is no
-    #     breakpoint to set, but prompt_cache_key pins a conversation to the machine
-    #     holding its prefix, which is what makes the hit rate hold up across turns.
-    #   DeepSeek caches on disk automatically from token zero, with no request-side
-    #     control at all, so it takes the same key harmlessly.
-    # `prompt_cache_key` is an OpenAI extension, not part of the OpenAI-compatible
-    # shape everyone implements, so what decides it is which ENDPOINT is being
-    # called, not which SDK shape talks to it. `sdk="openai"` is the wire for
-    # ollama, vLLM, llama.cpp, mimo, xAI and every `JS_BASE_URL` redirect, none of
-    # which are OpenAI; asking the wire sent the key to all of them, and an
-    # endpoint that validates its inputs rejects the whole request rather than
-    # dropping a key it does not know (observed:
-    # `JS_PROVIDER=openai JS_BASE_URL=https://integrate.api.nvidia.com/v1`, 400
-    # `Unsupported parameter(s): prompt_cache_key`). Ask the host instead. Losing
-    # the hint on an unlisted endpoint costs cache hit rate; sending it costs the
-    # entire request.
-    accepts_cache_key = is_codex or accepts_prompt_cache_key(
-        provider_name=provider_name,
-        sdk_provider_name=sdk_provider_name,
-        base_url=provider_base_url,
-    )
-    if is_anthropic_wire and _settings.knob(settings, "ANTHROPIC_PROMPT_CACHE"):
-        cache_params = ai_params.CacheParams()
-    elif cache_key and accepts_cache_key:
-        cache_params = ai_params.CacheParams(key=cache_key)
-    else:
-        cache_params = None
-
-    params = _build_inference_params(
-        sampling or Sampling(),
-        provider_def.transport if provider_def is not None else None,
-        reasoning=reasoning_params,
-        output=output_params,
-        extra_body=extra_body,
-        cache=cache_params,
+    params = build_request_params(
+        model_id=model_id,
+        provider_id=provider_id,
+        provider_base_url=provider_base_url,
+        max_output_tokens=max_output_tokens,
+        reasoning_effort=reasoning_effort,
+        thinking_budget=thinking_budget,
+        provider_extra=provider_extra,
+        sampling=sampling,
+        cache_key=cache_key,
+        settings=settings,
     )
 
     # DeepSeek, MiMo, and Anthropic-like providers are append-only in the sense
@@ -1924,11 +1993,10 @@ async def _stream_with_model(
     # which otherwise breaks resume and mid-conversation model switches. Strip it
     # only for those models, so a stored session stays portable without rewriting
     # history for backends (mimo, kimi) that accept the field.
-    transport = provider_def.transport if provider_def is not None else None
     if (
-        sdk_provider_name == "openai"
-        and transport != "custom_responses"
-        and reasoning.rejects_reasoning_replay(model_name)
+        route.sdk_provider_name == "openai"
+        and route.transport != "custom_responses"
+        and reasoning.rejects_reasoning_replay(model_id.lower())
     ):
         messages = _strip_reasoning_parts(messages)
 

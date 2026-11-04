@@ -407,12 +407,11 @@ def _stamp_without_login(stamp: dict, cfg: Config) -> str | None:
 
 
 def _stamped_reasoning(stamp: dict) -> str | None:
-    """The reasoning level of a stamp, when it is a valid one. A stamp
-    stores a disabled effort as `none`, which is `off`."""
+    """The effort word of a stamp, when it is a valid one."""
     raw = stamp.get("reasoning")
     if not isinstance(raw, str) or not raw:
         return None
-    value, error = _validate_cli_reasoning("off" if _norm_effort(raw) == "none" else raw)
+    value, error = _validate_cli_reasoning(raw)
     return value if error is None else None
 
 
@@ -2604,11 +2603,9 @@ def _format_prompt_load_error(cfg, exc: Exception) -> str:
 
 
 def _validate_cli_reasoning(reasoning: str) -> tuple[str | None, str | None]:
-    """Coerce a raw ``--reasoning`` value through the SAME registry validation as
-    ``set EFFORT`` and ``JS_REASONING`` (ruling B): ``off``
-    disables (stored as ``none``); every other value must be a ladder stop. Any
-    other token yields a clean local error instead of shipping garbage to the
-    provider. Returns (value, error)."""
+    """Check a raw ``--reasoning`` value through the same registry validation as
+    ``set EFFORT`` and ``JS_REASONING``: any one word, kept as typed.
+    Returns (value, error)."""
     spec = settings.SPEC_BY_KEY["EFFORT"]
     return settings.coerce_value(spec, reasoning)
 
@@ -2619,6 +2616,9 @@ def _validate_cli_reasoning(reasoning: str) -> tuple[str | None, str | None]:
 SETTING_FLAGS: tuple[tuple[str, str], ...] = (
     ("reasoning", "EFFORT"),
     ("max_out", "OUTPUT_TOKENS_MAX"),
+    ("max_turns", "TURN_ROUNDS_MAX"),
+    ("template_kwargs", "TEMPLATE_KWARGS"),
+    *((field, field.upper()) for field in sampling_mod.SAMPLING_FIELDS),
 )
 
 
@@ -2634,6 +2634,11 @@ def _setting_flag_extras(args: argparse.Namespace) -> tuple[list[str], int | Non
             _seed, effort_error = _validate_cli_reasoning(str(value))
             if effort_error is not None:
                 msgs.warn(msgs.BAD_REASONING, value=value, error=effort_error)
+                return [], 2
+        else:
+            _value, error = settings.coerce_value(settings.SPEC_BY_KEY[key], str(value))
+            if error is not None:
+                msgs.warn(msgs.BAD_FLAG_VALUE, flag="--" + attr.replace("_", "-"), value=value, error=error)
                 return [], 2
         extras.append(f"{key}={value}")
     return extras, None
@@ -4657,6 +4662,12 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("-q", "--quiet", action="store_true", help=msgs.OPT_QUIET.words())
     parser.add_argument("-r", "--reasoning", help=msgs.OPT_REASONING.words())
     parser.add_argument("--max-out", dest="max_out", type=int, help=msgs.OPT_MAX_OUT.words())
+    parser.add_argument("--max-turns", dest="max_turns", metavar="N", help=msgs.OPT_MAX_TURNS.words())
+    parser.add_argument("--template-kwargs", dest="template_kwargs", metavar="KEY=VALUE[,...]",
+                        help=msgs.OPT_TEMPLATE_KWARGS.words())
+    for field in sampling_mod.SAMPLING_FIELDS:
+        parser.add_argument("--" + field.replace("_", "-"), dest=field, metavar="VALUE",
+                            help=msgs.OPT_SETTING_FLAG.words(setting=field.upper()))
     prompt_group = parser.add_mutually_exclusive_group()
     prompt_group.add_argument('--system-prompt-file', '-spf', '-sysf', metavar='PATH',
                               help=msgs.OPT_SYSTEM_PROMPT_FILE.words())

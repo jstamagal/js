@@ -68,16 +68,16 @@ def test_extra_registered_scalar_keys_use_registry_validation(raw):
         settings.parse_extra_arg(raw)
 
 
-def test_extra_reasoning_effort_off_disables_via_registry(monkeypatch, tmp_path):
-    # RULING B: `off` is the only token that disables reasoning now.
+@pytest.mark.parametrize("word", ["off", "spoon", "High"])
+def test_extra_reasoning_effort_keeps_the_word_as_typed(monkeypatch, tmp_path, word):
     _env_dirs(monkeypatch, tmp_path)
 
-    path, value = settings.parse_extra_arg("EFFORT=off")
-    cfg = from_env(save_session=False, extras=["EFFORT=off"])
+    path, value = settings.parse_extra_arg(f"EFFORT={word}")
+    cfg = from_env(save_session=False, extras=[f"EFFORT={word}"])
 
     assert path == ("EFFORT",)
-    assert value == "none"
-    assert cfg.reasoning_effort == "none"
+    assert value == word
+    assert cfg.reasoning_effort == word
 
 
 def test_extra_provider_extra_json_uses_registry_map_coercion(monkeypatch, tmp_path):

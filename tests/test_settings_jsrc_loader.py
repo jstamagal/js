@@ -87,7 +87,7 @@ def test_save_preserves_disabled_reasoning(tmp_path):
     settings.save_settings_to_jsrc(path, store, keys=["EFFORT"])
 
     loaded = settings.collect_settings([path], env={})
-    assert loaded["EFFORT"] == store["EFFORT"] == "none"
+    assert loaded["EFFORT"] == store["EFFORT"] == "off"
 
 
 def test_jsrc_rejects_registered_non_map_subkeys_without_mutating(tmp_path):

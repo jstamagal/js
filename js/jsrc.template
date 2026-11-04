@@ -55,14 +55,17 @@
 #   xhigh    more than high
 #   max      as much as the model allows
 # More thinking: slower, more tokens, often better on hard problems.
+# Any other word is sent as typed. For a model js recognizes, a word from
+# this list becomes the nearest effort that model serves; the run line
+# shows the effort that went out.
 # Unset: the provider's own default for that model. An agent's agent.yaml
 # can set its own effort, and a one-shot `js -p` uses that.
 #   example:  set EFFORT medium
 #set EFFORT medium
 
 # Largest reply the model may write in one call, in tokens. Thinking counts
-# toward it. Unset: the model's own limit from the model catalog, or no
-# limit sent at all if the catalog doesn't know the model.
+# toward it. Unset: no limit is sent, except on Anthropic-format endpoints,
+# which require one: there ANTHROPIC_OUTPUT_TOKENS_MAX is sent.
 #   example:  set OUTPUT_TOKENS_MAX 32000
 #set -OUTPUT_TOKENS_MAX
 
@@ -75,10 +78,10 @@
 #   example:  set CONTEXT_SIZE 1000000
 #set -CONTEXT_SIZE
 
-# Only for Anthropic-format endpoints, and only for older models that think
-# against a token budget: Claude 4.5 and earlier, MiniMax, opencode-go.
-# This is the budget in tokens. Newer Claude models think adaptively and
-# ignore it. Unset: js picks a budget from EFFORT.
+# Only for Anthropic-format endpoints: a thinking budget in tokens, sent as
+# thinking {"type": "enabled", "budget_tokens": N}. Temperature and top_k
+# are not sent while it is in force (Anthropic rejects them with a budget).
+# Unset: no budget is sent; Claude 4.6 and later think adaptively.
 #   example:  set THINKING_BUDGET 16000
 #set -THINKING_BUDGET
 
@@ -717,8 +720,12 @@
 ################################################################################
 
 # Unset means js doesn't send the value at all and the provider uses its own
-# default. Set one only if your provider accepts it. Many reasoning models
-# reject temperature and top_p outright.
+# default. A set value is always sent: temperature, top_p, top_k (Anthropic)
+# and presence_penalty (OpenAI chat) as the wire's own fields, every other one
+# in the request body under its own lower-case name, for the server to take
+# or reject. Many reasoning models reject temperature and top_p outright.
+# Each one is also a flag (--temperature, --min-p, ...) and an agent.yaml
+# `sampling:` key (temperature, min_p, ...).
 
 # Randomness. Lower is more predictable, higher is more varied.
 #   example:  set TEMPERATURE 0.7
@@ -739,6 +746,41 @@
 # Push toward words that haven't been used yet. 0 is no push.
 #   example:  set PRESENCE_PENALTY 0.5
 #set -PRESENCE_PENALTY
+
+# Drop words less likely than this fraction of the most likely word.
+#   example:  set MIN_P 0.05
+#set -MIN_P
+
+# Keep only words within this many standard deviations of the top logit.
+#   example:  set TOP_N_SIGMA 1.0
+#set -TOP_N_SIGMA
+
+# XTC: how often to cut the most likely words, and the probability a word
+# needs to be cut.
+#   example:  set XTC_PROBABILITY 0.5
+#set -XTC_PROBABILITY
+#   example:  set XTC_THRESHOLD 0.1
+#set -XTC_THRESHOLD
+
+# DRY repetition penalty: its strength, how fast it grows, how long a repeat
+# may get before it applies, how many tokens back it looks, and the strings
+# that break a repeat (a JSON list).
+#   example:  set DRY_MULTIPLIER 0.8
+#set -DRY_MULTIPLIER
+#   example:  set DRY_BASE 1.75
+#set -DRY_BASE
+#   example:  set DRY_ALLOWED_LENGTH 2
+#set -DRY_ALLOWED_LENGTH
+#   example:  set DRY_PENALTY_LAST_N -1
+#set -DRY_PENALTY_LAST_N
+#   example:  set DRY_SEQUENCE_BREAKERS ["\n", ":", "\"", "*"]
+#set -DRY_SEQUENCE_BREAKERS
+
+# key=value entries sent as chat_template_kwargs, e.g. llama.cpp's
+# per-request thinking switch. A value is read as JSON (false, 1, "x"); one
+# that is not JSON is a string. Also --template-kwargs.
+#   example:  set TEMPLATE_KWARGS enable_thinking=false
+#set -TEMPLATE_KWARGS
 
 
 ################################################################################
@@ -781,11 +823,17 @@
 # on: malformed tool arguments are refused instead of repaired.
 #set TOOL_ARGUMENT_STRICT off
 
-# max_reasoning_tokens sent to DeepSeek models when the request sets none.
+# max_reasoning_tokens sent to DeepSeek's own endpoint when the request sets
+# none. The run line shows it under this name.
 #set DEEPSEEK_REASONING_TOKENS_MAX 32000
 
-# include_reasoning sent to a Claude proxy when the request sets none.
-#set CLAUDE_PROXY_INCLUDE_REASONING on
+# max_tokens sent on Anthropic-format endpoints, which require one, when
+# OUTPUT_TOKENS_MAX is unset.
+#set ANTHROPIC_OUTPUT_TOKENS_MAX 64000
+
+# on: every OpenAI chat-format request carries include_reasoning: true, which
+# a Claude proxy (CLIProxyAPI) needs to return Claude's thinking.
+#set CLAUDE_PROXY_INCLUDE_REASONING off
 
 # on: Anthropic requests mark the prompt for caching.
 #set ANTHROPIC_PROMPT_CACHE on
@@ -794,7 +842,8 @@
 # omitted.
 #set ANTHROPIC_THINKING_DISPLAY summarized
 
-# Effort sent to an Anthropic model that requires one when EFFORT is unset.
+# Effort sent instead of off to an Anthropic model that cannot turn
+# thinking off (Fable, Mythos, Claude 5.5 and later).
 #set ANTHROPIC_REQUIRED_EFFORT low
 
 # Text verbosity sent with Codex requests: low, medium or high.

@@ -1601,8 +1601,6 @@ def _turn_request(cfg: Config, *, model_override: str | None, provider_id_overri
     model = model_override or cfg.model
     provider_id = provider_id_override if provider_id_override is not None else cfg.provider_id
     max_out = cfg.max_output_tokens if max_output_override is _UNSET else max_output_override
-    if max_out is None:
-        max_out = model_metadata.resolve_max_output(model, provider_id)
     return ModelRequest(
         model=model,
         provider_id=provider_id,
@@ -1714,13 +1712,19 @@ def _trace_banner(telemetry: Telemetry, request: ModelRequest, context: ToolCont
     # is left to work in; max_out only bounds one reply. Showing the second
     # without the first invites reading 128000 as the window.
     ctx = compaction.configured_context_window(context.config, resolve_window)
+    # The output cap and effort fields show what the built request carries.
+    sent = model_client.wire_fields(model_client.build_request_params(
+        model_id=model, provider_id=provider_id, provider_base_url=request.base_url,
+        max_output_tokens=request.max_out, reasoning_effort=request.effort,
+        thinking_budget=request.thinking_budget, provider_extra=request.extra,
+        sampling=request.sampling, cache_key=request.cache_key, settings=request.settings))
     bits = [f"model={model}",
             f"provider={provider_label}",
             f"base={base}",
             f"ctx={ctx if ctx else 'unknown'}",
-            f"max_out={request.max_out if request.max_out is not None else 'provider-default'}"]
-    if request.effort:
-        bits.append(f"effort={request.effort}")
+            f"max_out={sent.get('max_out', 'provider-default')}"]
+    bits.extend(f"{name}={sent[name]}" for name in ("effort", "thinking", "DEEPSEEK_REASONING_TOKENS_MAX")
+                if name in sent)
     bits.append(f"vision={'on' if context.vision_enabled else 'off'}")
     try:
         ntools = len(registry.openai_specs())
