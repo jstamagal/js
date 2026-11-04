@@ -335,15 +335,19 @@ def _activate_saved_session(
     effective_key = caller_key if caller_key is not None else getattr(_session_leases, "caller_key", None)
     start = getattr(_session_leases, "start", None) or {}
     provider, bare = _recorded_model(model, cfg)
+    from .cli_options import current
+    options = current()
     record_session_start(
         cfg.session_file,
         cwd=Path.cwd(),
         caller_key=effective_key,
-        agent=cfg.agent_id,
+        # A --chat run with no --agent has no persona: its agent is "none".
+        agent="none" if options.chat and options.agent is None else cfg.agent_id,
         model=bare,
         provider=provider,
         mode=start.get("mode"),
         command=start.get("command"),
+        chat=options.chat,
     )
     lease = acquire_session(cfg.session_file)
     _session_leases.items.append(lease)
@@ -4677,15 +4681,15 @@ def _main(argv: list[str] | None = None) -> int:
                               help=msgs.OPT_SYSTEM_PROMPT_FILE.words())
     prompt_group.add_argument('--system-prompt', metavar='TEXT',
                               help=msgs.OPT_SYSTEM_PROMPT.words())
-    prompt_group.add_argument('--you-are', action='store_true',
+    prompt_group.add_argument('--you-are', nargs='?', const='', metavar='TEXT',
                               help=msgs.OPT_YOU_ARE.words())
     parser.add_argument('--append-system-prompt', action='append', default=[], metavar='TEXT',
                         help=msgs.OPT_APPEND_SYSTEM_PROMPT.words())
     parser.add_argument('--no-env', action='store_true', help=msgs.OPT_NO_ENV.words())
     parser.add_argument('--chat', action='store_true', help=msgs.OPT_CHAT.words())
-    parser.add_argument('--with-tools', metavar='SELECTORS', help=msgs.OPT_WITH_TOOLS.words())
-    parser.add_argument('--without-tools', metavar='NAMES', help=msgs.OPT_WITHOUT_TOOLS.words())
-    parser.add_argument('--tools', metavar='JSON', help=msgs.OPT_TOOLS.words())
+    tools_group = parser.add_mutually_exclusive_group()
+    tools_group.add_argument('--tools', metavar='LIST', help=msgs.OPT_TOOLS.words())
+    tools_group.add_argument('--no-tools', action='store_true', help=msgs.OPT_NO_TOOLS.words())
     parser.add_argument('--no-agents-md', action='store_true', help=msgs.OPT_NO_AGENTS_MD.words())
     parser.add_argument('--no-skills', action='store_true', help=msgs.OPT_NO_SKILLS.words())
     parser.add_argument('--no-mcp', action='store_true', help=msgs.OPT_NO_MCP.words())
@@ -4749,10 +4753,9 @@ def _main(argv: list[str] | None = None) -> int:
     options = RunOptions(
         system_prompt_file=args.system_prompt_file, system_prompt=args.system_prompt,
         append_system_prompt=tuple(args.append_system_prompt), you_are=args.you_are,
-        no_env=args.no_env or args.bare, chat=args.chat, with_tools=args.with_tools,
+        no_env=args.no_env or args.bare, chat=args.chat, agent=args.agent,
         no_agents_md=args.no_agents_md, no_skills=args.no_skills or args.bare,
-        no_mcp=args.no_mcp or args.bare,
-        without_tools=args.without_tools, tools=args.tools,
+        no_mcp=args.no_mcp or args.bare, no_tools=args.no_tools, tools=args.tools,
     )
     try:
         options.selectors(())

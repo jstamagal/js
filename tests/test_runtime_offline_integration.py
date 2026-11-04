@@ -1594,3 +1594,29 @@ def test_only_none_is_an_approval(monkeypatch, tmp_path, decision):
     assert ran == []
     [result] = [message for message in messages if message["role"] == "tool"]
     assert isinstance(result["content"], str)
+
+
+@pytest.mark.parametrize("options", [
+    {"you_are": ""}, {"you_are": "be brief"}, {"no_tools": True}, {"chat": True},
+])
+def test_a_tool_call_under_zero_tools_runs_nothing_and_returns_the_unknown_tool_error(tmp_path, options):
+    from js.cli_options import RunOptions
+
+    ran = []
+    tools = (Tool("shell", "shell", lambda **kwargs: ran.append(kwargs) or "ran", {}),)
+    stock = ToolRegistry(tools=tools, aliases={"shell": "shell"})
+    entries = RunOptions(**options).selectors(("shell:eager",))
+    surface = stock.select(entries, warn=False).lazy_surface(tmp_path)
+    assert surface.openai_specs() == []
+
+    calls = [runtime._PendingToolCall("c1", "nope", ['{"cmd": "id"}']),
+             runtime._PendingToolCall("c2", "shell", ['{"cmd": "id"}'])]
+    results = runtime._dispatch_tool_calls(
+        calls, runtime.Telemetry(None), 256 * 1024, False,
+        runtime.ToolErrorTracker(), surface.dispatch_registry(), _tools_context(0),
+    )
+
+    assert ran == []
+    outputs = [output for _call, _message, output in results]
+    assert "unknown tool" in outputs[0] and "nope" in outputs[0]
+    assert outputs[1].startswith("ERROR") and "shell" in outputs[1]

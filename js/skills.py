@@ -324,7 +324,7 @@ def discover_skills(
     """
 
     from .cli_options import current
-    if current().no_skills:
+    if current().skips_skills:
         return SkillCatalog()
     builtin_root = builtin_dir or BUILTIN_SKILLS_DIR
     global_root = global_dir or paths.global_skills_dir()

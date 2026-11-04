@@ -613,6 +613,7 @@ ARGS_OPTIONS = Message("Options")
 ARGUMENTS_REFUSED = Message("{error}", GRAVE)
 UNKNOWN_OPTION = Message("unknown option {option}", GRAVE)
 BARE_WITH_AGENT = Message("--bare and --agent cannot be used together", GRAVE)
+TOOLS_LIST_ENTRY = Message("--tools: {entry!r} is not NAME, NAME:eager or NAME:lazy", GRAVE)
 UNEXPECTED_ARGUMENT = Message("unexpected argument '{word}'", GRAVE)
 OPT_HELP_THIS = Message("Show this help and exit.")
 OPT_HELP = Message("Show the short usage guide and exit.")
@@ -658,15 +659,20 @@ OPT_QUIET = Message("Suppress the resume hint after a one-shot prompt.")
 OPT_REASONING = Message(
     "Thinking effort: off|minimal|low|medium|high|xhigh|max. off disables thinking. Any other value is rejected.")
 OPT_MAX_OUT = Message("Max output tokens per call.")
-OPT_SYSTEM_PROMPT_FILE = Message("Use one file as the full system prompt, with inline directives.")
-OPT_SYSTEM_PROMPT = Message("Use TEXT as the full system prompt.")
-OPT_YOU_ARE = Message("Identify the selected model with a minimal system prompt.")
+OPT_SYSTEM_PROMPT_FILE = Message(
+    "Use one file as the full system prompt, with inline directives, and defaultagent's tools. "
+    "No agent directory, *-env.md or AGENTS.md.")
+OPT_SYSTEM_PROMPT = Message("Use TEXT in place of the agent's *-prompt.md files. Everything else about the agent loads.")
+OPT_YOU_ARE = Message(
+    "System prompt is only 'You are <model> running inside the js agent', then TEXT. "
+    "No tools, envctx, AGENTS.md, skills or MCP; --tools adds tools.")
 OPT_APPEND_SYSTEM_PROMPT = Message("Append TEXT to the selected system prompt.")
-OPT_NO_ENV = Message("Suppress envctx output.")
-OPT_CHAT = Message("Omit agent and instruction files, envctx, and tools. Explicit tool selections still apply.")
-OPT_WITH_TOOLS = Message("Select only these comma-separated tools, optionally :eager or :lazy.")
-OPT_WITHOUT_TOOLS = Message("Exclude these comma-separated tool names or globs.")
-OPT_TOOLS = Message("Use a JSON list of tool-policy selectors.")
+OPT_NO_ENV = Message("Skip the agent's *-env.md files and envctx output.")
+OPT_CHAT = Message(
+    "Plain chat: no tools, *-env.md, AGENTS.md, skills or MCP. With --agent, that agent's *-prompt.md is the "
+    "persona; without it, no persona. --tools still adds tools.")
+OPT_TOOLS = Message("Exactly these comma-separated tools, globs or tags, each optionally :eager or :lazy.")
+OPT_NO_TOOLS = Message("Run with zero tools.")
 OPT_NO_AGENTS_MD = Message("Do not load JS.md or AGENTS.md instruction files.")
 OPT_NO_SKILLS = Message("Disable skill discovery and the skill tool.")
 OPT_NO_MCP = Message("Disable MCP servers.")

@@ -613,8 +613,10 @@ Native tools keep conversion, page schema/dedup, and ingest close-out determinis
 
 Agents are discovered from repo `prompts/`, global `~/.js/agents/`, and
 project `.js/agents/`; project scope wins over global, which wins over repo.
-Each agent lives at `<root>/<agent_id>/`: `*.md` prompt files, concatenated in
-sorted filename order, and an `agent.yaml` manifest:
+Each agent lives at `<root>/<agent_id>/`: `NN-prompt.md` and `NN-env.md`
+files, concatenated in sorted filename order into the system prompt, optional
+`NN-user.md` / `NN-agent.md` seed messages and `NN-benchmark.md` turns, and an
+`agent.yaml` manifest. Any other `.md` in the directory is not read.
 
 ```yaml
 tools:

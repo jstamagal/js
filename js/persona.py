@@ -89,12 +89,32 @@ def _is_zero_file(path: Path) -> bool:
     return stem == "00" or stem.startswith("00-") or stem.startswith("00_")
 
 
+def _ends_in_keyword(path: Path, keyword: str) -> bool:
+    stem = path.stem
+    return stem == keyword or stem.endswith(f"-{keyword}") or stem.endswith(f"_{keyword}")
+
+
 def _is_benchmark_file(path: Path) -> bool:
     """A NN-benchmark.md (or bare benchmark.md) file: a --bench turn, never part
-    of the system prompt. Excluded universally so `--agent` does not suck
-    benchmark bodies into the persona."""
-    stem = path.stem
-    return stem == "benchmark" or stem.endswith("-benchmark") or stem.endswith("_benchmark")
+    of the system prompt."""
+    return _ends_in_keyword(path, "benchmark")
+
+
+# The kinds of .md file an agent directory holds, named by the stem's last
+# word: NN-prompt.md, NN-env.md, NN-benchmark.md, NN-user.md, NN-agent.md.
+# A .md file of any other name is not read.
+PROMPT_KIND = "prompt"
+ENV_KIND = "env"
+
+
+def _system_kind(path: Path) -> str | None:
+    """`prompt` or `env` for a file that is system-prompt text, else None."""
+    if _is_message_file(path):
+        return None
+    for kind in (PROMPT_KIND, ENV_KIND):
+        if _ends_in_keyword(path, kind):
+            return kind
+    return None
 
 
 AGENT_MANIFEST = "agent.yaml"
@@ -268,11 +288,8 @@ def _has_manifest(prompts_dir: Path) -> bool:
 
 
 def _has_persona_text(prompts_dir: Path) -> bool:
-    """Whether a prompt dir holds system-prompt text: a .md that is neither a
-    benchmark turn nor a seed message file."""
-    return any(
-        not _is_benchmark_file(path) and not _is_message_file(path) for path in prompts_dir.glob("*.md")
-    )
+    """Whether a prompt dir holds system-prompt text: a *-prompt.md or *-env.md file."""
+    return any(_system_kind(path) is not None for path in prompts_dir.glob("*.md"))
 
 
 def _find_persona_dir(agent_id: str, *roots: Path) -> Path | None:
@@ -305,9 +322,13 @@ def load_agent_prompt_spec(
     global_agents_root: Path,
     project_agents_root: Path,
     agents_files: list[Path] | tuple[Path, ...] = (),
+    env: bool = True,
+    prompt: str | None = None,
 ) -> PromptSpec:
+    """The agent's prompt spec. ``env=False`` leaves out its *-env.md files;
+    ``prompt`` stands in for its *-prompt.md files."""
     prompt_dir = _most_specific_prompt_dir(agent_id, repo_prompts_root, global_agents_root, project_agents_root)
-    spec = load_prompt_spec(prompt_dir)
+    spec = load_prompt_spec(prompt_dir, env=env, prompt=prompt)
     if not _has_manifest(prompt_dir):
         # This dir won without a manifest: it may tweak only the wording, or
         # only carry seed messages or benchmark turns. Its seed exchanges stay
@@ -319,7 +340,7 @@ def load_agent_prompt_spec(
         system = spec.system
         persona_dir = _find_persona_dir(agent_id, *roots)
         if persona_dir is not None and persona_dir != prompt_dir:
-            system = load_prompt_spec(persona_dir).system
+            system = load_prompt_spec(persona_dir, env=env, prompt=prompt).system
         manifest_dir = _find_manifest_dir(agent_id, *roots)
         base = load_prompt_spec(manifest_dir) if manifest_dir is not None and manifest_dir != prompt_dir else spec
         spec = replace(_with_system(base, system), exchanges=spec.exchanges)
@@ -349,7 +370,10 @@ def load_agent_manifest(manifest_path: Path) -> PromptSpec:
     )
 
 
-def load_prompt_spec(prompts_dir: Path) -> PromptSpec:
+def load_prompt_spec(prompts_dir: Path, *, env: bool = True, prompt: str | None = None) -> PromptSpec:
+    """The directory's manifest, seed exchanges and system prompt: its
+    *-prompt.md and *-env.md files in name order. ``env=False`` leaves out the
+    *-env.md files; ``prompt`` takes the place of the *-prompt.md files."""
     if not prompts_dir.is_dir():
         raise FileNotFoundError(
             msgs.AGENT_MANIFEST_PROMPTS_DIRECTORY_MISSING_AT_DROP_MD_PROMPT.format(prompts_dir=prompts_dir, AGENT_MANIFEST=AGENT_MANIFEST)
@@ -366,12 +390,23 @@ def load_prompt_spec(prompts_dir: Path) -> PromptSpec:
 
     spec = load_agent_manifest(manifest_path) if has_manifest else PromptSpec(system="", tool_selectors=())
     parts: list[str] = []
+    prompt_placed = False
     for path in md_files:
-        if _is_benchmark_file(path) or _is_message_file(path):
-            continue  # --bench turns, never persona text (see load_benchmarks)
+        kind = _system_kind(path)
+        if kind == ENV_KIND and not env:
+            continue
+        if kind == PROMPT_KIND and prompt is not None:
+            if not prompt_placed and prompt.rstrip():
+                parts.append(prompt.rstrip())
+            prompt_placed = True
+            continue
+        if kind is None:
+            continue
         body = path.read_text(encoding="utf-8").rstrip()
         if body:
             parts.append(body)
+    if prompt is not None and not prompt_placed and prompt.rstrip():
+        parts.insert(0, prompt.rstrip())
     return replace(_with_system(spec, "\n\n".join(parts) + "\n"), exchanges=_load_exchanges(md_files))
 
 
@@ -387,11 +422,24 @@ def apply_agent_max_tokens(cfg, prompt_spec):
 def load_configured_prompt_spec(cfg, *, expand: bool = True) -> PromptSpec:
     from .cli_options import current
     options = current()
+    roots = tuple(getattr(cfg, "prompt_roots", ()))
+    if options.you_are is not None:
+        # _expand_spec writes the whole system prompt.
+        return _finish_configured_spec(PromptSpec(system="", tool_selectors=()), cfg, expand)
     if options.chat:
-        spec = PromptSpec(system=options.prompt_text(), tool_selectors=())
-        return _finish_configured_spec(spec, cfg, expand)
-    if options.replaces_prompt:
-        roots = tuple(getattr(cfg, 'prompt_roots', ()))
+        if options.system_prompt_file is not None or options.system_prompt is not None:
+            system = options.prompt_text()
+        elif options.agent is not None and len(roots) >= 3:
+            system = load_agent_prompt_spec(
+                cfg.agent_id, repo_prompts_root=roots[0], global_agents_root=roots[1],
+                project_agents_root=roots[2], env=False,
+            ).system
+        elif options.agent is not None:
+            system = load_prompt_spec(cfg.prompts_dir, env=False).system
+        else:
+            system = ""
+        return _finish_configured_spec(PromptSpec(system=system, tool_selectors=()), cfg, expand)
+    if options.system_prompt_file is not None:
         repo = roots[0] if roots else Path(__file__).resolve().parents[1] / 'prompts'
         global_root = roots[1] if len(roots) > 1 else Path.home() / '.js' / 'agents'
         manifest = global_root / 'defaultagent' / AGENT_MANIFEST
@@ -400,18 +448,21 @@ def load_configured_prompt_spec(cfg, *, expand: bool = True) -> PromptSpec:
         base = load_agent_manifest(manifest)
         spec = PromptSpec(system=options.prompt_text(), tool_selectors=base.tool_selectors)
         return _finish_configured_spec(spec, cfg, expand)
-    roots = tuple(getattr(cfg, "prompt_roots", ()))
+    env = not options.skips_env
+    agents_files = () if options.skips_agents_md else tuple(getattr(cfg, "agents_files", ()))
     if len(roots) >= 3:
         spec = load_agent_prompt_spec(
             cfg.agent_id,
             repo_prompts_root=roots[0],
             global_agents_root=roots[1],
             project_agents_root=roots[2],
-            agents_files=() if options.no_agents_md else getattr(cfg, "agents_files", ()),
+            agents_files=agents_files,
+            env=env,
+            prompt=options.system_prompt,
         )
     else:
-        spec = load_prompt_spec(cfg.prompts_dir)
-        agents_parts = [] if options.no_agents_md else _existing_text_parts(list(getattr(cfg, "agents_files", ())))
+        spec = load_prompt_spec(cfg.prompts_dir, env=env, prompt=options.system_prompt)
+        agents_parts = _existing_text_parts(list(agents_files))
         if agents_parts:
             spec = _with_system(spec, "\n\n".join([*agents_parts, spec.system.rstrip()]).rstrip() + "\n")
     return _finish_configured_spec(spec, cfg, expand)
@@ -495,10 +546,10 @@ def _expand_spec(spec: PromptSpec, cfg) -> PromptSpec:
     from .cli_options import current
     options = current()
     text = spec.system
-    if options.you_are:
+    if options.you_are is not None:
         text = f'You are {cfg.model.rsplit("/", 1)[-1]} running inside the js agent'
-        if not options.no_env and not options.chat:
-            text += '\n\n!{sh sh "$JS_ROOT/tools/envctx.c"}'
+        if options.you_are:
+            text += '\n' + options.you_are
         if options.append_system_prompt:
             text += '\n\n' + '\n\n'.join(options.append_system_prompt)
     system = expand_agent_text(text, cfg)

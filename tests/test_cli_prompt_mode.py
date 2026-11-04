@@ -417,7 +417,7 @@ def test_config_rejects_absolute_session_outside_sessions(monkeypatch, tmp_path)
 def test_js_prompt_mode_persists_turn_for_repl_continuity(monkeypatch, tmp_path, capsys):
     prompts = tmp_path / "prompts"
     prompts.mkdir()
-    (prompts / "01.md").write_text("SYSTEM\n", encoding="utf-8")
+    (prompts / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     cfg = _prompt_cfg(tmp_path, prompts, "prompt")
     calls: list[dict] = []
 
@@ -767,7 +767,7 @@ def test_prompt_mode_reasoning_off_and_maxout_forward_explicit_overrides(monkeyp
     monkeypatch.setenv("JS_REASONING", "high")
     prompts = tmp_path / "prompts"
     prompts.mkdir()
-    (prompts / "01.md").write_text("SYSTEM\n", encoding="utf-8")
+    (prompts / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     cfg = replace(_prompt_cfg(tmp_path, prompts, "knobs"), reasoning_effort="high", max_output_tokens=99)
     seen: dict[str, object] = {}
 
@@ -973,7 +973,7 @@ def test_a_session_run_under_an_agent_names_it_in_the_hint(monkeypatch, tmp_path
     def completion_stub(**kwargs):
         return _fake_stream_result("SCOPED_SESSION_OK")
 
-    def load_prompt_spec_stub(prompts_dir):
+    def load_prompt_spec_stub(prompts_dir, **_):
         loaded_prompt_dirs.append(prompts_dir)
         return cli.P.PromptSpec(system="SYSTEM\n", tool_selectors=())
 
@@ -1587,3 +1587,78 @@ def test_removed_switches_are_unknown(monkeypatch, tmp_path, flag):
 
     assert exc.value.code == 2
     assert "args" not in seen
+
+
+@pytest.mark.parametrize("argv,expected", [
+    (["--you-are", "-p", "hi"], ""),
+    (["--you-are", "Answer in one word.", "-p", "hi"], "Answer in one word."),
+    (["-p", "hi"], None),
+])
+def test_you_are_takes_optional_text(monkeypatch, tmp_path, argv, expected):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    seen = _capture_run_args(monkeypatch)
+
+    assert cli.main(argv) == 0
+    assert seen["args"].you_are == expected
+
+
+@pytest.mark.parametrize("argv", [
+    ["--no-tools", "--tools", "shell", "-p", "hi"],
+    ["--with-tools", "shell", "-p", "hi"],
+    ["--without-tools", "*", "-p", "hi"],
+    ["--no-tools", "x", "-p", "hi"],
+])
+def test_tool_flags_refuse_what_they_cannot_read(monkeypatch, tmp_path, argv):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    seen = _capture_run_args(monkeypatch)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(argv)
+    assert exc.value.code == 2
+    assert "args" not in seen
+
+
+def test_a_bad_tools_list_exits_2(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    seen = _capture_run_args(monkeypatch)
+
+    assert cli.main(["--tools", "shell:ban", "-p", "hi"]) == 2
+    assert "args" not in seen
+
+
+def _session_metadata(path: Path) -> dict:
+    for line in path.read_text(encoding="utf-8").splitlines():
+        record = json.loads(line)
+        if record.get("kind") == "session_metadata":
+            return record
+    raise AssertionError("no session metadata")
+
+
+@pytest.mark.parametrize("agent,recorded", [(None, "none"), ("defaultagent", "defaultagent")])
+def test_a_chat_session_records_chat_and_its_persona(monkeypatch, tmp_path, agent, recorded):
+    from js.cli_options import RunOptions, invocation
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
+    monkeypatch.delenv("JS_SESSION", raising=False)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kwargs: _fake_stream_result("ok"))
+
+    with invocation(RunOptions(chat=True, agent=agent)):
+        assert cli._run_prompt("hi", agent=agent, session="chatty") == 0
+
+    record = _session_metadata(session_store.folder_for(Path.cwd()) / "chatty.jsonl")
+    assert record["chat"] is True
+    assert record["agent"] == recorded
+
+
+def test_a_tools_session_records_no_chat(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
+    monkeypatch.delenv("JS_SESSION", raising=False)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kwargs: _fake_stream_result("ok"))
+
+    assert cli._run_prompt("hi", session="tooly") == 0
+
+    record = _session_metadata(session_store.folder_for(Path.cwd()) / "tooly.jsonl")
+    assert "chat" not in record
+    assert record["agent"] == "defaultagent"

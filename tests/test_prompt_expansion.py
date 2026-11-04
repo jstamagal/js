@@ -240,7 +240,7 @@ def test_persona_expands_env(tmp_path, monkeypatch):
     import js.persona as P
     d = tmp_path / "agent"
     d.mkdir()
-    (d / "00-seed.md").write_text("hello {{NAME}}\n", encoding="utf-8")
+    (d / "00-prompt.md").write_text("hello {{NAME}}\n", encoding="utf-8")
     monkeypatch.setenv("NAME", "world")
     spec = P.load_configured_prompt_spec(_cfg(d))
     assert "hello world" in spec.system
@@ -252,7 +252,7 @@ def test_persona_code_blocked_leaves_literal_and_starts(tmp_path, capsys):
     import js.persona as P
     d = tmp_path / "agent"
     d.mkdir()
-    (d / "00-seed.md").write_text("ctx !{sh echo hi}\n", encoding="utf-8")
+    (d / "00-prompt.md").write_text("ctx !{sh echo hi}\n", encoding="utf-8")
     spec = P.load_configured_prompt_spec(_cfg(d, allow_inline_code=False))
     assert "!{sh echo hi}" in spec.system  # left literal, not expanded, not crashed
     assert capsys.readouterr().err  # a warning, and the load goes on
@@ -264,7 +264,7 @@ def test_persona_unknown_subsystem_degrades(tmp_path, capsys):
     import js.persona as P
     d = tmp_path / "agent"
     d.mkdir()
-    (d / "00-seed.md").write_text("ctx !{wat huh}\n", encoding="utf-8")
+    (d / "00-prompt.md").write_text("ctx !{wat huh}\n", encoding="utf-8")
     spec = P.load_configured_prompt_spec(_cfg(d, allow_inline_code=True))
     assert "!{wat huh}" in spec.system
     assert capsys.readouterr().err  # a warning, and the load goes on
@@ -284,7 +284,7 @@ def test_persona_passes_configured_inline_code_timeout(tmp_path, monkeypatch):
 
     d = tmp_path / "agent"
     d.mkdir()
-    (d / "00-seed.md").write_text("ctx !{sh echo hi}\n", encoding="utf-8")
+    (d / "00-prompt.md").write_text("ctx !{sh echo hi}\n", encoding="utf-8")
     cfg = _cfg(d, allow_inline_code=True)
     cfg.inline_code_timeout_s = 17
     monkeypatch.setattr(P, "expand_prompt", fake_expand)
