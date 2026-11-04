@@ -75,7 +75,6 @@ install:
         exit 1
     fi
     repo="$(pwd -P)"
-    uv_bin="$(command -v uv)"
     bin="$HOME/.local/bin"
     launcher="$bin/js"
     wiki="$bin/wiki"
@@ -103,7 +102,12 @@ install:
     #!/bin/sh
     $marker in $repo.
     # Brings the checkout's venv in line with uv.lock, then runs its js.
-    "$uv_bin" sync --quiet --no-dev --inexact --project "$repo" {{ browser-extra }} ||
+    # uv is looked up on PATH on every start.
+    if ! command -v uv >/dev/null 2>&1; then
+        echo "js launcher: uv not found on PATH" >&2
+        exit 1
+    fi
+    uv sync --quiet --no-dev --inexact --project "$repo" {{ browser-extra }} ||
         echo "js launcher: uv sync failed; starting the venv as it stands" >&2
     exec "$repo/.venv/bin/js" "\$@"
     EOF

@@ -24,7 +24,9 @@ it asks nothing and names what is missing.
 The `js` on PATH is a launcher: on every start it brings this checkout's venv in
 line with `uv.lock` (`uv sync --no-dev --inexact`, a few milliseconds when nothing
 changed) and runs that venv's js, so a dependency added to the project is there
-the next time js starts. It runs the venv's js directly rather than through
+the next time js starts. The launcher finds `uv` on PATH each time it runs; with
+no `uv` there it exits 1 (`js launcher: uv not found on PATH`), and when
+`uv sync` fails it says so and starts the venv as it stands. It runs the venv's js directly rather than through
 `uv run`, which would put the venv first on PATH for every shell command the
 model runs. `just uninstall` removes the launcher and the `wiki` symlink.
 
