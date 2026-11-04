@@ -1,25 +1,15 @@
 # crush: Charm's Crush: the charmtone palette on the terminal's own background.
-# A theme is fset lines: palette slots, colours and formats.
+# A theme is a palette: fset PALETTE_nn lines, each slot's #rrggbb.
 
-fset COLOR_TEXT #dfdbdd
-fset COLOR_DIM #b8b4c2
-fset COLOR_USER #dfdbdd
-fset COLOR_USER_MARK $HOST_COLOR|$COLOR_USER
-fset COLOR_AGENT #ff60ff
-fset COLOR_AGENT_MARK $HOST_COLOR|$COLOR_AGENT
-fset COLOR_WARN #e59500
-fset COLOR_ERROR #ff8aa7
-fset COLOR_OK #00c555
-fset COLOR_TOOL #1fb4ff
-fset COLOR_TOOL_OUTPUT #e1e0e5
-fset COLOR_PANEL #2d2c35
-fset COLOR_ACCENT #1fb4ff
-fset COLOR_ADDED #00c555
-fset COLOR_REMOVED #ff8aa7
-fset COLOR_CODE #ff8aa7
-fset COLOR_REASONING #858392
-fset COLOR_SEPARATOR #3a3943
-fset COLOR_STATUS_BACKGROUND #6b50ff
-fset COLOR_STATUS_TEXT #fffaf1
-fset COLOR_STATUS_ACCENT $HOST_COLOR|$COLOR_ACCENT
-fset CODE_STYLE dracula
+fset PALETTE_00 #fffaf1
+fset PALETTE_02 #6b50ff
+fset PALETTE_03 #00c555
+fset PALETTE_04 #ff8aa7
+fset PALETTE_06 #ff8aa7
+fset PALETTE_07 #e59500
+fset PALETTE_10 #1fb4ff
+fset PALETTE_12 #1fb4ff
+fset PALETTE_13 #ff60ff
+fset PALETTE_14 #b8b4c2
+fset PALETTE_93 #3a3943
+fset PALETTE_94 #858392

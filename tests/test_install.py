@@ -133,7 +133,7 @@ def test_model_setup_accepts_supplied_answer_words():
 
 
 def test_the_login_flow_runs_until_the_default_routes_and_the_jsrc_is_left_alone():
-    text = "# mine\nset MODEL mimo/mimo-v3\nfset NET_DISPLAY 2\nalias x /help\n"
+    text = "# mine\nset MODEL mimo/mimo-v3\nset NET_DISPLAY 2\nalias x /help\n"
     _write_jsrc(text)
     _login("deepseek", ["deepseek-flash"])
     ask = _answers("a")

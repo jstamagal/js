@@ -735,7 +735,7 @@ rich — code, output, elapsed, the namespace, save/load activity. stderr so
 - `normal` — code, merged output, elapsed, namespace, defined/gone.
 - `verbose` — stdout/stderr/display split apart, plus kernel lifecycle events.
 
-Set the baseline with `fset KERNEL_VERBOSITY <level>` (or `JS_KERNEL_VERBOSITY`);
+Set the baseline with `set KERNEL_VERBOSITY <level>` (or `JS_KERNEL_VERBOSITY`);
 override one call with the tool's `verbosity` parameter. `fset
 KERNEL_LINES_MAX <n>` (default 24) caps each rendered section so a
 4000-line cell cannot scroll the screen away; the hidden count is shown. The

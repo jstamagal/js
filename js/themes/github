@@ -1,26 +1,15 @@
 # github: Light: GitHub's light palette.
-# A theme is fset lines: palette slots, colours and formats.
+# A theme is a palette: fset PALETTE_nn lines, each slot's #rrggbb.
 
-fset COLOR_BACKGROUND #ffffff
-fset COLOR_TEXT #1f2328
-fset COLOR_DIM #59636e
-fset COLOR_USER #1f2328
-fset COLOR_USER_MARK $HOST_COLOR|$COLOR_USER
-fset COLOR_AGENT #8250df
-fset COLOR_AGENT_MARK $HOST_COLOR|$COLOR_AGENT
-fset COLOR_WARN #9a6700
-fset COLOR_ERROR #d1242f
-fset COLOR_OK #1a7f37
-fset COLOR_TOOL #8250df
-fset COLOR_TOOL_OUTPUT #1f2328
-fset COLOR_PANEL #f6f8fa
-fset COLOR_ACCENT #0969da
-fset COLOR_ADDED #1a7f37
-fset COLOR_REMOVED #d1242f
-fset COLOR_CODE #1f2328
-fset COLOR_REASONING #59636e
-fset COLOR_SEPARATOR #d1d9e0
-fset COLOR_STATUS_BACKGROUND #f6f8fa
-fset COLOR_STATUS_TEXT #1f2328
-fset COLOR_STATUS_ACCENT $HOST_COLOR|$COLOR_ACCENT
-fset CODE_STYLE default
+fset PALETTE_00 #1f2328
+fset PALETTE_02 #f6f8fa
+fset PALETTE_03 #1a7f37
+fset PALETTE_04 #d1242f
+fset PALETTE_06 #1f2328
+fset PALETTE_07 #9a6700
+fset PALETTE_10 #8250df
+fset PALETTE_12 #0969da
+fset PALETTE_13 #8250df
+fset PALETTE_14 #59636e
+fset PALETTE_93 #d1d9e0
+fset PALETTE_94 #59636e

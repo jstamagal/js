@@ -71,7 +71,7 @@ def test_a_literal_dollar_survives_save_and_reload(tmp_path):
 
 def test_a_display_setting_line_expands_like_set_and_a_saved_dollar_reloads(tmp_path):
     path = tmp_path / "jsrc"
-    path.write_text("fset REASONING_DISPLAY 3\nfset TOOLS_DISPLAY $REASONING_DISPLAY\n", encoding="utf-8")
+    path.write_text("set REASONING_DISPLAY 3\nset TOOLS_DISPLAY $REASONING_DISPLAY\n", encoding="utf-8")
     loaded = settings.seed_defaults()
     assert settings.load_jsrc_files([path], loaded) == []
     assert settings.knob(loaded, "TOOLS_DISPLAY") == 3

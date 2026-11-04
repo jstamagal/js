@@ -47,7 +47,7 @@ def test_fset_lines_survive_save_and_load(tmp_path):
     live = settings.seed_defaults()
     setcmd.fset_command(live, "THEME paper")
     setcmd.fset_command(live, "MODEL_SET now on $0-")
-    setcmd.fset_command(live, "TOOLS_DISPLAY 2")
+    setcmd.set_command(live, "TOOLS_DISPLAY 2")
     path = tmp_path / "jsrc"
     settings.save_changes(path, settings.seed_defaults(), live, fset_before={})
     fset.reset()
@@ -62,7 +62,7 @@ def test_fset_lines_survive_save_and_load(tmp_path):
 def test_an_old_display_setting_line_renames_to_an_fset_line():
     from js.rename import rename_old_names
 
-    assert rename_old_names("set ui.net 0")[0] == "fset NET_DISPLAY 0"
+    assert rename_old_names("set ui.net 0")[0] == "set NET_DISPLAY 0"
     assert rename_old_names("set theme.accent #1fb4ff")[0] == "fset COLOR_TOOL #1fb4ff"
     assert rename_old_names("set model.id x")[0] == "set MODEL x"
 
@@ -135,3 +135,35 @@ def test_a_theme_file_reads_its_lines_as_a_jsrc_does(tmp_path):
     path = tmp_path / "theme"
     path.write_text('fset\tMARK_GAP\t2\nfset MARK_USER ""\nfset MODEL_SET "two\\nlines $0"\n', encoding="utf-8")
     assert fset.read_file(path) == {"MARK_GAP": "2", "MARK_USER": "", "MODEL_SET": "two\nlines $0"}
+
+
+def test_no_theme_is_set_by_default_and_the_palette_is_js_fset_s():
+    assert fset.theme_name() == ""
+    assert fset.hex_for("PALETTE_04") == fset.defaults()["PALETTE_04"].lower()
+
+
+def test_every_built_in_theme_is_a_palette():
+    assert {name: str(fset.theme_error(name)) for name in fset.themes() if fset.theme_error(name)} == {}
+
+
+def test_a_theme_in_the_home_wins_over_the_built_in_and_an_unknown_one_is_refused(monkeypatch, tmp_path):
+    from js import paths
+
+    monkeypatch.setattr(paths, "home", lambda: tmp_path)
+    (tmp_path / "themes").mkdir()
+    (tmp_path / "themes" / "crush").write_text("fset PALETTE_04 #123456\n", encoding="utf-8")
+    (tmp_path / "themes" / "broken").write_text("fset COLOR_ERROR #123456\n", encoding="utf-8")
+    fset._themes.clear()
+    assert setcmd.fset_command({}, "THEME crush").error is None
+    assert fset.hex_for("COLOR_ERROR") == "#123456"
+    assert setcmd.fset_command({}, "THEME no-such-theme").error is not None
+    assert setcmd.fset_command({}, "THEME broken").error is not None
+    assert fset.theme_name() == "crush"
+    fset._themes.clear()
+
+
+def test_a_display_level_is_a_set_setting_and_fset_refuses_it():
+    live = settings.seed_defaults()
+    assert setcmd.set_command(live, "TOOLS_DISPLAY 2").error is None
+    assert settings.knob(live, "TOOLS_DISPLAY") == 2
+    assert setcmd.fset_command(live, "TOOLS_DISPLAY 3").error is not None

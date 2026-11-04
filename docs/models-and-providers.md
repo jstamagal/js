@@ -252,7 +252,7 @@ independently of `EFFORT`:
 | `2` | Stream and leave visible |
 | `3` | Stream and leave visible, with the provider's token count; no count when the provider gives none |
 
-Use `/fset REASONING_DISPLAY <0-3>` and `/save`; `JS_REASONING_DISPLAY` is its canonical
+Use `/set REASONING_DISPLAY <0-3>` and `/save`; `JS_REASONING_DISPLAY` is its canonical
 environment variable. Setting changes apply to subsequent turns. In the standard async screen,
 **Ctrl-O** collapses or expands retained reasoning blocks without changing the
 input line; a manual toggle overrides auto-collapse for those blocks.
