@@ -175,9 +175,11 @@
 # Network chatter in the REPL screen. Retries, the line that gives up on
 # them and the wait for a first byte show at every level.
 #   0  nothing else
-#   1  also failures js does not retry
+#   1  also failures js does not retry, and what changes the session: a
+#      compaction request, a resend with a bigger output cap, refused
+#      reasoning dropped
 #   2  also a line when the prompt cache breaks
-#   3  also "Connecting" and "Connected" for every request, model catalog
+#   3  also "Connecting" and "Connected" for every other request, model catalog
 #      refreshes and per-call stream stats
 #   example:  set NET_DISPLAY 0
 #set NET_DISPLAY 2

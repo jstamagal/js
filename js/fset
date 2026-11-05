@@ -259,6 +259,8 @@ fset NOT_SAVED_NO_RESUME %C07%G%C Session not saved. Resume unavailable.
 fset RESUME_MODEL_FALLBACK %C07%G%C No login for $0, the model this session last ran on. Continuing on $1-.
 fset EMPTY_SESSION %C07%G%C Empty session. Nothing to resume: $0-
 fset RESPONSE_INCOMPLETE %C07%G%C Response incomplete: $0-
+fset SIGNED_REASONING_DROPPED %C07%G%C The provider refused replayed reasoning; dropped it from $0- messages and sending again.
+fset THINKING_TURN_RESTARTED %C07%G%C The provider refused this turn's thinking; restarted the turn from $0- messages and sending again.
 fset MAX_OUTPUT_RESUMING %C07%G%C Reply hit its output cap; asking the model to resume, $0 of $1-.
 fset CATALOG_UPDATE_FAILED %C07%G%C models.dev cache not refreshed: $0-
 fset LOGIN_BAD_HEADERS %C07%G%C Headers must use k=v,k=v. Nothing saved yet.

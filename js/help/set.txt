@@ -848,9 +848,11 @@ REASONING_DISPLAY
     Display only; session reasoning is always retained.
 
 NET_DISPLAY
-    Network display in the async screen: 0 nothing, 1 failures, 2 also
-    prompt cache breaks, 3 also Connecting/Connected lines for every
-    request, catalog refreshes and per-call stream stats. Retries, the line
+    Network display in the async screen: 0 nothing; 1 failures and what
+    changes the session: a compaction request, a resend with a larger
+    output cap, refused reasoning dropped; 2 also prompt cache breaks; 3
+    also Connecting/Connected lines for every other request, catalog
+    refreshes and per-call stream stats. Retries, the line
     that gives up on them and the wait for a first byte show at every level.
 
 TOOLS_DISPLAY

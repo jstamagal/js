@@ -125,6 +125,12 @@ def say_for_caller(level: int, line: str) -> None:
     say(level, _labelled(_role.get(), line))
 
 
+def say_or_print_for_caller(level: int, line: str) -> None:
+    """`say_or_print`, prefixed with the calling role's label: a line about
+    something that changed the session, which `js -p` prints too."""
+    say_or_print(level, _labelled(_role.get(), line))
+
+
 def _labelled(role: NetRole, line: str) -> str:
     if not role.label:
         return line
@@ -174,7 +180,10 @@ class NetCall:
         self._sent = False
         if role.hold is not None:
             role.hold.pending = None
-        say(3, self._connecting_line())
+        # A compaction request changes the session; every other request's
+        # line is chatter.
+        compacting = role.label == msgs.COMPACTING_ROLE.words()
+        say(1 if compacting else 3, self._connecting_line())
 
     def _connecting_line(self) -> str:
         label, agent = self._role.label, self._role.agent
