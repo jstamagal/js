@@ -248,8 +248,11 @@ PARALLEL_TOOLS_MAX
     after the calls before it. 1 runs every call in turn.
 
 RETRY_COUNT_MAX
-    Retries of one model request after a retryable failure: a 429, a 5xx, a
-    dropped or idle stream. Each waits what the provider's Retry-After or
+    Retries of one model request after a retryable failure: a 429, 502,
+    503, 504 or 529; a network failure: refused, no connection in
+    CONNECT_TIMEOUT, or a connection dropped before or during the reply; a
+    stream idle past STREAM_IDLE_TIMEOUT. A 500 and every other 4xx fail at
+    once. Each waits what the provider's Retry-After or
     retry-after-ms header asks, else 8s each time by default. Defaults to
     3 retries. 0 fails on the first error.
 
@@ -257,10 +260,20 @@ RETRY_WAIT_MAX
     Longest Retry-After wait honoured. A provider asking for longer fails
     the request at once. 0 honours any wait.
 
+CONNECT_TIMEOUT
+    Seconds a model request may take to connect: the TCP and TLS handshake.
+    No connection in time is retried under RETRY_COUNT_MAX. 0 waits forever.
+
+FIRST_BYTE_TIMEOUT
+    Seconds from sending a model request to its first response body byte:
+    the prefill. The status bar, or stderr under js -p, counts the wait; ^C
+    cancels it. When it runs out the request fails once, naming this
+    setting, and is not retried. 0 waits forever.
+
 STREAM_IDLE_TIMEOUT
-    Seconds a model request may go without a response byte before it is
-    aborted and retried under RETRY_COUNT_MAX. SSE keep-alive comments count
-    as bytes. 0 waits forever.
+    Seconds a model request may go without a response byte after its first
+    before it is aborted and retried under RETRY_COUNT_MAX. Any byte resets
+    it: SSE keep-alive comments and reasoning included. 0 waits forever.
 
 OUTPUT_TOKENS_RETRY_MAX
     A reply cut off by its output-token cap is sent again once with this

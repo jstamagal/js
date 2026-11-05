@@ -797,7 +797,7 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                 # can only append, so the call cannot be made right.
                 raise ai.ProviderResponseError(
                     f"OpenAI Codex tool call {call.call_id} arguments do not match their deltas",
-                    provider=_PROVIDER, is_retryable=True,
+                    provider=_PROVIDER,
                 )
             rest = final[len(sent):]
             call.chunks.append(rest)
@@ -947,24 +947,22 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                             body=raw,
                             code=code,
                             error_type=error_type,
-                            is_retryable=code in {"model_error", "server_error", "internal_error"},
                         )
                 # The body ended without response.completed/done/incomplete:
                 # the connection broke. Ending cleanly would pass a cut answer
                 # or a half-streamed tool call off as finished, and a call
                 # marked "incomplete" still reaches _dispatch unless every
                 # consumer checks the flag (doc #372, ruhondo #378). Raise a
-                # retryable error instead; a server-stated response.incomplete
-                # above stays data.
-                raise ai.ProviderResponseError(
+                # connection error instead, which is retried; a server-stated
+                # response.incomplete above stays data.
+                raise ai.ProviderConnectionError(
                     "OpenAI Codex stream ended without a terminal event",
                     provider=_PROVIDER,
-                    is_retryable=True,
                 )
         except httpx.TimeoutException as exc:
-            raise ai.ProviderTimeoutError("OpenAI Codex request timed out", provider=_PROVIDER, is_retryable=True) from exc
+            raise ai.ProviderTimeoutError("OpenAI Codex request timed out", provider=_PROVIDER) from exc
         except httpx.TransportError as exc:
-            raise ai.ProviderConnectionError(f"OpenAI Codex connection failed: {exc}", provider=_PROVIDER, is_retryable=True) from exc
+            raise ai.ProviderConnectionError(f"OpenAI Codex connection failed: {exc}", provider=_PROVIDER) from exc
 
 
 async def fetch_models_for_login(login: Login) -> list[str]:

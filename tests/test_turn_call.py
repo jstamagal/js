@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from js import compaction, model_client, retry, turn_call
+from js import messages as msgs
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
 from js.toolkit.core import TurnStatus
@@ -118,7 +119,7 @@ class _Turn:
         self.caller = ModelCaller(
             ModelRequest(model="m", provider_id=provider_id, base_url=None, api_key=None,
                          effort=None, max_out=max_out),
-            CallLimits(retry=retry.Budget(attempts=attempts, max_wait=max_wait), stream_idle=None,
+            CallLimits(retry=retry.Budget(attempts=attempts, max_wait=max_wait), stream=retry.StreamLimits(),
                        max_output_escalation=escalation, max_output_resumes=0),
             convo=self.convo, budget=self.budget,
             sink=StreamSink(self.telemetry, status, events, settings={}, suppress_output=True),
@@ -225,6 +226,13 @@ def test_a_cut_off_reply_is_resent_once_with_a_larger_cap(tmp_path, monkeypatch)
     assert [c["max_output_tokens"] for c in turn.calls] == [1000, 8000, 1000]
 
 
+def test_an_escalated_cap_is_said_without_a_screen(tmp_path, monkeypatch, capsys):
+    """js -p has no network channel; a change to the session still shows."""
+    turn = _Turn(tmp_path, monkeypatch, [_cut("half"), _done()], escalation=8000)
+    turn.call()
+    assert "8000" in capsys.readouterr().err
+
+
 def test_a_refused_escalated_cap_falls_back_to_the_configured_cap(tmp_path, monkeypatch):
     turn = _Turn(tmp_path, monkeypatch, [_cut("half"), _fatal(), _cut("half again")], escalation=8000)
     assert turn.call().result.text == "half again"
@@ -239,7 +247,7 @@ def test_a_cut_off_tool_call_with_whole_arguments_is_not_resent(tmp_path, monkey
     assert len(turn.calls) == 1
 
 
-def test_a_refused_signature_is_dropped_once_and_the_history_replayed(tmp_path, monkeypatch):
+def test_a_refused_signature_is_dropped_once_and_the_history_replayed(tmp_path, monkeypatch, capsys):
     messages = [
         {"role": "user", "content": "go"},
         {"role": "assistant", "content": "ok", "reasoning_content": "thought",
@@ -256,11 +264,12 @@ def test_a_refused_signature_is_dropped_once_and_the_history_replayed(tmp_path, 
     assert turn.kinds().count("signed_reasoning_dropped") == 1
     assert "reasoning_parts" not in messages[1]
     assert turn.convo.ai is not first
+    assert msgs.SIGNED_REASONING_DROPPED.words(messages=1) in capsys.readouterr().err
 
 
 def test_call_limits_read_the_resilience_settings():
-    limits = CallLimits.from_settings({"RETRY_COUNT_MAX": 4, "RETRY_WAIT_MAX": 60, "STREAM_IDLE_TIMEOUT": 0, "OUTPUT_TOKENS_RETRY_MAX": 32000, "OUTPUT_RESUMES_MAX": 2})
-    assert limits == CallLimits(retry=retry.Budget(attempts=4, max_wait=60.0), stream_idle=None,
+    limits = CallLimits.from_settings({"RETRY_COUNT_MAX": 4, "RETRY_WAIT_MAX": 60, "STREAM_IDLE_TIMEOUT": 0, "CONNECT_TIMEOUT": 30, "FIRST_BYTE_TIMEOUT": 600, "OUTPUT_TOKENS_RETRY_MAX": 32000, "OUTPUT_RESUMES_MAX": 2})
+    assert limits == CallLimits(retry=retry.Budget(attempts=4, max_wait=60.0), stream=retry.StreamLimits(connect=30.0, first_byte=600.0),
                                 max_output_escalation=32000, max_output_resumes=2)
 
 
@@ -278,7 +287,7 @@ def test_escalation_respects_window_when_usage_has_no_prompt_tokens():
     caller = ModelCaller.__new__(ModelCaller)
     caller._request = request
     caller._limits = CallLimits(
-        retry=retry.Budget(attempts=1, max_wait=0), stream_idle=None,
+        retry=retry.Budget(attempts=1, max_wait=0), stream=retry.StreamLimits(),
         max_output_escalation=8000, max_output_resumes=0,
     )
     caller._context = SimpleNamespace(last_output_tokens=500)

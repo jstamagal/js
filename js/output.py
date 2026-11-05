@@ -27,7 +27,11 @@ The loop's events, and their fields:
     retry_wait     n, attempts, delay, error, label
     retry_tick     left: seconds of the retry's wait still to go
     retry_done     (none): the retry's wait ended, waited out or cancelled
-    retry_gave_up  n, label: retries made before the caller stopped
+    first_byte_tick waited: seconds the main turn's request has waited for
+                   its first response byte, once a second
+    first_byte_done (none): that wait ended
+    retry_gave_up  n, error, label: retries made before the caller stopped,
+                   and the failure that ended them
     user_echo      text
     kernel_execution context, level, code, stdout, stderr, display, error,
                    elapsed, cell, added, removed, namespace, images, interrupted

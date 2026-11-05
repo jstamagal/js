@@ -161,6 +161,16 @@ class Message:
             fmt = fmt[len("$BANNER "):]
         return fset.runs(fmt, _holes(self.template, fields))
 
+    def piece_runs(self, **fields: Any) -> list[fset.Run]:
+        """`body_runs` painted in the entry's severity where its format sets
+        no colour: the entry as a piece of another message."""
+        fmt = self.format()
+        if fmt == self.default_format() and fmt.startswith("$BANNER "):
+            fmt = fmt[len("$BANNER "):]
+        holes = _holes(self.template, fields)
+        role = SEVERITY_ROLE[self.severity]
+        return fset.runs(fmt, holes, hole=role if holes else "", whole="" if holes else role)
+
     def words(self, **fields: Any) -> str:
         """The entry's wording through its /fset format, plain and without a
         leading `$BANNER`: for a channel that takes text and no colour, such
@@ -235,9 +245,9 @@ def _holes(template: str, fields: dict[str, Any]) -> list[str | list[fset.Run]]:
 
 
 def _said_runs(said: Said, spec: str) -> list[fset.Run] | str:
-    """A `said()` entry's runs through its own format, padded as ``spec``
-    pads it; its words alone when ``spec`` does more than pad."""
-    parts = said.message.body_runs(**said.fields)
+    """A `said()` entry's runs through its own format and severity, padded
+    as ``spec`` pads it; its words alone when ``spec`` does more than pad."""
+    parts = said.message.piece_runs(**said.fields)
     words = fset.to_plain(parts)
     shaped = format(words, spec)
     at = shaped.find(words)
@@ -341,6 +351,18 @@ class _HelpFormatter(argparse.HelpFormatter):
 def plural(n: int, word: str) -> str:
     """`n word`, with an s when n is not one."""
     return (COUNT_ONE if n == 1 else COUNT_MANY).words(number=n, noun=word)
+
+
+def duration(seconds: float) -> str:
+    """Whole seconds as a running clock reads them: `12s`, `4m12s`, `1h04m12s`."""
+    total = max(0, int(seconds))
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return DURATION_HOURS.words(h=hours, m=minutes, s=secs)
+    if minutes:
+        return DURATION_MINUTES.words(m=minutes, s=secs)
+    return DURATION_SECONDS.words(s=secs)
 
 
 # ---------------------------------------------------------------------------
@@ -878,10 +900,16 @@ RETRY_BUDGET_EXHAUSTED = Message("Tool-loop retry budget exhausted.", GRAVE)
 MAX_ITERATIONS = Message("Tool loop hit max iterations: {limit}", GRAVE)
 RESPONSE_INCOMPLETE = Message("Response incomplete: {reason}", WARN)
 MAX_OUTPUT_ESCALATED = Message("Reply hit its output cap of {before}; sending again with {after}.")
+SIGNED_REASONING_DROPPED = Message(
+    "The provider refused replayed reasoning; dropped it from {messages} messages and sending again.", WARN)
+THINKING_TURN_RESTARTED = Message(
+    "The provider refused this turn's thinking; restarted the turn from {messages} messages and sending again.", WARN)
+MODEL_REMOVED = Message("Removed {model} from the model list: {reasons}", WARN)
 MAX_OUTPUT_RESUMING = Message("Reply hit its output cap; asking the model to resume, {n} of {limit}.", WARN)
 RETRY_WAIT = Message("Retry {n}/{of} in {seconds:.1f}s: {failure}")
-RETRY_GAVE_UP = Message("Gave up after {n} retries.", GRAVE)
+RETRY_GAVE_UP = Message("Gave up after {n} retries: {failure}")
 RETRY_COUNTDOWN = Message("Retry {n}/{of} in {seconds:.0f}s")
+FIRST_BYTE_COUNTER = Message("Waiting for first byte {waited}")
 STEERED = Message("Steered.")
 FLIGHT_LOG_FAILED = Message("Flight log not written: {error}", GRAVE)
 COMPACTION_FAILED = Message("Compaction failed: {error}", GRAVE)
@@ -899,9 +927,15 @@ NET_ROLE_CONNECTED = Message("{role}: connected: {host}  {ms}ms")
 NET_COMPACTING = Message("Compacting: {model} via {url}")
 NET_CACHE_BREAK = Message(
     "Prompt cache break: cache read {before} -> {after} tokens, down {drop:.0%}, {idle}s since the last request")
-NET_DNS_FAILURE = Message("DNS failure")
-NET_TIMEOUT = Message("Timeout")
-NET_CONNECT_FAILED = Message("Connection failed")
+# A failed request: what failed (an HTTP status, or one of the kinds below,
+# each painted in COLOR_ERROR), then what it names.
+NET_FAILURE = Message("{kind}: {detail}", banner=False)
+NET_STATUS_FAILURE = Message("{status} {reason}", banner=False)
+NET_FAILURE_STATUS = Message("{status}", GRAVE, banner=False)
+NET_FAILURE_TYPE = Message("{name}", GRAVE, banner=False)
+NET_DNS_FAILURE = Message("DNS failure", GRAVE, banner=False)
+NET_TIMEOUT = Message("Timeout", GRAVE, banner=False)
+NET_CONNECT_FAILED = Message("Connection failed", GRAVE, banner=False)
 CATALOG_UPDATING = Message("Updating the models.dev cache.")
 CATALOG_UPDATE_FAILED = Message("models.dev cache not refreshed: {error}", WARN)
 
@@ -1428,7 +1462,9 @@ SUMMARY_RESPONSE_NO_TEXT = Message("summary response did not contain a completed
 
 COMPACTION_FLIGHT_START = Message("model={compact_model} trigger={value} messages={original_len}", banner=False)
 
-STREAM_IDLE_NO_BYTES = "no response bytes for {seconds:g}s (STREAM_IDLE_TIMEOUT)"
+STREAM_IDLE_NO_BYTES = "no response bytes for {seconds:g}s after the first (STREAM_IDLE_TIMEOUT)"
+FIRST_BYTE_NONE = "no response byte {seconds:g}s after the request was sent (FIRST_BYTE_TIMEOUT)"
+CONNECT_TIMED_OUT = "no connection after {seconds:g}s (CONNECT_TIMEOUT)"
 
 RESPONSES_STREAM_FAILED = Message("OpenAI Responses stream failed", banner=False)
 
@@ -1534,7 +1570,10 @@ STATUS_TOOL_EXTRA = Message(" +{tool_extra}", banner=False)
 
 STATUS_TOOL_ELAPSED = Message("{tool}{extra} {elapsed}s", banner=False)
 
-STATUS_RESPONSE_BYTES = Message("{value:,}B", banner=False)
+STATUS_FIRST_BYTE_WAIT = Message("waiting for first byte {waited}", banner=False)
+DURATION_SECONDS = Message("{s}s", banner=False)
+DURATION_MINUTES = Message("{m}m{s:02d}s", banner=False)
+DURATION_HOURS = Message("{h}h{m:02d}m{s:02d}s", banner=False)
 
 STATUS_RETRY = Message("retry {n}/{of} in {seconds:.0f}s", banner=False)
 

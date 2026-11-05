@@ -222,7 +222,7 @@ left as supplied. Recheck this adapter when upstream stream ownership changes.
 
 The same wrapper carries the `NET_DISPLAY` channel. `stream_model_async` opens a
 `NetCall` per request (`stream_transport.begin_call`); the response iterator
-counts bytes into the caller's `TurnStatus` until the first token, and a
+feeds the channel's handshake line, and a
 `trace` request extension reports the TCP/TLS handshake as "connected" (the
 first token stands in when the transport cannot say). Who is calling (main
 turn, `Subagent N`, `Compacting`) is a context variable set by
@@ -230,11 +230,11 @@ turn, `Subagent N`, `Compacting`) is a context variable set by
 its role holds each request failure instead of printing it: the next request
 drops it, and the turn prints it (level 1) only when it gives up. The retry
 itself prints at every level (`retry.wait` emits `retry_wait`, a
-`retry_tick` per second and `retry_done`; `retry_gave_up` when the budget is
-spent): the console prints the failure and the wait, and counts it down on
-stderr under `-p` or on the status bar through `TurnStatus`. An Anthropic
-`error` event inside a stream that answered 200 is retried as the status its
-type stands for (`model_client.error_status`). After each
+`retry_tick` per second and `retry_done`; `retry_gave_up` with the last
+failure when the budget is spent): the console prints the failure and the
+wait, and counts it down on stderr under `-p` or on the status bar through
+`TurnStatus`. The give-up line names the last failure, so the held one is
+dropped. After each
 response `compaction.note_response` compares its cache-read tokens with the
 previous response of the same conversation and model; a drop of more than 5%
 and at least 2000 tokens prints one cache-break line at level 2. A compaction or
@@ -253,7 +253,18 @@ compacts. The meter's callback adds the call to the turn's totals, which
 
 Provider request retry:
 
-- A failure with SDK `ProviderAPIError.is_retryable` is retried up to
+- One rule decides what is retried: `model_client.retryable`, applied in
+  `_stream_async` as a failure leaves the SDK, which sets the error's
+  `is_retryable` for every retrying caller. A status in `RETRY_STATUSES`
+  (429, 502, 503, 504, 529) is retried; 500 and every other 4xx fail at once. An
+  Anthropic `error` event inside a stream that answered 200 counts as the
+  status its type stands for (`error_status`), and an OpenAI Responses stream
+  error as the status its `code` stands for (`rate_limit_exceeded` 429;
+  `server_error`, `internal_error`, `model_error` 500). A network failure is
+  retried: refused, past `CONNECT_TIMEOUT`, or a connection dropped before
+  or during the reply (including a Codex stream that ends without a
+  terminal event). Any other answer with no status is not.
+- A failure the rule retries is retried up to
   `RETRY_COUNT_MAX` times (default 3). Each retry waits what the
   response's `retry-after-ms` or `Retry-After` header asks (seconds or an HTTP
   date), else a flat 8s by default (no jitter). A wait longer than
@@ -263,13 +274,21 @@ Provider request retry:
   itself (`turn_call.ModelCaller`), between overflow and max-output recovery; every other model
   request (compaction summaries, the `/login` test) goes through
   `retry.call` under the same budget.
-- `STREAM_IDLE_TIMEOUT` (default 300, 0 off) is the stream idle
-  watchdog. `_stream_async` runs the request under an `asyncio.timeout` whose
-  deadline moves forward on every response chunk the transport reads (SSE
-  keep-alive comments included) and on every SDK event. The wait for the
-  response headers counts too. When it expires the request fails with the
-  retryable `StreamIdleError` and the retry budget above takes over.
-  Compaction's summary calls get the same limit and the same retries.
+- Three clocks bound a request (`retry.StreamLimits`, 0 is no limit for
+  each). `CONNECT_TIMEOUT` (default 15) is the TCP and TLS handshake, laid
+  on each request's httpx timeout by `stream_transport.own_responses`, which
+  also clears the transport's read timeout. `_stream_async` runs the request
+  under one `asyncio.timeout`: from the request being sent to the first
+  response body byte it is `FIRST_BYTE_TIMEOUT` (default 0), the prefill;
+  when it expires the request fails once with `FirstByteTimeoutError`, not
+  retried. From the first byte on it is `STREAM_IDLE_TIMEOUT` (default 300),
+  moved forward on every chunk the transport reads (SSE keep-alive comments
+  included) and every SDK event; when it expires the request fails with the
+  retryable `StreamIdleError`. Compaction's summary calls get the same clocks
+  and the same retries. The wait for the first byte shows as `waiting for
+  first byte 4m12s` on the status bar (`TurnStatus.waiting_since`) and,
+  under `js -p` on a terminal, on its own stderr row
+  (`stream_transport.FirstByteWait`).
 - Context overflow has three separate recovery rounds, each followed by a new
   request. Recovery clears old tool results, then summarizes if needed. This
   also works after tool execution: only the rejected model request is retried.

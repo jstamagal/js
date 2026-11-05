@@ -407,27 +407,22 @@ class TurnStatus:
     tool_extra: int = 0          # parallel siblings of `tool` in the same batch
     tool_started: float = 0.0    # time.monotonic() when the batch started
     compacting: bool = False
-    net_bytes: int = 0           # response bytes of this call before its first token
+    waiting_since: float = 0.0   # time.monotonic() when the request waiting for its first byte was sent; 0 when none
     retry: int = 0               # the retry being waited for; 0 when none
     retry_of: int = 0            # the retries the budget allows
     retry_at: float = 0.0        # time.monotonic() when that retry is sent
     _settled: int = field(default=0, repr=False)     # tokens of the finished calls
     _chars: int = field(default=0, repr=False)       # streamed chars of this call
-    _token_seen: bool = field(default=False, repr=False)
 
-    def call_started(self) -> None:
-        """A model request went out: count its response bytes until a token."""
-        self.net_bytes = 0
-        self._token_seen = False
+    def first_byte_wait(self, since: float) -> None:
+        """A model request went out at `since` and waits for its first byte."""
+        self.waiting_since = since
 
-    def add_bytes(self, n: int) -> None:
-        if not self._token_seen:
-            self.net_bytes += n
+    def first_byte_done(self) -> None:
+        self.waiting_since = 0.0
 
     def stream(self, text: str) -> None:
         """A reasoning or text chunk arrived: estimate at four chars a token."""
-        self._token_seen = True
-        self.net_bytes = 0
         self._chars += len(text)
         self.output_tokens = self._settled + self._chars // 4
 

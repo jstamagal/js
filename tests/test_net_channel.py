@@ -1,4 +1,5 @@
-"""The NET_DISPLAY channel: connection lines, failures, and the byte counter.
+"""The NET_DISPLAY channel: connection lines, failures, and the wait for the
+first byte.
 
 The streaming tests run a real OpenAI-compatible SSE server on 127.0.0.1 and
 drive `stream_model_async` through the actual SDK and transport.
@@ -18,7 +19,7 @@ import httpx2
 import pytest
 from test_status_bar import _cfg
 
-from js import model_client, runtime, stream_transport, turn_call
+from js import model_client, output, runtime, stream_transport, turn_call
 from js.model_client import ModelStreamResult
 from js.toolkit.core import ToolContext, TurnStatus
 
@@ -58,7 +59,8 @@ async def _serve_sse(reader, writer):
     await reader.readexactly(length)
     writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
                  b"Transfer-Encoding: chunked\r\n\r\n")
-    # Keep-alive comments arrive before the first token: the bar counts these.
+    # The prefill: silence, then keep-alive comments before the first token.
+    await asyncio.sleep(0.05)
     for _ in range(3):
         piece = b": keep-alive " + b"x" * 200 + b"\n\n"
         writer.write(f"{len(piece):x}\r\n".encode() + piece + b"\r\n")
@@ -77,7 +79,7 @@ def _stream_once(status: TurnStatus, events: list):
         try:
             with stream_transport.net_role(status=status):
                 def on_text(chunk):
-                    events.append(("text", chunk, status.net_bytes))
+                    events.append(("text", chunk, status.waiting_since))
 
                 return await asyncio.wait_for(model_client.stream_model_async(
                     model_id="t", provider_id="openai",
@@ -93,18 +95,22 @@ def _stream_once(status: TurnStatus, events: list):
 
 
 class _RecordingStatus(TurnStatus):
-    def add_bytes(self, n: int) -> None:
-        super().add_bytes(n)
-        self.__dict__.setdefault("history", []).append(self.net_bytes)
+    def first_byte_wait(self, since: float) -> None:
+        super().first_byte_wait(since)
+        self.__dict__.setdefault("history", []).append("wait")
+
+    def first_byte_done(self) -> None:
+        super().first_byte_done()
+        self.__dict__.setdefault("history", []).append("done")
 
 
-def test_level_2_prints_connecting_then_connected_before_any_token(sink):
+def test_level_3_prints_connecting_then_connected_before_any_token(sink):
     lines, _level = sink
     events: list = []
     status = _RecordingStatus()
     real_emit = lines.append
     stream_transport.install_sink(stream_transport.NetSink(
-        level=lambda: 2, emit=lambda line: (real_emit(line), events.append(("net", line))),
+        level=lambda: 3, emit=lambda line: (real_emit(line), events.append(("net", line))),
     ))
 
     result = _stream_once(status, events)
@@ -117,23 +123,22 @@ def test_level_2_prints_connecting_then_connected_before_any_token(sink):
     assert "127.0.0.1" in _plain(events[0][1])
 
 
-def test_byte_counter_climbs_before_the_first_token(sink):
+def test_the_status_waits_for_the_first_byte_once_per_request():
     events: list = []
     status = _RecordingStatus()
 
     _stream_once(status, events)
 
-    history = status.__dict__["history"]
-    before_token = [n for n in history if n > 0]
-    assert len(before_token) >= 2
-    assert before_token == sorted(before_token)
+    assert status.__dict__["history"] == ["wait", "done"]
     first_text = next(e for e in events if e[0] == "text")
-    assert first_text[2] > 0            # bytes were on the bar when the token landed
+    assert first_text[2] == 0           # the wait was over when the token landed
+    assert status.waiting_since == 0
 
 
-def test_level_1_prints_no_connection_lines(sink):
+@pytest.mark.parametrize("value", [1, 2])
+def test_the_default_level_and_below_print_no_connection_lines(sink, value):
     lines, level = sink
-    level["value"] = 1
+    level["value"] = value
 
     _stream_once(TurnStatus(), [])
 
@@ -209,8 +214,31 @@ def test_http_status_failure_names_the_status():
     assert "429" in text and "insufficient_quota" in text
 
 
+@pytest.mark.parametrize("value", [1, 2])
+def test_a_compaction_request_shows_at_the_default_level_and_other_requests_do_not(sink, value):
+    lines, level = sink
+    level["value"] = value
+    with stream_transport.net_role("Compacting"):
+        stream_transport.begin_call("https://api.deepseek.com", "deepseek/deepseek-v4-flash")
+    with stream_transport.net_role("Subagent 2"):
+        stream_transport.begin_call("https://api.deepseek.com", "deepseek/deepseek-v4-pro")
+    stream_transport.begin_call("https://api.deepseek.com", "deepseek/deepseek-v4-pro")
+
+    plain = [_plain(line) for line in lines]
+    assert len(plain) == 1 and "deepseek/deepseek-v4-flash" in plain[0]
+
+
+def test_network_display_0_hides_the_compaction_request(sink):
+    lines, level = sink
+    level["value"] = 0
+    with stream_transport.net_role("Compacting"):
+        stream_transport.begin_call("https://api.deepseek.com", "deepseek/deepseek-v4-flash")
+    assert lines == []
+
+
 def test_roles_label_subagent_and_compaction_lines(sink):
-    lines, _level = sink
+    lines, level = sink
+    level["value"] = 3
     with stream_transport.net_role("Subagent 2", agent="summarizer"):
         call = stream_transport.begin_call("https://api.deepseek.com", "deepseek/deepseek-v4-flash")
     with stream_transport.net_role("Compacting"):
@@ -279,7 +307,7 @@ def test_turn_that_gives_up_on_dns_prints_every_attempt_at_level_1(monkeypatch, 
         _turn(tmp_path, ToolContext(cwd=tmp_path), cfg=_retrying(tmp_path, 2))
 
     assert len(calls) > 1                       # the runtime retried
-    # One line per retry, then the failure the runtime gave up on.
+    # One line per retry, then the give-up line naming the last failure.
     assert len(_naming(lines, "nowhere.invalid")) == len(calls)
     assert any("Gave up after 2 retries" in _plain(line) for line in lines)
 
@@ -293,7 +321,7 @@ def test_turn_retries_show_at_level_3_and_end_with_the_failure(monkeypatch, sink
         _turn(tmp_path, ToolContext(cwd=tmp_path), cfg=_retrying(tmp_path, 2))
 
     # Each call says Connecting (with the URL); each failure after it names the
-    # host alone: one per retry, then the one the runtime gave up on.
+    # host alone: one per retry, then the give-up line naming the last.
     about_host = _naming(lines, "nowhere.invalid")
     connecting = [line for line in about_host if "https://nowhere.invalid" in line]
     failures = [line for line in about_host if line not in connecting]
@@ -326,3 +354,26 @@ def test_a_multi_line_connect_error_is_one_line():
 
     text = _plain(stream_transport.describe_failure(httpx2.ConnectError("refused\nsecond line")))
     assert len(text.splitlines()) == 1 and "refused second line" in text
+
+
+def test_the_main_turn_counts_its_first_byte_wait_a_subagent_does_not():
+    def waited(label: str) -> list[str]:
+        events: list = []
+
+        class _Sink:
+            def emit(self, event):
+                events.append(event.name)
+
+        async def wait():
+            with stream_transport.net_role(label):
+                waiting = stream_transport.FirstByteWait()
+                waiting.start()
+                await asyncio.sleep(1.2)
+                waiting.end()
+
+        with output.using_sink(_Sink()):
+            asyncio.run(wait())
+        return events
+
+    assert waited("") == ["first_byte_tick", "first_byte_done"]
+    assert waited("Subagent 1") == []

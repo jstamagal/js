@@ -91,12 +91,12 @@ def silent_overflow(usage: Any, context_window: int | None, *, cut_by_cap: bool)
 @dataclass(frozen=True)
 class CallLimits:
     """The resilience settings a turn's model calls run under: the retry
-    budget, the stream idle watchdog, the escalated output cap for one resend
+    budget, each request's clocks, the escalated output cap for one resend
     of a cut-off reply (0: none), and how many resume nudges a turn may send
     after replies cut off by their cap."""
 
     retry: retry.Budget
-    stream_idle: float | None
+    stream: retry.StreamLimits
     max_output_escalation: int
     max_output_resumes: int
     overflow_rounds_max: int = field(default_factory=lambda: _settings.default_value("COMPACTION_OVERFLOW_ROUNDS_MAX"))
@@ -110,7 +110,7 @@ class CallLimits:
             signed_reasoning_recovery=bool(_settings.knob(settings, "SIGNED_REASONING_RECOVERY")),
             overflow_rounds_max=int(_settings.knob(settings, "COMPACTION_OVERFLOW_ROUNDS_MAX")),
             retry=retry.Budget.from_settings(settings),
-            stream_idle=retry.idle_seconds(settings),
+            stream=retry.StreamLimits.from_settings(settings),
             max_output_escalation=int(_settings.knob(settings, "OUTPUT_TOKENS_RETRY_MAX") or 0),
             max_output_resumes=int(_settings.knob(settings, "OUTPUT_RESUMES_MAX") or 0),
         )
@@ -232,8 +232,8 @@ class ModelCaller:
                     self._escalated = True
                     telemetry.event("max_output_escalated", model=model,
                                     max_output_tokens=call_max_out, escalated_to=escalated)
-                    stream_transport.say_for_caller(
-                        2, msgs.MAX_OUTPUT_ESCALATED.said(before=call_max_out or "default", after=escalated))
+                    stream_transport.say_or_print_for_caller(
+                        1, msgs.MAX_OUTPUT_ESCALATED.said(before=call_max_out or "default", after=escalated))
                     call_max_out = escalated
                     continue
                 return reply
@@ -278,6 +278,9 @@ class ModelCaller:
                     telemetry.event("thinking_turn_restarted" if restarted else "signed_reasoning_dropped",
                                     model=model, messages=restarted or dropped,
                                     error=f"{type(e).__name__}: {e}")
+                    stream_transport.say_or_print_for_caller(1, (
+                        msgs.THINKING_TURN_RESTARTED.said(messages=restarted) if restarted
+                        else msgs.SIGNED_REASONING_DROPPED.said(messages=dropped)))
                     self._convo.rebuild()
                     compaction.history_rewritten(context)
                     continue
@@ -290,7 +293,7 @@ class ModelCaller:
                         if too_long:
                             telemetry.event("retry_after_too_long", model=model,
                                             retry_after=wait, limit=limits.retry.max_wait)
-                        retry.gave_up(transport_retries)
+                        retry.gave_up(transport_retries, e)
                         self._fail(e, retryable=True)
                         raise
                     delay = wait if wait is not None else _backoff(transport_retries, limits.retry)
@@ -338,7 +341,7 @@ class ModelCaller:
             trace_request_from=convo.sent,
             cache_key=request.cache_key,
             settings=request.settings,
-            stream_idle_seconds=self._limits.stream_idle,
+            stream_limits=self._limits.stream,
         )
         if self._trace_sink is not None:
             convo.traced()

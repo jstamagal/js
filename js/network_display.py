@@ -6,6 +6,7 @@ import socket
 import sys
 from dataclasses import dataclass
 
+import httpx
 import httpx2
 
 from . import fset
@@ -16,8 +17,11 @@ from . import messages as msgs
 class Failure:
     error: BaseException
 
-    def __str__(self) -> str:
+    def said(self) -> msgs.Said:
         return describe_failure(self.error)
+
+    def __str__(self) -> str:
+        return str(self.said())
 
 
 @dataclass(frozen=True)
@@ -52,14 +56,14 @@ def always(line: object) -> None:
         print(msgs.for_stream(_net_line(line), sys.stderr), file=sys.stderr, flush=True)
 
 
-# The line of the wait being counted down, from the seconds left; None when none.
+# The line of the wait being counted, from its seconds; None when none.
 _countdown = None
 
 
 def countdown_start(line_for, seconds: float) -> None:
-    """Count a wait down on one stderr row, redrawn in place and erased when
-    it ends. Only on a terminal with no channel installed (`js -p`): the
-    REPL's status bar counts its retries down."""
+    """Count a wait (a retry down, a first byte up) on one stderr row,
+    redrawn in place and erased when it ends. Only on a terminal with no
+    channel installed (`js -p`): the REPL's status bar counts both."""
     global _countdown
     from . import stream_transport
 
@@ -71,6 +75,11 @@ def countdown_start(line_for, seconds: float) -> None:
         return
     _countdown = line_for
     countdown_tick(seconds)
+
+
+def counting() -> bool:
+    """Whether a wait is being counted on its stderr row."""
+    return _countdown is not None
 
 
 def countdown_tick(seconds: float) -> None:
@@ -91,17 +100,18 @@ def _net_line(line: str) -> str:
     """A network line on the screen: its entry's runs, COLOR_WARN where the
     format sets no colour."""
     if isinstance(line, LabelledLine):
-        inner = line.line
-        text = fset.to_ansi(inner.message.body_runs(**inner.fields)) if isinstance(inner, msgs.Said) else str(inner)
-        line = msgs.NET_LABELLED.said(label=line.label, text=text)
+        inner = line.line.said() if isinstance(line.line, Failure) else line.line
+        line = msgs.NET_LABELLED.said(label=line.label, text=inner if isinstance(inner, msgs.Said) else str(inner))
     elif isinstance(line, Failure):
-        line = str(line)
+        line = line.said()
     said = line if isinstance(line, msgs.Said) else msgs.NET_LINE.said(text=line)
     return fset.to_ansi(said.message.runs(whole="COLOR_WARN", **said.fields))
 
 
-def describe_failure(exc: BaseException) -> str:
-    """One line naming a failed model request: status, DNS, timeout or connect."""
+def describe_failure(exc: BaseException) -> msgs.Said:
+    """One line naming a failed model request: status, js's own timeout,
+    DNS, timeout or connect. A `said()` entry: NET_STATUS_FAILURE or
+    NET_FAILURE."""
     seen: set[int] = set()
     chain: list[BaseException] = []
     current: BaseException | None = exc
@@ -116,25 +126,26 @@ def describe_failure(exc: BaseException) -> str:
         if status is None:
             status = getattr(err, "status_code", None)
         if isinstance(status, int):
-            reason = _capped(model_client.error_message(err))
-            return f"{fset.fg('COLOR_ERROR')}{status}{fset.fg('COLOR_WARN')} {reason}".rstrip()
+            return msgs.NET_STATUS_FAILURE.said(status=msgs.NET_FAILURE_STATUS.said(status=status),
+                                                reason=_capped(model_client.error_message(err)))
+    for err in chain:
+        if isinstance(err, model_client.RequestTimeoutError):
+            return _failure(msgs.NET_TIMEOUT, _one_line(err))
+    host = next((h for h in (_request_host(e) for e in chain) if h), "")
     for err in chain:
         text = str(err)
         if isinstance(err, socket.gaierror) or any(needle in text for needle in (
             "Name or service not known", "nodename nor servname",
             "Temporary failure in name resolution", "No address associated with hostname",
         )):
-            host = next((h for h in (_request_host(e) for e in chain) if h), "")
             return _failure(msgs.NET_DNS_FAILURE, host)
     for err in chain:
-        if isinstance(err, (httpx2.TimeoutException, TimeoutError)):
-            host = next((h for h in (_request_host(e) for e in chain) if h), "")
+        if isinstance(err, (httpx2.TimeoutException, httpx.TimeoutException, TimeoutError)):
             return _failure(msgs.NET_TIMEOUT, host)
     for err in chain:
-        if isinstance(err, (httpx2.ConnectError, ConnectionError)):
-            host = next((h for h in (_request_host(e) for e in chain) if h), "")
+        if isinstance(err, (httpx2.ConnectError, httpx.ConnectError, ConnectionError)):
             return _failure(msgs.NET_CONNECT_FAILED, f"{host} {_one_line(err)}".strip())
-    return f"{fset.fg('COLOR_ERROR')}{type(exc).__name__}{fset.fg('COLOR_WARN')}: {_one_line(exc)}"
+    return msgs.NET_FAILURE.said(kind=msgs.NET_FAILURE_TYPE.said(name=type(exc).__name__), detail=_one_line(exc))
 
 
 _DETAIL_WIDTH = 160
@@ -152,10 +163,9 @@ def _capped(text: str) -> str:
     return line if len(line) <= _DETAIL_WIDTH else line[:_DETAIL_WIDTH - 1] + "…"
 
 
-def _failure(kind: msgs.Message, detail: str) -> str:
-    """A failure line: the kind of failure painted hot, then what it names."""
-    head = f"{fset.fg('COLOR_ERROR')}{kind.body()}{fset.fg('COLOR_WARN')}"
-    return f"{head}: {detail}" if detail else head
+def _failure(kind: msgs.Message, detail: str) -> msgs.Said:
+    """A failure line: the kind of failure, then what it names."""
+    return msgs.NET_FAILURE.said(kind=kind.said(), detail=detail)
 
 
 def _request_host(err: BaseException) -> str:

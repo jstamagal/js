@@ -277,16 +277,26 @@ in truecolor on every terminal, including the Linux console.
 `NET_DISPLAY` sets how much of the network shows, 0 to 3. Retries print at
 every level, 0 included: each one names the failure it follows and its wait,
 the wait counts down (on its own line under `-p`, on the status bar in the
-screen), and `*** Gave up after N retries.` prints when js stops. At 1 only
-failures print (`*** DNS failure: host`, `*** 429 ...`, timeouts), once,
-when js stops retrying; at 2 (the default) each
-model request, including subagents and compaction, also prints
-`*** Connecting` and `*** Connected ... Nms`, the bar counts response
-bytes until the first token arrives, and a response that read more than 5%
-(and at least 2000 tokens) less from the prompt cache than the one before it
-prints one `*** Prompt cache break` line with both counts and the seconds
-since that request; at 3 models.dev catalog
-refreshes and the per-call stream stats line (`ms finish tok tok/s cache`)
+screen), and `*** Gave up after N retries: <last failure>` prints when js
+stops. js retries a 429, 502, 503, 504 or 529, a network failure (refused,
+no connection in `CONNECT_TIMEOUT`, a connection dropped before or during
+the reply), and a stream quiet for `STREAM_IDLE_TIMEOUT` after its first
+byte; a 500 and any other 4xx fail at once. While a
+request waits for its first byte (the prefill) the bar, or a stderr row
+under `-p`, counts `waiting for first byte 4m12s`; ^C cancels it, and
+`FIRST_BYTE_TIMEOUT` (default 0, no limit) fails it once, unretried. At 1
+a failure js does not retry prints too (`*** DNS failure: host`,
+`*** 500 ...`, timeouts), and so does what changes the session: each
+compaction request (`*** Compacting: model via url`), a reply sent again
+with a larger output cap, replayed reasoning the provider refused and js
+dropped, a model removed from the list. Under `-p` those lines print
+whatever `NET_DISPLAY` says; a compaction shows there through its own
+`*** Compaction` lines, which print at every level in both. At 2 (the default) a response that read more
+than 5% (and at least 2000 tokens) less from the prompt cache than the one
+before it prints one `*** Prompt cache break` line with both counts and the
+seconds since that request; at 3 every other model request, subagents
+included, also prints `*** Connecting` and `*** Connected ... Nms`,
+and models.dev catalog refreshes and the per-call stream stats line (`ms finish tok tok/s cache`)
 print as well. In the screen that stats
 line follows `NET_DISPLAY`; `-p` and `--blocking` still show it with `-d`.
 

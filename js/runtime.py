@@ -41,6 +41,7 @@ from . import tool_args
 from . import routing
 from . import skills
 from . import compaction
+from . import retry
 from . import stream_transport
 from . import usage as usage_mod
 from .config import Config, vision_enabled_for_model
@@ -1698,6 +1699,11 @@ def _prepare_turn_context(context: ToolContext, cfg: Config, request: ModelReque
     return token_state
 
 
+def _seconds(limit: float | None) -> str:
+    """A clock on the run line: `15s`, or `off` for no limit."""
+    return "off" if limit is None else f"{limit:g}s"
+
+
 def _trace_banner(telemetry: Telemetry, request: ModelRequest, context: ToolContext, registry: ToolRegistry,
                   resolve_window: Callable[[], int | None]) -> None:
     """Show the run line: model, provider, window, output cap, effort, vision, memory, tools."""
@@ -1721,6 +1727,9 @@ def _trace_banner(telemetry: Telemetry, request: ModelRequest, context: ToolCont
             f"max_out={request.max_out if request.max_out is not None else 'provider-default'}"]
     if request.effort:
         bits.append(f"effort={request.effort}")
+    clocks = retry.StreamLimits.from_settings(request.settings)
+    bits.append(f"connect_timeout={_seconds(clocks.connect)}")
+    bits.append(f"first_byte_timeout={_seconds(clocks.first_byte)}")
     bits.append(f"vision={'on' if context.vision_enabled else 'off'}")
     try:
         ntools = len(registry.openai_specs())

@@ -866,7 +866,7 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
     previous, rest = _split_previous_summary(list(messages))
     tool_result_chars = get_nonnegative_int(cfg, "COMPACTION_SUMMARY_RESULT_CHARS_MAX")
     settings = getattr(cfg, "settings", None)
-    idle = retry.idle_seconds(settings)
+    limits = retry.StreamLimits.from_settings(settings)
     budget = retry.Budget.from_settings(settings)
 
     async def summarize_chunk(head: list[dict], depth: int, previous: str) -> str:
@@ -887,7 +887,7 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
                 provider_extra=routing.provider_extra_params(cfg),
                 trace_request=ACTIVE_FLIGHT.get() is not None,
                 trace_sink=ACTIVE_FLIGHT.get(),
-                stream_idle_seconds=idle,
+                stream_limits=limits,
                 settings=settings,
             ), budget)
         except ai.ProviderAPIError as exc:
