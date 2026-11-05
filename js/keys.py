@@ -60,6 +60,10 @@ ACTIONS: tuple[Action, ...] = (
     Action("scroll_up", SCREEN, (("pageup",),), msgs.KEY_ACTION_SCROLL_UP.words()),
     Action("scroll_down", SCREEN, (("pagedown",),), msgs.KEY_ACTION_SCROLL_DOWN.words()),
     Action("complete", SCREEN, (("tab",),), msgs.KEY_ACTION_COMPLETE.words()),
+    # ircII's window keys: Ctrl-W then a digit. Ctrl-W followed by any other
+    # key is still prompt_toolkit's delete-word-before-the-cursor.
+    *(Action(f"window_{n}", SCREEN, (("c-w", str(n)),), msgs.KEY_ACTION_WINDOW.words(n=n))
+      for n in range(1, 10)),
 )
 ACTION_BY_NAME: dict[str, Action] = {action.name: action for action in ACTIONS}
 

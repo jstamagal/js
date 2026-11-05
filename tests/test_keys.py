@@ -23,7 +23,8 @@ def test_assembly_action_can_be_bound_and_run_in_blocking_prompt():
     assert buffer.text == ""
 
 # The keys the async screen answered to before the keys file existed, with
-# Ctrl-R moved to history_search and reasoning_toggle on Ctrl-O.
+# Ctrl-R moved to history_search, reasoning_toggle on Ctrl-O, and Ctrl-W then
+# a digit showing that window.
 DEFAULTS = {
     "submit": (("enter",),),
     "history_search": (("c-r",),),
@@ -38,6 +39,7 @@ DEFAULTS = {
     "scroll_up": (("pageup",),),
     "scroll_down": (("pagedown",),),
     "complete": (("tab",),),
+    **{f"window_{n}": (("c-w", str(n)),) for n in range(1, 10)},
 }
 
 

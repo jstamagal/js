@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from pathlib import Path
 import asyncio
@@ -47,6 +47,11 @@ class SubagentAssembly:
 # named-agent tool) or "background" (task with background=true). Set in the
 # coroutine each fan-out schedules, so it is the launching call's.
 _LAUNCH_KIND: ContextVar[str] = ContextVar("js_subagent_launch_kind", default="task")
+
+# Opens a window for a subagent this context launches: called with the
+# subagent_start fields, it returns the window (`subagent_windows.SubagentWindow`)
+# or None when none is free. The REPL screen sets it; None means no windows.
+window_opener: ContextVar[Any] = ContextVar("js_subagent_window_opener", default=None)
 
 
 def _route(model: str, provider: str | None) -> str:
@@ -252,7 +257,6 @@ async def _run_one_task_async(
     from .. import agent_messages
     from ..runtime import Telemetry, run_turn_async
     from .. import routing
-    from .terminal import close_terminal_sessions
 
     assembly = parent_context.subagent_assembly or SubagentAssembly()
     turn = run_turn_async if assembly.turn is None else assembly.turn
@@ -357,48 +361,80 @@ async def _run_one_task_async(
         parent_approval = getattr(parent_context, "tool_approval", None)
         telemetry = Telemetry(debug_log=cfg.debug_log)
         launch = _launch_fields(idx, total, agent, cfg, registry)
+        opener = window_opener.get()
+        window = opener(launch) if opener is not None else None
+        # The window it shows in: None with no windows, 0 when none was free.
+        launch["window"] = None if opener is None else (window.number if window is not None else 0)
         output.emit(output.event("subagent_start", **launch))
+        if window is not None:
+            # Its window shows what it streams, as window 1 shows a REPL turn.
+            telemetry = window.telemetry(cfg.debug_log)
+            window.running(child_context)
+            with window.writing():
+                output.sink_of(telemetry).emit(output.event("subagent_start", **launch))
         started = time.monotonic()
         call_stats: list[dict] = []
         outcome = "error"
+        error: str | None = None
         turn_kwargs = {
-            "trace_override": False,
+            "trace_override": None if window is not None else False,
             "tool_registry": registry,
             "tool_context": child_context,
-            "suppress_output": assembly.suppress_output,
+            "suppress_output": False if window is not None else assembly.suppress_output,
             "sampling": sampling,
             "event_hooks": None if parent_hooks is None else RefusableOnly(parent_hooks),
             "approve": parent_approval,
         }
+        if window is not None:
+            turn_kwargs["steer"] = window.steer
+        stamp = M.stamp_for(cfg.model, cfg.provider_id, cfg.reasoning_effort)
         try:
-            await agent_messages.initialize(cfg, prompt_spec, messages, telemetry, **turn_kwargs)
-            messages.append(M.note_time({"role": "user", "content": prompt}))
-            await turn(
-                cfg,
-                system,
-                messages,
-                telemetry,
-                call_stats=call_stats,
-                **turn_kwargs,
-            )
+            with window.writing() if window is not None else nullcontext():
+                await agent_messages.initialize(cfg, prompt_spec, messages, telemetry, **turn_kwargs)
+                messages.append(M.note_time({"role": "user", "content": prompt}))
+                await turn(
+                    cfg,
+                    system,
+                    messages,
+                    telemetry,
+                    call_stats=call_stats,
+                    **turn_kwargs,
+                )
             outcome = "ok"
         except Exception as exc:  # noqa: BLE001
-            return f"ERROR {type(exc).__name__}: {exc}"
+            error = f"ERROR {type(exc).__name__}: {exc}"
         except BaseException:
             outcome = "cancelled"
             raise
         finally:
-            output.emit(output.event(
+            end = output.event(
                 "subagent_end", **launch, outcome=outcome, elapsed_s=time.monotonic() - started,
                 prompt_tokens=sum(int(stat.get("prompt_tokens") or 0) for stat in call_stats),
                 output_tokens=sum(int(stat.get("output_tokens") or 0) for stat in call_stats),
-                calls=len(call_stats)))
-            close_terminal_sessions(child_context)
-            if child_context.kernel_session is not None:
-                child_context.kernel_session.shutdown()
-                child_context.kernel_session = None
-            M.persist_messages(cfg.session_file, messages,
-                               stamp=M.stamp_for(cfg.model, cfg.provider_id, cfg.reasoning_effort))
+                calls=len(call_stats))
+            output.emit(end)
+            _close_child_tools(child_context)
+            M.persist_messages(cfg.session_file, messages, stamp=stamp)
+            if window is not None:
+                with window.writing():
+                    output.sink_of(telemetry).emit(end)
+
+                async def resume(text: str) -> None:
+                    """One turn typed in its window, on its own session."""
+                    with _worker_session(Path(cfg.session_file)), window.writing():
+                        messages.append(M.note_time({"role": "user", "content": text}))
+                        try:
+                            await turn(cfg, system, messages, telemetry, **turn_kwargs)
+                        finally:
+                            _close_child_tools(child_context)
+                            M.persist_messages(cfg.session_file, messages, stamp=stamp)
+
+                # Called before the session lock is let go; a turn it starts
+                # runs as its own job, after this one has returned.
+                window.finished(resume)
+
+    if error is not None:
+        return error
 
     final = ""
     for msg in reversed(messages):
@@ -421,6 +457,16 @@ async def _run_one_task_async(
         final = cap_text(final, cap, f"\n[truncated: TOOL_RESULT_MAX ({cap}) reached]")
     return final
 
+
+
+def _close_child_tools(child_context: ToolContext) -> None:
+    """Close a child's terminal sessions and its private kernel."""
+    from .terminal import close_terminal_sessions
+
+    close_terminal_sessions(child_context)
+    if child_context.kernel_session is not None:
+        child_context.kernel_session.shutdown()
+        child_context.kernel_session = None
 
 
 def _fan_out(indexed_items: list[tuple[int, Any]], coro_factory) -> list[str | None]:

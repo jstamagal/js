@@ -272,7 +272,38 @@ drops the provider, the token count, the cost and the agent id; the clock,
 spinner and session stay. A session started with `--session NAME` shows its
 whole name, cut short with `…` when nothing else is left to drop. Its
 colours are `/fset COLOR_STATUS_BACKGROUND #rrggbb` and `/fset COLOR_STATUS_TEXT #rrggbb`, drawn
-in truecolor on every terminal, including the Linux console.
+in truecolor on every terminal, including the Linux console. With more than
+one window open the bar shows the window on screen after the clock, `[2]`,
+and `[Act: 3,5]` names the windows with output you have not seen.
+
+### Windows
+
+The scrollback is window 1, the main conversation. Each subagent a turn
+launches from the async REPL opens the next free window, 2 to 9; its launch
+line in window 1 says which (`window 2`), or that windows 2 to 9 are all open,
+and that subagent then runs without one, as under `-p`. A subagent's window
+shows everything it streams: its launch and end lines, its answer, reasoning
+and tool exchanges, each at the levels window 1 uses. Output in a window you
+are not looking at marks it on the bar's `[Act: ...]` list until you show it.
+
+**Ctrl-W** then a digit shows that window; Ctrl-W 1 is the main conversation.
+Ctrl-W followed by any other key still deletes the word before the cursor.
+`/window` lists the windows (`*` the one on screen, `+` one with unseen
+output), `/window N` shows window N, and `/window close [N]` closes a
+finished subagent's window (the one on screen without N). Window 1 never
+closes. Every window keeps running while another is on screen.
+
+What you type in a subagent's window goes to that subagent; commands still
+run as commands, their output in that window. While the subagent runs, the
+line is queued and reaches it as a user message at its next tool boundary,
+before its next model call; a line still queued when its task ends runs as
+the next turn. Once it has finished, a line runs a new turn on the
+subagent's own session with its own agent, model, effort and tools, as
+resuming it would. That conversation stays in the subagent's session: the
+result its task returned to the parent stands, and the parent is not told.
+Ctrl-C in a subagent's window cancels what runs there and drops the lines
+queued for it; it leaves window 1's turn alone. The bar in a subagent's
+window shows that subagent's model, agent, session and turn.
 
 `NET_DISPLAY` sets how much of the network shows, 0 to 3. Retries print at
 every level, 0 included: each one names the failure it follows and its wait,
@@ -401,7 +432,9 @@ place. Key names are prompt_toolkit's (`c-r`, `escape`, `enter`, `tab`,
 `submit` Enter, `history_search` Ctrl-R, `ex_open` `:` (vi normal mode),
 `ex_run` Enter and `ex_cancel` Esc (in the ex line), `interrupt` Ctrl-C, `eof`
 Ctrl-D, `suspend` Ctrl-Z, `reasoning_toggle` Ctrl-O, `redraw` Ctrl-L,
-`scroll_up` PageUp, `scroll_down` PageDown, `complete` Tab. A bad line is one
+`scroll_up` PageUp, `scroll_down` PageDown, `complete` Tab, and `window_1` to
+`window_9` Ctrl-W then the digit (`bind escape 2 window_2` adds ircII's
+Meta-2). A bad line is one
 `path:line: error` line in the startup banner and is skipped. The `--blocking`
 REPL takes `history_search` from the file; its other keys are prompt_toolkit's. Already received text
 and reasoning are retained as an interrupted assistant record. A turn with no

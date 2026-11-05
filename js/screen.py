@@ -7,12 +7,14 @@ appended to the scrollback buffer; the input buffer is untouched.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
 import os
 import re
 import subprocess
 import sys
 from collections.abc import Awaitable, Callable, Coroutine
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 from prompt_toolkit.application import Application, get_app, run_in_terminal
@@ -23,7 +25,8 @@ from prompt_toolkit.filters import Condition, FilterOrBool, has_focus, is_search
 from prompt_toolkit.formatted_text import ANSI, to_formatted_text
 from prompt_toolkit.key_binding import KeyBindings, KeyBindingsBase, merge_key_bindings
 from prompt_toolkit.key_binding.vi_state import InputMode
-from prompt_toolkit.layout import ConditionalContainer, Float, FloatContainer, HSplit, Layout, Window
+from prompt_toolkit.layout import (ConditionalContainer, DynamicContainer, Float, FloatContainer, HSplit, Layout,
+                                   Window)
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout.menus import MultiColumnCompletionsMenu
@@ -156,8 +159,14 @@ def status_line(
     session_short: str | None,
     cache_pct: int | None,
     cost: str | None = None,
+    window: int | None = None,
+    activity: list[int] | None = None,
 ) -> str:
     """The status bar as a plain string of exactly `width` cells.
+
+    ``window`` is the number of the window on screen, shown after the clock
+    while more than one is open; ``activity`` the windows with output not yet
+    seen, shown ircII's way, `[Act: 3,5]`, at the head of the right group.
 
     Left `[HH:MM] provider/model context`, centre `throbber phase count` (only
     while `throbber` is set, i.e. a turn runs), right `agent/session cache N%
@@ -176,6 +185,9 @@ def status_line(
             "count": output_tokens is not None, "agent": bool(agent_id), "cost": bool(cost)}
 
     clock_text = _field(msgs.STATUS_CLOCK, clock=clock)
+    if window is not None:
+        clock_text += " " + _field(msgs.STATUS_WINDOW, number=window)
+    activity_text = _field(msgs.STATUS_ACTIVITY, numbers=",".join(map(str, activity))) if activity else ""
 
     def groups() -> tuple[str, str, str]:
         route = "/".join(filter(None, (provider if show["provider"] else "", model_text)))
@@ -189,7 +201,7 @@ def status_line(
             centre = " ".join(filter(None, (_field(msgs.STATUS_SPINNER, spinner=throbber),
                                             _field(msgs.STATUS_PHASE, phase=phase) if phase else "", count)))
         who = "/".join(filter(None, (agent_id if show["agent"] else "", session_text)))
-        right = " ".join(filter(None, (_field(msgs.STATUS_WHO, who=who) if who else "",
+        right = " ".join(filter(None, (activity_text, _field(msgs.STATUS_WHO, who=who) if who else "",
                                        _field(msgs.STATUS_CACHE, pct=cache_pct) if show["cache"] else "",
                                        _field(msgs.STATUS_COST, cost=cost) if show["cost"] else "")))
         return left, centre, right
@@ -289,6 +301,8 @@ class Scrollback:
         self._answer: AnswerSpan | None = None
         # The reasoning_toggle key a collapsed block names; "" names none.
         self.toggle_key = keys.describe(keys.ACTION_BY_NAME["reasoning_toggle"].keys[0])
+        # Called after each change to the buffer's text (`Windows` marks activity with it).
+        self.changed: Callable[[], None] | None = None
 
     def append(self, text: str) -> None:
         self._pending += _drawable(text)
@@ -324,6 +338,8 @@ class Scrollback:
             Document(trimmed, len(trimmed) if follow else max(0, min(cursor - removed, len(trimmed)))),
             bypass_readonly=True,
         )
+        if self.changed is not None:
+            self.changed()
 
     def flush(self) -> None:
         self._commit()
@@ -554,6 +570,118 @@ class ReasoningBlock:
         self.owner._render_span(self)
 
 
+# The scrollback that ``sys.stdout`` writes made in this context land in; None
+# is the screen's own (window 1). A subagent's window sets it for that
+# subagent's task, so what it prints lands in its window.
+writing_to: ContextVar[Scrollback | None] = ContextVar("js_screen_writing_to", default=None)
+
+
+@contextlib.contextmanager
+def writing(scrollback: Scrollback):
+    """Send this context's ``sys.stdout`` writes to ``scrollback``."""
+    token = writing_to.set(scrollback)
+    try:
+        yield
+    finally:
+        writing_to.reset(token)
+
+
+class View:
+    """One window: its number, its scrollback, whether it has output not yet
+    seen, and what it shows (``owner``: None for window 1, else the object
+    that opened it)."""
+
+    def __init__(self, number: int, scrollback: Scrollback, owner=None) -> None:
+        self.number = number
+        self.scrollback = scrollback
+        self.owner = owner
+        self.active = False
+        self.window: Window | None = None
+
+
+class Windows:
+    """ircII-style windows over the scrollback region: window 1 is the main
+    conversation; ``open`` numbers the next one from 2 to `LAST`. One window
+    shows at a time; output to a hidden window marks it active until it is
+    shown."""
+
+    LAST = 9
+
+    def __init__(self) -> None:
+        self._views: dict[int, View] = {}
+        self.current = 1
+        self.invalidate: Callable[[], None] = lambda: None
+
+    def set_main(self, scrollback: Scrollback) -> None:
+        """Window 1 shows ``scrollback``."""
+        if 1 not in self._views:
+            self._views[1] = View(1, scrollback)
+
+    def view(self, number: int | None = None) -> View | None:
+        return self._views.get(self.current if number is None else number)
+
+    def scrollback(self) -> Scrollback:
+        """The scrollback of the window on screen."""
+        return self._views[self.current].scrollback
+
+    def numbers(self) -> list[int]:
+        return sorted(self._views)
+
+    def open(self, owner=None) -> View | None:
+        """A new window numbered with the lowest free number from 2 to
+        `LAST`, its output marking it active; None when every one is taken."""
+        free = next((n for n in range(2, self.LAST + 1) if n not in self._views), None)
+        if free is None:
+            return None
+        view = self._views[free] = View(free, Scrollback(), owner)
+        view.scrollback.toggle_key = self._views[1].scrollback.toggle_key if 1 in self._views else ""
+        view.scrollback.changed = functools.partial(self._changed, view)
+        self.invalidate()
+        return view
+
+    def _changed(self, view: View) -> None:
+        if view.number != self.current and not view.active and self._views.get(view.number) is view:
+            view.active = True
+            self.invalidate()
+
+    def switch(self, number: int) -> bool:
+        """Show window ``number`` and clear its activity mark; False when
+        there is no such window."""
+        view = self._views.get(number)
+        if view is None:
+            return False
+        self.current = number
+        view.active = False
+        self.invalidate()
+        return True
+
+    def close(self, number: int) -> View | None:
+        """Take window ``number`` off the screen; window 1 stays. The view
+        closed, or None when there was none to close."""
+        if number == 1:
+            return None
+        view = self._views.pop(number, None)
+        if view is not None and self.current == number:
+            self.current = 1
+            self._views[1].active = False
+        self.invalidate()
+        return view
+
+    def activity(self) -> list[int]:
+        """The windows with output not yet seen, in number order."""
+        return [n for n in self.numbers() if self._views[n].active and n != self.current]
+
+    def container(self, make: Callable[[Scrollback], Window]) -> DynamicContainer:
+        """The scrollback region: the window on screen, each view keeping its
+        own prompt_toolkit Window (and so its own scroll position)."""
+        def current() -> Window:
+            view = self._views[self.current]
+            if view.window is None:
+                view.window = make(view.scrollback)
+            return view.window
+        return DynamicContainer(current)
+
+
 class ScreenReasoningDisplay:
     """Schedule reasoning and ordinary stdout writes on the same loop queue."""
 
@@ -653,19 +781,22 @@ class _ScreenStdout:
         self._real = real
         self.encoding = getattr(real, "encoding", "utf-8")
 
+    def _target(self) -> Scrollback:
+        return writing_to.get() or self._scrollback
+
     def write(self, s: str) -> int:
-        self._loop.call_soon_threadsafe(self._append, s)
+        self._loop.call_soon_threadsafe(self._append, self._target(), s)
         return len(s)
 
-    def _append(self, s: str) -> None:
-        self._scrollback.append(s)
+    def _append(self, scrollback: Scrollback, s: str) -> None:
+        scrollback.append(s)
         self._app.invalidate()
 
     def flush(self) -> None:
-        self._loop.call_soon_threadsafe(self._flush)
+        self._loop.call_soon_threadsafe(self._flush, self._target())
 
-    def _flush(self) -> None:
-        self._scrollback.flush()
+    def _flush(self, scrollback: Scrollback) -> None:
+        scrollback.flush()
         self._app.invalidate()
 
     def isatty(self) -> bool:
@@ -677,11 +808,11 @@ class _ScreenStdout:
     def write_folded(self, folded: str, whole: str) -> None:
         """A block shown as ``folded`` that the reasoning_toggle key unfolds
         to ``whole``, as a folded tool row is."""
-        self._loop.call_soon_threadsafe(self._fold, folded, whole)
+        self._loop.call_soon_threadsafe(self._fold, self._target(), folded, whole)
 
-    def _fold(self, folded: str, whole: str) -> None:
-        span = self._scrollback.exchange_open(folded)
-        self._scrollback.exchange_close(span, folded, whole)
+    def _fold(self, scrollback: Scrollback, folded: str, whole: str) -> None:
+        span = scrollback.exchange_open(folded)
+        scrollback.exchange_close(span, folded, whole)
         self._app.invalidate()
 
 
@@ -748,6 +879,7 @@ def build_app(
     complete_while_typing: bool = False,
     complete_tab: Callable | None = None,
     handler_factory: Callable[[dict[str, Handler]], dict[str, Handler]] | None = None,
+    windows: Windows | None = None,
 ) -> tuple[Application, Scrollback]:
     """`status(width)` renders the bar; `status_colours()` is its style, read on
     every repaint so a changed setting shows on the next invalidate. In vi mode
@@ -765,8 +897,13 @@ def build_app(
     a line with text arms the exit, quitting on a second press within the
     same window. While an exit is armed a row under the input says so. A
     sent line's paste markers (`js.pastes`) are expanded before ``on_line`` gets it; the
-    scrollback echoes the line as typed when ``echo`` of the expanded line is true."""
+    scrollback echoes the line as typed when ``echo`` of the expanded line is true.
+    ``windows`` holds the scrollback region's windows (`Windows`); the
+    returned scrollback is window 1's. The window_N keys show window N, and
+    the scroll, reasoning_toggle and echo act on the window on screen."""
     scrollback = Scrollback()
+    windows = Windows() if windows is None else windows
+    windows.set_main(scrollback)
     input_buffer = Buffer(
         name=DEFAULT_BUFFER,  # the buffer js.pastes collapses large pastes in
         history=history,
@@ -785,7 +922,7 @@ def build_app(
         input_buffer.reset()
         sent = pastes.expand(line).strip()
         if sent and echo(sent):
-            scrollback.append((display.user_line if user_line is None else user_line)(line))
+            windows.scrollback().append((display.user_line if user_line is None else user_line)(line))
         await on_line(sent)
 
     editor = InputEditor(input_buffer, submit)
@@ -866,8 +1003,14 @@ def build_app(
         return ANSI(msgs.EXIT_ARMED.body(key=key))
 
     def _toggle_reasoning(event) -> None:
-        if scrollback.toggle_reasoning():
+        if windows.scrollback().toggle_reasoning():
             event.app.invalidate()
+
+    def _switch(number: int):
+        def handler(event) -> None:
+            if windows.switch(number):
+                event.app.invalidate()
+        return handler
 
     def _tab(event) -> None:
         if complete_tab is not None:
@@ -896,9 +1039,10 @@ def build_app(
         "suspend": Handler(lambda event: event.app.suspend_to_background()),
         "reasoning_toggle": Handler(_toggle_reasoning),
         "redraw": Handler(lambda event: event.app.renderer.clear()),
-        "scroll_up": Handler(lambda event: scrollback.buffer.cursor_up(count=_page())),
-        "scroll_down": Handler(lambda event: scrollback.buffer.cursor_down(count=_page())),
+        "scroll_up": Handler(lambda event: windows.scrollback().buffer.cursor_up(count=_page())),
+        "scroll_down": Handler(lambda event: windows.scrollback().buffer.cursor_down(count=_page())),
         "complete": Handler(_tab),
+        **{f"window_{n}": Handler(_switch(n)) for n in range(1, Windows.LAST + 1)},
     }
     bind_actions(kb, keymap, handlers if handler_factory is None else handler_factory(handlers))
     toggle = keymap.get("reasoning_toggle", ())
@@ -930,8 +1074,8 @@ def build_app(
     layout = Layout(
         FloatContainer(
             HSplit([
-                Window(BufferControl(buffer=scrollback.buffer, lexer=_AnsiLexer(), focusable=False),
-                       wrap_lines=True),
+                windows.container(lambda shown: Window(
+                    BufferControl(buffer=shown.buffer, lexer=_AnsiLexer(), focusable=False), wrap_lines=True)),
                 Window(FormattedTextControl(_status_text), height=1, style="class:status"),
                 Window(BufferControl(buffer=input_buffer,
                                      input_processors=[HighlightIncrementalSearchProcessor()],
