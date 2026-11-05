@@ -172,12 +172,13 @@
 #   example:  set REASONING_DISPLAY 2
 #set REASONING_DISPLAY 1
 
-# Network chatter, on screen.
-#   0  nothing, not even errors
-#   1  failures only
-#   2  also "Connecting" and "Connected" lines, and a byte counter in the
-#      status bar until the first word of the answer arrives
-#   3  also retries, model catalog refreshes and per-call stream stats
+# Network chatter in the REPL screen. Retries, the line that gives up on
+# them and the wait for a first byte show at every level.
+#   0  nothing else
+#   1  also failures js does not retry
+#   2  also a line when the prompt cache breaks
+#   3  also "Connecting" and "Connected" for every request, model catalog
+#      refreshes and per-call stream stats
 #   example:  set NET_DISPLAY 0
 #set NET_DISPLAY 2
 
@@ -494,9 +495,10 @@
 
 # How many times js retries a request that failed in a way worth retrying:
 # rate limited (429), a gateway that could not reach the server (502, 503,
-# 504), no response at all (refused, no connection in CONNECT_TIMEOUT, or
-# dropped before any header), or a stream that went quiet past
-# STREAM_IDLE_TIMEOUT. A 500 or any other 4xx fails at once. It waits as
+# 504), overloaded (529), a network failure (refused, no connection in
+# CONNECT_TIMEOUT, or a connection dropped before or during the reply), or
+# a stream that went quiet past STREAM_IDLE_TIMEOUT. A 500 or any other 4xx
+# fails at once. It waits as
 # long as the provider asks, otherwise 8s each time.
 # 0: give up on the first error.
 #set RETRY_COUNT_MAX 3

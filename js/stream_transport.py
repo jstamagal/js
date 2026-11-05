@@ -174,7 +174,7 @@ class NetCall:
         self._sent = False
         if role.hold is not None:
             role.hold.pending = None
-        say(2, self._connecting_line())
+        say(3, self._connecting_line())
 
     def _connecting_line(self) -> str:
         label, agent = self._role.label, self._role.agent
@@ -199,9 +199,9 @@ class NetCall:
         ms = int((time.perf_counter() - self._started) * 1000)
         host = host or _host(self._url)
         if self._role.label:
-            say(2, msgs.NET_ROLE_CONNECTED.said(role=self._role.label, host=host, ms=ms))
+            say(3, msgs.NET_ROLE_CONNECTED.said(role=self._role.label, host=host, ms=ms))
         else:
-            say(2, msgs.NET_CONNECTED.said(host=host, ms=ms))
+            say(3, msgs.NET_CONNECTED.said(host=host, ms=ms))
 
     def received(self, n: int) -> None:
         self.connected()
@@ -319,18 +319,15 @@ class _OwnedCoreStream:
 async def own_responses(client: httpx2.AsyncClient | httpx.AsyncClient, call: NetCall | None = None,
                         on_request: Callable[[], None] | None = None,
                         on_bytes: Callable[[], None] | None = None,
-                        on_response: Callable[[], None] | None = None,
                         timeout: dict[str, float | None] | None = None):
     """Close this model request's byte iterators when its stream scope exits.
     With a `call`, its handshake and response bytes feed the network channel.
-    `on_request` is called as each request is sent, `on_response` as its
-    headers arrive and `on_bytes` for every response chunk read. `timeout`
-    replaces those parts of each request's own (`connect`, `read`, ...)."""
+    `on_request` is called as each request is sent and `on_bytes` for every
+    response chunk read. `timeout` replaces those parts of each request's own
+    (`connect`, `read`, ...)."""
     async with AsyncExitStack() as cleanup:
 
         async def own(response: httpx2.Response) -> None:
-            if on_response is not None:
-                on_response()
             stream: AsyncIterable[bytes] = response.stream
             if isinstance(stream, (BoundAsyncStream, HttpxBoundAsyncStream)):
                 stream = stream._stream

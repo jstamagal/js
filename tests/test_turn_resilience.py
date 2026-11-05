@@ -248,7 +248,7 @@ def _stalled(text: str, seconds: float):
     return step
 
 
-@pytest.mark.parametrize("code", [429, 502, 503, 504])
+@pytest.mark.parametrize("code", [429, 502, 503, 504, 529])
 def test_a_rate_limit_or_gateway_status_is_retried(tmp_path, code):
     server, messages, error = _served_turn(tmp_path, [_status(code, {}), _answer("recovered")])
 
@@ -273,11 +273,12 @@ def test_a_connection_closed_before_any_header_is_retried(tmp_path):
     assert len(server.arrivals) == 2
 
 
-def test_a_connection_dropped_after_its_headers_is_not_retried(tmp_path):
-    server, _messages, error = _served_turn(tmp_path, [_dropped("Green"), _answer("never")])
+def test_a_connection_dropped_mid_stream_is_retried(tmp_path):
+    server, messages, error = _served_turn(tmp_path, [_dropped("Green"), _answer("recovered")])
 
-    assert isinstance(error, ai.ProviderConnectionError) and not error.is_retryable
-    assert len(server.arrivals) == 1
+    assert error is None
+    assert messages[-1] == {"role": "assistant", "content": "recovered"}
+    assert len(server.arrivals) == 2
 
 
 def test_a_long_prefill_is_not_idle(tmp_path):
@@ -754,8 +755,8 @@ def test_a_compaction_summary_survives_a_429(tmp_path):
     assert len(server.arrivals) == 2
 
 
-def test_a_compaction_summary_survives_a_connection_closed_before_any_header(tmp_path):
-    server, summary = _served_summary(tmp_path, [_closed(), _answer("the summary")])
+def test_a_compaction_summary_survives_a_dropped_connection(tmp_path):
+    server, summary = _served_summary(tmp_path, [_dropped("the sum"), _answer("the summary")])
 
     assert summary == "the summary"
     assert len(server.arrivals) == 2

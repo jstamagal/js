@@ -104,13 +104,13 @@ class _RecordingStatus(TurnStatus):
         self.__dict__.setdefault("history", []).append("done")
 
 
-def test_level_2_prints_connecting_then_connected_before_any_token(sink):
+def test_level_3_prints_connecting_then_connected_before_any_token(sink):
     lines, _level = sink
     events: list = []
     status = _RecordingStatus()
     real_emit = lines.append
     stream_transport.install_sink(stream_transport.NetSink(
-        level=lambda: 2, emit=lambda line: (real_emit(line), events.append(("net", line))),
+        level=lambda: 3, emit=lambda line: (real_emit(line), events.append(("net", line))),
     ))
 
     result = _stream_once(status, events)
@@ -135,9 +135,10 @@ def test_the_status_waits_for_the_first_byte_once_per_request():
     assert status.waiting_since == 0
 
 
-def test_level_1_prints_no_connection_lines(sink):
+@pytest.mark.parametrize("value", [1, 2])
+def test_the_default_level_and_below_print_no_connection_lines(sink, value):
     lines, level = sink
-    level["value"] = 1
+    level["value"] = value
 
     _stream_once(TurnStatus(), [])
 
@@ -214,7 +215,8 @@ def test_http_status_failure_names_the_status():
 
 
 def test_roles_label_subagent_and_compaction_lines(sink):
-    lines, _level = sink
+    lines, level = sink
+    level["value"] = 3
     with stream_transport.net_role("Subagent 2", agent="summarizer"):
         call = stream_transport.begin_call("https://api.deepseek.com", "deepseek/deepseek-v4-flash")
     with stream_transport.net_role("Compacting"):

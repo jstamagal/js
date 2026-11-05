@@ -248,10 +248,11 @@ PARALLEL_TOOLS_MAX
     after the calls before it. 1 runs every call in turn.
 
 RETRY_COUNT_MAX
-    Retries of one model request after a retryable failure: a 429, 502, 503
-    or 504; no response: refused, no connection in CONNECT_TIMEOUT, or
-    dropped before any header; a stream idle past STREAM_IDLE_TIMEOUT. A 500 and every other
-    4xx fail at once. Each waits what the provider's Retry-After or
+    Retries of one model request after a retryable failure: a 429, 502,
+    503, 504 or 529; a network failure: refused, no connection in
+    CONNECT_TIMEOUT, or a connection dropped before or during the reply; a
+    stream idle past STREAM_IDLE_TIMEOUT. A 500 and every other 4xx fail at
+    once. Each waits what the provider's Retry-After or
     retry-after-ms header asks, else 8s each time by default. Defaults to
     3 retries. 0 fails on the first error.
 
@@ -848,8 +849,9 @@ REASONING_DISPLAY
 
 NET_DISPLAY
     Network display in the async screen: 0 nothing, 1 failures, 2 also
-    Connecting/Connected lines, 3 also catalog refreshes and per-call stream
-    stats. Retries and the line that gives up on them print at every level.
+    prompt cache breaks, 3 also Connecting/Connected lines for every
+    request, catalog refreshes and per-call stream stats. Retries, the line
+    that gives up on them and the wait for a first byte show at every level.
 
 TOOLS_DISPLAY
     Tool exchange display: 0 nothing; 1 what matters: quiet calls fold into

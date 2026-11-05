@@ -262,13 +262,14 @@ Provider request retry:
 - One rule decides what is retried: `model_client.retryable`, applied in
   `_stream_async` as a failure leaves the SDK, which sets the error's
   `is_retryable` for every retrying caller. A status in `RETRY_STATUSES`
-  (429, 502, 503, 504) is retried; 500 and every 4xx fail at once. An
+  (429, 502, 503, 504, 529) is retried; 500 and every other 4xx fail at once. An
   Anthropic `error` event inside a stream that answered 200 counts as the
   status its type stands for (`error_status`), and an OpenAI Responses stream
   error as the status its `code` stands for (`rate_limit_exceeded` 429;
-  `server_error`, `internal_error`, `model_error` 500). A request that got no
-  response is retried: refused, past `CONNECT_TIMEOUT`, or dropped before
-  any response header. A connection dropped after the headers is not.
+  `server_error`, `internal_error`, `model_error` 500). A network failure is
+  retried: refused, past `CONNECT_TIMEOUT`, or a connection dropped before
+  or during the reply (including a Codex stream that ends without a
+  terminal event). Any other answer with no status is not.
 - A failure the rule retries is retried up to
   `RETRY_COUNT_MAX` times (default 3). Each retry waits what the
   response's `retry-after-ms` or `Retry-After` header asks (seconds or an HTTP
