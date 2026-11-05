@@ -477,6 +477,14 @@ def _finish_configured_spec(spec: PromptSpec, cfg, expand: bool) -> PromptSpec:
     # Tag references resolve against tools.yaml here, so a bad tag or a tag
     # cycle fails the prompt load with one line instead of a later traceback.
     policy.expand(spec.tool_selectors, policy.load_tools_config(), f"agent {getattr(cfg, 'agent_id', '')!r}")
+    if options.tools is not None:
+        # The registry the run's surface is selected from; tool entries never
+        # select MCP tools, which come only through tool_discovery.
+        from .toolkit.registry import registry_for_roots
+        registry = registry_for_roots(getattr(cfg, "prompt_roots", ()) or (), flags=policy.schema_flags(cfg))
+        unmatched = options.unmatched_tools(registry.tools)
+        if unmatched:
+            raise ValueError(msgs.TOOLS_ENTRY_MATCHES_NOTHING.text(entry=unmatched[0]))
     if expand:
         spec = _expand_spec(spec, cfg)
     return spec

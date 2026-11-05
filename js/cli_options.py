@@ -70,6 +70,15 @@ class RunOptions:
             entries = ('skill:ban', *entries)
         return entries
 
+    def unmatched_tools(self, tools) -> tuple[str, ...]:
+        """The --tools entries, other than tags, that name no tool in `tools`."""
+        if self.tools is None:
+            return ()
+        rules = policy.expand(tool_list(self.tools), policy.load_tools_config(), '--tools')
+        return tuple(rule.entry.text for rule in rules
+                     if not rule.via and rule.entry.noun != 'tag'
+                     and not any(rule.matches(tool) for tool in tools))
+
     def prompt_text(self) -> str:
         if self.system_prompt_file is not None:
             return Path(self.system_prompt_file).expanduser().read_text(encoding='utf-8')
