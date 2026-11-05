@@ -262,6 +262,38 @@ class ToolTrace:
             _print_trace(self._telemetry, finished)
 
 
+_SUBAGENT_KINDS = {"task": msgs.SUBAGENT_KIND_TASK, "agent": msgs.SUBAGENT_KIND_AGENT,
+                   "background": msgs.SUBAGENT_KIND_BACKGROUND}
+_SUBAGENT_OUTCOMES = {"ok": msgs.SUBAGENT_OUTCOME_OK, "error": msgs.SUBAGENT_OUTCOME_ERROR,
+                      "cancelled": msgs.SUBAGENT_OUTCOME_CANCELLED}
+
+
+def subagent_started_fields(event: dict) -> dict:
+    """SUBAGENT_STARTED's holes from a subagent_start event's fields."""
+    return {
+        "index": event["index"], "total": event["total"], "agent": event["agent"],
+        "kind": _SUBAGENT_KINDS[event["kind"]].words(),
+        "route": event["route"],
+        "effort": event["effort"] or msgs.SUBAGENT_EFFORT_UNSET.words(),
+        "tools": event["tools"],
+        "session": event["session"] or msgs.SUBAGENT_SESSION_UNSAVED.words(),
+    }
+
+
+def subagent_finished_fields(event: dict) -> dict:
+    """SUBAGENT_FINISHED's holes from a subagent_end event's fields."""
+    tokens = ""
+    if event.get("calls"):
+        tokens = msgs.SUBAGENT_TOKENS.words(prompt_tokens=event["prompt_tokens"],
+                                            output_tokens=event["output_tokens"])
+    return {
+        "index": event["index"], "total": event["total"], "agent": event["agent"],
+        "outcome": _SUBAGENT_OUTCOMES[event["outcome"]].words(),
+        "elapsed": _elapsed_text(event["elapsed_s"]),
+        "tokens": tokens,
+    }
+
+
 def _print_run_line(fields: list[str]) -> None:
     """The run line through its format, wrapped between two fields."""
     parts = msgs.RUN_LINE.runs(fields="".join(display.FIELD_BREAK + display.clean(field) for field in fields))
@@ -390,6 +422,14 @@ class ConsoleSink:
         line = msgs.RETRY_GAVE_UP.said(n=n)
         with _muted_tee(getattr(self._telemetry, "transcript_log", None)):
             network_display.always(network_display.LabelledLine(label, line) if label else line)
+
+    def _on_subagent_start(self, **fields: Any) -> None:
+        with _muted_tee(getattr(self._telemetry, "transcript_log", None)):
+            msgs.say(msgs.SUBAGENT_STARTED, file=sys.stderr, flush=True, **subagent_started_fields(fields))
+
+    def _on_subagent_end(self, **fields: Any) -> None:
+        with _muted_tee(getattr(self._telemetry, "transcript_log", None)):
+            msgs.say(msgs.SUBAGENT_FINISHED, file=sys.stderr, flush=True, **subagent_finished_fields(fields))
 
     def _on_kernel_execution(self, *, context: Any, **fields: Any) -> None:
         from . import kernel_display

@@ -884,6 +884,22 @@ RETRY_WAIT = Message("Retry {n}/{of} in {seconds:.1f}s: {failure}")
 RETRY_GAVE_UP = Message("Gave up after {n} retries.", GRAVE)
 RETRY_COUNTDOWN = Message("Retry {n}/{of} in {seconds:.0f}s")
 STEERED = Message("Steered.")
+
+# A subagent's run, from launch to end. `kind` is a SUBAGENT_KIND_* entry's
+# words; `route` is provider/model; `effort` the effort its requests send, or
+# SUBAGENT_EFFORT_UNSET's words; `tokens` is "" or SUBAGENT_TOKENS's line.
+SUBAGENT_STARTED = Message(
+    "Subagent {index} of {total} started: {agent} ({kind})  {route}  effort {effort}  {tools} tools  session {session}")
+SUBAGENT_FINISHED = Message("Subagent {index} of {total} {outcome}: {agent}  {elapsed}{tokens}")
+SUBAGENT_KIND_TASK = Message("task", banner=False)
+SUBAGENT_KIND_AGENT = Message("named agent", banner=False)
+SUBAGENT_KIND_BACKGROUND = Message("background task", banner=False)
+SUBAGENT_EFFORT_UNSET = Message("unset", banner=False)
+SUBAGENT_SESSION_UNSAVED = Message("unsaved", banner=False)
+SUBAGENT_OUTCOME_OK = Message("ok", banner=False)
+SUBAGENT_OUTCOME_ERROR = Message("error", banner=False)
+SUBAGENT_OUTCOME_CANCELLED = Message("cancelled", banner=False)
+SUBAGENT_TOKENS = Message("  {prompt_tokens:,} tok in  {output_tokens:,} tok out", banner=False)
 FLIGHT_LOG_FAILED = Message("Flight log not written: {error}", GRAVE)
 COMPACTION_FAILED = Message("Compaction failed: {error}", GRAVE)
 
