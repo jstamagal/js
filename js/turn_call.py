@@ -232,8 +232,8 @@ class ModelCaller:
                     self._escalated = True
                     telemetry.event("max_output_escalated", model=model,
                                     max_output_tokens=call_max_out, escalated_to=escalated)
-                    stream_transport.say_for_caller(
-                        2, msgs.MAX_OUTPUT_ESCALATED.said(before=call_max_out or "default", after=escalated))
+                    stream_transport.say_or_print_for_caller(
+                        1, msgs.MAX_OUTPUT_ESCALATED.said(before=call_max_out or "default", after=escalated))
                     call_max_out = escalated
                     continue
                 return reply
@@ -278,6 +278,9 @@ class ModelCaller:
                     telemetry.event("thinking_turn_restarted" if restarted else "signed_reasoning_dropped",
                                     model=model, messages=restarted or dropped,
                                     error=f"{type(e).__name__}: {e}")
+                    stream_transport.say_or_print_for_caller(1, (
+                        msgs.THINKING_TURN_RESTARTED.said(messages=restarted) if restarted
+                        else msgs.SIGNED_REASONING_DROPPED.said(messages=dropped)))
                     self._convo.rebuild()
                     compaction.history_rewritten(context)
                     continue

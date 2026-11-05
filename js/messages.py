@@ -900,6 +900,11 @@ RETRY_BUDGET_EXHAUSTED = Message("Tool-loop retry budget exhausted.", GRAVE)
 MAX_ITERATIONS = Message("Tool loop hit max iterations: {limit}", GRAVE)
 RESPONSE_INCOMPLETE = Message("Response incomplete: {reason}", WARN)
 MAX_OUTPUT_ESCALATED = Message("Reply hit its output cap of {before}; sending again with {after}.")
+SIGNED_REASONING_DROPPED = Message(
+    "The provider refused replayed reasoning; dropped it from {messages} messages and sending again.", WARN)
+THINKING_TURN_RESTARTED = Message(
+    "The provider refused this turn's thinking; restarted the turn from {messages} messages and sending again.", WARN)
+MODEL_REMOVED = Message("Removed {model} from the model list: {reasons}", WARN)
 MAX_OUTPUT_RESUMING = Message("Reply hit its output cap; asking the model to resume, {n} of {limit}.", WARN)
 RETRY_WAIT = Message("Retry {n}/{of} in {seconds:.1f}s: {failure}")
 RETRY_GAVE_UP = Message("Gave up after {n} retries: {failure}")

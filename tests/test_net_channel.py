@@ -214,6 +214,28 @@ def test_http_status_failure_names_the_status():
     assert "429" in text and "insufficient_quota" in text
 
 
+@pytest.mark.parametrize("value", [1, 2])
+def test_a_compaction_request_shows_at_the_default_level_and_other_requests_do_not(sink, value):
+    lines, level = sink
+    level["value"] = value
+    with stream_transport.net_role("Compacting"):
+        stream_transport.begin_call("https://api.deepseek.com", "deepseek/deepseek-v4-flash")
+    with stream_transport.net_role("Subagent 2"):
+        stream_transport.begin_call("https://api.deepseek.com", "deepseek/deepseek-v4-pro")
+    stream_transport.begin_call("https://api.deepseek.com", "deepseek/deepseek-v4-pro")
+
+    plain = [_plain(line) for line in lines]
+    assert len(plain) == 1 and "deepseek/deepseek-v4-flash" in plain[0]
+
+
+def test_network_display_0_hides_the_compaction_request(sink):
+    lines, level = sink
+    level["value"] = 0
+    with stream_transport.net_role("Compacting"):
+        stream_transport.begin_call("https://api.deepseek.com", "deepseek/deepseek-v4-flash")
+    assert lines == []
+
+
 def test_roles_label_subagent_and_compaction_lines(sink):
     lines, level = sink
     level["value"] = 3

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import logins
+from . import messages as msgs
 
 
 @dataclass(frozen=True)
@@ -64,7 +65,8 @@ class HealthSession:
                     and measured.decode_s > 0 and measured.tokens / measured.decode_s < self.policy.slow_decode):
                 reasons.append('slow_decode')
             if reasons and logins.remove_cached_model(provider, model):
-                stream_transport.say(1, f'Removed {provider}/{model}: {", ".join(reasons)}')
+                stream_transport.say_or_print(1, msgs.MODEL_REMOVED.said(
+                    model=f"{provider}/{model}", reasons=", ".join(reasons)))
 
 
 _session: contextvars.ContextVar[HealthSession | None] = contextvars.ContextVar('model_health', default=None)

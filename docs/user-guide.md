@@ -286,11 +286,16 @@ request waits for its first byte (the prefill) the bar, or a stderr row
 under `-p`, counts `waiting for first byte 4m12s`; ^C cancels it, and
 `FIRST_BYTE_TIMEOUT` (default 0, no limit) fails it once, unretried. At 1
 a failure js does not retry prints too (`*** DNS failure: host`,
-`*** 500 ...`, timeouts); at 2 (the default) a response that read more
+`*** 500 ...`, timeouts), and so does what changes the session: each
+compaction request (`*** Compacting: model via url`), a reply sent again
+with a larger output cap, replayed reasoning the provider refused and js
+dropped, a model removed from the list. Under `-p` those lines print
+whatever `NET_DISPLAY` says; a compaction shows there through its own
+`*** Compaction` lines, which print at every level in both. At 2 (the default) a response that read more
 than 5% (and at least 2000 tokens) less from the prompt cache than the one
 before it prints one `*** Prompt cache break` line with both counts and the
-seconds since that request; at 3 each model request, including subagents
-and compaction, also prints `*** Connecting` and `*** Connected ... Nms`,
+seconds since that request; at 3 every other model request, subagents
+included, also prints `*** Connecting` and `*** Connected ... Nms`,
 and models.dev catalog refreshes and the per-call stream stats line (`ms finish tok tok/s cache`)
 print as well. In the screen that stats
 line follows `NET_DISPLAY`; `-p` and `--blocking` still show it with `-d`.

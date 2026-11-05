@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from js import compaction, model_client, retry, turn_call
+from js import messages as msgs
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
 from js.toolkit.core import TurnStatus
@@ -225,6 +226,13 @@ def test_a_cut_off_reply_is_resent_once_with_a_larger_cap(tmp_path, monkeypatch)
     assert [c["max_output_tokens"] for c in turn.calls] == [1000, 8000, 1000]
 
 
+def test_an_escalated_cap_is_said_without_a_screen(tmp_path, monkeypatch, capsys):
+    """js -p has no network channel; a change to the session still shows."""
+    turn = _Turn(tmp_path, monkeypatch, [_cut("half"), _done()], escalation=8000)
+    turn.call()
+    assert "8000" in capsys.readouterr().err
+
+
 def test_a_refused_escalated_cap_falls_back_to_the_configured_cap(tmp_path, monkeypatch):
     turn = _Turn(tmp_path, monkeypatch, [_cut("half"), _fatal(), _cut("half again")], escalation=8000)
     assert turn.call().result.text == "half again"
@@ -239,7 +247,7 @@ def test_a_cut_off_tool_call_with_whole_arguments_is_not_resent(tmp_path, monkey
     assert len(turn.calls) == 1
 
 
-def test_a_refused_signature_is_dropped_once_and_the_history_replayed(tmp_path, monkeypatch):
+def test_a_refused_signature_is_dropped_once_and_the_history_replayed(tmp_path, monkeypatch, capsys):
     messages = [
         {"role": "user", "content": "go"},
         {"role": "assistant", "content": "ok", "reasoning_content": "thought",
@@ -256,6 +264,7 @@ def test_a_refused_signature_is_dropped_once_and_the_history_replayed(tmp_path, 
     assert turn.kinds().count("signed_reasoning_dropped") == 1
     assert "reasoning_parts" not in messages[1]
     assert turn.convo.ai is not first
+    assert msgs.SIGNED_REASONING_DROPPED.words(messages=1) in capsys.readouterr().err
 
 
 def test_call_limits_read_the_resilience_settings():
