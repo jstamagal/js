@@ -1546,7 +1546,7 @@ def _route(provider_id: str | None, model_id: str) -> _Route:
         # With no provider the model id is the only signal there is.
         deepseek_wire=provider_name == "deepseek" or sdk_provider_name == "deepseek" or (
             not explicit_provider and "deepseek" in model_name),
-        minimax=provider_name.startswith("minimax"),
+        minimax=provider_name == "minimax",
     )
 
 
@@ -1596,7 +1596,10 @@ def build_request_params(
         output_max_tokens = (max_output_tokens if max_output_tokens is not None
                              else _settings.knob(settings, "ANTHROPIC_OUTPUT_TOKENS_MAX"))
         # A `thinking` set in EXTRA_PARAMS wins over the one js/reasoning.py plans.
-        plan = reasoning.anthropic_thinking(model_name, reasoning_effort, thinking_budget, settings=settings)
+        if route.minimax:
+            plan = reasoning.minimax_thinking(model_name, reasoning_effort, thinking_budget)
+        else:
+            plan = reasoning.anthropic_thinking(model_name, reasoning_effort, thinking_budget, settings=settings)
         if plan is not None:
             if plan.thinking is not None:
                 extra_body.setdefault("thinking", plan.thinking)
@@ -1610,7 +1613,7 @@ def build_request_params(
         standard = _ANTHROPIC_SAMPLING
     else:
         output_max_tokens = None if route.codex else max_output_tokens
-        if reasoning_effort is not None and not route.minimax:
+        if reasoning_effort is not None:
             # The effort word as typed, snapped where js knows the model family
             # (js/reasoning.py). With no provider the call goes to a gateway,
             # which normalizes the word itself.
@@ -1639,9 +1642,9 @@ def build_request_params(
 
     # Claude omits its thinking text unless the request asks for it. On the
     # Anthropic wire `reasoning.anthropic_thinking` asks with display=summarized;
-    # on the chat-completions wire (CLIProxyAPI in front of Claude) the ask is
-    # include_reasoning, sent whenever CLAUDE_PROXY_INCLUDE_REASONING is on.
-    if (not route.anthropic_wire and not route.responses_wire
+    # through CLIProxyAPI's OpenAI-shaped endpoint the ask is include_reasoning,
+    # which the proxy maps onto the same display.
+    if (route.transport == "cliproxyapi"
             and _settings.knob(settings, "CLAUDE_PROXY_INCLUDE_REASONING")):
         extra_body.setdefault("include_reasoning", True)
 

@@ -389,15 +389,20 @@ def test_stream_model_sends_an_effort_word_as_typed_to_an_unrecognized_model(mon
     assert _pview(factory.kwargs["params"]) == {"max_tokens": 64, "reasoning_effort": "off"}
 
 
-@pytest.mark.parametrize("include", [True, False])
-def test_include_reasoning_follows_its_setting_on_the_openai_wire(monkeypatch, include):
-    # Claude hides its thinking unless the request asks for it; behind an
-    # OpenAI-shaped proxy the model may be any alias, so the setting decides.
+@pytest.mark.parametrize(("provider_id", "include", "sent"), [
+    ("cliproxyapi", True, True),
+    ("cliproxyapi", False, False),
+    ("openai", True, False),
+    ("vllm", True, False),
+])
+def test_include_reasoning_goes_only_to_cliproxyapi(monkeypatch, provider_id, include, sent):
+    # Claude hides its thinking unless the request asks for it; behind
+    # CLIProxyAPI the model may be any alias, so the provider decides.
     factory = _use_fake_stream(monkeypatch, _text_events("ok"))
     model_client.stream_model(
         model_id="opus",
         settings={"CLAUDE_PROXY_INCLUDE_REASONING": include},
-        provider_id="openai",
+        provider_id=provider_id,
         provider_base_url="http://localhost:8999/v1",
         provider_api_key="x",
         messages=[ai.user_message("hi")],
@@ -406,7 +411,7 @@ def test_include_reasoning_follows_its_setting_on_the_openai_wire(monkeypatch, i
         reasoning_effort=None,
         on_text=lambda _s: None,
     )
-    expected = {"max_tokens": 64, "extra_body": {"include_reasoning": True}} if include else {"max_tokens": 64}
+    expected = {"max_tokens": 64, "extra_body": {"include_reasoning": True}} if sent else {"max_tokens": 64}
     assert _pview(factory.kwargs["params"]) == expected
 
 

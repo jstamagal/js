@@ -151,6 +151,9 @@ def _effort_sent(provider_id, model, effort):
         ("openai", "kimi-k2.7-code", "spoon", "spoon"), # a non-ladder word stays as typed
         ("openai-codex", "gpt-5.5", "max", "xhigh"),
         ("deepseek", "deepseek-chat", "high", "high"),
+        ("openai", "MiniMax-M3.1-Flash", "off", "low"),  # MiniMax's OpenAI endpoint: reasoning_effort
+        ("minimax", "MiniMax-M3.1-Flash", "minimal", "low"),
+        ("minimax", "MiniMax-M3", "spoon", "spoon"),
     ],
 )
 def test_the_effort_word_is_sent_as_typed_or_snapped_for_a_known_family(provider_id, model, effort, sent):
