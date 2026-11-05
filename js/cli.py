@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import contextvars
 import copy
 import errno
 import functools
@@ -34,6 +35,7 @@ from prompt_toolkit.key_binding import merge_key_bindings
 from prompt_toolkit.shortcuts import CompleteStyle
 
 from . import supervisor
+from . import subagent_windows
 from . import swarm as swarm_mod
 
 from . import attach, clipimage, codex_auth
@@ -111,7 +113,7 @@ from .session_catalog import (
 )
 from .tool_binaries import resolve_binary
 from .toolkit import policy as tool_policy
-from .toolkit import task_jobs
+from .toolkit import meta, task_jobs
 from .toolkit.registry import registry_for_roots
 from .toolkit import ToolContext
 from .prompt_text import load_catalog
@@ -1982,6 +1984,53 @@ def _cmd_cancel(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
+def _cmd_window(arg: str, state: dict, cfg: Config) -> str | None:
+    """`/window` lists the windows, `/window N` shows window N, `/window close
+    [N]` closes N or the window on screen."""
+    windows = state.get("windows")
+    if windows is None:
+        msgs.say(msgs.BLOCKING_NO_JOBS, command="/window")
+        return None
+    words = arg.split()
+    usage = msgs.USAGE.said(usage="/window [N | close [N]]")
+    if not words:
+        for row in windows.rows():
+            mark = (msgs.WINDOW_MARK_CURRENT.words() if row["current"]
+                    else msgs.WINDOW_MARK_ACTIVE.words() if row["active"] else "")
+            state_words = (msgs.WINDOW_STATE_RUNNING if row["running"] else msgs.WINDOW_STATE_FINISHED).words()
+            msgs.say(msgs.WINDOW_ROW, number=row["number"], mark=mark,
+                     name=row["agent"] or msgs.WINDOW_MAIN.words(),
+                     state=state_words if row["agent"] else "")
+        return None
+    if words[0] == "close":
+        if len(words) > 2 or (len(words) == 2 and not words[1].isdigit()):
+            return usage
+        number = int(words[1]) if len(words) == 2 else windows.windows.current
+        return _on_loop(lambda: windows.close(number))
+    if len(words) == 1 and words[0].isdigit():
+        number = int(words[0])
+        if not _on_loop(lambda: windows.windows.switch(number)):
+            return msgs.NO_SUCH_WINDOW.said(number=number)
+        return None
+    return usage
+
+
+def _on_loop(call: Callable[[], object]) -> object:
+    """``call``'s result, run on the REPL's loop from a command's executor thread."""
+    sup = supervisor.get_current()
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    if sup is None or running is sup.loop:
+        return call()
+
+    async def run():
+        return call()
+
+    return asyncio.run_coroutine_threadsafe(run(), sup.loop).result()
+
+
 def _cmd_compact_auto(arg: str, state: dict, cfg: Config) -> str | None:
     value = arg.strip().lower()
     if value not in ("on", "off"):
@@ -2323,6 +2372,7 @@ COMMANDS: dict[str, Command] = {
     "name": Command(_cmd_name, "name [title]", msgs.CMD_NAME),
     "jobs": Command(_cmd_jobs, "jobs", msgs.CMD_JOBS),
     "cancel": Command(_cmd_cancel, "cancel [id]", msgs.CMD_CANCEL),
+    "window": Command(_cmd_window, "window [N | close [N]]", msgs.CMD_WINDOW),
     # The async REPL drains its loop-owned queue before a line reaches the
     # table; this entry runs everywhere else, where nothing queues.
     "flush": Command(lambda arg, state, cfg: msgs.say(msgs.NO_QUEUED_PROMPTS),
@@ -3954,10 +4004,26 @@ def _live_level(state: dict, key: str) -> int:
 
 
 def _status_bar_line(cfg: Config, state: dict, turn_active: bool, width: int) -> str:
-    """The REPL status bar from live state: what is running, on what, how full."""
+    """The REPL status bar from live state: what is running, on what, how full.
+    In a subagent's window it is that subagent's: its model, agent, session
+    and turn."""
     context = runtime.T.STOCK_CONTEXT
     provider = state.get("provider_id") or cfg.provider_id
     model = state.get("model") or cfg.model
+    agent_id, session_file = cfg.agent_id, cfg.session_file
+    windows = state.get("windows")
+    window = activity = None
+    if windows is not None:
+        if len(windows.windows.numbers()) > 1:
+            window = windows.windows.current
+        activity = windows.windows.activity()
+        shown = windows.on_screen()
+        if shown is not None:
+            launch = shown.launch
+            provider, model, agent_id = launch["provider"], launch["model"], launch["agent"]
+            session_file = Path(launch["session_file"]) if launch["session_file"] else None
+            context = shown.context or context
+            turn_active = shown.busy()
     if provider and isinstance(model, str) and model.startswith(f"{provider}/"):
         model = model[len(provider) + 1:]
     prompt_tokens = int(getattr(context, "last_prompt_tokens", 0) or 0)
@@ -3978,10 +4044,12 @@ def _status_bar_line(cfg: Config, state: dict, turn_active: bool, width: int) ->
         phase=phase,
         output_tokens=output_tokens,
         throbber=throbber,
-        agent_id=cfg.agent_id,
-        session_short=screen.session_short(cfg.session_file),
+        agent_id=agent_id,
+        session_short=screen.session_short(session_file) if session_file is not None else None,
         cache_pct=int(100 * cached_tokens / prompt_tokens) if prompt_tokens else None,
-        cost=usage_display.status_text(usage_mod.totals(cfg.session_file)),
+        cost=usage_display.status_text(usage_mod.totals(session_file)) if session_file is not None else None,
+        window=window,
+        activity=activity,
     )
 
 
@@ -4047,6 +4115,12 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
     queue: asyncio.Queue = asyncio.Queue()
     steer_inbox: list[str] = []
     mcp_host = state.get("mcp_host")
+    # Each subagent a turn launches gets a window; set before the consumer
+    # starts, so every turn it runs inherits it.
+    windows = screen.Windows()
+    child_windows = subagent_windows.SubagentWindows(windows, sup)
+    state["windows"] = child_windows
+    opener_token = meta.window_opener.set(child_windows.open)
 
     channel_instructed: set[str] = set()
 
@@ -4084,6 +4158,24 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
     async def on_line(line: str) -> None:
         if not line:
             return
+        shown = child_windows.on_screen()
+        if shown is not None:
+            # In a subagent's window a command runs as anywhere, its output
+            # in that window; any other line is the subagent's.
+            if _is_turn_state_command(line, state) and sup.turn_active():
+                with screen.writing(shown.scrollback):
+                    msgs.say(_repl_hint(msgs.TURN_RUNNING, state), command=line.split()[0])
+                return
+            command = contextvars.copy_context()
+            command.run(screen.writing_to.set, shown.scrollback)
+            handled = await loop.run_in_executor(None, command.run, _handle_command, line, state, cfg)
+            if handled:
+                _sync_telemetry_from_live_settings(cfg, state, telemetry)
+                if not state["running"]:
+                    await close()
+                return
+            shown.send(line)
+            return
         if line in _repl_assembly(state).flush_lines:
             # Drop pending input without touching the active turn. Handled
             # here (not in _handle_command) because the queue is loop-owned
@@ -4109,6 +4201,10 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
             msgs.say(msgs.QUEUED, ahead=queue.qsize())
 
     def on_interrupt() -> bool:
+        shown = child_windows.on_screen()
+        if shown is not None:
+            # In a subagent's window the key stops what runs there.
+            return shown.cancel()
         handler = _repl_assembly(state).interrupt or _interrupt_turn_and_queue
         return handler(sup, drop_pending)
 
@@ -4164,7 +4260,10 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
             *(_repl_assembly(state).input_bindings or _repl_input_bindings)(lambda: state["settings"]),
         ]),
         keymap=state.get("keymap"),
+        windows=windows,
     )
+    windows.set_main(scrollback)
+    child_windows.attach(app)
     previous_reasoning_factory = telemetry.reasoning_factory
     previous_display_factory = telemetry.display_factory
     previous_exchange_factory = telemetry.exchange_factory
@@ -4175,7 +4274,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         flush=sys.stdout.flush,
     )
     telemetry.exchange_factory = lambda: screen.ScreenExchange(loop, scrollback, app)
-    ticker = loop.create_task(screen.tick(app, sup.turn_active))
+    ticker = loop.create_task(screen.tick(app, lambda: sup.turn_active() or bool(sup.jobs("subagent"))))
     try:
         with screen.capture_stdio(loop, scrollback, app):
             try:
@@ -4204,6 +4303,8 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         telemetry.display_factory = previous_display_factory
         telemetry.exchange_factory = previous_exchange_factory
         supervisor.set_current(None)
+        meta.window_opener.reset(opener_token)
+        state.pop("windows", None)
         consumer.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await consumer

@@ -81,6 +81,10 @@ Each child says when it starts and when it ends, one line each, on stderr in
 *** Subagent 1 of 2 ok: explore  1m 13s  12,345 tok in  678 tok out
 ```
 
+In the async REPL the launch line also names the subagent's window: each
+subagent gets one (2 to 9) that shows everything it streams and takes lines
+typed in it (user guide, "Windows").
+
 The kind is `task`, `named agent` or `background task`. Model, effort, tool
 count and session are the child's own, after its `agent.yaml` and the tool
 call's `model`/`reasoning` are applied; the effort is what its requests send.

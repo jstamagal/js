@@ -438,6 +438,19 @@ PERSONA_TRUNCATED = Message("Truncated. {size} bytes in all.")
 BLOCKING_NO_JOBS = Message("{command} is unavailable under --blocking.")
 NO_JOBS = Message("No running jobs.")
 JOB_ROW = Message("[{id}] {kind}{label}", banner=False)
+
+# Windows on the REPL screen (`js.subagent_windows`). `state` is a
+# WINDOW_STATE_* entry's words, `mark` "" or WINDOW_MARK_* words.
+WINDOW_ROW = Message("{number}{mark}  {name}  {state}", banner=False)
+WINDOW_MAIN = Message("main", banner=False)
+WINDOW_STATE_RUNNING = Message("running", banner=False)
+WINDOW_STATE_FINISHED = Message("finished", banner=False)
+WINDOW_MARK_CURRENT = Message("*", banner=False)
+WINDOW_MARK_ACTIVE = Message("+", banner=False)
+WINDOW_QUEUED = Message("Queued for {agent}'s next model call.")
+NO_SUCH_WINDOW = Message("No window {number}.", WARN)
+WINDOW_MAIN_STAYS = Message("Window 1 is the main conversation; it stays.", WARN)
+WINDOW_STILL_RUNNING = Message("Window {number} still runs {agent}. Ctrl-C there cancels it.", WARN)
 NO_JOB_TO_CANCEL = Message("No matching job to cancel.")
 CANCELLING = Message("Cancelling {jobs}", WARN)
 NO_SUCH_SKILL = Message("No skill named {name!r}.")
@@ -545,6 +558,7 @@ CMD_SESSION = Message("Open the session picker. Words after it start a search.")
 CMD_NAME = Message("Pin a title on this session, or print the one it has.")
 CMD_JOBS = Message("List running turns and subagents.")
 CMD_CANCEL = Message("Cancel a job by id, or the active turn.")
+CMD_WINDOW = Message("List the windows, show window N, or close a finished subagent's window.")
 CMD_FLUSH = Message("Drop all prompts queued behind the active turn.")
 CMD_COMPACT = Message("Append a compaction summary mark.")
 CMD_COMPACT_AUTO = Message("Turn auto-compaction on or off.")
@@ -897,9 +911,13 @@ STEERED = Message("Steered.")
 
 # A subagent's run, from launch to end. `kind` is a SUBAGENT_KIND_* entry's
 # words; `route` is provider/model; `effort` the effort its requests send, or
-# SUBAGENT_EFFORT_UNSET's words; `tokens` is "" or SUBAGENT_TOKENS's line.
+# SUBAGENT_EFFORT_UNSET's words; `tokens` is "" or SUBAGENT_TOKENS's line;
+# `window` is "", SUBAGENT_WINDOW's or SUBAGENT_NO_WINDOW's words.
 SUBAGENT_STARTED = Message(
-    "Subagent {index} of {total} started: {agent} ({kind})  {route}  effort {effort}  {tools} tools  session {session}")
+    "Subagent {index} of {total} started: {agent} ({kind})  {route}  effort {effort}  {tools} tools  "
+    "session {session}{window}")
+SUBAGENT_WINDOW = Message("  window {number}", banner=False)
+SUBAGENT_NO_WINDOW = Message("  no window: windows 2-{last} are open", banner=False)
 SUBAGENT_FINISHED = Message("Subagent {index} of {total} {outcome}: {agent}  {elapsed}{tokens}")
 SUBAGENT_KIND_TASK = Message("task", banner=False)
 SUBAGENT_KIND_AGENT = Message("named agent", banner=False)
@@ -1255,6 +1273,8 @@ STATUS_WHO = Message("{who}", banner=False)
 STATUS_CACHE = Message("cache {pct}%", banner=False)
 STATUS_COST = Message("{cost}", banner=False)
 STATUS_COMPACTING = Message("compacting", banner=False)
+STATUS_WINDOW = Message("[{number}]", banner=False)
+STATUS_ACTIVITY = Message("[Act: {numbers}]", banner=False)
 
 # --- Reasoning ---------------------------------------------------------------
 
@@ -1590,6 +1610,8 @@ KEY_ACTION_SCROLL_UP = Message("Scroll the output up a page.", banner=False)
 KEY_ACTION_SCROLL_DOWN = Message("Scroll the output down a page.", banner=False)
 
 KEY_ACTION_COMPLETE = Message("Complete the word at the cursor, or cycle completions.", banner=False)
+
+KEY_ACTION_WINDOW = Message("Show window {n}; window 1 is the main conversation.", banner=False)
 
 KEY_CONTROL_PREFIX = Message("Ctrl-", banner=False)
 

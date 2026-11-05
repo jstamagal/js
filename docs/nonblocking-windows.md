@@ -61,8 +61,10 @@ Full async, not worker threads (fork B resolved — see below).
   `run_coroutine_threadsafe`, as cancelable `subagent` jobs — not a private
   loop (that would leave them detached and un-cancelable).
 - `js/screen.py` splits the terminal into scrollback, a one-line status bar,
-  and the input line. Output lands in the scrollback today; it moves to
-  events → irciipy → target window later.
+  and the input line. The scrollback region is a set of windows
+  (`screen.Windows`): window 1 is the main conversation and each subagent
+  launched from the REPL gets its own (`js/subagent_windows.py`, user guide
+  "Windows").
 - Cancel = `task.cancel()`. Ctrl-C cancels the active turn; the turn's
   `CancelledError` handler persists partial work and heals orphaned tool_calls.
   A running tool batch finishes detached (v1 contract) — a per-task flag
@@ -101,7 +103,9 @@ Today it is a near-complete REPL. Turn it into an embeddable lib:
    status bar reads the turn's state from `TurnStatus` on the `ToolContext`
    instead of parsing stdout.
 3. irciipy as dispatcher: events → ON hooks → rendered text.
-4. `/window` commands + key bindings (`/jobs`, `/cancel` are the seed).
+4. `/window` commands + key bindings — DONE for subagent windows: Ctrl-W N,
+   `/window [N | close [N]]`, `[Act: ...]` on the bar. Binding a window to a
+   source glob is step 5.
 5. `model!provider@baseurl` identity on every event; window↔source binding.
 6. Per-task cancel flag checked between tools (kill running tools, not just
    detach); fire-and-forget subagents into windows.
