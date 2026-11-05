@@ -10,8 +10,6 @@ from pathlib import Path
 
 import pytest
 
-from conftest import start_session
-
 from js import cli, runtime, session_store
 from js import memory as M
 from js.config import from_env
@@ -77,7 +75,6 @@ def _switch_note(previous: str, current: str) -> str:
 
 @pytest.mark.parametrize("mode", ["-p", "repl"])
 def test_an_explicit_model_beats_the_stamp_on_resume(monkeypatch, mode):
-    start_session("s")
     _prompt(monkeypatch, ["--session", "s", "--model", "model-x", "-p", "one"])
 
     if mode == "-p":
@@ -174,7 +171,6 @@ def test_an_async_repl_model_switch_puts_one_note_on_the_next_request(monkeypatc
 
 
 def test_a_prompt_run_on_another_model_carries_the_note_once(monkeypatch):
-    start_session("s")
     _prompt(monkeypatch, ["--session", "s", "--model", "model-x", "-p", "one"])
 
     switched = _prompt(monkeypatch, ["--session", "s", "--model", "model-y", "-p", "two"])

@@ -363,7 +363,6 @@ def claude(monkeypatch, tmp_path):
     cfg = from_env(
         agent_id="thinking",
         session="thinking",
-        create_session=True,
         extras=[
             "MODEL=claude-sonnet-4-5",
             "PROVIDER=anthropic",
@@ -802,7 +801,7 @@ def test_a_drop_of_signed_reasoning_on_a_final_answer_survives_resume(tmp_path):
 
 def test_the_thinking_budget_setting_replaces_the_effort_budget(claude):
     cfg, wire, context = claude
-    tuned = from_env(agent_id="thinking", session="thinking", create_session=True,
+    tuned = from_env(agent_id="thinking", session="thinking",
                      extras=["THINKING_BUDGET=4000", "PROVIDER=anthropic", "MODEL=claude-sonnet-4-5"])
     assert tuned.thinking_budget == 4000
     # A turn resolves its settings from the layers: the budget rides the flag layer.

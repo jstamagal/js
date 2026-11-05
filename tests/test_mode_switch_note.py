@@ -5,8 +5,6 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import start_session
-
 from js import cli, memory
 from js.memory import load_messages
 from repl_driver import run_async
@@ -21,7 +19,6 @@ def home(monkeypatch, tmp_path):
     for name in ("JS_DEFAULT_AGENT", "JS_SESSION", "JS_MODEL"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.chdir(tmp_path)
-    start_session(SESSION)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_a, **_k: None)
     sent: list[str] = []

@@ -98,8 +98,7 @@ def _configure(spec: AgentSpec) -> tuple[Any, str, Any, Any]:
 
     extras = [f"{k}={v}" for k, v in spec.opts.items()]
     cwd = Path(spec.cwd).expanduser() if spec.cwd else Path.cwd()
-    cfg = from_env(save_session=True, create_session=True, extras=extras, agent_id=spec.agent,
-                   session=spec.session, cwd=cwd)
+    cfg = from_env(save_session=True, extras=extras, agent_id=spec.agent, session=spec.session, cwd=cwd)
     prompt_spec = P.load_configured_prompt_spec(cfg, expand=False)
     cfg = cli._apply_agent_model(cfg, prompt_spec, spec.model, config_pins=False)
     cfg = cli._resolve_cli_model_override(cfg, spec.model)

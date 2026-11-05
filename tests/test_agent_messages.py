@@ -10,11 +10,10 @@ from js.model_client import ModelStreamResult
 from js.session_catalog import last_stamp
 from js.toolkit import ToolContext
 from js.toolkit.meta import task
-from conftest import start_session
 from repl_driver import run_async, run_blocking
 
 
-def _agent(tmp_path, monkeypatch, files, *, seed=True):
+def _agent(tmp_path, monkeypatch, files):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("JS_DEFAULT_AGENT", "voice")
@@ -25,8 +24,6 @@ def _agent(tmp_path, monkeypatch, files, *, seed=True):
     (directory / "00-role.md").write_text("SYSTEM", encoding="utf-8")
     for name, content in files.items():
         (directory / name).write_bytes(content.encode("utf-8"))
-    if seed:
-        start_session("seeded")
     return directory
 
 
@@ -63,7 +60,7 @@ def test_message_keywords_are_separate_from_ordinary_prompt_files(tmp_path, monk
         "1-agent.md": "ASSISTANT",
         "2-benchmark.md": "BENCHMARK",
         "02-ape.md": "APE",
-    }, seed=False)
+    })
     source = tmp_path / "troop.md"
     source.write_text("TROOP", encoding="utf-8")
     (directory / "01-troop.md").symlink_to(source)
@@ -190,7 +187,7 @@ def test_project_message_files_survive_lower_layer_manifest_fallback(tmp_path):
 
 
 def test_duplicate_numeric_role_is_an_error(tmp_path, monkeypatch):
-    directory = _agent(tmp_path, monkeypatch, {"1-user.md": "one", "01-user.md": "another"}, seed=False)
+    directory = _agent(tmp_path, monkeypatch, {"1-user.md": "one", "01-user.md": "another"})
     with pytest.raises(ValueError):
         persona.load_prompt_spec(directory)
 
@@ -224,7 +221,7 @@ def test_benchmarks_use_examples_in_each_fresh_context(tmp_path, monkeypatch):
     _agent(tmp_path, monkeypatch, {
         "01-user.md": "example", "01-agent.md": "example reply",
         "02-benchmark.md": "benchmark one", "03-benchmark.md": "benchmark two",
-    }, seed=False)
+    })
     requests = _model(monkeypatch, ["first", "second"])
     assert cli.main(["--bench", "voice", "-q"]) == 0
     assert requests == [
@@ -236,7 +233,7 @@ def test_benchmarks_use_examples_in_each_fresh_context(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("args", [[], ["--agent", "voice"]])
 def test_benchmark_files_select_bench_mode_without_a_flag_or_prompt(tmp_path, monkeypatch, args):
-    _agent(tmp_path, monkeypatch, {"01-benchmark.md": "measure me"}, seed=False)
+    _agent(tmp_path, monkeypatch, {"01-benchmark.md": "measure me"})
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     requests = _model(monkeypatch, ["measured"])
     assert cli.main([*args, "-q"]) == 0
@@ -245,7 +242,7 @@ def test_benchmark_files_select_bench_mode_without_a_flag_or_prompt(tmp_path, mo
 
 
 def test_even_an_empty_benchmark_file_prevents_entering_repl(tmp_path, monkeypatch):
-    _agent(tmp_path, monkeypatch, {"01-benchmark.md": ""}, seed=False)
+    _agent(tmp_path, monkeypatch, {"01-benchmark.md": ""})
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(cli, "PromptSession", lambda **kwargs: pytest.fail("entered REPL"))
     assert cli.main([]) == 2
@@ -256,19 +253,19 @@ def test_benchmark_expansion_happens_after_its_setup(tmp_path, monkeypatch):
     _agent(tmp_path, monkeypatch, {
         "01-user.md": f"!{{sh printf ready > '{marker}'; printf opening}}",
         "02-benchmark.md": f"!{{sh cat '{marker}'}}",
-    }, seed=False)
+    })
     requests = _model(monkeypatch, ["opening reply", "benchmark reply"])
     assert cli.main(["--bench", "voice", "-q"]) == 0
     assert [request[-1] for request in requests] == [("user", "opening"), ("user", "ready")]
 
 
 def test_malformed_benchmark_reports_a_load_error(tmp_path, monkeypatch):
-    _agent(tmp_path, monkeypatch, {"01-benchmark.md": "---\nmax_tokens: [\n---\nproblem"}, seed=False)
+    _agent(tmp_path, monkeypatch, {"01-benchmark.md": "---\nmax_tokens: [\n---\nproblem"})
     assert cli.main(["--bench", "voice", "-q"]) == 2
 
 
 def test_global_benchmark_agent_is_automatically_selected(tmp_path, monkeypatch):
-    directory = _agent(tmp_path, monkeypatch, {"01-benchmark.md": "global benchmark"}, seed=False)
+    directory = _agent(tmp_path, monkeypatch, {"01-benchmark.md": "global benchmark"})
     global_directory = Path.home() / ".js" / "agents" / "voice"
     global_directory.parent.mkdir(parents=True)
     directory.rename(global_directory)
@@ -279,7 +276,7 @@ def test_global_benchmark_agent_is_automatically_selected(tmp_path, monkeypatch)
 
 
 def test_project_agent_without_benchmarks_shadows_global_benchmarks(tmp_path, monkeypatch):
-    _agent(tmp_path, monkeypatch, {"01-user.md": "project opening", "01-agent.md": "project reply"}, seed=False)
+    _agent(tmp_path, monkeypatch, {"01-user.md": "project opening", "01-agent.md": "project reply"})
     global_directory = Path.home() / ".js" / "agents" / "voice"
     global_directory.mkdir(parents=True)
     (global_directory / "01-benchmark.md").write_text("GLOBAL BENCHMARK", encoding="utf-8")
@@ -357,8 +354,7 @@ def test_plain_prompt_mode_prints_only_the_answer(tmp_path, monkeypatch, capsys)
 def test_benchmarks_never_write_to_a_session_selected_by_environment(tmp_path, monkeypatch):
     _agent(tmp_path, monkeypatch, {
         "01-user.md": "opening %%CURRENT_SESSION_FULLPATH%%", "02-benchmark.md": "benchmark",
-    }, seed=False)
-    start_session("valuable")
+    })
     cfg = from_env(session="valuable")
     memory.append_message(cfg.session_file, {"role": "user", "content": "valuable question"})
     memory.append_message(cfg.session_file, {"role": "assistant", "content": "valuable reply"})

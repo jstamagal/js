@@ -12,8 +12,6 @@ from dataclasses import replace
 from pathlib import Path
 import pytest
 
-from conftest import start_session
-
 from js import cli, runtime, settings
 from js import paths as _paths
 from js import session_store
@@ -353,7 +351,7 @@ def test_config_existing_session_id_loads_with_and_without_suffix(monkeypatch, t
     assert list(sessions_dir.glob("foo-*.jsonl")) == [existing]
 
 
-def test_config_missing_session_id_is_an_error(monkeypatch, tmp_path):
+def test_config_missing_session_id_creates_named_session(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.setenv("JS_SESSION", "foo")
@@ -362,21 +360,7 @@ def test_config_missing_session_id_is_an_error(monkeypatch, tmp_path):
 
     sessions_dir = session_store.folder_for(Path.cwd())
 
-    with pytest.raises(ValueError, match="foo"):
-        from_env()
-    assert not (sessions_dir / "foo.jsonl").exists()
-
-
-def test_config_missing_session_id_is_started_when_creation_is_asked(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
-    monkeypatch.setenv("JS_SESSION", "foo")
-
-    from js.config import from_env
-
-    sessions_dir = session_store.folder_for(Path.cwd())
-
-    actual = from_env(create_session=True)
+    actual = from_env()
 
     assert actual.session_file == sessions_dir / "foo.jsonl"
     assert actual.session_file.is_file()
@@ -578,7 +562,6 @@ def test_the_continue_hint_goes_to_stderr_and_stdout_keeps_only_the_answer(monke
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_k: _fake_stream_result("HINT_OK"))
 
-    start_session("hinted")
     assert cli._run_prompt("Reply with HINT_OK", session="hinted") == 0
 
     captured = capsys.readouterr()
@@ -1329,7 +1312,6 @@ def test_named_nested_sessions_append_stably(monkeypatch, tmp_path):
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_kwargs: _fake_stream_result("OK"))
 
-    start_session("caller/nested")
     assert cli._run_prompt("first", session="caller/nested", show_continue=False) == 0
     assert cli._run_prompt("second", session="caller/nested", show_continue=False) == 0
     nested = session_store.folder_for(tmp_path) / "caller" / "nested.jsonl"
@@ -1481,7 +1463,6 @@ def test_prompt_failure_preserves_tool_work_and_resumes(monkeypatch, tmp_path, d
         raise failure()
 
     monkeypatch.setattr(runtime, "run_turn", interrupted)
-    start_session("interrupted")
     assert cli._run_prompt("inspect tests", session="interrupted", debug=debug) == status
     kept = load_messages(session)
     assert kept[:3] == [user, *exchange]
@@ -1510,7 +1491,6 @@ def test_prompt_interrupt_keeps_streamed_partial(monkeypatch, tmp_path):
 
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(runtime.model_client, "stream_model_async", interrupted)
-    start_session("partial")
     assert cli._run_prompt("explain", session="partial") == 130
     session = session_store.folder_for(Path.cwd()) / "partial.jsonl"
     assert load_messages(session) == [

@@ -165,15 +165,3 @@ def home_model_catalog(fresh_model_catalog):
         "model_count": status.model_count,
     }), encoding="utf-8")
     return target
-
-
-def start_session(name: str, cwd=None):
-    """Create the empty session NAME in the sessions of `cwd` (default: the
-    current directory) under the current HOME, as `--session-key` would:
-    `--session NAME` resumes only a session that exists."""
-    from pathlib import Path
-
-    from js import config, session_store
-
-    folder = session_store.folder_for(Path.cwd() if cwd is None else Path(cwd))
-    return config.resolve_session_file(folder, name, create=True)

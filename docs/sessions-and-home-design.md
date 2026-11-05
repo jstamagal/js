@@ -177,10 +177,9 @@ branched-from: -
 **`--session`:**
 
 - `js --session` alone opens the picker.
-- `js --session NAME` resumes a session by name; a name that matches nothing
-  is an error. `--session-key KEY` starts its session on first use. Lookup is
-  the current directory's folder first, then every folder. A name found in two
-  folders is refused with both paths listed.
+- `js --session NAME` creates or resumes a session by name, as today; scripts
+  rely on it. Lookup is the current directory's folder first, then every
+  folder. A name found in two folders is refused with both paths listed.
 - A generated name or a unique tail of it (`--session 6d65`) resumes, as today.
 
 ### Session kinds
