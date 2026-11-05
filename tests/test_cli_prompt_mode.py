@@ -1662,3 +1662,17 @@ def test_a_tools_session_records_no_chat(monkeypatch, tmp_path):
     record = _session_metadata(session_store.folder_for(Path.cwd()) / "tooly.jsonl")
     assert "chat" not in record
     assert record["agent"] == "defaultagent"
+
+
+@pytest.mark.parametrize("extra", [[], ["--you-are"], ["--chat"]])
+def test_a_tools_entry_naming_no_tool_exits_2_before_any_request(monkeypatch, tmp_path, capsys, extra):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
+    monkeypatch.delenv("JS_SESSION", raising=False)
+    requests = []
+    monkeypatch.setattr(runtime.model_client, "stream_model_async",
+                        lambda **kwargs: requests.append(kwargs) or _fake_stream_result("ok"))
+
+    assert cli.main([*extra, "--tools", "read,nosuchtool", "-n", "-p", "hi"]) == 2
+    assert requests == []
+    assert "nosuchtool" in capsys.readouterr().err

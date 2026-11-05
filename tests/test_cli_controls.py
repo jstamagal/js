@@ -196,3 +196,14 @@ def test_verify_checks_the_agent_roots_only(tmp_path, monkeypatch):
         (elsewhere / 'agents.yaml').write_text('tools: invalid')
     assert not [error for error in verify.verify() if str(tmp_path / 'worktrees') in error
                 or str(tmp_path / 'scratch') in error]
+
+
+@pytest.mark.parametrize('extra', [{}, {'you_are': ''}, {'chat': True}])
+@pytest.mark.parametrize('selection', ['nosuchtool', 'read,nosuchtool:lazy', 'nosuch*'])
+def test_a_tools_entry_that_matches_no_tool_is_refused(tmp_path, extra, selection):
+    roots = _roots_with_agent(tmp_path, 'defaultagent')
+    cfg = Config(model='m', agent_id='defaultagent', prompt_roots=roots)
+    with invocation(RunOptions(tools=selection, **extra)):
+        with pytest.raises(ValueError) as excinfo:
+            persona.load_configured_prompt_spec(cfg, expand=False)
+    assert 'nosuch' in str(excinfo.value)
