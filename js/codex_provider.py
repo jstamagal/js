@@ -952,11 +952,10 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                 # the connection broke. Ending cleanly would pass a cut answer
                 # or a half-streamed tool call off as finished, and a call
                 # marked "incomplete" still reaches _dispatch unless every
-                # consumer checks the flag (doc #372, ruhondo #378). Raise an
-                # error instead; a server-stated response.incomplete above
-                # stays data. Whether a stream failure is retried is
-                # model_client.retryable's to say.
-                raise ai.ProviderResponseError(
+                # consumer checks the flag (doc #372, ruhondo #378). Raise a
+                # connection error instead, which is retried; a server-stated
+                # response.incomplete above stays data.
+                raise ai.ProviderConnectionError(
                     "OpenAI Codex stream ended without a terminal event",
                     provider=_PROVIDER,
                 )

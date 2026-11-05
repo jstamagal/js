@@ -47,18 +47,18 @@ def _status(code: int, error_type: str | None = None) -> ai.ProviderStatusError:
 
 
 @pytest.mark.parametrize(("code", "retried"), [
-    (429, True), (502, True), (503, True), (504, True),
-    (500, False), (529, False), (400, False), (401, False), (404, False), (408, False), (409, False),
+    (429, True), (502, True), (503, True), (504, True), (529, True),
+    (500, False), (400, False), (401, False), (404, False), (408, False), (409, False),
 ])
-def test_only_429_and_gateway_statuses_are_retried(code, retried):
-    assert model_client.retryable(_status(code), responded=True) is retried
+def test_only_429_gateway_and_overloaded_statuses_are_retried(code, retried):
+    assert model_client.retryable(_status(code)) is retried
 
 
 @pytest.mark.parametrize(("error_type", "retried"), [
-    ("rate_limit_error", True), ("timeout_error", True), ("api_error", False), ("overloaded_error", False),
+    ("rate_limit_error", True), ("timeout_error", True), ("overloaded_error", True), ("api_error", False),
 ])
 def test_an_error_event_in_a_200_stream_is_retried_as_its_type_status(error_type, retried):
-    assert model_client.retryable(_status(200, error_type), responded=True) is retried
+    assert model_client.retryable(_status(200, error_type)) is retried
 
 
 @pytest.mark.parametrize(("code", "retried"), [
@@ -66,19 +66,22 @@ def test_an_error_event_in_a_200_stream_is_retried_as_its_type_status(error_type
     ("context_length_exceeded", False),
 ])
 def test_a_responses_stream_code_is_retried_as_the_status_it_stands_for(code, retried):
-    assert model_client.retryable(ai.ProviderAPIError("failed", code=code), responded=True) is retried
+    assert model_client.retryable(ai.ProviderAPIError("failed", code=code)) is retried
 
 
-def test_a_connection_lost_is_retried_only_before_any_header():
-    lost = ai.ProviderConnectionError("Connection error.")
-    assert model_client.retryable(lost, responded=False)
-    assert not model_client.retryable(lost, responded=True)
+def test_a_connection_lost_is_retried():
+    assert model_client.retryable(ai.ProviderConnectionError("Connection error."))
+    assert model_client.retryable(ai.ProviderTimeoutError("Request timed out."))
+
+
+def test_an_answer_with_no_status_is_not_retried():
+    assert not model_client.retryable(ai.ProviderResponseError("tool arguments do not match their deltas"))
 
 
 def test_js_clocks_say_for_themselves():
-    assert model_client.retryable(model_client.StreamIdleError(300), responded=True)
-    assert not model_client.retryable(model_client.FirstByteTimeoutError(60), responded=False)
-    assert model_client.retryable(model_client.ConnectTimeoutError(15), responded=False)
+    assert model_client.retryable(model_client.StreamIdleError(300))
+    assert not model_client.retryable(model_client.FirstByteTimeoutError(60))
+    assert model_client.retryable(model_client.ConnectTimeoutError(15))
 
 
 def test_a_handshake_past_connect_timeout_names_the_setting():
@@ -89,7 +92,7 @@ def test_a_handshake_past_connect_timeout_names_the_setting():
             raise ai.ProviderTimeoutError("Request timed out.") from exc
     except ai.ProviderTimeoutError as exc:
         failure = model_client._request_failure(
-            exc, provider="openai", limits=retry.StreamLimits(connect=15.0), responded=False)
+            exc, provider="openai", limits=retry.StreamLimits(connect=15.0))
 
     assert isinstance(failure, model_client.ConnectTimeoutError) and failure.is_retryable
     assert "CONNECT_TIMEOUT" in str(failure)

@@ -229,9 +229,10 @@ def error_message(exc: BaseException) -> str:
     return " ".join(str(message).split()) or type(exc).__name__
 
 
-# The statuses a failed model request is sent again for. Every other status,
-# 500 and every 4xx included, fails at once.
-RETRY_STATUSES = frozenset({429, 502, 503, 504})
+# The statuses a failed model request is sent again for: rate limited, a
+# gateway that could not reach the server, Anthropic's overloaded. Every other
+# status, 500 and every other 4xx included, fails at once.
+RETRY_STATUSES = frozenset({429, 502, 503, 504, 529})
 
 # The HTTP status an OpenAI Responses stream error's `code` stands for: the
 # stream answered 200 and names its failure only by code.
@@ -257,18 +258,19 @@ def failure_status(exc: BaseException) -> int | None:
     return None
 
 
-def retryable(exc: BaseException, *, responded: bool) -> bool:
+def retryable(exc: BaseException) -> bool:
     """Whether a failed model request is sent again: js's rule, the one every
     retrying caller reads through `is_retryable`. A status in RETRY_STATUSES
-    is; a request that got no response (refused, CONNECT_TIMEOUT, dropped
-    before any header, `responded` False) is; a stream that went quiet past
-    STREAM_IDLE_TIMEOUT is. FIRST_BYTE_TIMEOUT and everything else is not."""
+    is; a network failure is (refused, CONNECT_TIMEOUT, a connection dropped
+    before or during the reply); a stream that went quiet past
+    STREAM_IDLE_TIMEOUT is. FIRST_BYTE_TIMEOUT and every other answer the
+    server gave are not."""
     if isinstance(exc, RequestTimeoutError):
         return bool(exc.is_retryable)
     status = failure_status(exc)
     if status is not None:
         return status in RETRY_STATUSES
-    return isinstance(exc, ai.ProviderConnectionError) and not responded
+    return isinstance(exc, ai.ProviderConnectionError)
 
 
 def _connect_timeout(exc: BaseException) -> bool:
@@ -282,8 +284,7 @@ def _connect_timeout(exc: BaseException) -> bool:
     return False
 
 
-def _request_failure(exc: BaseException, *, provider: str | None, limits: retry.StreamLimits,
-                     responded: bool) -> BaseException:
+def _request_failure(exc: BaseException, *, provider: str | None, limits: retry.StreamLimits) -> BaseException:
     """The error a failed model request leaves this module as, its
     `is_retryable` set by `retryable`. A handshake past CONNECT_TIMEOUT is a
     ConnectTimeoutError. The provider SDKs wrap transport errors raised while
@@ -296,7 +297,7 @@ def _request_failure(exc: BaseException, *, provider: str | None, limits: retry.
         kind = ai.ProviderTimeoutError if isinstance(exc, httpx2.TimeoutException) else ai.ProviderConnectionError
         exc = kind(f"{type(exc).__name__}: {exc}", provider=provider or "default")
     if isinstance(exc, ai.ProviderAPIError):
-        exc.is_retryable = retryable(exc, responded=responded)
+        exc.is_retryable = retryable(exc)
     return exc
 
 
@@ -1368,7 +1369,6 @@ async def _open_stream(
     tools: Sequence[ai.types.tools.Tool] | None,
     params: ai_params.InferenceRequestParams | None = None,
     on_request: Callable[[], None] | None = None,
-    on_response: Callable[[], None] | None = None,
     on_bytes: Callable[[], None] | None = None,
     connect_timeout: float | None = None,
 ) -> AsyncIterator[ai.models.Stream]:
@@ -1378,9 +1378,8 @@ async def _open_stream(
     Keeping the test seam here lets offline tests supply a public
     :class:`ai.models.Stream` without reaching into SDK internals.
 
-    ``on_request`` is called as each HTTP request is sent, ``on_response`` as
-    its response headers arrive and ``on_bytes`` for each response body chunk
-    the transport reads. Each request's handshake is bounded by
+    ``on_request`` is called as each HTTP request is sent and ``on_bytes`` for
+    each response body chunk the transport reads. Each request's handshake is bounded by
     ``connect_timeout`` (None: no limit) and its reads by nothing: the
     first-byte and idle clocks of `_stream_async` bound those silences.
     The OpenAI and Anthropic SDK clients retry nothing themselves: every retry
@@ -1394,7 +1393,7 @@ async def _open_stream(
         if http_client is not None:
             await cleanup.enter_async_context(stream_transport.own_responses(
                 http_client, stream_transport.current_call(),
-                on_request=on_request, on_response=on_response, on_bytes=on_bytes,
+                on_request=on_request, on_bytes=on_bytes,
                 timeout={"connect": connect_timeout, "read": None},
             ))
         if sdk_client is not None:
@@ -1478,7 +1477,6 @@ async def _stream_async(
     sees_request = _http_client(model) is not None
     deadline = asyncio.timeout(None)
     waiting = stream_transport.FirstByteWait()
-    responded = False
     first_byte = False
 
     def sent() -> None:
@@ -1489,17 +1487,13 @@ async def _stream_async(
         waiting.start()
 
     def alive() -> None:
-        nonlocal first_byte, responded
+        nonlocal first_byte
         if not first_byte:
-            first_byte = responded = True
+            first_byte = True
             waiting.end()
         if deadline.expired():
             return
         deadline.reschedule(None if limits.idle is None else loop.time() + limits.idle)
-
-    def headers() -> None:
-        nonlocal responded
-        responded = True
 
     def request_sent() -> None:
         model_health.sent()
@@ -1509,7 +1503,7 @@ async def _stream_async(
         async with deadline:
             if not sees_request:
                 sent()
-            async with _open_stream(**kwargs, on_request=request_sent, on_response=headers, on_bytes=alive,
+            async with _open_stream(**kwargs, on_request=request_sent, on_bytes=alive,
                                     connect_timeout=limits.connect) as stream:
                 async for event in stream:
                     # A transport js sees marks the first byte itself; an
@@ -1536,7 +1530,7 @@ async def _stream_async(
             if first_byte:
                 raise StreamIdleError(limits.idle, provider=provider) from exc
             raise FirstByteTimeoutError(limits.first_byte, provider=provider) from exc
-        failure = _request_failure(exc, provider=provider, limits=limits, responded=responded)
+        failure = _request_failure(exc, provider=provider, limits=limits)
         if failure is exc:
             raise
         raise failure from exc

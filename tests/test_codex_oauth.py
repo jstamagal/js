@@ -847,26 +847,26 @@ def test_stream_errors_keep_their_message_and_code_so_retry_can_see_them(event, 
     assert caught.value.message == message
     assert caught.value.code == "server_error"
     assert model_client.failure_status(caught.value) == 500
-    assert not model_client.retryable(caught.value, responded=True)
+    assert not model_client.retryable(caught.value)
 
 
 def test_a_rate_limit_code_is_retried_as_a_429():
     with pytest.raises(ai.ProviderAPIError) as caught:
         _drain([{"type": "error", "code": "rate_limit_exceeded", "message": "slow down", "param": None}])
     assert model_client.failure_status(caught.value) == 429
-    assert model_client.retryable(caught.value, responded=True)
+    assert model_client.retryable(caught.value)
 
 
 def test_a_stream_that_ends_without_a_terminal_event_raises():
     """ALL-CLAIMS codex_provider.py:97 (doc #372, ruhondo #378): a broken pipe
     used to end as a clean StreamEnd, so a cut answer or a half tool call
-    passed as finished. The connection broke after its headers: not retried."""
-    with pytest.raises(ai.ProviderResponseError) as caught:
+    passed as finished. The connection broke: it is retried."""
+    with pytest.raises(ai.ProviderConnectionError) as caught:
         _drain([
             {"type": "response.output_item.added", "item": _call_item("item_A", "call_A", "write")},
             {"type": "response.function_call_arguments.delta", "item_id": "item_A", "delta": '{"path": "a'},
         ])
-    assert not model_client.retryable(caught.value, responded=True)
+    assert model_client.retryable(caught.value)
 
 
 def test_the_owned_client_bounds_silence_not_total_time():
@@ -909,7 +909,7 @@ def test_a_silent_server_times_out_as_a_retryable_provider_error(monkeypatch):
 
     with pytest.raises(ai.ProviderTimeoutError) as caught:
         asyncio.run(asyncio.wait_for(run(), 10))
-    assert model_client.retryable(caught.value, responded=False)   # no response came
+    assert model_client.retryable(caught.value)
     listener.close()
 
 
@@ -969,7 +969,7 @@ def test_a_half_streamed_tool_call_never_reaches_the_caller(monkeypatch):
     async def run():
         results.append(await model_client._stream_async(model, [], None, None, on_text=lambda _s: None))
 
-    with pytest.raises(ai.ProviderResponseError):
+    with pytest.raises(ai.ProviderConnectionError):
         asyncio.run(run())
     assert results == []
 
