@@ -93,7 +93,6 @@ def test_run_bench_writes_stats_and_resolves_max_tokens(tmp_path, monkeypatch):
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.chdir(tmp_path)
     _write_agent(tmp_path)
-    # A model whose output limit the catalog knows, so an uncapped row resolves to it.
     (tmp_path / ".js").mkdir(exist_ok=True)
     (tmp_path / ".js" / "jsrc").write_text("set MODEL deepseek/deepseek-v4-flash\n", encoding="utf-8")
 
@@ -115,10 +114,9 @@ def test_run_bench_writes_stats_and_resolves_max_tokens(tmp_path, monkeypatch):
     assert rows["03-benchmark"]["max_tokens"] is None
     assert rows["04-benchmark"]["max_tokens"] == 4096
     # …and that those caps actually reached the model layer (order = sorted).
-    # -1 is uncapped: run_turn turns a None cap into the model's own resolved
-    # max — NOT the 4096 agent default — so the wire value is large, not None.
+    # -1 is uncapped: no cap is sent, NOT the 4096 agent default.
     assert captured[0] == 256 and captured[1] == 512 and captured[3] == 4096
-    assert captured[2] not in (None, 4096) and captured[2] > 4096
+    assert captured[2] is None
 
     # Stats math: 20 tok over 0.5s stream = 40 tok/s; ttft surfaced.
     assert rows["02-benchmark"]["output_tokens"] == 20

@@ -373,7 +373,7 @@ def test_stream_model_passes_reasoning_effort(monkeypatch):
     assert _pview(factory.kwargs["params"]) == {"max_tokens": 64, "reasoning_effort": "low"}
 
 
-def test_stream_model_passes_reasoning_none(monkeypatch):
+def test_stream_model_sends_an_effort_word_as_typed_to_an_unrecognized_model(monkeypatch):
     factory = _use_fake_stream(monkeypatch, _text_events("ok"))
     model_client.stream_model(
         model_id="test",
@@ -383,19 +383,26 @@ def test_stream_model_passes_reasoning_none(monkeypatch):
         messages=[ai.user_message("hi")],
         tools=None,
         max_output_tokens=64,
-        reasoning_effort="none",
+        reasoning_effort="off",
         on_text=lambda _s: None,
     )
-    assert _pview(factory.kwargs["params"]) == {"max_tokens": 64}
+    assert _pview(factory.kwargs["params"]) == {"max_tokens": 64, "reasoning_effort": "off"}
 
 
-def test_stream_model_asks_for_claude_thinking_on_the_openai_wire(monkeypatch):
-    # Claude hides its thinking unless the request asks for it, so a Claude
-    # model behind an OpenAI-shaped proxy showed and kept no reasoning at all.
+@pytest.mark.parametrize(("provider_id", "include", "sent"), [
+    ("cliproxyapi", True, True),
+    ("cliproxyapi", False, False),
+    ("openai", True, False),
+    ("vllm", True, False),
+])
+def test_include_reasoning_goes_only_to_cliproxyapi(monkeypatch, provider_id, include, sent):
+    # Claude hides its thinking unless the request asks for it; behind
+    # CLIProxyAPI the model may be any alias, so the provider decides.
     factory = _use_fake_stream(monkeypatch, _text_events("ok"))
     model_client.stream_model(
-        model_id="claude-opus-5-5",
-        provider_id="openai",
+        model_id="opus",
+        settings={"CLAUDE_PROXY_INCLUDE_REASONING": include},
+        provider_id=provider_id,
         provider_base_url="http://localhost:8999/v1",
         provider_api_key="x",
         messages=[ai.user_message("hi")],
@@ -404,7 +411,8 @@ def test_stream_model_asks_for_claude_thinking_on_the_openai_wire(monkeypatch):
         reasoning_effort=None,
         on_text=lambda _s: None,
     )
-    assert _pview(factory.kwargs["params"]) == {"max_tokens": 64, "extra_body": {"include_reasoning": True}}
+    expected = {"max_tokens": 64, "extra_body": {"include_reasoning": True}} if sent else {"max_tokens": 64}
+    assert _pview(factory.kwargs["params"]) == expected
 
 
 def test_stream_model_puts_deepseek_reasoning_budget_in_extra_body(monkeypatch):
@@ -423,7 +431,7 @@ def test_stream_model_puts_deepseek_reasoning_budget_in_extra_body(monkeypatch):
     assert _pview(factory.kwargs["params"]) == {"max_tokens": 64, "extra_body": {"max_reasoning_tokens": 32_000}}
 
 
-def test_stream_model_strips_minimax_reasoning_by_model_prefix(monkeypatch):
+def test_a_minimax_model_name_alone_does_not_drop_the_effort(monkeypatch):
     factory = _use_fake_stream(monkeypatch, _text_events("ok"))
     model_client.stream_model(
         model_id="minimax:text-01",
@@ -439,11 +447,12 @@ def test_stream_model_strips_minimax_reasoning_by_model_prefix(monkeypatch):
         reasoning_effort="high",
         on_text=lambda _s: None,
     )
-    assert _pview(factory.kwargs["params"]) == {"max_tokens": 64}
+    assert _pview(factory.kwargs["params"]) == {"max_tokens": 64, "reasoning_effort": "high"}
 
 
 def test_stream_model_applies_sampling_from_env_for_openai(monkeypatch):
-    """JS_* env sampling is typed before stream_model; OpenAI only receives supported knobs."""
+    """JS_* env sampling is typed before stream_model; OpenAI's own fields go
+    top level and the rest in extra_body."""
     sampling = Sampling.from_env(
         {
             "JS_TEMPERATURE": "1.1",
@@ -471,6 +480,7 @@ def test_stream_model_applies_sampling_from_env_for_openai(monkeypatch):
         "temperature": 1.1,
         "top_p": 0.96,
         "presence_penalty": 1.5,
+        "extra_body": {"top_k": 64, "repetition_penalty": 1.05},
     }
 
 
@@ -506,7 +516,7 @@ def test_openai_compatible_topk_reppen_never_become_structured_params():
 
     params = model_client._build_inference_params(
         Sampling(temperature=0.5, top_k=40, repetition_penalty=1.2, presence_penalty=0.3),
-        "openai_compatible",
+        model_client._CHAT_SAMPLING,
         reasoning=None,
         output=None,
         extra_body={},

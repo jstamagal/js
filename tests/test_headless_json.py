@@ -152,12 +152,52 @@ def test_a_provider_error_is_an_error_event_and_a_failed_result(monkeypatch, cap
 
 
 def test_a_failure_before_the_turn_still_ends_with_error_and_result(monkeypatch, capsys):
-    code, events, _err = _run(monkeypatch, capsys, [], ["-p", "hi", "--json", "--reasoning", "loud"])
+    code, events, _err = _run(monkeypatch, capsys, [], ["-p", "hi", "--json", "--template-kwargs", "enable_thinking"])
 
     assert code == 2
     assert [e["type"] for e in events] == ["error", "result"]
-    assert events[0]["message"]
+    assert "enable_thinking" in events[0]["message"]
     assert events[1]["exit_code"] == 2
+
+
+@pytest.mark.parametrize("argv", [
+    ["--template-kwargs", "enable_thinking"],
+    ["--template-kwargs", "a=1,a=2"],
+    ["--top-k", "many"],
+    ["--dry-sequence-breakers", "nope"],
+    ["--max-turns", "x"],
+    ["--reasoning", "two words"],
+])
+def test_a_malformed_sampling_or_effort_flag_exits_2_naming_it(monkeypatch, capsys, argv):
+    code = cli.main(["-p", "hi", *argv])
+    err = capsys.readouterr().err
+
+    assert code == 2
+    assert argv[0] in err
+
+
+def test_sampling_and_template_flags_reach_the_request(monkeypatch, capsys):
+    from js import model_client
+
+    seen = []
+
+    def stream(**kw):
+        seen.append(model_client.build_request_params(
+            model_id=kw["model_id"], provider_id=kw["provider_id"], provider_base_url=kw["provider_base_url"],
+            max_output_tokens=kw["max_output_tokens"], reasoning_effort=kw["reasoning_effort"],
+            sampling=kw["sampling"], settings=kw["settings"]))
+        return _reply("ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    code = cli.main(["-p", "hi", "--min-p", "0.05", "--top-k", "20",
+                     "--template-kwargs", "enable_thinking=false", "-r", "spoon"])
+    err = capsys.readouterr().err
+
+    assert code == 0, err
+    extra = seen[0].extra_body
+    assert extra["min_p"] == 0.05 and extra["top_k"] == 20
+    assert extra["chat_template_kwargs"] == {"enable_thinking": False}
+    assert model_client.wire_fields(seen[0])["effort"] == "spoon"
 
 
 def test_json_needs_a_headless_run(capsys):

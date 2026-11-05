@@ -12,7 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 import pytest
 
-from js import cli, runtime, settings
+from js import cli, runtime
 from js import paths as _paths
 from js import session_store
 from js import messages as msgs
@@ -798,27 +798,23 @@ def test_prompt_mode_missing_agent_fails_before_the_provider(monkeypatch, tmp_pa
 
 
 def test_prompt_mode_invalid_reasoning_errors_cleanly_before_provider(monkeypatch, tmp_path, capsys):
-    """Ruling B: `--reasoning default` (or any non-ladder token) is rejected with
-    rc 2, never shipped verbatim to the provider. The error names the rejected
-    token and every accepted value."""
+    """`--reasoning` takes one word; anything else is rc 2 naming it, before
+    the provider is reached."""
     def explode(**kwargs):
         raise AssertionError("provider must not be reached for an invalid --reasoning")
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", explode)
 
-    assert cli._run_prompt("hi", reasoning="default") == 2
+    assert cli._run_prompt("hi", reasoning="very default") == 2
 
-    err = capsys.readouterr().err
-    assert "default" in err
-    for value in settings.REASONING_EFFORT_VALUES:
-        assert value in err
+    assert "very default" in capsys.readouterr().err
 
 
 def test_bench_mode_invalid_reasoning_errors_cleanly(monkeypatch, tmp_path):
     """The bench loop validates --reasoning up front too (same ruling B path)."""
     monkeypatch.setenv("HOME", str(tmp_path))
     actual = cli._run_bench(
-        "someagent", model=None, reasoning="auto", maxout=None, quiet=True, extras=None,
+        "someagent", model=None, reasoning="not one", maxout=None, quiet=True, extras=None,
         ignore_local_config=False, ignore_global_config=False, presets=None,
         stats_json=None, stats_csv=None,
     )

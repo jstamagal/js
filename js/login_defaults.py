@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from . import messages as msgs
 
+import json
 from dataclasses import replace
 from typing import Any
 
@@ -49,7 +50,7 @@ def parse(text: str) -> dict[str, Any]:
     `set` checks it. A name matches in any case. Raises ValueError naming
     the first bad entry."""
     values: dict[str, Any] = {}
-    for entry in (text or "").split(","):
+    for entry in _entries(text or ""):
         entry = entry.strip()
         if not entry:
             continue
@@ -64,14 +65,39 @@ def parse(text: str) -> dict[str, Any]:
     return values
 
 
+def _entries(text: str) -> list[str]:
+    """``text`` split at each ',' outside a JSON list and outside a JSON
+    string, so a `DRY_SEQUENCE_BREAKERS` list stays one entry."""
+    entries, start, depth, quoted, escaped = [], 0, 0, False, False
+    for index, char in enumerate(text):
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char == "[":
+            depth += 1
+        elif char == "]":
+            depth = max(0, depth - 1)
+        elif char == "," and depth == 0:
+            entries.append(text[start:index])
+            start = index + 1
+    entries.append(text[start:])
+    return entries
+
+
 def render(values: dict[str, Any] | None) -> str:
     """``values`` as `parse` reads them."""
     out = []
     for key, value in (values or {}).items():
         if isinstance(value, bool):
             value = "on" if value else "off"
-        elif key == "EFFORT" and value == "none":
-            value = "off"  # `set` stores EFFORT off as none
+        elif isinstance(value, (list, dict)):
+            value = json.dumps(value)
         out.append(f"{key}={value}")
     return ", ".join(out)
 

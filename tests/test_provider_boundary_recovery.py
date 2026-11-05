@@ -325,3 +325,31 @@ def test_cached_agent_loop_keeps_context_without_repeated_summaries(monkeypatch,
     assert messages[1]["content"].startswith("active task")
     assert sum(m["role"] == "tool" for m in messages) == 11
     assert messages[-1]["content"] == "finished"
+
+
+@pytest.mark.parametrize(("provider_id", "model", "effort", "shown"), [
+    ("openai", "some-model", "off", "effort=off"),
+    ("openai", "some-model", "spoon", "effort=spoon"),
+    ("anthropic", "claude-opus-5-5", "off", "effort=low"),
+    ("anthropic", "claude-opus-4-8", "off", "thinking=disabled"),
+    ("deepseek", "deepseek-chat", "high", "DEEPSEEK_REASONING_TOKENS_MAX=32000"),
+])
+def test_run_line_shows_the_effort_the_request_carries(monkeypatch, tmp_path, capsys,
+                                                       provider_id, model, effort, shown):
+    cfg = replace(_config(tmp_path), trace=True, provider_id=provider_id, model=model, reasoning_effort=effort)
+    sent = []
+
+    async def sdk(**kwargs):
+        sent.append(model_client.wire_fields(kwargs["params"]))
+        return _result(text="ok")
+
+    monkeypatch.setattr(model_client, "_stream_async", sdk)
+    asyncio.run(runtime.run_turn_async(
+        cfg, "system", [{"role": "user", "content": "hello"}], runtime.Telemetry(None),
+        tool_registry=build_default_registry().select([]),
+        tool_context=ToolContext(cwd=tmp_path),
+    ))
+    run_line = capsys.readouterr().out
+    assert shown in run_line
+    name, _, value = shown.partition("=")
+    assert str(sent[0][name]) == value
