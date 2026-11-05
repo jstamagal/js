@@ -29,6 +29,10 @@ The loop's events, and their fields:
     retry_done     (none): the retry's wait ended, waited out or cancelled
     retry_gave_up  n, label: retries made before the caller stopped
     user_echo      text
+    subagent_start agent, kind (task/agent/background), index, total, model,
+                   provider, route, effort, tools, session, session_file
+    subagent_end   the subagent_start fields, outcome (ok/error/cancelled),
+                   elapsed_s, prompt_tokens, output_tokens, calls
     kernel_execution context, level, code, stdout, stderr, display, error,
                    elapsed, cell, added, removed, namespace, images, interrupted
     kernel_note    context, kind (event/entry/note), level, content, style, verbose_only

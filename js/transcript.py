@@ -318,6 +318,16 @@ class TranscriptSink:
     def _on_notice(self, *, message: msgs.Message, fields: dict, stderr: bool, flush: bool) -> None:
         self._plain(message.line(**fields) + "\n", stderr=stderr)
 
+    def _on_subagent_start(self, **fields: Any) -> None:
+        from .console import subagent_started_fields
+
+        self._plain(msgs.SUBAGENT_STARTED.line(**subagent_started_fields(fields)) + "\n", stderr=True)
+
+    def _on_subagent_end(self, **fields: Any) -> None:
+        from .console import subagent_finished_fields
+
+        self._plain(msgs.SUBAGENT_FINISHED.line(**subagent_finished_fields(fields)) + "\n", stderr=True)
+
     def _on_network(self, *, level: int, line: Any, fallback: bool) -> None:
         from . import network_display, stream_transport
 

@@ -73,6 +73,23 @@ one-shot mode, so cancelling the parent cancels its foreground children.
 Synchronous leaf tools run in dispatch threads; read-only groups can run in
 parallel.
 
+Each child says when it starts and when it ends, one line each, on stderr in
+`-p` and in the REPL's scrollback, whatever `TOOLS_DISPLAY` is:
+
+```
+*** Subagent 1 of 2 started: explore (named agent)  cpa/claude-opus-5-5  effort medium  12 tools  session task-20261105-abcd
+*** Subagent 1 of 2 ok: explore  1m 13s  12,345 tok in  678 tok out
+```
+
+The kind is `task`, `named agent` or `background task`. Model, effort, tool
+count and session are the child's own, after its `agent.yaml` and the tool
+call's `model`/`reasoning` are applied; the effort is what its requests send.
+The end line says `ok`, `error` or `cancelled`. The lines are the output
+events `subagent_start` and `subagent_end` (`js/output.py`), formatted through
+the `SUBAGENT_STARTED` and `SUBAGENT_FINISHED` entries. Swarm agents run on
+their own path (`js/swarm_run.py`) and report through the swarm's event
+stream instead.
+
 ## Worker Session State
 
 For each child task:

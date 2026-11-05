@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 import asyncio
 import fcntl
 import os
+import time
 from typing import Any
 
 from .. import login_defaults
+from .. import output
 from .. import paths
 from .. import session_store
 from .. import settings as _settings
@@ -38,6 +41,50 @@ class SubagentAssembly:
     turn: Any = None
     write_latest: Any = None
     suppress_output: bool = True
+
+
+# How the running subagent was launched: "task" (the task tool), "agent" (a
+# named-agent tool) or "background" (task with background=true). Set in the
+# coroutine each fan-out schedules, so it is the launching call's.
+_LAUNCH_KIND: ContextVar[str] = ContextVar("js_subagent_launch_kind", default="task")
+
+
+def _route(model: str, provider: str | None) -> str:
+    """``provider/model`` as a route names it; the model alone when it already
+    carries the provider or there is none."""
+    if not provider or model.startswith(f"{provider}/"):
+        return model
+    return f"{provider}/{model}"
+
+
+def _tool_count(registry: Any) -> int:
+    try:
+        return len(registry.openai_specs())
+    except Exception:  # noqa: BLE001 - a registry stub has no specs
+        return 0
+
+
+def _launch_fields(idx: int, total: int, agent: str, cfg: Any, registry: Any) -> dict[str, Any]:
+    """What the subagent_start event says of a child about to run: its own
+    model, the effort its requests send, its tools and its session."""
+    from ..runtime import _with_login_defaults
+
+    effort = _with_login_defaults(cfg, None, None, None).reasoning_effort
+    session = Path(cfg.session_file)
+    saved = session != Path(os.devnull)
+    return {
+        "agent": agent,
+        "kind": _LAUNCH_KIND.get(),
+        "index": idx,
+        "total": total,
+        "model": cfg.model,
+        "provider": cfg.provider_id,
+        "route": _route(cfg.model, cfg.provider_id),
+        "effort": effort or "",
+        "tools": _tool_count(registry),
+        "session": session.stem if saved else "",
+        "session_file": str(session) if saved else "",
+    }
 
 
 def _filename_limit(directory: Path) -> int:
@@ -309,6 +356,11 @@ async def _run_one_task_async(
         parent_hooks = getattr(parent_context, "tool_call_hooks", None)
         parent_approval = getattr(parent_context, "tool_approval", None)
         telemetry = Telemetry(debug_log=cfg.debug_log)
+        launch = _launch_fields(idx, total, agent, cfg, registry)
+        output.emit(output.event("subagent_start", **launch))
+        started = time.monotonic()
+        call_stats: list[dict] = []
+        outcome = "error"
         turn_kwargs = {
             "trace_override": False,
             "tool_registry": registry,
@@ -326,11 +378,21 @@ async def _run_one_task_async(
                 system,
                 messages,
                 telemetry,
+                call_stats=call_stats,
                 **turn_kwargs,
             )
+            outcome = "ok"
         except Exception as exc:  # noqa: BLE001
             return f"ERROR {type(exc).__name__}: {exc}"
+        except BaseException:
+            outcome = "cancelled"
+            raise
         finally:
+            output.emit(output.event(
+                "subagent_end", **launch, outcome=outcome, elapsed_s=time.monotonic() - started,
+                prompt_tokens=sum(int(stat.get("prompt_tokens") or 0) for stat in call_stats),
+                output_tokens=sum(int(stat.get("output_tokens") or 0) for stat in call_stats),
+                calls=len(call_stats)))
             close_terminal_sessions(child_context)
             if child_context.kernel_session is not None:
                 child_context.kernel_session.shutdown()
@@ -460,6 +522,7 @@ def _prepare_fan_out(
     model: str,
     context: ToolContext,
     reasoning: str = "",
+    kind: str = "task",
 ) -> tuple[str, None] | tuple[None, tuple[list[tuple[int, Any]], Any]]:
     """Validate a task/named-agent call and build (indexed_items, coro_factory).
 
@@ -513,6 +576,7 @@ def _prepare_fan_out(
 
     def _coro(idx: int, item: Any):
         async def _gated() -> str:
+            _LAUNCH_KIND.set(kind)
             async with gate:
                 return await worker(
                     idx, total, item, context, parent_cfg, full_registry, agent_id, session_id, model,
@@ -592,6 +656,13 @@ def task(
     context: ToolContext | None = None,
     reasoning: str = "",
 ) -> str:
+    return _run_task(tasks, agent_id, session_id, model, background, action, handle, timeout, context,
+                     reasoning, launch="task")
+
+
+def _run_task(tasks, agent_id, session_id, model, background, action, handle, timeout, context, reasoning,
+              *, launch: str) -> str:
+    """`task`, launched as ``launch`` ("task" or "agent")."""
     assert context is not None
     action = _job_action(action)
     if action != "run":
@@ -608,7 +679,8 @@ def task(
     agent_id = str(agent_id).strip()
     model = str(model or "").strip()
     reasoning = str(reasoning or "").strip().lower()
-    error, prepared = _prepare_fan_out(tasks, agent_id, session_id, model, context, reasoning)
+    kind = "background" if _flag(background) else launch
+    error, prepared = _prepare_fan_out(tasks, agent_id, session_id, model, context, reasoning, kind)
     if prepared is None:
         return error  # type: ignore[return-value]
     indexed_items, coro_factory = prepared
@@ -635,11 +707,13 @@ async def task_async(
     timeout: int | None = None,
     context: ToolContext | None = None,
     reasoning: str = "",
+    launch: str = "task",
 ) -> str:
     """Async twin of :func:`task`: awaits child turns
     on the caller's loop via :func:`_fan_out_async` instead of blocking a
     dispatch thread. The runtime routes fan-out calls here
-    (see ``runtime._dispatch_batch``)."""
+    (see ``runtime._dispatch_batch``). ``launch`` is "agent" for a
+    named-agent tool's call."""
     assert context is not None
     action = _job_action(action)
     if action != "run":
@@ -656,7 +730,8 @@ async def task_async(
     agent_id = str(agent_id).strip()
     model = str(model or "").strip()
     reasoning = str(reasoning or "").strip().lower()
-    error, prepared = _prepare_fan_out(tasks, agent_id, session_id, model, context, reasoning)
+    kind = "background" if _flag(background) else launch
+    error, prepared = _prepare_fan_out(tasks, agent_id, session_id, model, context, reasoning, kind)
     if prepared is None:
         return error  # type: ignore[return-value]
     indexed_items, coro_factory = prepared
@@ -680,6 +755,7 @@ async def dispatch_fan_out_async(tool: Tool, args: dict[str, Any], context: Tool
     a named-agent tag when present, else from the call args."""
     handler = tool.handler
     agent_id = getattr(handler, "_js_agent_id", None)
+    launch = "task" if agent_id is None else "agent"
     if agent_id is None:
         agent_id = str(args.get("agent_id", "")).strip()
     return await task_async(
@@ -693,13 +769,15 @@ async def dispatch_fan_out_async(tool: Tool, args: dict[str, Any], context: Tool
         timeout=args.get("timeout"),
         context=context,
         reasoning=args.get("reasoning", ""),
+        launch=launch,
     )
 
 
 def named_agent_tool(agent_id: str, description: str | None = None) -> Tool:
     def run_named_agent(tasks: list[Any], model: str = "", reasoning: str = "",
                         context: ToolContext | None = None) -> str:
-        return task(tasks=tasks, agent_id=agent_id, model=model, reasoning=reasoning, context=context)
+        return _run_task(tasks, agent_id, None, model, False, "run", None, None, context, reasoning,
+                         launch="agent")
 
     # Tag so the runtime recognizes this as fan-out and awaits it on-loop under a
     # supervisor (like the `task` tool); `_js_agent_id` carries the fixed worker.
