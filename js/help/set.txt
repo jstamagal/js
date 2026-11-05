@@ -42,7 +42,8 @@ EFFORT
 THINKING_BUDGET
     Thinking budget in tokens on the Anthropic wire, sent as thinking
     enabled with budget_tokens. Unset = no budget sent. Temperature and
-    top_k are not sent while it is in force.
+    top_k are not sent while it is in force. Claude 4.7 and later answer a
+    budget with a 400.
 
 VISION
     Send image bytes to the active model: on/off; unset = detect from
@@ -556,8 +557,8 @@ ANTHROPIC_OUTPUT_TOKENS_MAX
     OUTPUT_TOKENS_MAX is unset.
 
 CLAUDE_PROXY_INCLUDE_REASONING
-    on: every OpenAI chat-format request carries include_reasoning: true,
-    which a Claude proxy needs to return Claude's thinking.
+    on: requests through a CLIProxyAPI login carry include_reasoning: true,
+    which the proxy needs to return Claude's thinking.
 
 ANTHROPIC_PROMPT_CACHE
     on: Anthropic requests mark the prompt for caching.

@@ -282,6 +282,34 @@ def test_off_is_the_required_effort_on_a_model_that_always_thinks(monkeypatch, m
     assert body["output_config"] == {"effort": "low"}
 
 
+_MINIMAX = "https://api.minimax.io/anthropic/v1"
+
+
+@pytest.mark.parametrize(("effort", "sent"), [
+    ("high", "high"), ("max", "max"), ("minimal", "low"), ("off", "low"), ("spoon", "spoon"),
+])
+def test_minimax_m3_1_flash_always_thinks_with_an_effort(monkeypatch, effort, sent):
+    body = _send(monkeypatch, provider="minimax", base=_MINIMAX, model="MiniMax-M3.1-Flash",
+                 effort=effort, max_out=8000)
+
+    assert _thinking_fields(body) == {
+        "thinking": {"type": "adaptive"}, "output_config": {"effort": sent}, "max_tokens": 8000}
+
+
+def test_minimax_m3_thinks_adaptively_with_the_effort_word(monkeypatch):
+    body = _send(monkeypatch, provider="minimax", base=_MINIMAX, model="MiniMax-M3", effort="high", max_out=8000)
+
+    assert _thinking_fields(body) == {
+        "thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}, "max_tokens": 8000}
+
+
+def test_off_turns_minimax_m3_thinking_off(monkeypatch):
+    body = _send(monkeypatch, provider="minimax", base=_MINIMAX, model="MiniMax-M3", effort="off", max_out=8000)
+
+    assert body["thinking"] == {"type": "disabled"}
+    assert "output_config" not in body
+
+
 def test_thinking_in_provider_extra_wins(monkeypatch):
     mine = {"type": "enabled", "budget_tokens": 5000}
     body = _send(monkeypatch, provider="anthropic", model="claude-sonnet-4-5", effort="high",

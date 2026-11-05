@@ -203,7 +203,15 @@ request carries, read back from the built request.
 DeepSeek's own endpoint gets `max_reasoning_tokens` from
 `DEEPSEEK_REASONING_TOKENS_MAX` (default 32000) unless the effort is off. It is
 sent through `extra_body`, and the run line shows it under the setting's name.
-The `minimax` provider gets no effort on the OpenAI chat wire.
+The `minimax` provider follows MiniMax's own documentation
+(<https://platform.minimax.io/docs/api-reference/text-anthropic-api>,
+<https://platform.minimax.io/docs/guides/text-generation>): MiniMax-M3.1-Flash
+always thinks and gets `thinking: {"type": "adaptive"}` with
+`output_config.effort` snapped to `low|medium|high|xhigh|max` (`off` becomes
+`low`, since `none` is a 400). MiniMax-M3 gets `thinking: {"type": "adaptive"}`
+and the effort word as typed, or `thinking: {"type": "disabled"}` for `off`.
+On an OpenAI-compatible endpoint MiniMax-M3.1-Flash takes `reasoning_effort`
+with the same snapping.
 
 Every provider on the Anthropic Messages wire (`anthropic`, `anthropic-custom`,
 `opencode-go-anthropic`, `minimax`, and any saved login with sdk `anthropic`)
@@ -218,16 +226,17 @@ carries the effort as `output_config.effort` (`js/reasoning.py`):
 - Every other model gets the effort word as typed and no `thinking`.
 - `THINKING_BUDGET`, when set, makes `thinking`
   `{"type": "enabled", "budget_tokens": N}` on any model. js never picks a
-  budget itself. While a budget is in force js sends no `TEMPERATURE` or
+  budget itself; Claude 4.7 and later answer a budget with a 400. While a
+  budget is in force js sends no `TEMPERATURE` or
   `TOP_K`: Anthropic rejects either alongside budget thinking.
 - `max_tokens` is required on this wire: `OUTPUT_TOKENS_MAX` when set,
   `ANTHROPIC_OUTPUT_TOKENS_MAX` (default 64000) otherwise.
 
 A `thinking` object in `EXTRA_PARAMS` replaces the one js builds.
 
-`CLAUDE_PROXY_INCLUDE_REASONING on` adds `include_reasoning: true` to every
-OpenAI chat-format request, which a Claude proxy (CLIProxyAPI) needs to return
-Claude's thinking. It is off by default.
+`CLAUDE_PROXY_INCLUDE_REASONING` (on by default) adds
+`include_reasoning: true` to requests on the `cliproxyapi` transport, which
+CLIProxyAPI needs to return Claude's thinking. No other endpoint gets it.
 
 `TEMPLATE_KWARGS` (`--template-kwargs k=v,...`) is sent as
 `chat_template_kwargs`, for example `enable_thinking=false`, llama.cpp's

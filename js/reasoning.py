@@ -37,6 +37,9 @@ _FAMILY_EFFORTS: tuple[tuple[tuple[str, ...], frozenset[str]], ...] = (
     (("kimi",), frozenset({"minimal", "low", "medium", "high"})),
     (("glm",), frozenset({"none", "low", "medium", "high", "xhigh", "max"})),
     (("deepseek",), frozenset({"low", "medium", "high", "xhigh", "max"})),
+    # MiniMax text-generation guide: MiniMax-M3.1-Flash takes low..max and
+    # always thinks; "none" is a 400.
+    (("minimax-m3.1-flash",), frozenset({"low", "medium", "high", "xhigh", "max"})),
 )
 
 
@@ -172,6 +175,37 @@ def anthropic_thinking(model_name: str, effort: str | None, budget: int | None =
     allowed = _ADAPTIVE_4_6_EFFORTS if _claude_version(name) == (4, 6) else _ADAPTIVE_EFFORTS
     thinking = budgeted or {"type": "adaptive", "display": _settings.knob(settings, "ANTHROPIC_THINKING_DISPLAY")}
     return AnthropicThinking(thinking=thinking, effort=translate_effort(effort, allowed))
+
+
+# --- MiniMax's own Anthropic-compatible endpoint ----------------------------
+#
+# The `minimax` provider (platform.minimax.io/docs/api-reference/text-anthropic-api):
+# MiniMax-M3.1-Flash always thinks, with depth in ``output_config.effort``
+# (low..max) and ``thinking: disabled`` or effort ``none`` a 400. MiniMax-M3
+# does not think unless ``thinking`` is ``{"type": "adaptive"}``, and
+# ``disabled`` keeps it off. Other models get the effort word as typed.
+
+_MINIMAX_M3 = re.compile(r"minimax-m3(?![.\d])")
+
+
+def minimax_thinking(model_name: str, effort: str | None,
+                     budget: int | None = None) -> AnthropicThinking | None:
+    """The thinking fields for ``effort`` on the minimax provider, or None
+    when no effort is set. ``budget`` (`THINKING_BUDGET`) makes ``thinking``
+    a budget of that many tokens."""
+    if effort is None:
+        return None
+    name = model_name.lower()
+    budgeted = {"type": "enabled", "budget_tokens": budget} if budget else None
+    allowed = supported_efforts(name)
+    if allowed is not None:
+        return AnthropicThinking(thinking=budgeted or {"type": "adaptive"},
+                                 effort=translate_effort(effort, allowed))
+    if _MINIMAX_M3.search(name):
+        if ladder_stop(effort) == "none":
+            return AnthropicThinking(thinking={"type": "disabled"}, effort=None)
+        return AnthropicThinking(thinking=budgeted or {"type": "adaptive"}, effort=effort)
+    return AnthropicThinking(thinking=budgeted, effort=effort)
 
 
 # --- Signed reasoning replay -----------------------------------------------

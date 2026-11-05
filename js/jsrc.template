@@ -81,6 +81,7 @@
 # Only for Anthropic-format endpoints: a thinking budget in tokens, sent as
 # thinking {"type": "enabled", "budget_tokens": N}. Temperature and top_k
 # are not sent while it is in force (Anthropic rejects them with a budget).
+# Claude 4.7 and later reject a budget with a 400.
 # Unset: no budget is sent; Claude 4.6 and later think adaptively.
 #   example:  set THINKING_BUDGET 16000
 #set -THINKING_BUDGET
@@ -851,9 +852,9 @@
 # OUTPUT_TOKENS_MAX is unset.
 #set ANTHROPIC_OUTPUT_TOKENS_MAX 64000
 
-# on: every OpenAI chat-format request carries include_reasoning: true, which
-# a Claude proxy (CLIProxyAPI) needs to return Claude's thinking.
-#set CLAUDE_PROXY_INCLUDE_REASONING off
+# on: requests through a CLIProxyAPI login carry include_reasoning: true,
+# which the proxy needs to return Claude's thinking. No other endpoint gets it.
+#set CLAUDE_PROXY_INCLUDE_REASONING on
 
 # on: Anthropic requests mark the prompt for caching.
 #set ANTHROPIC_PROMPT_CACHE on
