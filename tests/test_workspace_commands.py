@@ -7,8 +7,6 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import start_session
-
 from js import cli, jail, runtime
 from js import messages as msgs
 from js.toolkit import call_tool, process_net
@@ -25,7 +23,6 @@ def turns(monkeypatch, tmp_path):
     for name in ("JS_DEFAULT_AGENT", "JS_SESSION", "JS_MODEL"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.chdir(tmp_path)
-    start_session(SESSION)
     monkeypatch.setattr(runtime.T.STOCK_CONTEXT, "cwd", runtime.T.STOCK_CONTEXT.cwd)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_a, **_k: None)

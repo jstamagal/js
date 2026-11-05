@@ -647,7 +647,7 @@ OPT_DEBUG_FILE = Message(
     "prints to stdout. REQUEST_LOG always writes the same trace under logs/<agent>/<session>.log.")
 OPT_SESSION = Message(
     "--session NAME: resume NAME, looking in this directory's sessions first, then in all of them."
-    " No session matches NAME: exit 2. Bare, open the session picker.")
+    " Not found: start it. Bare, open the session picker.")
 OPT_SESSION_KEY = Message("Derive a stable session name from agent, cwd and caller key.")
 OPT_NO_SAVE = Message(
     "Expensive throwaway prompt or pipe run. Nothing is saved, resume is unavailable, "

@@ -211,7 +211,6 @@ def codex(monkeypatch, tmp_path):
     cfg = from_env(
         agent_id="codex-replay",
         session="codex-replay",
-        create_session=True,
         extras=[
             "MODEL=gpt-5.5",
             "PROVIDER=openai-codex",

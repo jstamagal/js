@@ -285,7 +285,10 @@ def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = Fal
     if found is not None:
         return found
 
-    if not create:
+    # A generated or subagent-task name is only ever js's own: one that
+    # matches nothing is a lookup that missed, not a new name.
+    stem = relative_path.with_suffix("").name
+    if not create or _session_store.is_generated(stem) or _session_store.is_task(stem):
         raise ValueError(msgs.CONFIG_SESSION_MUST_IDENTIFY_AN_EXISTING_JSONL_FILE.format(session=session))
 
     sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -469,7 +472,6 @@ class ConfigAssembly:
 def from_env(
     *,
     save_session: bool = True,
-    create_session: bool = False,
     extras: list[str] | None = None,
     agent_id: str | None = None,
     session: str | None = None,
@@ -480,9 +482,6 @@ def from_env(
     assembly: ConfigAssembly | None = None,
 ) -> Config:
     """Read jsrc + env + CLI extras once, populate everything explicitly.
-
-    `session` (else `JS_SESSION`) names an existing session; with
-    `create_session` a name no session has is started as a new one.
 
     Provider/model resolution is centralized here:
 
@@ -598,7 +597,7 @@ def from_env(
 
     session_name = session if session is not None else env.get("JS_SESSION")
     if session_name is not None:
-        session_file = resolve_session_file(sessions_dir, session_name, create=save_session and create_session)
+        session_file = resolve_session_file(sessions_dir, session_name, create=save_session)
         if save_session:
             _session_store.write_latest(state_dir, session_file)
     elif save_session:

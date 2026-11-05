@@ -424,8 +424,8 @@ context on every invocation.
 Useful flags:
 
 ```bash
-js -p "prompt" --session-key parser-fix
-js -p "apply the review corrections" --session-key parser-fix
+js -p "prompt" --session reviews/parser-fix
+js -p "apply the review corrections" --session reviews/parser-fix
 js -p "throwaway question" --no-save
 js -p "prompt" --debug
 js -p "prompt" --debug-file /tmp/js-debug.log

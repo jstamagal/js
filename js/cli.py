@@ -245,11 +245,8 @@ def _from_env(
     ignore_global_config: bool = False,
     presets: list[str] | None = None,
 ) -> Config:
-    # Only a --session-key name is started when no session has it yet; any
-    # other session name must already exist.
     return from_env(
         save_session=save_session,
-        create_session=getattr(_session_leases, "caller_key", None) is not None,
         extras=extras,
         session=session,
         agent_id=agent_id,
