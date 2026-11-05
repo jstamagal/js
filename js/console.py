@@ -277,7 +277,19 @@ def subagent_started_fields(event: dict) -> dict:
         "effort": event["effort"] or msgs.SUBAGENT_EFFORT_UNSET.words(),
         "tools": event["tools"],
         "session": event["session"] or msgs.SUBAGENT_SESSION_UNSAVED.words(),
+        "window": _window_words(event.get("window")),
     }
+
+
+def _window_words(window: int | None) -> str:
+    """Where the subagent shows: "" with no windows, else its window or that none was free."""
+    if window is None:
+        return ""
+    if window == 0:
+        from .screen import Windows
+
+        return msgs.SUBAGENT_NO_WINDOW.words(last=Windows.LAST)
+    return msgs.SUBAGENT_WINDOW.words(number=window)
 
 
 def subagent_finished_fields(event: dict) -> dict:
