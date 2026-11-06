@@ -9,14 +9,36 @@ from js import fset, setcmd, settings
 from js import messages as msgs
 
 
-def test_holes_fill_in_order_and_a_missing_one_is_empty():
-    assert fset.render("%s and %s and %s", ["a", "b"], colour=False) == "a and b and"
-    assert fset.render("no holes", ["dropped"], colour=False) == "no holes"
-    assert fset.render("100%% %s", ["x"], colour=False) == "100% x"
+def test_holes_name_words_of_the_line_in_any_order():
+    line = ["503", "127.0.0.1", "The server is unavailable"]
+    assert fset.render("$1 said $0", line, colour=False) == "127.0.0.1 said 503"
+    assert fset.render("$2-", line, colour=False) == "The server is unavailable"
+    assert fset.render("$3", line, colour=False) == "server"
+    assert fset.render("$*", line, colour=False) == "503 127.0.0.1 The server is unavailable"
+    assert fset.render("$7 and $7-|", line, colour=False) == " and |"
+    assert fset.render("no holes", line, colour=False) == "no holes"
+    assert fset.render("100%% $$5 $0", ["x"], colour=False) == "100% $5 x"
+
+
+def test_a_field_before_the_last_is_one_word_whatever_it_holds():
+    assert fset.render("[$0] [$1-]", ["a path", "b c"], colour=False) == "[a path] [b c]"
+
+
+def test_a_colour_code_paints_what_follows_and_bare_c_ends_it():
+    red = fset.hex_for("PALETTE_04")
+    assert fset.runs("%C04%G%C Unknown setting: %C04$0%C", fset.words(["X"])) == [
+        (red, msgs.current_banner()), ("", " Unknown setting: "), (red, "X")]
+
+
+def test_a_format_that_names_a_code_or_word_its_event_lacks_is_refused():
+    for bad in ("model is %s", "$NOPE", "%C99", "$1", "100%"):
+        assert setcmd.fset_command({}, f"MODEL_SET {bad}").error is not None, bad
+    assert setcmd.fset_command({}, "NO_ALIASES none: $0").error is not None
+    assert setcmd.fset_command({}, "MODEL_SET %C04$0-%C is $* $$ 100%%").error is None
 
 
 def test_a_set_format_is_what_the_message_shows():
-    assert setcmd.fset_command({}, "MODEL_SET model is now %s!").error is None
+    assert setcmd.fset_command({}, "MODEL_SET model is now $0!").error is None
     assert msgs.MODEL_SET.line(colour=False, model="m1") == "model is now m1!"
     assert msgs.MODEL_SET.text(model="m1") == "Model: m1"
 
@@ -24,7 +46,7 @@ def test_a_set_format_is_what_the_message_shows():
 def test_fset_lines_survive_save_and_load(tmp_path):
     live = settings.seed_defaults()
     setcmd.fset_command(live, "THEME paper")
-    setcmd.fset_command(live, "MODEL_SET now on %s")
+    setcmd.fset_command(live, "MODEL_SET now on $0-")
     setcmd.fset_command(live, "TOOLS_DISPLAY 2")
     path = tmp_path / "jsrc"
     settings.save_changes(path, settings.seed_defaults(), live, fset_before={})
@@ -92,11 +114,11 @@ def test_save_leaves_the_live_banner_as_it_is(tmp_path):
 def test_a_format_on_two_lines_survives_save_and_a_fresh_load(tmp_path):
     path = tmp_path / "jsrc"
     live = settings.seed_defaults()
-    assert fset.set_entry("MODEL_SET", "first %s\nsecond") is None
+    assert fset.set_entry("MODEL_SET", "first $0\nsecond") is None
     settings.save_changes(path, settings.seed_defaults(), live, fset_before={})
     fset.reset()
     settings.load_jsrc_files([path], settings.seed_defaults())
-    assert fset.lookup("MODEL_SET") == "first %s\nsecond"
+    assert fset.lookup("MODEL_SET") == "first $0\nsecond"
 
 
 def test_an_entry_set_to_nothing_stays_set_to_nothing_after_save(tmp_path):
@@ -111,5 +133,5 @@ def test_an_entry_set_to_nothing_stays_set_to_nothing_after_save(tmp_path):
 
 def test_a_theme_file_reads_its_lines_as_a_jsrc_does(tmp_path):
     path = tmp_path / "theme"
-    path.write_text('fset\tMARK_GAP\t2\nfset MARK_USER ""\nfset MODEL_SET "two\\nlines %s"\n', encoding="utf-8")
-    assert fset.read_file(path) == {"MARK_GAP": "2", "MARK_USER": "", "MODEL_SET": "two\nlines %s"}
+    path.write_text('fset\tMARK_GAP\t2\nfset MARK_USER ""\nfset MODEL_SET "two\\nlines $0"\n', encoding="utf-8")
+    assert fset.read_file(path) == {"MARK_GAP": "2", "MARK_USER": "", "MODEL_SET": "two\nlines $0"}

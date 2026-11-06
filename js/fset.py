@@ -20,17 +20,22 @@ read them like any setting. This module holds the rest.
 An entry's value is the operator's (an `fset` line in a jsrc, or typed), else
 the theme's (`js/themes/<THEME>`), else the default (`js/fset`).
 
-A format is text with holes:
+A format is literal text, colour codes, the banner glyph and holes. An event
+hands its format one line of text, split on single spaces into words
+numbered from 0; every field but the last is one word, and only the last
+may contain spaces.
 
-  %s        the next value, in the order the message passes them. A hole
-            with no value is empty; a value with no hole is dropped.
-  %Cnn      the foreground becomes palette slot nn (two digits).
-  %C        the foreground goes back to the default.
-  %%        a literal %.
-  $BANNER   the BANNER setting, in COLOR_SYSTEM. `$G` is the same (BitchX).
-  $NAME     the value of setting or /fset entry NAME. `$$` is a literal $.
+  $0 .. $9  that word.
+  $N-       word N through the end of the line.
+  $*        the whole line.
+  %Cnn      what follows is drawn in palette slot nn, 00 to 98.
+  %C        what follows is drawn in the terminal's own colour.
+  %G        the banner glyph, the BANNER setting.
+  %%  $$    a literal % and $.
 
-Trailing spaces are trimmed. Rendering never raises.
+A format may use any word, in any order, or leave any out. Trailing spaces
+are trimmed. Setting a format checks it (`format_error`); rendering never
+raises.
 
 A colour value is `#rrggbb`, a two-digit palette slot, or `$NAME` of another
 colour entry; `a|b` takes the first that resolves to a colour.
@@ -56,7 +61,7 @@ BOLD = "\x1b[1m"
 # Every colour role; `js/help/fset.txt` says what each paints.
 ROLES: tuple[str, ...] = (
     "COLOR_BACKGROUND", "COLOR_TEXT", "COLOR_DIM", "COLOR_USER", "COLOR_USER_MARK", "COLOR_AGENT",
-    "COLOR_AGENT_MARK", "COLOR_SYSTEM", "COLOR_WARN", "COLOR_ERROR", "COLOR_OK", "COLOR_TOOL",
+    "COLOR_AGENT_MARK", "COLOR_WARN", "COLOR_ERROR", "COLOR_OK", "COLOR_TOOL",
     "COLOR_TOOL_OUTPUT", "COLOR_PANEL", "COLOR_ACCENT", "COLOR_ADDED", "COLOR_REMOVED", "COLOR_CODE",
     "COLOR_REASONING", "COLOR_SEPARATOR", "COLOR_STATUS_BACKGROUND", "COLOR_STATUS_TEXT",
     "COLOR_STATUS_ACCENT",
@@ -74,7 +79,7 @@ _PALETTE_NAME = re.compile(r"PALETTE_(\d\d)")
 _HEX = re.compile(r"#[0-9a-fA-F]{6}")
 _DIGITS = re.compile(r"[0-9]+")
 _SLOT = re.compile(r"\d\d")
-_TOKEN = re.compile(r"%%|%s|%C(\d\d)?|\$(\$|[A-Z][A-Z0-9_]*)")
+_TOKEN = re.compile(r"%%|%G|%C(\d\d)?|\$\$|\$\*|\$(\d)(-)?")
 _ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 # Variation selectors and skin-tone modifiers: terminals disagree on their width.
 _MARK_MODIFIER = re.compile("[\uFE0E\uFE0F\U0001F3FB-\U0001F3FF]")
@@ -210,16 +215,6 @@ def bind_settings(settings: dict | None) -> None:
     _s.bind_live_settings(settings)
 
 
-def _setting(name: str) -> str | None:
-    """Setting ``name``'s live value as `set` writes it, or None."""
-    from . import settings as _s  # lazy: settings imports messages, which imports this
-
-    if _s.spec_for(name) is None:
-        return None
-    value = _s.knob(_settings, name)
-    return None if value is None else _s.config_value_text(value)
-
-
 _NAME = re.compile(r"\$(\$|[A-Z][A-Z0-9_]*)")
 
 
@@ -308,6 +303,8 @@ def check(name: str, value: str) -> str | None:
         return _msgs.FSET_MARK_MODIFIER.said()
     if _PALETTE_NAME.fullmatch(name) and not _HEX.fullmatch(value):
         return _msgs.EXPECTED_COLOUR.said(value=value)
+    if name in _msgs.ENTRIES:
+        return format_error(value, len(_msgs.ENTRIES[name].fields()))
     if name in ROLES or name == HOST_COLOR:
         if value and not all(_HEX.fullmatch(part) or _SLOT.fullmatch(part) or part.startswith("$")
                              for part in value.split("|")):
@@ -423,20 +420,82 @@ def escape(text: str) -> str:
 
 
 # A run of text and the colour it is drawn in: "#rrggbb", or "" for the
-# default. What a format renders to, before any output target sees it.
+# terminal's own. What a format renders to, before any output target sees it.
 Run = tuple[str, str]
+# A word an event passes: text, or runs (a message inside another, which
+# keeps its own colours).
+Word = str | list[Run]
 
 
-def runs(fmt: str, args: list[str | list[Run]], *, hole: str = "", whole: str = "") -> list[Run]:
-    """Format ``fmt`` with ``args`` in its `%s` holes, as runs. A hole takes
-    the `%Cnn` colour in force where it stands; where none is, colour entry
-    ``hole`` (a severity), then ``whole``. A hole given runs (a message inside
-    another) keeps each run's own colour, and takes that one where a run has
-    none. Text takes the colour in force,
-    else ``whole``; `$BANNER` the colour in force, else COLOR_SYSTEM.
-    Trailing spaces are trimmed. Never raises."""
-    values = iter(args)
-    base = hex_for(whole) or "" if whole else ""
+def _split_word(value: Word) -> list[Word]:
+    """``value`` cut at each single space into words."""
+    if isinstance(value, str):
+        return value.split(" ")
+    words: list[Word] = [[]]
+    for colour, text in value:
+        for index, piece in enumerate(text.split(" ")):
+            if index:
+                words.append([])
+            if piece:
+                words[-1].append((colour, piece))
+    return words
+
+
+def words(fields: list[Word]) -> list[Word]:
+    """The words of the line an event hands its format: every field but the
+    last is one word, and the last is cut at each single space."""
+    if not fields:
+        return []
+    return [*fields[:-1], *_split_word(fields[-1])]
+
+
+def format_error(fmt: str, fields: int) -> str | None:
+    """Why ``fmt`` is not a format for an event that passes ``fields``
+    fields, or None. Each `%` and `$` starts a code or a hole; a hole names
+    a field the event passes."""
+    from . import messages as _msgs
+
+    pos = 0
+    for match in _TOKEN.finditer(fmt):
+        stray = re.search(r"[%$]", fmt[pos:match.start()])
+        if stray:
+            return _msgs.FSET_BAD_CODE.said(code=fmt[pos + stray.start():pos + stray.start() + 2])
+        pos = match.end()
+        token = match.group(0)
+        slot = match.group(1)
+        if slot is not None and int(slot) >= PALETTE_SIZE:
+            return _msgs.FSET_BAD_SLOT.said(code=token)
+        word = match.group(2)
+        if word is not None and int(word) >= fields:
+            return (_msgs.FSET_NO_HOLES.said(hole=token) if not fields
+                    else _msgs.FSET_BAD_HOLE.said(hole=token, last=fields - 1))
+        if token == "$*" and not fields:
+            return _msgs.FSET_NO_HOLES.said(hole=token)
+    stray = re.search(r"[%$]", fmt[pos:])
+    if stray:
+        return _msgs.FSET_BAD_CODE.said(code=fmt[pos + stray.start():pos + stray.start() + 2])
+    return None
+
+
+def _joined(found: list[Word]) -> list[Run] | str:
+    if all(isinstance(word, str) for word in found):
+        return " ".join(found)  # type: ignore[arg-type]
+    out: list[Run] = []
+    for index, word in enumerate(found):
+        if index:
+            out.append(("", " "))
+        out.extend([("", word)] if isinstance(word, str) else word)
+    return out
+
+
+def runs(fmt: str, line: list[Word]) -> list[Run]:
+    """Format ``fmt`` drawn with ``line``, the words its event passes
+    (`words`), as runs. `$N` is word N, `$N-` word N through the end of the
+    line, `$*` the whole line; a hole past the line is empty. `%Cnn` turns
+    what follows to palette slot nn, `%C` back to the terminal's own colour,
+    `%G` is the banner glyph. A hole given runs keeps each run's own colour
+    and takes the one in force where a run has none. Trailing spaces are
+    trimmed. Never raises: a code it cannot read is drawn as written."""
     current = ""
     out: list[Run] = []
 
@@ -448,16 +507,13 @@ def runs(fmt: str, args: list[str | list[Run]], *, hole: str = "", whole: str = 
 
     pos = 0
     for match in _TOKEN.finditer(fmt):
-        add(current or base, fmt[pos:match.start()])
+        add(current, fmt[pos:match.start()])
         pos = match.end()
         token = match.group(0)
-        if token == "%%":
-            add(current or base, "%")
-        elif token == "%s":
-            colour = current or (hex_for(hole) or "" if hole else "") or base
-            value = next(values, "")
-            for own, text in value if isinstance(value, list) else [("", str(value))]:
-                add(own or colour, text)
+        if token in ("%%", "$$"):
+            add(current, token[0])
+        elif token == "%G":
+            add(current, banner_text())
         elif token.startswith("%C"):
             slot = match.group(1)
             if slot is None:
@@ -465,19 +521,18 @@ def runs(fmt: str, args: list[str | list[Run]], *, hole: str = "", whole: str = 
             elif int(slot) < PALETTE_SIZE:
                 current = hex_for(palette_name(int(slot))) or ""
             else:
-                add(current or base, token)
+                add(current, token)
         else:
-            name = match.group(2)
-            if name == "$":
-                add(current or base, "$")
-            elif name in ("BANNER", "G"):
-                add(current or hex_for("COLOR_SYSTEM") or "", banner_text())
+            if token == "$*":
+                value: Word = _joined(line)
+            elif match.group(3):
+                value = _joined(line[int(match.group(2)):])
             else:
-                value = _setting(name)
-                if value is None and is_name(name):
-                    value = entry_value(name)
-                add(current or base, token if value is None else str(value))
-    add(current or base, fmt[pos:])
+                index = int(match.group(2))
+                value = line[index] if index < len(line) else ""
+            for own, text in value if isinstance(value, list) else [("", value)]:
+                add(own or current, text)
+    add(current, fmt[pos:])
     while out and out[-1][1].rstrip(" ") != out[-1][1]:
         colour, text = out.pop()
         add(colour, text.rstrip(" "))
@@ -546,8 +601,8 @@ def to_rich(parts: list[Run], style: str = "") -> Any:
     return text
 
 
-def render(fmt: str, args: list[str], *, colour: bool = True,
-           hole: str = "", whole: str = "") -> str:
-    """`runs` as `to_ansi`, or `to_plain` when ``colour`` is False."""
-    parts = runs(fmt, args, hole=hole, whole=whole)
+def render(fmt: str, fields: list[Word], *, colour: bool = True) -> str:
+    """`runs` of ``fields`` (`words`) as `to_ansi`, or `to_plain` when
+    ``colour`` is False."""
+    parts = runs(fmt, words(fields))
     return to_ansi(parts) if colour else to_plain(parts)

@@ -50,7 +50,7 @@ VISION
 
 BANNER
     Text that starts each line js prints about its own state, such as `/set`
-    output. $BANNER in a format reads it.
+    output. %G in a format draws it.
 
 EDITING_MODE
     Input line key bindings in the async screen. emacs: Enter sends. vi: a

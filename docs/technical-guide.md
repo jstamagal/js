@@ -49,7 +49,7 @@ persists each completed turn.
 | `js/memory.py` | locked JSONL persistence and loader control marks |
 | `js/usage.py` | per-session token and cost totals, the `usage` records, the meter a turn charges its calls to |
 | `js/headless.py` | `js -p --json`: runtime events as JSON lines (docs/headless-json.md) |
-| `js/messages.py` | every string the operator reads, as named entries; the banner slot; severity colours |
+| `js/messages.py` | every string the operator reads, as named entries; the banner slot; each entry's default format |
 | `js/persona.py` | prompt-directory concatenation and `agent.yaml` |
 | `js/events.py` | event names, `on` handler table, handler refusals, the approval a program passes to `run_turn_async` |
 | `js/hookexec.py` | `exec`: runs a command for the command layer; event JSON on stdin, exit 2 refuses |
@@ -423,14 +423,16 @@ The operator's messages are named `Message` entries in `js/messages.py`; code
 passes the values for their holes (`msgs.say(msgs.MODEL_SET, model=m)`,
 `msgs.warn(...)` for stderr, `.text()` for a string raised as exception text).
 A banner entry prints behind the `BANNER` slot (`***` today); no template
-spells the slot. Severity is colour, never a word: `WARN` paints the holes
-light yellow, `GRAVE` light red, and a message with no holes is painted whole.
+spells the slot. Each entry is shown through its /fset format (`js/fset.py`):
+its fields become the words `$0`, `$1`, ... and the format adds colour only
+where it writes `%Cnn`; `js/fset` draws a failure's glyph red and a warning's
+orange.
 `say` paints only a stream that is a terminal, so a pipe gets plain lines.
 
 `Message.said(...)` is `.text()` that keeps its entry: a `str` whose `message`
 and `fields` say what produced it. A REPL command returns its refusal that
-way, and the REPL prints it in that entry's severity, so a usage slip is not
-painted while a failed save is. `compact_now` returns its result the same way,
+way, and the REPL prints it through that entry's format, so a failed save
+shows its red glyph and a usage slip shows none. `compact_now` returns its result the same way,
 and `compaction.compacted()` tells a compaction from a skip by the entry.
 
 The `/help` column (`CMD_*`), `js --help` (`SHORT_HELP`), every argparse help

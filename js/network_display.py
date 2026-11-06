@@ -88,8 +88,7 @@ def countdown_end() -> None:
 
 
 def _net_line(line: str) -> str:
-    """A network line on the screen: its entry's runs, COLOR_WARN where the
-    format sets no colour."""
+    """A network line on the screen: its entry's runs."""
     if isinstance(line, LabelledLine):
         inner = line.line
         text = fset.to_ansi(inner.message.body_runs(**inner.fields)) if isinstance(inner, msgs.Said) else str(inner)
@@ -97,7 +96,7 @@ def _net_line(line: str) -> str:
     elif isinstance(line, Failure):
         line = str(line)
     said = line if isinstance(line, msgs.Said) else msgs.NET_LINE.said(text=line)
-    return fset.to_ansi(said.message.runs(whole="COLOR_WARN", **said.fields))
+    return fset.to_ansi(said.message.runs(**said.fields))
 
 
 def describe_failure(exc: BaseException) -> str:
