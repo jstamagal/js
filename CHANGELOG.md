@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **A directive that fails expands to nothing; the model never sees it raw.**
+  An `!{...}` or ` ```! ` directive that failed to resolve (nonzero exit with
+  no stdout, as `rm` of a missing file with `2>/dev/null`; a failed compile; a
+  missing interpreter; a timeout; an unknown subsystem; code while inline code
+  is off) stayed in the text as written, so a message file handed the model a
+  bare command it then ran itself. It now expands to nothing, with the same
+  warning on stderr. An unterminated ` ```! ` fence that runs into the next
+  fence drops only the directive; the fence after it stays. The env-expanded
+  `--printonly=e` preview still shows code directives literally.
+
 - **A Claude model behind an OpenAI-shaped proxy shows its thinking.** Claude
   sends no thinking text unless the request asks for it. On the Anthropic wire
   js asks with `display: summarized`; on the OpenAI wire it asked for nothing,

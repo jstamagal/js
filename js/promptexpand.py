@@ -17,15 +17,15 @@ what an inline is activating. Subsystems are a registry:
   python, py,    run when ``allow_code`` is true, which is the DEFAULT
   c, node, js    (``INLINE_CODE``). Opt out with ``--im-a-pussy``
                  (or ``set INLINE_CODE off`` / ``JS_INLINE_CODE=0``);
-                 a code directive then stays literal. Built-ins in its body
+                 a code directive then expands to nothing. Built-ins in its body
                  are substituted before execution.
 
 Expansion is a SINGLE pass: a directive's output is never re-scanned, so a value
 (or a command's stdout) that happens to contain another ``!{...}`` / ``{{...}}``
 cannot trigger further expansion. That is the injection guard. A directive that
-fails to resolve is, by default, left literal (with a one-line stderr warning)
-rather than aborting the load — call with ``on_error="raise"`` for the strict
-behavior.
+fails to resolve expands to nothing, with a one-line stderr warning, rather than
+aborting the load or reaching the model as raw text — call with
+``on_error="raise"`` for the strict behavior.
 
 A prompt that documents the directive syntax to itself must be able to show a
 directive without the loader running it. Two ways:
@@ -60,7 +60,14 @@ __all__ = ["expand_prompt", "session_variables", "PromptExpansionError"]
 
 class PromptExpansionError(ValueError):
     """A directive could not be resolved (unknown subsystem, gated/failed code,
-    unreadable file, malformed token)."""
+    unreadable file, malformed token).
+
+    ``remainder`` is text the match spans that is not part of the directive; it
+    stays in the output when the directive is dropped."""
+
+    def __init__(self, *args, remainder: str = "") -> None:
+        super().__init__(*args)
+        self.remainder = remainder
 
 
 _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -117,7 +124,7 @@ def expand_prompt(
     variables: Mapping[str, str] | None = None,
     timeout_s: int | None = None,
     max_output_bytes: int | None = None,
-    on_error: str = "warn",
+    on_error: str = "drop",
     subsystems: Mapping | None = None,
     warn=None,
 ) -> str:
@@ -127,9 +134,11 @@ def expand_prompt(
     (unknown subsystem, a code subsystem while ``allow_code`` is false, an
     execution/read failure, a malformed token):
 
-      ``"warn"`` (default) -- leave that directive LITERAL in the output, print
-      one line to stderr, and keep going. A broken directive never aborts the
-      load: js starts, that spot just stays unexpanded.
+      ``"drop"`` (default) -- that directive expands to nothing, one line goes
+      to stderr, and expansion goes on. A broken directive never aborts the
+      load and never reaches the model as raw directive text.
+      ``"keep"`` -- as ``"drop"``, but the directive stays literal; for
+      previews that show the prompt with code directives unrun.
       ``"raise"`` -- raise :class:`PromptExpansionError` at the first failure
       (the strict behavior; used by tests).
 
@@ -189,8 +198,14 @@ def expand_prompt(
                     for line in (m.group("fbody") or "").replace("\r\n", "\n").split("\n")
                 )
                 if re.search(r"(?m)^[ ]{0,3}```", fbody):
+                    # The match runs past the unterminated directive into the
+                    # next fence; that fence and everything after it is prompt.
+                    whole = m.group(0)
+                    fence = re.compile(rf"(?m)^[ ]{{0,{len(m.group('find')) + 3}}}```")
+                    foreign = fence.search(whole, whole.index("\n") + 1)
                     raise PromptExpansionError(
-                        msgs.DIRECTIVE_FENCED_DIRECTIVE_BODY_CARRIES_A_LINE_THE.words()
+                        msgs.DIRECTIVE_FENCED_DIRECTIVE_BODY_CARRIES_A_LINE_THE.words(),
+                        remainder=whole[foreign.start():],
                     )
                 # Put the markdown indent back. The fence may sit up to three
                 # spaces in because it is nested in a list; dropping the indent
@@ -227,9 +242,10 @@ def expand_prompt(
         except PromptExpansionError as exc:
             if on_error == "raise":
                 raise
-            # Keep the directive as written, warn, and let startup go on.
             warning(msgs.DIRECTIVE_NOT_EXPANDED, error=exc)
-            return m.group(0)
+            if on_error == "keep":
+                return m.group(0)
+            return exc.remainder
 
     token = _WARNING.set(warning)
     try:

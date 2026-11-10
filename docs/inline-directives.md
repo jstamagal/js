@@ -111,9 +111,11 @@ directive that exits nonzero after printing to stdout (grep with no match, a
 script ending on a false test) injects that stdout and warns with the exit
 code on stderr. A directive that fails to resolve — nonzero exit with no
 stdout, a failed `c` compile, missing interpreter/compiler, timeout, unknown
-subsystem — is left **literal** in the prompt with a one-line
-warning on stderr; it does not abort prompt assembly. (Callers of
-`expand_prompt` can pass `on_error="raise"` for the strict behavior.) The
+subsystem — expands to **nothing**, with a one-line warning on stderr; it
+does not abort prompt assembly, and the raw directive never reaches the model.
+(Callers of `expand_prompt` can pass `on_error="raise"` for the strict
+behavior, or `on_error="keep"` to leave it literal, as the env-expanded
+`--printonly=e` preview does.) The
 default per-directive timeout is 300 seconds; set
 `INLINE_CODE_TIMEOUT` or `JS_INLINE_CODE_TIMEOUT` to override it.
 Output is capped at `SHELL_OUTPUT_MAX`. A failing directive's
@@ -145,9 +147,9 @@ set INLINE_CODE off      # permanent, in jsrc
 JS_INLINE_CODE=0 js -p "..."     # via environment
 ```
 
-With code execution off, any `!{sh ...}`, `!{python ...}`, ` ```!c ` etc. is
-left literal in the prompt (no error); `{{VAR}}`, `!{env}`, and `!{file}` still
-expand.
+With code execution off, any `!{sh ...}`, `!{python ...}`, ` ```!c ` etc.
+expands to nothing, with a warning on stderr; `{{VAR}}`, `!{env}`, and
+`!{file}` still expand.
 
 > **Security note.** By default `js` compiles and runs arbitrary code taken
 > from your prompt files (the agent's `*-prompt.md` and `*-env.md`, and any stacked `AGENTS.md`).

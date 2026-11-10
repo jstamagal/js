@@ -130,7 +130,7 @@ def test_printonly_inlines_respect_opt_out(offline_agent, monkeypatch, capsys):
     rc = cli.main(["-a", "potest", "--im-a-pussy", "--printonly=i"])
     out = capsys.readouterr().out
     assert rc == 0
-    assert "code=<!{sh printf ran}>" in out  # opted out: left literal, not run
+    assert "code=<>" in out  # opted out: not run, and no directive text reaches the prompt
 
 
 def test_incognito_flag_tells_envctx_to_skip_history(offline_agent, monkeypatch, capsys):

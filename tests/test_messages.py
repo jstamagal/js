@@ -86,7 +86,7 @@ def test_the_tools_table_names_an_undecided_tool_without_a_paren_aside():
 
 
 def test_a_failed_directive_without_stderr_warns_without_a_paren_aside(capsys):
-    assert expand_prompt("x !{sh exit 3} y", allow_code=True) == "x !{sh exit 3} y"
+    assert expand_prompt("x !{sh exit 3} y", allow_code=True) == "x  y"
     err = _plain(capsys.readouterr().err).strip()
     reason = msgs.DIRECTIVE_EXITED_SILENT.text(label="!{sh}", code=3)
     assert err == msgs.banner(msgs.DIRECTIVE_NOT_EXPANDED.text(error=reason))

@@ -133,30 +133,43 @@ def test_sh_inline_runs_when_allowed():
     assert expand_prompt("!{sh printf hello}", allow_code=True) == "hello"
 
 
-# ---- default degrade: a failed directive is left literal, never raised ----
+# ---- default degrade: a failed directive expands to nothing, never raised ----
 
-def test_unknown_subsystem_degrades_to_literal(capsys):
+def test_unknown_subsystem_expands_to_nothing(capsys):
     out = expand_prompt("a !{wat hi} b", env={})
-    assert out == "a !{wat hi} b"
+    assert out == "a  b"
     assert capsys.readouterr().err  # a warning, and the load goes on
 
 
-def test_code_while_off_degrades_to_literal(capsys):
+def test_code_while_off_expands_to_nothing(capsys):
     out = expand_prompt("run !{sh echo hi} now", allow_code=False)
-    assert out == "run !{sh echo hi} now"
+    assert out == "run  now"
     assert capsys.readouterr().err  # a warning, and the load goes on
+
+
+def test_keep_leaves_a_failed_directive_literal(capsys):
+    out = expand_prompt("run !{sh echo hi} now", allow_code=False, on_error="keep")
+    assert out == "run !{sh echo hi} now"
+    assert capsys.readouterr().err
 
 
 def test_one_bad_directive_does_not_kill_the_others():
     # The good !{env} still expands even though the sibling directive failed.
     out = expand_prompt("!{wat x} then !{env WHO}", env={"WHO": "ape"})
-    assert out == "!{wat x} then ape"
+    assert out == " then ape"
 
 
-def test_failed_code_run_degrades_to_literal(capsys):
+def test_failed_code_run_expands_to_nothing(capsys):
     out = expand_prompt("!{sh sh -c 'exit 3'}", allow_code=True)
-    assert out == "!{sh sh -c 'exit 3'}"
+    assert out == ""
     assert capsys.readouterr().err  # a warning, and the load goes on
+
+
+def test_silent_failure_after_good_directives_leaves_no_directive_text(capsys):
+    text = "!{sh echo The cake}\n!{sh rm /nonexistent/js-test-file 2>/dev/null}\n!{sh exit 127}"
+    out = expand_prompt(text, allow_code=True)
+    assert out == "The cake\n\n"
+    assert "!{" not in out
 
 
 def test_sh_nonzero_exit_errors():
@@ -246,27 +259,27 @@ def test_persona_expands_env(tmp_path, monkeypatch):
     assert "hello world" in spec.system
 
 
-def test_persona_code_blocked_leaves_literal_and_starts(tmp_path, capsys):
+def test_persona_code_blocked_drops_directive_and_starts(tmp_path, capsys):
     # Opt-out (allow_inline_code False): the code directive must NOT abort the
-    # load — it stays literal and js keeps starting, with a stderr warning.
+    # load — it expands to nothing and js keeps starting, with a stderr warning.
     import js.persona as P
     d = tmp_path / "agent"
     d.mkdir()
     (d / "00-prompt.md").write_text("ctx !{sh echo hi}\n", encoding="utf-8")
     spec = P.load_configured_prompt_spec(_cfg(d, allow_inline_code=False))
-    assert "!{sh echo hi}" in spec.system  # left literal, not expanded, not crashed
+    assert "!{sh echo hi}" not in spec.system and "ctx " in spec.system
     assert capsys.readouterr().err  # a warning, and the load goes on
 
 
 def test_persona_unknown_subsystem_degrades(tmp_path, capsys):
-    # A bad directive (unknown subsystem) degrades gracefully at load: literal +
+    # A bad directive (unknown subsystem) degrades gracefully at load: dropped +
     # one warning + startup continues — never a raw traceback at startup.
     import js.persona as P
     d = tmp_path / "agent"
     d.mkdir()
     (d / "00-prompt.md").write_text("ctx !{wat huh}\n", encoding="utf-8")
     spec = P.load_configured_prompt_spec(_cfg(d, allow_inline_code=True))
-    assert "!{wat huh}" in spec.system
+    assert "!{wat huh}" not in spec.system and "ctx " in spec.system
     assert capsys.readouterr().err  # a warning, and the load goes on
 
 
@@ -309,7 +322,7 @@ def test_persona_passes_configured_inline_code_timeout(tmp_path, monkeypatch):
 def test_fence_mentioned_mid_sentence_is_not_a_directive(capsys):
     text = "see ```!sub ` fenced block for detail\nmore prose\n```\ntail"
 
-    actual = expand_prompt(text, allow_code=True, on_error="warn")
+    actual = expand_prompt(text, allow_code=True)
 
     assert actual == text
     assert capsys.readouterr().err == ""
@@ -363,7 +376,7 @@ def test_repo_agents_md_expands_to_itself(capsys):
         pytest.skip("AGENTS.md not present in this tree")
     text = agents_md.read_text(encoding="utf-8")
 
-    actual = expand_prompt(text, allow_code=True, on_error="warn")
+    actual = expand_prompt(text, allow_code=True)
 
     assert actual == text
     assert capsys.readouterr().err == ""
@@ -408,11 +421,11 @@ def test_fenced_directive_allows_indented_closer():
 
 def test_unterminated_stream_after_python_fence_fails_closed():
     """A ```! opener must not close at the next ```python opener (ALL-CLAIMS:380):
-    the body fails to run and the text stays literal."""
+    the body never runs, the unterminated directive is dropped, the python
+    fence stays."""
     text = "```!sh\necho SWALLOWED\n```python\nprint(1)\n```\n"
     out = expand_prompt(text, allow_code=True)
-    # the body never runs: the fence stays in the prompt verbatim with a warn
-    assert out == text
+    assert out == "```python\nprint(1)\n```\n"
 
 
 def test_fenced_directive_accepts_crlf_closer():
@@ -439,7 +452,7 @@ def test_fenced_directive_with_foreign_fence_in_body_never_executes(tmp_path):
         out = expand_prompt(text, allow_code=True)
     assert runner_calls == [], runner_calls
     assert not marker.exists()
-    assert out == text
+    assert out == "```python\nprint(1)\n```\n"
 
 
 def test_file_directive_with_non_utf8_bytes_embeds_nothing(tmp_path):
@@ -447,9 +460,9 @@ def test_file_directive_with_non_utf8_bytes_embeds_nothing(tmp_path):
     embeds nothing either way (ALL-CLAIMS:379)."""
     path = tmp_path / "bin.dat"
     path.write_bytes(b"\xff\xfe\x00binary\xff")
-    # warns and keeps the directive literal (on_error=warn default)
+    # warns and embeds nothing (on_error=drop default)
     out = expand_prompt(f"!{{file {path}}}", allow_code=True)
-    assert out == f"!{{file {path}}}"
+    assert out == ""
     # on_error=raise propagates
     with pytest.raises(PromptExpansionError):
         expand_prompt(f"!{{file {path}}}", allow_code=True, on_error="raise")
@@ -465,6 +478,6 @@ def test_expansion_accepts_subsystems_and_warning_sink(capsys):
     result = expand_prompt("!{custom hi} !{missing}",
                            subsystems={"custom": (False, lambda body, **kwargs: "!{custom again}")},
                            warn=lambda message, **fields: warnings.append((message, fields)))
-    assert result == "!{custom again} !{missing}"
+    assert result == "!{custom again} "
     assert len(warnings) == 1
     assert capsys.readouterr().err == ""

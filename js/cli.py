@@ -4658,7 +4658,7 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
                 allow_code=allow_code,
                 timeout_s=timeout_s,
                 max_output_bytes=cfg.max_bash_output_bytes,
-                on_error="warn",
+                on_error="drop",
             )
             blocks.append(f"# bench {bm.name}\n{body}")
         return "\n\n".join(blocks)
@@ -4685,7 +4685,7 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
             variables=session_variables(cfg),
             allow_code=False,
             max_output_bytes=cfg.max_bash_output_bytes,
-            on_error="warn",
+            on_error="keep",
         ),
         "i": lambda: expand_prompt(
             system,
@@ -4693,7 +4693,7 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
             allow_code=allow_code,
             timeout_s=timeout_s,
             max_output_bytes=cfg.max_bash_output_bytes,
-            on_error="warn",
+            on_error="drop",
         ),
         "b": _bench,
         "x": _exchanges,
