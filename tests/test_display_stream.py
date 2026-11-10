@@ -286,3 +286,16 @@ def test_a_markdown_table_cell_wraps_instead_of_losing_its_tail(monkeypatch):
     _stream("| a | b |\n|---|---|\n| short | " + "x" * 26 + "TAIL |\n", sink, size=200)
     shown = "".join(text for kind, text in live.events if kind == "commit")
     assert "TAIL" in "".join(ANSI.sub("", shown).split()) and "…" not in ANSI.sub("", shown)
+
+
+def test_rendered_prose_shows_every_character_of_its_source():
+    # A command copied off the screen must run as the model wrote it.
+    for source in (
+        'case "$out" in *FLIPPED*|"choice "*" conf=0."[0-6]*) echo a;; esac',
+        "a *b* **c** _d_ ~~e~~ x_y_z",
+        r"grep \. \* \\ \$HOME",
+        "a &amp; b &lt;",
+        "use <program> to run <foo/>",
+        "<div>\nhi\n</div>",
+    ):
+        assert ANSI.sub("", display.render_markdown(source, 400)).rstrip("\n") == source

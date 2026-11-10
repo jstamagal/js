@@ -30,6 +30,8 @@ from typing import Any, Protocol
 
 from prompt_toolkit.utils import get_cwidth
 from rich.console import Console
+from markdown_it import MarkdownIt
+from markdown_it.token import Token
 from rich.markdown import Markdown, TableElement
 from rich.syntax import Syntax
 from rich.text import Text
@@ -511,7 +513,6 @@ def _markdown_styles(colours: Theme) -> dict[str, str]:
         "markdown.link_url": f"underline {colours.dim}",
         "markdown.table.border": colours.separator,
         "markdown.table.header": f"not bold {colours.highlight}",
-        "markdown.kbd": f"bold {colours.highlight}",
     }
 
 
@@ -591,9 +592,43 @@ def _shows_every_cell(console: Console, options: Any, headings: list[Text], rows
 
 
 class _Markdown(Markdown):
-    """rich's Markdown with tables that wrap their cells."""
+    """rich's Markdown with tables that wrap their cells, drawing every
+    character of inline source: emphasis keeps its `*`, `_` and `~~` markers
+    inside the style, a backslash escape or an entity is drawn as written, and
+    HTML is text. Commands copied off the screen match what the model wrote."""
 
     elements = {**Markdown.elements, "table_open": _FoldingTable}
+
+    def __init__(self, markup: str, **options: Any) -> None:
+        super().__init__("", **options)
+        self.markup = markup
+        self.parsed = _SOURCE_PARSER.parse(markup)
+        for token in self.parsed:
+            if token.children:
+                token.children = _with_source(token.children)
+
+
+# commonmark with HTML off, so a tag is text; text_join off, so an escape or
+# an entity stays a text_special token that still holds its source.
+_SOURCE_PARSER = (MarkdownIt("commonmark", {"html": False})
+                  .enable("strikethrough").enable("table").disable("text_join"))
+
+_MARKER_OPEN = {"em_open", "strong_open", "s_open"}
+_MARKER_CLOSE = {"em_close", "strong_close", "s_close"}
+
+
+def _with_source(children: list[Token]) -> list[Token]:
+    """Inline tokens with the source markdown-it consumed put back as text."""
+    kept: list[Token] = []
+    for child in children:
+        if child.type == "text_special":
+            child.type, child.content = "text", child.markup
+        if child.type in _MARKER_CLOSE:
+            kept.append(Token("text", "", 0, content=child.markup))
+        kept.append(child)
+        if child.type in _MARKER_OPEN:
+            kept.append(Token("text", "", 0, content=child.markup))
+    return kept
 
 
 def render_markdown(source: str, width: int, settings: Any = None) -> str:
@@ -615,7 +650,7 @@ def render_markdown(source: str, width: int, settings: Any = None) -> str:
 
 def _block_starts(source: str) -> list[int]:
     """Source line numbers where each top-level Markdown block begins."""
-    return [token.map[0] for token in Markdown(source).parsed if token.level == 0 and token.map]
+    return [token.map[0] for token in _SOURCE_PARSER.parse(source) if token.level == 0 and token.map]
 
 
 # --------------------------------------------------------------------------
