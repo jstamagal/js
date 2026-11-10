@@ -50,7 +50,7 @@ from .sampling import Sampling
 from .reasoning_display import ReasoningDisplay
 from . import reasoning as reasoning_rules
 from .toolkit.core import (ToolContext, ToolOutput, ToolResult, as_output, call_is_read_only, call_scope, call_view,
-                           call_tool, call_tool_async, registry_scope)
+                           call_tool, call_tool_async, compact_json, registry_scope)
 from .toolkit.registry import ToolRegistry
 from .turn_budget import TurnBudget, TurnConvo, last_user_message_index as _last_user_message_index
 from .turn_surface import SurfaceJournal
@@ -389,24 +389,31 @@ def _normalize_tool_call_batch(
         )
         schema = tool.openai_spec()["function"]["parameters"] if tool is not None else None
         validation_error: str | None = None
+        raw_args = call.arguments()
         try:
-            arguments = _repair_jsonish(call.arguments())
+            parsed = _repair_jsonish(raw_args)
         except ValueError as exc:
-            arguments = {}
+            parsed = arguments = {}
             validation_error = _PROMPTS['normalize_tool_call_batch_could_not_parse_arguments'].format(exc=exc)
         else:
             # Before validation, not after: a container or number the model
             # serialized as a string is the right value in the wrong type, and
             # rejecting it here means the handler never runs (patch's `edits`
             # batch form and shell's timeout=15 were unusable for this reason).
-            arguments = tool_args.coerce_to_schema(arguments, schema)
-        canonical_args = json.dumps(
+            arguments = tool_args.coerce_to_schema(parsed, schema)
+        # The sorted form is only the duplicate key. History keeps the model's
+        # own text: a server's prompt cache holds the tokens the model wrote,
+        # and a replay with its keys reordered re-renders a different prefix.
+        identity = (canonical_name, json.dumps(
             arguments,
             ensure_ascii=False,
             separators=(",", ":"),
             sort_keys=True,
-        )
-        identity = (canonical_name, canonical_args)
+        ))
+        if arguments == parsed and tool_args.is_json_object(raw_args):
+            replay_args = raw_args
+        else:
+            replay_args = compact_json(arguments)
         if identity in seen:
             duplicate += 1
             continue
@@ -433,7 +440,7 @@ def _normalize_tool_call_batch(
             _PendingToolCall(
                 id=call.id,
                 name=canonical_name,
-                arg_chunks=[canonical_args],
+                arg_chunks=[replay_args],
                 validation_error=validation_error,
                 unavailable=tool is None,
                 refused=refused,

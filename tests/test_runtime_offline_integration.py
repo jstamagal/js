@@ -1620,3 +1620,56 @@ def test_a_tool_call_under_zero_tools_runs_nothing_and_returns_the_unknown_tool_
     outputs = [output for _call, _message, output in results]
     assert "unknown tool" in outputs[0] and "nope" in outputs[0]
     assert outputs[1].startswith("ERROR") and "shell" in outputs[1]
+
+
+def test_tool_batch_keeps_the_models_argument_text_for_replay():
+    """A server's prompt cache holds the tokens the model wrote. Arguments
+    replayed with their keys sorted re-render a different prefix, and a
+    hybrid-attention server then recomputes the whole prompt."""
+    from js.toolkit import fs
+
+    tool = next(item for item in fs.tools() if item.name == "write")
+    registry = ToolRegistry(tools=(tool,), aliases={"write": "write"})
+    raw = '{"file_path":"hello.txt","content":"hi\\n"}'
+
+    normalized, _ = runtime._normalize_tool_call_batch(
+        [runtime._PendingToolCall("call_1", "write", [raw])], registry, limit=10
+    )
+
+    assert normalized[0].arguments() == raw
+
+
+def test_coerced_tool_arguments_keep_the_models_key_order():
+    from js.toolkit import fs
+
+    tool = next(item for item in fs.tools() if item.name == "patch")
+    registry = ToolRegistry(tools=(tool,), aliases={"patch": "patch"})
+    raw = json.dumps({"file_path": "f.txt", "edits": json.dumps([{"old_string": "a", "new_string": "b"}])})
+
+    normalized, _ = runtime._normalize_tool_call_batch(
+        [runtime._PendingToolCall("call_1", "patch", [raw])], registry, limit=10
+    )
+
+    replayed = normalized[0].arguments()
+    assert list(json.loads(replayed)) == ["file_path", "edits"]
+    assert list(json.loads(replayed)["edits"][0]) == ["old_string", "new_string"]
+
+
+def test_duplicate_tool_calls_still_match_across_key_order():
+    tool = Tool(
+        name="write",
+        description="write",
+        handler=lambda **_kwargs: "ok",
+        params={"path": {"type": "string"}, "content": {"type": "string"}},
+        required=("path",),
+    )
+    registry = ToolRegistry(tools=(tool,), aliases={"write": "write"})
+    calls = [
+        runtime._PendingToolCall("first", "write", ['{"path":"a","content":"x"}']),
+        runtime._PendingToolCall("second", "write", ['{"content":"x","path":"a"}']),
+    ]
+
+    normalized, stats = runtime._normalize_tool_call_batch(calls, registry, limit=10)
+
+    assert [call.id for call in normalized] == ["first"]
+    assert stats.duplicate == 1
