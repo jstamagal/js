@@ -4272,14 +4272,14 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
     previous_exchange_factory = telemetry.exchange_factory
     telemetry.reasoning_factory = lambda level: screen.ScreenReasoningDisplay(loop, scrollback, app, level)
     telemetry.display_factory = lambda markdown: display_mod.Display(
-        sys.stdout.write,
+        getattr(sys.stdout, "write_unlogged", sys.stdout.write),
         live=screen.ScreenLive(loop, scrollback, app) if markdown else None,
         flush=sys.stdout.flush,
     )
     telemetry.exchange_factory = lambda: screen.ScreenExchange(loop, scrollback, app)
     ticker = loop.create_task(screen.tick(app, lambda: sup.turn_active() or bool(sup.jobs("subagent"))))
     try:
-        with screen.capture_stdio(loop, scrollback, app):
+        with screen.capture_stdio(loop, scrollback, app), _transcript_stdio(telemetry):
             try:
                 stream_transport.install_sink(stream_transport.NetSink(
                     level=lambda: _live_level(state, "NET_DISPLAY"),

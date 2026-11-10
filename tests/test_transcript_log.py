@@ -303,3 +303,28 @@ def test_transcript_failure_setting_keeps_healthy_files_writable(tmp_path, monke
 
     assert "first\n" in healthy.getvalue()
     assert "second\n" in healthy.getvalue()
+
+
+def test_async_repl_transcript_records_the_lines_the_screen_shows(monkeypatch, tmp_path):
+    from repl_driver import run_async
+
+    from js import stream_transport
+
+    log_dir = tmp_path / "transcripts"
+    cfg = _cfg(tmp_path, log_dir, session_name="screen.jsonl")
+    cfg.settings["NET_DISPLAY"] = 2
+
+    def completion_stub(**kwargs):
+        stream_transport.say(2, "NETLINE_SEEN")
+        kwargs["on_text"]("ANSWER_SEEN")
+        return _fake_stream_result("ANSWER_SEEN")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
+    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
+
+    run_async(monkeypatch, cfg, ["hello"])
+
+    log = (log_dir / "screen.log").read_text(encoding="utf-8")
+    assert log.count("NETLINE_SEEN") == 1
+    assert log.count("ANSWER_SEEN") == 1
+    assert log.index("<USER> hello") < log.index("NETLINE_SEEN") < log.index("<APE> ANSWER_SEEN")
