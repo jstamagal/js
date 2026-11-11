@@ -112,6 +112,28 @@ def _report(payload: dict[str, Any], context: ToolContext) -> str:
     ) + "\n[truncated]"
 
 
+def _make_screen(width: int, height: int) -> Any:
+    import pyte
+
+    screen = pyte.Screen(width, height)
+    # pyte passes private=True to every CSI handler, but only these handlers
+    # implement private variants. Unsupported private commands are no-ops.
+    private_handlers = {
+        "set_mode", "reset_mode", "erase_in_display", "erase_in_line",
+        "report_device_attributes",
+    }
+
+    def standard_only(handler):
+        def dispatch(*params, private=False):
+            if not private:
+                return handler(*params)
+        return dispatch
+
+    for name in set(pyte.Stream.csi.values()) - private_handlers:
+        setattr(screen, name, standard_only(getattr(screen, name)))
+    return screen
+
+
 def _drain(state: dict[str, Any], wait_ms: int) -> None:
     import pexpect
 
@@ -299,7 +321,7 @@ def terminal_session(
             )
         except (OSError, pexpect.ExceptionPexpect) as exc:
             return f"ERROR: could not start terminal command: {type(exc).__name__}: {exc}"
-        screen = pyte.Screen(width, height)
+        screen = _make_screen(width, height)
         replacement = {
             "child": child,
             "screen": screen,
