@@ -18,6 +18,17 @@ def _no_prior_refresh_failure(monkeypatch):
     monkeypatch.setattr(model_metadata, "_refresh_failure", None)
 
 
+@pytest.mark.parametrize("model_name,expected", [
+    ("gpt-5.99", False),
+    ("gpt-5-mini", False),
+    ("gpt-50", False),
+    ("gpt-5:cloud", True),
+    ("gpt-5", True),
+])
+def test_model_version_is_not_a_wrapper_suffix(model_name, expected):
+    assert model_metadata._is_wrapper_request("gpt-5", model_name) is expected
+
+
 class _FakeModel:
     def __init__(self, provider_id: str, model_id: str, context: int | None, output: int | None, input_: int | None = None):
         self.provider_id = provider_id

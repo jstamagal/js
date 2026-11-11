@@ -559,7 +559,7 @@ def _is_wrapper_request(catalog_id: str, request: str) -> bool:
     catalog id ``deepseek-v4-pro`` against the request ``deepseek-v4-pro:cloud``.
 
     Requires an exact prefix match followed by a boundary that is not itself
-    part of a bare model slug (letters, digits, ``-`` all continue one), so a
+    part of a bare model slug (letters, digits, ``-`` and ``.`` continue one), so a
     genuinely distinct sibling model — ``gpt-5-mini-2026`` against the catalog
     id ``gpt-5`` — is rejected: ``-`` continues the slug, it isn't a wrapper
     marker like ``:``.
@@ -567,7 +567,7 @@ def _is_wrapper_request(catalog_id: str, request: str) -> bool:
     if not request.startswith(catalog_id):
         return False
     tail = request[len(catalog_id):]
-    return not tail or not (tail[0].isalnum() or tail[0] == "-")
+    return not tail or not (tail[0].isalnum() or tail[0] in "-.")
 
 
 @lru_cache(maxsize=512)
