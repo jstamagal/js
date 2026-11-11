@@ -4551,6 +4551,9 @@ def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
                 M.append_mark(cfg.session_file, "turn_aborted")
         except Exception as e:  # noqa: BLE001
             msgs.say(msgs.FAILED, error=_error_text(e))
+            if isinstance(e, OSError) and e.errno == errno.ESTALE:
+                state["messages"] = M.load_replay_messages(turn_cfg.session_file)
+                continue
             if _turn_has_progress(state["messages"], user_message):
                 _persist_turn_messages(turn_cfg, state["messages"])
             else:
