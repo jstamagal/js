@@ -1487,6 +1487,7 @@ def _interrupt_inflight(tool_context: ToolContext) -> None:
     shell call blocked on its command gets that command's process tree killed,
     so ^C ends the turn now rather than when the shell wait runs out.
     """
+    from .toolkit import fs
     from .toolkit import kernel as kernel_tool
     from .toolkit import process_net
 
@@ -1494,6 +1495,7 @@ def _interrupt_inflight(tool_context: ToolContext) -> None:
         tool_context.tool_approval.cancel()
     kernel_tool.interrupt_inflight(tool_context)
     process_net.interrupt_inflight(tool_context)
+    fs.interrupt_inflight(tool_context)
 
 
 async def _dispatch_batch(

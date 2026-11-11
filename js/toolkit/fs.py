@@ -1335,12 +1335,33 @@ def _rg_types(rg: str) -> frozenset[str]:
     )
 
 
+_SEARCH_PROCESSES: dict[int, set[subprocess.Popen]] = {}
+_SEARCH_PROCESSES_LOCK = threading.Lock()
+
+
+def _kill_search_process(proc: subprocess.Popen) -> None:
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def interrupt_inflight(context: ToolContext) -> int:
+    """Stop searches owned by a cancelled turn; their workers reap the children."""
+    with _SEARCH_PROCESSES_LOCK:
+        processes = tuple(_SEARCH_PROCESSES.get(id(context), ()))
+        for proc in processes:
+            _kill_search_process(proc)
+    return len(processes)
+
+
 def _rg_stream(
     argv: list[str],
     want: int,
     timeout: int,
     input_text: str | None = None,
     cwd: str | None = None,
+    context: ToolContext | None = None,
 ) -> tuple[list[str], int | None, str, bool]:
     """Run rg and collect at most *want* output lines, then stop it.
 
@@ -1369,15 +1390,14 @@ def _rg_stream(
         )
     except OSError as exc:
         return [], 2, str(exc), False
+    with _SEARCH_PROCESSES_LOCK:
+        _SEARCH_PROCESSES.setdefault(id(context), set()).add(proc)
     lines: list[str] = []
     stopped_early = False
     expired = threading.Event()
 
     def _kill_group() -> None:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except (OSError, AttributeError):
-            proc.kill()
+        _kill_search_process(proc)
 
     def _expire() -> None:
         expired.set()
@@ -1419,24 +1439,26 @@ def _rg_stream(
             if len(lines) >= want:
                 stopped_early = True
                 break
-    finally:
         if stopped_early:
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                _kill_group()
-                proc.wait()
-    reader.join()
-    stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace")
-    for stream in (proc.stdout, proc.stderr):
-        if stream is not None:
-            stream.close()
-    if not stopped_early and proc.poll() is None:
+            _kill_group()
         proc.wait()
-    if writer is not None:
-        writer.join(timeout=1)
-    watchdog.cancel()
+        reader.join()
+    finally:
+        _kill_group()
+        proc.wait()
+        reader.join()
+        if writer is not None:
+            writer.join()
+        for stream in (proc.stdout, proc.stderr, proc.stdin):
+            if stream is not None:
+                stream.close()
+        watchdog.cancel()
+        with _SEARCH_PROCESSES_LOCK:
+            processes = _SEARCH_PROCESSES.get(id(context), set())
+            processes.discard(proc)
+            if not processes:
+                _SEARCH_PROCESSES.pop(id(context), None)
+    stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace")
     timed_out = expired.is_set()
     rc = None if stopped_early else proc.returncode
     return lines, rc, stderr, timed_out
@@ -1633,7 +1655,7 @@ def fs_search(
     # Ask for one past the page so an exact-fit result is not reported as
     # truncated; only a genuine extra line proves more matches exist.
     lines, rc, stderr, timed_out = _rg_stream(
-        argv, skip + limit + 1, _RG_TIMEOUT_S, cwd=rg_cwd
+        argv, skip + limit + 1, _RG_TIMEOUT_S, cwd=rg_cwd, context=context
     )
     if timed_out:
         return f"ERROR: search timed out after {_RG_TIMEOUT_S}s"
@@ -1734,7 +1756,7 @@ def _ast_records(
     excludes = _hidden_globs(base, context)
     lines, rc, stderr, timed_out = _rg_stream(
         _ast_argv(binary, pattern, root, lang, rewrite, excludes=excludes), want, _AST_GREP_TIMEOUT_S,
-        cwd=str(base),
+        cwd=str(base), context=context,
     )
 
     used_stdin = False
@@ -1747,7 +1769,7 @@ def _ast_records(
             _ast_argv(binary, pattern, root, lang, rewrite, stdin=True),
             want,
             _AST_GREP_TIMEOUT_S,
-            input_text=source,
+            input_text=source, context=context,
         )
         used_stdin = True
 
