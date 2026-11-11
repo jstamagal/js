@@ -378,9 +378,13 @@ class Room:
             done = next((c for c in cells if c.id == cell_id), None)
             if done is None:
                 raise KeyError(cell_id)
+            claims = self._claims()
+            if done.status == "done":
+                raise PermissionError(_PROMPTS['finish_task_error_already_done'].format(cell_id=cell_id))
+            if claims.get(done.key, {}).get("holder") != who:
+                raise PermissionError(_PROMPTS['finish_task_error_not_holder'].format(cell_id=cell_id))
             done = replace(done, status="done", holder=who, result=result)
             self._write_cells([done if c.id == cell_id else c for c in cells])
-            claims = self._claims()
             if done.key in claims:
                 del claims[done.key]
                 self._write_claims(claims)
@@ -906,6 +910,8 @@ def _finish_task(id: Any = None, result: str = "", context: Any = None) -> str: 
         cell = agent.room.finish_cell(cell_id, agent.name, str(result or ""))
     except KeyError:
         return _PROMPTS['finish_task_no_task_on_the_board'].format(cell_id=cell_id)
+    except PermissionError as exc:
+        return str(exc)
     _view(task=cell.as_dict())
     return _PROMPTS['finish_task_task_done_everyone_was_told'].format(cell_id=cell.id)
 

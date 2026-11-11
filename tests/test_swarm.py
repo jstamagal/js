@@ -315,6 +315,28 @@ def test_finishing_a_cell_frees_it_tells_everyone_and_sinks_it_to_the_bottom(tmp
     assert [(c.id, c.status) for c in room.cells()] == [(2, "open"), (1, "done")]
 
 
+@pytest.mark.parametrize("case", ["other_holder", "expired", "untaken", "done"])
+def test_finish_requires_live_holder_and_unfinished_task(tmp_path, monkeypatch, case):
+    agent = swarm.Agent(tmp_path / "bus" / "a")
+    room = agent.room
+    cell = room.post_cell("a", "work")
+    if case != "untaken":
+        room.take_cell(cell.id, "b" if case == "other_holder" else "a", ttl=1)
+    if case == "expired":
+        now = time.time()
+        monkeypatch.setattr(swarm.time, "time", lambda: now + 2)
+    if case == "done":
+        room.finish_cell(cell.id, "a", "original")
+    before_cells = (room.root / "cells.json").read_bytes()
+    before_claims = room.claims()
+    before_log = room.log.read_bytes()
+    response = swarm._finish_task(cell.id, "replacement", ToolContext(cwd=tmp_path, swarm=agent))
+    assert response.startswith("ERROR")
+    assert (room.root / "cells.json").read_bytes() == before_cells
+    assert room.claims() == before_claims
+    assert room.log.read_bytes() == before_log
+
+
 def test_task_tools_work_the_board_from_the_agent_on_the_context(tmp_path):
     a = swarm.Agent(tmp_path / "bus" / "a")
     registry = swarm.with_bus_tools(ToolRegistry(tools=(), aliases={}))

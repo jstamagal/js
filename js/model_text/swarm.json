@@ -2,6 +2,8 @@
   "post_cell_task": "task #{cell_id}: {cell_title}",
   "post_cell_text": "\n{body}",
   "finish_cell_done": "done #{done_id}: {done_title}",
+  "finish_task_error_already_done": "ERROR: task #{cell_id} is already done",
+  "finish_task_error_not_holder": "ERROR: task #{cell_id} is not held by you; take it before finishing",
   "finish_cell_text": "\n{result}",
   "render_messages": "--- messages ---",
   "render_you": "you",
