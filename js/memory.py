@@ -197,10 +197,11 @@ def _heal_orphaned_tool_calls(messages: list[dict]) -> list[dict]:
         for call in calls:
             cid = _call_id(call)
             if cid and cid not in answered:
+                function = call.get("function")
                 healed.append({
                     "role": "tool",
                     "tool_call_id": cid,
-                    "name": (call.get("function") or {}).get("name", ""),
+                    "name": function.get("name", "") if isinstance(function, dict) else "",
                     "content": _PROMPTS['heal_orphaned_tool_calls_error_tool_result_was_not_recorded'],
                 })
     return healed
