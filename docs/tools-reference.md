@@ -53,7 +53,8 @@ that the runtime expands for vision models. PDFs use `pdftotext`. Both are
 refused when the file exceeds `FILE_BYTES_MAX`.
 
 A notebook (`.ipynb`) read without a range shows its cells: index, id (the
-nbformat `id`, or `cell-N` by position before nbformat 4.5), type, execution
+nbformat `id`, or a collision-free `cell-N` positional name before the first
+edit of an older notebook), type, execution
 count and source, then each output summarised. A stream or `text/plain`
 output shows at most `NOTEBOOK_OUTPUT_LINES_MAX` lines; other MIME types show only
 their size; an error shows `ename: evalue`. That read records the file's hash
@@ -77,8 +78,10 @@ Parameters:
 
 It needs a prior `read` of the notebook, and the file's hash must still match
 that read. A replaced code cell gets empty outputs and a null execution count.
-An inserted cell gets a new 8-hex id when the notebook is nbformat 4.5 or
-later. The JSON keeps its key order, indent and line endings. The notebook is
+The first edit persists all displayed cell ids, upgrading nbformat 4 versions
+older than 4.5 to 4.5. An inserted cell gets a new 8-hex id. Later edits keep
+addressing the same cells after insertions or deletions. The JSON keeps its
+key order, indent and line endings. The notebook is
 snapshotted for `undo`, and after the edit the new hash counts as read, so
 edits in a row need no second read.
 
