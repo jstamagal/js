@@ -398,7 +398,9 @@ def open_transcript_sink(paths: list[Path]) -> TranscriptLogSink | None:
     for path in paths:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            files.append(open(path, "a", encoding="utf-8"))  # noqa: SIM115 - sink owns lifetime
+            files.append(
+                open(path, "a", encoding="utf-8", errors="backslashreplace")  # noqa: SIM115 - sink owns lifetime
+            )
             opened.append(path)
         except OSError:
             pass

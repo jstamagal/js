@@ -131,6 +131,25 @@ def test_transcript_sink_strips_ansi(tmp_path):
     assert "<APE> ok" in text
 
 
+def test_lone_surrogates_do_not_disable_transcript_destinations(tmp_path):
+    paths = [tmp_path / "session.log", tmp_path / "combined.log"]
+    sink = transcript.open_transcript_sink(paths)
+    assert sink is not None
+
+    sink.write_plain("bad \udc80\n")
+    sink.write_user("user \ud800")
+    sink.write_assistant("reply \udcff")
+    sink.write_plain("next healthy line\n")
+    sink.close()
+
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        assert "bad \\udc80" in text
+        assert "user \\ud800" in text
+        assert "reply \\udcff" in text
+        assert "next healthy line" in text
+
+
 def test_transcript_logging_failure_never_raises(tmp_path):
     class BadFile:
         def write(self, _text):
