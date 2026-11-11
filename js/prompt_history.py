@@ -110,7 +110,7 @@ def _line(entry: Entry) -> bytes:
     # splitlines() honours besides \n go in as JSON escapes.
     text = json.dumps(asdict(entry), ensure_ascii=False)
     text = text.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029").replace("\x85", "\\u0085")
-    return (text + "\n").encode("utf-8")
+    return (text + "\n").encode("utf-8", errors="backslashreplace")
 
 
 def _append_lines(fd: int, data: bytes) -> None:
