@@ -315,6 +315,41 @@ def test_finishing_a_cell_frees_it_tells_everyone_and_sinks_it_to_the_bottom(tmp
     assert [(c.id, c.status) for c in room.cells()] == [(2, "open"), (1, "done")]
 
 
+def test_concurrent_subscriptions_preserve_all_kinds(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    room = swarm.Room(tmp_path / "bus")
+    start = threading.Barrier(16)
+
+    def subscribe(index):
+        start.wait(timeout=5)
+        for number in range(10):
+            room.subscribe("a", f"kind-{index}-{number}")
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        list(pool.map(subscribe, range(16)))
+    assert room.subs_of("a") == {f"kind-{i}-{n}" for i in range(16) for n in range(10)}
+
+
+def test_subscription_readers_see_complete_snapshot(tmp_path, monkeypatch):
+    room = swarm.Room(tmp_path / "bus")
+    room.subscribe("a", "original")
+    write_text = Path.write_text
+    observations = []
+
+    def interrupted_write(path, text, *args, **kwargs):
+        write_text(path, text[:1], *args, **kwargs)
+        observations.append(room.subs_of("a"))
+        return write_text(path, text, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", interrupted_write)
+    room.subscribe("a", "second")
+    assert observations == [{"original"}]
+    assert room.subs_of("a") == {"original", "second"}
+    room.subscribe("a", "original", on=False)
+    assert room.subs_of("a") == {"second"}
+
+
 @pytest.mark.parametrize("case", ["other_holder", "expired", "untaken", "done"])
 def test_finish_requires_live_holder_and_unfinished_task(tmp_path, monkeypatch, case):
     agent = swarm.Agent(tmp_path / "bus" / "a")

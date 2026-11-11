@@ -291,11 +291,14 @@ class Room:
     def subscribe(self, name: str, kind: str, on: bool = True) -> set[str]:
         check_name(name)
         kind = check_kind(kind)
-        kinds = self.subs_of(name)
-        (kinds.add if on else kinds.discard)(kind)
-        path = self.root / name / "subs"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("".join(k + "\n" for k in sorted(kinds)), encoding="utf-8")
+        with self._locked():
+            kinds = self.subs_of(name)
+            (kinds.add if on else kinds.discard)(kind)
+            path = self.root / name / "subs"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(".subs.tmp")
+            tmp.write_text("".join(k + "\n" for k in sorted(kinds)), encoding="utf-8")
+            os.replace(tmp, path)
         return kinds
 
     # claims: one holder per key, for a while
