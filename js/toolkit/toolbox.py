@@ -266,7 +266,10 @@ def discover(cwd: Path) -> dict[str, ToolRecord]:
             meta = _parse_header(text)
             record.revision = int_or_default(meta.get("revision"), 1, minimum=1)
             raw_history = meta.get("history")
-            record.history = raw_history if isinstance(raw_history, list) else []
+            record.history = (
+                [entry for entry in raw_history if isinstance(entry, dict)]
+                if isinstance(raw_history, list) else []
+            )
             try:
                 ast.parse(text, filename=str(path))
             except SyntaxError as exc:
@@ -346,7 +349,10 @@ def write_revision(
         prior = int_or_default(prior_meta.get("revision"), 1, minimum=1)
         raw_history = prior_meta.get("history")
         revision = max(revision, prior + 1)
-        history = list(raw_history) if isinstance(raw_history, list) else []
+        history = (
+            [entry for entry in raw_history if isinstance(entry, dict)]
+            if isinstance(raw_history, list) else []
+        )
         archive = directory / ".history" / f"{name}.r{prior}.py"
         try:
             archive.parent.mkdir(parents=True, exist_ok=True)

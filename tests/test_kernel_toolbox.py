@@ -92,6 +92,32 @@ def test_history_source_fallback_keeps_decorators(definition, capsys):
     assert restored["sample"].decorated is True
 
 
+@pytest.mark.parametrize("bad_entry", ["oops", None, 7, ["nested"]])
+def test_malformed_history_entries_preserve_listing_and_valid_revisions(ctx, bad_entry):
+    cwd = Path(ctx.cwd)
+    directory = tbmod.toolbox_dirs(cwd)[0]
+    directory.mkdir(parents=True)
+    valid = {"revision": 1, "model": "first", "date": "2026-01-01", "note": "original"}
+    original = tbmod._render_header({"revision": 2, "history": [bad_entry, valid]})
+    original += "\n\ndef sample():\n    return 1\n"
+    target = directory / "sample.py"
+    target.write_text(original, encoding="utf-8")
+    tbmod.write_revision(cwd, "other", "def other():\n    return 2\n", model="other-model")
+
+    listing = tbmod.describe(cwd)
+    assert tbmod.discover(cwd)["sample"].history == [valid]
+    assert "sample r2" in listing and "first" in listing
+    assert "other r1" in listing
+    assert "original" in tbmod.history_of(cwd, "sample")
+
+    report = tbmod.write_revision(cwd, "sample", "def sample():\n    return 3\n", model="next")
+    assert "sample r3" in report
+    saved = tbmod._parse_header(target.read_text(encoding="utf-8"))
+    assert saved["history"][0] == valid
+    assert [entry["model"] for entry in saved["history"]] == ["first", "next"]
+    assert (directory / ".history" / "sample.r2.py").read_text(encoding="utf-8") == original
+
+
 def test_save_writes_a_parseable_provenance_header_with_model_note_and_revision(ctx):
     tbmod.write_revision(Path(ctx.cwd), "adder", "def adder(a, b):\n    return a + b\n",
                          model="qwen", note="first cut", stamp=time.time())
