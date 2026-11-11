@@ -67,6 +67,42 @@ def test_cursor_keys_follow_drained_mode(tmp_path, monkeypatch, key, final, appl
     assert sent == [("\x1bO" if application else "\x1b[").encode() + final.encode()]
 
 
+@pytest.mark.parametrize("query,expected", [
+    ("\x1b[c", "\x1b[?6c"),
+    ("\x1b[>c", "\x1b[>0;0;0c"),
+    ("\x1b[6n", "\x1b[1;1R"),
+    ("\x1b[5n", "\x1b[0n"),
+])
+def test_queries_reply_to_actual_pty(tmp_path, query, expected):
+    context = ToolContext(cwd=tmp_path)
+    script = (
+        "import os,select,tty; tty.setraw(0); "
+        f"os.write(1, {query.encode()!r}); "
+        "ready=select.select([0],[],[],1)[0]; "
+        "reply=os.read(0,1024) if ready else b''; "
+        "os.write(1,b'REPLY:'+reply.hex().encode())"
+    )
+    command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
+    try:
+        result = json.loads(terminal_session("start", command=command, wait_ms=1500, context=context))
+        assert any("REPLY:" + expected.encode().hex() in line for line in result["lines"])
+    finally:
+        close_terminal_sessions(context)
+
+
+def test_fragmented_secondary_query_and_adjacent_output():
+    from js.toolkit.terminal import _make_screen, _TerminalStream
+
+    replies = []
+    screen = _make_screen(80, 24, replies.append)
+    stream = _TerminalStream(screen)
+    for chunk in ("BEFORE\x1b", "[", ">", "0", "cAFTER\x1b[31m RED"):
+        stream.feed(chunk)
+    assert replies == [b"\x1b[>0;0;0c"]
+    assert screen.display[0].strip() == "BEFOREAFTER RED"
+    assert screen.buffer[0][12].fg == "red"
+
+
 def test_standard_sgr_still_renders(tmp_path):
     result = _run_output(tmp_path, "\x1b[31mRED\x1b[0m AFTER")
     assert result["lines"][0] == "RED AFTER"

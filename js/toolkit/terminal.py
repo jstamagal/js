@@ -112,10 +112,49 @@ def _report(payload: dict[str, Any], context: ToolContext) -> str:
     ) + "\n[truncated]"
 
 
-def _make_screen(width: int, height: int) -> Any:
+class _TerminalStream:
+    """Preserve secondary DA queries which pyte treats as primary DA."""
+
+    def __init__(self, screen: Any) -> None:
+        import pyte
+
+        self.screen = screen
+        self.stream = pyte.Stream(screen)
+        self.pending = ""
+
+    def feed(self, text: str) -> None:
+        output = []
+        for char in text:
+            if not self.pending:
+                if char == "\x1b":
+                    self.pending = char
+                else:
+                    output.append(char)
+                continue
+            self.pending += char
+            if self.pending in {"\x1b[", "\x1b[>"}:
+                continue
+            if self.pending.startswith("\x1b[>"):
+                params = self.pending[3:]
+                if len(params) < 128 and params and all(c in "0123456789;" for c in params):
+                    continue
+                if char == "c" and params[:-1] in {"", "0"}:
+                    self.stream.feed("".join(output))
+                    output.clear()
+                    self.screen.write_process_input("\x1b[>0;0;0c")
+                    self.pending = ""
+                    continue
+            output.append(self.pending)
+            self.pending = ""
+        self.stream.feed("".join(output))
+
+
+def _make_screen(width: int, height: int, send=None) -> Any:
     import pyte
 
     screen = pyte.Screen(width, height)
+    if send is not None:
+        screen.write_process_input = lambda text: send(text.encode("utf-8"))
     # pyte passes private=True to every CSI handler, but only these handlers
     # implement private variants. Unsupported private commands are no-ops.
     private_handlers = {
@@ -260,7 +299,7 @@ def terminal_session(
         return "ERROR: missing ToolContext"
     try:
         import pexpect
-        import pyte
+        __import__("pyte")
     except ImportError as exc:
         return f"ERROR: terminal dependency is missing: {exc.name}"
 
@@ -321,11 +360,11 @@ def terminal_session(
             )
         except (OSError, pexpect.ExceptionPexpect) as exc:
             return f"ERROR: could not start terminal command: {type(exc).__name__}: {exc}"
-        screen = _make_screen(width, height)
+        screen = _make_screen(width, height, child.send)
         replacement = {
             "child": child,
             "screen": screen,
-            "stream": pyte.Stream(screen),
+            "stream": _TerminalStream(screen),
             # One incremental decoder per session: a code point split across two
             # read_nonblocking chunks is carried into the next chunk instead of
             # being replaced.
