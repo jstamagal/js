@@ -345,12 +345,18 @@ class _Transcript:
         self.count += 1
         number = self.count
         role = message.get("role")
+        raw_calls = message.get("tool_calls")
+        calls = (
+            [call for call in raw_calls
+             if isinstance(call, dict) and isinstance(call.get("function"), dict)]
+            if isinstance(raw_calls, list) else []
+        )
         if replayed:
             light = {"role": role, "_entry": number}
-            if role == "assistant" and message.get("tool_calls"):
+            if role == "assistant" and calls:
                 light["tool_calls"] = [
-                    {"id": call.get("id"), "function": {"name": (call.get("function") or {}).get("name", "")}}
-                    for call in message["tool_calls"] if isinstance(call, dict)]
+                    {"id": call.get("id"), "function": {"name": call["function"].get("name", "")}}
+                    for call in calls]
             if role == "tool":
                 light["tool_call_id"] = message.get("tool_call_id")
             self.replay.append(light)
@@ -360,15 +366,12 @@ class _Transcript:
         elif role == "assistant":
             model = self._stamp(stamp, number)
             lines = _lines(_content_text(message.get("content")))
-            calls = message.get("tool_calls") or []
             if not calls:
                 if lines:
                     self.entries[number] = Row(number, role, ts, self.style.assistant, lines, model=model)
                 return
             for index, call in enumerate(calls):
-                if not isinstance(call, dict):
-                    continue
-                function = call.get("function") or {}
+                function = call["function"]
                 self.calls[str(call.get("id"))] = _Call(
                     str(function.get("name") or "?"),
                     lines[0] if lines else "",

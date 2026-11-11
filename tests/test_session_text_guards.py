@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from js import memory, session_store, session_text
+from js import memory, session_index, session_store, session_text
 
 
 def _session(tmp_path: Path) -> Path:
@@ -31,6 +31,28 @@ def test_a_lone_surrogate_is_written_and_later_appends_keep_working(tmp_path):
     text = session_store.text_path(path).read_text(encoding="utf-8")
     assert "x?" in text and "again" in text
     assert _staging(path) == []
+
+
+@pytest.mark.parametrize("bad_calls", [5, "calls", {"id": "bad"},
+                                           [{"id": "bad", "function": "shell"}],
+                                           [None, 5, {"id": "bad", "function": ["shell"]}]])
+def test_malformed_tool_calls_do_not_break_transcript_or_later_records(tmp_path, bad_calls):
+    path = _session(tmp_path)
+    memory.append_message(path, {"role": "assistant", "content": "malformed call", "tool_calls": bad_calls})
+    valid = {"id": "good", "function": {"name": "shell", "arguments": '{"command":"pwd"}'}}
+    memory.append_message(path, {"role": "assistant", "content": "valid call",
+                                 "tool_calls": [None, {"function": "bad"}, valid]})
+    memory.append_message(path, {"role": "tool", "tool_call_id": "good", "content": "/tmp"})
+    memory.append_message(path, {"role": "user", "content": "later prompt"})
+
+    transcript = session_text.parse(path)
+    text = transcript.text()
+    assert "malformed call" in text
+    assert "valid call" in text and "pwd" in text and "tool:shell" in text
+    assert "later prompt" in text
+    assert transcript.replay[1].get("tool_calls", []) == []
+    assert transcript.replay[2]["tool_calls"] == [{"id": "good", "function": {"name": "shell"}}]
+    assert str(path.resolve()) in {entry["path"] for entry in session_index.catalog()}
 
 
 def test_a_failed_write_leaves_no_staging_file(tmp_path, monkeypatch):
