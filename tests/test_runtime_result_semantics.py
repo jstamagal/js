@@ -67,12 +67,18 @@ def test_per_result_cap_keeps_spill_pointer(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("budget", [1, 20, 200, 400, 800])
-def test_repeated_spill_caps_obey_byte_budget(budget, tmp_path):
+def test_repeated_spill_caps_keep_pointer_even_under_tiny_budget(budget, tmp_path):
     spilled = runtime.spill_oversized_result(Output("ERROR é\n" * 1000), 1000, spill_dir=tmp_path)
     first = runtime._cap_batch_results([spilled], budget)[0]
     second = runtime._cap_batch_results([first], max(1, budget // 2))[0]
-    assert len(first.encode()) <= budget
-    assert len(second.encode()) <= max(1, budget // 2)
+    path = str(next(tmp_path.glob("result-*.txt")))
+    assert path in first and path in second
+    if first != spilled:
+        assert '"start_byte": 0' in first
+    assert '"start_byte": 0' in second
+    # When the allowance can fit the pointer, preview + notice stays bounded.
+    if budget >= len(spilled.restart_notice.encode()):
+        assert len(first.encode()) <= budget
     assert isinstance(first, Output)
     assert isinstance(second, Output)
 

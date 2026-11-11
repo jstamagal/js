@@ -942,7 +942,8 @@ def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None,
 
     inline_cap (TOOL_RESULT_INLINE_MAX) sends anything larger to a
     file first, so what the model loses is only its position in the text, not
-    the text. cap_bytes is the hard backstop after that.
+    the text. cap_bytes bounds the preview after that; a recovery notice alone
+    may exceed it so the full result remains reachable.
 
     Original contract below: clip to the byte cap, leaving a visible marker when the slice
     actually shortens it — same wording the subagent layer uses (meta.py) so a
@@ -997,8 +998,9 @@ def _cap_result_text(result: str, budget: int, marker: str) -> str:
         return cap_text(result, budget, marker)
     # A shortened preview restarts at byte zero so no unseen bytes are skipped.
     notice = result.restart_notice
+    # Recovery pointers take precedence over a text allowance too small to name them.
     if byte_size(notice) > budget:
-        return cap_text(notice, budget, marker)
+        return type(result)(notice, notice)
     head = byte_prefix(result, max(0, budget - byte_size(notice) - 2))
     text = f"{head}\n\n{notice}" if head else notice
     return type(result)(text, notice)
@@ -1052,8 +1054,7 @@ def spill_oversized_result(
             _PROMPTS['spill_notice_result_was_bytes_over_the_full'].format(total_bytes=total_bytes, limit_name=limit_name, inline_cap=inline_cap, path=path, how=how)
         )
 
-    # Inline is a spill threshold, not the hard backstop. Keep a usable pointer
-    # even when the notice alone exceeds it; the downstream hard cap still wins.
+    # Keep a usable pointer even when the notice alone exceeds the text budget.
     # The budget is sized with the widest offsets the notice can name.
     widest = spill_notice(total_bytes, line_count + 1)
     head = byte_prefix(result, min(inline_cap // 2, max(0, inline_cap - byte_size(widest) - 2)))
