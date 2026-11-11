@@ -238,18 +238,38 @@ def _concurrent_savers(store: Path, n: int) -> None:
         import sys
         sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})
         from pathlib import Path
+        from modelsdotdev._internal import sync
+
+        download_requests = []
+
+        def no_download(source):
+            download_requests.append(source)
+            raise AssertionError("offline login-lock child requested catalog download")
+
+        sync._load_providers = no_download
         from js import logins
         logins.set_config_dir(Path({str(store)!r}))
         logins.save_login(logins.Login(provider_id=f"p{{sys.argv[1]}}", provider_api_key="k"))
         logins.cache_models(f"p{{sys.argv[1]}}", ["m"])
+        assert not download_requests, "offline login-lock child requested catalog download"
         """
     )
-    procs = [subprocess.Popen([sys.executable, "-c", code, str(i)]) for i in range(n)]
-    for proc in procs:
-        assert proc.wait() == 0
+    procs = []
+    try:
+        for i in range(n):
+            procs.append(subprocess.Popen([sys.executable, "-c", code, str(i)]))
+        deadline = time.monotonic() + 15
+        codes = [proc.wait(timeout=max(0, deadline - time.monotonic())) for proc in procs]
+        assert codes == [0] * n
+    finally:
+        for proc in procs:
+            if proc.poll() is None:
+                proc.kill()
+        for proc in procs:
+            proc.wait()
 
 
-def test_concurrent_processes_do_not_lose_each_others_logins_or_caches(store):
+def test_concurrent_processes_do_not_lose_each_others_logins_or_caches(store, home_model_catalog):
     _concurrent_savers(store, 8)
     assert set(logins.load_logins()) == {f"p{i}" for i in range(8)}
     assert set(logins.load_model_cache()) == {f"p{i}" for i in range(8)}
