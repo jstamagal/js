@@ -200,6 +200,10 @@ for a model js does not recognize, goes out verbatim, `off` and `spoon`
 included; the endpoint answers for it. The run line shows the effort the
 request carries, read back from the built request.
 
+Sending the word as typed is deliberate, not a bug. Custom chat templates
+define their own levels, so js never filters an unknown word, and an HTTP 400
+from an endpoint that rejects it (`off`, `default`, ...) is the expected result.
+
 DeepSeek's own endpoint gets `max_reasoning_tokens` from
 `DEEPSEEK_REASONING_TOKENS_MAX` (default 32000) unless the effort is off. It is
 sent through `extra_body`, and the run line shows it under the setting's name.

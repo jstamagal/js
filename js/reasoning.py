@@ -9,6 +9,11 @@ name matches a family below and the word is on the effort ladder
 serves. Any other word, or a model no table names, gets the word verbatim and
 the endpoint answers for it. The banner shows what was sent.
 
+Sending the word as typed is deliberate, not a bug: custom chat templates
+define their own levels, so js never filters or maps an unknown word. An
+endpoint that rejects the word (HTTP 400 for `off`, `default`, ...) is the
+expected result.
+
 The supported sets below are ground-truthed by live probe (2026-06-30) against
 the endpoints js targets, not vendor docs:
 
