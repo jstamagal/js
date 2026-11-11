@@ -121,7 +121,8 @@ def test_tab_completes_a_command_file_name(dirs):
     assert "/review" in completer.candidates("rev")[0]
 
 
-def test_help_lists_command_files(dirs, capsys):
+def test_help_lists_command_files(dirs, capsys, monkeypatch):
+    monkeypatch.setattr(cli.display_mod, "terminal_width", lambda: 500)
     global_dir, _ = dirs
     (global_dir / "review.md").write_text("---\ndescription: Review a file\n---\nReview $1", encoding="utf-8")
 
