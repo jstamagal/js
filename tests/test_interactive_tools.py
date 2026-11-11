@@ -81,7 +81,7 @@ def test_registry_exposes_only_canonical_interactive_tool_names():
     browser = registry.resolve("browser_probe")
     assert terminal.required == ("action",)
     assert set(terminal.params) == {
-        "action", "session", "command", "keys", "cwd", "wait_ms", "cols", "rows"
+        "action", "session", "command", "keys", "text", "cwd", "wait_ms", "cols", "rows"
     }
     assert snapshot.required == ()
     assert set(snapshot.params) == {"session", "output_path", "wait_ms"}
