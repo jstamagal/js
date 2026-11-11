@@ -37,7 +37,7 @@ class NotebookError(Exception):
 
 def _load(data: bytes) -> dict:
     try:
-        notebook = json.loads(data.decode("utf-8"))
+        notebook = json.loads(data.decode("utf-8-sig"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise NotebookError(f"not valid notebook JSON: {exc}") from exc
     if not isinstance(notebook, dict) or not isinstance(notebook.get("cells"), list):
@@ -277,7 +277,7 @@ def notebook_edit(
         if context.notebook_clear_outputs:
             done += "; its outputs are cleared"
 
-    original = data.decode("utf-8")
+    original = data.decode("utf-8-sig")
     text = json.dumps(notebook, indent=_indent(original), ensure_ascii=False)
     if original.endswith(("\n", "\r")):
         text += "\n"

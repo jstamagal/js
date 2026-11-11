@@ -64,6 +64,18 @@ def nb(tmp_path):
     return path, ToolContext(cwd=tmp_path)
 
 
+def test_bom_notebook_reads_and_edits(nb):
+    path, context = nb
+    path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+    original = path.read_bytes()
+    view = tool("read", context, file_path=str(path))
+    assert "id=a1" in view
+    assert path.read_bytes() == original
+    result = tool("notebook_edit", context, file_path=str(path), cell_id="a1", new_source="changed")
+    assert not result.startswith("ERROR"), result
+    assert "".join(cells_of(path)[0]["source"]) == "changed"
+
+
 def test_read_shows_cells_with_ids_and_summarised_outputs(nb):
     path, context = nb
 
