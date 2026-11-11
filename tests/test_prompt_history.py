@@ -40,6 +40,20 @@ def test_a_stored_prompt_is_one_json_line_with_its_origin(tmp_path):
     assert isinstance(record["ts"], float)
 
 
+def test_overflowing_timestamps_do_not_hide_valid_prompts(tmp_path):
+    path = tmp_path / "history.jsonl"
+    records = [
+        {"ts": 2, "text": "before"},
+        {"ts": 10**400, "text": "overflow"},
+        {"ts": -(10**400), "text": "underflow"},
+        {"ts": 1, "text": "after"},
+    ]
+    path.write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
+
+    assert [(entry.ts, entry.text) for entry in ph.read_entries(path)] == [(1.0, "after"), (2.0, "before")]
+    assert list(_history(path).load_history_strings()) == ["before", "after"]
+
+
 def test_a_blank_prompt_is_not_stored(tmp_path):
     path = tmp_path / "history.jsonl"
 

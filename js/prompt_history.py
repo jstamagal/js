@@ -79,7 +79,7 @@ def read_entries(path: Path, limit: int | None = None) -> list[Entry]:
     for line in lines:
         try:
             entry = _entry(json.loads(line))
-        except ValueError:
+        except (ValueError, OverflowError):
             continue
         if entry is not None:
             entries.append(entry)
