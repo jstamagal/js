@@ -28,6 +28,15 @@ def test_stderr_and_devnull_redirects_are_not_writes():
     assert c("FOO=1 env bar --flag") == {}
 
 
+@pytest.mark.parametrize("operator", [">", ">>"])
+@pytest.mark.parametrize("spacing", ["", " ", "   ", "\t"])
+@pytest.mark.parametrize("target,is_write", [("/dev/null", False), ("out.txt", True)])
+def test_redirect_classification_does_not_backtrack(operator, spacing, target, is_write):
+    habits = toolstats.classify_shell_command(f"echo x {operator}{spacing}{target}")
+    assert bool(habits.get("write_via_shell")) is is_write
+    assert bool(habits.get("echo_only")) is not is_write
+
+
 def test_summarize_counts_calls_errors_turns_and_bytes(tmp_path):
     session = tmp_path / "s.jsonl"
 
