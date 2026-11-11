@@ -8,7 +8,7 @@ import secrets
 import shutil
 from pathlib import Path
 
-from ..core import ToolContext
+from ..core import ToolContext, coerce_value
 from ..sanitize import int_or_default, text_or_default
 from .helpers import resolve_vault, slugify, today, KIND_FOLDER, KIND_TYPE, KIND_TAG, vault_lock
 
@@ -79,6 +79,8 @@ def wiki_write(
     source = text_or_default(source)
     confidence = text_or_default(confidence)
     source_count = int_or_default(source_count, 1, minimum=1)
+    overwrite = coerce_value(overwrite, "boolean")
+    override_dedup = coerce_value(override_dedup, "boolean")
     k = kind.strip().lower()
     if k not in KIND_FOLDER:
         return f"ERROR: kind must be source|entity|concept|synthesis (got {raw_kind!r})"
