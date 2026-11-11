@@ -2148,7 +2148,7 @@ def _cmd_help(arg: str, state: dict, cfg: Config) -> str | None:
 def _cmd_exec(arg: str, state: dict, cfg: Config) -> str | None:
     """Run ``arg`` in the shell and queue its stdout for the next user message.
     Run by an `on` handler, the command reads the event as JSON on stdin with
-    JS_EVENT naming it, and exit status 2 under tool_call refuses the call."""
+    JS_EVENT naming it. Exit status 2 or a timeout under tool_call refuses the call."""
     command = arg.strip()
     if not command:
         return msgs.USAGE.said(usage="/exec <command>")
@@ -2174,6 +2174,7 @@ def _cmd_exec(arg: str, state: dict, cfg: Config) -> str | None:
     else:
         if outcome.returncode is None:
             failure = msgs.EXEC_TIMED_OUT.said(command=command, seconds=timeout)
+            hookexec.refuse_unfinished(call, str(failure))
         elif hookexec.apply_refusal(call, outcome):
             return None
         elif outcome.returncode != 0:

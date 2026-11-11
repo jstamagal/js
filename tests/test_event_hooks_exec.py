@@ -258,6 +258,49 @@ def test_tool_call_handler_decides_from_the_call_on_stdin(tmp_path):
     assert results[0]["content"].splitlines()[0] == "ERROR: no echo"
 
 
+def test_tool_call_handler_timeout_refuses_the_call(tmp_path):
+    state, cfg = _state(tmp_path)
+    state["settings"]["EXEC_TIMEOUT"] = 1
+    _on(state, cfg, "tool_call exec sh -c 'sleep 5; exit 2'")
+
+    ran, results = _run_one_tool_call(tmp_path, state)
+
+    assert ran == []
+    refusal = results[0]["content"].splitlines()[0]
+    assert refusal.startswith("ERROR:")
+    assert "killed after 1s" in refusal
+
+
+@pytest.mark.parametrize("command", ["exit 1", "/nonexistent-js-hook-command"])
+def test_tool_call_handler_ordinary_failure_still_lets_call_run(tmp_path, command):
+    state, cfg = _state(tmp_path)
+    _on(state, cfg, f"tool_call exec {command}")
+
+    ran, results = _run_one_tool_call(tmp_path, state)
+
+    assert ran == ["hi"]
+    assert results[0]["content"] == "echoed hi"
+
+
+def test_unfinished_refusal_only_marks_refusable_events():
+    assert not hookexec.refuse_unfinished(None, "timed out")
+    hook = events.EventHook("session_start", "exec sleep 5")
+    call = events.HandlerCall(hook, events.EventEmission("session_start", {}, [hook]))
+    assert not hookexec.refuse_unfinished(call, "timed out")
+    assert call.refusal is None
+
+
+def test_session_start_handler_timeout_is_not_a_refusal(tmp_path):
+    state, cfg = _state(tmp_path)
+    state["settings"]["EXEC_TIMEOUT"] = 1
+    _on(state, cfg, "session_start exec sleep 5")
+
+    emission = state["events"].emit("session_start")
+
+    assert events.refusal_of(emission) is None
+    assert emission.results[0].error is not None
+
+
 def test_tool_call_handler_exit_0_lets_the_call_run(tmp_path):
     state, cfg = _state(tmp_path)
     _on(state, cfg, "tool_call exec true")

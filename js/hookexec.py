@@ -197,6 +197,15 @@ def refusal(outcome: ExecOutcome, tool: str) -> str:
     return _PROMPTS['refusal_error_an_on_tool_call_handler'].format(tool=tool)
 
 
+def refuse_unfinished(call: events.HandlerCall | None, reason: str) -> bool:
+    """Refuse a gated event when its handler could not complete."""
+    if call is None or call.emission.event not in events.REFUSABLE_EVENTS:
+        return False
+    text = str(reason).strip()
+    call.refusal = text if text.startswith("ERROR") else f"ERROR: {text}"
+    return True
+
+
 def apply_refusal(call: events.HandlerCall | None, outcome: ExecOutcome) -> bool:
     """Record a blocking handler outcome on a refusable event."""
     if (call is None or outcome.returncode != REFUSE_STATUS
