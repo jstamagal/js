@@ -2143,10 +2143,16 @@ def _cmd_help(arg: str, state: dict, cfg: Config) -> str | None:
              for name, command in prompt_commands.discover(Path.cwd()).items()
              if name not in _commands(state) and name not in (state.get("aliases") or {})]
     rows += [("@path/to/file", msgs.HELP_ATTACH.said()), ("exit", msgs.HELP_EXIT.said())]
-    width = max(len(usage) for usage, _doc in rows)
+    columns = max(7, display_mod.terminal_width() - 1)
+    width = min(max(display_mod.cells(usage) for usage, _doc in rows), (columns - 3) // 2)
     msgs.say(msgs.HELP_HEADING)
     for usage, doc in rows:
-        msgs.say(msgs.HELP_ROW, usage=usage.ljust(width), doc=doc)
+        usages = display_mod.wrap_words(usage, width).splitlines()
+        docs = display_mod.wrap_words(msgs.words_of(doc), columns - width - 3).splitlines()
+        for index in range(max(len(usages), len(docs))):
+            label = usages[index] if index < len(usages) else ""
+            text = docs[index] if index < len(docs) else ""
+            msgs.say(msgs.HELP_ROW, usage=label + " " * (width - display_mod.cells(label)), doc=text)
     return None
 
 
