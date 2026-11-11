@@ -375,6 +375,10 @@ def terminal_session(
             value = "," if raw_token.lower() == "comma" else _KEY_SEQUENCES.get(
                 raw_token.lower(), raw_token
             )
+            if raw_token.lower() in {"up", "down", "right", "left", "home", "end"}:
+                # pyte stores private modes shifted five bits (DECCKM is 1).
+                if (1 << 5) in state["screen"].mode:
+                    value = "\x1bO" + value[-1]
             state["child"].send(value.encode("utf-8"))
             sent.append(raw_token)
             time.sleep(0.06)
