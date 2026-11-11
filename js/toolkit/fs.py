@@ -1386,6 +1386,14 @@ def _rg_stream(
     watchdog = threading.Timer(timeout, _expire)
     watchdog.daemon = True
     watchdog.start()
+    stderr_chunks: list[bytes] = []
+    assert proc.stderr is not None
+
+    def read_stderr() -> None:
+        stderr_chunks.append(proc.stderr.read())
+
+    reader = threading.Thread(target=read_stderr, daemon=True, name="search-stderr")
+    reader.start()
     writer: threading.Thread | None = None
     if input_text is not None:
         assert proc.stdin is not None
@@ -1412,7 +1420,6 @@ def _rg_stream(
                 stopped_early = True
                 break
     finally:
-        watchdog.cancel()
         if stopped_early:
             proc.terminate()
             try:
@@ -1420,12 +1427,8 @@ def _rg_stream(
             except subprocess.TimeoutExpired:
                 _kill_group()
                 proc.wait()
-    timed_out = expired.is_set()
-    stderr = (
-        proc.stderr.read().decode("utf-8", errors="replace")
-        if proc.stderr is not None
-        else ""
-    )
+    reader.join()
+    stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace")
     for stream in (proc.stdout, proc.stderr):
         if stream is not None:
             stream.close()
@@ -1433,6 +1436,8 @@ def _rg_stream(
         proc.wait()
     if writer is not None:
         writer.join(timeout=1)
+    watchdog.cancel()
+    timed_out = expired.is_set()
     rc = None if stopped_early else proc.returncode
     return lines, rc, stderr, timed_out
 

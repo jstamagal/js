@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import threading
 
 import pytest
@@ -36,6 +37,25 @@ def _call_with_timeout(fn, *args, timeout=10.0, **kwargs):
     t.join(timeout)
     assert not t.is_alive(), f"{getattr(fn, '__name__', fn)} did not return within {timeout}s (hang)"
     return box["result"]
+
+
+def test_rg_stream_drains_large_walk_diagnostics_without_losing_hits():
+    diagnostic_line = b"rg: blocked: Permission denied (os error 13)\n"
+    diagnostic = diagnostic_line * 8192
+    script = (
+        "import sys; "
+        f"sys.stderr.buffer.write({diagnostic_line!r} * 8192); "
+        "sys.stderr.flush(); "
+        "print('match.txt:1:needle'); sys.exit(2)"
+    )
+    lines, code, stderr, timed_out = fs._rg_stream(
+        [sys.executable, "-c", script], want=100, timeout=2,
+    )
+
+    assert not timed_out
+    assert code == 2
+    assert lines == ["match.txt:1:needle"]
+    assert stderr.encode() == diagnostic
 
 
 @requires_rg
