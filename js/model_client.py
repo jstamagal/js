@@ -341,8 +341,9 @@ _IMAGE_REJECTIONS = (
 
 def is_image_rejection(exc: BaseException) -> bool:
     """Whether ``exc`` is the provider refusing a request because it carries an
-    image the model route cannot take."""
-    if not isinstance(exc, ai.ProviderBadRequestError):
+    image the model route cannot take. Routers send the same refusal as an
+    HTTP 400 or as an error inside the stream, so any provider error counts."""
+    if not isinstance(exc, ai.ProviderAPIError):
         return False
     haystack = " ".join(str(v) for v in (exc, getattr(exc, "body", None)) if v is not None).lower()
     return any(needle in haystack for needle in _IMAGE_REJECTIONS)

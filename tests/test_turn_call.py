@@ -311,6 +311,12 @@ def test_image_rejections_are_recognised(text):
     assert model_client.is_image_rejection(ai.ProviderBadRequestError(text, provider="openai"))
 
 
+def test_an_image_refusal_inside_the_stream_is_recognised():
+    error = ai.ProviderAPIError("[400]: Message 5 of 5 carries an image, and the selected model route "
+                                "accepts text only.", provider="openai")
+    assert model_client.is_image_rejection(error)
+
+
 def test_other_bad_requests_are_not_image_rejections():
     assert not model_client.is_image_rejection(ai.ProviderBadRequestError("max_tokens too large", provider="openai"))
     assert not model_client.is_image_rejection(_retryable())
