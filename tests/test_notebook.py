@@ -64,6 +64,32 @@ def nb(tmp_path):
     return path, ToolContext(cwd=tmp_path)
 
 
+@pytest.mark.parametrize("first_mode", ["insert", "delete"])
+def test_old_cell_ids_survive_structural_edits(tmp_path, first_mode):
+    path = tmp_path / "old.ipynb"
+    notebook = old_notebook()
+    write_notebook(path, notebook)
+    before = path.read_bytes()
+    context = ToolContext(cwd=tmp_path)
+    tool("read", context, file_path=str(path))
+    assert path.read_bytes() == before
+    kwargs = {"edit_mode": first_mode, "cell_id": "cell-1"}
+    if first_mode == "insert":
+        kwargs.update(new_source="inserted", cell_type="markdown")
+    first = tool("notebook_edit", context, file_path=str(path), **kwargs)
+    assert not first.startswith("ERROR"), first
+    second = tool("notebook_edit", context, file_path=str(path), cell_id="cell-2", new_source="last changed")
+    assert not second.startswith("ERROR"), second
+    cells = cells_of(path)
+    assert "".join(cells[-1]["source"]) == "last changed"
+    assert cells[-1]["id"] == "cell-2"
+    assert len({cell["id"] for cell in cells}) == len(cells)
+    assert json.loads(path.read_text())["nbformat_minor"] >= 5
+    if first_mode == "delete":
+        refused = tool("notebook_edit", context, file_path=str(path), cell_id="cell-1", new_source="wrong")
+        assert refused.startswith("ERROR")
+
+
 def test_synthetic_id_does_not_shadow_explicit_id(nb):
     from js.toolkit.notebook import cell_ids
 
@@ -209,7 +235,9 @@ def test_notebook_without_ids_uses_positions(tmp_path):
     cells = cells_of(path)
     assert "".join(cells[3]["source"]) == "fixed"
     assert "".join(cells[1]["source"]) == "text"
-    assert all("id" not in cell for cell in cells)
+    assert [cells[index]["id"] for index in (0, 2, 3)] == ["cell-0", "cell-1", "cell-2"]
+    assert len({cell["id"] for cell in cells}) == len(cells)
+    assert json.loads(path.read_text())["nbformat_minor"] == 5
 
 
 def test_unknown_cell_id_is_refused_and_lists_the_ids(nb):

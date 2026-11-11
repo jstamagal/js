@@ -2,7 +2,8 @@
 one cell by id.
 
 A cell's id is its nbformat `id`; a notebook older than nbformat 4.5 has none,
-and its cells are named `cell-N` by 0-based index. The notebook view records a
+and its cells are initially named `cell-N` by 0-based index. Editing persists
+those ids and upgrades an older nbformat 4 notebook to 4.5. The notebook view records a
 read of the file (path and content hash) but no line coverage: `patch` on the
 raw JSON still needs a ranged `read` of the lines it edits.
 """
@@ -250,7 +251,12 @@ def notebook_edit(
     as_list = any(isinstance(cell.get("source"), list) for cell in cells) or not cells
     major = int_or_default(notebook.get("nbformat"), 4)
     minor = int_or_default(notebook.get("nbformat_minor"), 0)
-    has_ids = major > 4 or (major == 4 and minor >= 5)
+    # Persist the displayed names before positions change, including cells the
+    # current edit leaves untouched. nbformat 4.5 introduces native cell ids.
+    for cell, stable_id in zip(cells, cell_ids(cells), strict=True):
+        cell["id"] = stable_id
+    if major == 4 and minor < 5:
+        notebook["nbformat_minor"] = 5
 
     if mode == "delete":
         assert index is not None
@@ -260,14 +266,12 @@ def notebook_edit(
     elif mode == "insert":
         assert kind is not None and new_source is not None
         taken = set(cell_ids(cells))
-        new_id = None
-        if has_ids:
+        new_id = uuid.uuid4().hex[:8]
+        while new_id in taken:
             new_id = uuid.uuid4().hex[:8]
-            while new_id in taken:
-                new_id = uuid.uuid4().hex[:8]
         index = 0 if index is None else index + 1
         cells.insert(index, _new_cell(kind, _source_value(new_source, as_list), new_id))
-        done = f"inserted {kind} cell {new_id or f'cell-{index}'} at index {index}"
+        done = f"inserted {kind} cell {new_id} at index {index}"
     else:
         assert index is not None and new_source is not None
         cell = cells[index]
