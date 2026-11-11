@@ -72,6 +72,26 @@ def stderr_of(monkeypatch, fn):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("definition", [
+    "def sample():\n    return 1\n",
+    "async def sample():\n    return 1\n",
+    "class sample:\n    value = 1\n",
+])
+def test_history_source_fallback_keeps_decorators(definition, capsys):
+    source = "@decorate\n" + definition
+    namespace = {"In": [source]}
+    exec(tbmod._SOURCE_PROBE % {"name": "sample"}, namespace)
+    payload = json.loads(capsys.readouterr().out.removeprefix("__JS_SRC__"))
+
+    def decorate(target):
+        target.decorated = True
+        return target
+
+    restored = {"decorate": decorate}
+    exec(payload["source"], restored)
+    assert restored["sample"].decorated is True
+
+
 def test_save_writes_a_parseable_provenance_header_with_model_note_and_revision(ctx):
     tbmod.write_revision(Path(ctx.cwd), "adder", "def adder(a, b):\n    return a + b\n",
                          model="qwen", note="first cut", stamp=time.time())

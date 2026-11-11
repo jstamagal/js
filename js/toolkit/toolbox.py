@@ -93,7 +93,8 @@ def __js_src(target_name):
                 for node in tree.body:
                     kinds = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
                     if isinstance(node, kinds) and node.name == target_name:
-                        return ast.get_source_segment(cell, node)
+                        start = min([node.lineno] + [d.lineno for d in node.decorator_list])
+                        return ''.join(cell.splitlines(keepends=True)[start - 1:node.end_lineno])
         return ''
 
     def _free(src):
