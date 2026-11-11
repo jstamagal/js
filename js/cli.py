@@ -4265,6 +4265,7 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
         on_line=on_line,
         on_interrupt=on_interrupt,
         on_eof=on_eof,
+        turn_active=sup.turn_active,
         status=lambda width: _status_bar_line(cfg, state, sup.turn_active(), width),
         editing_mode=lambda: settings.knob(state["settings"], "EDITING_MODE"),
         echo=lambda line: _echoes(line, state),

@@ -21,7 +21,7 @@ from prompt_toolkit.application import Application, get_app, run_in_terminal
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.document import Document
 from prompt_toolkit.enums import DEFAULT_BUFFER, EditingMode
-from prompt_toolkit.filters import Condition, FilterOrBool, has_focus, is_searching, vi_mode, vi_navigation_mode
+from prompt_toolkit.filters import Condition, FilterOrBool, has_focus, is_searching, vi_insert_mode, vi_mode, vi_navigation_mode
 from prompt_toolkit.formatted_text import ANSI, to_formatted_text
 from prompt_toolkit.key_binding import KeyBindings, KeyBindingsBase, merge_key_bindings
 from prompt_toolkit.key_binding.vi_state import InputMode
@@ -865,6 +865,7 @@ def build_app(
     on_line: Callable[[str], Coroutine],
     on_interrupt: Callable[[], bool | None],
     on_eof: Callable[[], Awaitable | None],
+    turn_active: Callable[[], bool] = lambda: False,
     status: Callable[[int], str] = lambda width: "",
     status_colours: Callable[[], str] = status_style,
     editing_mode: Callable[[], str] = lambda: "emacs",
@@ -985,6 +986,10 @@ def build_app(
             return None
         return _arm_or_quit("interrupt")
 
+    def _cancel_turn(event):
+        if turn_active() and on_interrupt():
+            armed.clear()
+
     def _ctrl_d(event):
         if event.current_buffer is ex_buffer:
             ex_buffer.delete()
@@ -1034,6 +1039,11 @@ def build_app(
         "ex_run": Handler(_ex_run, has_focus(ex_buffer)),
         "ex_cancel": Handler(_ex_cancel, has_focus(ex_buffer), eager=True),
         "interrupt": Handler(_ctrl_c),
+        "cancel_turn": Handler(
+            _cancel_turn,
+            has_focus(input_buffer) & ~is_searching & ~vi_insert_mode
+            & Condition(lambda: turn_active() and input_buffer.complete_state is None),
+        ),
         "eof": Handler(_ctrl_d),
         "suspend": Handler(lambda event: event.app.suspend_to_background()),
         "reasoning_toggle": Handler(_toggle_reasoning),

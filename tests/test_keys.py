@@ -32,6 +32,7 @@ DEFAULTS = {
     "ex_run": (("enter",),),
     "ex_cancel": (("escape",),),
     "interrupt": (("c-c",),),
+    "cancel_turn": (("escape",),),
     "eof": (("c-d",),),
     "suspend": (("c-z",),),
     "reasoning_toggle": (("c-o",),),

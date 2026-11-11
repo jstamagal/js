@@ -53,6 +53,7 @@ ACTIONS: tuple[Action, ...] = (
     Action("ex_run", EX, (("enter",),), msgs.KEY_ACTION_EX_RUN.words()),
     Action("ex_cancel", EX, (("escape",),), msgs.KEY_ACTION_EX_CANCEL.words()),
     Action("interrupt", SCREEN, (("c-c",),), msgs.KEY_ACTION_INTERRUPT.words()),
+    Action("cancel_turn", INPUT, (("escape",),), msgs.KEY_ACTION_CANCEL_TURN.words()),
     Action("eof", SCREEN, (("c-d",),), msgs.KEY_ACTION_EOF.words()),
     Action("suspend", SCREEN, (("c-z",),), msgs.KEY_ACTION_SUSPEND.words()),
     Action("reasoning_toggle", SCREEN, (("c-o",),), msgs.KEY_ACTION_REASONING_TOGGLE.words()),

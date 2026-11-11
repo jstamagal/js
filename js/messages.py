@@ -1654,6 +1654,7 @@ KEY_ACTION_EX_RUN = Message("Run the ex line.", banner=False)
 KEY_ACTION_EX_CANCEL = Message("Close the ex line without running it.", banner=False)
 
 KEY_ACTION_INTERRUPT = Message("Cancel the running turn and drop queued prompts; with none, clear the line, and pressed again, quit.", banner=False)
+KEY_ACTION_CANCEL_TURN = Message("Cancel the running turn from the input line.", banner=False)
 
 KEY_ACTION_EOF = Message("Delete the next character; on an empty line, quit; at the end of a line, pressed twice, quit.", banner=False)
 
