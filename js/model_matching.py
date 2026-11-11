@@ -31,7 +31,7 @@ def without_effort(value: str) -> str:
 
 def family_candidates(request: str, rows: tuple[Any, ...]) -> list[Any]:
     """Keep family and variant identity before comparing release dates."""
-    stem = name_key(without_effort(request)).replace("-latest", "")
+    stem = without_effort(name_key(request)).replace("-latest", "")
     requested = set(stem.split("-"))
     matches = []
     for row in rows:
@@ -144,7 +144,7 @@ def match_routed(request: str, rows: tuple[Any, ...]) -> tuple[Any | None, str]:
        reseller rows of the exact name compete, maker first.
     """
     wanted = name_key(request)
-    stripped = name_key(without_effort(request))
+    stripped = without_effort(name_key(request))
     requested = set(stripped.replace("-latest", "").split("-"))
     latest = stripped.endswith("-latest")
     method = "normalized"

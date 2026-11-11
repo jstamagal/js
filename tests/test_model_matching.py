@@ -130,6 +130,15 @@ def test_release_dates_of_mixed_precision_compare_by_calendar(older, newer):
     assert found.model_id == "claude-x-2"
 
 
+@pytest.mark.parametrize("model_name", ["GPT-5-HIGH", "gpt-5_high", "openai/GPT_5_HIGH"])
+def test_effort_suffix_after_name_normalization(model_name):
+    base = row("openai", "gpt-5", "gpt-5", "2026-01-01", 400000)
+    found, how = M.match_routed(model_name, (base,))
+    assert found is base
+    assert how == "effort"
+    assert M.family_candidates(model_name, (base,)) == [base]
+
+
 def test_issuer_table_knows_openai_o_series_and_meta():
     assert M.issuer_rank(row("openai", "o3-mini", None, "2026-01-01", 1)) == 1
     assert M.issuer_rank(row("router", "o4-mini", None, "2026-01-01", 1)) == 0
