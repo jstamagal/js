@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+from js.mcp import host
 from js.mcp.client import MCPClient
 
 
@@ -13,6 +14,15 @@ def test_client_redacts_containing_secret_before_its_prefix(secrets):
     assert client._redact_text("key=abcdef prefix=abc") == (
         "key=[REDACTED] prefix=[REDACTED]"
     )
+
+
+def test_host_without_secrets_does_not_build_per_character_candidates(monkeypatch):
+    def unnecessary_normalization(value):
+        pytest.fail("no-secret output needs no decoding or span allocation")
+
+    monkeypatch.setattr(host, "_normalized_candidates", unnecessary_normalization)
+    value = "%25" * 100_000
+    assert host._redact_text(value, ()) is value
 
 
 def test_custom_redactor_receives_fully_scrubbed_containing_secret():

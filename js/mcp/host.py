@@ -149,6 +149,8 @@ def _normalized_candidates(value: str) -> tuple[tuple[str, list[tuple[int, int]]
 
 
 def _redact_text(value: str, secrets: tuple[str, ...]) -> str:
+    if not secrets:
+        return value
     normalized_secrets = {
         candidate
         for secret in secrets
