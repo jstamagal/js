@@ -43,6 +43,40 @@ def test_output_semantics_survive_spill_and_sanitizing(content, tmp_path, monkey
     assert not tracker.limit_reached()
 
 
+@pytest.mark.parametrize("is_content", [False, True])
+def test_batch_cap_keeps_spill_pointer(is_content, tmp_path, monkeypatch):
+    raw = "ERROR log entry\n" * 10000
+    if is_content:
+        raw = Output(raw)
+    monkeypatch.setattr(runtime.paths, "tool_results_dir", lambda: tmp_path)
+    spilled = runtime._cap_result(raw, 200000, inline_cap=51200)
+    capped = runtime._cap_batch_results([spilled] * 8, 200000)
+    for result in capped:
+        assert len(result.encode()) <= 25000
+        assert str(next(tmp_path.glob("result-*.txt"))) in result
+        assert '"start_byte": 0' in result
+        assert isinstance(result, Output) is is_content
+
+
+def test_per_result_cap_keeps_spill_pointer(tmp_path, monkeypatch):
+    monkeypatch.setattr(runtime.paths, "tool_results_dir", lambda: tmp_path)
+    capped = runtime._cap_result("line\n" * 1000, 400, inline_cap=1000)
+    assert len(capped.encode()) <= 400
+    assert str(next(tmp_path.glob("result-*.txt"))) in capped
+    assert '"start_byte": 0' in capped
+
+
+@pytest.mark.parametrize("budget", [1, 20, 200, 400, 800])
+def test_repeated_spill_caps_obey_byte_budget(budget, tmp_path):
+    spilled = runtime.spill_oversized_result(Output("ERROR é\n" * 1000), 1000, spill_dir=tmp_path)
+    first = runtime._cap_batch_results([spilled], budget)[0]
+    second = runtime._cap_batch_results([first], max(1, budget // 2))[0]
+    assert len(first.encode()) <= budget
+    assert len(second.encode()) <= max(1, budget // 2)
+    assert isinstance(first, Output)
+    assert isinstance(second, Output)
+
+
 def test_actual_error_still_counts():
     tracker = runtime.ToolErrorTracker(limit=1)
     result = tracker.record("read", "ERROR: missing file")

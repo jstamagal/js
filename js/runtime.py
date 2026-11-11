@@ -967,14 +967,41 @@ def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None,
     # strict encode meets it next; it reaches the model as `?`.
     is_content = isinstance(result, Output)
     result = well_formed(result)
+    if is_content and not isinstance(result, Output):
+        result = Output(result)
     if inline_cap is None:
         active_context = context if context is not None else T.STOCK_CONTEXT
         inline_cap = int(getattr(active_context, "max_tool_result_inline_bytes", 0) or 0)
     if inline_cap > 0:
         result = spill_oversized_result(result, inline_cap)
     if cap_bytes > 0:
-        result = cap_text(result, cap_bytes, _PROMPTS['cap_result_truncated_tool_result_max_reached_2'].format(cap_bytes=cap_bytes))
-    return Output(result) if is_content else result
+        result = _cap_result_text(result, cap_bytes, _PROMPTS['cap_result_truncated_tool_result_max_reached_2'].format(cap_bytes=cap_bytes))
+    return Output(result) if is_content and not isinstance(result, Output) else result
+
+
+class _SpilledResult(str):
+    """A preview with a recovery notice retained through downstream caps."""
+
+    def __new__(cls, text: str, restart_notice: str):
+        value = super().__new__(cls, text)
+        value.restart_notice = restart_notice
+        return value
+
+
+class _SpilledOutput(_SpilledResult, Output):
+    pass
+
+
+def _cap_result_text(result: str, budget: int, marker: str) -> str:
+    if not isinstance(result, _SpilledResult) or byte_size(result) <= budget:
+        return cap_text(result, budget, marker)
+    # A shortened preview restarts at byte zero so no unseen bytes are skipped.
+    notice = result.restart_notice
+    if byte_size(notice) > budget:
+        return cap_text(notice, budget, marker)
+    head = byte_prefix(result, max(0, budget - byte_size(notice) - 2))
+    text = f"{head}\n\n{notice}" if head else notice
+    return type(result)(text, notice)
 
 
 def spill_oversized_result(
@@ -1034,7 +1061,9 @@ def spill_oversized_result(
     # The line the preview stops inside, or the next one when it ends on a break.
     next_line = len(head_lines) + (1 if head_lines and head_lines[-1] != head_lines[-1].rstrip("\r\n") else 0)
     notice = spill_notice(byte_size(head), max(1, next_line))
-    return f"{head}\n\n{notice}" if head else notice
+    text = f"{head}\n\n{notice}" if head else notice
+    cls = _SpilledOutput if isinstance(result, Output) else _SpilledResult
+    return cls(text, spill_notice(0, 1))
 
 
 def _reconcile_read_delivery(
@@ -1115,8 +1144,8 @@ def _cap_batch_results(results: list[Any], cap_bytes: int) -> list[Any]:
         elif _image_marker_stub(result) is not None:
             capped.append(_cap_image_marker(result, allowance, None))
         else:
-            text = cap_text(result, allowance, marker)
-            capped.append(Output(text) if isinstance(result, Output) else text)
+            text = _cap_result_text(result, allowance, marker)
+            capped.append(Output(text) if isinstance(result, Output) and not isinstance(text, Output) else text)
     return capped
 
 
