@@ -142,6 +142,33 @@ def test_recreating_deleted_tool_continues_above_archived_revisions(ctx):
     assert "return 3" in (directory / ".history" / "adder.r2.py").read_text()
 
 
+def test_revision_exceeds_archived_max_even_with_lower_live_header(ctx):
+    cwd = Path(ctx.cwd)
+    tbmod.write_revision(cwd, "adder", "def adder():\n    return 1\n")
+    directory = tbmod.toolbox_dirs(cwd)[0]
+    archive = directory / ".history" / "adder.r9.py"
+    archive.parent.mkdir()
+    archive.write_text("old revision nine")
+
+    tbmod.write_revision(cwd, "adder", "def adder():\n    return 2\n")
+    assert tbmod.discover(cwd)["adder"].revision == 10
+    assert archive.read_text() == "old revision nine"
+
+
+def test_revision_numbering_does_not_mix_global_and_project_archives(ctx):
+    cwd = Path(ctx.cwd)
+    for scope in ("global", "project"):
+        tbmod.write_revision(cwd, "adder", "def adder():\n    return 1\n", scope=scope)
+    global_dir, project_dir = tbmod.toolbox_dirs(cwd)
+    archive = global_dir / ".history" / "adder.r9.py"
+    archive.parent.mkdir()
+    archive.write_text("global revision nine")
+
+    tbmod.write_revision(cwd, "adder", "def adder():\n    return 2\n", scope="project")
+    assert tbmod._parse_header((project_dir / "adder.py").read_text())["revision"] == 2
+    assert archive.read_text() == "global revision nine"
+
+
 def test_save_never_overwrites_an_existing_archive(ctx):
     cwd = Path(ctx.cwd)
     tbmod.write_revision(cwd, "adder", "def adder():\n    return 1\n")
