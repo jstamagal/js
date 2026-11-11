@@ -4,6 +4,7 @@ filters and order, and the list's views with branches nested."""
 from __future__ import annotations
 
 from datetime import datetime
+import time
 
 import pytest
 
@@ -207,6 +208,23 @@ def test_dates_match_a_session_active_in_the_span():
     assert pick("2025") == ["lastyear"]
     assert pick("2026-08") == ["august"]
     assert pick("2026-09-28") == ["across", "yesterday"]
+
+
+@pytest.mark.parametrize("text", ["0001", "0001-01", "0001-01-01", "9999-12-31"])
+def test_unrepresentable_local_dates_remain_search_words(text, monkeypatch):
+    with monkeypatch.context() as local:
+        local.setenv("TZ", "America/New_York")
+        time.tzset()
+        try:
+            query = _parse(text)
+            assert query.dates == []
+            assert query.words == [text]
+            normal = _parse("2026-09-29")
+            assert len(normal.dates) == 1
+            assert normal.dates[0][1:] == (_ts(2026, 9, 29), _ts(2026, 9, 30))
+        finally:
+            local.undo()
+            time.tzset()
 
 
 def test_a_date_prefix_is_the_date_plus_the_rest():

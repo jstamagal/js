@@ -228,9 +228,9 @@ def _date_span(token: str, now: float) -> tuple[float, float] | None:
         else:
             start = datetime(year, month, day)
             end = start + timedelta(days=1)
-    except ValueError:
+        return start.timestamp(), end.timestamp()
+    except (ValueError, OverflowError, OSError):
         return None
-    return start.timestamp(), end.timestamp()
 
 
 def _counts(token: str) -> list[tuple[str, int]] | None:
