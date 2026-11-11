@@ -7,6 +7,7 @@ the console mutes the transcript's stdout tee while it draws them."""
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import sys
 import threading
 import weakref
@@ -343,6 +344,7 @@ class ConsoleSink:
         self._trace = ToolTrace(telemetry)
         self._open: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
         self._streams: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+        self._retry_repeat = contextvars.ContextVar("console_retry_repeat", default=None)
 
     def emit(self, event: output.OutputEvent) -> None:
         handler = getattr(self, f"_on_{event.name}", None)
@@ -380,6 +382,15 @@ class ConsoleSink:
     def _on_call_stats(self, *, label: str, elapsed_s: float, finish: Any, tool_calls: int, tokens: int,
                        first_token_s: float | None, prompt_tokens: int, cached_tokens: int,
                        trace: bool | None = None, suppressed: bool = False) -> None:
+        repeated = self._retry_repeat.get()
+        if repeated is not None and repeated[0][0] == label:
+            self._retry_repeat.set(None)
+            if repeated[1] > 1:
+                from . import network_display
+
+                line = msgs.NET_RETRY_RECOVERED.said(count=repeated[1])
+                with _muted_tee(getattr(self._telemetry, "transcript_log", None)):
+                    network_display.always(network_display.LabelledLine(label, line) if label else line)
         if not call_stats_visible(label, trace, suppressed):
             return
         tps = (tokens / elapsed_s) if elapsed_s > 0 else 0.0
@@ -408,12 +419,22 @@ class ConsoleSink:
                        error: BaseException, label: str) -> None:
         from . import network_display
 
-        line = msgs.RETRY_WAIT.said(n=n, of=attempts, seconds=delay,
-                                    failure=network_display.describe_failure(error))
+        record = getattr(self._telemetry, "event", None)
+        if callable(record):
+            record("provider_retry", n=n, label=label, error=str(error))
+        failure = network_display.describe_failure(error)
+        key = (label, str(failure))
+        previous = self._retry_repeat.get() if n > 1 else None
+        duplicate = network_display.is_outage(failure) and previous is not None and previous[0] == key
+        count = previous[1] + 1 if duplicate else 1
+        self._retry_repeat.set((key, count))
+        template = msgs.NET_OUTAGE_RETRY if network_display.is_outage(failure) else msgs.RETRY_WAIT
+        line = template.said(n=n, of=attempts, seconds=delay, failure=failure)
         if label:
             line = network_display.LabelledLine(label, line)
-        with _muted_tee(getattr(self._telemetry, "transcript_log", None)):
-            network_display.always(line)
+        if not duplicate:
+            with _muted_tee(getattr(self._telemetry, "transcript_log", None)):
+                network_display.always(line)
         if not label and delay >= 1:
             network_display.countdown_start(
                 lambda left: msgs.RETRY_COUNTDOWN.said(n=n, of=attempts, seconds=left), delay)
@@ -445,7 +466,17 @@ class ConsoleSink:
     def _on_retry_gave_up(self, *, n: int, error: BaseException, label: str) -> None:
         from . import network_display
 
-        line = msgs.RETRY_GAVE_UP.said(n=n, failure=network_display.describe_failure(error))
+        record = getattr(self._telemetry, "event", None)
+        if callable(record):
+            record("provider_retry_stopped", n=n, label=label, error=str(error))
+        failure = network_display.describe_failure(error)
+        outage = network_display.is_outage(failure)
+        repeated = self._retry_repeat.get()
+        self._retry_repeat.set(None)
+        if outage and repeated is not None and repeated[0] == (label, str(failure)):
+            failure = msgs.NET_FAILURE_REPEATED.said(failure=failure, count=repeated[1] + 1)
+        template = msgs.NET_OUTAGE_STOP if outage else msgs.RETRY_GAVE_UP
+        line = template.said(n=n, failure=failure)
         with _muted_tee(getattr(self._telemetry, "transcript_log", None)):
             network_display.always(network_display.LabelledLine(label, line) if label else line)
 

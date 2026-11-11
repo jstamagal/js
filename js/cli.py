@@ -133,6 +133,11 @@ def _error_text(e: BaseException) -> str:
     a provider's status failure as its status and message, any other error
     after its kind; a `said()` entry inside either keeps its format
     (`msgs.of_error`)."""
+    from . import network_display
+
+    failure = network_display.describe_failure(e)
+    if network_display.is_outage(failure):
+        return msgs.NET_OUTAGE_ACTION.said(failure=failure)
     said = msgs.of_error(e)
     if isinstance(e, routing.ProviderNotLoggedInError):
         return said

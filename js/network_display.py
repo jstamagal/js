@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import socket
 import sys
 from dataclasses import dataclass
@@ -122,7 +123,7 @@ def describe_failure(exc: BaseException) -> msgs.Said:
 
     outage = outage_failure(chain)
     if outage is not None:
-        return msgs.NET_LINE.said(text=outage)
+        return outage
     for err in chain:
         status = model_client.error_status(err)
         if status is None:
@@ -150,7 +151,14 @@ def describe_failure(exc: BaseException) -> msgs.Said:
     return msgs.NET_FAILURE.said(kind=msgs.NET_FAILURE_TYPE.said(name=type(exc).__name__), detail=_one_line(exc))
 
 
-def outage_failure(chain: list[BaseException]) -> str | None:
+def is_outage(failure: msgs.Said) -> bool:
+    return failure.message in (
+        msgs.NET_OUTAGE_OVERLOADED, msgs.NET_OUTAGE_UNAVAILABLE, msgs.NET_OUTAGE_EMPTY,
+        msgs.NET_OUTAGE_ACCOUNT, msgs.NET_OUTAGE_ACCOUNT_OVERLOAD,
+    )
+
+
+def outage_failure(chain: list[BaseException]) -> msgs.Said | None:
     """A diagnosis based on provider metadata, never on a gateway status alone."""
     from . import model_client
 
@@ -164,11 +172,10 @@ def outage_failure(chain: list[BaseException]) -> str | None:
         identities.extend((str(getattr(err, "provider", "")), _request_host(err)))
     text = " ".join(details).lower()
     identity = " ".join(identities).lower()
-    # CLIProxyAPI names its upstream account pool in its diagnostic.
-    if "providers=codex" in text or "providers=openai" in text:
-        identity += " openai"
-    elif "providers=anthropic" in text:
-        identity += " anthropic"
+    # The proxy's explicit upstream account pool outranks SDK transport metadata.
+    upstream = re.search(r"providers=(codex|openai|anthropic)\b", text)
+    if upstream:
+        identity = upstream.group(1)
     if "openai" in identity or "codex" in identity or "chatgpt.com" in identity:
         service = "OpenAI"
     elif "anthropic" in identity:
@@ -180,14 +187,14 @@ def outage_failure(chain: list[BaseException]) -> str | None:
     )) or 529 in statuses
     if "auth_unavailable" in text:
         if overloaded:
-            return f"The proxy has no usable account after {service.removeprefix('The ')} reported overload."
-        return "The proxy has no usable account right now."
+            return msgs.NET_OUTAGE_ACCOUNT_OVERLOAD.said(service=service if service != "The upstream service" else "the upstream service")
+        return msgs.NET_OUTAGE_ACCOUNT.said()
     if "empty_stream" in text or "upstream stream closed before first payload" in text:
-        return f"{service} closed the connection before sending a reply."
+        return msgs.NET_OUTAGE_EMPTY.said(service=service)
     if overloaded:
-        return f"{service} is overloaded right now."
+        return msgs.NET_OUTAGE_OVERLOADED.said(service=service)
     if 503 in statuses or "service_unavailable" in text:
-        return f"{service} is unavailable right now (HTTP 503)." if 503 in statuses else f"{service} is unavailable right now."
+        return msgs.NET_OUTAGE_UNAVAILABLE.said(service=service, status=" (HTTP 503)" if 503 in statuses else "")
     return None
 
 
