@@ -1010,8 +1010,8 @@ def append_compaction_mark(memory_file: Path, *, summary: str, keep_from: int, f
 
 
 def wipe(memory_file: Path) -> Path | None:
-    """Move the memory file, and its text beside it, to a new session under
-    a fresh name in the same directory, leaving ``memory_file`` gone. Returns
+    """Move the memory file, its transcript, and subagent runs to a new session
+    under a fresh name in the same directory, leaving ``memory_file`` gone. Returns
     the new session's path, or None when there was nothing to move."""
     if memory_file == Path(os.devnull) or not memory_file.exists():
         return None
@@ -1020,6 +1020,9 @@ def wipe(memory_file: Path) -> Path | None:
     text = session_store.text_path(memory_file)
     if text.exists():
         os.replace(text, session_store.text_path(moved))
+    runs = session_store.subagent_folder(memory_file)
+    if runs.exists():
+        os.replace(runs, session_store.subagent_folder(moved))
     session_text.forget(memory_file)
     return moved
 
