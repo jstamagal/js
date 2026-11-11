@@ -207,6 +207,11 @@ def seed_examples() -> list[str]:
     return seeded
 
 
+def _history_model(entry: dict) -> str:
+    model = entry.get("model")
+    return model if isinstance(model, str) and model else "unknown"
+
+
 @dataclass
 class ToolRecord:
     name: str
@@ -220,7 +225,7 @@ class ToolRecord:
     def authors(self) -> list[str]:
         seen: list[str] = []
         for entry in self.history:
-            who = entry.get("model") or "unknown"
+            who = _history_model(entry)
             if who not in seen:
                 seen.append(who)
         return seen
@@ -371,7 +376,7 @@ def write_revision(
         return f"ERROR: could not write {target}: {exc}"
 
     verb = "saved" if revision == 1 else "refined"
-    chain = " -> ".join(entry.get("model", "?") for entry in history)
+    chain = " -> ".join(_history_model(entry) for entry in history)
     return f"{verb} {name} r{revision} [{scope}] {target}\nauthors: {chain}"
 
 

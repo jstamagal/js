@@ -118,6 +118,23 @@ def test_malformed_history_entries_preserve_listing_and_valid_revisions(ctx, bad
     assert (directory / ".history" / "sample.r2.py").read_text(encoding="utf-8") == original
 
 
+@pytest.mark.parametrize("model", [5, ["a"], {"x": 1}])
+def test_non_string_history_models_do_not_break_listing_or_saving(ctx, model):
+    cwd = Path(ctx.cwd)
+    directory = tbmod.toolbox_dirs(cwd)[0]
+    directory.mkdir(parents=True)
+    history = [{"revision": 1, "model": model}]
+    target = directory / "sample.py"
+    target.write_text(tbmod._render_header({"revision": 1, "history": history})
+                      + "\n\ndef sample():\n    return 1\n", encoding="utf-8")
+
+    assert "sample r1 [global] unknown" in tbmod.describe(cwd)
+    report = tbmod.write_revision(cwd, "sample", "def sample():\n    return 2\n", model="next")
+    assert "authors: unknown -> next" in report
+    assert tbmod.discover(cwd)["sample"].history[0] == history[0]
+    assert "sample r2 [global] unknown -> next" in tbmod.describe(cwd)
+
+
 def test_save_writes_a_parseable_provenance_header_with_model_note_and_revision(ctx):
     tbmod.write_revision(Path(ctx.cwd), "adder", "def adder(a, b):\n    return a + b\n",
                          model="qwen", note="first cut", stamp=time.time())
