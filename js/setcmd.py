@@ -113,10 +113,10 @@ def select(name: str | None) -> tuple[list[_s.SettingSpec], bool] | None:
     return (found, False) if found else None
 
 
-def show_lines(settings: dict, key: str | None = None) -> CommandResult:
+def show_lines(settings: dict, key: str | None = None, *, columns: int | None = None) -> CommandResult:
     """`set [NAME]`: the settings NAME selects (`select`) and their values. A
     setting the store does not hold shows its js/jsrc value, the value that runs."""
-    return show_lines_effective(settings, None, key)
+    return show_lines_effective(settings, None, key, columns=columns)
 
 
 # ---------------------------------------------------------------------------
@@ -142,10 +142,36 @@ def _annotate(line: str, live: LiveValue | None) -> str:
     return line if live is None else msgs.line_for(msgs.SETTING_LIVE, line=line, source=live.source)
 
 
+def _setting_lines(message: msgs.Message, key: str, value: str, *,
+                   live: LiveValue | None = None, columns: int | None = None) -> list[str]:
+    if columns is None:
+        return [_annotate(msgs.line_for(message, key=key, value=value), live)]
+    from . import display as display_mod
+
+    def said(text: str) -> msgs.Said:
+        line = message.said(key=key, value=text)
+        return line if live is None else msgs.SETTING_LIVE.said(line=line, source=live.source)
+
+    marker = "\x00"
+    marked = said(marker)
+    plain = marked.message.plain(**marked.fields)
+    indent = display_mod.cells(plain.partition(marker)[0]) if plain.count(marker) == 1 else 0
+    line = said(value)
+    unwrapped = line.message.plain(**line.fields)
+    if indent > columns // 2 and any(display_mod.cells(row) > columns for row in unwrapped.splitlines()):
+        value = "\n" + value
+        indent = min(4, columns // 2)
+        line = said(value)
+    return [msgs.for_stream(row) for row in display_mod.hanging_rows(
+        line.message.runs(**line.fields), columns, indent)]
+
+
 def show_lines_effective(
     settings: dict,
     overlay: Mapping[str, LiveValue] | None = None,
     key: str | None = None,
+    *,
+    columns: int | None = None,
 ) -> CommandResult:
     """Like `show_lines`, but a setting present in ``overlay`` shows its
     effective value and a ``live: <source>`` tag instead of the store value."""
@@ -162,11 +188,9 @@ def show_lines_effective(
         display = live.display if live is not None else render_value(
             spec, _s.knob(settings, spec.key), masked=masked)
         name = spec.key.upper()
-        if one:
-            line = msgs.line_for(msgs.SETTING_IS, key=name, value=display)
-        else:
-            line = msgs.line_for(msgs.SETTING_ROW, key=name.ljust(width), value=display)
-        lines.append(_annotate(line, live))
+        message = msgs.SETTING_IS if one else msgs.SETTING_ROW
+        label = name if one else name.ljust(width)
+        lines.extend(_setting_lines(message, label, display, live=live, columns=columns))
     return CommandResult(handled=True, lines=lines)
 
 
@@ -174,7 +198,7 @@ def show_lines_effective(
 # set
 # ---------------------------------------------------------------------------
 
-def apply_set(settings: dict, key: str, raw: str, *, banner_changed=None) -> CommandResult:
+def apply_set(settings: dict, key: str, raw: str, *, banner_changed=None, columns: int | None = None) -> CommandResult:
     """Set ``key`` to ``raw`` in ``settings``, coercing per the registry."""
     spec = _s.spec_for(key)
     if spec is not None:
@@ -188,9 +212,9 @@ def apply_set(settings: dict, key: str, raw: str, *, banner_changed=None) -> Com
         return CommandResult(
             handled=True,
             changed=True,
-            lines=[msgs.line_for(msgs.SETTING_CHANGED, key=spec.key.upper(),
-                                 value=render_value(spec, value, masked=masks_secrets(settings))
-                                 if spec.secret else raw.strip())],
+            lines=_setting_lines(msgs.SETTING_CHANGED, spec.key.upper(),
+                                 render_value(spec, value, masked=masks_secrets(settings))
+                                 if spec.secret else raw.strip(), columns=columns),
             changed_keys=[spec.key],
         )
 
@@ -210,10 +234,10 @@ def apply_set(settings: dict, key: str, raw: str, *, banner_changed=None) -> Com
         return CommandResult(
             handled=True,
             changed=True,
-            lines=[msgs.line_for(
-                msgs.SETTING_CHANGED, key=key,
-                value=msgs.SETTING_VALUE_SECRET.words() if prefix_spec is not None and prefix_spec.secret and masks_secrets(settings)
-                else raw.strip())],
+            lines=_setting_lines(
+                msgs.SETTING_CHANGED, key,
+                msgs.SETTING_VALUE_SECRET.words() if prefix_spec is not None and prefix_spec.secret and masks_secrets(settings)
+                else raw.strip(), columns=columns),
             changed_keys=[key],
         )
 
@@ -234,7 +258,7 @@ def _delete_dotted(settings: dict, path: tuple[str, ...]) -> bool:
     return False
 
 
-def apply_unset(settings: dict, key: str, baseline: dict | None = None, *, banner_changed=None) -> CommandResult:
+def apply_unset(settings: dict, key: str, baseline: dict | None = None, *, banner_changed=None, columns: int | None = None) -> CommandResult:
     """`set -<key>` — clear a setting. With ``baseline`` (the layers below this
     one), the setting takes the baseline's value; a setting the baseline does not
     hold is removed from ``settings``."""
@@ -278,23 +302,23 @@ def apply_unset(settings: dict, key: str, baseline: dict | None = None, *, banne
     return CommandResult(
         handled=True,
         changed=changed,
-        lines=[msgs.line_for(entry, key=name, value=display)],
+        lines=_setting_lines(entry, name, display, columns=columns),
         changed_keys=[key] if changed else [],
     )
 
 
-def set_command(settings: dict, arg: str, baseline: dict | None = None, *, banner_changed=None) -> CommandResult:
+def set_command(settings: dict, arg: str, baseline: dict | None = None, *, banner_changed=None, columns: int | None = None) -> CommandResult:
     """`set` shows every value, `set NAME` shows what NAME selects
     (`select`), `set -NAME` clears one (back to its ``baseline`` value, see
     `apply_unset`), `set NAME value` sets one."""
     key, value = first_word(arg)
     if not key:
-        return show_lines(settings)
+        return show_lines(settings, columns=columns)
     if key.startswith("-") and len(key) > 1:
-        return apply_unset(settings, key[1:], baseline, banner_changed=banner_changed)
+        return apply_unset(settings, key[1:], baseline, banner_changed=banner_changed, columns=columns)
     if not value:
-        return show_lines(settings, key)
-    return apply_set(settings, key, value, banner_changed=banner_changed)
+        return show_lines(settings, key, columns=columns)
+    return apply_set(settings, key, value, banner_changed=banner_changed, columns=columns)
 
 
 # ---------------------------------------------------------------------------

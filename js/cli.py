@@ -1548,7 +1548,7 @@ def _show_settings(state: dict, cfg: Config, key: str | None) -> str | None:
     """Render the values the NEXT turn uses, annotating knobs whose live source
     bypasses the store."""
     overlay = _live_settings_overlay_for_state(cfg, state)
-    result = setcmd.show_lines_effective(state["settings"], overlay, key)
+    result = setcmd.show_lines_effective(state["settings"], overlay, key, columns=display_mod.block_width())
     for out in result.lines:
         print(out)
     return result.error
@@ -1560,7 +1560,8 @@ def _cmd_set(arg: str, state: dict, cfg: Config) -> str | None:
         return _show_settings(state, cfg, parts[0] if parts else None)
     # `set -key` goes back to the value the session started with.
     baseline = cfg.settings if isinstance(getattr(cfg, "settings", None), dict) else None
-    result = setcmd.set_command(state["settings"], arg, baseline)
+    columns = None if state.get("rc_replay") else display_mod.block_width()
+    result = setcmd.set_command(state["settings"], arg, baseline, columns=columns)
     if state.get("rc_replay"):
         return _replayed(result)
     if result.error is None:

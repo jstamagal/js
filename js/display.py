@@ -307,6 +307,26 @@ def drawn_rows(parts: list[fset.Run], width: int, base: str = "") -> list[str]:
     return [fset.to_ansi(row) for row in field_rows(parts, width)]
 
 
+def hanging_rows(parts: list[fset.Run], width: int, indent: int) -> list[str]:
+    """Coloured runs word-wrapped with subsequent rows under ``indent`` cells."""
+    width = max(2, width)
+    indent = indent if 0 <= indent <= width - 2 else min(4, width // 2, width - 2)
+    rows: list[str] = []
+    for number, line in enumerate(fset.split_lines([(colour, text.expandtabs(TAB)) for colour, text in parts])):
+        plain = fset.to_plain(line)
+        start = 0
+        room = width - indent if number else width
+        for index, end in enumerate(cut_points(plain, room, width - indent)):
+            low = start
+            if index:
+                low += len(plain[start:end]) - len(plain[start:end].lstrip(" "))
+            high = end if end == len(plain) else len(plain[:end].rstrip(" "))
+            prefix = " " * indent if number or index else ""
+            rows.append(prefix + fset.to_ansi(_slice_runs(line, low, high)))
+            start = end
+    return rows
+
+
 # The two voices of a conversation hang off their marks: column 0 holds only
 # the speaker's mark (MARK_USER, MARK_AGENT), then MARK_GAP spaces, and every
 # row of the text starts at that one column.
