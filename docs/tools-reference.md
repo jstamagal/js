@@ -439,14 +439,19 @@ Parameters:
 - `action`: required; `start`, `send`, `look`, `stop`, or `list`.
 - `session`: name, default `main`.
 - `command`: shell command required by `start`.
-- `keys`: comma-separated named keys or literal text for `send`.
+- `text`: literal text for `send`, including commas; sent before `keys`.
+- `keys`: comma-separated named keys or legacy text tokens for `send`.
 - `cwd`: working directory for `start`.
 - `wait_ms`: redraw collection delay, default `700`.
 - `cols`, `rows`: terminal dimensions; unset, the `TERMINAL_COLUMNS` and `TERMINAL_ROWS` settings.
 
-Named input includes Enter, Tab, Escape, arrows, navigation keys, Ctrl-C/D/L,
-and F1 through F12. Results include the rendered screen, cursor, changed-line
-count, and process status. Sessions are isolated per `ToolContext`.
+Named input includes Enter, Tab, Shift-Tab, Escape, arrows, navigation keys,
+Ctrl-A through Ctrl-Z, Alt-prefixed keys (`alt-x`, `alt-enter`), and F1 through
+F12. Use `text="echo a, b"`, `keys="enter"` for a command containing commas.
+Results include the rendered screen, cursor, changed-line count, and process
+status. Each session continuously consumes output between tool calls; only
+the rendered screen is retained. Sessions are isolated per `ToolContext`, and
+stopping a session also stops its output reader.
 
 ### `terminal_snapshot`
 

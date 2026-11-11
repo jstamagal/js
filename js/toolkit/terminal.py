@@ -8,6 +8,7 @@ import json
 import os
 import re
 import signal
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -98,6 +99,7 @@ _BACKGROUND = (12, 12, 12)
 _FOREGROUND = (222, 222, 222)
 _CURSOR_COLOUR = (255, 255, 255)
 _LIVE_CHILDREN: set[Any] = set()
+_LIVE_STATES: dict[int, dict[str, Any]] = {}
 
 
 def _colour(name: str, fallback: tuple[int, int, int], palette=None) -> tuple[int, int, int]:
@@ -185,28 +187,63 @@ def _make_screen(width: int, height: int, send=None) -> Any:
     return screen
 
 
-def _drain(state: dict[str, Any], wait_ms: int) -> None:
+def _read_terminal(state: dict[str, Any]) -> None:
+    """The session's sole PTY reader; retain only the rendered screen."""
     import pexpect
 
+    changed = state["changed"]
+    try:
+        while not state["reader_stop"].is_set():
+            try:
+                chunk = state["child"].read_nonblocking(size=65536, timeout=0.05)
+            except pexpect.TIMEOUT:
+                chunk = b""
+            except (pexpect.EOF, OSError):
+                break
+            with changed:
+                if chunk:
+                    text = state["decoder"].decode(chunk)
+                    if text:
+                        state["stream"].feed(text)
+                state["read_generation"] += 1
+                changed.notify_all()
+    except Exception as exc:
+        with changed:
+            state["reader_error"] = f"{type(exc).__name__}: {exc}"
+    finally:
+        with changed:
+            try:
+                tail = state["decoder"].decode(b"", final=True)
+                if tail:
+                    state["stream"].feed(tail)
+            except Exception as exc:
+                state["reader_error"] = f"{type(exc).__name__}: {exc}"
+            state["reader_done"] = True
+            changed.notify_all()
+        if state["reader_stop"].is_set():
+            try:
+                state["child"].close(force=True)
+            except Exception:
+                pass
+            _LIVE_CHILDREN.discard(state["child"])
+            _LIVE_STATES.pop(id(state["child"]), None)
+
+
+def _drain(state: dict[str, Any], wait_ms: int) -> None:
+    # Only the reader thread touches the PTY or incremental decoder.
     deadline = time.monotonic() + max(0, wait_ms) / 1000.0
-    child = state["child"]
-    first_read = True
-    while first_read or time.monotonic() < deadline:
-        first_read = False
-        timeout = min(0.1, max(0.0, deadline - time.monotonic()))
-        try:
-            chunk = child.read_nonblocking(size=65536, timeout=timeout)
-        except pexpect.TIMEOUT:
-            continue
-        except (pexpect.EOF, OSError):
-            tail = state["decoder"].decode(b"", final=True)
-            if tail:
-                state["stream"].feed(tail)
-            break
-        if chunk:
-            text = state["decoder"].decode(chunk)
-            if text:
-                state["stream"].feed(text)
+    changed = state["changed"]
+    with changed:
+        generation = state["read_generation"]
+        changed.wait_for(
+            lambda: state["reader_done"] or state["read_generation"] != generation,
+            timeout=0.15,
+        )
+        while not state["reader_done"]:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            changed.wait(timeout=remaining)
 
 
 def _observe(
@@ -214,22 +251,25 @@ def _observe(
 ) -> str:
     _drain(state, wait_ms)
     child = state["child"]
-    screen = state["screen"]
-    lines = _render_lines(screen)
-    payload: dict[str, Any] = {
-        "session": session,
-        "did": did,
-        "lines": lines,
-        "nonblank_lines": sum(1 for line in lines if line.strip()),
-        "cursor": [screen.cursor.y, screen.cursor.x],
-        "still_running": child.isalive(),
-    }
-    previous = state.get("previous_lines")
-    if previous is not None:
-        changed = sum(1 for before, after in zip(previous, lines, strict=False) if before != after)
-        payload["lines_changed"] = changed
-        payload["screen_responded"] = changed > 0
-    state["previous_lines"] = lines
+    with state["changed"]:
+        screen = state["screen"]
+        lines = _render_lines(screen)
+        payload: dict[str, Any] = {
+            "session": session,
+            "did": did,
+            "lines": lines,
+            "nonblank_lines": sum(1 for line in lines if line.strip()),
+            "cursor": [screen.cursor.y, screen.cursor.x],
+            "still_running": child.isalive(),
+        }
+        previous = state.get("previous_lines")
+        if previous is not None:
+            changed = sum(1 for before, after in zip(previous, lines, strict=False) if before != after)
+            payload["lines_changed"] = changed
+            payload["screen_responded"] = changed > 0
+        state["previous_lines"] = lines
+        if state.get("reader_error"):
+            payload["reader_error"] = state["reader_error"]
 
     if not child.isalive():
         _LIVE_CHILDREN.discard(child)
@@ -247,6 +287,7 @@ def _observe(
 
 def _stop_state(state: dict[str, Any]) -> None:
     child = state["child"]
+    state["reader_stop"].set()
     try:
         if child.isalive():
             try:
@@ -259,11 +300,18 @@ def _stop_state(state: dict[str, Any]) -> None:
                 os.killpg(child.pid, signal.SIGKILL)
             except OSError:
                 child.kill(signal.SIGKILL)
-        child.close(force=True)
     except Exception:
         pass
     finally:
-        _LIVE_CHILDREN.discard(child)
+        state["reader"].join(timeout=1)
+        # A delayed reader closes its own fd after it leaves the read loop.
+        if not state["reader"].is_alive():
+            try:
+                child.close(force=True)
+            except Exception:
+                pass
+            _LIVE_CHILDREN.discard(child)
+            _LIVE_STATES.pop(id(child), None)
 
 
 def close_terminal_sessions(context: ToolContext) -> None:
@@ -281,15 +329,8 @@ def _jail_refusal(state: dict[str, Any], session: str, context: ToolContext) -> 
 
 
 def _cleanup_live_children() -> None:
-    for child in list(_LIVE_CHILDREN):
-        try:
-            if child.isalive():
-                child.kill(signal.SIGTERM)
-            child.close(force=True)
-        except Exception:
-            pass
-        finally:
-            _LIVE_CHILDREN.discard(child)
+    for state in list(_LIVE_STATES.values()):
+        _stop_state(state)
 
 
 atexit.register(_cleanup_live_children)
@@ -374,8 +415,19 @@ def terminal_session(
             )
         except (OSError, pexpect.ExceptionPexpect) as exc:
             return f"ERROR: could not start terminal command: {type(exc).__name__}: {exc}"
-        screen = _make_screen(width, height, child.send)
+        write_lock = threading.Lock()
+
+        def send(data):
+            with write_lock:
+                return child.send(data)
+
+        screen = _make_screen(width, height, send)
         replacement = {
+            "send": send,
+            "changed": threading.Condition(threading.RLock()),
+            "reader_stop": threading.Event(),
+            "reader_done": False,
+            "read_generation": 0,
             "child": child,
             "screen": screen,
             "stream": _TerminalStream(screen),
@@ -390,7 +442,12 @@ def terminal_session(
             # The jail settings it started under (`jail.shape`).
             "jail": jail.shape(context),
         }
+        reader = threading.Thread(target=_read_terminal, args=(replacement,),
+                                  name=f"js-terminal-{child.pid}", daemon=True)
+        replacement["reader"] = reader
         _LIVE_CHILDREN.add(child)
+        _LIVE_STATES[id(child)] = replacement
+        reader.start()
         old = sessions.get(session)
         if old is not None:
             _stop_state(old)
@@ -420,17 +477,19 @@ def terminal_session(
         # Flush output that had already arrived before the keys so the comparison
         # the caller reads covers only what lands after the send.
         _drain(state, 0)
-        state["previous_lines"] = _render_lines(state["screen"])
         sent: list[str] = []
-        if text:
-            state["child"].send(text.encode("utf-8"))
-            sent.append(text)
+        with state["changed"]:
+            state["previous_lines"] = _render_lines(state["screen"])
+            if text:
+                state["send"](text.encode("utf-8"))
+                sent.append(text)
         for raw_token in keys.split(","):
             if not raw_token:
                 continue
-            # pyte stores private modes shifted five bits (DECCKM is 1).
-            value = _key_sequence(raw_token, (1 << 5) in state["screen"].mode)
-            state["child"].send(value.encode("utf-8"))
+            with state["changed"]:
+                # pyte stores private modes shifted five bits (DECCKM is 1).
+                value = _key_sequence(raw_token, (1 << 5) in state["screen"].mode)
+                state["send"](value.encode("utf-8"))
             sent.append(raw_token)
             time.sleep(0.06)
         return _observe(state, session, f"sent {sent}", wait, context)
@@ -537,7 +596,6 @@ def terminal_snapshot(
     if raw_output_path and Path(raw_output_path).suffix.lower() != ".png":
         return "ERROR: output_path must end in .png"
     _drain(state, min(int_or_default(wait_ms, 100, minimum=0), 10_000))
-    state["previous_lines"] = _render_lines(state["screen"])
     snapshot_n = state["snapshot_n"] + 1
     if raw_output_path:
         target = context.resolve_path(raw_output_path, write=True)
@@ -547,7 +605,9 @@ def terminal_snapshot(
     try:
         context.snapshot(target)
         target.parent.mkdir(parents=True, exist_ok=True)
-        (_draw_screen if renderer is None else renderer)(state["screen"], target)
+        with state["changed"]:
+            state["previous_lines"] = _render_lines(state["screen"])
+            (_draw_screen if renderer is None else renderer)(state["screen"], target)
     except Exception as exc:
         return f"ERROR: could not render terminal snapshot: {type(exc).__name__}: {exc}"
     state["snapshot_n"] = snapshot_n

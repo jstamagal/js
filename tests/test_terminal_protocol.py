@@ -4,6 +4,7 @@ import json
 import re
 import shlex
 import sys
+import threading
 
 import pytest
 
@@ -60,7 +61,11 @@ def test_cursor_keys_follow_drained_mode(tmp_path, monkeypatch, key, final, appl
         def send(self, value):
             sent.append(value)
 
-    context.terminal_sessions["main"] = {"child": Child(), "screen": screen, "jail": jail.shape(context)}
+    child = Child()
+    context.terminal_sessions["main"] = {
+        "child": child, "screen": screen, "jail": jail.shape(context),
+        "changed": threading.Condition(), "send": child.send,
+    }
     monkeypatch.setattr(terminal, "_drain", lambda *_: stream.feed("\x1b[?1h" if application else "\x1b[?1l"))
     monkeypatch.setattr(terminal, "_observe", lambda *_: "observed")
     monkeypatch.setattr(terminal.time, "sleep", lambda _: None)

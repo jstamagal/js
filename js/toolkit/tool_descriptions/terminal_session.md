@@ -1,7 +1,7 @@
 Drive an interactive program through a persistent terminal (PTY).
 For TUIs, REPLs, pagers, editors, installers, and prompts. Sessions persist
-across tool calls for this run; a running process is normal, and stop sessions
-when you are done.
+across tool calls for this run and output is continuously consumed between
+calls; a running process is normal, and stop sessions when you are done.
 {{#if shell}}
 `shell` is for ordinary non-interactive commands.
 {{/if}}
