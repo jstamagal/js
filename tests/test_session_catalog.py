@@ -302,9 +302,15 @@ def test_home_refuses_a_journal_whose_state_rows_are_unreadable(session, data):
 def test_a_symlink_loop_is_unknown_not_a_crash(tmp_path):
     loop = tmp_path / "loop.jsonl"
     loop.symlink_to(loop)
-    # resolve() sits inside the guarded read; on this Python it returns the
-    # path, which has no state file.
+    # No liveness record exists beside this unresolvable journal.
     assert session_in_flight(loop) is False
+
+
+def test_a_symlink_loop_still_honors_its_liveness_sidecar(tmp_path):
+    loop = tmp_path / "loop.jsonl"
+    loop.symlink_to(loop)
+    _state_live(loop)
+    assert session_in_flight(loop) is True
 
 
 def test_a_live_pid_with_a_malformed_start_is_unknown(session):

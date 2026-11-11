@@ -184,7 +184,7 @@ def session_in_flight(session_file: Path) -> bool | None:
     listing shows the session as not live; anything destructive (moving the
     journal, tagging it) must treat it as live."""
     try:
-        state_path, _ = _sidecar_paths(Path(session_file).resolve(strict=False))
+        state_path, _ = _sidecar_paths(Path(os.path.realpath(session_file)))
         raw = json.loads(state_path.read_bytes().decode("utf-8"))
     except FileNotFoundError:
         return False
