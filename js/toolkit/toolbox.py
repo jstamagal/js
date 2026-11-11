@@ -332,7 +332,8 @@ def write_revision(
     # copy exists used to return the project record, fail the path comparison, skip
     # the archive, and truncate the global file with a fresh r1 header -- the exact
     # promote-a-local-fix-back-to-global workflow this tool exists for.
-    revision = 1
+    archived = _archived_revisions(ToolRecord(name, target, scope))
+    revision = max(archived, default=0) + 1
     history: list[dict] = []
     previous = ""
     if target.is_file():
@@ -344,12 +345,13 @@ def write_revision(
         prior_meta = _parse_header(previous)
         prior = int_or_default(prior_meta.get("revision"), 1, minimum=1)
         raw_history = prior_meta.get("history")
-        revision = prior + 1
+        revision = max(revision, prior + 1)
         history = list(raw_history) if isinstance(raw_history, list) else []
         archive = directory / ".history" / f"{name}.r{prior}.py"
         try:
             archive.parent.mkdir(parents=True, exist_ok=True)
-            archive.write_text(previous, encoding="utf-8")
+            with archive.open("x", encoding="utf-8") as saved:
+                saved.write(previous)
         except OSError as exc:
             return f"ERROR: could not archive revision {prior}: {exc}"
 

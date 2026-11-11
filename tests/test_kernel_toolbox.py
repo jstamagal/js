@@ -126,6 +126,39 @@ def test_second_save_bumps_the_revision_and_archives_the_previous_body(ctx):
     assert tbmod.discover(cwd)["adder"].authors == ["qwen", "fable"]
 
 
+def test_recreating_deleted_tool_continues_above_archived_revisions(ctx):
+    cwd = Path(ctx.cwd)
+    tbmod.write_revision(cwd, "adder", "def adder():\n    return 1\n")
+    tbmod.write_revision(cwd, "adder", "def adder():\n    return 2\n")
+    directory = tbmod.toolbox_dirs(cwd)[0]
+    archive = directory / ".history" / "adder.r1.py"
+    original = archive.read_bytes()
+    (directory / "adder.py").unlink()
+
+    tbmod.write_revision(cwd, "adder", "def adder():\n    return 3\n")
+    assert tbmod.discover(cwd)["adder"].revision == 2
+    tbmod.write_revision(cwd, "adder", "def adder():\n    return 4\n")
+    assert archive.read_bytes() == original
+    assert "return 3" in (directory / ".history" / "adder.r2.py").read_text()
+
+
+def test_save_never_overwrites_an_existing_archive(ctx):
+    cwd = Path(ctx.cwd)
+    tbmod.write_revision(cwd, "adder", "def adder():\n    return 1\n")
+    directory = tbmod.toolbox_dirs(cwd)[0]
+    target = directory / "adder.py"
+    original = target.read_bytes()
+    tbmod.write_revision(cwd, "adder", "def adder():\n    return 2\n")
+    archive = directory / ".history" / "adder.r1.py"
+    target.write_bytes(original.replace(b"return 1", b"return 99"))
+    before = target.read_bytes()
+
+    report = tbmod.write_revision(cwd, "adder", "def adder():\n    return 3\n")
+    assert report.startswith("ERROR")
+    assert archive.read_bytes() == original
+    assert target.read_bytes() == before
+
+
 def test_restore_writes_the_old_body_as_a_new_revision_so_history_only_grows(ctx):
     cwd = Path(ctx.cwd)
     tbmod.write_revision(cwd, "adder", "def adder(a, b):\n    return a + b\n", model="qwen")
