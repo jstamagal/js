@@ -322,6 +322,30 @@ _SIGNED_REASONING_REJECTIONS = (
 # "... could not be decrypted or parsed".
 _ENCRYPTED_REASONING_CODE = "invalid_encrypted_content"
 _ENCRYPTED_REASONING_REJECTIONS = ("could not be verified", "could not be decrypted")
+# A 400 for a request carrying an image the model route cannot take, in each
+# server's own words: omniroute, OpenAI, DeepSeek, llama.cpp, vLLM, Ollama.
+_IMAGE_REJECTIONS = (
+    "accepts text only",
+    "image_url is only supported",
+    "unknown variant `image_url`",
+    "image input is not supported",
+    "image inputs are not supported",
+    "images are not supported",
+    "does not support image",
+    "do not support image",
+    "does not support vision",
+    "vision is not supported",
+    "not a multimodal model",
+)
+
+
+def is_image_rejection(exc: BaseException) -> bool:
+    """Whether ``exc`` is the provider refusing a request because it carries an
+    image the model route cannot take."""
+    if not isinstance(exc, ai.ProviderBadRequestError):
+        return False
+    haystack = " ".join(str(v) for v in (exc, getattr(exc, "body", None)) if v is not None).lower()
+    return any(needle in haystack for needle in _IMAGE_REJECTIONS)
 
 
 def is_signed_reasoning_rejection(exc: BaseException) -> bool:
@@ -1097,6 +1121,8 @@ def history_to_ai_messages(
         if role == "user":
             content = msg.get("content", "")
             files = _file_parts(msg, vision)
+            if not vision and msg.get(media.MEDIA_KEY) and isinstance(content, str):
+                content = f"{content}\n{_PROMPTS['media_not_sent_text_only']}"
             if isinstance(content, str) and not files:
                 out.append(ai.user_message(content))
             else:
@@ -1141,6 +1167,8 @@ def history_to_ai_messages(
             continue
         if role == "tool":
             content = msg.get("content")
+            if not vision and msg.get(media.MEDIA_KEY) and isinstance(content, str):
+                content = f"{content}\n{_PROMPTS['media_not_sent_text_only']}"
             is_error = isinstance(content, str) and content.startswith("ERROR")
             out.append(
                 ai.tool_message(

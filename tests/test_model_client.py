@@ -882,3 +882,16 @@ def test_registered_deepseek_budget_reaches_wire(monkeypatch):
         settings={"DEEPSEEK_REASONING_TOKENS_MAX": 12000},
     )
     assert _pview(factory.kwargs["params"])["extra_body"]["max_reasoning_tokens"] == 12000
+
+
+def test_a_tool_image_left_out_for_a_text_only_model_is_named_to_it():
+    from js import media
+    record = {"role": "tool", "tool_call_id": "c1", "name": "read",
+              "content": "VISUAL_FILE red.png mime=image/png size=3 bytes",
+              media.MEDIA_KEY: [media.store(b"png", "image/png")]}
+    without = model_client.history_to_ai_messages("", [record], vision=False)
+    assert len(without) == 1
+    assert "accepts text only" in str(without[0].parts[0])
+    with_vision = model_client.history_to_ai_messages("", [record], vision=True)
+    assert "accepts text only" not in str(with_vision[0].parts[0])
+    assert any(isinstance(p, ai.types.messages.FilePart) for m in with_vision for p in m.parts)

@@ -8,5 +8,6 @@
   "mixed_result_parts_embedded_resource_attached": "[embedded resource {uri} {mime} attached]",
   "mixed_result_parts_resource_link": "[resource link {block_get_name}: {block_get_uri}]",
   "media_label_media_of_tool_result": "[media of tool result {value_0}: {head}]",
-  "provider_text_error_malformed_image_result_marker": "ERROR: malformed image result marker"
+  "provider_text_error_malformed_image_result_marker": "ERROR: malformed image result marker",
+  "media_not_sent_text_only": "[Not shown to you: this model accepts text only, so the attached image was dropped.]"
 }

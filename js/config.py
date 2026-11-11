@@ -68,13 +68,23 @@ def _vision_by_name(model: str) -> bool:
     return any(hint in name for hint in _VISION_NAME_HINTS)
 
 
+# Models whose endpoint refused a request for carrying an image, this process.
+_TEXT_ONLY_MODELS: set[str] = set()
+
+
+def mark_text_only(model: str) -> None:
+    """``model``'s endpoint refused images: send it none for the rest of the run."""
+    _TEXT_ONLY_MODELS.add(model)
+
+
 def vision_enabled_for_model(model: str, settings: dict | None = None) -> bool:
     """Whether image bytes should be sent to ``model``.
 
     Resolved ``settings`` already include environment, CLI and live overrides.
     Without a settings store, JS_VISION supplies the override. Unset falls back
-    to models.dev input modalities, then curated name hints for unknown ids.
-    The catalog follows the model rather than its serving provider.
+    to a refusal seen this run (`mark_text_only`), then models.dev input
+    modalities, then curated name hints for unknown ids. The catalog follows
+    the model rather than its serving provider.
     """
     if settings is None:
         explicit = _env_bool(os.environ.get("JS_VISION", ""))
@@ -82,6 +92,8 @@ def vision_enabled_for_model(model: str, settings: dict | None = None) -> bool:
         explicit = _settings.get_dotted(settings, ("VISION",))
     if isinstance(explicit, bool):
         return explicit
+    if model in _TEXT_ONLY_MODELS:
+        return False
     from . import model_metadata
 
     try:

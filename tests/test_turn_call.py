@@ -1,5 +1,6 @@
 """One model call of a turn, driven without a turn: retries, overflow
-recovery, the escalated resend and the resend without signed reasoning."""
+recovery, the escalated resend, the resend without signed reasoning and the
+resend without images a text-only route refused."""
 
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ import ai.types.usage
 import httpx
 import pytest
 
-from js import compaction, model_client, retry, turn_call
+from js import compaction, config, media, model_client, retry, turn_call
 from js import messages as msgs
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
@@ -61,6 +62,12 @@ def _fatal() -> ai.ProviderAPIError:
     return ai.ProviderStatusError("HTTP 401", provider="openai", code="401", is_retryable=False)
 
 
+def _images_refused() -> ai.ProviderAPIError:
+    return ai.ProviderBadRequestError(
+        "[400]: Message 2 of 2 in this request (role user) carries an image, and the selected model route "
+        "accepts text only.", provider="openai")
+
+
 def _signature_refused() -> ai.ProviderAPIError:
     return ai.ProviderBadRequestError("messages.1.content.0: Invalid `signature` in `thinking` block",
                                       provider="anthropic")
@@ -92,7 +99,7 @@ class _Turn:
 
     def __init__(self, tmp_path, monkeypatch, replies, *, budget=None, attempts=2, max_wait=0.0,
                  escalation=64000, max_out=1000, provider_id="openai",
-                 messages=None):
+                 messages=None, vision=False):
         self.calls: list[dict] = []
 
         def stream(**kwargs):
@@ -112,8 +119,8 @@ class _Turn:
         events = TurnEvents(None, lambda event, payload: self.raised.append(event), self.telemetry,
                             model="m", provider_id=provider_id)
         self.messages = messages if messages is not None else [{"role": "user", "content": "go"}]
-        self.convo = TurnConvo("SYSTEM", self.messages, provider_id=provider_id, model="m")
-        self.context = ToolContext(cwd=tmp_path)
+        self.convo = TurnConvo("SYSTEM", self.messages, provider_id=provider_id, model="m", vision=vision)
+        self.context = ToolContext(cwd=tmp_path, vision_enabled=vision)
         self.budget = budget or _Budget()
         status = TurnStatus()
         self.caller = ModelCaller(
@@ -265,6 +272,48 @@ def test_a_refused_signature_is_dropped_once_and_the_history_replayed(tmp_path, 
     assert "reasoning_parts" not in messages[1]
     assert turn.convo.ai is not first
     assert msgs.SIGNED_REASONING_DROPPED.words(messages=1) in capsys.readouterr().err
+
+
+def _images(messages) -> int:
+    return sum(isinstance(part, ai.types.messages.FilePart) for m in messages for part in m.parts)
+
+
+def test_a_refused_image_is_dropped_and_the_request_sent_again(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(config, "_TEXT_ONLY_MODELS", set())
+    messages = [{"role": "user", "content": "look", media.MEDIA_KEY: [media.store(b"png", "image/png")]}]
+    turn = _Turn(tmp_path, monkeypatch, [_images_refused(), _done()], messages=messages, vision=True)
+    assert turn.call().result.text == "done"
+    assert [_images(c["messages"]) for c in turn.calls] == [1, 0]
+    sent = turn.calls[1]["messages"][-1].parts[0].text
+    assert sent.startswith("look\n") and "accepts text only" in sent
+    assert turn.kinds().count("images_refused") == 1
+    assert turn.context.vision_enabled is False
+    assert config.vision_enabled_for_model("m", {}) is False
+    assert config.vision_enabled_for_model("m", {"VISION": True}) is True
+    assert msgs.IMAGES_REFUSED.words(model="m") in capsys.readouterr().err
+
+
+def test_an_image_refusal_without_images_to_drop_ends_the_turn(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "_TEXT_ONLY_MODELS", set())
+    turn = _Turn(tmp_path, monkeypatch, [_images_refused(), _done()], vision=False)
+    with pytest.raises(ai.ProviderAPIError):
+        turn.call()
+    assert len(turn.calls) == 1
+
+
+@pytest.mark.parametrize("text", [
+    "the selected model route accepts text only",
+    "Invalid content type. image_url is only supported by certain models.",
+    "Failed to deserialize the JSON body: unknown variant `image_url`, expected `text`",
+    "image input is not supported - hint: if this is unexpected, you may need to provide the mmproj",
+])
+def test_image_rejections_are_recognised(text):
+    assert model_client.is_image_rejection(ai.ProviderBadRequestError(text, provider="openai"))
+
+
+def test_other_bad_requests_are_not_image_rejections():
+    assert not model_client.is_image_rejection(ai.ProviderBadRequestError("max_tokens too large", provider="openai"))
+    assert not model_client.is_image_rejection(_retryable())
 
 
 def test_call_limits_read_the_resilience_settings():

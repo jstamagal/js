@@ -60,6 +60,15 @@ class TurnConvo:
         self.sent = 0
         self.schemas = True
 
+    @property
+    def vision(self) -> bool:
+        return self._vision
+
+    def drop_vision(self) -> None:
+        """Send no more media this turn: the endpoint refused it."""
+        self._vision = False
+        self.rebuild()
+
     def add(self, records: list[dict]) -> None:
         """Append history records already appended to ``messages``."""
         self.ai.extend(model_client.history_to_ai_messages(

@@ -4,8 +4,9 @@
 it retries retryable errors under the retry budget (honouring Retry-After),
 sheds history when the provider refuses the request as too long or shows it
 cut the input to fit (a silent overflow), resends once with a larger output
-cap a reply cut off by its cap, and resends once without signed reasoning a
-request whose replayed signatures the provider refused. A fatal error ends
+cap a reply cut off by its cap, resends once without signed reasoning a
+request whose replayed signatures the provider refused, and resends without
+its images a request the provider refused for carrying them. A fatal error ends
 the turn and propagates. None means the attempts ran out.
 
 The call reaches the model only through `model_client.stream_model_async`,
@@ -34,6 +35,7 @@ from . import settings as _settings
 from . import stream_transport
 from . import tool_args
 from . import usage as usage_mod
+from .config import mark_text_only
 from .retry import backoff as _backoff, retry_after_seconds
 from .sampling import Sampling
 from .turn_budget import TurnBudget, TurnConvo
@@ -283,6 +285,16 @@ class ModelCaller:
                         else msgs.SIGNED_REASONING_DROPPED.said(messages=dropped)))
                     self._convo.rebuild()
                     compaction.history_rewritten(context)
+                    continue
+                if self._convo.vision and model_client.is_image_rejection(e):
+                    # The route takes text only: drop the images and go on
+                    # rather than end the turn on them.
+                    mark_text_only(model)
+                    context.vision_enabled = False
+                    self._convo.drop_vision()
+                    compaction.history_rewritten(context)
+                    telemetry.event("images_refused", model=model, error=f"{type(e).__name__}: {e}")
+                    stream_transport.say_or_print_for_caller(1, msgs.IMAGES_REFUSED.said(model=model))
                     continue
                 if e.is_retryable:
                     telemetry.event("retriable_error", model=model,
