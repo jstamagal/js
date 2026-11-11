@@ -248,6 +248,36 @@ def test_search_is_case_insensitive_term_based_and_deterministic(tmp_path):
 _USER_ONLY = "---\ndescription: Only when asked\ndisable-model-invocation: true\n---\nuser-only body\n"
 
 
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_bom_skill_keeps_frontmatter_and_user_only_rule(tmp_path, newline):
+    package = tmp_path / "package"
+    text = "\ufeff" + _USER_ONLY.replace("\n", newline)
+    _write(package / "secret" / "SKILL.md", text)
+    catalog = _catalog(tmp_path, package, tmp_path / "global")
+    metadata = catalog.get("secret")
+    assert metadata.description == "Only when asked"
+    assert not metadata.model_invocable
+    assert load_skill(catalog, "secret") is None
+    assert load_skill(catalog, "secret", user=True).instructions == "user-only body\n"
+
+
+@pytest.mark.parametrize("prefix", ["", "\ufeff"])
+def test_frontmatter_offset_matches_body_after_bom(prefix):
+    from js.skills import _split_frontmatter
+
+    text = prefix + _USER_ONLY
+    manifest, body, end = _split_frontmatter(text)
+    assert manifest["disable-model-invocation"] is True
+    assert text[end:] == body == "user-only body\n"
+
+
+def test_frontmatter_strips_only_one_leading_bom():
+    from js.skills import _split_frontmatter
+
+    assert _split_frontmatter("\ufeff\ufeffbody") == ({}, "\ufeffbody", 1)
+    assert _split_frontmatter("body\ufeff") == ({}, "body\ufeff", 0)
+
+
 def test_user_only_skill_is_hidden_from_model_and_unloadable_by_it(tmp_path):
     package = tmp_path / "package"
     _write(package / "secret" / "SKILL.md", _USER_ONLY)

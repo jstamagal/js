@@ -410,8 +410,10 @@ def _index_skill(path: Path, source: str) -> _SkillRecord:
 
 
 def _split_frontmatter(text: str) -> tuple[dict[str, Any], str, int]:
+    offset = int(text.startswith("\ufeff"))
+    text = text[offset:]
     if not text.startswith("---") or text[:4] not in {"---\n", "---\r"}:
-        return {}, text, 0
+        return {}, text, offset
     match = re.search(r"\r?\n---[ \t]*(?:\r?\n|$)", text[3:])
     if match is None:
         raise ValueError(msgs.SKILL_FRONTMATTER_FRONTMATTER_IS_MISSING_A_CLOSING.format())
@@ -431,7 +433,7 @@ def _split_frontmatter(text: str) -> tuple[dict[str, Any], str, int]:
         manifest = {}
     if not isinstance(manifest, dict):
         raise ValueError(msgs.SKILL_FRONTMATTER_FRONTMATTER_MUST_BE_A_MAPPING.format())
-    return manifest, text[end:], end
+    return manifest, text[end:], end + offset
 
 
 def _quote_plain_description(yaml_text: str) -> str:
