@@ -77,7 +77,7 @@ class MCPClient:
         self._initialize_lock = asyncio.Lock()
         self._lifecycle_lock = asyncio.Lock()
         self._closed = False
-        self._secrets = tuple(secret for secret in secrets if secret)
+        self._secrets = tuple(sorted((secret for secret in secrets if secret), key=len, reverse=True))
         self._custom_redactor = redactor
         self._reconnect_attempts = max(0, reconnect_attempts)
         self._reconnect_backoff = max(0.0, reconnect_backoff)
