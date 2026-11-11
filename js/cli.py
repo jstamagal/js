@@ -1935,7 +1935,7 @@ def _cmd_copy(arg: str, state: dict, cfg: Config) -> str | None:
 def _cmd_wipe(arg: str, state: dict, cfg: Config) -> str | None:
     bak = M.wipe(cfg.session_file)
     usage_mod.forget(cfg.session_file)
-    state["messages"].clear()
+    state["messages"] = M.load_replay_messages(cfg.session_file)
     task_jobs.forget(runtime.T.STOCK_CONTEXT.task_owner)
     compaction.history_rewritten(runtime.T.STOCK_CONTEXT)
     if bak:
