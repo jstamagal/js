@@ -49,7 +49,7 @@ from .config import Config, vision_enabled_for_model
 from .sampling import Sampling
 from .reasoning_display import ReasoningDisplay
 from . import reasoning as reasoning_rules
-from .toolkit.core import (ToolContext, ToolOutput, ToolResult, as_output, call_is_read_only, call_scope, call_view,
+from .toolkit.core import (Output, ToolContext, ToolOutput, ToolResult, as_output, call_is_read_only, call_scope, call_view,
                            call_tool, call_tool_async, compact_json, registry_scope)
 from .toolkit.registry import ToolRegistry
 from .turn_budget import TurnBudget, TurnConvo, last_user_message_index as _last_user_message_index
@@ -640,7 +640,7 @@ class ToolErrorTracker:
         if isinstance(result, _jail.Refusal):
             return result
         with self._lock:
-            if not result.startswith("ERROR"):
+            if isinstance(result, Output) or not result.startswith("ERROR"):
                 self.errors.pop(tool_name, None)
                 return result
             count = self.errors.get(tool_name, 0) + 1
@@ -965,6 +965,7 @@ def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None,
                                  _limit(int(getattr(media_context, "max_tool_media_bytes", 0) or 0)))
     # A lone surrogate (surrogateescape read, json.loads) would crash whichever
     # strict encode meets it next; it reaches the model as `?`.
+    is_content = isinstance(result, Output)
     result = well_formed(result)
     if inline_cap is None:
         active_context = context if context is not None else T.STOCK_CONTEXT
@@ -972,8 +973,8 @@ def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None,
     if inline_cap > 0:
         result = spill_oversized_result(result, inline_cap)
     if cap_bytes > 0:
-        return cap_text(result, cap_bytes, _PROMPTS['cap_result_truncated_tool_result_max_reached_2'].format(cap_bytes=cap_bytes))
-    return result
+        result = cap_text(result, cap_bytes, _PROMPTS['cap_result_truncated_tool_result_max_reached_2'].format(cap_bytes=cap_bytes))
+    return Output(result) if is_content else result
 
 
 def spill_oversized_result(
@@ -1114,7 +1115,8 @@ def _cap_batch_results(results: list[Any], cap_bytes: int) -> list[Any]:
         elif _image_marker_stub(result) is not None:
             capped.append(_cap_image_marker(result, allowance, None))
         else:
-            capped.append(cap_text(result, allowance, marker))
+            text = cap_text(result, allowance, marker)
+            capped.append(Output(text) if isinstance(result, Output) else text)
     return capped
 
 
@@ -2018,7 +2020,8 @@ def _record_tool_error_limit(dispatch_records: list[tuple[_PendingToolCall, dict
     name, last_error = next(
         ((_canonical_tool_call_name(pc.name, registry), result_value)
          for pc, _, result_value in reversed(dispatch_records)
-         if isinstance(result_value, str) and result_value.startswith("ERROR")),
+         if isinstance(result_value, str) and not isinstance(result_value, Output)
+         and result_value.startswith("ERROR")),
         (dispatch_records[-1][0].name, dispatch_records[-1][2]),
     )
     failure = _PROMPTS['record_tool_error_limit_error_tool_retry_limit_reached_after'].format(name=name, last_error=last_error)

@@ -151,11 +151,12 @@ class ToolOutput:
 
 def result_text(result: Any) -> tuple[str, bool]:
     """Flatten a tool result to (text, is_error)."""
+    from .core import Output
     dehydrated = getattr(result, "dehydrated", None)
     if callable(dehydrated):
         return dehydrated(), bool(getattr(result, "is_error", False))
     text = result if isinstance(result, str) else str(result)
-    return text, text.lstrip().startswith("ERROR")
+    return text, not isinstance(result, Output) and text.lstrip().startswith("ERROR")
 
 
 # The count `runtime.ToolErrorTracker` appends to a failed result for the model.

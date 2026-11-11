@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .core import ToolResult
+from .core import Output, ToolResult
 
 
 def summary_text(result: Any) -> tuple[str, bool]:
@@ -14,4 +14,4 @@ def summary_text(result: Any) -> tuple[str, bool]:
         text = result.dehydrated()
         return text, result.is_error or text.startswith("ERROR")
     text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
-    return text, text.startswith("ERROR")
+    return text, not isinstance(result, Output) and text.startswith("ERROR")
