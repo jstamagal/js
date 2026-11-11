@@ -49,7 +49,7 @@ def today() -> str:
 
 
 def slugify(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", str(text).strip().lower()).strip("-")[:60] or "untitled"
+    return re.sub(r"[^a-z0-9]+", "-", str(text).strip().lower()).strip("-")[:60].rstrip("-") or "untitled"
 
 
 def resolve_vault(vault: str, context: ToolContext) -> Path:
