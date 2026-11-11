@@ -401,12 +401,13 @@ def test_image_that_grows_past_limit_after_stat_is_refused(tmp_path, monkeypatch
     real_stat = Path.stat
     png.write_bytes(_TINY_PNG + b"\x00" * (limit + 10))
     real_size = real_stat(png).st_size
+    resolved_png = png.resolve()
 
     class _Stat:
         st_size = len(_TINY_PNG)
         st_mode = real_stat(png).st_mode
 
-    monkeypatch.setattr(Path, "stat", lambda self, *a, **k: _Stat() if self == png.resolve() else real_stat(self, *a, **k))
+    monkeypatch.setattr(Path, "stat", lambda self, *a, **k: _Stat() if self == resolved_png else real_stat(self, *a, **k))
     try:
         attach.build_user_message("look", [str(png)], cfg)
     except attach.AttachmentError as exc:
