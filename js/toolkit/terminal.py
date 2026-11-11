@@ -37,9 +37,7 @@ _KEY_SEQUENCES = {
     "pgup": "\x1b[5~",
     "pgdn": "\x1b[6~",
     "delete": "\x1b[3~",
-    "ctrl-c": "\x03",
-    "ctrl-d": "\x04",
-    "ctrl-l": "\x0c",
+    "shift-tab": "\x1b[Z",
     "f1": "\x1bOP",
     "f2": "\x1bOQ",
     "f3": "\x1bOR",
@@ -53,6 +51,20 @@ _KEY_SEQUENCES = {
     "f11": "\x1b[23~",
     "f12": "\x1b[24~",
 }
+
+def _key_sequence(token: str, application_cursor: bool = False) -> str:
+    name = token.lower()
+    if name.startswith("alt-") and len(token) > 4:
+        return "\x1b" + _key_sequence(token[4:], application_cursor)
+    if len(name) == 6 and name.startswith("ctrl-") and "a" <= name[-1] <= "z":
+        return chr(ord(name[-1]) - ord("a") + 1)
+    if name == "comma":
+        return ","
+    value = _KEY_SEQUENCES.get(name, token)
+    if application_cursor and name in {"up", "down", "right", "left", "home", "end"}:
+        return "\x1bO" + value[-1]
+    return value
+
 
 _FONT_CANDIDATES = (
     "/usr/share/fonts/TTF/JetBrainsMonoNerdFont-Regular.ttf",
@@ -293,6 +305,7 @@ def terminal_session(
     cols: int | None = None,
     rows: int | None = None,
     context: ToolContext | None = None,
+    text: str | None = "",
 ) -> str:
     """Start, drive, inspect, stop, or list a persistent PTY session."""
     if context is None:
@@ -307,6 +320,7 @@ def terminal_session(
     session = text_or_default(session, "main").strip() or "main"
     command = text_or_default(command)
     keys = text_or_default(keys)
+    text = text_or_default(text)
     wait = min(int_or_default(wait_ms, 700, minimum=0), 10_000)
     cols_supplied = cols is not None
     rows_supplied = rows is not None
@@ -408,16 +422,14 @@ def terminal_session(
         _drain(state, 0)
         state["previous_lines"] = _render_lines(state["screen"])
         sent: list[str] = []
+        if text:
+            state["child"].send(text.encode("utf-8"))
+            sent.append(text)
         for raw_token in keys.split(","):
             if not raw_token:
                 continue
-            value = "," if raw_token.lower() == "comma" else _KEY_SEQUENCES.get(
-                raw_token.lower(), raw_token
-            )
-            if raw_token.lower() in {"up", "down", "right", "left", "home", "end"}:
-                # pyte stores private modes shifted five bits (DECCKM is 1).
-                if (1 << 5) in state["screen"].mode:
-                    value = "\x1bO" + value[-1]
+            # pyte stores private modes shifted five bits (DECCKM is 1).
+            value = _key_sequence(raw_token, (1 << 5) in state["screen"].mode)
             state["child"].send(value.encode("utf-8"))
             sent.append(raw_token)
             time.sleep(0.06)
@@ -553,6 +565,7 @@ def tools() -> tuple[Tool, ...]:
                 "session": {"type": "string", "default": "main"},
                 "command": {"type": "string"},
                 "keys": {"type": "string"},
+                "text": {"type": "string"},
                 "cwd": {"type": "string"},
                 "wait_ms": {"type": "integer", "minimum": 0, "maximum": 10_000, "default": 700},
                 "cols": {"type": "integer", "minimum": 1, "maximum": 400},
