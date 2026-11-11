@@ -134,6 +134,33 @@ def _init_repo(repo):
     _git(repo, "commit", "-qm", "baseline")
 
 
+def test_commit_snapshot_retention_is_per_repository(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from js import commit_helper
+
+    backups = tmp_path / "backups"
+    monkeypatch.setattr(cli, "_commit_backup_root", lambda: backups)
+    monkeypatch.setattr(cli, "_worktree_patch", lambda *args: "diff --git a/a b/a\n")
+    monkeypatch.setattr(commit_helper, "_git", lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=""))
+    legacy = backups / "20200101T000000000000Z"
+    legacy.mkdir(parents=True)
+    (legacy / "tracked.patch").write_text("legacy recovery data")
+    repo_a = tmp_path / "one" / "same-name"
+    repo_b = tmp_path / "two" / "same-name"
+    first_a = cli._snapshot_worktree(repo_a)
+    first_b = cli._snapshot_worktree(repo_b)
+    for _ in range(10):
+        cli._snapshot_worktree(repo_b)
+    assert first_a.exists()
+    assert (legacy / "tracked.patch").read_text() == "legacy recovery data"
+    assert first_a.parent != first_b.parent
+    assert not first_b.exists()
+    assert len(list(first_b.parent.iterdir())) == 10
+    # Resolving an equivalent path must not create another retention bucket.
+    another_a = cli._snapshot_worktree(repo_a / ".." / "same-name")
+    assert another_a.parent == first_a.parent
+
+
 def test_run_commit_snapshots_tracked_patch_and_untracked_file(tmp_path, monkeypatch):
     data_home = tmp_path / "data"
     monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
@@ -146,7 +173,9 @@ def test_run_commit_snapshots_tracked_patch_and_untracked_file(tmp_path, monkeyp
     assert cli._run_commit(str(repo), save=False) == 0
 
     backups = paths.commit_backups_dir()
-    snaps = sorted(backups.iterdir())
+    owners = list(backups.iterdir())
+    assert len(owners) == 1
+    snaps = sorted(owners[0].iterdir())
     assert len(snaps) == 1
     snap = snaps[0]
     patch = (snap / "tracked.patch").read_text()
@@ -170,22 +199,21 @@ def test_run_commit_makes_no_snapshot_on_clean_tree(tmp_path, monkeypatch):
 def test_run_commit_snapshot_prune_keeps_ten(tmp_path, monkeypatch):
     data_home = tmp_path / "data"
     monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
-    backups = paths.commit_backups_dir()
-    backups.mkdir(parents=True)
-    # Twelve older snapshots already on disk (names sort before any current UTC stamp).
-    for i in range(12):
-        (backups / f"20200101T0000{i:02d}000000Z").mkdir()
-
     repo = tmp_path / "messy"
     _init_repo(repo)
     (repo / "new.txt").write_text("fresh\n")
+    first = cli._snapshot_worktree(repo)
+    backups = first.parent
+    # Twelve old snapshots belong to this repository's retention bucket.
+    for i in range(12):
+        (backups / f"20200101T0000{i:02d}000000Z").mkdir()
 
     monkeypatch.setattr(cli, "_run_prompt", lambda prompt, **kwargs: 0)
     assert cli._run_commit(str(repo), save=False) == 0
 
     remaining = sorted(p.name for p in backups.iterdir())
     assert len(remaining) == 10
-    # The three oldest were pruned; the just-written snapshot is the newest kept.
+    # The oldest were pruned; the just-written snapshot is the newest kept.
     assert "20200101T000000000000Z" not in remaining
     assert "20200101T000002000000Z" not in remaining
     assert remaining[-1] not in {f"20200101T0000{i:02d}000000Z" for i in range(12)}

@@ -3366,6 +3366,8 @@ def _snapshot_worktree(repo_dir: Path) -> Path | None:
     The commit agent can revert files while splitting commits; a snapshot means any
     failure path is recoverable. Returns the backup dir, or None on a clean tree.
     """
+    import hashlib
+
     from . import commit_helper
 
     patch = _worktree_patch(repo_dir, commit_helper)
@@ -3374,8 +3376,10 @@ def _snapshot_worktree(repo_dir: Path) -> Path | None:
     if not patch.strip() and not untracked:
         return None
 
+    repo_key = hashlib.sha256(os.fsencode(repo_dir.resolve())).hexdigest()
+    repo_backups = _commit_backup_root() / repo_key
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
-    backup_dir = _commit_backup_root() / stamp
+    backup_dir = repo_backups / stamp
     backup_dir.mkdir(parents=True, exist_ok=True)
     if patch:
         (backup_dir / "tracked.patch").write_bytes(patch.encode("utf-8", "surrogateescape"))
@@ -3386,7 +3390,7 @@ def _snapshot_worktree(repo_dir: Path) -> Path | None:
             shutil.copy2(repo_dir / rel, dest, follow_symlinks=False)
         except OSError:
             continue  # a vanished/unreadable file must not abort the whole snapshot
-    _prune_commit_backups(_commit_backup_root())
+    _prune_commit_backups(repo_backups)
     return backup_dir
 
 
