@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from js import toolstats
 
 
@@ -56,6 +58,24 @@ def test_summarize_counts_calls_errors_turns_and_bytes(tmp_path):
     assert summary["result_bytes"] == len("ok") + len("ERROR: no such file")
     assert summary["duration_s"] == 10.0
     assert summary["final_text_chars"] == len("Done.")
+
+
+@pytest.mark.parametrize("invalid", [[], ["record"], None, False, 42, "record"])
+def test_summarize_skips_non_object_records_between_valid_lines(tmp_path, invalid):
+    session = tmp_path / "s.jsonl"
+    valid = [
+        {"kind": "session_metadata", "ts": 10, "agent": "full", "model": "m"},
+        {"kind": "message", "ts": 11, "message": {"role": "assistant", "content": "Done."}},
+    ]
+    session.write_text("\n".join(map(json.dumps, [valid[0], invalid, valid[1]])) + "\n")
+
+    summary = toolstats.summarize(session)
+
+    assert summary["agent"] == "full"
+    assert summary["model"] == "m"
+    assert summary["turns"] == 1
+    assert summary["duration_s"] == 1
+    assert summary["final_text_chars"] == 5
 
 
 def test_cli_prints_one_tagged_line_with_extras(tmp_path, capsys):

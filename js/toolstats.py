@@ -87,6 +87,8 @@ def summarize(path: Path) -> dict:
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if not isinstance(record, dict):
+            continue
         ts = record.get("ts")
         if isinstance(ts, (int, float)):
             first_ts = ts if first_ts is None else min(first_ts, ts)
