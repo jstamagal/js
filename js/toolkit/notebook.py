@@ -26,7 +26,6 @@ from .sanitize import int_or_default
 EDIT_MODES = ("replace", "insert", "delete")
 CELL_TYPES = ("code", "markdown", "raw")
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
-_INDEXED_ID = re.compile(r"cell-(\d+)")
 # Characters of one output's text shown per shown line.
 _CHARS_PER_LINE = 200
 
@@ -54,23 +53,28 @@ def _text(value: Any) -> str:
 
 
 def cell_ids(cells: list[dict]) -> list[str]:
-    """Each cell's id: its `id`, or `cell-N` when it has none."""
-    return [cell["id"] if isinstance(cell.get("id"), str) and cell["id"] else f"cell-{index}"
-            for index, cell in enumerate(cells)]
+    """Each cell's id, with unique synthetic names reserved around native ids."""
+    taken = {cell["id"] for cell in cells if isinstance(cell.get("id"), str) and cell["id"]}
+    ids: list[str] = []
+    for index, cell in enumerate(cells):
+        cell_id = cell.get("id")
+        if not isinstance(cell_id, str) or not cell_id:
+            base = f"cell-{index}"
+            cell_id = base
+            suffix = 1
+            while cell_id in taken:
+                cell_id = f"{base}-{suffix}"
+                suffix += 1
+            taken.add(cell_id)
+        ids.append(cell_id)
+    return ids
 
 
 def find_cell(cells: list[dict], cell_id: str) -> int | None:
-    """The index of the cell ``cell_id`` names: an `id`, else `cell-N`."""
+    """The index of the cell under the same ids shown by `read`."""
     wanted = str(cell_id).strip()
-    for index, cell in enumerate(cells):
-        if cell.get("id") == wanted:
-            return index
-    match = _INDEXED_ID.fullmatch(wanted)
-    if match and int(match.group(1)) < len(cells):
-        index = int(match.group(1))
-        if cell_ids(cells)[index] == wanted:
-            return index
-    return None
+    ids = cell_ids(cells)
+    return ids.index(wanted) if wanted in ids else None
 
 
 def _language(notebook: dict) -> str:

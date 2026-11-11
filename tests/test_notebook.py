@@ -64,6 +64,25 @@ def nb(tmp_path):
     return path, ToolContext(cwd=tmp_path)
 
 
+def test_synthetic_id_does_not_shadow_explicit_id(nb):
+    from js.toolkit.notebook import cell_ids
+
+    path, context = nb
+    notebook = modern_notebook()
+    notebook["cells"] = notebook["cells"][:2]
+    notebook["cells"][0]["id"] = "cell-1"
+    del notebook["cells"][1]["id"]
+    write_notebook(path, notebook)
+    ids = cell_ids(notebook["cells"])
+    assert len(set(ids)) == 2
+    view = tool("read", context, file_path=str(path))
+    assert all(f"id={cell_id}" in view for cell_id in ids)
+    result = tool("notebook_edit", context, file_path=str(path), cell_id=ids[1], new_source="second")
+    assert not result.startswith("ERROR"), result
+    assert "".join(cells_of(path)[1]["source"]) == "second"
+    assert cells_of(path)[0]["source"] == notebook["cells"][0]["source"]
+
+
 def test_bom_notebook_reads_and_edits(nb):
     path, context = nb
     path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
