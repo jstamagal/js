@@ -81,7 +81,7 @@ def backoff(attempt: int, budget: Budget | None = None) -> float:
     """Configured capped backoff with jitter; defaults to a flat 8s."""
     budget = budget if budget is not None else Budget.from_settings(None)
     base = min(budget.backoff_start * budget.backoff_multiplier ** attempt, budget.backoff_max)
-    return base + random.uniform(0, budget.backoff_jitter)
+    return min(base + random.uniform(0, budget.backoff_jitter), budget.backoff_max)
 
 
 def _error_chain(exc: BaseException) -> list[BaseException]:
