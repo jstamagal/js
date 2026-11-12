@@ -170,21 +170,19 @@ def _coerce_skills(path: Path, raw: Any) -> tuple[str, ...]:
     return tuple(out)
 
 
+def _frontmatter_source(path: Path, text: str) -> tuple[str, str]:
+    """The source YAML and body separated by an exact closing delimiter line."""
+    first_line_end = text.find("\n")
+    close = None if first_line_end == -1 else re.compile(r"(?m)^---(?:\r?\n|$)").search(text, first_line_end + 1)
+    if close is None:
+        raise ValueError(msgs.AGENT_MANIFEST_FRONTMATTER_IN_IS_MISSING_A_CLOSING.format(path=path))
+    return text[first_line_end + 1:close.start()], text[close.end():]
+
+
 def _split_frontmatter(path: Path, text: str) -> tuple[dict[str, Any] | None, str]:
     if not text.startswith("---"):
         return None, text.rstrip()
-    first_line_end = text.find("\n")
-    if first_line_end == -1:
-        raise ValueError(msgs.AGENT_MANIFEST_FRONTMATTER_IN_IS_MISSING_A_CLOSING.format(path=path))
-    close = text.find("\n---", first_line_end + 1)
-    if close == -1:
-        raise ValueError(msgs.AGENT_MANIFEST_FRONTMATTER_IN_IS_MISSING_A_CLOSING.format(path=path))
-    yaml_text = text[first_line_end + 1:close]
-    body_start = close + len("\n---")
-    if body_start < len(text) and text[body_start:body_start + 1] == "\r":
-        body_start += 1
-    if body_start < len(text) and text[body_start:body_start + 1] == "\n":
-        body_start += 1
+    yaml_text, body = _frontmatter_source(path, text)
     try:
         data = yaml.safe_load(yaml_text) if yaml_text.strip() else {}
     except yaml.YAMLError as exc:
@@ -193,7 +191,7 @@ def _split_frontmatter(path: Path, text: str) -> tuple[dict[str, Any] | None, st
         data = {}
     if not isinstance(data, dict):
         raise ValueError(msgs.AGENT_MANIFEST_FRONTMATTER_IN_MUST_BE_A_MAPPING.format(path=path))
-    return data, text[body_start:].rstrip()
+    return data, body.rstrip()
 
 
 def _coerce_tool_selectors(path: Path, raw: Any) -> tuple[str, ...]:

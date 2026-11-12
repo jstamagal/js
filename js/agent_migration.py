@@ -266,8 +266,7 @@ def plan(agent_dir: Path, keep: Keep, *, _beside_manifest: bool = False) -> tupl
             data, new_body = persona._split_frontmatter(frontmatter_md, md_text)
         except ValueError as exc:
             return Result(agent_dir, "error", str(exc)), None, None
-        first = md_text.find("\n")
-        text = md_text[first + 1:md_text.find("\n---", first)] + "\n"
+        text, _ = persona._frontmatter_source(frontmatter_md, md_text)
     data = data or {}
     if not isinstance(data, dict):
         return Result(agent_dir, "error", msgs.AGENT_MIGRATE_NOT_A_MAPPING.text(file=old.name)), None, None
