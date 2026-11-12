@@ -42,3 +42,37 @@ def test_wrapped_file_url_can_read_visible_regular_file(tmp_path, monkeypatch, w
 
     assert "visible sentinel" in result
     urlopen.assert_not_called()
+
+
+@pytest.mark.parametrize("url", [
+    "data:text/plain,hello", "ftp://example.test/item", "gopher://example.test/item",
+    "relative.txt", "<URL:data:text/plain,hello>", " URL:ftp://example.test/item ",
+])
+@pytest.mark.parametrize("save", [None, "output.bin"])
+def test_unsupported_scheme_never_reaches_backends(tmp_path, monkeypatch, url, save):
+    urlopen = Mock(side_effect=AssertionError("unsupported scheme reached network backend"))
+    resolver = Mock(side_effect=AssertionError("unsupported scheme reached downloader"))
+    monkeypatch.setattr(process_net.urllib.request, "urlopen", urlopen)
+
+    result = process_net.fetch(url, save=save, context=ToolContext(cwd=tmp_path), download_resolver=resolver)
+
+    assert result.startswith("ERROR:")
+    urlopen.assert_not_called()
+    resolver.assert_not_called()
+    assert not (tmp_path / "output.bin").exists()
+
+
+@pytest.mark.parametrize("url", ["http://example.test/item", "HTTPS://example.test/item"])
+def test_wrapped_http_download_receives_normalized_url(tmp_path, monkeypatch, url):
+    download = Mock(side_effect=lambda _binary, _url, target, **_kwargs: target.write_bytes(b"downloaded"))
+    monkeypatch.setattr(process_net, "download_with_aria2", download)
+    monkeypatch.setattr(process_net, "_saved_content_type", lambda *_args: "text/plain")
+
+    result = process_net.fetch(
+        "  <URL:" + url + ">  ", save="output.bin", context=ToolContext(cwd=tmp_path),
+        download_resolver=lambda _name: "/fake/aria2c",
+    )
+
+    assert not result.startswith("ERROR:")
+    assert download.call_args.args[1] == url
+    assert (tmp_path / "output.bin").read_bytes() == b"downloaded"

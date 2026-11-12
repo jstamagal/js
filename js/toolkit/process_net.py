@@ -943,6 +943,8 @@ def fetch(
         save_target = _download_target(save, context)
         url = urllib.parse.unwrap(url)
         parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in {"http", "https", "file"}:
+            return f"ERROR: unsupported URL scheme {parsed.scheme!r}; expected http, https, or file"
         if parsed.scheme == "file":
             if method_name != "GET":
                 return "ERROR: file:// fetch only supports GET"
