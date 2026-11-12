@@ -247,8 +247,8 @@ class _Transcript:
             stamp = record.get("stamp")
             if isinstance(stamp, dict) and isinstance(stamp.get("model"), str) and stamp["model"]:
                 self.last_stamp = dict(stamp)
-        elif kind == "message":
-            self._message(record.get("message"), ts, record.get("stamp"), replayed=True)
+        elif kind == "message" and isinstance(record.get("message"), dict):
+            self._message(record["message"], ts, record.get("stamp"), replayed=True)
             self._number(record)
             self._identify(record)
         elif kind == "mark" and isinstance(record.get("marker"), str):

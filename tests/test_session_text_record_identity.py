@@ -26,3 +26,26 @@ def test_compaction_synthetic_rows_match_memory_for_rehydration_shape(tmp_path, 
     assert len(transcript.replay) == len(memory.load_replay_messages(path))
     assert any("retained" in row.first() for row in transcript.rows())
     assert not any("discarded" in row.first() for row in transcript.rows())
+
+
+@pytest.mark.parametrize("bad_message", [None, "bad", [], 1, True])
+def test_unreadable_message_id_does_not_replace_previous_row_id(tmp_path, bad_message):
+    path = tmp_path / "session.jsonl"
+    records = [
+        {"kind": "message", "version": 1, "id": "first", "ts": 1,
+         "message": {"role": "user", "content": "first valid"}},
+        {"kind": "message", "version": 1, "id": "bad", "ts": 2, "message": bad_message},
+        {"kind": "message", "version": 1, "id": "next", "ts": 3,
+         "message": {"role": "assistant", "content": "next valid"}},
+    ]
+    path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    original = path.read_bytes()
+
+    transcript = session_text.parse(path)
+    replay = memory.load_replay_messages(path)
+
+    assert [row.id for row in transcript.rows()] == ["first", "next"]
+    assert transcript.numbers == {"first": 1, "next": 2}
+    assert [row.first() for row in transcript.rows()] == ["first valid", "next valid"]
+    assert len(transcript.replay) == len(replay) == 2
+    assert path.read_bytes() == original
