@@ -445,7 +445,7 @@ def _cmd_commit(message_file: str, repo: str | Path | None = None, *, amend: boo
         msg_path = repo_path / msg_path
     try:
         message = msg_path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeError) as exc:
         _err(msgs.MESSAGE_FILE_UNREADABLE, error=exc)
         return 2
     if not message.strip():
