@@ -412,7 +412,10 @@ def catalog_sessions(sessions_root: Path) -> list[dict[str, Any]]:
     if not root.is_dir():
         return records
     for path in _session_files(root):
-        stat = path.stat()
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
         user_turns, metadata = _session_details(path)
         folder = path.relative_to(root).parts[0]
         agent = metadata.get("agent") if metadata else None
