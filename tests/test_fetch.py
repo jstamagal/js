@@ -457,3 +457,23 @@ def test_fetch_accepts_a_download_resolver(monkeypatch, tmp_path):
     assert transfers == ["/assembly/aria2c"]
     assert (tmp_path / "file").read_bytes() == b"payload"
     assert not result.startswith("ERROR")
+
+
+def test_short_download_preserves_existing_target(tmp_path, monkeypatch):
+    import io
+
+    class ShortResponse(FakeResponse):
+        def __init__(self):
+            super().__init__(b"", {"Content-Length": "1000", "Content-Type": "application/octet-stream"})
+            self.stream = io.BytesIO(b"short body")
+
+        def read(self, size=-1):
+            return self.stream.read(size)
+
+    monkeypatch.setattr(process_net.urllib.request, "urlopen", lambda *a, **kw: ShortResponse())
+    target = tmp_path / "out.bin"
+    target.write_bytes(b"previous complete download")
+    result = process_net.fetch("https://example.test/short", save="out.bin", context=ToolContext(cwd=tmp_path))
+    assert result.startswith("ERROR:")
+    assert target.read_bytes() == b"previous complete download"
+    assert not list(tmp_path.glob(".*.js-partial-*"))

@@ -528,6 +528,7 @@ def _stream_download(
     content_type: str,
     context: ToolContext,
     limit: int | None,
+    expected_size: int | None = None,
 ) -> str:
     """Move bytes to disk without ever holding the whole transfer in memory.
 
@@ -549,6 +550,8 @@ def _stream_download(
                 if limit is not None and written > limit:
                     raise DownloadError(f"response exceeds {limit} byte download limit")
                 out.write(chunk)
+            if expected_size is not None and written != expected_size:
+                raise DownloadError(f"incomplete download: expected {expected_size} bytes, received {written}")
     except DownloadError as exc:
         partial.unlink(missing_ok=True)
         return f"ERROR: {exc}"
@@ -991,7 +994,8 @@ def fetch(
             if save_target is not None:
                 # Stream: a save must not be bounded by what fits in memory.
                 return _stream_download(
-                    resp.read, save_target, content_type, context, _download_limit(context)
+                    resp.read, save_target, content_type, context, _download_limit(context),
+                    expected_size=_content_length(resp.headers) if method_name != "HEAD" else None,
                 )
             response_length = _content_length(resp.headers)
             transfer_from_headers = aria2c is not None and (

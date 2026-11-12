@@ -511,3 +511,22 @@ def test_docs_search_can_keep_authorization_on_refusal(monkeypatch, tmp_path):
     assert len(calls) == 1
     assert calls[0].get_header("Authorization") == "Bearer secret"
     assert result.startswith("ERROR")
+
+@pytest.mark.parametrize("failure", ["http", "transport"])
+@pytest.mark.parametrize("paranoid_mode", ["on", "off"])
+def test_search_error_secrets_at_truncation_boundary(monkeypatch, tmp_path, failure, paranoid_mode):
+    key = "sk-boundary-" + "SECRET" * 7
+    monkeypatch.setenv("SERPER_API_KEY", key)
+    detail = "x" * 190 + key
+
+    def fail(request, timeout):
+        if failure == "http":
+            raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {}, io.BytesIO(detail.encode()))
+        raise OSError(detail)
+
+    monkeypatch.setattr(search.urllib.request, "urlopen", fail)
+    result = search.serper_search("test", context=ToolContext(cwd=tmp_path, paranoid_mode=paranoid_mode))
+    if paranoid_mode == "on":
+        assert "sk-boundar" not in result
+    else:
+        assert "sk-boundar" in result

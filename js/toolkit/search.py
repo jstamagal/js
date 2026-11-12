@@ -67,15 +67,19 @@ def _http_body(
                 continue
             detail = ""
             try:
-                detail = exc.read().decode("utf-8", errors="replace")[:200]
+                detail = exc.read().decode("utf-8", errors="replace")
             except Exception:  # noqa: BLE001
                 pass
             for secret in secrets:
                 if secret:
                     detail = detail.replace(secret, "[REDACTED]")
-            return f"ERROR: HTTP {exc.code} from {urllib.parse.urlparse(url).netloc}: {detail}"
+            return f"ERROR: HTTP {exc.code} from {urllib.parse.urlparse(url).netloc}: {detail[:200]}"
         except Exception as exc:  # noqa: BLE001
-            return f"ERROR: {type(exc).__name__}: {exc}"
+            detail = str(exc)
+            for secret in secrets:
+                if secret:
+                    detail = detail.replace(secret, "[REDACTED]")
+            return f"ERROR: {type(exc).__name__}: {detail}"
 
 
 def _http_json(
