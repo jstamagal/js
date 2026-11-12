@@ -505,7 +505,9 @@ class MCPClient:
 
     @staticmethod
     def _is_transport_failure(exc: BaseException) -> bool:
-        return isinstance(exc, (TransportError, PeerClosedError, ConnectionError, OSError))
+        return not isinstance(exc, TimeoutError) and isinstance(
+            exc, (TransportError, PeerClosedError, ConnectionError, OSError)
+        )
 
     async def _sleep_before_retry(self, attempt: int) -> None:
         delay = min(self._reconnect_backoff * (2**attempt), self._reconnect_backoff_max)
