@@ -151,7 +151,8 @@ def _migrate_record(d: dict) -> dict | None:
 
 def _open_locked(path: Path, mode: str):
     """Open with appropriate fcntl lock for the mode. Caller must close."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    if any(flag in mode for flag in "wax"):
+        path.parent.mkdir(parents=True, exist_ok=True)
     # Text reads replace bytes that are not UTF-8 (a torn multibyte char from
     # a crashed writer) instead of raising on every later read of the file.
     f = open(path, mode) if "b" in mode else open(path, mode, encoding="utf-8", errors="replace")
