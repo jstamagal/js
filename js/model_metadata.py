@@ -427,13 +427,18 @@ def _status_from_db(path: Path, *, refreshed_at: datetime | None = None) -> Cata
     metadata = _read_db_metadata(path)
     if metadata is None:
         return None
+    try:
+        provider_count = int(metadata["provider_count"]) if metadata.get("provider_count") else None
+        model_count = int(metadata["model_count"]) if metadata.get("model_count") else None
+    except ValueError:
+        return None
     return CatalogStatus(
         db_path=path,
         generated_at=_parse_dt(metadata.get("generated_at")),
         refreshed_at=refreshed_at,
         source=metadata.get("source"),
-        provider_count=int(metadata["provider_count"]) if metadata.get("provider_count") else None,
-        model_count=int(metadata["model_count"]) if metadata.get("model_count") else None,
+        provider_count=provider_count,
+        model_count=model_count,
     )
 
 
