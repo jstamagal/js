@@ -338,7 +338,7 @@ class ArgumentParser(argparse.ArgumentParser):
 
 class _HelpFormatter(argparse.HelpFormatter):
     def add_usage(self, usage: Any, actions: Any, groups: Any, prefix: str | None = None) -> None:
-        super().add_usage(usage, actions, groups, ARGS_USAGE_PREFIX.words() if prefix is None else prefix)
+        super().add_usage(usage, actions, groups, ARGS_USAGE_PREFIX.words() + " " if prefix is None else prefix)
 
 
 def plural(n: int, word: str) -> str:
