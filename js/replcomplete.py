@@ -172,16 +172,21 @@ class JsCompleter(Completer):
             return (self._spell(token) if self._spell is not None else []), len(token)
         source = table[head]
         if source == "set" and len(words) >= 2:
+            if words[1].startswith("-"):
+                return [], len(token)
             return value_candidates(words[1], token, self._value_enums), len(token)
+        unset = source in ("set", "fset") and token.startswith("-")
+        key_token = token[1:] if unset else token
+        prefix = "-" if unset else ""
         if source in ("set", "keys"):
             # `set` takes a setting name in any case. A lowercase prefix gets
             # its matches in lowercase, so the part they share can be filled in.
-            keys = [key for key in self._setting_keys if key.upper().startswith(token.upper())]
-            return sorted({key.lower() if token.islower() else key for key in keys}), len(token)
+            keys = [key for key in self._setting_keys if key.upper().startswith(key_token.upper())]
+            return sorted({prefix + (key.lower() if key_token.islower() else key) for key in keys}), len(token)
         if source == "fset" and len(words) == 1:
             # `fset` takes a name in any case, the same way.
-            names = [name for name in self._fset_names if name.startswith(token.upper())]
-            return sorted({name.lower() if token.islower() else name for name in names}), len(token)
+            names = [name for name in self._fset_names if name.startswith(key_token.upper())]
+            return sorted({prefix + (name.lower() if key_token.islower() else name) for name in names}), len(token)
         if source == "names":
             return _prefix(list(self._names()) if self._names else [], token), len(token)
         if source == "events":
