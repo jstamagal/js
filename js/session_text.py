@@ -337,7 +337,8 @@ class _Transcript:
                 return
             self.replay[:] = memory.balance_orphaned_tool_calls(self.replay)
             keep_from = max(0, min(keep_from, len(self.replay)))
-            synthetic = [{"role": "user"}] * (2 if compaction.get("rehydrated") else 1)
+            rehydrated = compaction.get("rehydrated")
+            synthetic = [{"role": "user"}] * (2 if isinstance(rehydrated, dict) and rehydrated else 1)
             self.replay[:] = [*synthetic, *self.replay[keep_from:]]
 
     def _message(self, message: Any, ts: float | None, stamp: Any, *, replayed: bool) -> None:
