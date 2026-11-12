@@ -14,6 +14,7 @@ import hashlib
 import inspect
 import itertools
 import json
+import math
 import os
 import secrets
 import stat
@@ -1105,11 +1106,14 @@ class ToolContext(_turn_settings.ContextSettings):
 def coerce_value(value: Any, schema_type: str | None) -> Any:
     if schema_type is None or value is None:
         return value
+    numeric = schema_type in ("integer", "number")
+    if numeric and isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{schema_type} argument must be finite")
     try:
         if schema_type == "integer" and not isinstance(value, bool) and not isinstance(value, int):
             return int(value)
         if schema_type == "number" and not isinstance(value, (int, float, bool)):
-            return float(value)
+            value = float(value)
         if schema_type == "string" and not isinstance(value, str):
             return str(value)
         if schema_type == "boolean" and not isinstance(value, bool):
@@ -1121,6 +1125,8 @@ def coerce_value(value: Any, schema_type: str | None) -> Any:
                     return False
     except (TypeError, ValueError):
         pass
+    if numeric and isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{schema_type} argument must be finite")
     return value
 
 
@@ -1144,7 +1150,10 @@ def call_tool(tool: Tool, args: dict[str, Any], context: ToolContext) -> Any:
         if key == "context" and not declares_context:
             continue
         schema_type = tool.params.get(key, {}).get("type")
-        filtered[key] = coerce_value(value, schema_type)
+        try:
+            filtered[key] = coerce_value(value, schema_type)
+        except ValueError as exc:
+            return f"ERROR: invalid argument {key!r}: {exc}"
     if "context" in known and not declares_context:
         filtered["context"] = context
     try:
