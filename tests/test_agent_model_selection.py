@@ -143,7 +143,7 @@ def test_apply_agent_model_uses_frontmatter_model_and_prefixed_provider_route(tm
     prompt_spec = persona.load_prompt_spec(prompts)
     _save_login("deepseek")
 
-    actual = cli._apply_agent_model(cfg, prompt_spec, None)
+    actual = persona.apply_agent_model(cfg, prompt_spec, None)
 
     assert actual.model == "agent-frontmatter-model"
     assert actual.provider_id == "deepseek"
@@ -165,7 +165,7 @@ def test_operator_pinned_model_overrides_agent_frontmatter_model(tmp_path, model
     cfg = _make_cfg(tmp_path, prompts, explicit_model=explicit_model)
     prompt_spec = persona.load_prompt_spec(prompts)
 
-    actual = cli._apply_agent_model(cfg, prompt_spec, model_arg)
+    actual = persona.apply_agent_model(cfg, prompt_spec, model_arg)
 
     assert actual is cfg
 
@@ -175,7 +175,7 @@ def test_apply_agent_model_noops_without_frontmatter_model(tmp_path):
     cfg = _make_cfg(tmp_path, prompts)
     prompt_spec = persona.load_prompt_spec(prompts)
 
-    actual = cli._apply_agent_model(cfg, prompt_spec, None)
+    actual = persona.apply_agent_model(cfg, prompt_spec, None)
 
     assert actual is cfg
 
