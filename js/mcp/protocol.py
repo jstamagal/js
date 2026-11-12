@@ -236,7 +236,11 @@ class JSONRPCPeer:
                     await self._send_error(message["id"], INVALID_PARAMS, "Invalid params")
                 return
             if "id" in message:
-                self._start_incoming_request(message["id"], method, params)
+                request_id = message["id"]
+                if request_id in self._incoming:
+                    await self._send_error(request_id, INVALID_REQUEST, "Duplicate active request ID")
+                    return
+                self._start_incoming_request(request_id, method, params)
             else:
                 self._dispatch_notification(method, params)
             return
