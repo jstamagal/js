@@ -90,6 +90,17 @@ def test_missing_file_is_an_error(tmp_path):
         secret_patterns.load(tmp_path / "nope")
 
 
+@pytest.mark.parametrize("content", [b"\xff\xfe\x00bad", b"class key a-z\n\xc3("])
+def test_non_utf8_file_names_the_file(tmp_path, content):
+    bad = tmp_path / "secret-patterns"
+    bad.write_bytes(content)
+
+    with pytest.raises(secret_patterns.SecretPatternsError) as error:
+        secret_patterns.load(bad)
+
+    assert str(bad) in str(error.value)
+
+
 # ---- envctx reader -----------------------------------------------------------
 
 

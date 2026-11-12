@@ -166,6 +166,8 @@ def load(path: Path | None = None) -> SecretPatterns:
         return _cache[key]
     except OSError as exc:
         raise SecretPatternsError(f"{path}: cannot read the secret-patterns file: {exc.strerror}") from None
+    except UnicodeError as exc:
+        raise SecretPatternsError(f"{path}: cannot read the secret-patterns file: {exc}") from None
 
 
 def is_secret(token: str) -> bool:
