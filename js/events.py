@@ -273,6 +273,11 @@ class Approval:
         future = asyncio.run_coroutine_threadsafe(self._decide(call), self.loop)
         try:
             return await asyncio.wrap_future(future)
+        except asyncio.CancelledError as exc:
+            caller = asyncio.current_task()
+            if caller is not None and caller.cancelling():
+                raise
+            return _failed(call, exc)
         except Exception as exc:  # noqa: BLE001
             return _failed(call, exc)
 
