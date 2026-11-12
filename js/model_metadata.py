@@ -414,7 +414,7 @@ def _read_db_metadata(path: Path) -> dict[str, str] | None:
     if not path.is_file():
         return None
     try:
-        with closing(sqlite3.connect(path)) as connection:
+        with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
             rows = connection.execute("SELECT key, value FROM metadata").fetchall()
     except sqlite3.Error:
         return None
@@ -502,10 +502,13 @@ def catalog_is_stale(status: CatalogStatus | None, *, now: datetime | None = Non
     current = datetime.now(tz=UTC) if now is None else now.astimezone(UTC)
     if current - checked_at >= timedelta(seconds=float(_policy("MODEL_CATALOG_AGE_MAX"))):
         return True
-    with closing(sqlite3.connect(status.db_path)) as connection:
-        return connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='model_release_dates'"
-        ).fetchone() is None
+    try:
+        with closing(sqlite3.connect(status.db_path.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
+            return connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='model_release_dates'"
+            ).fetchone() is None
+    except sqlite3.Error:
+        return True
 
 
 def refresh_catalog(*, force: bool = False) -> CatalogStatus:
