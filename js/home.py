@@ -443,9 +443,13 @@ def _read_old_session(folder: Path, path: Path) -> _OldSession:
             continue
         if message.get("role") == "user" and session.first_user is None:
             session.first_user = str(message.get("content") or "").strip()
-        for call in message.get("tool_calls") or ():
-            if isinstance(call, dict):
-                for text in _task_texts((call.get("function") or {}).get("arguments")):
+        calls = message.get("tool_calls")
+        if not isinstance(calls, list):
+            continue
+        for call in calls:
+            function = call.get("function") if isinstance(call, dict) else None
+            if isinstance(function, dict):
+                for text in _task_texts(function.get("arguments")):
                     session.tasks.append((ts or 0.0, text))
     return session
 
