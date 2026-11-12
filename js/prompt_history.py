@@ -22,6 +22,7 @@ import contextlib
 import errno
 import fcntl
 import json
+import math
 import os
 import time
 from collections.abc import Callable, Iterable
@@ -57,8 +58,11 @@ def _entry(record: object) -> Entry | None:
     if not isinstance(record, dict) or not isinstance(record.get("text"), str):
         return None
     ts = record.get("ts")
+    timestamp = float(ts) if isinstance(ts, (int, float)) else 0.0
+    if not math.isfinite(timestamp):
+        return None
     return Entry(
-        ts=float(ts) if isinstance(ts, (int, float)) else 0.0,
+        ts=timestamp,
         cwd=str(record.get("cwd") or ""),
         session=str(record.get("session") or ""),
         agent=str(record.get("agent") or ""),
