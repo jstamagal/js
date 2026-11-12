@@ -565,11 +565,20 @@ def _post_compact_rehydration(
             return 0.0
     paths.sort(key=_mtime, reverse=True)
 
+    from .toolkit.fs import _detect_visual_mime, _read_regular_bytes
+
     sections: list[str] = []
     spent = 0
     for path in paths[:max_files]:
         try:
-            body = path.read_text(encoding="utf-8", errors="replace")
+            header = _read_regular_bytes(path, 4096)
+            if _detect_visual_mime(path, header) or b"\x00" in header:
+                sections.append(_PROMPTS['post_compact_rehydration_nontext'].format(path=path))
+                continue
+            body = _read_regular_bytes(path).decode("utf-8")
+        except UnicodeError:
+            sections.append(_PROMPTS['post_compact_rehydration_nontext'].format(path=path))
+            continue
         except OSError:
             continue
         est = max(1, int(len(body) / max(1.0, chars_per_token)))
