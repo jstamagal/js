@@ -10,6 +10,7 @@ raw JSON still needs a ranged `read` of the lines it edits.
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import json
 import os
@@ -97,9 +98,16 @@ def _clip(text: str, max_lines: int) -> list[str]:
     return shown
 
 
-def _size(payload: Any) -> str:
-    text = _text(payload)
-    size = len(text) * 3 // 4 if text and not text.lstrip().startswith("<") else len(text.encode("utf-8"))
+def _size(payload: Any, mime: str) -> str:
+    if mime == "application/json" or mime.endswith("+json"):
+        size = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    else:
+        text = _text(payload)
+        size = len(text.encode("utf-8"))
+        binary = mime.startswith(("image/", "audio/", "video/")) and mime != "image/svg+xml"
+        if binary or mime in {"application/pdf", "application/octet-stream"}:
+            with contextlib.suppress(ValueError):
+                size = len(base64.b64decode("".join(text.split()), validate=True))
     return f"{size / 1024:.1f} KB" if size >= 1024 else f"{size} B"
 
 
@@ -113,7 +121,7 @@ def summarize_output(output: dict, max_lines: int) -> list[str]:
         head = f"error {output.get('ename', '')}: {_ANSI.sub('', str(output.get('evalue', '')))}"
         return [head.rstrip(": ")]
     data = output.get("data") if isinstance(output.get("data"), dict) else {}
-    others = [f"{mime} ({_size(payload)})" for mime, payload in data.items() if mime != "text/plain"]
+    others = [f"{mime} ({_size(payload, mime)})" for mime, payload in data.items() if mime != "text/plain"]
     label = kind if kind != "execute_result" else "result"
     heading = f"{label}: " + ", ".join(["text/plain", *others] if "text/plain" in data else others)
     lines = _clip(_text(data.get("text/plain")), max_lines) if "text/plain" in data else []
