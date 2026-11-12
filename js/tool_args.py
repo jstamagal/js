@@ -55,13 +55,13 @@ def _close_object(text: str) -> str | None:
 
 def repair_jsonish(raw: str) -> dict:
     """Best-effort repair for common model-emitted argument JSON."""
+    if not raw:
+        return {}
     if _settings.live_value("TOOL_ARGUMENT_STRICT"):
         parsed = json.loads(raw)
         if not isinstance(parsed, dict):
             raise ValueError(f"tool args must be an object, got {type(parsed).__name__}")
         return parsed
-    if not raw:
-        return {}
     stripped = raw.strip()
     candidates = [raw, stripped]
     if stripped.startswith('"') and stripped.endswith('"'):
