@@ -694,7 +694,8 @@ class Agent:
 
     def wake_me(self, seconds: float) -> None:
         """Wake after `seconds` even if nothing lands. Zero or less clears the alarm."""
-        self.alarm = None if seconds <= 0 else time.monotonic() + seconds
+        expires = _expiry(seconds, time.monotonic())
+        self.alarm = None if seconds <= 0 else expires
 
     def retire(self, handoff: str) -> Msg:
         """Post the handoff to everyone, leave the bus, end after this turn."""
@@ -838,7 +839,8 @@ def _wake_me(seconds: Any = None, context: Any = None) -> str:
         return _OFF_BUS
     try:
         s = float(seconds)
-    except (TypeError, ValueError):
+        _expiry(s, time.monotonic())
+    except (TypeError, ValueError, OverflowError):
         return _PROMPTS['wake_me_error_seconds_must_be_a_number'].format(seconds=seconds)
     left = None if agent.alarm is None else agent.alarm - time.monotonic()
     if s > 0 and left is not None and left > 0:
