@@ -505,7 +505,9 @@ def _fan_out(indexed_items: list[tuple[int, Any]], coro_factory) -> list[str | N
 
     for (idx, _item), res in zip(indexed_items, asyncio.run(_gather())):
         results[idx - 1] = (
-            f"ERROR {type(res).__name__}: {res}" if isinstance(res, Exception) else res
+            f"ERROR {type(res).__name__}: {res}"
+            if isinstance(res, (Exception, asyncio.CancelledError))
+            else res
         )
     return results
 
