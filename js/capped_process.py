@@ -284,8 +284,14 @@ def _log_kill(proc: subprocess.Popen, members: list[int]) -> None:
     path = Path(_settings.live_value("KILL_LOG_FILE") or paths.state_root() / "kill.log").expanduser()
     args = proc.args if isinstance(proc.args, (list, tuple)) else [str(proc.args)]
     args = [str(a) for a in args]
-    # A jailed command is the bwrap argv; what ran is after its "--".
-    command = shlex.join(args[args.index("--") + 1:] if "--" in args else args)
+    from .jail import _IGNORE_SIGINT
+
+    wrapped = args[len(_IGNORE_SIGINT):] if args[:len(_IGNORE_SIGINT)] == _IGNORE_SIGINT else args
+    if (wrapped and Path(wrapped[0]).name == "bwrap"
+            and wrapped[1:5] == ["--die-with-parent", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try"]
+            and "--" in wrapped):
+        args = wrapped[wrapped.index("--") + 1:]
+    command = shlex.join(args)
     frames = traceback.extract_stack()[:-2][-10:]
     via = " < ".join(f"{Path(f.filename).stem}.{f.name}" for f in reversed(frames))
     line = (f"{time.strftime('%Y-%m-%d %H:%M:%S')} js={os.getpid()} pid={proc.pid} "
