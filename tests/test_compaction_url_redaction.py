@@ -57,6 +57,21 @@ def test_sensitive_query_names_are_redacted(tmp_path, name):
     assert "sort_key=name" in raw
 
 
+@pytest.mark.parametrize("url", [
+    "https://user:sentinel-one'sentinel-two@box/v1?api_key=sentinel-query",
+    "https://box/v1?api_key=sentinel-one'sentinel-two&model=useful",
+])
+def test_apostrophe_subdelimiter_credentials_are_entirely_redacted(tmp_path, url):
+    cfg = _flight_cfg(tmp_path, tmp_path / "s.jsonl")
+    cfg.provider_base_url = url
+    flight = CompactionFlight(cfg, f"Endpoint '{url}'", [], trigger={}, forced=True, focus=None,
+                              preserve_from=0, details={}, directory=tmp_path / "flights")
+    flight.write(f"GET {url}")
+    flight.close()
+    assert "sentinel" not in flight.path.read_text()
+    assert cfg.provider_base_url == url
+
+
 def test_mixed_case_encoded_and_repeated_query_credentials(tmp_path):
     cfg = _flight_cfg(tmp_path, tmp_path / "s.jsonl")
     cfg.provider_base_url = "HTTPS://user:sentinel-password@[::1]:9443/v1?%41PI_KEY=sentinel-one&api_key=sentinel-two&model=useful"

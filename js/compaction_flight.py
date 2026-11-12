@@ -30,7 +30,7 @@ def _json(value):
     return str(value)
 
 
-_URL = re.compile(r"[a-z][a-z0-9+.-]*://[^\s<>\"']+", re.IGNORECASE)
+_URL = re.compile(r"[a-z][a-z0-9+.-]*://[^\s<>\"]+", re.IGNORECASE)
 _SENSITIVE_QUERY = frozenset({
     "key", "apikey", "xapikey", "xgoogapikey", "token", "accesstoken", "refreshtoken",
     "password", "passwd", "secret", "clientsecret", "auth", "authorization", "signature", "sig",
