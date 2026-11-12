@@ -36,3 +36,20 @@ def test_integer_current_version_remains_valid(tmp_path, capsys):
     write_records(session, [message()])
     assert memory.load_messages(session) == [{"role": "user", "content": "keep"}]
     assert not capsys.readouterr().err
+
+
+def test_missing_owned_versions_are_counted_without_counting_foreign_records(tmp_path, capsys):
+    session = tmp_path / "missing.jsonl"
+    missing = message()
+    del missing["version"]
+    write_records(session, [
+        message(), missing, {"kind": "mark", "marker": "session_reset", "ts": 2},
+        {"kind": "session_metadata", "agent": "worker"},
+        {"kind": "future_sidecar", "version": True},
+        {"role": "assistant", "content": "legacy bare message"},
+    ])
+    messages, skipped = memory._replay(session)
+    assert messages == [{"role": "user", "content": "keep"}]
+    assert skipped == 2
+    assert memory.load_messages(session) == messages
+    assert capsys.readouterr().err.strip()

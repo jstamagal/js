@@ -622,7 +622,6 @@ def _replay_records(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | No
             if migrated is None:
                 if (
                     isinstance(raw, dict)
-                    and "version" in raw
                     and isinstance(raw.get("kind"), str)
                     and raw["kind"] in {"message", "mark"}
                 ):
