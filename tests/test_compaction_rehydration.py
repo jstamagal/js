@@ -104,6 +104,34 @@ def test_per_file_size_reason_remains_separate(tmp_path):
     assert compaction._PROMPTS['post_compact_rehydration_budget_exhausted'].format(path=path) not in content
 
 
+def test_vanished_file_is_named_without_inline_contents(tmp_path):
+    path = tmp_path / "vanished.txt"
+    assert str(path) in rehydrate(path)
+
+
+def test_unreadable_file_is_named_without_inline_contents(tmp_path, monkeypatch):
+    from js.toolkit import fs
+
+    path = tmp_path / "private.txt"
+    path.write_text("UNREADABLE_PAYLOAD")
+
+    def unreadable(*args, **kwargs):
+        raise PermissionError("cannot read")
+
+    monkeypatch.setattr(fs, "_read_regular_bytes", unreadable)
+    content = rehydrate(path)
+    assert str(path) in content
+    assert "UNREADABLE_PAYLOAD" not in content
+
+
+def test_fifo_is_named_without_blocking(tmp_path):
+    import os
+
+    path = tmp_path / "pipe.txt"
+    os.mkfifo(path)
+    assert str(path) in rehydrate(path)
+
+
 def test_utf8_text_is_inlined(tmp_path):
     path = tmp_path / "text.txt"
     path.write_text("current text 日本語\n")

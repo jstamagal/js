@@ -539,8 +539,8 @@ def _post_compact_rehydration(
 
     Reads from disk rather than replaying the pre-compaction text, so the
     content is current — the model may have edited the file since. Files that
-    vanished or grew past the per-file budget are named but not inlined, which
-    is still useful: it tells the model the file exists and must be re-read.
+    are unavailable, non-text, or exceed a reattachment budget are named with
+    omission notices rather than inlined. Jail-denied paths remain omitted.
     A budget left None is its compact.rehydrate_* value in js/jsrc.
     """
     if max_files is None:
@@ -595,6 +595,7 @@ def _post_compact_rehydration(
             sections.append(_PROMPTS['post_compact_rehydration_nontext'].format(path=path))
             continue
         except OSError:
+            sections.append(_PROMPTS['post_compact_rehydration_unavailable'].format(path=path))
             continue
         est = max(1, int(len(body) / ratio))
         if est > per_file_tokens:
