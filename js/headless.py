@@ -99,15 +99,19 @@ class LastLine:
 
     def __init__(self, target: TextIO) -> None:
         self.target = target
-        self.last_line = ""
+        self._last_line = ""
         self._pending = ""
+
+    @property
+    def last_line(self) -> str:
+        return self._pending.strip() or self._last_line
 
     def write(self, text: str) -> int:
         self._pending += text
         *done, self._pending = self._pending.split("\n")
         for line in done:
             if line.strip():
-                self.last_line = line.strip()
+                self._last_line = line.strip()
         return self.target.write(text)
 
     def flush(self) -> None:
