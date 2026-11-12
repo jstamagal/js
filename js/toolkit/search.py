@@ -420,10 +420,16 @@ def _is_private_ip_literal(url: str) -> bool:
 
 
 def _redacted_url(url: str) -> str:
-    parsed = urllib.parse.urlsplit(url)
-    host = parsed.hostname or ""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        host = parsed.hostname or ""
+        port = parsed.port
+    except ValueError:
+        return "[invalid URL]"
     if ":" in host:
         host = f"[{host}]"
+    if port is not None:
+        host = f"{host}:{port}"
     return urllib.parse.urlunsplit(parsed._replace(netloc=host, query="", fragment=""))
 
 

@@ -387,7 +387,10 @@ def test_browse_timeout_reports_redacted_url(monkeypatch: pytest.MonkeyPatch, tm
 
     actual = search.browse(url, context=ToolContext(cwd=tmp_path, browse_timeout_s=15))
 
-    assert actual == "ERROR: browse timed out after 15 seconds fetching http://127.0.0.1/slow"
+    assert "http://127.0.0.1:8733/slow" in actual
+    assert "admin" not in actual
+    assert "hunter2" not in actual
+    assert "secret-token" not in actual
 
 
 def test_browse_sets_obscura_timeout_below_process_backstop(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
