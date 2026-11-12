@@ -572,10 +572,17 @@ def sibling_argv(argv: list[str], swarm: str, name: str) -> list[str]:
         elif tok.startswith("--session="):
             out.append(f"{tok}-{name}")
             i += 1
+        elif tok.startswith("--prompt="):
+            has_prompt = True
+            out.append("--prompt=-")
+            i += 1
         elif tok in ("-p", "--prompt"):
             has_prompt = True
             out += [tok, "-"]
-            i += 2 if has_value else 1
+            prompt_has_value = has_value or (
+                nxt is not None and (" " in nxt or re.fullmatch(r"-\d+|-\d*\.\d+", nxt))
+            )
+            i += 2 if prompt_has_value else 1
         elif tok == "--last":
             i += 1
         else:
