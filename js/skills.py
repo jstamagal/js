@@ -255,7 +255,10 @@ def expand_user_invocation(catalog: SkillCatalog, text: str, *, command: str = "
     name, request = match.group(1), (match.group(2) or "").strip()
     if not name:
         raise SkillInvocationError(msgs.USAGE.said(usage=f"{command} <name> [request]"))
-    loaded = load_skill(catalog, name, user=True)
+    try:
+        loaded = load_skill(catalog, name, user=True)
+    except (OSError, ValueError) as exc:
+        raise SkillInvocationError(str(exc)) from exc
     if loaded is None:
         raise SkillInvocationError(msgs.NO_SUCH_SKILL.said(name=name))
     metadata = loaded.metadata

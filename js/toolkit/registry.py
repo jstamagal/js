@@ -464,7 +464,7 @@ class TurnToolSurface:
             return _PROMPTS['load_error_no_allowed_catalog_entry_with'].format(item_id=item_id)
         try:
             loaded = load_skill(self._skill_catalog, skill.name, tool_registry=self)
-        except OSError:
+        except (OSError, ValueError):
             return _PROMPTS['load_error_skill_instructions_could_not_be'].format(skill_name=skill.name)
         if loaded is None:
             return _PROMPTS['load_error_skill_instructions_could_not_be_2'].format(skill_name=skill.name)

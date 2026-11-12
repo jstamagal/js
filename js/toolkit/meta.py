@@ -138,7 +138,10 @@ def skill(name: str, context: ToolContext | None = None, *, user_command: str = 
     metadata = catalog.get(name)
     if metadata is not None and not metadata.model_invocable:
         return f"ERROR: skill {metadata.name!r} is user-only; the user loads it with {user_command} {metadata.name}"
-    loaded = load_skill(catalog, name, tool_registry=getattr(context, "tool_registry", None))
+    try:
+        loaded = load_skill(catalog, name, tool_registry=getattr(context, "tool_registry", None))
+    except (OSError, ValueError):
+        return f"ERROR: skill {name!r} instructions could not be read"
     if loaded is not None:
         return loaded.render()
     return f"ERROR: skill {name!r} not found in js/skills or local skills directories"
