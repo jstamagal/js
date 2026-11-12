@@ -194,7 +194,7 @@ def test_kill_reaches_a_grandchild_that_moved_to_its_own_process_group():
             with open(f"/proc/{sleeper}/stat") as f:
                 if f.read().rsplit(")", 1)[1].split()[0] == "Z":
                     break
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
             break
         time.sleep(0.01)
     else:
