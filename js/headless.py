@@ -51,12 +51,12 @@ class JsonEvents:
         self.session: dict[str, Any] | None = None
         self._lock = threading.Lock()
 
-    def emit(self, kind: str, **fields: Any) -> None:
+    def emit(self, kind: str, /, **fields: Any) -> None:
         if kind == "error":
             self.errored = True
         elif kind == "session":
             self.session = fields
-        line = json.dumps({"type": kind, **fields}, ensure_ascii=True, default=str)
+        line = json.dumps({**fields, "type": kind}, ensure_ascii=True, default=str)
         with self._lock:
             self.out.write(line + "\n")
             self.out.flush()
