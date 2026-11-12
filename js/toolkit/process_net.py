@@ -941,6 +941,7 @@ def fetch(
         if isinstance(data, str):
             return data
         save_target = _download_target(save, context)
+        url = urllib.parse.unwrap(url)
         parsed = urllib.parse.urlparse(url)
         if parsed.scheme == "file":
             if method_name != "GET":
