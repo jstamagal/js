@@ -553,7 +553,7 @@ def _paths_field(manifest: dict[str, Any]) -> tuple[str, ...]:
     ))
     # A match-all pattern would offer the skill on the first file touched; it
     # scopes nothing, so the skill is left unscoped.
-    if all(pattern.strip("/") == "**" for pattern in patterns):
+    if any(pattern.strip("/") in {"**", "**/*"} for pattern in patterns):
         return ()
     return patterns
 
