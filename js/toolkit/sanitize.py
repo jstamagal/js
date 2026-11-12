@@ -16,7 +16,7 @@ def int_or_default(raw: Any, default: int, *, minimum: int | None = None) -> int
         return default
     try:
         value = int(raw)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
     if minimum is not None and value < minimum:
         return default
