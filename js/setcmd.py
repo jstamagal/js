@@ -200,6 +200,8 @@ def show_lines_effective(
 
 def apply_set(settings: dict, key: str, raw: str, *, banner_changed=None, columns: int | None = None) -> CommandResult:
     """Set ``key`` to ``raw`` in ``settings``, coercing per the registry."""
+    if any(not part for part in key.split(".")):
+        return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.said(key=key))
     spec = _s.spec_for(key)
     if spec is not None:
         value, error = _s.coerce_value(spec, raw)
@@ -222,7 +224,7 @@ def apply_set(settings: dict, key: str, raw: str, *, banner_changed=None, column
     # loose scalar coercion, or as the string a JSON string literal spells. Any other name that is not a setting is refused,
     # children of registered non-map settings included.
     key = _s.child_key(key)
-    path = tuple(p for p in key.split(".") if p)
+    path = tuple(key.split("."))
     prefix_spec = _s.parent_spec(key)
     if prefix_spec is not None and prefix_spec.type == "map":
         # A JSON string literal is the string it spells, as for any string
@@ -262,10 +264,12 @@ def apply_unset(settings: dict, key: str, baseline: dict | None = None, *, banne
     """`set -<key>` — clear a setting. With ``baseline`` (the layers below this
     one), the setting takes the baseline's value; a setting the baseline does not
     hold is removed from ``settings``."""
+    if any(not part for part in key.split(".")):
+        return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.said(key=key))
     spec = _s.spec_for(key)
     if spec is None:
         key = _s.child_key(key)
-    path = spec.path if spec is not None else tuple(p for p in key.split(".") if p)
+    path = spec.path if spec is not None else tuple(key.split("."))
     if not path:
         return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.said(key=key))
     if spec is None:
