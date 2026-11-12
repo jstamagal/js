@@ -823,6 +823,8 @@ def _nearest_hint(text: str, old: str) -> str:
 def _line_span(text: str, start: int, end: int) -> tuple[int, int]:
     start_line = _normalize_line_endings(text[:start], "\n").count("\n") + 1
     end_line = _normalize_line_endings(text[:end], "\n").count("\n") + 1
+    if end > start and text[end - 1] in "\r\n":
+        end_line -= 1
     total_lines = max(1, len(text.splitlines()))
     return start_line, min(end_line, total_lines)
 
