@@ -52,6 +52,20 @@ def test_handler_failure_is_not_an_argument_error(tmp_path, error_type):
         call_tool(tool, {"value": 2}, ToolContext(cwd=tmp_path))
 
 
+@pytest.mark.parametrize("value", [2.7, -2.7, 0.5, -0.5])
+def test_fractional_integer_never_truncates(tmp_path, value):
+    with pytest.raises(ValueError):
+        coerce_value(value, "integer")
+    calls = []
+    tool = Tool("numeric", "test numeric", lambda value: calls.append(value), {"value": {"type": "integer"}})
+
+    result = call_tool(tool, {"value": value}, ToolContext(cwd=tmp_path))
+
+    assert result.startswith("ERROR:")
+    assert not calls
+    assert coerce_value(value, "number") == value
+
+
 def test_async_call_uses_same_argument_guard(tmp_path):
     import asyncio
 

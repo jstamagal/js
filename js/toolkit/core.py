@@ -1109,6 +1109,8 @@ def coerce_value(value: Any, schema_type: str | None) -> Any:
     numeric = schema_type in ("integer", "number")
     if numeric and isinstance(value, float) and not math.isfinite(value):
         raise ValueError(f"{schema_type} argument must be finite")
+    if schema_type == "integer" and isinstance(value, float) and not value.is_integer():
+        raise ValueError("integer argument must be a whole number")
     try:
         if schema_type == "integer" and not isinstance(value, bool) and not isinstance(value, int):
             return int(value)
