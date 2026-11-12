@@ -1,4 +1,4 @@
-"""Optional feature boundaries must not weaken the core tool/runtime imports."""
+"""Without Pillow, terminal_snapshot and browser_probe raise one error, not a traceback."""
 
 import builtins
 
