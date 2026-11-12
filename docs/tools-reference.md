@@ -557,11 +557,11 @@ let it build its own. They do not replace the hardened tools, do not wrap them,
 and do not import their rails. The shipped `twotool` agent
 (`js --agent twotool`) is this mode: `kernel`, `toolbox`, `shell`, nothing else.
 
-An agent has them when its agent.yaml lists them, like any other tool. Install
-`js[kernel]` or run `uv sync --no-dev --extra kernel` for their packages.
-Jupyter's `jupyter_client` and `ipykernel` are optional, not base dependencies.
-Without them enabled tools return an ERROR naming the missing package and
-installation extra instead of a traceback; core js remains usable.
+An agent has them when its agent.yaml lists them, like any other tool. Both
+need `jupyter_client` and `ipykernel`, the `kernel` extra: `just install` and
+`just sync` put it in this checkout's project venv, except on Termux. Without
+them the tools return one ERROR naming the missing package instead of a
+traceback, and the rest of js is unaffected.
 
 ### `kernel`
 

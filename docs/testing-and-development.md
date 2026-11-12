@@ -9,13 +9,12 @@ runtime tool loops, registry surfaces, subagent isolation, memory, wiki tools, a
 UV_PROJECT_ENVIRONMENT=/tmp/js-private-venv just sync
 ```
 
-The `test` extra includes kernel, vision, tags, and browser Python dependencies.
-Run `just --set browser-extra '--extra browser' install-browser` to fetch the
-Chromium build the browser-probe tests drive. Without it those tests skip.
+The `test` extra includes the kernel, vision and browser packages. `just sync`
+also fetches js's CLI binaries and the Chromium build the browser-probe tests
+drive; `just install-browser` fetches Chromium on its own. Without it those
+tests skip rather than fail.
 
-This full developer extra requires platforms supported by Playwright (not
-Android or musl). Runtime installs do not need test extras; use
-`uv sync --no-dev` for the slim base.
+The `test` extra needs a platform Playwright supports (not Android or musl).
 
 Use a distinct `UV_PROJECT_ENVIRONMENT` for each checkout/audit, including on
 subsequent uv/just commands. Sharing an editable environment lets another

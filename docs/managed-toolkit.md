@@ -29,7 +29,8 @@ layers, or source builds are part of this contract.
 ## Release selection and incomplete targets
 
 `just install-tool-binaries` and `just ensure-tools` use the same managed
-installer. `just install` invokes it; none invokes a system package manager.
+installer. `just install` and `just sync` invoke it. Off Termux, none invokes a
+system package manager.
 System copies never satisfy provisioning. Python urllib bootstraps aria2,
 then the managed aria2 performs subsequent downloads. Runtime resolution and
 startup checks prefer managed executables over PATH.

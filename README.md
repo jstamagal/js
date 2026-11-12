@@ -29,28 +29,26 @@ wiki flow ~/wiki "ingest inbox"
 wiki flow ~/wiki "ingest all inbox units"
 ```
 
-## Optional Features / Slim Install
+## What `just install` Sets Up
 
-The default package installs core chat, providers, shell, and filesystem tools.
-From this checkout, `uv sync --no-dev` installs only the base; `just install`
-creates the launcher without downloading Chromium or managed CLI binaries.
-Use system tools from PATH, or explicitly run `just install-tool-binaries` on
-supported platforms. `just sync` is the developer setup and includes test extras.
+`just install` puts `js` and `wiki` on PATH and installs everything js's tools
+need: the kernel, vision and browser packages, js's pinned CLI binaries in
+`tools/bin` (`rg`, `fd`, `bat`, `fzf`, `ast-grep`, `obscura`, `aria2c`) and the
+Chromium build `browser_probe` drives. `just sync` does the same for the
+development env and adds the test packages.
 
-Install optional features with `uv sync --no-dev --extra kernel`, `--extra vision`,
-or `--extra browser` (combine flags to retain multiple extras).
-Package installers can use `js[kernel,vision,browser]` instead of `js`.
+Two systems get less. Playwright publishes no musllinux wheels, so a musl
+system goes without the `browser` extra and Chromium. A Termux install carries
+the base packages and the CLI binaries `pkg` provides; `ast-grep` and `obscura`
+have no verified Termux release, so the install names them and carries on.
+
 An agent has `kernel` and `toolbox` when its agent.yaml lists them, like any
-other tool. `vision` supplies Pillow for terminal snapshots;
-`browser` includes it plus Playwright. Browser binaries are a separate opt-in:
-`just --set browser-extra '--extra browser' install-browser`.
-The `jev` tool, part of the core install, needs `TYPESAFE_API_KEY`.
+other tool. The `jev` tool needs `TYPESAFE_API_KEY`.
 
-Python 3.12+ is required. A slim install removes Jupyter/ZeroMQ and Pillow,
-not all native extensions: core tool validation needs `jsonschema`/`rpds-py`,
-and the provider SDKs need `pydantic-core` and `jiter`. On Termux/32-bit ARM,
-these may need a local Rust toolchain/build rather than an available wheel.
-`httpx2` remains required by the provider SDKs and transport error handling.
+Python 3.12+ is required. The base packages include native extensions: core
+tool validation needs `jsonschema`/`rpds-py`, and the provider SDKs need
+`pydantic-core` and `jiter`. On Termux/32-bit ARM, these may need a local Rust
+toolchain/build rather than an available wheel.
 
 ## Documentation
 

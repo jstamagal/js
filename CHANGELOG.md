@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **`just install` and `just sync` set up everything js's tools need again.**
+  Since 0.2.3 `just install` made the launcher and stopped: no CLI binaries in
+  `tools/bin`, no kernel packages, no Pillow, no Playwright and no Chromium, so
+  on a fresh checkout `fs_search`, `ast_search`, `browse`, `kernel`, `toolbox`,
+  `terminal_snapshot` and `browser_probe` each failed at their first call.
+  Both recipes now install the kernel, vision and browser extras, download the
+  pinned binaries and fetch Chromium, and the launcher keeps those extras in
+  the venv on every start. A musl system goes without the browser extra and
+  Chromium. A Termux install carries the base packages and the binaries `pkg`
+  provides, names the ones with no Termux release, and finishes. The
+  `browser-extra` justfile variable is gone; a missing binary's error says
+  `just install` again. Rerun `just install` on a box set up since 0.2.3.
+
 - **A directive that fails expands to nothing; the model never sees it raw.**
   An `!{...}` or ` ```! ` directive that failed to resolve (nonzero exit with
   no stdout, as `rm` of a missing file with `2>/dev/null`; a failed compile; a
