@@ -30,6 +30,7 @@ CANONICAL_EVENT_NAMES: tuple[str, ...] = (
     "mcp_progress",
     "mcp_resource_updated",
     "mcp_catalog_collision",
+    "mcp_server_error",
     "error",
     "cancel",
     "session_start",
