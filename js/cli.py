@@ -495,7 +495,7 @@ def _print_session_list(*, json_lines: bool) -> int:
     records = sorted(catalog_sessions(_paths.sessions_root()), key=lambda record: -record["mtime"])
     if json_lines:
         for record in records:
-            print(json.dumps(record, separators=(",", ":"), ensure_ascii=False))
+            print(json.dumps(record, separators=(",", ":"), ensure_ascii=True))
         return 0
 
     headings = tuple(msgs.LIST_HEADINGS.words().split())
