@@ -70,11 +70,13 @@ class TaskJob:
         with self._lock:
             self._cancel = cancel
             kill = self._kill_requested
-        if kill:
+        if kill and not self.future.done():
             cancel()
 
     def kill(self) -> None:
         with self._lock:
+            if self.future.done():
+                return
             self._kill_requested = True
             cancel = self._cancel
         if cancel is not None:
@@ -216,7 +218,14 @@ def start(
             try:
                 task = loop.create_task(run_all())
                 task.add_done_callback(lambda done: _settle(job, done, on_done))
-                job.set_cancel(lambda: loop.call_soon_threadsafe(task.cancel))
+                def cancel() -> None:
+                    try:
+                        loop.call_soon_threadsafe(task.cancel)
+                    except RuntimeError:
+                        if not (loop.is_closed() and job.future.done()):
+                            raise
+
+                job.set_cancel(cancel)
                 with contextlib.suppress(BaseException):
                     loop.run_until_complete(task)
             finally:
