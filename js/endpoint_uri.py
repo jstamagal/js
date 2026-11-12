@@ -129,7 +129,12 @@ def split(text: str) -> EndpointURL:
             raise EndpointSpecError(msgs.ENDPOINT_NO_MODEL_BEFORE_AT.format(spec=spec))
     if not rest or rest.startswith("/"):
         raise EndpointSpecError(msgs.ENDPOINT_NO_HOST.format(spec=spec))
-    return EndpointURL(wire=wire, model=model, api_key=api_key, base_url=f"{scheme}://{rest}")
+    base_url = f"{scheme}://{rest}"
+    try:
+        _ = urlsplit(base_url).port
+    except ValueError as exc:
+        raise EndpointSpecError(str(exc)) from exc
+    return EndpointURL(wire=wire, model=model, api_key=api_key, base_url=base_url)
 
 
 def is_endpoint_form(text: str) -> bool:
