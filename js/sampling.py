@@ -189,4 +189,10 @@ def parse_template_kwargs(text: str) -> dict[str, Any]:
             out[key] = json.loads(raw)
         except ValueError:
             out[key] = raw
+        try:
+            json.dumps(out[key], allow_nan=False)
+        except ValueError as exc:
+            raise ValueError(msgs.SAMPLING_SAMPLING_MUST_BE_A_FINITE_NUMBER.words(
+                key=f"template_kwargs.{key}",
+            )) from exc
     return out
