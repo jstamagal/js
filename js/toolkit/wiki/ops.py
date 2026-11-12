@@ -27,7 +27,16 @@ def _commit(vault: Path, message: str, context: ToolContext) -> str:
             f"ERROR: {vault} is not the root of a git work tree (the enclosing "
             f"repository is {root}); refusing to commit the vault into another repository"
         )
-    rc, _, err = run(["git", "-C", str(vault), "add", "-A"], context)
+    rc, _, err = run(
+        ["git", "-C", str(vault), "rm", "--cached", "--force", "--ignore-unmatch", "--", ":(top,literal).wiki.lock"],
+        context,
+    )
+    if rc:
+        return f"ERROR: git lock index cleanup failed: {err.strip()}"
+    rc, _, err = run(
+        ["git", "-C", str(vault), "add", "-A", "--", ".", ":(top,exclude,literal).wiki.lock"],
+        context,
+    )
     if rc:
         return f"ERROR: git add failed: {err.strip()}"
     rc, _, _ = run(["git", "-C", str(vault), "diff", "--cached", "--quiet"], context)
