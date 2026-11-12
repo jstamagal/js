@@ -828,7 +828,9 @@ def _last_mark_payload(memory_file: Path, prefix: str) -> str | None:
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        marker = record.get("marker") if isinstance(record, dict) else None
+        if _migrate_record(record) is None or record["kind"] != "mark":
+            continue
+        marker = record.get("marker")
         if isinstance(marker, str) and marker.startswith(prefix):
             return marker[len(prefix):]
     return None
@@ -970,7 +972,9 @@ def first_turn_mode(memory_file: Path) -> str | None:
                     record = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                marker = record.get("marker") if isinstance(record, dict) else None
+                if _migrate_record(record) is None or record["kind"] != "mark":
+                    continue
+                marker = record.get("marker")
                 if isinstance(marker, str) and marker.startswith(_TURN_MODE_MARK):
                     return marker[len(_TURN_MODE_MARK):] or None
     except OSError:
@@ -1045,7 +1049,7 @@ def load_tool_surface(memory_file: Path, *, scope: dict | None = None) -> dict |
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if not isinstance(record, dict) or record.get('kind') != 'mark' or record.get('version') != SCHEMA_VERSION:
+        if _migrate_record(record) is None or record['kind'] != 'mark':
             continue
         marker = record.get('marker')
         if marker == 'session_reset':
