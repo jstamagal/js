@@ -159,11 +159,20 @@ def _session_agent(path: Path) -> str | None:
 def latest_session(data_dir: Path, agent: str | None) -> Path | None:
     """The most recently written session under `data_dir/sessions`, of `agent` when given."""
     root = data_dir / "sessions"
-    candidates = list(root.rglob("*.jsonl")) if root.is_dir() else []
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    for path in candidates:
-        if not agent or _session_agent(path) == agent:
-            return path
+    candidates = []
+    if root.is_dir():
+        for path in root.rglob("*.jsonl"):
+            try:
+                candidates.append((path.stat().st_mtime, path))
+            except OSError:
+                continue
+    candidates.sort(key=lambda candidate: candidate[0], reverse=True)
+    for _, path in candidates:
+        try:
+            if not agent or _session_agent(path) == agent:
+                return path
+        except OSError:
+            continue
     return None
 
 
