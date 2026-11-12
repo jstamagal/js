@@ -72,6 +72,13 @@ def _field(answer: Any, name: str) -> Any:
 
 
 def _format(answer: Any) -> str:
+    try:
+        return _format_answer(answer)
+    except (TypeError, ValueError, OverflowError) as exc:
+        return f"ERROR: invalid answer: {type(exc).__name__}: {exc}"
+
+
+def _format_answer(answer: Any) -> str:
     kind = _field(answer, "type")
     if kind == "noul":
         return f"noul {float(_field(answer, 'noul')):.2f}"
