@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import codecs
 import contextlib
 import html
 import json
@@ -504,6 +505,7 @@ def _html_to_text(raw: str, base_url: str) -> str:
 _DOWNLOAD_MAX_BYTES = 32 * 1024 * 1024
 _STREAM_CHUNK = 1024 * 1024
 _INLINE_READ_CHUNK = 64 * 1024
+_SNIFF_BYTES = 4096
 
 
 class _FetchTimeoutError(Exception):
@@ -599,11 +601,11 @@ def _media_type(content_type: str) -> str:
 
 
 def _looks_binary(data: bytes) -> bool:
-    sample = data[:4096]
+    sample = data[:_SNIFF_BYTES]
     if b"\x00" in sample:
         return True
     try:
-        sample.decode("utf-8")
+        codecs.getincrementaldecoder("utf-8")().decode(sample, final=len(data) <= _SNIFF_BYTES)
     except UnicodeDecodeError:
         return True
     controls = sum(byte < 32 and byte not in {9, 10, 12, 13} for byte in sample)
@@ -723,7 +725,7 @@ def _saved_content_type(
     except Exception:  # noqa: BLE001 -- a HEAD probe must never invalidate a good download
         pass
     with target.open("rb") as stream:
-        sample = stream.read(4096)
+        sample = stream.read(_SNIFF_BYTES + 1)
     return _guess_file_content_type(target, sample)
 
 
@@ -885,7 +887,7 @@ def _fetch_file_url(
             # Copying a local file to another path is a transfer, not a read: it
             # streams, so the size of the thing is the caller's business. The
             # head read doubles as the non-regular-file guard.
-            head = _read_regular_bytes(path, 4096)
+            head = _read_regular_bytes(path, _SNIFF_BYTES + 1)
             content_type = _guess_file_content_type(path, head)
             with path.open("rb") as source:
                 return _stream_download(
@@ -974,7 +976,7 @@ def fetch(
                 )
             else:
                 with save_target.open("rb") as stream:
-                    content_type = _guess_file_content_type(save_target, stream.read(4096))
+                    content_type = _guess_file_content_type(save_target, stream.read(_SNIFF_BYTES + 1))
             return (
                 f"SAVED_RESPONSE path={save_target} size={save_target.stat().st_size} bytes "
                 f"content-type={content_type or 'unknown'}"
