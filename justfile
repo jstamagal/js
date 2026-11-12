@@ -209,8 +209,20 @@ uninstall:
 # and e2e (live end-to-end paths).
 # offline suite — skips the live markers. Cached per tree state: an unchanged
 # tree replays the last run. `just test --force` reruns.
+[positional-arguments]
 test *args:
-    scripts/cached-test.sh {{ args }} uv run {{ browser-extra }} --extra test pytest -q -m "not ai_provider and not vision and not e2e and not live" -p no:cacheprovider -n logical --dist worksteal
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cache_args=()
+    pytest_args=()
+    for arg in "$@"; do
+        if [[ "$arg" == "--force" ]]; then
+            cache_args=(--force)
+        else
+            pytest_args+=("$arg")
+        fi
+    done
+    scripts/cached-test.sh "${cache_args[@]}" uv run {{ browser-extra }} --extra test pytest -q -m "not ai_provider and not vision and not e2e and not live" -p no:cacheprovider -n logical --dist worksteal "${pytest_args[@]}"
 
 # run one test file or node. e.g. just test-file tests/test_picker.py
 [positional-arguments]
