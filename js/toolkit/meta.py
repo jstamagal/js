@@ -672,8 +672,9 @@ def _find_job(action: str, handle: Any, context: ToolContext) -> tuple[str | Non
 
 def _wait_limit(timeout: Any) -> float | None:
     """Seconds a wait blocks; None (no timeout given) waits for the end."""
-    seconds = int_or_default(timeout, 0, minimum=0)
-    return float(seconds) if seconds > 0 else None
+    if timeout is None:
+        return None
+    return float(int_or_default(timeout, 0, minimum=0))
 
 
 def _start_background(indexed_items, coro_factory, agent_id: str, session_id: str | None,
