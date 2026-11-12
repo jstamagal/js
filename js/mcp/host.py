@@ -459,7 +459,6 @@ class MCPHost:
         for server in servers:
             try:
                 await self._ensure_server(server)
-                self._forget_server_error(server.name)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -536,6 +535,7 @@ class MCPHost:
         if client is not None:
             if not client.initialized:
                 await client.initialize(timeout=self.request_timeout)
+                self._forget_server_error(server.name)
                 self._mark_metadata_dirty(server, client)
             return client
 
@@ -578,6 +578,7 @@ class MCPHost:
         )
         self.clients[server.name] = client
         await client.initialize(timeout=self.request_timeout)
+        self._forget_server_error(server.name)
         self._mark_metadata_dirty(server, client)
         return client
 
@@ -627,6 +628,7 @@ class MCPHost:
                 continue
             self._raw_tools[server_name] = list(tools)
             self._index_server_tools(server, tools)
+            self._forget_server_error(server_name)
         self._regroup_tools()
 
     def _index_server_tools(self, server: MCPServer, tools: list[dict[str, Any]]) -> None:
@@ -696,7 +698,6 @@ class MCPHost:
                     server.name,
                     loadable=False,
                 ))
-        self._forget_server_error(server_name)
         self._server_collisions[server_name] = tuple(collision_entries)
         self._server_tools[server_name] = replacement
 

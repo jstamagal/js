@@ -58,6 +58,46 @@ def test_discovery_source_whitespace_matches_exact_server(source):
     asyncio.run(run())
 
 
+def test_paranoid_reindex_retains_last_remote_refresh_error_until_success():
+    class FlakyClient(FakeClient):
+        fail = False
+
+        async def list_tools(self, **kwargs):
+            if self.fail:
+                raise RuntimeError("refresh failed with sentinel-secret")
+            return await super().list_tools(**kwargs)
+
+    async def run():
+        server = MCPServer(name="server", normalized_name="server", transport="stdio", command=("unused",),
+                           env={"API_KEY": "sentinel-secret"})
+        host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=FlakyClient, paranoid_mode="off")
+        assert await host.discover(source="server")
+        client = host.clients[server.name]
+        client.fail = True
+        client.kwargs["on_tools_changed"]({})
+        await host.refresh()
+        assert "sentinel-secret" in host._server_errors[server.name]
+        cached = dict(host.remote_tools)
+        for mode in ("on", "off", "on"):
+            host.paranoid_mode = mode
+            assert server.name in host._server_errors
+            assert "refresh failed" in host._server_errors[server.name]
+            assert ("sentinel-secret" in host._server_errors[server.name]) is (mode == "off")
+            assert host.remote_tools.keys() == cached.keys()
+            found = await host.discover(source="server")
+            assert any(entry.id.startswith("mcp:server-error:") for entry in found)
+        host._dirty.clear()
+        assert any(entry.id.startswith("mcp:server-error:") for entry in await host.discover(source="server"))
+        client.kwargs["on_tools_changed"]({})
+        client.fail = False
+        await host.refresh()
+        assert server.name not in host._server_errors
+        assert server.name not in host._raw_server_errors
+        await host.close()
+
+    asyncio.run(run())
+
+
 def test_telemetry_reserved_field_aliases_preserve_original_payload():
     stream = io.StringIO()
     host = MCPHost(MCPConfiguration((), MCPPolicy()),
