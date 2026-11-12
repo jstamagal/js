@@ -99,16 +99,18 @@ class CompactionFlight:
             return
         settings = getattr(cfg, "settings", {}) or {}
         directory = Path(directory).expanduser()
-        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path = directory / f"{_stem(cfg)}-{self.id}.jsonl"
-        self.stream = os.fdopen(os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600),
-                                "w", encoding="utf-8", errors="backslashreplace")
         try:
+            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            self.stream = os.fdopen(os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600),
+                                    "w", encoding="utf-8", errors="backslashreplace")
             self._start(system, messages, settings, operation=operation, trigger=trigger, forced=forced,
                         focus=focus, preserve_from=preserve_from, details=details)
+        except OSError as exc:
+            self._disable(exc)
         except BaseException:
             # The caller never gets this object, so nobody else would close it.
-            self.stream.close()
+            self.close()
             raise
 
     def _start(self, system, messages, settings, *, operation, trigger, forced, focus, preserve_from, details):
@@ -124,9 +126,32 @@ class CompactionFlight:
                     disk_compaction_source_sha256=hashlib.sha256(Path(__file__).with_name("compaction.py").read_bytes()).hexdigest())
         self.snapshot("before", system, messages)
 
+    def _disable(self, error):
+        stream, self.stream = self.stream, None
+        if stream is not None:
+            try:
+                stream.close()
+            except OSError:
+                pass
+        notice = output.event("notice", message=msgs.FLIGHT_LOG_FAILED,
+                              fields={"error": error}, stderr=True, flush=True)
+        try:
+            if self.emit is None:
+                output.emit(notice)
+            else:
+                self.emit("compaction_output", output=notice)
+        except OSError:
+            pass
+
     def record(self, event, **payload):
         if self.stream is None:
             return
+        try:
+            self._record(event, **payload)
+        except OSError as exc:
+            self._disable(exc)
+
+    def _record(self, event, **payload):
         self.stream.write(json.dumps({"version": 1, "id": self.id, "event": event,
                                       "ts": time.time(), **payload}, ensure_ascii=False, default=_json) + "\n")
         self.stream.flush()
@@ -174,7 +199,10 @@ class CompactionFlight:
 
     def flush(self):
         if self.stream is not None:
-            self.stream.flush()
+            try:
+                self.stream.flush()
+            except OSError as exc:
+                self._disable(exc)
 
     def finish(self, event, system, messages, **payload):
         self.snapshot("after", system, messages)
@@ -183,4 +211,8 @@ class CompactionFlight:
 
     def close(self):
         if self.stream is not None:
-            self.stream.close()
+            stream, self.stream = self.stream, None
+            try:
+                stream.close()
+            except OSError as exc:
+                self._disable(exc)
