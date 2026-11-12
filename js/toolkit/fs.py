@@ -327,7 +327,7 @@ def _normalize_line_endings(text: str, target: str) -> str:
     return normalized.replace("\n", target)
 
 
-def _write_bytes_preserving_existing_newlines(path: Path, content: str) -> bytes:
+def _encode_preserving_existing_newlines(path: Path, content: str) -> bytes:
     line_ending = "\n"
     if path.exists():
         try:
@@ -336,10 +336,7 @@ def _write_bytes_preserving_existing_newlines(path: Path, content: str) -> bytes
         except UnicodeDecodeError:
             line_ending = "\n"
     normalized = _normalize_line_endings(content, line_ending)
-    data = normalized.encode("utf-8")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(data)
-    return data
+    return normalized.encode("utf-8")
 
 
 def _utf8_char_start(buf: bytes, index: int) -> int:
@@ -648,8 +645,13 @@ def write(file_path: str | None = None, content: str = "", overwrite: bool = Fal
         if guard:
             return guard
     try:
+        data = _encode_preserving_existing_newlines(target, content)
+    except (OSError, UnicodeEncodeError) as exc:
+        return f"ERROR: {exc}"
+    try:
         context.snapshot(target)
-        data = _write_bytes_preserving_existing_newlines(target, content)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
     except OSError as exc:
         return f"ERROR: {exc}"
     _view(path=str(target), before=current.decode("utf-8", errors="replace") if replacing else None,
@@ -1227,7 +1229,10 @@ def patch(
         replacements += count if edit_replace_all else 1
         fuzzy_edits += fuzzy
 
-    data = updated.encode("utf-8")
+    try:
+        data = updated.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        return f"ERROR: {exc}"
     context.snapshot(target)
     target.write_bytes(data)
     content_hash = _hash_bytes(data)
