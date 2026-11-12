@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import re
 import time
@@ -569,19 +570,33 @@ def _post_compact_rehydration(
 
     sections: list[str] = []
     spent = 0
+    ratio = max(1.0, chars_per_token)
+    # The estimate floors character/ratio; UTF-8 needs at most four bytes per character.
+    character_limit = max(0, math.ceil((per_file_tokens + 1) * ratio) - 1)
+    byte_limit = character_limit * 4
     for path in paths[:max_files]:
         try:
             header = _read_regular_bytes(path, 4096)
             if _detect_visual_mime(path, header) or b"\x00" in header:
                 sections.append(_PROMPTS['post_compact_rehydration_nontext'].format(path=path))
                 continue
-            body = _read_regular_bytes(path).decode("utf-8")
+            if path.stat().st_size > byte_limit:
+                sections.append(_PROMPTS['post_compact_rehydration_too_large_to_re_attach_read'].format(path=path))
+                continue
+            data = _read_regular_bytes(path, byte_limit + 1)
+            if len(data) > byte_limit:
+                sections.append(_PROMPTS['post_compact_rehydration_too_large_to_re_attach_read'].format(path=path))
+                continue
+            if b"\x00" in data:
+                sections.append(_PROMPTS['post_compact_rehydration_nontext'].format(path=path))
+                continue
+            body = data.decode("utf-8")
         except UnicodeError:
             sections.append(_PROMPTS['post_compact_rehydration_nontext'].format(path=path))
             continue
         except OSError:
             continue
-        est = max(1, int(len(body) / max(1.0, chars_per_token)))
+        est = max(1, int(len(body) / ratio))
         if est > per_file_tokens or spent + est > token_budget:
             sections.append(_PROMPTS['post_compact_rehydration_too_large_to_re_attach_read'].format(path=path))
             continue
