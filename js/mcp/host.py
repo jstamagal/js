@@ -510,12 +510,12 @@ class MCPHost:
             ))
         result = []
         for entry in sorted(entries, key=lambda item: item.id):
-            if source and entry.source.casefold() != source.casefold():
+            if source_scope and entry.source.casefold() != source_scope:
                 server = next(
                     (item for item in self.config.servers if item.name == entry.source),
                     None,
                 )
-                if server is None or server.normalized_name.casefold() != source.casefold():
+                if server is None or server.normalized_name.casefold() != source_scope:
                     continue
             result.append(entry)
         return tuple(ranked_entries(result, " ".join(sorted(terms))))

@@ -44,6 +44,20 @@ def test_notification_server_and_kind_fields_are_delivered(callback, event):
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("source", ["Configured Server ", " configured_server", " CONFIGURED_SERVER ", "\tConfigured Server\n"])
+def test_discovery_source_whitespace_matches_exact_server(source):
+    async def run():
+        server = MCPServer(name="Configured Server", normalized_name="configured_server", transport="stdio", command=("unused",))
+        host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=FakeClient)
+        expected = await host.discover(source="Configured Server")
+        assert expected
+        assert await host.discover(source=source) == expected
+        assert all(entry.source == server.name for entry in expected)
+        await host.close()
+
+    asyncio.run(run())
+
+
 def test_telemetry_reserved_field_aliases_preserve_original_payload():
     stream = io.StringIO()
     host = MCPHost(MCPConfiguration((), MCPPolicy()),
