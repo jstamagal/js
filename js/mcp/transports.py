@@ -144,6 +144,7 @@ class StdioTransport:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     env=child_env,
+                    start_new_session=True,
                 )
             except asyncio.CancelledError:
                 raise
