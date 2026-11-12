@@ -3497,7 +3497,9 @@ def _run_commit(target: str | None,
 
 def _run_compact_offline(session: str, *, agent: str | None = None, focus: str = "", extras: list[str] | None = None, model: str | None = None) -> int:
     try:
-        cfg = _from_env(session, save_session=True, extras=extras, agent_id=agent)
+        cfg = _from_env(session, save_session=False, extras=extras, agent_id=agent)
+        if not cfg.session_file.is_file():
+            raise ValueError(msgs.CONFIG_SESSION_MUST_IDENTIFY_AN_EXISTING_JSONL_FILE.format(session=session))
         prompt_spec = P.load_configured_prompt_spec(cfg)
         messages = M.load_replay_messages(cfg.session_file)
         compact_cfg = replace(cfg, model=model) if model is not None else cfg

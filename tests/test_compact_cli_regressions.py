@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from js import cli
+from js import cli, paths
 from test_config_compaction_layers import _compact_test_cfg
 
 
@@ -64,6 +64,8 @@ def _run_compact_route(monkeypatch, cfg, route):
         monkeypatch.setattr(cli, "_repl_assembly", lambda state: SimpleNamespace(compact_force_focus="forced"))
         assert cli._cmd_compact("", {"system": "", "messages": []}, cfg) is None
     else:
+        cfg.session_file.parent.mkdir(parents=True, exist_ok=True)
+        cfg.session_file.touch()
         monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
         monkeypatch.setattr(cli.P, "load_configured_prompt_spec", lambda cfg: SimpleNamespace(system=""))
         monkeypatch.setattr(cli.M, "load_replay_messages", lambda path: [])
@@ -91,3 +93,28 @@ def test_real_empty_compaction_publishes_skip_once(monkeypatch, tmp_path, capsys
     assert len(details) == 1
     captured = capsys.readouterr()
     assert (captured.out + captured.err).count(details[0]) == 1
+
+
+def test_missing_compact_session_does_not_create_file_or_run_work(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli.P, "load_configured_prompt_spec", lambda cfg: pytest.fail("loaded prompt for missing session"))
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", lambda *a, **k: pytest.fail("compacted missing session"))
+    monkeypatch.setattr(cli.compaction, "flight_log_dir", lambda cfg: pytest.fail("opened flight for missing session"))
+
+    assert cli._run_compact_offline("never-existed") != 0
+    captured = capsys.readouterr()
+    assert "never-existed" in captured.err
+    assert not list(paths.sessions_root().rglob("never-existed.jsonl"))
+    assert not list(paths.state_root().rglob("latest.json"))
+    assert not list(paths.logs_root().rglob("compactions"))
+
+
+def test_compact_session_removed_after_resolution_fails_before_prompt(monkeypatch, tmp_path, capsys):
+    cfg = _compact_test_cfg(tmp_path, {})
+    assert not cfg.session_file.exists()
+    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(cli.P, "load_configured_prompt_spec", lambda cfg: pytest.fail("loaded prompt after session vanished"))
+    assert cli._run_compact_offline("vanished") != 0
+    captured = capsys.readouterr()
+    assert "vanished" in captured.err or str(cfg.session_file) in captured.err
+    assert not cfg.session_file.exists()
