@@ -118,3 +118,23 @@ def test_compact_session_removed_after_resolution_fails_before_prompt(monkeypatc
     captured = capsys.readouterr()
     assert "vanished" in captured.err or str(cfg.session_file) in captured.err
     assert not cfg.session_file.exists()
+
+
+@pytest.mark.parametrize("external", ["configured-summarizer", "same", ""])
+@pytest.mark.parametrize("explicit", ["operator-summarizer", None])
+def test_offline_compaction_explicit_model_wins_without_rewriting_config(monkeypatch, tmp_path, external, explicit):
+    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_EXTERNAL_MODEL": external})
+    cfg.session_file.parent.mkdir(parents=True, exist_ok=True)
+    cfg.session_file.touch()
+    observed = []
+
+    def compact(actual_cfg, system, messages, *, model=None, **kwargs):
+        observed.append((actual_cfg.model, model or cli.compaction.get_model(actual_cfg)))
+        return "summary complete"
+
+    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(cli.P, "load_configured_prompt_spec", lambda cfg: SimpleNamespace(system=""))
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", compact)
+    assert cli._run_compact_offline("existing", model=explicit) == 0
+    expected = explicit or (external if external not in {"", "same"} else cfg.model)
+    assert observed == [(cfg.model, expected)]

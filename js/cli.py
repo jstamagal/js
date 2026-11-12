@@ -3502,11 +3502,10 @@ def _run_compact_offline(session: str, *, agent: str | None = None, focus: str =
             raise ValueError(msgs.CONFIG_SESSION_MUST_IDENTIFY_AN_EXISTING_JSONL_FILE.format(session=session))
         prompt_spec = P.load_configured_prompt_spec(cfg)
         messages = M.load_replay_messages(cfg.session_file)
-        compact_cfg = replace(cfg, model=model) if model is not None else cfg
         emit, skipped = _track_compact_skips(compaction.printing())
-        result = compaction.compact_now_sync(compact_cfg, prompt_spec.system, messages, focus=focus, forced=True,
-                                             emit=emit,
-                                             log_dir=compaction.flight_log_dir(compact_cfg))
+        result = compaction.compact_now_sync(cfg, prompt_spec.system, messages, focus=focus, forced=True,
+                                             model=model, emit=emit,
+                                             log_dir=compaction.flight_log_dir(cfg))
     except Exception as e:  # noqa: BLE001
         msgs.warn(msgs.FAILED, error=_error_text(e))
         return 1
