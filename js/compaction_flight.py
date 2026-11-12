@@ -9,10 +9,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import time
 import traceback
 from typing import Any
 from uuid import uuid4
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from . import output, paranoid, paths
 from . import messages as msgs
@@ -26,6 +28,48 @@ def _json(value):
     if isinstance(value, Path):
         return str(value)
     return str(value)
+
+
+_URL = re.compile(r"[a-z][a-z0-9+.-]*://[^\s<>\"']+", re.IGNORECASE)
+_SENSITIVE_QUERY = frozenset({
+    "key", "apikey", "xapikey", "xgoogapikey", "token", "accesstoken", "refreshtoken",
+    "password", "passwd", "secret", "clientsecret", "auth", "authorization", "signature", "sig",
+})
+
+
+def _diagnostic_url(match):
+    text = match.group()
+    try:
+        parsed = urlsplit(text)
+        netloc = parsed.netloc
+        if "@" in netloc:
+            netloc = "redacted@" + netloc.rsplit("@", 1)[1]
+        pairs = parse_qsl(parsed.query, keep_blank_values=True)
+        masked = [
+            (key, "[redacted]" if re.sub(r"[-_]", "", key.casefold()) in _SENSITIVE_QUERY else value)
+            for key, value in pairs
+        ]
+        query = urlencode(masked) if masked != pairs else parsed.query
+        if netloc == parsed.netloc and query == parsed.query:
+            return text
+        return urlunsplit((parsed.scheme, netloc, parsed.path, query, parsed.fragment))
+    except ValueError:
+        return "[redacted URL]"
+
+
+def _diagnostic(value):
+    """A diagnostic-only copy with credentials removed from URL strings."""
+    if is_dataclass(value) and not isinstance(value, type):
+        value = asdict(value)
+    if isinstance(value, Path):
+        value = str(value)
+    if isinstance(value, str):
+        return _URL.sub(_diagnostic_url, value)
+    if isinstance(value, dict):
+        return {key: _diagnostic(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_diagnostic(item) for item in value]
+    return value
 
 
 def _redact(value):
@@ -153,7 +197,8 @@ class CompactionFlight:
 
     def _record(self, event, **payload):
         self.stream.write(json.dumps({"version": 1, "id": self.id, "event": event,
-                                      "ts": time.time(), **payload}, ensure_ascii=False, default=_json) + "\n")
+                                      "ts": time.time(), **_diagnostic(payload)}, ensure_ascii=False,
+                                     default=lambda value: _diagnostic(_json(value))) + "\n")
         self.stream.flush()
         if event not in _LIFECYCLE and event not in {"before", "after"}:
             # Streamed chunks and traces: flushed, not fsynced. One fsync per
