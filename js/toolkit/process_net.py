@@ -541,25 +541,26 @@ def _stream_download(
     fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
     written = 0
     try:
-        with os.fdopen(fd, "wb") as out:
-            while True:
-                chunk = read_chunk(_STREAM_CHUNK)
-                if not chunk:
-                    break
-                written += len(chunk)
-                if limit is not None and written > limit:
-                    raise DownloadError(f"response exceeds {limit} byte download limit")
-                out.write(chunk)
-            if expected_size is not None and written != expected_size:
-                raise DownloadError(f"incomplete download: expected {expected_size} bytes, received {written}")
-    except DownloadError as exc:
+        try:
+            with os.fdopen(fd, "wb") as out:
+                while True:
+                    chunk = read_chunk(_STREAM_CHUNK)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if limit is not None and written > limit:
+                        raise DownloadError(f"response exceeds {limit} byte download limit")
+                    out.write(chunk)
+                if expected_size is not None and written != expected_size:
+                    raise DownloadError(f"incomplete download: expected {expected_size} bytes, received {written}")
+        except DownloadError as exc:
+            return f"ERROR: {exc}"
+        except OSError as exc:
+            return f"ERROR: {type(exc).__name__}: {exc}"
+        context.snapshot(target)
+        os.replace(partial, target)
+    finally:
         partial.unlink(missing_ok=True)
-        return f"ERROR: {exc}"
-    except OSError as exc:
-        partial.unlink(missing_ok=True)
-        return f"ERROR: {type(exc).__name__}: {exc}"
-    context.snapshot(target)
-    os.replace(partial, target)
     return (
         f"SAVED_RESPONSE path={target} size={written} bytes "
         f"content-type={content_type or 'unknown'}"
