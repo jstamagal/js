@@ -73,8 +73,11 @@ def cell_ids(cells: list[dict]) -> list[str]:
 
 def find_cell(cells: list[dict], cell_id: str) -> int | None:
     """The index of the cell under the same ids shown by `read`."""
-    wanted = str(cell_id).strip()
+    wanted = str(cell_id)
     ids = cell_ids(cells)
+    if wanted in ids:
+        return ids.index(wanted)
+    wanted = wanted.strip()
     return ids.index(wanted) if wanted in ids else None
 
 
