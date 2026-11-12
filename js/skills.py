@@ -522,7 +522,7 @@ def _tools_field(manifest: dict[str, Any]) -> tuple[str, ...]:
     if value is None:
         return ()
     if isinstance(value, str):
-        value = value.split(",")
+        value = [item for item in value.split(",") if item.strip()]
     if not isinstance(value, list):
         raise ValueError(msgs.SKILL_FRONTMATTER_TOOLS_FRONTMATTER_MUST_BE_A_LIST_OF.format())
     tools: list[str] = []
