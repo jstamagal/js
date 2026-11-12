@@ -102,6 +102,8 @@ _JSON_CONTAINERS = {"array": list, "object": dict}
 def _scalar_from_string(value: str, types: list) -> object:
     """``value`` parsed as the one scalar type its schema declares, or
     unchanged when it does not parse as that type."""
+    if "null" in types and value.strip() == "null":
+        return None
     if "integer" in types:
         try:
             return int(value.strip())
@@ -133,7 +135,7 @@ def coerce_to_schema(value: object, schema: object) -> object:
 
     Only a property whose declared type excludes ``string`` is touched: a
     container only when the string parses to exactly that container, a scalar
-    only when the string parses as that integer, number or boolean (``"1.5"``
+    only when the string parses as that integer, number, boolean or null (``"1.5"``
     is not an integer; ``"yes"`` is not a boolean). Anything else is returned
     unchanged, so a genuinely wrong argument still fails validation.
     """
