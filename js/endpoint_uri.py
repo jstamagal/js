@@ -110,6 +110,7 @@ def split(text: str) -> EndpointURL:
         if wire not in WIRES:
             raise EndpointSpecError(
                 msgs.ENDPOINT_UNKNOWN_WIRE.format(wire=wire, wires=", ".join(f"{w}+" for w in WIRES)))
+    scheme = scheme.lower()
     if scheme not in _SCHEMES:
         raise EndpointSpecError(msgs.ENDPOINT_UNKNOWN_SCHEME.format(scheme=scheme, spec=spec))
 
