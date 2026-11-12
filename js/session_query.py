@@ -627,16 +627,26 @@ _HARNESS_CLOSE = tuple(f"</{tag}>" for tag in HARNESS_USER_TAGS)
 
 def _operator_lines(lines: list[str]) -> list[str]:
     """A user message's lines without the blocks js wrote into it."""
-    kept, inside = [], False
+    kept = []
+    closing = None
     for line in lines:
-        text = line.strip()
-        if text.startswith(_HARNESS_OPEN):
-            inside = not text.endswith(_HARNESS_CLOSE)
-            continue
-        if inside:
-            inside = not text.endswith(_HARNESS_CLOSE)
-            continue
-        kept.append(line)
+        remaining = line
+        while remaining:
+            if closing is None:
+                text = remaining.lstrip()
+                for opening, end_tag in zip(_HARNESS_OPEN, _HARNESS_CLOSE, strict=True):
+                    if text.startswith(opening):
+                        closing = end_tag
+                        remaining = text[len(opening):]
+                        break
+                else:
+                    kept.append(remaining)
+                    break
+            end = remaining.find(closing)
+            if end < 0:
+                break
+            remaining = remaining[end + len(closing):]
+            closing = None
     return kept
 
 
