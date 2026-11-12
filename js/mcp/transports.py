@@ -725,8 +725,9 @@ class StreamableHTTPTransport:
                     self._last_event_id = pending_event_id
                     if resume_get:
                         self._get_last_event_id = pending_event_id
-                if data_lines:
-                    emit(self._decode_message(b"\n".join(data_lines)))
+                payload = b"\n".join(data_lines)
+                if payload:
+                    emit(self._decode_message(payload))
                 data_lines.clear()
                 return
             if line.startswith(b":"):
