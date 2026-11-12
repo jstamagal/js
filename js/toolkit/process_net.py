@@ -53,7 +53,6 @@ _ENV_ALLOW = tuple(_settings.default_value("SHELL_ENV_KEEP"))
 # Where rustup's cargo and rustc on PATH find their toolchains; a command
 # inherits them with PATH, since without them those binaries do not run.
 _TOOLCHAIN_ENV = ("RUSTUP_HOME", "CARGO_HOME")
-_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _TAG_RE = re.compile(r"<[^>]+>")
 _ANCHOR_RE = re.compile(r"(?is)<a\b(?P<attrs>[^>]*)>(?P<label>.*?)</a\s*>")
 _HREF_RE = re.compile(
@@ -228,7 +227,12 @@ def _kill_live_jobs() -> None:
 
 def _clean(raw: bytes, keep_ansi: bool) -> str:
     text = raw.decode("utf-8", errors="replace")
-    return text if keep_ansi else _ANSI_RE.sub("", text)
+    if keep_ansi:
+        return text
+    from ..display import StreamCleaner
+
+    cleaner = StreamCleaner(controls=True)
+    return cleaner.feed(text) + cleaner.flush()
 
 
 # Bytes held back from the inline limit for the stream labels and the HANDLE
