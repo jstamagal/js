@@ -848,8 +848,8 @@ def test_offline_compact_model_flag_overrides_same_model(monkeypatch, tmp_path):
     cli.M.append_message(session_file, {"role": "user", "content": "old"})
     seen: list[str] = []
 
-    def compact_stub(cfg, system, messages, *, focus="", forced=False, **kwargs):
-        seen.append(cfg.model)
+    def compact_stub(cfg, system, messages, *, model=None, focus="", forced=False, **kwargs):
+        seen.append(model or cli.compaction.get_model(cfg))
         return msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")
 
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=compact_stub))
