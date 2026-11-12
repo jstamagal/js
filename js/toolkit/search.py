@@ -454,6 +454,7 @@ _BROWSE_SETTLE_SECONDS = 5
 # what makes the link list actionable instead of decorative. In-page anchors are left
 # alone on purpose — they carry a "same page" signal that a full URL destroys.
 _MD_LINK = re.compile(r"(!?\[[^\]]*\])\(([^)\s]+)((?:\s+\"[^\"]*\")?)\)")
+_MD_LINKED_IMAGE = re.compile(r"(\[!\[[^\]]*\]\([^\n)]*\)\])\(([^)\s]+)((?:\s+\"[^\"]*\")?)\)")
 
 
 def _absolutize(markdown: str, base_url: str) -> str:
@@ -463,7 +464,7 @@ def _absolutize(markdown: str, base_url: str) -> str:
             return match.group(0)
         return f"{label}({urllib.parse.urljoin(base_url, target)}{title})"
 
-    return _MD_LINK.sub(_fix, markdown)
+    return _MD_LINKED_IMAGE.sub(_fix, _MD_LINK.sub(_fix, markdown))
 
 
 def _obscura_status(binary: str, url: str, timeout: float, context: ToolContext | None = None) -> int | None:
