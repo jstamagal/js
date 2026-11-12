@@ -59,6 +59,10 @@ class PeerClosedError(ConnectionError):
     pass
 
 
+def _valid_id(value: object) -> bool:
+    return isinstance(value, (int, str)) and not isinstance(value, bool)
+
+
 async def _resolve(value: Any) -> Any:
     if inspect.isawaitable(value):
         return await value
@@ -220,6 +224,9 @@ class JSONRPCPeer:
         if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
             return
         if "method" in message:
+            if "id" in message and not _valid_id(message["id"]):
+                await self._send_error(None, INVALID_REQUEST, "Invalid request ID")
+                return
             method = message.get("method")
             if not isinstance(method, str):
                 return
@@ -229,9 +236,7 @@ class JSONRPCPeer:
                     await self._send_error(message["id"], INVALID_PARAMS, "Invalid params")
                 return
             if "id" in message:
-                request_id = message["id"]
-                if isinstance(request_id, (int, str)) and not isinstance(request_id, bool):
-                    self._start_incoming_request(request_id, method, params)
+                self._start_incoming_request(message["id"], method, params)
             else:
                 self._dispatch_notification(method, params)
             return
@@ -240,6 +245,8 @@ class JSONRPCPeer:
 
     def _dispatch_response(self, message: dict[str, Any]) -> None:
         request_id = message.get("id")
+        if not _valid_id(request_id):
+            return
         future = self._pending.get(request_id)
         if future is None or future.done():
             return
@@ -313,6 +320,8 @@ class JSONRPCPeer:
     def _dispatch_notification(self, method: str, params: dict[str, Any]) -> None:
         if method == "notifications/cancelled":
             request_id = params.get("requestId")
+            if not _valid_id(request_id):
+                return
             task = self._incoming.get(request_id)
             if task is not None:
                 task.cancel()
