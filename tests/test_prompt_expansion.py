@@ -288,7 +288,7 @@ def test_persona_passes_configured_inline_code_timeout(tmp_path, monkeypatch):
 
     seen = {}
 
-    def fake_expand(text, *, allow_code=False, env=None, timeout_s=None, max_output_bytes=None):
+    def fake_expand(text, *, allow_code=False, env=None, code_env=None, timeout_s=None, max_output_bytes=None):
         seen["text"] = text
         seen["allow_code"] = allow_code
         seen["timeout_s"] = timeout_s

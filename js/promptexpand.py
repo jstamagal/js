@@ -75,6 +75,7 @@ _VARIABLE = re.compile(r"(?P<vbs>\\)?(?P<vtick>`)?%%(?P<variable>[A-Za-z_][A-Za-
 
 
 _WARNING: ContextVar = ContextVar("js_expansion_warning", default=None)
+_CODE_ENV: ContextVar[dict | None] = ContextVar("js_expansion_code_env", default=None)
 
 
 def session_variables(cfg) -> dict[str, str]:
@@ -121,6 +122,7 @@ def expand_prompt(
     *,
     allow_code: bool = False,
     env: dict | None = None,
+    code_env: dict | None = None,
     variables: Mapping[str, str] | None = None,
     timeout_s: int | None = None,
     max_output_bytes: int | None = None,
@@ -146,8 +148,8 @@ def expand_prompt(
     resolved independently in a single, non-re-scanned pass (the injection guard).
 
     ``env`` substitutes only for the read-only lookups ({{VAR}} and !{env});
-    code subsystems (sh/bash/python/node/c) always execute against the real
-    process environment.
+    code subsystems (sh/bash/python/node/c) execute against the real process
+    environment unless ``code_env`` supplies an explicit child environment.
 
     ``variables`` supplies the independent js built-ins, including substitutions
     in subsystem bodies. Unknown built-ins stay literal.
@@ -248,9 +250,11 @@ def expand_prompt(
             return exc.remainder
 
     token = _WARNING.set(warning)
+    code_token = _CODE_ENV.set(code_env)
     try:
         return _DIRECTIVE.sub(_resolve, text)
     finally:
+        _CODE_ENV.reset(code_token)
         _WARNING.reset(token)
 
 
@@ -280,7 +284,7 @@ def _run_subsystem(
         raise PromptExpansionError(msgs.DIRECTIVE_CODE_OFF.said(name=name))
     try:
         if is_code:
-            # Code subsystems run against the real process environment, always.
+            # Built-in runners use this expansion's child environment.
             return runner(body, timeout_s=timeout_s, max_output_bytes=max_output_bytes)
         return runner(body, environ=environ, timeout_s=timeout_s)
     except OSError as exc:
@@ -326,7 +330,7 @@ def _run_capture(
         proc = _run_capped(
             argv,
             cwd=cwd,
-            env=None,
+            env=_CODE_ENV.get(),
             timeout=timeout_s,
             cap=max_output_bytes,
         )

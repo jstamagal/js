@@ -529,15 +529,18 @@ def expand_agent_text(text: str, cfg) -> str:
     # The prompt's commands (envctx) report the shell the shell tool runs
     # commands in, which is SHELL_PROGRAM, not the operator's $SHELL.
     program = str(settings.knob(getattr(cfg, "settings", None), "SHELL_PROGRAM"))
-    os.environ["JS_SHELL"] = shutil.which(program) or program
+    environ = dict(os.environ)
+    environ["JS_SHELL"] = shutil.which(program) or program
     # JS_ROOT is where js itself is: the directory holding the js package,
     # prompts/ and tools/, so a prompt reaches `$JS_ROOT/tools/envctx.c`
     # wherever js is installed.
-    os.environ["JS_ROOT"] = str(Path(__file__).resolve().parents[1])
-    secret_patterns.export_env()
+    environ["JS_ROOT"] = str(Path(__file__).resolve().parents[1])
+    environ[secret_patterns.ENV_VAR] = str(secret_patterns.patterns_file())
     return expand_prompt(
         text,
         allow_code=allow_code,
+        env=environ,
+        code_env=environ,
         timeout_s=timeout_s,
         max_output_bytes=max_output_bytes,
         **({"variables": session_variables(cfg)} if "%%" in text else {}),
