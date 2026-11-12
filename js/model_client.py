@@ -891,7 +891,7 @@ def _strip_reasoning_parts(messages: list[ai.messages.Message]) -> list[ai.messa
             continue
         kept = [part for part in msg.parts if not isinstance(part, ai.types.messages.ReasoningPart)]
         if kept:
-            out.append(ai.assistant_message(*kept))
+            out.append(msg.model_copy(update={"parts": kept}))
     return out
 
 
