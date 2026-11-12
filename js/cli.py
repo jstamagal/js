@@ -2758,6 +2758,22 @@ def _run_prompt(prompt: str, **kwargs) -> int:
             say_continue()
 
 
+def _write_requested_stats(json_path, csv_path, payload, rows, *, announce: bool = False) -> bool:
+    ok = True
+    for path, writer, data in ((json_path, stats.write_json, payload), (csv_path, stats.write_csv, rows)):
+        if not path:
+            continue
+        try:
+            writer(path, data)
+        except OSError as exc:
+            msgs.warn(msgs.FAILED, error=f"stats output {path}: {exc}")
+            ok = False
+        else:
+            if announce:
+                msgs.warn(msgs.STATS_WRITTEN, path=path)
+    return ok
+
+
 def _prompt_run(prompt: str, model: str | None = None, debug: bool = False,
                 debug_file: str | None = None,
                 agent: str | None = None, session: str | None = None, save: bool = True,
@@ -3083,15 +3099,13 @@ def _prompt_run(prompt: str, model: str | None = None, debug: bool = False,
 
     answer = _turn_answer(messages)
 
+    stats_ok = True
     if stats_json or stats_csv:
         error = None if answer else msgs.NO_ANSWER.words()
         row = {"name": "prompt", "prompt": prompt, "max_tokens": cfg.max_output_tokens if maxout is None else maxout,
                "ok": bool(answer), "error": error, **stats.summarize_calls(call_stats, wall_s=time.time() - _t_wall)}
         payload = {"agent": cfg.agent_id, "model": cfg.model, "provider": cfg.provider_id, "turns": [row]}
-        if stats_json:
-            stats.write_json(stats_json, payload)
-        if stats_csv:
-            stats.write_csv(stats_csv, [row])
+        stats_ok = _write_requested_stats(stats_json, stats_csv, payload, [row])
 
     if not answer:
         with _transcript_stdio(telemetry):
@@ -3117,7 +3131,7 @@ def _prompt_run(prompt: str, model: str | None = None, debug: bool = False,
                 "messages": messages,
                 "model": cfg.model,
             })
-    return 0
+    return 0 if stats_ok else 1
 
 
 def _turn_answer(messages: list[dict]) -> str:
@@ -3347,15 +3361,10 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         trace_sink.close()
 
     payload = {"agent": agent_id, "model": cfg.model, "provider": cfg.provider_id, "benchmarks": rows}
-    if stats_json:
-        stats.write_json(stats_json, payload)
-        msgs.warn(msgs.STATS_WRITTEN, path=stats_json)
-    if stats_csv:
-        stats.write_csv(stats_csv, rows)
-        msgs.warn(msgs.STATS_WRITTEN, path=stats_csv)
+    stats_ok = _write_requested_stats(stats_json, stats_csv, payload, rows, announce=True)
     if not stats_json and not stats_csv:
         print(json.dumps(payload, indent=2, default=str))
-    return 130 if interrupted else 1 if any(not row["ok"] for row in rows) else 0
+    return 130 if interrupted else 1 if not stats_ok or any(not row["ok"] for row in rows) else 0
 
 
 def _commit_backup_root() -> Path:
@@ -3660,11 +3669,8 @@ def _run_model_bench(args: argparse.Namespace, presets: list[str]) -> int:
             rows.append(row)
             print(_bench_row_line(row))
             failed |= code != 0
-    if args.stats_json:
-        stats.write_json(args.stats_json, {'turns': rows})
-    if args.stats_csv:
-        stats.write_csv(args.stats_csv, rows)
-    return int(failed or not rows)
+    stats_ok = _write_requested_stats(args.stats_json, args.stats_csv, {'turns': rows}, rows)
+    return int(failed or not rows or not stats_ok)
 
 
 def _models_json(provider_id: str | None, cfg: Config | None = None) -> dict:
