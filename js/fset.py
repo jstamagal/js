@@ -165,7 +165,9 @@ def theme_entries(name: str) -> dict[str, str]:
     """The palette slots theme ``name`` sets; none for no theme."""
     if name not in _themes:
         path = theme_path(name)
-        _themes[name] = read_file(path) if path is not None else {}
+        if path is None:
+            return {}
+        _themes[name] = read_file(path)
     return _themes[name]
 
 
