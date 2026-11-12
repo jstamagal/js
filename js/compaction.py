@@ -597,8 +597,11 @@ def _post_compact_rehydration(
         except OSError:
             continue
         est = max(1, int(len(body) / ratio))
-        if est > per_file_tokens or spent + est > token_budget:
+        if est > per_file_tokens:
             sections.append(_PROMPTS['post_compact_rehydration_too_large_to_re_attach_read'].format(path=path))
+            continue
+        if spent + est > token_budget:
+            sections.append(_PROMPTS['post_compact_rehydration_budget_exhausted'].format(path=path))
             continue
         spent += est
         sections.append(_PROMPTS['post_compact_rehydration_text'].format(path=path, body=body))

@@ -1,6 +1,7 @@
 {
   "default_old_tool_result_cleared": "[old tool result cleared]",
   "post_compact_rehydration_too_large_to_re_attach_read": "### {path}\n(too large to re-attach; read it if you need it)",
+  "post_compact_rehydration_budget_exhausted": "### {path}\n(not re-attached because the shared file budget is exhausted; read it if you need it)",
   "post_compact_rehydration_nontext": "### {path}\n(non-text content not re-attached; use read if you need it)",
   "post_compact_rehydration_text": "### {path}\n{body}",
   "post_compact_rehydration_post_compaction_files_current_contents_of": "<post-compaction-files>\nFiles opened before the summary above. Inlined text is fresh from disk and includes your edits; do not re-read inlined files unless you change them. Files with omission notices may need to be read.\n\n",

@@ -76,6 +76,34 @@ def test_multibyte_utf8_uses_character_budget_and_preserves_flooring(tmp_path, t
     assert text in rehydrate(path, per_file_tokens=10)
 
 
+def test_shared_budget_omission_is_not_a_per_file_size_omission(tmp_path):
+    import os
+    from js import compaction
+
+    first, second, tiny = [tmp_path / name for name in ("first.txt", "second.txt", "tiny.txt")]
+    first.write_text("a" * 40)
+    second.write_text("b" * 40)
+    tiny.write_text("c" * 4)
+    for path, mtime in [(first, 30), (second, 20), (tiny, 10)]:
+        os.utime(path, (mtime, mtime))
+    content = rehydrate(first, second, tiny, per_file_tokens=20, token_budget=11)
+    assert "a" * 40 in content
+    assert "b" * 40 not in content
+    assert "c" * 4 in content
+    assert compaction._PROMPTS['post_compact_rehydration_budget_exhausted'].format(path=second) in content
+    assert compaction._PROMPTS['post_compact_rehydration_too_large_to_re_attach_read'].format(path=second) not in content
+
+
+def test_per_file_size_reason_remains_separate(tmp_path):
+    from js import compaction
+
+    path = tmp_path / "oversize.txt"
+    path.write_text("x" * 100)
+    content = rehydrate(path, per_file_tokens=1, token_budget=100)
+    assert compaction._PROMPTS['post_compact_rehydration_too_large_to_re_attach_read'].format(path=path) in content
+    assert compaction._PROMPTS['post_compact_rehydration_budget_exhausted'].format(path=path) not in content
+
+
 def test_utf8_text_is_inlined(tmp_path):
     path = tmp_path / "text.txt"
     path.write_text("current text 日本語\n")
