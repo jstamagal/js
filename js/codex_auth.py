@@ -12,6 +12,7 @@ import base64
 import errno
 import hashlib
 import json
+import math
 import os
 import secrets
 import selectors
@@ -118,8 +119,15 @@ def _token_from_response(data: dict[str, Any], *, previous: CodexToken | None = 
         refresh = previous.refresh if previous else None
     if not (isinstance(refresh, str) and refresh):
         raise RuntimeError(msgs.CODEX_OAUTH_OPENAI_CODEX_TOKEN_RESPONSE_DID_NOT_INCLUDE_119.format())
-    if not isinstance(expires_in, (int, float)):
-        raise RuntimeError(msgs.CODEX_OAUTH_OPENAI_CODEX_TOKEN_RESPONSE_DID_NOT_INCLUDE_121.format())
+    try:
+        if isinstance(expires_in, bool):
+            raise ValueError("boolean expiry")
+        seconds = float(expires_in)
+        expires_at = time.time() + seconds
+        if seconds <= 0 or not math.isfinite(seconds) or not math.isfinite(expires_at):
+            raise ValueError("invalid expiry")
+    except (TypeError, ValueError, OverflowError):
+        raise RuntimeError(msgs.CODEX_OAUTH_OPENAI_CODEX_TOKEN_RESPONSE_DID_NOT_INCLUDE_121.format()) from None
     account_id, email = token_profile(access)
     if not account_id and previous:
         account_id = previous.account_id
@@ -130,7 +138,7 @@ def _token_from_response(data: dict[str, Any], *, previous: CodexToken | None = 
     return CodexToken(
         access=access,
         refresh=refresh,
-        expires_at=time.time() + float(expires_in),
+        expires_at=expires_at,
         account_id=account_id,
         email=email,
     )
