@@ -629,7 +629,7 @@ def write(file_path: str | None = None, content: str = "", overwrite: bool = Fal
         # is. The hash proves nothing moved since; the snapshot makes the
         # discard undoable.
         try:
-            current = target.read_bytes()
+            current = _read_regular_bytes(target)
         except OSError as exc:
             return f"ERROR: {exc}"
         current_hash = _hash_bytes(current)
