@@ -256,9 +256,13 @@ def forget(session_file: Path) -> None:
         if row is None:
             return
         connection.execute("BEGIN IMMEDIATE")
-        connection.execute("DELETE FROM docs WHERE rowid = ?", (row[0],))
-        connection.execute("DELETE FROM sessions WHERE id = ?", (row[0],))
-        connection.execute("COMMIT")
+        try:
+            connection.execute("DELETE FROM docs WHERE rowid = ?", (row[0],))
+            connection.execute("DELETE FROM sessions WHERE id = ?", (row[0],))
+            connection.execute("COMMIT")
+        except BaseException:
+            connection.execute("ROLLBACK")
+            raise
 
 
 def _index_file(session_file: Path, info: os.stat_result) -> dict[str, Any] | None:
