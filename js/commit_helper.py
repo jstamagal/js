@@ -507,9 +507,12 @@ def main(argv: list[str] | None = None) -> int:
     if error:
         print(error, file=sys.stderr)
         return 2
-    if not argv or argv[0] not in ("survey", "stage", "commit"):
+    if argv and argv[0] in ("-h", "--help"):
         _out(msgs.COMMIT_HELPER_HELP)
-        return 0 if argv else 2
+        return 0
+    if not argv or argv[0] not in ("survey", "stage", "commit"):
+        _err(msgs.COMMIT_HELPER_HELP)
+        return 2
     if argv[0] == "survey":
         return cmd_survey(repo)
     if argv[0] == "commit":
