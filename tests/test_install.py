@@ -116,6 +116,18 @@ def test_a_model_whose_provider_has_a_saved_login_routes():
     assert install.default_model({}) == ("deepseek/deepseek-v4-flash", True)
 
 
+@pytest.mark.parametrize("model", ["@cf/model", "bad!provider/model"])
+def test_invalid_provider_model_is_unrouted_and_can_be_skipped(model):
+    text = f"set MODEL {model}\n"
+    _write_jsrc(text)
+
+    assert install.default_model({}) == (model, False)
+    ask = _answers("")
+    assert install.ask_model({}, ask, add_provider=pytest.fail) is None
+    assert len(ask.asked) == 1
+    assert paths.global_config_file().read_text(encoding="utf-8") == text
+
+
 def test_a_routed_default_model_asks_nothing():
     _write_jsrc("set MODEL deepseek/deepseek-v4-flash\n")
     _login("deepseek", ["deepseek-v4-flash"])

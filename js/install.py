@@ -111,7 +111,7 @@ def default_model(environ: Mapping[str, str]) -> tuple[str | None, bool]:
             configured_api_key=knob("API_KEY"),
             env=environ,
         )
-    except routing.ProviderNotLoggedInError:
+    except ValueError:
         return str(model_id), False
     return str(model_id), bool(route.provider_id or route.base_url)
 
