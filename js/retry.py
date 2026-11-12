@@ -115,12 +115,14 @@ def retry_after_seconds(exc: BaseException) -> float | None:
             continue
         if millis:
             try:
-                return max(0.0, float(millis) / 1000)
+                wait = float(millis) / 1000
+                return max(0.0, wait) if math.isfinite(wait) else wait
             except ValueError:
                 pass
         if after:
             try:
-                return max(0.0, float(after))
+                wait = float(after)
+                return max(0.0, wait) if math.isfinite(wait) else wait
             except ValueError:
                 pass
             try:
