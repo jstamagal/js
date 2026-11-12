@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import errno
 import hashlib
 import json
 import os
@@ -347,8 +348,12 @@ def _bind_callback_servers(handler_cls: type[BaseHTTPRequestHandler]) -> list[_C
     for cls, address in ((_CallbackServer, "127.0.0.1"), (_CallbackServerV6, "::1")):
         try:
             servers.append(cls((address, CALLBACK_PORT), handler_cls))
-        except OSError:
-            continue  # that family isn't available on this host; the other may still bind
+        except OSError as exc:
+            if exc.errno != errno.EADDRINUSE:
+                continue  # that family isn't available on this host; the other may still bind
+            for server in servers:
+                server.server_close()
+            raise
     return servers
 
 
