@@ -919,6 +919,8 @@ def _coerce_parts(content: Any) -> list[Any]:
         for item in content:
             if isinstance(item, str):
                 parts.append(ai.types.messages.TextPart(text=item))
+            elif isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
+                parts.append(ai.types.messages.TextPart(text=item["text"]))
             elif _is_message_part(item):
                 parts.append(item)
             else:
