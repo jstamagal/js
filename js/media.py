@@ -13,6 +13,7 @@ import hashlib
 import os
 import re
 from typing import Any
+from uuid import uuid4
 
 from . import paths
 
@@ -28,9 +29,12 @@ def store(data: bytes, mime: str) -> dict:
     path = paths.media_dir() / digest
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        partial = path.with_name(f".{digest}.{os.getpid()}.partial")
-        partial.write_bytes(data)
-        os.replace(partial, path)
+        partial = path.with_name(f".{digest}.{uuid4().hex}.partial")
+        try:
+            partial.write_bytes(data)
+            os.replace(partial, path)
+        finally:
+            partial.unlink(missing_ok=True)
     return {"type": MEDIA_PART, "sha256": digest, "mime": mime, "size": len(data)}
 
 
