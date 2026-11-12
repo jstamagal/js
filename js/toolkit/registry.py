@@ -427,13 +427,13 @@ class TurnToolSurface:
         return self.discover(query=query, kind=kind, source=source, load=load, offset=offset)
 
     def discover(self, *, query: str = "", kind: str = "", source: str = "", load: str = "", offset: int = 0) -> str:
-        load_id = str(load).strip()
-        if load_id:
-            return self._load(load_id)
         folded_kind = str(kind).strip().lower()
         folded_source = str(source).strip().lower()
         if folded_kind and folded_kind not in {"native", "skill", "mcp"}:
             return _PROMPTS['discover_error_kind_must_be_native_skill']
+        load_id = str(load).strip()
+        if load_id:
+            return self._load(load_id)
         entries = (
             item for item in self.catalog()
             if (not folded_kind or item.kind == folded_kind)
