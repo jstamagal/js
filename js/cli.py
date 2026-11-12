@@ -5183,7 +5183,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
                           debug=args.debug)
 
     if args.compact:
-        return _run_compact_offline(args.compact, agent=cli_agent, focus=args.prompt or "", extras=args.extras, model=args.model)
+        focus = _read_stdin_if_piped() if args.prompt == "-" else args.prompt or ""
+        return _run_compact_offline(args.compact, agent=cli_agent, focus=focus, extras=args.extras, model=args.model)
 
     if args.migrate_config:
         return _run_migrate_config()
