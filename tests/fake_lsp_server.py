@@ -16,6 +16,7 @@ import json
 import os
 import re
 import sys
+from urllib.parse import quote, unquote
 
 LOG = sys.argv[1]
 FLAGS = set(sys.argv[2:])
@@ -96,6 +97,8 @@ def publish(uri: str, version: int) -> None:
                           "end": {"line": number, "character": units(line, column + 5)}},
                 "severity": 1, "source": "fake", "message": "found ERROR",
             })
+    if "--reencode-uris" in FLAGS:
+        uri = quote(unquote(uri), safe="/:+@,=;!$&'()*")
     send({"method": "textDocument/publishDiagnostics",
           "params": {"uri": uri, "version": version, "diagnostics": diagnostics}})
 

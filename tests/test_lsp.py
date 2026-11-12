@@ -82,6 +82,31 @@ def test_diagnostics_follow_edits_on_disk(project):
     assert changes == [2, 3]
 
 
+@pytest.mark.parametrize("name", ["a+b@c,d=e:;!$&'()*.fake", "literal%2B#name.fake"])
+def test_diagnostics_accept_equivalent_server_uri_encoding(project, name):
+    root, context, log = project
+    fake(context, log, "--reencode-uris")
+    context.lsp_timeout_s = 1
+    source = root / name
+    source.write_text("ERROR\n")
+
+    first = run(context, operation="diagnostics", file_path=str(source))
+    cached = run(context, operation="diagnostics", file_path=str(source))
+    source.write_text("fine\nERROR\n")
+    changed = run(context, operation="diagnostics", file_path=str(source))
+
+    assert "1:1: error: found ERROR" in first
+    assert "1:1: error: found ERROR" in cached
+    assert "2:1: error: found ERROR" in changed
+    assert methods(log).count("textDocument/didChange") == 1
+
+
+@pytest.mark.parametrize("name", ["semi;colon.fake", "literal%2B#name.fake"])
+def test_file_uri_round_trip_preserves_filename(tmp_path, name):
+    path = tmp_path / name
+    assert lsp_mod.uri_path(lsp_mod.file_uri(path)) == path
+
+
 def test_unchanged_file_returns_cached_diagnostics_without_resending(project):
     root, context, log = project
     source = root / "mod.fake"

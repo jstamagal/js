@@ -26,7 +26,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import quote, unquote, urlsplit
 
 from .. import jail as _jail
 from .. import paths
@@ -155,7 +155,7 @@ def file_uri(path: Path) -> str:
 
 
 def uri_path(uri: str) -> Path | None:
-    parsed = urlparse(uri)
+    parsed = urlsplit(uri)
     if parsed.scheme != "file":
         return None
     return Path(unquote(parsed.path))
@@ -313,6 +313,9 @@ class LanguageServer:
             params = message.get("params") or {}
             uri = params.get("uri")
             if isinstance(uri, str):
+                path = uri_path(uri)
+                if path is not None:
+                    uri = file_uri(path)
                 with self._cond:
                     self._publishes += 1
                     version = params.get("version")
