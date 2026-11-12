@@ -145,6 +145,32 @@ def _coerce_strings(key: str, raw: Any) -> tuple[str, ...]:
     return tuple(raw)
 
 
+def _template_entries(text: str) -> list[str]:
+    """Split top-level commas while preserving JSON containers and strings."""
+    entries = []
+    start = depth = 0
+    quoted = escaped = False
+    for index, char in enumerate(text):
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char in "[{":
+            depth += 1
+        elif char in "]}":
+            depth = max(0, depth - 1)
+        elif char == "," and depth == 0:
+            entries.append(text[start:index])
+            start = index + 1
+    entries.append(text[start:])
+    return entries
+
+
 def parse_template_kwargs(text: str) -> dict[str, Any]:
     """``key=value`` entries split by ',' (`TEMPLATE_KWARGS`, `--template-kwargs`)
     as the request's ``chat_template_kwargs``. A value is read as JSON
@@ -152,7 +178,7 @@ def parse_template_kwargs(text: str) -> dict[str, Any]:
     Raises ValueError naming the first entry that is not ``key=value`` or a
     key given twice."""
     out: dict[str, Any] = {}
-    for entry in text.split(","):
+    for entry in _template_entries(text):
         key, sep, raw = entry.partition("=")
         key, raw = key.strip(), raw.strip()
         if not sep or not key or not raw:
