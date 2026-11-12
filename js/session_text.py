@@ -113,7 +113,8 @@ def _call_line(arguments: Any) -> str:
         return ""
     command = arguments.get("command")
     if isinstance(command, str) and command.strip():
-        return "$ " + _lines(command)[0]
+        line = "$ " + _lines(command)[0]
+        return line if len(line) <= _ARG_WIDTH else line[:_ARG_WIDTH - 1] + "…"
     pairs = []
     for key, value in arguments.items():
         if isinstance(value, (str, int, float, bool)) and str(value).strip():
