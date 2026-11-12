@@ -27,7 +27,7 @@ _TOKENISH_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)
 
 @dataclass(frozen=True)
 class TokenUsage:
-    """SDK-normalized counts; cache fields are breakdowns of input_tokens."""
+    """Normalized counts; cache fields are breakdowns of total input_tokens."""
 
     input_tokens: int = 0
     cache_read_tokens: int = 0
@@ -88,19 +88,25 @@ def usage_from_provider(usage: Any) -> TokenUsage:
     """Normalize provider/SDK usage objects without depending on their classes."""
     if usage is None:
         return TokenUsage()
+    input_tokens = _as_nonnegative_int(
+        getattr(usage, "input_tokens", None)
+        or getattr(usage, "prompt_tokens", None)
+    )
+    cache_write_tokens = _as_nonnegative_int(
+        getattr(usage, "cache_write_tokens", None)
+        or getattr(usage, "cache_creation_input_tokens", None)
+    )
+    raw = getattr(usage, "raw", None)
+    # Anthropic's SDK input includes cache reads but excludes cache writes.
+    if isinstance(raw, dict) and "cache_creation_input_tokens" in raw:
+        input_tokens += cache_write_tokens
     return TokenUsage(
-        input_tokens=_as_nonnegative_int(
-            getattr(usage, "input_tokens", None)
-            or getattr(usage, "prompt_tokens", None)
-        ),
+        input_tokens=input_tokens,
         cache_read_tokens=_as_nonnegative_int(
             getattr(usage, "cache_read_tokens", None)
             or getattr(usage, "cache_read_input_tokens", None)
         ),
-        cache_write_tokens=_as_nonnegative_int(
-            getattr(usage, "cache_write_tokens", None)
-            or getattr(usage, "cache_creation_input_tokens", None)
-        ),
+        cache_write_tokens=cache_write_tokens,
         output_tokens=_as_nonnegative_int(
             getattr(usage, "output_tokens", None)
             or getattr(usage, "completion_tokens", None)
