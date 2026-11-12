@@ -545,7 +545,10 @@ def fs_read(
 
     content_hash = _hash_bytes(data)
 
-    all_lines = text.splitlines()
+    # File lines end at LF, CRLF or CR; Unicode separators remain content.
+    all_lines = re.split(r"\r\n|\r|\n", text)
+    if not all_lines[-1]:
+        all_lines.pop()
     total = len(all_lines)
     if total == 0:
         context.remember_read(target, content_hash, total_lines=0, whole_file=True)

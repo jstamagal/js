@@ -37,7 +37,7 @@ def test_patch_refuses_unsupported_line_coordinates(tmp_path, separator):
     target.write_text(original)
     context = ToolContext(cwd=tmp_path)
     shown = fs.read(str(target), range={"start_line": 1, "end_line": 1}, context=context)
-    assert "three" not in shown
+    assert shown == f"1|one{separator}two{separator}three"
     result = fs.patch(str(target), old_string="three", new_string="THREE", context=context)
     assert result.startswith("ERROR: unsupported line separator")
     assert target.read_text() == original
