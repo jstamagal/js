@@ -672,7 +672,7 @@ def _keep_list(provider_id: str, login: Login, models: list[str]) -> tuple[list[
 
 def _run_codex_login(provider_id: str) -> int:
     try:
-        if provider_id == codex_auth.CODEX_DEVICE_PROVIDER_ID:
+        if provider_id.strip().lower() == codex_auth.CODEX_DEVICE_PROVIDER_ID:
             login = codex_auth.login_device()
         else:
             login = codex_auth.login_browser()
