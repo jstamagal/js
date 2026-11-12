@@ -22,7 +22,7 @@
   "send_error": "ERROR: {exc}",
   "send_sent_to": "sent #{msg_seq} to {everyone_if_to_BROADCAST_else_to}",
   "claim_error_key_is_empty_name_the": "ERROR: key is empty: name the file, area or task you are taking",
-  "claim_error_ttl_must_be_a_number": "ERROR: ttl must be a number of seconds, not {ttl!r}",
+  "claim_error_ttl_must_be_a_number": "ERROR: ttl must be finite seconds with a representable expiry, not {ttl!r}",
   "claim_is_yours_until_claim_it_again": "{key} is yours until {clock_expires}; claim it again to keep it longer",
   "claim_is_held_by_until": "{key} is held by {holder} until {clock_expires}",
   "release_released": "released {key}",

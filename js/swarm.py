@@ -49,6 +49,7 @@ from . import settings as _settings
 import contextlib
 import fcntl
 import json
+import math
 import os
 import re
 import shutil
@@ -310,11 +311,12 @@ class Room:
             return self._claim_locked(key, who, ttl)
 
     def _claim_locked(self, key: str, who: str, ttl: float) -> tuple[bool, str, float]:
+        expires = _expiry(ttl, time.time(), minimum=1.0)
         claims = self._claims()
         held = claims.get(key)
         if held is not None and held["holder"] != who:
             return False, held["holder"], held["expires"]
-        claims[key] = {"holder": who, "expires": time.time() + max(1.0, float(ttl))}
+        claims[key] = {"holder": who, "expires": expires}
         self._write_claims(claims)
         return True, who, claims[key]["expires"]
 
@@ -741,6 +743,21 @@ def _agent(context: Any) -> Agent | None:
     return getattr(context, "swarm", None)
 
 
+def _expiry(seconds: float, now: float, *, minimum: float = 0.0) -> float:
+    """A finite deadline that the platform can represent before state is written."""
+    try:
+        duration = float(seconds)
+        if not math.isfinite(duration):
+            raise ValueError("duration must be finite")
+        expires = now + max(minimum, duration)
+        if not math.isfinite(expires):
+            raise ValueError("deadline must be finite")
+        time.localtime(expires)
+    except (OverflowError, OSError) as exc:
+        raise ValueError("deadline is outside the platform time range") from exc
+    return expires
+
+
 def _clock(ts: float) -> str:
     return time.strftime("%H:%M:%S", time.localtime(ts))
 
@@ -780,9 +797,9 @@ def _claim(key: str = "", ttl: Any = None, context: Any = None) -> str:
         return _PROMPTS['claim_error_key_is_empty_name_the']
     try:
         seconds = CLAIM_TTL_S if ttl in (None, "") else float(ttl)
-    except (TypeError, ValueError):
+        yours, holder, expires = agent.room.claim(key, agent.name, seconds)
+    except (TypeError, ValueError, OverflowError):
         return _PROMPTS['claim_error_ttl_must_be_a_number'].format(ttl=ttl)
-    yours, holder, expires = agent.room.claim(key, agent.name, seconds)
     _view(key=key, claimed=yours, holder=holder, expires=expires)
     if yours:
         return _PROMPTS['claim_is_yours_until_claim_it_again'].format(key=key, clock_expires=_clock(expires))
