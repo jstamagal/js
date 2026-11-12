@@ -28,14 +28,17 @@ class TurnEvents:
         self.usage = usage_mod.Tally()
         self.ended = False
 
+    def _emit_sink(self, event: str, payload: dict[str, Any]) -> None:
+        if self._sink is not None:
+            try:
+                self._sink(event, payload)
+            except Exception as exc:  # noqa: BLE001 - an observer never breaks the turn
+                self._telemetry.event("event_sink_error", event=event, error=f"{type(exc).__name__}: {exc}")
+
     def emit(self, event: str, *, sink_extra: dict | None = None, **payload: Any) -> Any:
         """Raise ``event`` to the ON hooks and the event sink; the emission, or
         None when this turn has no hooks. ``sink_extra`` fields reach the sink only."""
-        if self._sink is not None:
-            try:
-                self._sink(event, {**payload, **(sink_extra or {})})
-            except Exception as exc:  # noqa: BLE001 - an observer never breaks the turn
-                self._telemetry.event("event_sink_error", event=event, error=f"{type(exc).__name__}: {exc}")
+        self._emit_sink(event, {**payload, **(sink_extra or {})})
         if self._hooks is None:
             return None
         emission = self._hooks.emit(event, **payload)
@@ -61,8 +64,7 @@ class TurnEvents:
     def on_usage(self, call: usage_mod.CallUsage, session: usage_mod.UsageTotals) -> None:
         """The usage meter's callback: tally ``call`` and tell the event sink."""
         self.usage.add(call)
-        if self._sink is not None:
-            self._sink("usage", {**call.as_dict(), "session": session.as_dict()})
+        self._emit_sink("usage", {**call.as_dict(), "session": session.as_dict()})
 
 
 def reasoning_level(settings: dict | None) -> int:

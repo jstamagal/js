@@ -201,6 +201,35 @@ def test_a_failing_event_sink_never_breaks_the_turn():
     assert log == [("telemetry", "event_sink_error")]
 
 
+@pytest.mark.parametrize("failure", [RuntimeError("observer failed"), BrokenPipeError("closed")])
+def test_usage_observer_failure_preserves_tally_and_hook_boundary(failure):
+    observed, hooks, telemetry = [], [], []
+
+    def sink(event, payload):
+        observed.append((event, payload))
+        if event == "usage":
+            raise failure
+
+    class Hooks:
+        def emit(self, event, **payload):
+            hooks.append((event, payload))
+            return SimpleNamespace(event=event, results=[])
+
+    events = TurnEvents(Hooks(), sink, _telemetry(telemetry), model="m", provider_id="p")
+    call = usage_mod.CallUsage(model="m", provider="p", input_tokens=10, output_tokens=2)
+    session = usage_mod.UsageTotals()
+    events.on_usage(call, session)
+    expected = usage_mod.Tally()
+    expected.add(call)
+    assert events.usage.as_dict() == expected.as_dict()
+    assert observed == [("usage", {**call.as_dict(), "session": session.as_dict()})]
+    assert telemetry == [("telemetry", "event_sink_error")]
+    assert hooks == []
+    events.start(3)
+    assert hooks == [("turn_start", {"model": "m", "provider_id": "p", "message_count": 3})]
+    assert observed[-1] == hooks[-1]
+
+
 def test_hooks_see_the_payload_without_the_sink_extras():
     received = []
 
