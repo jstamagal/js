@@ -179,12 +179,13 @@ def expand(line: str, commands: dict[str, PromptCommand]) -> str | None:
     stripped = line.lstrip()
     if not stripped.startswith("/"):
         return None
-    words = stripped[1:].split(maxsplit=1)
+    invocation = stripped[1:].lstrip()
+    words = invocation.split(maxsplit=1)
     command = commands.get(words[0]) if words else None
     if command is None:
         return None
     # The argument text as typed: only the one separator after the name goes,
     # so a pasted first line keeps its indentation.
-    rest = stripped[1:][len(words[0]):] if words else ""
+    rest = invocation[len(words[0]):]
     raw = rest[1:] if rest[:1].isspace() else rest
     return substitute(command.body, split_args(raw), raw=raw).strip()
