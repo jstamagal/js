@@ -99,9 +99,10 @@ def split(text: str) -> EndpointURL:
     spec = shown(text)
     if not text:
         raise EndpointSpecError(msgs.ENDPOINT_EMPTY.format())
-    if "[" in text:
-        raise EndpointSpecError(msgs.ENDPOINT_BRACKET.format(spec=spec))
     scheme, sep, rest = text.partition("://")
+    userinfo = rest.rsplit("@", 1)[0] if "@" in rest else ""
+    if "[" in scheme or "[" in userinfo:
+        raise EndpointSpecError(msgs.ENDPOINT_BRACKET.format(spec=spec))
     if not sep:
         raise EndpointSpecError(msgs.ENDPOINT_NO_SCHEME.format(spec=spec))
     wire = None
@@ -134,7 +135,7 @@ def split(text: str) -> EndpointURL:
 def is_endpoint_form(text: str) -> bool:
     """Whether a ``JS_BASE_URL`` value carries a wire prefix or a model."""
     scheme, sep, rest = (text or "").strip().partition("://")
-    return bool(sep) and ("+" in scheme or "@" in rest or "[" in text)
+    return bool(sep) and ("+" in scheme or "@" in rest)
 
 
 def _env(env: Mapping[str, str], key: str) -> str | None:

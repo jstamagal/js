@@ -23,8 +23,7 @@ def test_unsupported_schemes_still_fail(scheme):
         split(scheme + "://box/v1")
 
 
-def test_scheme_normalization_does_not_change_wire_or_ipv6_contract():
+def test_scheme_normalization_does_not_change_wire_case_contract():
     with pytest.raises(EndpointSpecError):
         split("OPENAI+HTTP://box/v1")
-    with pytest.raises(EndpointSpecError):
-        split("HTTP://[::1]/v1")
+    assert split("HTTP://[::1]/v1").base_url == "http://[::1]/v1"
