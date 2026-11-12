@@ -12,6 +12,8 @@ from js.toolkit.search import _absolutize
     ("../go?to=https://x.com#part", "https://example.test/go?to=https://x.com#part"),
     ("https://other.test/path", "https://other.test/path"),
     ("HTTP://other.test/path", "HTTP://other.test/path"),
+    ("http://[invalid", "http://[invalid"),
+    ("custom+scheme.resource:payload", "custom+scheme.resource:payload"),
     ("//cdn.test/image", "https://cdn.test/image"),
     ("#section", "#section"),
     ("mailto:a@example.test", "mailto:a@example.test"),

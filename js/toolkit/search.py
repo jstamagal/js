@@ -453,7 +453,7 @@ _MD_LINK = re.compile(r"(!?\[[^\]]*\])\(([^)\s]+)((?:\s+\"[^\"]*\")?)\)")
 def _absolutize(markdown: str, base_url: str) -> str:
     def _fix(match: re.Match[str]) -> str:
         label, target, title = match.group(1), match.group(2), match.group(3)
-        if target.startswith("#") or urllib.parse.urlsplit(target).scheme:
+        if target.startswith("#") or re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", target):
             return match.group(0)
         return f"{label}({urllib.parse.urljoin(base_url, target)}{title})"
 
