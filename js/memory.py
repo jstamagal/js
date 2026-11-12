@@ -144,7 +144,7 @@ def _migrate_record(d: dict) -> dict | None:
     """
     if not isinstance(d, dict) or not isinstance(d.get("kind"), str) or d["kind"] not in {"message", "mark"}:
         return None
-    if d.get("version") == SCHEMA_VERSION:
+    if type(d.get("version")) is int and d["version"] == SCHEMA_VERSION:
         return d
     return None
 
