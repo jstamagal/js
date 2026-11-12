@@ -548,13 +548,13 @@ class MCPHost:
             return self._secrets(server)
 
         def resource_updated(params: dict[str, Any], name: str = server.name) -> None:
-            self._event("mcp_resource_updated", server=name, **_redact_value(params, secrets()))
+            self._event("mcp_resource_updated", **{**_redact_value(params, secrets()), "server": name})
 
         def log(params: dict[str, Any], name: str = server.name) -> None:
-            self._event("mcp_log", server=name, **_redact_value(params, secrets()))
+            self._event("mcp_log", **{**_redact_value(params, secrets()), "server": name})
 
         def progress(params: dict[str, Any], name: str = server.name) -> None:
-            self._event("mcp_progress", server=name, **_redact_value(params, secrets()))
+            self._event("mcp_progress", **{**_redact_value(params, secrets()), "server": name})
 
         async def channel(params: dict[str, Any]) -> None:
             if self.channel_sink is not None:
@@ -589,9 +589,16 @@ class MCPHost:
         }
         self._dirty.setdefault(server.name, set()).update(features)
 
-    def _event(self, kind: str, **payload: Any) -> None:
+    def _event(self, kind: str, /, **payload: Any) -> None:
         if self.telemetry is not None:
-            self.telemetry.event(kind, **payload)
+            fields = dict(payload)
+            for reserved in ("kind", "self"):
+                if reserved in fields:
+                    alias = f"notification_{reserved}"
+                    if alias in fields:
+                        fields["notification_fields"] = dict(payload)
+                    fields[alias] = fields.pop(reserved)
+            self.telemetry.event(kind, **fields)
         if self.event_sink is not None:
             result = self.event_sink(kind, **payload)
             if inspect.isawaitable(result):
