@@ -164,6 +164,28 @@ def test_termux_plan_never_selects_desktop_artifacts(monkeypatch, environment):
     assert any("obscura" in item and "obscura-worker" in item for item in missing)
 
 
+@pytest.mark.parametrize("version", ["2.39+r1", "unknown", "2..39", "", "2.34", "2.35", "2.40"])
+def test_release_plan_handles_libc_versions(monkeypatch, version):
+    monkeypatch.setattr(tool_binaries, "is_termux", lambda: False)
+    monkeypatch.setattr(tool_binaries.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(tool_binaries.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(tool_binaries.platform, "libc_ver", lambda: ("glibc", version))
+
+    specs, missing = tool_binaries.release_plan()
+
+    names = {spec.name for spec in specs}
+    if version in {"2.35", "2.40"}:
+        assert "obscura" in names
+    else:
+        assert "obscura" not in names
+        assert any("obscura" in notice for notice in missing)
+    if version in {"2.39+r1", "unknown", "2..39", ""}:
+        assert "ast-grep" not in names
+        assert any("ast-grep" in notice for notice in missing)
+    else:
+        assert "ast-grep" in names
+
+
 @pytest.mark.parametrize("failure", [None, "pkg", "timeout", "unavailable", "missing"])
 def test_termux_install_uses_pkg_and_preserves_native_builds(monkeypatch, tmp_path, failure):
     monkeypatch.setenv("TERMUX_VERSION", "0.118.3")

@@ -554,6 +554,10 @@ def release_plan() -> tuple[list[DownloadTool], list[str]]:
     machine = platform.machine().lower()
     machine = {"amd64": "x86_64", "arm64": "aarch64"}.get(machine, machine)
     libc, version = platform.libc_ver()
+    try:
+        glibc_version = tuple(map(int, version.split(".")))
+    except ValueError:
+        glibc_version = ()
     specs: list[DownloadTool] = []
     missing: list[str] = []
     try:
@@ -568,15 +572,13 @@ def release_plan() -> tuple[list[DownloadTool], list[str]]:
             missing.append(msgs.TOOL_VERIFIED_RELEASE_MISSING.format(name=name, system=system, machine=machine))
             continue
         minimum = row["minimum_glibc"]
-        if minimum and (libc != "glibc" or not version or
-                        tuple(map(int, version.split("."))) < tuple(map(int, minimum.split(".")))):
+        if minimum and (libc != "glibc" or
+                        glibc_version < tuple(map(int, minimum.split(".")))):
             missing.append(msgs.TOOL_RELEASE_GLIBC_REQUIRED.format(name=name, value=row['asset'], minimum=minimum, value2=libc or 'unknown libc', version=version))
             continue
         specs.append(DownloadTool(**{k: v for k, v in row.items()
                                      if k not in ("system", "machine", "minimum_glibc")}))
-    if system == "Linux" and machine == "x86_64" and libc == "glibc" and version and (
-        tuple(map(int, version.split("."))) >= (2, 35)
-    ):
+    if system == "Linux" and machine == "x86_64" and libc == "glibc" and glibc_version >= (2, 35):
         specs.append(next(s for s in DOWNLOAD_TOOLS if s.name == "obscura"))
     else:
         missing.append(msgs.TOOL_OBSCURA_RELEASE_MISSING.format(system=system, machine=machine, libc=libc, version=version))
