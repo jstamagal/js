@@ -760,6 +760,8 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
         # output_item.done, which can land after text closed the block.
         reasoning_block: str | None = None
         closed_reasoning: set[str] = set()
+        active_summaries: dict[str, Any] = {}
+        summary_tails: dict[str, tuple[Any, int]] = {}
         # Function calls by output item id. Parallel calls interleave their
         # argument deltas, and each delta/done names its item_id, so there is
         # no "active" call: every event goes to the call it names.
@@ -863,15 +865,28 @@ class OpenAICodexProvider(ai.providers.Provider[httpx.AsyncClient]):
                             for ev in start_tool(item):
                                 yield ev
                         continue
+                    if event_type in {"response.reasoning_summary_part.added", "response.reasoning_summary_part.done"}:
+                        block_id = str(raw.get("item_id") or reasoning_block or "reasoning")
+                        active_summaries[block_id] = raw.get("summary_index", active_summaries.get(block_id, 0))
+                        continue
                     if event_type == "response.reasoning_summary_text.delta":
                         delta = raw.get("delta")
                         if isinstance(delta, str) and delta:
                             block_id = str(raw.get("item_id") or reasoning_block or "reasoning")
                             for ev in open_reasoning(block_id):
                                 yield ev
+                            index = raw.get("summary_index", active_summaries.get(block_id, 0))
+                            previous = summary_tails.get(block_id)
+                            if previous is not None and previous[0] != index:
+                                leading = len(delta) - len(delta.lstrip("\n"))
+                                delta = "\n" * max(0, 2 - previous[1] - leading) + delta
+                            trailing = len(delta) - len(delta.rstrip("\n"))
+                            if previous is not None and trailing == len(delta):
+                                trailing += previous[1]
+                            summary_tails[block_id] = (index, trailing)
                             yield ai.events.ReasoningDelta(block_id=block_id, chunk=delta)
                         continue
-                    if event_type in {"response.reasoning_summary_part.done", "response.output_item.done"}:
+                    if event_type == "response.output_item.done":
                         item = raw.get("item")
                         if event_type == "response.output_item.done" and isinstance(item, dict) and item.get("type") == "message":
                             for ev in close_text():
