@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from js import runtime, session_store, settings
+from js import persona, runtime, session_store, settings
 from js.config import Config, from_env
 from js import messages as msgs
 
@@ -182,7 +182,7 @@ def test_from_env_reads_global_jsrc(monkeypatch, tmp_path):
 def test_explicit_default_model_extra_beats_the_agent_model(tmp_path):
     from types import SimpleNamespace
 
-    from js import cli, logins
+    from js import logins
 
     model_id = settings.default_value("MODEL")
     provider_id, _, _ = model_id.partition("/")
@@ -190,7 +190,7 @@ def test_explicit_default_model_extra_beats_the_agent_model(tmp_path):
     cfg = from_env(cwd=tmp_path, save_session=False, extras=[f"MODEL={model_id}"])
     agent = SimpleNamespace(model="agent-model")
 
-    active = cli._apply_agent_model(cfg, agent, None)
+    active = persona.apply_agent_model(cfg, agent, None)
 
     assert active.model == cfg.model
 

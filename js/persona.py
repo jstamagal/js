@@ -414,6 +414,59 @@ def apply_agent_max_tokens(cfg, prompt_spec):
     return replace(cfg, max_output_tokens=agent_max)
 
 
+def agent_model_applies(cfg, prompt_spec, model: str | None, *, config_pins: bool = True) -> bool:
+    """Whether the agent's agent.yaml `model:` picks the model: it names one,
+    no ``model`` was given for this run, and the operator pinned none."""
+    agent_model = getattr(prompt_spec, "model", "") if prompt_spec is not None else ""
+    pinned = getattr(cfg, "explicit_model" if config_pins else "invocation_model", False)
+    return bool(agent_model) and model is None and not pinned
+
+
+def apply_agent_model(cfg, prompt_spec, model: str | None, *, config_pins: bool = True):
+    """``cfg`` routed to the agent's agent.yaml `model:`, unless the operator
+    pinned a model. -m, a JS_* env var and --extra always pin; a jsrc `MODEL`
+    pins only when ``config_pins``."""
+    if not agent_model_applies(cfg, prompt_spec, model, config_pins=config_pins):
+        return cfg
+    from .config import vision_enabled_for_model
+    from .routing import resolve_model_route
+
+    route = resolve_model_route(
+        prompt_spec.model,
+        configured_provider_id=cfg.provider_id,
+        configured_base_url=cfg.provider_base_url,
+        configured_api_key=cfg.provider_api_key,
+        configured_headers=getattr(cfg, "provider_headers", {}),
+        explicit_model=True,
+        prefix_overrides_provider=not getattr(cfg, "explicit_provider", False),
+    )
+    return replace(
+        cfg,
+        model=route.model,
+        provider_id=route.provider_id,
+        provider_base_url=route.base_url,
+        provider_api_key=route.api_key,
+        provider_headers=route.headers,
+        vision_enabled=vision_enabled_for_model(route.model, getattr(cfg, "settings", None)),
+    )
+
+
+def apply_agent_reasoning(cfg, prompt_spec):
+    """``cfg`` with the agent's agent.yaml `reasoning:`, unless a JS_* env var
+    or --extra set the effort for this run."""
+    effort = getattr(prompt_spec, "reasoning_effort", None) if prompt_spec is not None else None
+    if effort is None or getattr(cfg, "invocation_reasoning", False):
+        return cfg
+    return replace(cfg, reasoning_effort=effort)
+
+
+def apply_agent(cfg, prompt_spec, *, config_pins: bool = True):
+    """``cfg`` with everything the agent's agent.yaml chooses for a fresh run:
+    its model, reasoning and output cap, each unless the operator pinned it."""
+    cfg = apply_agent_model(cfg, prompt_spec, None, config_pins=config_pins)
+    return apply_agent_max_tokens(apply_agent_reasoning(cfg, prompt_spec), prompt_spec)
+
+
 def load_configured_prompt_spec(cfg, *, expand: bool = True) -> PromptSpec:
     from .cli_options import current
     options = current()

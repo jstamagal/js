@@ -2635,54 +2635,6 @@ def _run_rc_commands(state: dict, cfg: Config, paths: list[Path]) -> list[str]:
     return errors
 
 
-def _agent_model_applies(cfg: Config, prompt_spec, model: str | None, *, config_pins: bool = True) -> bool:
-    """Whether the active agent's agent.yaml `model:` picks the model: it
-    names one and the operator pinned none (`_apply_agent_model`)."""
-    agent_model = getattr(prompt_spec, "model", "") if prompt_spec is not None else ""
-    pinned = getattr(cfg, "explicit_model" if config_pins else "invocation_model", False)
-    return bool(agent_model) and model is None and not pinned
-
-
-def _apply_agent_model(cfg: Config, prompt_spec, model: str | None, *, config_pins: bool = True) -> Config:
-    """Apply the active agent's agent.yaml `model:` through the resolver, unless
-    the operator pinned a model. -m, a JS_* env var and --extra always pin; a
-    jsrc `MODEL` pins only when ``config_pins``."""
-    if not _agent_model_applies(cfg, prompt_spec, model, config_pins=config_pins):
-        return cfg
-    agent_model = prompt_spec.model
-    route = routing.resolve_model_route(
-        agent_model,
-        configured_provider_id=cfg.provider_id,
-        configured_base_url=cfg.provider_base_url,
-        configured_api_key=cfg.provider_api_key,
-        configured_headers=getattr(cfg, "provider_headers", {}),
-        explicit_model=True,
-        prefix_overrides_provider=not getattr(cfg, "explicit_provider", False),
-    )
-    return replace(
-        cfg,
-        model=route.model,
-        provider_id=route.provider_id,
-        provider_base_url=route.base_url,
-        provider_api_key=route.api_key,
-        provider_headers=route.headers,
-        vision_enabled=vision_enabled_for_model(route.model, getattr(cfg, "settings", None)),
-    )
-
-
-def _apply_agent_reasoning(cfg: Config, prompt_spec) -> Config:
-    """Apply the active agent's agent.yaml `reasoning:` unless a JS_* env var
-    or --extra set the effort for this run."""
-    effort = getattr(prompt_spec, "reasoning_effort", None) if prompt_spec is not None else None
-    if effort is None or getattr(cfg, "invocation_reasoning", False):
-        return cfg
-    return replace(cfg, reasoning_effort=effort)
-
-
-def _apply_agent_max_tokens(cfg: Config, prompt_spec) -> Config:
-    return P.apply_agent_max_tokens(cfg, prompt_spec)
-
-
 def _format_prompt_load_error(cfg, exc: Exception) -> str:
     """Turn a persona-load failure into an operator-legible line. A missing prompt
     directory means the named agent doesn't exist anywhere on the search path —
@@ -2856,14 +2808,14 @@ def _prompt_run(prompt: str, model: str | None = None, debug: bool = False,
         try:
             # A resumed session stays on its stamp; agent.yaml sets a fresh run.
             if config_pins or resumed is None:
-                cfg = _apply_agent_model(cfg, prompt_spec, model, config_pins=config_pins)
+                cfg = P.apply_agent_model(cfg, prompt_spec, model, config_pins=config_pins)
         except ValueError as e:
             with _transcript_stdio(telemetry):
                 msgs.warn(msgs.FAILED, error=e)
             return 2
         if not config_pins and resumed is None and reasoning_override is None:
-            cfg = _apply_agent_reasoning(cfg, prompt_spec)
-        cfg = _apply_agent_max_tokens(cfg, prompt_spec)
+            cfg = P.apply_agent_reasoning(cfg, prompt_spec)
+        cfg = P.apply_agent_max_tokens(cfg, prompt_spec)
 
     try:
         cfg = _resolve_cli_model_override(cfg, model)
@@ -3273,7 +3225,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
     system = prompt_spec.system
     active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
     try:
-        cfg = _apply_agent_model(cfg, prompt_spec, model)
+        cfg = P.apply_agent_model(cfg, prompt_spec, model)
         cfg = _resolve_cli_model_override(cfg, model)
         cfg = login_defaults.for_turn(login_defaults.with_agent(cfg, prompt_spec))
     except ValueError as e:
@@ -4399,7 +4351,7 @@ def _repl_state(cfg, prompt_spec, *, messages: list[dict] | None = None,
         # annotate `MODEL = ... (live: --model flag)`; agent.yaml's `model:` is
         # recorded the same way.
         "model_source": "--model flag" if model is not None else (
-            f"agent {cfg.agent_id}" if _agent_model_applies(cfg, prompt_spec, None) else None),
+            f"agent {cfg.agent_id}" if P.agent_model_applies(cfg, prompt_spec, None) else None),
         "provider_id": cfg.provider_id,
         "provider_base_url": cfg.provider_base_url,
         "provider_api_key": cfg.provider_api_key,
@@ -4677,8 +4629,8 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
         raw_spec = None
 
     try:
-        cfg = _apply_agent_model(cfg, raw_spec, model, config_pins=False)
-        cfg = _apply_agent_reasoning(cfg, raw_spec)
+        cfg = P.apply_agent_model(cfg, raw_spec, model, config_pins=False)
+        cfg = P.apply_agent_reasoning(cfg, raw_spec)
         cfg = _resolve_cli_model_override(cfg, model)
     except Exception as e:  # noqa: BLE001 — model routing cannot prevent a prompt preview
         msgs.warn(msgs.PRINTONLY_NO_CONFIG, error=f"{type(e).__name__}: {e}")
@@ -5351,8 +5303,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         system = recorded_system
     active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
     try:
-        cfg = _apply_agent_model(cfg, prompt_spec, args.model)
-        cfg = _apply_agent_max_tokens(cfg, prompt_spec)
+        cfg = P.apply_agent_model(cfg, prompt_spec, args.model)
+        cfg = P.apply_agent_max_tokens(cfg, prompt_spec)
         cfg = _resolve_cli_model_override(cfg, args.model)
     except ValueError as e:
         msgs.warn(msgs.FAILED, error=e)

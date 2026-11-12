@@ -100,7 +100,7 @@ def _configure(spec: AgentSpec) -> tuple[Any, str, Any, Any]:
     cwd = Path(spec.cwd).expanduser() if spec.cwd else Path.cwd()
     cfg = from_env(save_session=True, extras=extras, agent_id=spec.agent, session=spec.session, cwd=cwd)
     prompt_spec = P.load_configured_prompt_spec(cfg, expand=False)
-    cfg = cli._apply_agent_model(cfg, prompt_spec, spec.model, config_pins=False)
+    cfg = P.apply_agent_model(cfg, prompt_spec, spec.model, config_pins=False)
     cfg = cli._resolve_cli_model_override(cfg, spec.model)
     # agent.yaml's effort and max_tokens are the agent layers; the spec's own
     # effort is set for this run like a flag. Every turn resolves them.
