@@ -22,6 +22,7 @@ import threading
 import textwrap
 import time
 from collections.abc import Callable, Mapping
+from typing import Any
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
@@ -1142,6 +1143,18 @@ def _compact_hooks(state: dict, cfg: Config) -> dict:
             "log_dir": compaction.flight_log_dir(cfg)}
 
 
+def _track_compact_skips(emit: Callable[..., Any]) -> tuple[Callable[..., Any], set[str]]:
+    skipped: set[str] = set()
+
+    def tracked(event: str, **payload: Any) -> Any:
+        result = emit(event, **payload)
+        if event == "compaction_notice" and payload.get("stage") == "skipped":
+            skipped.add(payload.get("detail", ""))
+        return result
+
+    return tracked, skipped
+
+
 def _emit_session_event(state: dict, telemetry: runtime.Telemetry, cfg: Config, event: str) -> None:
     """session_start or session_end for the REPL session ``state`` runs."""
     _emit_repl_event(
@@ -2052,12 +2065,15 @@ def _cmd_compact(arg: str, state: dict, cfg: Config) -> str | None:
         focus = ""
     try:
         compact_cfg = _cfg_for_live_state(cfg, state)
+        hooks = _compact_hooks(state, compact_cfg)
+        hooks["emit"], skipped = _track_compact_skips(hooks["emit"])
         with stream_transport.net_role(msgs.COMPACTING_ROLE.words()):
             result = compaction.compact_now_sync(compact_cfg, state["system"], state["messages"], model=model,
-                                                 focus=focus, forced=forced, **_compact_hooks(state, compact_cfg))
+                                                 focus=focus, forced=forced, **hooks)
     except Exception as e:  # noqa: BLE001
         return msgs.COMPACTION_FAILED.said(error=f"{type(e).__name__}: {e}")
-    msgs.say(msgs.COMPACTION_DONE, result=result)
+    if result not in skipped:
+        msgs.say(msgs.COMPACTION_DONE, result=result)
     return None
 
 
@@ -3485,13 +3501,15 @@ def _run_compact_offline(session: str, *, agent: str | None = None, focus: str =
         prompt_spec = P.load_configured_prompt_spec(cfg)
         messages = M.load_replay_messages(cfg.session_file)
         compact_cfg = replace(cfg, model=model) if model is not None else cfg
+        emit, skipped = _track_compact_skips(compaction.printing())
         result = compaction.compact_now_sync(compact_cfg, prompt_spec.system, messages, focus=focus, forced=True,
-                                             emit=compaction.printing(),
+                                             emit=emit,
                                              log_dir=compaction.flight_log_dir(compact_cfg))
     except Exception as e:  # noqa: BLE001
         msgs.warn(msgs.FAILED, error=_error_text(e))
         return 1
-    msgs.say(msgs.COMPACTION_DONE, result=result)
+    if result not in skipped:
+        msgs.say(msgs.COMPACTION_DONE, result=result)
     return 0
 
 def _providers_json() -> list[dict]:
