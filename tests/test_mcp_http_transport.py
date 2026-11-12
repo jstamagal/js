@@ -169,6 +169,7 @@ def request(method="test/json", request_id=1):
 def test_sse_initialization_defers_get_until_protocol_version_is_negotiated():
     negotiated = "2025-03-26"
     early_get = threading.Event()
+    get_observed = threading.Event()
 
     class NegotiatingHandler(Handler):
         def do_POST(self):
@@ -203,12 +204,14 @@ def test_sse_initialization_defers_get_until_protocol_version_is_negotiated():
                 self._body(400, "application/json", b"")
             else:
                 self._body(405, "application/json", b"")
+            get_observed.set()
 
     async def scenario(url):
         client = MCPClient(lambda: StreamableHTTPTransport(url, reconnect_attempts=0))
         try:
             assert (await client.initialize(timeout=1)).protocol_version == negotiated
             assert await client.list_tools(timeout=1) == []
+            assert await asyncio.to_thread(get_observed.wait, 1)
         finally:
             await client.close()
 
