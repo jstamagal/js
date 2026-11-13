@@ -113,13 +113,14 @@ def translate_effort(effort: str, allowed: frozenset[str] | None) -> str:
 #
 # The anthropic SDK provider (api.anthropic.com, and every provider or login
 # whose sdk is anthropic) carries the effort as ``output_config.effort``.
-# Claude 4.6 and later, Fable and Mythos take ``thinking`` as
-# ``{"type": "adaptive"}`` with that effort, and ``off`` as thinking disabled
-# (Anthropic model docs, 2026-09). Every other model on the wire gets the
-# effort word as typed. ``thinking`` carries a token budget only when
-# `THINKING_BUDGET` sets one.
+# Every Claude model takes ``thinking`` as ``{"type": "adaptive"}`` with that
+# effort, and ``off`` as thinking disabled (Anthropic model docs, 2026-09).
+# Every other model on the wire gets the effort word as typed. ``thinking``
+# carries a token budget only when `THINKING_BUDGET` sets one.
 
-_CLAUDE_VERSION = re.compile(r"claude-(opus|sonnet|haiku)-(\d+)(?:[-.](\d{1,2}))?(?!\d)")
+# claude-opus-5-5, claude-fable-5-2, claude-6, claude-sonnet-6.1-high: the
+# version after `claude-` and an optional family word.
+_CLAUDE_VERSION = re.compile(r"claude-(?:[a-z]+-)?(\d+)(?:[-.](\d{1,2}))?(?!\d)")
 _ADAPTIVE_4_6_EFFORTS = frozenset({"low", "medium", "high", "max"})
 _ADAPTIVE_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
@@ -136,22 +137,14 @@ def _claude_version(name: str) -> tuple[int, int] | None:
     match = _CLAUDE_VERSION.search(name)
     if match is None:
         return None
-    return int(match.group(2)), int(match.group(3) or 0)
-
-
-def claude_model(model_name: str) -> bool:
-    """True for a Claude model id, whatever provider prefix it carries."""
-    name = model_name.lower()
-    return "fable" in name or "mythos" in name or _CLAUDE_VERSION.search(name) is not None
+    return int(match.group(1)), int(match.group(2) or 0)
 
 
 def anthropic_adaptive(model_name: str) -> bool:
-    """True when the model takes adaptive thinking with an effort level."""
+    """True when the model takes adaptive thinking with an effort level:
+    every Claude model, whatever provider prefix it carries."""
     name = model_name.lower()
-    if "fable" in name or "mythos" in name:
-        return True
-    version = _claude_version(name)
-    return version is not None and version >= (4, 6)
+    return "claude" in name or "fable" in name or "mythos" in name
 
 
 def _anthropic_rejects_disabled(name: str) -> bool:

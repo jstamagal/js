@@ -1083,8 +1083,11 @@ def test_vision_enabled_for_model_detects_families(monkeypatch):
     monkeypatch.delenv("JS_VISION", raising=False)
     assert config.vision_enabled_for_model("ollama_chat/gemma4:e4b") is True
     assert config.vision_enabled_for_model("openai/qwen3-vl:235b-instruct") is True
-    assert config.vision_enabled_for_model("openai/claude-opus-4-8") is True
-    assert config.vision_enabled_for_model("anthropic/claude-sonnet-4") is True
+    assert config.vision_enabled_for_model("openai/claude-opus-5-5") is True
+    assert config.vision_enabled_for_model("anthropic/claude-sonnet-5-5") is True
+    # Ids no catalog lists yet fall to the family names.
+    for future in ("cpa/claude-opus-6-high", "cpa/claude-7", "openai/gpt-7-xhigh", "xai/grok-5.0", "meta/muse-wonder-3"):
+        assert config.vision_enabled_for_model(future) is True, future
     assert config.vision_enabled_for_model("openai/auto/glm-5.1") is False
     assert config.vision_enabled_for_model("gemma4-coder-q8-256k:latest") is False
     monkeypatch.setenv("JS_VISION", "1")

@@ -99,6 +99,15 @@ class _ModelRow:
     max_input_tokens: int | None
     family: str | None = None
     release_date: str | None = None
+    image_input: bool = False
+
+
+def _takes_image(model: Any) -> bool:
+    modalities = getattr(model, "modalities", None)
+    return any(
+        str(getattr(modality, "value", modality)).lower() == "image"
+        for modality in getattr(modalities, "input", ()) or ()
+    )
 
 
 def _clear_caches() -> None:
@@ -125,6 +134,7 @@ def _all_models() -> tuple[_ModelRow, ...]:
                 max_input_tokens=None if limits is None else limits.input,
                 family=getattr(model, "family", None),
                 release_date=dates.get(f"{model.provider_id}:{model.id}"),
+                image_input=_takes_image(model),
             )
         )
     return tuple(rows)
@@ -199,13 +209,19 @@ def accepts_image_input(model_id: str, *, refresh=None) -> bool | None:
     """Whether models.dev records image as an input modality for ``model_id``.
 
     Keyed on the MODEL, not the provider: the same model reached through a proxy,
-    a router prefix, or a local server has the same input modalities. Returns None
-    when the catalog has never heard of the model, so the caller can fall back.
+    a router prefix, or a local server has the same input modalities. The row
+    that answers is the one routed limits come from (maker first, an effort
+    suffix like ``-high`` dropped); with none, any catalog model of that bare
+    name taking image says yes. Returns None when the catalog has never heard
+    of the model, so the caller can fall back.
     """
     (ensure_fresh_catalog if refresh is None else refresh)()
     wanted = _bare_model_name(model_id)
     if not wanted:
         return None
+    matched, _method = model_matching.match_routed(model_id, _all_models())
+    if matched is not None:
+        return matched.image_input
     return _image_inputs().get(wanted)
 
 
@@ -216,12 +232,7 @@ def _image_inputs() -> dict[str, bool]:
     found: dict[str, bool] = {}
     for model in modelsdotdev.iter_models():
         name = _bare_model_name(model.id)
-        modalities = getattr(model, "modalities", None)
-        image = any(
-            str(getattr(modality, "value", modality)).lower() == "image"
-            for modality in getattr(modalities, "input", ()) or ()
-        )
-        found[name] = found.get(name, False) or image
+        found[name] = found.get(name, False) or _takes_image(model)
     return found
 
 

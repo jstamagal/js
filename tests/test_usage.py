@@ -75,11 +75,11 @@ def test_anthropic_cache_writes_count_as_input_and_cost_the_write_rate():
     # The SDK's Anthropic usage leaves cache writes out of input_tokens.
     raw = {"input_tokens": 1000, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 2000}
     call = usage.call_usage(_usage(1000, 0, cache_read=0, cache_write=2000, raw=raw),
-                            model="claude-sonnet-4-5", provider_id="anthropic")
+                            model="claude-sonnet-5", provider_id="anthropic")
 
     assert call.input_tokens == 3000
     assert call.cache_write_tokens == 2000
-    assert call.cost == pytest.approx((1000 * 3.0 + 2000 * 3.75) / 1_000_000)
+    assert call.cost == pytest.approx((1000 * 2.0 + 2000 * 2.5) / 1_000_000)
 
 
 def test_a_model_the_catalog_does_not_price_counts_tokens_only():

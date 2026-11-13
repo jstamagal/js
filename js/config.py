@@ -51,13 +51,13 @@ _VISION_NAME_HINTS = (
     "-vl", ":vl", "vl-", "vl:", "vision", "llava", "pixtral", "internvl",
     "minicpm-v", "minicpm5", "gemma3", "gemma-3", "gemma4", "gemma-4",
     "qwen2-vl", "qwen2.5-vl", "qwen3-vl", "glm-4v", "glm-4.5v",
-    "gemini", "gpt-4o", "gpt-4.1", "gpt-5",
-    "claude-3", "claude-4", "claude-opus-4", "claude-sonnet-4", "claude-haiku-4",
+    "claude", "gemini", "gpt-", "grok-", "muse-",
 )
 # Text/audio/image-generation variants that share a vision-family substring but take
 # no image *input* — never enable image bytes for these.
 _VISION_NAME_ANTI = (
     "coder", "codex", "-code", "embed", "rerank", "guard", "tts", "whisper", "-image",
+    "gpt-oss", "realtime", "transcribe", "composer", "imagine",
 )
 
 

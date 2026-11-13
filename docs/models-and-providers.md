@@ -221,7 +221,7 @@ Every provider on the Anthropic Messages wire (`anthropic`, `anthropic-custom`,
 `opencode-go-anthropic`, `minimax`, and any saved login with sdk `anthropic`)
 carries the effort as `output_config.effort` (`js/reasoning.py`):
 
-- Claude 4.6 and later, Fable and Mythos get
+- Every Claude model (any id containing `claude`, `fable` or `mythos`) gets
   `thinking: {"type": "adaptive", "display": "summarized"}` with the effort
   snapped to the stops the model serves (no `xhigh` on 4.6). `off` sends
   `thinking: {"type": "disabled"}`; on the models that always think (Fable,

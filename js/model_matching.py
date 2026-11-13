@@ -74,7 +74,7 @@ def issuer_rank(row: Any) -> int:
         "nemotron": {"nvidia"}, "step": {"stepfun"}, "laguna": {"poolside"},
         "glm": {"zhipuai", "zai"}, "kimi": {"moonshotai"}, "mistral": {"mistral"},
         "o3": {"openai"}, "o4": {"openai"}, "llama": {"meta"}, "phi": {"microsoft"},
-        "command": {"cohere"},
+        "command": {"cohere"}, "muse": {"meta"},
     }
     for prefix, providers in issuers.items():
         if family.startswith(prefix) or model.startswith(prefix):

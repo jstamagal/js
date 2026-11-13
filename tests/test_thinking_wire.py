@@ -193,12 +193,10 @@ def _thinking_fields(body: dict) -> dict:
 
 
 @pytest.mark.parametrize(("provider", "base", "model"), [
-    ("anthropic", None, "claude-sonnet-4-5"),
-    ("anthropic-custom", "http://claude.test", "claude-sonnet-4-5"),
     ("opencode-go-anthropic", "https://opencode.ai/zen/go", "qwen3.7-plus"),
     ("minimax", "https://api.minimax.io/anthropic/v1", "MiniMax-M2"),
 ])
-def test_a_model_without_adaptive_thinking_gets_the_effort_word_and_no_invented_budget(
+def test_a_model_other_than_claude_gets_the_effort_word_and_no_invented_budget(
         monkeypatch, provider, base, model):
     body = _send(monkeypatch, provider=provider, base=base, model=model, effort="high", max_out=32000)
 
@@ -218,7 +216,7 @@ def test_a_saved_login_on_the_anthropic_sdk_sends_the_effort_word(monkeypatch, t
     assert _thinking_fields(body) == {"output_config": {"effort": "spoon"}, "max_tokens": 8000}
 
 
-@pytest.mark.parametrize("model", ["claude-haiku-4-5", "MiniMax-M2", "claude-opus-4-8"])
+@pytest.mark.parametrize("model", ["claude-haiku-5-5", "MiniMax-M2", "claude-opus-4-8"])
 def test_the_thinking_budget_is_sent_only_when_set(monkeypatch, model):
     body = _send(monkeypatch, provider="anthropic", model=model, effort="high", max_out=64000, budget=5000)
 
@@ -226,7 +224,8 @@ def test_the_thinking_budget_is_sent_only_when_set(monkeypatch, model):
 
 
 def test_off_on_an_unrecognized_model_is_sent_as_typed(monkeypatch):
-    body = _send(monkeypatch, provider="anthropic", model="claude-sonnet-4-5", effort="off", max_out=32000)
+    body = _send(monkeypatch, provider="opencode-go-anthropic", base="https://opencode.ai/zen/go",
+                 model="qwen3.7-plus", effort="off", max_out=32000)
 
     assert _thinking_fields(body) == {"output_config": {"effort": "off"}, "max_tokens": 32000}
 
@@ -252,7 +251,7 @@ def test_an_unset_output_cap_on_an_unknown_model_sends_the_anthropic_output_sett
 
 
 def test_an_unset_effort_sends_no_thinking(monkeypatch):
-    body = _send(monkeypatch, provider="anthropic", model="claude-sonnet-4-5", effort=None, max_out=32000)
+    body = _send(monkeypatch, provider="anthropic", model="claude-sonnet-5-5", effort=None, max_out=32000)
 
     assert "thinking" not in body
     assert "output_config" not in body
@@ -266,6 +265,9 @@ def test_an_unset_effort_sends_no_thinking(monkeypatch):
     ("claude-opus-5-5", "max", "max"),
     ("claude-fable-5-1", "medium", "medium"),
     ("claude-opus-5-5", "spoon", "spoon"),
+    ("claude-sonnet-5-5", "high", "high"),
+    ("claude-opus-6-high", "max", "max"),
+    ("claude-7", "xhigh", "xhigh"),
 ])
 def test_an_adaptive_model_gets_adaptive_thinking_and_an_effort(monkeypatch, model, effort, sent):
     body = _send(monkeypatch, provider="anthropic", model=model, effort=effort, max_out=64000)
@@ -285,7 +287,8 @@ def test_off_disables_thinking_where_the_model_accepts_it(monkeypatch, effort):
     assert "output_config" not in body
 
 
-@pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1"])
+@pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1",
+                                   "claude-opus-6", "claude-7-high"])
 def test_off_is_the_required_effort_on_a_model_that_always_thinks(monkeypatch, model):
     body = _send(monkeypatch, provider="anthropic", model=model, effort="off", max_out=64000)
 
@@ -323,7 +326,7 @@ def test_off_turns_minimax_m3_thinking_off(monkeypatch):
 
 def test_thinking_in_provider_extra_wins(monkeypatch):
     mine = {"type": "enabled", "budget_tokens": 5000}
-    body = _send(monkeypatch, provider="anthropic", model="claude-sonnet-4-5", effort="high",
+    body = _send(monkeypatch, provider="anthropic", model="claude-sonnet-5-5", effort="high",
                  max_out=32000, extra={"thinking": mine})
 
     assert body["thinking"] == mine
@@ -331,7 +334,7 @@ def test_thinking_in_provider_extra_wins(monkeypatch):
 
 def test_budget_thinking_sends_no_temperature_or_top_k(monkeypatch):
     sampling = Sampling(temperature=0.2, top_k=40)
-    body = _send(monkeypatch, provider="anthropic", model="claude-sonnet-4-5", effort="high",
+    body = _send(monkeypatch, provider="anthropic", model="claude-sonnet-5-5", effort="high",
                  max_out=32000, sampling=sampling, budget=4000)
 
     assert body["thinking"]["type"] == "enabled"
@@ -340,7 +343,7 @@ def test_budget_thinking_sends_no_temperature_or_top_k(monkeypatch):
 
 def test_without_a_budget_temperature_and_top_k_are_sent(monkeypatch):
     sampling = Sampling(temperature=0.2, top_k=40)
-    body = _send(monkeypatch, provider="anthropic", model="claude-sonnet-4-5", effort="high",
+    body = _send(monkeypatch, provider="anthropic", model="claude-sonnet-5-5", effort="high",
                  max_out=32000, sampling=sampling)
 
     assert body["temperature"] == 0.2 and body["top_k"] == 40
@@ -388,7 +391,7 @@ def claude(monkeypatch, tmp_path):
         agent_id="thinking",
         session="thinking",
         extras=[
-            "MODEL=claude-sonnet-4-5",
+            "MODEL=claude-sonnet-5-5",
             "PROVIDER=anthropic",
             "API_KEY=fixture",
             "EFFORT=high",
@@ -405,7 +408,7 @@ def claude(monkeypatch, tmp_path):
     cfg = replace(cfg, prompts_dir=prompts, project_dir=tmp_path)
     context = ToolContext(cwd=tmp_path)
     monkeypatch.setattr(runtime.T, "STOCK_CONTEXT", context)
-    wire = _Wire("claude-sonnet-4-5")
+    wire = _Wire("claude-sonnet-5-5")
     wire.install(monkeypatch)
     return cfg, wire, context
 
@@ -431,7 +434,7 @@ def test_the_history_record_keeps_the_signature_and_its_origin(claude):
     assert record["reasoning_parts"] == [
         {"text": _THOUGHT, "provider_metadata": {"anthropic": {"signature": _SIGNATURE}}},
     ]
-    assert record["reasoning_from"] == {"provider": "anthropic", "model": "claude-sonnet-4-5"}
+    assert record["reasoning_from"] == {"provider": "anthropic", "model": "claude-sonnet-5-5"}
 
 
 def test_the_next_turn_replays_the_signed_thinking_block(claude):
@@ -449,7 +452,7 @@ def test_a_resumed_session_replays_the_signed_thinking_block(claude):
     messages = [{"role": "user", "content": "first"}]
     _turn(cfg, messages, context)
     memory.persist_messages(cfg.session_file, messages,
-                            memory.stamp_for("claude-sonnet-4-5", "anthropic", "high"))
+                            memory.stamp_for("claude-sonnet-5-5", "anthropic", "high"))
 
     resumed = memory.load_replay_messages(cfg.session_file)
     resumed.append({"role": "user", "content": "next"})
@@ -474,7 +477,7 @@ def test_signed_thinking_is_not_sent_to_another_model(claude):
     messages = [{"role": "user", "content": "first"}]
     _turn(cfg, messages, context)
     messages.append({"role": "user", "content": "next"})
-    _turn(cfg, messages, context, model_override="claude-haiku-4-5")
+    _turn(cfg, messages, context, model_override="claude-haiku-5-5")
 
     assert _assistant_blocks(wire.bodies[1]) == [[{"type": "text", "text": "ok"}]]
 
@@ -508,7 +511,7 @@ def test_the_reduced_history_view_drops_signed_reasoning_with_the_text():
     record = {
         "role": "assistant", "content": "ok", "reasoning_content": _THOUGHT,
         "reasoning_parts": [{"text": _THOUGHT, "provider_metadata": {"anthropic": {"signature": _SIGNATURE}}}],
-        "reasoning_from": {"provider": "anthropic", "model": "claude-sonnet-4-5"},
+        "reasoning_from": {"provider": "anthropic", "model": "claude-sonnet-5-5"},
     }
 
     assert memory._strip_orphan_reasoning([record]) == [{"role": "assistant", "content": "ok"}]
@@ -826,7 +829,7 @@ def test_a_drop_of_signed_reasoning_on_a_final_answer_survives_resume(tmp_path):
 def test_the_thinking_budget_setting_replaces_the_effort_budget(claude):
     cfg, wire, context = claude
     tuned = from_env(agent_id="thinking", session="thinking",
-                     extras=["THINKING_BUDGET=4000", "PROVIDER=anthropic", "MODEL=claude-sonnet-4-5"])
+                     extras=["THINKING_BUDGET=4000", "PROVIDER=anthropic", "MODEL=claude-sonnet-5-5"])
     assert tuned.thinking_budget == 4000
     # A turn resolves its settings from the layers: the budget rides the flag layer.
     flagged = replace(cfg, layer_flag={**(cfg.layer_flag or {}), "THINKING_BUDGET": tuned.thinking_budget})
@@ -866,7 +869,7 @@ def test_resume_preserves_adjacent_text_blocks_and_drops_empty_ones_before_think
 def test_a_tool_continuation_whose_earlier_signature_is_refused_recovers_in_one_retry(claude):
     cfg, wire, context = claude
     wire.refuse_when = lambda body: '"S0"' in json.dumps(body)
-    origin = {"provider": "anthropic", "model": "claude-sonnet-4-5"}
+    origin = {"provider": "anthropic", "model": "claude-sonnet-5-5"}
     messages = [
         {"role": "user", "content": "first"},
         {"role": "assistant", "content": "earlier", "reasoning_from": origin,
