@@ -2930,6 +2930,8 @@ def _prompt_run(prompt: str, model: str | None = None, debug: bool = False,
     # -d shows the conversation as the REPL draws it: each user line, typed or
     # fired from the agent's files, ahead of the answer it got.
     echo_user = display_mod.echo_user if debug else None
+    # Saved after every tool batch, so a run killed mid-turn keeps what it did.
+    checkpoint = (lambda: _persist_turn_messages(cfg, messages, reasoning_override)) if save else None
     def turns() -> None:
         nonlocal before_len
         if prompt_spec is not None and prompt_spec.exchanges and not messages:
@@ -2949,7 +2951,7 @@ def _prompt_run(prompt: str, model: str | None = None, debug: bool = False,
             echo_user(prompt)
         runtime.run_turn(cfg, system, messages, telemetry,
                          trace_override=debug or bool(debug_file) or cfg.trace,
-                         tool_context=tool_context, **turn_kwargs)
+                         tool_context=tool_context, checkpoint=checkpoint, **turn_kwargs)
         if bus is None:
             return
         # On a bus, a turn ending is the agent going idle, not the run ending.
@@ -2981,15 +2983,14 @@ def _prompt_run(prompt: str, model: str | None = None, debug: bool = False,
                 echo_user(wake["content"])
             runtime.run_turn(cfg, system, messages, telemetry,
                              trace_override=debug or bool(debug_file) or cfg.trace,
-                             tool_context=tool_context, **turn_kwargs)
+                             tool_context=tool_context, checkpoint=checkpoint, **turn_kwargs)
 
-    # On a bus, SIGTERM (the runner stopping the swarm) ends the run like ^C:
+    # SIGTERM (a runner, `timeout`, a swarm stopping) ends the run like ^C:
     # the session is persisted and the exit code says interrupted. The
     # handler this run replaces is put back when it ends.
     previous_sigterm = None
-    if bus is not None:
-        with contextlib.suppress(ValueError):  # not the main thread: no signal hook
-            previous_sigterm = signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
+    with contextlib.suppress(ValueError):  # not the main thread: no signal hook
+        previous_sigterm = signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
     try:
         try:
             if debug:
@@ -3722,6 +3723,7 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_message, turn_cfg, l
             event_hooks=state.get("events"),
             mcp_host=state.get("mcp_host"),
             steer=steer,
+            checkpoint=lambda: _persist_turn_messages(turn_cfg, state["messages"]),
         )
         after_turn_model = _model_from_live_settings(state["settings"])
         if after_turn_model != before_turn_model:

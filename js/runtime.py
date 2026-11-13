@@ -2096,7 +2096,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
              event_sink: Callable[[str, dict], None] | None = None,
              approve: event_mod.Approve | event_mod.Approval | None = None,
              *, skill_catalog: skills.SkillCatalog | None = None,
-             state_dir: Path | None = None) -> None:
+             state_dir: Path | None = None,
+             checkpoint: Callable[[], None] | None = None) -> None:
     """One user turn → tool-use loop until the model stops. The real primitive:
     it awaits the model stream and runs tool dispatch in a thread executor, so it
     NEVER blocks the loop — many turns/subagents run concurrently. Mutates
@@ -2123,6 +2124,10 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
 
     ``state_dir`` is the root of this session's persistent undo store. None
     uses the usual state root.
+
+    ``checkpoint`` is called, off the loop, after each batch of tool results is
+    recorded: `messages` then holds every assistant message with all its
+    results, so the caller can save it and a killed process keeps the turn.
 
     Provider overrides let the REPL /prompt mode switch endpoint without
     reloading config; unset values fall back to the Config values. The sync
@@ -2248,6 +2253,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 registry=active_registry, dispatch_registry=dispatch_registry, context=active_context,
                 error_tracker=error_tracker, telemetry=telemetry, events=events,
             )
+            if checkpoint is not None:
+                await asyncio.to_thread(checkpoint)
             if error_tracker.limit_reached():
                 _record_tool_error_limit(dispatch_records, registry=active_registry, messages=messages,
                                          convo=convo, events=events)
