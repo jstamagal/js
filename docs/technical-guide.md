@@ -97,12 +97,16 @@ migrate-agents` converts them.
 numeric `N` (any width; `-` or `_` separators). Matching numbers form an
 exchange: the user file is recorded as a user message, then the agent file as
 an assistant message, without calling the model. A user file without a matching
-agent file runs a normal model turn, shown as any turn is: the user line
-behind the prompt, then the reply as it streams. In the REPL it is the first
-turn, so `^C` cancels it; in `-p` mode it shows only with `-d`. An agent file
+agent file runs a normal model turn; it shows only with `-d`. An agent file
 without a user file records an assistant message on its own. Bare `user.md`
 and `agent.md` are exchange 0. Two files defining the same numeric role are an
 error.
+
+A fresh session of an agent with message files never opens the REPL. With no
+`-p` the exchanges are the whole run: the last one's answer is printed as a
+`-p` answer is, and js exits. With `-p` the prompt is sent after the last
+exchange, its answer printed, and js exits. A session that already has
+messages skips initialization, so resuming one opens the REPL.
 
 Message contents retain their whitespace and are expanded when reached, using
 the same [prompt expansion](inline-directives.md) as system text. In saved

@@ -257,6 +257,45 @@ def test_even_an_empty_benchmark_file_prevents_entering_repl(tmp_path, monkeypat
     assert cli.main([]) == 2
 
 
+def test_exchange_files_run_as_a_one_shot_without_a_prompt(tmp_path, monkeypatch, capsys):
+    _agent(tmp_path, monkeypatch, {"01-user.md": "first step", "02-user.md": "last step"})
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli, "PromptSession", lambda **kwargs: pytest.fail("entered REPL"))
+    requests = _model(monkeypatch, ["first reply", "last reply"])
+    assert cli.main(["--session", "seeded", "-q"]) == 0
+    assert [request[-1] for request in requests] == [("user", "first step"), ("user", "last step")]
+    assert capsys.readouterr().out.strip() == "last reply"
+    assert [message["content"] for message in memory.load_replay_messages(_saved(tmp_path))] == [
+        "first step", "first reply", "last step", "last reply",
+    ]
+
+
+def test_exchange_files_with_a_prompt_send_it_after_them_and_exit(tmp_path, monkeypatch, capsys):
+    _agent(tmp_path, monkeypatch, {"01-user.md": "the workflow"})
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli, "PromptSession", lambda **kwargs: pytest.fail("entered REPL"))
+    requests = _model(monkeypatch, ["workflow reply", "opinion"])
+    assert cli.main(["-p", "your opinion", "-q"]) == 0
+    assert [request[-1] for request in requests] == [("user", "the workflow"), ("user", "your opinion")]
+    assert capsys.readouterr().out.strip() == "opinion"
+
+
+def test_resumed_session_with_exchange_files_opens_the_repl(tmp_path, monkeypatch):
+    _agent(tmp_path, monkeypatch, {"01-user.md": "the workflow"})
+    _model(monkeypatch, ["workflow reply"])
+    assert cli._run_prompt(None, session="seeded") == 0
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+
+    class EnteredRepl(Exception):
+        pass
+
+    def entered(**kwargs):
+        raise EnteredRepl
+    monkeypatch.setattr(cli, "PromptSession", entered)
+    with pytest.raises(EnteredRepl):
+        cli.main(["--session", "seeded", "--blocking"])
+
+
 def test_benchmark_expansion_happens_after_its_setup(tmp_path, monkeypatch):
     marker = tmp_path / "ready"
     _agent(tmp_path, monkeypatch, {

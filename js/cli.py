@@ -93,6 +93,7 @@ from .config import (
     from_env,
     jsrc_paths,
     resolve_agent_id,
+    resolve_session_file,
     run_settings,
     set_invocation,
     validate_agent_id,
@@ -475,6 +476,31 @@ def _print_resume_hint(cfg: Config, state: dict) -> None:
         resume += f" --model {shlex.quote(model)}"
     resume += f" --session {shlex.quote(_session_hint_arg(cfg))}"
     msgs.say(msgs.RESUME_HINT, command=resume)
+
+
+def _exchanges_are_the_prompt(args: argparse.Namespace, agent: str | None, presets: list[str]) -> bool:
+    """Whether a run with no -p runs the agent's NN-user.md / NN-agent.md
+    exchanges as a one-shot: the agent has them and the session is fresh,
+    so they are what the run sends."""
+    try:
+        cfg = _from_env(None, save_session=False, extras=args.extras, agent_id=agent,
+                        ignore_local_config=args.no_local_config,
+                        ignore_global_config=args.no_global_config, presets=presets)
+        spec = P.load_configured_prompt_spec(cfg, expand=False)
+    except (FileNotFoundError, ValueError):
+        # The REPL path reports the error.
+        return False
+    if not spec.exchanges:
+        return False
+    name = args.session if args.session is not None else os.environ.get("JS_SESSION")
+    if name is None:
+        return True
+    try:
+        session_file = resolve_session_file(cfg.sessions_dir, name)
+    except ValueError:
+        # No such session yet: the run starts it.
+        return True
+    return not M.load_replay_messages(session_file)
 
 
 def _invocation_agent(args: argparse.Namespace, presets: list[str]) -> str:
@@ -2699,7 +2725,7 @@ def _raise_keyboard_interrupt(*_args) -> None:
 
 
 @_session_scope
-def _run_prompt(prompt: str, **kwargs) -> int:
+def _run_prompt(prompt: str | None, **kwargs) -> int:
     """One `-p` run (`_prompt_run`). Once its session is open, the Continue
     line prints on every exit: an answer, no answer, an error, ^C."""
     opened: dict = {}
@@ -2726,7 +2752,7 @@ def _write_requested_stats(json_path, csv_path, payload, rows, *, announce: bool
     return ok
 
 
-def _prompt_run(prompt: str, model: str | None = None, debug: bool = False,
+def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = False,
                 debug_file: str | None = None,
                 agent: str | None = None, session: str | None = None, save: bool = True,
                 system_override: str | None = None, resume_prefix: str | None = None,
@@ -2741,13 +2767,17 @@ def _prompt_run(prompt: str, model: str | None = None, debug: bool = False,
                 events: headless.JsonEvents | None = None,
                 config_pins: bool = False, swarm: str | None = None,
                 call_stats: list[dict] | None = None, opened: dict | None = None) -> int:
+    """A ``prompt`` of None runs the agent's startup exchanges as the whole
+    run: the last one is the turn whose answer is printed."""
     # @path in the prompt attaches like it does in the REPL, read here before
     # any jail, so `-p "@/tmp/prompt.txt"` needs no JAIL_BIND.
-    prompt, named = attach.split_repl_attachments(prompt)
-    attachments = [*(files or []), *named]
-    if not prompt.strip() and not attachments:
-        msgs.warn(msgs.PROMPT_EMPTY)
-        return 2
+    attachments: list[str] = []
+    if prompt is not None:
+        prompt, named = attach.split_repl_attachments(prompt)
+        attachments = [*(files or []), *named]
+        if not prompt.strip() and not attachments:
+            msgs.warn(msgs.PROMPT_EMPTY)
+            return 2
     reasoning_override = None
     if reasoning is not None:
         reasoning_override, effort_error = _validate_cli_reasoning(reasoning)
@@ -2883,22 +2913,26 @@ def _prompt_run(prompt: str, model: str | None = None, debug: bool = False,
             resumed=before_len > 0, agent=cfg.agent_id, model=cfg.model, provider=cfg.provider_id,
             cwd=str(Path.cwd()), usage=usage_mod.totals(cfg.session_file).as_dict(),
         )
-    try:
-        user_message = attach.build_user_message(
-            prompt,
-            attachments,
-            attachment_cfg,
-            stdin_attachment=stdin_attachment,
-        )
-    except attach.AttachmentError as e:
-        with _transcript_stdio(telemetry):
-            msgs.warn(msgs.FAILED, error=e)
-        return 2
-    if save:
-        user_message = _note_mode_switch(cfg, user_message, "-p")
-    user_message = _note_model_switch(resume_cfg, user_message)
-    if cut_off:
-        user_message = attach.with_note(user_message, _CUT_OFF_NOTICE)
+    user_message = None
+    if prompt is not None:
+        try:
+            user_message = attach.build_user_message(
+                prompt,
+                attachments,
+                attachment_cfg,
+                stdin_attachment=stdin_attachment,
+            )
+        except attach.AttachmentError as e:
+            with _transcript_stdio(telemetry):
+                msgs.warn(msgs.FAILED, error=e)
+            return 2
+        if save:
+            user_message = _note_mode_switch(cfg, user_message, "-p")
+        user_message = _note_model_switch(resume_cfg, user_message)
+        if cut_off:
+            user_message = attach.with_note(user_message, _CUT_OFF_NOTICE)
+    elif save and cfg.session_file != Path(os.devnull):
+        M.record_turn_mode(cfg.session_file, "-p")
     if call_stats is None:
         call_stats = []
     turn_kwargs = {
@@ -2942,16 +2976,17 @@ def _prompt_run(prompt: str, model: str | None = None, debug: bool = False,
                 tool_context=tool_context, echo_user=echo_user, **turn_kwargs,
             ))
         before_len = len(messages)
-        messages.append(user_message)
-        if save:
-            _append_turn(cfg, user_message)
-        if turn_transcript is not None:
-            turn_transcript.emit(output.event("transcript_user", text=prompt))
-        if echo_user is not None:
-            echo_user(prompt)
-        runtime.run_turn(cfg, system, messages, telemetry,
-                         trace_override=debug or bool(debug_file) or cfg.trace,
-                         tool_context=tool_context, checkpoint=checkpoint, **turn_kwargs)
+        if user_message is not None:
+            messages.append(user_message)
+            if save:
+                _append_turn(cfg, user_message)
+            if turn_transcript is not None:
+                turn_transcript.emit(output.event("transcript_user", text=prompt))
+            if echo_user is not None:
+                echo_user(prompt)
+            runtime.run_turn(cfg, system, messages, telemetry,
+                             trace_override=debug or bool(debug_file) or cfg.trace,
+                             tool_context=tool_context, checkpoint=checkpoint, **turn_kwargs)
         if bus is None:
             return
         # On a bus, a turn ending is the agent going idle, not the run ending.
@@ -3055,7 +3090,7 @@ def _prompt_run(prompt: str, model: str | None = None, debug: bool = False,
     stats_ok = True
     if stats_json or stats_csv:
         error = None if answer else msgs.NO_ANSWER.words()
-        row = {"name": "prompt", "prompt": prompt, "max_tokens": cfg.max_output_tokens if maxout is None else maxout,
+        row = {"name": "prompt", "prompt": prompt or "", "max_tokens": cfg.max_output_tokens if maxout is None else maxout,
                "ok": bool(answer), "error": error, **stats.summarize_calls(call_stats, wall_s=time.time() - _t_wall)}
         payload = {"agent": cfg.agent_id, "model": cfg.model, "provider": cfg.provider_id, "turns": [row]}
         stats_ok = _write_requested_stats(stats_json, stats_csv, payload, [row])
@@ -3160,7 +3195,7 @@ def _emit_failure(events: headless.JsonEvents, line: str, code: int) -> None:
 _WARN_MARK = re.compile(r"^\*+\s*")
 
 
-def _run_prompt_json(prompt: str, **kwargs) -> int:
+def _run_prompt_json(prompt: str | None, **kwargs) -> int:
     """`_run_prompt` with its run written to stdout as JSON events
     (`js.headless`). A failure without an `error` event gets one carrying the
     last line printed to stderr before `_run_prompt` returned."""
@@ -5212,7 +5247,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         msgs.warn(msgs.FILE_NEEDS_PROMPT)
         return 2
 
-    if args.prompt is not None or not sys.stdin.isatty():
+    exchanges_only = args.prompt is None and sys.stdin.isatty() and _exchanges_are_the_prompt(args, cli_agent, presets)
+    if args.prompt is not None or not sys.stdin.isatty() or exchanges_only:
         os.environ["JS_MODE"] = "headless"
         stdin_attachment = None
         if "-" in args.files:
@@ -5224,6 +5260,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
                 return 2
             stdin_attachment = _read_stdin_attachment_if_piped()
             prompt = args.prompt or ""
+        elif exchanges_only:
+            prompt = None
         elif args.prompt in {None, "-"}:
             prompt = _read_stdin_if_piped()
         elif sys.stdin.isatty():
@@ -5231,7 +5269,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         else:
             stdin_text = _read_stdin_if_piped()
             prompt = args.prompt if not stdin_text.strip() else f"{args.prompt.rstrip()}\n\n{stdin_text.strip()}"
-        _session_leases.start["mode"] = "-p" if args.prompt is not None else "pipe"
+        _session_leases.start["mode"] = "-p" if args.prompt is not None or exchanges_only else "pipe"
         generated_session = (
             not args.no_save
             and args.session is None
