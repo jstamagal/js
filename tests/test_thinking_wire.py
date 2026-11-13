@@ -231,11 +231,22 @@ def test_off_on_an_unrecognized_model_is_sent_as_typed(monkeypatch):
     assert _thinking_fields(body) == {"output_config": {"effort": "off"}, "max_tokens": 32000}
 
 
-def test_an_unset_output_cap_sends_the_anthropic_output_setting(monkeypatch):
+@pytest.mark.parametrize("model", ["claude-opus-5-5-high", "claude-sonnet-5-5", "claude-fable-5-2"])
+def test_an_unset_output_cap_sends_the_models_known_limit(monkeypatch, model):
+    monkeypatch.setattr(model_client.model_metadata, "resolve_max_output", lambda _m, _p=None: 128000)
+
+    body = _send(monkeypatch, provider="anthropic", model=model, effort="max", max_out=None)
+
+    assert body["max_tokens"] == 128000
+
+
+def test_an_unset_output_cap_on_an_unknown_model_sends_the_anthropic_output_setting(monkeypatch):
     from js import settings
 
-    body = _send(monkeypatch, provider="minimax", base="https://api.minimax.io/anthropic/v1",
-                 model="MiniMax-M2", effort="medium", max_out=None)
+    monkeypatch.setattr(model_client.model_metadata, "resolve_max_output", lambda _m, _p=None: None)
+
+    body = _send(monkeypatch, provider="opencode-go-anthropic", base="https://opencode.ai/zen/go",
+                 model="qwen3.7-plus", effort="medium", max_out=None)
 
     assert body["max_tokens"] == settings.default_value("ANTHROPIC_OUTPUT_TOKENS_MAX")
 

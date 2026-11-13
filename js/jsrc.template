@@ -65,7 +65,8 @@
 
 # Largest reply the model may write in one call, in tokens. Thinking counts
 # toward it. Unset: no limit is sent, except on Anthropic-format endpoints,
-# which require one: there ANTHROPIC_OUTPUT_TOKENS_MAX is sent.
+# which require one: there the model's known output limit is sent, else
+# ANTHROPIC_OUTPUT_TOKENS_MAX.
 #   example:  set OUTPUT_TOKENS_MAX 32000
 #set -OUTPUT_TOKENS_MAX
 
@@ -849,7 +850,7 @@
 #set DEEPSEEK_REASONING_TOKENS_MAX 32000
 
 # max_tokens sent on Anthropic-format endpoints, which require one, when
-# OUTPUT_TOKENS_MAX is unset.
+# OUTPUT_TOKENS_MAX is unset and the model's output limit is unknown.
 #set ANTHROPIC_OUTPUT_TOKENS_MAX 64000
 
 # on: requests through a CLIProxyAPI login carry include_reasoning: true,

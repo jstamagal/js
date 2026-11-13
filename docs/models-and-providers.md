@@ -233,8 +233,9 @@ carries the effort as `output_config.effort` (`js/reasoning.py`):
   budget itself; Claude 4.7 and later answer a budget with a 400. While a
   budget is in force js sends no `TEMPERATURE` or
   `TOP_K`: Anthropic rejects either alongside budget thinking.
-- `max_tokens` is required on this wire: `OUTPUT_TOKENS_MAX` when set,
-  `ANTHROPIC_OUTPUT_TOKENS_MAX` (default 64000) otherwise.
+- `max_tokens` is required on this wire: `OUTPUT_TOKENS_MAX` when set, else
+  the model's known output limit (server cache, then models.dev), else
+  `ANTHROPIC_OUTPUT_TOKENS_MAX` (default 64000).
 
 A `thinking` object in `EXTRA_PARAMS` replaces the one js builds.
 
@@ -382,7 +383,7 @@ Order:
 3. `OUTPUT_TOKENS_MAX` in `jsrc`
 4. agent manifest `max_tokens:` in `agent.yaml`
 5. unset: no cap is sent, except on the Anthropic wire, which requires one and
-   gets `ANTHROPIC_OUTPUT_TOKENS_MAX`
+   gets the model's known output limit, else `ANTHROPIC_OUTPUT_TOKENS_MAX`
 
 A reply cut off by this cap is sent again once with
 `OUTPUT_TOKENS_RETRY_MAX` tokens (default 64000, never above the model's

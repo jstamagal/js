@@ -25,7 +25,8 @@ MODEL
 
 OUTPUT_TOKENS_MAX
     Per-call max_tokens; unset = not sent, except on the Anthropic wire,
-    which sends ANTHROPIC_OUTPUT_TOKENS_MAX.
+    which sends the model's known output limit, else
+    ANTHROPIC_OUTPUT_TOKENS_MAX.
 
 CONTEXT_SIZE
     Override the active model's context window. Unset = local runtime
@@ -554,7 +555,7 @@ DEEPSEEK_REASONING_TOKENS_MAX
 
 ANTHROPIC_OUTPUT_TOKENS_MAX
     max_tokens sent on the Anthropic wire, which requires one, when
-    OUTPUT_TOKENS_MAX is unset.
+    OUTPUT_TOKENS_MAX is unset and the model's output limit is unknown.
 
 CLAUDE_PROXY_INCLUDE_REASONING
     on: requests through a CLIProxyAPI login carry include_reasoning: true,

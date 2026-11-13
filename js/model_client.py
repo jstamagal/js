@@ -26,7 +26,7 @@ import ai
 import httpx
 import httpx2
 
-from . import codex_auth, codex_provider, media, messages as msgs, paranoid, providers, reasoning, retry, routing, stream_transport, tool_args
+from . import codex_auth, codex_provider, media, messages as msgs, model_metadata, paranoid, providers, reasoning, retry, routing, stream_transport, tool_args
 from . import settings as _settings
 from . import sampling as sampling_mod
 from .sampling import Sampling
@@ -1752,9 +1752,11 @@ def build_request_params(
     reasoning_params: ai_params.ReasoningParams | None = None
     if route.anthropic_wire:
         # The Anthropic wire requires max_tokens: OUTPUT_TOKENS_MAX when set,
-        # ANTHROPIC_OUTPUT_TOKENS_MAX otherwise.
-        output_max_tokens = (max_output_tokens if max_output_tokens is not None
-                             else _settings.knob(settings, "ANTHROPIC_OUTPUT_TOKENS_MAX"))
+        # else the model's known output limit, else ANTHROPIC_OUTPUT_TOKENS_MAX.
+        output_max_tokens = max_output_tokens
+        if output_max_tokens is None:
+            output_max_tokens = (model_metadata.resolve_max_output(model_id, provider_id)
+                                 or _settings.knob(settings, "ANTHROPIC_OUTPUT_TOKENS_MAX"))
         # A `thinking` set in EXTRA_PARAMS wins over the one js/reasoning.py plans.
         if route.minimax:
             plan = reasoning.minimax_thinking(model_name, reasoning_effort, thinking_budget)
