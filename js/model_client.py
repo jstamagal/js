@@ -1753,10 +1753,16 @@ def build_request_params(
     if route.anthropic_wire:
         # The Anthropic wire requires max_tokens: OUTPUT_TOKENS_MAX when set,
         # else the model's known output limit, else ANTHROPIC_OUTPUT_TOKENS_MAX.
+        # A catalog output limit as large as the context window is a
+        # placeholder, not a cap: kimi-k3 lists 1048576 and its endpoint
+        # answers "max_tokens must be at most 1000000".
         output_max_tokens = max_output_tokens
         if output_max_tokens is None:
-            output_max_tokens = (model_metadata.resolve_max_output(model_id, provider_id)
-                                 or _settings.knob(settings, "ANTHROPIC_OUTPUT_TOKENS_MAX"))
+            known = model_metadata.resolve_max_output(model_id, provider_id)
+            window = model_metadata.context_window(model_id, provider_id)
+            if known and window and known >= window:
+                known = None
+            output_max_tokens = known or _settings.knob(settings, "ANTHROPIC_OUTPUT_TOKENS_MAX")
         # A `thinking` set in EXTRA_PARAMS wins over the one js/reasoning.py plans.
         if route.minimax:
             plan = reasoning.minimax_thinking(model_name, reasoning_effort, thinking_budget)
