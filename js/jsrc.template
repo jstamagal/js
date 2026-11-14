@@ -732,6 +732,14 @@
 #   example:  set TOOL_ALIASES [{"match": "qwen", "aliases": {"read": "read_file"}}]
 #set -TOOL_ALIASES
 
+# Give particular models their own tool surface, as JSON. "match" is checked
+# against the model and provider names; the first profile that matches is
+# used when the agent's agent.yaml has no matching models: entry. "mode" is
+# replace (the default: these tools plus skill) or prepend (ahead of the
+# agent's tools). "core": false leaves skill out of a replace.
+#   example:  set TOOL_PROFILES [{"match": "qwen", "tools": ["shell:eager"]}]
+#set -TOOL_PROFILES
+
 # Size of a terminal_session the model starts without giving one.
 #set TERMINAL_COLUMNS 64
 #set TERMINAL_ROWS 36

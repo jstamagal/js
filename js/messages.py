@@ -1185,6 +1185,7 @@ AGENT_DIR_UNREADABLE = Message("Agent dir {path} unreadable: {error}. Skipped.")
 AGENT_NAME_IS_TOOL = Message("Agent {agent!r}: name collides with a builtin tool. Not exposed as a tool. Rename {root}/{agent}.")
 TOOL_ENTRY_UNMATCHED = Message("Tool entry {entry!r} matched no tool. Ignored.")
 TOOL_ENTRY_UNMATCHED_FOR = Message("Tool entry {entry!r} for agent {agent!r} matched no tool. Ignored.")
+TOOL_PROFILE_LEAVES_NO_TOOLS = Message("Tool profile {match!r} leaves no tools. Ignored.")
 DESCRIPTION_PROBLEM = Message("description: {problem}")
 DESCRIPTION_NESTED_BLOCK = Message("{label}nested {{{{#if}}}}/{{{{#unless}}}} block is unsupported. Kept as written.")
 DESCRIPTION_BLOCK_NAMES_NO_TOOL = Message("{label}conditional block names no tool. Kept as written.")
@@ -1957,6 +1958,20 @@ AGENT_MANIFEST_UNKNOWN_SAMPLING_KEY_IN_ALLOWED = "unknown sampling key '{key}' i
 AGENT_MANIFEST_SAMPLING_IN_MUST_BE_A_NUMBER = "sampling.{key} in {path} must be a number"
 
 AGENT_MANIFEST_SAMPLING_IN = "sampling.{key} in {path}: {error}"
+
+MODEL_PROFILES_NOT_A_LIST = "{where} must be a list of profiles"
+
+MODEL_PROFILE_NOT_A_MAPPING = "{where} must be a mapping"
+
+MODEL_PROFILE_UNKNOWN_KEYS = "unknown key(s) {keys} in {where}; allowed: {allowed}"
+
+MODEL_PROFILE_MATCH = "match in {where} must be a non-empty string or list of non-empty strings"
+
+MODEL_PROFILE_MODE = "mode in {where} must be one of: {modes}"
+
+MODEL_PROFILE_CORE = "core in {where} must be true or false"
+
+MODEL_PROFILE_PROMPT = "prompt in {where}: {error}"
 
 AGENT_MANIFEST_UNKNOWN_KEY_S_IN_ALLOWED = "unknown key(s) {value} in {manifest_path}; allowed: {value2}"
 

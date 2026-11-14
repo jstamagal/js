@@ -2833,8 +2833,6 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
             with _transcript_stdio(telemetry):
                 msgs.warn(msgs.FAILED, error=_format_prompt_load_error(cfg, e))
             return 2
-        system = prompt_spec.system
-        active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
         try:
             # A resumed session stays on its stamp; agent.yaml sets a fresh run.
             if config_pins or resumed is None:
@@ -2853,6 +2851,16 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
         with _transcript_stdio(telemetry):
             msgs.warn(msgs.FAILED, error=e)
         return 2
+    if prompt_spec is not None:
+        try:
+            # The run's tools and persona follow the model it settled on.
+            prompt_spec = P.for_model(prompt_spec, cfg)
+        except (FileNotFoundError, ValueError) as e:
+            with _transcript_stdio(telemetry):
+                msgs.warn(msgs.FAILED, error=_format_prompt_load_error(cfg, e))
+            return 2
+        system = prompt_spec.system
+        active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
     # The model and agent this run uses are settled: the login-default
     # settings resolve before sampling and attachments are worked out.
     cfg = login_defaults.for_turn(login_defaults.with_agent(
@@ -3258,15 +3266,15 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         msgs.warn(msgs.NO_BENCHMARKS, agent=agent_id)
         return 2
 
-    system = prompt_spec.system
-    active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
     try:
         cfg = P.apply_agent_model(cfg, prompt_spec, model)
         cfg = _resolve_cli_model_override(cfg, model)
+        prompt_spec = P.for_model(prompt_spec, cfg)
         cfg = login_defaults.for_turn(login_defaults.with_agent(cfg, prompt_spec))
-    except ValueError as e:
+    except (FileNotFoundError, ValueError) as e:
         msgs.warn(msgs.FAILED, error=e)
         return 2
+    active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
     # The resolved OUTPUT_TOKENS_MAX: agent.yaml's max_tokens is one of its layers.
     agent_default_max = cfg.max_output_tokens
     prompt_spec = P._expand_spec(prompt_spec, cfg)
@@ -5341,7 +5349,6 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     recorded_system = M.load_system_prompt(cfg.session_file)
     if recorded_system is not None and not (current().changes_prompt or current().chat):
         system = recorded_system
-    active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
     try:
         cfg = P.apply_agent_model(cfg, prompt_spec, args.model)
         cfg = P.apply_agent_max_tokens(cfg, prompt_spec)
@@ -5349,6 +5356,13 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     except ValueError as e:
         msgs.warn(msgs.FAILED, error=e)
         return 2
+    try:
+        # The session's tools and persona follow the model it settled on.
+        prompt_spec = P.for_model(prompt_spec, cfg)
+    except (FileNotFoundError, ValueError) as e:
+        msgs.warn(msgs.FAILED, error=_format_prompt_load_error(cfg, e))
+        return 2
+    active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
     # Compared with what the resumed model and agent resolve to, not the
     # startup model.
     resumed_reasoning = (

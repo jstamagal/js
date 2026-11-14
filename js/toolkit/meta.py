@@ -320,6 +320,11 @@ async def _run_one_task_async(
             provider_api_key=route.api_key,
             provider_headers=route.headers,
         )
+    try:
+        # The child's tools and persona follow its own model, not the parent's.
+        prompt_spec = P.for_model(prompt_spec, cfg)
+    except (FileNotFoundError, ValueError) as exc:
+        return f"ERROR could not load agent {agent!r}: {exc}"
     # The child's own model and agent.yaml settle its login-default settings;
     # what its agent.yaml leaves out it takes from the parent's agent. An
     # effort the parent's turn ran with that its layers do not give (a resumed

@@ -390,6 +390,8 @@ REGISTRY: tuple[SettingSpec, ...] = (
     # --- tools ---
     SettingSpec("TOOL_ALIASES", "json",
                 empty=EMPTY_NONE, group="tools"),
+    SettingSpec("TOOL_PROFILES", "json",
+                empty=EMPTY_NONE, group="tools"),
     SettingSpec("HTTP_USER_AGENT", "str", group="tools"),
     SettingSpec("JEV_MODEL", "str", group="tools"),
     SettingSpec("SKILLS_DISABLED", "json", group="tools"),
@@ -673,6 +675,13 @@ def _coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             error = _validate_alias_profiles(value)
             if error is not None:
                 return None, error
+        if spec.key == "TOOL_PROFILES":
+            from . import model_profiles
+
+            try:
+                model_profiles.parse_profiles(value, "TOOL_PROFILES")
+            except ValueError as exc:
+                return None, str(exc)
         if spec.key in {"SHELL_ENV_KEEP", "TOOLS_QUIET", "SHELL_QUIET"}:
             if not isinstance(value, list) or any(
                 not isinstance(item, str) or not item.strip() for item in value

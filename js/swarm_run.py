@@ -102,6 +102,7 @@ def _configure(spec: AgentSpec) -> tuple[Any, str, Any, Any]:
     prompt_spec = P.load_configured_prompt_spec(cfg, expand=False)
     cfg = P.apply_agent_model(cfg, prompt_spec, spec.model, config_pins=False)
     cfg = cli._resolve_cli_model_override(cfg, spec.model)
+    prompt_spec = P.for_model(prompt_spec, cfg)
     # agent.yaml's effort and max_tokens are the agent layers; the spec's own
     # effort is set for this run like a flag. Every turn resolves them.
     cfg = login_defaults.with_agent(cfg, prompt_spec, reasoning=spec.effort is None)
