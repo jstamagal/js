@@ -9,7 +9,9 @@ glob cannot be intersected, so passing both is rejected. Results are absolute
 paths, and `content` lines are `path:line:text`. Bytes that are not valid UTF-8
 are shown as `\xNN` escapes. The walk stays on the filesystem `path` is on and
 does not enter mount points below it; to search a mounted share, name it as
-`path`.
+`path`. A `path` that does not exist is refused with the nearest existing
+directory, close names in its parent directory, and existing paths that end
+the same way.
 {{#if shell}}
 For directory-only discovery use `shell` with `fd --type d`.
 {{/if}}

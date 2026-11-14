@@ -134,11 +134,14 @@ def test_patch_edits_list_is_atomic_when_a_later_edit_cannot_match(tmp_path):
     assert not context.snapshots.get(target)
 
 
-def test_patch_rejects_no_op_edit_in_both_scalar_and_list_form(tmp_path):
+def test_patch_identical_edit_is_skipped_in_both_scalar_and_list_form(tmp_path):
     target, context = _read_file(tmp_path, "noop.txt", "alpha\nbeta\n")
     before = target.read_bytes()
 
     scalar = fs.patch(file_path="noop.txt", old_string="alpha", new_string="alpha", context=context)
+    assert not scalar.startswith("ERROR")
+    assert target.read_bytes() == before
+
     listed = fs.patch(
         file_path="noop.txt",
         edits=[
@@ -148,9 +151,9 @@ def test_patch_rejects_no_op_edit_in_both_scalar_and_list_form(tmp_path):
         context=context,
     )
 
-    assert scalar == "ERROR: old_string and new_string must be different"
-    assert listed == "ERROR: edit 2: old_string and new_string must be different"
-    assert target.read_bytes() == before
+    assert listed.startswith(f"patched {target}")
+    assert "edit 2" in listed
+    assert target.read_text(encoding="utf-8") == "ALPHA\nbeta\n"
 
 
 def test_patch_ambiguous_match_needs_replace_all_in_both_forms(tmp_path):

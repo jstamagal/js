@@ -271,6 +271,8 @@ class ToolBridge:
                 return {"error": f"ERROR: {tool.name} got {key!r} both by position and by name"}
             arguments[key] = value
         schema = tool.openai_spec()["function"]["parameters"]
+        if tool.prepare_args is not None:
+            arguments = tool.prepare_args(arguments)
         arguments = tool_args.coerce_to_schema(arguments, schema)
         problem = tool_args.schema_error(arguments, schema)
         if problem is not None:

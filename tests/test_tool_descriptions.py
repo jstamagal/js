@@ -124,7 +124,7 @@ def test_core_tool_schemas_match_canonical_surface_names():
     task = registry.resolve("task")
 
     assert read.required == ("file_path",)
-    assert set(read.params) == {"file_path", "range", "show_line_numbers"}
+    assert set(read.params) == {"file_path", "start_line", "end_line", "start_byte", "end_byte", "show_line_numbers"}
     assert write.required == ("file_path", "content")
     assert set(write.params) == {"file_path", "content", "overwrite", "expected_hash"}
     assert {

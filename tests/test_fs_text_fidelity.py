@@ -132,10 +132,9 @@ def test_patch_replace_all_rewrites_non_overlapping_occurrences(tmp_path):
     assert target.read_text() == "Xba\n"
 
 
-def test_patch_batch_aborts_when_an_edit_normalizes_to_a_noop(tmp_path):
+def test_patch_batch_skips_an_edit_that_normalizes_to_a_noop(tmp_path):
     target = tmp_path / "file.txt"
-    original = b"alpha\nbeta\n"
-    target.write_bytes(original)
+    target.write_bytes(b"alpha\nbeta\n")
     context = ToolContext(cwd=tmp_path)
     fs.read(str(target), context=context)
 
@@ -148,9 +147,9 @@ def test_patch_batch_aborts_when_an_edit_normalizes_to_a_noop(tmp_path):
         context=context,
     )
 
-    assert result.startswith("ERROR: edit 2:")
-    assert target.read_bytes() == original
-    assert not context.snapshots
+    assert result.startswith("patched ")
+    assert "edit 2" in result.splitlines()[0]
+    assert target.read_bytes() == b"ALPHA\nbeta\n"
 
 
 def test_patch_diff_marks_a_missing_final_newline(tmp_path):

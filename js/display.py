@@ -1149,13 +1149,16 @@ def _other_arguments(name: str, args: dict, whole: bool = False) -> str:
     `(key=value, …)`."""
     notes: list[str] = []
     span = args.get("range")
+    if name == "read" and not isinstance(span, dict):
+        span = {key: args[key] for key in ("start_line", "end_line", "start_byte", "end_byte") if key in args}
     if name == "read" and isinstance(span, dict):
         span = {key: clean(value) if isinstance(value, str) else value for key, value in span.items()}
-        args = {**args, "range": span}
-        if "start_byte" in span or "end_byte" in span:
-            notes.append(msgs.TOOL_BYTE_RANGE.words(value=span.get('start_byte', 0), value2=span.get('end_byte', '')))
-        elif "start_line" in span or "end_line" in span:
+        if "range" in args:
+            args = {**args, "range": span}
+        if "start_line" in span or "end_line" in span:
             notes.append(msgs.TOOL_LINE_RANGE.words(value=span.get('start_line', 1), value2=span.get('end_line', '')))
+        elif "start_byte" in span or "end_byte" in span:
+            notes.append(msgs.TOOL_BYTE_RANGE.words(value=span.get('start_byte', 0), value2=span.get('end_byte', '')))
     if name == "write" and isinstance(args.get("content"), str):
         notes.append(_count(len(args["content"].rstrip("\n").split("\n")), msgs.TOOL_LINE_NOUN.words()))
     if name == "patch" and isinstance(args.get("edits"), list):

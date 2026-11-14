@@ -22,7 +22,7 @@ _BODY_ARG: dict[str, str] = {
 # Arguments the header leaves out: the body, or text the result's diff shows.
 _UNLISTED_ARGS: dict[str, tuple[str, ...]] = {
     "patch": ("old_string", "new_string", "edits"),
-    "read": ("range",),
+    "read": ("range", "start_line", "end_line", "start_byte", "end_byte"),
     "shell": ("description",),
     "send": ("text",),
     "post_task": ("body",),
