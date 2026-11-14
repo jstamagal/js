@@ -133,7 +133,7 @@ branch the audit was made on; they move as the code changes.
 | `js/reasoning.py:171-173,178` | anthropic_thinking | default | Effort "none" quietly becomes "low" on models that always think, and adaptive thinking always asks for display "summarized". | js-2lg.25 |
 | `js/runtime.py:623-647,2136,2191-2194,2003-2017` | ToolErrorTracker/run_turn_async/_record_tool_error_limit | policy | Three errors from one tool end the turn; the limit is fixed in code and is not a setting. | js-2lg.30 |
 | `js/toolkit/core.py:636-661` | ToolContext.require_read | policy | Refuses any edit or overwrite of a file the model has not read, with no setting to turn the gate off. | js-2lg.34 |
-| `js/toolkit/fs.py:612-647` | write | policy | Refuses to overwrite an existing file unless overwrite=true and a read or matching hash came first. | js-2lg.44 |
+| `js/toolkit/fs.py:613-646` | write | policy | Replaces an existing file only after a read or a matching hash; `WRITE_REQUIRE_OVERWRITE` on also demands overwrite=true. | js-2lg.44 |
 | `js/toolkit/fs.py:1017-1020,1097-1108` | _apply_edit | policy | Waives the read gate for an exact match of 24 characters or more, and applies fuzzy quote, dash and whitespace matches without a setting. | js-2lg.44 |
 | `js/toolkit/fs.py:573,587-591` | fs_read | policy | Swaps a repeated read for an "unchanged since read call N" note instead of the lines, with no setting. | js-2lg.44 |
 | `js/toolkit/fs.py:1537-1542,1971-1976` | fs_search / ast_search | policy | Returns a memoized result tagged "[deduplicated repeated search]" for a repeated search of a file root. | js-2lg.44 |

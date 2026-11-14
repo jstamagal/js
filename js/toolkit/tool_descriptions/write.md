@@ -1,7 +1,7 @@
 Create a file, or replace one whole.
 {{#if read}}
-Existing files need `overwrite=true` and a prior `read` of the file; one page is
-enough, the whole file is not needed. A read earlier in this session counts
+Replacing an existing file needs a prior `read` of it; one page is enough, the
+whole file is not needed. A read earlier in this session counts
 after js restarts on it. If the file changed on disk since that
 read, the overwrite is refused; the error names both hashes and shows the diff
 from what you read to what is there now, and a retry after it goes through.

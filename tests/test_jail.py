@@ -378,6 +378,8 @@ def test_file_tool_results_name_the_jail_tmp_not_the_host_dir(jailed):
     name = f"js-jail-names-{os.getpid()}-{time.monotonic_ns()}"
     tmp_file = f"/tmp/{name}/a.txt"
     js_tmp_file = f"~/.js/tmp/{name}.txt"
+    # The second write is refused, so the results hold a write error too.
+    jailed.write_require_overwrite = True
     results = [
         tool("write", jailed, path=tmp_file, content="alpha\nbeta\n"),
         tool("write", jailed, path=tmp_file, content="again\n"),

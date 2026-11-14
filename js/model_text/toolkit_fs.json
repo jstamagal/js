@@ -25,7 +25,7 @@
   "tools_for_text_output_prefix_each_line": "For text output, prefix each line with its line number.",
   "tools_file_path_to_create_or_overwrite": "File path to create or overwrite.",
   "tools_complete_file_content_to_write": "Complete file content to write.",
-  "tools_required_for_existing_files_after_reading": "Required for existing files after reading them first.",
+  "tools_set_it_when_a_refused_write": "Set it when a refused write asks for it.",
   "tools_the_file_s_current_hash_as": "The file's current hash, as a read or write result printed it. A match overwrites with no read.",
   "tools_content_regular_expression_or_filename_glob": "Content regular expression, or filename glob when output_mode is files.",
   "tools_file_or_directory_to_search_defaults": "File or directory to search; defaults to the current working directory.",

@@ -920,8 +920,9 @@
 # overwritten.
 #set FILE_REQUIRE_READ on
 
-# on: write() refuses an existing file unless the call sets overwrite.
-#set WRITE_REQUIRE_OVERWRITE on
+# off: write() replaces an existing file the model has read. on: the call
+# must also set overwrite.
+#set WRITE_REQUIRE_OVERWRITE off
 
 # An exact edit whose old text is at least this many characters is applied to
 # an unread file.

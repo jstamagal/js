@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **`write` replaces a file the model has read without `overwrite=true`.**
+  `WRITE_REQUIRE_OVERWRITE` now defaults to off. With it on, a model that had
+  read a file and sent its whole replacement was refused for the missing flag,
+  and sent the same content again with the flag: in the saved sessions that
+  retry went through unchanged 16 times, about 140,000 characters of output
+  generated twice. The read is the gate; `set WRITE_REQUIRE_OVERWRITE on`
+  brings the flag back.
 - **`just install` and `just sync` set up everything js's tools need again.**
   Since 0.2.3 `just install` made the launcher and stopped: no CLI binaries in
   `tools/bin`, no kernel packages, no Pillow, no Playwright and no Chromium, so

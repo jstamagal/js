@@ -354,21 +354,31 @@ def test_read_start_past_eof_returns_non_error_note(tmp_path):
     assert "start_line=50" in actual
 
 
-def test_write_overwrite_guard_requires_explicit_overwrite_and_prior_read(tmp_path):
-    target = tmp_path / "guarded.txt"
+def test_write_replaces_an_existing_file_once_it_has_been_read(tmp_path):
+    target = tmp_path / "known.txt"
     target.write_text("old\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    refused = fs.write("guarded.txt", "new\n", context=context)
-    assert refused.startswith("ERROR: guarded.txt already exists")
-    assert "patch" in refused and "overwrite=true" in refused
-    assert fs.write("guarded.txt", "new\n", overwrite=True, context=context) == (
-        "ERROR: You must read the file with the read tool before attempting to overwrite it."
-    )
+    assert fs.write("known.txt", "new\n", context=context).startswith("ERROR")
+    assert fs.write("known.txt", "new\n", overwrite=True, context=context).startswith("ERROR")
+    assert target.read_text(encoding="utf-8") == "old\n"
+    fs.read("known.txt", context=context)
+
+    assert fs.write("known.txt", "new\n", context=context).startswith(f"wrote 4 bytes to {target}")
+    assert target.read_text(encoding="utf-8") == "new\n"
+
+
+def test_write_require_overwrite_also_demands_the_flag_on_a_read_file(tmp_path):
+    target = tmp_path / "guarded.txt"
+    target.write_text("old\n", encoding="utf-8")
+    context = ToolContext(cwd=tmp_path, write_require_overwrite=True)
     fs.read("guarded.txt", context=context)
 
-    write_result = fs.write("guarded.txt", "new\n", overwrite=True, context=context)
-    assert write_result.startswith(f"wrote 4 bytes to {target}")
+    refused = fs.write("guarded.txt", "new\n", context=context)
+    assert refused.startswith("ERROR") and "overwrite=true" in refused
+    assert target.read_text(encoding="utf-8") == "old\n"
+
+    assert fs.write("guarded.txt", "new\n", overwrite=True, context=context).startswith(f"wrote 4 bytes to {target}")
     assert target.read_text(encoding="utf-8") == "new\n"
 
 

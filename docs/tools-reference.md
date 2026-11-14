@@ -95,9 +95,11 @@ Parameters:
 - `content`
 - `overwrite`
 
-Existing files require `overwrite=true` and a prior `read` in the same process;
-one page of the file is enough. The file's hash must still match the one the
-read saw, and the previous state is snapshotted for `undo`.
+Replacing an existing file requires a prior `read` of it; one page of the file
+is enough, and a read earlier in the session counts after a restart. The
+file's hash must still match the one the read saw, and the previous state is
+snapshotted for `undo`. With `WRITE_REQUIRE_OVERWRITE` on, the call must also
+set `overwrite=true`.
 
 ### `patch`
 
@@ -114,7 +116,7 @@ Parameters:
 
 Requires a prior `read` that showed every line an edit touches.
 
-When `write(overwrite=true)` or `patch` finds the file changed on disk since
+When a `write` over an existing file or a `patch` finds the file changed on disk since
 the read (the hash differs), the call writes nothing. js keeps the bytes each
 read saw, so the error carries the diff from that content to the current one
 and names both hashes. Lines the model had seen that the change left alone stay

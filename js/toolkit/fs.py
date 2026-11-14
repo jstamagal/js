@@ -2195,7 +2195,7 @@ def tools(*, result_wrapper=_offering_path_skills) -> tuple[Tool, ...]:
             {
                 "file_path": {"type": "string", "description": _PROMPTS['tools_file_path_to_create_or_overwrite']},
                 "content": {"type": "string", "description": _PROMPTS['tools_complete_file_content_to_write']},
-                "overwrite": {"type": "boolean", "default": False, "description": _PROMPTS['tools_required_for_existing_files_after_reading']},
+                "overwrite": {"type": "boolean", "default": False, "description": _PROMPTS['tools_set_it_when_a_refused_write']},
                 "expected_hash": {"type": "string", "description": _PROMPTS['tools_the_file_s_current_hash_as']},
             },
             required=("file_path", "content"),
