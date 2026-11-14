@@ -28,6 +28,7 @@ from . import login_defaults, model_client, memory
 import ai
 
 from . import context_budget
+from . import held
 from . import jail as _jail
 from . import messages as msgs
 from . import output
@@ -367,6 +368,7 @@ def _normalize_tool_call_batch(
     calls: list[_PendingToolCall],
     registry: ToolRegistry,
     limit: int,
+    context: ToolContext | None = None,
 ) -> tuple[list[_PendingToolCall], _ToolBatchStats]:
     """Canonicalize, deduplicate, validate, and cap one assistant batch."""
     retained: list[_PendingToolCall] = []
@@ -432,6 +434,8 @@ def _normalize_tool_call_batch(
                 validation_error, refused = refusal, True
         if validation_error is not None:
             invalid += 1
+            if canonical_name == "write":
+                validation_error += held.hold_failed_call(context, raw_args, arguments)
 
         if len(retained) >= limit:
             capped += 1
@@ -1204,6 +1208,8 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
     if tool is None:
         telemetry.event("tool_unknown", tool=name, args=args)
         result = active_registry.unavailable_error(name)
+        if _canonical_tool_call_name(name, active_registry) == "write":
+            result += held.hold_failed_call(context, raw_args, args)
         capped = _cap_result(result, cap_bytes, context=context)
         _trace_result(telemetry, context, trace_name, capped, args=args, exchange=opened, traced=trace)
         return args, capped
@@ -1818,7 +1824,9 @@ def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, 
     provider_metadata, incomplete_reason = reply.provider_metadata, reply.incomplete_reason
     assistant_message_override: ai.messages.Message | None = None
     if incomplete_reason and pending_calls and _incomplete_has_dangling_tool_args(pending_calls):
-        notice = _truncated_tool_call_notice(incomplete_reason, pending_calls)
+        notice = _truncated_tool_call_notice(incomplete_reason, pending_calls) + "".join(
+            held.hold_failed_call(context, pc.arguments(), None) for pc in pending_calls
+            if _canonical_tool_call_name(pc.name, registry) == "write")
         telemetry.event(
             "tool_call_dropped",
             reason="incomplete_truncated_args",
@@ -1848,6 +1856,7 @@ def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, 
                 "max_tool_calls_per_message",
                 _settings.default_value("REPLY_TOOL_CALLS_MAX"),
             ),
+            context,
         )
         telemetry.event(
             "tool_call_batch_normalized",

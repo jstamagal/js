@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **A failed `write` keeps its content; `from_held` finishes it.** Since
+  Sep 15, 223 writes failed, and in 111 the model regenerated 80% or more of
+  the same content, sometimes 45-80 KB that a local GPU took 20 minutes to
+  produce. Now any failed write of at least `HELD_WRITE_MIN` bytes (jail
+  refusal, unread file, I/O or encode error, invalid or unparseable
+  arguments, write not on the surface) holds the content in
+  `~/.js/tmp/held`, and the ERROR names the held id, the finishing call (a
+  corrected path under the cwd for a jail refusal) and where the model is.
+  Arguments cut off inside `content` hold the part that arrived, finished with
+  `from_held` and `append=true`. `HELD_TTL` bounds how long held content stays.
 - **`write` replaces a file the model has read without `overwrite=true`.**
   `WRITE_REQUIRE_OVERWRITE` now defaults to off. With it on, a model that had
   read a file and sent its whole replacement was refused for the missing flag,

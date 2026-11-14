@@ -19,6 +19,7 @@ from functools import lru_cache
 from pathlib import Path
 from collections.abc import Callable, Iterable
 
+from .. import held
 from .. import jail
 from .. import settings as _settings
 from . import policy
@@ -30,6 +31,7 @@ from .descriptions import load_description
 from ..prompt_text import load_catalog
 
 _PROMPTS = load_catalog('toolkit_fs')
+_HELD_PROMPTS = load_catalog('held')
 
 
 
@@ -610,13 +612,47 @@ def _read_call(target: Path, start_line: int, end_line: int | None = None) -> st
 read = fs_read
 
 
-def write(file_path: str | None = None, content: str = "", overwrite: bool = False, context: ToolContext | None = None, path: str | None = None, expected_hash: str | None = None) -> str:
+def write(file_path: str | None = None, content: str | None = None, overwrite: bool = False, context: ToolContext | None = None, path: str | None = None, expected_hash: str | None = None, from_held: str | None = None, append: bool = False) -> str:
     assert context is not None
     raw_path = file_path or path
+    source = None
+    if from_held:
+        try:
+            source = held.load(context, from_held)
+        except held.HeldError as exc:
+            return f"ERROR: {exc}"
+        if content and not append:
+            return _HELD_PROMPTS['write_error_content_with_from_held']
+        text = source.text + (content or "")
+    elif content is None:
+        return _HELD_PROMPTS['write_error_content_required']
+    else:
+        text = content
+    try:
+        result = _write_text(context, raw_path, text, overwrite=overwrite, expected_hash=expected_hash,
+                             append=append and source is None)
+    except jail.JailError as exc:
+        result = jail.Refusal(f"ERROR: {exc}")
+    if not result.startswith("ERROR"):
+        if source is not None:
+            held.release(source)
+        return result
+    # The content stays held, so the retry names it instead of sending it again.
+    if source is not None and text == source.text:
+        note = held.held_note(context, source, raw_path)
+    else:
+        note = held.hold_failed_write(context, text, raw_path, append=append and source is None)
+    return type(result)(result + note) if note else result
+
+
+def _write_text(context: ToolContext, raw_path: str | None, content: str, *, overwrite: bool,
+                expected_hash: str | None, append: bool) -> str:
+    """Write ``content`` to ``raw_path``, or add it to the end with ``append``.
+    Raises JailError for a path the jail refuses."""
     if not raw_path:
         return "ERROR: file_path is required"
     target = context.resolve_path(raw_path, write=True)
-    if target.exists() and context.write_require_overwrite and not overwrite:
+    if target.exists() and context.write_require_overwrite and not overwrite and not append:
         return (
             _PROMPTS['write_error_already_exists_to_change_part'].format(raw_path=raw_path)
         )
@@ -630,6 +666,7 @@ def write(file_path: str | None = None, content: str = "", overwrite: bool = Fal
         except OSError as exc:
             return f"ERROR: {exc}"
         current_hash = _hash_bytes(current)
+        action = "append to it" if append else "overwrite it"
         if expected_hash:
             # The hash the model expects is its proof of what it replaces: a
             # match needs no read, a mismatch names both and writes nothing.
@@ -638,9 +675,9 @@ def write(file_path: str | None = None, content: str = "", overwrite: bool = Fal
             )
         else:
             guard = _changed_since_read(
-                context, target, "overwrite it", current, current_hash, edits_lines=False
+                context, target, action, current, current_hash, edits_lines=False
             ) or context.require_read(
-                target, "overwrite it", content_hash=current_hash
+                target, action, content_hash=current_hash
             )
         if guard:
             return guard
@@ -648,21 +685,35 @@ def write(file_path: str | None = None, content: str = "", overwrite: bool = Fal
         data = _encode_preserving_existing_newlines(target, content)
     except (OSError, UnicodeEncodeError) as exc:
         return f"ERROR: {exc}"
+    appending = append and replacing
+    written = current + data if appending else data
     try:
         context.snapshot(target)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
+        target.write_bytes(written)
     except OSError as exc:
         return f"ERROR: {exc}"
     _view(path=str(target), before=current.decode("utf-8", errors="replace") if replacing else None,
-         after=data.decode("utf-8", errors="replace"), bytes=len(data))
-    content_hash = _hash_bytes(data)
+         after=written.decode("utf-8", errors="replace"), bytes=len(written))
+    content_hash = _hash_bytes(written)
+    total = len(written.decode("utf-8", errors="replace").splitlines())
+    if appending:
+        # The model has seen what it read of the old content and every line
+        # it added; a line the old content left unfinished continues there.
+        same = context.file_hashes.get(target) == current_hash
+        whole = same and target in context.fully_read_paths
+        ranges = list(context.read_ranges.get(target, [])) if same else []
+        old_total = len(current.decode("utf-8", errors="replace").splitlines())
+        first = old_total if current and not current.endswith(b"\n") else old_total + 1
+        if data and first <= total:
+            ranges.append((max(1, first), total))
+        context.replace_read_coverage(target, content_hash, [] if whole else ranges, total, whole_file=whole)
+        context.remember_content(target, content_hash, written)
+        return f"appended {len(data)} bytes to {target} (hash {content_hash})"
     # The model wrote every byte of the new content, so the file counts as
     # fully read: a patch can follow without a read in between.
-    context.replace_read_coverage(
-        target, content_hash, [], len(data.decode("utf-8").splitlines()), whole_file=True
-    )
-    context.remember_content(target, content_hash, data)
+    context.replace_read_coverage(target, content_hash, [], total, whole_file=True)
+    context.remember_content(target, content_hash, written)
     return f"wrote {len(data)} bytes to {target} (hash {content_hash})"
 
 
@@ -2197,8 +2248,10 @@ def tools(*, result_wrapper=_offering_path_skills) -> tuple[Tool, ...]:
                 "content": {"type": "string", "description": _PROMPTS['tools_complete_file_content_to_write']},
                 "overwrite": {"type": "boolean", "default": False, "description": _PROMPTS['tools_set_it_when_a_refused_write']},
                 "expected_hash": {"type": "string", "description": _PROMPTS['tools_the_file_s_current_hash_as']},
+                "from_held": {"type": "string", "description": _HELD_PROMPTS['tools_from_held']},
+                "append": {"type": "boolean", "default": False, "description": _HELD_PROMPTS['tools_append']},
             },
-            required=("file_path", "content"),
+            required=("file_path",),
         ),
         Tool(
             "fs_search",

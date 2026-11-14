@@ -924,6 +924,15 @@
 # must also set overwrite.
 #set WRITE_REQUIRE_OVERWRITE off
 
+# A failed write whose content is at least this many bytes keeps the content
+# in ~/.js/tmp/held, the jail's ~/.js/tmp under -C. The ERROR names its held
+# id, and write with from_held finishes the write without the model sending
+# it again.
+#set HELD_WRITE_MIN 512
+
+# Seconds a held write content is kept; 0 keeps it until js exits.
+#set HELD_TTL 86400
+
 # An exact edit whose old text is at least this many characters is applied to
 # an unread file.
 #set EDIT_READ_BYPASS_CHARACTERS 24

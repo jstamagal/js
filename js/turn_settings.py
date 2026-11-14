@@ -171,6 +171,8 @@ TURN_SETTINGS: tuple[TurnSetting, ...] = (
     TurnSetting("edit_fuzzy", "EDIT_FUZZY", flag, on_context=True),
     TurnSetting("edit_read_bypass_characters", "EDIT_READ_BYPASS_CHARACTERS", integer, on_context=True),
     TurnSetting("write_require_overwrite", "WRITE_REQUIRE_OVERWRITE", flag, on_context=True),
+    TurnSetting("held_write_min", "HELD_WRITE_MIN", integer, on_context=True),
+    TurnSetting("held_ttl", "HELD_TTL", integer, on_context=True),
     TurnSetting("file_require_read", "FILE_REQUIRE_READ", flag, on_context=True),
     TurnSetting("tool_errors_max", "TOOL_ERRORS_MAX", integer),
     TurnSetting("anthropic_required_effort", "ANTHROPIC_REQUIRED_EFFORT", text),

@@ -618,6 +618,15 @@ FILE_REQUIRE_READ
 WRITE_REQUIRE_OVERWRITE
     on: write() refuses an existing file unless the call sets overwrite.
 
+HELD_WRITE_MIN
+    A failed write whose content is at least this many bytes keeps the
+    content in ~/.js/tmp/held, the jail's ~/.js/tmp under -C; write with
+    from_held finishes it. Default: 512.
+
+HELD_TTL
+    Seconds a held write content is kept; 0 keeps it until js exits.
+    Default: 86400.
+
 EDIT_READ_BYPASS_CHARACTERS
     An exact edit whose old text is at least this many characters is
     applied to an unread file.
