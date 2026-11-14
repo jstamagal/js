@@ -4,7 +4,7 @@
   "normalize_tool_call_batch_a_load_in_this_same_response": " A load in this same response cannot authorize a sibling call.",
   "truncated_tool_call_notice_unknown": "unknown",
   "truncated_tool_call_notice_for": " for {joined}",
-  "truncated_tool_call_notice_response_incomplete_dropped_truncated_tool_call": "Response incomplete ({reason}); dropped truncated tool call arguments{suffix}. Retry the request or ask for the change in smaller chunks.",
+  "truncated_tool_call_notice_response_incomplete_dropped_truncated_tool_call": "Response incomplete ({reason}); dropped truncated tool call arguments{suffix}. Send large content across several smaller calls.",
   "history_tool_result_message_visual_file_image_omitted_from_history": "VISUAL_FILE (image omitted from history)",
   "record_retry_attempts_left_allowed_max_attempts": "{result}\n<retry>attempts_left={attempts_left}, allowed_max_attempts={self_limit}</retry>",
   "media_notice_dropped": "[{clip_name_str_kind} {clip_name_str_mime} dropped: {reason}]",

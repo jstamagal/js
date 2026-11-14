@@ -94,12 +94,26 @@ Parameters:
 - `file_path`
 - `content`
 - `overwrite`
+- `expected_hash`
+- `from_held`
+- `append`
 
 Replacing an existing file requires a prior `read` of it; one page of the file
 is enough, and a read earlier in the session counts after a restart. The
 file's hash must still match the one the read saw, and the previous state is
 snapshotted for `undo`. With `WRITE_REQUIRE_OVERWRITE` on, the call must also
 set `overwrite=true`.
+
+A write that fails, before or after its arguments parse, keeps content of at
+least `HELD_WRITE_MIN` bytes in `~/.js/tmp/held` (the jail's `~/.js/tmp` under
+`-C`, mode 0600) and its ERROR names a held id, the call that finishes the
+write, and where the model is: agent, model, cwd, jail root and writable paths,
+and whether the target exists and was read. A jail refusal also names a path
+under the cwd. `from_held` writes the held content, through the same checks,
+and deletes it once written. Arguments cut off inside `content` hold the part
+that arrived; `from_held` with `append=true` adds `content` after it. `append`
+alone adds `content` to the end of the file. Held content goes when js exits
+and after `HELD_TTL` seconds.
 
 ### `patch`
 
