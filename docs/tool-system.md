@@ -131,6 +131,50 @@ agents dir or a root given on the command line. The same pass drops dead
 entries from agents that already have `agent.yaml`. The ~/.js home migration
 runs this conversion on every agent it moves (`js/agent_migration.py`).
 
+### Per-model surfaces: `models:` and `TOOL_PROFILES`
+
+An agent can give particular models their own surface. `agent.yaml` takes an
+optional `models:` list:
+
+```yaml
+tools: [read:eager, write:eager, patch:eager, shell:eager, ...]
+models:
+  - match: [qwen, gemma]      # string or list
+    mode: replace             # replace (default) or prepend
+    tools: [shell:eager]
+    core: true                # default; false drops the core entries
+    prompt: small-coder       # optional: another agent's prompt as the persona
+    sampling: {temperature: 0.2}
+    reasoning: low
+  - match: deepseek
+    mode: prepend
+    tools: [remove:ban, undo:ban]
+```
+
+`match` values are case-insensitive substrings of the model id or the
+provider id, as in `TOOL_ALIASES`; the first matching entry wins. The
+`TOOL_PROFILES` setting is a JSON list of entries of the same shape and applies
+when the agent has no matching `models:` entry. `--tools` beats both, and both
+beat the agent's `tools:`.
+
+- `replace` puts the profile's entries, then the core entries, in place of the
+  agent's chain. The core entries are tools.yaml's `core` tag when it defines
+  one, otherwise `skill:eager`; `tool_discovery` comes with `skill` because the
+  skill catalog publishes it. `core: false` leaves them out.
+- `prepend` puts the profile's entries ahead of the agent's chain, so they
+  decide every tool they name and the agent's chain decides the rest.
+- An entry without `tools:` leaves the chain as it is.
+- `prompt:` names an agent (project > global > repo) whose prompt files stand
+  in for this agent's persona. `sampling:` sets keys over the agent's;
+  `reasoning:` replaces the agent's.
+- A profile whose chain would select no tool is ignored, with one notice
+  naming its `match`.
+
+The profile is resolved at session start from the model and provider the run
+settles on: after agent.yaml `model:`, `--model` and a resumed session's stamp.
+A subagent resolves its own from the model it runs on. Switching models with
+`/model` keeps the surface the session started with.
+
 ## Tool Descriptions
 
 Model-facing descriptions live in:

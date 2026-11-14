@@ -53,6 +53,8 @@ def verify(agent: str | None = None) -> list[str]:
             persona.load_benchmarks(directory)
             if config is not None:
                 policy.expand(spec.tool_selectors, config, str(directory))
+                for profile in spec.models:
+                    policy.expand(profile.tools or (), config, f"{directory} models")
         check(directory, validate_agent)
 
     skill_roots = (skills.BUILTIN_SKILLS_DIR, paths.global_skills_dir(), paths.shared_skills_dir(),

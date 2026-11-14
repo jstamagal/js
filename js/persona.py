@@ -14,6 +14,7 @@ import yaml
 
 from .promptexpand import expand_prompt, session_variables
 from .toolkit import policy
+from . import model_profiles
 from . import messages as msgs
 from . import settings
 from . import secret_patterns
@@ -34,6 +35,10 @@ class PromptSpec:
     # model is sent; for a spec that was never expanded the two are equal.
     source: str = ""
     exchanges: tuple[AgentExchange, ...] = ()
+    models: tuple[model_profiles.ModelProfile, ...] = ()  # agent.yaml `models:` entries
+    # The profile matched for the model and provider the spec was built for,
+    # whether or not it was applied; `for_model` compares against it.
+    model_profile: model_profiles.ModelProfile | None = None
 
     def __post_init__(self) -> None:
         if not self.source:
@@ -119,7 +124,7 @@ def _system_kind(path: Path) -> str | None:
 
 
 AGENT_MANIFEST = "agent.yaml"
-_MANIFEST_KEYS = ("model", "secondary_model", "reasoning", "max_tokens", "sampling", "tools", "skills")
+_MANIFEST_KEYS = ("model", "secondary_model", "reasoning", "max_tokens", "sampling", "tools", "skills", "models")
 _MIGRATE_HINT = msgs.AGENT_MANIFEST_MIGRATION_HINT.format()
 
 
@@ -362,6 +367,7 @@ def load_agent_manifest(manifest_path: Path) -> PromptSpec:
         reasoning_effort=_coerce_reasoning_effort(manifest_path, manifest.get("reasoning")),
         max_output_tokens=_coerce_max_tokens(manifest_path, manifest.get("max_tokens")),
         skills=_coerce_skills(manifest_path, manifest.get("skills")),
+        models=model_profiles.parse_profiles(manifest.get("models"), f"{manifest_path} models"),
     )
 
 
@@ -468,12 +474,15 @@ def apply_agent(cfg, prompt_spec, *, config_pins: bool = True):
 
 
 def load_configured_prompt_spec(cfg, *, expand: bool = True) -> PromptSpec:
+    """The run's prompt spec, with the model profile that matches ``cfg``'s
+    model and provider applied."""
     from .cli_options import current
     options = current()
     roots = tuple(getattr(cfg, "prompt_roots", ()))
     if options.you_are is not None:
         # _expand_spec writes the whole system prompt.
-        return _finish_configured_spec(PromptSpec(system="", tool_selectors=()), cfg, expand)
+        spec = PromptSpec(system="", tool_selectors=())
+        return _finish_configured_spec(replace(spec, model_profile=_profile_for(spec, cfg)), cfg, expand)
     if options.chat:
         if options.system_prompt_file is not None or options.system_prompt is not None:
             system = options.prompt_text()
@@ -486,7 +495,8 @@ def load_configured_prompt_spec(cfg, *, expand: bool = True) -> PromptSpec:
             system = load_prompt_spec(cfg.prompts_dir, env=False).system
         else:
             system = ""
-        return _finish_configured_spec(PromptSpec(system=system, tool_selectors=()), cfg, expand)
+        spec = PromptSpec(system=system, tool_selectors=())
+        return _finish_configured_spec(replace(spec, model_profile=_profile_for(spec, cfg)), cfg, expand)
     if options.system_prompt_file is not None:
         repo = roots[0] if roots else Path(__file__).resolve().parents[1] / 'prompts'
         global_root = roots[1] if len(roots) > 1 else Path.home() / '.js' / 'agents'
@@ -494,26 +504,78 @@ def load_configured_prompt_spec(cfg, *, expand: bool = True) -> PromptSpec:
         if not manifest.is_file():
             manifest = repo / 'defaultagent' / AGENT_MANIFEST
         base = load_agent_manifest(manifest)
-        spec = PromptSpec(system=options.prompt_text(), tool_selectors=base.tool_selectors)
-        return _finish_configured_spec(spec, cfg, expand)
+        spec = PromptSpec(system=options.prompt_text(), tool_selectors=base.tool_selectors, models=base.models)
+        return _finish_configured_spec(_with_model_profile(spec, cfg, None), cfg, expand)
     env = not options.skips_env
     agents_files = () if options.skips_agents_md else tuple(getattr(cfg, "agents_files", ()))
-    if len(roots) >= 3:
-        spec = load_agent_prompt_spec(
-            cfg.agent_id,
-            repo_prompts_root=roots[0],
-            global_agents_root=roots[1],
-            project_agents_root=roots[2],
-            agents_files=agents_files,
-            env=env,
-            prompt=options.system_prompt,
-        )
-    else:
-        spec = load_prompt_spec(cfg.prompts_dir, env=env, prompt=options.system_prompt)
+
+    def load(agent_id: str, prompts_dir: Path) -> PromptSpec:
+        if len(roots) >= 3:
+            return load_agent_prompt_spec(
+                agent_id,
+                repo_prompts_root=roots[0],
+                global_agents_root=roots[1],
+                project_agents_root=roots[2],
+                agents_files=agents_files,
+                env=env,
+                prompt=options.system_prompt,
+            )
+        spec = load_prompt_spec(prompts_dir, env=env, prompt=options.system_prompt)
         agents_parts = _existing_text_parts(list(agents_files))
         if agents_parts:
             spec = _with_system(spec, "\n\n".join([*agents_parts, spec.system.rstrip()]).rstrip() + "\n")
+        return spec
+
+    spec = load(getattr(cfg, "agent_id", ""), cfg.prompts_dir)
+    spec = _with_model_profile(spec, cfg, lambda agent_id: load(agent_id, cfg.prompts_dir.parent / agent_id).system)
     return _finish_configured_spec(spec, cfg, expand)
+
+
+def _profile_for(spec: PromptSpec, cfg) -> model_profiles.ModelProfile | None:
+    return model_profiles.choose(
+        spec.models, getattr(cfg, "settings", None), getattr(cfg, "model", "") or "", getattr(cfg, "provider_id", None))
+
+
+def _with_model_profile(spec: PromptSpec, cfg, persona_text) -> PromptSpec:
+    """``spec`` with the profile matched for ``cfg``'s model and provider
+    applied: its tool chain unless --tools or a zero-tool run sets the tools,
+    its `prompt:` agent's prompt text through ``persona_text`` when given, its
+    sampling over the agent's and its reasoning in place of the agent's. A
+    profile whose chain selects no tool is not applied."""
+    from .cli_options import current
+    options = current()
+    profile = _profile_for(spec, cfg)
+    spec = replace(spec, model_profile=profile)
+    if profile is None:
+        return spec
+    chain = spec.tool_selectors
+    if options.tools is None and not options.zero_tools:
+        config = policy.load_tools_config()
+        chain = profile.chain(spec.tool_selectors, config)
+        from .toolkit.registry import registry_for_roots
+        registry = registry_for_roots(getattr(cfg, "prompt_roots", ()) or (), flags=policy.schema_flags(cfg))
+        chosen = policy.select(registry.tools, options.selectors(chain), config, warn=False)
+        if not (chosen.eager or chosen.lazy):
+            model_profiles.warn_empty(profile)
+            return spec
+    if profile.prompt and persona_text is not None:
+        spec = _with_system(spec, persona_text(profile.prompt))
+    return replace(
+        spec,
+        tool_selectors=chain,
+        sampling={**spec.sampling, **profile.sampling},
+        reasoning_effort=profile.reasoning if profile.reasoning is not None else spec.reasoning_effort,
+    )
+
+
+def for_model(spec: PromptSpec, cfg) -> PromptSpec:
+    """``spec`` as `load_configured_prompt_spec` builds it for ``cfg``'s model
+    and provider. A run loads its spec before agent.yaml `model:`, --model or a
+    resumed stamp settle the model; once they have, a model that matches a
+    different profile reloads the spec."""
+    if _profile_for(spec, cfg) == spec.model_profile:
+        return spec
+    return load_configured_prompt_spec(cfg, expand=False)
 
 
 def _finish_configured_spec(spec: PromptSpec, cfg, expand: bool) -> PromptSpec:
