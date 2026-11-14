@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import difflib
 import os
+import re
 import threading
 from dataclasses import dataclass, field, replace
 from functools import cache
@@ -35,6 +36,14 @@ def _closest_tool_name(name: str, names: Iterable[str]) -> str:
     return close[0] if close else ""
 
 
+# CLIProxyAPI's Claude OAuth path publishes each tool as
+# `mcp__<word>_<word>__<word>_<tool>` and does not always restore the name it
+# gets back: js receives `promote_shell`, `promote_shell_placeholder` or
+# `mcp__exile_poem__fs_search_placeholder_never_called`.
+_CLOAK_PREFIX = re.compile(r"^mcp__.+?__")
+_CLOAK_SUFFIX = re.compile(r"_placeholder(?:_never_called)?$")
+
+
 @dataclass(frozen=True)
 class ToolRegistry:
     tools: tuple[Tool, ...]
@@ -53,6 +62,44 @@ class ToolRegistry:
             return self.by_name[trimmed]
         canonical = self.aliases.get(trimmed.lower(), trimmed)
         return self.by_name.get(canonical)
+
+    def repaired_name(self, name: str) -> str:
+        """The published tool a proxy-cloaked ``name`` stands for, or "".
+
+        The name loses an `mcp__<server>__` prefix and a `_placeholder` or
+        `_placeholder_never_called` suffix; what is left, as it is or without
+        its first `<word>_`, has to resolve to exactly one tool on this
+        registry."""
+        bare = _CLOAK_SUFFIX.sub("", _CLOAK_PREFIX.sub("", str(name).strip()))
+        found = {
+            tool.name
+            for candidate in (bare, bare.partition("_")[2])
+            if candidate and (tool := self.resolve(candidate)) is not None
+        }
+        return found.pop() if len(found) == 1 else ""
+
+    def runnable(self, context: Any) -> tuple[ToolRegistry, dict[str, str]]:
+        """This registry without the tools that cannot run for ``context``,
+        and the ERROR line a call to each of them gets: `kernel` without its
+        packages, a keyed search tool without its API key."""
+        left_out: dict[str, str] = {}
+        for tool in self.tools:
+            if tool.name == "kernel":
+                problem = kernel.missing_dependencies()
+                if problem:
+                    left_out[tool.name] = problem
+                continue
+            setting = search.missing_api_key(tool.name, context)
+            if setting is not None:
+                left_out[tool.name] = _PROMPTS['runnable_error_api_key_not_set'].format(
+                    tool=tool.name, setting=setting)
+        if not left_out:
+            return self, left_out
+        return replace(
+            self,
+            tools=tuple(tool for tool in self.tools if tool.name not in left_out),
+            unavailable_errors={**self.unavailable_errors, **left_out},
+        ), left_out
 
     def unavailable_error(self, name: str) -> str:
         canonical = self.aliases.get(str(name).strip().lower(), str(name).strip())

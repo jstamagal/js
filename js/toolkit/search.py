@@ -137,6 +137,23 @@ def _key(name: str, context: ToolContext) -> str | None:
     return value or None
 
 
+# The setting each keyed search tool reads its API key from.
+API_KEY_SETTINGS = {
+    "serper_search": "SERPER_API_KEY",
+    "tavily_search": "TAVILY_API_KEY",
+    "exa_search": "EXA_API_KEY",
+}
+
+
+def missing_api_key(tool_name: str, context: ToolContext) -> str | None:
+    """The API key setting ``tool_name`` needs and ``context`` and the
+    environment leave unset, or None."""
+    setting = API_KEY_SETTINGS.get(tool_name)
+    if setting is None or _key(setting, context) is not None:
+        return None
+    return setting
+
+
 def _hidden(context: ToolContext, *keys: str | None) -> tuple[str, ...]:
     """The keys an error to the model shows as [REDACTED]: all of them when
     PARANOID_MODE masks, none when it is off."""

@@ -15,6 +15,7 @@ import math
 import hashlib
 import itertools
 import os
+import re
 import socket
 import sys  # noqa: F401 - tests patch sys.stdout through runtime.sys
 import threading
@@ -361,6 +362,9 @@ class _ToolBatchStats:
     duplicate: int
     invalid: int
     capped: int
+    # (name the model sent, published tool it was dispatched as) per call
+    # whose proxy-cloaked name was repaired.
+    repaired: tuple[tuple[str, str], ...] = ()
 
 
 def _normalize_tool_call_batch(
@@ -372,6 +376,7 @@ def _normalize_tool_call_batch(
     retained: list[_PendingToolCall] = []
     seen: set[tuple[str, str]] = set()
     duplicate = invalid = capped = 0
+    repaired: list[tuple[str, str]] = []
     scheduled_loads = set()
     for call in calls:
         if _canonical_tool_call_name(call.name, registry) == "tool_discovery":
@@ -384,6 +389,9 @@ def _normalize_tool_call_batch(
 
     for call in calls:
         tool = registry.resolve(call.name)
+        if tool is None and (repaired_name := registry.repaired_name(call.name)):
+            tool = registry.resolve(repaired_name)
+            repaired.append((call.name, repaired_name))
         canonical_name = tool.name if tool is not None else _canonical_tool_call_name(
             call.name, registry
         )
@@ -400,7 +408,9 @@ def _normalize_tool_call_batch(
             # serialized as a string is the right value in the wrong type, and
             # rejecting it here means the handler never runs (patch's `edits`
             # batch form and shell's timeout=15 were unusable for this reason).
-            arguments = tool_args.coerce_to_schema(parsed, schema)
+            # An undeclared `_`-named key (`_message`) is dropped, not refused.
+            arguments = tool_args.without_underscore_extras(
+                tool_args.coerce_to_schema(parsed, schema), schema)
         # The sorted form is only the duplicate key. History keeps the model's
         # own text: a server's prompt cache holds the tokens the model wrote,
         # and a replay with its keys reordered re-renders a different prefix.
@@ -453,6 +463,7 @@ def _normalize_tool_call_batch(
         duplicate=duplicate,
         invalid=invalid,
         capped=capped,
+        repaired=tuple(repaired),
     )
 
 
@@ -622,10 +633,38 @@ def _sanitize_assistant_message(msg: ai.messages.Message) -> ai.messages.Message
     return msg.model_copy(update={"parts": new_parts})
 
 
+# Quoted text, paths and numbers vary between two failures that are the same
+# mistake; `_error_signature` blanks them.
+_ERROR_QUOTED = re.compile(r"""'[^'\n]*'|"[^"\n]*"|`[^`\n]*`""")
+_ERROR_PATH = re.compile(r"\S*/\S*")
+_ERROR_NUMBER = re.compile(r"\d+")
+
+
+def _error_signature(result: str) -> str:
+    """``result`` with quoted text, paths and numbers blanked and whitespace
+    collapsed: two errors with one signature are the same error."""
+    text = _ERROR_QUOTED.sub("''", result)
+    text = _ERROR_PATH.sub("/", text)
+    text = _ERROR_NUMBER.sub("0", text)
+    return " ".join(text.split())
+
+
+@dataclass
+class _ErrorStreak:
+    signature: str
+    count: int = 1
+    # The count when the model was told to change approach; None until then.
+    steered_at: int | None = None
+
+
 @dataclass
 class ToolErrorTracker:
+    """Counts, per tool, the ERROR results in a row that carry the same
+    error. At `limit` the model is told once to change approach; one more
+    repeat of that error ends the turn. A different error or a result that
+    is not an error starts the count over."""
     limit: int = field(default_factory=lambda: _settings.default_value("TOOL_ERRORS_MAX"))
-    errors: dict[str, int] = field(default_factory=dict)
+    errors: dict[str, _ErrorStreak] = field(default_factory=dict)
     # Under the non-blocking supervisor a turn's leaf tools dispatch in an
     # executor thread while its fan-out calls run as coroutines on the loop; both
     # record into this tracker, so guard the counter against that cross-thread
@@ -643,14 +682,35 @@ class ToolErrorTracker:
             if isinstance(result, Output) or not result.startswith("ERROR"):
                 self.errors.pop(tool_name, None)
                 return result
-            count = self.errors.get(tool_name, 0) + 1
-            self.errors[tool_name] = count
-            attempts_left = max(self.limit - count, 0)
+            signature = _error_signature(result)
+            streak = self.errors.get(tool_name)
+            if streak is not None and streak.signature == signature:
+                streak.count += 1
+            else:
+                streak = self.errors[tool_name] = _ErrorStreak(signature)
+            attempts_left = max(self.limit - streak.count, 0)
             return _PROMPTS['record_retry_attempts_left_allowed_max_attempts'].format(result=result, attempts_left=attempts_left, self_limit=self.limit)
 
-    def limit_reached(self) -> bool:
+    def steer_due(self) -> list[tuple[str, int]]:
+        """(tool, repeats) for each tool whose same error reached the limit
+        and that has not been told to change approach yet; marks them told."""
+        due: list[tuple[str, int]] = []
         with self._lock:
-            return any(count >= self.limit for count in self.errors.values())
+            for name, streak in self.errors.items():
+                if streak.steered_at is None and streak.count >= self.limit:
+                    streak.steered_at = streak.count
+                    due.append((name, streak.count))
+        return due
+
+    def exhausted(self) -> str | None:
+        """The tool that repeated its error after being told to change
+        approach, or None."""
+        with self._lock:
+            return next((name for name, streak in self.errors.items()
+                         if streak.steered_at is not None and streak.count > streak.steered_at), None)
+
+    def limit_reached(self) -> bool:
+        return self.exhausted() is not None
 
 
 # --------------------------------------------------------------------------
@@ -1849,6 +1909,8 @@ def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, 
                 _settings.default_value("REPLY_TOOL_CALLS_MAX"),
             ),
         )
+        for received, tool in batch_stats.repaired:
+            telemetry.event("tool_name_repaired", received=received, tool=tool)
         telemetry.event(
             "tool_call_batch_normalized",
             received=batch_stats.received,
@@ -2045,16 +2107,31 @@ async def _record_tool_results(pending_calls: list[_PendingToolCall], *, cfg: Co
     return dispatch_records
 
 
-def _record_tool_error_limit(dispatch_records: list[tuple[_PendingToolCall, dict, Any]], *,
+def _steer_off_repeated_errors(due: list[tuple[str, int]], *, messages: list[dict], convo: TurnConvo,
+                               telemetry: Telemetry) -> None:
+    """Tell the model, in one message that joins the running turn, to stop
+    retrying each tool in ``due`` (tool, repeats)."""
+    text = "\n".join(_PROMPTS['steer_off_repeated_errors_stop_retrying'].format(name=name, count=count)
+                     for name, count in due)
+    message = {"role": "user", "content": text, "steered": True}
+    messages.append(memory.note_time(message))
+    convo.add([message])
+    for name, count in due:
+        telemetry.event("tool_error_steered", tool=name, repeats=count)
+
+
+def _record_tool_error_limit(name: str, dispatch_records: list[tuple[_PendingToolCall, dict, Any]], *,
                              registry: ToolRegistry, messages: list[dict], convo: TurnConvo,
                              events: TurnEvents) -> None:
-    """End the turn on an assistant message naming the last failed call."""
-    name, last_error = next(
-        ((_canonical_tool_call_name(pc.name, registry), result_value)
+    """End the turn on an assistant message naming ``name``, the tool that
+    repeated its error after being told to stop, and its last error."""
+    last_error = next(
+        (result_value
          for pc, _, result_value in reversed(dispatch_records)
-         if isinstance(result_value, str) and not isinstance(result_value, Output)
+         if _canonical_tool_call_name(pc.name, registry) == name
+         and isinstance(result_value, str) and not isinstance(result_value, Output)
          and result_value.startswith("ERROR")),
-        (dispatch_records[-1][0].name, dispatch_records[-1][2]),
+        "",
     )
     failure = _PROMPTS['record_tool_error_limit_error_tool_retry_limit_reached_after'].format(name=name, last_error=last_error)
     convo.ai.append(ai.messages.Message(role="assistant", parts=[ai.types.messages.TextPart(text=failure)]))
@@ -2159,7 +2236,11 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         mcp_host = MCPHost(cfg.mcp, telemetry=telemetry, paranoid_mode=getattr(cfg, "paranoid_mode", "off"))
     # A fresh registry rechecks current policy and aliases while restoring the
     # session's visibility. Marks survive compaction and process restarts.
-    active_registry = base_registry.aliased(alias_map).lazy_surface(
+    # A tool that cannot run here is left off the surface the model sees.
+    runnable_registry, left_out = base_registry.runnable(active_context)
+    for name, reason in left_out.items():
+        telemetry.event("tool_unpublished", tool=name, reason=reason)
+    active_registry = runnable_registry.aliased(alias_map).lazy_surface(
         active_context.cwd, mcp_host=mcp_host, disabled_skills=cfg.skills_disabled,
         skill_catalog=skill_catalog)
     active_context.skill_catalog = skill_catalog
@@ -2255,10 +2336,14 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             )
             if checkpoint is not None:
                 await asyncio.to_thread(checkpoint)
-            if error_tracker.limit_reached():
-                _record_tool_error_limit(dispatch_records, registry=active_registry, messages=messages,
-                                         convo=convo, events=events)
+            exhausted = error_tracker.exhausted()
+            if exhausted is not None:
+                _record_tool_error_limit(exhausted, dispatch_records, registry=active_registry,
+                                         messages=messages, convo=convo, events=events)
                 return
+            due = error_tracker.steer_due()
+            if due:
+                _steer_off_repeated_errors(due, messages=messages, convo=convo, telemetry=telemetry)
             if steer is not None and iteration + 1 < cfg.max_tool_iterations:
                 await _take_steer(steer, messages, convo, telemetry, suppress_output)
 

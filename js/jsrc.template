@@ -830,7 +830,8 @@
 # once without it.
 #set SIGNED_REASONING_RECOVERY on
 
-# Failures of one tool in a turn before the model is told to stop calling it.
+# Times one tool may repeat the same error in a row before the model is told
+# to stop retrying it; one more repeat ends the turn.
 #set TOOL_ERRORS_MAX 3
 
 # /loop with a count gives up after count times this many attempts.

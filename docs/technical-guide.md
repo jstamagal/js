@@ -343,16 +343,24 @@ concatenates fragments by call id and repairs common JSON mistakes:
 - trailing commas
 - missing final `}` for object-shaped args
 
-Unknown tool calls return an `ERROR` result naming available tools.
+Unknown tool calls return an `ERROR` result naming available tools. A name a
+proxy cloaked (`promote_shell`, `mcp__exile_poem__fs_search_placeholder`) is
+repaired first: without its `mcp__<server>__` prefix, `_placeholder` suffix
+and, if need be, its first `<word>_`, it dispatches when it names exactly one
+published tool, and the flight log records `tool_name_repaired`.
 
-Tool errors are tracked per tool. A repeated `ERROR` gets retry metadata:
+Tool errors are tracked per tool, as a count of the same error in a row
+(numbers, paths and quoted text do not make two errors different). Each
+`ERROR` gets retry metadata:
 
 ```text
 <retry>attempts_left=2, allowed_max_attempts=3</retry>
 ```
 
-After the retry limit is reached, the runtime appends a final assistant error
-instead of surfacing "no assistant response".
+When one error repeats `TOOL_ERRORS_MAX` times, the model is told once to stop
+retrying that tool and change approach. A different error or a success starts
+the count over. One more repeat of the same error ends the turn on a final
+assistant error instead of surfacing "no assistant response".
 
 ## Task and Read-Only Parallelism
 

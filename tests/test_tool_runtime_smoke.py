@@ -632,13 +632,16 @@ def test_retry_metadata_is_appended_and_resets_after_success():
     assert tracker.record("read", "ERROR: bad path") == (
         "ERROR: bad path\n<retry>attempts_left=1, allowed_max_attempts=2</retry>"
     )
-    assert tracker.record("read", "ERROR: still bad") == (
-        "ERROR: still bad\n<retry>attempts_left=0, allowed_max_attempts=2</retry>"
+    assert tracker.record("read", "ERROR: bad path") == (
+        "ERROR: bad path\n<retry>attempts_left=0, allowed_max_attempts=2</retry>"
     )
-    assert tracker.limit_reached()
+    assert tracker.steer_due() == [("read", 2)]
 
     assert tracker.record("read", "ok") == "ok"
-    assert not tracker.limit_reached()
+    assert tracker.record("read", "ERROR: bad path").endswith(
+        "<retry>attempts_left=1, allowed_max_attempts=2</retry>"
+    )
+    assert tracker.steer_due() == []
 
 
 def test_dispatch_uses_canonical_name_repairs_args_and_adds_retry_metadata(tmp_path, monkeypatch):
@@ -1454,7 +1457,7 @@ def test_patch_fuzzy_match_still_requires_prior_read(tmp_path):
 def test_tool_error_tracker_uses_registered_limit():
     tracker = runtime.ToolErrorTracker.from_settings({"TOOL_ERRORS_MAX": 1})
     tracker.record("read", "ERROR: missing")
-    assert tracker.limit_reached()
+    assert tracker.steer_due() == [("read", 1)]
 
 
 def test_remove_uses_the_configured_trash_size_limit(tmp_path, monkeypatch):

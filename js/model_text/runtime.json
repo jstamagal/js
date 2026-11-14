@@ -30,5 +30,6 @@
   "dispatch_async_tool_error_could_not_parse_arguments_for": "ERROR: could not parse arguments for {pc_name}: {exc}",
   "dispatch_async_tool_error_running": "ERROR running {tool_name}: {type_exc___name}: {exc}",
   "record_assistant_tool_call_batch_limit_reached_retained": "Tool-call batch limit reached: retained {batch_stats_retained} distinct calls and rejected {batch_stats_capped} beyond REPLY_TOOL_CALLS_MAX.",
-  "record_tool_error_limit_error_tool_retry_limit_reached_after": "ERROR: tool retry limit reached after {name}\n{last_error}"
+  "record_tool_error_limit_error_tool_retry_limit_reached_after": "ERROR: tool retry limit reached: {name} repeated the same error after being told to stop retrying it\n{last_error}",
+  "steer_off_repeated_errors_stop_retrying": "Stop retrying {name}; the same error repeated {count} times. Change approach. Repeating that error again ends this turn."
 }

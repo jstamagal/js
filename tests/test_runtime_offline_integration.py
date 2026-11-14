@@ -1112,16 +1112,20 @@ def test_tool_retry_limit_appends_assistant_error_instead_of_silent_no_response(
         tool_registry=registry,
     )
 
-    assert calls == 3
+    # Three repeats steer the model once; the fourth repeat ends the turn.
+    assert calls == 4
+    assert sum(1 for m in messages if m.get("steered")) == 1
     assert messages[-1]["role"] == "assistant"
-    assert messages[-1]["content"].startswith("ERROR: tool retry limit reached after failing_tool")
+    assert messages[-1]["content"].startswith("ERROR: tool retry limit reached")
+    assert "failing_tool" in messages[-1]["content"]
     assert "deliberate handler failure" in messages[-1]["content"]
 
 
 def test_parallel_failing_calls_all_get_tool_messages_before_retry_limit_failure(monkeypatch, tmp_path):
     """Regression: 3 parallel calls of one tool can saturate the error tracker inside a
     single batch. The old code returned after appending only the FIRST tool message,
-    orphaning the other tool_call_ids — DeepSeek/OpenAI then 400 the whole session."""
+    orphaning the other tool_call_ids — DeepSeek/OpenAI then 400 the whole session.
+    The first batch reaches the limit and steers; the second batch ends the turn."""
     registry = ToolRegistry(
         (Tool("failing_tool", "Fails after dispatch",
               lambda **kwargs: "ERROR: deliberate handler failure",
@@ -1154,16 +1158,17 @@ def test_parallel_failing_calls_all_get_tool_messages_before_retry_limit_failure
         tool_registry=registry,
     )
 
-    assert calls == 1
-    batch = next(m for m in messages if m.get("tool_calls"))
-    call_ids = [c["id"] for c in batch["tool_calls"]]
-    assert call_ids == ["orphan_1", "orphan_2", "orphan_3"]
-    batch_idx = messages.index(batch)
-    between = messages[batch_idx + 1:-1]
-    assert [m.get("tool_call_id") for m in between] == call_ids
-    assert all(m["role"] == "tool" for m in between)
+    assert calls == 2
+    for batch in (m for m in messages if m.get("tool_calls")):
+        call_ids = [c["id"] for c in batch["tool_calls"]]
+        assert call_ids == ["orphan_1", "orphan_2", "orphan_3"]
+        batch_idx = messages.index(batch)
+        following = messages[batch_idx + 1:batch_idx + 4]
+        assert [m.get("tool_call_id") for m in following] == call_ids
+        assert all(m["role"] == "tool" for m in following)
+    assert sum(1 for m in messages if m.get("steered")) == 1
     assert messages[-1]["role"] == "assistant"
-    assert messages[-1]["content"].startswith("ERROR: tool retry limit reached after failing_tool")
+    assert messages[-1]["content"].startswith("ERROR: tool retry limit reached")
 
 
 def test_run_turn_streams_tool_call_dispatches_real_read_then_final_text(monkeypatch, tmp_path):

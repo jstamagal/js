@@ -1,6 +1,8 @@
 {
   "render_finished_shell": "shell={job_shell_path}",
   "render_finished_exit": "exit={result_returncode}",
+  "exit_note_sigpipe_output_complete": "note=the output is complete: exit 141 is SIGPIPE, which an earlier stage got when {program} stopped reading early",
+  "exit_note_grep_no_matches": "note=no matches: {program} exits 1 when nothing matched",
   "render_finished_description": "description={description}",
   "render_finished_none": "<none>",
   "render_finished_none_2": "<none>",

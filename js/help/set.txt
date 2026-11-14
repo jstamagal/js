@@ -534,8 +534,8 @@ SIGNED_REASONING_RECOVERY
     retried once without it.
 
 TOOL_ERRORS_MAX
-    Failures of one tool in a turn before the model is told to stop
-    calling it.
+    Times one tool may repeat the same error in a row before the model is
+    told to stop retrying it; one more repeat ends the turn.
 
 LOOP_ATTEMPTS_MULTIPLIER
     /loop with a count gives up after count times this many attempts.

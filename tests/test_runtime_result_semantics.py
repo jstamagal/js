@@ -87,6 +87,6 @@ def test_actual_error_still_counts():
     tracker = runtime.ToolErrorTracker(limit=1)
     result = tracker.record("read", "ERROR: missing file")
     assert result.endswith("</retry>")
-    assert tracker.limit_reached()
+    assert tracker.steer_due() == [("read", 1)]
     assert result_text("ERROR: missing file")[1]
     assert summary_text("ERROR: missing file")[1]

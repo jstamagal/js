@@ -14,5 +14,6 @@
   "discover_error_kind_must_be_native_skill": "ERROR: kind must be native, skill, or mcp",
   "load_error_no_allowed_catalog_entry_with": "ERROR: no allowed catalog entry with id {item_id!r}",
   "load_error_skill_instructions_could_not_be": "ERROR: skill {skill_name!r} instructions could not be read",
-  "load_error_skill_instructions_could_not_be_2": "ERROR: skill {skill_name!r} instructions could not be read"
+  "load_error_skill_instructions_could_not_be_2": "ERROR: skill {skill_name!r} instructions could not be read",
+  "runnable_error_api_key_not_set": "ERROR: {tool} needs {setting}, which is not set, so it is not on this agent's tools."
 }

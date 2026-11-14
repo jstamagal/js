@@ -11,6 +11,7 @@ import mimetypes
 import os
 import re
 import secrets
+import shlex
 import shutil
 import tempfile
 import threading
@@ -322,11 +323,100 @@ def _job_output(job: _ShellJob, context: Any, header: str, *, since_last: bool
     return rendered, (whole if whole != rendered else None)  # type: ignore[return-value]
 
 
+# Words that end one pipeline stage and start the next command.
+_STAGE_SEPARATORS = frozenset({"|", "|&", "||", "&&", ";", "&"})
+_ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+_GREPS = frozenset({"grep", "egrep", "fgrep", "rg"})
+# grep and rg short options that take a value, so the rest of a cluster
+# (`-e…`) is that value, not more options.
+_GREP_VALUE_OPTIONS = frozenset("efABCdDgtTMjrE")
+# A sed script whose last command is `q`/`Q` (`q`, `5q`, `/x/q`, `1,5p;5q`).
+_SED_QUIT_RE = re.compile(r"(?:^|[;{}\s/\d$])[qQ]\d*\s*\}?\s*$")
+
+
+def _last_stage(command: str) -> list[str]:
+    """The words of the last pipeline stage on the command's last line, after
+    any leading NAME=value assignments; [] when it does not split."""
+    lines = [line for line in command.replace("\\\n", " ").splitlines() if line.strip()]
+    if not lines:
+        return []
+    lexer = shlex.shlex(lines[-1], posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        words = list(lexer)
+    except ValueError:
+        return []
+    for index in range(len(words) - 1, -1, -1):
+        if words[index] in _STAGE_SEPARATORS:
+            words = words[index + 1:]
+            break
+    while words and _ASSIGNMENT_RE.match(words[0]):
+        words = words[1:]
+    return words
+
+
+def _grep_stops_early(options: list[str]) -> bool:
+    """True when grep/rg ``options`` hold -q, --quiet, --silent or -m/--max-count."""
+    for word in options:
+        if word == "--":
+            return False
+        if word in ("--quiet", "--silent") or word.startswith("--max-count"):
+            return True
+        if word.startswith("-") and not word.startswith("--"):
+            for flag in word[1:]:
+                if flag in "qm":
+                    return True
+                if flag in _GREP_VALUE_OPTIONS:
+                    break
+    return False
+
+
+def _sed_quits(options: list[str]) -> bool:
+    """True when the sed script in ``options`` ends on a `q`/`Q` command."""
+    scripts: list[str] = []
+    words = iter(options)
+    for word in words:
+        if word in ("-e", "--expression"):
+            scripts.append(next(words, ""))
+        elif word.startswith("--expression="):
+            scripts.append(word.partition("=")[2])
+        elif word in ("-f", "--file"):
+            next(words, None)
+    if not scripts:
+        scripts = [next((word for word in options if not word.startswith("-")), "")]
+    return any(_SED_QUIT_RE.search(script) for script in scripts if script)
+
+
+def _exit_note(command: str, returncode: int, output_bytes: int) -> str:
+    """A line explaining an exit status that is not a failure: 141 (SIGPIPE)
+    when the last stage is a reader that stops early, 1 from grep/rg with no
+    output. "" for any other exit."""
+    if returncode not in (1, 141):
+        return ""
+    words = _last_stage(command)
+    if not words:
+        return ""
+    program, options = Path(words[0]).name, words[1:]
+    if returncode == 141:
+        if (program in ("head", "tail")
+                or (program in _GREPS and _grep_stops_early(options))
+                or (program == "sed" and _sed_quits(options))):
+            return _PROMPTS['exit_note_sigpipe_output_complete'].format(program=program)
+        return ""
+    if program in _GREPS and output_bytes == 0:
+        return _PROMPTS['exit_note_grep_no_matches'].format(program=program)
+    return ""
+
+
 def _render_finished(job: _ShellJob, result: CappedProcessResult, description: str | None,
                      allowed: set[str], safe_env: dict[str, str], context: Any, *,
                      since_last: bool, preface: str = "") -> str | ToolOutput:
     parts = [preface] if preface else []
     parts += [_PROMPTS['render_finished_shell'].format(job_shell_path=job.shell_path), _PROMPTS['render_finished_exit'].format(result_returncode=result.returncode)]
+    note = _exit_note(job.command, result.returncode,
+                      sum(job.process.stream(name).total for name in ("stdout", "stderr")))
+    if note:
+        parts.append(note)
     if description:
         parts.append(_PROMPTS['render_finished_description'].format(description=description))
     filtered = _filtered_references(job.command, allowed)

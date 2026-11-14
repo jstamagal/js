@@ -131,7 +131,7 @@ branch the audit was made on; they move as the code changes.
 | `js/model_client.py:1724-1725` | _stream_with_model | default | include_reasoning is forced on for Claude models behind OpenAI-shaped proxies. | js-2lg.24 |
 | `js/model_client.py:1753-1754` | _stream_with_model | policy | Anthropic prompt caching is always requested. | js-2lg.24 |
 | `js/reasoning.py:171-173,178` | anthropic_thinking | default | Effort "none" quietly becomes "low" on models that always think, and adaptive thinking always asks for display "summarized". | js-2lg.25 |
-| `js/runtime.py:623-647,2136,2191-2194,2003-2017` | ToolErrorTracker/run_turn_async/_record_tool_error_limit | policy | Three errors from one tool end the turn; the limit is fixed in code and is not a setting. | js-2lg.30 |
+| `js/runtime.py` | ToolErrorTracker/run_turn_async/_steer_off_repeated_errors/_record_tool_error_limit | policy | The same error from one tool TOOL_ERRORS_MAX times in a row gets one "stop retrying" message; one more repeat of it ends the turn. | js-2lg.30 |
 | `js/toolkit/core.py:636-661` | ToolContext.require_read | policy | Refuses any edit or overwrite of a file the model has not read, with no setting to turn the gate off. | js-2lg.34 |
 | `js/toolkit/fs.py:613-646` | write | policy | Replaces an existing file only after a read or a matching hash; `WRITE_REQUIRE_OVERWRITE` on also demands overwrite=true. | js-2lg.44 |
 | `js/toolkit/fs.py:1017-1020,1097-1108` | _apply_edit | policy | Waives the read gate for an exact match of 24 characters or more, and applies fuzzy quote, dash and whitespace matches without a setting. | js-2lg.44 |

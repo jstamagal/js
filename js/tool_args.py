@@ -54,7 +54,8 @@ def _close_object(text: str) -> str | None:
 
 
 def repair_jsonish(raw: str) -> dict:
-    """Best-effort repair for common model-emitted argument JSON."""
+    """Best-effort repair for common model-emitted argument JSON. Raw
+    newlines and tabs inside string values are accepted."""
     if not raw:
         return {}
     if _settings.live_value("TOOL_ARGUMENT_STRICT"):
@@ -66,7 +67,7 @@ def repair_jsonish(raw: str) -> dict:
     candidates = [raw, stripped]
     if stripped.startswith('"') and stripped.endswith('"'):
         try:
-            decoded = json.loads(stripped)
+            decoded = json.loads(stripped, strict=False)
             if isinstance(decoded, str):
                 # Unwrap BEFORE scanning: the encoded form hides its commas
                 # behind escapes, so stripping must run on the decoded text.
@@ -87,7 +88,7 @@ def repair_jsonish(raw: str) -> dict:
     last_error: Exception | None = None
     for candidate in candidates:
         try:
-            parsed = json.loads(candidate)
+            parsed = json.loads(candidate, strict=False)
             if not isinstance(parsed, dict):
                 raise ValueError(f"tool args must be an object, got {type(parsed).__name__}")
             return parsed
@@ -175,7 +176,7 @@ def coerce_to_schema(value: object, schema: object) -> object:
             if expected is None:
                 continue
             try:
-                parsed = json.loads(value)
+                parsed = json.loads(value, strict=False)
             except (json.JSONDecodeError, ValueError, RecursionError):
                 break
             if isinstance(parsed, expected):
@@ -215,6 +216,19 @@ def coerce_to_schema(value: object, schema: object) -> object:
             except Unresolvable:
                 pass
     return value
+
+
+def without_underscore_extras(arguments: object, schema: object) -> object:
+    """``arguments`` without the top-level keys that start with ``_`` and
+    that ``schema`` does not declare."""
+    if not isinstance(arguments, dict) or not isinstance(schema, dict):
+        return arguments
+    properties = schema.get("properties")
+    declared = properties if isinstance(properties, dict) else {}
+    extras = [key for key in arguments if isinstance(key, str) and key.startswith("_") and key not in declared]
+    if not extras:
+        return arguments
+    return {key: value for key, value in arguments.items() if key not in extras}
 
 
 def is_json_object(raw: str) -> bool:
