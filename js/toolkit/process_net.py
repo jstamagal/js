@@ -891,7 +891,9 @@ def _format_payload(
     size = len(data) if total_size is None else total_size
     image_mime = _image_mime(source_path, content_type, data)
     if image_mime:
-        if context.vision_enabled and not truncated:
+        # `truncated` is the text budget; an image arrives here whole, and an
+        # image over imagefit's limits is fitted, not refused.
+        if context.vision_enabled:
             marker_path = source_path or _temp_image_path(image_mime, data)
             return _image_marker(marker_path, image_mime, size, data)
         return _descriptor("IMAGE_RESPONSE", image_mime, size, truncated)

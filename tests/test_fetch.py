@@ -143,6 +143,30 @@ def test_file_url_image_uses_vision_marker_when_enabled_and_descriptor_when_disa
     assert descriptor == f"IMAGE_RESPONSE content-type=image/png size={len(PNG_BYTES)} bytes"
 
 
+def test_fetched_image_over_the_result_cap_is_sent_fitted(monkeypatch, tmp_path):
+    """A fetched image larger than TOOL_RESULT_MAX, by file:// or HTTP, is
+    sent as its copy fitted to 2000 x 2000, not described as truncated."""
+    import io
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.frombytes("RGB", (3000, 400), os.urandom(3000 * 400 * 3)).save(buffer, format="PNG")
+    data = buffer.getvalue()
+    image = tmp_path / "wide.png"
+    image.write_bytes(data)
+    context = ToolContext(cwd=tmp_path, vision_enabled=True, max_tool_result_bytes=1024)
+    monkeypatch.setattr(process_net.urllib.request, "urlopen",
+                        lambda req, timeout: FakeResponse(data, {"Content-Type": "image/png"}))
+
+    for url in (image.as_uri(), "https://example.com/wide.png"):
+        prefix, sent_path, mime, stub = process_net.fetch(url, context=context).split("\t", 3)
+        assert prefix == "IMAGE_RESULT" and mime == "image/png"
+        with Image.open(sent_path) as sent:
+            assert sent.size == (2000, 267)
+        assert "3000x400" in stub and "2000x267" in stub
+    assert image.read_bytes() == data
+
+
 def test_http_request_builds_method_headers_and_json_body(monkeypatch, tmp_path):
     seen = {}
 
