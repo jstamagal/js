@@ -32,6 +32,7 @@ from . import jail as _jail
 from . import messages as msgs
 from . import output
 from .text_bytes import byte_size, byte_prefix, cap_text, well_formed
+from . import imagefit
 from . import model_metadata
 from . import paths
 from . import providers
@@ -844,6 +845,27 @@ def _limit(setting: int | None) -> int | None:
     return None if setting is None or setting <= 0 else setting
 
 
+def _fit_images(result: ToolResult) -> ToolResult:
+    """``result`` with each image block over imagefit's limits replaced by its
+    fitted copy, followed by the note that says what changed."""
+    blocks: list[dict] = []
+    for block in result.blocks:
+        blocks.append(block)
+        mime = str(block.get("mimeType", ""))
+        if block.get("type") != "image" or not mime.startswith("image/"):
+            continue
+        try:
+            data = base64.b64decode(str(block.get("data", "")), validate=True)
+        except (ValueError, TypeError):
+            continue
+        fitted = imagefit.fit(data, mime)
+        if fitted is None or not fitted.changed:
+            continue
+        blocks[-1] = {**block, "data": base64.b64encode(fitted.data).decode("ascii"), "mimeType": fitted.mime}
+        blocks.append({"type": "text", "media_notice": _MEDIA_NOTICE, "text": fitted.note})
+    return result if blocks == result.blocks else replace(result, blocks=blocks)
+
+
 def _cap_media(result: ToolResult, media_max: int | None) -> ToolResult:
     """``result`` with each media block over ``media_max`` bytes of data
     replaced by js's notice that says so. None = unlimited."""
@@ -953,7 +975,7 @@ def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None,
         result = _without_notice_marks(_well_formed_result(_text_blobs_as_text(result)))
         # TOOL_MEDIA_MAX of the context running the call.
         media_context = context if context is not None else T.STOCK_CONTEXT
-        result = _cap_media(result, _limit(int(getattr(media_context, "max_tool_media_bytes", 0) or 0)))
+        result = _cap_media(_fit_images(result), _limit(int(getattr(media_context, "max_tool_media_bytes", 0) or 0)))
         if cap_bytes > 0 and _tool_result_content_size(result) > cap_bytes:
             marker = _PROMPTS['cap_result_truncated_tool_result_max_reached'].format(cap_bytes=cap_bytes)
             return _dehydrate_capped_result(result, cap_bytes, marker)

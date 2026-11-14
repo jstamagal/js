@@ -817,12 +817,23 @@ def test_fs_read_image_returns_marker_without_inline_base64(tmp_path):
 
 
 def test_fs_read_image_oversize_and_vision_off_fallback(tmp_path):
+    from PIL import Image
+
     image = tmp_path / "pixel.png"
     image.write_bytes(_TINY_PNG)
 
-    # Oversize is rejected before any vision handling, regardless of vision state.
-    too_small = ToolContext(cwd=tmp_path, max_file_bytes=4, vision_enabled=True)
-    assert fs.fs_read("pixel.png", context=too_small).startswith("ERROR: image size")
+    # An image over 2000 px is not refused, whatever FILE_BYTES_MAX says: the
+    # marker names a copy that fits 2000 x 2000, and the text says so.
+    tall = tmp_path / "tall.png"
+    Image.new("RGB", (600, 5000), (10, 120, 40)).save(tall)
+    original = tall.read_bytes()
+    small_cap = ToolContext(cwd=tmp_path, max_file_bytes=4, vision_enabled=True)
+    _prefix, sent_path, mime, stub = fs.fs_read("tall.png", context=small_cap).split("\t", 3)
+    with Image.open(sent_path) as sent:
+        assert sent.size == (240, 2000)
+    assert mime == "image/png"
+    assert "600x5000" in stub and "240x2000" in stub
+    assert tall.read_bytes() == original
 
     # Vision off (the default): a plain text descriptor, never an image marker.
     vision_off = ToolContext(cwd=tmp_path)

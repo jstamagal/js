@@ -10,6 +10,7 @@ from pathlib import Path
 from collections.abc import Iterable
 
 from . import clipimage
+from . import imagefit
 from . import media
 from . import messages as msgs
 from . import settings as _settings
@@ -253,18 +254,11 @@ def _prepare_attachment(
 
     mime = _image_mime(header)
     if mime:
-        limit = cfg.max_file_bytes
-        if stat.st_size > limit:
-            raise AttachmentError(
-                msgs.ATTACHMENT_IMAGE_TOO_LARGE.said(path=path, size=stat.st_size, limit=limit))
         try:
             with path.open("rb") as fh:
-                data = fh.read(limit + 1)
+                data = fh.read()
         except OSError as exc:
             raise AttachmentError(msgs.ATTACHMENT_UNREADABLE.said(path=path, error=exc)) from exc
-        if len(data) > limit:  # the file grew after the stat
-            raise AttachmentError(
-                msgs.ATTACHMENT_IMAGE_TOO_LARGE.said(path=path, size=len(data), limit=limit))
         return _prepare_image(str(path), mime, len(data), data, cfg)
 
     cap = _text_cap(cfg)
@@ -287,9 +281,6 @@ def _prepare_bytes(
     size = len(data) if total_size is None else total_size
     mime = _image_mime(data[:16])
     if mime:
-        if size > cfg.max_file_bytes:
-            raise AttachmentError(
-                msgs.ATTACHMENT_IMAGE_TOO_LARGE.said(path=display_path, size=size, limit=cfg.max_file_bytes))
         return _prepare_image(display_path, mime, size, data, cfg)
 
     cap = _text_cap(cfg)
@@ -311,6 +302,9 @@ def _prepare_image(display_path: str, mime: str, size: int, data: bytes, cfg: Co
     stub = _PROMPTS['prepare_image_visual_file_mime_size_bytes'].format(display_path=display_path, mime=mime, size=size)
     if not getattr(cfg, "vision_enabled", False):
         return _PreparedAttachment(_PROMPTS['prepare_image_vision_disabled_image_bytes_not_sent'].format(stub=stub))
+    fitted = imagefit.fit(data, mime)
+    if fitted is not None and fitted.changed:
+        return _PreparedAttachment(f"{stub} {fitted.note}", media.store(fitted.data, fitted.mime))
     return _PreparedAttachment(stub, media.store(data, mime))
 
 

@@ -392,28 +392,20 @@ def test_real_png_still_attaches_as_image(tmp_path):
     assert _TINY_PNG not in json.dumps(message).encode()
 
 
-def test_image_that_grows_past_limit_after_stat_is_refused(tmp_path, monkeypatch):
-    """The image read is bounded by the limit, so a file that grew between the
-    stat and the read is refused instead of sent oversized."""
-    png = tmp_path / "big.png"
-    cfg = _cfg(tmp_path, vision=True)
-    limit = cfg.max_file_bytes
-    real_stat = Path.stat
-    png.write_bytes(_TINY_PNG + b"\x00" * (limit + 10))
-    real_size = real_stat(png).st_size
-    resolved_png = png.resolve()
+def test_oversized_image_is_sent_fitted_and_says_so(tmp_path):
+    """An image over 2000 px is attached scaled to fit 2000 x 2000, its aspect
+    kept; the text says so, and the file on disk is unchanged."""
+    from PIL import Image
 
-    class _Stat:
-        st_size = len(_TINY_PNG)
-        st_mode = real_stat(png).st_mode
-
-    monkeypatch.setattr(Path, "stat", lambda self, *a, **k: _Stat() if self == resolved_png else real_stat(self, *a, **k))
-    try:
-        attach.build_user_message("look", [str(png)], cfg)
-    except attach.AttachmentError as exc:
-        assert str(limit) in str(exc)
-    else:
-        raise AssertionError(f"oversized image ({real_size} bytes) was accepted")
+    png = tmp_path / "wide.png"
+    Image.new("RGB", (4000, 500), (200, 30, 30)).save(png)
+    original = png.read_bytes()
+    message = attach.build_user_message("look", [str(png)], _cfg(tmp_path, vision=True))
+    [part] = message["media"]
+    with Image.open(io.BytesIO(media.load(part))) as sent:
+        assert sent.size == (2000, 250)
+    assert "4000x500" in message["content"] and "2000x250" in message["content"]
+    assert png.read_bytes() == original
 
 
 def test_truncated_text_attachment_does_not_end_in_a_replacement_char(tmp_path):

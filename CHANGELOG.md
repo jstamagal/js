@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Large images are fitted, not refused, as Claude Code does.** An image read,
+  attached, pasted or returned by a tool was refused over `FILE_BYTES_MAX`
+  (2 MB) or dropped over `TOOL_MEDIA_MAX`. Now one over 2000 px on a side is
+  sent scaled to fit 2000 x 2000, aspect kept, and one over 3.75 MiB is
+  re-encoded smaller (palette PNG, then JPEG at quality 80 down to 20, last at
+  1000 px wide). The text says what changed and how to map coordinates back
+  to the original; the file on disk is never touched. New `js/imagefit.py`.
 - **`write` replaces a file the model has read without `overwrite=true`.**
   `WRITE_REQUIRE_OVERWRITE` now defaults to off. With it on, a model that had
   read a file and sent its whole replacement was refused for the missing flag,
