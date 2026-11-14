@@ -2,8 +2,8 @@
 
 A profile is one mapping:
 
-    match: qwen              # string or list; case-insensitive substrings of
-                             # the model id or the provider id
+    match: [sol, terra]      # string or list; model family names, matched as
+                             # whole words of the model id or the provider id
     mode: replace            # replace (the default) or prepend
     tools: [shell:eager]     # chain entries, as in agent.yaml `tools:`
     core: true               # replace keeps the core entries unless false
@@ -16,10 +16,16 @@ the first matching TOOL_PROFILES entry. `replace` puts the profile's entries
 and the core entries in place of the agent's chain; `prepend` puts the
 profile's entries ahead of it, so under first-match-wins they decide every
 tool they name. A profile without `tools:` leaves the chain as it is.
+
+A `match` word is a whole word of the id: `sol` matches `cpa/sol:latest` and
+`gpt-6.1-sol-medium`, not `console`. A word may be followed by a version
+number, so `qwen` matches `Qwen3.6-35B-A3B`. A multi-word entry
+(`claude-opus`) matches those words in a row.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -39,6 +45,25 @@ CORE_TAG = "core"
 CORE_ENTRIES = ("skill:eager",)
 
 
+def _words(text: Any) -> list[str]:
+    return [word for word in re.split(r"[^a-z0-9]+", str(text or "").lower()) if word]
+
+
+def _word_matches(needle: str, word: str) -> bool:
+    """``word`` is ``needle``, or ``needle`` followed by a version number."""
+    return word == needle or (word.startswith(needle) and word[len(needle)].isdigit())
+
+
+def _has_run(words: list[str], needles: list[str]) -> bool:
+    if not needles:
+        return False
+    last = len(words) - len(needles)
+    return any(
+        all(_word_matches(needle, words[start + offset]) for offset, needle in enumerate(needles))
+        for start in range(last + 1)
+    )
+
+
 @dataclass(frozen=True)
 class ModelProfile:
     match: tuple[str, ...]
@@ -54,10 +79,10 @@ class ModelProfile:
         return ", ".join(self.match)
 
     def matches(self, model: str, provider_id: str | None) -> bool:
-        haystacks = [str(model or "").lower()]
+        haystacks = [_words(model)]
         if provider_id:
-            haystacks.append(str(provider_id).lower())
-        return any(needle in haystack for needle in self.match for haystack in haystacks)
+            haystacks.append(_words(provider_id))
+        return any(_has_run(words, _words(needle)) for needle in self.match for words in haystacks)
 
     def chain(self, agent_chain: Sequence[str], config: policy.ToolsConfig) -> tuple[str, ...]:
         """The tool chain this profile makes of the agent's own."""

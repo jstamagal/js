@@ -231,3 +231,19 @@ def test_a_subagent_resolves_its_profile_from_its_own_model(monkeypatch, tmp_pat
     assert "CHILD_OK" in task(["do the child work"], agent_id="worker", context=context)
     assert seen["model_id"] == "child-model"
     assert {tool.name for tool in seen["tools"] or ()} == {"read"}
+
+
+@pytest.mark.parametrize(("needle", "model", "hit"), [
+    ("sol", "cpa/sol:latest", True),
+    ("sol", "gpt-6.1-sol-medium", True),
+    ("sol", "console-model", False),
+    ("luna", "cpa/luna:latest", True),
+    ("opus", "cpa/claude-opus-5-5-xhigh", True),
+    ("fable", "cpa/claude-fable-5-1", True),
+    ("qwen", "/models/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf", True),
+    ("claude-opus", "claude-opus-5-5", True),
+    ("claude-opus", "claude-sonnet-5-5", False),
+])
+def test_match_names_a_model_family_as_whole_words(needle, model, hit):
+    profile = model_profiles.parse_profile({"match": needle, "tools": ["shell:eager"]}, "test")
+    assert profile.matches(model, None) is hit

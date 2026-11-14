@@ -151,8 +151,12 @@ models:
     tools: [remove:ban, undo:ban]
 ```
 
-`match` values are case-insensitive substrings of the model id or the
-provider id, as in `TOOL_ALIASES`; the first matching entry wins. The
+`match` values name model families (`opus`, `sonnet`, `haiku`, `fable`,
+`sol`, `terra`, `astra`, `luna`, `qwen`, …), matched case-insensitively as
+whole words of the model id or the provider id: `sol` matches
+`cpa/sol:latest` and `gpt-6.1-sol-medium` but not `console`, and `qwen`
+matches `Qwen3.6-35B` (a word may carry a version number). The first
+matching entry wins. The
 `TOOL_PROFILES` setting is a JSON list of entries of the same shape and applies
 when the agent has no matching `models:` entry. `--tools` beats both, and both
 beat the agent's `tools:`.
