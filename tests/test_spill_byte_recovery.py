@@ -135,14 +135,16 @@ def test_lines_a_byte_range_shows_whole_count_as_read(tmp_path):
     assert target.read_text(encoding="utf-8") == "aaa\nBBB\nccc\n"
 
 
-def test_line_and_byte_range_together_are_refused(tmp_path):
+def test_line_and_byte_range_together_read_the_lines_and_say_so(tmp_path):
     target = tmp_path / "f.txt"
-    target.write_text("aaa\n", encoding="utf-8")
+    target.write_text("aaa\nbbb\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    result = fs.fs_read(file_path=str(target), range={"start_line": 1, "start_byte": 0}, context=context)
+    result = fs.fs_read(file_path=str(target), range={"start_line": 2, "start_byte": 0}, context=context)
 
-    assert result.startswith("ERROR")
+    lines = result.splitlines()
+    assert lines[0] == "2|bbb"
+    assert len(lines) == 2 and "start_byte" in lines[1]
 
 
 @pytest.mark.parametrize("bad", [{"start_byte": -5}, {"start_byte": True}, {"end_byte": "x"}, {"start_byte": 0, "end_byte": -1}])

@@ -20,7 +20,11 @@ own characters wherever your edit left `old_string` unchanged. With
 `replace_all`, this fallback runs only when there is no exact occurrence. Pass `edits`
 for several replacements in one call: they apply in order, each seeing the
 previous result, and all are validated before anything is written, so a failed
-call leaves the file untouched and names the offending edit.
+call leaves the file untouched and names the offending edit. An edit whose
+`old_string` equals its `new_string` changes nothing: it is left out, the rest
+apply, and the result names it; when every edit is one, nothing is written. A
+path that does not exist is refused with the nearest existing directory, close
+names in its parent directory, and existing paths that end the same way.
 {{#if undo}}
 One call is one `undo` step.
 {{/if}}

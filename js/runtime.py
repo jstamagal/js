@@ -408,9 +408,12 @@ def _normalize_tool_call_batch(
             # serialized as a string is the right value in the wrong type, and
             # rejecting it here means the handler never runs (patch's `edits`
             # batch form and shell's timeout=15 were unusable for this reason).
-            # An undeclared `_`-named key (`_message`) is dropped, not refused.
+            # A tool's own prepare_args runs first, mapping the shapes it
+            # accepts onto its schema. An undeclared `_`-named key
+            # (`_message`) is then dropped, not refused.
+            prepared = tool.prepare_args(parsed) if tool is not None and tool.prepare_args else parsed
             arguments = tool_args.without_underscore_extras(
-                tool_args.coerce_to_schema(parsed, schema), schema)
+                tool_args.coerce_to_schema(prepared, schema), schema)
         # The sorted form is only the duplicate key. History keeps the model's
         # own text: a server's prompt cache holds the tokens the model wrote,
         # and a replay with its keys reordered re-renders a different prefix.

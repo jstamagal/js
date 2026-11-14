@@ -376,6 +376,10 @@ class Tool:
     read_only_when: Callable[[dict[str, Any]], bool] | None = None
     # Catalog label shown by tool_discovery (fs, shell, search, agent, ...).
     source: str = "native"
+    # Maps the arguments a model sent to the ones the schema declares, before
+    # schema coercion and validation; it returns a new dict and leaves its
+    # input as it was. None when the tool takes its arguments as sent.
+    prepare_args: Callable[[dict[str, Any]], dict[str, Any]] | None = None
 
     def openai_spec(self) -> dict:
         parameters = self.input_schema if self.input_schema is not None else {

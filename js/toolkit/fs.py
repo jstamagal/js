@@ -15,7 +15,9 @@ import subprocess
 import textwrap
 import threading
 import functools
+from collections import deque
 from functools import lru_cache
+from itertools import islice
 from pathlib import Path
 from collections.abc import Callable, Iterable
 
@@ -28,6 +30,7 @@ from .sanitize import int_or_default
 from .wiki.helpers import run
 from .descriptions import load_description
 from ..prompt_text import load_catalog
+from .. import tool_args as _tool_args
 
 _PROMPTS = load_catalog('toolkit_fs')
 
@@ -350,7 +353,7 @@ def _utf8_char_start(buf: bytes, index: int) -> int:
 
 def _read_byte_call(target: Path, start_byte: int) -> str:
     """JSON arguments for a follow-up byte-range `read` call."""
-    return json.dumps({"file_path": str(target), "range": {"start_byte": start_byte}})
+    return json.dumps({"file_path": str(target), "start_byte": start_byte})
 
 
 def _read_byte_range(target: Path, context: ToolContext, start_byte: int, end_byte: int | None) -> str:
@@ -440,6 +443,191 @@ def _remember_byte_read(target: Path, context: ToolContext, data: bytes, start: 
     context.remember_content(target, content_hash, data)
 
 
+_READ_RANGE_FIELDS = ("start_line", "end_line", "start_byte", "end_byte")
+_READ_RANGE_ALIASES = {"line_start": "start_line", "line_end": "end_line"}
+_READ_RANGE_WORDS = re.compile(r"\b(start_line|end_line|start_byte|end_byte|line_start|line_end)\b\W*?(\d+)")
+_READ_LINE_SPAN = re.compile(r"(\d+)(?:\s*(?:-|,|:|\.\.)\s*(\d+)?)?")
+
+
+def _plain_int(value: object) -> int | None:
+    """``value`` as an int when it is one or a string of digits, else None."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def _range_fields(raw: object) -> dict | None:
+    """The fields a `range` value names, or None when it names none.
+
+    Takes the object, the object as JSON text (a missing closing brace is
+    mended), `start_line 170`, a line span written `170-185`, `1,110`,
+    `170:185` or `170`, and a list `[170, 185]`."""
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, list) and 1 <= len(raw) <= 2 and all(_plain_int(item) is not None for item in raw):
+        return dict(zip(("start_line", "end_line"), (_plain_int(item) for item in raw)))
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    if text.startswith("{"):
+        try:
+            return _tool_args.repair_jsonish(text)
+        except ValueError:
+            pass
+    named = _READ_RANGE_WORDS.findall(text)
+    if named:
+        return {key: int(value) for key, value in named}
+    span = _READ_LINE_SPAN.fullmatch(text)
+    if span is None:
+        return None
+    fields = {"start_line": int(span[1])}
+    if span[2]:
+        fields["end_line"] = int(span[2])
+    return fields
+
+
+def prepare_read_arguments(arguments: dict) -> dict:
+    """`read`'s arguments with the range shapes models send mapped onto the
+    schema's flat `start_line`/`end_line`/`start_byte`/`end_byte`.
+
+    A `range` value (see _range_fields) is flattened, its fields filling only
+    the ones the call does not name at the top level. `line_start`/`line_end`
+    are `start_line`/`end_line`; `offset` is the first line and `limit` the
+    number of lines. A `range` that names nothing, or keys it holds that are
+    not range fields, stay under `range` for validation to report."""
+    args = {key: value for key, value in arguments.items() if not (key == "range" and value is None)}
+    fields: dict[str, object] = {}
+
+    def take(source: dict) -> None:
+        for key in list(source):
+            name = _READ_RANGE_ALIASES.get(key, key)
+            if name in _READ_RANGE_FIELDS or name in ("offset", "limit"):
+                value = source.pop(key)
+                if value is not None:
+                    fields.setdefault(name, value)
+
+    take(args)
+    if "range" in args:
+        nested = _range_fields(args["range"])
+        if nested is not None:
+            take(nested)
+            if nested:
+                args["range"] = nested
+            else:
+                del args["range"]
+    offset, limit = fields.pop("offset", None), fields.pop("limit", None)
+    first, count = _plain_int(offset), _plain_int(limit)
+    if (offset is not None and first is None) or (limit is not None and count is None):
+        # Not a line count: left as sent, so validation names it.
+        if offset is not None:
+            args["offset"] = offset
+        if limit is not None:
+            args["limit"] = limit
+    elif first is not None or count is not None:
+        start = max(1, first or 1)
+        fields.setdefault("start_line", start)
+        if count:
+            fields.setdefault("end_line", start + count - 1)
+    args.update(fields)
+    return args
+
+
+_PATH_HINT_SKIP_DIRS = frozenset({".git", "node_modules", ".venv"})
+_PATH_HINT_SCAN_MAX = 20_000
+_PATH_HINT_SHOWN = 5
+
+
+def _jail_shows(context: ToolContext, path: Path) -> bool:
+    try:
+        context.resolve_path(path)
+    except jail.JailError:
+        return False
+    return True
+
+
+def _same_tail_paths(context: ToolContext, target: Path) -> list[Path]:
+    """Existing paths under the working directory and the jail root that end
+    in the last one to three components of *target*, the longest shared tail
+    first. The walk is breadth-first, skips .git, node_modules and .venv,
+    and stops after _PATH_HINT_SCAN_MAX directory entries."""
+    tail = target.parts[1:][-3:]
+    if not tail:
+        return []
+    active = jail.active()
+    roots = [Path(os.path.abspath(context.cwd))]
+    if active is not None:
+        roots.append(Path(os.path.abspath(active.root)))
+    hidden = jail.hider(context)
+    queue = deque(roots)
+    visited: set[Path] = set()
+    found: list[tuple[int, int, Path]] = []
+    scanned = 0
+    while queue and scanned < _PATH_HINT_SCAN_MAX:
+        directory = queue.popleft()
+        if directory in visited or (directory not in roots and hidden(directory)):
+            continue
+        visited.add(directory)
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    scanned += 1
+                    if scanned > _PATH_HINT_SCAN_MAX:
+                        break
+                    path = Path(entry.path)
+                    if entry.name == tail[-1]:
+                        shared = 1
+                        while (shared < len(tail) and shared < len(path.parts) - 1
+                               and path.parts[-shared - 1] == tail[-shared - 1]):
+                            shared += 1
+                        found.append((shared, len(found), path))
+                    if entry.name not in _PATH_HINT_SKIP_DIRS and entry.is_dir(follow_symlinks=False):
+                        queue.append(path)
+        except OSError:
+            continue
+    found.sort(key=lambda item: (-item[0], item[1]))
+    shown: list[Path] = []
+    for _shared, _order, path in found:
+        if path != target and not hidden(path) and _jail_shows(context, path):
+            shown.append(path)
+            if len(shown) == _PATH_HINT_SHOWN:
+                break
+    return shown
+
+
+def _missing_path_hint(context: ToolContext, target: Path) -> str:
+    """Lines that point from a path that does not exist toward what does: the
+    nearest existing ancestor directory, close names in the parent directory
+    when it exists, and existing paths that end the same way (_same_tail_paths).
+    Each line names only paths the jail shows."""
+    lines: list[str] = []
+    ancestor = next((parent for parent in target.parents
+                     if parent.is_dir() and _jail_shows(context, parent)), None)
+    if ancestor is not None:
+        lines.append(_PROMPTS['missing_path_nearest_existing_directory'].format(path=ancestor))
+    if ancestor is not None and ancestor == target.parent:
+        try:
+            with os.scandir(ancestor) as entries:
+                names = [entry.name for entry in islice(entries, _PATH_HINT_SCAN_MAX)]
+        except OSError:
+            names = []
+        hidden = jail.hider(context)
+        close = [name for name in difflib.get_close_matches(target.name, names, n=_PATH_HINT_SHOWN * 2, cutoff=0.6)
+                 if not hidden(ancestor / name)][:_PATH_HINT_SHOWN]
+        if close:
+            lines.append(_PROMPTS['missing_path_close_names_there'].format(names=", ".join(close)))
+    same_tail = _same_tail_paths(context, target)
+    if same_tail:
+        lines.append(_PROMPTS['missing_path_existing_paths_that_end_the_same'].format(
+            paths="".join(f"\n  {path}" for path in same_tail)))
+    return "".join(f"\n{line}" for line in lines)
+
+
+def _no_such_file(context: ToolContext, target: Path) -> str:
+    return f"ERROR: no such file: {target}{_missing_path_hint(context, target)}"
+
+
 def fs_read(
     path: str | None = None,
     file_path: str | None = None,
@@ -455,11 +643,14 @@ def fs_read(
     raw_path = file_path or path
     if not raw_path:
         return "ERROR: file_path is required"
-    if isinstance(range, dict):
-        start_line = start_line if start_line is not None else range.get("start_line")
-        end_line = end_line if end_line is not None else range.get("end_line")
-        start_byte = start_byte if start_byte is not None else range.get("start_byte")
-        end_byte = end_byte if end_byte is not None else range.get("end_byte")
+    asked = prepare_read_arguments({
+        "start_line": start_line, "end_line": end_line,
+        "start_byte": start_byte, "end_byte": end_byte, "range": range,
+    })
+    if set(asked) - set(_READ_RANGE_FIELDS):
+        return _PROMPTS['fs_read_error_range_not_understood'].format(range=range)
+    start_line, end_line = asked.get("start_line"), asked.get("end_line")
+    start_byte, end_byte = asked.get("start_byte"), asked.get("end_byte")
     for name, value in (("start_byte", start_byte), ("end_byte", end_byte)):
         if value is not None and int_or_default(value, -1, minimum=0) == -1:
             return f"ERROR: {name} must be a non-negative integer, got {value!r}"
@@ -467,9 +658,9 @@ def fs_read(
     byte_end = int_or_default(end_byte, -1, minimum=0)
     byte_ranged = byte_start != -1 or byte_end != -1
     # A whole-file read (no range asked for) is the only one gated by
-    # max_read_bytes. Once the caller names a range it is reading deliberately,
-    # so a 40 MB log stays addressable line-by-line up to max_file_bytes; a
-    # byte range seeks, so it reaches past max_file_bytes too.
+    # max_read_bytes and max_file_bytes. Once the caller names a range it is
+    # reading deliberately: a line range of a file over max_file_bytes is
+    # streamed, and a byte range seeks.
     # Matches the acceptance rule the line math below uses: bools, junk and
     # out-of-range values are not a range, so they can't smuggle a whole-file
     # read past the cap.
@@ -477,11 +668,15 @@ def fs_read(
         int_or_default(start_line, -1, minimum=1) != -1
         or int_or_default(end_line, -1, minimum=1) != -1
     )
+    # A line range and a byte range together: the line range is read, and the
+    # result says the byte range was not.
+    note = ""
     if byte_ranged and ranged:
-        return "ERROR: pass a line range (start_line/end_line) or a byte range (start_byte/end_byte), not both"
+        byte_ranged = False
+        note = "\n" + _PROMPTS['fs_read_byte_range_ignored']
     target = context.resolve_path(raw_path)
     if not target.exists():
-        return f"ERROR: no such file: {target}"
+        return _no_such_file(context, target)
     if not target.is_file():
         return f"ERROR: not a regular file: {target}"
     if target.suffix.lower() == ".ipynb" and not ranged and not byte_ranged:
@@ -534,6 +729,29 @@ def fs_read(
         return (
             _PROMPTS['fs_read_error_file_size_bytes_exceeds_read'].format(size=size, read_cap=read_cap, example=example)
         )
+    if not ranged and size > context.max_file_bytes:
+        example = _read_call(target, 1, context.max_read_lines)
+        return _PROMPTS['fs_read_error_file_size_bytes_exceeds_file'].format(
+            size=size, file_cap=context.max_file_bytes, example=example)
+
+    # Resolve the window: a reversed range is
+    # swapped, an oversized one is clamped to max_read_lines, and an omitted
+    # end_line means "one page starting at start_line" — NOT "one page starting at
+    # line 1", which used to make the tool's own
+    # `read ... with start_line=N to continue` hint fail with an invalid-range error.
+    raw_start = int_or_default(start_line, 1, minimum=1)
+    raw_end = int_or_default(end_line, 0, minimum=1)
+    if raw_end and raw_end < raw_start:
+        raw_start, raw_end = raw_end, raw_start
+    start = max(1, raw_start)
+    page_end = start + context.max_read_lines - 1
+    last = min(page_end, raw_end or page_end)
+    numbered = bool(show_line_numbers)
+
+    if size > context.max_file_bytes:
+        if _is_binary(target):
+            return "ERROR: Binary or visual files are not supported by this Python port yet"
+        return _read_streamed_lines(target, size, start, last, numbered, note)
 
     try:
         text, data = _read_text(target, context)
@@ -551,25 +769,13 @@ def fs_read(
         context.remember_read(target, content_hash, total_lines=0, whole_file=True)
         context.remember_content(target, content_hash, data)
         _view(path=str(target), start_line=0, end_line=0, total_lines=0, lines=[])
-        return f"{target} is empty (hash {content_hash})"
+        return f"{target} is empty (hash {content_hash}){note}"
 
-    # Resolve the window: a reversed range is
-    # swapped, an oversized one is clamped to max_read_lines, and an omitted
-    # end_line means "one page starting at start_line" — NOT "one page starting at
-    # line 1", which used to make the tool's own
-    # `read ... with start_line=N to continue` hint fail with an invalid-range error.
-    raw_start = int_or_default(start_line, 1, minimum=1)
-    raw_end = int_or_default(end_line, 0, minimum=1)
-    if raw_end and raw_end < raw_start:
-        raw_start, raw_end = raw_end, raw_start
-    start = max(1, raw_start)
     if start > total:
-        return f"{target} has {total} total lines; requested start_line={start} is past EOF (hash {content_hash})"
-    page_end = start + context.max_read_lines - 1
-    end = min(total, page_end, raw_end or page_end)
+        return f"{target} has {total} total lines; requested start_line={start} is past EOF (hash {content_hash}){note}"
+    end = min(total, last)
 
     selected = all_lines[start - 1:end]
-    numbered = bool(show_line_numbers)
     read_key = (content_hash, start, end, numbered)
     earlier = context.shown_read(target, read_key)
     context.remember_read(
@@ -585,6 +791,7 @@ def fs_read(
     suffix = ""
     if end < total:
         suffix = f"\n[{total} total lines; continue with {_read_call(target, end + 1)}]"
+    suffix += note
     if context.read_deduplicate and earlier is not None:
         return (
             f"Lines {start}-{end} are unchanged since read call {earlier} returned them "
@@ -599,12 +806,41 @@ def fs_read(
     return result
 
 
+def _read_streamed_lines(target: Path, size: int, start: int, last: int, numbered: bool, note: str) -> str:
+    """Lines start..last of a text file over FILE_BYTES_MAX, read one line at
+    a time and never held whole. Lines end at LF, CRLF or CR, as in the
+    whole-file reader. The read records no coverage: the file is never hashed."""
+    selected: list[str] = []
+    more = False
+    count = 0
+    try:
+        with open(target, encoding="utf-8", newline="") as handle:
+            for count, line in enumerate(handle, start=1):
+                if count > last:
+                    more = True
+                    break
+                if count >= start:
+                    selected.append(line.rstrip("\r\n"))
+    except (OSError, UnicodeDecodeError) as exc:
+        return f"ERROR: {exc}"
+    if not selected:
+        return f"{target} has {count} total lines; requested start_line={start} is past EOF{note}"
+    end = start + len(selected) - 1
+    _view(path=str(target), start_line=start, end_line=end, total_lines=None, lines=selected)
+    footer = ""
+    if more:
+        footer = "\n" + _PROMPTS['fs_read_streamed_more_lines_follow'].format(
+            size=size, call=_read_call(target, end + 1))
+    body = _format_numbered_lines(selected, start) if numbered else "\n".join(selected)
+    return Output(f"{body}{footer}{note}")
+
+
 def _read_call(target: Path, start_line: int, end_line: int | None = None) -> str:
     """JSON arguments for a follow-up `read` call, in the public schema's shape."""
-    rng: dict[str, int] = {"start_line": start_line}
+    args: dict[str, str | int] = {"file_path": str(target), "start_line": start_line}
     if end_line is not None:
-        rng["end_line"] = end_line
-    return json.dumps({"file_path": str(target), "range": rng})
+        args["end_line"] = end_line
+    return json.dumps(args)
 
 
 read = fs_read
@@ -796,8 +1032,6 @@ def _normalize_edit(raw: object, label: str) -> tuple[str, str, bool] | str:
     if old is None or new is None:
         return f"ERROR: {label}every edit requires old_string and new_string"
     old, new = str(old), str(new)
-    if old == new:
-        return f"ERROR: {label}old_string and new_string must be different"
     return old, new, bool(raw.get("replace_all", False))
 
 
@@ -1062,11 +1296,8 @@ def _apply_edit(
     new_norm = _normalize_line_endings(new, line_ending)
     if not old_norm:
         return f"ERROR: {label}old_string cannot be empty"
-    if old_norm == new_norm:
-        return (
-            f"ERROR: {label}old_string and new_string are identical after "
-            "line-ending normalization, so this edit would not change the file"
-        )
+    # patch leaves out an edit whose old_string equals its new_string before
+    # it gets here, so every edit applied changes the text.
     haystack, needle, origin = text, old_norm, None
     occurrences = _count_overlapping(text, old_norm)
     if occurrences == 0 and context.edit_fuzzy:
@@ -1145,12 +1376,14 @@ def patch(
         patch(file_path, edits=[{old_string, new_string, replace_all}, ...])
 
     Both forms are ONE code path: same read-before-edit guard, same match rules
-    (must exist, must be unique unless replace_all, must differ from new_string),
-    one snapshot, one write. Batch validation is all-or-nothing: every edit is
-    validated and applied in memory first, so a miss, an ambiguity or a no-op
-    anywhere in the list writes nothing and names the offending edit. The final
-    filesystem write is not crash-atomic. Mixing the two forms is an error, never
-    a silent precedence rule.
+    (must exist, must be unique unless replace_all), one snapshot, one write.
+    An edit whose old_string equals its new_string once line endings match the
+    file's changes nothing: it is left out and the result names it, and a call
+    whose every edit is one writes nothing and says so. Batch validation is
+    all-or-nothing: every other edit is validated and applied in memory first,
+    so a miss or an ambiguity anywhere in the list writes nothing and names the
+    offending edit. The final filesystem write is not crash-atomic. Mixing the
+    two forms is an error, never a silent precedence rule.
     """
     assert context is not None
     raw_path = file_path or path
@@ -1188,7 +1421,7 @@ def patch(
     # Reject a non-regular target by type before any read: opening a FIFO with
     # no writer parks in open() forever, so read_bytes() never returns.
     if not target.exists():
-        return f"ERROR: no such file: {target}"
+        return _no_such_file(context, target)
     if not target.is_file():
         return f"ERROR: not a regular file: {target}"
     try:
@@ -1212,7 +1445,12 @@ def patch(
         seen_ranges = [(1, total_lines)]
     replacements = 0
     fuzzy_edits = 0
+    unchanged: list[int] = []
     for index, (old_text, new_text, edit_replace_all) in enumerate(pending, start=1):
+        line_ending = _detect_line_ending(updated)
+        if _normalize_line_endings(old_text, line_ending) == _normalize_line_endings(new_text, line_ending):
+            unchanged.append(index)
+            continue
         applied = _apply_edit(
             updated,
             old_text,
@@ -1230,6 +1468,9 @@ def patch(
         updated, count, seen_ranges, fuzzy = applied
         replacements += count if edit_replace_all else 1
         fuzzy_edits += fuzzy
+
+    if len(unchanged) == len(pending):
+        return _PROMPTS['patch_nothing_changed'].format(target=target, content_hash=source_hash)
 
     try:
         data = updated.encode("utf-8")
@@ -1251,12 +1492,16 @@ def patch(
     if len(diff) > 4000:
         diff = diff[:4000] + "\n... [diff truncated]"
     if batch:
-        summary = f"{len(pending)} edit{'s' if len(pending) != 1 else ''}"
+        applied_edits = len(pending) - len(unchanged)
+        summary = f"{applied_edits} edit{'s' if applied_edits != 1 else ''}"
     else:
         summary = f"{replacements} replacement{'s' if replacements != 1 else ''}"
     if fuzzy_edits:
         who = f"{fuzzy_edits} of them" if batch else "old_string"
         summary += f", {who} matched after normalising quotes, dashes and whitespace"
+    if unchanged:
+        named = f"edit{'s' if len(unchanged) != 1 else ''} {', '.join(map(str, unchanged))}"
+        summary += _PROMPTS['patch_edits_unchanged'].format(edits=named)
     return f"patched {target} ({summary}, hash {content_hash})\n{diff}"
 
 
@@ -1547,7 +1792,7 @@ def fs_search(
     file_type = rg_flags.get("type", file_type)
     root = context.resolve_path(path or ".")
     if not root.exists():
-        return f"ERROR: Path does not exist: {root}"
+        return f"ERROR: Path does not exist: {root}{_missing_path_hint(context, root)}"
     try:
         root_stat = root.stat()
     except OSError as exc:
@@ -2172,21 +2417,15 @@ def tools(*, result_wrapper=_offering_path_skills) -> tuple[Tool, ...]:
             result_wrapper(fs_read),
             {
                 "file_path": {"type": "string", "description": _PROMPTS['tools_absolute_relative_or_path_to_a']},
-                "range": {
-                    "type": "object",
-                    "properties": {
-                        "start_line": {"type": "integer", "description": _PROMPTS['tools_optional_1_based_first_line_for']},
-                        "end_line": {"type": "integer", "description": _PROMPTS['tools_optional_inclusive_1_based_last_line']},
-                        "start_byte": {"type": "integer", "description": _PROMPTS['tools_0_based_offset_of_the_first']},
-                        "end_byte": {"type": "integer", "description": _PROMPTS['tools_optional_0_based_offset_one_past']},
-                    },
-                    "additionalProperties": False,
-                    "description": _PROMPTS['tools_optional_line_range_or_byte_range'],
-                },
+                "start_line": {"type": "integer", "description": _PROMPTS['tools_optional_1_based_first_line_for']},
+                "end_line": {"type": "integer", "description": _PROMPTS['tools_optional_inclusive_1_based_last_line']},
                 "show_line_numbers": {"type": "boolean", "default": True, "description": _PROMPTS['tools_for_text_output_prefix_each_line']},
+                "start_byte": {"type": "integer", "description": _PROMPTS['tools_0_based_offset_of_the_first']},
+                "end_byte": {"type": "integer", "description": _PROMPTS['tools_optional_0_based_offset_one_past']},
             },
             required=("file_path",),
             read_only=True,
+            prepare_args=prepare_read_arguments,
         ),
         Tool(
             "write",
@@ -2248,7 +2487,7 @@ def tools(*, result_wrapper=_offering_path_skills) -> tuple[Tool, ...]:
             {
                 "file_path": {"type": "string", "description": _PROMPTS['tools_file_path_to_edit']},
                 "old_string": {"type": "string", "description": _PROMPTS['tools_exact_text_to_replace_required_unless']},
-                "new_string": {"type": "string", "description": _PROMPTS['tools_replacement_text_must_differ_from_old']},
+                "new_string": {"type": "string", "description": _PROMPTS['tools_replacement_text_required_unless_edits_is']},
                 "replace_all": {"type": "boolean", "default": False, "description": _PROMPTS['tools_replace_every_occurrence_instead_of_requiring']},
                 "edits": {
                     "type": "array",
@@ -2256,7 +2495,7 @@ def tools(*, result_wrapper=_offering_path_skills) -> tuple[Tool, ...]:
                         "type": "object",
                         "properties": {
                             "old_string": {"type": "string", "description": _PROMPTS['tools_exact_text_to_replace']},
-                            "new_string": {"type": "string", "description": _PROMPTS['tools_replacement_text_must_differ_from_old_2']},
+                            "new_string": {"type": "string", "description": _PROMPTS['tools_replacement_text']},
                             "replace_all": {"type": "boolean", "default": False, "description": _PROMPTS['tools_replace_every_occurrence_of_this_edit']},
                         },
                         "required": ["old_string", "new_string"],
@@ -2273,7 +2512,7 @@ def tools(*, result_wrapper=_offering_path_skills) -> tuple[Tool, ...]:
                 "properties": {
                     "file_path": {"type": "string", "description": _PROMPTS['tools_file_path_to_edit_2']},
                     "old_string": {"type": "string", "description": _PROMPTS['tools_exact_text_to_replace_pair_with']},
-                    "new_string": {"type": "string", "description": _PROMPTS['tools_replacement_text_must_differ_from_old_3']},
+                    "new_string": {"type": "string", "description": _PROMPTS['tools_replacement_text']},
                     "replace_all": {"type": "boolean", "default": False, "description": _PROMPTS['tools_replace_every_occurrence_instead_of_requiring_2']},
                     "edits": {
                         "type": "array",
@@ -2282,7 +2521,7 @@ def tools(*, result_wrapper=_offering_path_skills) -> tuple[Tool, ...]:
                             "type": "object",
                             "properties": {
                                 "old_string": {"type": "string", "description": _PROMPTS['tools_exact_text_to_replace_2']},
-                                "new_string": {"type": "string", "description": _PROMPTS['tools_replacement_text_must_differ_from_old_4']},
+                                "new_string": {"type": "string", "description": _PROMPTS['tools_replacement_text']},
                                 "replace_all": {"type": "boolean", "default": False, "description": _PROMPTS['tools_replace_every_occurrence_of_this_edit_2']},
                             },
                             "required": ["old_string", "new_string"],
