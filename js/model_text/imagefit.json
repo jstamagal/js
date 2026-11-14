@@ -1,0 +1,7 @@
+{
+  "image_note": "[Image: {parts}]",
+  "image_resized": "original {original_width}x{original_height}, displayed at {width}x{height}. Multiply coordinates by {scale} to map to the original image.",
+  "image_reencoded": "Re-encoded as {encoding} to fit the 5 MB image limit.",
+  "encoding_palette_png": "a 256-colour PNG",
+  "encoding_jpeg": "JPEG at quality {quality}"
+}

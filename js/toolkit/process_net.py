@@ -893,7 +893,7 @@ def _format_payload(
     if image_mime:
         if context.vision_enabled and not truncated:
             marker_path = source_path or _temp_image_path(image_mime, data)
-            return _image_marker(marker_path, image_mime, size)
+            return _image_marker(marker_path, image_mime, size, data)
         return _descriptor("IMAGE_RESPONSE", image_mime, size, truncated)
 
     if not _is_text_response(content_type, data):

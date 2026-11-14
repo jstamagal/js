@@ -136,8 +136,8 @@ def read_image(
     run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
 ) -> bytes:
     """The image bytes on the clipboard. Raises ClipboardError when there is no
-    clipboard, no tool to read it, no image on it, or an image over
-    `FILE_BYTES_MAX`."""
+    clipboard, no tool to read it, or no image on it. A large image is fitted
+    when it is attached (`js.imagefit`)."""
     try:
         argv = clipboard_command(settings, env)
     except ValueError as exc:
@@ -156,9 +156,6 @@ def read_image(
     mime = _detect_visual_mime(_DETECT_NAME, data[:16])
     if done.returncode != 0 or not mime or not mime.startswith("image/"):
         raise ClipboardError(msgs.CLIPBOARD_NO_IMAGE)
-    limit = int(_settings.knob(settings, "FILE_BYTES_MAX"))
-    if len(data) > limit:
-        raise ClipboardError(msgs.CLIPBOARD_IMAGE_TOO_LARGE, size=len(data), limit=limit)
     return data
 
 

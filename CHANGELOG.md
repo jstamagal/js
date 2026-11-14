@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Large images are fitted, not refused, as Claude Code does.** An image read,
+  attached, pasted or returned by a tool was refused over `FILE_BYTES_MAX`
+  (2 MB) or dropped over `TOOL_MEDIA_MAX`. Now one over 2000 px on a side is
+  sent scaled to fit 2000 x 2000, aspect kept, and one over 3.75 MiB is
+  re-encoded smaller (palette PNG, then JPEG at quality 80 down to 20, last at
+  1000 px wide). The text says what changed and how to map coordinates back
+  to the original; the file on disk is never touched. New `js/imagefit.py`.
 - **A failed `write` keeps its content; `from_held` finishes it.** Since
   Sep 15, 223 writes failed, and in 111 the model regenerated 80% or more of
   the same content, sometimes 45-80 KB that a local GPU took 20 minutes to

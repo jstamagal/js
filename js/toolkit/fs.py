@@ -22,6 +22,7 @@ from pathlib import Path
 from collections.abc import Callable, Iterable
 
 from .. import held
+from .. import imagefit
 from .. import jail
 from .. import settings as _settings
 from . import policy
@@ -289,8 +290,15 @@ def _visual_fallback(path: Path, mime: str, size: int) -> str:
     return f"VISUAL_FILE {path} mime={mime} size={size} bytes (vision disabled; no image bytes returned)"
 
 
-def _image_marker(path: Path, mime: str, size: int) -> str:
-    return f"{_IMAGE_RESULT_PREFIX}{path}\t{mime}\tVISUAL_FILE {path} mime={mime} size={size} bytes"
+def _image_marker(path: Path, mime: str, size: int, data: bytes) -> str:
+    """The marker the model client sends ``path``'s image ``data`` by. An
+    image over imagefit's limits is sent as its fitted copy, and the text
+    says what changed."""
+    stub = f"VISUAL_FILE {path} mime={mime} size={size} bytes"
+    fitted = imagefit.fit(data, mime)
+    if fitted is None or not fitted.changed:
+        return f"{_IMAGE_RESULT_PREFIX}{path}\t{mime}\t{stub}"
+    return f"{_IMAGE_RESULT_PREFIX}{imagefit.stored(fitted)}\t{fitted.mime}\t{stub} {fitted.note}"
 
 
 def _read_pdf_text(path: Path, context: ToolContext) -> tuple[str, bytes]:
@@ -700,8 +708,6 @@ def fs_read(
             return f"ERROR: byte ranges read text files; {target} is not text"
         return _read_byte_range(target, context, max(0, byte_start), None if byte_end == -1 else byte_end)
     if mime and mime.startswith("image/"):
-        if size > context.max_file_bytes:
-            return f"ERROR: image size ({size} bytes) exceeds the maximum allowed size of {context.max_file_bytes} bytes"
         try:
             data = _read_regular_bytes(target)
         except OSError as exc:
@@ -710,7 +716,7 @@ def fs_read(
         context.remember_read(target, content_hash)
         if not context.vision_enabled:
             return _visual_fallback(target, mime, size)
-        return _image_marker(target, mime, size)
+        return _image_marker(target, mime, size, data)
 
     if mime == "application/pdf":
         # A PDF is read whole — pdftotext extracts the entire document and has no

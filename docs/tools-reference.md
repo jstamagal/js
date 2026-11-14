@@ -49,8 +49,14 @@ clipped, spilled, cleared by compaction or summarised away is not repeated, and
 the lines come back in full. Any write, patch or undo of the file starts over.
 
 Images return either a vision-disabled text stub or an internal image marker
-that the runtime expands for vision models. PDFs use `pdftotext`. Both are
-refused when the file exceeds `FILE_BYTES_MAX`.
+that the runtime expands for vision models. An image is never refused for its
+size: one over 2000 px on a side is sent scaled to fit 2000 x 2000 (aspect
+kept), and one over 3.75 MiB is re-encoded smaller (palette PNG, then JPEG at
+falling quality), as Claude Code does. The text then says
+`[Image: original WxH, displayed at wxh. Multiply coordinates by N ...]`; the
+file on disk is unchanged. Attachments, pasted images and tool image blocks
+are fitted the same way. PDFs use `pdftotext` and are refused when the file
+exceeds `FILE_BYTES_MAX`.
 
 A notebook (`.ipynb`) read without a range shows its cells: index, id (the
 nbformat `id`, or a collision-free `cell-N` positional name before the first

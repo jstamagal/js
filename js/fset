@@ -255,7 +255,6 @@ fset CLIPBOARD_NONE %C07%G%C No clipboard: no Wayland or X11 display. PASTE_IMAG
 fset CLIPBOARD_TOOL_MISSING %C07%G%C Clipboard image not read: $0- is not installed.
 fset CLIPBOARD_READ_FAILED %C07%G%C Clipboard image not read: $0: $1-
 fset CLIPBOARD_NO_IMAGE %C07%G%C No image on the clipboard.
-fset CLIPBOARD_IMAGE_TOO_LARGE %C07%G%C Clipboard image is $0 bytes. The maximum is $1- bytes.
 fset NOT_SAVED_NO_RESUME %C07%G%C Session not saved. Resume unavailable.
 fset RESUME_MODEL_FALLBACK %C07%G%C No login for $0, the model this session last ran on. Continuing on $1-.
 fset EMPTY_SESSION %C07%G%C Empty session. Nothing to resume: $0-
