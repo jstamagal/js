@@ -91,6 +91,27 @@ def test_an_unread_existing_file_holds_the_content_until_read_and_from_held(tmp_
     assert not kept.path.exists()
 
 
+def test_a_committed_held_id_never_names_later_content(tmp_path):
+    context = ToolContext(cwd=tmp_path, file_require_read=True)
+    target = tmp_path / "notes.txt"
+    target.write_text("old\n")
+
+    first = held_id(tool("write", context, file_path=str(target), content=CONTENT))
+    tool("read", context, file_path=str(target))
+    assert not tool("write", context, file_path=str(target), from_held=first).startswith("ERROR")
+
+    other = tmp_path / "other.txt"
+    other.write_text("x\n")
+    second = held_id(tool("write", context, file_path=str(other), content=CONTENT.upper()))
+
+    assert second != first
+    with pytest.raises(held.HeldError):
+        held.load(context, first)
+    stale = tool("write", context, file_path=str(target), from_held=first)
+    assert stale.startswith("ERROR")
+    assert target.read_bytes() == CONTENT.encode("utf-8")
+
+
 def test_short_content_is_not_held(tmp_path):
     context = ToolContext(cwd=tmp_path, file_require_read=True)
     target = tmp_path / "notes.txt"

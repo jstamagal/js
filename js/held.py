@@ -3,7 +3,9 @@ model finishes the write by naming it (`from_held`) instead of sending it again.
 
 A held file lives in `held_dir()`: the jail's ~/.js/tmp under `js -C` (the
 model can read it there), else ~/.js/tmp. It is mode 0600 and named
-`<session>-<n>-<basename>`; its id is `h<n>`, unique within the session.
+`<session>-<n>-<basename>`; its id is `h<n>`, never reused within the
+session: `.<session>.seq` keeps the last number handed out, so an id whose
+content was written and deleted cannot later name other content.
 The write that commits it deletes it. Every held file this process made is
 deleted when the process exits, and any held file older than HELD_TTL
 seconds is deleted when content is next held or loaded.
@@ -76,6 +78,8 @@ def _sweep(directory: Path, context: Any) -> None:
         return
     oldest = time.time() - ttl
     for entry in directory.iterdir():
+        if entry.name.endswith(".seq"):
+            continue
         try:
             if entry.is_file() and entry.stat().st_mtime < oldest:
                 entry.unlink()
@@ -94,6 +98,18 @@ def _session_files(directory: Path, session: str) -> dict[int, Path]:
         if number.isdigit():
             out[int(number)] = entry
     return out
+
+
+def _next_number(directory: Path, session: str, files: dict[int, Path]) -> int:
+    """One more than any number this session has handed out. Caller holds _LOCK."""
+    seq = directory / f".{session}.seq"
+    try:
+        last = int(seq.read_text(encoding="ascii").strip() or 0)
+    except (OSError, ValueError):
+        last = 0
+    number = max(last, max(files, default=0)) + 1
+    seq.write_text(str(number), encoding="ascii")
+    return number
 
 
 def _remove_made() -> None:
@@ -124,7 +140,7 @@ def hold(context: Any, text: str, file_path: str | None) -> Held:
                     return Held(f"h{number}", existing, stored)
             except OSError:
                 continue
-        number = max(files, default=0) + 1
+        number = _next_number(directory, session, files)
         base = re.sub(r"[^\w.-]", "_", Path(str(file_path or "")).name).lstrip(".") or "content"
         target = directory / f"{session}-{number}-{base}"
         temporary = directory / f".{target.name}.{os.getpid()}.{threading.get_ident()}.tmp"
