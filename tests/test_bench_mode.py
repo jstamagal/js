@@ -197,10 +197,13 @@ def test_bench_tools_keep_telemetry_order_and_unknown_marker(tmp_path, monkeypat
             "cached_tokens", "ttft_s", "stream_s", "tok_per_s", "wall_s", "finish_reason", "tools"} == row.keys()
 
 
-def test_bench_json_and_json_stream_share_payload(tmp_path, monkeypatch, capsys):
+def test_plain_bench_json_and_json_stream_share_payload(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     _write_agent(tmp_path)
     monkeypatch.setattr(cli.runtime.model_client, "stream_model_async", _stream_stub([]))
+    assert cli.main(["--bench", "jokertest"]) == 0
+    raw = capsys.readouterr().out
+    plain = json.loads(raw[raw.rindex("\n{") + 1:])
     assert cli.main(["--bench", "jokertest", "--json"]) == 0
     final = json.loads(capsys.readouterr().out)
     assert cli.main(["--bench", "jokertest", "--json-stream"]) == 0
@@ -208,10 +211,10 @@ def test_bench_json_and_json_stream_share_payload(tmp_path, monkeypatch, capsys)
     assert events[0]["type"] == "start"
     end = events[-1]
     assert end.pop("type") == "end"
-    for payload in (final, end):
+    for payload in (plain, final, end):
         for row in payload["benchmarks"]:
             row.pop("wall_s")
-    assert final == end
+    assert plain == final == end
 
 
 def test_bench_parallel_calls_keep_model_order_and_full_output(tmp_path, monkeypatch, capsys):

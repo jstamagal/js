@@ -1,23 +1,4 @@
-"""Offline tests for the picker-facing JSON flags in js.cli.
-
-Covers the three machine-readable flags external pickers consume:
-
-  --providers-json  -> cli._providers_json
-  --logins-json     -> cli._logins_json
-  --models-json     -> cli._models_json, which main wraps in {"error": ...}/rc=1
-
-The security contract under test lives in _logins_json:
-codex_refresh_token is ALWAYS nulled, has_api_key / has_codex_refresh_token
-expose only booleans, and provider_api_key is nulled for codex providers. Note
-the actual behavior (asserted below, not assumed): provider_api_key is NOT
-nulled for non-codex logins — only codex access JWTs are stripped, because for
-ordinary providers the saved key is what the picker needs to reconnect.
-
---models-json's success path calls logins.test_login, which does network I/O
-(asyncio.run(fetch_models)); offline we exercise (a) its error wrap with a real
-credential-less failure and (b) its JSON envelope shape with the network
-boundary stubbed, mirroring how test_cli_prompt_mode stubs stream_model.
-"""
+"""JSON listing options and provider credential masking."""
 
 from __future__ import annotations
 
@@ -46,7 +27,7 @@ def _stdout_json(capsys) -> object:
 
 
 # --------------------------------------------------------------------------
-# --providers-json
+# --list-providers --json
 # --------------------------------------------------------------------------
 
 def test_providers_json_shape_and_sources(monkeypatch, tmp_logins_dir):
@@ -90,7 +71,7 @@ def test_providers_json_custom_saved_only_provider_appended(monkeypatch, tmp_log
 
 
 # --------------------------------------------------------------------------
-# --logins-json  (secret masking is the point of this flag)
+# --list-logins --json  (secret masking is the point of this flag)
 # --------------------------------------------------------------------------
 
 def test_logins_json_empty_store(tmp_logins_dir):
@@ -191,7 +172,7 @@ def test_json_flags_print_their_payload_as_one_json_line(monkeypatch, capsys):
 
 
 # --------------------------------------------------------------------------
-# --models-json
+# --list-models --json
 # --------------------------------------------------------------------------
 
 def test_models_json_shape_with_stubbed_provider(monkeypatch, tmp_logins_dir):
@@ -200,7 +181,7 @@ def test_models_json_shape_with_stubbed_provider(monkeypatch, tmp_logins_dir):
     logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="sk-test"))
     monkeypatch.setattr(cli.logins, "test_login", lambda login: ["m-alpha", "m-beta"])
 
-    assert cli._models_json("deepseek") == {"models": ["m-alpha", "m-beta"]}
+    assert cli._models_json("deepseek") == {"models": ["deepseek/m-alpha", "deepseek/m-beta"]}
 
 
 def test_models_json_error_path_is_json_and_returns_one(tmp_logins_dir, capsys, monkeypatch):
@@ -220,7 +201,7 @@ def test_models_json_error_path_is_json_and_returns_one(tmp_logins_dir, capsys, 
 
 
 def test_models_json_no_arg_uses_config_provider(monkeypatch, tmp_logins_dir, capsys):
-    # `--models-json` with no value (const="") sends provider_arg=None, which
+    # `--list-models --json` with no value (const="") sends provider_arg=None, which
     # builds a Config and feeds cfg.provider_id to _models_for_provider
     #. Stub the network boundary and capture the cfg.
     seen: list[str | None] = []
@@ -244,7 +225,7 @@ def test_models_json_no_arg_uses_config_provider(monkeypatch, tmp_logins_dir, ca
     payload = _stdout_json(capsys)
 
     assert rc == 0
-    assert payload == {"models": ["cfg-model"]}
+    assert payload == {"models": ["that-provider/cfg-model"]}
     assert seen == ["that-provider"]
 
 
@@ -327,3 +308,15 @@ def test_verify_json(monkeypatch, capsys):
     monkeypatch.setattr(verify, "verify", lambda agent: ["missing agent"])
     assert cli.main(["--verify", "bad", "--json"]) == 1
     assert _stdout_json(capsys) == {"ok": False, "errors": ["missing agent"]}
+
+
+def test_text_and_json_model_listings_cover_the_same_cached_routes(monkeypatch, tmp_logins_dir, capsys):
+    logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="sk"))
+    logins.save_login(logins.Login(provider_id="opencode-go", provider_api_key="sk"))
+    logins.cache_models("deepseek", ["a"])
+    logins.cache_models("opencode-go", ["b"])
+    monkeypatch.setattr(cli.logins, "test_login", lambda login: pytest.fail("cached listing went online"))
+    cfg = SimpleNamespace(provider_id=None)
+    assert cli._print_model_list(None, cfg) == 0
+    text = capsys.readouterr().out.splitlines()
+    assert cli._models_json(None, cfg) == {"models": text}

@@ -48,6 +48,8 @@ def _requests(monkeypatch):
 def test_printed_continue_command_reproduces_custom_endpoint_and_overrides(tmp_path, monkeypatch, capsys, overrides):
     monkeypatch.chdir(tmp_path)
     requests = _requests(monkeypatch)
+    logins.save_login(logins.Login(provider_id="other-login", sdk_provider_id="openai",
+                                   provider_base_url="http://local.test/v1", provider_api_key="another-key"))
     assert cli.main(["-p", "first", "-u", "responses+http://model:sk-secret-secret-secret@local.test/v1",
                      "-r", "spoon", "--temperature", "0.65", "--top-k", "37",
                      "--dry-sequence-breakers", '["\\n", ":"]', *overrides]) == 0

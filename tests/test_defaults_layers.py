@@ -141,3 +141,21 @@ def test_parameter_prose_follows_the_selected_tool_file(tmp_path, monkeypatch):
     assert descriptions.load_parameter_description('fixture', 'path') == 'Home parameter.'
     _write(paths.home() / 'tool_descriptions/fixture.md', '')
     assert descriptions.load_parameter_description('fixture', 'path') == ''
+
+
+def test_parameter_missing_value_names_its_source_file(tmp_path):
+    path = _write(paths.home() / 'tool_descriptions/fixture.md',
+                  'Contract.\n<!--parameters-->\n### path\n{{REQUIRED}}\n')
+    with pytest.raises(ValueError) as error:
+        descriptions.load_parameter_description('fixture', 'path')
+    assert str(path) in str(error.value)
+    assert 'REQUIRED' in str(error.value)
+
+
+def test_invalid_tool_description_names_its_source_file(tmp_path):
+    path = paths.home() / 'tool_descriptions/fixture.md'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b'\xff')
+    with pytest.raises(ValueError) as error:
+        descriptions.load_description('fixture')
+    assert str(path) in str(error.value)

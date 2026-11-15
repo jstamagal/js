@@ -1355,7 +1355,7 @@ def test_generated_prompt_emits_machine_session_metadata_even_when_quiet(monkeyp
     assert Path(metadata["path"]).stem == metadata["session_id"]
 
 
-def test_list_table_and_jsonl_cover_same_nested_records_without_config(monkeypatch, tmp_path, capsys):
+def test_list_table_and_json_cover_same_nested_records_without_config(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
     old = session_store.folder_for(tmp_path / "old") / "legacy.jsonl"
     nested = session_store.folder_for(tmp_path) / "caller" / "nested.jsonl"
@@ -1366,13 +1366,13 @@ def test_list_table_and_jsonl_cover_same_nested_records_without_config(monkeypat
     record_session_start(nested, cwd=tmp_path, caller_key="job-key", job_id=9, agent="agent")
     monkeypatch.setattr(cli, "_from_env", lambda *_args, **_kwargs: pytest.fail("list loaded config"))
 
-    assert cli._print_session_list(json_lines=False) == 0
+    assert cli._print_session_list(as_json=False) == 0
     table = capsys.readouterr().out
     assert "legacy" in table and "caller/nested" in table
     assert "job-key" in table and str(tmp_path) in table
 
-    assert cli._print_session_list(json_lines=True) == 0
-    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert cli._print_session_list(as_json=True) == 0
+    records = json.loads(capsys.readouterr().out)
     assert {(item["agent"], item["name"]) for item in records} == {
         (None, "legacy"),
         ("agent", "caller/nested"),
@@ -1398,11 +1398,11 @@ def test_list_is_newest_first_across_folders_in_local_time(monkeypatch, tmp_path
             os.utime(path, (now - age, now - age))
             made[name] = now - age
 
-        assert cli._print_session_list(json_lines=True) == 0
-        records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        assert cli._print_session_list(as_json=True) == 0
+        records = json.loads(capsys.readouterr().out)
         assert [item["name"] for item in records] == ["b-new", "a-mid", "b-old"]
 
-        assert cli._print_session_list(json_lines=False) == 0
+        assert cli._print_session_list(as_json=False) == 0
         rows = capsys.readouterr().out.splitlines()[1:]
         assert [row.split()[1] for row in rows] == ["b-new", "a-mid", "b-old"]
         newest = rows[0]
@@ -1415,7 +1415,7 @@ def test_list_is_newest_first_across_folders_in_local_time(monkeypatch, tmp_path
 
 def test_list_flag_prints_the_session_list(monkeypatch):
     calls: list[bool] = []
-    monkeypatch.setattr(cli, "_print_session_list", lambda *, json_lines: calls.append(json_lines) or 0)
+    monkeypatch.setattr(cli, "_print_session_list", lambda *, as_json: calls.append(as_json) or 0)
 
     assert cli.main(["--list-sessions", "--json"]) == 0
     assert calls == [True]
@@ -1441,14 +1441,14 @@ def test_list_reports_subprocess_session_live_only_while_process_alive(monkeypat
         while not ready.exists() and time.monotonic() < deadline:
             time.sleep(0.01)
         assert ready.exists()
-        assert cli._print_session_list(json_lines=True) == 0
-        assert json.loads(capsys.readouterr().out)["in_flight"] is True
+        assert cli._print_session_list(as_json=True) == 0
+        assert json.loads(capsys.readouterr().out)[0]["in_flight"] is True
     finally:
         process.terminate()
         process.wait(timeout=5)
 
-    assert cli._print_session_list(json_lines=True) == 0
-    assert json.loads(capsys.readouterr().out)["in_flight"] is False
+    assert cli._print_session_list(as_json=True) == 0
+    assert json.loads(capsys.readouterr().out)[0]["in_flight"] is False
 
 
 def test_json_is_scoped_to_list(monkeypatch):

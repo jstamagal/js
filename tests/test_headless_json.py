@@ -261,3 +261,49 @@ def test_streaming_reasoning_and_retry_ignore_display_preferences(monkeypatch, c
     events = _events(capsys.readouterr().out)
     assert next(e for e in events if e["type"] == "reasoning")["delta"] == "full private reasoning"
     assert next(e for e in events if e["type"] == "retry")["attempt"] == 1
+
+
+def test_prompt_load_failure_starts_then_errors_before_continue_hint(monkeypatch, capsys):
+    monkeypatch.setattr(cli.P, "load_configured_prompt_spec", lambda *a, **kw: (_ for _ in ()).throw(ValueError("broken persona")))
+    assert cli.main(["-p", "hi", "--json-stream"]) == 2
+    events = _events(capsys.readouterr().out)
+    assert [event["type"] for event in events] == ["start", "error", "end"]
+    assert "broken persona" in events[1]["message"]
+    assert "Continue:" not in events[1]["message"]
+
+
+def test_swarm_run_uses_only_the_declared_stream_event_types(monkeypatch, capsys):
+    from types import SimpleNamespace
+    class Bus:
+        name = "agent"
+        stop_seen = False
+        def __init__(self, name):
+            pass
+        def sleep(self):
+            self.stop_seen = True
+            return [SimpleNamespace(kind=cli.swarm_mod.STOP)]
+        def steer(self):
+            return []
+    monkeypatch.setattr(cli.swarm_mod, "Agent", Bus)
+    monkeypatch.setattr(cli.swarm_mod, "with_bus_tools", lambda registry: registry)
+    code, events, _ = _run(monkeypatch, capsys, [_reply("idle")],
+                           ["-p", "hi", "--no-save", "--json-stream", "--swarm", "bus/agent"])
+    assert code == 0
+    assert events[0]["type"] == "start" and events[-1]["type"] == "end"
+    assert {event["type"] for event in events} <= {"start", "reasoning", "text", "tool_call", "tool_result", "retry", "error", "end"}
+
+
+@pytest.mark.parametrize('flag', ['--json', '--json-stream'])
+def test_final_usage_includes_tail_compaction(monkeypatch, capsys, flag):
+    def compact(cfg, state):
+        usage.record(ai.types.usage.Usage(input_tokens=1000, output_tokens=20),
+                     model=cfg.model, provider_id=cfg.provider_id,
+                     session_file=cfg.session_file)
+
+    monkeypatch.setattr(cli, '_maybe_auto_compact', compact)
+    code, events, error = _run(monkeypatch, capsys, [_reply('done', use=(10, 5))],
+                               ['-p', 'hello', flag])
+    assert code == 0, error
+    assert events[-1]['usage']['calls'] == 2
+    assert events[-1]['usage']['input_tokens'] == 1010
+    assert events[-1]['usage']['output_tokens'] == 25

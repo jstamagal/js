@@ -38,7 +38,7 @@ def test_actual_cli_session_list_json_is_valid_utf8(tmp_path, monkeypatch, field
     )
 
     assert process.returncode == 0, process.stderr.decode("utf-8", errors="replace")
-    [record] = [json.loads(line) for line in process.stdout.decode("utf-8", errors="strict").splitlines()]
+    [record] = json.loads(process.stdout.decode("utf-8", errors="strict"))
     assert record["title"] == title
     assert record["cwd"] == cwd
     assert record["agent"] == agent

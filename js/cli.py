@@ -527,13 +527,12 @@ def _invocation_agent(args: argparse.Namespace, presets: list[str]) -> str:
     )
 
 
-def _print_session_list(*, json_lines: bool) -> int:
+def _print_session_list(*, as_json: bool) -> int:
     """Every session, newest first; the table shows times in local time as the
     picker does."""
     records = sorted(catalog_sessions(_paths.sessions_root()), key=lambda record: -record["mtime"])
-    if json_lines:
-        for record in records:
-            print(json.dumps(record, separators=(",", ":"), ensure_ascii=True))
+    if as_json:
+        print(json.dumps(records, separators=(",", ":"), ensure_ascii=True))
         return 0
 
     headings = tuple(msgs.LIST_HEADINGS.words().split())
@@ -2733,7 +2732,11 @@ def _run_prompt(prompt: str | None, **kwargs) -> int:
     line prints on every exit: an answer, no answer, an error, ^C."""
     opened: dict = {}
     try:
-        return _prompt_run(prompt, opened=opened, **kwargs)
+        code = _prompt_run(prompt, opened=opened, **kwargs)
+        events = kwargs.get("events")
+        if events is not None and code != 0 and not events.errored:
+            _emit_failure(events, getattr(sys.stderr, "last_line", ""), code)
+        return code
     finally:
         if (say_continue := opened.get("say")) is not None:
             say_continue()
@@ -3013,12 +3016,7 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
                 _persist_turn_messages(cfg, messages, reasoning_override)
                 with _transcript_stdio(telemetry):
                     _maybe_auto_compact(cfg, auto_state)
-            if events is not None:
-                events.emit("sleep", agent=bus.name)
             landed = bus.sleep()
-            if events is not None:
-                events.emit("wake", agent=bus.name, count=len(landed), seqs=[m.seq for m in landed if m.seq],
-                            kinds=sorted({m.kind for m in landed}))
             if all(m.kind == swarm_mod.STOP for m in landed):
                 return
             wake = M.note_time(bus.wake_message(landed))
@@ -3167,7 +3165,7 @@ def _say_continue(telemetry: runtime.Telemetry, hint: str, *, resume_prefix: str
         words += ["--agent", selected_agent]
     if cfg is not None:
         saved_login = login_defaults.login_for(cfg.provider_id, cfg.provider_base_url)
-        if cfg.provider_base_url and saved_login is None:
+        if cfg.provider_base_url and (saved_login is None or saved_login.provider_id != cfg.provider_id):
             wire = model_client.wire_name(cfg.provider_id)
             scheme, _, host = cfg.provider_base_url.partition("://")
             words += ["-u", f"{wire}+{scheme}://{cfg.model}@{host}"]
@@ -3232,7 +3230,10 @@ def _json_run(run: Callable[[], int], *, stream: bool = True) -> int:
         "effort": None if opened is None else opened.get("effort"),
         "usage": None if opened is None else opened.get("usage"),
     }
-    payload.update(ok=code == 0, exit_code=code)
+    if "benchmarks" not in payload:
+        if opened is not None and opened.get("file"):
+            payload["usage"] = usage_mod.totals(Path(opened["file"])).as_dict()
+        payload.update(ok=code == 0, exit_code=code)
     if stream:
         events.emit("end", **payload)
     else:
@@ -3241,6 +3242,8 @@ def _json_run(run: Callable[[], int], *, stream: bool = True) -> int:
 
 
 def _emit_failure(events: headless.JsonEvents, line: str, code: int) -> None:
+    if events.session is None:
+        events.emit("start", version=headless.SCHEMA_VERSION)
     message = _WARN_MARK.sub("", _ANSI.sub("", line))
     events.emit("error", message=message or f"exit {code}", retryable=False)
 
@@ -3661,21 +3664,6 @@ def _resolve_cli_model_override(cfg: Config, model: str | None) -> Config:
     )
 
 
-def _list_models_payload(provider_id: str | None, cfg: Config | None = None) -> dict:
-    if provider_id:
-        provider = providers.normalize_provider_id(provider_id) or provider_id
-        model_ids = _models_for_provider(provider, None, None)
-    elif cfg is not None:
-        provider = cfg.provider_id
-        model_ids = _models_for_provider(cfg.provider_id, cfg.provider_base_url, cfg.provider_api_key)
-    else:
-        raise ValueError("provider required")
-    return {
-        "provider_id": provider,
-        "models": model_ids,
-        "pass_via_model": [f"{provider}/{model_id}" for model_id in model_ids] if provider else list(model_ids),
-    }
-
 
 def _models_cached_or_live(provider_id: str, cfg: Config | None) -> list[str]:
     """Models for one provider, cache first (offline-friendly, fast), live on miss."""
@@ -3756,8 +3744,11 @@ def _run_model_bench(args: argparse.Namespace, presets: list[str]) -> int:
 
 
 def _models_json(provider_id: str | None, cfg: Config | None = None) -> dict:
-    payload = _list_models_payload(provider_id, cfg)
-    return {"models": payload["models"]}
+    models = []
+    for provider in _list_models_provider_ids(provider_id, cfg):
+        models.extend(f"{provider}/{model}" if provider else model
+                      for model in _models_cached_or_live(provider, cfg))
+    return {"models": models}
 
 
 def _warn_unmatched_presets(presets: list[str], *, ignore_local: bool, ignore_global: bool) -> None:
@@ -4983,11 +4974,10 @@ def _json_run_requested(args: argparse.Namespace) -> bool:
 
 
 def _agents_listing() -> list[str]:
-    roots = (getattr(_paths, "layers")() if hasattr(_paths, "layers") else (
-        Path(P.__file__).resolve().parents[1], _paths.home(), Path.cwd() / ".js"))
+    roots = _paths.layers()
     names = set()
     for root in roots:
-        directory = root / ("prompts" if root == Path(P.__file__).resolve().parents[1] else "agents")
+        directory = root / "agents"
         if directory.is_dir():
             names.update(path.name for path in directory.iterdir() if path.is_dir())
     return sorted(names)
@@ -5102,7 +5092,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         if ambiguous:
             msgs.warn(msgs.LIST_EXCLUSIVE)
             return 2
-        return _print_session_list(json_lines=args.json)
+        return _print_session_list(as_json=args.json)
     if args.last:
         if args.session is not None:
             msgs.warn(msgs.LAST_WITH_SESSION)

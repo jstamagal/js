@@ -98,10 +98,17 @@ def _description_path(name: str) -> Path:
     return path
 
 
+def _read_description(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeError as exc:
+        raise ValueError(f"invalid tool description {path}: {exc}") from None
+
+
 @cache
 def _load_description(path: Path, flags: tuple[str, ...]) -> str:
     try:
-        text = path.read_text(encoding="utf-8").strip()
+        text = _read_description(path).strip()
     except FileNotFoundError:
         raise FileNotFoundError(f"missing tool description: {path}") from None
 
@@ -117,7 +124,7 @@ def _load_description(path: Path, flags: tuple[str, ...]) -> str:
 def load_parameter_description(name: str, parameter: str, **values: object) -> str:
     """Read parameter prose from the same markdown file as its tool contract."""
     path = _description_path(name)
-    text = path.read_text(encoding="utf-8")
+    text = _read_description(path)
     if not text.strip():
         return ""
     _, separator, parameters = text.partition(_PARAMETERS)
@@ -126,7 +133,10 @@ def load_parameter_description(name: str, parameter: str, **values: object) -> s
         for index, heading in enumerate(headings):
             if heading[1] == parameter:
                 end = headings[index + 1].start() if index + 1 < len(headings) else len(parameters)
-                return snippets.substitute(parameters[heading.end():end].strip(), values)
+                try:
+                    return snippets.substitute(parameters[heading.end():end].strip(), values)
+                except KeyError as exc:
+                    raise ValueError(f"parameter {parameter!r} in {path} needs {{{{{exc.args[0]}}}}}") from None
     raise ValueError(f"missing parameter description {parameter!r} in {path}")
 
 

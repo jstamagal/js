@@ -365,7 +365,7 @@ def test_js_startup_migrates_and_then_lists_the_moved_session(tmp_path, monkeypa
 
     assert cli.main(["--list-sessions", "--json"]) == 0
 
-    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    records = json.loads(capsys.readouterr().out)
     assert [(item["agent"], item["name"]) for item in records] == [("defaultagent", "old")]
 
 
