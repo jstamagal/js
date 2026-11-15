@@ -2901,10 +2901,11 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
     if events is not None:
         saved = cfg.session_file != Path(os.devnull)
         events.emit(
-            "session", version=headless.SCHEMA_VERSION,
+            "start", version=headless.SCHEMA_VERSION,
             id=_session_hint_arg(cfg) if saved else None,
             file=str(cfg.session_file) if saved else None,
             resumed=before_len > 0, agent=cfg.agent_id, model=cfg.model, provider=cfg.provider_id,
+            effort=reasoning_override if reasoning_override is not None else cfg.reasoning_effort,
             cwd=str(Path.cwd()), usage=usage_mod.totals(cfg.session_file).as_dict(),
         )
     user_message = None
@@ -2940,6 +2941,7 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
     }
     if events is not None:
         turn_kwargs["event_sink"] = events.runtime_event
+        telemetry.sink = output.Fanout(output.sink_of(telemetry), headless.OutputEvents(events))
     if bus is not None:
         turn_kwargs["steer"] = bus.steer
     if reasoning_override is not None:
@@ -3067,6 +3069,8 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
         except Exception as e:  # noqa: BLE001
             with _transcript_stdio(telemetry):
                 msgs.warn(msgs.FAILED, error=_error_text(e))
+            if events is not None and not events.errored:
+                _emit_failure(events, _error_text(e), 1)
             return 1
     finally:
         try:
@@ -3082,12 +3086,17 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
     answer = _turn_answer(messages)
 
     stats_ok = True
-    if stats_json or stats_csv:
+    if stats_json or stats_csv or events is not None:
         error = None if answer else msgs.NO_ANSWER.words()
         row = {"name": "prompt", "prompt": prompt or "", "max_tokens": cfg.max_output_tokens if maxout is None else maxout,
                "ok": bool(answer), "error": error, **stats.summarize_calls(call_stats, wall_s=time.time() - _t_wall)}
         payload = {"agent": cfg.agent_id, "model": cfg.model, "provider": cfg.provider_id, "turns": [row]}
         stats_ok = _write_requested_stats(stats_json, stats_csv, payload, [row])
+        if events is not None:
+            events.result = {**payload, "answer": answer,
+                             "session": _session_hint_arg(cfg) if save else None,
+                             "effort": reasoning_override if reasoning_override is not None else cfg.reasoning_effort,
+                             "usage": (usage_mod.totals(cfg.session_file).as_dict() if save else events.usage.as_dict())}
 
     if not answer:
         with _transcript_stdio(telemetry):
@@ -3151,13 +3160,11 @@ _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _json_events: headless.JsonEvents | None = None
 
 
-def _json_run(run: Callable[[], int]) -> int:
-    """Run `run` as a `--json` headless run: stdout carries only JSON events,
-    everything else printed goes to stderr, and the last event is `result`. A
-    run that fails without an `error` event gets one carrying the last line
-    printed to stderr."""
+def _json_run(run: Callable[[], int], *, stream: bool = True) -> int:
+    """Keep stdout machine-readable, ending with the completed run object."""
     global _json_events
-    events = headless.JsonEvents(sys.stdout)
+    stdout = sys.stdout
+    events = headless.JsonEvents(stdout if stream else io.StringIO())
     err = headless.LastLine(sys.stderr)
     _json_events = events
     try:
@@ -3169,15 +3176,24 @@ def _json_run(run: Callable[[], int]) -> int:
                 code = 1
     finally:
         _json_events = None
+    opened = events.session
+    if opened is None:
+        events.emit("start", version=headless.SCHEMA_VERSION)
     if code != 0 and not events.errored:
         _emit_failure(events, err.last_line, code)
-    opened = events.session
-    events.emit(
-        "result", ok=code == 0, exit_code=code, text=events.final_text if code == 0 else "",
-        session=None if opened is None else opened.get("id"),
-        usage=None if opened is None else usage_mod.totals(
-            Path(opened["file"]) if opened.get("file") else None).as_dict(),
-    )
+    payload = events.result or {
+        "answer": events.final_text if code == 0 else "",
+        "session": None if opened is None else opened.get("id"),
+        "provider": None if opened is None else opened.get("provider"),
+        "model": None if opened is None else opened.get("model"),
+        "effort": None if opened is None else opened.get("effort"),
+        "usage": None if opened is None else opened.get("usage"),
+    }
+    payload.update(ok=code == 0, exit_code=code)
+    if stream:
+        events.emit("end", **payload)
+    else:
+        print(json.dumps(payload, ensure_ascii=False, default=str), file=stdout)
     return code
 
 
@@ -3200,6 +3216,34 @@ def _run_prompt_json(prompt: str | None, **kwargs) -> int:
     if code != 0 and not events.errored:
         _emit_failure(events, getattr(sys.stderr, "last_line", ""), code)
     return code
+
+
+class _BenchTools:
+    """Reserve model call order before parallel tools report their outcomes."""
+
+    outcomes = frozenset({"tool_ok", "tool_error", "tool_exception", "tool_invalid", "tool_call_refused", "tool_unknown"})
+
+    def __init__(self) -> None:
+        self.entries: list[list] = []
+        self.calls: dict[str, list] = {}
+
+    def event(self, kind: str, fields: dict) -> None:
+        call_id = fields.get("call_id")
+        if kind == "tool_scheduled":
+            entry = [str(fields["tool"]), False]
+            self.entries.append(entry)
+            self.calls[call_id] = entry
+        elif kind in self.outcomes:
+            name = ("?" if kind == "tool_unknown" else "") + str(fields["tool"])
+            entry = self.calls.get(call_id) if call_id else None
+            if entry is None:
+                self.entries.append([name, True])
+            else:
+                entry[:] = [name if not entry[0].startswith("?") else entry[0], True]
+
+    @property
+    def names(self) -> list[str]:
+        return [name for name, finished in self.entries if finished]
 
 
 def _bench_row_line(row: dict) -> msgs.Said:
@@ -3260,7 +3304,13 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
     except (FileNotFoundError, ValueError) as e:
         msgs.warn(msgs.FAILED, error=e)
         return 2
+    cfg = replace(cfg, settings={**cfg.settings, "REASONING_DISPLAY": 3,
+                                 "TOOLS_DISPLAY": 3, "TOOLS_QUIET": [], "SHELL_QUIET": [], "MARKDOWN": False})
     active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
+    events = _json_events
+    if events is not None:
+        events.emit("start", version=headless.SCHEMA_VERSION, agent=agent_id,
+                    model=cfg.model, provider=cfg.provider_id)
     # The resolved OUTPUT_TOKENS_MAX: agent.yaml's max_tokens is one of its layers.
     agent_default_max = cfg.max_output_tokens
     prompt_spec = P._expand_spec(prompt_spec, cfg)
@@ -3286,6 +3336,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         prompt_text = bench.prompt
         messages = []
         call_stats: list[dict] = []
+        tool_names = _BenchTools()
         turn_kwargs = {
             "model_override": cfg.model,
             "provider_id_override": cfg.provider_id,
@@ -3296,6 +3347,8 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
             "max_output_override": eff_max,
             "call_stats": call_stats,
         }
+        if events is not None:
+            turn_kwargs["event_sink"] = events.runtime_event
         if reasoning is not None:
             turn_kwargs["reasoning_effort_override"] = reasoning_override
         ok, err = True, None
@@ -3304,16 +3357,16 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
             sink = io.StringIO() if quiet else None
             out = sink if sink is not None else (_StdoutTee(sys.stdout, trace_sink) if trace_sink is not None else None)
             with contextlib.redirect_stdout(out) if out is not None else contextlib.nullcontext():
-                # -d turns on the per-turn trace here too. Without it a bench run
-                # records only the model's prose, which is its own claim about
-                # what it called, not evidence — useless for measuring tool use.
                 async def run_benchmark():
                     nonlocal prompt_text
                     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
                     telemetry.trace_sink = trace_sink
+                    telemetry.event_observer = tool_names.event
+                    if events is not None:
+                        telemetry.sink = output.Fanout(output.sink_of(telemetry), headless.OutputEvents(events))
                     await agent_messages.initialize(
                         cfg, prompt_spec, messages, telemetry, save=False,
-                        trace_override=bool(debug), **turn_kwargs,
+                        trace_override=True, **turn_kwargs,
                     )
                     prompt_text = P.expand_agent_text(bench.prompt, cfg)
                     if not quiet:
@@ -3321,7 +3374,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
                         msgs.warn(msgs.BENCH_START, name=bench.name, prompt=first)
                     messages.append({"role": "user", "content": prompt_text})
                     await runtime.run_turn_async(
-                        cfg, system, messages, telemetry, trace_override=bool(debug), **turn_kwargs,
+                        cfg, system, messages, telemetry, trace_override=True, **turn_kwargs,
                     )
 
                 model_client.run_owning_loop(run_benchmark())
@@ -3331,7 +3384,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
             ok, err = False, f"{type(e).__name__}: {e}"
         row = {
             "name": bench.name, "prompt": prompt_text, "max_tokens": eff_max,
-            "ok": ok, "error": err,
+            "ok": ok, "error": err, "tools": tool_names.names,
             **stats.summarize_calls(call_stats, wall_s=time.time() - t_wall),
         }
         rows.append(row)
@@ -3344,7 +3397,9 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
 
     payload = {"agent": agent_id, "model": cfg.model, "provider": cfg.provider_id, "benchmarks": rows}
     stats_ok = _write_requested_stats(stats_json, stats_csv, payload, rows, announce=True)
-    if not stats_json and not stats_csv:
+    if events is not None:
+        events.result = payload
+    elif not stats_json and not stats_csv:
         print(json.dumps(payload, indent=2, default=str))
     return 130 if interrupted else 1 if not stats_ok or any(not row["ok"] for row in rows) else 0
 
@@ -4612,17 +4667,21 @@ def _main(argv: list[str] | None = None) -> int:
         "--login", "login", "--logout", "logout", "--models-edit", "models-edit"
     ):
         dotenv.load()
-    if dispatch_argv and dispatch_argv[0] in ("--login", "login"):
+    if dispatch_argv and dispatch_argv[0] in ("--login", "login") and not any(
+        flag in dispatch_argv for flag in ("--json", "--json-stream")
+    ):
         from . import login_cli
         return login_cli.main(dispatch_argv[1:])
-    if dispatch_argv and dispatch_argv[0] in ("--logout", "logout"):
+    if dispatch_argv and dispatch_argv[0] in ("--logout", "logout") and not any(
+        flag in dispatch_argv for flag in ("--json", "--json-stream")
+    ):
         from . import login_cli
         return login_cli.main(["logout"] + dispatch_argv[1:])
     if dispatch_argv and dispatch_argv[0] in ("--models-edit", "models-edit"):
         from . import login_cli
         return login_cli.main(["models-edit"] + dispatch_argv[1:])
 
-    parser = msgs.ArgumentParser(add_help=False)
+    parser = msgs.ArgumentParser(add_help=False, allow_abbrev=False)
     parser.add_argument("-h", "--help", action=_ShortHelpAction, nargs=0, help=msgs.OPT_HELP.words())
     parser.add_argument("--help-full", action="help", help=msgs.OPT_HELP_FULL.words())
     parser.add_argument("--login", metavar="PROVIDER", nargs="?", const="", help=msgs.OPT_LOGIN.words())
@@ -4681,13 +4740,14 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-local-config", action="store_true", help=msgs.OPT_NO_LOCAL_CONFIG.words())
     parser.add_argument("--no-global-config", action="store_true", help=msgs.OPT_NO_GLOBAL_CONFIG.words())
     parser.add_argument("--migrate-config", action="store_true", help=msgs.OPT_MIGRATE_CONFIG.words())
-    parser.add_argument("--list", action="store_true", help=msgs.OPT_LIST.words())
+    parser.add_argument("--list-sessions", action="store_true", help=msgs.OPT_LIST_SESSIONS.words())
+    parser.add_argument("--list-agents", action="store_true", help=msgs.OPT_LIST_AGENTS.words())
     parser.add_argument("--last", action="store_true", help=msgs.OPT_LAST.words())
     parser.add_argument("--json", action="store_true", help=msgs.OPT_JSON.words())
     parser.add_argument("--swarm", metavar="ROOT/NAME", help=msgs.OPT_SWARM.words())
-    parser.add_argument("--providers-json", action="store_true", help=msgs.OPT_PROVIDERS_JSON.words())
-    parser.add_argument("--logins-json", action="store_true", help=msgs.OPT_LOGINS_JSON.words())
-    parser.add_argument("--models-json", nargs="?", const="", metavar="PROVIDER", help=msgs.OPT_MODELS_JSON.words())
+    parser.add_argument("--json-stream", action="store_true", help=msgs.OPT_JSON_STREAM.words())
+    parser.add_argument("--list-providers", action="store_true", help=msgs.OPT_LIST_PROVIDERS.words())
+    parser.add_argument("--list-logins", action="store_true", help=msgs.OPT_LIST_LOGINS.words())
     parser.add_argument("--list-models", nargs="?", const="", metavar="PROVIDER", help=msgs.OPT_LIST_MODELS.words())
     parser.add_argument("--refresh-model-catalog", action="store_true", help=msgs.OPT_REFRESH_MODEL_CATALOG.words())
     parser.add_argument("--commit", action="store_true", help=msgs.OPT_COMMIT.words())
@@ -4700,7 +4760,9 @@ def _main(argv: list[str] | None = None) -> int:
                         help=msgs.OPT_PRINTONLY.words())
     parser.add_argument("target", nargs="?", help=msgs.OPT_TARGET.words())
     _refuse_glued_short_options(parser, dispatch_argv)
+    _validate_output_argv(parser, dispatch_argv)
     args = parser.parse_args(argv)
+    _validate_output_flags(parser, args)
     if args.target is not None and not args.commit:
         parser.error(msgs.UNEXPECTED_ARGUMENT.text(word=args.target))
     if args.bare and args.agent is not None:
@@ -4733,7 +4795,7 @@ def _main(argv: list[str] | None = None) -> int:
         options.selectors(())
         with invocation(options):
             if _json_run_requested(args):
-                return _json_run(lambda: _run_args(args, dispatch_argv))
+                return _json_run(lambda: _run_args(args, dispatch_argv), stream=args.json_stream)
             return _run_args(args, dispatch_argv)
     except (ValueError, OSError) as exc:
         msgs.warn(msgs.FAILED, error=exc)
@@ -4762,16 +4824,54 @@ def _refuse_glued_short_options(parser: argparse.ArgumentParser, argv: list[str]
         parser.error(msgs.UNKNOWN_OPTION.text(option=token))
 
 
+def _validate_output_argv(parser: argparse.ArgumentParser, argv: list[str]) -> None:
+    flags = {word.partition("=")[0] for word in argv[:argv.index("--") if "--" in argv else len(argv)]}
+    if {"--json", "--json-stream"} <= flags:
+        parser.error(msgs.JSON_FLAGS_EXCLUSIVE.words())
+    if flags & {"--json", "--json-stream"}:
+        for command in ("--help", "-h", "--help-full"):
+            if command in flags:
+                error = msgs.JSON_UNSUPPORTED.words(mode="--json/--json-stream", command=command)
+                parser.error(error)
+
+
+def _validate_output_flags(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    if args.json and args.json_stream:
+        parser.error(msgs.JSON_FLAGS_EXCLUSIVE.words())
+    for name in ("list_sessions", "list_providers", "list_logins"):
+        if getattr(args, name) and not args.json:
+            error = msgs.LIST_REQUIRES_JSON.words(command="--" + name.replace("_", "-"))
+            parser.error(error)
+    listings = ("list_sessions", "list_providers", "list_logins", "list_agents", "list_models", "verify")
+    for name in listings:
+        value = getattr(args, name)
+        if value is not None and value is not False and args.json_stream:
+            error = msgs.JSON_UNSUPPORTED.words(mode="--json-stream", command="--" + name.replace("_", "-"))
+            parser.error(error)
+    if args.json or args.json_stream:
+        for name in ("commit", "compact", "printonly", "login", "logout", "migrate_config", "refresh_model_catalog", "bench_models"):
+            value = getattr(args, name)
+            if value is not None and value is not False:
+                error = msgs.JSON_UNSUPPORTED.words(mode="--json-stream" if args.json_stream else "--json", command="--" + name.replace("_", "-"))
+                parser.error(error)
+
+
 def _json_run_requested(args: argparse.Namespace) -> bool:
-    """Whether the command line is a `--json` headless run: a prompt or piped
-    stdin, and no mode that refuses `--json` or prints its own output."""
-    if not args.json or args.list or (args.prompt is None and sys.stdin.isatty()):
-        return False
-    return not (
-        args.commit or args.bench or args.compact or args.printonly is not None
-        or args.login is not None or args.logout or args.providers_json or args.logins_json
-        or args.models_json is not None or args.list_models is not None
+    return (args.json or args.json_stream) and not any(
+        getattr(args, name) is not None and getattr(args, name) is not False
+        for name in ("list_sessions", "list_providers", "list_logins", "list_agents", "list_models", "verify")
     )
+
+
+def _agents_listing() -> list[str]:
+    roots = (getattr(_paths, "layers")() if hasattr(_paths, "layers") else (
+        Path(P.__file__).resolve().parents[1], _paths.home(), Path.cwd() / ".js"))
+    names = set()
+    for root in roots:
+        directory = root / ("prompts" if root == Path(P.__file__).resolve().parents[1] else "agents")
+        if directory.is_dir():
+            names.update(path.name for path in directory.iterdir() if path.is_dir())
+    return sorted(names)
 
 
 def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
@@ -4855,22 +4955,19 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         # STOCK_CONTEXT is built at import (before this chdir), so its cwd is
         # stale; rebind it so -p/REPL turns (which fall back to it) run in DIR.
         runtime.T.STOCK_CONTEXT.cwd = Path.cwd()
-    if args.json and not args.list and (
-        (args.prompt is None and sys.stdin.isatty())
-        or args.commit or args.bench or args.compact or args.printonly is not None
-    ):
-        msgs.warn(msgs.JSON_NEEDS_LIST)
-        return 2
     if args.verify is not None:
         from .verify import verify
         errors = verify(args.verify or None)
-        for error in errors:
-            print(error, file=sys.stderr)
-        print(f'Verification: {len(errors)} error(s).')
+        if args.json:
+            _print_json({'ok': not errors, 'errors': errors})
+        else:
+            for error in errors:
+                print(error, file=sys.stderr)
+            print(f'Verification: {len(errors)} error(s).')
         return int(bool(errors))
     if args.bench_models:
         return _run_model_bench(args, presets)
-    if args.list:
+    if args.list_sessions:
         ambiguous = any(
             (
                 args.prompt is not None,
@@ -4919,27 +5016,13 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     if args.logout:
         from . import login_cli
         return login_cli.main(["logout", args.logout])
-    if args.providers_json:
+    if args.list_agents:
+        names = _agents_listing()
+        return _print_json(names) if args.json else (print("\n".join(names)) or 0)
+    if args.list_providers:
         return _print_json(_providers_json())
-    if args.logins_json:
+    if args.list_logins:
         return _print_json(_logins_json())
-    if args.models_json is not None:
-        try:
-            cfg = None
-            provider_arg = args.models_json or None
-            if provider_arg is None:
-                cfg = _from_env(
-                    args.session,
-                    save_session=False,
-                    extras=args.extras,
-                    agent_id=args.agent,
-                    ignore_local_config=args.no_local_config,
-                    ignore_global_config=args.no_global_config,
-                )
-            return _print_json(_models_json(provider_arg, cfg))
-        except Exception as e:  # noqa: BLE001
-            print(json.dumps({"error": f"{type(e).__name__}: {e}"}, ensure_ascii=False))
-            return 1
     if args.list_models is not None:
         try:
             cfg = None
@@ -4953,9 +5036,12 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
                     ignore_local_config=args.no_local_config,
                     ignore_global_config=args.no_global_config,
                 )
-            return _print_model_list(provider_arg, cfg)
+            return _print_json(_models_json(provider_arg, cfg)) if args.json else _print_model_list(provider_arg, cfg)
         except Exception as e:  # noqa: BLE001
-            msgs.warn(msgs.FAILED, error=f"{type(e).__name__}: {e}")
+            if args.json:
+                _print_json({"error": f"{type(e).__name__}: {e}"})
+            else:
+                msgs.warn(msgs.FAILED, error=f"{type(e).__name__}: {e}")
             return 1
     if args.refresh_model_catalog:
         if not _force_refresh_model_catalog():
@@ -5060,9 +5146,6 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         return 2
     from .cli_options import current
     if not current().replaces_prompt and not current().chat and P.has_benchmarks(automatic_dir):
-        if args.json:
-            msgs.warn(msgs.JSON_NEEDS_LIST)
-            return 2
         return _run_bench(
             automatic_agent, model=args.model, reasoning=args.reasoning,
             maxout=args.max_out, quiet=args.quiet, extras=args.extras,
@@ -5102,7 +5185,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
             and args.session is None
             and os.environ.get("JS_SESSION") is None
         )
-        run = _run_prompt_json if args.json else _run_prompt
+        run = _run_prompt_json if (args.json or args.json_stream) else _run_prompt
         result = run(prompt, model=args.model, debug=args.debug, debug_file=args.debug_file,
                      agent=args.agent, session=args.session, save=not args.no_save,
                      caller_key=args.session_key, announce_generated=generated_session,
@@ -5120,6 +5203,9 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
             msgs.warn(msgs.NOT_SAVED_NO_RESUME)
         return result
 
+    if args.json or args.json_stream:
+        msgs.warn(msgs.FAILED, error="--json/--json-stream requires -p, a pipe, an agent run, or --bench")
+        return 2
     os.environ["JS_MODE"] = "repl"
     _session_leases.start["mode"] = "repl"
     try:

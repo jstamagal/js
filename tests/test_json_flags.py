@@ -104,7 +104,7 @@ def test_logins_json_hides_credentials_when_paranoid_mode_is_on(tmp_logins_dir, 
         xai_refresh_token="refresh-secret",
     ))
 
-    assert cli.main(["--extra", "PARANOID_MODE=on", "--logins-json"]) == 0
+    assert cli.main(["--extra", "PARANOID_MODE=on", "--list-logins", "--json"]) == 0
     rows = _stdout_json(capsys)
 
     assert rows[0]["provider_id"] == "private-proxy"
@@ -184,9 +184,9 @@ def test_json_flags_print_their_payload_as_one_json_line(monkeypatch, capsys):
     monkeypatch.setattr(cli, "_providers_json", lambda: [{"id": "p"}])
     monkeypatch.setattr(cli, "_logins_json", lambda: [{"provider_id": "l"}])
 
-    assert cli.main(["--providers-json"]) == 0
+    assert cli.main(["--list-providers", "--json"]) == 0
     assert _stdout_json(capsys) == [{"id": "p"}]
-    assert cli.main(["--logins-json"]) == 0
+    assert cli.main(["--list-logins", "--json"]) == 0
     assert _stdout_json(capsys) == [{"provider_id": "l"}]
 
 
@@ -209,7 +209,7 @@ def test_models_json_error_path_is_json_and_returns_one(tmp_logins_dir, capsys, 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_ADMIN_KEY", raising=False)
 
-    rc = cli.main(["--models-json", "openai"])
+    rc = cli.main(["--list-models", "openai", "--json"])
     payload = _stdout_json(capsys)
 
     assert rc == 1
@@ -240,7 +240,7 @@ def test_models_json_no_arg_uses_config_provider(monkeypatch, tmp_logins_dir, ca
     monkeypatch.setenv("JS_PROVIDER", "that-provider")
     monkeypatch.setattr(cli.logins, "test_login", fake_test_login)
 
-    rc = cli.main(["--models-json"])
+    rc = cli.main(["--list-models", "--json"])
     payload = _stdout_json(capsys)
 
     assert rc == 0
@@ -287,3 +287,43 @@ def test_list_models_flag_prints_the_model_list(monkeypatch):
 
     assert cli.main(["--list-models", "openai-codex"]) == 0
     assert calls == ["openai-codex"]
+
+
+@pytest.mark.parametrize("argv,missing", [
+    (["--json", "--json-stream", "-p", "hello"], "--json-stream"),
+    *[([flag], "--json") for flag in ("--list-sessions", "--list-providers", "--list-logins")],
+    *[([flag, "--json-stream"], flag) for flag in ("--list-models", "--list-agents", "--list-sessions", "--list-providers", "--list-logins", "--verify")],
+    *[([flag, "--json"], flag) for flag in ("--commit", "--compact", "--printonly", "--login", "--migrate-config", "--refresh-model-catalog") if flag != "--compact"],
+    (["--compact", "session", "--json"], "--compact"),
+    *[([flag, mode], flag) for flag in ("--help", "--help-full", "-h") for mode in ("--json", "--json-stream")],
+])
+def test_json_refusals_name_the_command(argv, missing, capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(argv)
+    assert exc.value.code == 2
+    assert missing in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("flag", ["--list", "--logins-json", "--models-json", "--providers-json", "--list-model"])
+def test_removed_and_abbreviated_flags_are_unknown(flag, capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.main([flag])
+    assert exc.value.code == 2
+    assert flag in capsys.readouterr().err
+
+
+def test_agent_listing_has_text_and_json_forms(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    agent = tmp_path / ".js" / "agents" / "local-agent"
+    agent.mkdir(parents=True)
+    assert cli.main(["--list-agents"]) == 0
+    assert "local-agent" in capsys.readouterr().out.splitlines()
+    assert cli.main(["--list-agents", "--json"]) == 0
+    assert "local-agent" in _stdout_json(capsys)
+
+
+def test_verify_json(monkeypatch, capsys):
+    from js import verify
+    monkeypatch.setattr(verify, "verify", lambda agent: ["missing agent"])
+    assert cli.main(["--verify", "bad", "--json"]) == 1
+    assert _stdout_json(capsys) == {"ok": False, "errors": ["missing agent"]}

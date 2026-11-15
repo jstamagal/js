@@ -363,7 +363,7 @@ def test_js_startup_migrates_and_then_lists_the_moved_session(tmp_path, monkeypa
     monkeypatch.chdir(tmp_path)
     _write(_legacy()["data"] / "sessions" / "defaultagent" / "old.jsonl", '{"role":"user","content":"hi"}\n')
 
-    assert cli.main(["--list", "--json"]) == 0
+    assert cli.main(["--list-sessions", "--json"]) == 0
 
     records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert [(item["agent"], item["name"]) for item in records] == [("defaultagent", "old")]
@@ -427,7 +427,7 @@ def test_one_start_converts_moved_agents_and_prints_what_it_dropped(tmp_path, mo
     _write(agents / "builder" / "01-prompt.md", "BUILD\n")
     _write(agents / "helper" / "01-prompt.md", "HELP\n")
 
-    assert cli.main(["--list"]) == 0
+    assert cli.main(["--list-sessions", "--json"]) == 0
 
     builder = paths.global_agents_dir() / "builder"
     assert not (builder / "00-tools.yaml").exists()
@@ -475,7 +475,7 @@ def test_a_moved_relative_symlink_still_reaches_what_it_reached(tmp_path):
 def test_every_start_lays_out_the_whole_home(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
-    assert cli.main(["--list"]) == 0
+    assert cli.main(["--list-sessions", "--json"]) == 0
 
     names = {entry.name for entry in paths.home().iterdir() if entry.is_dir()}
     assert names >= {"agents", "skills", "toolbox", "logins", "sessions", "state", "logs",

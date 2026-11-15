@@ -77,13 +77,13 @@ def test_a_turn_with_a_tool_call_streams_every_event_kind(monkeypatch, capsys, t
     code, events, _err = _run(monkeypatch, capsys, [
         _reply("Let me read it.", calls=[("c1", "read", json.dumps({"file_path": str(target)}))], use=(100, 20)),
         _reply("It says alpha.", use=(300, 30)),
-    ], ["-p", "what is in notes.txt", "--json"])
+    ], ["-p", "what is in notes.txt", "--json-stream"])
 
     assert code == 0
     kinds = [e["type"] for e in events]
-    assert kinds[0] == "session"
-    assert kinds[-1] == "result"
-    for kind in ("turn_start", "text", "message", "tool_call", "tool_result", "usage", "turn_end"):
+    assert kinds[0] == "start"
+    assert kinds[-1] == "end"
+    for kind in ("text", "tool_call", "tool_result"):
         assert kind in kinds
 
     session = events[0]
@@ -92,7 +92,6 @@ def test_a_turn_with_a_tool_call_streams_every_event_kind(monkeypatch, capsys, t
 
     deltas = "".join(e["delta"] for e in events if e["type"] == "text")
     assert deltas == "Let me read it.It says alpha."
-    assert [e["text"] for e in events if e["type"] == "message"] == ["Let me read it.", "It says alpha."]
 
     call = next(e for e in events if e["type"] == "tool_call")
     assert (call["id"], call["name"], call["arguments"]) == ("c1", "read", {"file_path": str(target)})
@@ -101,23 +100,15 @@ def test_a_turn_with_a_tool_call_streams_every_event_kind(monkeypatch, capsys, t
     assert result["ok"] is True and result["bytes"] > 0 and isinstance(result["summary"], str)
     assert kinds.index("tool_call") < kinds.index("tool_result")
 
-    usages = [e for e in events if e["type"] == "usage"]
-    assert [(u["input_tokens"], u["output_tokens"]) for u in usages] == [(100, 20), (300, 30)]
-    assert usages[-1]["session"]["input_tokens"] == 400
-
-    end = next(e for e in events if e["type"] == "turn_end")
-    assert end["reason"] == "stop"
-    assert end["usage"]["calls"] == 2 and end["usage"]["output_tokens"] == 50
-
     final = events[-1]
     assert final["ok"] is True and final["exit_code"] == 0
-    assert final["text"] == "It says alpha."
+    assert final["answer"] == "It says alpha."
     assert final["session"] == session["id"]
     assert final["usage"]["calls"] == 2
 
 
 def test_stdout_carries_only_json_even_with_the_debug_trace_on(monkeypatch, capsys):
-    code, events, err = _run(monkeypatch, capsys, [_reply("plain answer")], ["-p", "hi", "--json", "--debug"])
+    code, events, err = _run(monkeypatch, capsys, [_reply("plain answer")], ["-p", "hi", "--json-stream", "--debug"])
 
     assert code == 0
     assert all(isinstance(e, dict) and "type" in e for e in events)
@@ -125,13 +116,13 @@ def test_stdout_carries_only_json_even_with_the_debug_trace_on(monkeypatch, caps
 
 
 def test_a_resumed_session_says_so_and_carries_its_totals(monkeypatch, capsys):
-    code, first, _ = _run(monkeypatch, capsys, [_reply("one", use=(7, 3))], ["-p", "hi", "--json"])
+    code, first, _ = _run(monkeypatch, capsys, [_reply("one", use=(7, 3))], ["-p", "hi", "--json-stream"])
     assert code == 0
     session_id = first[0]["id"]
     usage.forget(first[0]["file"])  # the next run is a new process
 
     code, second, _ = _run(monkeypatch, capsys, [_reply("two", use=(11, 4))],
-                           ["-p", "again", "--json", "--session", session_id])
+                           ["-p", "again", "--json-stream", "--session", session_id])
 
     assert code == 0
     assert second[0]["resumed"] is True
@@ -141,23 +132,22 @@ def test_a_resumed_session_says_so_and_carries_its_totals(monkeypatch, capsys):
 
 def test_a_provider_error_is_an_error_event_and_a_failed_result(monkeypatch, capsys):
     failure = ai.ProviderAPIError("bad request", is_retryable=False)
-    code, events, _err = _run(monkeypatch, capsys, [failure], ["-p", "hi", "--json"])
+    code, events, _err = _run(monkeypatch, capsys, [failure], ["-p", "hi", "--json-stream"])
 
     assert code != 0
     errors = [e for e in events if e["type"] == "error"]
     assert errors and "bad request" in errors[0]["message"]
     assert errors[0]["retryable"] is False
-    assert any(e["type"] == "turn_end" and e["reason"] == "error" for e in events)
-    assert events[-1]["type"] == "result" and events[-1]["ok"] is False
+    assert events[-1]["type"] == "end" and events[-1]["ok"] is False
 
 
 def test_a_failure_before_the_turn_still_ends_with_error_and_result(monkeypatch, capsys):
-    code, events, _err = _run(monkeypatch, capsys, [], ["-p", "hi", "--json", "--template-kwargs", "enable_thinking"])
+    code, events, _err = _run(monkeypatch, capsys, [], ["-p", "hi", "--json-stream", "--template-kwargs", "enable_thinking"])
 
     assert code == 2
-    assert [e["type"] for e in events] == ["error", "result"]
-    assert "enable_thinking" in events[0]["message"]
-    assert events[1]["exit_code"] == 2
+    assert [e["type"] for e in events] == ["start", "error", "end"]
+    assert "enable_thinking" in events[1]["message"]
+    assert events[-1]["exit_code"] == 2
 
 
 @pytest.mark.parametrize("argv", [
@@ -201,12 +191,12 @@ def test_sampling_and_template_flags_reach_the_request(monkeypatch, capsys):
 
 
 def test_json_needs_a_headless_run(capsys):
-    assert cli.main(["--json"]) == 2
-    assert capsys.readouterr().out == ""
+    assert cli.main(["--json-stream"]) == 2
+    assert _events(capsys.readouterr().out)[-1]["exit_code"] == 2
 
 
 def test_the_transcript_log_keeps_the_answer(monkeypatch, capsys, tmp_path):
-    code, _events_, _err = _run(monkeypatch, capsys, [_reply("JSON-ANSWER")], ["-p", "hi-json", "--json"])
+    code, _events_, _err = _run(monkeypatch, capsys, [_reply("JSON-ANSWER")], ["-p", "hi-json", "--json-stream"])
 
     assert code == 0
     logs = [p.read_text(encoding="utf-8") for p in (tmp_path / ".js").rglob("*.log")]
@@ -219,12 +209,12 @@ def test_the_transcript_log_keeps_the_answer(monkeypatch, capsys, tmp_path):
     ["-C", "/nonexistent/dir/for/json"],
 ])
 def test_a_command_line_refused_before_the_run_still_ends_with_error_and_result(monkeypatch, capsys, extra):
-    code, events, err = _run(monkeypatch, capsys, [], ["-p", "hi", "--json", *extra])
+    code, events, err = _run(monkeypatch, capsys, [], ["-p", "hi", "--json-stream", *extra])
 
     assert code == 2
-    assert [e["type"] for e in events] == ["error", "result"]
-    assert events[0]["message"] and not events[0]["message"].startswith("*")
-    assert events[1]["exit_code"] == 2 and events[1]["ok"] is False
+    assert [e["type"] for e in events] == ["start", "error", "end"]
+    assert events[1]["message"] and not events[1]["message"].startswith("*")
+    assert events[-1]["exit_code"] == 2 and events[-1]["ok"] is False
     assert err.strip()
 
 
@@ -237,8 +227,37 @@ def test_piped_stdin_with_json_is_a_headless_run(monkeypatch, capsys):
             return "piped question"
 
     monkeypatch.setattr(cli.sys, "stdin", Pipe())
-    code, events, _err = _run(monkeypatch, capsys, [_reply("piped answer")], ["--json"])
+    code, events, _err = _run(monkeypatch, capsys, [_reply("piped answer")], ["--json-stream"])
 
     assert code == 0
-    assert [e["type"] for e in events][0] == "session"
-    assert events[-1]["type"] == "result" and events[-1]["text"] == "piped answer"
+    assert [e["type"] for e in events][0] == "start"
+    assert events[-1]["type"] == "end" and events[-1]["answer"] == "piped answer"
+
+
+def test_final_json_has_the_same_run_payload_as_stream_end(monkeypatch, capsys):
+    _stub(monkeypatch, [_reply("answer")])
+    assert cli.main(["-p", "hi", "--json", "--no-save"]) == 0
+    final = json.loads(capsys.readouterr().out)
+    _stub(monkeypatch, [_reply("answer")])
+    assert cli.main(["-p", "hi", "--json-stream", "--no-save"]) == 0
+    end = _events(capsys.readouterr().out)[-1]
+    assert end.pop("type") == "end"
+    # Wall clocks measure each run separately; everything else is the same object.
+    for payload in (final, end):
+        payload["turns"][0].pop("wall_s")
+    assert final == end
+    assert {"answer", "session", "provider", "model", "effort", "usage"} <= final.keys()
+
+
+def test_streaming_reasoning_and_retry_ignore_display_preferences(monkeypatch, capsys):
+    from js import output
+    def stream(**kw):
+        kw["on_reasoning"]("full private reasoning")
+        output.emit(output.event("retry_wait", n=1, attempts=2, delay=0, error=RuntimeError("temporary"), label="model"))
+        kw["on_text"]("answer")
+        return _reply("answer")
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    assert cli.main(["-p", "hi", "--json-stream", "--extra", "REASONING_DISPLAY=0"]) == 0
+    events = _events(capsys.readouterr().out)
+    assert next(e for e in events if e["type"] == "reasoning")["delta"] == "full private reasoning"
+    assert next(e for e in events if e["type"] == "retry")["attempt"] == 1

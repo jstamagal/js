@@ -32,7 +32,7 @@ def test_actual_cli_session_list_json_is_valid_utf8(tmp_path, monkeypatch, field
     append_title(path, title)
     before = path.read_bytes()
     process = subprocess.run(
-        [sys.executable, "-c", "from js.cli import main; raise SystemExit(main(['--list', '--json']))"],
+        [sys.executable, "-c", "from js.cli import main; raise SystemExit(main(['--list-sessions', '--json']))"],
         cwd=tmp_path, capture_output=True,
         env={**os.environ, "PYTHONPATH": str(ROOT), "PYTHONIOENCODING": "utf-8:strict"},
     )

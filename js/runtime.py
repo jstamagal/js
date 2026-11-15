@@ -175,6 +175,7 @@ def _pending_with_name(pc: _PendingToolCall, name: str) -> _PendingToolCall:
         validation_error=pc.validation_error,
         unavailable=pc.unavailable,
         refused=pc.refused,
+        called_name=pc.called_name,
     )
 
 
@@ -317,11 +318,14 @@ class Telemetry:
     exchange_factory: Callable[[], Any] | None = None
     # js's own sink for this telemetry, made on its first event (`output.sink_of`).
     own_sink: Any = field(default=None, init=False, repr=False)
+    event_observer: Callable[[str, dict], None] | None = None
 
     def settle_tools(self) -> None:
         settle_tool_trace(self)
 
     def event(self, kind: str, **fields: Any) -> None:
+        if self.event_observer is not None:
+            self.event_observer(kind, fields)
         rec = {"ts": time.time(), "kind": kind, **fields}
         line = json.dumps(rec, default=str) + "\n"
         with output.LOCK:
@@ -348,6 +352,7 @@ class _PendingToolCall:
     unavailable: bool = False
     # A tools.yaml argument ban matched; validation_error is the ERROR line.
     refused: bool = False
+    called_name: str = ""
 
     def arguments(self) -> str:
         return "".join(self.arg_chunks)
@@ -454,6 +459,7 @@ def _normalize_tool_call_batch(
             _PendingToolCall(
                 id=call.id,
                 name=canonical_name,
+                called_name=call.called_name or call.name,
                 arg_chunks=[replay_args],
                 validation_error=validation_error,
                 unavailable=tool is None,
@@ -1260,7 +1266,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
               registry: ToolRegistry | None = None,
               tool_context: ToolContext | None = None,
               trace_together: bool = False,
-              call_id: str | None = None) -> tuple[dict, str]:
+              call_id: str | None = None, called_name: str | None = None) -> tuple[dict, str]:
     """Parse + execute one tool call. Returns (parsed_args, result_string).
 
     `trace_together` prints the call header with the result instead of before
@@ -1273,7 +1279,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
     except ValueError as e:
         opened = _trace_call(telemetry, tool_context, name, None, malformed=True,
                              traced=trace, deferred=trace_together)
-        telemetry.event("tool_error", tool=name, error=f"argparse: {e}")
+        telemetry.event("tool_error", tool=called_name or name, call_id=call_id, error=f"argparse: {e}")
         result = f'ERROR: could not parse arguments for {name}: {e}'
         if error_tracker is not None:
             result = error_tracker.record(name, result)
@@ -1286,7 +1292,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
     trace_name = tool.name if tool is not None else name
     opened = _trace_call(telemetry, context, trace_name, args, traced=trace, deferred=trace_together)
     if tool is None:
-        telemetry.event("tool_unknown", tool=name, args=args)
+        telemetry.event("tool_unknown", tool=called_name or name, call_id=call_id, args=args)
         result = active_registry.unavailable_error(name)
         if _canonical_tool_call_name(name, active_registry) == "write":
             result += held.hold_failed_call(context, raw_args, args)
@@ -1301,9 +1307,9 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
                 active_registry, _cell_call_observer(telemetry, trace, context)):
             result = call_tool(tool, args, context)
             view = call_view()
-        telemetry.event("tool_ok", tool=tool.name, latency_ms=int((time.time() - started) * 1000))
+        telemetry.event("tool_ok", tool=called_name or name, call_id=call_id, latency_ms=int((time.time() - started) * 1000))
     except Exception as e:  # noqa: BLE001
-        telemetry.event("tool_exception", tool=tool.name,
+        telemetry.event("tool_exception", tool=called_name or name, call_id=call_id,
                         error=f"{type(e).__name__}: {e}",
                         latency_ms=int((time.time() - started) * 1000))
         result = _jail.shown(f'ERROR running {tool.name}: {type(e).__name__}: {e}')
@@ -1407,7 +1413,8 @@ def _dispatch_tool_calls(
         if pc.validation_error is None:
             continue
         args = json.loads(pc.arguments())
-        telemetry.event("tool_invalid", tool=pc.name, error=pc.validation_error)
+        telemetry.event("tool_unknown" if pc.unavailable else "tool_invalid",
+                        tool=pc.called_name or pc.name, call_id=pc.id, error=pc.validation_error)
         result = pc.validation_error if pc.unavailable or pc.refused else f'ERROR: invalid arguments for {pc.name}: {pc.validation_error}'
         recorded = _cap_result(result, cap_bytes, context=tool_context)
         if not pc.unavailable:
@@ -1437,6 +1444,7 @@ def _dispatch_tool_calls(
                     registry,
                     tool_context,
                     trace_together or len(task_indices) > 1,
+                    tool_calls[idx].id, tool_calls[idx].called_name,
                 )
                 for idx in task_indices
             }
@@ -1469,7 +1477,7 @@ def _dispatch_tool_calls(
             registry,
             tool_context,
             together,
-            pc.id,
+            pc.id, pc.called_name,
         )
         if progress is not None:
             progress.record(pc, *records[idx])
@@ -1520,7 +1528,7 @@ async def _dispatch_fan_out_async(
     except ValueError as e:
         opened = _trace_call(telemetry, tool_context, pc.name, None, malformed=True,
                              traced=trace, deferred=trace_together)
-        telemetry.event("tool_error", tool=pc.name, error=f"argparse: {e}")
+        telemetry.event("tool_error", tool=pc.called_name or pc.name, call_id=pc.id, error=f"argparse: {e}")
         result = f'ERROR: could not parse arguments for {pc.name}: {e}'
         recorded = error_tracker.record(pc.name, result)
         _trace_result(telemetry, tool_context, pc.name, recorded, malformed=True, exchange=opened, traced=trace)
@@ -1530,7 +1538,7 @@ async def _dispatch_fan_out_async(
     trace_name = tool.name if tool is not None else pc.name
     opened = _trace_call(telemetry, tool_context, trace_name, args, traced=trace, deferred=trace_together)
     if tool is None:
-        telemetry.event("tool_unknown", tool=pc.name, args=args)
+        telemetry.event("tool_unknown", tool=pc.called_name or pc.name, call_id=pc.id, args=args)
         result = registry.unavailable_error(pc.name)
         recorded = _cap_result(result, cap_bytes, context=tool_context)
         _trace_result(telemetry, tool_context, trace_name, recorded, args=args, exchange=opened, traced=trace)
@@ -1539,9 +1547,9 @@ async def _dispatch_fan_out_async(
     started = time.time()
     try:
         result = await meta.dispatch_fan_out_async(tool, args, tool_context)
-        telemetry.event("tool_ok", tool=tool.name, latency_ms=int((time.time() - started) * 1000))
+        telemetry.event("tool_ok", tool=pc.called_name or pc.name, call_id=pc.id, latency_ms=int((time.time() - started) * 1000))
     except Exception as e:  # noqa: BLE001
-        telemetry.event("tool_exception", tool=tool.name,
+        telemetry.event("tool_exception", tool=pc.called_name or pc.name, call_id=pc.id,
                         error=f"{type(e).__name__}: {e}",
                         latency_ms=int((time.time() - started) * 1000))
         result = _jail.shown(f'ERROR running {tool.name}: {type(e).__name__}: {e}')
@@ -1560,11 +1568,13 @@ async def _dispatch_async_tool(
     try:
         args = _repair_jsonish(pc.arguments())
     except ValueError as exc:
+        telemetry.event("tool_error", tool=pc.called_name or pc.name, call_id=pc.id, error=f"argparse: {exc}")
         result = error_tracker.record(pc.name, f'ERROR: could not parse arguments for {pc.name}: {exc}')
         _trace_result(telemetry, tool_context, pc.name, result, malformed=True, traced=trace)
         return pc, {}, result
     tool = registry.resolve(pc.name)
     if tool is None:
+        telemetry.event("tool_unknown", tool=pc.called_name or pc.name, call_id=pc.id, args=args)
         result = registry.unavailable_error(pc.name)
         _trace_result(telemetry, tool_context, pc.name, result, args=args, traced=trace)
         return pc, args, result
@@ -1576,11 +1586,11 @@ async def _dispatch_async_tool(
                 registry, _cell_call_observer(telemetry, trace, tool_context)):
             result = await call_tool_async(tool, args, tool_context)
             view = call_view()
-        telemetry.event("tool_ok", tool=tool.name, latency_ms=int((time.time() - started) * 1000))
+        telemetry.event("tool_ok", tool=pc.called_name or pc.name, call_id=pc.id, latency_ms=int((time.time() - started) * 1000))
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001
-        telemetry.event("tool_exception", tool=tool.name, error=f"{type(exc).__name__}: {exc}")
+        telemetry.event("tool_exception", tool=pc.called_name or pc.name, call_id=pc.id, error=f"{type(exc).__name__}: {exc}")
         result = _jail.shown(f'ERROR running {tool.name}: {type(exc).__name__}: {exc}')
     output = as_output(result)
     raw_result = output.model
@@ -2060,6 +2070,8 @@ async def _record_tool_results(pending_calls: list[_PendingToolCall], *, cfg: Co
     Each result becomes one history record (`model_client.tool_result_record`)
     and the convo is built from those records, so later turns and a resumed
     session send the same messages this turn does."""
+    for pc in pending_calls:
+        telemetry.event("tool_scheduled", tool=pc.called_name or pc.name, call_id=pc.id)
     for index, pc in enumerate(pending_calls):
         call = {"id": pc.id, "name": _canonical_tool_call_name(pc.name, registry),
                 "arguments": _canonical_tool_args(pc.arguments())}
@@ -2069,12 +2081,12 @@ async def _record_tool_results(pending_calls: list[_PendingToolCall], *, cfg: Co
             # An `on tool_call` handler refused it: the call never runs
             # and the model reads the refusal as its result.
             pending_calls[index] = replace(pc, validation_error=refusal, refused=True)
-            telemetry.event("tool_call_refused", tool=pc.name, refusal=refusal)
+            telemetry.event("tool_call_refused", tool=pc.called_name or pc.name, call_id=pc.id, refusal=refusal)
         elif pc.validation_error is None and context.tool_approval is not None:
             refusal = await context.tool_approval.refusal(call)
             if refusal is not None:
                 pending_calls[index] = replace(pc, validation_error=refusal, refused=True)
-                telemetry.event("tool_call_refused", tool=pc.name, via="approval", refusal=refusal)
+                telemetry.event("tool_call_refused", tool=pc.called_name or pc.name, call_id=pc.id, via="approval", refusal=refusal)
     # Tools are sync (subprocess, file I/O); leaf calls fan out to a worker
     # thread so the shared loop stays free while they execute. Fan-out (task /
     # named-agent) calls are awaited ON the loop instead, so a parent turn

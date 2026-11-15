@@ -333,7 +333,7 @@ def test_a_no_save_repl_writes_no_session_and_lists_none(monkeypatch, tmp_path, 
     assert models  # the turn ran
     assert _all_sessions() == []
     capsys.readouterr()
-    assert cli.main(["--list", "--json"]) == 0
+    assert cli.main(["--list-sessions", "--json"]) == 0
     assert capsys.readouterr().out == ""
 
 
@@ -551,7 +551,7 @@ def test_name_pins_a_title_on_the_session(monkeypatch, tmp_path, capsys):
 
     session = session_store.folder_for(Path.cwd()) / "titled.jsonl"
     assert session_title(session) == "fbcon lag"
-    assert cli.main(["--list", "--json"]) == 0
+    assert cli.main(["--list-sessions", "--json"]) == 0
     [record] = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert record["title"] == "fbcon lag"
 

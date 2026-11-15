@@ -731,8 +731,15 @@ OPT_NO_GLOBAL_CONFIG = Message("Ignore the platform jsrc.")
 OPT_MIGRATE_CONFIG = Message("One-shot: convert a legacy config.toml to jsrc, then exit.")
 OPT_LIST = Message("List saved sessions without loading config or contacting a provider.")
 OPT_LAST = Message("Resume the most recently used session for this agent.")
-OPT_JSON = Message("With -p or pipe mode, print the run as JSON events one per line; "
-                   "with --list, print compact JSON objects one per line.")
+OPT_JSON = Message("Print the completed run or listing as one JSON object.")
+OPT_JSON_STREAM = Message("Stream JSON Lines while the run executes.")
+OPT_LIST_SESSIONS = Message("List saved sessions; requires --json.")
+OPT_LIST_AGENTS = Message("List available agents.")
+OPT_LIST_PROVIDERS = Message("List providers; requires --json.")
+OPT_LIST_LOGINS = Message("List saved logins; requires --json.")
+JSON_FLAGS_EXCLUSIVE = Message("--json and --json-stream cannot be used together")
+JSON_UNSUPPORTED = Message("{mode} is not supported with {command}")
+LIST_REQUIRES_JSON = Message("{command} requires --json")
 OPT_SWARM = Message("With -p: be agent NAME on the swarm bus at ROOT. Adds the bus tools, "
                     "delivers inbox messages at every tool boundary, and sleeps on the inbox instead of "
                     "exiting when a turn ends. A message of kind stop ends it.")

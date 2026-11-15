@@ -169,3 +169,103 @@ def test_failed_benchmark_returns_failure_and_keeps_all_rows(tmp_path, monkeypat
     assert len(rows) == 4
     assert all(row["ok"] is False for row in rows)
     assert rc == 1
+
+
+def test_bench_tools_keep_telemetry_order_and_unknown_marker(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    _write_agent(tmp_path)
+    async def turn(cfg, system, messages, telemetry, **kw):
+        assert kw["trace_override"] is True
+        assert cfg.settings["REASONING_DISPLAY"] == 3
+        assert cfg.settings["TOOLS_DISPLAY"] == 3
+        assert cfg.settings["MARKDOWN"] is False
+        for kind, name in [("tool_ok", "read"), ("tool_error", "write"),
+                           ("tool_exception", "write"), ("tool_unknown", "shell"),
+                           ("tool_invalid", "invalid"), ("tool_call_refused", "refused")]:
+            telemetry.event(kind, tool=name)
+        print("visible tool results")
+        messages.append({"role": "assistant", "content": "answer"})
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn)
+    assert cli.main(["--bench", "jokertest"]) == 0
+    out = capsys.readouterr().out
+    assert "visible tool results" in out
+    payload = json.loads(out[out.index('{'):])
+    row = payload["benchmarks"][0]
+    assert row["tools"] == ["read", "write", "write", "?shell", "invalid", "refused"]
+    assert {"agent", "model", "provider", "benchmarks"} == payload.keys()
+    assert {"name", "prompt", "max_tokens", "ok", "error", "calls", "prompt_tokens", "output_tokens",
+            "cached_tokens", "ttft_s", "stream_s", "tok_per_s", "wall_s", "finish_reason", "tools"} == row.keys()
+
+
+def test_bench_json_and_json_stream_share_payload(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    _write_agent(tmp_path)
+    monkeypatch.setattr(cli.runtime.model_client, "stream_model_async", _stream_stub([]))
+    assert cli.main(["--bench", "jokertest", "--json"]) == 0
+    final = json.loads(capsys.readouterr().out)
+    assert cli.main(["--bench", "jokertest", "--json-stream"]) == 0
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert events[0]["type"] == "start"
+    end = events[-1]
+    assert end.pop("type") == "end"
+    for payload in (final, end):
+        for row in payload["benchmarks"]:
+            row.pop("wall_s")
+    assert final == end
+
+
+def test_bench_parallel_calls_keep_model_order_and_full_output(tmp_path, monkeypatch, capsys):
+    import threading
+    from js import runtime
+    from js.model_client import ModelToolCall
+    from js.toolkit.core import Tool, ToolContext
+    from js.toolkit.registry import ToolRegistry
+
+    monkeypatch.chdir(tmp_path)
+    agent = _write_agent(tmp_path)
+    for path in agent.glob("*-benchmark.md"):
+        if path.name != "01-benchmark.md":
+            path.unlink()
+    (agent / "agent.yaml").write_text("tools: ['*:eager']\n")
+    finished = threading.Event()
+    completed = []
+    def slow(context):
+        assert finished.wait(5)
+        completed.append("slow")
+        return "\n".join(f"full-output-{i}" for i in range(40))
+    def fast(context):
+        completed.append("fast")
+        finished.set()
+        return "fast output"
+    registry = ToolRegistry((Tool("slow", "slow", slow, {}, aliases=("slow_alias",), read_only=True),
+                             Tool("fast", "fast", fast, {}, read_only=True)), {"slow_alias": "slow"})
+    monkeypatch.setattr(cli, "_registry_for", lambda cfg: registry)
+    monkeypatch.setattr(runtime.T, "STOCK_CONTEXT", ToolContext(cwd=tmp_path))
+    calls = 0
+    def stream(**kw):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            tool_calls = [ModelToolCall(id="s", name="slow_alias", arguments="{}"),
+                          ModelToolCall(id="f", name="fast", arguments="{}")]
+            return ModelStreamResult(
+                text="", tool_calls=tool_calls, reasoning="", usage=None, finish_reason="tool_calls",
+                assistant_message=ai.types.messages.Message(role="assistant", parts=[
+                    ai.types.messages.ToolCallPart(tool_call_id=c.id, tool_name=c.name, tool_args=c.arguments)
+                    for c in tool_calls]),
+            )
+        kw["on_reasoning"]("full bench reasoning")
+        kw["on_text"]("**raw markdown**")
+        return ModelStreamResult(text="**raw markdown**", tool_calls=[], reasoning="full bench reasoning", usage=None,
+                                 finish_reason="stop", assistant_message=ai.assistant_message("**raw markdown**"))
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    assert cli.main(["--bench", "jokertest", "--extra", "PARALLEL_TOOLS_MAX=2",
+                     "--extra", "REASONING_DISPLAY=0", "--extra", "TOOLS_DISPLAY=0",
+                     "--extra", "TOOLS_PREVIEW_LINES=1", "--extra", "MARKDOWN=on"]) == 0
+    captured = capsys.readouterr()
+    assert completed == ["fast", "slow"]
+    assert "full-output-39" in captured.out
+    assert "**raw markdown**" in captured.out
+    assert "full bench reasoning" in captured.err
+    payload = json.loads(captured.out[captured.out.rindex('\n{') + 1:])
+    assert payload["benchmarks"][0]["tools"] == ["slow_alias", "fast"]

@@ -138,7 +138,7 @@ def test_cli_rejects_unsafe_agent_id_argument(monkeypatch, tmp_path):
     ("option", "documented_options"),
     [
         ("--help", ["--no-save", "--help-full"]),
-        ("--help-full", ["--help-full", "--providers-json", "--printonly"]),
+        ("--help-full", ["--help-full", "--list-providers", "--printonly"]),
     ],
 )
 def test_cli_help_exposes_options_and_exits_successfully(option, documented_options, capsys):
@@ -1405,9 +1405,8 @@ def test_list_flag_prints_the_session_list(monkeypatch):
     calls: list[bool] = []
     monkeypatch.setattr(cli, "_print_session_list", lambda *, json_lines: calls.append(json_lines) or 0)
 
-    assert cli.main(["--list"]) == 0
-    assert cli.main(["--list", "--json"]) == 0
-    assert calls == [False, True]
+    assert cli.main(["--list-sessions", "--json"]) == 0
+    assert calls == [True]
 
 
 def test_list_reports_subprocess_session_live_only_while_process_alive(monkeypatch, tmp_path, capsys):

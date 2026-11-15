@@ -1,9 +1,4 @@
-"""`js -p --json`: the run as JSON events, one object per line on stdout.
-
-The schema is in docs/headless-json.md. Every event has a `type`; the first
-is `session` and the last is `result`. Everything else the run prints goes to
-stderr, so stdout carries only these lines.
-"""
+"""JSON output for completed runs and streaming JSON Lines."""
 
 from __future__ import annotations
 
@@ -12,8 +7,9 @@ import threading
 from typing import Any, TextIO
 
 from .toolkit.results import summary_text
+from . import usage as usage_mod
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SUMMARY_CHARS = 200
 
 
@@ -49,12 +45,14 @@ class JsonEvents:
         self.errored = False
         self.final_text = ""
         self.session: dict[str, Any] | None = None
+        self.result: dict[str, Any] = {}
+        self.usage = usage_mod.UsageTotals()
         self._lock = threading.Lock()
 
     def emit(self, kind: str, /, **fields: Any) -> None:
         if kind == "error":
             self.errored = True
-        elif kind == "session":
+        elif kind == "start":
             self.session = fields
         line = json.dumps({**fields, "type": kind}, ensure_ascii=True, default=str)
         with self._lock:
@@ -64,33 +62,35 @@ class JsonEvents:
     def runtime_event(self, event: str, payload: dict) -> None:
         """The `event_sink` of `runtime.run_turn_async`: each runtime event as
         its JSON event. Events the schema does not name are not written."""
-        if event == "turn_start":
-            self.emit("turn_start", model=payload.get("model"), provider=payload.get("provider_id"))
-        elif event == "stream":
+        if event == "stream":
             self.emit("text", delta=payload.get("text", ""))
         elif event == "response":
-            text = payload.get("text", "")
-            self.final_text = text
-            fields = {"text": text, "finish_reason": payload.get("finish_reason")}
-            if payload.get("incomplete_reason"):
-                fields["incomplete_reason"] = payload["incomplete_reason"]
-            self.emit("message", **fields)
+            self.final_text = payload.get("text", "")
         elif event == "tool_call":
             self.emit("tool_call", id=payload.get("id"), name=payload.get("name"),
                       arguments=_arguments(payload.get("arguments")))
         elif event == "tool_result":
             self.emit("tool_result", id=payload.get("id"), name=payload.get("name"),
-                      **tool_result_summary(payload.get("result")))
+                      result=payload.get("result"), **tool_result_summary(payload.get("result")))
         elif event == "usage":
-            self.emit("usage", **payload)
+            self.usage.add(usage_mod.CallUsage(**{**{"model": "", "provider": None}, **{key: payload[key] for key in usage_mod.CallUsage.__dataclass_fields__ if key in payload}}))
         elif event == "error":
             self.emit("error", message=payload.get("error"), retryable=bool(payload.get("retryable")))
-        elif event == "turn_end":
-            fields = {"reason": payload.get("reason"), "usage": payload.get("usage")}
-            for key in ("finish_reason", "incomplete_reason"):
-                if payload.get(key):
-                    fields[key] = payload[key]
-            self.emit("turn_end", **fields)
+
+
+class OutputEvents:
+    """Observe reasoning and retries, which use the presentation event bus."""
+
+    def __init__(self, events: JsonEvents) -> None:
+        self.events = events
+
+    def emit(self, event) -> None:
+        fields = dict(event.fields)
+        if event.name == "reasoning":
+            self.events.emit("reasoning", delta=fields.get("text", ""))
+        elif event.name == "retry_wait":
+            self.events.emit("retry", attempt=fields.get("n"), attempts=fields.get("attempts"),
+                             delay=fields.get("delay"), message=str(fields.get("error", "")))
 
 
 class LastLine:

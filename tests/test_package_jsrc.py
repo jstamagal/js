@@ -132,11 +132,11 @@ def test_a_start_writes_no_jsrc_and_leaves_an_existing_one_alone(monkeypatch, tm
     monkeypatch.chdir(project)
     user = tmp_path / "home" / ".js" / "jsrc"
 
-    assert cli.main(["--list"]) == 0
+    assert cli.main(["--list-sessions", "--json"]) == 0
     assert not user.exists()
 
     user.write_text("set READ_LINES_MAX 33\n", encoding="utf-8")
-    assert cli.main(["--list"]) == 0
+    assert cli.main(["--list-sessions", "--json"]) == 0
     assert user.read_text(encoding="utf-8") == "set READ_LINES_MAX 33\n"
 
 
