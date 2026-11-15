@@ -34,8 +34,8 @@ def verify(agent: str | None = None) -> list[str]:
         directories = [persona._most_specific_prompt_dir(agent, *roots)]
     else:
         configs = {repo / 'js' / 'jsrc', home / 'jsrc', project / '.js' / 'jsrc', project / '.js' / 'jsrc.local'}
-        configs.update(home.rglob('jsrc'))
-        configs.update(home.rglob('jsrc.*'))
+        for directory in (home, project / '.js'):
+            configs.update(directory.glob('jsrc.*'))
         for path in sorted(configs):
             if path.is_file():
                 def validate_config(path=path):
