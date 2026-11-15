@@ -252,7 +252,7 @@ def test_workspace_root_never_climbs_above_the_operators_home(tmp_path, monkeypa
 
 
 def test_lsp_is_read_only_and_lazy_for_the_default_agent():
-    entries = yaml.safe_load((REPO / "prompts" / "defaultagent" / "agent.yaml").read_text())["tools"]
+    entries = yaml.safe_load((REPO / "defaults" / "agents" / "defaultagent" / "agent.yaml").read_text())["tools"]
     registry = build_default_registry()
     surface = registry.select(entries, config=policy.ToolsConfig(), warn=False)
 

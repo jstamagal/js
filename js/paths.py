@@ -30,6 +30,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+_ROOT = Path(os.path.realpath(__file__)).parent.parent
+_PROJECT_SCOPES = frozenset({"agents", "skills", "commands", "toolbox", "jsrc", "jsrc.local"})
+
 
 def user_home() -> Path:
     return Path.home()
@@ -41,13 +44,31 @@ def home() -> Path:
 
 def defaults_dir() -> Path:
     """js's stock setup, laid out like ``~/.js``, beside the js package."""
-    return Path(__file__).resolve().parents[1] / "defaults"
+    return _ROOT / "defaults"
 
 
-def home_or_default(name: str) -> Path:
-    """``name`` under the home when that file exists, else under defaults."""
-    own = home() / name
-    return own if own.is_file() else defaults_dir() / name
+def layers() -> tuple[Path, ...]:
+    """Setup roots, lowest priority first. Project files use their existing scopes."""
+    return tuple(dict.fromkeys((defaults_dir(), home(), Path.cwd() / ".js")))
+
+
+def _file_layers(rel: str | Path) -> tuple[Path, ...]:
+    path = Path(rel)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"setup path must be relative: {rel}")
+    roots = layers()
+    return roots if path.parts and path.parts[0] in _PROJECT_SCOPES else roots[:2]
+
+
+def find(rel: str | Path) -> Path | None:
+    """The highest layer's file at ``rel``, including a zero-byte file."""
+    return next((root / rel for root in reversed(_file_layers(rel)) if (root / rel).is_file()), None)
+
+
+def names(rel_dir: str | Path) -> list[str]:
+    """Sorted union of the immediate names in a setup directory."""
+    return sorted({entry.name for root in _file_layers(rel_dir)
+                   if (root / rel_dir).is_dir() for entry in (root / rel_dir).iterdir()})
 
 
 def global_config_file() -> Path:

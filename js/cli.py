@@ -2655,6 +2655,8 @@ def _format_prompt_load_error(cfg, exc: Exception) -> str:
             resolved = P.resolve_agent_prompt_dir(cfg)
         except Exception:  # noqa: BLE001
             resolved = None
+        if isinstance(resolved, tuple):
+            return msgs.of_error(exc)
         if resolved is None or not Path(resolved).is_dir():
             agents_dir = _paths.global_agents_dir()
             agent_id = getattr(cfg, "agent_id", "?")
@@ -3951,7 +3953,7 @@ def _default_startup_banner(cfg: Config, state: dict, notices: list[str], errors
         msgs.STARTUP_TITLE.line(),
         msgs.STARTUP_AGENT.line(agent=cfg.agent_id),
         msgs.STARTUP_MODEL.line(model=state["model"]),
-        msgs.STARTUP_PROMPT.line(prompt=cfg.prompts_dir),
+        msgs.STARTUP_PROMPT.line(prompt=", ".join(map(str, cfg.prompts_dir)) if isinstance(cfg.prompts_dir, tuple) else cfg.prompts_dir),
         msgs.STARTUP_MEMORY.line(memory=cfg.session_file),
         "",
         _repl_hint(msgs.STARTUP_HINT, state).line(),
@@ -5050,10 +5052,10 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     try:
         automatic_agent = _invocation_agent(args, presets)
         automatic_dir = P._most_specific_prompt_dir(
-            automatic_agent, Path(P.__file__).resolve().parents[1] / "prompts",
+            automatic_agent, _paths.defaults_dir() / "agents",
             _paths.global_agents_dir(), Path.cwd() / ".js" / "agents",
         )
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         msgs.warn(msgs.FAILED, error=exc)
         return 2
     from .cli_options import current

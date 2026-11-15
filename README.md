@@ -75,9 +75,9 @@ js/toolkit/fs.py                  read/write/search/patch/remove/undo
 js/toolkit/process_net.py         shell and fetch
 js/toolkit/meta.py                plan/skill/task/subagents
 js/toolkit/wiki/                  deterministic tools for installed wiki agents
-js/toolkit/tool_descriptions/     model-facing tool contracts
-prompts/                          repo prompt-directory agents; layered with ~/.js/agents/ and project .js/agents/
-                                  (repo `prompts/`, global `~/.js/agents/`, and project `.js/agents/`;
+defaults/tool_descriptions/     model-facing tool contracts
+defaults/agents/                 stock prompt-directory agents; layered with ~/.js/agents/ and project .js/agents/
+                                  (repo `defaults/agents/`, global `~/.js/agents/`, and project `.js/agents/`;
                                   project scope wins over global, which wins over repo)
 tests/                            offline, harness, smoke, and live/proxy tests
 docs/                             full user and technical documentation
@@ -91,13 +91,13 @@ spellings like `fs_read`, `fs_write`, `cat`, `grep`, or `semantic_search`.
 
 ## Config And Model Defaults
 Config is a script: each line of a `jsrc` file is a `set <key> <value>` command,
-applied at startup. Files layer lowest-to-highest as `js/jsrc` (shipped in the
+applied at startup. Files layer lowest-to-highest as `defaults/jsrc` (shipped in the
 package: one line per setting, the built-in defaults), `~/.js/jsrc`,
 project `.js/jsrc`, then project `.js/jsrc.local`; env vars override files and
 CLI `--extra key=value` overrides env. js never writes `~/.js/jsrc` on its
 own: it exists once you write it or run `/save`, and holds only what you set.
 `js/jsrc.template` lists every setting, described, at its stock value.
-`js/jsrc` sets `MODEL` to `cpa/claude-opus-5-5` and `EFFORT` to `medium`;
+`defaults/jsrc` sets `MODEL` to `cpa/claude-opus-5-5` and `EFFORT` to `medium`;
 `JS_MODEL` overrides it. Explicit
 `set PROVIDER`, `BASE_URL` and `API_KEY` are opt-in only; `JS_PROVIDER`, `JS_BASE_URL`,
 and `JS_API_KEY` are env overrides. Official SDK env vars (`AI_GATEWAY_API_KEY`,

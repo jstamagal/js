@@ -2,20 +2,23 @@
 
 import pytest
 
-from js import fset
+from js import fset, paths
 
 
 @pytest.fixture
 def themes_dir(monkeypatch, tmp_path):
-    monkeypatch.setattr(fset, "user_themes_dir", lambda: tmp_path)
-    monkeypatch.setattr(fset, "THEMES_DIR", tmp_path / "builtins")
+    monkeypatch.setattr(paths, "home", lambda: tmp_path)
+    themes = tmp_path / "themes"
+    themes.mkdir()
     monkeypatch.setattr(fset, "_themes", {})
-    return tmp_path
+    return themes
 
 
 def test_missing_theme_can_be_created_after_lookup(themes_dir):
-    assert fset.theme_entries("new-theme") == {}
-    assert fset.theme_entries("new-theme") == {}
+    with pytest.raises(ValueError):
+        fset.theme_entries("new-theme")
+    with pytest.raises(ValueError):
+        fset.theme_entries("new-theme")
     (themes_dir / "new-theme").write_text("fset PALETTE_04 #123456\n", encoding="utf-8")
     assert fset.theme_entries("new-theme") == {"PALETTE_04": "#123456"}
 

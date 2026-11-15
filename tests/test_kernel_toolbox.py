@@ -448,7 +448,7 @@ def test_both_tools_are_registered_with_their_model_facing_descriptions():
 
     assert registry.resolve("kernel").name == "kernel"
     assert registry.resolve("toolbox").name == "toolbox"
-    descriptions = Path(kmod.__file__).parent / "tool_descriptions"
+    descriptions = Path(kmod.__file__).resolve().parents[2] / "defaults" / "tool_descriptions"
     for name in ("kernel", "toolbox"):
         expected = (descriptions / f"{name}.md").read_text().strip()
         assert registry.resolve(name).description == expected
@@ -484,10 +484,10 @@ def test_the_twotool_agent_ships_with_exactly_kernel_toolbox_and_shell():
     import yaml
 
     root = Path(__file__).resolve().parents[1]
-    spec = yaml.safe_load((root / "prompts" / "twotool" / "agent.yaml").read_text())
+    spec = yaml.safe_load((root / "defaults" / "agents" / "twotool" / "agent.yaml").read_text())
 
     assert spec["tools"] == ["kernel:eager", "toolbox:eager", "shell:eager"]
-    assert (root / "prompts" / "twotool" / "01-prompt.md").read_text().strip()
+    assert (root / "defaults" / "agents" / "twotool" / "01-prompt.md").read_text().strip()
 
 
 def test_kernel_verbosity_is_a_real_config_knob_with_a_default(tmp_path, monkeypatch):

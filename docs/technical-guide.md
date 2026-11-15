@@ -20,7 +20,7 @@ One normal prompt run follows this path:
 1. `js.cli.main()` parses flags.
 2. `_from_env()` builds `Config`.
 3. `js.persona.load_prompt_spec()` loads the selected agent from repo
-   `prompts/`, global `~/.js/agents/`, and project `.js/agents/`.
+   `defaults/agents/`, global `~/.js/agents/`, and project `.js/agents/`.
 4. `ToolRegistry.select()` filters the default registry by prompt selectors.
 5. Existing session messages are loaded through `js.memory.load_replay_messages()`,
    which keeps every assistant's reasoning for replay.
@@ -157,8 +157,7 @@ generated prompt-directory agent tools
 ```
 
 Generated agent tools come from directories with markdown files under repo
-`prompts/`, global `~/.js/agents/`, and project `.js/agents/`. Project scope
-wins over global, which wins over repo when roots define the same agent id. A
+`defaults/agents/`, global `~/.js/agents/`, and project `.js/agents/`. Files assemble across layers; for the same filename, project wins over home, which wins over stock. A
 prompt directory whose name collides with an existing tool is skipped.
 
 ## Tool Context
@@ -519,7 +518,7 @@ Ollama, llama.cpp and vLLM can use their actual allocated context. Explicit
 model overrides remain available. `CONTEXT_SIZE` applies one window to the
 run banner and both automatic compaction paths;
 `CONTEXT_SIZE_UNKNOWN` is the window assumed for unresolved models;
-`js/jsrc` sets it to 1,000,000.
+`defaults/jsrc` sets it to 1,000,000.
 
 Both automatic compaction paths cap reply headroom with
 `COMPACTION_REPLY_RESERVE_TOKENS` and reserve `COMPACTION_HEADROOM_TOKENS`.

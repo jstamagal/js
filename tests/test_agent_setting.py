@@ -88,7 +88,7 @@ def test_config_resolves_agent_by_layer(monkeypatch, tmp_path, js_agent, argv, e
     cfg = from_env(save_session=False, agent_id=_agent_flag(argv))
 
     assert cfg.agent_id == expected
-    assert cfg.prompts_dir == tmp_path / "home" / ".js" / "agents" / expected
+    assert tmp_path / "home" / ".js" / "agents" / expected in cfg.prompts_dir
 
 
 def test_extra_agent_beats_env(monkeypatch, tmp_path):

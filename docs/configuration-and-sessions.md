@@ -7,35 +7,35 @@ A program that imports js can build a `Config` in code instead:
 `Config(model=..., provider_id=..., provider_api_key=...)`. `model` is the one
 required argument. Every other field has a default: no session is written
 (the session file is `os.devnull`), and the per-turn settings are the
-`js/jsrc` values unless `settings=` holds them. No jsrc, env var or `~/.js`
+`defaults/jsrc` values unless `settings=` holds them. No jsrc, env var or `~/.js`
 file is read.
 
 ## Config Files And Precedence
 
 `js` reads config in this order, lowest to highest:
 
-1. `js/jsrc`, shipped in the package: the built-in defaults
+1. `defaults/jsrc`, shipped in the package: the built-in defaults
 2. user `jsrc` (`~/.js/jsrc`)
 3. project `.js/jsrc`
 4. project `.js/jsrc.local`
 5. env vars
 6. `--extra` CLI flags (may be repeated)
 
-In one line: `js/jsrc` < `~/.js/jsrc` < project `.js/jsrc` < project
+In one line: `defaults/jsrc` < `~/.js/jsrc` < project `.js/jsrc` < project
 `.js/jsrc.local` < env vars < `--extra` CLI flags.
 
 A `jsrc` file is a config script: each non-comment line is
 `set <key> <value>`, using the same dotted keys as the REPL. Comments start with
 `#`. `set -<key>` drops what the layers in between set, so the setting takes its
-`js/jsrc` value again.
+`defaults/jsrc` value again.
 
-`js/jsrc` holds one line per registered setting and is where every default value
-lives. A setting it leaves unset is written `set -<key>`. If `js/jsrc` is
+`defaults/jsrc` holds one line per registered setting and is where every default value
+lives. A setting it leaves unset is written `set -<key>`. If `defaults/jsrc` is
 missing, leaves out a registered setting, or holds a line that does not apply,
 js stops at startup with one line naming the file.
 
 js never writes `~/.js/jsrc` on its own; only `/save` does, so the file holds
-only what the operator set and a default changed in `js/jsrc` still reaches
+only what the operator set and a default changed in `defaults/jsrc` still reaches
 the box. `js/jsrc.template` lists every setting in sections, each described
 with examples, at its stock value. `/save` writes what changed in the session
 since it started (or since the last `/save`): the settings `/set` changed, the
@@ -48,7 +48,7 @@ every other line is left alone. No backup is made. With nothing changed, no
 file is written.
 
 `PROVIDER`, `BASE_URL`, and `API_KEY` are unset in
-`js/jsrc`. When `PROVIDER` is set, the provider is constructed explicitly with
+`defaults/jsrc`. When `PROVIDER` is set, the provider is constructed explicitly with
 the given base URL and API key; otherwise `ai-python` routes the model id
 natively through AI Gateway or via `provider:model` syntax for direct providers.
 
@@ -56,7 +56,7 @@ natively through AI Gateway or via `provider:model` syntax for direct providers.
 
 Every setting is registered in `js/settings.py` `REGISTRY` with its type; its
 help text is its entry in `js/help/set.txt` and its default is its line in
-`js/jsrc`. `/set` with no argument lists every setting and its current value,
+`defaults/jsrc`. `/set` with no argument lists every setting and its current value,
 `/set NAME` shows one, `/set compaction` one group and `/set *_FILE` the names
 a wildcard matches; `/help set NAME` prints a setting's help. Empty-state rendering uses `off` for false booleans, `<none>` for no-value
 settings, and `<unset>` for settings that explicitly defer to provider defaults. With
@@ -139,14 +139,14 @@ new name wins when both are set:
 | `JS_CONTEXT_WINDOW` | `JS_CONTEXT_SIZE` | `CONTEXT_SIZE` |
 | `JS_MAX_OUTPUT_TOKENS` | `JS_OUTPUT_TOKENS_MAX` | `OUTPUT_TOKENS_MAX` |
 
-Default values are the lines in `js/jsrc`.
+Default values are the lines in `defaults/jsrc`.
 
 Official `ai-python` SDK env vars (`AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`,
 `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`) are read directly by the provider and
 do not need to be copied into `jsrc`.
 
 The agent a run uses is the `DEFAULT_AGENT` setting (`JS_DEFAULT_AGENT`, default
-`defaultagent` in `js/jsrc`). `set DEFAULT_AGENT autocoder` in a `jsrc` file picks it for
+`defaultagent` in `defaults/jsrc`). `set DEFAULT_AGENT autocoder` in a `jsrc` file picks it for
 every run under that file; `JS_DEFAULT_AGENT` beats the `jsrc` files, and `--agent` or
 `--commit` beats both. `--last` and `--session-key` resolve the agent the same
 way. The agent is read once at startup: `/set DEFAULT_AGENT` in the REPL does not switch
@@ -382,9 +382,8 @@ never leaves stray files.
 
 ### Agent prompts
 
-Agent prompts are discovered from repo `prompts/`, global `~/.js/agents/`,
-and project `.js/agents/`; project scope wins over global,
-which wins over repo.
+Agent prompts are discovered from repo `defaults/agents/`, global `~/.js/agents/`,
+and project `.js/agents/`; each filename is selected independently, project over home over stock. An empty file overrides its lower copy.
 
 Two layers are prepended to every main-agent and subagent system prompt,
 blank-line separated:

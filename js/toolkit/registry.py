@@ -536,13 +536,15 @@ def _registry_from_tools(
 
 
 def _default_prompts_root() -> Path:
-    return Path(__file__).resolve().parents[2] / "prompts"
+    from .. import paths
+
+    return paths.defaults_dir() / "agents"
 
 
 def _agent_tools(prompts_root: Path | Sequence[Path], reserved: set[str]) -> tuple[Tool, ...]:
     """Build direct agent tools from roots ordered least- to most-specific.
 
-    ``from_env`` passes repo ``prompts/``, then ``~/.js/agents/``,
+    ``from_env`` passes stock ``defaults/agents/``, then ``~/.js/agents/``,
     then project ``.js/agents/``. Later roots shadow earlier roots for the same
     agent id, matching prompt loading for main agents and subagents.
     """
@@ -591,7 +593,7 @@ def registry_for_roots(
     """Registry for one config's prompt roots, built once per distinct root set.
 
     Every caller must go through here rather than through a module-level singleton.
-    A registry built with no roots falls back to the js REPO's own prompts/ dir, which
+    A registry built with no roots falls back to the stock defaults/agents/ dir, which
     holds two agents; the operator's agents live in ~/.js/agents and .js/agents,
     which only reach the registry via cfg.prompt_roots. The singleton in cli.py meant
     every one of those agents was invisible as a tool, and selecting one printed

@@ -225,7 +225,7 @@ def test_selecting_an_unreachable_agent_stops_with_a_plain_error(tmp_path, monke
 
     import pytest
 
-    from js.config import _select_prompt_dir
+    from js.config import _agent_prompt_layers
 
     root = tmp_path / "agents"
     dead = _agent_dir(root, "asleep")
@@ -239,7 +239,7 @@ def test_selecting_an_unreachable_agent_stops_with_a_plain_error(tmp_path, monke
     monkeypatch.setattr(Path, "is_dir", is_dir)
 
     with pytest.raises(ValueError, match="asleep.*No such device"):
-        _select_prompt_dir("asleep", tmp_path / "repo", root, tmp_path / "project")
+        _agent_prompt_layers("asleep", (tmp_path / "repo", root, tmp_path / "project"))
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root can list an unreadable directory")

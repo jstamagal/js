@@ -69,7 +69,7 @@ def test_global_persona_text_beats_repo_under_a_seed_only_project(layers):
     assert _spec(layers).system == "GLOBAL SYSTEM\n"
 
 
-def test_an_explicit_manifest_alone_means_an_empty_system_prompt(layers):
+def test_a_manifest_override_preserves_lower_system_files(layers):
     (layers[2] / "x" / "agent.yaml").write_text("model: intentional-model\n", encoding="utf-8")
     spec = _spec(layers)
-    assert spec.model == "intentional-model" and spec.system.strip() == ""
+    assert spec.model == "intentional-model" and spec.system == "LOWER SYSTEM\n"

@@ -38,12 +38,11 @@ from __future__ import annotations
 import re
 
 from .. import messages as msgs
-from .. import output
+from .. import output, paths
 from collections.abc import Iterable
 from functools import cache
 from pathlib import Path
 
-_DESCRIPTIONS_ROOT = Path(__file__).with_name("tool_descriptions")
 
 _IF_BLOCK = re.compile(r"[ \t]*<!--if:([A-Za-z0-9_]+)-->\n?(.*?)\n?[ \t]*<!--endif-->\n?", re.DOTALL)
 
@@ -77,7 +76,7 @@ def _warn_once(message: str) -> None:
 
 
 def description_dir() -> Path:
-    return _DESCRIPTIONS_ROOT
+    return paths.defaults_dir() / "tool_descriptions"
 
 
 def load_description(name: str, flags: tuple[str, ...] = ("model_override",)) -> str:
@@ -85,18 +84,19 @@ def load_description(name: str, flags: tuple[str, ...] = ("model_override",)) ->
     blocks whose flag is in ``flags``. Co-present-tool-name blocks
     ({{#if}}/{{#unless}}) are left intact here and resolved later at the
     registry boundary."""
-    return _load_description(name, tuple(flags))
+    path = paths.find(Path("tool_descriptions") / f"{name}.md")
+    if path is None:
+        searched = ", ".join(str(root / "tool_descriptions") for root in paths.layers()[:2])
+        raise FileNotFoundError(f"missing tool description {name!r}; searched {searched}")
+    return _load_description(path, tuple(flags))
 
 
 @cache
-def _load_description(name: str, flags: tuple[str, ...]) -> str:
-    path = _DESCRIPTIONS_ROOT / f"{name}.md"
+def _load_description(path: Path, flags: tuple[str, ...]) -> str:
     try:
         text = path.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
         raise FileNotFoundError(f"missing tool description: {path}") from None
-    if not text:
-        raise ValueError(f"empty tool description: {path}")
 
     active = frozenset(flags)
 

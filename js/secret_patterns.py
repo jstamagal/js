@@ -84,7 +84,7 @@ class SecretPatterns:
 
 def patterns_file() -> Path:
     """``~/.js/secret-patterns`` when it exists, else the stock defaults file."""
-    return paths.home_or_default(FILE_NAME)
+    return paths.find(FILE_NAME) or paths.defaults_dir() / FILE_NAME
 
 
 def export_env() -> None:

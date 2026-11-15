@@ -8,16 +8,16 @@ entries are:
   palette    `PALETTE_00` .. `PALETTE_98`: the mIRC 99-colour palette, each
              slot a `#rrggbb` js sends as 24-bit colour.
   colours    `COLOR_<ROLE>`: what each part of the screen is drawn in, a
-             palette slot in `js/fset`.
+             palette slot in `defaults/fset`.
   THEME      a palette under the entries the operator set: the file
-             `~/.js/themes/<THEME>`, else the built-in `js/themes/<THEME>`.
+             `~/.js/themes/<THEME>`, else the built-in `defaults/themes/<THEME>`.
              None by default.
-  HOST_COLOR this box's colour; `js/fset` points the prompt, the speaker
+  HOST_COLOR this box's colour; `defaults/fset` points the prompt, the speaker
              marks and the status bar's accent at it.
   CODE_STYLE the Pygments style code is highlighted in.
 
 An entry's value is the operator's (an `fset` line in a jsrc, or typed), else
-the theme's, else the default (`js/fset`). A theme sets palette slots only.
+the theme's, else the default (`defaults/fset`). A theme sets palette slots only.
 
 A format is literal text, colour codes, the banner glyph and holes. An event
 hands its format one line of text, split on single spaces into words
@@ -49,22 +49,17 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from . import paths
+
 PALETTE_SIZE = 99
-PACKAGE_FSET = Path(__file__).with_name("fset")
-THEMES_DIR = Path(__file__).with_name("themes")
+PACKAGE_FSET = paths.defaults_dir() / "fset"
 
-
-def user_themes_dir() -> Path:
-    """`~/.js/themes`: a theme here wins over a built-in of the same name."""
-    from . import paths
-
-    return paths.home() / "themes"
 
 RESET = "\x1b[0m"
 FG_DEFAULT = "\x1b[39m"  # the foreground back to the default, the background kept
 BOLD = "\x1b[1m"
 
-# Every colour role; `js/help/fset.txt` says what each paints.
+# Every colour role; `defaults/help/fset.txt` says what each paints.
 ROLES: tuple[str, ...] = (
     "COLOR_BACKGROUND", "COLOR_DIM", "COLOR_USER", "COLOR_USER_MARK", "COLOR_AGENT",
     "COLOR_AGENT_MARK", "COLOR_WARN", "COLOR_ERROR", "COLOR_OK", "COLOR_TOOL",
@@ -100,7 +95,8 @@ def palette_name(slot: int) -> str:
 # ---------------------------------------------------------------------------
 
 _defaults: dict[str, str] | None = None
-_themes: dict[str, dict[str, str]] = {}
+_defaults_path: Path | None = None
+_themes: dict[Path, dict[str, str]] = {}
 _overrides: dict[str, str] = {}
 _settings: dict | None = None
 
@@ -131,44 +127,43 @@ def read_file(path: Path) -> dict[str, str]:
 
 
 def defaults() -> dict[str, str]:
-    """The entries `js/fset` sets: the palette, THEME and the formats that are
+    """The entries `defaults/fset` sets: the palette, THEME and the formats that are
     not their message's own text."""
-    global _defaults
-    if _defaults is None:
-        _defaults = read_file(PACKAGE_FSET)
+    global _defaults, _defaults_path
+    path = paths.find("fset") or PACKAGE_FSET
+    if _defaults is None or _defaults_path != path:
+        _defaults = read_file(path)
+        _defaults_path = path
     return _defaults
-
-
-def _theme_names(directory: Path) -> list[str]:
-    if not directory.is_dir():
-        return []
-    return [path.name for path in directory.iterdir() if path.is_file() and not path.name.startswith(".")]
 
 
 def themes() -> list[str]:
     """Every theme THEME can name: the operator's in `~/.js/themes`, then
     the built-ins, by name."""
-    return sorted({*_theme_names(user_themes_dir()), *_theme_names(THEMES_DIR)})
+    return [name for name in paths.names("themes")
+            if not name.startswith(".") and paths.find(Path("themes") / name) is not None]
 
 
 def theme_path(name: str) -> Path | None:
     """The file theme ``name`` is read from: `~/.js/themes/<name>`, else the
     built-in; None when neither exists."""
-    for directory in (user_themes_dir(), THEMES_DIR):
-        path = directory / name
-        if name and "/" not in name and path.is_file():
-            return path
-    return None
+    if not name or "/" in name or name in {".", ".."}:
+        return None
+    return paths.find(Path("themes") / name)
+
 
 
 def theme_entries(name: str) -> dict[str, str]:
     """The palette slots theme ``name`` sets; none for no theme."""
-    if name not in _themes:
-        path = theme_path(name)
-        if path is None:
-            return {}
-        _themes[name] = read_file(path)
-    return _themes[name]
+    if not name:
+        return {}
+    path = theme_path(name)
+    if path is None:
+        raise ValueError(theme_error(name))
+    if path not in _themes:
+        _themes[path] = read_file(path)
+    return _themes[path]
+
 
 
 def theme_error(name: str) -> str | None:
@@ -180,8 +175,8 @@ def theme_error(name: str) -> str | None:
         return None
     path = theme_path(name)
     if path is None:
-        return _msgs.FSET_NO_THEME.said(name=name, user=str(user_themes_dir()), themes="|".join(themes()))
-    _themes.pop(name, None)
+        return f"unknown theme {name!r}; searched " + ", ".join(str(root / "themes") for root in paths.layers()[:2])
+    _themes.pop(path, None)
     for entry, value in theme_entries(name).items():
         if not _PALETTE_NAME.fullmatch(entry) or int(entry[-2:]) >= PALETTE_SIZE or not _HEX.fullmatch(value):
             return _msgs.FSET_THEME_NOT_PALETTE.said(path=str(path), name=entry)

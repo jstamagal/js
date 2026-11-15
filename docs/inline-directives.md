@@ -60,7 +60,7 @@ js exports these variables before it expands a prompt:
 
 | Variable | Value |
 | --- | --- |
-| `JS_ROOT` | The directory holding js itself: the `js` package, `prompts/` and `tools/`. The stock agent runs `sh "$JS_ROOT/tools/envctx.c"`. |
+| `JS_ROOT` | The directory holding js itself: the `js` package, `defaults/agents/` and `tools/`. The stock agent runs `sh "$JS_ROOT/tools/envctx.c"`. |
 | `JS_SHELL` | The shell the shell tool runs commands in (`SHELL_PROGRAM`, resolved on PATH). |
 | `JS_SECRET_PATTERNS` | The secret-patterns file envctx's scrubber reads: `~/.js/secret-patterns` when it exists, else `defaults/secret-patterns` in `JS_ROOT`. |
 

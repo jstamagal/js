@@ -2,9 +2,9 @@
 
 `REGISTRY` (a list of `SettingSpec`) names every runtime setting: its storage
 path, type, env-var override, empty-state display, and help text. The values
-a setting starts with live in ONE file, `js/jsrc`, shipped in the package: one
+a setting starts with live in ONE file, `defaults/jsrc`, shipped in the package: one
 `set` line per setting. `seed_defaults` and `default_value` read it; a missing
-or broken `js/jsrc` stops startup with one line naming the path.
+or broken `defaults/jsrc` stops startup with one line naming the path.
 
 A config file is a *script*: each non-comment line is a command (see
 `js.setcmd`). The conventional filenames follow the `rc` lineage (`.ircrc`,
@@ -12,7 +12,7 @@ A config file is a *script*: each non-comment line is a command (see
 There is no TOML — `js --migrate-config` converts a legacy `config.toml` once.
 
 Precedence, lowest to highest:
-    js/jsrc < ~/.js/jsrc < project .js/jsrc
+    defaults/jsrc < ~/.js/jsrc < project .js/jsrc
         < project .js/jsrc.local < env vars < --extra CLI flag
 """
 
@@ -37,6 +37,7 @@ from typing import Any
 from . import reasoning as _reasoning
 from . import sampling as _sampling
 from . import messages as msgs
+from . import paths
 from . import output
 
 # What a line typed while a turn runs does: now = join the running turn at its
@@ -47,16 +48,16 @@ STEER_MODES: tuple[str, ...] = ("now", "batch", "one")
 HISTORY_ORDERS: tuple[str, ...] = ("last", "cwd")
 
 # The built-in default layer: one `set` line per registered setting.
-PACKAGE_JSRC = Path(__file__).with_name("jsrc")
+PACKAGE_JSRC = paths.defaults_dir() / "jsrc"
 
 
 class DefaultsError(SystemExit):
-    """`js/jsrc` is missing or holds a line that does not apply. A SystemExit,
+    """`defaults/jsrc` is missing or holds a line that does not apply. A SystemExit,
     so an uncaught one ends the process with its one-line message."""
 
 
 CONFIG_PRECEDENCE_LAYERS = (
-    "js/jsrc",
+    "defaults/jsrc",
     "~/.js/jsrc",
     "project .js/jsrc",
     "project .js/jsrc.local",
@@ -94,7 +95,7 @@ class SettingSpec:
 
     @property
     def default(self) -> Any:
-        """This setting's value in `js/jsrc`; None when that file leaves it unset."""
+        """This setting's value in `defaults/jsrc`; None when that file leaves it unset."""
         return default_value(self.key)
 
     @property
@@ -103,21 +104,23 @@ class SettingSpec:
 
     @property
     def doc(self) -> str:
-        """This setting's help: its entry in `js/help/set.txt`; "" when it
+        """This setting's help: its entry in `defaults/help/set.txt`; "" when it
         has none."""
         return setting_help().get(self.key, "")
 
 
 # `/help set NAME` text, one entry per setting; `/help fset NAME` text, one
 # entry per /fset entry that is not a format or a palette slot.
-SETTING_HELP_FILE = Path(__file__).parent / "help" / "set.txt"
-FSET_HELP_FILE = Path(__file__).parent / "help" / "fset.txt"
+SETTING_HELP_FILE = paths.defaults_dir() / "help" / "set.txt"
+FSET_HELP_FILE = paths.defaults_dir() / "help" / "fset.txt"
 _help_cache: dict[Path, dict[str, str]] = {}
 
 
 def read_help(path: Path) -> dict[str, str]:
     """NAME -> help text, read once from the help file at ``path``: a NAME
     alone on a line, then its help indented. `#` lines are comments."""
+    if path in (SETTING_HELP_FILE, FSET_HELP_FILE):
+        path = paths.find(Path("help") / path.name) or path
     if path not in _help_cache:
         entries: dict[str, list[str]] = {}
         current: list[str] | None = None
@@ -492,7 +495,7 @@ REASONING_EFFORT_VALUES: tuple[str, ...] = ("off", *_reasoning.EFFORT_LADDER[1:]
 
 
 def steer_mode(value: Any) -> str:
-    """The STEER_MODE mode ``value`` names, or its js/jsrc value for anything else."""
+    """The STEER_MODE mode ``value`` names, or its defaults/jsrc value for anything else."""
     text = str(value or "").strip().lower()
     return text if text in STEER_MODES else default_value("STEER_MODE")
 
@@ -950,10 +953,10 @@ def env_value(spec: SettingSpec, env: Mapping[str, str], missing: Any = None, *,
 
 
 # ---------------------------------------------------------------------------
-# The default layer: js/jsrc
+# The default layer: defaults/jsrc
 # ---------------------------------------------------------------------------
 
-# (path, settings) of the js/jsrc read last; a different PACKAGE_JSRC rereads.
+# (path, settings) of the defaults/jsrc read last; a different PACKAGE_JSRC rereads.
 _package_cache: tuple[Path, dict] | None = None
 
 
@@ -962,7 +965,7 @@ def _defaults_error(message: msgs.Message, **fields) -> BaseException:
 
 
 def _package_settings(*, error_factory=None) -> dict:
-    """The settings `js/jsrc` sets, read once per path. Raises `DefaultsError`
+    """The settings `defaults/jsrc` sets, read once per path. Raises `DefaultsError`
     naming the file when it is missing, a line in it does not apply, or a
     registered setting has no line in it."""
     global _package_cache
@@ -997,13 +1000,13 @@ def _package_settings(*, error_factory=None) -> dict:
 
 
 def seed_defaults(*, error_factory=None) -> dict:
-    """A fresh copy of the settings `js/jsrc` sets: the bottom config layer."""
+    """A fresh copy of the settings `defaults/jsrc` sets: the bottom config layer."""
     source = _package_settings() if error_factory is None else _package_settings(error_factory=error_factory)
     return copy.deepcopy(source)
 
 
 def default_value(key: str) -> Any:
-    """Registered setting ``key``'s value in `js/jsrc`; None when that file leaves
+    """Registered setting ``key``'s value in `defaults/jsrc`; None when that file leaves
     it unset."""
     spec = spec_for(key)
     path = spec.path if spec is not None else tuple(key.split("."))
@@ -1011,7 +1014,7 @@ def default_value(key: str) -> Any:
 
 
 def knob(settings: dict | None, key: str) -> Any:
-    """Setting ``key`` from a settings store, or its `js/jsrc` value when the
+    """Setting ``key`` from a settings store, or its `defaults/jsrc` value when the
     store does not hold it."""
     spec = spec_for(key)
     path = spec.path if spec is not None else tuple(key.split("."))
@@ -1021,7 +1024,7 @@ def knob(settings: dict | None, key: str) -> Any:
 
 
 def knob_attr(obj: Any, attr: str, key: str) -> Any:
-    """``obj.attr`` (a Config or ToolContext field), or setting ``key``'s js/jsrc
+    """``obj.attr`` (a Config or ToolContext field), or setting ``key``'s defaults/jsrc
     value when ``obj`` has no such attribute."""
     value = getattr(obj, attr, None)
     return default_value(key) if value is None else value
@@ -1065,7 +1068,7 @@ def live_value(key: str, settings: dict | None = None) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# Collect: js/jsrc < jsrc files < env < CLI extras
+# Collect: defaults/jsrc < jsrc files < env < CLI extras
 # ---------------------------------------------------------------------------
 
 
@@ -1146,7 +1149,7 @@ def collect_settings(
     defaults=None,
     reset_formats=None,
 ) -> dict:
-    """Run precedence: js/jsrc < jsrc files (in order) < env < CLI extras.
+    """Run precedence: defaults/jsrc < jsrc files (in order) < env < CLI extras.
 
     ``config_paths`` defaults to ``~/.js/jsrc``. ``js.config.from_env``
     passes the global, project, and project-local files explicitly.

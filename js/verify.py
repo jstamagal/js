@@ -11,8 +11,7 @@ def verify(agent: str | None = None) -> list[str]:
     errors: list[str] = []
     home = paths.home()
     project = Path.cwd()
-    repo = Path(__file__).resolve().parents[1]
-    roots = (repo / 'prompts', paths.global_agents_dir(), project / '.js' / 'agents')
+    roots = (paths.defaults_dir() / 'agents', paths.global_agents_dir(), project / '.js' / 'agents')
 
     def check(path, action):
         try:
@@ -33,7 +32,7 @@ def verify(agent: str | None = None) -> list[str]:
         validate_agent_id(agent)
         directories = [persona._most_specific_prompt_dir(agent, *roots)]
     else:
-        configs = {repo / 'js' / 'jsrc', home / 'jsrc', project / '.js' / 'jsrc', project / '.js' / 'jsrc.local'}
+        configs = {paths.defaults_dir() / 'jsrc', home / 'jsrc', project / '.js' / 'jsrc', project / '.js' / 'jsrc.local'}
         for directory in (home, project / '.js'):
             configs.update(directory.glob('jsrc.*'))
         for path in sorted(configs):

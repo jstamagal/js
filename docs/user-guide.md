@@ -549,7 +549,7 @@ rule line telling the model it is confined.
 `.js/jsrc.local`.
 
 `--no-global-config` ignores `~/.js/jsrc`. The defaults in the package's
-`js/jsrc` still apply.
+`defaults/jsrc` still apply.
 
 `--migrate-config` runs the one-shot legacy-to-`jsrc` conversion and exits; see
 [Configuration And Sessions](configuration-and-sessions.md) for the file-level
@@ -652,8 +652,8 @@ Native tools keep conversion, page schema/dedup, and ingest close-out determinis
 
 ## Prompt-Directory Agents
 
-Agents are discovered from repo `prompts/`, global `~/.js/agents/`, and
-project `.js/agents/`; project scope wins over global, which wins over repo.
+Agents are discovered from repo `defaults/agents/`, global `~/.js/agents/`, and
+project `.js/agents/`; each filename is selected independently, project over home over stock. An empty file overrides its lower copy.
 Each agent lives at `<root>/<agent_id>/`: `NN-prompt.md` and `NN-env.md`
 files, concatenated in sorted filename order into the system prompt, optional
 `NN-user.md` / `NN-agent.md` seed messages and `NN-benchmark.md` turns, and an

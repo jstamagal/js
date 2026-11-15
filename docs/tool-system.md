@@ -184,7 +184,7 @@ A subagent resolves its own from the model it runs on. Switching models with
 Model-facing descriptions live in:
 
 ```text
-js/toolkit/tool_descriptions/<tool>.md
+defaults/tool_descriptions/<tool>.md
 ```
 
 Descriptions are cut to what the model can act on; `just tool-bytes` shows
@@ -410,7 +410,7 @@ subagent use those tools, add entries to that agent's `agent.yaml`.
 
 ## Generated Agent Tools
 
-Every prompt directory with markdown files or an `agent.yaml` under repo `prompts/`, global
+Every prompt directory with markdown files or an `agent.yaml` under repo `defaults/agents/`, global
 `~/.js/agents/`, and project `.js/agents/` becomes a direct agent tool unless
 its name collides with a base tool. Project scope wins over global, which wins
 over repo when the same agent id appears in multiple roots.

@@ -46,7 +46,7 @@ Keep = Callable[[str], bool]
 
 
 def repo_prompts_dir() -> Path:
-    return Path(__file__).resolve().parents[1] / "prompts"
+    return paths.defaults_dir() / "agents"
 
 
 def default_roots(*roots: Path) -> tuple[Path, ...]:

@@ -83,7 +83,7 @@ def test_registry_selection_handles_empty_globs_aliases_unknowns_and_dedupe():
     assert names(select(["read:lazy", "Read:lazy", "fs_read:lazy", "unknown:lazy", "read:lazy"])) == ["read"]
     # prompt-dir agents are selectable by name and reachable via a prefix glob
     # (discovered from prompts/, so adding/removing an agent dir never snaps this).
-    prompt_agents = sorted(p.name for p in Path("prompts").iterdir() if p.is_dir())
+    prompt_agents = sorted(p.name for p in (Path(__file__).resolve().parents[1] / "defaults" / "agents").iterdir() if p.is_dir())
     assert prompt_agents, "prompts/ should expose at least one agent dir"
     assert names(select([f"{name}:eager" for name in prompt_agents])) == prompt_agents
     assert prompt_agents[0] in names(select([prompt_agents[0][:-2] + "*:eager"]))

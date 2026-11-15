@@ -382,7 +382,7 @@ tools-outdated:
 tools-upgrade:
     uv run python scripts/refresh_tool_releases.py
 
-# show what moved upstream in each built-in skill (js/skills/*) since the commit
+# show what moved upstream in each built-in skill (defaults/skills/*) since the commit
 # its SOURCE: line names. upstream is a git checkout of that repo.
 #   just skills-diff                 # ~/matt-skills
 #   just skills-diff /path/to/skills
@@ -395,7 +395,7 @@ skills-diff upstream=(env_var('HOME') / "matt-skills"):
         exit 1
     fi
     echo "upstream: $up at $(git -C "$up" rev-parse --short HEAD)"
-    for skill_md in js/skills/*/SKILL.md; do
+    for skill_md in defaults/skills/*/SKILL.md; do
         name=$(basename "$(dirname "$skill_md")")
         source=$(sed -n 's/^SOURCE: //p' "$skill_md" | head -n 1)
         if [ -z "$source" ]; then

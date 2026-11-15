@@ -197,16 +197,11 @@ def _worker_session(session_file: Path):
         yield
 
 
-def _select_agent_prompt_dir(agent: str, prompt_roots: tuple[Path, ...]) -> Path:
-    """Select the most-specific prompt dir from repo/global/project roots."""
-    for root in reversed(prompt_roots):
-        candidate = root / agent
-        try:
-            if candidate.is_dir() and any(entry.name.endswith(".md") for entry in candidate.iterdir()):
-                return candidate
-        except OSError as exc:
-            raise ValueError(f"agent {agent!r} at {candidate} is unreadable: {exc.strerror}") from exc
-    return (prompt_roots[0] if prompt_roots else Path("prompts")) / agent
+def _select_agent_prompt_dir(agent: str, prompt_roots: tuple[Path, ...]) -> tuple[Path, ...]:
+    from ..config import _agent_prompt_layers
+
+    return _agent_prompt_layers(agent, prompt_roots)
+
 
 def _agent_cfg(parent_cfg: Any, agent: str, session_id: str | None, *, write_latest=None) -> Any:
     from ..mcp_config import resolve as resolve_mcp

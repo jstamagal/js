@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from js import paths
 from js.toolkit import descriptions, fs
 from js.toolkit.core import Tool
 from js.toolkit.registry import ToolRegistry, build_default_registry
@@ -27,20 +28,21 @@ CORE_TOOL_NAMES = {
 
 
 def _prompt_agent_names() -> set[str]:
-    prompts_root = Path(__file__).resolve().parents[1] / "prompts"
+    prompts_root = paths.defaults_dir() / "agents"
     return {path.name for path in prompts_root.iterdir() if path.is_dir() and any(path.glob("*.md"))}
 
 
-def test_description_loader_rejects_missing_and_empty_files(tmp_path, monkeypatch):
-    monkeypatch.setattr(descriptions, "_DESCRIPTIONS_ROOT", tmp_path)
+def test_description_loader_rejects_missing_and_accepts_empty_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "defaults_dir", lambda root=tmp_path: root)
+    tmp_path = tmp_path / "tool_descriptions"
+    tmp_path.mkdir()
     descriptions._load_description.cache_clear()
 
     with pytest.raises(FileNotFoundError):
         descriptions.load_description("missing")
 
     (tmp_path / "empty.md").write_text("\n", encoding="utf-8")
-    with pytest.raises(ValueError):
-        descriptions.load_description("empty")
+    assert descriptions.load_description("empty") == ""
 
     descriptions._load_description.cache_clear()
 
@@ -162,7 +164,7 @@ def test_tools_reference_fs_search_section_matches_the_published_schema():
 def test_named_agent_tools_are_generated_from_prompt_dirs():
     registry = build_default_registry()
     # discover real agent dirs so adding/removing a prompt agent never snaps this test.
-    prompt_agents = sorted(p.name for p in Path("prompts").iterdir() if p.is_dir())
+    prompt_agents = sorted(p.name for p in (paths.defaults_dir() / "agents").iterdir() if p.is_dir())
 
     assert prompt_agents, "prompts/ should expose at least one agent dir"
     for name in prompt_agents:

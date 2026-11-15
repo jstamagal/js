@@ -87,7 +87,7 @@ def test_personal_defaultagent_overrides_repo_defaultagent(monkeypatch, tmp_path
     actual = from_env(save_session=False)
 
     assert actual.agent_id == "defaultagent"
-    assert actual.prompts_dir == personal_default
+    assert personal_default in actual.prompts_dir
 
 
 def test_config_default_sessions_are_unique_and_latest_is_recorded(monkeypatch, tmp_path):
@@ -956,6 +956,8 @@ def test_a_session_run_under_an_agent_names_it_in_the_hint(monkeypatch, tmp_path
     cli.M.append_message(scoped_session, {"role": "user", "content": "scoped old"})
     cli.M.append_message(scoped_session, {"role": "assistant", "content": "old reply"})
     loaded_prompt_dirs = []
+    agent_dir = tmp_path / ".js" / "agents" / "scoped"
+    agent_dir.mkdir(parents=True)
 
     def completion_stub(**kwargs):
         return _fake_stream_result("SCOPED_SESSION_OK")
@@ -974,7 +976,7 @@ def test_a_session_run_under_an_agent_names_it_in_the_hint(monkeypatch, tmp_path
     # The resume hint must name the agent: an agent-less `js --session ...`
     # runs the `agent` setting and would continue the session under it.
     assert _continue_args(err) == ["js", "--agent", "scoped", "--session", "scoped-session"]
-    assert loaded_prompt_dirs[0].name == "scoped"
+    assert all(path.name == "scoped" for path in loaded_prompt_dirs[0])
     assert load_messages(scoped_session) == [
         {"role": "user", "content": "scoped old"},
         {"role": "assistant", "content": "old reply"},

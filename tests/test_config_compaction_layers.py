@@ -30,7 +30,7 @@ def test_collect_settings_layers_global_project_and_local_with_env_cli(monkeypat
         global_js / "agents",
         project / ".js" / "agents",
     )
-    assert cfg.prompt_roots[0].name == "prompts"
+    assert cfg.prompt_roots[0].name == "agents"
 
 
 def test_prompt_spec_uses_most_specific_agent_and_stacks_agents_files(tmp_path):
@@ -294,5 +294,5 @@ def test_config_assembly_supplies_roots_and_display_services(tmp_path):
                        collect=lambda **kwargs: copy.deepcopy(values),
                        set_banner=lambda value: seen.append("banner"),
                        bind_formats=lambda values: seen.append("formats")))
-    assert cfg.prompts_dir == prompt and cfg.prompt_roots == (root,)
+    assert cfg.prompts_dir == (prompt,) and cfg.prompt_roots == (root,)
     assert seen == ["banner", "formats"]

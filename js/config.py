@@ -122,9 +122,10 @@ class Config(_turn_settings.ConfigSettings):
     A program can build one in code instead: ``model`` is the one required
     argument, and every other field has a default. Built that way, the
     session file is os.devnull, so no session is written; ``agent_dir`` is
-    the agent's state directory and ``prompts_dir`` its directory under the
-    repository's prompts/, neither of them created; the per-turn settings are
-    the `js/jsrc` values unless ``settings`` holds them."""
+    the agent's state directory and ``prompts_dir`` its stock agent directory,
+    neither of them created. Real configurations report every agent layer in
+    ``prompts_dir``; the per-turn settings are the `defaults/jsrc` values
+    unless ``settings`` holds them."""
 
     agent_id: str = field(default_factory=lambda: _settings.default_value("DEFAULT_AGENT"))
     agent_dir: Path = None  # type: ignore[assignment]  # None: the agent's state directory
@@ -137,7 +138,7 @@ class Config(_turn_settings.ConfigSettings):
     history_file: Path = field(default_factory=lambda: _paths.prompt_history_file())
     sessions_dir: Path = field(default_factory=lambda: _session_store.folder_for(Path.cwd().resolve(strict=False)))
     session_file: Path = field(default_factory=lambda: Path(os.devnull))
-    prompts_dir: Path = None  # type: ignore[assignment]  # None: prompts/<agent_id> in the repository
+    prompts_dir: Path | tuple[Path, ...] = None  # type: ignore[assignment]  # None: defaults/agents/<agent_id>
     provider_headers: dict[str, str] = field(default_factory=dict)
     explicit_model: bool = False  # MODEL was set by JS_MODEL or config (not the built-in default); gates --agent agent.yaml model
     explicit_provider: bool = False  # PROVIDER was set by config/env/CLI extras, not inferred from a model prefix
@@ -164,7 +165,7 @@ class Config(_turn_settings.ConfigSettings):
         if self.agent_dir is None:
             object.__setattr__(self, "agent_dir", _paths.state_root() / self.agent_id)
         if self.prompts_dir is None:
-            object.__setattr__(self, "prompts_dir", Path(__file__).resolve().parent.parent / "prompts" / self.agent_id)
+            object.__setattr__(self, "prompts_dir", _paths.defaults_dir() / "agents" / self.agent_id)
         # A key that is not a setting (an old name such as retry_attempts)
         # would be read by nothing; refuse it as `set` does.
         unknown = _unknown_setting_keys(self.settings)
@@ -314,19 +315,17 @@ def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = Fal
     return concrete_path
 
 
-def _select_prompt_dir(agent_id: str, repo_root: Path, global_root: Path, project_root: Path, *, roots=None) -> Path:
-    roots = (repo_root, global_root, project_root) if roots is None else roots
-    for root in reversed(roots):
-        candidate = root / agent_id
+def _agent_prompt_layers(agent_id: str, roots: tuple[Path, ...]) -> tuple[Path, ...]:
+    candidates = tuple(dict.fromkeys(root / agent_id for root in roots))
+    existing = []
+    for candidate in candidates:
         try:
-            if candidate.is_dir() and any(entry.name.endswith(".md") for entry in candidate.iterdir()):
-                return candidate
+            if candidate.is_dir():
+                tuple(candidate.iterdir())
+                existing.append(candidate)
         except OSError as exc:
-            # Named agent exists but can't be read (symlink onto a sleeping
-            # NFS/automount host). Stop here; falling through would silently
-            # run a different agent of the same name.
-            raise ValueError(msgs.CONFIG_AGENT_AT_IS_UNREADABLE.format(agent_id=agent_id, candidate=candidate, strerror=exc.strerror)) from exc
-    return (roots[0] if roots else repo_root) / agent_id
+            raise ValueError(f"agent {agent_id!r} at {candidate} is unreadable: {exc}") from exc
+    return tuple(existing) or candidates
 
 
 def _same_config_path(one: Path, other: Path) -> bool:
@@ -502,8 +501,6 @@ def from_env(
     bind_formats = _fset.bind_settings if assembly.bind_formats is None else assembly.bind_formats
     resolve_route = _routing.resolve_model_route if assembly.resolve_route is None else assembly.resolve_route
     env = os.environ
-    pkg = Path(__file__).resolve().parent
-    js_root = pkg.parent
     project_dir = (cwd or Path.cwd()).resolve(strict=False)
     config_paths = jsrc_paths(
         project_dir,
@@ -613,6 +610,9 @@ def from_env(
     project_instruction_files = tuple(project_dir / name for name in _settings.knob(js_root_settings, "PROJECT_INSTRUCTION_FILES"))
     bind_formats(js_root_settings)
 
+    prompt_roots = assembly.prompt_roots if assembly.prompt_roots is not None else (
+        _paths.defaults_dir() / "agents", _paths.global_agents_dir(), project_dir / ".js" / "agents")
+
     return _login_defaults.for_turn(Config(
         agent_id=agent_id,
         agent_dir=state_dir,
@@ -626,11 +626,10 @@ def from_env(
         sessions_dir=sessions_dir,
         session_file=session_file,
         history_file=history_file,
-        prompts_dir=_select_prompt_dir(agent_id, js_root / "prompts", _paths.global_agents_dir(), project_dir / ".js" / "agents", roots=assembly.prompt_roots),
+        prompts_dir=_agent_prompt_layers(agent_id, prompt_roots),
         vision_enabled=vision_enabled_for_model(model, js_root_settings),
         settings=js_root_settings,
-        prompt_roots=(js_root / "prompts", _paths.global_agents_dir(), project_dir / ".js" / "agents")
-        if assembly.prompt_roots is None else assembly.prompt_roots,
+        prompt_roots=prompt_roots,
         agents_files=() if options.skips_agents_md else tuple(
             p for p in (*global_instruction_files, *project_instruction_files) if p.is_file()),
         project_dir=project_dir,

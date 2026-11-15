@@ -22,8 +22,8 @@ _TOOL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:-]*$")
 _MAX_DESCRIPTION = 500
 # Discovery runs on every turn; each distinct warning prints once per process.
 _WARNED: set[str] = set()
-# The skills js ships, vendored as js/skills/<name>/SKILL.md.
-BUILTIN_SKILLS_DIR = Path(__file__).resolve().parent / "skills"
+# The skills js ships, vendored as defaults/skills/<name>/SKILL.md.
+BUILTIN_SKILLS_DIR = paths.defaults_dir() / "skills"
 
 
 @dataclass(frozen=True)

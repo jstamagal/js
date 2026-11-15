@@ -319,14 +319,14 @@ def test_global_benchmark_agent_is_automatically_selected(tmp_path, monkeypatch)
     assert requests[0][-1] == ("user", "global benchmark")
 
 
-def test_project_agent_without_benchmarks_shadows_global_benchmarks(tmp_path, monkeypatch):
+def test_project_agent_keeps_lower_benchmark_files(tmp_path, monkeypatch):
     _agent(tmp_path, monkeypatch, {"01-user.md": "project opening", "01-agent.md": "project reply"})
     global_directory = Path.home() / ".js" / "agents" / "voice"
     global_directory.mkdir(parents=True)
     (global_directory / "01-benchmark.md").write_text("GLOBAL BENCHMARK", encoding="utf-8")
     requests = _model(monkeypatch, ["done"])
     assert cli.main(["-p", "typed", "-q"]) == 0
-    assert requests[0][-1] == ("user", "typed")
+    assert requests[0][-1] == ("user", "GLOBAL BENCHMARK")
     assert requests[0][1:3] == [("user", "project opening"), ("assistant", "project reply")]
 
 

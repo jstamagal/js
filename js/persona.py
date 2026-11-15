@@ -14,7 +14,7 @@ import yaml
 
 from .promptexpand import expand_prompt, session_variables
 from .toolkit import policy
-from . import model_profiles
+from . import paths, model_profiles
 from . import messages as msgs
 from . import settings
 from . import secret_patterns
@@ -129,8 +129,7 @@ _MIGRATE_HINT = msgs.AGENT_MANIFEST_MIGRATION_HINT.format()
 
 
 def _find_yaml_zero_file(prompts_dir: Path) -> Path | None:
-    """A pre-agent.yaml manifest (00-tools.yaml and kin). It is refused, never read."""
-    candidates = sorted(p for p in prompts_dir.glob("00*.yaml") if _is_zero_file(p))
+    candidates = sorted(path for path in prompts_dir.glob("00*.yaml") if _is_zero_file(path))
     return candidates[0] if candidates else None
 
 
@@ -147,10 +146,7 @@ def _load_yaml_manifest(path: Path) -> dict[str, Any]:
     return data
 
 
-def _refuse_legacy_manifest(prompts_dir: Path, md_files: list[Path]) -> None:
-    legacy = _find_yaml_zero_file(prompts_dir)
-    if legacy is not None:
-        raise ValueError(msgs.AGENT_MANIFEST_IS_NO_LONGER_READ.format(legacy=legacy, _MIGRATE_HINT=_MIGRATE_HINT))
+def _refuse_legacy_manifest(md_files: list[Path]) -> None:
     for path in md_files:
         if (
             _is_zero_file(path)
@@ -270,49 +266,32 @@ def _existing_text_parts(paths: list[Path]) -> list[str]:
     return parts
 
 
-def _most_specific_prompt_dir(agent_id: str, repo_prompts_root: Path, global_agents_root: Path, project_agents_root: Path) -> Path:
-    """Resolve project > global > repo prompt roots for one agent id."""
-    for root in (project_agents_root, global_agents_root, repo_prompts_root):
-        candidate = root / agent_id
-        if not candidate.is_dir():
-            continue
-        if _has_manifest(candidate) or any(candidate.glob("*.md")):
-            return candidate
-    return repo_prompts_root / agent_id
+def _agent_directories(agent_id: str, roots) -> tuple[Path, ...]:
+    candidates = tuple(dict.fromkeys(root / agent_id for root in roots))
+    existing = tuple(path for path in candidates if path.is_dir())
+    if not existing:
+        raise FileNotFoundError(f"unknown agent {agent_id!r}; searched " + ", ".join(map(str, candidates)))
+    return existing
 
 
-def _has_manifest(prompts_dir: Path) -> bool:
-    """Whether a prompt dir carries a manifest of its own: agent.yaml, or a
-    refused 00-tools.yaml that must fail the load rather than be skipped."""
-    return (prompts_dir / AGENT_MANIFEST).is_file() or _find_yaml_zero_file(prompts_dir) is not None
+def _most_specific_prompt_dir(agent_id: str, repo_prompts_root: Path, global_agents_root: Path, project_agents_root: Path) -> tuple[Path, ...]:
+    candidates = tuple(dict.fromkeys(root / agent_id for root in (repo_prompts_root, global_agents_root, project_agents_root)))
+    return tuple(path for path in candidates if path.is_dir()) or candidates
 
 
-def _has_persona_text(prompts_dir: Path) -> bool:
-    """Whether a prompt dir holds system-prompt text: a *-prompt.md or *-env.md file."""
-    return any(_system_kind(path) is not None for path in prompts_dir.glob("*.md"))
-
-
-def _find_persona_dir(agent_id: str, *roots: Path) -> Path | None:
-    """Highest-priority root whose agent_id dir supplies the system prompt: it
-    has persona text, or a manifest (an agent.yaml with no prompt files means an
-    empty system prompt on purpose)."""
-    for root in roots:
-        candidate = root / agent_id
-        if candidate.is_dir() and (_has_manifest(candidate) or _has_persona_text(candidate)):
-            return candidate
-    return None
-
-
-def _find_manifest_dir(agent_id: str, *roots: Path) -> Path | None:
-    """Highest-priority root (in the order given) whose agent_id dir actually
-    carries a manifest. Used to fall back past a winning prompt dir that
-    supplies prompt text but no agent.yaml, so it doesn't silently shadow a
-    lower layer's tool selection."""
-    for root in roots:
-        candidate = root / agent_id
-        if candidate.is_dir() and _has_manifest(candidate):
-            return candidate
-    return None
+def _prompt_files(sources: Path | tuple[Path, ...] | list[Path]) -> list[Path]:
+    """Assemble source directories or files by filename, highest layer winning."""
+    entries = (sources,) if isinstance(sources, Path) else sources
+    selected: dict[str, Path] = {}
+    for source in entries:
+        try:
+            candidates = source.iterdir() if source.is_dir() else (source,)
+            for path in candidates:
+                if path.is_file():
+                    selected[path.name] = path
+        except OSError as exc:
+            raise ValueError(f"agent source {source} is unreadable: {exc}") from exc
+    return [selected[name] for name in sorted(selected)]
 
 
 def load_agent_prompt_spec(
@@ -325,25 +304,9 @@ def load_agent_prompt_spec(
     env: bool = True,
     prompt: str | None = None,
 ) -> PromptSpec:
-    """The agent's prompt spec. ``env=False`` leaves out its *-env.md files;
-    ``prompt`` stands in for its *-prompt.md files."""
-    prompt_dir = _most_specific_prompt_dir(agent_id, repo_prompts_root, global_agents_root, project_agents_root)
-    spec = load_prompt_spec(prompt_dir, env=env, prompt=prompt)
-    if not _has_manifest(prompt_dir):
-        # This dir won without a manifest: it may tweak only the wording, or
-        # only carry seed messages or benchmark turns. Its seed exchanges stay
-        # (and --bench reads its benchmarks), but the model, tools and sampling
-        # come from the nearest layer with an agent.yaml, and the system prompt
-        # from the nearest layer that has one, so a seed-only or bench-only
-        # override never boots the agent with an empty system prompt.
-        roots = (project_agents_root, global_agents_root, repo_prompts_root)
-        system = spec.system
-        persona_dir = _find_persona_dir(agent_id, *roots)
-        if persona_dir is not None and persona_dir != prompt_dir:
-            system = load_prompt_spec(persona_dir, env=env, prompt=prompt).system
-        manifest_dir = _find_manifest_dir(agent_id, *roots)
-        base = load_prompt_spec(manifest_dir) if manifest_dir is not None and manifest_dir != prompt_dir else spec
-        spec = replace(_with_system(base, system), exchanges=spec.exchanges)
+    """Assemble every agent filename from stock, home and project layers."""
+    directories = _agent_directories(agent_id, (repo_prompts_root, global_agents_root, project_agents_root))
+    spec = load_prompt_spec(directories, env=env, prompt=prompt)
     agents_parts = _existing_text_parts(list(agents_files))
     if not agents_parts:
         return spec
@@ -371,23 +334,22 @@ def load_agent_manifest(manifest_path: Path) -> PromptSpec:
     )
 
 
-def load_prompt_spec(prompts_dir: Path, *, env: bool = True, prompt: str | None = None) -> PromptSpec:
-    """The directory's manifest, seed exchanges and system prompt: its
-    *-prompt.md and *-env.md files in name order. ``env=False`` leaves out the
-    *-env.md files; ``prompt`` takes the place of the *-prompt.md files."""
-    if not prompts_dir.is_dir():
-        raise FileNotFoundError(
-            msgs.AGENT_MANIFEST_PROMPTS_DIRECTORY_MISSING_AT_DROP_MD_PROMPT.format(prompts_dir=prompts_dir, AGENT_MANIFEST=AGENT_MANIFEST)
-        )
-
-    md_files = sorted(prompts_dir.glob("*.md"))
-    _refuse_legacy_manifest(prompts_dir, md_files)
-    manifest_path = prompts_dir / AGENT_MANIFEST
-    has_manifest = manifest_path.is_file()
-    if not md_files and not has_manifest:
-        raise FileNotFoundError(
-            msgs.AGENT_MANIFEST_PROMPTS_DIRECTORY_HAS_NO_MD_PROMPT_FILES.format(prompts_dir=prompts_dir, AGENT_MANIFEST=AGENT_MANIFEST)
-        )
+def load_prompt_spec(prompts_dir: Path | tuple[Path, ...] | list[Path], *, env: bool = True, prompt: str | None = None) -> PromptSpec:
+    """Load assembled files or directories, with each higher filename replacing
+    its lower copy. ``env=False`` skips env files; ``prompt`` replaces prompt files."""
+    sources = (prompts_dir,) if isinstance(prompts_dir, Path) else tuple(prompts_dir)
+    if not any(source.is_dir() or source.is_file() for source in sources):
+        raise FileNotFoundError("agent sources missing; searched " + ", ".join(map(str, sources)))
+    files = _prompt_files(sources)
+    md_files = [path for path in files if path.suffix == ".md"]
+    legacy = next((path for path in files if path.suffix == ".yaml" and _is_zero_file(path)), None)
+    if legacy is not None:
+        raise ValueError(msgs.AGENT_MANIFEST_IS_NO_LONGER_READ.format(legacy=legacy, _MIGRATE_HINT=_MIGRATE_HINT))
+    _refuse_legacy_manifest(md_files)
+    manifest_path = next((path for path in files if path.name == AGENT_MANIFEST), None)
+    has_manifest = manifest_path is not None
+    if isinstance(prompts_dir, Path) and not md_files and not has_manifest:
+        raise FileNotFoundError(msgs.AGENT_MANIFEST_PROMPTS_DIRECTORY_HAS_NO_MD_PROMPT_FILES.format(prompts_dir=prompts_dir, AGENT_MANIFEST=AGENT_MANIFEST))
 
     spec = load_agent_manifest(manifest_path) if has_manifest else PromptSpec(system="", tool_selectors=())
     parts: list[str] = []
@@ -498,12 +460,12 @@ def load_configured_prompt_spec(cfg, *, expand: bool = True) -> PromptSpec:
         spec = PromptSpec(system=system, tool_selectors=())
         return _finish_configured_spec(replace(spec, model_profile=_profile_for(spec, cfg)), cfg, expand)
     if options.system_prompt_file is not None:
-        repo = roots[0] if roots else Path(__file__).resolve().parents[1] / 'prompts'
-        global_root = roots[1] if len(roots) > 1 else Path.home() / '.js' / 'agents'
-        manifest = global_root / 'defaultagent' / AGENT_MANIFEST
-        if not manifest.is_file():
-            manifest = repo / 'defaultagent' / AGENT_MANIFEST
-        base = load_agent_manifest(manifest)
+        repo = roots[0] if roots else paths.defaults_dir() / 'agents'
+        global_root = roots[1] if len(roots) > 1 else paths.global_agents_dir()
+        manifest_roots = roots or (repo, global_root)
+        files = _prompt_files(_agent_directories('defaultagent', manifest_roots))
+        manifest = next((path for path in files if path.name == AGENT_MANIFEST), None)
+        base = load_agent_manifest(manifest) if manifest else PromptSpec(system="", tool_selectors=())
         spec = PromptSpec(system=options.prompt_text(), tool_selectors=base.tool_selectors, models=base.models)
         return _finish_configured_spec(_with_model_profile(spec, cfg, None), cfg, expand)
     env = not options.skips_env
@@ -527,7 +489,8 @@ def load_configured_prompt_spec(cfg, *, expand: bool = True) -> PromptSpec:
         return spec
 
     spec = load(getattr(cfg, "agent_id", ""), cfg.prompts_dir)
-    spec = _with_model_profile(spec, cfg, lambda agent_id: load(agent_id, cfg.prompts_dir.parent / agent_id).system)
+    fallback_root = cfg.prompts_dir.parent if isinstance(cfg.prompts_dir, Path) else cfg.prompts_dir[0].parent
+    spec = _with_model_profile(spec, cfg, lambda agent_id: load(agent_id, fallback_root / agent_id).system)
     return _finish_configured_spec(spec, cfg, expand)
 
 
@@ -600,7 +563,7 @@ def _finish_configured_spec(spec: PromptSpec, cfg, expand: bool) -> PromptSpec:
     return spec
 
 
-def resolve_agent_prompt_dir(cfg) -> Path:
+def resolve_agent_prompt_dir(cfg) -> Path | tuple[Path, ...]:
     """The prompt directory `load_configured_prompt_spec` would load for this
     agent (project > global > repo). --bench reads its NN-benchmark.md files from
     the same resolved dir as the persona."""
@@ -610,14 +573,12 @@ def resolve_agent_prompt_dir(cfg) -> Path:
     return cfg.prompts_dir
 
 
-def load_benchmarks(prompts_dir: Path) -> list[Benchmark]:
+def load_benchmarks(prompts_dir: Path | tuple[Path, ...]) -> list[Benchmark]:
     """Ordered NN-benchmark.md turns from a prompt dir. Each is a clean-slate
     one-shot user turn with an optional `max_tokens` frontmatter override."""
-    if not prompts_dir.is_dir():
-        return []
     out: list[Benchmark] = []
-    for path in sorted(prompts_dir.glob("*.md")):
-        if not _is_benchmark_file(path):
+    for path in _prompt_files(prompts_dir):
+        if path.suffix != ".md" or not _is_benchmark_file(path):
             continue
         frontmatter, body = _split_frontmatter(path, path.read_text(encoding="utf-8"))
         body = body.strip()
@@ -631,9 +592,9 @@ def load_benchmarks(prompts_dir: Path) -> list[Benchmark]:
     return out
 
 
-def has_benchmarks(prompts_dir: Path) -> bool:
+def has_benchmarks(prompts_dir: Path | tuple[Path, ...]) -> bool:
     """Whether this agent selects benchmark mode, including empty benchmark files."""
-    return any(_is_benchmark_file(path) for path in prompts_dir.glob("*.md"))
+    return any(path.suffix == ".md" and _is_benchmark_file(path) for path in _prompt_files(prompts_dir))
 
 
 def expand_agent_text(text: str, cfg) -> str:
@@ -647,7 +608,7 @@ def expand_agent_text(text: str, cfg) -> str:
     environ = dict(os.environ)
     environ["JS_SHELL"] = shutil.which(program) or program
     # JS_ROOT is where js itself is: the directory holding the js package,
-    # prompts/ and tools/, so a prompt reaches `$JS_ROOT/tools/envctx.c`
+    # defaults/ and tools/, so a prompt reaches `$JS_ROOT/tools/envctx.c`
     # wherever js is installed.
     environ["JS_ROOT"] = str(Path(__file__).resolve().parents[1])
     environ[secret_patterns.ENV_VAR] = str(secret_patterns.patterns_file())

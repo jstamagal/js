@@ -4,7 +4,7 @@ Subagents in `js` are implemented by the `task` tool and generated
 prompt-directory tools. They are parallel worker turns. A `task` call waits for
 them, or with `background=true` returns a handle at once.
 
-Agents are created using prompt directories under `prompts/` (for bundled agents)
+Agents are created using prompt directories under `defaults/agents/` (for bundled agents)
 or `.js/agents/` (for project/global agents), with an `agent.yaml` manifest
 declaring `tools:` (`noun:modifier` entries, see
 [tool-system.md](tool-system.md)) and optional `model:`, `reasoning:` and
@@ -36,7 +36,7 @@ Rules:
 
 ## Direct Agent Tools
 
-Prompt directories under repo `prompts/`, global `~/.js/agents/`, and
+Prompt directories under repo `defaults/agents/`, global `~/.js/agents/`, and
 project `.js/agents/` become direct tools. Project scope wins over global,
 which wins over repo:
 
@@ -153,7 +153,7 @@ What exists today:
 
 - `task`: generic subagent runner.
 - prompt-directory agents: any `<root>/<agent_id>` directory under repo
-  `prompts/`, global `~/.js/agents/`, and project `.js/agents/`.
+  `defaults/agents/`, global `~/.js/agents/`, and project `.js/agents/`.
 - generated direct tools for prompt directories.
 - bundled prompt dirs: `defaultagent`, `autocoder`, `commit`.
 - built-in CLI mode: commit, exposed as a prompt-directory agent and a

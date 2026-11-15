@@ -49,8 +49,8 @@ js = "js.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-# prompts/ holds the shipped agents; js reads it beside the js package.
-include = ["js*", "prompts*"]
+# defaults/ holds the stock setup beside the js package.
+include = ["js*", "defaults*"]
 
 [tool.pytest.ini_options]
 markers = [
@@ -61,9 +61,9 @@ markers = [
 ]
 
 [tool.setuptools.package-data]
-"js" = ["jsrc", "jsrc.template", "fset", "themes/*", "help/*", "tool_releases.json", "skills/**/*"]
-"js.toolkit" = ["tool_descriptions/*.md", "toolbox_examples/*.py"]
-"prompts" = ["*/*"]
+"js" = ["jsrc.template", "tool_releases.json"]
+"js.toolkit" = ["toolbox_examples/*.py"]
+"defaults" = ["jsrc", "fset", "secret-patterns", "themes/*", "help/*", "agents/**/*", "tool_descriptions/*", "skills/**/*"]
 
 # dev tooling for agents hacking this code (and for the justfile quality
 # recipes). synced into the project env by `uv sync`, so ruff lands on the
