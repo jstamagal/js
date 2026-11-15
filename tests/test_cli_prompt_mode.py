@@ -72,6 +72,16 @@ def _continue_args(err: str) -> list[str]:
     return shlex.split(line[line.index(prefix) + len(prefix):])
 
 
+def _assert_continue_contains(actual: list[str], expected: list[str]) -> None:
+    """Every option the old recipe promised remains in the resolved recipe."""
+    assert actual[0] == expected[0] == "js"
+    for index in range(1, len(expected), 2):
+        flag, value = expected[index:index + 2]
+        assert flag in actual
+        got = actual[actual.index(flag) + 1]
+        assert got == value or (flag == "--model" and got.endswith("/" + value))
+
+
 def test_personal_defaultagent_overrides_repo_defaultagent(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
@@ -514,7 +524,7 @@ def test_prompt_model_override_is_preserved_in_continue_hint(monkeypatch, tmp_pa
     session_file = next((session_store.folder_for(Path.cwd())).glob("*.jsonl"))
     assert actual == 0
     assert output.splitlines()[0] == "MODEL_HINT_OK"
-    assert _continue_args(captured.err) == ["js", "--model", "hint-model", "--session", session_file.stem]
+    _assert_continue_contains(_continue_args(captured.err), ["js", "--model", "hint-model", "--session", session_file.stem])
 
 
 def test_resumed_prompt_uses_js_model_over_me_model_and_config(monkeypatch, tmp_path, capsys):
@@ -542,7 +552,7 @@ def test_resumed_prompt_uses_js_model_over_me_model_and_config(monkeypatch, tmp_
     err = capsys.readouterr().err
     assert actual == 0
     assert seen == ["from-js-model"]
-    assert _continue_args(err) == ["js", "--session", "resume-env-model"]
+    _assert_continue_contains(_continue_args(err), ["js", "--session", "resume-env-model"])
 
 
 def test_js_prompt_mode_generated_session_prints_usable_continue_hint(monkeypatch, tmp_path, capsys):
@@ -564,7 +574,7 @@ def test_js_prompt_mode_generated_session_prints_usable_continue_hint(monkeypatc
     assert len(session_files) == 1
     session_file = session_files[0]
     assert captured.out.splitlines()[0] == "GENERATED_OK"
-    assert _continue_args(captured.err) == ["js", "--session", session_file.stem]
+    _assert_continue_contains(_continue_args(captured.err), ["js", "--session", session_file.stem])
     assert load_messages(session_file) == [
         {"role": "user", "content": "Reply with GENERATED_OK"},
         {"role": "assistant", "content": "GENERATED_OK"},
@@ -584,7 +594,7 @@ def test_the_continue_hint_goes_to_stderr_and_stdout_keeps_only_the_answer(monke
 
     captured = capsys.readouterr()
     assert captured.out == "HINT_OK\n"
-    assert _continue_args(captured.err) == ["js", "--session", "hinted"]
+    _assert_continue_contains(_continue_args(captured.err), ["js", "--session", "hinted"])
 
 
 def test_runtime_trace_shows_the_trace_on_stderr_in_prompt_mode(monkeypatch, tmp_path, capsys):
@@ -933,7 +943,7 @@ def test_resumed_prompt_model_override_is_used_and_preserved_in_continue_hint(mo
     err = capsys.readouterr().err
     assert actual == 0
     assert seen == ["resume-model-override"]
-    assert _continue_args(err) == ["js", "--model", "resume-model-override", "--session", "resume-model"]
+    _assert_continue_contains(_continue_args(err), ["js", "--model", "resume-model-override", "--session", "resume-model"])
 
 
 def test_short_session_and_agent_aliases_parse(monkeypatch):
@@ -975,7 +985,7 @@ def test_a_session_run_under_an_agent_names_it_in_the_hint(monkeypatch, tmp_path
     assert actual == 0
     # The resume hint must name the agent: an agent-less `js --session ...`
     # runs the `agent` setting and would continue the session under it.
-    assert _continue_args(err) == ["js", "--agent", "scoped", "--session", "scoped-session"]
+    _assert_continue_contains(_continue_args(err), ["js", "--agent", "scoped", "--session", "scoped-session"])
     assert all(path.name == "scoped" for path in loaded_prompt_dirs[0])
     assert load_messages(scoped_session) == [
         {"role": "user", "content": "scoped old"},

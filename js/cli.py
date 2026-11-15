@@ -2806,7 +2806,7 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
         hint = _session_hint_arg(cfg)
         # `model` is read when the line prints: a resumed session's spec by then.
         opened["say"] = lambda: _say_continue(telemetry, hint, resume_prefix=resume_prefix,
-                                              agent=agent, model=model)
+                                              agent=agent, model=model, cfg=cfg, reasoning=reasoning_override)
 
     prompt_spec = None
     if system_override is not None:
@@ -3139,21 +3139,44 @@ def _turn_answer(messages: list[dict]) -> str:
 
 
 def _say_continue(telemetry: runtime.Telemetry, hint: str, *, resume_prefix: str | None,
-                  agent: str | None, model: str | None) -> None:
-    cont = resume_prefix or "js"
+                  agent: str | None, model: str | None, cfg: Config | None = None,
+                  reasoning: str | None = None) -> None:
+    from .cli_options import current
+
+    words = shlex.split(resume_prefix) if resume_prefix else ["js"]
+    selected_agent = cfg.agent_id if cfg is not None else agent
+    if resume_prefix is None and selected_agent and selected_agent != settings.default_value("DEFAULT_AGENT"):
+        words += ["--agent", selected_agent]
+    if cfg is not None:
+        saved_login = login_defaults.login_for(cfg.provider_id, cfg.provider_base_url)
+        if cfg.provider_base_url and saved_login is None:
+            wire = model_client.wire_name(cfg.provider_id)
+            scheme, _, host = cfg.provider_base_url.partition("://")
+            words += ["-u", f"{wire}+{scheme}://{cfg.model}@{host}"]
+        else:
+            route = f"{cfg.provider_id}/{cfg.model}" if cfg.provider_id else cfg.model
+            words += ["--model", route]
+        effort = reasoning if reasoning is not None else cfg.reasoning_effort
+        words += ["-r", effort or "off"]
+        for field, value in login_defaults.sampling(cfg).as_dict_nonnull().items():
+            words += ["--" + field.replace("_", "-"),
+                      json.dumps(list(value)) if isinstance(value, tuple) else str(value)]
+    elif model:
+        words += ["--model", model]
+    options = current()
+    for attr in ("chat", "no_tools", "no_env", "no_agents_md", "no_skills", "no_mcp"):
+        if getattr(options, attr):
+            words.append("--" + attr.replace("_", "-"))
+    for attr in ("tools", "you_are", "system_prompt", "system_prompt_file"):
+        if (value := getattr(options, attr)) is not None:
+            words += ["--" + attr.replace("_", "-"), value]
+    for text in options.append_system_prompt:
+        words += ["--append-system-prompt", text]
     if _paths.custom_home():
-        cont += f" --home {shlex.quote(str(_paths.home()))}"
-    # Plain -p has no resume_prefix; a resume runs the `DEFAULT_AGENT`
-    # setting unless told otherwise, so a non-default agent MUST
-    # be echoed or the session continues under the wrong agent.
-    # (wiki/commit already fold the agent into resume_prefix.)
-    if resume_prefix is None and agent:
-        cont += f" --agent {shlex.quote(agent)}"
-    if model:
-        cont += f" --model {shlex.quote(model)}"
-    cont += f" --session {hint}"
+        words += ["--home", str(_paths.home())]
+    words += ["--session", hint]
     with _transcript_stdio(telemetry):
-        msgs.warn(msgs.CONTINUE_HINT, command=cont)
+        msgs.warn(msgs.CONTINUE_HINT, command=shlex.join(words))
 
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
