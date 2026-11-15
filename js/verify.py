@@ -30,7 +30,7 @@ def verify(agent: str | None = None) -> list[str]:
     if agent:
         from .config import validate_agent_id
         validate_agent_id(agent)
-        directories = [persona._most_specific_prompt_dir(agent, *roots)]
+        agent_ids = [agent]
     else:
         configs = {paths.defaults_dir() / 'jsrc', home / 'jsrc', paths.project_home(project) / 'jsrc', paths.project_home(project) / 'jsrc.local'}
         for directory in (home, paths.project_home(project)):
@@ -40,21 +40,23 @@ def verify(agent: str | None = None) -> list[str]:
                 def validate_config(path=path):
                     errors.extend(settings.load_jsrc_files([path], settings.seed_defaults()))
                 check(path, validate_config)
-        directories = set()
-        for root in roots:
-            if root.is_dir():
-                directories.update(path for path in root.iterdir() if path.is_dir())
-        directories = sorted(directories)
+        agent_ids = sorted({directory.name for root in roots if root.is_dir()
+                            for directory in root.iterdir() if directory.is_dir()})
 
-    for directory in directories:
-        def validate_agent(directory=directory):
-            spec = persona.load_prompt_spec(directory)
-            persona.load_benchmarks(directory)
+    for agent_id in agent_ids:
+        directories = persona._most_specific_prompt_dir(agent_id, *roots)
+        location = ", ".join(map(str, directories))
+
+        def validate_agent(agent_id=agent_id, directories=directories, location=location):
+            spec = persona.load_agent_prompt_spec(
+                agent_id, repo_prompts_root=roots[0], global_agents_root=roots[1],
+                project_agents_root=roots[2])
+            persona.load_benchmarks(directories)
             if config is not None:
-                policy.expand(spec.tool_selectors, config, str(directory))
+                policy.expand(spec.tool_selectors, config, location)
                 for profile in spec.models:
-                    policy.expand(profile.tools or (), config, f"{directory} models")
-        check(directory, validate_agent)
+                    policy.expand(profile.tools or (), config, f"{location} models")
+        check(location, validate_agent)
 
     shared_project = paths.shared_skills_dir() if project.resolve() == paths.user_home().resolve() else project / '.agents' / 'skills'
     skill_roots = (skills.BUILTIN_SKILLS_DIR, paths.global_skills_dir(), paths.shared_skills_dir(),
