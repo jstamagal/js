@@ -409,7 +409,7 @@ class Jail:
             with contextlib.suppress(ValueError):
                 path = parse_hide(item)
                 out.append(path)
-                if path == paths.user_home() / ".js":
+                if path == paths.default_home():
                     out.append(paths.home())
         return out
 

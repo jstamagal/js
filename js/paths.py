@@ -40,18 +40,23 @@ def user_home() -> Path:
     return Path.home()
 
 
+def default_home() -> Path:
+    """The operator's conventional profile location."""
+    return user_home() / ".js"
+
+
 def home() -> Path:
     """The resolved invocation profile; direct callers also honor JS_HOME."""
     if _HOME is not None:
         return _HOME
-    value = os.environ.get("JS_HOME") or user_home() / ".js"
+    value = os.environ.get("JS_HOME") or default_home()
     return Path(value).expanduser().resolve(strict=False)
 
 
 def configure_home(directory: str | Path | None = None) -> Path:
     """Resolve and create the selected profile once at invocation startup."""
     global _HOME
-    value = directory if directory is not None else os.environ.get("JS_HOME") or user_home() / ".js"
+    value = directory if directory is not None else os.environ.get("JS_HOME") or default_home()
     selected = Path(value).expanduser().resolve(strict=False)
     if selected.exists() and not selected.is_dir():
         raise ValueError(f"home is not a directory: {selected}")
@@ -66,13 +71,13 @@ def configure_home(directory: str | Path | None = None) -> Path:
 
 def custom_home() -> bool:
     """Whether this profile is separate from the operator's default profile."""
-    return home() != (user_home() / ".js").resolve(strict=False)
+    return home() != (default_home()).resolve(strict=False)
 
 
 def project_home(cwd: Path | None = None) -> Path:
     """Project setup, with the operator's home using the selected profile."""
     root = (cwd or Path.cwd()) / ".js"
-    if custom_home() and root.resolve(strict=False) == (user_home() / ".js").resolve(strict=False):
+    if custom_home() and root.resolve(strict=False) == (default_home()).resolve(strict=False):
         return home()
     return root
 
