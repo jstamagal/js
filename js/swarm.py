@@ -573,9 +573,10 @@ def sibling_argv(argv: list[str], swarm: str, name: str) -> list[str]:
             has_prompt = True
             out.append("--prompt=-")
             i += 1
-        elif tok in ("-p", "--prompt"):
+        elif tok in ("-p", "--prompt", "-lp"):
+            # A swarm seat keeps its own session, so -lp is a plain prompt.
             has_prompt = True
-            out += [tok, "-"]
+            out += ["-p" if tok == "-lp" else tok, "-"]
             prompt_has_value = has_value or (
                 nxt is not None and (" " in nxt or re.fullmatch(r"-\d+|-\d*\.\d+", nxt))
             )

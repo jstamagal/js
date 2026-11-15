@@ -626,6 +626,35 @@ def test_last_finds_the_latest_session_from_another_directory(monkeypatch, tmp_p
     assert [m["content"] for m in load_messages(session)] == ["one", "OK", "two", "OK"]
 
 
+def test_lp_resumes_the_last_session_on_its_model_route_and_effort(monkeypatch, tmp_path):
+    seen: list[dict] = []
+
+    def stream(**kwargs):
+        seen.append(kwargs)
+        return _text("OK")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    monkeypatch.chdir(_dir(tmp_path, "a"))
+    assert cli.main(["-m", "first-model", "-r", "high", "-p", "one"]) == 0
+
+    assert cli.main(["-lp", "two"]) == 0
+
+    [session] = _all_sessions()
+    assert [m["content"] for m in load_messages(session)] == ["one", "OK", "two", "OK"]
+    keys = ("model_id", "provider_id", "provider_base_url", "reasoning_effort")
+    assert [seen[1][k] for k in keys] == [seen[0][k] for k in keys]
+    assert seen[1]["model_id"] == "first-model" and seen[1]["reasoning_effort"] == "high"
+
+
+def test_lp_with_p_is_refused(monkeypatch, tmp_path):
+    monkeypatch.chdir(_dir(tmp_path, "a"))
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["-lp", "two", "-p", "three"])
+
+    assert exc.value.code == 2
+
+
 def test_a_branch_starts_its_usage_totals_at_zero(tmp_path):
     parent = session_store.reserve(session_store.folder_for(tmp_path))
     record_session_start(parent, cwd=tmp_path, agent="defaultagent", mode="repl")

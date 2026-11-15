@@ -4752,6 +4752,8 @@ def _build_parser() -> argparse.ArgumentParser:
     groups['MODELS & LOGINS'].add_argument("--login", metavar="PROVIDER", nargs="?", const="", help=msgs.OPT_LOGIN.words())
     groups['MODELS & LOGINS'].add_argument("--logout", metavar="PROVIDER", help=msgs.OPT_LOGOUT.words())
     groups['PROMPT'].add_argument("-p", "--prompt", nargs="?", const="-", help=msgs.OPT_PROMPT.words())
+    groups['PROMPT'].add_argument("-lp", dest="last_prompt", nargs="?", const="-", metavar="PROMPT",
+                                  help=msgs.OPT_LAST_PROMPT.words())
     groups['PROMPT'].add_argument("-f", "--file", dest="files", action="append", default=[], metavar="PATH", help=msgs.OPT_FILE.words())
     groups['RUNNING'].add_argument("-a", "--agent", help=msgs.OPT_AGENT.words())
     groups['RUNNING'].add_argument("-m", "--model", help=msgs.OPT_MODEL.words())
@@ -4873,6 +4875,10 @@ def _main(argv: list[str] | None = None) -> int:
     _validate_output_argv(parser, dispatch_argv)
     args = parser.parse_args(dispatch_argv)
     _validate_output_flags(parser, args)
+    if args.last_prompt is not None:
+        if args.prompt is not None:
+            parser.error(msgs.LAST_PROMPT_WITH_PROMPT.text())
+        args.last, args.prompt = True, args.last_prompt
     if args.target is not None and not args.commit:
         parser.error(msgs.UNEXPECTED_ARGUMENT.text(word=args.target))
     if args.bare and args.agent is not None:
