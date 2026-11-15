@@ -18,7 +18,7 @@ from js import session_store
 from js.session_catalog import first_metadata
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
-from repl_driver import LineSession
+from repl_driver import stub_screen, turn_stub
 
 AGENTS = ("fromjsrc", "fromenv", "fromflag")
 
@@ -111,10 +111,10 @@ def test_unsafe_agent_in_jsrc_is_rejected(monkeypatch, tmp_path):
 def test_last_resumes_the_session_of_the_resolved_agent(monkeypatch, tmp_path, js_agent, argv, expected):
     _home(monkeypatch, tmp_path, js_agent)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli.runtime, "run_turn",
-                        lambda cfg, system, messages, *a, **k: messages.append({"role": "assistant", "content": "ok"}))
-    monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession(["first run"]))
-    assert cli.main(["--blocking", *argv]) == 0
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(
+        lambda cfg, system, messages, *a, **k: messages.append({"role": "assistant", "content": "ok"})))
+    stub_screen(monkeypatch, ["first run"], wait=True)
+    assert cli.main([*argv]) == 0
     [first] = _sessions(tmp_path)
     assert first_metadata(first)["agent"] == expected
     resumed: list = []
@@ -122,10 +122,10 @@ def test_last_resumes_the_session_of_the_resolved_agent(monkeypatch, tmp_path, j
     def record(cfg, system, messages, *a, **k):
         resumed.append((cfg.agent_id, [m["content"] for m in messages]))
 
-    monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession(["second run"]))
-    monkeypatch.setattr(cli.runtime, "run_turn", record)
+    stub_screen(monkeypatch, ["second run"], wait=True)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(record))
 
-    assert cli.main(["--blocking", "--last", *argv]) == 0
+    assert cli.main(["--last", *argv]) == 0
 
     assert _sessions(tmp_path) == [first]
     assert resumed == [(expected, ["first run", "ok", "second run"])]

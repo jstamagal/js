@@ -3,10 +3,12 @@ wipe it — except when the turn produced nothing, where the bare prompt is drop
 
 from __future__ import annotations
 
+import asyncio
+
 from js import cli
 from js.config import from_env
 from js.memory import append_message, load_messages
-from repl_driver import run_blocking
+from repl_driver import run_async, turn_stub
 
 
 def _session_file(tmp_path):
@@ -16,22 +18,22 @@ def _session_file(tmp_path):
 
 
 def _drive_repl(monkeypatch, tmp_path, run_turn_stub):
-    """Run the interactive loop for exactly one user line, then EOF to exit."""
+    """Run the REPL for exactly one user line, then EOF to exit."""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    run_blocking(from_env(), ["please do the thing"])
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
+    run_async(monkeypatch, from_env(), ["please do the thing"], wait=True)
 
 
 def test_interrupt_keeps_partial_work_across_reload(monkeypatch, tmp_path):
     def run_turn_stub(cfg, system, messages, telemetry, **kwargs):
-        # Simulate a turn that did real work (an assistant tool_call) before ^C.
+        # Simulate a turn that did real work (an assistant tool_call) before ^C cancelled it.
         messages.append({
             "role": "assistant",
             "content": "starting",
             "tool_calls": [{"id": "call_1", "type": "function",
                             "function": {"name": "read", "arguments": "{}"}}],
         })
-        raise KeyboardInterrupt
+        raise asyncio.CancelledError
 
     _drive_repl(monkeypatch, tmp_path, run_turn_stub)
 
@@ -67,7 +69,7 @@ def test_turn_persistence_journals_mutated_history_without_overwriting(tmp_path)
 
 def test_interrupt_with_no_work_drops_the_bare_prompt(monkeypatch, tmp_path):
     def run_turn_stub(cfg, system, messages, telemetry, **kwargs):
-        raise KeyboardInterrupt  # stopped before the model produced anything
+        raise asyncio.CancelledError  # stopped before the model produced anything
 
     _drive_repl(monkeypatch, tmp_path, run_turn_stub)
 

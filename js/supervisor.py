@@ -98,7 +98,7 @@ _current: Supervisor | None = None
 
 
 def get_current() -> Supervisor | None:
-    """The active supervisor, or None outside the non-blocking REPL (one-shot
+    """The active supervisor, or None outside the REPL (one-shot
     `-p`, bench, tests). `task()` uses this to decide its fan-out ramp."""
     return _current
 

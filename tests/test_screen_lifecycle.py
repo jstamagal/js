@@ -1,4 +1,4 @@
-"""The async REPL's screen from open to close: what is in the scrollback before
+"""The REPL's screen from open to close: what is in the scrollback before
 the first prompt, and what happens to a turn still streaming at exit or EOF."""
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import pytest
 from js import cli, runtime
 from js.config import from_env
 from js.memory import load_messages, load_replay_messages
-from repl_driver import LineSession, _telemetry, repl_state
+from repl_driver import _telemetry, repl_state, stub_screen, turn_stub
 
 SGR = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -106,9 +106,9 @@ def test_resume_notices_and_last_exchanges_are_in_the_scrollback_before_the_prom
     def answer(cfg, system, messages, telemetry, **kwargs):
         messages.append({"role": "assistant", "content": f"answer to {messages[-1]['content']}"})
 
-    monkeypatch.setattr(cli.runtime, "run_turn", answer)
-    monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession(["one", "two", "three", "four"]))
-    assert cli.main(["--blocking", "--model", "cliapiproxy/claude-opus-5"]) == 0
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(answer))
+    stub_screen(monkeypatch, ["one", "two", "three", "four"], wait=True)
+    assert cli.main(["--model", "cliapiproxy/claude-opus-5"]) == 0
     session_file = _session_file(tmp_path)
 
     seen: list[str] = []
@@ -119,7 +119,6 @@ def test_resume_notices_and_last_exchanges_are_in_the_scrollback_before_the_prom
 
     terminal = _Recorder()
     _install_screen(monkeypatch, script, terminal)
-    monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession([]))
     assert cli.main(["--session", session_file.stem, "--extra", "RESUME_EXCHANGES=2"]) == 0
 
     shown = seen[0]
@@ -135,7 +134,6 @@ def test_resume_notices_and_last_exchanges_are_in_the_scrollback_before_the_prom
 def test_an_empty_session_says_so_in_the_scrollback(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession([]))
     seen: list[str] = []
 
     async def script(screen):
@@ -181,7 +179,7 @@ def test_quitting_mid_turn_interrupts_it_and_writes_nothing_after_the_screen_clo
     cfg = from_env()
     state, prompt_spec = repl_state(cfg)
     assert runtime.model_client.run_owning_loop(
-        cli._repl_main(cfg, state, _telemetry(cfg, state), LineSession([]), prompt_spec)
+        cli._repl_main(cfg, state, _telemetry(cfg, state), None, None, prompt_spec)
     ) == 0
 
     assert screens[0].exits == 1

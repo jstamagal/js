@@ -103,8 +103,6 @@ pi retries once. Codex does not recover inside a normal turn.
 
 **`AGENTS.md` is read only from the start directory.** Kept on purpose: js never walks up, so `~/js` never reads `~/AGENTS.md`. The other three walk up; Codex even reads `/AGENTS.md`. Not a gap.
 
-**Two REPL loops (async and `--blocking`).** Every input feature has to land twice, or it goes missing in one of them. None of the others keeps a second loop.
-
 ## Novel in js
 
 - **A persistent IPython kernel whose every result includes a fresh `NAMESPACE` line.** It stays accurate after compaction. Codex and pi start a fresh isolate for every cell.

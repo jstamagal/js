@@ -12,6 +12,7 @@ from js import messages as msgs
 from js.toolkit import call_tool, process_net
 from js.toolkit.registry import build_default_registry
 from jail_probe import needs_bwrap
+from repl_driver import stub_screen, turn_stub
 
 SESSION = "workspace"
 
@@ -25,7 +26,11 @@ def turns(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(runtime.T.STOCK_CONTEXT, "cwd", runtime.T.STOCK_CONTEXT.cwd)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_a, **_k: None)
+
+    async def no_compaction(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(cli, "_maybe_auto_compact_async", no_compaction)
 
     class Turns:
         sent: list[str] = []
@@ -41,23 +46,13 @@ def turns(monkeypatch, tmp_path):
         record.results.append({name: probe(context) for name, probe in record.probes.items()})
         messages.append({"role": "assistant", "content": "ok"})
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
     return record
 
 
 def repl(monkeypatch, args, lines):
-    class PromptSessionStub:
-        def __init__(self, history, **kwargs):
-            self.lines = iter(lines)
-
-        def prompt(self, *_args, **_kwargs):
-            try:
-                return next(self.lines)
-            except StopIteration:
-                raise EOFError from None
-
-    monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
-    cli.main([*args, "--blocking", "--session", SESSION])
+    stub_screen(monkeypatch, lines, wait=True)
+    cli.main([*args, "--session", SESSION])
 
 
 def shell_out(command):

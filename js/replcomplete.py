@@ -20,7 +20,7 @@ A first word that is not a command is prose -> spellcheck (backend injected
 via ``spell``).
 
 Always PREFIX match (``startswith``), never fuzzy subsequence. Tab-triggered,
-rotating menu is configured on the PromptSession, not here.
+rotating menu is configured on the screen, not here.
 """
 
 from __future__ import annotations

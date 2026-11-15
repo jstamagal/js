@@ -19,9 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Callable, Mapping
 
-from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import KEY_ALIASES, Keys
 from prompt_toolkit.search import SearchDirection
 
@@ -214,12 +212,3 @@ def history_search(event) -> None:
         search.start_search(direction=SearchDirection.BACKWARD)
 
 
-def prompt_bindings(keymap: Keymap, *, handlers: Mapping[str, Callable] | None = None) -> KeyBindings:
-    """Bind the actions a blocking prompt supplies handlers for. The stock
-    prompt supplies history_search; other keys remain prompt_toolkit's own."""
-    kb = KeyBindings()
-    handlers = {"history_search": history_search} if handlers is None else handlers
-    for action, handler in handlers.items():
-        for sequence in keymap.get(action, ()):
-            kb.add(*sequence)(handler)
-    return kb

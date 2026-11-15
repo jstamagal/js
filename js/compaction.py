@@ -1119,7 +1119,6 @@ def compact_now_sync(
     trigger: dict | None = None,
     flight_data: dict | None = None,
     context: Any = None,
-    loop_runner: asyncio.Runner | None = None,
     emit: Callable[..., Any] | None = None,
     log_dir: Path | None = None,
 ) -> str:
@@ -1132,8 +1131,6 @@ def compact_now_sync(
         preserve_from=preserve_from, trigger=trigger, flight_data=flight_data,
         context=context, emit=emit, log_dir=log_dir,
     )
-    if loop_runner is not None:
-        return loop_runner.run(coro)
     return model_client.run_owning_loop(coro)
 
 

@@ -12,7 +12,7 @@ from ai.providers.openai.protocol import _messages_to_openai
 from js import cli, memory, model_client, runtime
 from js.config import from_env
 from js.toolkit import ToolContext
-from repl_driver import run_blocking
+from repl_driver import run_async
 
 
 _THOUGHT = " first thought\n  keep spacing and Unicode: λ\n"
@@ -76,7 +76,7 @@ def test_live_next_turn_retains_tool_free_reasoning(replay):
 
 
 @pytest.mark.parametrize("mode", ["prompt", "repl"])
-def test_resume_retains_reasoning_without_rewriting_the_journal(replay, mode):
+def test_resume_retains_reasoning_without_rewriting_the_journal(replay, mode, monkeypatch):
     cfg, wire, _context = replay
     memory.append_message(cfg.session_file, {"role": "user", "content": "first"})
     memory.append_message(cfg.session_file, {
@@ -86,7 +86,7 @@ def test_resume_retains_reasoning_without_rewriting_the_journal(replay, mode):
     if mode == "prompt":
         assert cli._run_prompt("next") == 0
     else:
-        run_blocking(cfg, ["next", "exit"])
+        run_async(monkeypatch, cfg, ["next", "exit"], wait=True)
     prior = next(m for m in wire[0] if m["role"] == "assistant")
     assert prior["reasoning"] == _THOUGHT
     assert prior["content"] == "answer"

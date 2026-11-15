@@ -449,7 +449,7 @@ RESET_DONE = Message("Cleared in-process. Session log preserved.")
 WIPE_ROTATED = Message("The conversation moved to session {path}")
 WIPE_NOTHING = Message("No memory file to rotate.")
 PERSONA_TRUNCATED = Message("Truncated. {size} bytes in all.")
-BLOCKING_NO_JOBS = Message("{command} is unavailable under --blocking.")
+REPL_ONLY = Message("{command} is unavailable outside the REPL.")
 NO_JOBS = Message("No running jobs.")
 JOB_ROW = Message("[{id}] {kind}{label}", banner=False)
 
@@ -515,7 +515,6 @@ KEY_UNBOUND = "unbound"
 _HINT_ACTIONS = {
     "INSTALL_ASK_PROVIDER": {"a": ("add",)},
     "TURN_RUNNING": {"^C": ("interrupt",)},
-    "PRESS_CTRL_C_AGAIN": {"^C": ("interrupt",)},
     "STARTUP_HINT": {"Ctrl-D": ("eof",)},
     "PICKER_KEYS": {"↑↓/jk": ("up", "down"), "pgup/pgdn": ("page_up", "page_down"),
                     "/": ("search",), "enter": ("choose",), "q/esc": ("quit",)},
@@ -723,10 +722,6 @@ OPT_LOOP = Message(
     "The deadline is checked between invocations; all other options carry through.")
 OPT_STATS_JSON = Message("Write per-turn stats to PATH as JSON: ttft, tok/s, turn time, tokens.")
 OPT_STATS_CSV = Message("Write per-turn stats to PATH as CSV.")
-OPT_BLOCKING = Message(
-    "Run the legacy blocking REPL: input waits for the turn to finish, and ^C exits. The default runs one "
-    "async event loop, so input stays live while a turn streams and subagents run, and ^C cancels the "
-    "active turn.")
 OPT_EXTRA = Message(
     "Set a dotted config key for this run, e.g. --extra SUBAGENT_DEPTH_MAX=3. May be repeated. "
     "Wins over env and all config files.")
@@ -849,7 +844,6 @@ SKILL_ROW_USER_ONLY = Message("{name} user-only {source} {description}", banner=
 SKILL_HINT = Message("/skill <name> [request] sends one with your request.")
 DROPPED_QUEUED = Message("Dropped {prompts}.")
 QUEUED = Message("Queued. {ahead} ahead.")
-PRESS_CTRL_C_AGAIN = Message("Press ^C again to exit.")
 
 # --- --printonly -------------------------------------------------------------
 

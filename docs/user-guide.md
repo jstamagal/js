@@ -259,7 +259,7 @@ which can be resumed like any session, then clears the in-process messages.
 
 Reasoning streams in and folds to one line, `N tok reasoning`, when the answer
 starts: `REASONING_DISPLAY` 1, the default. `0` hides it, `2` leaves it visible,
-and `3` also puts the provider's token count on the open block. Off the screen (`js -p`, the blocking REPL) nothing can unfold a block, so reasoning never folds there: levels 1 to 3 print its text, and the count line after it when the provider gives one. In the standard async screen, **Ctrl-O** toggles retained reasoning and folded tool rows
+and `3` also puts the provider's token count on the open block. Off the screen (`js -p`) nothing can unfold a block, so reasoning never folds there: levels 1 to 3 print its text, and the count line after it when the provider gives one. In the screen, **Ctrl-O** toggles retained reasoning and folded tool rows
 without changing the input line. `/save` persists the setting. Hiding or folding
 reasoning never removes it from session history or provider replay.
 
@@ -330,7 +330,7 @@ seconds since that request; at 3 every other model request, subagents
 included, also prints `*** Connecting` and `*** Connected ... Nms`,
 and models.dev catalog refreshes and the per-call stream stats line (`ms finish tok tok/s cache`)
 print as well. In the screen that stats
-line follows `NET_DISPLAY`; `-p` and `--blocking` still show it with `-d`.
+line follows `NET_DISPLAY`; `-p` still shows it with `-d`.
 
 `/set EDITING_MODE vi` makes the input line a vi buffer (the default is
 `emacs`, where Enter sends). In vi mode typing starts in insert mode, Enter is a
@@ -446,8 +446,7 @@ Ctrl-D, `suspend` Ctrl-Z, `reasoning_toggle` Ctrl-O, `redraw` Ctrl-L,
 `scroll_up` PageUp, `scroll_down` PageDown, `complete` Tab, and `window_1` to
 `window_9` Ctrl-W then the digit (`bind escape 2 window_2` adds ircII's
 Meta-2). A bad line is one
-`path:line: error` line in the startup banner and is skipped. The `--blocking`
-REPL takes `history_search` from the file; its other keys are prompt_toolkit's. Already received text
+`path:line: error` line in the startup banner and is skipped. Already received text
 and reasoning are retained as an interrupted assistant record. A turn with no
 recorded progress can be discarded; completed tool work is preserved.
 

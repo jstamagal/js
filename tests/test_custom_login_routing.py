@@ -649,9 +649,11 @@ def test_only_explicit_set_lines_reach_the_set_layer(monkeypatch, tmp_path):
             # An `on turn_end set -TEMPERATURE` handler, run inside the turn.
             assert cli._cmd_set("-TEMPERATURE", live["state"], cfg) is None
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", repl_driver.turn_stub(run_turn_stub))
 
-    state = repl_driver.run_blocking(cfg, ["/set TEMPERATURE 0.5", "one", "/model testes/b", "two", "exit"])
+    state = repl_driver.run_async(
+        monkeypatch, cfg, ["/set TEMPERATURE 0.5", "one", "/model testes/b", "two", "exit"], wait=True,
+    )
 
     assert "TEMPERATURE" not in state["live_set"]
     assert sent == [0.5, 0.9]

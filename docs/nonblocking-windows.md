@@ -1,7 +1,7 @@
 # js × irciipy — non-blocking, event-first, windowed
 
-Design notes. Branch `nonblocking-windows`. The async REPL (step 1) is now
-the default; `--blocking` runs the legacy loop. Later steps are still design.
+Design notes. Branch `nonblocking-windows`. The async REPL (step 1) is the
+only REPL. Later steps are still design.
 
 ## North star
 
@@ -88,7 +88,7 @@ Today it is a near-complete REPL. Turn it into an embeddable lib:
 - The seam already exists: `js/events.py EventHooks.set_dispatcher(...)`.
   irciipy becomes that dispatcher.
 
-## Build order (step 1 shipped as the default; `--blocking` opts out)
+## Build order (step 1 shipped)
 
 0. **Event schema + OutputSink** — DONE. `js/output.py`: `OutputEvent`, `Sink`,
    `StdoutSink`, `agent_identity`.

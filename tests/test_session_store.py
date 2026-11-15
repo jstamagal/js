@@ -28,7 +28,7 @@ from js.session_catalog import (
 )
 from js.toolkit import ToolContext
 from js.toolkit.meta import task
-from repl_driver import LineSession
+from repl_driver import stub_screen, turn_stub
 
 
 @pytest.fixture(autouse=True)
@@ -163,14 +163,14 @@ def test_a_subagent_run_is_filed_under_its_parent_session(monkeypatch, tmp_path)
 
 def _repl(monkeypatch, argv, lines, models):
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession(lines))
+    stub_screen(monkeypatch, lines, wait=True)
 
     def turn(cfg, system, messages, *a, **k):
         models.append(cfg.model)
         messages.append({"role": "assistant", "content": f"on {cfg.model}"})
 
-    monkeypatch.setattr(cli.runtime, "run_turn", turn)
-    assert cli.main(["--blocking", *argv]) == 0
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(turn))
+    assert cli.main([*argv]) == 0
 
 
 def test_a_session_resumes_on_the_model_it_was_switched_to(monkeypatch, tmp_path):
@@ -349,9 +349,9 @@ def test_a_no_save_repl_on_a_named_session_reads_it_and_writes_nothing(monkeypat
         seen.append([m["content"] for m in messages])
         messages.append({"role": "assistant", "content": "again"})
 
-    monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession(["more", "/model model-y"]))
-    monkeypatch.setattr(cli.runtime, "run_turn", turn)
-    assert cli.main(["--blocking", "-n", "--session", "kept"]) == 0
+    stub_screen(monkeypatch, ["more", "/model model-y"], wait=True)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(turn))
+    assert cli.main(["-n", "--session", "kept"]) == 0
 
     assert seen == [[*history, "more"]]
     assert session.read_bytes() == before

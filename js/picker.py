@@ -350,7 +350,7 @@ def pick_model(
 def run_modal(app: Application[Any]) -> Any:
     """Run a full-screen picker app to its result, blocking.
 
-    Under the non-blocking REPL this is called from an executor thread while
+    Under the REPL this is called from an executor thread while
     the REPL's own prompt_toolkit app runs on the loop; the picker then runs on
     that loop inside ``in_terminal()``, which detaches the REPL's input and
     redraws it after, so the two apps never read the terminal at once.

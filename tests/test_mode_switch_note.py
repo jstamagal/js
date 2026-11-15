@@ -7,7 +7,7 @@ import pytest
 
 from js import cli, memory
 from js.memory import load_messages
-from repl_driver import run_async
+from repl_driver import run_async, stub_screen, turn_stub
 from test_repl_harness import make_cfg
 
 SESSION = "modeswitch"
@@ -21,6 +21,11 @@ def home(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_a, **_k: None)
+
+    async def no_compaction(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(cli, "_maybe_auto_compact_async", no_compaction)
     sent: list[str] = []
 
     def run_turn_stub(cfg, system, messages, *_a, **_k):
@@ -28,6 +33,7 @@ def home(monkeypatch, tmp_path):
         messages.append({"role": "assistant", "content": "ok"})
 
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
     return sent
 
 
@@ -36,18 +42,8 @@ def _one_shot(text):
 
 
 def _repl(monkeypatch, lines):
-    class PromptSessionStub:
-        def __init__(self, history, **kwargs):
-            self.lines = iter(lines)
-
-        def prompt(self, *_args, **_kwargs):
-            try:
-                return next(self.lines)
-            except StopIteration:
-                raise EOFError from None
-
-    monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
-    cli.main(["--blocking", "--session", SESSION])
+    stub_screen(monkeypatch, lines, wait=True)
+    cli.main(["--session", SESSION])
 
 
 def _session_file(tmp_path):

@@ -4,9 +4,16 @@ from pathlib import Path
 
 import ai
 
+from prompt_toolkit.application import Application, create_app_session
+
 from js import cli, runtime, transcript
 from js.config import Config
 from js.model_client import ModelStreamResult
+from repl_driver import stub_screen
+
+
+async def _no_compaction(*_args, **_kwargs):
+    return None
 
 
 def _fake_stream_result(text: str = "ok") -> ModelStreamResult:
@@ -92,29 +99,44 @@ def test_repl_transcript_logs_user_then_streamed_assistant(monkeypatch, tmp_path
     log_dir = tmp_path / "transcripts"
     cfg = _cfg(tmp_path, log_dir, session_name="repl.jsonl")
 
-    class SessionStub:
-        def __init__(self, history=None, **_kwargs):
-            self.lines = iter(["hello", "exit"])
-
-        def prompt(self, *_args, **_kwargs):
-            return next(self.lines)
-
     def completion_stub(**kwargs):
         kwargs["on_text"]("\x1b[32mREPL_OK\x1b[0m")
         return _fake_stream_result("REPL_OK")
 
     monkeypatch.setattr(cli, "_warn_missing_binaries", lambda: None)
     monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
-    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_maybe_auto_compact_async", _no_compaction)
+    stub_screen(monkeypatch, ["hello", "exit"], wait=True)
 
-    assert cli.main(["--blocking"]) == 0
+    assert cli.main([]) == 0
 
     log = (log_dir / "repl.log").read_text(encoding="utf-8")
     assert log.index("<USER> hello") < log.index("<APE> REPL_OK")
     assert "\x1b[" not in log
+
+
+def test_the_screen_draws_on_the_terminal_not_on_the_transcript_tee(monkeypatch, tmp_path):
+    cfg = _cfg(tmp_path, tmp_path / "transcripts", session_name="repl.jsonl")
+    monkeypatch.setattr(cli, "_warn_missing_binaries", lambda: None)
+    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
+    stub_screen(monkeypatch, [])
+    stub = cli.screen.build_app
+
+    def build_app(**kwargs):
+        # The real screen is a prompt_toolkit Application, which takes the
+        # session's output; prompt_toolkit creates that from sys.stdout on
+        # first use.
+        Application()
+        return stub(**kwargs)
+
+    monkeypatch.setattr(cli.screen, "build_app", build_app)
+
+    with create_app_session():
+        assert cli.main([]) == 0
 
 
 def test_transcript_sink_strips_ansi(tmp_path):
@@ -324,7 +346,7 @@ def test_transcript_failure_setting_keeps_healthy_files_writable(tmp_path, monke
     assert "second\n" in healthy.getvalue()
 
 
-def test_async_repl_transcript_records_the_lines_the_screen_shows(monkeypatch, tmp_path):
+def test_repl_transcript_records_the_lines_the_screen_shows(monkeypatch, tmp_path):
     from repl_driver import run_async
 
     from js import stream_transport
@@ -339,7 +361,7 @@ def test_async_repl_transcript_records_the_lines_the_screen_shows(monkeypatch, t
         return _fake_stream_result("ANSWER_SEEN")
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
-    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_maybe_auto_compact_async", _no_compaction)
 
     run_async(monkeypatch, cfg, ["hello"])
 

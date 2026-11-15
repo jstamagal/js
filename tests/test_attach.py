@@ -11,7 +11,7 @@ from js import attach, cli, media, model_client, runtime
 from js.config import Config
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
-from repl_driver import run_blocking
+from repl_driver import run_async, turn_stub
 
 
 _TINY_PNG = base64.b64decode(
@@ -223,9 +223,9 @@ def test_repl_at_file_attaches_text_file(monkeypatch, tmp_path, capsys):
     def run_turn_stub(_cfg, _system, messages, _telemetry, **kwargs):
         seen.append(messages[-1]["content"])
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, [f"summarize @{note}", "exit"])
+    run_async(monkeypatch, cfg, [f"summarize @{note}", "exit"], wait=True)
 
     # Position-aware @token removal leaves the separator space that preceded the
     # token untouched (byte-for-byte outside the removed span) — unlike the old

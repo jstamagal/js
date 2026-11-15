@@ -38,7 +38,6 @@ branch the audit was made on; they move as the code changes.
 | `js/runtime.py:2137-2138,2266-2267,2390,2405-2406,2431` | _send_resume_nudge/_take_steer/run_turn_async | presentation | Prints MAX_OUTPUT_RESUMING, STEERED, RETRY_BUDGET_EXHAUSTED, RESPONSE_INCOMPLETE and MAX_ITERATIONS straight to stdout/stderr. | js-2lg.27 |
 | `js/cli.py:1234-1267` | _set_model_via_route | presentation | The /model routing and state change prints its own confirmation, so another assembly cannot reuse it without that output. | js-2lg.82 |
 | `js/cli.py:1158-1184` | _maybe_auto_compact_async | presentation | The between-turn auto-compaction trigger (status flag, net role, window resolver) is combined with printing its notices. | js-2lg.82 |
-| `js/cli.py:3558-3586,4254-4291` | _do_turn, _blocking_repl | policy | The rule to keep a partial turn or discard an unstarted one on ^C or error (marks, orphan healing, requeued notes) is copied twice and combined with print and msgs.say. | js-2lg.82 |
 | `js/cli.py:2437` | _run_rc_commands | presentation | Output from the startup jsrc replay is dropped by redirecting stdout into a StringIO. | js-2lg.82 |
 | `js/cli.py:2959-2994` | _json_run, _emit_failure | presentation | The headless error event is taken from the last printed stderr line, with ANSI codes and warning marks removed. | js-2lg.82 |
 | `js/headless.py:170-180` | watch_output | presentation | The process-global sys.stdout and sys.stderr are replaced so progress can detect silence. | js-2lg.88 |
@@ -258,7 +257,7 @@ branch the audit was made on; they move as the code changes.
 | `js/toolkit/kernel.py` | _died / _busy / kernel | policy | Model-facing text is loaded from `js/model_text/toolkit_kernel.json`; selection and execution policy are unchanged. | js-2lg.69 |
 | `js/toolkit/toolbox.py` | toolbox | policy | Model-facing text is loaded from `js/model_text/toolkit_toolbox.json`; selection and execution policy are unchanged. | js-2lg.73 |
 | `js/toolkit/lsp.py` | server_for / lsp | policy | Model-facing text is loaded from `js/model_text/toolkit_lsp.json`; selection and execution policy are unchanged. | js-2lg.76 |
-| `js/cli.py` | _note_mode_switch, _note_model_switch, _run_prompt, _run_repl_turn, _blocking_repl, _run_args | policy | Model-facing text is loaded from `js/model_text/cli.json`; selection and execution policy are unchanged. | js-2lg.78 |
+| `js/cli.py` | _note_mode_switch, _note_model_switch, _run_prompt, _run_repl_turn, _run_args | policy | Model-facing text is loaded from `js/model_text/cli.json`; selection and execution policy are unchanged. | js-2lg.78 |
 | `js/cli.py` | _cmd_cd, _cmd_add, _cmd_drop | policy | Model-facing text is loaded from `js/model_text/cli.json`; selection and execution policy are unchanged. | js-2lg.78 |
 | `js/cli.py` | _append_closing_note, _cmd_quit | policy | Model-facing text is loaded from `js/model_text/cli.json`; selection and execution policy are unchanged. | js-2lg.78 |
 | `js/cli.py` | _run_commit | policy | Model-facing text is loaded from `js/model_text/cli.json`; selection and execution policy are unchanged. | js-2lg.78 |
@@ -362,8 +361,8 @@ Resolution notes (the rows below record the original audit):
   the attachment prefix. The REPL keeps the default @ syntax.
 - js-2lg.123: `run_ex` takes the verb-handler table and force-form aliases;
   the extracted default handlers preserve existing edits, writes and dispatch.
-- js-2lg.119: key-file loading, parsing and binding accept the action catalogue;
-  blocking-prompt bindings accept handlers. Stock actions and handlers stay default.
+- js-2lg.119: key-file loading, parsing and binding accept the action catalogue.
+  Stock actions and handlers stay default.
 - js-2lg.115: command completion and argument routing accept a command prefix;
   the REPL continues to supply the default slash grammar.
 - js-2lg.113: the skill picker accepts separate list and search action maps;
@@ -394,16 +393,14 @@ Resolution notes (the rows below record the original audit):
 | `js/cli.py:3727-3744` | _startup_banner | presentation | The startup banner layout (MOTD, title, agent, model, prompt, memory, hint, notices) is fixed. | js-2lg.86 |
 | `js/cli.py:3915-3920,3939-3950` | _repl_main.on_line, _repl_main.on_interrupt | policy | "/flush" and "/cancel queued" are fixed input words, and ^C always cancels the turn and drops queued input. | js-2lg.86 |
 | `js/cli.py:4000-4004,4109-4128` | _repl_main, _repl_prompt_session | policy | The clipimage and paste key bindings and the prompt-session behaviour (search case, completion style, suspend, erase) are fixed. | js-2lg.86 |
-| `js/cli.py:4160-4169` | _blocking_repl | policy | A second ^C at an idle prompt ends the blocking REPL; this rule is fixed. | js-2lg.86 |
 | `js/screen.py:47,811-855` | build_app (_arm, _arm_or_quit, _ctrl_c, _ctrl_d) | policy | Fixes what interrupt and eof do (clear the line, then quit on a second press within 2.0 s, Ctrl-D deletes inside a line). The window is not a setting. | js-2lg.101 |
 | `js/screen.py:879-893` | build_app | policy | The action-to-handler table is fixed. A keymap can only move keys between js's 13 actions; an assembly cannot add an action or change one. | js-2lg.101 |
-| `js/messages.py:419,700,755,805-808,1157,1172-1173,1181,1191,1203,1206` | TURN_RUNNING / PRESS_CTRL_C_AGAIN / STARTUP_HINT / PICKER_KEYS* / PICK_HELP / SKILLS_KEYS / SESSIONS_*KEYS | presentation | Key hints spell fixed keys (^C, Ctrl-D, arrows/jk, esc, q, v, b, i, a, f) and do not follow the keymap. | js-2lg.107 |
+| `js/messages.py:419,700,755,805-808,1157,1172-1173,1181,1191,1203,1206` | TURN_RUNNING / STARTUP_HINT / PICKER_KEYS* / PICK_HELP / SKILLS_KEYS / SESSIONS_*KEYS | presentation | Key hints spell fixed keys (^C, Ctrl-D, arrows/jk, esc, q, v, b, i, a, f) and do not follow the keymap. | js-2lg.107 |
 | `js/picker.py:246-294` | ModelPicker.application | policy | Fixed keymap (up/k, down/j, pageup/pagedown, tab/left/right, enter, escape/q/c-c, f). | js-2lg.109 |
 | `js/session_picker.py:85-87,234-316,464-483` | SessionPicker.press / _list_key / _messages_key / _info_key / application | policy | Fixed keymap (j/k, g/G, v, /, b, i, a, r, q, escape, c-w, c-u). | js-2lg.111 |
 | `js/skill_picker.py:32-35,109-154,196-215` | SkillPicker.press / _search_key / application | policy | Fixed keymap (j/k, g/G, space, enter, /, escape, q, c-u). | js-2lg.113 |
 | `js/replcomplete.py:39` | CMDCHAR | policy | The command character "/" is fixed. | js-2lg.115 |
 | `js/keys.py:47-62` | ACTIONS | policy | The set of REPL actions is fixed in code; an assembly cannot add one. | js-2lg.119 |
-| `js/keys.py:202-208` | prompt_bindings | policy | The --blocking prompt binds only history_search from the keymap. | js-2lg.119 |
 | `js/exline.py:78-116` | run_ex | policy | Fixed ex verb table (w, wq, x, q, e, r, n, and the ! forms). | js-2lg.123 |
 | `js/attach.py:168` | split_repl_attachments | policy | The "@" prefix as attachment syntax is fixed. | js-2lg.132 |
 | `js/login_cli.py:133-179,719-726` | _curses_picker / _curses_prompt | policy | The picker keymap (/, j, k, q, a, n, e, space, Esc, Enter) is fixed in code. | js-2lg.144 |

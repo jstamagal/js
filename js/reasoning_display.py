@@ -43,8 +43,8 @@ def settled_rows(line: str, held: int, width: int, *, whole: bool) -> tuple[list
 
 
 class StderrReasoning:
-    """Reasoning on stderr, for a run without the screen (`js -p`, the
-    blocking REPL). Nothing there can unfold a block, so nothing folds: at
+    """Reasoning on stderr, for a run without the screen (`js -p`).
+    Nothing there can unfold a block, so nothing folds: at
     REASONING_DISPLAY 0 nothing shows; at 1, 2 and 3 the heading, the text,
     and at the end `N tok reasoning` when the provider gave a count. On a terminal
     the text is word-wrapped to its width in COLOR_REASONING, each row shown

@@ -19,7 +19,7 @@ from js import messages as msgs
 from js.config import Config
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
-from repl_driver import repl_state
+from repl_driver import repl_state, stub_screen, turn_stub
 
 @pytest.fixture(autouse=True)
 def fresh_tool_context(monkeypatch, tmp_path):
@@ -174,19 +174,22 @@ def test_interactive_prompt_enables_ctrl_z_suspend(monkeypatch, tmp_path):
     monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    seen = {}
+    real_build_app = cli.screen.build_app
+    stub_screen(monkeypatch, [])
+    stub_build_app = cli.screen.build_app
+    suspends = []
 
-    class PromptSessionStub:
-        def __init__(self, history, **kwargs):
-            seen.update(kwargs)
+    def build_app(**kwargs):
+        app, _scrollback = real_build_app(**kwargs)
+        suspends.extend(
+            binding for binding in app.key_bindings.bindings if tuple(binding.keys) == ("c-z",)
+        )
+        return stub_build_app(**kwargs)
 
-        def prompt(self, *_args, **_kwargs):
-            raise EOFError
+    monkeypatch.setattr(cli.screen, "build_app", build_app)
 
-    monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
-
-    assert cli.main(["--blocking"]) == 0
-    assert seen["enable_suspend"] is True
+    assert cli.main([]) == 0
+    assert suspends
 
 
 def test_prompt_model_flag_with_provider_prefix_routes_provider_override(monkeypatch, tmp_path):
@@ -237,13 +240,6 @@ def test_interactive_model_flag_with_provider_prefix_routes_provider_override(mo
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     seen = {}
 
-    class PromptSessionStub:
-        def __init__(self, history, **kwargs):
-            self.lines = iter(["hi", "exit"])
-
-        def prompt(self, *_args, **_kwargs):
-            return next(self.lines)
-
     def fake_run_turn(cfg, system, messages, telemetry, trace_override=False, tool_context=None, **kwargs):
         seen["cfg_model"] = cfg.model
         seen["cfg_provider_id"] = cfg.provider_id
@@ -251,12 +247,15 @@ def test_interactive_model_flag_with_provider_prefix_routes_provider_override(mo
         seen["provider_id_override"] = kwargs.get("provider_id_override")
         messages.append({"role": "assistant", "content": "ok"})
 
-    monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
-    monkeypatch.setattr(cli.runtime, "run_turn", fake_run_turn)
-    monkeypatch.setattr(cli, "_append_turn", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
+    async def no_compaction(*_args, **_kwargs):
+        return None
 
-    actual = cli.main(["--blocking", "--model", "openai-codex/gpt-5.5"])
+    stub_screen(monkeypatch, ["hi", "exit"], wait=True)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(fake_run_turn))
+    monkeypatch.setattr(cli, "_append_turn", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_maybe_auto_compact_async", no_compaction)
+
+    actual = cli.main(["--model", "openai-codex/gpt-5.5"])
 
     assert actual == 0
     assert seen["cfg_model"] == "gpt-5.5"
@@ -672,19 +671,11 @@ def test_no_save_warning_is_only_for_a_headless_no_save_run(monkeypatch, tmp_pat
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.setattr(cli, "_run_prompt", lambda prompt, **kwargs: 0)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-
-    class PromptSessionStub:
-        def __init__(self, history, **kwargs):
-            pass
-
-        def prompt(self, *_args, **_kwargs):
-            raise EOFError
-
-    monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
+    stub_screen(monkeypatch, [])
 
     assert cli.main(["-p", "hi"]) == 0
     assert NO_SAVE_WARNING not in capsys.readouterr().err
-    assert cli.main(["--blocking", "-n"]) == 0
+    assert cli.main(["-n"]) == 0
     assert NO_SAVE_WARNING not in capsys.readouterr().err
 
 

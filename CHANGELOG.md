@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **The `--blocking` REPL is removed.** js kept two REPL loops, and a fix to
+  how a turn is saved, kept or discarded had to land in both; the blocking one
+  had fallen behind (it never saved between tool calls) and was not in use.
+  Gone with it: the `--blocking` flag, the blocking prompt's key bindings
+  (`keys.prompt_bindings`), the "Press ^C again to exit" prompt, and
+  `loop_runner` on `runtime.run_turn` and `compaction.compact_now_sync`. The
+  REPL now prints the `Resume:` command when it exits, which only the
+  blocking loop did. REPL tests that ran on the blocking loop run on the REPL.
 - **Large images are fitted, not refused, as Claude Code does.** An image read,
   attached, pasted or returned by a tool was refused over `FILE_BYTES_MAX`
   (2 MB) or dropped over `TOOL_MEDIA_MAX`. Now one over 2000 px on a side is

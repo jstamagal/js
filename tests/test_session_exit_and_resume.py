@@ -1,5 +1,5 @@
-"""Leaving a session and coming back: the exit hint, --last, the two-^C guard,
-and /quit with a closing note."""
+"""Leaving a session and coming back: the exit hint, --last, and /quit with a
+closing note."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import shlex
 from js import cli
 from js.config import from_env
 from js.memory import load_messages
-from repl_driver import LineSession, run_blocking
+from repl_driver import run_async, stub_screen, turn_stub
 
 
 def _reply(cfg, system, messages, *a, **k):
@@ -17,24 +17,24 @@ def _reply(cfg, system, messages, *a, **k):
 
 
 def _repl(monkeypatch, tmp_path, argv, lines=(), run_turn=lambda *a, **k: None):
-    """Launch `js --blocking *argv` over *lines*; it exits on EOF."""
+    """Launch `js *argv` over *lines*; it exits on EOF."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.delenv("JS_MODEL", raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession(lines))
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn)
-    return cli.main(["--blocking", *argv])
+    stub_screen(monkeypatch, lines, wait=True)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn))
+    return cli.main([*argv])
 
 
 def _session(monkeypatch, tmp_path, lines, **state_kwargs):
-    """Run the blocking loop over *lines* on a fresh session; return its state and config."""
+    """Run the REPL over *lines* on a fresh session; return its state and config."""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli.runtime, "run_turn", lambda *a, **k: None)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(lambda *a, **k: None))
     cfg = from_env()
-    return run_blocking(cfg, lines, **state_kwargs), cfg
+    return run_async(monkeypatch, cfg, lines, wait=True, **state_kwargs), cfg
 
 
 def _only_session(tmp_path):
@@ -58,6 +58,12 @@ def test_exit_prints_a_runnable_resume_command(monkeypatch, tmp_path, capsys):
     assert args == ["js", "--model", "cliapiproxy/claude-opus-5", "--session", cfg.session_file.stem]
 
 
+def test_leaving_the_repl_prints_the_resume_command(monkeypatch, tmp_path, capsys):
+    assert _repl(monkeypatch, tmp_path, ["--session", "kept"], ["hello"], run_turn=_reply) == 0
+
+    assert _resume_args(capsys.readouterr().out)[-2:] == ["--session", "kept"]
+
+
 def test_no_resume_hint_for_a_session_with_nothing_in_it(monkeypatch, tmp_path, capsys):
     state, cfg = _session(monkeypatch, tmp_path, [])
     capsys.readouterr()
@@ -65,41 +71,6 @@ def test_no_resume_hint_for_a_session_with_nothing_in_it(monkeypatch, tmp_path, 
     cli._print_resume_hint(cfg, state)
 
     assert capsys.readouterr().out == ""
-
-
-class _InterruptedSession(LineSession):
-    """The first *interrupts* prompts raise KeyboardInterrupt, standing in for ^C
-    at an idle prompt; then *lines*, then EOF."""
-
-    def __init__(self, lines, interrupts):
-        super().__init__(lines)
-        self.interrupts = interrupts
-
-    def prompt(self, *args, **kwargs):
-        if self.interrupts > 0:
-            self.interrupts -= 1
-            raise KeyboardInterrupt
-        return super().prompt(*args, **kwargs)
-
-
-def _interrupted(monkeypatch, tmp_path, lines, interrupts):
-    state, _cfg = _session(monkeypatch, tmp_path, _InterruptedSession(lines, interrupts))
-    return state
-
-
-def test_a_second_interrupt_at_the_prompt_exits(monkeypatch, tmp_path):
-    # Two ^C in a row end the loop before the line after them is read.
-    state = _interrupted(monkeypatch, tmp_path, ["never read"], interrupts=2)
-
-    assert state["messages"] == []
-
-
-def test_an_interrupt_does_not_end_a_session_that_keeps_going(monkeypatch, tmp_path):
-    # One ^C, then a real line: the session must survive to record it.
-    _interrupted(monkeypatch, tmp_path, ["still here"], interrupts=1)
-
-    roles = [m["role"] for m in load_messages(_only_session(tmp_path))]
-    assert roles == ["user"]
 
 
 def test_last_resumes_the_previous_session(monkeypatch, tmp_path):
@@ -110,9 +81,9 @@ def test_last_resumes_the_previous_session(monkeypatch, tmp_path):
     def record(cfg, system, messages, *a, **k):
         resumed.append([m["content"] for m in messages])
 
-    monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession(["second run"]))
-    monkeypatch.setattr(cli.runtime, "run_turn", record)
-    assert cli.main(["--blocking", "--last"]) == 0
+    stub_screen(monkeypatch, ["second run"], wait=True)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(record))
+    assert cli.main(["--last"]) == 0
 
     assert _only_session(tmp_path) == session_file
     assert resumed == [["first run", "ok", "second run"]]

@@ -9,20 +9,7 @@ from prompt_toolkit.key_binding.key_bindings import _parse_key
 from js import keys, screen
 
 
-def test_assembly_action_can_be_bound_and_run_in_blocking_prompt():
-    from types import SimpleNamespace
-    from prompt_toolkit.buffer import Buffer
-
-    actions = (*keys.ACTIONS, keys.Action("clear", keys.INPUT, (), ""))
-    keymap, errors = keys.parse("bind c-w clear", "/keys", actions=actions)
-    assert errors == []
-    buffer = Buffer()
-    buffer.text = "unfinished"
-    kb = keys.prompt_bindings(keymap, handlers={"clear": lambda event: event.current_buffer.reset()})
-    kb.get_bindings_for_keys((_parse_key("c-w"),))[0].handler(SimpleNamespace(current_buffer=buffer))
-    assert buffer.text == ""
-
-# The keys the async screen answered to before the keys file existed, with
+# The keys the screen answered to before the keys file existed, with
 # Ctrl-R moved to history_search, reasoning_toggle on Ctrl-O, and Ctrl-W then
 # a digit showing that window.
 DEFAULTS = {
@@ -205,12 +192,18 @@ def test_bind_actions_carries_each_actions_filter_and_eager_flag():
     assert not binding.filter()
 
 
-def test_the_blocking_prompt_binds_the_history_search_keys():
+def test_the_screen_binds_the_history_search_keys():
+    from types import SimpleNamespace
+
     keymap, _ = _parse("bind c-f history_search\n")
 
-    kb = keys.prompt_bindings(keymap)
+    app, _ = screen.build_app(prompt="", history=None, completer=None,
+                              on_line=lambda line: None, on_interrupt=lambda: False, on_eof=lambda: None,
+                              keymap=keymap, application_factory=lambda **kwargs: SimpleNamespace(**kwargs))
 
-    assert _bound(kb) == {"history_search": _expected(keymap)["history_search"]}
+    for key in ("c-r", "c-f"):
+        bound = app.key_bindings.get_bindings_for_keys((_parse_key(key),))
+        assert [binding.handler for binding in bound] == [keys.history_search], key
 
 
 def test_a_collapsed_reasoning_block_names_the_toggle_key():

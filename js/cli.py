@@ -30,10 +30,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import ai
-from prompt_toolkit import PromptSession
-from prompt_toolkit.formatted_text import ANSI
+from prompt_toolkit.application.current import get_app_session
 from prompt_toolkit.key_binding import merge_key_bindings
-from prompt_toolkit.shortcuts import CompleteStyle
 
 from . import supervisor
 from . import subagent_windows
@@ -1872,17 +1870,17 @@ def _cmd_session(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
-# The session `/session` chose, run once the REPL has closed: {"target", "blocking"}.
+# The session `/session` chose, run once the REPL has closed: {"target"}.
 _pending_switch: dict[str, object] = {}
 
 
-def _queue_switch(state: dict, *, blocking: bool) -> None:
+def _queue_switch(state: dict) -> None:
     target = state.get("switch_session")
     if isinstance(target, _SessionTarget):
-        _pending_switch.update(target=target, blocking=blocking)
+        _pending_switch.update(target=target)
 
 
-def _exec_session(target: _SessionTarget, *, blocking: bool) -> None:
+def _exec_session(target: _SessionTarget) -> None:
     """Replace this process with js resuming `target` in its own directory
     and agent. Resume puts it back on its last-stamped model."""
     _enter_session_dir(target)
@@ -1891,8 +1889,6 @@ def _exec_session(target: _SessionTarget, *, blocking: bool) -> None:
         argv += ["-a", target.agent]
     if target.jailed and target.cwd:
         argv += ["-C", target.cwd]
-    if blocking:
-        argv.append("--blocking")
     sys.stdout.flush()
     sys.stderr.flush()
     os.execv(sys.executable, argv)
@@ -1996,7 +1992,7 @@ def _cmd_persona(arg: str, state: dict, cfg: Config) -> str | None:
 def _cmd_jobs(arg: str, state: dict, cfg: Config) -> str | None:
     sup = supervisor.get_current()
     if sup is None:
-        msgs.say(msgs.BLOCKING_NO_JOBS, command="/jobs")
+        msgs.say(msgs.REPL_ONLY, command="/jobs")
         return None
     jobs = sup.jobs()
     if not jobs:
@@ -2009,7 +2005,7 @@ def _cmd_jobs(arg: str, state: dict, cfg: Config) -> str | None:
 def _cmd_cancel(arg: str, state: dict, cfg: Config) -> str | None:
     sup = supervisor.get_current()
     if sup is None:
-        msgs.say(msgs.BLOCKING_NO_JOBS, command="/cancel")
+        msgs.say(msgs.REPL_ONLY, command="/cancel")
         return None
     if arg:
         if not arg.isdigit():
@@ -2033,7 +2029,7 @@ def _cmd_window(arg: str, state: dict, cfg: Config) -> str | None:
     [N]` closes N or the window on screen."""
     windows = state.get("windows")
     if windows is None:
-        msgs.say(msgs.BLOCKING_NO_JOBS, command="/window")
+        msgs.say(msgs.REPL_ONLY, command="/window")
         return None
     words = arg.split()
     usage = msgs.USAGE.said(usage="/window [N | close [N]]")
@@ -2487,11 +2483,6 @@ def _run_script_line(line: str, state: dict, cfg: Config) -> str | None:
 QUIT_WORDS = ("exit", "quit", ":q")  # quit without the leading '/'
 
 
-def _repl_prompt_options() -> dict:
-    return dict(search_ignore_case=True, complete_while_typing=False,
-                complete_style=CompleteStyle.MULTI_COLUMN, enable_suspend=True, erase_when_done=True)
-
-
 def _repl_input_bindings(settings_store):
     return [clipimage.key_bindings(settings_store), pastes.key_bindings(settings_store)]
 
@@ -2520,11 +2511,9 @@ class ReplAssembly:
     skill_pattern: re.Pattern | None = None
     flush_lines: tuple[str, ...] = ("/flush", "/cancel queued")
     interrupt: Callable | None = None
-    blocking_interrupts_max: int = 2
     banner: Callable | None = None
     hint_renderer: Callable[[msgs.Message, dict], msgs.Message] | None = None
     input_bindings: Callable | None = None
-    prompt_options: Callable[[], dict] = _repl_prompt_options
 
 
 DEFAULT_REPL_ASSEMBLY = ReplAssembly()
@@ -3737,9 +3726,8 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_message, turn_cfg, l
     """One main turn on the async loop. Runs the turn, syncs live-settings
     deltas, persists new messages, then awaits auto-compaction. Owns cancellation
     ENTIRELY: on ^C the turn Task is cancelled, and this handler — never the
-    caller — persists partial work and heals orphaned tool_calls, mirroring the
-    legacy blocking KeyboardInterrupt path, then re-raises so the job ends
-    cancelled.
+    caller — persists partial work and heals orphaned tool_calls, then re-raises
+    so the job ends cancelled.
 
     ``steer`` hands the runtime lines typed during the turn. ``notes`` are
     the queued reminders ``user_message`` carries; a discarded turn puts
@@ -4144,8 +4132,8 @@ async def _initialize_repl_agent(cfg, state, telemetry, prompt_spec) -> None:
         msgs.warn(msgs.FAILED, error=_error_text(exc))
 
 
-async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = "") -> int:
-    """Non-blocking REPL: input, the active turn, and subagents all share ONE
+async def _repl_main(cfg, state, telemetry, history, completer, prompt_spec, banner: str = "") -> int:
+    """The REPL: input, the active turn, and subagents all share ONE
     event loop. The screen has three regions (scrollback, status, input); turn
     output lands in the scrollback and never touches the input line. ^C cancels
     the active turn instead of killing the process; a line typed during a turn
@@ -4289,8 +4277,8 @@ async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = 
 
     app, scrollback = screen.build_app(
         prompt=display_mod.prompt,
-        history=session.history,
-        completer=session.completer,
+        history=history,
+        completer=completer,
         on_line=on_line,
         on_interrupt=on_interrupt,
         on_eof=on_eof,
@@ -4417,176 +4405,15 @@ def _repl_state(cfg, prompt_spec, *, messages: list[dict] | None = None,
     return state
 
 
-def _repl_prompt_session(cfg: Config, keymap, completer, *, assembly: ReplAssembly | None = None) -> PromptSession:
-    """The prompt session of the REPL: its history and completer serve both
-    REPLs; the --blocking one reads from it. It erases each sent line, and
-    `_blocking_echo` prints back the ones that are messages."""
-    return PromptSession(
-        history=prompt_history.PromptHistory(
-            cfg.history_file,
-            lambda: _prompt_origin(cfg),
-            cwd_first=settings.knob(cfg.settings, "HISTORY_ORDER") == "cwd",
-            limit=settings.knob(cfg.settings, "HISTORY_SIZE"),
-            state_root=_paths.state_root(),
-        ),
-        key_bindings=keys_mod.prompt_bindings(keymap),
-        completer=completer,
-        **(assembly or DEFAULT_REPL_ASSEMBLY).prompt_options(),
+def _repl_history(cfg: Config) -> prompt_history.PromptHistory:
+    """The input history of the REPL."""
+    return prompt_history.PromptHistory(
+        cfg.history_file,
+        lambda: _prompt_origin(cfg),
+        cwd_first=settings.knob(cfg.settings, "HISTORY_ORDER") == "cwd",
+        limit=settings.knob(cfg.settings, "HISTORY_SIZE"),
+        state_root=_paths.state_root(),
     )
-
-
-def _blocking_echo(raw: str, state: dict) -> str | None:
-    """The line the --blocking REPL leaves for a sent line ``raw``: the
-    prompt and the line as typed, or None when it ran as a command
-    (`_echoes`). The prompt session erases its own copy."""
-    line = pastes.expand(raw).strip()
-    if not line or not _echoes(line, state):
-        return None
-    return display_mod.user_line(raw).rstrip("\n")
-
-
-def _blocking_repl(cfg, state, telemetry, session, prompt_spec) -> None:
-    """The --blocking REPL: read a line from ``session``, run it as a command
-    or a turn, repeat until exit, EOF, or a second ^C at an idle prompt."""
-    mcp_loop = asyncio.Runner()
-    interrupt_count = 0
-    session.key_bindings = merge_key_bindings([
-        *(_repl_assembly(state).input_bindings or _repl_input_bindings)(lambda: state["settings"]),
-    ])
-    _emit_session_event(state, telemetry, cfg, "session_start")
-    if prompt_spec.exchanges and not state["messages"]:
-        mcp_loop.run(_initialize_repl_agent(cfg, state, telemetry, prompt_spec))
-    while state["running"]:
-        try:
-            raw = session.prompt(ANSI(display_mod.prompt()))
-            if (echo := _blocking_echo(raw, state)) is not None:
-                print(echo)
-            line = pastes.expand(raw).strip()
-            interrupt_count = 0
-        except KeyboardInterrupt:
-            # One stray ^C at the prompt should not end a session that took real
-            # work to build; the second one within the same idle stretch does.
-            interrupt_count += 1
-            if interrupt_count < _repl_assembly(state).blocking_interrupts_max:
-                print()
-                msgs.say(_repl_hint(msgs.PRESS_CTRL_C_AGAIN, state))
-                continue
-            print()
-            break
-        except EOFError:
-            print()
-            break
-        if not line:
-            continue
-        if _handle_command(line, state, cfg):
-            _sync_telemetry_from_live_settings(cfg, state, telemetry)
-            continue
-        if (sink := _transcript_sink(telemetry)) is not None:
-            sink.emit(output.event("transcript_user", text=line))
-
-        prompt_text, line_attachments = attach.split_repl_attachments(line)
-        _emit_repl_event(
-            state,
-            telemetry,
-            "input",
-            text=prompt_text,
-            attachments=line_attachments,
-        )
-        _sync_telemetry_from_live_settings(cfg, state, telemetry)
-        try:
-            prompt_text = _expand_skill_line(prompt_text, state)
-            turn_cfg = _cfg_for_live_state(cfg, state)
-            user_message = attach.build_user_message(prompt_text, line_attachments, turn_cfg, missing_ok=True)
-        except ValueError as e:
-            # AttachmentError / SkillInvocationError (ValueErrors) or a login-gate
-            # routing error from re-resolving the live model: degrade to one friendly
-            # line, keep the REPL.
-            msgs.say(msgs.FAILED, error=e)
-            continue
-
-        user_message = _note_mode_switch(cfg, user_message, "repl")
-        user_message = _note_model_switch(turn_cfg, user_message)
-        notes = _take_pending_notes(state)
-        user_message = _with_notes(user_message, notes)
-        state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
-        state["messages"].append(user_message)
-        _append_turn(cfg, user_message)
-        try:
-            before_turn_model = _model_from_live_settings(state["settings"])
-            before_turn_provider = _provider_from_live_settings(state["settings"])
-            before_turn_lock = _live_bool_setting(
-                state["settings"],
-                ("SUBAGENT_MODEL_LOCK",),
-                cfg.lock_subagent_model,
-            )
-            runtime.run_turn(
-                turn_cfg,
-                state["system"],
-                state["messages"],
-                telemetry,
-                trace_override=bool(
-                    settings.get_dotted(state["settings"], ("TRACE",), cfg.trace)
-                ),
-                reasoning_effort_override=turn_cfg.reasoning_effort,
-                max_output_override=turn_cfg.max_output_tokens,
-                tool_registry=state["tool_registry"],
-                sampling=login_defaults.sampling(turn_cfg),
-                event_hooks=state.get("events"),
-                mcp_host=state.get("mcp_host"),
-                loop_runner=mcp_loop,
-            )
-            after_turn_model = _model_from_live_settings(state["settings"])
-            if after_turn_model != before_turn_model:
-                _sync_model_from_live_settings(state)
-            after_turn_provider = _provider_from_live_settings(state["settings"])
-            _sync_provider_delta_from_live_settings(state, before_turn_provider, after_turn_provider)
-            after_turn_lock = _live_bool_setting(
-                state["settings"],
-                ("SUBAGENT_MODEL_LOCK",),
-                cfg.lock_subagent_model,
-            )
-            if after_turn_lock != before_turn_lock:
-                _sync_tool_registry_from_live_settings(cfg, state)
-            _sync_telemetry_from_live_settings(cfg, state, telemetry)
-            _persist_turn_messages(turn_cfg, state["messages"])
-            _maybe_auto_compact(turn_cfg, state)
-        except KeyboardInterrupt:
-            _emit_repl_event(state, telemetry, "cancel", reason="keyboard_interrupt")
-            _sync_telemetry_from_live_settings(cfg, state, telemetry)
-            if _turn_has_progress(state["messages"], user_message):
-                # Turn did real work (assistant/tool messages beyond the user
-                # prompt) before ^C landed. Keep it: persist the partial turn,
-                # then heal any orphaned tool_calls in memory so the next turn is
-                # valid. The mark is informational ONLY — a `rollback_to:` mark
-                # would silently re-truncate this turn on the next session load.
-                print()
-                msgs.say(msgs.TURN_INTERRUPTED_KEPT)
-                _persist_turn_messages(turn_cfg, state["messages"])
-                M.append_mark(cfg.session_file, "turn_interrupted")
-                state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
-            else:
-                # Stopped before the model produced anything worth keeping — drop
-                # the bare user prompt (rollback removes it on reload too).
-                print()
-                msgs.say(msgs.TURN_ABORTED)
-                _discard_unstarted_turn(cfg, state["messages"], user_message)
-                _requeue_notes(state, notes)
-                M.append_mark(cfg.session_file, "turn_aborted")
-        except Exception as e:  # noqa: BLE001
-            msgs.say(msgs.FAILED, error=_error_text(e))
-            if isinstance(e, OSError) and e.errno == errno.ESTALE:
-                state["messages"] = M.load_replay_messages(turn_cfg.session_file)
-                continue
-            if _turn_has_progress(state["messages"], user_message):
-                _persist_turn_messages(turn_cfg, state["messages"])
-            else:
-                _discard_unstarted_turn(cfg, state["messages"], user_message)
-                _requeue_notes(state, notes)
-            M.append_mark(cfg.session_file, f"error: {msgs.words_of(_error_text(e))}")
-    _emit_session_event(state, telemetry, cfg, "session_end")
-    mcp_loop.run(_close_session_mcp_host(state))
-    model_client.install_asyncgen_shutdown_filter(mcp_loop.get_loop())
-    mcp_loop.close()
 
 
 # --------------------------------------------------------------------------
@@ -4771,7 +4598,7 @@ def main(argv: list[str] | None = None) -> int:
     pending = dict(_pending_switch)
     _pending_switch.clear()
     if pending:
-        _exec_session(pending["target"], blocking=pending["blocking"])
+        _exec_session(pending["target"])
     return code
 
 
@@ -4854,7 +4681,6 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lock", action="store_true", help=msgs.OPT_LOCK.words())
     parser.add_argument("--stats-json", dest="stats_json", metavar="PATH", help=msgs.OPT_STATS_JSON.words())
     parser.add_argument("--stats-csv", dest="stats_csv", metavar="PATH", help=msgs.OPT_STATS_CSV.words())
-    parser.add_argument("--blocking", action="store_true", help=msgs.OPT_BLOCKING.words())
     parser.add_argument("--extra", dest="extras", action="append", default=[], metavar="KEY=VALUE",
                         help=msgs.OPT_EXTRA.words())
     parser.add_argument("--preset", dest="presets", action="append", default=[], metavar="NAME[,NAME...]",
@@ -5384,7 +5210,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         spell=replcomplete.hunspell_suggest,
         bare_words=QUIT_WORDS,
     )
-    session = _repl_prompt_session(cfg, keymap, completer)
+    history = _repl_history(cfg)
 
     messages = M.load_replay_messages(cfg.session_file)
     cut_off = M.turn_cut_off(messages)
@@ -5451,30 +5277,24 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     _mark_saved(state)
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
     state["mcp_host"] = _session_mcp_host(cfg, telemetry)
-    # Attach the debug autolog sink before the first turn (both REPL
-    # variants below share this telemetry object).
+    # Attach the debug autolog sink before the first turn.
     _sync_telemetry_from_live_settings(cfg, state, telemetry)
 
     banner = _startup_banner(cfg, state, notices, [*rc_errors, *key_errors])
     transcript_stack = contextlib.ExitStack()
+    # prompt_toolkit creates its output from sys.stdout on first use. The
+    # screen and the pickers draw on the terminal, so that first use is here,
+    # before stdout becomes the transcript tee.
+    get_app_session().output
     _enter_transcript_stdio(transcript_stack, telemetry)
-    if not args.blocking:
-        try:
-            code = model_client.run_owning_loop(
-                _repl_main(cfg, state, telemetry, session, prompt_spec, banner)
-            )
-        finally:
-            transcript_stack.close()
-        _queue_switch(state, blocking=False)
-        return code
-    print(msgs.for_stream(banner))
-    _show_resume(state, telemetry, display_mod.terminal_width() - 1)
     try:
-        _blocking_repl(cfg, state, telemetry, session, prompt_spec)
+        code = model_client.run_owning_loop(
+            _repl_main(cfg, state, telemetry, history, completer, prompt_spec, banner)
+        )
     finally:
         transcript_stack.close()
     _print_resume_hint(cfg, state)
-    _queue_switch(state, blocking=True)
-    return 0
+    _queue_switch(state)
+    return code
 if __name__ == "__main__":
     sys.exit(main())

@@ -375,11 +375,10 @@ def test_the_switch_reexecs_js_in_the_sessions_dir_with_its_agent(tmp_path, monk
     monkeypatch.setattr(cli.os, "execv", execv)
     monkeypatch.setattr(runtime.T.STOCK_CONTEXT, "cwd", Path.cwd())
     monkeypatch.chdir(Path.cwd())
-    cli._exec_session(target, blocking=True)
+    cli._exec_session(target)
     assert ran["cwd"] == str(tmp_path)
     assert ran["argv"][ran["argv"].index("--session") + 1] == str(tmp_path / "s.jsonl")
     assert ran["argv"][ran["argv"].index("-a") + 1] == "research"
-    assert "--blocking" in ran["argv"]
 
 
 def test_a_session_started_under_c_resumes_jailed_in_its_dir(tmp_path, monkeypatch):
@@ -390,7 +389,7 @@ def test_a_session_started_under_c_resumes_jailed_in_its_dir(tmp_path, monkeypat
     monkeypatch.setattr(cli.os, "execv", lambda program, argv: ran.update(argv=argv))
     monkeypatch.setattr(runtime.T.STOCK_CONTEXT, "cwd", Path.cwd())
     monkeypatch.chdir(Path.cwd())
-    cli._exec_session(target, blocking=False)
+    cli._exec_session(target)
     assert ran["argv"][ran["argv"].index("-C") + 1] == str((tmp_path / "proj").resolve())
     assert not cli._session_target(_choice(path, tmp_path / "proj", command=["js", "--commit"])).jailed
 

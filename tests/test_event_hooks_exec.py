@@ -5,7 +5,6 @@ post_compact fire where they say."""
 
 from __future__ import annotations
 
-import contextlib
 import json
 import time
 
@@ -14,6 +13,7 @@ import pytest
 from js import cli, compaction, events, hookexec, runtime, settings
 from js.memory import load_messages
 from js.toolkit import Tool, ToolContext, ToolRegistry
+from repl_driver import stub_screen, turn_stub
 from test_runtime_offline_integration import _budget_config, model_text_result, model_tool_call_result, offline_config
 
 SESSION = "hooks"
@@ -486,18 +486,18 @@ def home(monkeypatch, tmp_path):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_a, **_k: None)
+
+    async def no_compaction(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(cli, "_maybe_auto_compact_async", no_compaction)
     sent: list[str] = []
 
     def run_turn_stub(cfg, system, messages, *_a, **_k):
         sent.append(str(messages[-1]["content"]))
         messages.append({"role": "assistant", "content": "ok"})
 
-    async def run_turn_async_stub(cfg, system, messages, *_a, **_k):
-        run_turn_stub(cfg, system, messages)
-
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
-    monkeypatch.setattr(cli.runtime, "run_turn_async", run_turn_async_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
     (tmp_path / ".js").mkdir(exist_ok=True)
     log = tmp_path / "ended.log"
     (tmp_path / ".js" / "jsrc").write_text(
@@ -506,22 +506,6 @@ def home(monkeypatch, tmp_path):
         encoding="utf-8",
     )
     return sent, log
-
-
-def _stub_prompt_session(monkeypatch, lines):
-    class PromptSessionStub:
-        def __init__(self, history, **kwargs):
-            self.history = history
-            self.completer = kwargs.get("completer")
-            self.lines = iter(lines)
-
-        def prompt(self, *_args, **_kwargs):
-            try:
-                return next(self.lines)
-            except StopIteration:
-                raise EOFError from None
-
-    monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
 
 
 def _check_session_events(tmp_path, sent, log):
@@ -535,48 +519,9 @@ def _check_session_events(tmp_path, sent, log):
     assert ended["messages"] == 4
 
 
-def test_blocking_repl_fires_session_start_and_session_end(monkeypatch, tmp_path, home):
+def test_repl_fires_session_start_and_session_end(monkeypatch, tmp_path, home):
     sent, log = home
-    _stub_prompt_session(monkeypatch, ["first", "second"])
-
-    cli.main(["--blocking", "--session", SESSION])
-
-    _check_session_events(tmp_path, sent, log)
-
-
-def test_async_repl_fires_session_start_and_session_end(monkeypatch, tmp_path, home):
-    sent, log = home
-    _stub_prompt_session(monkeypatch, [])
-    lines = ["first", "second"]
-    queues = []
-    turn_consumer = cli._turn_consumer
-
-    def recording_consumer(queue, *args, **kwargs):
-        queues.append(queue)
-        return turn_consumer(queue, *args, **kwargs)
-
-    class AppStub:
-        def __init__(self, on_line, on_eof):
-            self._on_line, self._on_eof = on_line, on_eof
-
-        async def run_async(self):
-            for line in lines:
-                await self._on_line(line)
-            # EOF cancels a running turn, so it is pressed once the turns end.
-            for queue in queues:
-                await queue.join()
-            self._on_eof()
-
-        def exit(self):
-            pass
-
-        def invalidate(self):
-            pass
-
-    monkeypatch.setattr(cli, "_turn_consumer", recording_consumer)
-    monkeypatch.setattr(cli.screen, "build_app",
-                        lambda *, on_line, on_eof, **_kw: (AppStub(on_line, on_eof), cli.screen.Scrollback()))
-    monkeypatch.setattr(cli.screen, "capture_stdio", lambda *a, **k: contextlib.nullcontext())
+    stub_screen(monkeypatch, ["first", "second"])
 
     cli.main(["--session", SESSION])
 

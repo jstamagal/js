@@ -9,7 +9,7 @@ import pytest
 
 from js import cli
 from js.session_catalog import last_session_model, record_session_start
-from repl_driver import LineSession
+from repl_driver import stub_screen, turn_stub
 
 
 def _metadata(session_file):
@@ -64,7 +64,7 @@ def test_last_session_model_survives_a_session_with_no_metadata(tmp_path):
 
 
 def _repl(monkeypatch, tmp_path, argv, lines=()):
-    """Launch `js --blocking *argv` over *lines*; return the model each turn ran on."""
+    """Launch the `js *argv` REPL over *lines*; return the model each turn ran on."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
@@ -72,9 +72,9 @@ def _repl(monkeypatch, tmp_path, argv, lines=()):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     models: list[str] = []
-    monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession(lines))
-    monkeypatch.setattr(cli.runtime, "run_turn", lambda cfg, *a, **k: models.append(cfg.model))
-    assert cli.main(["--blocking", *argv]) == 0
+    stub_screen(monkeypatch, lines, wait=True)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(lambda cfg, *a, **k: models.append(cfg.model)))
+    assert cli.main([*argv]) == 0
     return models
 
 

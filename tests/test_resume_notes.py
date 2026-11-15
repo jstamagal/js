@@ -6,6 +6,7 @@ next request; a resumed session whose last turn was cut off gets one note."""
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -14,7 +15,7 @@ from js import cli, runtime, session_store
 from js import memory as M
 from js.config import from_env
 from js.memory import load_messages
-from repl_driver import LineSession
+from repl_driver import stub_screen, turn_stub
 
 
 @pytest.fixture(autouse=True)
@@ -28,7 +29,7 @@ def offline(monkeypatch, tmp_path):
 
 
 class Turns:
-    """Stands in for runtime.run_turn: records the model and the user message
+    """Stands in for a turn: records the model and the user message
     each turn ran with, and answers."""
 
     def __init__(self):
@@ -51,9 +52,9 @@ def _prompt(monkeypatch, argv) -> Turns:
 def _repl(monkeypatch, argv, lines) -> Turns:
     turns = Turns()
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession(lines))
-    monkeypatch.setattr(cli.runtime, "run_turn", turns)
-    assert cli.main(["--blocking", *argv]) == 0
+    stub_screen(monkeypatch, lines, wait=True)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(turns))
+    assert cli.main([*argv]) == 0
     return turns
 
 
@@ -247,7 +248,7 @@ def test_a_resume_after_a_finished_turn_carries_no_note(monkeypatch):
     assert turns.users == ["next"]
 
 
-@pytest.mark.parametrize("failure", [KeyboardInterrupt, RuntimeError])
+@pytest.mark.parametrize("failure", [asyncio.CancelledError, RuntimeError])
 def test_a_repl_cut_off_note_survives_a_first_turn_that_was_discarded(monkeypatch, failure):
     path = _session("cut", CUT_OFF_ENDINGS["tool result"])
     users: list = []
@@ -259,9 +260,9 @@ def test_a_repl_cut_off_note_survives_a_first_turn_that_was_discarded(monkeypatc
         messages.append({"role": "assistant", "content": "ok"})
 
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli, "PromptSession", lambda *a, **k: LineSession(["go on", "again", "more"]))
-    monkeypatch.setattr(cli.runtime, "run_turn", turn)
-    assert cli.main(["--blocking", "--session", "cut"]) == 0
+    stub_screen(monkeypatch, ["go on", "again", "more"], wait=True)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(turn))
+    assert cli.main(["--session", "cut"]) == 0
 
     assert users[1:] == [f"again\n\n{cli._CUT_OFF_NOTICE}", "more"]
     assert f"again\n\n{cli._CUT_OFF_NOTICE}" in [m.get("content") for m in load_messages(path)]

@@ -10,7 +10,7 @@ from js.model_client import ModelStreamResult
 from js.session_catalog import last_stamp
 from js.toolkit import ToolContext
 from js.toolkit.meta import task
-from repl_driver import run_async, run_blocking
+from repl_driver import run_async
 
 
 def _agent(tmp_path, monkeypatch, files):
@@ -166,15 +166,11 @@ def test_empty_headless_reply_does_not_reprint_a_previous_answer(tmp_path, monke
     assert "previous answer" not in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("blocking", [True, False])
-def test_repl_initializes_before_the_first_typed_message(tmp_path, monkeypatch, blocking):
+def test_repl_initializes_before_the_first_typed_message(tmp_path, monkeypatch):
     _agent(tmp_path, monkeypatch, {"01-user.md": "opening"})
     cfg = from_env(session="seeded")
     requests = _model(monkeypatch, ["opening reply", "typed reply"])
-    if blocking:
-        run_blocking(cfg, ["typed"])
-    else:
-        run_async(monkeypatch, cfg, ["typed"])
+    run_async(monkeypatch, cfg, ["typed"])
     assert [request[-1] for request in requests] == [("user", "opening"), ("user", "typed")]
     assert [message["content"] for message in memory.load_replay_messages(cfg.session_file)] == [
         "opening", "opening reply", "typed", "typed reply",
@@ -253,14 +249,14 @@ def test_benchmark_files_select_bench_mode_without_a_flag_or_prompt(tmp_path, mo
 def test_even_an_empty_benchmark_file_prevents_entering_repl(tmp_path, monkeypatch):
     _agent(tmp_path, monkeypatch, {"01-benchmark.md": ""})
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli, "PromptSession", lambda **kwargs: pytest.fail("entered REPL"))
+    monkeypatch.setattr(cli.screen, "build_app", lambda **kwargs: pytest.fail("entered REPL"))
     assert cli.main([]) == 2
 
 
 def test_exchange_files_run_as_a_one_shot_without_a_prompt(tmp_path, monkeypatch, capsys):
     _agent(tmp_path, monkeypatch, {"01-user.md": "first step", "02-user.md": "last step"})
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli, "PromptSession", lambda **kwargs: pytest.fail("entered REPL"))
+    monkeypatch.setattr(cli.screen, "build_app", lambda **kwargs: pytest.fail("entered REPL"))
     requests = _model(monkeypatch, ["first reply", "last reply"])
     assert cli.main(["--session", "seeded", "-q"]) == 0
     assert [request[-1] for request in requests] == [("user", "first step"), ("user", "last step")]
@@ -273,7 +269,7 @@ def test_exchange_files_run_as_a_one_shot_without_a_prompt(tmp_path, monkeypatch
 def test_exchange_files_with_a_prompt_send_it_after_them_and_exit(tmp_path, monkeypatch, capsys):
     _agent(tmp_path, monkeypatch, {"01-user.md": "the workflow"})
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli, "PromptSession", lambda **kwargs: pytest.fail("entered REPL"))
+    monkeypatch.setattr(cli.screen, "build_app", lambda **kwargs: pytest.fail("entered REPL"))
     requests = _model(monkeypatch, ["workflow reply", "opinion"])
     assert cli.main(["-p", "your opinion", "-q"]) == 0
     assert [request[-1] for request in requests] == [("user", "the workflow"), ("user", "your opinion")]
@@ -291,9 +287,9 @@ def test_resumed_session_with_exchange_files_opens_the_repl(tmp_path, monkeypatc
 
     def entered(**kwargs):
         raise EnteredRepl
-    monkeypatch.setattr(cli, "PromptSession", entered)
+    monkeypatch.setattr(cli.screen, "build_app", entered)
     with pytest.raises(EnteredRepl):
-        cli.main(["--session", "seeded", "--blocking"])
+        cli.main(["--session", "seeded"])
 
 
 def test_benchmark_expansion_happens_after_its_setup(tmp_path, monkeypatch):
@@ -347,16 +343,15 @@ def test_transcript_keeps_startup_exchanges_in_conversation_order(tmp_path, monk
     assert logs.index("opening prompt") < logs.index("opening reply") < logs.index("typed prompt") < logs.index("typed reply")
 
 
-def test_blocking_repl_shows_the_generated_startup_reply(tmp_path, monkeypatch, capsys):
+def test_repl_shows_the_generated_startup_reply(tmp_path, monkeypatch, capsys):
     _agent(tmp_path, monkeypatch, {"01-user.md": "opening"})
     _model(monkeypatch, ["VISIBLE_OPENING_REPLY"])
-    run_blocking(from_env(session="seeded"), [])
+    run_async(monkeypatch, from_env(session="seeded"), [])
     assert "VISIBLE_OPENING_REPLY" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("resume_exchanges", [0, 2])
-@pytest.mark.parametrize("blocking", [True, False])
-def test_repl_displays_each_fired_message_and_reply(tmp_path, monkeypatch, capsys, blocking, resume_exchanges):
+def test_repl_displays_each_fired_message_and_reply(tmp_path, monkeypatch, capsys, resume_exchanges):
     _agent(tmp_path, monkeypatch, {
         "01-user.md": "first startup prompt",
         "02-user.md": "second startup prompt",
@@ -365,10 +360,7 @@ def test_repl_displays_each_fired_message_and_reply(tmp_path, monkeypatch, capsy
     cfg.settings["RESUME_EXCHANGES"] = resume_exchanges
     _model(monkeypatch, ["first startup reply", "second startup reply"])
 
-    if blocking:
-        run_blocking(cfg, [])
-    else:
-        run_async(monkeypatch, cfg, [])
+    run_async(monkeypatch, cfg, [])
 
     output = capsys.readouterr().out
     assert output.index("first startup prompt") < output.index("first startup reply")

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from js import cli, memory
 from js.memory import append_system_prompt, load_messages, load_system_prompt
+from repl_driver import stub_screen, turn_stub
 
 
 def test_recorded_system_prompt_round_trips(tmp_path):
@@ -41,27 +42,14 @@ def _repl(monkeypatch, tmp_path, argv, lines=()):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
-    class PromptSessionStub:
-        def __init__(self, history, **kwargs):
-            self.lines = iter(lines)
-
-        def prompt(self, *_args, **_kwargs):
-            try:
-                return next(self.lines)
-            except StopIteration:
-                raise EOFError from None
-
     seen: list[str] = []
 
     def record_turn(cfg, system, *a, **k):
         seen.append(system)
 
-    monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
-    monkeypatch.setattr(cli.runtime, "run_turn", record_turn)
-    try:
-        cli.main(["--blocking", *argv])
-    except (RuntimeError, StopIteration):
-        pass
+    stub_screen(monkeypatch, lines, wait=True)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(record_turn))
+    assert cli.main([*argv]) == 0
     return seen
 
 

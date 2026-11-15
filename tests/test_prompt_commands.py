@@ -5,9 +5,10 @@ from __future__ import annotations
 
 import pytest
 
-from js import cli, pastes
+from js import cli
 from js import prompt_commands as pc
 from js.replcomplete import JsCompleter
+from repl_driver import stub_screen, turn_stub
 
 SESSION = "cmds"
 
@@ -141,28 +142,22 @@ def repl(monkeypatch, tmp_path):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_a, **_k: None)
+
+    async def no_compaction(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(cli, "_maybe_auto_compact_async", no_compaction)
     sent: list[str] = []
 
     def run_turn_stub(cfg, system, messages, *_a, **_k):
         sent.append(str(messages[-1]["content"]))
         messages.append({"role": "assistant", "content": "ok"})
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
     def run(lines):
-        class PromptSessionStub:
-            def __init__(self, history, **kwargs):
-                self.lines = iter(lines)
-
-            def prompt(self, *_args, **_kwargs):
-                try:
-                    return next(self.lines)
-                except StopIteration:
-                    raise EOFError from None
-
-        monkeypatch.setattr(cli, "PromptSession", PromptSessionStub)
-        cli.main(["--blocking", "--session", SESSION])
+        stub_screen(monkeypatch, lines, wait=True)
+        cli.main(["--session", SESSION])
         return sent
 
     commands = tmp_path / ".js" / "commands"
@@ -194,16 +189,6 @@ def test_an_unknown_slash_command_is_refused_and_a_path_is_still_prose(repl):
     sent = run(["/effort", "/usr/bin/python is broken"])
 
     assert sent == ["/usr/bin/python is broken"]
-
-
-def test_the_blocking_repl_sends_a_collapsed_paste_in_full(repl):
-    run, _commands = repl
-    text = "\n".join(f"row {i}" for i in range(30))
-    token = pastes.keep(text, 10)
-
-    sent = run([f"summarize {token}"])
-
-    assert sent == [f"summarize {text}"]
 
 
 def test_apostrophe_inside_a_word_does_not_open_a_quote():

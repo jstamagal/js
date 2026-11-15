@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 import json
 from pathlib import Path
@@ -10,7 +11,7 @@ import pytest
 from js import cli, events, settings
 from js.config import Config
 from js.memory import append_message, load_messages
-from repl_driver import run_blocking
+from repl_driver import run_async, turn_stub
 
 
 def _debug_records(path: Path) -> list[dict]:
@@ -122,16 +123,16 @@ def test_repl_runtime_exception_rolls_back_persisted_user_message(monkeypatch, t
     def run_turn_stub(*args, **kwargs):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["cause failure", "exit"])
+    run_async(monkeypatch, cfg, ["cause failure", "exit"], wait=True)
 
     captured = capsys.readouterr()
     assert "RuntimeError: boom" in captured.out
     assert load_messages(cfg.session_file) == [{"role": "user", "content": "existing"}]
 
 
-def test_repl_keyboard_interrupt_emits_cancel_event(monkeypatch, tmp_path, capsys):
+def test_repl_cancelled_turn_emits_cancel_event(monkeypatch, tmp_path, capsys):
     cfg = make_cfg(tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
@@ -144,15 +145,15 @@ def test_repl_keyboard_interrupt_emits_cancel_event(monkeypatch, tmp_path, capsy
             return super().emit(event, **payload)
 
     def run_turn_stub(*args, **kwargs):
-        raise KeyboardInterrupt
+        raise asyncio.CancelledError
 
     monkeypatch.setattr(cli.events, "EventHooks", RecordingHooks)
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["interrupt me", "exit"])
+    run_async(monkeypatch, cfg, ["interrupt me", "exit"], wait=True)
 
     assert ("input", {"text": "interrupt me", "attachments": []}) in seen
-    assert ("cancel", {"reason": "keyboard_interrupt"}) in seen
+    assert ("cancel", {"reason": "cancelled"}) in seen
     assert load_messages(cfg.session_file) == [{"role": "user", "content": "existing"}]
 
 
@@ -165,9 +166,9 @@ def test_repl_input_hook_error_records_debug_telemetry(monkeypatch, tmp_path):
     def run_turn_stub(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/on input echo nope", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/on input echo nope", "hello", "exit"], wait=True)
 
     records = _debug_records(debug_log)
     assert {
@@ -189,9 +190,9 @@ def test_repl_set_runtime_debug_enables_later_event_telemetry(monkeypatch, tmp_p
         return None
 
     monkeypatch.setattr(cli._paths, "state_root", lambda: state_root)
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/set DEBUG_LOG on", "/on input echo nope", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/set DEBUG_LOG on", "/on input echo nope", "hello", "exit"], wait=True)
 
     records = _debug_records(debug_log)
     assert {
@@ -209,11 +210,11 @@ def test_repl_cancel_hook_error_records_debug_telemetry(monkeypatch, tmp_path):
     (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
 
     def run_turn_stub(*args, **kwargs):
-        raise KeyboardInterrupt
+        raise asyncio.CancelledError
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/on cancel echo nope", "interrupt me", "exit"])
+    run_async(monkeypatch, cfg, ["/on cancel echo nope", "interrupt me", "exit"], wait=True)
 
     records = _debug_records(debug_log)
     assert {
@@ -236,12 +237,12 @@ def test_repl_cancel_hook_partial_load_sampling_change_updates_next_turn(monkeyp
         nonlocal calls
         calls += 1
         if calls == 1:
-            raise KeyboardInterrupt
+            raise asyncio.CancelledError
         temperatures.append(kwargs["sampling"].temperature)
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/on cancel load cancel.irc", "interrupt me", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/on cancel load cancel.irc", "interrupt me", "hello", "exit"], wait=True)
 
     assert temperatures == [0.2]
 
@@ -255,9 +256,9 @@ def test_repl_input_hook_dispatches_before_run_turn(monkeypatch, tmp_path):
     def run_turn_stub(*args, **kwargs):
         trace_overrides.append(kwargs["trace_override"])
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/on input set TRACE on", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/on input set TRACE on", "hello", "exit"], wait=True)
 
     assert trace_overrides == [True]
 
@@ -271,9 +272,9 @@ def test_repl_input_hook_does_not_drop_existing_sampling_override(monkeypatch, t
     def run_turn_stub(*args, **kwargs):
         temperatures.append(kwargs["sampling"].temperature)
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/on input set COMPACTION_AUTO off", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/on input set COMPACTION_AUTO off", "hello", "exit"], wait=True)
 
     assert temperatures == [0.9]
 
@@ -287,9 +288,9 @@ def test_repl_input_hook_sampling_change_updates_turn_sampling(monkeypatch, tmp_
     def run_turn_stub(*args, **kwargs):
         temperatures.append(kwargs["sampling"].temperature)
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/on input set TEMPERATURE 0.2", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/on input set TEMPERATURE 0.2", "hello", "exit"], wait=True)
 
     assert temperatures == [0.2]
 
@@ -304,9 +305,9 @@ def test_repl_input_hook_partial_load_model_change_updates_turn_model(monkeypatc
     def run_turn_stub(cfg_arg, *args, **kwargs):
         models.append(cfg_arg.model)
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/on input load model.irc", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/on input load model.irc", "hello", "exit"], wait=True)
 
     assert models == ["hook-model"]
 
@@ -327,9 +328,9 @@ def test_repl_input_hook_partial_load_provider_change_updates_turn_config(monkey
     def run_turn_stub(cfg_arg, *args, **kwargs):
         seen.append((cfg_arg.provider_id, cfg_arg.provider_base_url, cfg_arg.provider_api_key))
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/on input load provider.irc", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/on input load provider.irc", "hello", "exit"], wait=True)
 
     assert seen == [("openai", "http://provider.test/v1", "sk-hook")]
 
@@ -348,9 +349,9 @@ def test_repl_input_hook_partial_load_tool_aliases_update_turn_config(monkeypatc
     def run_turn_stub(cfg_arg, *args, **kwargs):
         seen.append(cfg_arg.settings.get("TOOL_ALIASES", []))
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/on input load tools.irc", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/on input load tools.irc", "hello", "exit"], wait=True)
 
     assert seen == [[{"match": ["offline-test-model"], "aliases": {"read": "r"}}]]
 
@@ -364,9 +365,9 @@ def test_repl_set_limit_updates_turn_config(monkeypatch, tmp_path):
     def run_turn_stub(cfg_arg, *args, **kwargs):
         max_tool_result_bytes.append(cfg_arg.max_tool_result_bytes)
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/set TOOL_RESULT_MAX 123", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/set TOOL_RESULT_MAX 123", "hello", "exit"], wait=True)
 
     assert max_tool_result_bytes == [123]
 
@@ -380,9 +381,9 @@ def test_repl_set_subagent_prefer_inherit_updates_turn_config(monkeypatch, tmp_p
     def run_turn_stub(cfg_arg, *args, **kwargs):
         prefer_inherit.append(cfg_arg.prefer_inherit)
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/set SUBAGENT_INHERIT_MODEL on", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/set SUBAGENT_INHERIT_MODEL on", "hello", "exit"], wait=True)
 
     assert prefer_inherit == [True]
 
@@ -400,9 +401,9 @@ def test_repl_set_subagent_lock_model_updates_turn_config_and_task_schema(monkey
         params = task_tool.openai_spec()["function"]["parameters"]["properties"]
         seen.append((cfg_arg.lock_subagent_model, "model" in params))
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/set SUBAGENT_MODEL_LOCK on", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/set SUBAGENT_MODEL_LOCK on", "hello", "exit"], wait=True)
 
     assert seen == [(True, False)]
 
@@ -420,15 +421,15 @@ def test_repl_set_max_output_updates_turn_config(monkeypatch, tmp_path):
     def run_turn_stub(cfg_arg, *args, **kwargs):
         max_output_tokens.append(cfg_arg.max_output_tokens)
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, [
+    run_async(monkeypatch, cfg, [
                 "/set OUTPUT_TOKENS_MAX 5000",
                 "hello",
                 "/set -OUTPUT_TOKENS_MAX",
                 "hello",
                 "exit",
-            ])
+            ], wait=True)
 
     assert max_output_tokens == [5000, None]
 
@@ -442,9 +443,9 @@ def test_repl_set_reasoning_effort_updates_turn_config(monkeypatch, tmp_path):
     def run_turn_stub(cfg_arg, *args, **kwargs):
         reasoning_efforts.append(cfg_arg.reasoning_effort)
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/set EFFORT max", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/set EFFORT max", "hello", "exit"], wait=True)
 
     # `max` is a real ladder stop (reasoning.py) — config._norm_effort no longer
     # collapses it to "high"; reasoning.snap_effort floors it per-model instead.
@@ -462,9 +463,9 @@ def test_repl_preserves_provider_default_reasoning_effort(monkeypatch, tmp_path)
     def run_turn_stub(cfg_arg, *args, **kwargs):
         seen.append((cfg_arg.reasoning_effort, kwargs["reasoning_effort_override"]))
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["hello", "exit"])
+    run_async(monkeypatch, cfg, ["hello", "exit"], wait=True)
 
     assert seen == [("xhigh", "xhigh")]
 
@@ -478,9 +479,9 @@ def test_repl_set_reasoning_effort_off_disables_provider_default(monkeypatch, tm
     def run_turn_stub(cfg_arg, *args, **kwargs):
         seen.append((cfg_arg.reasoning_effort, kwargs["reasoning_effort_override"]))
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/set EFFORT off", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/set EFFORT off", "hello", "exit"], wait=True)
 
     assert seen == [("off", "off")]
 
@@ -494,14 +495,14 @@ def test_repl_set_reasoning_effort_clear_via_dash_key_restores_the_default(monke
     def run_turn_stub(cfg_arg, *args, **kwargs):
         seen.append((cfg_arg.reasoning_effort, kwargs["reasoning_effort_override"]))
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, [
+    run_async(monkeypatch, cfg, [
                 "/set EFFORT off",
                 "/set -EFFORT",
                 "hello",
                 "exit",
-            ])
+            ], wait=True)
 
     default = settings.default_value("EFFORT")
     assert seen == [(default, default)]
@@ -516,9 +517,9 @@ def test_repl_set_runtime_trace_updates_turn_config(monkeypatch, tmp_path):
     def run_turn_stub(cfg_arg, *args, **kwargs):
         traces.append(cfg_arg.trace)
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/set TRACE on", "hello", "exit"])
+    run_async(monkeypatch, cfg, ["/set TRACE on", "hello", "exit"], wait=True)
 
     assert traces == [True]
 
@@ -551,11 +552,11 @@ def test_repl_set_provider_extra_reaches_model_params(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.runtime.model_client, "resolve_model", lambda *args, **kwargs: FakeModel())
     monkeypatch.setattr(cli.runtime.model_client, "_stream_async", stream_async_stub)
 
-    run_blocking(cfg, [
+    run_async(monkeypatch, cfg, [
                 '/set EXTRA_PARAMS {"extra_body":{"live_flag":true}}',
                 "hello",
                 "exit",
-            ])
+            ], wait=True)
 
     assert len(params_seen) == 1
     assert params_seen[0] is not None
@@ -579,9 +580,9 @@ def test_repl_turn_end_hook_partial_load_sampling_change_updates_next_turn(monke
         temperatures.append(kwargs["sampling"].temperature)
         return None
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/on turn_end load turn-end.irc", "first", "second", "exit"])
+    run_async(monkeypatch, cfg, ["/on turn_end load turn-end.irc", "first", "second", "exit"], wait=True)
 
     assert temperatures == [0.2]
 
@@ -1075,9 +1076,9 @@ def test_repl_skill_command_sends_user_only_skill_and_rejects_unknown(monkeypatc
     def run_turn_stub(cfg, system, messages, *args, **kwargs):
         turns.append(messages[-1]["content"])
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
-    run_blocking(cfg, ["/skill nosuch", "/skill secret check the plan", "exit"])
+    run_async(monkeypatch, cfg, ["/skill nosuch", "/skill secret check the plan", "exit"], wait=True)
 
     assert len(turns) == 1
     assert "user-only body" in str(turns[0])

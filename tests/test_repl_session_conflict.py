@@ -6,7 +6,7 @@ import pytest
 from js import memory, runtime
 from js.config import from_env
 from js.toolkit import ToolContext
-from repl_driver import run_blocking
+from repl_driver import run_async, turn_stub
 
 
 def _config(tmp_path, monkeypatch):
@@ -20,7 +20,7 @@ def _config(tmp_path, monkeypatch):
     return from_env(session="conflict")
 
 
-def test_blocking_repl_reloads_stale_session_and_accepts_next_turn(tmp_path, monkeypatch):
+def test_repl_reloads_stale_session_and_accepts_next_turn(tmp_path, monkeypatch):
     cfg = _config(tmp_path, monkeypatch)
     requests = []
 
@@ -33,9 +33,9 @@ def test_blocking_repl_reloads_stale_session_and_accepts_next_turn(tmp_path, mon
             with cfg.session_file.open("a") as stream:
                 stream.write(json.dumps(external) + "\n")
 
-    monkeypatch.setattr(runtime, "run_turn", turn)
+    monkeypatch.setattr(runtime, "run_turn_async", turn_stub(turn))
 
-    state = run_blocking(cfg, ["conflicted question", "next question"])
+    state = run_async(monkeypatch, cfg, ["conflicted question", "next question"], wait=True)
 
     assert len(requests) == 2
     assert {"role": "assistant", "content": "external answer"} in requests[1]
@@ -49,15 +49,15 @@ def test_blocking_repl_reloads_stale_session_and_accepts_next_turn(tmp_path, mon
 
 
 @pytest.mark.parametrize("error", [ValueError("ordinary failure"), OSError(errno.EIO, "disk failure")])
-def test_blocking_repl_still_records_non_stale_turn_errors(tmp_path, monkeypatch, capsys, error):
+def test_repl_still_records_non_stale_turn_errors(tmp_path, monkeypatch, capsys, error):
     cfg = _config(tmp_path, monkeypatch)
 
     def turn(*args, **kwargs):
         raise error
 
-    monkeypatch.setattr(runtime, "run_turn", turn)
+    monkeypatch.setattr(runtime, "run_turn_async", turn_stub(turn))
 
-    run_blocking(cfg, ["question"])
+    run_async(monkeypatch, cfg, ["question"], wait=True)
 
     assert str(error) in capsys.readouterr().out
     records = [json.loads(line) for line in cfg.session_file.read_text().splitlines()]

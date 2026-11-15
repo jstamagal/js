@@ -315,8 +315,8 @@ environment variable. Setting changes apply to subsequent turns. In the standard
 **Ctrl-O** collapses or expands retained reasoning blocks without changing the
 input line; a manual toggle overrides auto-collapse for those blocks.
 
-One-shot and blocking modes stream reasoning on **stderr**, separately from
-answer stdout. They leave it visible rather than trying to rewrite terminal
+One-shot mode streams reasoning on **stderr**, separately from
+answer stdout. It leaves it visible rather than trying to rewrite terminal
 scrollback. Reasoning is excluded from the human answer transcript, but its
 original text stays in the append-only session JSONL at every display level,
 including partial reasoning received before cancellation. Display controls do

@@ -479,7 +479,7 @@ def _close_child_tools(child_context: ToolContext) -> None:
 
 def _fan_out(indexed_items: list[tuple[int, Any]], coro_factory) -> list[str | None]:
     """Run each subagent turn concurrently, results returned in task order. Two
-    ramps, chosen by whether a non-blocking REPL supervisor is live:
+    ramps, chosen by whether a REPL supervisor is live:
 
     - Supervisor present: schedule each turn as a cancelable "subagent" job on
       the REPL's shared loop via `run_coroutine_threadsafe` (we're on a
@@ -521,7 +521,7 @@ def _fan_out(indexed_items: list[tuple[int, Any]], coro_factory) -> list[str | N
 
 
 async def _fan_out_async(indexed_items: list[tuple[int, Any]], coro_factory) -> list[str | None]:
-    """On-loop sibling of `_fan_out` for the non-blocking REPL. The CALLER is
+    """On-loop sibling of `_fan_out` for the REPL. The CALLER is
     already a coroutine on the shared loop (the parent turn), so each child turn
     is scheduled as a cancelable "subagent" job on THAT loop and awaited with
     `asyncio.gather` — holding NO dispatch-pool thread while the children run.
@@ -584,7 +584,7 @@ def _prepare_fan_out(
 
     Returns ``(error_message, None)`` on a validation/depth failure, else
     ``(None, (indexed_items, coro_factory))``. Shared verbatim by the sync
-    ``task`` (``-p``/bench) and async ``task_async`` (non-blocking REPL) paths so
+    ``task`` (``-p``/bench) and async ``task_async`` (REPL) paths so
     the two rails can never drift. Each coroutine is gated by a shared semaphore
     so a wide (or nested) fan-out never runs more than the worker cap at once."""
     if not agent_id:

@@ -892,8 +892,8 @@ REASONING_DISPLAY
     `N tok reasoning` when the answer starts; 2 leave visible; 3 leave
     visible with the provider's token count. The count is the provider's or none.
     The reasoning_toggle key, Ctrl-O unless KEYBINDS_FILE moves it, folds
-    and unfolds it in the async screen. Folding is the screen's: in js -p
-    and the blocking REPL, 1 to 3 print the text and then the count line.
+    and unfolds it in the screen. Folding is the screen's: in js -p, 1 to 3
+    print the text and then the count line.
     Display only; session reasoning is always retained.
 
 NET_DISPLAY

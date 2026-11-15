@@ -673,7 +673,7 @@ class ToolErrorTracker:
     is not an error starts the count over."""
     limit: int = field(default_factory=lambda: _settings.default_value("TOOL_ERRORS_MAX"))
     errors: dict[str, _ErrorStreak] = field(default_factory=dict)
-    # Under the non-blocking supervisor a turn's leaf tools dispatch in an
+    # Under the REPL's supervisor a turn's leaf tools dispatch in an
     # executor thread while its fan-out calls run as coroutines on the loop; both
     # record into this tracker, so guard the counter against that cross-thread
     # interleave.
@@ -2414,17 +2414,13 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             await mcp_host.close()
 
 
-def run_turn(*args, loop_runner: asyncio.Runner | None = None, **kwargs) -> None:
-    """Sync wrapper over :func:`run_turn_async` — spins a throwaway loop for this
-    turn. The OLD blocking path; the non-blocking runtime awaits
-    ``run_turn_async`` directly on its shared loop. Kept so the current sync
-    callers (cli one-shot/REPL/bench, subagent threads) keep working through the
-    transition. `messages` is still mutated in place, so ^C mid-turn preserves
-    partial work exactly as before.
+def run_turn(*args, **kwargs) -> None:
+    """Sync wrapper over :func:`run_turn_async`: one turn on a loop of its own,
+    for callers off the event loop (`-p`, bench, subagent threads). The REPL
+    awaits ``run_turn_async`` on its shared loop. `messages` is mutated in
+    place, so ^C mid-turn leaves the partial work in it.
     """
     # The sync caller also resolves this window between turns, outside the
     # task context the runner copies for the turn itself.
     install_context_window_overrides(args[0] if args else kwargs["cfg"])
-    if loop_runner is not None:
-        return loop_runner.run(run_turn_async(*args, **kwargs))
     return model_client.run_owning_loop(run_turn_async(*args, **kwargs))
