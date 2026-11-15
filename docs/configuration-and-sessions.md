@@ -82,7 +82,9 @@ settings, and `<unset>` for settings that explicitly defer to provider defaults.
 `EXTRA_PARAMS`, `MCP_SERVERS`) shows as `<set>`; with the default `off` it shows in full.
 
 Under `js -C DIR`, `JAIL_HIDE` paths (by default `~/.js`, `~/.ssh`, `~/.gnupg`,
-`~/.netrc`, `~/.aws`, `~/.config/gh`) are empty in the jail whatever DIR and
+`~/.netrc`, `~/.aws`, `~/.config/gh`) are empty in the jail. The `~/.js`
+entry also covers the selected profile; an explicit replacement or empty list
+controls the hide rules. These paths stay hidden whatever DIR and
 `JAIL_BIND` show, and `js -C` refuses a DIR inside one. A hidden path created on the host while a long-running jailed
 command (kernel or terminal session) is already running can be visible to that
 command until it ends; file tools refuse it by name throughout.

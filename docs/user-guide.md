@@ -580,7 +580,10 @@ see `<dir>`, and it puts the tools in a jail:
 - The `JAIL_HIDE` setting lists paths that are always empty in the jail,
   whatever DIR and `JAIL_BIND` show, and that the file tools refuse. The
   default is `~/.js`, `~/.ssh`, `~/.gnupg`, `~/.netrc`, `~/.aws` and
-  `~/.config/gh`, so a jail rooted at your home still shows no keys.
+  `~/.config/gh`. The `~/.js` entry also hides the selected profile under
+  `--home` or `JS_HOME`, so a jail rooted at your home still shows no keys.
+  Replacing `JAIL_HIDE` keeps the operator's explicit choice; an empty list
+  clears these entries. The selected profile's private `tmp` stays available.
 
 `-C` needs `bwrap` (bubblewrap). Without it, or when a startup self-test of the
 jail fails, js prints one line and exits; nothing runs unjailed. A missing or

@@ -392,7 +392,7 @@ class Jail:
 
     def hides(self, hide: object = None) -> list[Path]:
         """The `JAIL_HIDE` paths as the host resolves them; None is the
-        `js/jsrc` list. Invalid entries are skipped; `/set` refuses them."""
+        `defaults/jsrc` list. Invalid entries are skipped; `/set` refuses them."""
         out = [_real(path) for path in self._hide_entries(hide)]
         # The same directory where another mount shows it (a home on a btrfs
         # subvolume, a bind mount elsewhere) is hidden there too.
@@ -403,11 +403,14 @@ class Jail:
         return [h for h in out if not any(other != h and _under(h, other) for other in out)]
 
     def _hide_entries(self, hide: object) -> list[Path]:
-        """The valid `JAIL_HIDE` entries as written; None is the `js/jsrc` list."""
+        """The valid `JAIL_HIDE` entries as written; None is the `defaults/jsrc` list."""
         out: list[Path] = []
         for item in _default_hides() if hide is None else hide or ():
             with contextlib.suppress(ValueError):
-                out.append(parse_hide(item))
+                path = parse_hide(item)
+                out.append(path)
+                if path == paths.user_home() / ".js":
+                    out.append(paths.home())
         return out
 
     def hidden_test(self, hide: object = None) -> Callable[[Path], bool]:
@@ -589,6 +592,8 @@ class Jail:
         over it; what js binds inside one is bound again on top."""
         hidden = hidden_roots()
         home = paths.user_home()
+        js_tmp = paths.home() / "tmp"
+        js_tmp.mkdir(parents=True, exist_ok=True)
         network = ({m.point for m in _mounts() if m.fstype in NETWORK_FS}
                    if _settings.live_value("JAIL_HIDE_NETWORK_FILESYSTEMS") else set())
         out = [self.bwrap, "--die-with-parent", "--unshare-ipc", "--unshare-uts",
@@ -604,7 +609,7 @@ class Jail:
         for root in hidden:
             if root not in network or (root in homes and not _under(root, Path("/tmp"))):
                 out += ["--tmpfs", str(root)]
-        out += ["--bind", str(self.js_tmp), str(home / ".js" / "tmp"),
+        out += ["--bind", str(self.js_tmp), str(js_tmp),
                 "--bind", str(self.private), str(self.private)]
 
         explicit = [Bind(self.root, True), *self.binds(setting), *(Bind(Path(p), True) for p in extra_rw)]
@@ -633,12 +638,9 @@ class Jail:
         binds = sorted(dict.fromkeys([*implicit, *explicit]), key=lambda b: len(b.path.parts))
         plan, placeholders = self._mount_plan(hide, binds, candidates, [*hidden, Path("/tmp")], network)
         out += plan
-        # The private ~/.js/tmp and private directory go on top of DIR, the
-        # binds and the blanks. The mount point must exist on the host: a
-        # read-only bind of ~ leaves bwrap no way to make it.
-        with contextlib.suppress(OSError):
-            (home / ".js" / "tmp").mkdir(parents=True, exist_ok=True)
-        out += ["--bind", str(self.js_tmp), str(home / ".js" / "tmp"),
+        # The selected profile's private tmp and the private directory go on
+        # top of DIR, the binds and the blanks.
+        out += ["--bind", str(self.js_tmp), str(js_tmp),
                 "--bind", str(self.private), str(self.private)]
         out += _read_only_covers(out, [*_network_parents(network, masked), *placeholders])
         # A read-only bind over /tmp (`"/tmp"` in JAIL_BIND, to read files the
@@ -941,7 +943,7 @@ def enter(directory: Path | str, *, setting: object = (), hide: object = None) -
     """Put this process's tools in a jail at ``directory``. Raises JailError
     with one line when it cannot: no bwrap, a bad DIR, a failing self-test.
     The self-test builds the jail with the run's `JAIL_BIND` (``setting``) and
-    `JAIL_HIDE` (``hide``; None is the `js/jsrc` list)."""
+    `JAIL_HIDE` (``hide``; None is the `defaults/jsrc` list)."""
     global ACTIVE
     root = _real(Path(directory).expanduser())
     if not root.is_dir():

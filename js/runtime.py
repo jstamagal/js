@@ -1284,7 +1284,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
         _trace_result(telemetry, tool_context, name, result, malformed=True, exchange=opened, traced=trace)
         return {}, result
 
-    active_registry = registry or T.STOCK_REGISTRY
+    active_registry = registry or T.stock_registry()
     context = tool_context or T.STOCK_CONTEXT
     tool = active_registry.resolve(name)
     trace_name = tool.name if tool is not None else name
@@ -2273,7 +2273,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     model, provider_id = request.model, request.provider_id
     convo = TurnConvo(system, messages, provider_id=provider_id, model=model,
                       vision=vision_enabled_for_model(model, getattr(cfg, "settings", None)))
-    base_registry = tool_registry or T.STOCK_REGISTRY
+    base_registry = tool_registry or T.stock_registry()
     alias_map = _resolve_alias_profile(getattr(cfg, "settings", {}) or {}, model, provider_id, base_registry)
     active_context = tool_context or T.STOCK_CONTEXT
     owns_mcp_host = mcp_host is None
