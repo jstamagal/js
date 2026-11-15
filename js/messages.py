@@ -593,41 +593,57 @@ EXEC_FAILED = Message("exec: {command} did not start: {error}")
 # --- js --help ----------------------------------------------------------------
 
 SHORT_HELP = Message(
-    "js — one agent, one terminal.\n"
-    "\n"
-    "RUN\n"
-    "  js                          Interactive REPL in this directory.\n"
-    "  js -p \"task\"                One prompt. Prints the answer.\n"
-    "  echo task | js -p           The same, from stdin.\n"
-    "  js -C DIR ...               Run as if launched from DIR.\n"
-    "\n"
-    "PICK\n"
-    "  -a NAME     Agent profile: ~/.js/agents/NAME\n"
-    "  -m MODEL    Provider/model, e.g. openai-codex/gpt-5.6-sol\n"
-    "  -r EFFORT   off|minimal|low|medium|high|xhigh|max\n"
-    "  -i          Incognito: keep your shell history out of the prompt.\n"
-    "\n"
-    "STATE: sessions are saved by default. A driven agent normally wants that.\n"
-    "  -s NAME     Create or resume a named session.\n"
-    "  --session-key KEY   Derive a stable session from agent, cwd and key.\n"
-    "  --list [--json]     List every saved session.\n"
-    "  -n, --no-save\n"
-    "              Expensive throwaway choice: resume is unavailable, so the next\n"
-    "              run must re-read context. Use only for throwaway one-liners.\n"
-    "  --debug-file PATH   Full request trace, for debugging js.\n"
-    "\n"
-    "SCRIPTING\n"
-    "  -q          No resume hint after the answer. The session is still saved.\n"
-    "  -f PATH     Attach a file or image. Repeatable.\n"
-    "  --max-out N Max output tokens.\n"
-    "  --extra K=V One-off config, e.g. --extra SUBAGENT_DEPTH_MAX=3\n"
-    "\n"
-    "MORE\n"
-    "  js --login [PROVIDER]   Sign in.\n"
-    "  js --list-models        List the runnable models.\n"
-    "  js --commit             Run the commit agent.\n"
-    "  js -p 'task' --loop 10   Repeat fresh turns; 45M and 3H loop by time.\n"
-    "  js --help-full          Every option.\n",
+    'js — one agent, one terminal.\n'
+    '\n'
+    'JOBS\n'
+    '  js -p "task"                         Run a task and print the answer.\n'
+    '  echo task | js -p                    Read the task from stdin.\n'
+    '  js --agent defaultagent -p "task"    Choose an agent.\n'
+    '  js -u http://qwen3:27b@box:11434/v1 -p "hello"\n'
+    '                                       Use a custom model endpoint.\n'
+    '  js --chat -p "question"              Chat with no tools or environment.\n'
+    '  js --session NAME -p "continue"      Resume a session.\n'
+    '  js --last -p "continue"              Resume this agent\'s latest session.\n'
+    '  js --list-sessions --json            Inspect saved sessions.\n'
+    '  js --list-agents                     List available agents.\n'
+    '  js --list-models                     List runnable provider/model names.\n'
+    '  js --login                          Sign in to a provider.\n'
+    '  js --verify                         Check agents and tool configuration.\n'
+    '  js --bench AGENT                    Run an agent benchmark.\n'
+    '  js --commit                         Run the commit agent.\n'
+    '  js -p "task" --json                  Print one final JSON object.\n'
+    '  js -p "task" --json-stream           Stream JSON Lines during the run.\n'
+    '  js -p "task" --loop 10               Repeat fresh turns.\n'
+    '  js                                  Open the interactive REPL.\n'
+    '\n'
+    'RUN SETTINGS\n'
+    '  -r WORD                 Reasoning effort sent to the provider; any word.\n'
+    '  --temperature VALUE     Set sampling for this run.\n'
+    '  --extra KEY=VALUE       Override a setting for this run.\n'
+    '  --home DIR              Choose js configuration and state.\n'
+    '  -f PATH                 Attach a file or image; repeat for more files.\n'
+    '  -C DIR                  Work inside DIR, with tools jailed there.\n'
+    '  --max-out N             Cap output tokens.\n'
+    '  --tools LIST            Choose tools, comma separated.\n'
+    '  --you-are TEXT          Use TEXT as the persona.\n'
+    '  -n, --no-save           Run without saving a resumable session.\n'
+    '  -q                      Omit the Continue command.\n'
+    '  --debug-file PATH       Write the full request trace.\n'
+    '  --help-full             Show every option, grouped by job.\n'
+    '\n'
+    'COMMANDS\n'
+    '  js -p "task"\n'
+    '  js --agent defaultagent -p "task"\n'
+    '  js -u http://qwen3:27b@box:11434/v1 -p "hello"\n'
+    '  js --session NAME -p "continue"\n'
+    '  js --list-sessions --json\n'
+    '  js --list-agents\n'
+    '  js --list-models\n'
+    '  js --verify\n'
+    '  js --commit\n'
+    '  js --bench AGENT\n'
+    '  js -p "task" --json-stream\n'
+    '  js --help-full\n',
     banner=False)
 
 # argparse: its headings, its refusal, and each option's help.
@@ -666,7 +682,7 @@ OPT_CD = Message(
     "entries, a private /tmp, the network on. File tools refuse paths outside DIR and the "
     "bound paths. Needs bwrap.")
 OPT_DEBUG = Message(
-    "In prompt and --bench modes, stream the concise per-turn diagnostics and the answer live to the terminal: "
+    "In prompt mode, stream the concise per-turn diagnostics and the answer live to the terminal: "
     "run header, tool-call lines, per-call timing. The full request trace still goes only to the debug "
     "autolog file.")
 OPT_DEBUG_FILE = Message(
