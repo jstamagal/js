@@ -569,7 +569,7 @@ def sibling_argv(argv: list[str], swarm: str, name: str) -> list[str]:
         elif tok.startswith("--session="):
             out.append(f"{tok}-{name}")
             i += 1
-        elif tok.startswith("--prompt="):
+        elif tok.startswith(("--prompt=", "-lp=")):
             has_prompt = True
             out.append("--prompt=-")
             i += 1

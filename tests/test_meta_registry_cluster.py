@@ -9,7 +9,10 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import types
+
+import pytest
 
 from js import settings
 from js.toolkit import ToolContext
@@ -175,6 +178,85 @@ def test_cancelled_waiter_gives_back_nothing_it_did_not_take():
         return held, gate.running
 
     assert asyncio.run(run()) == (1, 0)
+
+
+def test_a_waiter_on_a_closed_loop_is_not_counted_twice():
+    gate = meta.SubagentGate()
+    main = asyncio.new_event_loop()
+    other = asyncio.new_event_loop()
+    try:
+        main.run_until_complete(gate.acquire(1))
+        stranded = other.create_task(gate.acquire(1))
+        other.run_until_complete(asyncio.sleep(0))
+        other.close()
+
+        gate.release()  # wakes the waiter, whose loop is gone
+        assert gate.running == 0
+        stranded.get_coro().close()  # its coroutine is finalized later
+        assert gate.running == 0
+
+        main.run_until_complete(gate.acquire(1))
+        assert gate.running == 1
+        gate.release()
+    finally:
+        main.close()
+    assert gate.running == 0
+
+
+def test_a_background_job_that_fails_hands_back_every_slot(monkeypatch):
+    from js import snippets
+
+    async def probe(idx, total, item, context, parent_cfg, full_registry, agent_id, session_id, model=""):
+        if item == "boom":
+            await asyncio.sleep(0.05)
+            raise snippets.SnippetError("missing snippet")
+        await asyncio.sleep(30)
+        return "slow"
+
+    monkeypatch.setattr(meta, "_run_one_task_async", probe)
+
+    ctx = _tree_ctx(2, 3)
+    started = meta.task(tasks=["boom", "slow", "slower"], agent_id="worker", background=True, context=ctx)
+    handle = started.rsplit("HANDLE ", 1)[1].split()[0]
+    job = meta.task_jobs.find(handle, ctx.task_owner)
+    with pytest.raises(snippets.SnippetError):
+        meta.task_jobs.wait(job, 5)
+    deadline = time.monotonic() + 5
+    while meta._GATE.running and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+    assert meta._GATE.running == 0
+
+
+def test_a_timed_wait_returns_on_time_while_its_job_is_queued(monkeypatch):
+    waited: list[float] = []
+
+    async def probe(idx, total, item, context, parent_cfg, full_registry, agent_id, session_id, model=""):
+        if item == "child":
+            await asyncio.sleep(0.5)
+            return "child done"
+        child = ToolContext()
+        child.config = context.config
+        child.subagent_max_workers = 1
+        child.task_max_depth = 3
+        child.task_depth = 1
+        started = await meta.task_async(tasks=["child"], agent_id="worker", background=True, context=child)
+        handle = started.rsplit("HANDLE ", 1)[1].split()[0]
+        await asyncio.sleep(0.1)  # the child is queued behind this slot
+        began = time.monotonic()
+        await meta.task_async(action="wait", handle=handle, timeout=0, context=child)
+        waited.append(time.monotonic() - began)
+        await meta.task_async(action="wait", handle=handle, context=child)
+        return "parent done"
+
+    monkeypatch.setattr(meta, "_run_one_task_async", probe)
+
+    result = asyncio.run(asyncio.wait_for(
+        meta.task_async(tasks=["parent"], agent_id="worker", context=_tree_ctx(1, 3)), 10))
+
+    assert result == "parent done"
+    assert waited and waited[0] < 0.3
+    assert meta._GATE.running == 0
 
 
 # --------------------------------------------------------------------------

@@ -233,6 +233,13 @@ def start(
                 with contextlib.suppress(BaseException):
                     loop.run_until_complete(task)
             finally:
+                # A worker that failed the gather leaves its siblings running;
+                # they end here, so each lets go of what it holds.
+                left = asyncio.all_tasks(loop)
+                for pending in left:
+                    pending.cancel()
+                with contextlib.suppress(BaseException):
+                    loop.run_until_complete(asyncio.gather(*left, return_exceptions=True))
                 loop.close()
 
         threading.Thread(target=runner, daemon=True, name=f"js-task-{job.id}").start()

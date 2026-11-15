@@ -6,7 +6,7 @@ from js import cli, swarm
 
 
 @pytest.mark.parametrize("prompt", ["-v is broken, fix", "--fix this", "-4", "-4.5", "-.5", "plain opener", "-"])
-@pytest.mark.parametrize("flag", ["-p", "--prompt"])
+@pytest.mark.parametrize("flag", ["-p", "--prompt", "-lp"])
 def test_sibling_consumes_actual_cli_prompt_values(monkeypatch, prompt, flag):
     parsed = []
     monkeypatch.setattr(cli, "_run_args", lambda args, _argv: parsed.append(args) or 0)
@@ -27,10 +27,11 @@ def test_sibling_consumes_actual_cli_prompt_values(monkeypatch, prompt, flag):
 
 
 @pytest.mark.parametrize("prompt", ["-flag", "-v is broken, fix", "plain opener", ""])
-def test_equals_prompt_is_replaced_once_without_parent_opener(monkeypatch, prompt):
+@pytest.mark.parametrize("flag", ["--prompt=", "-lp="])
+def test_equals_prompt_is_replaced_once_without_parent_opener(monkeypatch, prompt, flag):
     parsed = []
     monkeypatch.setattr(cli, "_run_args", lambda args, _argv: parsed.append(args) or 0)
-    parent = ["js", "--prompt=" + prompt, "--swarm=/fixture/parent"]
+    parent = ["js", flag + prompt, "--swarm=/fixture/parent"]
     assert cli.main(parent[1:]) == 0
     assert parsed[-1].prompt == prompt
 
@@ -39,7 +40,7 @@ def test_equals_prompt_is_replaced_once_without_parent_opener(monkeypatch, promp
     assert cli.main(child[3:]) == 0
     assert parsed[-1].prompt == "-"
     assert sum(arg in {"-p", "--prompt"} or arg.startswith("--prompt=") for arg in child[3:]) == 1
-    assert "--prompt=" + prompt not in child
+    assert flag + prompt not in child
 
 
 @pytest.mark.parametrize("prefix", [["-p"], ["--prompt"], []])

@@ -95,7 +95,7 @@ class SubagentGate:
             with self._lock:
                 if waiter.granted:
                     self._release_locked()
-                else:
+                elif waiter in self._waiters:
                     self._waiters.remove(waiter)
                     self._wake_locked()
             raise
@@ -116,6 +116,7 @@ class SubagentGate:
             try:
                 waiter.loop.call_soon_threadsafe(_grant, waiter.future)
             except RuntimeError:  # its loop is closed: nobody is waiting
+                waiter.granted = False
                 self._running -= 1
 
 
@@ -920,8 +921,11 @@ async def task_async(
             job.kill()
             await task_jobs.wait_async(job, task_jobs.KILL_GRACE_S)
         elif action == "wait":
-            async with _lend_slot():
-                await task_jobs.wait_async(job, _wait_limit(timeout))
+            limit = _wait_limit(timeout)
+            # A wait to the end lends this subagent's slot to the job; a timed
+            # wait keeps it, so it returns when its time is up.
+            async with _lend_slot() if limit is None else nullcontext():
+                await task_jobs.wait_async(job, limit)
         return task_jobs.report(job, action, was_running=was_running)
     agent_id = str(agent_id).strip()
     model = str(model or "").strip()
