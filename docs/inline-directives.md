@@ -27,6 +27,7 @@ variables and of any filename convention:
 | `CURRENT_SESSION_FULLPATH` | Absolute session JSONL path. `/dev/null` for runs without a session, including benchmarks. |
 | `CURRENT_SESSION_AGENT` | Active agent id. |
 | `CURRENT_SESSION_MODEL` | Effective model id, after agent and command-line model selection. |
+| `JS_HOME` | Absolute home selected by `--home`, `JS_HOME` or `~/.js`; always set. |
 
 ```text
 This is session %%CURRENT_SESSION%% using %%CURRENT_SESSION_MODEL%%.
@@ -60,8 +61,8 @@ js exports these variables before it expands a prompt:
 
 | Variable | Value |
 | --- | --- |
-| `JS_ROOT` | The directory holding js itself: the `js` package, `defaults/agents/` and `tools/`. The stock agent runs `sh "$JS_ROOT/tools/envctx.c"`. |
-| `JS_HOME` | The resolved absolute profile directory, selected by `--home DIR`, `JS_HOME`, or `~/.js`. Also available as `%%JS_HOME%%`. |
+| `JS_ROOT` | The directory holding js itself: the `js` package, `defaults/` and `tools/`. The stock agent runs `sh "$JS_ROOT/tools/envctx.c"`. |
+| `JS_HOME` | The resolved profile home; available as `{{JS_HOME}}`, `%%JS_HOME%%` and `$JS_HOME` in shell commands. |
 | `JS_SHELL` | The shell the shell tool runs commands in (`SHELL_PROGRAM`, resolved on PATH). |
 | `JS_SECRET_PATTERNS` | The secret-patterns file envctx's scrubber reads: `~/.js/secret-patterns` when it exists, else `defaults/secret-patterns` in `JS_ROOT`. |
 

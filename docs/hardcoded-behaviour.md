@@ -16,9 +16,9 @@ branch the audit was made on; they move as the code changes.
 - **S2 tool-results**: The screen reads tool results from their text. Tools should hand the screen structured results. Related: js-2lg.5.
 - **S3 transcript**: The transcript is built from rendered text. It should record events. Related: js-2lg.6.
 - **S4 approval**: Allow/deny of a tool call is decided in the part. It should go through the approval gate (events.Approve, run_turn_async approve=) or `on tool_call` hooks. Related: js-2lg.4.
-- **S5 settings**: Behaviour is fixed in code. It should be a registered setting (js/settings.py REGISTRY + js/jsrc).
+- **S5 settings**: Behaviour is fixed in code. It should be a registered setting (js/settings.py REGISTRY + defaults/jsrc).
 - **S6 tool-policy**: Tool policy is fixed in code. It belongs in tools.yaml / js/toolkit/policy.py rules.
-- **S7 prompts**: Model-facing wording is built in code. It belongs in prompts/ or js/toolkit/tool_descriptions/*.md.
+- **S7 prompts**: Model-facing wording is built in code. It belongs in defaults/agents/ or defaults/tool_descriptions/*.md.
 - **S8 messages**: User-facing wording is built outside the js/messages.py catalogue.
 - **S9 commands-keymap**: A command table, keymap or banner is fixed in code. The assembly should supply it.
 - **S10 injectable**: The part decides something its caller cannot pass in as a parameter or callback.
@@ -209,81 +209,10 @@ branch the audit was made on; they move as the code changes.
 
 ## S7 prompts
 
-72 findings.
-
-| file:line | function | kind | what the part decides | bead |
-|---|---|---|---|---|
-| `js/compaction.py` | microcompact | model-facing | Model-facing text is loaded from `js/model_text/compaction.json`; selection and execution policy are unchanged. | js-2lg.18 |
-| `js/compaction.py` | _post_compact_rehydration | model-facing | Model-facing text is loaded from `js/model_text/compaction.json`; selection and execution policy are unchanged. | js-2lg.18 |
-| `js/compaction.py` | _summary_prompt/serialize_conversation/_clip/_part_text/_compaction_summary_message | model-facing | Model-facing text is loaded from `js/model_text/compaction.json`; selection and execution policy are unchanged. | js-2lg.18 |
-| `js/model_client.py` | _image_result_payload/_visual_read_error/_mixed_result_parts/media_label | model-facing | Model-facing text is loaded from `js/model_text/model_client.json`; selection and execution policy are unchanged. | js-2lg.22 |
-| `js/runtime.py` | MAX_OUTPUT_RESUME_NUDGE/_send_resume_nudge | model-facing | Model-facing text is loaded from `js/model_text/runtime.json`; selection and execution policy are unchanged. | js-2lg.26 |
-| `js/runtime.py` | _normalize_tool_call_batch/_dispatch/_dispatch_tool_calls/_dispatch_fan_out_async/_dispatch_async_tool | model-facing | Model-facing text is loaded from `js/model_text/runtime.json`; selection and execution policy are unchanged. | js-2lg.26 |
-| `js/runtime.py` | _truncated_tool_call_notice/_record_assistant | model-facing | Model-facing text is loaded from `js/model_text/runtime.json`; selection and execution policy are unchanged. | js-2lg.26 |
-| `js/runtime.py` | _history_tool_result_message | model-facing | Model-facing text is loaded from `js/model_text/runtime.json`; selection and execution policy are unchanged. | js-2lg.26 |
-| `js/runtime.py` | ToolErrorTracker.record/_record_tool_error_limit | model-facing | Model-facing text is loaded from `js/model_text/runtime.json`; selection and execution policy are unchanged. | js-2lg.26 |
-| `js/runtime.py` | _media_notice/_dehydrate_capped_result/_cap_media/_cap_image_marker/_cap_result/spill_oversized_result/_cap_batch_results | model-facing | Model-facing text is loaded from `js/model_text/runtime.json`; selection and execution policy are unchanged. | js-2lg.26 |
-| `js/runtime.py` | _record_assistant | model-facing | Model-facing text is loaded from `js/model_text/runtime.json`; selection and execution policy are unchanged. | js-2lg.26 |
-| `js/toolkit/core.py` | ToolContext.require_read | policy | Model-facing text is loaded from `js/model_text/toolkit_core.json`; selection and execution policy are unchanged. | js-2lg.35 |
-| `js/toolkit/core.py` | ToolContext._persist_snapshot / snapshot / call_tool | policy | Model-facing text is loaded from `js/model_text/toolkit_core.json`; selection and execution policy are unchanged. | js-2lg.35 |
-| `js/toolkit/core.py` | ToolResult.dehydrated | policy | Model-facing text is loaded from `js/model_text/toolkit_core.json`; selection and execution policy are unchanged. | js-2lg.35 |
-| `js/toolkit/registry.py` | ToolRegistry.unavailable_error | policy | Model-facing text is loaded from `js/model_text/toolkit_registry.json`; selection and execution policy are unchanged. | js-2lg.36 |
-| `js/toolkit/registry.py` | TurnToolSurface._unavailable_errors | policy | Model-facing text is loaded from `js/model_text/toolkit_registry.json`; selection and execution policy are unchanged. | js-2lg.36 |
-| `js/toolkit/registry.py` | TurnToolSurface.offer_path_skills | policy | Model-facing text is loaded from `js/model_text/toolkit_registry.json`; selection and execution policy are unchanged. | js-2lg.36 |
-| `js/toolkit/registry.py` | TurnToolSurface.discover_async / discover / _load | policy | Model-facing text is loaded from `js/model_text/toolkit_registry.json`; selection and execution policy are unchanged. | js-2lg.36 |
-| `js/toolkit/policy.py` | argument_refusal | policy | Model-facing text is loaded from `js/model_text/toolkit_policy.json`; selection and execution policy are unchanged. | js-2lg.40 |
-| `js/toolkit/discovery.py` | catalog_result | policy | Model-facing text is loaded from `js/model_text/toolkit_discovery.json`; selection and execution policy are unchanged. | js-2lg.42 |
-| `js/toolkit/discovery.py` | discovery_tool | policy | Model-facing text is loaded from `js/model_text/toolkit_discovery.json`; selection and execution policy are unchanged. | js-2lg.42 |
-| `js/toolkit/fs.py` | write | policy | Model-facing text is loaded from `js/model_text/toolkit_fs.json`; selection and execution policy are unchanged. | js-2lg.45 |
-| `js/toolkit/fs.py` | _changed_since_read | policy | Model-facing text is loaded from `js/model_text/toolkit_fs.json`; selection and execution policy are unchanged. | js-2lg.45 |
-| `js/toolkit/fs.py` | _nearest_hint / _apply_edit | policy | Model-facing text is loaded from `js/model_text/toolkit_fs.json`; selection and execution policy are unchanged. | js-2lg.45 |
-| `js/toolkit/fs.py` | fs_read | policy | Model-facing text is loaded from `js/model_text/toolkit_fs.json`; selection and execution policy are unchanged. | js-2lg.45 |
-| `js/toolkit/fs.py` | module constants | policy | Model-facing text is loaded from `js/model_text/toolkit_fs.json`; selection and execution policy are unchanged. | js-2lg.45 |
-| `js/toolkit/fs.py` | tools | policy | Model-facing text is loaded from `js/model_text/toolkit_fs.json`; selection and execution policy are unchanged. | js-2lg.45 |
-| `js/toolkit/process_net.py` | _render_finished / _render_running | policy | Model-facing text is loaded from `js/model_text/toolkit_process_net.json`; selection and execution policy are unchanged. | js-2lg.48 |
-| `js/toolkit/process_net.py` | _inline_read_limit_error / _fetch_file_url | policy | Model-facing text is loaded from `js/model_text/toolkit_process_net.json`; selection and execution policy are unchanged. | js-2lg.48 |
-| `js/toolkit/process_net.py` | tools | policy | Model-facing text is loaded from `js/model_text/toolkit_process_net.json`; selection and execution policy are unchanged. | js-2lg.48 |
-| `js/toolkit/search.py` | browse | policy | Model-facing text is loaded from `js/model_text/toolkit_search.json`; selection and execution policy are unchanged. | js-2lg.53 |
-| `js/toolkit/terminal.py` | _observe | policy | Model-facing text is loaded from `js/model_text/toolkit_terminal.json`; selection and execution policy are unchanged. | js-2lg.55 |
-| `js/toolkit/terminal.py` | _jail_refusal / _draw_screen | policy | Model-facing text is loaded from `js/model_text/toolkit_terminal.json`; selection and execution policy are unchanged. | js-2lg.55 |
-| `js/toolkit/browser.py` | _frame_metrics / browser_probe | policy | Model-facing text is loaded from `js/model_text/toolkit_browser.json`; selection and execution policy are unchanged. | js-2lg.58 |
-| `js/toolkit/browser.py` | browser_probe | policy | Model-facing text is loaded from `js/model_text/toolkit_browser.json`; selection and execution policy are unchanged. | js-2lg.58 |
-| `js/toolkit/meta.py` | named_agent_tool | policy | Model-facing text is loaded from `js/model_text/toolkit_meta.json`; selection and execution policy are unchanged. | js-2lg.62 |
-| `js/toolkit/meta.py` | named_agent_tool / _task_params / tools | policy | Model-facing text is loaded from `js/model_text/toolkit_meta.json`; selection and execution policy are unchanged. | js-2lg.62 |
-| `js/toolkit/task_jobs.py` | started_text / report | policy | Model-facing text is loaded from `js/model_text/toolkit_task_jobs.json`; selection and execution policy are unchanged. | js-2lg.63 |
-| `js/toolkit/task_jobs.py` | completion_notes | policy | Model-facing text is loaded from `js/model_text/toolkit_task_jobs.json`; selection and execution policy are unchanged. | js-2lg.63 |
-| `js/toolkit/jev.py` | jev | policy | Model-facing text is loaded from `js/model_text/toolkit_jev.json`; selection and execution policy are unchanged. | js-2lg.66 |
-| `js/toolkit/kernel.py` | MISSING_DEPS / get_session / kernel | policy | Model-facing text is loaded from `js/model_text/toolkit_kernel.json`; selection and execution policy are unchanged. | js-2lg.69 |
-| `js/toolkit/kernel.py` | _died / _busy / kernel | policy | Model-facing text is loaded from `js/model_text/toolkit_kernel.json`; selection and execution policy are unchanged. | js-2lg.69 |
-| `js/toolkit/toolbox.py` | toolbox | policy | Model-facing text is loaded from `js/model_text/toolkit_toolbox.json`; selection and execution policy are unchanged. | js-2lg.73 |
-| `js/toolkit/lsp.py` | server_for / lsp | policy | Model-facing text is loaded from `js/model_text/toolkit_lsp.json`; selection and execution policy are unchanged. | js-2lg.76 |
-| `js/cli.py` | _note_mode_switch, _note_model_switch, _run_prompt, _run_repl_turn, _run_args | policy | Model-facing text is loaded from `js/model_text/cli.json`; selection and execution policy are unchanged. | js-2lg.78 |
-| `js/cli.py` | _cmd_cd, _cmd_add, _cmd_drop | policy | Model-facing text is loaded from `js/model_text/cli.json`; selection and execution policy are unchanged. | js-2lg.78 |
-| `js/cli.py` | _append_closing_note, _cmd_quit | policy | Model-facing text is loaded from `js/model_text/cli.json`; selection and execution policy are unchanged. | js-2lg.78 |
-| `js/cli.py` | _run_commit | policy | Model-facing text is loaded from `js/model_text/cli.json`; selection and execution policy are unchanged. | js-2lg.78 |
-| `js/loop_controller.py` | run | policy | Model-facing text is loaded from `js/model_text/loop_controller.json`; selection and execution policy are unchanged. | js-2lg.89 |
-| `js/attach.py` | _prepare_bytes | presentation | Model-facing text is loaded from `js/model_text/attach.json`; selection and execution policy are unchanged. | js-2lg.131 |
-| `js/attach.py` | _prepare_image | presentation | Model-facing text is loaded from `js/model_text/attach.json`; selection and execution policy are unchanged. | js-2lg.131 |
-| `js/attach.py` | _format_text_attachment | presentation | Model-facing text is loaded from `js/model_text/attach.json`; selection and execution policy are unchanged. | js-2lg.131 |
-| `js/login_cli.py` | _run_secondary_test | presentation | Model-facing text is loaded from `js/model_text/login_cli.json`; selection and execution policy are unchanged. | js-2lg.147 |
-| `js/codex_provider.py` | _repair_tool_pairs | presentation | Model-facing text is loaded from `js/model_text/codex_provider.json`; selection and execution policy are unchanged. | js-2lg.152 |
-| `js/codex_provider.py` | _repair_tool_pairs | presentation | Model-facing text is loaded from `js/model_text/codex_provider.json`; selection and execution policy are unchanged. | js-2lg.152 |
-| `js/codex_provider.py` | _file_part_to_input | presentation | Model-facing text is loaded from `js/model_text/codex_provider.json`; selection and execution policy are unchanged. | js-2lg.152 |
-| `js/memory.py` | _heal_orphaned_tool_calls | policy | Model-facing text is loaded from `js/model_text/memory.json`; selection and execution policy are unchanged. | js-2lg.179 |
-| `js/memory.py` | restart_thinking_turn | policy | Model-facing text is loaded from `js/model_text/memory.json`; selection and execution policy are unchanged. | js-2lg.179 |
-| `js/skills.py` | LoadedSkill.render | policy | Model-facing text is loaded from `js/model_text/skills.json`; selection and execution policy are unchanged. | js-2lg.188 |
-| `js/skills.py` | expand_user_invocation | policy | Model-facing text is loaded from `js/model_text/skills.json`; selection and execution policy are unchanged. | js-2lg.188 |
-| `js/swarm.py` | render / Agent._tick / Room.post_cell / Room.finish_cell | policy | Model-facing text is loaded from `js/model_text/swarm.json`; selection and execution policy are unchanged. | js-2lg.193 |
-| `js/swarm.py` | roster / board | presentation | Model-facing text is loaded from `js/model_text/swarm.json`; selection and execution policy are unchanged. | js-2lg.193 |
-| `js/swarm.py` | _send / _who / _claim / _release / _subscribe / _wake_me / _retire / _recruit / _post_task / _take_task / _finish_task / _tasks | policy | Model-facing text is loaded from `js/model_text/swarm.json`; selection and execution policy are unchanged. | js-2lg.193 |
-| `js/swarm.py` | tools | policy | Model-facing text is loaded from `js/model_text/swarm.json`; selection and execution policy are unchanged. | js-2lg.193 |
-| `js/events.py` | _failed | policy | Model-facing text is loaded from `js/model_text/events.json`; selection and execution policy are unchanged. | js-2lg.200 |
-| `js/hookexec.py` | refusal | policy | Model-facing text is loaded from `js/model_text/hookexec.json`; selection and execution policy are unchanged. | js-2lg.202 |
-| `js/jail.py` | Jail.confine | policy | Model-facing text is loaded from `js/model_text/jail.json`; selection and execution policy are unchanged. | js-2lg.204 |
-| `js/capped_process.py` | truncation_marker | policy | Model-facing text is loaded from `js/model_text/capped_process.json`; selection and execution policy are unchanged. | js-2lg.213 |
-| `js/mcp/host.py` | MCPHost.CONTROL_TOOLS | policy | Model-facing text is loaded from `js/model_text/mcp_host.json`; selection and execution policy are unchanged. | js-2lg.215 |
-| `js/mcp/host.py` | MCPHost.discover / _index_server_tools / _regroup_tools / _make_tool | policy | Model-facing text is loaded from `js/model_text/mcp_host.json`; selection and execution policy are unchanged. | js-2lg.215 |
-| `js/mcp/host.py` | _safe_content_block / resource_result / _make_tool | policy | Model-facing text is loaded from `js/model_text/mcp_host.json`; selection and execution policy are unchanged. | js-2lg.215 |
+The former catalog extraction has been replaced. Model instructions live in
+`defaults/snippets/` and tool contracts in `defaults/tool_descriptions/`;
+the home can override either per file. Result/error messages and presentation
+constants stay beside their owning code. See [Model text](prompt-text.md).
 
 ## S8 messages
 
@@ -415,7 +344,7 @@ Resolution notes (the rows below record the original audit):
 | file:line | function | kind | what the part decides | bead |
 |---|---|---|---|---|
 | `js/toolkit/__init__.py:7-8` | module level | default | Builds the full default registry and a bare ToolContext at import time as the stock surface for callers that pass none. | js-2lg.33 |
-| `js/toolkit/registry.py:501-502,577-601` | _default_prompts_root / build_default_registry | policy | Fixes the list of tool suites that exist, and falls back to the repo's own prompts/ directory when no roots are given. | js-2lg.38 |
+| `js/toolkit/registry.py:501-502,577-601` | _default_prompts_root / build_default_registry | policy | Fixes the list of tool suites that exist, and falls back to the stock defaults/agents/ directory when no roots are given. | js-2lg.38 |
 | `js/toolkit/fs.py:2107-2126` | _offering_path_skills | policy | Wraps read, write and patch so their results start with a skill-offer reminder on their own. | js-2lg.46 |
 | `js/toolkit/process_net.py:932-1023` | fetch | policy | Prefers aria2c when present and falls back to urllib on its own. | js-2lg.49 |
 | `js/toolkit/search.py:56-63,350,387` | _http_body / docs_search | policy | Retries a 401 or 403 once without the Authorization header. | js-2lg.51 |
@@ -457,7 +386,7 @@ Resolution notes (the rows below record the original audit):
 | `js/config.py:311-322,581,584` | _select_prompt_dir / from_env | policy | The agent prompt roots and their order (project > global > repo) are fixed in code. | js-2lg.135 |
 | `js/config.py:486,566` | from_env | presentation | Building a Config sets the global message banner and the fset bound settings, so loading config changes presentation for the whole process. | js-2lg.135 |
 | `js/config.py:507-520` | from_env | policy | When the default model names a provider with no login, the run goes on with no provider instead of failing; the fallback is fixed in code. | js-2lg.135 |
-| `js/settings.py:787,796,806` | _package_settings | policy | A missing or bad js/jsrc raises SystemExit and ends the process, with the text formatted for sys.stderr. | js-2lg.139 |
+| `js/settings.py:787,796,806` | _package_settings | policy | A missing or bad defaults/jsrc raises SystemExit and ends the process, with the text formatted for sys.stderr. | js-2lg.139 |
 | `js/settings.py:934` | collect_settings | policy | Every settings collect clears all operator /fset overrides held in process-global state. | js-2lg.139 |
 | `js/login_cli.py:358,360,496,498` | _input / _secondary_test_choice | presentation | It reads with input()/getpass and writes with print() directly. | js-2lg.146 |
 | `js/login_cli.py:526` | _run_secondary_test | policy | The test call reads the process-global invocation settings (config.run_settings) instead of settings from its caller. | js-2lg.146 |

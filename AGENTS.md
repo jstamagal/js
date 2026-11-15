@@ -48,15 +48,33 @@ Streaming tool-use loop: sync runtime over the async SDK.
 `codex_provider.py`); `js/runtime.py` is the loop (streaming, dispatch,
 subagent fan-out); `js/toolkit/` is the tools — model-facing contracts live
 in `tool_descriptions/*.md`, not in code. Agents are prompt directories
-(`js/persona.py` + `defaults/agents/`; layered project > global > repo; `agent.yaml`
+(`js/persona.py` + `defaults/agents/`; layered per file, project > home > defaults; `agent.yaml`
 beside the prompt picks model, reasoning and tool surface, resolved against
-`tools.yaml` noun:modifier rules). Config layers jsrc < `.js/jsrc` <
+`tools.yaml` noun:modifier rules). Config layers `defaults/jsrc` < home `jsrc` < `.js/jsrc` <
 `.js/jsrc.local` < env < `--extra`. Sessions are append-only JSONL and
 compaction leaves history intact. Inline-directive expansion
 (`js/promptexpand.py`) is single-pass on purpose — that is the injection
 guard; preserve it. Project instructions come from the start directory only
 (`AGENTS.md`, `AGENTS.local.md`): js never walks up to parent directories, so
 `~/js` never reads `~/AGENTS.md`. Deep dives belong in `docs/technical-guide.md`.
+
+Stock setup lives in `defaults/`: jsrc, fset, agents, themes, tool descriptions,
+skills, help, snippets and secret-patterns. A home file replaces only the same
+relative stock file; an empty file shadows it too. Listings union names across
+layers. Skills shadow whole directories by name. Only agents, skills, commands,
+toolbox and jsrc use the project layer. Missing named setup is a hard error.
+`--home DIR` beats `JS_HOME`, then `~/.js`; the selected absolute directory holds
+all configuration, sessions, logs, state, cache and tmp. Prompts and shell commands
+receive `JS_HOME`; inline prompts also support `{{JS_HOME}}` and `%%JS_HOME%%`.
+
+`--json` prints one final object; `--json-stream` streams typed JSON Lines.
+Use `--list-models` or `--list-agents` for text or JSON; `--list-sessions`,
+`--list-providers` and `--list-logins` require `--json`. Sampling flags
+(`--temperature`, `--top-p`, `--top-k`, `--min-p`, `--top-n-sigma`,
+`--repetition-penalty`, `--presence-penalty`, `--xtc-probability`,
+`--xtc-threshold`, `--dry-multiplier`, `--dry-base`, `--dry-allowed-length`,
+`--dry-penalty-last-n`, `--dry-sequence-breakers`) override `--extra`, agent
+sampling and jsrc. A Continue command records the effective run options.
 
 Anything settable is a registered setting (`js/settings.py`). `/set` with no
 argument dumps every settable setting, `/set <key> <value>` sets one, and

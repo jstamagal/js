@@ -1,13 +1,18 @@
-# Model-facing text catalogs
+# Model text
 
-`js/model_text/*.json` holds exact text for the parts of js. Each catalog is
-loaded by `js.prompt_text.load_catalog` and shared with its owning module.
-An assembly can replace catalog entries before importing the owning part;
-shipped files provide the defaults. Agent discovery ignores these catalogs
-because the directory contains neither Markdown persona text nor a manifest.
-The existing `prompts` package-data rule includes the catalogs in wheels.
+Actual instructions to the model live in `defaults/snippets/<name>.md`.
+Copy one to `<home>/snippets/<name>.md` to change it. The home is selected by
+`--home`, `JS_HOME`, or `~/.js`; an empty file shadows stock too. A missing
+snippet is an error naming it and the searched directories.
 
-Literal entries preserve whitespace. Templates use Python `str.format` fields;
-the owning part supplies the data, and inserted values are never expanded
-again. Protocol keys, parsing markers and control flow remain in Python.
-Changing a template does not change when it is sent or the policy that selects it.
+`js.snippets.render(name, **values)` resolves the file when used and substitutes
+`{{NAME}}` fields once. Replacement values are inserted literally and never
+rescanned. This keeps user text or a prior summary from becoming a directive.
+Snippet placeholders are separate from the inline directives expanded in agent
+prompt files.
+
+The main snippets are `commit-task`, `compaction-summary`, `compaction-update`,
+`compaction-rehydrate`, `output-limit-resume` and `flush-context`. Further model
+instructions use the same directory. Tool parameter descriptions live with each
+tool's contract in `defaults/tool_descriptions/`, overridable in the home.
+Result/error text and presentation constants live in their owning Python module.

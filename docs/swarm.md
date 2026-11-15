@@ -1,13 +1,13 @@
 # Swarm bus
 
-`js -p --json --swarm ROOT/NAME "opener"` runs this process as agent `NAME` on
+`js -p "opener" --json-stream --swarm ROOT/NAME` runs this process as agent `NAME` on
 a bus rooted at `ROOT`. Many such processes, one per agent, talk to each other
 through the bus while they work. The code is `js/swarm.py`.
 
 ```bash
 ROOT=/tmp/troop-42
-js -a troop -p --json --swarm $ROOT/kivu  "You are kivu. ..." &
-js -a troop -p --json --swarm $ROOT/twig  "You are twig. ..." &
+js -a troop -p "You are kivu. ..." --json-stream --swarm $ROOT/kivu &
+js -a troop -p "You are twig. ..." --json-stream --swarm $ROOT/twig &
 python -m js.swarm send $ROOT steer '*' "new evidence: the leak is in the writer"
 python -m js.swarm members $ROOT                 # kivu asleep holds parser / twig working
 python -m js.swarm cells $ROOT                   # the work board
@@ -62,8 +62,9 @@ python -m js.swarm run spec.json                 # the same swarm, every agent i
 - **Stop.** A message of kind `stop` ends the agent after the turn it lands in
   (or at once, if it arrives while asleep). `SIGTERM` ends it like `^C`.
 
-The headless event stream (`--json`) gains `sleep` and `wake` between turns;
-see [headless-json.md](headless-json.md).
+The headless stream uses the standard `--json-stream` events throughout the run
+and ends when the agent stops. Bus files record sleep and wake state; see
+[headless-json.md](headless-json.md).
 
 ## Files
 

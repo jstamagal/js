@@ -76,9 +76,9 @@ js/toolkit/process_net.py         shell and fetch
 js/toolkit/meta.py                plan/skill/task/subagents
 js/toolkit/wiki/                  deterministic tools for installed wiki agents
 defaults/tool_descriptions/     model-facing tool contracts
-defaults/agents/                 stock prompt-directory agents; layered with ~/.js/agents/ and project .js/agents/
-                                  (repo `defaults/agents/`, global `~/.js/agents/`, and project `.js/agents/`;
-                                  project scope wins over global, which wins over repo)
+defaults/                         stock jsrc, fset, agents, themes, help, skills and snippets
+                                  each file can be shadowed in the selected home;
+                                  agents also use project .js/agents/
 tests/                            offline, harness, smoke, and live/proxy tests
 docs/                             full user and technical documentation
 ```
@@ -97,8 +97,7 @@ skills, sessions, logs, state, cache and scratch data stay within that profile.
 Project `.js/` layers still apply in the working directory.
 
 Config is a script: each line of a `jsrc` file is a `set <key> <value>` command,
-applied at startup. Files layer lowest-to-highest as `defaults/jsrc` (shipped in the
-package: one line per setting, the built-in defaults), `~/.js/jsrc`,
+applied at startup. Files layer lowest-to-highest as `defaults/jsrc` (shipped with js: one line per setting, the built-in defaults), `~/.js/jsrc`,
 project `.js/jsrc`, then project `.js/jsrc.local`; env vars override files and
 CLI `--extra key=value` overrides env. js never writes `~/.js/jsrc` on its
 own: it exists once you write it or run `/save`, and holds only what you set.
@@ -126,6 +125,47 @@ global prompt-directory agents in `agents/`, skills in
 `skills/`, and per-agent runtime state in `state/`. On first start js moves its
 old XDG config and data directories in; `just migrate-home` previews that. Session memory is append-only JSONL
 with control marks; see the compaction section for compaction commands.
+
+## Setup Layers And Profiles
+
+Stock files live under `defaults/`. Copy a file to the same relative path in
+`~/.js/` to change it: `agents/defaultagent/01-prompt.md` changes that prompt
+while the stock manifest and environment still load. An empty file shadows the
+stock file. Names in listings are the union of the layers. Skills replace a
+whole directory by name. Project `.js/` overrides agents, skills, commands,
+toolbox and jsrc; themes, tool descriptions, help and snippets use stock and home.
+`jsrc` files layer settings, and `defaults/fset` loads before jsrc format entries.
+
+```bash
+js --home ~/profiles/review -p "review this change"
+JS_HOME=~/profiles/chat js --chat -p "hello"
+js --list-agents
+js --list-models --json
+js --list-sessions --json
+js --list-providers --json
+js --list-logins --json
+js --verify --json
+js -p "summarize this repo" --json
+js -p "summarize this repo" --json-stream
+```
+
+`--home` beats `JS_HOME`, which beats `~/.js`. The directory is created when
+missing; all configuration, credentials, sessions, logs, state, cache and tmp
+use that home. Prompts can use `{{JS_HOME}}` or `%%JS_HOME%%`; shell commands
+receive `$JS_HOME`. A missing named agent, theme or snippet is an error naming
+the search directories.
+
+`--json` writes one final object; `--json-stream` writes typed events while a run
+executes. They are mutually exclusive. Models and agents have text and JSON
+listings; sessions, providers and logins require `--json`.
+
+Sampling flags override `--extra`, agent sampling and jsrc: `--temperature`,
+`--top-p`, `--top-k`, `--min-p`, `--top-n-sigma`, `--repetition-penalty`,
+`--presence-penalty`, `--xtc-probability`, `--xtc-threshold`, `--dry-multiplier`,
+`--dry-base`, `--dry-allowed-length`, `--dry-penalty-last-n` and
+`--dry-sequence-breakers`. For example, `js -p "hello" --temperature 0.7 --top-k 40`.
+The Continue line carries the effective model, effort, samplers, profile and
+prompt/tool switches. A resumed chat session keeps chat mode.
 
 ## Provider Management
 

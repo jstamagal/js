@@ -36,9 +36,8 @@ Rules:
 
 ## Direct Agent Tools
 
-Prompt directories under repo `defaults/agents/`, global `~/.js/agents/`, and
-project `.js/agents/` become direct tools. Project scope wins over global,
-which wins over repo:
+Prompt directories under stock `defaults/agents/`, global `~/.js/agents/`, and
+project `.js/agents/` become direct tools. Files layer per relative name: project > home > defaults:
 
 ```json
 {
@@ -114,7 +113,7 @@ Child agents do not inherit the parent's selected tool surface.
 The child loads:
 
 ```text
-<root>/<agent_id>/*-prompt.md, *-env.md  # root is repo prompts/, ~/.js/agents/, or project .js/agents/
+<root>/<agent_id>/*-prompt.md, *-env.md  # root is defaults/agents/, ~/.js/agents/, or project .js/agents/
 ```
 
 Then selects tools from the full registry using that agent's `agent.yaml`

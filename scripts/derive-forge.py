@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Derive forge's `forge` agent prompt from js's shipped defaultagent prompt.
 
-js's prompts/defaultagent/01-prompt.md is the source of truth. forge gets the
+js's defaults/agents/defaultagent/01-prompt.md is the source of truth. forge gets the
 same text minus the js-harness-only sections, with forge's agent front-matter.
 
   derive-forge.py --ship FORK/crates/forge_repo/src/agents/forge.md
-      Shipping prompt: every `!{file ~/.js/custom/<section>.md}` slot dropped.
+      Shipping prompt: every `!{file %%JS_HOME%%/custom/<section>.md}` slot dropped.
       Front-matter is kept from the existing file at that path.
 
   derive-forge.py --personal ~/.forge/agents/forge.md
@@ -15,7 +15,7 @@ same text minus the js-harness-only sections, with forge's agent front-matter.
       existing personal file).
 
 Both may be given in one run. Never edit the outputs by hand: edit the js
-prompt or ~/.js/custom/*.md and re-run.
+prompt or <home>/custom/*.md and re-run.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 
 JS_ROOT = Path(__file__).resolve().parents[1]
-SOURCE = JS_ROOT / "prompts" / "defaultagent" / "01-prompt.md"
+SOURCE = JS_ROOT / "defaults" / "agents" / "defaultagent" / "01-prompt.md"
 SLOT = re.compile(r"^!\{file (?P<path>[^}]+)\}\n", re.MULTILINE)
 # Sections that only make sense inside the js harness.
 JS_ONLY = ("## Headless mode", "## Reminders", "## `js`")
@@ -53,8 +53,8 @@ def forgeify(body: str) -> str:
     swaps = [
         ("\nHeadless run: body uses Headless shape (see Headless mode). Brass tacks + GATE phrase still last two lines.\n", ""),
         ("You are **js** —", "You are **forgecode** —"),
-        ("`$HOME/.js/tmp`. Cleared of anything a day old.", "`/tmp`."),
-        ("`$HOME/.js/work`.", "`$HOME/.forge/work`."),
+        ("`$JS_HOME/tmp`. Cleared of anything a day old.", "`/tmp`."),
+        ("`$JS_HOME/work`.", "`$HOME/.forge/work`."),
         ("gh issue create -R jstamagal/js", "gh issue create -R jstamagal/forgecode"),
     ]
     for old, new in swaps:
@@ -68,7 +68,9 @@ def fill_slots(body: str, keep: bool) -> str:
     def sub(m: re.Match) -> str:
         if not keep:
             return ""
-        path = Path(os.path.expanduser(m.group("path").strip()))
+        profile = os.environ.get("JS_HOME") or str(Path.home() / ".js")
+        source = m.group("path").strip().replace("%%JS_HOME%%", profile)
+        path = Path(os.path.expanduser(source))
         text = path.read_text(encoding="utf-8") if path.is_file() else ""
         if "{{" in text:
             raise SystemExit(f"derive-forge: {path} has '{{{{' which forge's handlebars would eat")

@@ -73,7 +73,7 @@ natively through AI Gateway or via `provider:model` syntax for direct providers.
 ## Setting Reference
 
 Every setting is registered in `js/settings.py` `REGISTRY` with its type; its
-help text is its entry in `js/help/set.txt` and its default is its line in
+help text is its entry in `defaults/help/set.txt` and its default is its line in
 `defaults/jsrc`. `/set` with no argument lists every setting and its current value,
 `/set NAME` shows one, `/set compaction` one group and `/set *_FILE` the names
 a wildcard matches; `/help set NAME` prints a setting's help. Empty-state rendering uses `off` for false booleans, `<none>` for no-value
@@ -400,8 +400,8 @@ never leaves stray files.
 
 ### Agent prompts
 
-Agent prompts are discovered from repo `defaults/agents/`, global `~/.js/agents/`,
-and project `.js/agents/`; each filename is selected independently, project over home over stock. An empty file overrides its lower copy.
+Agent prompts are discovered from stock `defaults/agents/`, global `~/.js/agents/`,
+and project `.js/agents/`; files layer per relative name: project > home > defaults.
 
 Two layers are prepended to every main-agent and subagent system prompt,
 blank-line separated:
@@ -640,7 +640,7 @@ left out) loses `reasoning_parts` and `reasoning_from`; a compaction mark drops
 them from its kept tail on load.
 
 `/name <text>` appends a `title` record; `/name` alone prints the title. The
-newest title is the session's name in `--list --json`.
+newest title is the session's name in `--list-sessions --json`.
 
 `load_replay_messages()` (and `load_messages()`, which reads through it) ignores:
 
@@ -709,8 +709,8 @@ after it. The newest one is where a resumed session's totals start; `/wipe`
 starts them again at zero. `/cost` prints the totals, the tokens by kind, and
 each model's share. The status bar shows the session's cost; `+` after it
 means some calls had no price, and a session with no priced call shows its
-token count instead. `js -p --json` carries the same figures in its `usage`
-events ([Headless JSON Events](headless-json.md)).
+token count instead. `js -p "task" --json` carries the same figures in its final `usage`
+object; `--json-stream` includes them in `end` ([Headless JSON](headless-json.md)).
 
 ## Wipe
 

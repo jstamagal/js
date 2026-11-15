@@ -55,7 +55,7 @@ Every setting a merged bead added shows up in this diff. Each one becomes one ro
 
 | Copy | Location | What it holds |
 |---|---|---|
-| Registry | js/settings.py:90–390 (`REGISTRY`) plus js/jsrc (one `set` line per setting) | key, type, doc, env var. This stays as the source of truth. |
+| Registry | js/settings.py:90–390 (`REGISTRY`) plus defaults/jsrc (one `set` line per setting) | key, type, doc, env var. This stays as the source of truth. |
 | Config fields | js/config.py:139–200 | 4 required int fields (`max_tool_iterations`, `max_bash_output_bytes`, `max_tool_result_bytes`, `fetch_timeout_s`:151), 22 `_jsrc_field(...)` fields, `shell_env_allow`, `*_dir` |
 | Loader | js/config.py:499–545 (`_int_knob` ×24, `bool(knob(...))` ×7, `kernel_verbosity` choice, `shell_env_allow` validation, `max(1, …)` clamp) plus ~28 matching kwargs in `Config(...)` at 571–628 | |
 | Live overlay | js/cli.py:490–534 (`_LIVE_LIMIT_FIELDS` 20 rows, `_LIVE_STR_FIELDS`, `_LIVE_STR_LIST_FIELDS`, `_LIVE_OPTIONAL_INT_FIELDS`, `_LIVE_BOOL_FIELDS`), helpers 537–586, loops in `_cfg_for_live_state` 814–842 | Re-derives the same values from the live store with the active cfg as fallback. It **does not** apply the `max(1, …)` clamp to `max_parallel_tools`, so it has already drifted from the loader. |
@@ -82,7 +82,7 @@ KNOBS: tuple[Knob, ...]       # the one place a per-turn setting lands
 
 def project(settings: Mapping | None, fallback: object | None = None) -> dict[str, Any]
     # attr -> effective value for every knob. A missing or invalid value falls back
-    # to fallback.attr when a fallback is given, else to the js/jsrc default.
+    # to fallback.attr when a fallback is given, else to the defaults/jsrc default.
 def install(context, cfg) -> None      # copy the on_context knobs cfg -> ToolContext (getattr-tolerant for SimpleNamespace cfgs)
 def inherit(parent) -> dict[str, Any]  # on_context knobs of a parent ToolContext
 ConfigKnobs   # make_dataclass(frozen=True, kw_only=True, module=__name__), fields from KNOBS
@@ -100,7 +100,7 @@ Readers are small private functions: `integer`, `at_least_one` (for `max_paralle
 - About 27 test helpers build `Config(..., fetch_timeout_s=5, ...)` with keyword arguments, and one does `Config(**{**cfg.__dict__, ...})`.
 - Tests construct `ToolContext(cwd=..., fetch_timeout_s=…)` about 60 times and assign `context.max_read_lines = …` about 50 times.
 
-So `cfg.X` and `context.X` must remain flat, constructible, mutable-on-context attributes. Config inherits `ConfigKnobs` and ToolContext inherits `ContextKnobs`. Two bases are needed because a frozen dataclass cannot inherit from a non-frozen one, or the other way round. `kw_only` lets required Config fields (agent_id, …) follow defaulted base fields, and `ToolContext(tmp_path)` still binds `cwd` positionally. Defaults stay `default_factory` so they read js/jsrc lazily; test_package_jsrc swaps `PACKAGE_JSRC` and expects the defaults to follow.
+So `cfg.X` and `context.X` must remain flat, constructible, mutable-on-context attributes. Config inherits `ConfigKnobs` and ToolContext inherits `ContextKnobs`. Two bases are needed because a frozen dataclass cannot inherit from a non-frozen one, or the other way round. `kw_only` lets required Config fields (agent_id, …) follow defaulted base fields, and `ToolContext(tmp_path)` still binds `cwd` positionally. Defaults stay `default_factory` so they read defaults/jsrc lazily; test_package_jsrc swaps `PACKAGE_JSRC` and expects the defaults to follow.
 
 **Alternatives I rejected:**
 - (a) A nested `cfg.limits` object. This breaks the ~27 constructors and ~50 assignments above.

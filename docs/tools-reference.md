@@ -1,7 +1,7 @@
 # Tools Reference
 
 This file describes the public tool surface. The exact model-facing contract
-text lives in `js/toolkit/tool_descriptions/*.md`, cut to what the model can
+text lives in `defaults/tool_descriptions/*.md`, cut to what the model can
 act on.
 
 ## Core Filesystem Tools
@@ -532,7 +532,7 @@ Parameters:
 Loads a local skill document by name from known skill paths.
 A skill whose frontmatter sets `disable-model-invocation: true` is user-only:
 the tool refuses it and the user loads it with `/skill <name>` in the REPL.
-The built-in skills in `js/skills/` are the lowest layer. A skill named in
+The built-in skills in `defaults/skills/` are the lowest layer. A skill named in
 `SKILLS_DISABLED` is not in the catalog: the tool refuses it like an unknown name.
 
 A skill whose frontmatter sets `paths:` (a list of globs, or one string of
@@ -849,9 +849,8 @@ trace headers and prompt events include `tool_names` for the published schema se
 
 ## Generated Agent Tools
 
-Prompt directories under repo `prompts/`, global `~/.js/agents/`, and
-project `.js/agents/` become tools named after the directory. Project scope
-wins over global, which wins over repo. Current generated tool names include:
+Prompt directories under stock `defaults/agents/`, global `~/.js/agents/`, and
+project `.js/agents/` become tools named after the directory. Files layer per relative name: project > home > defaults. Current generated tool names include:
 
 - `defaultagent`
 - `autocoder`

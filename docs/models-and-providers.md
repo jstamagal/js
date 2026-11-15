@@ -10,7 +10,7 @@ matching against known-provider ids and saved logins; an unprefixed id goes to
 
 Configuration precedence is:
 
-1. `js/jsrc`, shipped in the package: the built-in defaults
+1. `defaults/jsrc`, shipped in the package: the built-in defaults
 2. platform `jsrc`
 3. project `.js/jsrc`
 4. project `.js/jsrc.local`
@@ -466,13 +466,13 @@ with no session. opencode routes and caches by that header, and the Anthropic
 endpoint answers a request without it with 400 `MissingSessionID`.
 
 Both endpoints advertise their live catalog through the API. js does not apply a
-client-side allow-list — the endpoint is the source of truth, so the JSON bridge
-and the login picker surface exactly what the upstream `list_models` returns
-(including freshly shipped ids like `glm-5.2` that a curated tuple would hide):
+client-side allow-list. The model listing uses saved cached models when available,
+and the live endpoint on a cache miss. Use `js --models-edit PROVIDER` to update
+a saved catalog:
 
 ```bash
-python -m js --models-json opencode-go
-# {"models": [...whatever https://opencode.ai/zen/go/v1 serves right now...]}
+python -m js --list-models opencode-go --json
+# {"models": ["opencode-go/model-name", ...]}
 ```
 
 There is no model gate: a model id is passed straight through to the provider,
@@ -484,18 +484,20 @@ if it does not).
 Three read-only commands expose the provider/login state as JSON for external
 pickers (e.g. the Go picker), all printing a single line to stdout:
 
-- `python -m js --providers-json` — every known provider as
+- `python -m js --list-providers --json` — every known provider as
   `{"id", "name", "source"}`, where `source` is `login` (saved), `env`
   (configured via env vars), `registry` (known but unconfigured), or `custom`
   (saved login with no built-in def).
-- `python -m js --logins-json` — only saved logins, with `has_api_key` /
+- `python -m js --list-logins --json` — only saved logins, with `has_api_key` /
   `has_codex_refresh_token` booleans. The Codex refresh token is always nulled
   in the output, and Codex providers' `provider_api_key` is nulled too.
   With `PARANOID_MODE on` or `extra`, API keys and xAI refresh tokens are
   nulled and provider headers are empty. With it off, other providers'
   credentials remain available for a picker to reconnect.
-- `python -m js --models-json <provider>` — the (filtered) model list for a
-  provider; omit the provider to use the effective configured provider.
+- `python -m js --list-models <provider> --json` — the (filtered) model list for a
+  provider, using qualified provider/model ids and cached models when available.
+  Omit the provider to list all saved providers plus the active provider.
+  Text and JSON listings use the same selection.
 
 ## Claude Tool Name Handling
 

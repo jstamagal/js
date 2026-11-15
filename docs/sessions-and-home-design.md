@@ -283,7 +283,7 @@ own: how a turn ends belongs in the operator's prompt files.
 
 ## 4. Shell tool
 
-- New setting `SHELL_PROGRAM`, default `bash` in `js/jsrc`. Today the tool
+- New setting `SHELL_PROGRAM`, default `bash` in `defaults/jsrc`. Today the tool
   runs `$SHELL` with no setting; models write bash, and zsh broke a model's
   `echo ===` separator on 2026-09-29.
 - Under bash, commands run with `pipefail`, so `dmesg … 2>/dev/null | rg … |

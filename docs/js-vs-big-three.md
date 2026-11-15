@@ -36,7 +36,7 @@ Safety, sandboxing and approval flows are left out on purpose.
 | Model recorded per turn | no, start only (being fixed) | ? | yes | yes |
 | Branch / fork / rewind | no (designed) | yes | yes | yes |
 | Session picker with search | no (designed) | yes | yes | yes |
-| Structured headless output | yes, `-p --json` (done in js-1g1.18) | stream-json | `exec --json` | json + rpc |
+| Structured headless output | yes, `-p --json` or `--json-stream` | stream-json | `exec --json` | json + rpc |
 | Cost accounting | yes, `/cost` and the bar (done in js-1g1.19) | yes | tokens only | yes |
 | One config grammar (file = REPL) | yes | no | no | no |
 | Prompt-time code directives | yes | no | no | no |
@@ -75,7 +75,7 @@ pi retries once. Codex does not recover inside a normal turn.
 
 **The tool policy is declarative, and you can see why each tool is on or off.** `agent.yaml` noun:modifier entries resolve against `tools.yaml` tags, and `/tools` prints the rule that decided each tool. The others decide in code.
 
-**One grammar for config.** `set key value` is the same line in `js/jsrc`, in `/set` and in `--extra`. `/save` writes the settings you changed into your jsrc in place, and `set -key` reverts a setting. The others keep their file format and their runtime settings separate.
+**One grammar for config.** `set key value` is the same line in `defaults/jsrc`, in `/set` and in `--extra`. `/save` writes the settings you changed into your jsrc in place, and `set -key` reverts a setting. The others keep their file format and their runtime settings separate.
 
 **`JS.md` rather than a global `AGENTS.md`**, so repo-shaped instructions don't leak into every project (`paths.py:74-81`). **Single-pass prompt directives**, so a directive's output is never re-scanned (`promptexpand.py`). **Agents are prompt directories** with ordered fragments and a manifest, which is a richer unit than Claude Code's single file or pi's `SYSTEM.md`.
 
@@ -119,7 +119,7 @@ pi retries once. Codex does not recover inside a normal turn.
 - **`toolstats` audits shell habits:** calls to `cat`, `grep`, `find` or `sed -i` where a dedicated tool exists.
 - **An ircII scripting layer:** `on <event> <command>`, `alias`, `load`, and `/save` persisting them. The hook language is the command language.
 - **A vi input buffer with a real ex line** (`:w`, `:x`, `:e`, `:r`, `:n`, and `:<program>` runs the program on the buffer).
-- **`set -key` reverts a setting through the layers,** and `js/jsrc` must list every setting.
+- **`set -key` reverts a setting through the layers,** and `defaults/jsrc` must list every setting.
 - **Session leases with pid and start-time checks,** so the listing can show which sessions are in flight.
 - **The mode-switch note** (-p ↔ REPL) and prompt-drift marks.
 
@@ -152,7 +152,7 @@ pi retries once. Codex does not recover inside a normal turn.
 ## Entirely lacking
 
 - **Cost and cumulative token accounting** (done in js-1g1.19: `usage.py`, `/cost`, the status bar).
-- **Structured headless output.** `-p --json` streams events (done in js-1g1.18: `headless.py`); there's still no JSON-RPC and no SDK, so another agent can read js as an event stream but can't drive a live session.
+- **Structured headless output.** `-p --json-stream` streams events (`headless.py`), while `--json` returns one final object; there's still no JSON-RPC and no SDK, so another agent can read js as an event stream but can't drive a live session.
 - **Branch, fork and rewind of history.** (designed)
 - **An in-REPL picker, titles and search.** (designed)
 - **Plugins, or an in-process extension API** for registering tools or rewriting calls.

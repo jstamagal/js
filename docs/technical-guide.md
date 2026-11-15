@@ -48,7 +48,7 @@ persists each completed turn.
 | `js/turn_call.py` | one model call with its retries, overflow recovery, escalated resend and signed-reasoning resend (`ModelCaller`) |
 | `js/memory.py` | locked JSONL persistence and loader control marks |
 | `js/usage.py` | per-session token and cost totals, the `usage` records, the meter a turn charges its calls to |
-| `js/headless.py` | `js -p --json`: runtime events as JSON lines (docs/headless-json.md) |
+| `js/headless.py` | `js -p --json-stream`: typed runtime events as JSON Lines (docs/headless-json.md) |
 | `js/messages.py` | every string the operator reads, as named entries; the banner slot; each entry's default format |
 | `js/persona.py` | prompt-directory concatenation and `agent.yaml` |
 | `js/events.py` | event names, `on` handler table, handler refusals, the approval a program passes to `run_turn_async` |
@@ -157,7 +157,7 @@ generated prompt-directory agent tools
 ```
 
 Generated agent tools come from directories with markdown files under repo
-`defaults/agents/`, global `~/.js/agents/`, and project `.js/agents/`. Files assemble across layers; for the same filename, project wins over home, which wins over stock. A
+`defaults/agents/`, global `~/.js/agents/`, and project `.js/agents/`. Files layer per relative name: project > home > defaults when roots define the same agent id. A
 prompt directory whose name collides with an existing tool is skipped.
 
 ## Tool Context
@@ -461,7 +461,7 @@ passes the values for their holes (`msgs.say(msgs.MODEL_SET, model=m)`,
 A banner entry prints behind the `BANNER` slot (`***` today); no template
 spells the slot. Each entry is shown through its /fset format (`js/fset.py`):
 its fields become the words `$0`, `$1`, ... and the format adds colour only
-where it writes `%Cnn`; `js/fset` draws a failure's glyph red and a warning's
+where it writes `%Cnn`; `defaults/fset` draws a failure's glyph red and a warning's
 orange.
 `say` paints only a stream that is a terminal, so a pipe gets plain lines.
 

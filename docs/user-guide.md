@@ -477,10 +477,32 @@ js -p "prompt" --json
 js --migrate-config
 ```
 
-`--json` writes the run to stdout as JSON events, one per line: the session,
-streamed text, each tool call and a summary of its result, token usage and
-cost per model call, errors, and a closing `result`. Everything else goes to
-stderr. The schema is in [Headless JSON Events](headless-json.md).
+`--json` writes one final JSON object with the answer, session, provider, model,
+effort and usage. `--json-stream` writes JSON Lines as the run proceeds, with
+`start`, `reasoning`, `text`, `tool_call`, `tool_result`, `retry`, `error` and
+`end` events. The final event contains the same result as `--json`. Other output
+goes to stderr. The flags are mutually exclusive. See [Headless JSON](headless-json.md).
+
+`--list-models` and `--list-agents` print text, or JSON with `--json`.
+`--list-sessions`, `--list-providers` and `--list-logins` require `--json`.
+`--verify --json` reports configuration errors as JSON. A command without the
+requested JSON form exits 2 and names the command.
+
+Sampling flags set registered settings for this run: `--temperature`, `--top-p`,
+`--top-k`, `--min-p`, `--top-n-sigma`, `--repetition-penalty`, `--presence-penalty`,
+`--xtc-probability`, `--xtc-threshold`, `--dry-multiplier`, `--dry-base`,
+`--dry-allowed-length`, `--dry-penalty-last-n` and `--dry-sequence-breakers`.
+A flag wins over `--extra`, which wins over agent `sampling:`, then jsrc.
+For example: `js -p "hello" --temperature 0.7 --top-k 40`.
+
+The Continue command carries the effective route, effort, samplers, home and
+prompt/tool options; endpoint keys are omitted. Resuming a chat session keeps
+chat mode without needing to repeat `--chat`.
+
+A benchmark always shows complete reasoning, tool calls and results, and raw
+markdown. Its JSON keeps its existing metrics and adds `tools`, in call order,
+with repeats; unknown tool names have a `?` prefix. `--bench AGENT --json`
+prints that object alone; `--json-stream` streams events and ends with it.
 
 `--debug` streams the trace to stdout. `--debug-file` writes the rich trace to a
 file and keeps stdout clean. They are mutually exclusive. With `TRACE`
@@ -493,6 +515,30 @@ stdout answer-only, and prints `*** Session not saved. Resume unavailable.`
 to stderr after a headless prompt or pipe run. Agent drivers should treat that
 warning as a signal that the next correction round cannot resume and must
 re-read context.
+
+## Profiles And Stock Files
+
+`defaults/` ships jsrc, fset, agents, themes, tool descriptions, skills, help,
+snippets and secret-patterns. The home overrides a file at the same relative
+path; files you have not copied keep coming from stock. Empty files shadow too.
+Names in listings union across layers. Skills replace whole directories by name.
+Only jsrc, agents, skills, commands and toolbox use a project `.js/` layer.
+`defaults/jsrc`, home `jsrc`, project `jsrc`, project `jsrc.local`, env and
+`--extra` layer settings; `defaults/fset` loads before format lines in jsrc.
+
+```bash
+js --home ~/profiles/review -p "review this patch"
+JS_HOME=~/profiles/chat js --chat
+```
+
+`--home DIR` wins over `JS_HOME`, then `~/.js`. The selected directory is resolved
+to an absolute path once at startup and created when missing. A file in its
+place is an error. The whole profile lives there: config, agents, themes,
+snippets, credentials, sessions, logs, state, cache and tmp.
+
+Prompt text can use `{{JS_HOME}}` or `%%JS_HOME%%` for the resolved home; inline
+commands, envctx and the shell tool receive `$JS_HOME`. A missing named theme or
+snippet is an error naming it and its search directories.
 
 ## Working Directory And Config Scoping
 
@@ -548,7 +594,7 @@ rule line telling the model it is confined.
 `--no-local-config` ignores the project config files `.js/jsrc` and
 `.js/jsrc.local`.
 
-`--no-global-config` ignores `~/.js/jsrc`. The defaults in the package's
+`--no-global-config` ignores `~/.js/jsrc`. The defaults in
 `defaults/jsrc` still apply.
 
 `--migrate-config` runs the one-shot legacy-to-`jsrc` conversion and exits; see
@@ -652,12 +698,17 @@ Native tools keep conversion, page schema/dedup, and ingest close-out determinis
 
 ## Prompt-Directory Agents
 
-Agents are discovered from repo `defaults/agents/`, global `~/.js/agents/`, and
-project `.js/agents/`; each filename is selected independently, project over home over stock. An empty file overrides its lower copy.
-Each agent lives at `<root>/<agent_id>/`: `NN-prompt.md` and `NN-env.md`
-files, concatenated in sorted filename order into the system prompt, optional
-`NN-user.md` / `NN-agent.md` seed messages and `NN-benchmark.md` turns, and an
-`agent.yaml` manifest. Any other `.md` in the directory is not read.
+Agents are assembled per file from `defaults/agents/`, home `agents/`, and
+project `.js/agents/`, lowest first. Copy only the files you want to change:
+a home `agents/defaultagent/01-prompt.md` replaces that file while the stock
+`agent.yaml` and `02-env.md` still load. A zero-byte override shadows the stock
+file too. Listings union the names across layers. An unknown agent is an error
+naming it and the searched directories.
+
+Each agent lives at `<root>/<agent_id>/`. `*-prompt.md` and `*-env.md` files
+concatenate in filename order; `NN-user.md` / `NN-agent.md` seed exchanges and benchmark files
+have their own roles. `agent.yaml` selects tools, model, effort and sampling.
+It follows the same per-file layering rule.
 
 ```yaml
 tools:
@@ -679,12 +730,7 @@ A run without `--agent` uses the `DEFAULT_AGENT` setting: `set DEFAULT_AGENT aut
 `~/.js/jsrc` or a project `.js/jsrc`, or `JS_DEFAULT_AGENT=autocoder`. The built-in
 value is `defaultagent`.
 
-Current prompt dirs:
-
-- `defaultagent`: main orchestrator prompt. Selects core tools, `task`,
-  `autocoder`, and `commit`.
-- `autocoder`: headless engineering worker.
-- `commit`: git commit worker.
+Use `js --list-agents` to see the agents installed across your layers.
 
 ## Shell Expectations
 

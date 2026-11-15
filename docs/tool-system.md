@@ -410,10 +410,10 @@ subagent use those tools, add entries to that agent's `agent.yaml`.
 
 ## Generated Agent Tools
 
-Every prompt directory with markdown files or an `agent.yaml` under repo `defaults/agents/`, global
+Every prompt directory with markdown files or an `agent.yaml` under stock `defaults/agents/`, global
 `~/.js/agents/`, and project `.js/agents/` becomes a direct agent tool unless
-its name collides with a base tool. Project scope wins over global, which wins
-over repo when the same agent id appears in multiple roots.
+its name collides with a base tool. Each filename resolves independently: project over home over defaults.
+An empty file shadows its lower copy.
 
 Direct generated tools take:
 
