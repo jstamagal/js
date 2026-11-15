@@ -359,6 +359,7 @@ def branch_session(parent_file: Path, message: str, *, cwd: Path | str, agent: s
     stamp = last_stamp(branch)
     record_session_start(branch, cwd=cwd, agent=agent, model=stamp.get("model") if stamp else None,
                          provider=stamp.get("provider") if stamp else None, mode=mode, command=command,
+                         chat=bool((first_metadata(parent_file) or {}).get("chat")),
                          branched_from={"session": str(parent_file), "message": message})
     return branch
 

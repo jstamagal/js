@@ -106,6 +106,7 @@ from .session_catalog import (
     append_title,
     branch_session,
     catalog_sessions,
+    first_metadata,
     last_stamp,
     record_model_switch,
     record_session_start,
@@ -238,6 +239,28 @@ def _parse_bool(raw: str) -> bool | None:
     return None
 
 
+def _inherit_session_chat(session: str | None) -> bool:
+    from .cli_options import current, restore_chat
+
+    session = session or os.environ.get("JS_SESSION")
+    if not session:
+        return False
+    try:
+        path = resolve_session_file(session_store.folder_for(Path.cwd()), session)
+        metadata = first_metadata(path)
+    except (ValueError, OSError):
+        return False
+    if not metadata or not metadata.get("chat"):
+        return False
+    agent = current().agent
+    if agent in (None, "none"):
+        agent = metadata.get("agent")
+        if agent == "none":
+            agent = None
+    restore_chat(agent)
+    return True
+
+
 def _from_env(
     session: str | None = None,
     *,
@@ -248,6 +271,9 @@ def _from_env(
     ignore_global_config: bool = False,
     presets: list[str] | None = None,
 ) -> Config:
+    if _inherit_session_chat(session):
+        from .cli_options import current
+        agent_id = current().agent or (None if agent_id == "none" else agent_id)
     return from_env(
         save_session=save_session,
         extras=extras,
@@ -315,8 +341,10 @@ def _session_scope(func):
         start = len(leases)
         old_caller_key = getattr(_session_leases, "caller_key", None)
         old_start = getattr(_session_leases, "start", None)
+        from .cli_options import current, invocation
         try:
-            return func(*args, **kwargs)
+            with invocation(current()):
+                return func(*args, **kwargs)
         finally:
             while len(leases) > start:
                 leases.pop().release()
@@ -5041,6 +5069,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
             return 2
         args.session = derive_session_name(effective_agent, Path.cwd(), args.session_key)
     _session_leases.caller_key = args.session_key
+    _inherit_session_chat(args.session)
     if presets:
         # Resolve against the now-final cwd (after any -C). A name that matches no
         # file anywhere is almost certainly a typo — say so rather than no-op.

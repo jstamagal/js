@@ -4,7 +4,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from . import messages as msgs
@@ -106,6 +106,12 @@ _current: contextvars.ContextVar[RunOptions] = contextvars.ContextVar('js_run_op
 
 def current() -> RunOptions:
     return _current.get()
+
+
+def restore_chat(agent: str | None) -> None:
+    """Resume the recorded chat persona in the current invocation's scope."""
+    _current.set(replace(current(), chat=True, agent=agent))
+    os.environ['JS_NOENV'] = '1'
 
 
 @contextlib.contextmanager
