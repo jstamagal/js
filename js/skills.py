@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from . import snippets
+
 from collections.abc import Iterable
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
@@ -261,7 +263,7 @@ def expand_user_invocation(catalog: SkillCatalog, text: str, *, command: str = "
     header = [f'Base directory for this skill: {metadata.path.parent}']
     if metadata.tools:
         header.append(
-            'Tools this skill declares (load them with tool_discovery): '
+            snippets.render('skill-tools-header')
             + ", ".join(metadata.tools)
         )
     body = loaded.instructions.strip("\n")

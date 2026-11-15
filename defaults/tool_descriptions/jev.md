@@ -14,3 +14,17 @@ whether the answer flipped. A flipped answer is not to be trusted.
 
 Each answer comes back as one numbered line in question order. Jev needs
 TYPESAFE_API_KEY in the environment.
+
+<!--parameters-->
+
+### check_order
+
+Ask each choice again with its options reversed and report a flip.
+
+### questions.items.options
+
+choice: `name` or `name=description`; score: levels, lowest first.
+
+### state
+
+What the questions are about. A JSON object or array is sent as JSON.

@@ -19,3 +19,57 @@ For directory-only discovery use `shell` with `fd --type d`.
 - Use `task` for open-ended investigations that require multiple search/read
   rounds or synthesis across several areas.
 {{/if}}
+
+<!--parameters-->
+
+### after_context
+
+Lines after each match when output_mode is content.
+
+### before_context
+
+Lines before each match when output_mode is content.
+
+### case_insensitive
+
+Match without case sensitivity.
+
+### context_lines
+
+Lines before and after each match when output_mode is content.
+
+### file_type
+
+ripgrep type name or bare extension, e.g. rust, py, rs. Cannot be combined with a positive glob.
+
+### glob
+
+Optional glob filter such as *.py or **/*.tsx.
+
+### head_limit
+
+Maximum number of result entries after offset; must be at least 1.
+
+### multiline
+
+Allow the regex to span line breaks.
+
+### offset
+
+Number of result entries to skip before returning output.
+
+### output_mode
+
+Result format: filename-glob paths, content-matching lines, paths whose contents match, or per-file content-match counts.
+
+### path
+
+File or directory to search; defaults to the current working directory.
+
+### pattern
+
+Content regular expression, or filename glob when output_mode is files.
+
+### show_line_numbers
+
+Include file:line prefixes for content output.

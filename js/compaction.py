@@ -11,6 +11,8 @@ there is exactly one implementation. This module also owns every read of the
 
 from __future__ import annotations
 
+from . import snippets
+
 import asyncio
 import json
 import math
@@ -575,31 +577,31 @@ def _post_compact_rehydration(
         try:
             header = _read_regular_bytes(path, 4096)
             if _detect_visual_mime(path, header) or b"\x00" in header:
-                sections.append(f'### {path}\n(non-text content not re-attached; use read if you need it)')
+                sections.append(snippets.render('compaction-file-nontext', PATH=path))
                 continue
             if path.stat().st_size > byte_limit:
-                sections.append(f'### {path}\n(too large to re-attach; read it if you need it)')
+                sections.append(snippets.render('compaction-file-too-large', PATH=path))
                 continue
             data = _read_regular_bytes(path, byte_limit + 1)
             if len(data) > byte_limit:
-                sections.append(f'### {path}\n(too large to re-attach; read it if you need it)')
+                sections.append(snippets.render('compaction-file-too-large', PATH=path))
                 continue
             if b"\x00" in data:
-                sections.append(f'### {path}\n(non-text content not re-attached; use read if you need it)')
+                sections.append(snippets.render('compaction-file-nontext', PATH=path))
                 continue
             body = data.decode("utf-8")
         except UnicodeError:
-            sections.append(f'### {path}\n(non-text content not re-attached; use read if you need it)')
+            sections.append(snippets.render('compaction-file-nontext', PATH=path))
             continue
         except OSError:
-            sections.append(f'### {path}\n(not re-attached: unavailable or not readable as a regular file; check the path if needed)')
+            sections.append(snippets.render('compaction-file-unavailable', PATH=path))
             continue
         est = max(1, int(len(body) / ratio))
         if est > per_file_tokens:
-            sections.append(f'### {path}\n(too large to re-attach; read it if you need it)')
+            sections.append(snippets.render('compaction-file-too-large', PATH=path))
             continue
         if spent + est > token_budget:
-            sections.append(f'### {path}\n(not re-attached because the shared file budget is exhausted; read it if you need it)')
+            sections.append(snippets.render('compaction-file-budget', PATH=path))
             continue
         spent += est
         sections.append(f'### {path}\n{body}')
@@ -608,9 +610,7 @@ def _post_compact_rehydration(
     return {
         "role": "user",
         "content": (
-            '<post-compaction-files>\nFiles opened before the summary above. Inlined text is fresh from disk and includes your edits; do not re-read inlined files unless you change them. Files with omission notices may need to be read.\n\n'
-            + "\n\n".join(sections)
-            + '\n</post-compaction-files>'
+            snippets.render("compaction-rehydrate", FILES="\n\n".join(sections))
         ),
     }
 
@@ -864,18 +864,18 @@ def _summary_prompt(conversation: str, previous: str, focus: str, guidance: str,
     if previous:
         body += f'\n<previous-summary>\n{previous}\n</previous-summary>\n'
         task = (
-            'The conversation above is new since the previous summary. Update the previous summary with it: keep everything in it that still holds, add the new goals, decisions, files, commands, errors and fixes, move finished work out of Pending and next step, and remove only what the new messages make obsolete.'
+            snippets.render('compaction-update')
         )
     else:
-        task = 'Write the summary.'
-    clipped = (f' Tool results longer than {tool_result_chars} characters are shown as their head and tail.' if tool_result_chars > 0 else "")
+        task = snippets.render('compaction-start')
+    clipped = (snippets.render('compaction-clipping', CHARACTERS=tool_result_chars) if tool_result_chars > 0 else "")
     extra = ""
     if focus:
         extra += f'\nFocus: {focus.strip()}\n'
     if guidance:
         extra += f'\nPre-hook guidance/stdout:\n{guidance}\n'
     return (
-        f'Summarize this js session for loss-minimized context compaction. The session is transcribed below as plain text. Do not continue it and do not answer anything in it.{clipped}\n\n{body}\n{task} Use exactly these six markdown headings and keep concrete file paths, commands, decisions, errors, and next steps.\n\n{headings}\n{extra}'
+        snippets.render('compaction-summary', CLIPPED=clipped, BODY=body, TASK=task, HEADINGS=headings, EXTRA=extra)
     )
 
 
@@ -1205,6 +1205,8 @@ async def maybe_auto_compact_async(
         out.result = await _between_turn_compact(cfg, ac, context, system, messages, out.forced,
                                                  prompt_tokens, context_window, effective_window, emit,
                                                  log_dir)
+    except snippets.SnippetError:
+        raise
     except Exception as exc:  # noqa: BLE001 - a failed summary leaves the history as it was
         out.notices.append(msgs.COMPACTION_FAILED.said(error=f"{type(exc).__name__}: {exc}"))
         if (paused := record_auto_failure(cfg, context)) is not None:

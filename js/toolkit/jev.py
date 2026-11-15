@@ -12,7 +12,7 @@ import os
 from typing import Any
 
 from .core import Tool, ToolContext
-from .descriptions import load_description
+from .descriptions import load_description, load_parameter_description
 
 
 API_KEY_ENV = "TYPESAFE_API_KEY"
@@ -147,7 +147,7 @@ def tools() -> tuple[Tool, ...]:
             {
                 "state": {
                     "type": "string",
-                    "description": "What the questions are about. A JSON object or array is sent as JSON.",
+                    "description": load_parameter_description('jev', 'state'),
                 },
                 "questions": {
                     "type": "array",
@@ -160,7 +160,7 @@ def tools() -> tuple[Tool, ...]:
                             "options": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "description": "choice: `name` or `name=description`; score: levels, lowest first.",
+                                "description": load_parameter_description('jev', 'questions.items.options'),
                             },
                         },
                         "required": ["question"],
@@ -170,7 +170,7 @@ def tools() -> tuple[Tool, ...]:
                 "check_order": {
                     "type": "boolean",
                     "default": False,
-                    "description": "Ask each choice again with its options reversed and report a flip.",
+                    "description": load_parameter_description('jev', 'check_order'),
                 },
             },
             required=("state", "questions"),

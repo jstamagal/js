@@ -13,6 +13,8 @@ prompt cache as broken.
 
 from __future__ import annotations
 
+from . import snippets
+
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -280,6 +282,8 @@ class TurnBudget:
                 flight_data=check.flight_data, over_budget=check.over_budget,
                 log_dir=compaction.flight_log_dir(self._cfg), emit=compaction.printing(warn=self._warn),
             )
+        except snippets.SnippetError:
+            raise
         except Exception as exc:  # noqa: BLE001 - an optional step never kills the turn
             messages[:] = before  # microcompact edits in place; keep memory and disk alike
             self._warn(msgs.COMPACTION_FAILED, error=f"{type(exc).__name__}: {exc}")
@@ -311,6 +315,8 @@ class TurnBudget:
                     tail_tokens=tail_tokens, context=context, emit=compaction.printing(self._emit, warn=self._warn),
                     log_dir=compaction.flight_log_dir(cfg),
                 )
+        except snippets.SnippetError:
+            raise
         except Exception as exc:  # noqa: BLE001
             self._warn(msgs.COMPACTION_FAILED, error=f"{type(exc).__name__}: {exc}")
             self._telemetry.event("context_compaction_failed", phase=check.phase,

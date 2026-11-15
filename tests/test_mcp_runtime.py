@@ -300,7 +300,7 @@ def test_lazy_discovery_policy_collision_schema_call_and_shutdown(config):
     async def drive():
         FakeClient.instances.clear()
         host = MCPHost(config, client_factory=FakeClient)
-        assert [entry.name for entry in host.initial_catalog()] == [name for name, _ in host.CONTROL_TOOLS]
+        assert [entry.name for entry in host.initial_catalog()] == [name for name, _ in host.control_tools()]
         assert not FakeClient.instances
         found = await host.discover(query="mcp")
         assert FakeClient.instances[0].initialized

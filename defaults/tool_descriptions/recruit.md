@@ -11,3 +11,13 @@ review that, build the other half) and tell it when to retire.
 
 A name already on the bus is refused, and a bus takes a limited number of
 recruited agents.
+
+<!--parameters-->
+
+### name
+
+The new agent's name: one word, not yet on the bus.
+
+### opener
+
+Its first prompt: who it is, the goal, what to do first.

@@ -131,3 +131,13 @@ def test_unknown_theme_in_jsrc_exits_two_before_model(tmp_path, monkeypatch, cap
     error = capsys.readouterr().err
     assert 'missing-theme' in error
     assert all(str(root / 'themes') in error for root in paths.layers()[:2])
+
+
+def test_parameter_prose_follows_the_selected_tool_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write(paths.home() / 'tool_descriptions/fixture.md',
+           'Home contract.\n<!--parameters-->\n### path\nHome parameter.\n')
+    assert descriptions.load_description('fixture') == 'Home contract.'
+    assert descriptions.load_parameter_description('fixture', 'path') == 'Home parameter.'
+    _write(paths.home() / 'tool_descriptions/fixture.md', '')
+    assert descriptions.load_parameter_description('fixture', 'path') == ''

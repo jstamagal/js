@@ -15,3 +15,17 @@ Rules:
   `done`. A reader can filter on it; it does not change delivery.
 - Keep the text self-contained. The reader may be mid-task and has not seen
   what you have seen.
+
+<!--parameters-->
+
+### kind
+
+say (default), ask, reply, done, or a short word the troop agrees on.
+
+### text
+
+The message.
+
+### to
+
+An agent's name, or * for everyone else on the bus.

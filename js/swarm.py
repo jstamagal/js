@@ -951,47 +951,47 @@ def _tasks(context: Any = None) -> str:
 
 def tools() -> tuple:
     from .toolkit.core import Tool
-    from .toolkit.descriptions import load_description
+    from .toolkit.descriptions import load_description, load_parameter_description
 
     return (
         Tool("send", load_description("send"), _send, {
-            "to": {"type": "string", "description": "An agent's name, or * for everyone else on the bus."},
-            "text": {"type": "string", "description": 'The message.'},
+            "to": {"type": "string", "description": load_parameter_description('send', 'to')},
+            "text": {"type": "string", "description": load_parameter_description('send', 'text')},
             "kind": {"type": "string", "default": "say",
-                     "description": 'say (default), ask, reply, done, or a short word the troop agrees on.'},
+                     "description": load_parameter_description('send', 'kind')},
         }, required=("to", "text"), source="swarm"),
         Tool("who", load_description("who"), _who, {}, read_only=True, source="swarm"),
         Tool("claim", load_description("claim"), _claim, {
-            "key": {"type": "string", "description": 'What you are taking: a file, a module, a task line.'},
-            "ttl": {"type": "number", "description": f'Seconds the claim lasts. Default {CLAIM_TTL_S:g}.'},
+            "key": {"type": "string", "description": load_parameter_description('claim', 'key')},
+            "ttl": {"type": "number", "description": load_parameter_description('claim', 'ttl', SECONDS=f"{CLAIM_TTL_S:g}")},
         }, required=("key",), source="swarm"),
         Tool("release", load_description("release"), _release, {
-            "key": {"type": "string", "description": 'The key you claimed.'},
+            "key": {"type": "string", "description": load_parameter_description('release', 'key')},
         }, required=("key",), source="swarm"),
         Tool("subscribe", load_description("subscribe"), _subscribe, {
-            "kind": {"type": "string", "description": 'A message kind, as passed to send.'},
-            "off": {"type": "boolean", "default": False, "description": 'True to unsubscribe.'},
+            "kind": {"type": "string", "description": load_parameter_description('subscribe', 'kind')},
+            "off": {"type": "boolean", "default": False, "description": load_parameter_description('subscribe', 'off')},
         }, required=("kind",), source="swarm"),
         Tool("wake_me", load_description("wake_me"), _wake_me, {
-            "seconds": {"type": "number", "description": 'How long to wait. 0 clears a pending alarm.'},
+            "seconds": {"type": "number", "description": load_parameter_description('wake_me', 'seconds')},
         }, required=("seconds",), source="swarm"),
         Tool("retire", load_description("retire"), _retire, {
-            "handoff": {"type": "string", "description": 'What you did, what is left, where things are.'},
+            "handoff": {"type": "string", "description": load_parameter_description('retire', 'handoff')},
         }, required=("handoff",), source="swarm"),
         Tool("recruit", load_description("recruit"), _recruit, {
-            "name": {"type": "string", "description": "The new agent's name: one word, not yet on the bus."},
-            "opener": {"type": "string", "description": 'Its first prompt: who it is, the goal, what to do first.'},
+            "name": {"type": "string", "description": load_parameter_description('recruit', 'name')},
+            "opener": {"type": "string", "description": load_parameter_description('recruit', 'opener')},
         }, required=("name", "opener"), source="swarm"),
         Tool("post_task", load_description("post_task"), _post_task, {
-            "title": {"type": "string", "description": 'One line: what needs doing.'},
-            "body": {"type": "string", "default": "", "description": 'What the taker needs to know: where, how, done when.'},
+            "title": {"type": "string", "description": load_parameter_description('post_task', 'title')},
+            "body": {"type": "string", "default": "", "description": load_parameter_description('post_task', 'body')},
         }, required=("title",), source="swarm"),
         Tool("take_task", load_description("take_task"), _take_task, {
-            "id": {"type": "integer", "description": 'The task number from the board.'},
+            "id": {"type": "integer", "description": load_parameter_description('take_task', 'id')},
         }, required=("id",), source="swarm"),
         Tool("finish_task", load_description("finish_task"), _finish_task, {
-            "id": {"type": "integer", "description": 'The task number from the board.'},
-            "result": {"type": "string", "default": "", "description": 'What came of it: where the work is, what was found.'},
+            "id": {"type": "integer", "description": load_parameter_description('finish_task', 'id')},
+            "result": {"type": "string", "default": "", "description": load_parameter_description('finish_task', 'result')},
         }, required=("id",), source="swarm"),
         Tool("tasks", load_description("tasks"), _tasks, {}, read_only=True, source="swarm"),
     )

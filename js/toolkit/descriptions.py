@@ -1,8 +1,8 @@
 """Markdown-backed model-facing tool descriptions with conditional sections.
 
-Descriptions live under ``tool_descriptions/<tool>.md``, cut to what a model
-can act on: contracts it cannot infer, cross-references to co-present tools,
-nothing the schema already carries.
+Descriptions and parameter prose live under ``tool_descriptions/<tool>.md``.
+The main text carries contracts and cross-references to co-present tools.
+The ``<!--parameters-->`` section supplies the parameter schema descriptions.
 
 Two independent conditional axes flip parts of a description on and off:
 
@@ -38,7 +38,7 @@ from __future__ import annotations
 import re
 
 from .. import messages as msgs
-from .. import output, paths
+from .. import output, paths, snippets
 from collections.abc import Iterable
 from functools import cache
 from pathlib import Path
@@ -65,6 +65,9 @@ _NAME_BLOCK = re.compile(
 # block regex could not pair — surfaced once, left literal, never a crash.
 _STRAY_MARKER = re.compile(r"\{\{#(?:if|unless)\b|\{\{/(?:if|unless)\}\}")
 
+_PARAMETERS = "<!--parameters-->"
+_PARAMETER_HEADING = re.compile(r"^### ([A-Za-z0-9_.-]+)\n", re.MULTILINE)
+
 _WARNED: set[str] = set()
 
 
@@ -84,11 +87,15 @@ def load_description(name: str, flags: tuple[str, ...] = ("model_override",)) ->
     blocks whose flag is in ``flags``. Co-present-tool-name blocks
     ({{#if}}/{{#unless}}) are left intact here and resolved later at the
     registry boundary."""
+    return _load_description(_description_path(name), tuple(flags))
+
+
+def _description_path(name: str) -> Path:
     path = paths.find(Path("tool_descriptions") / f"{name}.md")
     if path is None:
         searched = ", ".join(str(root / "tool_descriptions") for root in paths.layers()[:2])
         raise FileNotFoundError(f"missing tool description {name!r}; searched {searched}")
-    return _load_description(path, tuple(flags))
+    return path
 
 
 @cache
@@ -104,7 +111,23 @@ def _load_description(path: Path, flags: tuple[str, ...]) -> str:
         flag, body = m.group(1), m.group(2)
         return (body + "\n") if flag in active else ""
 
-    return _IF_BLOCK.sub(_resolve, text).strip()
+    return _IF_BLOCK.sub(_resolve, text.split(_PARAMETERS, 1)[0]).strip()
+
+
+def load_parameter_description(name: str, parameter: str, **values: object) -> str:
+    """Read parameter prose from the same markdown file as its tool contract."""
+    path = _description_path(name)
+    text = path.read_text(encoding="utf-8")
+    if not text.strip():
+        return ""
+    _, separator, parameters = text.partition(_PARAMETERS)
+    if separator:
+        headings = list(_PARAMETER_HEADING.finditer(parameters))
+        for index, heading in enumerate(headings):
+            if heading[1] == parameter:
+                end = headings[index + 1].start() if index + 1 < len(headings) else len(parameters)
+                return snippets.substitute(parameters[heading.end():end].strip(), values)
+    raise ValueError(f"missing parameter description {parameter!r} in {path}")
 
 
 def render_tool_name_sections(text: str, present: Iterable[str], *, tool: str = "") -> str:

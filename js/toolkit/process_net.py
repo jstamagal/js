@@ -39,7 +39,7 @@ from ..tool_binaries import (
     warn_urllib_fallback,
 )
 from .core import Tool, ToolContext, ToolOutput, view as _view
-from .descriptions import load_description
+from .descriptions import load_description, load_parameter_description
 from .fs import _detect_visual_mime, _image_marker, _read_regular_bytes
 from .sanitize import int_or_default, text_or_default
 from .search import _absolutize
@@ -1171,15 +1171,15 @@ def tools() -> tuple[Tool, ...]:
                 "cwd": {"type": "string"},
                 "timeout": {
                     "type": "integer",
-                    "description": 'Seconds this call blocks before returning a handle. The command is never killed by this.',
+                    "description": load_parameter_description('shell', 'timeout'),
                 },
                 "action": {"type": "string", "enum": ["run", "poll", "wait", "kill"], "default": "run"},
-                "handle": {"type": "string", "description": 'Job id from a HANDLE line, for poll/wait/kill.'},
+                "handle": {"type": "string", "description": load_parameter_description('shell', 'handle')},
                 "keep_ansi": {"type": "boolean", "default": False},
                 "env": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": 'Variable names to pass through. The child environment is filtered by default.',
+                    "description": load_parameter_description('shell', 'env'),
                 },
                 "description": {"type": "string"},
             },

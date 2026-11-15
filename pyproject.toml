@@ -63,7 +63,7 @@ markers = [
 [tool.setuptools.package-data]
 "js" = ["jsrc.template", "tool_releases.json"]
 "js.toolkit" = ["toolbox_examples/*.py"]
-"defaults" = ["jsrc", "fset", "secret-patterns", "themes/*", "help/*", "agents/**/*", "tool_descriptions/*", "skills/**/*"]
+"defaults" = ["jsrc", "fset", "secret-patterns", "themes/*", "help/*", "agents/**/*", "tool_descriptions/*", "skills/**/*", "snippets/*.md"]
 
 # dev tooling for agents hacking this code (and for the justfile quality
 # recipes). synced into the project env by `uv sync`, so ruff lands on the

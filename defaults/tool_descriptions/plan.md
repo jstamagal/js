@@ -19,3 +19,21 @@ When to use:
 When not to use:
 - Do not create documentation proactively.
 - Do not use this for ordinary source edits; use `patch` or `write`.
+
+<!--parameters-->
+
+### content
+
+Markdown plan body to persist.
+
+### overwrite
+
+Replace an existing plan with the same name and version.
+
+### plan_name
+
+Plan name used in the filename.
+
+### version
+
+Version suffix used in the filename.

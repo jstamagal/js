@@ -12,7 +12,8 @@ import re
 from collections.abc import Callable, Iterable
 from typing import Any
 
-from .. import settings as _settings
+from .. import settings as _settings, snippets
+from ..toolkit.descriptions import load_description
 from ..mcp_config import MCPConfiguration, MCPServer
 from ..toolkit.core import CatalogEntry, Tool, ToolResult, compact_json
 from ..toolkit.discovery import ranked_entries, schema_search_text, search_tokens
@@ -306,29 +307,21 @@ def prompt_result(result: Any, secrets: tuple[str, ...] = ()) -> ToolResult:
     return ToolResult(blocks=blocks)
 
 
-_MCP_CONTROL_SETUP = (
-    ' Before using this control, run tool_discovery with kind="mcp" (and optionally source) to connect servers, then pass the exact server name from a mcp:server:* status result.'
-)
-_MCP_RESOURCE_URI = (
-    ' First call mcp_resource_list or mcp_resource_templates and copy an exact returned URI.'
-)
-_MCP_PROMPT_NAME = (
-    ' First call mcp_prompt_list and copy an exact returned prompt name.'
-)
-
 
 class MCPHost:
     """Own clients and lazy remote metadata for one js session."""
 
-    CONTROL_TOOLS = (
-        ("mcp_resource_list", 'List resources from an MCP server.' + _MCP_CONTROL_SETUP),
-        ("mcp_resource_templates", 'List resource templates from an MCP server.' + _MCP_CONTROL_SETUP),
-        ("mcp_resource_read", 'Read an MCP resource by URI.' + _MCP_CONTROL_SETUP + _MCP_RESOURCE_URI),
-        ("mcp_resource_subscribe", 'Subscribe to updates for an MCP resource.' + _MCP_CONTROL_SETUP + _MCP_RESOURCE_URI),
-        ("mcp_resource_unsubscribe", 'Unsubscribe from updates for an MCP resource.' + _MCP_CONTROL_SETUP + _MCP_RESOURCE_URI),
-        ("mcp_prompt_list", 'List prompts from an MCP server.' + _MCP_CONTROL_SETUP),
-        ("mcp_prompt_get", 'Get an MCP prompt and its messages.' + _MCP_CONTROL_SETUP + _MCP_PROMPT_NAME),
-    )
+    @staticmethod
+    def control_tools() -> tuple[tuple[str, str], ...]:
+        return tuple((name, load_description(name)) for name in (
+            'mcp_resource_list',
+            'mcp_resource_templates',
+            'mcp_resource_read',
+            'mcp_resource_subscribe',
+            'mcp_resource_unsubscribe',
+            'mcp_prompt_list',
+            'mcp_prompt_get',
+        ))
 
     def __init__(
         self,
@@ -420,7 +413,7 @@ class MCPHost:
         """Only generic controls are visible before an MCP-scoped discovery."""
         return tuple(
             CatalogEntry(f"mcp:{name}", name, description, "mcp", "mcp")
-            for name, description in self.CONTROL_TOOLS
+            for name, description in self.control_tools()
             if self.config.allows_tool(name) and not self._public_name_reserved(name)
         )
 
@@ -493,7 +486,7 @@ class MCPHost:
             entries.append(CatalogEntry(
                 f"mcp:server:{normalize_tool_name(server_name)}",
                 server_name,
-                f'Connected MCP server ({detail}); use this exact server name with MCP controls.',
+                snippets.render("mcp-server-connected", DETAIL=detail),
                 "mcp",
                 server_name,
                 loadable=False,
@@ -795,13 +788,13 @@ class MCPHost:
         name = item_id.removeprefix("mcp:")
         if not self.config.allows_tool(name) or self._public_name_reserved(name):
             return None
-        if name in dict(self.CONTROL_TOOLS) or name in self.remote_tools:
+        if name in dict(self.control_tools()) or name in self.remote_tools:
             return [name]
         return None
 
     def tools(self, loaded: set[str] | tuple[str, ...] = ()) -> tuple[Tool, ...]:
         available = {
-            name for name in set(dict(self.CONTROL_TOOLS)) | set(self.remote_tools)
+            name for name in set(dict(self.control_tools())) | set(self.remote_tools)
             if self.config.allows_tool(name) and not self._public_name_reserved(name)
         }
         return tuple(self._make_tool(name) for name in sorted(set(loaded) & available))
@@ -848,7 +841,7 @@ class MCPHost:
         return self.clients[server]
 
     def _control_tool(self, name: str) -> Tool:
-        description = dict(self.CONTROL_TOOLS)[name]
+        description = dict(self.control_tools())[name]
 
         def secrets(server: str) -> tuple[str, ...]:
             config = next(item for item in self.config.servers if item.name == server)

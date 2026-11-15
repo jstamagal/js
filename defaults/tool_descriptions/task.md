@@ -101,3 +101,37 @@ Failure behavior:
 - A task recursion limit prevents unbounded worker spawning.
 - A foreground call is not a controllable job; its progress is visible only
   through streamed child tool activity and the final worker result.
+
+<!--parameters-->
+
+### action
+
+run starts workers; poll, wait and kill act on a background handle.
+
+### agent_id
+
+Worker agent id; loads that agent's persona and selected tools.
+
+### background
+
+Return a handle at once and run the workers in the background.
+
+### handle
+
+Background task id from a HANDLE line, for poll/wait/kill.
+
+### model
+
+Model for the subagent(s), same string as --model. Set it when the operator names one; omit otherwise.
+
+### session_id
+
+Optional session id for a worker context.
+
+### tasks
+
+One or more clear, detailed task prompts to run in parallel.
+
+### timeout
+
+Seconds a wait blocks; without it, wait blocks until the task ends.

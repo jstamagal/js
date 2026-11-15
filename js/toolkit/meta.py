@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .. import snippets
+
 from dataclasses import dataclass, replace
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
@@ -23,7 +25,7 @@ from ..text_bytes import cap_text
 from ..skills import discover_skills, load_skill
 from .core import Tool, ToolContext
 from . import task_jobs
-from .descriptions import load_description
+from .descriptions import load_description, load_parameter_description
 from .sanitize import int_or_default, text_or_default
 
 
@@ -400,6 +402,8 @@ async def _run_one_task_async(
                     **turn_kwargs,
                 )
             outcome = "ok"
+        except snippets.SnippetError:
+            raise
         except Exception as exc:  # noqa: BLE001
             error = f"ERROR {type(exc).__name__}: {exc}"
         except BaseException:
@@ -491,6 +495,8 @@ def _fan_out(indexed_items: list[tuple[int, Any]], coro_factory) -> list[str | N
         for future, idx in futures.items():
             try:
                 results[idx - 1] = future.result()
+            except snippets.SnippetError:
+                raise
             except Exception as exc:  # noqa: BLE001
                 results[idx - 1] = f"ERROR {type(exc).__name__}: {exc}"
         return results
@@ -502,6 +508,8 @@ def _fan_out(indexed_items: list[tuple[int, Any]], coro_factory) -> list[str | N
         )
 
     for (idx, _item), res in zip(indexed_items, asyncio.run(_gather())):
+        if isinstance(res, snippets.SnippetError):
+            raise res
         results[idx - 1] = (
             f"ERROR {type(res).__name__}: {res}"
             if isinstance(res, (Exception, asyncio.CancelledError))
@@ -533,6 +541,8 @@ async def _fan_out_async(indexed_items: list[tuple[int, Any]], coro_factory) -> 
             *(job.task for _idx, job in jobs), return_exceptions=True
         )
         for (idx, _job), res in zip(jobs, gathered):
+            if isinstance(res, snippets.SnippetError):
+                raise res
             results[idx - 1] = (
                 f"ERROR {type(res).__name__}: {res}"
                 if isinstance(res, BaseException)
@@ -545,6 +555,8 @@ async def _fan_out_async(indexed_items: list[tuple[int, Any]], coro_factory) -> 
         return_exceptions=True,
     )
     for (idx, _item), res in zip(indexed_items, gathered):
+        if isinstance(res, snippets.SnippetError):
+            raise res
         results[idx - 1] = (
             f"ERROR {type(res).__name__}: {res}"
             if isinstance(res, BaseException)
@@ -832,38 +844,38 @@ def named_agent_tool(agent_id: str, description: str | None = None) -> Tool:
     run_named_agent._js_agent_id = agent_id  # type: ignore[attr-defined]
 
     text = description or (
-        f'Run the `{agent_id}` agent as a subagent. Provide one or more task strings; the agent loads its own persona and selected tool surface.'
+        snippets.substitute(load_description("named_agent"), {"AGENT_ID": agent_id})
     )
     return Tool(
         agent_id,
         text,
         run_named_agent,
-        {"tasks": {"type": "array", "items": {"type": "string"}, "description": 'One or more clear, detailed task prompts to run in parallel.'},
-         "model": {"type": "string", "description": 'Model for the subagent(s), same string as --model. Set it when the operator names one; omit otherwise.'},
-         "reasoning": {"type": "string", "description": 'Reasoning effort for the subagent(s): minimal, low, medium, high, xhigh or max. Set it when the operator names one; omit otherwise.'}},
+        {"tasks": {"type": "array", "items": {"type": "string"}, "description": load_parameter_description('named_agent', 'tasks')},
+         "model": {"type": "string", "description": load_parameter_description('named_agent', 'model')},
+         "reasoning": {"type": "string", "description": load_parameter_description('named_agent', 'reasoning')}},
         required=("tasks",),
     )
 
 
 def _task_params(flags: tuple[str, ...]) -> dict:
     params = {
-        "tasks": {"type": "array", "items": {"type": "string"}, "description": 'One or more clear, detailed task prompts to run in parallel.'},
-        "agent_id": {"type": "string", "description": "Worker agent id; loads that agent's persona and selected tools."},
-        "session_id": {"type": "string", "description": 'Optional session id for a worker context.'},
-        "background": {"type": "boolean", "default": False, "description": 'Return a handle at once and run the workers in the background.'},
-        "action": {"type": "string", "enum": ["run", "poll", "wait", "kill"], "default": "run", "description": 'run starts workers; poll, wait and kill act on a background handle.'},
-        "handle": {"type": "string", "description": 'Background task id from a HANDLE line, for poll/wait/kill.'},
-        "timeout": {"type": "integer", "description": 'Seconds a wait blocks; without it, wait blocks until the task ends.'},
+        "tasks": {"type": "array", "items": {"type": "string"}, "description": load_parameter_description('task', 'tasks')},
+        "agent_id": {"type": "string", "description": load_parameter_description('task', 'agent_id')},
+        "session_id": {"type": "string", "description": load_parameter_description('task', 'session_id')},
+        "background": {"type": "boolean", "default": False, "description": load_parameter_description('task', 'background')},
+        "action": {"type": "string", "enum": ["run", "poll", "wait", "kill"], "default": "run", "description": load_parameter_description('task', 'action')},
+        "handle": {"type": "string", "description": load_parameter_description('task', 'handle')},
+        "timeout": {"type": "integer", "description": load_parameter_description('task', 'timeout')},
     }
     if "model_override" in flags:
-        params["model"] = {"type": "string", "description": 'Model for the subagent(s), same string as --model. Set it when the operator names one; omit otherwise.'}
+        params["model"] = {"type": "string", "description": load_parameter_description('task', 'model')}
     return params
 
 
 def tools(flags: tuple[str, ...] = ("model_override",)) -> tuple[Tool, ...]:
     return (
-        Tool("plan", load_description("plan"), plan, {"plan_name": {"type": "string", "description": 'Plan name used in the filename.'}, "version": {"type": "string", "description": 'Version suffix used in the filename.'}, "content": {"type": "string", "description": 'Markdown plan body to persist.'}, "overwrite": {"type": "boolean", "default": False, "description": 'Replace an existing plan with the same name and version.'}}, required=("plan_name", "version", "content")),
-        Tool("skill", load_description("skill"), skill, {"name": {"type": "string", "description": 'Local skill name to load.'}}, required=("name",), read_only=True),
+        Tool("plan", load_description("plan"), plan, {"plan_name": {"type": "string", "description": load_parameter_description('plan', 'plan_name')}, "version": {"type": "string", "description": load_parameter_description('plan', 'version')}, "content": {"type": "string", "description": load_parameter_description('plan', 'content')}, "overwrite": {"type": "boolean", "default": False, "description": load_parameter_description('plan', 'overwrite')}}, required=("plan_name", "version", "content")),
+        Tool("skill", load_description("skill"), skill, {"name": {"type": "string", "description": load_parameter_description('skill', 'name')}}, required=("name",), read_only=True),
         Tool(
             "task",
             load_description("task", flags=flags),

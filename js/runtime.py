@@ -3,6 +3,8 @@ Uses ``js.model_client`` for model I/O via the Vercel AI Python SDK (``ai``)."""
 
 from __future__ import annotations
 
+from . import snippets
+
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
@@ -287,10 +289,6 @@ def _resolve_context_window(
 # Max-output recovery
 # --------------------------------------------------------------------------
 
-# Sent as a user message after a reply cut off by its output-token cap.
-MAX_OUTPUT_RESUME_NUDGE = (
-    'Output token limit hit. Resume directly, no apology, no recap of what you were doing. Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces.'
-)
 
 
 # --------------------------------------------------------------------------
@@ -539,7 +537,7 @@ def _truncated_tool_call_notice(reason: str, pending_calls: list[_PendingToolCal
     joined = ", ".join(names)
     suffix = f' for {joined}' if joined else ""
     return (
-        f'Response incomplete ({reason}); dropped truncated tool call arguments{suffix}. Send large content across several smaller calls.'
+        snippets.render('incomplete-tool-call', REASON=reason, TOOLS=suffix)
     )
 
 
@@ -1308,6 +1306,8 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
             result = call_tool(tool, args, context)
             view = call_view()
         telemetry.event("tool_ok", tool=called_name or name, call_id=call_id, latency_ms=int((time.time() - started) * 1000))
+    except snippets.SnippetError:
+        raise
     except Exception as e:  # noqa: BLE001
         telemetry.event("tool_exception", tool=called_name or name, call_id=call_id,
                         error=f"{type(e).__name__}: {e}",
@@ -1451,6 +1451,8 @@ def _dispatch_tool_calls(
             for idx in task_indices:
                 try:
                     args, result = futures[idx].result()
+                except snippets.SnippetError:
+                    raise
                 except Exception as exc:  # noqa: BLE001
                     args = {}
                     result = f'ERROR running task: {type(exc).__name__}: {exc}'
@@ -1548,6 +1550,8 @@ async def _dispatch_fan_out_async(
     try:
         result = await meta.dispatch_fan_out_async(tool, args, tool_context)
         telemetry.event("tool_ok", tool=pc.called_name or pc.name, call_id=pc.id, latency_ms=int((time.time() - started) * 1000))
+    except snippets.SnippetError:
+        raise
     except Exception as e:  # noqa: BLE001
         telemetry.event("tool_exception", tool=pc.called_name or pc.name, call_id=pc.id,
                         error=f"{type(e).__name__}: {e}",
@@ -1588,6 +1592,8 @@ async def _dispatch_async_tool(
             view = call_view()
         telemetry.event("tool_ok", tool=pc.called_name or pc.name, call_id=pc.id, latency_ms=int((time.time() - started) * 1000))
     except asyncio.CancelledError:
+        raise
+    except snippets.SnippetError:
         raise
     except Exception as exc:  # noqa: BLE001
         telemetry.event("tool_exception", tool=pc.called_name or pc.name, call_id=pc.id, error=f"{type(exc).__name__}: {exc}")
@@ -2051,7 +2057,7 @@ def _send_resume_nudge(messages: list[dict], convo: TurnConvo, *, n: int, limit:
                        suppress_output: bool) -> None:
     """Keep the partial reply and ask the model to carry on from where the
     cap cut it."""
-    nudge = {"role": "user", "content": MAX_OUTPUT_RESUME_NUDGE, "resume_nudge": True}
+    nudge = {"role": "user", "content": snippets.render("output-limit-resume"), "resume_nudge": True}
     messages.append(nudge)
     convo.add([nudge])
     telemetry.event("max_output_resume", model=model, n=n, incomplete_reason=incomplete_reason)
@@ -2152,7 +2158,7 @@ def _steer_off_repeated_errors(due: list[tuple[str, int]], *, messages: list[dic
                                telemetry: Telemetry) -> None:
     """Tell the model, in one message that joins the running turn, to stop
     retrying each tool in ``due`` (tool, repeats)."""
-    text = "\n".join(f'Stop retrying {name}; the same error repeated {count} times. Change approach. Repeating that error again ends this turn.'
+    text = "\n".join(snippets.render('repeated-tool-error', TOOL=name, COUNT=count)
                      for name, count in due)
     message = {"role": "user", "content": text, "steered": True}
     messages.append(memory.note_time(message))

@@ -3,6 +3,8 @@ the REPL) tells the model once, on the next user message."""
 
 from __future__ import annotations
 
+from js import snippets
+
 import pytest
 
 from js import cli, memory
@@ -92,7 +94,7 @@ def test_unchanged_mode_carries_no_reminder(monkeypatch, tmp_path, home):
 
     assert home[1] == "second"
     assert home[3] == "fourth"
-    assert _reminders(tmp_path, cli._MODE_PRESENCE['-p']) == []
+    assert _reminders(tmp_path, snippets.render("mode-presence-prompt")) == []
 
 
 def test_a_repl_launch_with_no_turn_does_not_change_the_mode(monkeypatch, tmp_path, home):

@@ -13,6 +13,8 @@ seconds is deleted when content is next held or loaded.
 
 from __future__ import annotations
 
+from . import snippets
+
 import atexit
 import json
 import os
@@ -254,13 +256,10 @@ def held_note(context: Any, held: Held, file_path: str | None, *, partial: bool 
     if partial:
         call = json.dumps({"file_path": finish_path, "from_held": held.id, "append": True,
                            "content": "<the rest>"}, ensure_ascii=False)
-        head = 'Your call was cut off before its content ended. The {size} bytes ({lines} lines) that arrived are held at {path} as held id {id}; they end with {last_line}. Do not write those again.\nTo finish: write {call}, where content is only the rest, continuing from the last held byte.'.format(
-            size=f"{held.size:,}", lines=f"{_line_count(held.text):,}", path=shown_path, id=held.id,
-            last_line=json.dumps(lines[-1][-120:], ensure_ascii=False), call=call)
+        head = snippets.render('held-content-partial', SIZE=f'{held.size:,}', LINES=f'{_line_count(held.text):,}', PATH=shown_path, ID=held.id, LAST_LINE=json.dumps(lines[-1][-120:], ensure_ascii=False), CALL=call)
     else:
         call = json.dumps({"file_path": finish_path, "from_held": held.id}, ensure_ascii=False)
-        head = 'Your content ({size} bytes, {lines} lines) is held at {path} as held id {id}. Do not write it again.\nTo finish: write {call}'.format(
-            size=f"{held.size:,}", lines=f"{_line_count(held.text):,}", path=shown_path, id=held.id, call=call)
+        head = snippets.render('held-content', SIZE=f'{held.size:,}', LINES=f'{_line_count(held.text):,}', PATH=shown_path, ID=held.id, CALL=call)
     return "\n\n" + "\n".join([head, *_orientation(context, finish_path if raw else None)])
 
 

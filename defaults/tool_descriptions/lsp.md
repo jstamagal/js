@@ -14,3 +14,25 @@ A position is `line` (1-based) plus either `character` (1-based column) or
 `symbol` (text on that line; the position goes on its first occurrence).
 Locations come back as `path:line:column: source line`, relative to the
 working directory when under it.
+
+<!--parameters-->
+
+### character
+
+1-based column on that line.
+
+### file_path
+
+Absolute, relative, or ~ path to a source file.
+
+### line
+
+1-based line of the position. Not used by diagnostics.
+
+### operation
+
+diagnostics for the file, or definition, references or hover at a position.
+
+### symbol
+
+Text on that line to put the position on, instead of character.

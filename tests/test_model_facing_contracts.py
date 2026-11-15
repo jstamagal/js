@@ -96,7 +96,7 @@ def test_closed_sets_and_numeric_bounds_match_handler_contracts():
 def test_mcp_control_catalog_ids_load_callable_tools():
     host = MCPHost(MCPConfiguration((), MCPPolicy()))
     entries = host.initial_catalog()
-    assert {entry.name for entry in entries} == set(dict(host.CONTROL_TOOLS))
+    assert {entry.name for entry in entries} == set(dict(host.control_tools()))
     for entry in entries:
         assert entry.loadable is True
         assert entry.description.strip()

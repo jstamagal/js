@@ -5,6 +5,8 @@ and test_prompt_cache_key_per_session."""
 
 from __future__ import annotations
 
+from js import snippets
+
 from js import cli, memory
 from js.memory import append_system_prompt, load_messages, load_system_prompt
 from repl_driver import stub_screen, turn_stub
@@ -141,4 +143,4 @@ def test_prompt_change_is_reported_once_across_resumes(tmp_path):
 
 
 def test_the_prompt_change_notice_does_not_ask_for_a_restart():
-    assert "restart" not in cli._PROMPT_CHANGED_NOTICE.lower()
+    assert "restart" not in snippets.render('prompt-changed').lower()

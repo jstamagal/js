@@ -3,6 +3,8 @@ cut off by its output cap, and an input the provider cut to fit its window."""
 
 from __future__ import annotations
 
+from js import snippets
+
 import asyncio
 import json
 import time
@@ -443,7 +445,7 @@ def test_still_cut_off_after_escalation_gets_three_resume_nudges(monkeypatch, tm
     # One escalated resend, then three nudges at the configured cap, then the turn ends.
     assert [c["max_output_tokens"] for c in calls] == [1000, 64000, 1000, 1000, 1000]
     for call in calls[2:]:
-        assert _last_user_text(call) == runtime.MAX_OUTPUT_RESUME_NUDGE
+        assert _last_user_text(call) == snippets.render("output-limit-resume")
     assert [m["role"] for m in messages] == ["user"] + ["assistant", "user"] * 3 + ["assistant"]
     kept = [m for m in messages if m["role"] == "assistant"]
     assert [m["content"] for m in kept] == ["part 2", "part 3", "part 4", "part 5"]
@@ -462,7 +464,7 @@ def test_resume_nudge_that_finishes_ends_the_turn_normally(monkeypatch, tmp_path
 
     assert [c["max_output_tokens"] for c in calls] == [4096, 4096]
     assert [m["content"] for m in messages] == [
-        "go", "first half", runtime.MAX_OUTPUT_RESUME_NUDGE, "second half"]
+        "go", "first half", snippets.render("output-limit-resume"), "second half"]
 
 
 def test_rejected_escalation_falls_back_to_resume_nudges(monkeypatch, tmp_path):
@@ -474,7 +476,7 @@ def test_rejected_escalation_falls_back_to_resume_nudges(monkeypatch, tmp_path):
 
     assert [c["max_output_tokens"] for c in calls] == [1000, 64000, 1000, 1000]
     assert [m["content"] for m in messages] == [
-        "go", "half again", runtime.MAX_OUTPUT_RESUME_NUDGE, "rest"]
+        "go", "half again", snippets.render("output-limit-resume"), "rest"]
 
 
 def test_cut_off_tool_call_is_dropped_and_the_model_resumes(monkeypatch, tmp_path):
@@ -487,7 +489,7 @@ def test_cut_off_tool_call_is_dropped_and_the_model_resumes(monkeypatch, tmp_pat
 
     assert len(calls) == 2
     assert "tool_calls" not in messages[1]
-    assert messages[2]["content"] == runtime.MAX_OUTPUT_RESUME_NUDGE
+    assert messages[2]["content"] == snippets.render("output-limit-resume")
     assert messages[-1] == {"role": "assistant", "content": "smaller pieces"}
     assert not (tmp_path / "a.txt").exists()
 
@@ -642,7 +644,7 @@ def test_a_window_with_no_room_left_skips_escalation(monkeypatch, tmp_path):
     asyncio.run(_run(_config(tmp_path, window=20_000, max_output_tokens=1000), messages))
 
     assert [c["max_output_tokens"] for c in calls] == [1000, 1000]
-    assert messages[2]["content"] == runtime.MAX_OUTPUT_RESUME_NUDGE
+    assert messages[2]["content"] == snippets.render("output-limit-resume")
 
 
 def test_codex_requests_carry_no_output_cap_to_escalate():
@@ -688,7 +690,7 @@ def test_a_cut_reply_already_printed_is_resumed_not_printed_twice(monkeypatch, t
 
     assert [c["max_output_tokens"] for c in calls] == [1000, 1000]
     assert capsys.readouterr().out.count("PARTIAL-") == 1
-    assert [m["content"] for m in messages] == ["go", "PARTIAL-", runtime.MAX_OUTPUT_RESUME_NUDGE, "REST"]
+    assert [m["content"] for m in messages] == ["go", "PARTIAL-", snippets.render("output-limit-resume"), "REST"]
 
 
 def test_a_silent_overflow_reply_already_printed_is_kept_and_history_shed(monkeypatch, tmp_path, capsys):

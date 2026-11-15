@@ -28,3 +28,29 @@ count exceeds `max_results`.
 {{#if undo}}
 An applied rewrite snapshots every changed file for `undo`.
 {{/if}}
+
+<!--parameters-->
+
+### apply
+
+Apply the rewrite to files. False is a non-mutating dry run.
+
+### lang
+
+Optional language override; source extensions are inferred when omitted.
+
+### max_results
+
+Maximum matches returned or rewritten; an apply is refused when more matches exist.
+
+### path
+
+File or directory to search; defaults to the current working directory.
+
+### pattern
+
+ast-grep structural pattern with metavariables such as $NAME and $$$ARGS.
+
+### rewrite
+
+Optional structural replacement. Supplying it produces a dry-run diff unless apply is true.

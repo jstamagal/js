@@ -7,3 +7,13 @@ subscribes to `claim` and `result`, a reviewer to `done`, a reproducer to
 `bug`. The kinds are whatever the troop agreed to pass to `send`.
 
 Messages sent to you or to `*` reach you with or without subscriptions.
+
+<!--parameters-->
+
+### kind
+
+A message kind, as passed to send.
+
+### off
+
+True to unsubscribe.

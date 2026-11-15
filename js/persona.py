@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from . import snippets
+
 import json
 import os
 import re
@@ -630,7 +632,7 @@ def _expand_spec(spec: PromptSpec, cfg) -> PromptSpec:
     options = current()
     text = spec.system
     if options.you_are is not None:
-        text = f'You are {cfg.model.rsplit("/", 1)[-1]} running inside the js agent'
+        text = snippets.render("model-identity", MODEL=cfg.model.rsplit("/", 1)[-1])
         if options.you_are:
             text += '\n' + options.you_are
         if options.append_system_prompt:

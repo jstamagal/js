@@ -4,6 +4,8 @@ on the next user message, and a resumed session is put back where it was."""
 
 from __future__ import annotations
 
+from js import snippets
+
 
 import pytest
 
@@ -89,8 +91,8 @@ def test_add_shows_a_path_and_drop_hides_it(monkeypatch, places, turns):
     assert "extra-data" in shown["read"]
     assert "exit=0" not in hidden["shell"]
     assert hidden["read"].startswith("ERROR:")
-    assert cli._ADD_NOTICE.format(path=extra, access="read-only") in turns.sent[0]
-    assert cli._DROP_NOTICE.format(path=extra) in turns.sent[1]
+    assert snippets.render('jail-path-added', PATH=extra, ACCESS="read-only") in turns.sent[0]
+    assert snippets.render('jail-path-removed', PATH=extra) in turns.sent[1]
 
 
 @needs_bwrap
@@ -114,7 +116,7 @@ def test_cd_moves_where_commands_run(monkeypatch, places, turns):
     repl(monkeypatch, ["-C", str(root)], ["/cd sub", "where"])
 
     assert f"\n{(root / 'sub').resolve()}\n" in turns.results[0]["pwd"]
-    assert cli._CD_NOTICE.format(path=(root / "sub").resolve()) in turns.sent[0]
+    assert snippets.render('working-directory', PATH=(root / "sub").resolve()) in turns.sent[0]
 
 
 @needs_bwrap
@@ -193,5 +195,5 @@ def test_drop_keeps_the_path_the_working_directory_is_in(monkeypatch, places, tu
     repl(monkeypatch, ["-C", str(root)], [f"/add {extra}", f"/cd {extra}", f"/drop {extra}", "where"])
 
     assert f"\n{extra.resolve()}\n" in turns.results[0]["pwd"]
-    assert cli._DROP_NOTICE.format(path=extra) not in turns.sent[0]
+    assert snippets.render('jail-path-removed', PATH=extra) not in turns.sent[0]
     assert jail.active().added == [jail.Bind(extra, False)]

@@ -13,6 +13,8 @@ the main agent and each subagent see only their own jobs.
 
 from __future__ import annotations
 
+from .. import snippets
+
 import asyncio
 import concurrent.futures
 import contextlib
@@ -146,9 +148,12 @@ def _settle(job: TaskJob, outcome: concurrent.futures.Future | asyncio.Future,
         job.future.cancel()
     else:
         error = outcome.exception()
-        text = f"ERROR {type(error).__name__}: {error}" if error is not None else str(outcome.result())
-        _save(job, text)
-        job.future.set_result(text)
+        if isinstance(error, snippets.SnippetError):
+            job.future.set_exception(error)
+        else:
+            text = f"ERROR {type(error).__name__}: {error}" if error is not None else str(outcome.result())
+            _save(job, text)
+            job.future.set_result(text)
     if on_done is not None:
         with contextlib.suppress(Exception):
             on_done()
@@ -185,6 +190,8 @@ def start(
             try:
                 results[idx - 1] = await coro_factory(idx, item)
             except asyncio.CancelledError:
+                raise
+            except snippets.SnippetError:
                 raise
             except Exception as exc:  # noqa: BLE001 - one worker's failure is its result
                 results[idx - 1] = f"ERROR {type(exc).__name__}: {exc}"
@@ -295,13 +302,15 @@ def completion_notes(owner: str) -> list[str]:
         if job.depth != 0 or job.running() or job.delivered or job.noted:
             continue
         job.noted = True
+        if not job.cancelled() and isinstance(job.future.exception(), snippets.SnippetError):
+            raise job.future.exception()
         if job.cancelled():
             notes.append(f'<js-reminder>Background task {job.id} (agent `{job.agent_id}`) was cancelled after {job.elapsed():.0f}s and has no result.</js-reminder>')
             continue
         where = (f'Its result is at {job.result_path}' if job.saved
                  else 'Its result could not be saved to a file')
         notes.append(
-            '<js-reminder>Background task {job_id} (agent `{job_agent_id}`, {job_count} {task_if_job_count_1_else_tasks}) finished after {job_elapsed:.0f}s. {where}; read it, or call task with action="poll", handle="{value_6}".</js-reminder>'.format(job_id=job.id, job_agent_id=job.agent_id, job_count=job.count, task_if_job_count_1_else_tasks='task' if job.count == 1 else 'tasks', job_elapsed=job.elapsed(), where=where, value_6=job.id)
+            snippets.render('background-task-finished', ID=job.id, AGENT=job.agent_id, COUNT=job.count, TASK_LABEL='task' if job.count == 1 else 'tasks', SECONDS=format(job.elapsed(), '.0f'), LOCATION=where, HANDLE=job.id)
         )
     _prune()
     return notes

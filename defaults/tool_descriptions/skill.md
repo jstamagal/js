@@ -24,3 +24,9 @@ Rules:
   this tool refuses it, and the user loads it with `/skill <name>`.
 - A skill whose frontmatter lists `paths:` globs is offered in a
   `<js-reminder>` the first time read, write or patch touches a matching file.
+
+<!--parameters-->
+
+### name
+
+Local skill name to load.

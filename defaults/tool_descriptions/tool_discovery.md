@@ -15,3 +15,25 @@ returns its instructions and activates every allowed tool it declares. A new
 session starts unloaded; current agent policy still limits what can be loaded.
 Do not load and call that tool in the same response: load first, then call it.
 Calling a tool that is not loaded returns an ERROR naming the exact load call.
+
+<!--parameters-->
+
+### kind
+
+Optional catalog kind filter.
+
+### load
+
+Stable catalog id to load, such as native:browser_probe or skill:review.
+
+### offset
+
+Continue the same search at next_offset from a truncated result.
+
+### query
+
+Intent or words to search; empty returns a compact index.
+
+### source
+
+Optional exact source filter.

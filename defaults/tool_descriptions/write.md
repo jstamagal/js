@@ -32,3 +32,29 @@ not file content.
 Edit existing files with `patch`; use this only for new files or a deliberate
 full rewrite.
 {{/if}}
+
+<!--parameters-->
+
+### append
+
+Add content to the end of the file instead of replacing it. With from_held, content is added after the held text and the result written whole.
+
+### content
+
+Complete file content to write.
+
+### expected_hash
+
+The file's current hash, as a read or write result printed it. A match overwrites with no read.
+
+### file_path
+
+File path to create or overwrite.
+
+### from_held
+
+A held id (h3) from a failed write's ERROR: write the held content instead of sending it again. With append=true, content is added after it.
+
+### overwrite
+
+Set it when a refused write asks for it.

@@ -23,7 +23,7 @@ from .. import paranoid, settings as _settings
 from ..capped_process import CappedProcessResult, _run_capped, truncation_marker
 from ..tool_binaries import resolve_binary
 from .core import Tool, ToolContext
-from .descriptions import load_description
+from .descriptions import load_description, load_parameter_description
 from .sanitize import int_or_default, text_or_default
 
 
@@ -689,20 +689,18 @@ def tools() -> tuple[Tool, ...]:
             load_description("browse"),
             browse,
             {
-                "url": {"type": "string", "description": "Page to read."},
+                "url": {"type": "string", "description": load_parameter_description('browse', 'url')},
                 "dump": {
                     "type": "string",
                     "enum": list(_BROWSE_DUMPS),
                     "default": "markdown",
                     "description": (
-                        "What to return: readable markdown, plain text, rendered HTML, the link "
-                        "list, the raw response body decoded as UTF-8 text, the sub-resource "
-                        "URLs, or the cookie jar."
+                        load_parameter_description('browse', 'dump')
                     ),
                 },
                 "screenshot": {
                     "type": "string",
-                    "description": "Optional .png path to save a picture of the settled page.",
+                    "description": load_parameter_description('browse', 'screenshot'),
                 },
             },
             required=("url",),

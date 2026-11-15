@@ -6,6 +6,8 @@ next request; a resumed session whose last turn was cut off gets one note."""
 
 from __future__ import annotations
 
+from js import snippets
+
 import asyncio
 from pathlib import Path
 
@@ -67,8 +69,8 @@ def _session(name: str, messages: list[dict], stamp: dict | None = None) -> Path
 
 def _switch_note(previous: str, current: str) -> str:
     provider = from_env().provider_id
-    return cli._MODEL_SWITCH_NOTICE.format(previous=cli._stamp_label(previous, provider),
-                                           current=cli._stamp_label(current, provider))
+    return snippets.render("model-changed", PREVIOUS=cli._stamp_label(previous, provider),
+                                           CURRENT=cli._stamp_label(current, provider))
 
 
 # --- -m beats the stamp ----------------------------------------------------------
@@ -214,7 +216,7 @@ def test_a_turn_that_ended_without_a_finished_reply_is_cut_off(ending):
     [],
     [{"role": "user", "content": "q"}, {"role": "assistant", "content": "done"}],
     [{"role": "user", "content": "q"}, {"role": "assistant", "content": "done"},
-     {"role": "user", "content": cli._PROMPT_CHANGED_NOTICE}],
+     {"role": "user", "content": snippets.render('prompt-changed')}],
     [{"role": "user", "content": "<compaction-summary>\nall of it\n</compaction-summary>"}],
 ])
 def test_a_finished_turn_is_not_cut_off(messages):
@@ -227,7 +229,7 @@ def test_a_prompt_resume_after_a_cut_off_turn_carries_the_note_once(monkeypatch)
     first = _prompt(monkeypatch, ["--session", "cut", "-p", "go on"])
     second = _prompt(monkeypatch, ["--session", "cut", "-p", "and then"])
 
-    assert first.users == [f"go on\n\n{cli._CUT_OFF_NOTICE}"]
+    assert first.users == [f"go on\n\n{snippets.render('turn-cut-off')}"]
     assert second.users == ["and then"]
 
 
@@ -236,8 +238,8 @@ def test_a_repl_resume_after_a_cut_off_turn_carries_the_note_once(monkeypatch):
 
     turns = _repl(monkeypatch, ["--session", "cut"], ["go on", "and then"])
 
-    assert turns.users == [f"go on\n\n{cli._CUT_OFF_NOTICE}", "and then"]
-    assert load_messages(path)[3]["content"] == f"go on\n\n{cli._CUT_OFF_NOTICE}"
+    assert turns.users == [f"go on\n\n{snippets.render('turn-cut-off')}", "and then"]
+    assert load_messages(path)[3]["content"] == f"go on\n\n{snippets.render('turn-cut-off')}"
 
 
 def test_a_resume_after_a_finished_turn_carries_no_note(monkeypatch):
@@ -264,8 +266,8 @@ def test_a_repl_cut_off_note_survives_a_first_turn_that_was_discarded(monkeypatc
     monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(turn))
     assert cli.main(["--session", "cut"]) == 0
 
-    assert users[1:] == [f"again\n\n{cli._CUT_OFF_NOTICE}", "more"]
-    assert f"again\n\n{cli._CUT_OFF_NOTICE}" in [m.get("content") for m in load_messages(path)]
+    assert users[1:] == [f"again\n\n{snippets.render('turn-cut-off')}", "more"]
+    assert f"again\n\n{snippets.render('turn-cut-off')}" in [m.get("content") for m in load_messages(path)]
 
 
 # --- the stamp the model-switch note compares with ------------------------------------
@@ -340,5 +342,5 @@ def test_an_async_repl_note_survives_a_turn_that_was_discarded(monkeypatch, tmp_
     monkeypatch.setattr(cli.runtime, "run_turn_async", turn)
     run_async(monkeypatch, from_env(), script)
 
-    note = cli._CD_NOTICE.format(path=target.resolve())
+    note = snippets.render('working-directory', PATH=target.resolve())
     assert users == [f"one\n\n{note}", f"two\n\n{note}"]

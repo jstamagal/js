@@ -53,7 +53,9 @@ def test_registered_tools_and_description_files_match():
     registered = {tool.name for tool in registry.tools}
     files = {path.stem for path in descriptions.description_dir().glob("*.md")}
     generated_agent_tools = _prompt_agent_names() - files
-    turn_scoped_tools = {"tool_discovery"}
+    from js.mcp.host import MCPHost
+    turn_scoped_tools = {"tool_discovery", "named_agent",
+                         *(name for name, _ in MCPHost.control_tools())}
 
     assert CORE_TOOL_NAMES.issubset(registered)
     assert files - turn_scoped_tools == registered - generated_agent_tools

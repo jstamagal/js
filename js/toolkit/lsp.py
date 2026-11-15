@@ -31,7 +31,7 @@ from urllib.parse import quote, unquote, urlsplit
 from .. import jail as _jail
 from .. import paths
 from .core import Tool, ToolContext
-from .descriptions import load_description
+from .descriptions import load_description, load_parameter_description
 from .sanitize import int_or_default
 
 
@@ -814,11 +814,11 @@ def tools() -> tuple[Tool, ...]:
             lsp,
             {
                 "operation": {"type": "string", "enum": list(OPERATIONS),
-                              "description": "diagnostics for the file, or definition, references or hover at a position."},
-                "file_path": {"type": "string", "description": "Absolute, relative, or ~ path to a source file."},
-                "line": {"type": "integer", "description": "1-based line of the position. Not used by diagnostics."},
-                "character": {"type": "integer", "description": "1-based column on that line."},
-                "symbol": {"type": "string", "description": "Text on that line to put the position on, instead of character."},
+                              "description": load_parameter_description('lsp', 'operation')},
+                "file_path": {"type": "string", "description": load_parameter_description('lsp', 'file_path')},
+                "line": {"type": "integer", "description": load_parameter_description('lsp', 'line')},
+                "character": {"type": "integer", "description": load_parameter_description('lsp', 'character')},
+                "symbol": {"type": "string", "description": load_parameter_description('lsp', 'symbol')},
             },
             required=("operation", "file_path"),
             read_only=True,

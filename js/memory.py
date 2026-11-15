@@ -12,6 +12,8 @@ transcript up to date (`js.session_text`)."""
 
 from __future__ import annotations
 
+from . import snippets
+
 import contextlib
 import errno
 import fcntl
@@ -246,7 +248,7 @@ def restart_thinking_turn(messages: list[dict], *, require_tool_calls: bool) -> 
     def flush_context() -> None:
         if context:
             rewritten.append(note_time({"role": "user", "content": (
-                'Continue from this previous assistant context and its completed tool results. The calls recorded here have already run.\n'
+                snippets.render('flush-context')
                 + json.dumps(context, ensure_ascii=False)
             )}))
             context.clear()

@@ -7,3 +7,9 @@ your lens has nothing left to add, your task is merged, you are out of budget.
 Do not retire because you are waiting; stop calling tools and you will be
 woken. Do not retire while you hold a claim someone else needs: `release` it
 or name it in the handoff.
+
+<!--parameters-->
+
+### handoff
+
+What you did, what is left, where things are.

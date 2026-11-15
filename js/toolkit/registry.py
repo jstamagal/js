@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .. import snippets
+
 import difflib
 import os
 import re
@@ -411,7 +413,7 @@ class TurnToolSurface:
                     offers.append((item_id, skill))
             self._state_changed()
         lines = [
-            'Skill {skill_name} applies to {relative}: {join_skill_description_split} Load it with tool_discovery {{"load":"{item_id}"}}.'.format(skill_name=skill.name, relative=relative, join_skill_description_split=' '.join(skill.description.split()), item_id=item_id)
+            snippets.render('skill-offer', SKILL=skill.name, PATH=relative, DESCRIPTION=' '.join(skill.description.split()), CATALOG_ID=item_id)
             for item_id, skill in offers
         ]
         return '<js-reminder>{join_lines}</js-reminder>'.format(join_lines=' '.join(lines)) if lines else ""

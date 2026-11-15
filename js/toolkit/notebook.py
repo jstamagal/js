@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from .core import Tool, ToolContext
-from .descriptions import load_description
+from .descriptions import load_description, load_parameter_description
 from .fs import _detect_line_ending, _hash_bytes, _normalize_line_endings, _read_regular_bytes
 from .sanitize import int_or_default
 
@@ -333,11 +333,11 @@ def tools() -> tuple[Tool, ...]:
             load_description("notebook_edit"),
             notebook_edit,
             {
-                "file_path": {"type": "string", "description": "Path to the .ipynb notebook."},
-                "cell_id": {"type": "string", "description": "Id of the cell to replace or delete, or to insert after. Omit to insert at the top."},
-                "new_source": {"type": "string", "description": "The cell's whole new source. Not used by delete."},
-                "cell_type": {"type": "string", "enum": list(CELL_TYPES), "description": "Required to insert; on replace, changes the cell's type."},
-                "edit_mode": {"type": "string", "enum": list(EDIT_MODES), "default": "replace", "description": "replace, insert or delete."},
+                "file_path": {"type": "string", "description": load_parameter_description('notebook_edit', 'file_path')},
+                "cell_id": {"type": "string", "description": load_parameter_description('notebook_edit', 'cell_id')},
+                "new_source": {"type": "string", "description": load_parameter_description('notebook_edit', 'new_source')},
+                "cell_type": {"type": "string", "enum": list(CELL_TYPES), "description": load_parameter_description('notebook_edit', 'cell_type')},
+                "edit_mode": {"type": "string", "enum": list(EDIT_MODES), "default": "replace", "description": load_parameter_description('notebook_edit', 'edit_mode')},
             },
             required=("file_path",),
         ),

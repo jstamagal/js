@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from js import snippets
+
 from unittest.mock import AsyncMock
 
 import json
@@ -1485,7 +1487,7 @@ def test_prompt_failure_preserves_tool_work_and_resumes(monkeypatch, tmp_path, d
     assert kept[:3] == [user, *exchange]
     assert kept[3]["tool_call_id"] == "read-2"
 
-    resumed_user = {"role": "user", "content": f"continue\n\n{cli._CUT_OFF_NOTICE}"}
+    resumed_user = {"role": "user", "content": f"continue\n\n{snippets.render('turn-cut-off')}"}
 
     def resumed(cfg, system, messages, telemetry, **kwargs):
         assert messages == [*kept, resumed_user]

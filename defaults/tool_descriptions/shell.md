@@ -56,3 +56,17 @@ poll before assuming a long build or test run has failed.
 {{#if remove}}
 - Delete with `remove`, not `rm`.
 {{/if}}
+
+<!--parameters-->
+
+### env
+
+Variable names to pass through. The child environment is filtered by default.
+
+### handle
+
+Job id from a HANDLE line, for poll/wait/kill.
+
+### timeout
+
+Seconds this call blocks before returning a handle. The command is never killed by this.

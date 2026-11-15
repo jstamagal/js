@@ -1,6 +1,8 @@
 """Repeat complete CLI invocations as fresh, isolated processes."""
 from __future__ import annotations
 
+from . import snippets
+
 from . import messages as msgs
 
 from . import settings as _settings
@@ -15,7 +17,6 @@ import time
 
 
 _DURATION = re.compile(r"([1-9][0-9]*)([mMhH])\Z")
-_DEFAULT_PROMPT = 'Carry out your assigned task for this fresh session.'
 
 
 def parse_limit(value: str) -> tuple[int | None, float | None]:
@@ -110,7 +111,7 @@ def run(argv: list[str], limit: str, *, bench: str | None, prompt: str | None,
     stdin_data = sys.stdin.buffer.read() if not sys.stdin.isatty() else None
     if (prompt is None and bench is None and not stdin_data
             and not any(a in args for a in ("--commit", "--printonly"))):
-        args += ["-p", _DEFAULT_PROMPT]
+        args += ["-p", snippets.render("fresh-session")]
     deadline = time.monotonic() + seconds if seconds is not None else None
     completed = failures = attempts = 0
     max_attempts = count * int(_settings.knob(settings, "LOOP_ATTEMPTS_MULTIPLIER")) if count is not None else None

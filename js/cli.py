@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from . import snippets
+
 import argparse
 import asyncio
 import contextlib
@@ -163,16 +165,9 @@ def _registry_for(cfg) -> object:
 
 _BOOL_WORDS_ON = {"on", "true", "yes", "1"}
 _BOOL_WORDS_OFF = {"off", "false", "no", "0"}
-_PROMPT_CHANGED_NOTICE = (
-    '<js-reminder>The agent prompt files changed on disk. This session keeps the prompt it started with.</js-reminder>'
-)
 
 
 _MODE_PLACES = {"repl": 'in interactive chat', "-p": 'as a one-shot run'}
-_MODE_PRESENCE = {
-    "repl": 'The human is here and can answer.',
-    "-p": 'The human is not here and cannot answer.',
-}
 
 
 def _mode_switch_notice(started: str, previous: str, now: str) -> str:
@@ -182,7 +177,8 @@ def _mode_switch_notice(started: str, previous: str, now: str) -> str:
         course = (f'started {_MODE_PLACES[started]}, moved {_MODE_PLACES[previous]}, and now continues {_MODE_PLACES[now]} again')
     else:
         course = f'started {_MODE_PLACES[started]} and now continues {_MODE_PLACES[now]}'
-    return f'<js-reminder>This conversation {course}. {_MODE_PRESENCE[now]}</js-reminder>'
+    return snippets.render("mode-switch", COURSE=course, PRESENCE=snippets.render(
+        "mode-presence-chat" if now == "repl" else "mode-presence-prompt"))
 
 
 def _note_mode_switch(cfg: Config, message: dict, mode: str) -> dict:
@@ -200,12 +196,6 @@ def _note_mode_switch(cfg: Config, message: dict, mode: str) -> dict:
     return attach.with_note(message, _mode_switch_notice(started, previous, mode))
 
 
-_MODEL_SWITCH_NOTICE = (
-    '<js-reminder>The model changed from {previous} to {current}. Earlier replies in this conversation came from {previous}.</js-reminder>'
-)
-_CUT_OFF_NOTICE = (
-    '<js-reminder>The last turn in this conversation was cut off before it finished.</js-reminder>'
-)
 
 
 def _stamp_label(model: str | None, provider: str | None) -> str:
@@ -224,9 +214,9 @@ def _note_model_switch(cfg: Config, message: dict) -> dict:
     provider = stamp.get("provider") if isinstance(stamp.get("provider"), str) else None
     if stamp["model"] == cfg.model and (provider is None or provider == cfg.provider_id):
         return message
-    return attach.with_note(message, _MODEL_SWITCH_NOTICE.format(
-        previous=_stamp_label(stamp["model"], provider),
-        current=_stamp_label(cfg.model, cfg.provider_id),
+    return attach.with_note(message, snippets.render("model-changed",
+        PREVIOUS=_stamp_label(stamp["model"], provider),
+        CURRENT=_stamp_label(cfg.model, cfg.provider_id),
     ))
 
 
@@ -2115,6 +2105,8 @@ def _cmd_compact(arg: str, state: dict, cfg: Config) -> str | None:
         with stream_transport.net_role(msgs.COMPACTING_ROLE.words()):
             result = compaction.compact_now_sync(compact_cfg, state["system"], state["messages"], model=model,
                                                  focus=focus, forced=forced, **hooks)
+    except snippets.SnippetError:
+        raise
     except Exception as e:  # noqa: BLE001
         return msgs.COMPACTION_FAILED.said(error=f"{type(e).__name__}: {e}")
     if result not in skipped:
@@ -2276,9 +2268,6 @@ def _cmd_exec(arg: str, state: dict, cfg: Config) -> str | None:
 # reminder for the next user message and records a `workspace:` mark, so a
 # resumed session works in the same place.
 
-_CD_NOTICE = '<js-reminder>The working directory is now {path}.</js-reminder>'
-_ADD_NOTICE = '<js-reminder>{path} is now visible inside the jail ({access}).</js-reminder>'
-_DROP_NOTICE = '<js-reminder>{path} is no longer visible inside the jail.</js-reminder>'
 
 
 def _access(bind: _jail.Bind) -> str:
@@ -2361,7 +2350,7 @@ def _cmd_cd(arg: str, state: dict, cfg: Config) -> str | None:
     if jail is not None and not jail.bound(target, settings.knob(state.get("settings"), "JAIL_BIND")):
         return msgs.CD_OUTSIDE_JAIL.said(path=target, root=jail.root)
     _set_working_dir(target)
-    _queue_note(state, _CD_NOTICE.format(path=target))
+    _queue_note(state, snippets.render("working-directory", PATH=target))
     _record_workspace(cfg)
     msgs.say(msgs.CD_DONE, path=target)
     return None
@@ -2381,7 +2370,7 @@ def _cmd_add(arg: str, state: dict, cfg: Config) -> str | None:
     if not bind.path.exists():
         return msgs.ADD_MISSING.said(path=bind.path)
     jail.add(bind)
-    _queue_note(state, _ADD_NOTICE.format(path=bind.path, access=_access(bind)))
+    _queue_note(state, snippets.render("jail-path-added", PATH=bind.path, ACCESS=_access(bind)))
     _record_workspace(cfg)
     msgs.say(msgs.ADD_DONE, path=bind.path, access=_access(bind))
     return None
@@ -2402,7 +2391,7 @@ def _cmd_drop(arg: str, state: dict, cfg: Config) -> str | None:
     if not jail.bound(runtime.T.STOCK_CONTEXT.cwd, settings.knob(state.get("settings"), "JAIL_BIND")):
         jail.add(dropped)
         return msgs.DROP_CWD.said(path=path)
-    _queue_note(state, _DROP_NOTICE.format(path=path))
+    _queue_note(state, snippets.render("jail-path-removed", PATH=path))
     _record_workspace(cfg)
     msgs.say(msgs.DROP_DONE, path=path)
     return None
@@ -2918,7 +2907,7 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
         if recorded_system is None:
             M.append_system_prompt(cfg.session_file, system)
         elif prompt_changed:
-            notice = {"role": "user", "content": _PROMPT_CHANGED_NOTICE}
+            notice = {"role": "user", "content": snippets.render('prompt-changed')}
             messages.append(notice)
             _append_turn(cfg, notice)
     _restore_workspace(cfg)
@@ -2953,7 +2942,7 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
             user_message = _note_mode_switch(cfg, user_message, "-p")
         user_message = _note_model_switch(resume_cfg, user_message)
         if cut_off:
-            user_message = attach.with_note(user_message, _CUT_OFF_NOTICE)
+            user_message = attach.with_note(user_message, snippets.render('turn-cut-off'))
     elif save and cfg.session_file != Path(os.devnull):
         M.record_turn_mode(cfg.session_file, "-p")
     if call_stats is None:
@@ -3097,9 +3086,10 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
         except Exception as e:  # noqa: BLE001
             with _transcript_stdio(telemetry):
                 msgs.warn(msgs.FAILED, error=_error_text(e))
+            code = 2 if isinstance(e, snippets.SnippetError) else 1
             if events is not None and not events.errored:
-                _emit_failure(events, _error_text(e), 1)
-            return 1
+                _emit_failure(events, _error_text(e), code)
+            return code
     finally:
         try:
             if save:
@@ -3226,7 +3216,7 @@ def _json_run(run: Callable[[], int], *, stream: bool = True) -> int:
                 code = run()
             except Exception as exc:  # noqa: BLE001 - the stream must still end with a result
                 msgs.warn(msgs.FAILED, error=_error_text(exc))
-                code = 1
+                code = 2 if isinstance(exc, snippets.SnippetError) else 1
     finally:
         _json_events = None
     opened = events.session
@@ -3433,6 +3423,8 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
                 model_client.run_owning_loop(run_benchmark())
         except KeyboardInterrupt:
             interrupted, ok, err = True, False, "interrupted"
+        except snippets.SnippetError:
+            raise
         except Exception as e:  # noqa: BLE001
             ok, err = False, f"{type(e).__name__}: {e}"
         row = {
@@ -3569,7 +3561,7 @@ def _run_commit(target: str | None,
     helper_survey = f'python -m js.commit_helper -C {shlex.quote(str(target_dir))} survey'
     helper_commit = f'python -m js.commit_helper -C {shlex.quote(str(target_dir))} commit <message-file>'
     prompt = (
-        f'Commit all work in this target directory: {target_dir}\n\nThe repository has already been initialized if it was missing. Use this deterministic staging helper for every commit unit:\n`{helper_stage}`\nUse `all` for whole-file staging or comma-separated hunk numbers from the survey for tracked text files. To commit a staged unit, write the full commit message to a file with the write tool, then run:\n`{helper_commit}`\nIf you need a fresh snapshot after making changes, run:\n`{helper_survey}`\n\nInitial deterministic commit_helper survey:\n```text\n{survey}\n```'
+        snippets.render('commit-task', DIRECTORY=target_dir, STAGE=helper_stage, COMMIT=helper_commit, SURVEY_COMMAND=helper_survey, SURVEY=survey)
     )
     if extra_context and extra_context.strip():
         prompt += f'\n\nOperator context:\n{extra_context.strip()}'
@@ -3605,6 +3597,8 @@ def _run_compact_offline(session: str, *, agent: str | None = None, focus: str =
         result = compaction.compact_now_sync(cfg, prompt_spec.system, messages, focus=focus, forced=True,
                                              model=model, emit=emit,
                                              log_dir=compaction.flight_log_dir(cfg))
+    except snippets.SnippetError:
+        raise
     except Exception as e:  # noqa: BLE001
         msgs.warn(msgs.FAILED, error=_error_text(e))
         return 1
@@ -3888,6 +3882,13 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_message, turn_cfg, l
             _requeue_notes(state, notes)
             M.append_mark(cfg.session_file, "turn_aborted")
         raise
+    except snippets.SnippetError:
+        if _turn_has_progress(state["messages"], user_message):
+            _persist_turn_messages(turn_cfg, state["messages"])
+        else:
+            _discard_unstarted_turn(cfg, state["messages"], user_message)
+            _requeue_notes(state, notes)
+        raise
     except Exception as e:  # noqa: BLE001
         msgs.say(msgs.FAILED, error=_error_text(e))
         if isinstance(e, OSError) and e.errno == errno.ESTALE:
@@ -3976,6 +3977,8 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
         turn_cfg = await loop.run_in_executor(None, _live_cfg_snapshot, cfg, state)
         user_message = external_message or attach.build_user_message(
             prompt_text, line_attachments, turn_cfg, missing_ok=True)
+    except snippets.SnippetError:
+        raise
     except ValueError as e:
         # AttachmentError / SkillInvocationError (ValueErrors) or a login-gate
         # routing error from re-resolving the live model: degrade to one friendly
@@ -4013,6 +4016,8 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
                     missing_ok=True,
                 ),
             )
+        except snippets.SnippetError:
+            raise
         except ValueError as e:
             msgs.say(msgs.FAILED, error=e)
             return None
@@ -4229,6 +4234,8 @@ async def _initialize_repl_agent(cfg, state, telemetry, prompt_spec) -> None:
         )
     except (KeyboardInterrupt, asyncio.CancelledError):
         msgs.warn(msgs.TURN_INTERRUPTED)
+    except snippets.SnippetError:
+        raise
     except Exception as exc:  # noqa: BLE001
         msgs.warn(msgs.FAILED, error=_error_text(exc))
 
@@ -4286,7 +4293,7 @@ async def _repl_main(cfg, state, telemetry, history, completer, prompt_spec, ban
         steer_inbox.clear()
         return dropped
 
-    async def on_line(line: str) -> None:
+    async def _on_line(line: str) -> None:
         if not line:
             return
         shown = child_windows.on_screen()
@@ -4330,6 +4337,25 @@ async def _repl_main(cfg, state, telemetry, history, completer, prompt_spec, ban
         queue.put_nowait(line)
         if sup.turn_active() or queue.qsize() > 1:
             msgs.say(msgs.QUEUED, ahead=queue.qsize())
+
+    snippet_failures: list[snippets.SnippetError] = []
+
+    def fail_snippet(error: snippets.SnippetError) -> None:
+        snippet_failures.append(error)
+        state["running"] = False
+        app.exit()
+
+    async def on_line(line: str) -> None:
+        try:
+            await _on_line(line)
+        except snippets.SnippetError as exc:
+            fail_snippet(exc)
+
+    def consumer_done(task: asyncio.Task) -> None:
+        if not task.cancelled() and isinstance(error := task.exception(), snippets.SnippetError):
+            fail_snippet(error)
+
+    consumer.add_done_callback(consumer_done)
 
     def on_interrupt() -> bool:
         shown = child_windows.on_screen()
@@ -4438,12 +4464,14 @@ async def _repl_main(cfg, state, telemetry, history, completer, prompt_spec, ban
         meta.window_opener.reset(opener_token)
         state.pop("windows", None)
         consumer.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
+        with contextlib.suppress(asyncio.CancelledError, snippets.SnippetError):
             await consumer
         for job in sup.jobs():  # backstop: cancel any straggler
             job.task.cancel()
         _emit_session_event(state, telemetry, cfg, "session_end")
         await _close_session_mcp_host(state)
+    if snippet_failures:
+        raise snippet_failures[0]
     return 0
 
 
@@ -4591,12 +4619,16 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
             ignore_local_config=ignore_local_config, ignore_global_config=ignore_global_config,
             presets=presets,
         )
+    except snippets.SnippetError:
+        raise
     except Exception as e:  # noqa: BLE001 — printonly never errors
         msgs.warn(msgs.PRINTONLY_NO_CONFIG, error=f"{type(e).__name__}: {e}")
         return 0
 
     try:
         raw_spec = _raw_configured_spec(cfg)
+    except snippets.SnippetError:
+        raise
     except Exception as e:  # noqa: BLE001
         msgs.warn(msgs.PRINTONLY_NO_PROMPT, error=f"{type(e).__name__}: {e}")
         raw_spec = None
@@ -4605,6 +4637,8 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
         cfg = P.apply_agent_model(cfg, raw_spec, model, config_pins=False)
         cfg = P.apply_agent_reasoning(cfg, raw_spec)
         cfg = _resolve_cli_model_override(cfg, model)
+    except snippets.SnippetError:
+        raise
     except Exception as e:  # noqa: BLE001 — model routing cannot prevent a prompt preview
         msgs.warn(msgs.PRINTONLY_NO_CONFIG, error=f"{type(e).__name__}: {e}")
 
@@ -4674,6 +4708,8 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
     for ch in sections:
         try:
             body = msgs.words_of(builders[ch]())
+        except snippets.SnippetError:
+            raise
         except Exception as e:  # noqa: BLE001 — a failed section is reported, never kills the run
             error = f"{type(e).__name__}: {e}"
             msgs.warn(msgs.PRINTONLY_SECTION_FAILED, section=_PRINTONLY_TITLES[ch], error=error)
@@ -4695,7 +4731,11 @@ def _printonly_run(spec: str, *, agent: str | None = None, session: str | None =
 
 
 def main(argv: list[str] | None = None) -> int:
-    code = _main(argv)
+    try:
+        code = _main(argv)
+    except snippets.SnippetError as exc:
+        msgs.warn(msgs.FAILED, error=exc)
+        code = 2
     pending = dict(_pending_switch)
     _pending_switch.clear()
     if pending:
@@ -5376,7 +5416,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         # The prompt on disk differs from the one the previous launch saw. The
         # recorded one is still what gets sent; the model is told once, at the
         # launch that first sees the change.
-        notice = {"role": "user", "content": _PROMPT_CHANGED_NOTICE}
+        notice = {"role": "user", "content": snippets.render('prompt-changed')}
         messages.append(notice)
         _append_turn(cfg, notice)
         notices.append(msgs.line_for(msgs.PROMPT_CHANGED))
@@ -5410,7 +5450,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     state["keymap"] = keymap
     state["live_resume"] = resumed_layer
     if cut_off:
-        _queue_note(state, _CUT_OFF_NOTICE)
+        _queue_note(state, snippets.render('turn-cut-off'))
     rc_errors = _run_rc_commands(state, cfg, jsrc_paths(
         Path(getattr(cfg, "project_dir", None) or Path.cwd()),
         ignore_local_config=args.no_local_config,

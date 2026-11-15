@@ -31,3 +31,29 @@ not file content.
 {{#if fs_search}}
 Find files and search contents with `fs_search`. This reads a known path.
 {{/if}}
+
+<!--parameters-->
+
+### end_byte
+
+Optional 0-based offset one past the last byte to read.
+
+### end_line
+
+Optional inclusive 1-based last line for text files.
+
+### file_path
+
+Absolute, relative, or ~ path to a file.
+
+### show_line_numbers
+
+For text output, prefix each line with its line number.
+
+### start_byte
+
+0-based offset of the first byte to read, for text files. Use instead of lines.
+
+### start_line
+
+Optional 1-based first line for text files.

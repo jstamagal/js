@@ -5,3 +5,13 @@ The task's hold is released.
 
 Finish only what is actually done and checked. If you are giving a task up
 instead, let the hold expire or say so with `send`.
+
+<!--parameters-->
+
+### id
+
+The task number from the board.
+
+### result
+
+What came of it: where the work is, what was found.

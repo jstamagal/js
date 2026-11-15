@@ -36,3 +36,69 @@ not file content.
 {{#if write}}
 Use `write` for new files or a deliberate full rewrite.
 {{/if}}
+
+<!--parameters-->
+
+### edits
+
+Several replacements applied in order before one final write. Use instead of old_string/new_string, never alongside them.
+
+### edits.items.new_string
+
+Replacement text.
+
+### edits.items.old_string
+
+Exact text to replace.
+
+### edits.items.replace_all
+
+Replace every occurrence of this edit.
+
+### file_path
+
+File path to edit.
+
+### new_string
+
+Replacement text.
+
+### old_string
+
+Exact text to replace. Pair with new_string, or use edits instead.
+
+### params.edits
+
+Several replacements validated and applied in order before one final write. Use instead of old_string/new_string, never alongside them.
+
+### params.edits.items.new_string
+
+Replacement text.
+
+### params.edits.items.old_string
+
+Exact text to replace.
+
+### params.edits.items.replace_all
+
+Replace every occurrence of this edit.
+
+### params.file_path
+
+File path to edit.
+
+### params.new_string
+
+Replacement text. Required unless edits is used.
+
+### params.old_string
+
+Exact text to replace. Required unless edits is used.
+
+### params.replace_all
+
+Replace every occurrence instead of requiring one unique match.
+
+### replace_all
+
+Replace every occurrence instead of requiring one unique match.

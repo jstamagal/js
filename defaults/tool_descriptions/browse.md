@@ -68,3 +68,17 @@ When not to use:
 Uses the managed `tools/bin/obscura` binary installed by `just install`. Before
 installation it falls back to `obscura` on PATH and reports a plain ERROR when
 neither exists.
+
+<!--parameters-->
+
+### dump
+
+What to return: readable markdown, plain text, rendered HTML, the link list, the raw response body decoded as UTF-8 text, the sub-resource URLs, or the cookie jar.
+
+### screenshot
+
+Optional .png path to save a picture of the settled page.
+
+### url
+
+Page to read.

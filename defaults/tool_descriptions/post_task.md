@@ -6,3 +6,13 @@ Write the `title` as one line of what needs doing and the `body` as what the
 taker needs: where the files are, what done looks like, what to send back and
 to whom. Post work you will not do yourself; take it with `take_task` if you
 will. `tasks` shows the board.
+
+<!--parameters-->
+
+### body
+
+What the taker needs to know: where, how, done when.
+
+### title
+
+One line: what needs doing.

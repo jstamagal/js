@@ -10,7 +10,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from .core import CatalogEntry, Tool, ToolContext
-from .descriptions import load_description
+from .descriptions import load_description, load_parameter_description
 
 
 DISCOVERY_TOOL_NAME = "tool_discovery"
@@ -34,11 +34,11 @@ def discovery_tool(surface: Any) -> Tool:
         load_description(DISCOVERY_TOOL_NAME),
         discover,
         {
-            "query": {"type": "string", "description": 'Intent or words to search; empty returns a compact index.'},
-            "offset": {"type": "integer", "minimum": 0, "description": 'Continue the same search at next_offset from a truncated result.'},
-            "kind": {"type": "string", "enum": ["native", "skill", "mcp"], "description": 'Optional catalog kind filter.'},
-            "source": {"type": "string", "description": 'Optional exact source filter.'},
-            "load": {"type": "string", "description": 'Stable catalog id to load, such as native:browser_probe or skill:review.'},
+            "query": {"type": "string", "description": load_parameter_description('tool_discovery', 'query')},
+            "offset": {"type": "integer", "minimum": 0, "description": load_parameter_description('tool_discovery', 'offset')},
+            "kind": {"type": "string", "enum": ["native", "skill", "mcp"], "description": load_parameter_description('tool_discovery', 'kind')},
+            "source": {"type": "string", "description": load_parameter_description('tool_discovery', 'source')},
+            "load": {"type": "string", "description": load_parameter_description('tool_discovery', 'load')},
         },
     )
 

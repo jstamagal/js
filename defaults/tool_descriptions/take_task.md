@@ -5,3 +5,9 @@ blocks nobody. If someone else holds it you are told who and until when.
 
 The result tells you the title and body. When you are done, `finish_task`
 with what came of it.
+
+<!--parameters-->
+
+### id
+
+The task number from the board.

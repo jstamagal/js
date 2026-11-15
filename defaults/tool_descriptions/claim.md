@@ -9,3 +9,13 @@ again, so a dead agent cannot block anyone. `release` it when you are done.
 
 A claim is not a message: it wakes nobody. Say what you took with `send` when
 the others need to know.
+
+<!--parameters-->
+
+### key
+
+What you are taking: a file, a module, a task line.
+
+### ttl
+
+Seconds the claim lasts. Default {{SECONDS}}.

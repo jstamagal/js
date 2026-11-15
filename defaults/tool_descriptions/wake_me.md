@@ -8,3 +8,9 @@ you by itself, so an alarm adds nothing to waiting for a reply, a review or a
 result. Do not poll in the shell and do not loop on short timers; one alarm,
 then sleep. The alarm stays set when a message wakes you first, and a second
 call while one is pending changes nothing. `seconds: 0` clears a pending alarm.
+
+<!--parameters-->
+
+### seconds
+
+How long to wait. 0 clears a pending alarm.
