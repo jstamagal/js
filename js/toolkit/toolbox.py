@@ -42,9 +42,6 @@ from . import kernel as _kernel
 from .core import Tool, ToolContext
 from .descriptions import load_description
 from .sanitize import int_or_default, text_or_default
-from ..prompt_text import load_catalog
-
-_PROMPTS = load_catalog('toolkit_toolbox')
 
 
 _HEADER = re.compile(r"^#\s*js-toolbox:\s*(\{.*?\})\s*$", re.MULTILINE)
@@ -579,13 +576,13 @@ def toolbox(
         if not body.strip():
             session, problem, _started = _kernel.get_session(context)
             if session is None:
-                return (_PROMPTS['toolbox_without_a_kernel_save_needs_the'].format(problem=problem))
+                return (f'{problem}\nWithout a kernel, save needs the definition passed explicitly in `source`.')
             extracted = source_from_kernel(session, name)
             body = extracted.body()
             if extracted.imports:
-                warnings.append(_PROMPTS['toolbox_hoisted_into_the_file'] + "; ".join(extracted.imports))
+                warnings.append('hoisted into the file: ' + "; ".join(extracted.imports))
         if not body.strip():
-            return (_PROMPTS['toolbox_error_no_source_found_for_define'].format(name=name))
+            return (f'ERROR: no source found for {name!r}. Define it in the kernel first, or pass the definition in `source`.')
         # A saved sibling is carried: load execs every tool file into one
         # namespace and retries a file whose module level needs one not yet
         # loaded, so a call to another tool resolves there.
@@ -593,8 +590,8 @@ def toolbox(
         missing = [free for free in unbound_names(body) if free not in siblings]
         if missing and context.toolbox_require_bound_names:
             message = (
-                _PROMPTS['toolbox_error_uses'].format(name=name) + ", ".join(missing)
-                + _PROMPTS['toolbox_which_the_file_would_not_carry']
+                f'ERROR: {name!r} uses ' + ", ".join(missing)
+                + ', which the file would not carry: a later session that loads it would NameError. Save them as their own tools, inline them into this definition, or pass the whole definition in `source`.'
             )
             _kernel.render_event(context, level, message, style="COLOR_ERROR")
             return _kernel.cap_for_model(message, context)

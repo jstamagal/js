@@ -1,3 +1,0 @@
-{
-  "argument_refusal_error_call_refused_before_running_an": "ERROR: {tool_name} call refused before running: an argument matches ban pattern {pattern!r} in tools.yaml."
-}

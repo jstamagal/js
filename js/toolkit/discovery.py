@@ -11,10 +11,6 @@ from typing import Any
 
 from .core import CatalogEntry, Tool, ToolContext
 from .descriptions import load_description
-from ..prompt_text import load_catalog
-
-_PROMPTS = load_catalog('toolkit_discovery')
-
 
 
 DISCOVERY_TOOL_NAME = "tool_discovery"
@@ -38,11 +34,11 @@ def discovery_tool(surface: Any) -> Tool:
         load_description(DISCOVERY_TOOL_NAME),
         discover,
         {
-            "query": {"type": "string", "description": _PROMPTS['discovery_tool_intent_or_words_to_search_empty']},
-            "offset": {"type": "integer", "minimum": 0, "description": _PROMPTS['discovery_tool_continue_the_same_search_at_next']},
-            "kind": {"type": "string", "enum": ["native", "skill", "mcp"], "description": _PROMPTS['discovery_tool_optional_catalog_kind_filter']},
-            "source": {"type": "string", "description": _PROMPTS['discovery_tool_optional_exact_source_filter']},
-            "load": {"type": "string", "description": _PROMPTS['discovery_tool_stable_catalog_id_to_load_such']},
+            "query": {"type": "string", "description": 'Intent or words to search; empty returns a compact index.'},
+            "offset": {"type": "integer", "minimum": 0, "description": 'Continue the same search at next_offset from a truncated result.'},
+            "kind": {"type": "string", "enum": ["native", "skill", "mcp"], "description": 'Optional catalog kind filter.'},
+            "source": {"type": "string", "description": 'Optional exact source filter.'},
+            "load": {"type": "string", "description": 'Stable catalog id to load, such as native:browser_probe or skill:review.'},
         },
     )
 
@@ -203,7 +199,7 @@ def ranked_entries(entries: Iterable[CatalogEntry], query: str) -> list[CatalogE
 def catalog_result(entries: Iterable[CatalogEntry], query: str, loaded: set[str], offset: int = 0) -> str:
     """Bound serialized UTF-8 bytes while retaining stable ids and pagination."""
     if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
-        return _PROMPTS['catalog_result_error_offset_must_be_a_non']
+        return 'ERROR: offset must be a non-negative integer'
     matches = ranked_entries(entries, query)
     searching = bool(str(query).strip())
     cap = 8192 if searching else 4096
@@ -231,5 +227,5 @@ def catalog_result(entries: Iterable[CatalogEntry], query: str, loaded: set[str]
     if cursor < len(matches):
         result.update(truncated=True, next_offset=cursor)
     if not matches:
-        result["hint"] = _PROMPTS['catalog_result_browse_with_an_empty_query_narrow']
+        result["hint"] = 'Browse with an empty query; narrow with kind or source.'
     return compact_result(result)

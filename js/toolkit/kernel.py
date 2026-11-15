@@ -57,15 +57,12 @@ from . import kernel_bridge
 from .core import Tool, ToolContext, ToolOutput, current_observer, current_registry
 from .descriptions import load_description
 from .sanitize import int_or_default, text_or_default
-from ..prompt_text import load_catalog
-
-_PROMPTS = load_catalog('toolkit_kernel')
 
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 MISSING_DEPS = (
-    _PROMPTS['default_error_the_kernel_tool_needs_the']
+    "ERROR: the kernel tool needs the {missing} package{plural}, which {verb} not importable in this environment. They are the `kernel` extra in pyproject.toml: `just install` and `just sync` put it in this checkout's project venv, which the `js` on PATH runs and syncs on every start; a Termux install goes without it. The kernel cannot run until they are there; every other tool is unaffected."
 )
 
 # Names IPython and js put in the user namespace themselves (`tools` is the js
@@ -840,7 +837,7 @@ def _died(context: ToolContext, session: KernelSession, level: str, notes: list[
     session.handles = {}
     session.current = ""
     message = (
-        _PROMPTS['died_error_the_kernel_died_during_execution'].format(cell=cell)
+        f'ERROR: the kernel died during execution (cell {cell}). Everything defined in this session is gone; call again with restart=true and rebuild.'
     )
     render_event(context, level, message, style="COLOR_ERROR")
     return "\n".join([*notes, message, "NAMESPACE (none)"])
@@ -848,8 +845,8 @@ def _died(context: ToolContext, session: KernelSession, level: str, notes: list[
 
 def _busy(context: ToolContext, session: KernelSession, level: str, notes: list[str],
           live: CellHandle) -> str:
-    message = (_PROMPTS['busy_error_the_previous_cell_is_still'].format(live_first_line=live.first_line()))
-    hint = (_PROMPTS['busy_handle_action_poll_for_new_output'].format(live_id=live.id))
+    message = (f'ERROR: the previous cell is still running ({live.first_line()}); interrupt it or wait')
+    hint = (f'handle {live.id}: action="poll" for new output, action="interrupt" to stop it, action="wait" to block for it. A cell blocked in a syscall that ignores SIGINT needs restart=true')
     render_event(context, level, message, style="COLOR_ERROR")
     return cap_for_model("\n".join([*notes, message, hint, f"HANDLE {live.id} RUNNING"]), context)
 
@@ -915,13 +912,13 @@ def kernel(
     if mode in ("poll", "interrupt", "wait"):
         live = pick_handle(session, target)
         if live is None:
-            message = (_PROMPTS['kernel_error_no_cell_nothing_to_poll'].format(value_0='handle ' + target if target else 'is running'))
+            message = ('ERROR: no cell {value_0}; nothing to poll, interrupt, or wait for'.format(value_0='handle ' + target if target else 'is running'))
             render_event(context, level, message, style="COLOR_ERROR")
             return cap_for_model("\n".join([*notes, message]), context)
         if mode == "poll":
             output = poll_cell(session, live)
-            status = (_PROMPTS['kernel_cell_finished_s'].format(live_id=live.id, live_age=live.age()) if live.finished
-                      else _PROMPTS['kernel_cell_is_still_running_s'].format(live_id=live.id, live_age=live.age()))
+            status = (f'cell {live.id} finished ({live.age():.1f}s).' if live.finished
+                      else f'cell {live.id} is still running ({live.age():.1f}s).')
             return _report(context, session, level, notes, live, output, status=status)
         if mode == "interrupt":
             already_finished = live.finished
@@ -929,19 +926,19 @@ def kernel(
                 interrupt_and_collect(session, live)
             output = poll_cell(session, live)
             if already_finished:
-                status = _PROMPTS['kernel_cell_had_already_finished_s'].format(live_id=live.id, live_age=live.age())
+                status = f'cell {live.id} had already finished ({live.age():.1f}s).'
             elif live.finished:
-                status = _PROMPTS['kernel_interrupt_sent_to_cell_it_stopped'].format(live_id=live.id, live_age=live.age())
+                status = f'interrupt sent to cell {live.id}; it stopped ({live.age():.1f}s).'
             else:
-                status = (_PROMPTS['kernel_interrupt_sent_to_cell_it_is'].format(live_id=live.id, live_age=live.age()))
+                status = (f'interrupt sent to cell {live.id}; it is still running ({live.age():.1f}s).')
             return _report(context, session, level, notes, live, output, status=status)
         output = wait_cell(session, live, limit)
-        status = (_PROMPTS['kernel_cell_finished_s_2'].format(live_id=live.id, live_age=live.age()) if live.finished
-                  else _PROMPTS['kernel_cell_is_still_running_s_2'].format(live_id=live.id, live_age=live.age()))
+        status = (f'cell {live.id} finished ({live.age():.1f}s).' if live.finished
+                  else f'cell {live.id} is still running ({live.age():.1f}s).')
         return _report(
             context, session, level, notes, live, output, status=status,
             timed_out_note=(
-                _PROMPTS['kernel_interrupted_after_s_the_cell_was'].format(limit=limit)
+                f'INTERRUPTED after {limit:g}s. The cell was stopped with a KeyboardInterrupt; the namespace and everything defined in it are intact.'
                 if live.timed_out else ""),
         )
 
@@ -988,7 +985,7 @@ def kernel(
         parts: list[str] = list(notes)
         if live.timed_out:
             parts.append(
-                _PROMPTS['kernel_interrupted_after_s_the_cell_was_2'].format(limit=limit)
+                f'INTERRUPTED after {limit:g}s. The cell was stopped with a KeyboardInterrupt; the namespace and everything defined in it are intact.'
             )
         parts.extend(_output_parts(output))
         # Images are reported before the footer so every result really does end with
@@ -1002,7 +999,7 @@ def kernel(
 
     parts = [
         *notes,
-        _PROMPTS['kernel_cell_is_still_running_after_s'].format(session_executions=session.executions, window=window, live_id=live.id, value_3=live.id),
+        f'cell {session.executions} is still running after {window:.1f}s (handle {live.id}). Poll it with action="poll", handle="{live.id}"; interrupt it with action="interrupt".',
         *_output_parts(output),
         f"HANDLE {live.id} RUNNING",
     ]

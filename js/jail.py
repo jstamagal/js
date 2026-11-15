@@ -44,9 +44,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import paths, settings as _settings
-from .prompt_text import load_catalog
-
-_PROMPTS = load_catalog('jail')
 
 
 # Filesystem types whose mounts are hidden in the jail. `find /` over an NFS
@@ -527,7 +524,7 @@ class Jail:
                 continue
             links += 1
             if links > 40:
-                raise JailError(_PROMPTS['confine_has_too_many_symbolic_links'].format(path=path))
+                raise JailError(f'{path} has too many symbolic links')
             current = Path("/") if target.is_absolute() else current.parent
             pending.extendleft(reversed(target.parts[1:] if target.is_absolute() else target.parts))
         resolved = self.host_path(current, setting)
@@ -546,18 +543,18 @@ class Jail:
                         and not os.path.lexists(real))
         if best is None or private_miss:
             raise JailError(
-                _PROMPTS['confine_is_outside_the_jail_js_c'].format(path=path, self_root=self.root)
+                f'{path} is outside the jail: js -C keeps the tools in {self.root} and its bound paths'
             )
         if self.hidden(real, hide):
-            raise JailError(_PROMPTS['confine_is_hidden_in_the_jail_jail'].format(path=path))
+            raise JailError(f'{path} is hidden in the jail (JAIL_HIDE)')
         # Removing or moving a tree takes everything under it, hidden or not.
         if write and any(h != real and _under(h, real) for h in self.hides(hide)):
-            raise JailError(_PROMPTS['confine_holds_a_path_hidden_in_the'].format(path=path))
+            raise JailError(f'{path} holds a path hidden in the jail (JAIL_HIDE); a tool may not change it')
         if write and not best.rw:
-            raise JailError(_PROMPTS['confine_is_read_only_in_the_jail'].format(path=path, best_path=best.path))
+            raise JailError(f'{path} is read-only in the jail (bound from {best.path})')
         if write and any(not area.rw and area.path != real and _under(area.path, real)
                          for area in areas):
-            raise JailError(_PROMPTS['confine_holds_a_read_only_path_in'].format(path=path))
+            raise JailError(f'{path} holds a read-only path in the jail; a tool may not change it')
         return real
 
     def bound(self, path: Path, setting: object = ()) -> bool:

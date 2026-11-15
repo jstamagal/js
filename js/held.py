@@ -25,9 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from . import jail, paths, settings as _settings
-from .prompt_text import load_catalog
 
-_PROMPTS = load_catalog("held")
 
 _LOCK = threading.Lock()
 _MADE: set[Path] = set()
@@ -165,11 +163,11 @@ def load(context: Any, held_id: str) -> Held:
         _sweep(directory, context)
         path = _session_files(directory, _session_key(context)).get(int(number)) if number.isdigit() else None
         if path is None:
-            raise HeldError(_PROMPTS["error_no_such_held_content"].format(id=held_id))
+            raise HeldError(f'no held content {held_id} in this session')
         try:
             content = path.read_bytes().decode("utf-8", errors="replace")
         except OSError as exc:
-            raise HeldError(_PROMPTS["error_held_content_unreadable"].format(id=held_id, exc=exc)) from exc
+            raise HeldError(f'held content {held_id} cannot be read: {exc}') from exc
     return Held(f"h{int(number)}", path, content)
 
 
@@ -225,20 +223,20 @@ def _orientation(context: Any, target_raw: str | None) -> list[str]:
     model = getattr(context, "model", "") or "?"
     active = jail.active()
     if active is None:
-        lines = [_PROMPTS["orientation_you"].format(agent=agent, model=model, cwd=context.cwd)]
+        lines = [f'You: agent {agent}, model {model}; cwd {context.cwd}; no jail.']
     else:
         writable = [str(active.root)]
         writable += [str(b.path) for b in active.binds(getattr(context, "jail_bind", ())) if b.rw]
         writable += ["/tmp", str(paths.user_home() / ".js" / "tmp")]
-        lines = [_PROMPTS["orientation_you_jailed"].format(
+        lines = ['You: agent {agent}, model {model}; cwd {cwd}; jail root {root} (writable: {writable}).'.format(
             agent=agent, model=model, cwd=context.cwd, root=active.root,
             writable=", ".join(dict.fromkeys(writable)))]
     if target_raw:
         resolved = _resolve(context, target_raw)
         if resolved is None:
-            lines.append(_PROMPTS["orientation_target_refused"].format(target=_absolute(context, target_raw)))
+            lines.append(f'Target {_absolute(context, target_raw)}: outside what the jail lets you write.')
         else:
-            lines.append(_PROMPTS["orientation_target"].format(
+            lines.append('Target {target}: exists={exists}, read this session={read}.'.format(
                 target=jail.shown(str(resolved)),
                 exists=str(resolved.exists()).lower(),
                 read=str(resolved in getattr(context, "read_paths", ())).lower()))
@@ -256,12 +254,12 @@ def held_note(context: Any, held: Held, file_path: str | None, *, partial: bool 
     if partial:
         call = json.dumps({"file_path": finish_path, "from_held": held.id, "append": True,
                            "content": "<the rest>"}, ensure_ascii=False)
-        head = _PROMPTS["held_partial"].format(
+        head = 'Your call was cut off before its content ended. The {size} bytes ({lines} lines) that arrived are held at {path} as held id {id}; they end with {last_line}. Do not write those again.\nTo finish: write {call}, where content is only the rest, continuing from the last held byte.'.format(
             size=f"{held.size:,}", lines=f"{_line_count(held.text):,}", path=shown_path, id=held.id,
             last_line=json.dumps(lines[-1][-120:], ensure_ascii=False), call=call)
     else:
         call = json.dumps({"file_path": finish_path, "from_held": held.id}, ensure_ascii=False)
-        head = _PROMPTS["held"].format(
+        head = 'Your content ({size} bytes, {lines} lines) is held at {path} as held id {id}. Do not write it again.\nTo finish: write {call}'.format(
             size=f"{held.size:,}", lines=f"{_line_count(held.text):,}", path=shown_path, id=held.id, call=call)
     return "\n\n" + "\n".join([head, *_orientation(context, finish_path if raw else None)])
 

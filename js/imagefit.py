@@ -18,9 +18,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from . import paths
-from .prompt_text import load_catalog
 
-_PROMPTS = load_catalog('imagefit')
 
 MAX_EDGE = 2000
 MAX_BYTES = 5 * 1024 * 1024 * 3 // 4
@@ -49,13 +47,13 @@ class Fitted:
         """What the model is told about the change; empty when there is none."""
         parts = []
         if (self.width, self.height) != (self.original_width, self.original_height):
-            parts.append(_PROMPTS['image_resized'].format(
+            parts.append('original {original_width}x{original_height}, displayed at {width}x{height}. Multiply coordinates by {scale} to map to the original image.'.format(
                 original_width=self.original_width, original_height=self.original_height,
                 width=self.width, height=self.height,
                 scale=f"{self.original_width / self.width:.2f}"))
         if self.encoding:
-            parts.append(_PROMPTS['image_reencoded'].format(encoding=self.encoding))
-        return _PROMPTS['image_note'].format(parts=" ".join(parts)) if parts else ""
+            parts.append(f'Re-encoded as {self.encoding} to fit the 5 MB image limit.')
+        return '[Image: {parts}]'.format(parts=" ".join(parts)) if parts else ""
 
 
 def fit(data: bytes, mime: str) -> Fitted | None:
@@ -109,7 +107,7 @@ def _fit(image, data: bytes, mime: str) -> Fitted:
     w2 = min(w, _LAST_RESORT_WIDTH)
     h2 = max(1, round(h * w2 / max(w, 1)))
     out = _encode(image.resize((w2, h2), _lanczos()), "JPEG", quality=20)
-    return result(out, "image/jpeg", w2, h2, _PROMPTS['encoding_jpeg'].format(quality=20))
+    return result(out, "image/jpeg", w2, h2, f'JPEG at quality {20}')
 
 
 def _smaller_encoding(image, mime: str) -> tuple[bytes, str, str] | None:
@@ -119,11 +117,11 @@ def _smaller_encoding(image, mime: str) -> tuple[bytes, str, str] | None:
     if mime == "image/png":
         out = _encode(image.convert("RGBA").quantize(256), "PNG", optimize=True)
         if len(out) <= MAX_BYTES:
-            return out, "image/png", _PROMPTS['encoding_palette_png']
+            return out, "image/png", 'a 256-colour PNG'
     for quality in _JPEG_QUALITIES:
         out = _encode(image, "JPEG", quality=quality)
         if len(out) <= MAX_BYTES:
-            return out, "image/jpeg", _PROMPTS['encoding_jpeg'].format(quality=quality)
+            return out, "image/jpeg", f'JPEG at quality {quality}'
     return None
 
 

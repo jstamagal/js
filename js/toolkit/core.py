@@ -31,10 +31,6 @@ from .. import settings as _settings
 from .. import turn_settings as _turn_settings
 from ..paths import state_root
 from ..skills import SkillCatalog
-from ..prompt_text import load_catalog
-
-_PROMPTS = load_catalog('toolkit_core')
-
 
 
 Handler = Callable[..., Any]
@@ -324,19 +320,19 @@ class ToolResult:
             if kind == "text":
                 lines.append(str(block.get("text", "")))
             elif kind in {"image", "audio"}:
-                lines.append(_PROMPTS['dehydrated_omitted_from_history'].format(kind=kind, value_1=block.get('mimeType', 'application/octet-stream')))
+                lines.append('[{kind} {value_1} omitted from history]'.format(kind=kind, value_1=block.get('mimeType', 'application/octet-stream')))
             elif kind == "resource_link":
-                lines.append(_PROMPTS['dehydrated_resource_link'].format(block_get_name=block.get('name', ''), block_get_uri=block.get('uri', '')))
+                lines.append('[resource link {block_get_name}: {block_get_uri}]'.format(block_get_name=block.get('name', ''), block_get_uri=block.get('uri', '')))
             elif kind == "resource":
                 resource = block.get("resource")
                 if isinstance(resource, dict):
                     uri = resource.get("uri", "")
                     text = resource.get("text")
-                    lines.append(_PROMPTS['dehydrated_embedded_resource'].format(uri=uri) + (_PROMPTS['dehydrated_text'].format(text=text) if isinstance(text, str) else _PROMPTS['dehydrated_binary_omitted']))
+                    lines.append(f'[embedded resource {uri}]' + (f'\n{text}' if isinstance(text, str) else ' [binary omitted]'))
             elif kind == "structured":
                 lines.append(compact_json(block.get("value")))
             else:
-                lines.append(_PROMPTS['dehydrated_content_omitted_from_history'].format(kind=kind))
+                lines.append(f'[{kind} content omitted from history]')
         value = "\n".join(lines)
         return f"ERROR: {value}" if self.is_error and not value.startswith("ERROR") else value
 
@@ -667,11 +663,11 @@ class ToolContext(_turn_settings.ContextSettings):
             return None
         with self._coverage_lock:
             if path not in self.read_paths:
-                return _PROMPTS['require_read_error_you_must_read_the_file'].format(action=action)
+                return f'ERROR: You must read the file with the read tool before attempting to {action}.'
             known_hash = self.file_hashes.get(path)
             if content_hash is not None and known_hash != content_hash:
                 return (
-                    _PROMPTS['require_read_error_changed_since_it_was_read'].format(path=path, known_hash=known_hash, content_hash=content_hash, action=action)
+                    f'ERROR: {path} changed since it was read (hash {known_hash} when read, {content_hash} now); read it again before attempting to {action}.'
                 )
             unseen = [span for span in line_ranges or [] if not self._ranges_cover(path, *span, seen_ranges)]
         if unseen:
@@ -937,7 +933,7 @@ class ToolContext(_turn_settings.ContextSettings):
                 metadata = json.loads((path_dir / "path.json").read_text(encoding="utf-8"))
                 target = Path(metadata["path"])
                 if not target.is_absolute():
-                    raise ValueError(_PROMPTS['load_snapshots_snapshot_target_is_not_absolute'])
+                    raise ValueError('snapshot target is not absolute')
             except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
                 continue
             try:
@@ -967,7 +963,7 @@ class ToolContext(_turn_settings.ContextSettings):
             too_large = _snapshot_raw_size(snapshot) > _SNAPSHOT_MAX_DISK_BYTES
             encoded = b"" if too_large else _encode_snapshot(path, snapshot)
             if too_large or len(encoded) > _SNAPSHOT_MAX_DISK_BYTES:
-                reason = _PROMPTS['persist_snapshot_snapshot_exceeds_the_mib_session_undo'].format(SNAPSHOT_MAX_DISK_BYTES_1024_1024=_SNAPSHOT_MAX_DISK_BYTES // (1024 * 1024))
+                reason = f'snapshot exceeds the {_SNAPSHOT_MAX_DISK_BYTES // (1024 * 1024)} MiB session undo cap'
                 encoded = json.dumps(
                     {
                         "version": _SNAPSHOT_FORMAT_VERSION,
@@ -976,14 +972,14 @@ class ToolContext(_turn_settings.ContextSettings):
                     },
                     separators=(",", ":"),
                 ).encode("utf-8")
-                self._notice_snapshot(_PROMPTS['persist_snapshot_this_undo_is_available_only_until'].format(reason=reason))
+                self._notice_snapshot(f'{reason}; this undo is available only until the process exits')
             stamp = f"{time.time_ns():020d}-{secrets.token_hex(6)}.snapshot"
             entry = path_dir / stamp
             self._atomic_write(entry, encoded)
             self._prune_snapshot_store()
             return entry if entry.exists() else None
         except OSError as exc:
-            self._notice_snapshot(_PROMPTS['persist_snapshot_could_not_persist_undo_snapshot_for'].format(path=path, exc=exc))
+            self._notice_snapshot(f'could not persist undo snapshot for {path}: {exc}')
             return None
 
     def _forget_snapshot_file(self, victim: Path) -> None:
@@ -1101,7 +1097,7 @@ class ToolContext(_turn_settings.ContextSettings):
                         },
                     }
         except OSError as exc:
-            reason = _PROMPTS['snapshot_could_not_capture_undo_snapshot_for'].format(path=path, exc=exc)
+            reason = f'could not capture undo snapshot for {path}: {exc}'
             content = {"kind": "unavailable", "reason": reason}
             self._notice_snapshot(reason)
         self.record_snapshot(path, content)
@@ -1168,7 +1164,7 @@ def call_tool(tool: Tool, args: dict[str, Any], context: ToolContext) -> Any:
         return _jail.Refusal(f"ERROR: {exc}")
     notices = context.consume_snapshot_notices()
     if notices:
-        rendered = "\n".join(_PROMPTS['call_tool_warning'].format(notice=notice) for notice in notices)
+        rendered = "\n".join(f'WARNING: {notice}' for notice in notices)
         result = each_part(result, lambda text: _with_notices(text, rendered))
     return each_part(result, _as_jail_shows)
 

@@ -1,3 +1,0 @@
-{
-  "refusal_error_an_on_tool_call_handler": "ERROR: an on tool_call handler refused {tool}."
-}

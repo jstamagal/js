@@ -78,7 +78,6 @@ def test_multibyte_utf8_uses_character_budget_and_preserves_flooring(tmp_path, t
 
 def test_shared_budget_omission_is_not_a_per_file_size_omission(tmp_path):
     import os
-    from js import compaction
 
     first, second, tiny = [tmp_path / name for name in ("first.txt", "second.txt", "tiny.txt")]
     first.write_text("a" * 40)
@@ -90,18 +89,17 @@ def test_shared_budget_omission_is_not_a_per_file_size_omission(tmp_path):
     assert "a" * 40 in content
     assert "b" * 40 not in content
     assert "c" * 4 in content
-    assert compaction._PROMPTS['post_compact_rehydration_budget_exhausted'].format(path=second) in content
-    assert compaction._PROMPTS['post_compact_rehydration_too_large_to_re_attach_read'].format(path=second) not in content
+    assert f'### {second}\n(not re-attached because the shared file budget is exhausted; read it if you need it)' in content
+    assert f'### {second}\n(too large to re-attach; read it if you need it)' not in content
 
 
 def test_per_file_size_reason_remains_separate(tmp_path):
-    from js import compaction
 
     path = tmp_path / "oversize.txt"
     path.write_text("x" * 100)
     content = rehydrate(path, per_file_tokens=1, token_budget=100)
-    assert compaction._PROMPTS['post_compact_rehydration_too_large_to_re_attach_read'].format(path=path) in content
-    assert compaction._PROMPTS['post_compact_rehydration_budget_exhausted'].format(path=path) not in content
+    assert f'### {path}\n(too large to re-attach; read it if you need it)' in content
+    assert f'### {path}\n(not re-attached because the shared file budget is exhausted; read it if you need it)' not in content
 
 
 def test_vanished_file_is_named_without_inline_contents(tmp_path):

@@ -41,9 +41,6 @@ from .. import output, paths
 from .. import settings as _settings
 from .. import messages as msgs
 from .core import Tool
-from ..prompt_text import load_catalog
-
-_PROMPTS = load_catalog('toolkit_policy')
 
 
 MODIFIERS = ("eager", "lazy", "ban")
@@ -295,7 +292,7 @@ def argument_refusal(tool_name: str, args: Any, bans: Mapping[str, Sequence[str]
         for value in values:
             if fnmatchcase(value, folded) if glob else folded in value:
                 return (
-                    _PROMPTS['argument_refusal_error_call_refused_before_running_an'].format(tool_name=tool_name, pattern=pattern)
+                    f'ERROR: {tool_name} call refused before running: an argument matches ban pattern {pattern!r} in tools.yaml.'
                 )
     return None
 

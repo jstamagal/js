@@ -12,10 +12,6 @@ import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from .prompt_text import load_catalog
-
-_PROMPTS = load_catalog('capped_process')
-
 
 
 # After the process exits, how long its reader threads get to drain the pipes
@@ -520,4 +516,4 @@ def _run_capped(
 
 
 def truncation_marker(cap: int, knob: str = "SHELL_OUTPUT_MAX") -> str:
-    return _PROMPTS['truncation_marker_truncated_reached'].format(knob=knob, cap=cap)
+    return f'[truncated: {knob} ({cap}) reached]'

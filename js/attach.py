@@ -16,9 +16,6 @@ from . import messages as msgs
 from . import settings as _settings
 from .config import Config
 from .toolkit.fs import _detect_visual_mime
-from .prompt_text import load_catalog
-
-_PROMPTS = load_catalog('attach')
 
 
 STDIN_ATTACHMENT_NAME = "<stdin>"
@@ -243,7 +240,7 @@ def _prepare_attachment(
         if not missing_ok:
             raise AttachmentError(msgs.ATTACHMENT_NOT_FOUND.said(path=raw_path)) from exc
         msgs.warn(msgs.ATTACHMENT_NOT_FOUND, path=raw_path)
-        return _PreparedAttachment(_PROMPTS['prepare_attachment_not_found'].format(path=raw_path))
+        return _PreparedAttachment(f'[Attachment {raw_path} not found: nothing was attached.]')
     if not path.is_file():
         raise AttachmentError(msgs.ATTACHMENT_NOT_A_FILE.said(path=path))
     try:
@@ -294,14 +291,14 @@ def _prepare_bytes(
     guessed, _ = mimetypes.guess_type(str(path))
     file_type = guessed or "application/octet-stream"
     return _PreparedAttachment(
-        _PROMPTS['prepare_bytes_attached_binary_file_type_size_bytes'].format(display_path=display_path, file_type=file_type, size=size)
+        f'ATTACHED_BINARY_FILE {display_path} type={file_type} size={size} bytes (content not inlined)'
     )
 
 
 def _prepare_image(display_path: str, mime: str, size: int, data: bytes, cfg: Config) -> _PreparedAttachment:
-    stub = _PROMPTS['prepare_image_visual_file_mime_size_bytes'].format(display_path=display_path, mime=mime, size=size)
+    stub = f'VISUAL_FILE {display_path} mime={mime} size={size} bytes'
     if not getattr(cfg, "vision_enabled", False):
-        return _PreparedAttachment(_PROMPTS['prepare_image_vision_disabled_image_bytes_not_sent'].format(stub=stub))
+        return _PreparedAttachment(f'{stub} (vision disabled; image bytes not sent)')
     fitted = imagefit.fit(data, mime)
     if fitted is not None and fitted.changed:
         return _PreparedAttachment(f"{stub} {fitted.note}", media.store(fitted.data, fitted.mime))
@@ -349,10 +346,10 @@ def _looks_text(data: bytes) -> bool:
 
 def _format_text_attachment(display_path: str, text: str, size: int, truncated: bool, cap: int) -> str:
     fence = _fence_for(text)
-    header = _PROMPTS['format_text_attachment_attached_file_bytes'].format(display_path=display_path, size=size)
+    header = f'Attached file: {display_path} ({size} bytes)'
     if truncated:
-        header += _PROMPTS['format_text_attachment_truncated_to_bytes'].format(cap=cap)
-    return _PROMPTS['format_text_attachment_text'].format(header=header, fence=fence, text=text, value_3=fence)
+        header += f' [truncated to {cap} bytes]'
+    return f'{header}\n{fence}\n{text}\n{fence}'
 
 
 def _fence_for(text: str) -> str:

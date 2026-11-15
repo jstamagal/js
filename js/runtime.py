@@ -62,10 +62,6 @@ from .turn_stream import StreamSink, TurnEvents
 from .console import _print_run_line, _print_trace  # noqa: F401
 from .turn_call import (CallLimits, ModelCaller, ModelReply, ModelRequest, cut_off_by_cap,
                         dangling_arguments)
-from .prompt_text import load_catalog
-
-_PROMPTS = load_catalog('runtime')
-
 
 
 _UNSET = object()
@@ -292,7 +288,7 @@ def _resolve_context_window(
 
 # Sent as a user message after a reply cut off by its output-token cap.
 MAX_OUTPUT_RESUME_NUDGE = (
-    _PROMPTS['default_output_token_limit_hit_resume_directly']
+    'Output token limit hit. Resume directly, no apology, no recap of what you were doing. Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces.'
 )
 
 
@@ -405,7 +401,7 @@ def _normalize_tool_call_batch(
             parsed = _repair_jsonish(raw_args)
         except ValueError as exc:
             parsed = arguments = {}
-            validation_error = _PROMPTS['normalize_tool_call_batch_could_not_parse_arguments'].format(exc=exc)
+            validation_error = f'could not parse arguments: {exc}'
         else:
             # Before validation, not after: a container or number the model
             # serialized as a string is the right value in the wrong type, and
@@ -438,7 +434,7 @@ def _normalize_tool_call_batch(
         if tool is None:
             validation_error = registry.unavailable_error(canonical_name)
             if scheduled_loads & {f"native:{canonical_name}", f"mcp:{canonical_name}"}:
-                validation_error += _PROMPTS['normalize_tool_call_batch_a_load_in_this_same_response']
+                validation_error += ' A load in this same response cannot authorize a sibling call.'
         if validation_error is None:
             validation_error = tool_args.schema_error(arguments, schema)
         refused = False
@@ -533,11 +529,11 @@ def _incomplete_has_dangling_tool_args(pending_calls: list[_PendingToolCall]) ->
 
 
 def _truncated_tool_call_notice(reason: str, pending_calls: list[_PendingToolCall]) -> str:
-    names = sorted({pc.name or _PROMPTS['truncated_tool_call_notice_unknown'] for pc in pending_calls})
+    names = sorted({pc.name or 'unknown' for pc in pending_calls})
     joined = ", ".join(names)
-    suffix = _PROMPTS['truncated_tool_call_notice_for'].format(joined=joined) if joined else ""
+    suffix = f' for {joined}' if joined else ""
     return (
-        _PROMPTS['truncated_tool_call_notice_response_incomplete_dropped_truncated_tool_call'].format(reason=reason, suffix=suffix)
+        f'Response incomplete ({reason}); dropped truncated tool call arguments{suffix}. Send large content across several smaller calls.'
     )
 
 
@@ -697,7 +693,7 @@ class ToolErrorTracker:
             else:
                 streak = self.errors[tool_name] = _ErrorStreak(signature)
             attempts_left = max(self.limit - streak.count, 0)
-            return _PROMPTS['record_retry_attempts_left_allowed_max_attempts'].format(result=result, attempts_left=attempts_left, self_limit=self.limit)
+            return f'{result}\n<retry>attempts_left={attempts_left}, allowed_max_attempts={self.limit}</retry>'
 
     def steer_due(self) -> list[tuple[str, int]]:
         """(tool, repeats) for each tool whose same error reached the limit
@@ -813,14 +809,14 @@ def _without_notice_marks(result: ToolResult) -> ToolResult:
 
 def _media_notice(kind: str, mime: str, reason: str) -> str:
     """js's one notice for a media block it did not send."""
-    notice = _PROMPTS['media_notice_dropped'].format(clip_name_str_kind=_clip_name(str(kind)), clip_name_str_mime=_clip_name(str(mime)), reason=reason)
+    notice = f'[{_clip_name(str(kind))} {_clip_name(str(mime))} dropped: {reason}]'
     return cap_text(notice, _MEDIA_NOTICE_MAX, "]")
 
 
 def _media_names(block: dict) -> tuple[str, str]:
     resource = block.get("resource") if block.get("type") == "resource" else None
     if isinstance(resource, dict):
-        return (_PROMPTS['media_names_embedded_resource'].format(resource_get_uri=resource.get('uri', '')),
+        return ('embedded resource {resource_get_uri}'.format(resource_get_uri=resource.get('uri', '')),
                 str(resource.get("mimeType", "application/octet-stream")))
     return str(block.get("type")), str(block.get("mimeType", "application/octet-stream"))
 
@@ -872,7 +868,7 @@ def _dehydrate_capped_result(result: ToolResult, budget: int, marker: str) -> To
     else:
         # Some media will not fit: room for the bare marker that says so is
         # kept free first, and media fill what is left.
-        bare = {"type": "text", "text": _PROMPTS['dehydrate_capped_result_media_dropped'], "media_notice": _MEDIA_NOTICE}
+        bare = {"type": "text", "text": '[media dropped]', "media_notice": _MEDIA_NOTICE}
         for block in media:
             if not _overflow([*kept, block, bare], budget, is_error):
                 kept.append(block)
@@ -881,10 +877,10 @@ def _dehydrate_capped_result(result: ToolResult, budget: int, marker: str) -> To
     if dropped:
         # A media block with no room still says so: its notice, cut to the
         # room there is, at the least a bare marker.
-        joined = "\n".join(_media_notice(*_media_names(block), _PROMPTS['dehydrate_capped_result_no_room_in_a_byte_result'].format(budget=budget))
+        joined = "\n".join(_media_notice(*_media_names(block), f'no room in a {budget}-byte result')
                            for block in dropped)
         cap = budget - _tool_result_content_size(ToolResult(kept, is_error=is_error)) - (1 if kept else 0)
-        for wording in (joined, _PROMPTS['dehydrate_capped_result_media_dropped_2']):
+        for wording in (joined, '[media dropped]'):
             notice = {"type": "text", "text": cap_text(wording, max(cap, 0), "]"), "media_notice": _MEDIA_NOTICE}
             if notice["text"] and not _overflow([*kept, notice], budget, is_error):
                 kept.append(notice)
@@ -945,7 +941,7 @@ def _cap_media(result: ToolResult, media_max: int | None) -> ToolResult:
         if size > media_max:
             kind, mime = _media_names(block)
             blocks.append({"type": "text", "media_notice": _MEDIA_NOTICE, "text": _media_notice(
-                kind, mime, _PROMPTS['cap_media_bytes_is_over_tool_media_max'].format(size=size, media_max=media_max))})
+                kind, mime, f'{size} bytes is over TOOL_MEDIA_MAX ({media_max}); capture a smaller region or a lower resolution')})
         else:
             blocks.append(block)
     return result if blocks == result.blocks else replace(result, blocks=blocks)
@@ -979,9 +975,9 @@ def _cap_image_marker(result: str, cap_bytes: int | None, media_max: int | None)
         size = 0
     notice = None
     if media_max is not None and size > media_max:
-        notice = _media_notice("image", mime, _PROMPTS['cap_image_marker_bytes_is_over_tool_media_max'].format(size=size, media_max=media_max))
+        notice = _media_notice("image", mime, f'{size} bytes is over TOOL_MEDIA_MAX ({media_max}); capture a smaller region or a lower resolution')
     elif cap_bytes is not None and byte_size(model_client.provider_text(result)) > cap_bytes:
-        notice = _media_notice("image", mime, _PROMPTS['cap_image_marker_no_room_in_a_byte_result'].format(cap_bytes=cap_bytes))
+        notice = _media_notice("image", mime, f'no room in a {cap_bytes}-byte result')
     if notice is None:
         return result
     return cap_text(notice, cap_bytes, "]") if cap_bytes is not None else notice
@@ -1044,7 +1040,7 @@ def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None,
         media_context = context if context is not None else T.STOCK_CONTEXT
         result = _cap_media(_fit_images(result), _limit(int(getattr(media_context, "max_tool_media_bytes", 0) or 0)))
         if cap_bytes > 0 and _tool_result_content_size(result) > cap_bytes:
-            marker = _PROMPTS['cap_result_truncated_tool_result_max_reached'].format(cap_bytes=cap_bytes)
+            marker = f'\n[truncated: TOOL_RESULT_MAX ({cap_bytes}) reached]'
             return _dehydrate_capped_result(result, cap_bytes, marker)
         return result
     if not isinstance(result, str):
@@ -1065,7 +1061,7 @@ def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None,
     if inline_cap > 0:
         result = spill_oversized_result(result, inline_cap)
     if cap_bytes > 0:
-        result = _cap_result_text(result, cap_bytes, _PROMPTS['cap_result_truncated_tool_result_max_reached_2'].format(cap_bytes=cap_bytes))
+        result = _cap_result_text(result, cap_bytes, f'\n[truncated: TOOL_RESULT_MAX ({cap_bytes}) reached]')
     return Output(result) if is_content and not isinstance(result, Output) else result
 
 
@@ -1136,11 +1132,11 @@ def spill_oversized_result(
         by_byte = json.dumps({"start_byte": next_byte})
         if multiline:
             by_line = json.dumps({"start_line": next_line})
-            how = _PROMPTS['spill_notice_read_it_on_with_range_or'].format(by_byte=by_byte, by_line=by_line)
+            how = f'read it on with range {by_byte}, or by line with range {by_line}'
         else:
-            how = _PROMPTS['spill_notice_read_it_on_with_range_it'].format(by_byte=by_byte)
+            how = f'read it on with range {by_byte}; it is one line, so only a byte range splits it'
         return (
-            _PROMPTS['spill_notice_result_was_bytes_over_the_full'].format(total_bytes=total_bytes, limit_name=limit_name, inline_cap=inline_cap, path=path, how=how)
+            f'[result was {total_bytes} bytes, over {limit_name} ({inline_cap}); the full text is at {path} — {how}]'
         )
 
     # Keep a usable pointer even when the notice alone exceeds the text budget.
@@ -1177,7 +1173,6 @@ def _reconcile_read_delivery(
     bounds = args.get("range") if isinstance(args.get("range"), dict) else args
     byte_read = bounds.get("start_byte") is not None or bounds.get("end_byte") is not None
     context.record_delivered_read(context.resolve_path(raw_path), raw, "" if byte_read else delivered, call_id)
-
 
 
 def _tool_results_in(messages: list[dict]) -> dict[str, str]:
@@ -1221,7 +1216,7 @@ def _cap_batch_results(results: list[Any], cap_bytes: int) -> list[Any]:
     sizes = [_result_size(r) for r in results]
     if sum(sizes) <= cap_bytes:
         return results
-    marker = _PROMPTS['cap_batch_results_truncated_parallel_results_max_reached'].format(cap_bytes=cap_bytes)
+    marker = f'\n[truncated: PARALLEL_RESULTS_MAX ({cap_bytes}) reached]'
     allowance = _fair_share_ceiling(sizes, cap_bytes)
     if allowance < 0:
         return results
@@ -1279,7 +1274,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
         opened = _trace_call(telemetry, tool_context, name, None, malformed=True,
                              traced=trace, deferred=trace_together)
         telemetry.event("tool_error", tool=name, error=f"argparse: {e}")
-        result = _PROMPTS['dispatch_error_could_not_parse_arguments_for'].format(name=name, e=e)
+        result = f'ERROR: could not parse arguments for {name}: {e}'
         if error_tracker is not None:
             result = error_tracker.record(name, result)
         _trace_result(telemetry, tool_context, name, result, malformed=True, exchange=opened, traced=trace)
@@ -1311,7 +1306,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
         telemetry.event("tool_exception", tool=tool.name,
                         error=f"{type(e).__name__}: {e}",
                         latency_ms=int((time.time() - started) * 1000))
-        result = _jail.shown(_PROMPTS['dispatch_error_running'].format(tool_name=tool.name, type_e___name=type(e).__name__, e=e))
+        result = _jail.shown(f'ERROR running {tool.name}: {type(e).__name__}: {e}')
     produced = as_output(result)
     result = produced.model
     if error_tracker is not None and isinstance(result, str):
@@ -1413,7 +1408,7 @@ def _dispatch_tool_calls(
             continue
         args = json.loads(pc.arguments())
         telemetry.event("tool_invalid", tool=pc.name, error=pc.validation_error)
-        result = pc.validation_error if pc.unavailable or pc.refused else _PROMPTS['dispatch_tool_calls_error_invalid_arguments_for'].format(pc_name=pc.name, pc_validation_error=pc.validation_error)
+        result = pc.validation_error if pc.unavailable or pc.refused else f'ERROR: invalid arguments for {pc.name}: {pc.validation_error}'
         recorded = _cap_result(result, cap_bytes, context=tool_context)
         if not pc.unavailable:
             recorded = error_tracker.record(pc.name, recorded)
@@ -1450,7 +1445,7 @@ def _dispatch_tool_calls(
                     args, result = futures[idx].result()
                 except Exception as exc:  # noqa: BLE001
                     args = {}
-                    result = _PROMPTS['dispatch_tool_calls_error_running_task'].format(type_exc___name=type(exc).__name__, exc=exc)
+                    result = f'ERROR running task: {type(exc).__name__}: {exc}'
                 records[idx] = (args, error_tracker.record("task", result))
                 if progress is not None:
                     progress.record(tool_calls[idx], *records[idx])
@@ -1526,7 +1521,7 @@ async def _dispatch_fan_out_async(
         opened = _trace_call(telemetry, tool_context, pc.name, None, malformed=True,
                              traced=trace, deferred=trace_together)
         telemetry.event("tool_error", tool=pc.name, error=f"argparse: {e}")
-        result = _PROMPTS['dispatch_fan_out_async_error_could_not_parse_arguments_for'].format(pc_name=pc.name, e=e)
+        result = f'ERROR: could not parse arguments for {pc.name}: {e}'
         recorded = error_tracker.record(pc.name, result)
         _trace_result(telemetry, tool_context, pc.name, recorded, malformed=True, exchange=opened, traced=trace)
         return pc, {}, recorded
@@ -1549,7 +1544,7 @@ async def _dispatch_fan_out_async(
         telemetry.event("tool_exception", tool=tool.name,
                         error=f"{type(e).__name__}: {e}",
                         latency_ms=int((time.time() - started) * 1000))
-        result = _jail.shown(_PROMPTS['dispatch_fan_out_async_error_running'].format(tool_name=tool.name, type_e___name=type(e).__name__, e=e))
+        result = _jail.shown(f'ERROR running {tool.name}: {type(e).__name__}: {e}')
     output = as_output(result)
     recorded = error_tracker.record(tool.name, _cap_result(output.model, cap_bytes, context=tool_context))
     _trace_result(telemetry, tool_context, tool.name, _operator_sees(output, output.model), args=args,
@@ -1565,7 +1560,7 @@ async def _dispatch_async_tool(
     try:
         args = _repair_jsonish(pc.arguments())
     except ValueError as exc:
-        result = error_tracker.record(pc.name, _PROMPTS['dispatch_async_tool_error_could_not_parse_arguments_for'].format(pc_name=pc.name, exc=exc))
+        result = error_tracker.record(pc.name, f'ERROR: could not parse arguments for {pc.name}: {exc}')
         _trace_result(telemetry, tool_context, pc.name, result, malformed=True, traced=trace)
         return pc, {}, result
     tool = registry.resolve(pc.name)
@@ -1586,7 +1581,7 @@ async def _dispatch_async_tool(
         raise
     except Exception as exc:  # noqa: BLE001
         telemetry.event("tool_exception", tool=tool.name, error=f"{type(exc).__name__}: {exc}")
-        result = _jail.shown(_PROMPTS['dispatch_async_tool_error_running'].format(tool_name=tool.name, type_exc___name=type(exc).__name__, exc=exc))
+        result = _jail.shown(f'ERROR running {tool.name}: {type(exc).__name__}: {exc}')
     output = as_output(result)
     raw_result = output.model
     result = _cap_result(raw_result, cap_bytes, context=tool_context)
@@ -1955,7 +1950,7 @@ def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, 
         )
         if batch_stats.capped:
             diagnostic = (
-                _PROMPTS['record_assistant_tool_call_batch_limit_reached_retained'].format(batch_stats_retained=batch_stats.retained, batch_stats_capped=batch_stats.capped)
+                f'Tool-call batch limit reached: retained {batch_stats.retained} distinct calls and rejected {batch_stats.capped} beyond REPLY_TOOL_CALLS_MAX.'
             )
             batch_diagnostic_suffix = ("\n\n" if text else "") + diagnostic
             text += batch_diagnostic_suffix
@@ -2145,7 +2140,7 @@ def _steer_off_repeated_errors(due: list[tuple[str, int]], *, messages: list[dic
                                telemetry: Telemetry) -> None:
     """Tell the model, in one message that joins the running turn, to stop
     retrying each tool in ``due`` (tool, repeats)."""
-    text = "\n".join(_PROMPTS['steer_off_repeated_errors_stop_retrying'].format(name=name, count=count)
+    text = "\n".join(f'Stop retrying {name}; the same error repeated {count} times. Change approach. Repeating that error again ends this turn.'
                      for name, count in due)
     message = {"role": "user", "content": text, "steered": True}
     messages.append(memory.note_time(message))
@@ -2167,7 +2162,7 @@ def _record_tool_error_limit(name: str, dispatch_records: list[tuple[_PendingToo
          and result_value.startswith("ERROR")),
         "",
     )
-    failure = _PROMPTS['record_tool_error_limit_error_tool_retry_limit_reached_after'].format(name=name, last_error=last_error)
+    failure = f'ERROR: tool retry limit reached: {name} repeated the same error after being told to stop retrying it\n{last_error}'
     convo.ai.append(ai.messages.Message(role="assistant", parts=[ai.types.messages.TextPart(text=failure)]))
     messages.append(memory.note_time({"role": "assistant", "content": failure}))
     events.emit("error", error=failure, retryable=False)
