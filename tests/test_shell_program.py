@@ -106,6 +106,15 @@ def test_allowed_or_unset_references_get_no_env_preamble(tmp_path, monkeypatch):
     assert "environment=filtered" not in result
 
 
+def test_js_home_is_not_reported_as_unset(tmp_path, monkeypatch):
+    monkeypatch.setenv("JS_HOME", str(tmp_path))
+
+    result = process_net.shell('echo "$JS_HOME"; exit 1', context=ToolContext(cwd=tmp_path, shell_program="/bin/sh"))
+
+    assert "environment=filtered" not in result
+    assert str(tmp_path) in result
+
+
 def test_shell_own_variables_are_not_reported_as_unset(tmp_path, monkeypatch):
     monkeypatch.setenv("SHLVL", "3")
 

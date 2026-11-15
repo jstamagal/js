@@ -414,7 +414,8 @@ def _render_finished(job: _ShellJob, result: CappedProcessResult, description: s
         parts.append(note)
     if description:
         parts.append(f'description={description}')
-    filtered = _filtered_references(job.command, allowed)
+    # JS_HOME and the toolchain names reach the command without being allowed.
+    filtered = _filtered_references(job.command, allowed | set(safe_env))
     if filtered:
         allowed_names = ",".join(sorted(allowed)) or '<none>'
         present_names = ",".join(sorted(safe_env)) or '<none>'

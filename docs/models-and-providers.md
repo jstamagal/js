@@ -146,6 +146,8 @@ js -m "model/id" -p "prompt"
 layered config and `JS_MODEL`.
 
 Agent manifests may also declare `model:` and `reasoning:` in `agent.yaml`.
+Either may be `inherit`, which means the same as leaving the key out: the
+run's settings for a main agent, the parent's for a subagent.
 A one-shot `js --agent <id> -p` applies both over the jsrc files; only what the
 run itself names wins over them: `-m` / `--model`, `--reasoning`, a `JS_*` env
 var, or `--extra`. A resumed session stays on the model and effort of its last

@@ -196,6 +196,26 @@ def test_subagent_frontmatter_reasoning_effort(monkeypatch, tmp_path, manifest_v
     assert seen["reasoning_effort"] == expected
 
 
+def test_subagent_inherit_takes_parent_model_and_effort(monkeypatch, tmp_path):
+    prompts = _write_agent_dir(
+        tmp_path / "inherit" / "prompts",
+        manifest="model: inherit\nreasoning: inherit\ntools: []\n",
+    )
+    cfg = replace(_make_cfg(tmp_path, prompts), reasoning_effort="low")
+
+    seen = _capture_single_task_route(monkeypatch, tmp_path, cfg)
+
+    assert seen["model_id"] == "parent-model"
+    assert seen["reasoning_effort"] == "low"
+
+
+def test_apply_agent_model_noops_on_inherit(tmp_path):
+    prompts = _write_agent_dir(tmp_path / "prompts", "agent-model", "model: inherit\ntools: []\n")
+    cfg = _make_cfg(tmp_path, prompts)
+
+    assert persona.apply_agent_model(cfg, persona.load_prompt_spec(prompts), None) is cfg
+
+
 def test_subagent_rejects_a_frontmatter_reasoning_effort_that_is_not_one_word(tmp_path):
     prompts = _write_agent_dir(
         tmp_path / "invalid-reasoning" / "prompts",

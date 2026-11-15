@@ -206,8 +206,16 @@ def _coerce_tool_selectors(path: Path, raw: Any) -> tuple[str, ...]:
 _SAMPLING_KEYS = SAMPLING_FIELDS
 
 
+# The agent.yaml value of `model:` or `reasoning:` that takes the value from
+# the parent (a subagent) or the run's settings (a main agent), as leaving the
+# key out does.
+INHERIT = "inherit"
+
+
 def _coerce_reasoning_effort(path: Path, raw: Any) -> str | None:
     if raw is None:
+        return None
+    if isinstance(raw, str) and raw.strip().lower() == INHERIT:
         return None
     # PyYAML's YAML 1.1 resolver parses an unquoted `off` as False.
     if raw is False:
@@ -220,6 +228,10 @@ def _coerce_reasoning_effort(path: Path, raw: Any) -> str | None:
         raise ValueError(msgs.AGENT_MANIFEST_REASONING_IN.format(path=path, error=error))
     return value
 
+
+def _coerce_model(raw: Any) -> str:
+    model = str(raw or "").strip()
+    return "" if model.lower() == INHERIT else model
 
 
 def _coerce_max_tokens(path: Path, raw: Any) -> int | None:
@@ -327,7 +339,7 @@ def load_agent_manifest(manifest_path: Path) -> PromptSpec:
         system="",
         tool_selectors=_coerce_tool_selectors(manifest_path, manifest.get("tools")),
         sampling=_coerce_sampling(manifest_path, manifest.get("sampling")),
-        model=str(manifest.get("model") or "").strip(),
+        model=_coerce_model(manifest.get("model")),
         secondary_model=str(manifest.get("secondary_model") or "").strip(),
         reasoning_effort=_coerce_reasoning_effort(manifest_path, manifest.get("reasoning")),
         max_output_tokens=_coerce_max_tokens(manifest_path, manifest.get("max_tokens")),

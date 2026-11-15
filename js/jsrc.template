@@ -329,7 +329,8 @@
 # starting its own subagent is depth 2.
 #set SUBAGENT_DEPTH_MAX 2
 
-# Most subagents one task call runs at once.
+# Most subagents running at once, at every depth and from every task call.
+# A subagent waiting on its own subagents does not count.
 #set SUBAGENT_WORKERS_MAX 8
 
 # Subagents run on your current model instead of the one their own agent

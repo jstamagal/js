@@ -374,7 +374,9 @@ to original tool-call order before being appended. See
 as read-only and how shared state is kept consistent.
 
 Inside the `task` tool, multiple task strings run concurrently on the parent's
-event loop, limited by `SUBAGENT_WORKERS_MAX`. Cancelling the parent cancels
+event loop. `SUBAGENT_WORKERS_MAX` caps the subagents running at once across
+the whole process; a parent blocked on its children lends them its slot.
+Cancelling the parent cancels
 its foreground children in both the REPL and one-shot mode.
 
 See [Subagents](subagents.md).

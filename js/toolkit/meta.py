@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from .. import snippets
 
+from collections import deque
 from dataclasses import dataclass, replace
-from contextlib import contextmanager, nullcontext
+from contextlib import asynccontextmanager, contextmanager, nullcontext
 from contextvars import ContextVar
 from pathlib import Path
 import asyncio
 import fcntl
 import os
+import threading
 import time
 from typing import Any
 
@@ -50,6 +52,131 @@ _LAUNCH_KIND: ContextVar[str] = ContextVar("js_subagent_launch_kind", default="t
 # subagent_start fields, it returns the window (`subagent_windows.SubagentWindow`)
 # or None when none is free. The REPL screen sets it; None means no windows.
 window_opener: ContextVar[Any] = ContextVar("js_subagent_window_opener", default=None)
+
+
+class _Waiter:
+    __slots__ = ("loop", "future", "limit", "granted")
+
+    def __init__(self, loop: asyncio.AbstractEventLoop, limit: int) -> None:
+        self.loop = loop
+        self.future: asyncio.Future[None] = loop.create_future()
+        self.limit = limit
+        self.granted = False
+
+
+class SubagentGate:
+    """Process-wide count of running subagents, held to SUBAGENT_WORKERS_MAX.
+
+    Subagents run on more than one event loop (the REPL's, a `-p` run's, a
+    background job's private loop), so the count sits behind a thread lock and
+    a waiter is woken on its own loop. Waiters are served in arrival order.
+    Each acquire carries the limit its caller's settings give."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._running = 0
+        self._waiters: deque[_Waiter] = deque()
+
+    @property
+    def running(self) -> int:
+        return self._running
+
+    async def acquire(self, limit: int) -> None:
+        loop = asyncio.get_running_loop()
+        with self._lock:
+            if not self._waiters and self._running < limit:
+                self._running += 1
+                return
+            waiter = _Waiter(loop, limit)
+            self._waiters.append(waiter)
+        try:
+            await waiter.future
+        except BaseException:
+            with self._lock:
+                if waiter.granted:
+                    self._release_locked()
+                else:
+                    self._waiters.remove(waiter)
+                    self._wake_locked()
+            raise
+
+    def release(self) -> None:
+        with self._lock:
+            self._release_locked()
+
+    def _release_locked(self) -> None:
+        self._running -= 1
+        self._wake_locked()
+
+    def _wake_locked(self) -> None:
+        while self._waiters and self._running < self._waiters[0].limit:
+            waiter = self._waiters.popleft()
+            waiter.granted = True
+            self._running += 1
+            try:
+                waiter.loop.call_soon_threadsafe(_grant, waiter.future)
+            except RuntimeError:  # its loop is closed: nobody is waiting
+                self._running -= 1
+
+
+def _grant(future: asyncio.Future[None]) -> None:
+    if not future.done():
+        future.set_result(None)
+
+
+_GATE = SubagentGate()
+
+
+@dataclass
+class _Slot:
+    """The gate slot one running subagent holds. While it waits on its own
+    subagents it lends the slot to them, so a parent blocked on its children
+    never holds a place they need."""
+
+    limit: int
+    held: bool = True
+    lent: int = 0
+    # False once its subagent run is over; a later turn in its window runs
+    # outside the gate.
+    active: bool = True
+
+
+# The slot of the subagent this coroutine runs in; None in the main agent.
+_SLOT: ContextVar[_Slot | None] = ContextVar("js_subagent_slot", default=None)
+
+
+@asynccontextmanager
+async def _lend_slot():
+    """Give up this subagent's slot while it waits on subagents it started."""
+    slot = _SLOT.get()
+    if slot is None or not slot.active:
+        yield
+        return
+    slot.lent += 1
+    if slot.held:
+        slot.held = False
+        _GATE.release()
+    try:
+        yield
+    except Exception:
+        await _take_back(slot)
+        raise
+    except BaseException:
+        # Cancelled: the subagent is ending, it needs no slot to end.
+        slot.lent -= 1
+        raise
+    else:
+        await _take_back(slot)
+
+
+async def _take_back(slot: _Slot) -> None:
+    slot.lent -= 1
+    if slot.lent == 0 and not slot.held and slot.active:
+        await _GATE.acquire(slot.limit)
+        if slot.lent or slot.held or not slot.active:
+            _GATE.release()
+        else:
+            slot.held = True
 
 
 def _route(model: str, provider: str | None) -> str:
@@ -565,12 +692,11 @@ async def _fan_out_async(indexed_items: list[tuple[int, Any]], coro_factory) -> 
     return results
 
 
-def _subagent_worker_cap(context: ToolContext, total: int) -> int:
-    """Concurrency ceiling for one fan-out: at most `total` workers, never above
-    SUBAGENT_WORKERS_MAX."""
+def _subagent_worker_cap(context: ToolContext) -> int:
+    """SUBAGENT_WORKERS_MAX as ``context`` has it: the most subagents running at
+    once in the whole process."""
     default = _settings.default_value("SUBAGENT_WORKERS_MAX")
-    limit = int_or_default(getattr(context, "subagent_max_workers", default), default, minimum=1)
-    return max(1, min(total, limit))
+    return int_or_default(getattr(context, "subagent_max_workers", default), default, minimum=1)
 
 
 def _prepare_fan_out(
@@ -587,8 +713,10 @@ def _prepare_fan_out(
     Returns ``(error_message, None)`` on a validation/depth failure, else
     ``(None, (indexed_items, coro_factory))``. Shared verbatim by the sync
     ``task`` (``-p``/bench) and async ``task_async`` (REPL) paths so
-    the two rails can never drift. Each coroutine is gated by a shared semaphore
-    so a wide (or nested) fan-out never runs more than the worker cap at once."""
+    the two rails can never drift. Each coroutine takes a slot of the
+    process-wide gate, so subagents at every depth and from every call together
+    never run more than SUBAGENT_WORKERS_MAX at once; a subagent waiting on its
+    own subagents lends them its slot."""
     if not agent_id:
         return "ERROR: task requires agent_id", None
     if not isinstance(tasks, list):
@@ -630,16 +758,24 @@ def _prepare_fan_out(
     reg_flags = () if getattr(parent_cfg, "lock_subagent_model", False) else ("model_override",)
     full_registry = registry_factory(getattr(parent_cfg, "prompt_roots", None), flags=reg_flags)
     total = len(normalized_items)
-    gate = asyncio.Semaphore(_subagent_worker_cap(context, total))
+    limit = _subagent_worker_cap(context)
 
     def _coro(idx: int, item: Any):
         async def _gated() -> str:
             _LAUNCH_KIND.set(kind)
-            async with gate:
+            await _GATE.acquire(limit)
+            slot = _Slot(limit)
+            _SLOT.set(slot)
+            try:
                 return await worker(
                     idx, total, item, context, parent_cfg, full_registry, agent_id, session_id, model,
                     **({"reasoning": reasoning} if reasoning else {}),
                 )
+            finally:
+                slot.active = False
+                if slot.held:
+                    slot.held = False
+                    _GATE.release()
 
         return _gated()
 
@@ -784,7 +920,8 @@ async def task_async(
             job.kill()
             await task_jobs.wait_async(job, task_jobs.KILL_GRACE_S)
         elif action == "wait":
-            await task_jobs.wait_async(job, _wait_limit(timeout))
+            async with _lend_slot():
+                await task_jobs.wait_async(job, _wait_limit(timeout))
         return task_jobs.report(job, action, was_running=was_running)
     agent_id = str(agent_id).strip()
     model = str(model or "").strip()
@@ -796,7 +933,8 @@ async def task_async(
     indexed_items, coro_factory = prepared
     if _flag(background):
         return _start_background(indexed_items, coro_factory, agent_id, session_id, context, on_loop=True)
-    results = await _fan_out_async(indexed_items, coro_factory)
+    async with _lend_slot():
+        results = await _fan_out_async(indexed_items, coro_factory)
     context.invalidate_search_cache()
     return _assemble_task_results(results, agent_id, session_id)
 

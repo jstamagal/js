@@ -206,7 +206,9 @@ SUBAGENT_DEPTH_MAX
     Maximum recursive task/subagent depth.
 
 SUBAGENT_WORKERS_MAX
-    Maximum concurrent subagent workers per task call; minimum 1.
+    Most subagents running at once in the whole process, at every depth and
+    from every task call; minimum 1. A subagent waiting on its own subagents
+    does not count.
 
 SWARM_ACTIVE_MAX
     How many agents of an in-process swarm may be mid-turn at once; 0 is no

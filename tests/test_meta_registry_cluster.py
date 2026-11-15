@@ -1,7 +1,7 @@
 """Cluster coverage for the meta/registry fan-out fixes:
 
 - session_id + multiple tasks is rejected cleanly (never silently shares a file).
-- one fan-out never runs more workers than the width cap.
+- subagents never run more workers than the cap, across the whole tree.
 - the subagent-model lock strips the `model` override at every depth.
 - a typo'd exact tool selector warns instead of silently shrinking the surface.
 """
@@ -104,6 +104,77 @@ def test_worker_cap_defaults_below_the_dispatch_pool(monkeypatch):
     asyncio.run(meta.task_async(tasks=[f"t{n}" for n in range(20)], agent_id="worker", context=ctx))
 
     assert peak <= settings.default_value("SUBAGENT_WORKERS_MAX")
+
+
+def _nested_probe(cap: int, depth_max: int, width: int, seen: list[int]):
+    """A worker that fans out `width` children until `depth_max`, recording how
+    many gate slots are taken while it runs."""
+
+    async def probe(idx, total, item, context, parent_cfg, full_registry, agent_id, session_id, model=""):
+        child = ToolContext()
+        child.config = context.config
+        child.subagent_max_workers = cap
+        child.task_max_depth = depth_max
+        child.task_depth = getattr(context, "task_depth", 0) + 1
+        seen.append(meta._GATE.running)
+        await asyncio.sleep(0.005)
+        if child.task_depth < depth_max:
+            await meta.task_async(tasks=[f"t{n}" for n in range(width)], agent_id="worker", context=child)
+        seen.append(meta._GATE.running)
+        return "done"
+
+    return probe
+
+
+def _tree_ctx(cap: int, depth_max: int) -> ToolContext:
+    ctx = _ctx()
+    ctx.subagent_max_workers = cap
+    ctx.task_max_depth = depth_max
+    return ctx
+
+
+def test_worker_cap_holds_across_the_whole_tree(monkeypatch):
+    seen: list[int] = []
+    monkeypatch.setattr(meta, "_run_one_task_async", _nested_probe(4, 4, 4, seen))
+
+    asyncio.run(meta.task_async(tasks=[f"t{n}" for n in range(4)], agent_id="worker", context=_tree_ctx(4, 4)))
+
+    # 4 + 16 + 64 + 256 subagents ran, two samples each.
+    assert len(seen) == 2 * (4 + 16 + 64 + 256)
+    assert max(seen) <= 4
+    assert meta._GATE.running == 0
+
+
+def test_parent_waiting_on_children_lends_its_slot(monkeypatch):
+    # One slot, three levels: a parent that kept its slot while waiting would
+    # leave its child no slot to run in.
+    seen: list[int] = []
+    monkeypatch.setattr(meta, "_run_one_task_async", _nested_probe(1, 3, 2, seen))
+
+    async def run():
+        return await asyncio.wait_for(
+            meta.task_async(tasks=["a", "b"], agent_id="worker", context=_tree_ctx(1, 3)), 10)
+
+    assert asyncio.run(run()).count("done") == 2
+    assert max(seen) <= 1
+    assert meta._GATE.running == 0
+
+
+def test_cancelled_waiter_gives_back_nothing_it_did_not_take():
+    async def run():
+        gate = meta.SubagentGate()
+        await gate.acquire(1)
+        waiter = asyncio.ensure_future(gate.acquire(1))
+        await asyncio.sleep(0)
+        waiter.cancel()
+        await asyncio.sleep(0)
+        gate.release()
+        await gate.acquire(1)
+        held = gate.running
+        gate.release()
+        return held, gate.running
+
+    assert asyncio.run(run()) == (1, 0)
 
 
 # --------------------------------------------------------------------------

@@ -363,7 +363,7 @@ No task, no question? Answer with fact about 🦍:
 
 - **Read** tool list.
 - Every tool call also tests harness; 🦍 is sensor. Any weirdness, threshold zero: schema says one thing, tool does another; description lies; output shape off; error smells wrong.
-- File it: `gh issue create -R jstamagal/js`. Exact tool, exact input, expected vs got.
+- Fix not major surgery? Fix it in js, same session, then say what was fixed. Major surgery? File it: `gh issue create -R jstamagal/js`. Exact tool, exact input, expected vs got.
 !{file %%JS_HOME%%/custom/tools.md}
 
 ---

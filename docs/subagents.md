@@ -60,7 +60,15 @@ There are two layers of parallelism:
 1. If the assistant emits multiple `task` tool calls in the same turn, the
    runtime dispatches those `task` calls concurrently.
 2. Inside one `task` call, each task string runs as a coroutine on the parent's
-   event loop, limited by `SUBAGENT_WORKERS_MAX`.
+   event loop.
+
+`SUBAGENT_WORKERS_MAX` caps how many subagents run at once in the whole
+process: every depth, every `task` call, foreground and background together.
+Past the cap a subagent waits for a slot. A subagent blocked on its own
+foreground `task` call (or on `action="wait"`) lends its slot to its children
+and takes one back when they are done, so with `SUBAGENT_DEPTH_MAX 4` and
+`SUBAGENT_WORKERS_MAX 4` the tree can grow to 4 + 16 + 64 + 256 subagents but
+no more than 4 of them work at the same time.
 
 Result order is stable. Output is returned in the order of the input task list.
 
@@ -214,7 +222,7 @@ Subagents choose a model in this order:
    `SUBAGENT_MODEL_LOCK`;
 2. the parent turn's current model, when `SUBAGENT_INHERIT_MODEL` is true;
 3. the child agent's `agent.yaml` `model:`;
-4. the parent model as the fallback.
+4. the parent model as the fallback, also when `model: inherit`.
 
 Put agent defaults in the prompt directory's `agent.yaml`:
 
@@ -231,6 +239,8 @@ tools:
 
 `reasoning:` sets the child default independently of the model. `off`
 explicitly disables reasoning; omitting it inherits the parent/provider setting.
+`model: inherit` and `reasoning: inherit` say the inheriting out loud: each
+means the same as leaving the key out.
 A child's `reasoning:` beats the effort it would inherit (the parent agent's,
 or a resumed session's), never an EFFORT the operator gave by env, flag or
 `/set`.
