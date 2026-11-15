@@ -333,8 +333,9 @@ def discover_skills(
     # because two same-named skills in one scope is ambiguity, not layering.
     # Run from $HOME, the project dirs are the global dirs: a project root that
     # resolves to a global root is skipped, so its skills keep the global label.
+    shared_project = paths.shared_skills_dir() if project_dir.resolve() == paths.user_home().resolve() else project_dir / ".agents" / "skills"
     project_roots = tuple(
-        root for root in (project_dir / ".agents" / "skills", project_dir / ".js" / "skills")
+        root for root in (shared_project, paths.project_home(project_dir) / "skills")
         if not any(_same_file(root, global_dir) for global_dir in (user_root, global_root))
     )
     layers = (

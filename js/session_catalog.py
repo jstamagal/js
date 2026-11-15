@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from . import messages as msgs
-from . import session_store
+from . import paths, session_store
 from . import session_text
 from . import usage as usage_mod
 
@@ -243,6 +243,7 @@ def record_session_start(
         "version": _METADATA_VERSION,
         "ts": time.time() if ts is None else ts,
         "cwd": str(Path(cwd).expanduser().resolve(strict=False)),
+        "home": str(paths.home()),
         "caller_key": caller_key,
         "job_id": job_id,
         "agent": agent,

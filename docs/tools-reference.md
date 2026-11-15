@@ -330,7 +330,7 @@ never reads the keystrokes meant for js's input line.
 `shell` runs `SHELL_PROGRAM` (default `bash`) with `-c`. bash and zsh also get
 `-o pipefail`, so a pipeline reports the failure of any stage.
 
-The command's environment holds only the names in `SHELL_ENV_KEEP` and
+The command's environment always includes the resolved `JS_HOME`, plus the names in `SHELL_ENV_KEEP` and
 the `env` parameter. When the command text references (`$NAME`, `${NAME}`) a
 variable that js has but the command's environment does not, the result
 carries an `environment=filtered unset=NAME allowed=… present=…` line after the

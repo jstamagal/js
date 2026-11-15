@@ -61,6 +61,7 @@ js exports these variables before it expands a prompt:
 | Variable | Value |
 | --- | --- |
 | `JS_ROOT` | The directory holding js itself: the `js` package, `defaults/agents/` and `tools/`. The stock agent runs `sh "$JS_ROOT/tools/envctx.c"`. |
+| `JS_HOME` | The resolved absolute profile directory, selected by `--home DIR`, `JS_HOME`, or `~/.js`. Also available as `%%JS_HOME%%`. |
 | `JS_SHELL` | The shell the shell tool runs commands in (`SHELL_PROGRAM`, resolved on PATH). |
 | `JS_SECRET_PATTERNS` | The secret-patterns file envctx's scrubber reads: `~/.js/secret-patterns` when it exists, else `defaults/secret-patterns` in `JS_ROOT`. |
 
@@ -128,7 +129,7 @@ stderr goes into the warning; a succeeding one's stderr is discarded.
   in a temp dir under js's tmp dir, but the snippet itself runs in the
   invocation directory, so it sees the same paths `!{sh pwd}` does.
 - **Environment.** Directives inherit js's environment, including the
-  exported `JS_ROOT`, `JS_SHELL` and `JS_SECRET_PATTERNS`.
+  exported `JS_ROOT`, `JS_HOME`, `JS_SHELL` and `JS_SECRET_PATTERNS`.
 - **How often.** The system prompt is expanded each time js loads the agent:
   every js run, `--session` resumes included. A side effect in a prompt file
   (making a directory, writing a file, downloading something) happens again on

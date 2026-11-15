@@ -470,7 +470,7 @@ class Jail:
         names a file in the private directory, anywhere else itself."""
         path = Path(os.path.abspath(path))
         # `argv` binds the private ~/.js/tmp last, over DIR and every bind.
-        js_tmp = paths.user_home() / ".js" / "tmp"
+        js_tmp = paths.home() / "tmp"
         if _under(path, js_tmp):
             return self.js_tmp / path.relative_to(js_tmp)
         if any(_under(path, b.path) or _under(path, _real(b.path))
@@ -496,7 +496,7 @@ class Jail:
             # Under a /tmp bind the private one shows only at its own path.
             if not self.tmp_covered:
                 views[str(private / "tmp")] = "/tmp"
-            views[str(private / "js-tmp")] = str(paths.user_home() / ".js" / "tmp")
+            views[str(private / "js-tmp")] = str(paths.home() / "tmp")
         # A host path ends where a file name character does not follow.
         pattern = "(" + "|".join(re.escape(p) for p in sorted(views, key=len, reverse=True)) + r")(?![\w.-])"
         return re.sub(pattern, lambda m: views[m.group(1)], text)

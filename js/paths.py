@@ -1,13 +1,14 @@
 """Every location js keeps outside a project, and nothing else.
 
-One home: `~/.js/`. Project-local `.js/` files (jsrc, jsrc.local, agents,
-skills, toolbox) stay with the project and are not named here.
+One home: `--home DIR`, else `$JS_HOME`, else `~/.js/`. Startup resolves it
+once to an absolute directory. Project-local `.js/` files (jsrc, jsrc.local,
+agents, skills, commands, toolbox) stay with their project.
 
 `ensure_home()` creates every directory of the layout on each start, so the
 whole structure is always there:
 
     ~/.js/
-      jsrc           written with every setting on the first run
+      jsrc           operator overrides; /save writes session changes
       JS.md  tools.yaml  keys   files; not created, only read
       agents/  skills/  toolbox/
       logins/        credentials and the model-list cache
@@ -31,6 +32,7 @@ import os
 from pathlib import Path
 
 _ROOT = Path(os.path.realpath(__file__)).parent.parent
+_HOME: Path | None = None
 _PROJECT_SCOPES = frozenset({"agents", "skills", "commands", "toolbox", "jsrc", "jsrc.local"})
 
 
@@ -39,7 +41,40 @@ def user_home() -> Path:
 
 
 def home() -> Path:
-    return user_home() / ".js"
+    """The resolved invocation profile; direct callers also honor JS_HOME."""
+    if _HOME is not None:
+        return _HOME
+    value = os.environ.get("JS_HOME") or user_home() / ".js"
+    return Path(value).expanduser().resolve(strict=False)
+
+
+def configure_home(directory: str | Path | None = None) -> Path:
+    """Resolve and create the selected profile once at invocation startup."""
+    global _HOME
+    value = directory if directory is not None else os.environ.get("JS_HOME") or user_home() / ".js"
+    selected = Path(value).expanduser().resolve(strict=False)
+    if selected.exists() and not selected.is_dir():
+        raise ValueError(f"home is not a directory: {selected}")
+    try:
+        selected.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ValueError(f"cannot create home {selected}: {exc}") from exc
+    _HOME = selected
+    os.environ["JS_HOME"] = str(selected)
+    return selected
+
+
+def custom_home() -> bool:
+    """Whether this profile is separate from the operator's default profile."""
+    return home() != (user_home() / ".js").resolve(strict=False)
+
+
+def project_home(cwd: Path | None = None) -> Path:
+    """Project setup, with the operator's home using the selected profile."""
+    root = (cwd or Path.cwd()) / ".js"
+    if custom_home() and root.resolve(strict=False) == (user_home() / ".js").resolve(strict=False):
+        return home()
+    return root
 
 
 def defaults_dir() -> Path:
@@ -49,7 +84,7 @@ def defaults_dir() -> Path:
 
 def layers() -> tuple[Path, ...]:
     """Setup roots, lowest priority first. Project files use their existing scopes."""
-    return tuple(dict.fromkeys((defaults_dir(), home(), Path.cwd() / ".js")))
+    return tuple(dict.fromkeys((defaults_dir(), home(), project_home())))
 
 
 def _file_layers(rel: str | Path) -> tuple[Path, ...]:
@@ -89,7 +124,9 @@ def global_skills_dir() -> Path:
 
 
 def shared_skills_dir() -> Path:
-    """`~/.agents/skills`, the skill root other agent tools read too."""
+    """Cross-client skills: ~/.agents/skills, isolated inside a custom profile."""
+    if custom_home():
+        return home() / ".agents" / "skills"
     return user_home() / ".agents" / "skills"
 
 

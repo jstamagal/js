@@ -56,7 +56,7 @@ def default_roots(*roots: Path) -> tuple[Path, ...]:
     project-local agent is not pruned as dead."""
     ordered: list[Path] = []
     seen: set[Path] = set()
-    for root in (repo_prompts_dir(), paths.global_agents_dir(), Path.cwd() / ".js" / "agents", *roots):
+    for root in (repo_prompts_dir(), paths.global_agents_dir(), paths.project_home() / "agents", *roots):
         key = root.resolve(strict=False)
         if key not in seen:
             seen.add(key)

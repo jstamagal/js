@@ -1,5 +1,23 @@
 # Configuration And Sessions
 
+## Selecting a profile
+
+`js --home DIR` uses `DIR` for the complete js home. The flag overrides
+`JS_HOME`; without either, the home is `~/.js`. Startup resolves it once to an
+absolute directory and creates a missing directory. An existing file is an
+error. The resolved directory is exported as `JS_HOME` to prompts and shell
+commands; `%%JS_HOME%%` is the same value during prompt expansion.
+
+Each selected profile owns its config, agents, themes, skills, snippets,
+commands, sessions, credentials, logs, state, cache, work and tmp. A separate
+profile does not run migration from the operator's legacy locations or load
+the operator's `~/.agents/skills`. Its corresponding cross-client skill root
+is `<home>/.agents/skills`. Project `.js/` and `.agents/skills` layers still
+apply; starting in the operator's home uses the selected profile for those
+home-level layers. Session start records include `home`, and Continue hints
+carry `--home` for a separate profile.
+
+
 Configuration is read by `js.config.from_env()` at run start and stored in a
 frozen `Config` dataclass. CLI flags override individual runs where supported.
 

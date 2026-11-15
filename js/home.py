@@ -634,6 +634,8 @@ def migrate_once(out: TextIO | None = None, *, on_step=None, on_error=None, shou
     """The startup migration: runs when an old location exists and the marker
     does not, then writes the marker. With nothing to move it touches nothing.
     Each step is printed as it is done."""
+    if paths.custom_home():
+        return []
     marker = paths.home_migration_marker()
     if should_migrate is not None and not should_migrate(marker):
         return []

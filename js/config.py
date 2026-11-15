@@ -357,7 +357,7 @@ def _preset_config_paths(
         if not name:
             continue
         global_path = _paths.global_config_file().with_name(f"jsrc.{name}")
-        local_path = project_dir / ".js" / f"jsrc.{name}"
+        local_path = _paths.project_home(project_dir) / f"jsrc.{name}"
         if not ignore_global_config:
             paths.append(global_path)
         if not ignore_local_config and not _same_config_path(local_path, global_path):
@@ -410,10 +410,10 @@ def jsrc_paths(
     if not ignore_global_config:
         paths.append(global_path)
     if not ignore_local_config:
-        local_path = project_dir / ".js" / "jsrc"
+        local_path = _paths.project_home(project_dir) / "jsrc"
         if not _same_config_path(local_path, global_path):
             paths.append(local_path)
-        paths.append(project_dir / ".js" / "jsrc.local")
+        paths.append(_paths.project_home(project_dir) / "jsrc.local")
     # Presets layer on top of the base jsrc files (still below env / --extra).
     paths.extend(_preset_config_paths(
         presets,
@@ -611,7 +611,7 @@ def from_env(
     bind_formats(js_root_settings)
 
     prompt_roots = assembly.prompt_roots if assembly.prompt_roots is not None else (
-        _paths.defaults_dir() / "agents", _paths.global_agents_dir(), project_dir / ".js" / "agents")
+        _paths.defaults_dir() / "agents", _paths.global_agents_dir(), _paths.project_home(project_dir) / "agents")
 
     return _login_defaults.for_turn(Config(
         agent_id=agent_id,

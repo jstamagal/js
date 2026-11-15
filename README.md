@@ -90,6 +90,12 @@ in [docs/tools-reference.md](docs/tools-reference.md), not compatibility
 spellings like `fs_read`, `fs_write`, `cat`, `grep`, or `semantic_search`.
 
 ## Config And Model Defaults
+
+`--home DIR` selects a complete profile; otherwise `JS_HOME` or `~/.js` is used.
+The chosen directory is resolved once and created if needed. Config, agents,
+skills, sessions, logs, state, cache and scratch data stay within that profile.
+Project `.js/` layers still apply in the working directory.
+
 Config is a script: each line of a `jsrc` file is a `set <key> <value>` command,
 applied at startup. Files layer lowest-to-highest as `defaults/jsrc` (shipped in the
 package: one line per setting, the built-in defaults), `~/.js/jsrc`,

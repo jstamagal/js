@@ -3141,6 +3141,8 @@ def _turn_answer(messages: list[dict]) -> str:
 def _say_continue(telemetry: runtime.Telemetry, hint: str, *, resume_prefix: str | None,
                   agent: str | None, model: str | None) -> None:
     cont = resume_prefix or "js"
+    if _paths.custom_home():
+        cont += f" --home {shlex.quote(str(_paths.home()))}"
     # Plain -p has no resume_prefix; a resume runs the `DEFAULT_AGENT`
     # setting unless told otherwise, so a non-default agent MUST
     # be echoed or the session continues under the wrong agent.
@@ -4652,14 +4654,23 @@ def main(argv: list[str] | None = None) -> int:
 
 @_session_scope
 def _main(argv: list[str] | None = None) -> int:
-    dispatch_argv = argv if argv is not None else sys.argv[1:]
+    from .home_cli import configure_home
+    try:
+        dispatch_argv = configure_home(list(argv if argv is not None else sys.argv[1:]))
+    except ValueError as exc:
+        msgs.warn(msgs.FAILED, error=exc)
+        return 2
     _blocking_stdio()
     # Before anything reads or writes ~/.js: move the old locations in, once,
     # then make sure every directory of the layout is there.
     _home.migrate_once()
     with contextlib.suppress(OSError):
         _paths.ensure_home()
-    _home.sweep_tmp()
+    try:
+        _home.sweep_tmp()
+    except (OSError, ValueError) as exc:
+        msgs.warn(msgs.FAILED, error=exc)
+        return 2
     # Handle login/logout before argparse so they don't require a valid agent/config.
     # None of them take -C, so the cwd is already final and .env can load here;
     # otherwise `js --login x` and `js --login=x` (argparse path) would disagree.
@@ -4759,9 +4770,10 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--printonly", dest="printonly", metavar="LETTERS[:COUNT][:PATH]", nargs="?", const="a",
                         help=msgs.OPT_PRINTONLY.words())
     parser.add_argument("target", nargs="?", help=msgs.OPT_TARGET.words())
+    parser.add_argument("--home", metavar="DIR", help=msgs.OPT_HOME.words())
     _refuse_glued_short_options(parser, dispatch_argv)
     _validate_output_argv(parser, dispatch_argv)
-    args = parser.parse_args(argv)
+    args = parser.parse_args(dispatch_argv)
     _validate_output_flags(parser, args)
     if args.target is not None and not args.commit:
         parser.error(msgs.UNEXPECTED_ARGUMENT.text(word=args.target))
@@ -5139,7 +5151,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         automatic_agent = _invocation_agent(args, presets)
         automatic_dir = P._most_specific_prompt_dir(
             automatic_agent, _paths.defaults_dir() / "agents",
-            _paths.global_agents_dir(), Path.cwd() / ".js" / "agents",
+            _paths.global_agents_dir(), _paths.project_home() / "agents",
         )
     except (ValueError, OSError) as exc:
         msgs.warn(msgs.FAILED, error=exc)

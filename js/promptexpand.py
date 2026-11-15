@@ -82,6 +82,7 @@ def session_variables(cfg) -> dict[str, str]:
     """Built-in values for the session and effective model in ``cfg``."""
     path = Path(getattr(cfg, "session_file", os.devnull)).expanduser().absolute()
     return {
+        "JS_HOME": str(paths.home()),
         "CURRENT_SESSION": path.stem if path != Path(os.devnull) else "",
         "CURRENT_SESSION_FULLPATH": str(path),
         "CURRENT_SESSION_AGENT": getattr(cfg, "agent_id", ""),

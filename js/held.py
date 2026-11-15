@@ -227,7 +227,7 @@ def _orientation(context: Any, target_raw: str | None) -> list[str]:
     else:
         writable = [str(active.root)]
         writable += [str(b.path) for b in active.binds(getattr(context, "jail_bind", ())) if b.rw]
-        writable += ["/tmp", str(paths.user_home() / ".js" / "tmp")]
+        writable += ["/tmp", str(paths.home() / "tmp")]
         lines = ['You: agent {agent}, model {model}; cwd {cwd}; jail root {root} (writable: {writable}).'.format(
             agent=agent, model=model, cwd=context.cwd, root=active.root,
             writable=", ".join(dict.fromkeys(writable)))]

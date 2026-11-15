@@ -13,6 +13,9 @@ def _write(path, text):
 
 def test_find_uses_files_and_preserves_empty_override(tmp_path, monkeypatch):
     stock, own = (tmp_path / name for name in ('stock', 'own'))
+    user = tmp_path / 'user'
+    user.mkdir()
+    monkeypatch.setenv('HOME', str(user))
     monkeypatch.setattr(paths, 'defaults_dir', lambda: stock)
     monkeypatch.setattr(paths, 'home', lambda: own)
     monkeypatch.chdir(tmp_path)
@@ -116,3 +119,15 @@ def test_unknown_theme_names_searched_directories():
     assert all(str(root / 'themes') in error for root in paths.layers()[:2])
     with pytest.raises(ValueError):
         fset.theme_entries('missing')
+
+
+def test_unknown_theme_in_jsrc_exits_two_before_model(tmp_path, monkeypatch, capsys):
+    from js import cli, runtime
+    monkeypatch.chdir(tmp_path)
+    _write(paths.home() / 'jsrc', 'fset THEME missing-theme\n')
+    monkeypatch.setattr(runtime.model_client, 'stream_model_async',
+        lambda **kwargs: pytest.fail('provider reached'))
+    assert cli.main(['-p', 'hello']) == 2
+    error = capsys.readouterr().err
+    assert 'missing-theme' in error
+    assert all(str(root / 'themes') in error for root in paths.layers()[:2])

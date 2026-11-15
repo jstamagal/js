@@ -607,6 +607,7 @@ def expand_agent_text(text: str, cfg) -> str:
     program = str(settings.knob(getattr(cfg, "settings", None), "SHELL_PROGRAM"))
     environ = dict(os.environ)
     environ["JS_SHELL"] = shutil.which(program) or program
+    environ["JS_HOME"] = str(paths.home())
     # JS_ROOT is where js itself is: the directory holding the js package,
     # defaults/ and tools/, so a prompt reaches `$JS_ROOT/tools/envctx.c`
     # wherever js is installed.

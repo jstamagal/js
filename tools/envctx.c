@@ -26,17 +26,19 @@
   beside tools/.
 //
 set -e
+JS_HOME=${JS_HOME:-$HOME/.js}
+export JS_HOME
 _src=$0
 if [ -z "$JS_SECRET_PATTERNS" ]; then
   case $_src in *[/]*) _dir=${_src%[/]*} ;; *) _dir=. ;; esac
-  if [ -f "$HOME/.js/secret-patterns" ]; then
-    JS_SECRET_PATTERNS=$HOME/.js/secret-patterns
+  if [ -f "$JS_HOME/secret-patterns" ]; then
+    JS_SECRET_PATTERNS=$JS_HOME/secret-patterns
   else
     JS_SECRET_PATTERNS=$_dir/../defaults/secret-patterns
   fi
   export JS_SECRET_PATTERNS
 fi
-_cache=$HOME/.js/cache
+_cache=$JS_HOME/cache
 _bin=$_cache/envctx.bin
 if [ ! -x "$_bin" ] || [ "$_src" -nt "$_bin" ]; then
   mkdir -p "$_cache"
@@ -1088,7 +1090,11 @@ int main(void) {
       hash = hash * 33u + (unsigned char)*p;
 
     char cachedir[900], cachefile[1024];
-    snprintf(cachedir, sizeof cachedir, "%s/.js/cache", HOMEDIR);
+    const char *js_home = getenv("JS_HOME");
+    if (js_home && *js_home)
+      snprintf(cachedir, sizeof cachedir, "%s/cache", js_home);
+    else
+      snprintf(cachedir, sizeof cachedir, "%s/.js/cache", HOMEDIR);
     snprintf(cachefile, sizeof cachefile, "%s/envctx.tools.%lx", cachedir,
              hash);
 

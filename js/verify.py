@@ -11,7 +11,7 @@ def verify(agent: str | None = None) -> list[str]:
     errors: list[str] = []
     home = paths.home()
     project = Path.cwd()
-    roots = (paths.defaults_dir() / 'agents', paths.global_agents_dir(), project / '.js' / 'agents')
+    roots = (paths.defaults_dir() / 'agents', paths.global_agents_dir(), paths.project_home(project) / 'agents')
 
     def check(path, action):
         try:
@@ -32,8 +32,8 @@ def verify(agent: str | None = None) -> list[str]:
         validate_agent_id(agent)
         directories = [persona._most_specific_prompt_dir(agent, *roots)]
     else:
-        configs = {paths.defaults_dir() / 'jsrc', home / 'jsrc', project / '.js' / 'jsrc', project / '.js' / 'jsrc.local'}
-        for directory in (home, project / '.js'):
+        configs = {paths.defaults_dir() / 'jsrc', home / 'jsrc', paths.project_home(project) / 'jsrc', paths.project_home(project) / 'jsrc.local'}
+        for directory in (home, paths.project_home(project)):
             configs.update(directory.glob('jsrc.*'))
         for path in sorted(configs):
             if path.is_file():
@@ -56,8 +56,9 @@ def verify(agent: str | None = None) -> list[str]:
                     policy.expand(profile.tools or (), config, f"{directory} models")
         check(directory, validate_agent)
 
+    shared_project = paths.shared_skills_dir() if project.resolve() == paths.user_home().resolve() else project / '.agents' / 'skills'
     skill_roots = (skills.BUILTIN_SKILLS_DIR, paths.global_skills_dir(), paths.shared_skills_dir(),
-                   project / '.agents' / 'skills', project / '.js' / 'skills')
+                   shared_project, paths.project_home(project) / 'skills')
     for root in skill_roots:
         for path in skills._skill_paths(root):
             check(path, lambda path=path: skills._index_skill(path, 'verify'))

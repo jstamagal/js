@@ -1099,6 +1099,14 @@ def _apply_jsrc(path: Path, settings: dict, stack: list[Path], warnings: list[st
             # $NAMEs expand once, before the line is read as any command.
             raw = setcmd.expand_line(raw, settings)
             parsed = setcmd.split_command(raw)
+            if parsed is not None and parsed[0] == "fset":
+                name, value = setcmd.first_word(parsed[1])
+                if name.upper() == "THEME" and value:
+                    from . import fset
+
+                    theme = from_line_literal(value)
+                    if theme and fset.theme_path(theme) is None:
+                        raise FileNotFoundError(f"{path}:{lineno}: {fset.theme_error(theme)}")
             error = None
             if parsed is not None and parsed[0] in setcmd.LOAD_VERBS:
                 # A loaded file's lines sit in the jsrc layer too, resolved
@@ -1126,8 +1134,8 @@ def _apply_jsrc(path: Path, settings: dict, stack: list[Path], warnings: list[st
 
 def load_jsrc_files(paths: list[Path], settings: dict) -> list[str]:
     """Apply each existing jsrc script's settings onto ``settings`` in order.
-    Returns a list of human-readable warnings (bad lines) — a single typo
-    never aborts the boot."""
+    Returns human-readable warnings for bad lines. A named missing theme
+    raises FileNotFoundError with the directories searched."""
     warnings: list[str] = []
     for path in paths:
         if path.exists():

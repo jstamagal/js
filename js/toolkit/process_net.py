@@ -485,6 +485,7 @@ def shell(
         configured_allow = _ENV_ALLOW
     allowed = {str(key) for key in configured_allow if str(key)} | set(env or [])
     safe_env = {key: os.environ[key] for key in (*allowed, *_TOOLCHAIN_ENV) if key in os.environ}
+    safe_env["JS_HOME"] = str(paths.home())
     # The managed binaries are downloaded for a command to call by name, so the
     # directory holding them leads PATH. Without this fd, bat and fzf are
     # installed and unreachable.

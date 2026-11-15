@@ -173,7 +173,7 @@ del __js_load
 
 def toolbox_dirs(cwd: Path) -> tuple[Path, Path]:
     """(global, project). Project wins on a name clash, mirroring agent precedence."""
-    return _paths.global_toolbox_dir(), Path(cwd) / ".js" / "toolbox"
+    return _paths.global_toolbox_dir(), _paths.project_home(Path(cwd)) / "toolbox"
 
 
 _EXAMPLES = Path(__file__).with_name("toolbox_examples")

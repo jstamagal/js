@@ -727,6 +727,7 @@ OPT_PRESET = Message(
     "Comma-list and/or repeatable: --preset fast,debug. Looks for jsrc.<name> beside the global jsrc "
     "and in project .js/. Still below env and --extra.")
 OPT_NO_LOCAL_CONFIG = Message("Ignore project .js/jsrc and .js/jsrc.local.")
+OPT_HOME = Message("Use DIR as the complete js profile; overrides JS_HOME.")
 OPT_NO_GLOBAL_CONFIG = Message("Ignore the platform jsrc.")
 OPT_MIGRATE_CONFIG = Message("One-shot: convert a legacy config.toml to jsrc, then exit.")
 OPT_LIST = Message("List saved sessions without loading config or contacting a provider.")
