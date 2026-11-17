@@ -59,14 +59,14 @@ CACHE_BREAK_FRACTION = 0.05
 CACHE_BREAK_MIN_TOKENS = 2000
 
 
-def cache_expired(cfg: Config, context: Any, *, now: float | None = None) -> bool:
+def cache_expired(cfg: Config, context: Any) -> bool:
     """Whether the prompt cache of ``context``'s conversation has outlived
     ``COMPACTION_CACHE_TTL``. No request yet counts as expired."""
     ttl = compaction_settings.get_nonnegative_int(cfg, "COMPACTION_CACHE_TTL")
     last = context.last_request_at
     if ttl == 0 or last is None:
         return True
-    return (time.time() if now is None else now) - last >= ttl
+    return time.time() - last >= ttl
 
 
 def note_response(context: Any, *, model_key: str, cache_read: int | None, now: float) -> str | None:
