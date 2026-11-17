@@ -9,6 +9,7 @@ import shutil
 from pathlib import Path
 
 from ..core import ToolContext, coerce_value
+from ..reads import require_read
 from ..sanitize import int_or_default, text_or_default
 from .helpers import resolve_vault, slugify, today, KIND_FOLDER, KIND_TYPE, KIND_TAG, vault_lock
 
@@ -122,7 +123,7 @@ def wiki_write(
                         f"link, bump source_count), then call again with overwrite=true. This prevents clobber.")
             if existed:
                 content_hash = hashlib.sha256(page.read_bytes()).hexdigest()[:16]
-                guard = context.require_read(page, "overwrite it", content_hash=content_hash)
+                guard = require_read(context, page, "overwrite it", content_hash=content_hash)
                 if guard:
                     return guard
 
@@ -150,8 +151,8 @@ def wiki_write(
                 staged.unlink(missing_ok=True)
             # This context wrote every byte, so its next UPSERT needs no read.
             written_hash = hashlib.sha256(data).hexdigest()[:16]
-            context.replace_read_coverage(page, written_hash, [], len(content.splitlines()), whole_file=True)
-            context.remember_content(page, written_hash, data)
+            context.reads.replace(page, written_hash, [], len(content.splitlines()), whole_file=True)
+            context.reads.remember_content(page, written_hash, data)
     except OSError as exc:
         return f"ERROR: {exc}"
     return f"{'overwrote' if existed else 'wrote'} {page} (type: {ptype})"

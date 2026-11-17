@@ -174,8 +174,8 @@ def test_concurrent_reads_of_one_file_leave_consistent_coverage(tmp_path):
         _dispatch(calls, registry, context)
 
         path = target.resolve()
-        assert context.read_ranges[path] == [(1, 80)]
-        assert path in context.fully_read_paths
+        assert context.reads.coverage(path).ranges == [(1, 80)]
+        assert context.reads.coverage(path).whole
         assert fs.patch(file_path=str(target), old_string="line 55\n", new_string="line 55!\n",
                         context=context).startswith("patched ")
         target.write_text("".join(f"line {n}\n" for n in range(1, 81)), encoding="utf-8")
@@ -207,10 +207,10 @@ def test_a_clip_of_one_parallel_read_keeps_the_other_reads_coverage(tmp_path, mo
     whole = next(m["content"] for m in messages if m.get("tool_call_id") == "whole")
     assert "PARALLEL_RESULTS_MAX" in whole
     path = target.resolve()
-    assert path not in context.fully_read_paths
-    assert context.require_read(path, "edit", line_ranges=[(2995, 2995)]) is None
-    assert context.require_read(path, "edit", line_ranges=[(1500, 1500)]) is not None
-    assert context.require_read(path, "edit", line_ranges=[(1, 1)]) is None
+    assert not context.reads.coverage(path).whole
+    assert context.reads.require(path, "edit", line_ranges=[(2995, 2995)]) is None
+    assert context.reads.require(path, "edit", line_ranges=[(1500, 1500)]) is not None
+    assert context.reads.require(path, "edit", line_ranges=[(1, 1)]) is None
 
 
 def test_cancel_mid_batch_keeps_finished_results_and_starts_nothing_new(tmp_path, monkeypatch):
@@ -294,11 +294,11 @@ def test_a_call_id_scopes_read_coverage_to_its_call(tmp_path):
     with tool_core.call_scope("two"):
         second = fs.fs_read(file_path=str(target), context=context)
 
-    context.record_delivered_read(target.resolve(), second, second.split("\n", 3)[0], "two")
+    context.reads.narrow_to_delivered(target.resolve(), second, second.split("\n", 3)[0], "two")
 
     assert "row 5" in first
-    assert context.read_ranges[target.resolve()] == [(1, 5)]
-    assert target.resolve() not in context.fully_read_paths
+    assert context.reads.coverage(target.resolve()).ranges == [(1, 5)]
+    assert not context.reads.coverage(target.resolve()).whole
 
 
 def test_spilled_parallel_results_are_whole(tmp_path, monkeypatch):

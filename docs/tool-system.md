@@ -268,14 +268,16 @@ when its tool's `read_only_when` accepts its arguments: `ast_search` without
 `apply`, `fetch` as a GET or HEAD without `save`, `browse` without
 `screenshot`. A call that cannot be resolved or parsed is not read-only.
 
-Parallel read-only calls share one `ToolContext`. Read coverage, file hashes
-and known content sit behind `ToolContext._coverage_lock`, and coverage is
-recorded per call id: when the runtime clips a read's result, only that call's
-share is narrowed, and lines another read of the same file delivered stay
-read. The runtime forgets the per-call shares (`settle_reads`) once the batch
-cap has run. The same settle records the line reads the batch delivered whole,
-by call id and a hash of their text; before the next dispatch the runtime keeps
-only those whose text is still in the history (`keep_shown_reads`), so an
+Parallel read-only calls share one `ToolContext`. Its read ledger
+(`ToolContext.reads`, a `ReadLedger` in `js/toolkit/reads.py`) holds read
+coverage, file hashes and known content behind one lock, and records coverage
+per call id: when the runtime clips a read's result, only that call's share is
+narrowed (`narrow_to_delivered`), and lines another read of the same file
+delivered stay read. The runtime forgets the per-call shares (`settle`) once
+the batch cap has run. The same settle records the line reads the batch
+delivered whole, by call id and a hash of their text; before the next dispatch
+the runtime keeps only those whose text is still in the history
+(`keep_shown`), so an
 unchanged re-read returns a note naming the earlier call only while that result
 is there. Trace and telemetry writes hold one lock, so an exchange prints
 whole; spill files are written to a temporary name and renamed.

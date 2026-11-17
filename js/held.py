@@ -238,7 +238,7 @@ def _orientation(context: Any, target_raw: str | None) -> list[str]:
         if resolved is None:
             lines.append(f'Target {_absolute(context, target_raw)}: outside what the jail lets you write.')
         else:
-            lines.append(f'Target {jail.shown(str(resolved))}: exists={str(resolved.exists()).lower()}, read this session={str(resolved in context.read_paths).lower()}.')
+            lines.append(f'Target {jail.shown(str(resolved))}: exists={str(resolved.exists()).lower()}, read this session={str(resolved in context.reads.paths()).lower()}.')
     return lines
 
 

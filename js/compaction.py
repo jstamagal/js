@@ -549,14 +549,14 @@ def _post_compact_rehydration(
     if per_file_tokens is None:
         per_file_tokens = _settings.default_value("COMPACTION_REATTACH_FILE_TOKENS_MAX")
     paths = []
-    for path in list(context.read_paths):
+    for path in context.reads.paths():
         try:
             paths.append(context.resolve_path(path))
         except (OSError, RuntimeError, jail.JailError):
             continue
     if not paths:
         return None
-    # read_paths is a set; order by mtime so "recent" means recent.
+    # The ledger's paths come unordered; order by mtime so "recent" means recent.
     def _mtime(p):
         try:
             return p.stat().st_mtime

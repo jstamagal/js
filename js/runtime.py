@@ -1173,7 +1173,7 @@ def _reconcile_read_delivery(
     # delivered, so a clipped one keeps none of its own coverage.
     bounds = args.get("range") if isinstance(args.get("range"), dict) else args
     byte_read = bounds.get("start_byte") is not None or bounds.get("end_byte") is not None
-    context.record_delivered_read(context.resolve_path(raw_path), raw, "" if byte_read else delivered, call_id)
+    context.reads.narrow_to_delivered(context.resolve_path(raw_path), raw, "" if byte_read else delivered, call_id)
 
 
 def _tool_results_in(messages: list[dict]) -> dict[str, str]:
@@ -2096,7 +2096,7 @@ async def _record_tool_results(pending_calls: list[_PendingToolCall], *, cfg: Co
     # never parks a dispatch thread its descendants need (see _dispatch_batch).
     # A read that repeats an earlier one returns a stub naming it only
     # while that earlier result is still in the history the model sees.
-    context.keep_shown_reads(_tool_results_in(messages))
+    context.reads.keep_shown(_tool_results_in(messages))
     progress = _DispatchProgress()
     context.turn_status.tool_begin([_canonical_tool_call_name(pc.name, registry) for pc in pending_calls])
     try:
@@ -2133,7 +2133,7 @@ async def _record_tool_results(pending_calls: list[_PendingToolCall], *, cfg: Co
             )
             reconciled.append((pc, args, new_result))
         dispatch_records = reconciled
-        context.settle_reads()
+        context.reads.settle()
         records: list[dict] = []
         for pc, _args, result_value in dispatch_records:
             canonical_pc = _pending_with_name(pc, _canonical_tool_call_name(pc.name, registry))

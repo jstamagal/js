@@ -83,7 +83,9 @@ def test_post_compact_rehydration_reattaches_recent_files(tmp_path):
     b = tmp_path / "b.py"
     b.write_text("print('b')\n", encoding="utf-8")
 
-    context = ToolContext(read_paths={a, b})
+    context = ToolContext()
+    context.reads.remember(a, "read")
+    context.reads.remember(b, "read")
 
     msg = compaction._post_compact_rehydration(context)
     assert msg["role"] == "user"
@@ -96,7 +98,8 @@ def test_post_compact_rehydration_names_but_skips_huge_files(tmp_path):
     big = tmp_path / "big.log"
     big.write_text("q" * 500_000, encoding="utf-8")
 
-    context = ToolContext(read_paths={big})
+    context = ToolContext()
+    context.reads.remember(big, "read")
 
     msg = compaction._post_compact_rehydration(context, per_file_tokens=1_000)
     assert "too large to re-attach" in msg["content"]
@@ -104,7 +107,7 @@ def test_post_compact_rehydration_names_but_skips_huge_files(tmp_path):
 
 
 def test_post_compact_rehydration_is_none_without_reads():
-    context = ToolContext(read_paths=set())
+    context = ToolContext()
 
     assert compaction._post_compact_rehydration(context) is None
 
@@ -124,7 +127,7 @@ def test_post_compact_rehydration_rechecks_the_jail_after_a_file_becomes_a_symli
     monkeypatch.setattr(jail, "ACTIVE", jail.Jail(root=root, bwrap="bwrap", private=private))
     context = ToolContext(cwd=root)
     assert "project notes" in fs_read(file_path=str(target), context=context)
-    assert target in context.read_paths
+    assert target in context.reads.paths()
     target.unlink()
     target.symlink_to(outside)
 

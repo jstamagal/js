@@ -27,6 +27,7 @@ from .. import settings as _settings
 from . import policy
 from ..tool_binaries import resolve_binary
 from .core import Output, Tool, ToolContext, view as _view
+from .reads import require_read
 from .sanitize import int_or_default
 from .wiki.helpers import run
 from .descriptions import load_description, load_parameter_description
@@ -161,16 +162,12 @@ def _changed_since_read(
     Returns None when the file is unchanged since the read, or when js holds no
     UTF-8 copy of the content that was read; require_read covers those cases.
     """
-    if target not in context.read_paths:
+    as_read = context.reads.content_as_read(target)
+    if as_read is None or as_read[0] == current_hash:
         return None
-    known_hash = context.file_hashes.get(target)
-    if known_hash == current_hash:
-        return None
-    cached = context.known_content.get(target)
-    if cached is None or cached[0] != known_hash:
-        return None
+    known_hash, known = as_read
     try:
-        old_text = cached[1].decode("utf-8")
+        old_text = known.decode("utf-8")
         new_text = current.decode("utf-8")
     except UnicodeDecodeError:
         return None
@@ -178,8 +175,9 @@ def _changed_since_read(
     # credited below are the hunks the model is shown.
     old_lines = old_text.splitlines(keepends=True)
     new_lines = new_text.splitlines(keepends=True)
-    was_whole = target in context.fully_read_paths
-    prior = [(1, len(old_lines))] if was_whole else list(context.read_ranges.get(target, []))
+    coverage = context.reads.coverage(target)
+    was_whole = coverage.whole
+    prior = [(1, len(old_lines))] if was_whole else coverage.ranges
     carried: list[tuple[int, int]] = []
     changed: list[tuple[int, int]] = []
     matcher = difflib.SequenceMatcher(None, old_lines, new_lines)
@@ -199,14 +197,14 @@ def _changed_since_read(
     diff = _unified_diff(old_text, new_text, f"{target} (as read)", f"{target} (now)")
     budget = _result_page_bytes(context)
     delivered = not budget or len(diff.encode("utf-8")) <= budget
-    context.replace_read_coverage(
+    context.reads.replace(
         target,
         current_hash,
         carried + (shown if delivered else []),
         len(new_lines),
         whole_file=was_whole and delivered,
     )
-    context.remember_content(target, current_hash, current)
+    context.reads.remember_content(target, current_hash, current)
     head = (
         f'ERROR: {target} changed on disk since it was read (hash {known_hash} when read, {current_hash} now); nothing was written.'
     )
@@ -431,7 +429,7 @@ def _remember_byte_read(target: Path, context: ToolContext, data: bytes, start: 
             break
     if shown:
         first, last = shown[0]
-        context.remember_read(
+        context.reads.remember(
             target,
             content_hash,
             start_line=first,
@@ -440,8 +438,8 @@ def _remember_byte_read(target: Path, context: ToolContext, data: bytes, start: 
             whole_file=first == 1 and last == len(lines),
         )
     else:
-        context.remember_read(target, content_hash, total_lines=len(lines), whole_file=False)
-    context.remember_content(target, content_hash, data)
+        context.reads.remember(target, content_hash, total_lines=len(lines), whole_file=False)
+    context.reads.remember_content(target, content_hash, data)
 
 
 _READ_RANGE_FIELDS = ("start_line", "end_line", "start_byte", "end_byte")
@@ -704,7 +702,7 @@ def fs_read(
         except OSError as exc:
             return f"ERROR: {exc}"
         content_hash = _hash_bytes(data)
-        context.remember_read(target, content_hash)
+        context.reads.remember(target, content_hash)
         if not context.vision_enabled:
             return _visual_fallback(target, mime, size)
         return _image_marker(target, mime, size, data)
@@ -719,7 +717,7 @@ def fs_read(
         except OSError as exc:
             return f"ERROR: {exc}"
         content_hash = _hash_bytes(data)
-        context.remember_read(target, content_hash)
+        context.reads.remember(target, content_hash)
         return text
 
     read_cap = int(context.max_read_bytes or 0)
@@ -764,8 +762,8 @@ def fs_read(
         all_lines.pop()
     total = len(all_lines)
     if total == 0:
-        context.remember_read(target, content_hash, total_lines=0, whole_file=True)
-        context.remember_content(target, content_hash, data)
+        context.reads.remember(target, content_hash, total_lines=0, whole_file=True)
+        context.reads.remember_content(target, content_hash, data)
         _view(path=str(target), start_line=0, end_line=0, total_lines=0, lines=[])
         return f"{target} is empty (hash {content_hash}){note}"
 
@@ -775,8 +773,8 @@ def fs_read(
 
     selected = all_lines[start - 1:end]
     read_key = (content_hash, start, end, numbered)
-    earlier = context.shown_read(target, read_key)
-    context.remember_read(
+    earlier = context.reads.shown_by(target, read_key)
+    context.reads.remember(
         target,
         content_hash,
         start_line=start,
@@ -784,7 +782,7 @@ def fs_read(
         total_lines=total,
         whole_file=start == 1 and end == total,
     )
-    context.remember_content(target, content_hash, data)
+    context.reads.remember_content(target, content_hash, data)
     _view(path=str(target), start_line=start, end_line=end, total_lines=total, lines=selected)
     suffix = ""
     if end < total:
@@ -800,7 +798,7 @@ def fs_read(
     # and the tool-result spill bounds what reaches the model.
     body = _format_numbered_lines(selected, start) if numbered else "\n".join(selected)
     result = Output(f"{body}{suffix}")
-    context.offer_read(target, read_key, result)
+    context.reads.offer(target, read_key, result)
     return result
 
 
@@ -907,9 +905,7 @@ def _write_text(context: ToolContext, raw_path: str | None, content: str, *, ove
         else:
             guard = _changed_since_read(
                 context, target, action, current, current_hash, edits_lines=False
-            ) or context.require_read(
-                target, action, content_hash=current_hash
-            )
+            ) or require_read(context, target, action, content_hash=current_hash)
         if guard:
             return guard
     try:
@@ -931,20 +927,21 @@ def _write_text(context: ToolContext, raw_path: str | None, content: str, *, ove
     if appending:
         # The model has seen what it read of the old content and every line
         # it added; a line the old content left unfinished continues there.
-        same = context.file_hashes.get(target) == current_hash
-        whole = same and target in context.fully_read_paths
-        ranges = list(context.read_ranges.get(target, [])) if same else []
+        coverage = context.reads.coverage(target)
+        same = coverage.content_hash == current_hash
+        whole = same and coverage.whole
+        ranges = coverage.ranges if same else []
         old_total = len(current.decode("utf-8", errors="replace").splitlines())
         first = old_total if current and not current.endswith(b"\n") else old_total + 1
         if data and first <= total:
             ranges.append((max(1, first), total))
-        context.replace_read_coverage(target, content_hash, [] if whole else ranges, total, whole_file=whole)
-        context.remember_content(target, content_hash, written)
+        context.reads.replace(target, content_hash, [] if whole else ranges, total, whole_file=whole)
+        context.reads.remember_content(target, content_hash, written)
         return f"appended {len(data)} bytes to {target} (hash {content_hash})"
     # The model wrote every byte of the new content, so the file counts as
     # fully read: a patch can follow without a read in between.
-    context.replace_read_coverage(target, content_hash, [], total, whole_file=True)
-    context.remember_content(target, content_hash, written)
+    context.reads.replace(target, content_hash, [], total, whole_file=True)
+    context.reads.remember_content(target, content_hash, written)
     return f"wrote {len(data)} bytes to {target} (hash {content_hash})"
 
 
@@ -1051,13 +1048,13 @@ def undo(path: str, context: ToolContext | None = None) -> str:
             # Legacy snapshots have no evidence of what was displayed. Never
             # carry transformed coverage from the edited version across undo.
             valid = isinstance(coverage, dict) and coverage.get("hash") == content_hash
-            context.replace_read_coverage(
+            context.reads.replace(
                 target, content_hash,
                 [tuple(span) for span in coverage["ranges"]] if valid else [],
                 len(previous.decode("utf-8", errors="replace").splitlines()),
                 whole_file=bool(valid and coverage["whole"]),
             )
-            context.remember_content(target, content_hash, previous)
+            context.reads.remember_content(target, content_hash, previous)
             return f"restored {target} (hash {content_hash})"
     except OSError as exc:
         return f"ERROR: {exc}"
@@ -1379,13 +1376,11 @@ def _apply_edit(
     if fuzzy or len(old_norm) < context.edit_read_bypass_characters:
         if stale:
             return stale
-        guard = context.require_read(target, "edit it", content_hash=content_hash)
+        guard = require_read(context, target, "edit it", content_hash=content_hash)
         if guard:
             return guard
         line_ranges = [_line_span(text, start, end) for start, end in positions]
-        guard = context.require_read(
-            target, "edit it", line_ranges=line_ranges, seen_ranges=seen_ranges
-        )
+        guard = require_read(context, target, "edit it", line_ranges=line_ranges, seen_ranges=seen_ranges)
         if guard:
             return f"ERROR: {label}{guard.removeprefix('ERROR: ')}"
     updated = text
@@ -1483,8 +1478,9 @@ def patch(
     )
 
     updated = source
-    seen_ranges = list(context.read_ranges.get(target, []))
-    was_whole = target in context.fully_read_paths
+    coverage = context.reads.coverage(target)
+    seen_ranges = coverage.ranges
+    was_whole = coverage.whole
     if was_whole:
         total_lines = max(1, len(source.splitlines()))
         seen_ranges = [(1, total_lines)]
@@ -1524,14 +1520,14 @@ def patch(
     context.snapshot(target)
     target.write_bytes(data)
     content_hash = _hash_bytes(data)
-    context.replace_read_coverage(
+    context.reads.replace(
         target,
         content_hash,
         seen_ranges,
         len(updated.splitlines()),
         whole_file=was_whole,
     )
-    context.remember_content(target, content_hash, data)
+    context.reads.remember_content(target, content_hash, data)
     _view(path=str(target), before=source, after=updated, edits=len(pending), replacements=replacements)
     diff = _unified_diff(source, updated, str(target), str(target))
     if len(diff) > 4000:
@@ -2379,8 +2375,9 @@ def ast_search(
             return f"ERROR: {exc}; snapshots are available through undo"
         if updated != source:
             changed += 1
-        context.file_hashes[target] = _hash_bytes(updated)
-        context.remember_content(target, context.file_hashes[target], updated)
+        updated_hash = _hash_bytes(updated)
+        context.reads.rehash(target, updated_hash)
+        context.reads.remember_content(target, updated_hash, updated)
         prepared[target] = (source, updated)
     diff = _ast_rewrite_diff(prepared) or "(no changes)"
     summary = f"rewrote {len(visible)} match{'es' if len(visible) != 1 else ''} in {changed} file{'s' if changed != 1 else ''}"

@@ -137,7 +137,7 @@ pi retries once. Codex does not recover inside a normal turn.
 | Async subagents with a completion message | Claude Code `AgentTool` `run_in_background` | done in js-1g1.17: `task_jobs.py`, `task(background=true)` |
 | BM25 discovery; "load it first" hint on calls to deferred tools | Codex `tool_search.rs`, Claude Code `ToolSearchTool.ts` | done in js-1g1.16: `discovery.ranked_entries`, `CatalogEntry.search_text` |
 | Fuzzy edit that keeps untouched bytes | pi `edit-diff.ts:132,207` | done in js-1g1.15: `fs._apply_edit`, `fs._keep_untouched` |
-| Unchanged re-read returns a stub | Claude Code `FileReadTool.ts:528` | done in js-1g1.15: `ToolContext.shown_read`, kept only while the earlier result is in history |
+| Unchanged re-read returns a stub | Claude Code `FileReadTool.ts:528` | done in js-1g1.15: `ReadLedger.shown_by`, kept only while the earlier result is in history |
 | Record ids and parents; branching becomes a pointer move | pi `session-manager.ts:57` | `memory.Record` (before the picker) |
 | Explicit `-m` beats the stamp; fallback message if the stamped model has no login; `<model_switch>` note | Codex `config_persistence.rs`, `model_switch_instructions.rs` | done in js-1g1.21: `run_assembly.unreachable_stamp`, `_note_model_switch` |
 | Head/tail metadata reads for listing | Claude Code `sessionStorage.ts:4744` | `session_catalog._session_details` |

@@ -233,7 +233,7 @@ async def rehydration():
     file = cfg.agent_dir / "edited.py"
     file.write_text("FACT_99 = 1\n")
     context = ToolContext(cwd=cfg.agent_dir)
-    context.read_paths.add(file)
+    context.reads.remember(file, "read")
     messages = [
         {"role": "user", "content": "old " * 1000},
         {"role": "assistant", "content": "answer " * 1000},
@@ -471,8 +471,8 @@ async def context_isolation():
     a.write_text("FACT_11=1")
     b = cfg.agent_dir / "foreign.py"
     b.write_text("FACT_22=2")
-    own.read_paths.add(a)
-    foreign.read_paths.add(b)
+    own.reads.remember(a, "read")
+    foreign.reads.remember(b, "read")
     messages = [
         {"role": "user", "content": "prefix " * 2000},
         {"role": "user", "content": "current"},

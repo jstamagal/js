@@ -24,7 +24,7 @@ def test_undo_restores_original_coverage(tmp_path, restart):
         context = ToolContext(cwd=tmp_path)
         context.configure_snapshot_store("audit", tmp_path / "session.jsonl", state_dir=tmp_path / "state")
     assert fs.undo(str(target), context=context).startswith("restored ")
-    assert context.read_ranges[target] == [(1, 1)]
+    assert context.reads.coverage(target).ranges == [(1, 1)]
     assert fs.patch(str(target), old_string="L11", new_string="ELEVEN", context=context).startswith("ERROR:")
     assert target.read_text() == original
     assert fs.patch(str(target), old_string="HEAD", new_string="head", context=context).startswith("patched ")
@@ -87,7 +87,7 @@ def test_a_written_file_counts_as_fully_read_so_patch_needs_no_read_first(tmp_pa
     target = tmp_path / "new.txt"
     context = ToolContext(cwd=tmp_path)
     assert fs.write(str(target), content="alpha\nbeta\ngamma\n", context=context).startswith("wrote ")
-    assert target in context.fully_read_paths
+    assert context.reads.coverage(target).whole
     assert fs.patch(str(target), old_string="beta", new_string="BETA", context=context).startswith("patched ")
     assert target.read_text() == "alpha\nBETA\ngamma\n"
     assert fs.write(str(target), content="replaced\n", overwrite=True, context=context).startswith("wrote ")

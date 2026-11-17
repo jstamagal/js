@@ -16,7 +16,7 @@ def test_overwriting_a_10k_line_file_needs_one_read(tmp_path):
     context = ToolContext(cwd=tmp_path, max_read_lines=2_000)
 
     fs.fs_read(file_path=str(target), context=context)
-    assert target not in context.fully_read_paths
+    assert not context.reads.coverage(target).whole
     result = fs.write(file_path=str(target), content="fresh\n", overwrite=True, context=context)
 
     assert result.startswith("wrote "), result
@@ -55,9 +55,13 @@ def test_overwrite_of_a_file_changed_since_the_read_is_refused_naming_both_hashe
 def test_hash_mismatch_is_named_when_no_copy_of_the_read_is_held(tmp_path):
     target = tmp_path / "f.txt"
     target.write_text("as read\n", encoding="utf-8")
+    session = tmp_path / "session.jsonl"
+    first = ToolContext(cwd=tmp_path)
+    first.configure_snapshot_store("agent", session, state_dir=tmp_path / "state")
+    fs.fs_read(file_path=str(target), context=first)
+    # A restarted process keeps the coverage but not the content that was read.
     context = ToolContext(cwd=tmp_path)
-    fs.fs_read(file_path=str(target), context=context)
-    context.known_content.clear()
+    context.configure_snapshot_store("agent", session, state_dir=tmp_path / "state")
     target.write_text("moved underneath\n", encoding="utf-8")
 
     result = fs.patch(file_path=str(target), old_string="moved", new_string="kept", context=context)

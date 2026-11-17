@@ -23,6 +23,7 @@ from typing import Any
 from .core import Tool, ToolContext
 from .descriptions import load_description, load_parameter_description
 from .fs import _detect_line_ending, _hash_bytes, _normalize_line_endings, _read_regular_bytes
+from .reads import require_read
 from .sanitize import int_or_default
 
 EDIT_MODES = ("replace", "insert", "delete")
@@ -171,8 +172,8 @@ def read_view(target: Path, context: ToolContext) -> str | None:
     except NotebookError:
         return None
     content_hash = _hash_bytes(data)
-    context.remember_read(target, content_hash, whole_file=False)
-    context.remember_content(target, content_hash, data)
+    context.reads.remember(target, content_hash, whole_file=False)
+    context.reads.remember_content(target, content_hash, data)
     max_lines = int_or_default(context.notebook_output_lines, 10, minimum=0)
     return render(notebook, target, content_hash, max_lines)
 
@@ -244,7 +245,7 @@ def notebook_edit(
     except OSError as exc:
         return f"ERROR: {exc}"
     current_hash = _hash_bytes(data)
-    guard = context.require_read(target, f"{mode} a cell of it", content_hash=current_hash)
+    guard = require_read(context, target, f"{mode} a cell of it", content_hash=current_hash)
     if context.notebook_require_read and guard:
         return guard
     try:
@@ -321,8 +322,8 @@ def notebook_edit(
     new_hash = _hash_bytes(payload)
     # The model knows the notebook it just changed; the raw JSON lines moved,
     # so no line coverage carries over.
-    context.replace_read_coverage(target, new_hash, [], len(payload.splitlines()), whole_file=False)
-    context.remember_content(target, new_hash, payload)
+    context.reads.replace(target, new_hash, [], len(payload.splitlines()), whole_file=False)
+    context.reads.remember_content(target, new_hash, payload)
     return f"{done} in {target}; {len(cells)} cells now (hash {new_hash})"
 
 

@@ -2,8 +2,9 @@
 
 The runtime depends on this module, not on individual tool implementations.
 Tools are small Python objects with an OpenAI-compatible schema and a handler
-that receives a shared ToolContext. The context carries per-session state used
-for read-before-write checks, undo snapshots, and search deduplication.
+that receives a shared ToolContext. The context carries per-session state: the
+read ledger behind read-before-write checks (`reads`), undo snapshots, and
+search deduplication.
 """
 
 from __future__ import annotations
@@ -12,7 +13,6 @@ import base64
 import contextvars
 import hashlib
 import inspect
-import itertools
 import json
 import math
 import os
@@ -31,6 +31,8 @@ from .. import settings as _settings
 from .. import turn_settings as _turn_settings
 from ..paths import state_root
 from ..skills import SkillCatalog
+from . import reads as _reads
+from .reads import ReadLedger
 
 if TYPE_CHECKING:
     from ..config import Config
@@ -44,37 +46,27 @@ Snapshot = bytes | None | dict[str, Any]
 _SNAPSHOT_FORMAT_VERSION = 1
 _SNAPSHOT_MAX_ENTRIES = 100
 _SNAPSHOT_MAX_DISK_BYTES = 64 * 1024 * 1024
-# Upper bound on ToolContext.known_content; the oldest entries go first.
-_KNOWN_CONTENT_MAX_BYTES = 64 * 1024 * 1024
 # A tool result that carries an image: prefix, host path, mime, text stub.
 _IMAGE_RESULT_PREFIX = "IMAGE_RESULT\t"
 
 
-# The id of the tool call running in this thread or task. Read coverage is
-# recorded per call, so the runtime can narrow one call's coverage after it
-# clips that call's result.
-_CALL_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("js_tool_call_id", default=None)
-# False while the running call's result goes to code (a kernel cell) rather
-# than to the model's history.
-_FOR_MODEL: contextvars.ContextVar[bool] = contextvars.ContextVar("js_tool_call_for_model", default=True)
 # What the running call's tool hands the screen beside its result (`view`).
 _VIEW: contextvars.ContextVar[dict | None] = contextvars.ContextVar("js_tool_call_view", default=None)
-_anonymous_calls = itertools.count()
 
 
 @contextmanager
 def call_scope(call_id: str, *, for_model: bool = True):
     """Run the body as tool call ``call_id``. ``for_model`` is False when the
     result goes to code rather than to the model's history."""
-    token = _CALL_ID.set(call_id)
-    model_token = _FOR_MODEL.set(for_model)
+    token = _reads.CALL_ID.set(call_id)
+    model_token = _reads.FOR_MODEL.set(for_model)
     view_token = _VIEW.set({})
     try:
         yield
     finally:
         _VIEW.reset(view_token)
-        _FOR_MODEL.reset(model_token)
-        _CALL_ID.reset(token)
+        _reads.FOR_MODEL.reset(model_token)
+        _reads.CALL_ID.reset(token)
 
 
 def view(**fields: Any) -> None:
@@ -134,16 +126,6 @@ def call_is_read_only(tool: Tool, args: dict[str, Any]) -> bool:
         return bool(tool.read_only_when(args))
     except Exception:  # noqa: BLE001 - odd arguments make the call exclusive
         return False
-
-
-def _merge_line_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    merged: list[tuple[int, int]] = []
-    for start, end in sorted(ranges):
-        if not merged or start > merged[-1][1] + 1:
-            merged.append((start, end))
-        else:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-    return merged
 
 
 def _encode_snapshot(path: Path, snapshot: Snapshot) -> bytes:
@@ -464,17 +446,6 @@ class TurnStatus:
 
 
 @dataclass
-class _ReadWindow:
-    """One path's read coverage since the runtime last settled reads: the
-    coverage before the first of those reads, and what each read call added."""
-
-    content_hash: str
-    base_ranges: list[tuple[int, int]]
-    base_whole: bool
-    reads: dict[str, tuple[list[tuple[int, int]], bool]] = field(default_factory=dict)
-
-
-@dataclass
 class ToolContext(_turn_settings.ContextSettings):
     """Mutable state shared across tool calls in a js process. The per-turn
     settings are fields of the ``ContextSettings`` base, one per ``on_context``
@@ -510,15 +481,8 @@ class ToolContext(_turn_settings.ContextSettings):
     # Token accounting kept across the turns of this context; the runtime
     # creates it on the first turn.
     context_budget_state: TokenState | None = field(default=None, repr=False)
-    read_paths: set[Path] = field(default_factory=set)
-    file_hashes: dict[Path, str] = field(default_factory=dict)
-    read_ranges: dict[Path, list[tuple[int, int]]] = field(default_factory=dict)
-    read_line_totals: dict[Path, int] = field(default_factory=dict)
-    fully_read_paths: set[Path] = field(default_factory=set)
-    # The bytes js last knew a file to hold, with their hash: set by read and
-    # by every tool that writes the file. A later edit that finds the file
-    # changed on disk diffs against this instead of asking for a re-read.
-    known_content: dict[Path, tuple[str, bytes]] = field(default_factory=dict, repr=False)
+    # What the model has seen of each file; a subagent's context has its own.
+    reads: ReadLedger = field(default_factory=ReadLedger, repr=False)
     snapshots: dict[Path, list[Snapshot]] = field(default_factory=dict)
     snapshot_files: dict[Path, list[Path | None]] = field(default_factory=dict, repr=False)
     snapshot_store: Path | None = field(default=None, repr=False)
@@ -551,23 +515,6 @@ class ToolContext(_turn_settings.ContextSettings):
     task_owner: str = field(default_factory=lambda: secrets.token_hex(8), repr=False)
     _snapshot_lock: Any = field(default_factory=threading.RLock, init=False, repr=False)
     _snapshot_notices: dict[int, list[str]] = field(default_factory=dict, init=False, repr=False)
-    # Read-only calls run in parallel threads; this lock covers read_paths,
-    # file_hashes, read_ranges, read_line_totals, fully_read_paths,
-    # known_content, _read_windows, _shown_reads and _offered_reads.
-    _coverage_lock: Any = field(default_factory=threading.RLock, init=False, repr=False)
-    _read_windows: dict[Path, _ReadWindow] = field(default_factory=dict, init=False, repr=False)
-    # Line reads whose whole text reached the model. Per path, a read key
-    # (content hash, first line, last line, numbered) maps to the read call's
-    # id and the sha256 of the text it returned.
-    _shown_reads: dict[Path, dict[tuple, tuple[str, str]]] = field(
-        default_factory=dict, init=False, repr=False
-    )
-    # Reads of the batch still running, by call id: (path, read key, sha256 of
-    # the text). settle_reads moves the ones the runtime delivered whole into
-    # _shown_reads.
-    _offered_reads: dict[str, tuple[Path, tuple, str]] = field(
-        default_factory=dict, init=False, repr=False
-    )
 
     def resolve_path(self, raw: str | os.PathLike[str], *, write: bool = False,
                      follow: bool = True) -> Path:
@@ -584,299 +531,6 @@ class ToolContext(_turn_settings.ContextSettings):
         if not follow:
             return Path(os.path.abspath(path))
         return path.resolve()
-
-    def remember_read(
-        self,
-        path: Path,
-        content_hash: str,
-        *,
-        start_line: int | None = None,
-        end_line: int | None = None,
-        total_lines: int | None = None,
-        whole_file: bool | None = None,
-    ) -> None:
-        """Record the content the model actually saw, not merely its path.
-
-        Callers that omit a range retain the historical meaning of a complete
-        read. Text readers pass their rendered window explicitly, including when
-        an implicit max-lines page made a nominal whole-file read partial.
-        """
-        if whole_file is None:
-            whole_file = start_line is None and end_line is None
-        with self._coverage_lock:
-            previous_hash = self.file_hashes.get(path)
-            if previous_hash is not None and previous_hash != content_hash:
-                self.read_ranges.pop(path, None)
-                self.read_line_totals.pop(path, None)
-                self.fully_read_paths.discard(path)
-                self._read_windows.pop(path, None)
-                self._shown_reads.pop(path, None)
-            # The runtime can clip this read's text after the handler returns;
-            # record_delivered_read then narrows this call's share and keeps
-            # what earlier and concurrent reads delivered.
-            window = self._read_windows.get(path)
-            if window is None or window.content_hash != content_hash:
-                window = _ReadWindow(content_hash, list(self.read_ranges.get(path, [])),
-                                     path in self.fully_read_paths)
-                self._read_windows[path] = window
-            call_id = _CALL_ID.get() or f"anonymous-{next(_anonymous_calls)}"
-            self.read_paths.add(path)
-            self.file_hashes[path] = content_hash
-            if total_lines is not None:
-                self.read_line_totals[path] = max(0, total_lines)
-            if whole_file:
-                window.reads[call_id] = ([(1, total_lines)] if total_lines else [], True)
-                self.fully_read_paths.add(path)
-                if total_lines:
-                    self.read_ranges[path] = [(1, total_lines)]
-            elif start_line is None or end_line is None or end_line < start_line:
-                window.reads[call_id] = ([], False)
-            else:
-                window.reads[call_id] = ([(start_line, end_line)], False)
-                ranges = [*self.read_ranges.get(path, []), (start_line, end_line)]
-                self.read_ranges[path] = _merge_line_ranges(ranges)
-                total = self.read_line_totals.get(path)
-                if total == 0 or (total is not None and self._ranges_cover(path, 1, total)):
-                    self.fully_read_paths.add(path)
-            self._save_reads()
-
-    def _ranges_cover(
-        self,
-        path: Path,
-        start: int,
-        end: int,
-        seen_ranges: list[tuple[int, int]] | None = None,
-    ) -> bool:
-        with self._coverage_lock:
-            if seen_ranges is None and path in self.fully_read_paths:
-                return True
-            cursor = start
-            for seen_start, seen_end in seen_ranges if seen_ranges is not None else self.read_ranges.get(path, []):
-                if seen_end < cursor:
-                    continue
-                if seen_start > cursor:
-                    return False
-                cursor = max(cursor, seen_end + 1)
-                if cursor > end:
-                    return True
-            return cursor > end
-
-    def remember_content(self, path: Path, content_hash: str, data: bytes) -> None:
-        """Keep *data* as the content of *path* that *content_hash* names."""
-        with self._coverage_lock:
-            self.known_content.pop(path, None)
-            self.known_content[path] = (content_hash, data)
-            total = sum(len(entry[1]) for entry in self.known_content.values())
-            while total > _KNOWN_CONTENT_MAX_BYTES and len(self.known_content) > 1:
-                oldest = next(iter(self.known_content))
-                total -= len(self.known_content.pop(oldest)[1])
-
-    def require_read(
-        self,
-        path: Path,
-        action: str,
-        *,
-        line_ranges: list[tuple[int, int]] | None = None,
-        content_hash: str | None = None,
-        seen_ranges: list[tuple[int, int]] | None = None,
-    ) -> str | None:
-        if not self.file_require_read:
-            return None
-        with self._coverage_lock:
-            if path not in self.read_paths:
-                return f'ERROR: You must read the file with the read tool before attempting to {action}.'
-            known_hash = self.file_hashes.get(path)
-            if content_hash is not None and known_hash != content_hash:
-                return (
-                    f'ERROR: {path} changed since it was read (hash {known_hash} when read, {content_hash} now); read it again before attempting to {action}.'
-                )
-            unseen = [span for span in line_ranges or [] if not self._ranges_cover(path, *span, seen_ranges)]
-        if unseen:
-            rendered = ", ".join(str(start) if start == end else f"{start}-{end}" for start, end in unseen)
-            return (
-                f"ERROR: You must read the target line{'s' if len(unseen) != 1 or unseen[0][0] != unseen[0][1] else ''} "
-                f"({rendered}) before attempting to {action}."
-            )
-        return None
-
-    def replace_read_coverage(
-        self,
-        path: Path,
-        content_hash: str,
-        ranges: list[tuple[int, int]],
-        total_lines: int,
-        *,
-        whole_file: bool,
-    ) -> None:
-        with self._coverage_lock:
-            # Reads recorded before this replacement no longer describe the
-            # coverage, so a later clip of one of them changes nothing, and
-            # none of them is the read a later one repeats.
-            self._read_windows.pop(path, None)
-            self._forget_shown_reads(path)
-            self.read_paths.add(path)
-            self.file_hashes[path] = content_hash
-            self.read_ranges[path] = _merge_line_ranges(ranges)
-            self.read_line_totals[path] = max(0, total_lines)
-            if whole_file:
-                self.fully_read_paths.add(path)
-            else:
-                self.fully_read_paths.discard(path)
-            self._save_reads()
-
-    def _reads_file(self) -> Path | None:
-        return self.snapshot_store / "reads.json" if self.snapshot_store is not None else None
-
-    def _save_reads(self) -> None:
-        """Keep the read coverage beside the session's undo store, so js
-        restarted on the session still knows what the model saw. Caller holds
-        _coverage_lock."""
-        target = self._reads_file()
-        if target is None:
-            return
-        rows = {
-            str(path): {
-                "hash": self.file_hashes[path],
-                "ranges": self.read_ranges.get(path, []),
-                "total": self.read_line_totals.get(path),
-                "whole": path in self.fully_read_paths,
-            }
-            for path in self.read_paths
-            if path in self.file_hashes
-        }
-        try:
-            self._atomic_write(target, json.dumps(rows, separators=(",", ":")).encode("utf-8"))
-        except OSError:
-            pass
-
-    def _load_reads(self) -> None:
-        """Coverage a previous process recorded for this session. A file that
-        changed since stays gated: its hash no longer matches."""
-        target = self._reads_file()
-        try:
-            rows = json.loads(target.read_text(encoding="utf-8")) if target is not None else {}
-        except (OSError, ValueError):
-            return
-        if not isinstance(rows, dict):
-            return
-        with self._coverage_lock:
-            for raw, row in rows.items():
-                try:
-                    path, content_hash = Path(raw), str(row["hash"])
-                    ranges = [(int(start), int(end)) for start, end in row.get("ranges") or []]
-                    total = row.get("total")
-                except (KeyError, TypeError, ValueError):
-                    continue
-                self.read_paths.add(path)
-                self.file_hashes[path] = content_hash
-                if ranges:
-                    self.read_ranges[path] = _merge_line_ranges(ranges)
-                if isinstance(total, int):
-                    self.read_line_totals[path] = total
-                if row.get("whole"):
-                    self.fully_read_paths.add(path)
-
-    def record_delivered_read(self, path: Path, raw: str, delivered: str,
-                              call_id: str | None = None) -> None:
-        """Reconcile coverage after the runtime clipped a read result.
-
-        The read handler recorded coverage for the whole text it returned, but
-        the runtime clips or spills that text before the model sees it. Keep only
-        the numbered lines fully present in the shared prefix, so a later edit is
-        never authorized against lines the model never received. ``call_id``
-        names the read call; it defaults to the call running in this thread."""
-        limit = 0
-        upper = min(len(raw), len(delivered))
-        while limit < upper and raw[limit] == delivered[limit]:
-            limit += 1
-        # A clip can land mid-line; that line's content was only partly shown.
-        complete = raw[:limit].rsplit("\n", 1)[0]
-        seen: list[tuple[int, int]] = []
-        for line in complete.splitlines():
-            head, separator, _text = line.partition("|")
-            if separator and head.isdigit():
-                number = int(head)
-                seen.append((number, number))
-        call_id = call_id or _CALL_ID.get()
-        with self._coverage_lock:
-            if call_id is not None:
-                self._offered_reads.pop(call_id, None)
-            window = self._read_windows.get(path)
-            if window is None or call_id not in window.reads:
-                return
-            # Restrict only this read's contribution: keep the coverage that
-            # predates the window and every other read's share, so a clip
-            # cannot revoke lines another read delivered in full.
-            window.reads[call_id] = (seen, False)
-            merged = _merge_line_ranges(
-                [*window.base_ranges, *(span for ranges, _whole in window.reads.values() for span in ranges)]
-            )
-            if merged:
-                self.read_ranges[path] = merged
-            else:
-                self.read_ranges.pop(path, None)
-            if window.base_whole or any(whole for _ranges, whole in window.reads.values()):
-                self.fully_read_paths.add(path)
-            else:
-                self.fully_read_paths.discard(path)
-            self._save_reads()
-
-    def settle_reads(self) -> None:
-        """Forget which call recorded which read, and record the reads the
-        batch delivered whole as shown. The runtime calls it once a batch's
-        results are final, after the last clip."""
-        with self._coverage_lock:
-            self._read_windows.clear()
-            for call_id, (path, key, digest) in self._offered_reads.items():
-                self._shown_reads.setdefault(path, {})[key] = (call_id, digest)
-            self._offered_reads.clear()
-
-    def shown_read(self, path: Path, key: tuple) -> str | None:
-        """The id of the read call that showed the model the text read key
-        ``key`` of ``path`` renders, when that result is still in its
-        history; None otherwise. A call whose result goes to code gets None:
-        the code needs the lines, not a note about the model's history."""
-        if not _FOR_MODEL.get():
-            return None
-        with self._coverage_lock:
-            entry = self._shown_reads.get(path, {}).get(key)
-        return entry[0] if entry else None
-
-    def offer_read(self, path: Path, key: tuple, text: str) -> None:
-        """Record that the read call running in this thread returned ``text``
-        for read key ``key`` of ``path``. It counts as shown once the runtime
-        settles the batch without clipping it. A read outside a tool call, or
-        one whose result goes to code, records nothing."""
-        call_id = _CALL_ID.get()
-        if call_id is None or not _FOR_MODEL.get():
-            return
-        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        with self._coverage_lock:
-            self._offered_reads[call_id] = (path, key, digest)
-
-    def keep_shown_reads(self, results: dict[str, str]) -> None:
-        """Keep the shown reads whose text is still in the model's history.
-
-        ``results`` maps tool call ids to the result text the history holds
-        for them. A read whose result was cleared, summarised or dropped is
-        forgotten, so a later read of the same lines returns them in full."""
-        with self._coverage_lock:
-            for path in list(self._shown_reads):
-                kept = {
-                    key: (call_id, digest)
-                    for key, (call_id, digest) in self._shown_reads[path].items()
-                    if call_id in results
-                    and hashlib.sha256(results[call_id].encode("utf-8")).hexdigest() == digest
-                }
-                if kept:
-                    self._shown_reads[path] = kept
-                else:
-                    del self._shown_reads[path]
-
-    def _forget_shown_reads(self, path: Path) -> None:
-        self._shown_reads.pop(path, None)
-        for call_id in [cid for cid, offer in self._offered_reads.items() if offer[0] == path]:
-            del self._offered_reads[call_id]
 
     def configure_snapshot_store(
         self,
@@ -899,34 +553,18 @@ class ToolContext(_turn_settings.ContextSettings):
                 return
             # Reads made before the context had a session carry into its first one.
             if self.snapshot_store is not None:
-                with self._coverage_lock:
-                    self.read_paths.clear()
-                    self.file_hashes.clear()
-                    self.read_ranges.clear()
-                    self.read_line_totals.clear()
-                    self.fully_read_paths.clear()
-                    self.known_content.clear()
-                    self._read_windows.clear()
-                    self._shown_reads.clear()
-                    self._offered_reads.clear()
+                self.reads.clear()
             self.snapshots.clear()
             self.snapshot_files.clear()
             self.snapshot_store = store
             if store is not None:
                 self._load_snapshots()
-                self._load_reads()
+            self.reads.persist_to(None if store is None else store / "reads.json")
 
     def _path_snapshot_dir(self, path: Path) -> Path:
         assert self.snapshot_store is not None
         digest = hashlib.sha256(str(path).encode("utf-8")).hexdigest()
         return self.snapshot_store / digest
-
-    @staticmethod
-    def _atomic_write(path: Path, data: bytes) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.{secrets.token_hex(4)}.tmp")
-        temporary.write_bytes(data)
-        os.replace(temporary, path)
 
     def _notice_snapshot(self, message: str) -> None:
         ident = threading.get_ident()
@@ -980,7 +618,7 @@ class ToolContext(_turn_settings.ContextSettings):
                 ensure_ascii=False,
                 separators=(",", ":"),
             ).encode("utf-8")
-            self._atomic_write(path_dir / "path.json", metadata)
+            _reads.atomic_write(path_dir / "path.json", metadata)
             too_large = _snapshot_raw_size(snapshot) > _SNAPSHOT_MAX_DISK_BYTES
             encoded = b"" if too_large else _encode_snapshot(path, snapshot)
             if too_large or len(encoded) > _SNAPSHOT_MAX_DISK_BYTES:
@@ -996,7 +634,7 @@ class ToolContext(_turn_settings.ContextSettings):
                 self._notice_snapshot(f'{reason}; this undo is available only until the process exits')
             stamp = f"{time.time_ns():020d}-{secrets.token_hex(6)}.snapshot"
             entry = path_dir / stamp
-            self._atomic_write(entry, encoded)
+            _reads.atomic_write(entry, encoded)
             self._prune_snapshot_store()
             return entry if entry.exists() else None
         except OSError as exc:
@@ -1107,14 +745,15 @@ class ToolContext(_turn_settings.ContextSettings):
             else:
                 content = None
                 if path.exists():
+                    coverage = self.reads.coverage(path)
                     content = {
                         "kind": "file",
                         "data": path.read_bytes(),
                         "mode": stat.S_IMODE(path.stat().st_mode),
                         "read_coverage": {
-                            "hash": self.file_hashes.get(path),
-                            "ranges": self.read_ranges.get(path, []),
-                            "whole": path in self.fully_read_paths,
+                            "hash": coverage.content_hash,
+                            "ranges": coverage.ranges,
+                            "whole": coverage.whole,
                         },
                     }
         except OSError as exc:

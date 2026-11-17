@@ -76,7 +76,7 @@ def test_a_read_from_a_cell_counts_as_read_for_patch(ctx):
     cell("tools.read(file_path='code.py')", ctx)
     patched = dispatch("patch", ctx, file_path="code.py", old_string="x = 1", new_string="x = 2")
 
-    assert ctx.resolve_path("code.py") in ctx.read_paths
+    assert ctx.resolve_path("code.py") in ctx.reads.paths()
     assert not patched.startswith("ERROR"), patched
     assert target.read_text() == "x = 2\n"
 
@@ -387,10 +387,10 @@ def model_read(context: ToolContext, call_id: str, file_path: str) -> str:
 def test_a_cell_read_of_lines_the_model_already_saw_returns_the_lines(ctx):
     (ctx.cwd / "notes.txt").write_text("alpha\nbeta\n")
     shown = model_read(ctx, "r1", "notes.txt")
-    ctx.settle_reads()
-    ctx.keep_shown_reads({"r1": shown})
+    ctx.reads.settle()
+    ctx.reads.keep_shown({"r1": shown})
     assert "r1" in model_read(ctx, "r2", "notes.txt")
-    ctx.settle_reads()
+    ctx.reads.settle()
 
     result = cell(
         "text = tools.read('notes.txt', show_line_numbers=False)\n"
@@ -405,7 +405,7 @@ def test_a_cell_read_of_lines_the_model_already_saw_returns_the_lines(ctx):
 def test_a_cell_read_does_not_count_as_shown_to_the_model(ctx):
     (ctx.cwd / "notes.txt").write_text("alpha\nbeta\n")
     cell("tools.read('notes.txt', show_line_numbers=False)", ctx)
-    ctx.settle_reads()
+    ctx.reads.settle()
 
     again = model_read(ctx, "r2", "notes.txt")
 

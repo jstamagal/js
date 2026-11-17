@@ -73,7 +73,7 @@ def test_cr_patch_tracks_read_ranges_after_inserting_lines(tmp_path):
 
     assert result.startswith("patched ")
     assert target.read_bytes() == b"alpha\rone\rTWO\rgamma\r"
-    assert context.read_ranges[target] == [(2, 3)]
+    assert context.reads.coverage(target).ranges == [(2, 3)]
     result = fs.patch(str(target), old_string="gamma", new_string="GAMMA", context=context)
     assert result == "ERROR: You must read the target line (4) before attempting to edit it."
 
@@ -85,8 +85,7 @@ def test_failed_patch_batch_preserves_bytes_and_snapshot_state(tmp_path, newline
     target.write_bytes(original)
     context = ToolContext(cwd=tmp_path)
     fs.read(str(target), context=context)
-    hashes = dict(context.file_hashes)
-    ranges = dict(context.read_ranges)
+    coverage = context.reads.coverage(target)
 
     result = fs.patch(
         str(target),
@@ -100,8 +99,7 @@ def test_failed_patch_batch_preserves_bytes_and_snapshot_state(tmp_path, newline
     assert result.startswith("ERROR: edit 2: Could not find match")
     assert target.read_bytes() == original
     assert context.snapshots == {}
-    assert context.file_hashes == hashes
-    assert context.read_ranges == ranges
+    assert context.reads.coverage(target) == coverage
 
 
 def test_patch_refuses_an_ambiguous_overlapping_match(tmp_path):

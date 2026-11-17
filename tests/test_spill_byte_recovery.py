@@ -156,4 +156,4 @@ def test_an_invalid_byte_offset_is_refused_not_read_as_the_whole_file(tmp_path, 
     result = fs.fs_read(file_path=str(target), range=bad, context=context)
 
     assert result.startswith("ERROR")
-    assert target not in context.read_paths
+    assert target not in context.reads.paths()

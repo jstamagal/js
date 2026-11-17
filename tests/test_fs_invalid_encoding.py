@@ -23,9 +23,7 @@ def test_invalid_surrogate_preserves_file_and_undo_state(tmp_path, surrogate, op
     original = target.read_bytes() if target.exists() else None
     prior_stat = target.stat() if target.exists() else None
     snapshots = copy.deepcopy(context.snapshots)
-    hashes = dict(context.file_hashes)
-    ranges = copy.deepcopy(context.read_ranges)
-    fully_read = set(context.fully_read_paths)
+    coverage = context.reads.coverage(target)
 
     if operation in {"new", "overwrite"}:
         result = fs.write(str(target), content=f"invalid {surrogate}\n", overwrite=True, context=context)
@@ -39,9 +37,7 @@ def test_invalid_surrogate_preserves_file_and_undo_state(tmp_path, surrogate, op
 
     assert result.startswith("ERROR:")
     assert context.snapshots == snapshots
-    assert context.file_hashes == hashes
-    assert context.read_ranges == ranges
-    assert context.fully_read_paths == fully_read
+    assert context.reads.coverage(target) == coverage
     if original is None:
         assert not target.exists()
         assert not target.parent.exists()

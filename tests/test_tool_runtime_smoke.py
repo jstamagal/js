@@ -719,7 +719,7 @@ def test_a_read_clipped_by_the_inline_cap_does_not_authorize_unseen_edits(tmp_pa
     )
 
     assert len(delivered.encode("utf-8")) < target.stat().st_size
-    assert target.resolve() not in context.fully_read_paths
+    assert not context.reads.coverage(target.resolve()).whole
 
     late_line = fs.patch(
         file_path=str(target), old_string="L02000 filler\n", new_string="changed\n", context=context
@@ -764,7 +764,7 @@ def test_a_clipped_read_does_not_revoke_an_earlier_read(tmp_path, monkeypatch):
         tool_context=context,
     )
     assert len(delivered.encode("utf-8")) < target.stat().st_size
-    assert target.resolve() not in context.fully_read_paths
+    assert not context.reads.coverage(target.resolve()).whole
 
     earlier = fs.patch(
         file_path=str(target), old_string="L02505 filler\n", new_string="changed\n", context=context
@@ -1449,7 +1449,7 @@ def test_patch_exact_long_match_needs_no_prior_read(tmp_path):
 
     assert result.startswith(f"patched {target}")
     assert target.read_text(encoding="utf-8") == "def compute_total(items):\n    return sum(items) + 1\n"
-    assert context.read_ranges[target] == [(1, 2)]
+    assert context.reads.coverage(target).ranges == [(1, 2)]
 
 
 def test_patch_fuzzy_match_still_requires_prior_read(tmp_path):

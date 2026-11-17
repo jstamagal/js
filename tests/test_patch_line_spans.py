@@ -27,7 +27,7 @@ def test_patch_line_including_newline_needs_only_that_line_read(tmp_path, newlin
 
     assert result.startswith("patched ")
     assert target.read_bytes() == newline.join([b"A", b"B", b"two", b"three", b"four", b"five", b""])
-    assert context.read_ranges[target] == [(1, 2)]
+    assert context.reads.coverage(target).ranges == [(1, 2)]
     # Inserted text is known, but the formerly second line remains unread.
     assert fs.patch(str(target), old_string="B", new_string="BB", context=context).startswith("patched ")
     assert fs.patch(str(target), old_string="two", new_string="TWO", context=context).startswith("ERROR:")

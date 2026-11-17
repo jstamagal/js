@@ -170,13 +170,13 @@ def test_missing_runtime_snippet_exits_two(monkeypatch, tmp_path, capsys, mode):
 
 
 def test_missing_rehydration_snippet_is_not_a_file_read_failure(monkeypatch, tmp_path):
-    from types import SimpleNamespace
-
     from js import compaction
+    from js.toolkit import ToolContext
 
     path = tmp_path / "binary.dat"
     path.write_bytes(b"\x00data")
-    context = SimpleNamespace(read_paths={path}, resolve_path=lambda path: path)
+    context = ToolContext()
+    context.reads.remember(path, "read")
     real_find = paths.find
     monkeypatch.setattr(paths, "find", lambda relative: (
         tmp_path / "missing" / relative if str(relative).startswith("snippets/") else real_find(relative)

@@ -69,7 +69,7 @@ def test_an_unchanged_reread_of_the_same_lines_names_the_earlier_read(tmp_path, 
     assert "row 3" not in again
     assert len(again) < len(first)
     # The stub counts as reading those lines.
-    assert context.require_read(target.resolve(), "edit", line_ranges=[(3, 8)]) is None
+    assert context.reads.require(target.resolve(), "edit", line_ranges=[(3, 8)]) is None
 
 
 def test_a_whole_file_reread_is_a_stub_too(tmp_path, monkeypatch):
@@ -210,7 +210,7 @@ def test_a_read_outside_a_tool_call_never_stubs(tmp_path):
     context = ToolContext(cwd=tmp_path)
 
     first = fs.read(str(target), context=context)
-    context.settle_reads()
+    context.reads.settle()
     second = fs.read(str(target), context=context)
 
     assert first == second
@@ -221,12 +221,12 @@ def test_the_ledger_forgets_a_read_whose_result_text_changed(tmp_path):
     context = ToolContext(cwd=tmp_path)
     with call_scope("r1"):
         shown = fs.read(str(target), context=context)
-    context.settle_reads()
-    context.keep_shown_reads({"r1": shown})
+    context.reads.settle()
+    context.reads.keep_shown({"r1": shown})
     with call_scope("r2"):
         assert "r1" in fs.read(str(target), context=context)
-    context.settle_reads()
+    context.reads.settle()
 
-    context.keep_shown_reads({"r1": shown[:-1]})
+    context.reads.keep_shown({"r1": shown[:-1]})
     with call_scope("r3"):
         assert fs.read(str(target), context=context) == shown

@@ -1,14 +1,15 @@
 """Post-compaction file attachment preserves text and reports omitted files."""
 
-from types import SimpleNamespace
-
 import pytest
 
 from js.compaction import _post_compact_rehydration
+from js.toolkit import ToolContext
 
 
 def rehydrate(*paths, **kwargs):
-    context = SimpleNamespace(read_paths=set(paths), resolve_path=lambda path: path)
+    context = ToolContext()
+    for path in paths:
+        context.reads.remember(path, "read")
     message = _post_compact_rehydration(context, **kwargs)
     return message["content"] if message else ""
 

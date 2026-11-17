@@ -282,4 +282,4 @@ def test_runtime_dispatch_rejects_unselected_tool_cleanly(tmp_path):
     assert result.startswith("ERROR:")
     assert "read" in result
     assert "unselected tool must not read this" not in result
-    assert context.read_paths == set()
+    assert context.reads.paths() == []

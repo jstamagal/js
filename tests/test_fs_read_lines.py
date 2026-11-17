@@ -15,7 +15,7 @@ def test_read_preserves_non_newline_separators(tmp_path, separator):
     result = fs.read(str(target), context=context)
 
     assert result == f"1|one{separator}two\n2|three{separator}four\n3|five"
-    assert context.read_ranges[target] == [(1, 3)]
+    assert context.reads.coverage(target).ranges == [(1, 3)]
 
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
@@ -33,7 +33,7 @@ def test_read_counts_only_real_lines(tmp_path, newline, ending):
     result = fs.read(str(target), context=context)
 
     assert result == "1|one\n2|two" + ("\n3|" if ending == "blank" else "")
-    assert context.read_ranges[target] == [(1, 3 if ending == "blank" else 2)]
+    assert context.reads.coverage(target).ranges == [(1, 3 if ending == "blank" else 2)]
 
 
 @pytest.mark.parametrize("text, expected", [("\n", "1|"), ("\n\n", "1|\n2|")])
@@ -52,7 +52,7 @@ def test_read_empty_file_has_no_numbered_lines(tmp_path):
     result = fs.read(str(target), context=context)
 
     assert result == f"{target} is empty (hash {fs._hash_bytes(b'')})"
-    assert not context.read_ranges.get(target)
+    assert not context.reads.coverage(target).ranges
 
 
 def test_read_ranges_keep_physical_line_numbers(tmp_path):
@@ -64,5 +64,5 @@ def test_read_ranges_keep_physical_line_numbers(tmp_path):
 
     assert result.startswith("2|three\u2028four\n[3 total lines;")
     assert '"start_line": 3' in result
-    assert context.read_ranges[target] == [(2, 2)]
+    assert context.reads.coverage(target).ranges == [(2, 2)]
     assert fs.read(str(target), start_line=3, context=context) == "3|five"

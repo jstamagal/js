@@ -340,7 +340,7 @@ def test_rehydrate_max_files_knob_decides_whether_files_come_back(
     source = project / "kept.py"
     source.write_text("print('rehydrated-marker')\n", encoding="utf-8")
     context = ToolContext(cwd=project)
-    context.read_paths = {source}
+    context.reads.remember(source, "read")
 
     async def stream_stub(**_kwargs):
         return SimpleNamespace(text="Summary")
