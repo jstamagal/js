@@ -20,13 +20,13 @@ from typing import TYPE_CHECKING, Any
 
 from . import (
     control_sequences,
-    display as _display,
     fset,
     messages as msgs,
     output,
     paths as _paths,
     settings as _settings,
     text_layout,
+    tool_display,
     toolkit as _toolkit,
 )
 
@@ -380,17 +380,17 @@ class TranscriptSink:
         if not callable(write_plain):
             return
         settings = getattr(getattr(context or _toolkit.STOCK_CONTEXT, "config", None), "settings", None)
-        level = _display.tools_level(settings)
+        level = tool_display.tools_level(settings)
         if level <= 0:
             return
         # Every call whole, at every level.
         if level < 3:
-            record = _display.render_exchange(name, args, result, level=3, malformed=malformed, settings=settings)
+            record = tool_display.render_exchange(name, args, result, level=3, malformed=malformed, settings=settings)
         else:
-            record = _display.render_exchange(name, args, result, level=level,
-                                              preview=_display.preview_lines(settings),
-                                              malformed=malformed, settings=settings)
-        write_plain(_display.for_transcript(record))
+            record = tool_display.render_exchange(name, args, result, level=level,
+                                                  preview=tool_display.preview_lines(settings),
+                                                  malformed=malformed, settings=settings)
+        write_plain(tool_display.for_transcript(record))
 
     def _on_stream_open(self, *, stream: Any) -> None:
         self._streams[stream] = [getattr(self._telemetry, "transcript_log", None), False]

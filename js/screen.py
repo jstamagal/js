@@ -60,6 +60,7 @@ from . import (
     pastes,
     session_store,
     text_layout,
+    tool_display,
 )
 from .reasoning_display import grey, settled_rows
 
@@ -498,7 +499,7 @@ def _goes_on(first: str, rest: str, width: int) -> bool:
     """Whether the row after ``first`` may be ``first`` word-wrapped onto it:
     its first word would not have fit on ``first``, so a wrap could have put
     it there."""
-    following = fset.plain(rest.partition("\n")[0]).removeprefix(display.RAIL).split()
+    following = fset.plain(rest.partition("\n")[0]).removeprefix(tool_display.RAIL).split()
     if not following:
         return False
     return text_layout.cells(first.rstrip(" ")) + 1 + text_layout.cells(following[0]) > width

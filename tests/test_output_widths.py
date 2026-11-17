@@ -8,7 +8,7 @@ import re
 
 import pytest
 
-from js import display, fset, text_layout
+from js import fset, text_layout, tool_display
 
 SGR = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -61,6 +61,6 @@ def _tools():
 def test_the_whole_form_of_every_tool_shows_every_one_of_its_arguments(tool):
     args, tokens = _every_argument(tool)
     for result in ("RESULTA", "ERROR: it failed"):
-        shown = "".join(SGR.sub("", display.render_exchange(tool.name, args, result, level=3, width=200)).split())
+        shown = "".join(SGR.sub("", tool_display.render_exchange(tool.name, args, result, level=3, width=200)).split())
         missing = [token for token in tokens if token not in shown]
         assert not missing, (tool.name, result, missing)

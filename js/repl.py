@@ -69,6 +69,7 @@ from . import (
     stream_transport,
     subagent_windows,
     supervisor,
+    tool_display,
     transcript as transcript_mod,
     usage as usage_mod,
     usage_display,
@@ -712,8 +713,8 @@ def _show_resume(state: ReplState, telemetry: runtime.Telemetry, width: int) -> 
         if result is None:
             # A call the session holds no result for is drawn as it was left, running.
             console.settle_tool_trace(replay)
-            print(msgs.for_stream(display_mod.render_exchange(
-                name, args, None, level=display_mod.tools_level(live), preview=display_mod.preview_lines(live),
+            print(msgs.for_stream(tool_display.render_exchange(
+                name, args, None, level=tool_display.tools_level(live), preview=tool_display.preview_lines(live),
                 settings=live)), end="")
             continue
         opened = console.trace_call(replay, context, name, args)

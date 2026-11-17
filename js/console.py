@@ -15,9 +15,19 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from . import control_sequences, display, fset, messages as msgs, output, text_layout, toolkit as T
+from . import (
+    control_sequences,
+    display,
+    fset,
+    messages as msgs,
+    output,
+    text_layout,
+    tool_display,
+    toolkit as T,
+)
 from .reasoning_display import ReasoningDisplay, StderrReasoning
 from .toolkit.core import ToolContext
+from .toolkit.presentation import call_kind, declared, tool_output
 
 if TYPE_CHECKING:
     from .runtime import Telemetry
@@ -102,8 +112,8 @@ class ToolTrace:
     def _fold_text(self, fold: _Fold, settings: Any) -> str:
         if not fold.calls:
             return ""
-        return display.render_fold(fold.name, [args for _key, args in fold.calls], running=fold.running,
-                                   settings=settings)
+        return tool_display.render_fold(fold.name, [args for _key, args in fold.calls], running=fold.running,
+                                        settings=settings)
 
     def _draw(self, fold: _Fold, settings: Any) -> None:
         factory = self._factory()
@@ -142,14 +152,14 @@ class ToolTrace:
     def call(self, tool_context: ToolContext | None, name: str, args: dict | None,
              malformed: bool) -> _OpenCall | None:
         settings = _tool_settings(tool_context)
-        level = display.tools_level(settings)
+        level = tool_display.tools_level(settings)
         if level <= 0:
             return None
         opened = _OpenCall(name, args, malformed)
         with output.LOCK:
             # Quiet calls fold only on the screen, where the reasoning_toggle key unfolds them.
             if (level == 1 and not malformed and self._factory() is not None
-                    and display.call_kind(name, args, settings) == "quiet"):
+                    and call_kind(name, args, settings) == "quiet"):
                 fold = self._folds.get(name)
                 if fold is None:
                     fold = self._folds[name] = _Fold(name)
@@ -162,16 +172,16 @@ class ToolTrace:
             factory = self._factory()
             if factory is not None:
                 opened.exchange = factory()
-                opened.exchange.open(display.render_exchange(
-                    name, args, None, level=level, preview=display.preview_lines(settings),
+                opened.exchange.open(tool_display.render_exchange(
+                    name, args, None, level=level, preview=tool_display.preview_lines(settings),
                     malformed=malformed, settings=settings))
-            elif display.call_kind(name, args, settings) == "agent":
+            elif call_kind(name, args, settings) == "agent":
                 # Plain stdout draws a call once it ends; a subagent run can take
                 # minutes, so it gets a row now too.
-                _print_trace(self._telemetry, display.render_exchange(
-                    name, args, None, level=level, preview=display.preview_lines(settings),
+                _print_trace(self._telemetry, tool_display.render_exchange(
+                    name, args, None, level=level, preview=tool_display.preview_lines(settings),
                     malformed=malformed, settings=settings))
-        if opened.exchange is not None and display.declared(name).live:
+        if opened.exchange is not None and declared(name).live:
             threading.Thread(target=self._follow, args=(opened, tool_context, level),
                              name="js-live-output", daemon=True).start()
         return opened
@@ -185,7 +195,7 @@ class ToolTrace:
             return
         while not opened.done.wait(_LIVE_TICK_S):
             settings = _tool_settings(tool_context)
-            rows = int(display._setting(settings, "SHELL_LIVE_LINES_MAX"))
+            rows = int(display.setting(settings, "SHELL_LIVE_LINES_MAX"))
             tail = shell_fetch.live_tail(tool_context, command, rows)
             if tail is None:
                 continue
@@ -193,22 +203,22 @@ class ToolTrace:
             with output.LOCK:
                 if opened.done.is_set():
                     return
-                opened.exchange.update(display.render_exchange(
+                opened.exchange.update(tool_display.render_exchange(
                     opened.name, opened.args, None, level=level,
-                    preview=display.preview_lines(settings), settings=settings,
+                    preview=tool_display.preview_lines(settings), settings=settings,
                     live=lines, elapsed=_elapsed_text(seconds)))
 
     def result(self, tool_context: ToolContext | None, name: str, result: Any, *,
                args: dict | None, malformed: bool, opened: _OpenCall | None) -> None:
         settings = _tool_settings(tool_context)
-        level = display.tools_level(settings)
+        level = tool_display.tools_level(settings)
         if level <= 0:
             return
-        finished = display.render_exchange(
-            name, args, result, level=level, preview=display.preview_lines(settings),
+        finished = tool_display.render_exchange(
+            name, args, result, level=level, preview=tool_display.preview_lines(settings),
             malformed=malformed, settings=settings)
         # A folded row's or a preview's whole form, for the reasoning_toggle key to unfold.
-        whole = (display.render_exchange(name, args, result, level=3, malformed=malformed, settings=settings)
+        whole = (tool_display.render_exchange(name, args, result, level=3, malformed=malformed, settings=settings)
                  if level < 3 else None)
         if whole == finished:
             whole = None  # shown whole already: nothing to unfold
@@ -217,8 +227,8 @@ class ToolTrace:
                 opened.done.set()
             fold = opened.fold if opened is not None else None
             quiet = (level == 1 and not malformed and self._factory() is not None
-                     and display.call_kind(name, args, settings) == "quiet")
-            failed = display.tool_output(name, result).failed
+                     and call_kind(name, args, settings) == "quiet")
+            failed = tool_output(name, result).failed
             if fold is None and quiet and not failed:
                 fold = self._folds.get(name)
                 if fold is None:
@@ -242,8 +252,8 @@ class ToolTrace:
                     return
             if fold is not None or (quiet and failed):
                 # A failed quiet call stands on its own row, inside the run.
-                tight = display.render_exchange(
-                    name, args, result, level=level, preview=display.preview_lines(settings),
+                tight = tool_display.render_exchange(
+                    name, args, result, level=level, preview=tool_display.preview_lines(settings),
                     malformed=malformed, settings=settings)
                 factory = self._factory()
                 if factory is None:

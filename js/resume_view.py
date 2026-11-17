@@ -7,8 +7,9 @@ from collections.abc import Iterator
 from typing import Any
 
 from .control_sequences import clean
-from .display import agent_speaker, hang, render_exchange, render_markdown, user_line
+from .display import agent_speaker, hang, render_markdown, user_line
 from .text_layout import wrap_words
+from .tool_display import render_exchange
 
 
 def content_text(content: Any) -> str:

@@ -89,7 +89,7 @@ def test_save_puts_a_changed_line_after_a_load_that_would_override_it(tmp_path):
 
 
 def test_every_fallback_printer_writes_plain_text_to_a_stream_that_is_not_a_terminal(monkeypatch, capsys):
-    from js import display, runtime, stream_transport
+    from js import display, runtime, stream_transport, tool_display
     from js.reasoning_display import StderrReasoning
 
     out, err = io.StringIO(), io.StringIO()
@@ -98,7 +98,7 @@ def test_every_fallback_printer_writes_plain_text_to_a_stream_that_is_not_a_term
     fset.set_entry("RUN_LINE", "%C04run $0-")
     stream_transport.say_or_print(3, msgs.CATALOG_UPDATING.said())
     runtime._print_run_line(["model=m", "ctx=1"])
-    runtime._print_trace(runtime.Telemetry(None), display.render_exchange("shell", {"command": "x"}, None, level=1))
+    runtime._print_trace(runtime.Telemetry(None), tool_display.render_exchange("shell", {"command": "x"}, None, level=1))
     msgs.say(msgs.SAVE_FAILED, error="disk full")
     msgs.warn(msgs.SAVE_FAILED, error="disk full")
     answer = display.Display.for_stream(out)

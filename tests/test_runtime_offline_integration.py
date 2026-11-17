@@ -22,13 +22,13 @@ from turn_driver import (
 
 from js import (
     compaction,
-    display,
     events,
     history_record,
     repl,
     runtime,
     settings,
     tool_calls,
+    tool_display,
     tool_errors,
     toolkit as runtime_tools,
     turn_dispatch,
@@ -1460,7 +1460,7 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 def _trace_lines(capsys) -> list[str]:
     """What was printed, without colour or the exchange rail."""
-    return [ANSI_RE.sub("", line).removeprefix(display.RAIL).removeprefix(" ")
+    return [ANSI_RE.sub("", line).removeprefix(tool_display.RAIL).removeprefix(" ")
             for line in capsys.readouterr().out.splitlines()]
 
 
@@ -1489,7 +1489,7 @@ def _tools_context(level: int) -> ToolContext:
 
 
 def _marker_lines(lines: list[str]) -> list[str]:
-    return [line for line in lines if line.startswith((display.MARK, display.OK, display.FAIL))]
+    return [line for line in lines if line.startswith((tool_display.MARK, tool_display.OK, tool_display.FAIL))]
 
 
 def _traced_turn(tmp_path, monkeypatch, registry: ToolRegistry, batch: list[tuple[str, str, str]],
@@ -1506,8 +1506,8 @@ def test_trace_prints_a_result_line_for_success_and_for_error(capsys, monkeypatc
 
     markers = _marker_lines(_trace_lines(capsys))
     assert len(markers) == 2
-    assert markers[0].startswith(display.OK) and "big" in markers[0]
-    assert markers[1].startswith(display.FAIL) and "boom" in markers[1]
+    assert markers[0].startswith(tool_display.OK) and "big" in markers[0]
+    assert markers[1].startswith(tool_display.FAIL) and "boom" in markers[1]
 
 
 def test_trace_result_line_covers_the_unknown_tool_and_invalid_argument_paths(capsys, monkeypatch, tmp_path):

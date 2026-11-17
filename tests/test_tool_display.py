@@ -8,9 +8,17 @@ from types import SimpleNamespace
 
 from turn_driver import ExchangeConsole, config, run
 
-from js import console, control_sequences, display, messages as msgs, repl, runtime, tool_errors
+from js import (
+    console,
+    control_sequences,
+    messages as msgs,
+    repl,
+    runtime,
+    tool_display,
+    tool_errors,
+)
 from js.repl_state import ReplState
-from js.toolkit import Tool, ToolContext, ToolRegistry
+from js.toolkit import Tool, ToolContext, ToolRegistry, presentation
 from js.transcript import TranscriptLogSink
 
 SGR = re.compile(r"\x1b\[[0-9;]*m")
@@ -20,21 +28,21 @@ RESULT_292 = "\n".join(f"{index}|row {index} of the file" for index in range(1, 
 
 def _plain(text: str) -> list[str]:
     """The rows of `text` without colour or the exchange rail; blank rows dropped."""
-    rows = [row.removeprefix(display.RAIL).removeprefix(" ") for row in SGR.sub("", text).splitlines()]
+    rows = [row.removeprefix(tool_display.RAIL).removeprefix(" ") for row in SGR.sub("", text).splitlines()]
     return [row for row in rows if row.strip()]
 
 
 def _shown(name: str, result, level: int, *, args=None, **options) -> str:
     """A finished exchange."""
-    return display.render_exchange(name, args, result, level=level, **options)
+    return tool_display.render_exchange(name, args, result, level=level, **options)
 
 
 def _running(name: str, args, level: int, **options) -> str:
     """An exchange whose call has not returned."""
-    return display.render_exchange(name, args, None, level=level, **options)
+    return tool_display.render_exchange(name, args, None, level=level, **options)
 
 
-MARKS = (display.MARK, display.OK, display.FAIL)
+MARKS = (tool_display.MARK, tool_display.OK, tool_display.FAIL)
 
 
 def _headers(lines: list[str]) -> list[str]:
@@ -116,8 +124,8 @@ def test_one_transcript_marker_per_exchange_at_every_visible_level():
     args = {"file_path": "x.py"}
     for level in (1, 2, 3):
         text = _shown("read", RESULT_292, level, args=args)
-        markers = [line for line in _plain(display.for_transcript(text))
-                   if line.startswith(display.TOOL_MARKER + " ")]
+        markers = [line for line in _plain(tool_display.for_transcript(text))
+                   if line.startswith(tool_display.TOOL_MARKER + " ")]
         assert len(markers) == 1, level
 
 
@@ -216,8 +224,8 @@ def test_a_shell_command_is_quiet_only_when_all_of_it_looks_around():
     quiet = ("ls -la", "cd /tmp && git status | head -3", "cat a.txt; wc -l a.txt")
     loud = ("just test", "ls > listing.txt", "git status && git commit -m x", "ls\nrm -rf build")
 
-    assert [display.call_kind("shell", {"command": command}) for command in quiet] == ["quiet"] * len(quiet)
-    assert [display.call_kind("shell", {"command": command}) for command in loud] == ["command"] * len(loud)
+    assert [presentation.call_kind("shell", {"command": command}) for command in quiet] == ["quiet"] * len(quiet)
+    assert [presentation.call_kind("shell", {"command": command}) for command in loud] == ["command"] * len(loud)
 
 
 def test_the_output_of_a_command_still_running_can_be_read():
@@ -248,8 +256,8 @@ def test_ctrl_o_unfolds_a_folded_tool_row_and_folds_it_back():
 
     scroll = screen.Scrollback()
     shell = "shell=bash\nexit=0\n--- stdout ---\n" + "\n".join(f"out {n}" for n in range(8)) + "\n"
-    folded = display.render_exchange("shell", {"command": "make"}, shell, level=1, width=60)
-    whole = display.render_exchange("shell", {"command": "make"}, shell, level=3, width=60)
+    folded = tool_display.render_exchange("shell", {"command": "make"}, shell, level=1, width=60)
+    whole = tool_display.render_exchange("shell", {"command": "make"}, shell, level=3, width=60)
     span = scroll.exchange_open(folded)
     scroll.exchange_close(span, folded, expanded=whole)
     scroll.append("after\n")
@@ -420,14 +428,14 @@ def test_the_transcript_keeps_every_call_whole_at_every_level():
 
 
 def test_a_long_run_of_quiet_calls_renders_each_call_a_fixed_number_of_times(monkeypatch):
-    real = display.render_exchange
+    real = tool_display.render_exchange
     count = [0]
 
     def counting(*args, **kwargs):
         count[0] += 1
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(display, "render_exchange", counting)
+    monkeypatch.setattr(tool_display, "render_exchange", counting)
 
     def renders(calls: int) -> int:
         count[0] = 0

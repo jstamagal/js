@@ -7,7 +7,7 @@ import asyncio
 import io
 import re
 
-from js import debug_trace, display, resume_view, screen, text_layout, transcript
+from js import debug_trace, display, resume_view, screen, text_layout, tool_display, transcript
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
@@ -210,8 +210,8 @@ def test_line_separator_in_a_paragraph_does_not_cut_the_block():
 def test_tool_result_name_is_cleaned_at_every_level():
     evil = "evil\x1b]0;PWNED\x07\x1b[2J"
     for level in (1, 2, 3):
-        out = (display.render_exchange(evil, {}, None, level=level, width=80)
-               + display.render_exchange(evil, {}, "ok", level=level, width=80))
+        out = (tool_display.render_exchange(evil, {}, None, level=level, width=80)
+               + tool_display.render_exchange(evil, {}, "ok", level=level, width=80))
         assert "PWNED" not in out and "\x1b[2J" not in out and "\x07" not in out, level
         assert "evil" in out
 
