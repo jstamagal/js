@@ -30,6 +30,7 @@ from . import (
     attach,
     clipimage,
     command_line,
+    console,
     conversation,
     debug_trace,
     display as display_mod,
@@ -703,20 +704,20 @@ def _show_resume(state: ReplState, telemetry: runtime.Telemetry, width: int) -> 
     for kind, part in display_mod.resume_parts(state.messages, count if isinstance(count, int) else 0,
                                                width=width, markdown=display_mod.markdown_enabled(live)):
         if kind == "text":
-            runtime.settle_tool_trace(replay)
+            console.settle_tool_trace(replay)
             print(msgs.for_stream(part), end="", flush=True)
             continue
         name, args, result = part
         if result is None:
             # A call the session holds no result for is drawn as it was left, running.
-            runtime.settle_tool_trace(replay)
+            console.settle_tool_trace(replay)
             print(msgs.for_stream(display_mod.render_exchange(
                 name, args, None, level=display_mod.tools_level(live), preview=display_mod.preview_lines(live),
                 settings=live)), end="")
             continue
-        opened = runtime._trace_call(replay, context, name, args)
-        runtime._trace_result(replay, context, name, result, args=args, exchange=opened)
-    runtime.settle_tool_trace(replay)
+        opened = console.trace_call(replay, context, name, args)
+        console.trace_result(replay, context, name, result, args=args, exchange=opened)
+    console.settle_tool_trace(replay)
 
 
 async def _initialize_repl_agent(cfg, state, telemetry, prompt_spec) -> None:

@@ -7,7 +7,7 @@ from prompt_toolkit.application import Application, create_app_session
 from repl_driver import stub_screen, turn_stub
 from turn_driver import js
 
-from js import cli, conversation, run_assembly, runtime, screen, transcript
+from js import cli, console, conversation, run_assembly, runtime, screen, transcript
 from js.config import Config
 from js.model_client import ModelStreamResult
 
@@ -245,8 +245,8 @@ def test_prompt_mode_transcript_records_each_tool_call_whole(monkeypatch, tmp_pa
 
     def run_turn(cfg, system, messages, telemetry, **_kwargs):
         context = SimpleNamespace(config=SimpleNamespace(settings={"TOOLS_DISPLAY": 1}))
-        opened = runtime._trace_call(telemetry, context, "shell", {"command": "make"})
-        runtime._trace_result(telemetry, context, "shell", result, args={"command": "make"}, exchange=opened)
+        opened = console.trace_call(telemetry, context, "shell", {"command": "make"})
+        console.trace_result(telemetry, context, "shell", result, args={"command": "make"}, exchange=opened)
         messages.append({"role": "assistant", "content": "FINAL_OK"})
 
     monkeypatch.chdir(tmp_path)

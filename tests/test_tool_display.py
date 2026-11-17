@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 from turn_driver import ExchangeConsole, config, run
 
-from js import display, messages as msgs, repl, runtime, tool_errors
+from js import console, display, messages as msgs, repl, runtime, tool_errors
 from js.repl_state import ReplState
 from js.toolkit import Tool, ToolContext, ToolRegistry
 from js.transcript import TranscriptLogSink
@@ -176,9 +176,9 @@ def _traced(calls, *, level: int = 1) -> tuple[list[str], str]:
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         for name, args, result in calls:
-            opened = runtime._trace_call(telemetry, context, name, args)
-            runtime._trace_result(telemetry, context, name, result, args=args, exchange=opened)
-        runtime.settle_tool_trace(telemetry)
+            opened = console.trace_call(telemetry, context, name, args)
+            console.trace_result(telemetry, context, name, result, args=args, exchange=opened)
+        console.settle_tool_trace(telemetry)
     return _headers(_plain(out.getvalue())), log.getvalue()
 
 
@@ -205,9 +205,9 @@ def _traced_on_screen(calls) -> list[str]:
     context = ToolContext(cwd="/tmp")
     context.config = SimpleNamespace(settings={"TOOLS_DISPLAY": 1})
     for name, args, result in calls:
-        opened = runtime._trace_call(telemetry, context, name, args)
-        runtime._trace_result(telemetry, context, name, result, args=args, exchange=opened)
-    runtime.settle_tool_trace(telemetry)
+        opened = console.trace_call(telemetry, context, name, args)
+        console.trace_result(telemetry, context, name, result, args=args, exchange=opened)
+    console.settle_tool_trace(telemetry)
     scroll.flush()
     return _headers(_plain(scroll.buffer.text))
 
@@ -285,12 +285,12 @@ def test_a_level_one_exchange_hands_the_screen_its_whole_form(monkeypatch):
     context = ToolContext(cwd="/tmp")
     context.config = SimpleNamespace(settings={"TOOLS_DISPLAY": 1})
     result = "shell=bash\nexit=0\n--- stdout ---\none\ntwo\nthree\n"
-    opened = runtime._trace_call(telemetry, context, "shell", {"command": "make"})
-    runtime._trace_result(telemetry, context, "shell", result, args={"command": "make"}, exchange=opened)
+    opened = console.trace_call(telemetry, context, "shell", {"command": "make"})
+    console.trace_result(telemetry, context, "shell", result, args={"command": "make"}, exchange=opened)
     for name in ("read", "read"):
-        opened = runtime._trace_call(telemetry, context, name, {"path": "/w/a.py"})
-        runtime._trace_result(telemetry, context, name, "1|alpha_line", args={"path": "/w/a.py"}, exchange=opened)
-    runtime.settle_tool_trace(telemetry)
+        opened = console.trace_call(telemetry, context, name, {"path": "/w/a.py"})
+        console.trace_result(telemetry, context, name, "1|alpha_line", args={"path": "/w/a.py"}, exchange=opened)
+    console.settle_tool_trace(telemetry)
     assert closed and all(expanded for _, expanded in closed)
     assert "one" in SGR.sub("", closed[0][1]) and "alpha_line" in SGR.sub("", closed[-1][1])
 
@@ -313,12 +313,12 @@ def test_a_quiet_call_still_running_when_a_loud_one_starts_keeps_its_whole_form(
     context = ToolContext(cwd="/tmp")
     context.config = SimpleNamespace(settings={"TOOLS_DISPLAY": 1})
     read_args, shell_args = {"path": "/w/a.py"}, {"command": "make"}
-    reading = runtime._trace_call(telemetry, context, "read", read_args)
-    making = runtime._trace_call(telemetry, context, "shell", shell_args)
-    runtime._trace_result(telemetry, context, "read", "1|alpha_line", args=read_args, exchange=reading)
-    runtime._trace_result(telemetry, context, "shell", "shell=bash\nexit=0\n--- stdout ---\nok\n",
+    reading = console.trace_call(telemetry, context, "read", read_args)
+    making = console.trace_call(telemetry, context, "shell", shell_args)
+    console.trace_result(telemetry, context, "read", "1|alpha_line", args=read_args, exchange=reading)
+    console.trace_result(telemetry, context, "shell", "shell=bash\nexit=0\n--- stdout ---\nok\n",
                           args=shell_args, exchange=making)
-    runtime.settle_tool_trace(telemetry)
+    console.settle_tool_trace(telemetry)
     reads = [expanded for rendered, expanded in closed if " read " in rendered]
     assert reads and reads[0] and "alpha_line" in reads[0]
 
@@ -341,11 +341,11 @@ def test_a_failed_repeat_of_a_quiet_call_leaves_the_earlier_result_in_the_whole_
     context = ToolContext(cwd="/tmp")
     context.config = SimpleNamespace(settings={"TOOLS_DISPLAY": 1})
     one, two = {"path": "/w/a.py"}, {"path": "/w/a.py"}
-    first = runtime._trace_call(telemetry, context, "read", one)
-    runtime._trace_result(telemetry, context, "read", "1|alpha_line", args=one, exchange=first)
-    again = runtime._trace_call(telemetry, context, "read", two)
-    runtime._trace_result(telemetry, context, "read", "ERROR: gone", args=two, exchange=again)
-    runtime.settle_tool_trace(telemetry)
+    first = console.trace_call(telemetry, context, "read", one)
+    console.trace_result(telemetry, context, "read", "1|alpha_line", args=one, exchange=first)
+    again = console.trace_call(telemetry, context, "read", two)
+    console.trace_result(telemetry, context, "read", "ERROR: gone", args=two, exchange=again)
+    console.settle_tool_trace(telemetry)
     assert any(expanded and "alpha_line" in expanded for expanded in closed), closed
 
 
@@ -402,8 +402,8 @@ def test_a_finished_quiet_call_unfolds_before_its_run_ends(monkeypatch):
     context = ToolContext(cwd="/tmp")
     context.config = SimpleNamespace(settings={"TOOLS_DISPLAY": 1})
     for _ in range(2):
-        opened = runtime._trace_call(telemetry, context, "read", {"path": "/w/a.py"})
-        runtime._trace_result(telemetry, context, "read", "1|alpha_line", args={"path": "/w/a.py"}, exchange=opened)
+        opened = console.trace_call(telemetry, context, "read", {"path": "/w/a.py"})
+        console.trace_result(telemetry, context, "read", "1|alpha_line", args={"path": "/w/a.py"}, exchange=opened)
     assert scroll.toggle_reasoning()
     assert "alpha_line" in SGR.sub("", scroll.buffer.text)
 
@@ -458,7 +458,7 @@ def test_a_quiet_call_shown_only_when_it_returns_unfolds_at_once():
     telemetry.exchange_factory = Exchange
     context = ToolContext(cwd="/tmp")
     context.config = SimpleNamespace(settings={"TOOLS_DISPLAY": 1})
-    runtime._trace_result(telemetry, context, "read", "1|nested_line", args={"path": "/w/a.py"})
+    console.trace_result(telemetry, context, "read", "1|nested_line", args={"path": "/w/a.py"})
     assert scroll.toggle_reasoning()
     assert "nested_line" in SGR.sub("", scroll.buffer.text)
 
@@ -473,13 +473,13 @@ def test_plain_stdout_keeps_what_tools_display_hides_and_shows_a_subagent_start(
     big = "\n".join(f"line {n}" for n in range(500))
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        opened = runtime._trace_call(telemetry, context, "fetch_all", {"url": "x"})
-        runtime._trace_result(telemetry, context, "fetch_all", big, args={"url": "x"}, exchange=opened)
+        opened = console.trace_call(telemetry, context, "fetch_all", {"url": "x"})
+        console.trace_result(telemetry, context, "fetch_all", big, args={"url": "x"}, exchange=opened)
         tasks = {"tasks": ["review 9b142f1"]}
-        opened = runtime._trace_call(telemetry, context, "coder", tasks)
+        opened = console.trace_call(telemetry, context, "coder", tasks)
         started = _plain(out.getvalue())
-        runtime._trace_result(telemetry, context, "coder", "verdict: problem", args=tasks, exchange=opened)
-        runtime.settle_tool_trace(telemetry)
+        console.trace_result(telemetry, context, "coder", "verdict: problem", args=tasks, exchange=opened)
+        console.settle_tool_trace(telemetry)
 
     shown = _plain(out.getvalue())
     assert "line 2" in "\n".join(shown) and "line 3" not in "\n".join(shown)

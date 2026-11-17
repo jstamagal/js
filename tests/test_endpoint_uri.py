@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from js import cli, logins, run_assembly, runtime, settings
+from js import cli, console, logins, run_assembly, runtime, settings
 from js.config import from_env
 from js.endpoint_uri import DUMMY_KEY, EndpointSpecError, from_env as endpoint_from_env, parse
 from js.logins import Login
@@ -178,7 +178,7 @@ def test_an_error_never_prints_the_key():
 
 def _banner(monkeypatch, *, provider_id, api_key, settings_=None):
     seen = {}
-    monkeypatch.setattr(runtime, "_output", lambda _t, name, **f: seen.update(f))
+    monkeypatch.setattr(console, "emit_event", lambda _t, name, **f: seen.update(f))
     monkeypatch.setattr(runtime.compaction, "configured_context_window", lambda *a: None)
     request = ModelRequest(model="m", provider_id=provider_id, base_url="http://h/v1",
                            api_key=api_key, effort=None, max_out=None, settings=settings_ or {})

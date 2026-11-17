@@ -13,11 +13,14 @@ import threading
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import display, fset, messages as msgs, output, toolkit as T
 from .reasoning_display import ReasoningDisplay, StderrReasoning
 from .toolkit.core import ToolContext
+
+if TYPE_CHECKING:
+    from .runtime import Telemetry
 
 
 def _tool_settings(tool_context: ToolContext | None) -> Any:
@@ -587,3 +590,45 @@ def compaction_events(emit: Callable[..., Any] | None = None, *,
             return None
         return None if emit is None else emit(event, **payload)
     return handler
+
+
+def emit_event(telemetry: Telemetry, name: str, /, **fields: Any) -> None:
+    """Emit output event ``name`` to the telemetry's sink."""
+    output.sink_of(telemetry).emit(output.event(name, **fields))
+
+
+def settle_tool_trace(telemetry: Telemetry) -> None:
+    """End the run of quiet tool calls: called before anything else is shown
+    and when the turn ends."""
+    with output.LOCK:
+        emit_event(telemetry, "tools_settle")
+
+
+def trace_call(telemetry: Telemetry, tool_context: ToolContext | None, name: str,
+                args: dict | None, *, malformed: bool = False, traced: bool = True,
+                deferred: bool = False) -> output.Key:
+    """Show a call that is starting; returns what `trace_result` finishes."""
+    call = output.Key()
+    with output.LOCK:
+        emit_event(telemetry, "tool_call", call=call, name=name, args=args, malformed=malformed,
+                context=tool_context, traced=traced, deferred=deferred)
+    return call
+
+
+def trace_result(telemetry: Telemetry, tool_context: ToolContext | None, name: str, result: Any,
+                  *, args: dict | None = None, malformed: bool = False,
+                  exchange: output.Key | None = None, view: dict | None = None,
+                  traced: bool = True) -> None:
+    """Show a finished call. `exchange` is what `trace_call` returned for it;
+    without one the call is shown whole now. `view` is what the tool handed
+    the screen beside its result (`toolkit.core.view`)."""
+    from .toolkit.presentation import tool_output
+
+    screen = tool_output(name, result) if traced else None
+    with output.LOCK:
+        if exchange is None:
+            exchange = trace_call(telemetry, tool_context, name, args, malformed=malformed,
+                                   traced=traced, deferred=True)
+        emit_event(telemetry, "tool_result", call=exchange, name=name, args=args, result=result,
+                malformed=malformed, context=tool_context, view=view, screen=screen,
+                traced=traced)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 
+from js import console
 from js.output import OutputEvent
 
 
@@ -156,7 +157,7 @@ def test_tool_result_event_carries_screen_fields_without_rendering(capsys):
     from js import runtime
 
     sink = _Sink()
-    runtime._trace_result(runtime.Telemetry(None, sink=sink), None, "shell",
+    console.trace_result(runtime.Telemetry(None, sink=sink), None, "shell",
                           "shell=/bin/sh\nexit=7\n--- stdout ---\nout\n--- stderr ---\nerr\n")
 
     result = sink.named("tool_result")[0]["screen"]

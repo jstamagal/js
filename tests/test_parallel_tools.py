@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from test_lazy_tool_discovery import _cfg, _result
 
-from js import paths, result_caps, runtime, tool_calls, tool_errors
+from js import console, paths, result_caps, runtime, tool_calls, tool_errors
 from js.toolkit import core as tool_core, fs
 from js.toolkit.core import Tool, ToolContext, call_is_read_only
 from js.toolkit.registry import ToolRegistry, build_default_registry
@@ -61,7 +61,7 @@ def _dispatch(calls, registry, context, *, trace: bool = False, progress=None, t
         calls, telemetry, 256 * 1024, trace, tool_errors.ToolErrorTracker(),
         registry, context, progress,
     )
-    runtime.settle_tool_trace(telemetry)
+    console.settle_tool_trace(telemetry)
     return records
 
 

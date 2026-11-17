@@ -25,6 +25,7 @@ import ai
 
 from . import (
     compaction,
+    console,
     context_budget,
     events as event_mod,
     held,
@@ -244,52 +245,10 @@ class Telemetry:
 # Tool trace
 # --------------------------------------------------------------------------
 
-def _output(telemetry: Telemetry, name: str, /, **fields: Any) -> None:
-    """Emit output event ``name`` to the telemetry's sink."""
-    output.sink_of(telemetry).emit(output.event(name, **fields))
-
-
 def _notice(telemetry: Telemetry, message: msgs.Message, *, stderr: bool = False, flush: bool = False,
             **fields: Any) -> None:
     """``message`` as a notice event: a line for stdout, or for stderr."""
-    _output(telemetry, "notice", message=message, fields=fields, stderr=stderr, flush=flush)
-
-
-def settle_tool_trace(telemetry: Telemetry) -> None:
-    """End the run of quiet tool calls: called before anything else is shown
-    and when the turn ends."""
-    with output.LOCK:
-        _output(telemetry, "tools_settle")
-
-
-def _trace_call(telemetry: Telemetry, tool_context: ToolContext | None, name: str,
-                args: dict | None, *, malformed: bool = False, traced: bool = True,
-                deferred: bool = False) -> output.Key:
-    """Show a call that is starting; returns what `_trace_result` finishes."""
-    call = output.Key()
-    with output.LOCK:
-        _output(telemetry, "tool_call", call=call, name=name, args=args, malformed=malformed,
-                context=tool_context, traced=traced, deferred=deferred)
-    return call
-
-
-def _trace_result(telemetry: Telemetry, tool_context: ToolContext | None, name: str, result: Any,
-                  *, args: dict | None = None, malformed: bool = False,
-                  exchange: output.Key | None = None, view: dict | None = None,
-                  traced: bool = True) -> None:
-    """Show a finished call. `exchange` is what `_trace_call` returned for it;
-    without one the call is shown whole now. `view` is what the tool handed
-    the screen beside its result (`toolkit.core.view`)."""
-    from .toolkit.presentation import tool_output
-
-    screen = tool_output(name, result) if traced else None
-    with output.LOCK:
-        if exchange is None:
-            exchange = _trace_call(telemetry, tool_context, name, args, malformed=malformed,
-                                   traced=traced, deferred=True)
-        _output(telemetry, "tool_result", call=exchange, name=name, args=args, result=result,
-                malformed=malformed, context=tool_context, view=view, screen=screen,
-                traced=traced)
+    console.emit_event(telemetry, "notice", message=message, fields=fields, stderr=stderr, flush=flush)
 
 
 # --------------------------------------------------------------------------
@@ -346,7 +305,7 @@ def _cell_call_observer(telemetry: Telemetry, trace: bool,
         else:
             telemetry.event("tool_exception", tool=name, via="kernel", error=failure,
                             latency_ms=latency_ms)
-        _trace_result(telemetry, context, name, result, args=args, traced=trace, view=call_view())
+        console.trace_result(telemetry, context, name, result, args=args, traced=trace, view=call_view())
 
     return observe
 
@@ -401,17 +360,17 @@ async def _run_call(way: _CallWay, name: str, raw_args: str, *, call_id: str, ca
     try:
         args = tool_calls.repair_jsonish(raw_args)
     except ValueError as exc:
-        opened = _trace_call(telemetry, context, name, None, malformed=True,
+        opened = console.trace_call(telemetry, context, name, None, malformed=True,
                              traced=trace, deferred=trace_together)
         telemetry.event("tool_error", tool=logged_name, call_id=call_id, error=f"argparse: {exc}")
         result = f'ERROR: could not parse arguments for {name}: {exc}'
         if error_tracker is not None:
             result = error_tracker.record(name, result)
-        _trace_result(telemetry, context, name, result, malformed=True, exchange=opened, traced=trace)
+        console.trace_result(telemetry, context, name, result, malformed=True, exchange=opened, traced=trace)
         return {}, result
 
     tool = registry.resolve(name)
-    opened = _trace_call(telemetry, context, tool.name if tool is not None else name, args,
+    opened = console.trace_call(telemetry, context, tool.name if tool is not None else name, args,
                          traced=trace, deferred=trace_together)
     if tool is None:
         telemetry.event("tool_unknown", tool=logged_name, call_id=call_id, args=args)
@@ -419,7 +378,7 @@ async def _run_call(way: _CallWay, name: str, raw_args: str, *, call_id: str, ca
         if way.hold_unknown_write and tool_calls.canonical_tool_call_name(name, registry) == "write":
             result += held.hold_failed_call(context, raw_args, args)
         result = result_caps.cap_result(result, cap_bytes, context=context)
-        _trace_result(telemetry, context, name, result, args=args, exchange=opened, traced=trace)
+        console.trace_result(telemetry, context, name, result, args=args, exchange=opened, traced=trace)
         return args, result
 
     started = time.time()
@@ -448,7 +407,7 @@ async def _run_call(way: _CallWay, name: str, raw_args: str, *, call_id: str, ca
     capped = result_caps.cap_result(result, cap_bytes, context=context)
     if way.reconcile_reads:
         _reconcile_read_delivery(tool.name, args, result, capped, context, call_id)
-    _trace_result(telemetry, context, tool.name, _operator_sees(produced, result), args=args,
+    console.trace_result(telemetry, context, tool.name, _operator_sees(produced, result), args=args,
                   exchange=opened, view=view, traced=trace)
     return args, capped
 
@@ -612,7 +571,7 @@ def _dispatch_tool_calls(
             recorded = error_tracker.record(pc.name, recorded)
         # A call rejected before dispatch is still an exchange the model sees.
         # It used to be invisible in the trace from both ends.
-        _trace_result(telemetry, tool_context, pc.name, recorded, args=args, traced=trace)
+        console.trace_result(telemetry, tool_context, pc.name, recorded, args=args, traced=trace)
         records[idx] = (args, recorded)
         if progress is not None:
             progress.record(pc, args, recorded)
@@ -979,7 +938,7 @@ def _trace_banner(telemetry: Telemetry, request: ModelRequest, context: ToolCont
     except Exception:  # noqa: BLE001 — registry internals
         ntools = "?"
     bits.append(f"tools={ntools}")
-    _output(telemetry, "run_line", fields=bits)
+    console.emit_event(telemetry, "run_line", fields=bits)
 
 
 def _note_user_skill(messages: list[dict], registry: ToolRegistry) -> None:
@@ -1379,7 +1338,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         active_context.net_label, agent=cfg.agent_id, status=turn_status, retries=True,
     )
     net_output_token = stream_transport.set_output(
-        lambda level, line, fallback: _output(telemetry, "network", level=level, line=line, fallback=fallback))
+        lambda level, line, fallback: console.emit_event(telemetry, "network", level=level, line=line, fallback=fallback))
     usage_token = usage_mod.start(usage_mod.Meter(
         (usage_mod.session_key(getattr(cfg, "session_file", None), active_context),
          *getattr(active_context, "usage_chain", ())),
@@ -1464,7 +1423,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         raise
     finally:
         sink.close_reasoning()
-        settle_tool_trace(telemetry)
+        console.settle_tool_trace(telemetry)
         usage_mod.stop(usage_token)
         stream_transport.reset_role(net_role_token)
         stream_transport.reset_output(net_output_token)
