@@ -97,7 +97,7 @@ _LIFECYCLE = frozenset({"start", "success", "failure", "cancelled", "skipped"})
 def _stem(cfg) -> str:
     """The session file's name, or `<agent>-<pid>` for a one-shot run with no
     persisted session (whose session file is /dev/null), the same rule as the
-    debug autolog in cli.py. One-shot runs no longer share `null.log` and
+    debug autolog in debug_trace.py. One-shot runs no longer share `null.log` and
     `null-<id>.jsonl`."""
     session = getattr(cfg, "session_file", None)
     if not session or Path(session) == Path(os.devnull):

@@ -200,7 +200,7 @@ private loop in a daemon thread and ends with the process.
 
 When a run started by the main agent finishes and the model has not read its
 result through poll, wait or kill, the next user message carries a
-`<js-reminder>` naming the handle and the result file (`cli._take_pending_notes`).
+`<js-reminder>` naming the handle and the result file (`repl._take_pending_notes`).
 A run a subagent started gets no reminder; that subagent polls it itself.
 
 Children run through the same `_prepare_fan_out` as a foreground call, so they

@@ -18,7 +18,7 @@ js = "js.cli:main"
 One normal prompt run follows this path:
 
 1. `js.cli.main()` parses flags.
-2. `_from_env()` builds `Config`.
+2. `js.run_assembly.from_env()` builds `Config`.
 3. `js.persona.load_prompt_spec()` loads the selected agent from repo
    `defaults/agents/`, global `~/.js/agents/`, and project `.js/agents/`.
 4. `ToolRegistry.select()` filters the default registry by prompt selectors.
@@ -35,7 +35,8 @@ persists each completed turn.
 ## Module Responsibilities
 
 | Module | Responsibility |
-| `js/cli.py` | argument parser, REPL, prompt/pipe mode, commit orchestration |
+| `js/cli.py` | argument parser, the run's setup, the mode picker, prompt/pipe mode, commit orchestration |
+| `js/repl.py` | the interactive REPL: startup (`start_repl`), the input loop, the turn queue and steering, the status bar, the `/session` switch |
 | `js/repl_commands.py` | the REPL's slash commands: the command table (`COMMANDS`), dispatch, aliases, `/load` and the startup run of the jsrc files |
 | `js/repl_state.py` | the REPL's live state (`ReplState`), its assembly, and carrying live settings into the route and tool registry |
 | `js/config.py` | environment parsing, session reservation, model/provider caps, vision heuristic |
@@ -46,6 +47,7 @@ persists each completed turn.
 | `js/output.py` | output events (`OutputEvent`), the `Sink` a turn emits them to (`Telemetry.sink`), the list of the loop's events and their fields |
 | `js/console.py` | js's console sink (`ConsoleSink`): draws output events on stdout or the screen, folds tool runs (`ToolTrace`) |
 | `js/transcript.py` | the transcript log (`TranscriptLogSink`), its stdout tee, and its record of output events (`TranscriptSink`) |
+| `js/debug_trace.py` | the request-trace autolog (`DebugTraceSink`), its path, and the stdout tee `-d` writes through |
 | `js/turn_surface.py` | the session file's record of the lazy tool surface, restored per agent and directory |
 | `js/turn_budget.py` | the turn's SDK conversation (`TurnConvo`) and the context budget it is held to (`TurnBudget`) |
 | `js/turn_call.py` | one model call with its retries, overflow recovery, escalated resend and signed-reasoning resend (`ModelCaller`) |

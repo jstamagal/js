@@ -50,7 +50,9 @@ Streaming tool-use loop: sync runtime over the async SDK.
 `js/model_client.py` is the model I/O boundary (providers are registered in
 `js/providers.py`); `js/runtime.py` is the loop (dispatch, subagent
 fan-out), and a turn's model call and streamed reply live in
-`js/turn_call.py` and `js/turn_stream.py`; `js/run_assembly.py` turns config,
+`js/turn_call.py` and `js/turn_stream.py`; `js/cli.py` parses the command
+line and picks the mode, and `js/repl.py` is the interactive REPL (startup,
+the input loop, the turn queue, steering); `js/run_assembly.py` turns config,
 agent and model into a settled run, the ready-to-run turn that `-p`, the REPL
 at startup, `--bench` and swarm agents start from; `js/toolkit/` is the tools — model-facing contracts live
 in `tool_descriptions/*.md`, not in code. Agents are prompt directories
