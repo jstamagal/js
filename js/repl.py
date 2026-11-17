@@ -84,7 +84,7 @@ from .repl_state import ReplState
 from .toolkit import subagents, task_jobs
 
 
-def _print_resume_hint(cfg: Config, state: ReplState) -> None:
+def print_resume_hint(cfg: Config, state: ReplState) -> None:
     """Print the command that reopens this session.
 
     Without it the name is only recoverable by hunting through the sessions
@@ -1134,6 +1134,6 @@ def start_repl(args: argparse.Namespace, setup: Setup) -> int:
         )
     finally:
         transcript_stack.close()
-    _print_resume_hint(cfg, state)
+    print_resume_hint(cfg, state)
     _queue_switch(state)
     return code

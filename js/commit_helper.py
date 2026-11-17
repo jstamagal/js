@@ -96,12 +96,14 @@ _DIFF_FLAGS = (
 )
 
 
-def _git(
+def git(
     *args: str,
     check: bool = True,
     stdin: str | None = None,
     repo: str | Path | None = None,
 ) -> subprocess.CompletedProcess:
+    """Run git in ``repo`` with text decoded as surrogate-escaped UTF-8. A
+    nonzero exit raises GitCommandError unless ``check`` is false."""
     workdir = _repo_path(repo)
     try:
         # Bytes in, bytes out, decoded here: text mode would translate
@@ -214,7 +216,7 @@ def _toplevel(repo: str | Path | None = None) -> Path:
     """The work tree root. Status paths are root-relative, so every git call
     that takes them back runs from here, whatever directory ``-C`` named."""
     # Exactly one trailing LF is git's delimiter; anything else is the name.
-    top = _git("rev-parse", "--show-toplevel", repo=repo).stdout.removesuffix("\n")
+    top = git("rev-parse", "--show-toplevel", repo=repo).stdout.removesuffix("\n")
     return Path(top) if top else _repo_path(repo)
 
 
@@ -225,7 +227,7 @@ def _porcelain(repo: str | Path | None = None) -> list[StatusRow]:
     in its own field; ``-uall`` lists the files inside untracked directories
     instead of ``newdir/``.
     """
-    out = _git("status", "--porcelain=v1", "-z", "-uall", repo=repo).stdout
+    out = git("status", "--porcelain=v1", "-z", "-uall", repo=repo).stdout
     fields = out.split("\0")
     rows: list[StatusRow] = []
     i = 0
@@ -266,13 +268,13 @@ def _split_hunks(diff_text: str) -> tuple[str, list[str]]:
 
 
 def _branch_name(repo: str | Path | None = None) -> str:
-    current = _git("branch", "--show-current", repo=repo).stdout.strip()
+    current = git("branch", "--show-current", repo=repo).stdout.strip()
     if current:
         return current
-    short = _git("rev-parse", "--short", "HEAD", check=False, repo=repo)
+    short = git("rev-parse", "--short", "HEAD", check=False, repo=repo)
     if short.returncode == 0 and short.stdout.strip():
         return msgs.SURVEY_DETACHED.said(sha=short.stdout.strip())
-    symbolic = _git("symbolic-ref", "--short", "HEAD", check=False, repo=repo)
+    symbolic = git("symbolic-ref", "--short", "HEAD", check=False, repo=repo)
     return symbolic.stdout.strip() or msgs.SURVEY_NO_COMMITS.said()
 
 
@@ -299,7 +301,7 @@ def _print_diff_section(repo: Path, rows: list[StatusRow], *, cached: bool) -> N
     any_diff = False
     for row in rows:
         path = row.path
-        diff = _git(*_diff_args(path, cached=cached, orig=row.orig), repo=repo).stdout
+        diff = git(*_diff_args(path, cached=cached, orig=row.orig), repo=repo).stdout
         if not diff.strip():
             continue
         any_diff = True
@@ -350,7 +352,7 @@ def _cmd_survey(repo: str | Path | None = None) -> int:
         _out(msgs.SURVEY_NONE)
 
     _out(msgs.SURVEY_LOG)
-    log = _git("log", "--oneline", "-8", check=False, repo=repo_path)
+    log = git("log", "--oneline", "-8", check=False, repo=repo_path)
     if log.returncode == 0 and log.stdout.strip():
         _print(log.stdout.rstrip("\n"))
     else:
@@ -360,7 +362,7 @@ def _cmd_survey(repo: str | Path | None = None) -> int:
 
 def _stage_whole(path: str, repo: Path) -> int:
     try:
-        _git("add", "--", path, repo=repo)
+        git("add", "--", path, repo=repo)
     except GitCommandError as exc:
         _write_error(_git_failure_message(exc))
         return 1
@@ -404,7 +406,7 @@ def _cmd_stage(path: str, spec: str, repo: str | Path | None = None) -> int:
         return 2
 
     try:
-        diff = _git(*_diff_args(path, cached=False), repo=repo_path).stdout
+        diff = git(*_diff_args(path, cached=False), repo=repo_path).stdout
     except GitCommandError as exc:
         _write_error(_git_failure_message(exc))
         return 1
@@ -421,7 +423,7 @@ def _cmd_stage(path: str, spec: str, repo: str | Path | None = None) -> int:
     try:
         # --whitespace=nowarn: apply.whitespace=error in config would refuse a
         # hunk the operator wrote; staging must not judge content.
-        _git("apply", "--cached", "--recount", "--whitespace=nowarn", stdin=patch, repo=repo_path)
+        git("apply", "--cached", "--recount", "--whitespace=nowarn", stdin=patch, repo=repo_path)
     except GitCommandError as exc:
         detail = (exc.stderr or exc.stdout).strip() or msgs.GIT_APPLY_FAILED.text()
         _err(msgs.STAGE_APPLY_FAILED, detail=detail, path=path)
@@ -455,7 +457,7 @@ def _cmd_commit(message_file: str, repo: str | Path | None = None, *, amend: boo
     if amend:
         args.append("--amend")
     try:
-        proc = _git(*args, repo=repo_path)
+        proc = git(*args, repo=repo_path)
     except GitCommandError as exc:
         _write_error(_git_failure_message(exc))
         return 1

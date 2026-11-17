@@ -157,19 +157,19 @@ def test_stage_unknown_path_errors(repo, capsys):
 def test_git_check_flag_distinguishes_not_repo_and_git_failure(tmp_path):
     non_repo = tmp_path / "not-repo"
     non_repo.mkdir()
-    unchecked = commit_helper._git("status", check=False, repo=non_repo)
+    unchecked = commit_helper.git("status", check=False, repo=non_repo)
     assert unchecked.returncode != 0
     with pytest.raises(commit_helper.GitCommandError) as not_repo:
-        commit_helper._git("status", repo=non_repo)
+        commit_helper.git("status", repo=non_repo)
     assert not_repo.value.kind == "not-a-repo"
 
     git_repo = tmp_path / "repo"
     git_repo.mkdir()
     _git(git_repo, "init", "-q", "-b", "main")
-    unchecked = commit_helper._git("definitely-not-a-git-command", check=False, repo=git_repo)
+    unchecked = commit_helper.git("definitely-not-a-git-command", check=False, repo=git_repo)
     assert unchecked.returncode != 0
     with pytest.raises(commit_helper.GitCommandError) as failed:
-        commit_helper._git("definitely-not-a-git-command", repo=git_repo)
+        commit_helper.git("definitely-not-a-git-command", repo=git_repo)
     assert failed.value.kind == "git-failed"
 
 

@@ -33,11 +33,11 @@ def _worktree_patch(repo_dir: Path, commit_helper) -> str:
     commits yet has no HEAD, so fall back to staged+unstaged separately.
     """
     flags = (*commit_helper._DIFF_FLAGS, "--binary")
-    diff = commit_helper._git("diff", *flags, "HEAD", check=False, repo=repo_dir)
+    diff = commit_helper.git("diff", *flags, "HEAD", check=False, repo=repo_dir)
     if diff.returncode == 0:
         return diff.stdout
-    staged = commit_helper._git("diff", "--cached", *flags, check=False, repo=repo_dir)
-    unstaged = commit_helper._git("diff", *flags, check=False, repo=repo_dir)
+    staged = commit_helper.git("diff", "--cached", *flags, check=False, repo=repo_dir)
+    unstaged = commit_helper.git("diff", *flags, check=False, repo=repo_dir)
     return (staged.stdout if staged.returncode == 0 else "") + (unstaged.stdout if unstaged.returncode == 0 else "")
 
 
@@ -58,7 +58,7 @@ def _snapshot_worktree(repo_dir: Path) -> Path | None:
     from . import commit_helper
 
     patch = _worktree_patch(repo_dir, commit_helper)
-    others = commit_helper._git("ls-files", "--others", "--exclude-standard", "-z", check=False, repo=repo_dir)
+    others = commit_helper.git("ls-files", "--others", "--exclude-standard", "-z", check=False, repo=repo_dir)
     untracked = [p for p in others.stdout.split("\0") if p] if others.returncode == 0 else []
     if not patch.strip() and not untracked:
         return None
@@ -100,11 +100,11 @@ def run_commit(target: str | None,
 
     from . import commit_helper
 
-    probe = commit_helper._git("rev-parse", "--is-inside-work-tree", check=False, repo=target_dir)
+    probe = commit_helper.git("rev-parse", "--is-inside-work-tree", check=False, repo=target_dir)
     if probe.returncode != 0 or probe.stdout.strip() != "true":
-        init = commit_helper._git("init", "-q", "-b", "main", check=False, repo=target_dir)
+        init = commit_helper.git("init", "-q", "-b", "main", check=False, repo=target_dir)
         if init.returncode != 0:
-            init = commit_helper._git("init", "-q", check=False, repo=target_dir)
+            init = commit_helper.git("init", "-q", check=False, repo=target_dir)
         if init.returncode != 0:
             detail = (init.stderr or init.stdout).strip() or f"exit {init.returncode}"
             msgs.warn(msgs.GIT_INIT_FAILED, path=target_dir, error=detail)

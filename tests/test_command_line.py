@@ -214,7 +214,7 @@ def test_resume_hint_command(monkeypatch, printed, agent, settings, model, custo
     monkeypatch.setattr(paths, "custom_home", lambda: custom_home)
     cfg = SimpleNamespace(session_file=Path("/s/dir/sub/name.jsonl"), sessions_dir=Path("/s/dir"),
                           agent_id=agent, settings=settings)
-    repl._print_resume_hint(cfg, ReplState(messages=["one"], model=model))
+    repl.print_resume_hint(cfg, ReplState(messages=["one"], model=model))
     assert printed == [line]
 
 
