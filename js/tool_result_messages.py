@@ -154,9 +154,7 @@ def tool_result_record(tool_call_id: str, tool_name: str, result: Any) -> dict:
     return record
 
 
-def build_tool_result_messages(
-    tool_call_id: str, tool_name: str, result: Any, *, vision: bool = True,
-) -> list[ai.messages.Message]:
+def build_tool_result_messages(tool_call_id: str, tool_name: str, result: Any) -> list[ai.messages.Message]:
     """Provider-facing messages for a completed tool call: its
     `tool_result_record` as `history_record.history_to_ai_messages` sends it."""
-    return history_record.history_to_ai_messages("", [tool_result_record(tool_call_id, tool_name, result)], vision=vision)
+    return history_record.history_to_ai_messages("", [tool_result_record(tool_call_id, tool_name, result)], vision=True)
