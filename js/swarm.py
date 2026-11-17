@@ -42,6 +42,7 @@ in an inbox or the log. A member whose process is gone stays silent.
 
 from __future__ import annotations
 
+from . import command_line
 from . import messages as msgs
 
 from . import settings as _settings
@@ -549,43 +550,33 @@ def sibling_argv(argv: list[str], swarm: str, name: str) -> list[str]:
     """The command of a sibling of this process: `argv` run again as `python -m js`
     with the --swarm path, the session name and the prompt replaced. The sibling
     reads its opener from stdin."""
-    rest = list(argv[1:])
+    words = argv[1:]
+    end = words.index("--") if "--" in words else len(words)
+    args = command_line.read(words[:end])
+    if end < len(words):
+        # The words after `--` are read as options too.
+        args += [command_line.Arg(("--",), value="--"), *command_line.read(words[end + 1:])]
     out: list[str] = [sys.executable, "-m", "js"]
     has_prompt = False
-    i = 0
-    while i < len(rest):
-        tok = rest[i]
-        nxt = rest[i + 1] if i + 1 < len(rest) else None
-        has_value = nxt is not None and (nxt == "-" or not nxt.startswith("-"))
-        if tok == "--swarm" and has_value:
-            out += [tok, swarm]
-            i += 2
-        elif tok.startswith("--swarm="):
-            out.append(f"--swarm={swarm}")
-            i += 1
-        elif tok in ("-s", "--session") and has_value:
-            out += [tok, f"{nxt}-{name}"]
-            i += 2
-        elif tok.startswith("--session="):
-            out.append(f"{tok}-{name}")
-            i += 1
-        elif tok.startswith(("--prompt=", "-lp=")):
-            has_prompt = True
-            out.append("--prompt=-")
-            i += 1
-        elif tok in ("-p", "--prompt", "-lp"):
+    skip = False
+    for index, arg in enumerate(args):
+        if skip:
+            skip = False
+            continue
+        dashed = arg.sep is None and arg.value is not None and arg.value.startswith("-") and arg.value != "-"
+        if arg.dest == "swarm" and arg.value is not None and not dashed:
+            out += arg.given(swarm)
+        elif arg.dest == "session" and arg.value is not None and not dashed and arg.option + (arg.sep or "") != "-s=":
+            out += arg.given(f"{arg.value}-{name}")
+        elif arg.dest in ("prompt", "last_prompt") and arg.option + (arg.sep or "") != "-p=":
             # A swarm seat keeps its own session, so -lp is a plain prompt.
             has_prompt = True
-            out += ["-p" if tok == "-lp" else tok, "-"]
-            prompt_has_value = has_value or (
-                nxt is not None and (" " in nxt or re.fullmatch(r"-\d+|-\d*\.\d+", nxt))
-            )
-            i += 2 if prompt_has_value else 1
-        elif tok == "--last":
-            i += 1
-        else:
-            out.append(tok)
-            i += 1
+            out += ["--prompt=-"] if arg.sep is not None else ["-p" if arg.option == "-lp" else arg.option, "-"]
+            following = args[index + 1] if index + 1 < len(args) else None
+            skip = (arg.value is None and following is not None and following.option is not None
+                    and " " in following.words[0])
+        elif arg.dest != "last":
+            out += arg.words
     if "--swarm" not in out and not any(t.startswith("--swarm=") for t in out):
         out += ["--swarm", swarm]
     if not has_prompt:
