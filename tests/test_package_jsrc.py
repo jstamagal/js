@@ -50,7 +50,7 @@ def _isolated_home(monkeypatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     for spec in settings.REGISTRY:
-        for name in setting_layers.env_names_for(spec):
+        for name in settings.env_names_for(spec):
             monkeypatch.delenv(name, raising=False)
     return project
 

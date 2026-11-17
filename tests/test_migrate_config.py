@@ -54,7 +54,7 @@ def test_no_old_env_name_is_an_env_name_js_reads_now():
     from js import settings
     from js.rename import RENAMED_ENV
 
-    current = {setting_layers.canonical_env_name(spec.key) for spec in settings.REGISTRY}
+    current = {settings.canonical_env_name(spec.key) for spec in settings.REGISTRY}
     assert sorted(current & set(RENAMED_ENV)) == []
 
 

@@ -40,7 +40,7 @@ class SettingSpec:
     """One setting. ``key`` is its name, UPPER_SNAKE (`MODEL`). The key is
     the storage path in the settings dict, split on dots, and the name its
     `set` takes. Its env var is ``JS_<KEY>``
-    (`setting_layers.canonical_env_name`)."""
+    (`canonical_env_name`)."""
 
     key: str
     type: str            # "str" | "int" | "float" | "bool" | "json" | "map"
@@ -413,6 +413,21 @@ def spec_for(name: str) -> SettingSpec | None:
     """The spec a `set` name refers to: its key in any case (`model` is
     `MODEL`, `UI.TOOLS` is `ui.tools`), or a jsrc verb alias."""
     return SPEC_BY_KEY.get(name) or SPEC_BY_UPPER.get(name.upper()) or SPEC_BY_ALIAS.get(name)
+
+
+def canonical_env_name(key: str) -> str:
+    """The env var for a setting: ``NAME`` -> ``JS_NAME`` (a dotted display
+    setting ``a.b`` -> ``JS_A_B``)."""
+    return "JS_" + key.upper().replace(".", "_")
+
+
+def env_names_for(spec: SettingSpec) -> tuple[str, ...]:
+    """Env vars that feed ``spec``, highest precedence first: ``JS_<KEY>``,
+    then ``spec.env``, if any."""
+    canon = canonical_env_name(spec.key)
+    if spec.env and spec.env != canon:
+        return (canon, spec.env)
+    return (canon,)
 
 
 # ---------------------------------------------------------------------------

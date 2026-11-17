@@ -426,7 +426,7 @@ def resolve_agent_id(
 def _set_by_invocation(key: str, env: Mapping[str, str], extras: tuple[str, ...]) -> bool:
     """True when a JS_* env var or a --extra argument sets ``key`` for this run."""
     spec = _settings.SPEC_BY_KEY[key]
-    if any(name in env for name in setting_layers.env_names_for(spec)):
+    if any(name in env for name in _settings.env_names_for(spec)):
         return True
     return any(tuple(setting_layers.parse_extra_arg(arg)[0]) == tuple(spec.path) for arg in extras)
 
@@ -490,7 +490,7 @@ def from_env(
     raw_model = _settings.get_dotted(js_root_settings, ("MODEL",)) or default_model
     # Any env name that feeds MODEL makes the model invocation-explicit.
     invocation_explicit_model = any(
-        env.get(name) for name in setting_layers.env_names_for(_settings.SPEC_BY_KEY["MODEL"]))
+        env.get(name) for name in _settings.env_names_for(_settings.SPEC_BY_KEY["MODEL"]))
     explicit_model = _set_by_invocation("MODEL", env, sources.extras) or raw_model != default_model
     _cfg_provider_id = _settings.get_dotted(js_root_settings, ("PROVIDER",))
     explicit_provider = _cfg_provider_id is not None

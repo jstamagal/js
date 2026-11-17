@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from . import (
+    endpoint_uri,
     fset,
     messages as msgs,
     output,
@@ -31,6 +32,7 @@ from .settings import (
     REGISTRY,
     SettingSpec,
     child_key,
+    env_names_for,
     package_settings,
     parent_spec,
     seed_defaults,
@@ -84,21 +86,6 @@ def apply_cli_extras(settings: dict, extras: list[str]) -> dict:
 # Env layer
 # ---------------------------------------------------------------------------
 
-def canonical_env_name(key: str) -> str:
-    """The env var for a setting: ``NAME`` -> ``JS_NAME`` (a dotted display
-    setting ``a.b`` -> ``JS_A_B``)."""
-    return "JS_" + key.upper().replace(".", "_")
-
-
-def env_names_for(spec: SettingSpec) -> tuple[str, ...]:
-    """Env vars that feed ``spec``, highest precedence first: ``JS_<KEY>``,
-    then ``spec.env``, if any."""
-    canon = canonical_env_name(spec.key)
-    if spec.env and spec.env != canon:
-        return (canon, spec.env)
-    return (canon,)
-
-
 def apply_env_overrides(settings: dict, env: dict[str, str] | None = None) -> dict:
     """Overlay env vars onto ``settings``: each setting's ``JS_<KEY>``, or
     its ``spec.env`` name when ``JS_<KEY>`` is not set."""
@@ -122,8 +109,6 @@ _SKIP_ENV = object()
 def _env_endpoint(env: Mapping[str, str]) -> dict[str, Any] | None:
     """MODEL, PROVIDER, BASE_URL and API_KEY from a ``JS_BASE_URL`` written in
     the ``-u`` form; None for a plain base URL, or one js cannot read (named)."""
-    from . import endpoint_uri  # lazy: endpoint_uri imports this module
-
     try:
         spec = endpoint_uri.from_env(env)
     except endpoint_uri.EndpointSpecError as exc:

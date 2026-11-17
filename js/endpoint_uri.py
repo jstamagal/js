@@ -27,7 +27,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-from . import messages as msgs, secret_patterns, setting_layers, settings as _settings
+from . import messages as msgs, secret_patterns, settings as _settings
 
 # An endpoint reached this way is usually a local box that ignores the key, but
 # most OpenAI-shaped servers still require the header to exist.
@@ -142,7 +142,7 @@ def is_endpoint_form(text: str) -> bool:
 
 
 def _env(env: Mapping[str, str], key: str) -> str | None:
-    for name in setting_layers.env_names_for(_settings.SPEC_BY_KEY[key]):
+    for name in _settings.env_names_for(_settings.SPEC_BY_KEY[key]):
         if env.get(name):
             return env[name]
     return None

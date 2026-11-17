@@ -13,7 +13,7 @@ import ai.types.usage
 import pytest
 from repl_driver import stub_screen, turn_stub
 
-from js import cli, runtime, session_store, setting_layers, settings
+from js import cli, runtime, session_store, settings
 from js.config import InvocationSources, derive_session_name, from_env
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
@@ -46,7 +46,7 @@ def _home(monkeypatch, tmp_path: Path, js_agent: str | None) -> Path:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     for spec in settings.REGISTRY:
-        for name in setting_layers.env_names_for(spec):
+        for name in settings.env_names_for(spec):
             monkeypatch.delenv(name, raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     if js_agent is not None:
