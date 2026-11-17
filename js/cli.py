@@ -3603,9 +3603,10 @@ async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop,
                 job = sup.spawn(line(), kind="turn", label="startup")
                 with contextlib.suppress(asyncio.CancelledError):
                     await job.task
-                continue
-            lines = [line]
-            if _steer_mode(state) == "batch":
+                lines = []
+            else:
+                lines = [line]
+            if lines and _steer_mode(state) == "batch":
                 pending = [line, *_take_queued(queue)]
                 lines = []
                 for item in pending:
@@ -3615,6 +3616,8 @@ async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop,
                         lines.append(item)
             for item in lines:
                 await _run_repl_turn(item, sup, cfg, state, telemetry, prompt_spec, loop, steer_inbox)
+            # The startup exchanges take no steered lines: what was typed
+            # while they ran is the next message, like a turn's leftovers.
             while steer_inbox:
                 leftover = "\n".join(steer_inbox)
                 steer_inbox.clear()
