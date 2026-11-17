@@ -271,7 +271,6 @@ def collect_settings(
     env: dict[str, str] | None = None,
     extras: list[str] | None = None,
     *,
-    defaults=None,
     reset_formats=None,
 ) -> dict:
     """Run precedence: defaults/jsrc < jsrc files (in order) < env < CLI extras.
@@ -279,7 +278,7 @@ def collect_settings(
     ``config_paths`` defaults to ``~/.js/jsrc``. ``js.config.from_env``
     passes the global, project, and project-local files explicitly.
     """
-    settings = (seed_defaults if defaults is None else defaults)()
+    settings = seed_defaults()
     from . import fset
 
     # The /fset entries the jsrc files set are rebuilt with the settings.
