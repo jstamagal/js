@@ -1469,6 +1469,48 @@ def _run_compact_offline(session: str, *, agent: str | None = None, focus: str =
         msgs.say(msgs.COMPACTION_DONE, result=result)
     return 0
 
+def _compact(args: argparse.Namespace, sources: InvocationSources, agent: str | None) -> int:
+    """`js --compact SESSION`: -p TEXT is the focus, `-p -` reads it from stdin."""
+    focus = _read_stdin_if_piped() if args.prompt == "-" else args.prompt or ""
+    return _run_compact_offline(args.compact, agent=agent, focus=focus, sources=sources,
+                                model=args.model)
+
+
+def _commit(args: argparse.Namespace, sources: InvocationSources) -> int:
+    """`js --commit [TARGET]`. It runs the commit agent, so --agent beside it
+    exits 2. -p TEXT and piped stdin are extra context for the agent."""
+    if args.agent:
+        msgs.warn(msgs.COMMIT_WITH_AGENT)
+        return 2
+    extra_context = None
+    if args.prompt is not None:
+        if args.prompt == "-":
+            extra_context = _read_stdin_if_piped()
+        else:
+            stdin_text = _read_stdin_if_piped()
+            extra_context = args.prompt if not stdin_text.strip() else f"{args.prompt.rstrip()}\n\n{stdin_text.strip()}"
+    _session_leases.start["mode"] = "commit"
+    return commit_cli.run_commit(args.target, model=args.model, debug=args.debug, debug_file=args.debug_file,
+                       session=args.session, save=not args.no_save,
+                       reasoning=args.reasoning, maxout=args.max_out,
+                       extra_context=extra_context, sources=sources)
+
+
+def _agent_bench(args: argparse.Namespace, sources: InvocationSources) -> int | None:
+    """The run's agent runs its NN-benchmark.md cases when it has some and no
+    system prompt flag or chat mode replaces its prompt; None otherwise."""
+    try:
+        agent = _invocation_agent(args, sources)
+        agent_dir = _paths.agent_dirs(agent)
+    except (ValueError, OSError) as exc:
+        msgs.warn(msgs.FAILED, error=exc)
+        return 2
+    from .cli_options import current
+    if not current().replaces_prompt and not current().chat and P.has_benchmarks(agent_dir):
+        return bench.run_agent_bench(agent, args, sources)
+    return None
+
+
 def _warn_unmatched_presets(sources: InvocationSources) -> None:
     from .config import _preset_config_paths
 
@@ -2446,32 +2488,10 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         # stale; rebind it so -p/REPL turns (which fall back to it) run in DIR.
         runtime.T.STOCK_CONTEXT.cwd = Path.cwd()
     if args.verify is not None:
-        from .verify import verify
-        errors = verify(args.verify or None)
-        if args.json:
-            listings.print_json({'ok': not errors, 'errors': errors})
-        else:
-            for error in errors:
-                print(error, file=sys.stderr)
-            print(f'Verification: {len(errors)} error(s).')
-        return int(bool(errors))
+        from . import verify
+        return verify.run_verify(args)
     if args.list_sessions:
-        ambiguous = any(
-            (
-                args.prompt is not None,
-                args.session is not None,
-                args.session_key is not None,
-                args.agent is not None,
-                args.commit,
-                args.compact is not None,
-                args.bench is not None,
-                args.target is not None,
-            )
-        )
-        if ambiguous:
-            msgs.warn(msgs.LIST_EXCLUSIVE)
-            return 2
-        return listings.print_session_list(as_json=args.json)
+        return listings.run_list_sessions(args)
     if args.last:
         if args.session is not None:
             msgs.warn(msgs.LAST_WITH_SESSION)
@@ -2506,37 +2526,16 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         from . import login_cli
         return login_cli.main(["logout", args.logout])
     if args.list_agents:
-        names = _paths.agent_names()
-        return listings.print_json(names) if args.json else (print("\n".join(names)) or 0)
+        return listings.run_list_agents(args)
     if args.list_providers:
         return listings.print_json(listings.providers_json())
     if args.list_logins:
         return listings.print_json(listings.logins_json())
     if args.list_models is not None:
-        try:
-            cfg = None
-            provider_arg = args.list_models or None
-            if provider_arg is None:
-                cfg = _from_env(args.session, save_session=False, sources=sources, agent_id=args.agent)
-            return listings.print_json(listings.models_json(provider_arg, cfg)) if args.json else listings.print_model_list(provider_arg, cfg)
-        except Exception as e:  # noqa: BLE001
-            if args.json:
-                listings.print_json({"error": f"{type(e).__name__}: {e}"})
-            else:
-                msgs.warn(msgs.FAILED, error=f"{type(e).__name__}: {e}")
-            return 1
-    if args.refresh_model_catalog:
-        if not model_metadata.force_refresh_model_catalog():
-            return 1
-        if (
-            args.prompt is None
-            and not args.commit
-            and args.compact is None
-            and args.target is None
-            and args.bench is None
-            and not args.migrate_config
-        ):
-            return 0
+        return listings.run_list_models(args, lambda: _from_env(
+            args.session, save_session=False, sources=sources, agent_id=args.agent))
+    if args.refresh_model_catalog and (code := model_metadata.run_refresh_model_catalog(args)) is not None:
+        return code
     if args.debug and args.debug_file:
         msgs.warn(msgs.DEBUG_FLAGS_EXCLUSIVE)
         return 2
@@ -2574,52 +2573,15 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         return 2
 
     if args.bench:
-        if selected_modes or args.agent:
-            msgs.warn(msgs.BENCH_EXCLUSIVE)
-            return 2
-        return bench.run_bench(args.bench, model=args.model, reasoning=args.reasoning,
-                          maxout=args.max_out, quiet=args.quiet, sources=sources,
-                          stats_json=args.stats_json, stats_csv=args.stats_csv,
-                          debug=args.debug)
-
+        return bench.run_bench_mode(args, sources)
     if args.compact:
-        focus = _read_stdin_if_piped() if args.prompt == "-" else args.prompt or ""
-        return _run_compact_offline(args.compact, agent=cli_agent, focus=focus, sources=sources,
-                                    model=args.model)
-
+        return _compact(args, sources, cli_agent)
     if args.migrate_config:
         return migrate_config.run_migrate_config()
-
     if args.commit:
-        if args.agent:
-            msgs.warn(msgs.COMMIT_WITH_AGENT)
-            return 2
-        extra_context = None
-        if args.prompt is not None:
-            if args.prompt == "-":
-                extra_context = _read_stdin_if_piped()
-            else:
-                stdin_text = _read_stdin_if_piped()
-                extra_context = args.prompt if not stdin_text.strip() else f"{args.prompt.rstrip()}\n\n{stdin_text.strip()}"
-        _session_leases.start["mode"] = "commit"
-        return commit_cli.run_commit(args.target, model=args.model, debug=args.debug, debug_file=args.debug_file,
-                           session=args.session, save=not args.no_save,
-                           reasoning=args.reasoning, maxout=args.max_out,
-                           extra_context=extra_context, sources=sources)
-
-    try:
-        automatic_agent = _invocation_agent(args, sources)
-        automatic_dir = _paths.agent_dirs(automatic_agent)
-    except (ValueError, OSError) as exc:
-        msgs.warn(msgs.FAILED, error=exc)
-        return 2
-    from .cli_options import current
-    if not current().replaces_prompt and not current().chat and P.has_benchmarks(automatic_dir):
-        return bench.run_bench(
-            automatic_agent, model=args.model, reasoning=args.reasoning,
-            maxout=args.max_out, quiet=args.quiet, sources=sources,
-            stats_json=args.stats_json, stats_csv=args.stats_csv, debug=args.debug,
-        )
+        return _commit(args, sources)
+    if (code := _agent_bench(args, sources)) is not None:
+        return code
 
     if args.files and args.prompt is None and sys.stdin.isatty():
         msgs.warn(msgs.FILE_NEEDS_PROMPT)

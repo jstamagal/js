@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import time
+from collections.abc import Callable
 from dataclasses import asdict
 
 from . import (
@@ -20,6 +22,51 @@ from .config import (
 from .session_catalog import (
     catalog_sessions,
 )
+
+
+def run_list_sessions(args: argparse.Namespace) -> int:
+    """`js --list-sessions --json`. It names no session and runs nothing, so a
+    prompt, session, agent or other mode beside it exits 2."""
+    ambiguous = any(
+        (
+            args.prompt is not None,
+            args.session is not None,
+            args.session_key is not None,
+            args.agent is not None,
+            args.commit,
+            args.compact is not None,
+            args.bench is not None,
+            args.target is not None,
+        )
+    )
+    if ambiguous:
+        msgs.warn(msgs.LIST_EXCLUSIVE)
+        return 2
+    return print_session_list(as_json=args.json)
+
+
+def run_list_agents(args: argparse.Namespace) -> int:
+    """`js --list-agents`: one agent name per line, or with --json one array."""
+    names = _paths.agent_names()
+    return print_json(names) if args.json else (print("\n".join(names)) or 0)
+
+
+def run_list_models(args: argparse.Namespace, config: Callable[[], Config]) -> int:
+    """`js --list-models [PROVIDER]`. With no PROVIDER the listing covers every
+    saved login and the provider of `config()`, the run's Config. A failure
+    prints as an error, a JSON object under --json, and exits 1."""
+    try:
+        cfg = None
+        provider_arg = args.list_models or None
+        if provider_arg is None:
+            cfg = config()
+        return print_json(models_json(provider_arg, cfg)) if args.json else print_model_list(provider_arg, cfg)
+    except Exception as e:  # noqa: BLE001
+        if args.json:
+            print_json({"error": f"{type(e).__name__}: {e}"})
+        else:
+            msgs.warn(msgs.FAILED, error=f"{type(e).__name__}: {e}")
+        return 1
 
 
 def print_session_list(*, as_json: bool) -> int:

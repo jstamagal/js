@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import io
 import json
@@ -63,6 +64,24 @@ def _bench_row_line(row: dict) -> msgs.Said:
     ttft = f"{row['ttft_s'] * 1000:.0f}ms" if row.get("ttft_s") is not None else "—"
     return msgs.BENCH_ROW.said(name=row["name"], tokens=row.get("output_tokens", 0),
                                tps=row.get("tok_per_s", 0.0), ttft=ttft, wall=row.get("wall_s") or 0.0)
+
+
+def run_bench_mode(args: argparse.Namespace, sources: InvocationSources) -> int:
+    """`js --bench AGENT`. It runs AGENT, so --agent, --commit or --compact
+    beside it exits 2."""
+    if args.commit or args.compact or args.agent:
+        msgs.warn(msgs.BENCH_EXCLUSIVE)
+        return 2
+    return run_agent_bench(args.bench, args, sources)
+
+
+def run_agent_bench(agent: str, args: argparse.Namespace, sources: InvocationSources) -> int:
+    """Benchmark `agent` with the model, reasoning, output cap, quiet, stats and
+    debug flags of the command line."""
+    return run_bench(agent, model=args.model, reasoning=args.reasoning,
+                     maxout=args.max_out, quiet=args.quiet, sources=sources,
+                     stats_json=args.stats_json, stats_csv=args.stats_csv,
+                     debug=args.debug)
 
 
 def run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,

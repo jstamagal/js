@@ -10,6 +10,7 @@ js CLI/REPL commands.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sqlite3
@@ -584,6 +585,24 @@ def ensure_fresh_catalog(*, force: bool = False) -> CatalogStatus | None:
         raise
     _refresh_failure = None
     return status
+
+
+def run_refresh_model_catalog(args: argparse.Namespace) -> int | None:
+    """`js --refresh-model-catalog`: refresh the catalog now. Exits 1 when the
+    refresh fails and 0 when it is the only mode on the command line; None lets
+    the mode beside it run."""
+    if not force_refresh_model_catalog():
+        return 1
+    if (
+        args.prompt is None
+        and not args.commit
+        and args.compact is None
+        and args.target is None
+        and args.bench is None
+        and not args.migrate_config
+    ):
+        return 0
+    return None
 
 
 def force_refresh_model_catalog() -> bool:

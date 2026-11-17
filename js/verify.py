@@ -1,10 +1,25 @@
 """Read-only validation of configuration, agent prompts, and reachable skills."""
 from __future__ import annotations
 
+import argparse
+import sys
 from pathlib import Path
 
-from . import paths, persona, settings, skills
+from . import listings, paths, persona, settings, skills
 from .toolkit import policy
+
+
+def run_verify(args: argparse.Namespace) -> int:
+    """`js --verify [AGENT]`: each error on stderr and a count, or with --json one
+    {ok, errors} object. Exits 1 when there is an error."""
+    errors = verify(args.verify or None)
+    if args.json:
+        listings.print_json({'ok': not errors, 'errors': errors})
+    else:
+        for error in errors:
+            print(error, file=sys.stderr)
+        print(f'Verification: {len(errors)} error(s).')
+    return int(bool(errors))
 
 
 def verify(agent: str | None = None) -> list[str]:
