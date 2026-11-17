@@ -187,7 +187,6 @@ def test_login_picker_accepts_action_keymaps(monkeypatch):
     assert chosen == [0]
 
 
-@pytest.mark.xfail(strict=True, reason="multiselect takes keymaps and does not pass them to the picker")
 def test_multiselect_accepts_action_keymaps(monkeypatch):
     monkeypatch.setattr(curses, "curs_set", lambda value: None)
     screen = _FakeStdscr([ord("z"), ord("q")])

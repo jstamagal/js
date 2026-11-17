@@ -219,7 +219,7 @@ def multiselect(
     """Spacebar checklist with / filtering; None means cancel."""
     if not rows:
         return []
-    return _curses_picker(stdscr, rows, title, preselected=preselected, on_edit=on_edit)
+    return _curses_picker(stdscr, rows, title, preselected=preselected, on_edit=on_edit, keymaps=keymaps)
 
 
 def line_prompt(stdscr: curses.window, prompt: str, default: str, *,
