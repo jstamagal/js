@@ -17,6 +17,10 @@ from js import jail, logins, model_metadata, paths
 
 @pytest.fixture(autouse=True)
 def isolated_user_profile(monkeypatch, tmp_path):
+    # `cli.main` fills unset names from a .env into os.environ for the rest
+    # of the process, as a run should; each test ends with the environment
+    # it started with.
+    environ = dict(os.environ)
     # Clear XDG overrides rather than fixing them to this HOME: individual
     # tests deliberately replace HOME again and expect the default layout.
     # Tests of explicit XDG configuration can still set their own overrides.
@@ -60,6 +64,8 @@ def isolated_user_profile(monkeypatch, tmp_path):
     # confine the next test's tools.
     yield
     jail.leave()
+    os.environ.clear()
+    os.environ.update(environ)
 
 @pytest.fixture(scope="session")
 def _worker_cache_home(tmp_path_factory):

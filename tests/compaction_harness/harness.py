@@ -20,6 +20,10 @@ os.environ["JS_VISION"] = "false"
 os.environ["XDG_STATE_HOME"] = str(OUT / "state")
 os.environ["XDG_CONFIG_HOME"] = str(OUT / "config")
 os.environ["XDG_CACHE_HOME"] = str(OUT / "cache")
+sys.path.insert(0, str(REPO / "tests"))
+
+from session_marks import append_compaction_mark  # noqa: E402
+
 from js import (  # noqa: E402
     cli,
     compaction as C,
@@ -839,7 +843,7 @@ async def compacted_turn_cancel(error=False):
 
     async def turn(*args, **kw):
         context.compacted_during_turn = True
-        M.append_compaction_mark(cfg.session_file, summary="previous work", keep_from=20)
+        append_compaction_mark(cfg.session_file, summary="previous work", keep_from=20)
         messages[:] = [
             M.compaction_summary_message("previous work"),
             user,

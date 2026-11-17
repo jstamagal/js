@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from repl_driver import record_turns, run_async
+from session_marks import append_compaction_mark
 from test_repl_info_cmds import make_cfg
 
 from js import (
@@ -518,7 +519,7 @@ def test_a_compacted_session_previews_what_its_transcript_still_holds(tmp_path):
     path = tmp_path / "s.jsonl"
     M.append_message(path, {"role": "user", "content": "fix the nfs mount"})
     M.append_message(path, {"role": "assistant", "content": "📌 mount fixed in fstab"})
-    M.append_compaction_mark(path, summary="the operator fixed a mount", keep_from=2,
+    append_compaction_mark(path, summary="the operator fixed a mount", keep_from=2,
                              rehydrated={"role": "user", "content": "REATTACHED FILE BODY"})
     M.append_message(path, {"role": "assistant", "content": "anything else?"})
     picker = _picker([_session(str(path))], messages=session_picker._messages)
@@ -538,7 +539,7 @@ def test_a_signed_reply_kept_by_compaction_then_rolled_back_is_not_previewed(tmp
     M.append_message(path, {"role": "assistant", "content": "📌 old diagnosis",
                             "reasoning_parts": [{"type": "thinking", "signature": "sig"}],
                             "reasoning_from": {"provider": "anthropic", "model": "m"}})
-    M.append_compaction_mark(path, summary="asked why it is slow", keep_from=0)
+    append_compaction_mark(path, summary="asked why it is slow", keep_from=0)
     M.append_mark(path, "rollback_to:2")
     M.append_message(path, {"role": "assistant", "content": "current reply"})
     picker = _picker([_session(str(path))], messages=session_picker._messages)

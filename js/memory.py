@@ -988,12 +988,6 @@ def compaction_mark(live: list[dict], keep_from: int, *, summary: str, forced: b
     return marker, after
 
 
-def append_compaction_mark(memory_file: Path, *, summary: str, keep_from: int, forced: bool = False,
-                           trigger: dict | None = None, rehydrated: dict | None = None) -> None:
-    append_mark(memory_file, _compaction_marker(summary=summary, keep_from=keep_from, forced=forced,
-                                                trigger=trigger, rehydrated=rehydrated))
-
-
 def wipe(memory_file: Path) -> Path | None:
     """Move the memory file, its transcript, and subagent runs to a new session
     under a fresh name in the same directory, leaving ``memory_file`` gone. Returns

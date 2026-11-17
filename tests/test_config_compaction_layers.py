@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from session_marks import append_compaction_mark
+
 from js import compaction, memory, persona, settings
 from js.capped_process import CappedProcessResult
 from js.config import Config, InvocationSources, from_env
@@ -93,7 +95,7 @@ def test_compaction_mark_rebuilds_summary_and_safe_tail_without_rewriting(tmp_pa
     for m in msgs:
         memory.append_message(session, m)
     before = session.read_text(encoding="utf-8")
-    memory.append_compaction_mark(session, summary="Summary", keep_from=1)
+    append_compaction_mark(session, summary="Summary", keep_from=1)
     rebuilt = memory.load_messages(session)
 
     assert rebuilt[0] == {"role":"user", "content":"<compaction-summary>\nSummary\n</compaction-summary>"}

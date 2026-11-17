@@ -13,6 +13,7 @@ from pathlib import Path
 import ai
 import pytest
 from repl_driver import stub_screen, turn_stub
+from session_marks import append_compaction_mark
 
 from js import cli, memory as M, run_assembly, runtime, session_store, supervisor, usage
 from js.config import from_env
@@ -532,7 +533,7 @@ def test_replay_ignores_ids_and_parents(tmp_path):
     M.persist_messages(session, live)
     M.persist_messages(session, [*live[:2], {"role": "tool", "tool_call_id": "c1", "content": "ok"},
                                  {"role": "assistant", "content": "done"}])
-    M.append_compaction_mark(session, summary="so far", keep_from=2)
+    append_compaction_mark(session, summary="so far", keep_from=2)
     M.append_message(session, {"role": "user", "content": "after"})
     bare = session.with_name("bare.jsonl")
     bare.write_text("".join(json.dumps({k: v for k, v in record.items() if k not in ("id", "parent")}) + "\n"

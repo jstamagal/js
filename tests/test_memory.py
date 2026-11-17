@@ -4,6 +4,8 @@ import json
 import re
 from pathlib import Path
 
+from session_marks import append_compaction_mark
+
 from js import history_record, memory as M
 
 
@@ -121,7 +123,7 @@ def test_compaction_keep_from_is_applied_in_post_heal_space(tmp_path: Path):
     M.append_message(f, {"role": "user", "content": "keep-user"})
     M.append_message(f, {"role": "assistant", "content": "keep-assistant"})
     # healed live space: [u1, assistant(tc), synthetic-tool, keep-user, keep-assistant]
-    M.append_compaction_mark(f, summary="S", keep_from=3)
+    append_compaction_mark(f, summary="S", keep_from=3)
 
     out = M.load_messages(f)
 
@@ -188,7 +190,7 @@ def test_compaction_keeps_the_stamp_of_a_retained_signed_reply(tmp_path):
     M.append_message(path, {"role": "assistant", "content": "answer",
                             "reasoning_parts": [{"type": "thinking", "signature": "sig"}],
                             "reasoning_from": {"provider": "anthropic", "model": "model-y"}}, stamp=stamp)
-    M.append_compaction_mark(path, summary="earlier work", keep_from=1)
+    append_compaction_mark(path, summary="earlier work", keep_from=1)
 
     assert M.load_replay_messages(path)[-1] == {"role": "assistant", "content": "answer"}
     assert M.last_reply_stamp(path) == stamp
