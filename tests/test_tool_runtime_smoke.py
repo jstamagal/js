@@ -908,6 +908,23 @@ def test_fs_read_pdf_over_the_read_cap_still_reads(tmp_path):
     assert "Hello PDF Text" in read_result
 
 
+def test_fs_read_pdf_text_is_cut_by_bytes_to_the_result_cap(tmp_path, monkeypatch):
+    """Extracted text of multi-byte characters is cut to TOOL_RESULT_MAX bytes,
+    not characters, and says it was cut; a cap of 0 cuts nothing."""
+    pdf = tmp_path / "sample.pdf"
+    pdf.write_bytes(_simple_pdf_bytes("Hello PDF Text"))
+    text = "\u00e9\u4e2d" * 400
+    monkeypatch.setattr(fs, "run", lambda argv, context: (0, text, ""))
+
+    capped = fs.fs_read("sample.pdf", context=ToolContext(cwd=tmp_path, max_tool_result_bytes=300))
+    whole = fs.fs_read("sample.pdf", context=ToolContext(cwd=tmp_path, max_tool_result_bytes=0))
+
+    assert len(capped.encode("utf-8")) <= 300
+    assert capped.startswith("\u00e9\u4e2d" * 10)
+    assert "TOOL_RESULT_MAX" in capped
+    assert whole == text
+
+
 def test_shell_sanitizes_bool_command_and_invalid_timeouts(tmp_path, monkeypatch):
     """A bool command is empty and refused; an invalid wait falls back to the
     configured window."""

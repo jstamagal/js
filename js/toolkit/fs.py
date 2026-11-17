@@ -296,7 +296,7 @@ def _read_pdf_text(path: Path, context: ToolContext) -> tuple[str, bytes]:
     data = _read_regular_bytes(path)
     rc, out, err = run(["pdftotext", str(path), "-"], context)
     if rc == 0 and out.strip():
-        return out[: context.max_tool_result_bytes], data
+        return truncate(out, context), data
     detail = err.strip() or "no extractable text"
     return f"ERROR: pdftotext failed for {path}: {detail}", data
 
