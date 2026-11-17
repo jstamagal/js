@@ -27,7 +27,7 @@ def _slice_runs(parts: list[fset.Run], start: int, end: int) -> list[fset.Run]:
     return out
 
 
-def field_rows(parts: list[fset.Run], width: int, sep: str = "  ") -> list[list[fset.Run]]:
+def field_rows(parts: list[fset.Run], width: int) -> list[list[fset.Run]]:
     """Runs whose fields each follow a `FIELD_BREAK` as rows of runs at most
     ``width`` columns wide, broken between two fields; the rows after the
     first start under the first field. A field wider than its row breaks at
@@ -66,7 +66,7 @@ def field_rows(parts: list[fset.Run], width: int, sep: str = "  ") -> list[list[
     for index, (low, high) in enumerate(spans[1:]):
         field = plain[low:high]
         size = cells(field)
-        gap = len(sep) if index else 0
+        gap = 2 if index else 0
         if used + gap + size > width and used > lead:
             rows.append([("", " " * lead)] if lead else [])
             used, gap = lead, 0
