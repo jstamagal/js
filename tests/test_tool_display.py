@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 from turn_driver import ExchangeConsole, config, run
 
-from js import display, messages as msgs, repl, runtime
+from js import display, messages as msgs, repl, runtime, tool_errors
 from js.repl_state import ReplState
 from js.toolkit import Tool, ToolContext, ToolRegistry
 from js.transcript import TranscriptLogSink
@@ -155,7 +155,7 @@ def test_level_three_read_highlights_the_file_text_and_keeps_it_all():
 
 
 def test_a_failed_call_shows_the_error_without_the_retry_note_for_the_model():
-    result = runtime.ToolErrorTracker().record("write", "ERROR: You must read the file first.\n")
+    result = tool_errors.ToolErrorTracker().record("write", "ERROR: You must read the file first.\n")
 
     for level in (1, 2, 3):
         shown = _shown("write", result, level, width=80)

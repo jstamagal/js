@@ -280,7 +280,7 @@ def test_wiki_finish_ingest_refuses_to_commit_into_an_ancestor_repository(tmp_pa
 
 
 def test_wiki_finish_ingest_reports_a_failed_commit_as_an_error(tmp_path):
-    from js.runtime import ToolErrorTracker
+    from js.tool_errors import ToolErrorTracker
 
     vault = _vault(tmp_path)
     _git_init(vault)

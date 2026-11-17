@@ -2,7 +2,7 @@
 
 import pytest
 
-from js import paths, runtime
+from js import paths, runtime, tool_errors
 from js.toolkit.core import Output
 from js.toolkit.results import result_text
 
@@ -10,7 +10,7 @@ from js.toolkit.results import result_text
 @pytest.mark.parametrize("content", ["ERROR disk full\nsecond line", "  ERROR is a log entry"])
 def test_output_content_is_not_an_error(content):
     result = Output(content)
-    tracker = runtime.ToolErrorTracker(limit=2)
+    tracker = tool_errors.ToolErrorTracker(limit=2)
     tracker.record("read", "ERROR: missing file")
     for _ in range(3):
         assert tracker.record("read", result) is result
@@ -28,7 +28,7 @@ def test_output_semantics_survive_result_caps(cap):
     assert not result_text(capped, screen=True)[1]
     batch = runtime._cap_batch_results([result], 40)
     assert isinstance(batch[0], Output)
-    assert not runtime.ToolErrorTracker(limit=1).record("read", batch[0]).endswith("</retry>")
+    assert not tool_errors.ToolErrorTracker(limit=1).record("read", batch[0]).endswith("</retry>")
 
 
 @pytest.mark.parametrize("content", ["ERROR " + "line\n" * 1000, "ERROR \udc80 malformed log"])
@@ -37,7 +37,7 @@ def test_output_semantics_survive_spill_and_sanitizing(content, tmp_path, monkey
     capped = runtime._cap_result(Output(content), 2000, inline_cap=1000)
     assert isinstance(capped, Output)
     assert not result_text(capped, screen=True)[1]
-    tracker = runtime.ToolErrorTracker(limit=1)
+    tracker = tool_errors.ToolErrorTracker(limit=1)
     assert tracker.record("read", capped) is capped
     assert not tracker.limit_reached()
 
@@ -83,7 +83,7 @@ def test_repeated_spill_caps_keep_pointer_even_under_tiny_budget(budget, tmp_pat
 
 
 def test_actual_error_still_counts():
-    tracker = runtime.ToolErrorTracker(limit=1)
+    tracker = tool_errors.ToolErrorTracker(limit=1)
     result = tracker.record("read", "ERROR: missing file")
     assert result.endswith("</retry>")
     assert tracker.steer_due() == [("read", 1)]

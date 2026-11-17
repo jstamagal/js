@@ -28,6 +28,7 @@ from js import (
     repl,
     runtime,
     settings,
+    tool_errors,
     toolkit as runtime_tools,
 )
 from js.config import Config
@@ -1529,7 +1530,7 @@ def test_trace_result_line_is_printed_by_the_async_dispatch_path_too(capsys):
     asyncio.run(runtime._dispatch_async_tool(
         runtime._PendingToolCall("c1", "slow", ["{}"]),
         runtime.Telemetry(None), 256 * 1024, True,
-        runtime.ToolErrorTracker(), registry, _tools_context(3),
+        tool_errors.ToolErrorTracker(), registry, _tools_context(3),
     ))
 
     lines = _trace_lines(capsys)
@@ -1619,7 +1620,7 @@ def test_a_tool_call_under_zero_tools_runs_nothing_and_returns_the_unknown_tool_
              runtime._PendingToolCall("c2", "shell", ['{"cmd": "id"}'])]
     results = runtime._dispatch_tool_calls(
         calls, runtime.Telemetry(None), 256 * 1024, False,
-        runtime.ToolErrorTracker(), surface.dispatch_registry(), _tools_context(0),
+        tool_errors.ToolErrorTracker(), surface.dispatch_registry(), _tools_context(0),
     )
 
     assert ran == []

@@ -160,7 +160,7 @@ class ScreenResult:
         return self.is_error or bool(self.exit_code)
 
 
-# The count `runtime.ToolErrorTracker` appends to a failed result for the model.
+# The count `tool_errors.ToolErrorTracker` appends to a failed result for the model.
 _RETRY_NOTE = re.compile(r"\s*<retry>attempts_left=(\d+), allowed_max_attempts=(\d+)</retry>\s*$")
 
 

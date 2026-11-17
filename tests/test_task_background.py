@@ -13,7 +13,7 @@ import types
 
 import pytest
 
-from js import repl, repl_commands, runtime, supervisor
+from js import repl, repl_commands, runtime, supervisor, tool_errors
 from js.repl_state import ReplState
 from js.toolkit import ToolContext, subagents, task_jobs
 from js.toolkit.registry import ToolRegistry
@@ -289,7 +289,7 @@ def test_the_runtime_dispatch_passes_background_and_handle_through(workers, ctx,
         async def go():
             return await runtime._dispatch_fan_out_async(
                 pc, runtime.Telemetry(None), 256 * 1024, False,
-                runtime.ToolErrorTracker(), registry, ctx)
+                tool_errors.ToolErrorTracker(), registry, ctx)
 
         return asyncio.run_coroutine_threadsafe(go(), loop).result(timeout=10)[2]
 

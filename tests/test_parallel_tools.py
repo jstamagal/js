@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from test_lazy_tool_discovery import _cfg, _result
 
-from js import paths, runtime
+from js import paths, runtime, tool_errors
 from js.toolkit import core as tool_core, fs
 from js.toolkit.core import Tool, ToolContext, call_is_read_only
 from js.toolkit.registry import ToolRegistry, build_default_registry
@@ -58,7 +58,7 @@ def _calls(*labels: str, name: str = "sleeper") -> list[runtime._PendingToolCall
 def _dispatch(calls, registry, context, *, trace: bool = False, progress=None, telemetry=None):
     telemetry = telemetry if telemetry is not None else runtime.Telemetry(None)
     records = runtime._dispatch_tool_calls(
-        calls, telemetry, 256 * 1024, trace, runtime.ToolErrorTracker(),
+        calls, telemetry, 256 * 1024, trace, tool_errors.ToolErrorTracker(),
         registry, context, progress,
     )
     runtime.settle_tool_trace(telemetry)

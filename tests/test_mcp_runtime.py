@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock
 import pytest
 from turn_driver import run_async as run_turn_async
 
-from js import events as event_mod, history_record, model_client, runtime
+from js import events as event_mod, history_record, model_client, runtime, tool_errors
 from js.mcp.client import CapabilityError, MCPClient, MCPClientError
 from js.mcp.host import MCPHost, mcp_tool_result, prompt_result, resource_result
 from js.mcp.types import CallToolResult, GetPromptResult, ReadResourceResult, ServerCapabilities
@@ -555,7 +555,7 @@ def test_mixed_sync_and_async_dispatch_preserves_model_order():
 
         records = await runtime._dispatch_batch(
             calls, runtime.Telemetry(debug_log=None), 0, False,
-            runtime.ToolErrorTracker(), registry, ToolContext(), asyncio.get_running_loop(),
+            tool_errors.ToolErrorTracker(), registry, ToolContext(), asyncio.get_running_loop(),
         )
 
         assert events == ["first", "second", "third", "fourth"]
@@ -585,7 +585,7 @@ def test_async_dispatch_cancellation_reaches_handler():
         registry = _registry_from_tools((Tool("wait", "wait", wait, {}),))
         task = asyncio.create_task(runtime._dispatch_batch(
             [runtime._PendingToolCall("1", "wait", ["{}"])], runtime.Telemetry(debug_log=None), 0, False,
-            runtime.ToolErrorTracker(), registry, ToolContext(), asyncio.get_running_loop(),
+            tool_errors.ToolErrorTracker(), registry, ToolContext(), asyncio.get_running_loop(),
         ))
         await started.wait()
         task.cancel()

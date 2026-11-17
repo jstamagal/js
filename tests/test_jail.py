@@ -19,7 +19,7 @@ import pytest
 from jail_probe import bwrap_starts, needs_bwrap
 from test_subagent_isolation import _fake_stream_result, make_cfg, prompt_dir
 
-from js import cli, jail, paths, persona, runtime, settings
+from js import cli, jail, paths, persona, runtime, settings, tool_errors
 from js.toolkit import ToolContext, call_tool, fs, python_kernel, shell_fetch, terminal
 from js.toolkit.registry import build_default_registry
 
@@ -168,7 +168,7 @@ def test_parallel_read_only_calls_stay_in_the_jail(jailed):
     jailed.max_parallel_tools = 8
 
     records = runtime._dispatch_tool_calls(
-        calls, runtime.Telemetry(None), 65536, False, runtime.ToolErrorTracker(),
+        calls, runtime.Telemetry(None), 65536, False, tool_errors.ToolErrorTracker(),
         build_default_registry(), jailed,
     )
 
@@ -355,7 +355,7 @@ def test_a_host_tmp_path_the_jail_does_not_show_is_refused_without_the_jail_dir(
         calls = [runtime._PendingToolCall("r", "read", [f'{{"file_path": "{host_dir}/x.txt"}}'])]
 
         records = runtime._dispatch_tool_calls(
-            calls, runtime.Telemetry(None), 65536, False, runtime.ToolErrorTracker(),
+            calls, runtime.Telemetry(None), 65536, False, tool_errors.ToolErrorTracker(),
             build_default_registry(), jailed,
         )
 
@@ -427,7 +427,7 @@ def test_an_image_read_under_the_jail_tmp_keeps_the_host_path_for_the_model_clie
 
 
 def test_a_jail_refusal_gets_no_retry_count_and_other_errors_do():
-    tracker = runtime.ToolErrorTracker()
+    tracker = tool_errors.ToolErrorTracker()
 
     refused = tracker.record("read", jail.Refusal("ERROR: /x is outside the jail"))
     failed = tracker.record("read", "ERROR: no such file: /y")

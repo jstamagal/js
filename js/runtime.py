@@ -12,7 +12,6 @@ import itertools
 import json
 import math
 import os
-import re
 import socket
 import sys  # noqa: F401 - tests patch sys.stdout through runtime.sys
 import threading
@@ -48,6 +47,7 @@ from . import (
     snippets,
     stream_transport,
     tool_args,
+    tool_errors,
     toolkit as T,
     turn_settings as _turn_settings,
     usage as usage_mod,
@@ -657,86 +657,6 @@ def _sanitize_assistant_message(msg: ai.messages.Message) -> ai.messages.Message
     return msg.model_copy(update={"parts": new_parts})
 
 
-# Quoted text, paths and numbers vary between two failures that are the same
-# mistake; `_error_signature` blanks them.
-_ERROR_QUOTED = re.compile(r"""'[^'\n]*'|"[^"\n]*"|`[^`\n]*`""")
-_ERROR_PATH = re.compile(r"\S*/\S*")
-_ERROR_NUMBER = re.compile(r"\d+")
-
-
-def _error_signature(result: str) -> str:
-    """``result`` with quoted text, paths and numbers blanked and whitespace
-    collapsed: two errors with one signature are the same error."""
-    text = _ERROR_QUOTED.sub("''", result)
-    text = _ERROR_PATH.sub("/", text)
-    text = _ERROR_NUMBER.sub("0", text)
-    return " ".join(text.split())
-
-
-@dataclass
-class _ErrorStreak:
-    signature: str
-    count: int = 1
-    # The count when the model was told to change approach; None until then.
-    steered_at: int | None = None
-
-
-@dataclass
-class ToolErrorTracker:
-    """Counts, per tool, the ERROR results in a row that carry the same
-    error. At `limit` the model is told once to change approach; one more
-    repeat of that error ends the turn. A different error or a result that
-    is not an error starts the count over."""
-    limit: int = field(default_factory=lambda: _settings.default_value("TOOL_ERRORS_MAX"))
-    errors: dict[str, _ErrorStreak] = field(default_factory=dict)
-    # Under the REPL's supervisor a turn's leaf tools dispatch in an
-    # executor thread while its fan-out calls run as coroutines on the loop; both
-    # record into this tracker, so guard the counter against that cross-thread
-    # interleave.
-    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
-
-    @classmethod
-    def from_settings(cls, settings: dict | None) -> ToolErrorTracker:
-        return cls(limit=int(_settings.knob(settings, "TOOL_ERRORS_MAX")))
-
-    def record(self, tool_name: str, result: str) -> str:
-        if isinstance(result, _jail.Refusal):
-            return result
-        with self._lock:
-            if isinstance(result, Output) or not result.startswith("ERROR"):
-                self.errors.pop(tool_name, None)
-                return result
-            signature = _error_signature(result)
-            streak = self.errors.get(tool_name)
-            if streak is not None and streak.signature == signature:
-                streak.count += 1
-            else:
-                streak = self.errors[tool_name] = _ErrorStreak(signature)
-            attempts_left = max(self.limit - streak.count, 0)
-            return f'{result}\n<retry>attempts_left={attempts_left}, allowed_max_attempts={self.limit}</retry>'
-
-    def steer_due(self) -> list[tuple[str, int]]:
-        """(tool, repeats) for each tool whose same error reached the limit
-        and that has not been told to change approach yet; marks them told."""
-        due: list[tuple[str, int]] = []
-        with self._lock:
-            for name, streak in self.errors.items():
-                if streak.steered_at is None and streak.count >= self.limit:
-                    streak.steered_at = streak.count
-                    due.append((name, streak.count))
-        return due
-
-    def exhausted(self) -> str | None:
-        """The tool that repeated its error after being told to change
-        approach, or None."""
-        with self._lock:
-            return next((name for name, streak in self.errors.items()
-                         if streak.steered_at is not None and streak.count > streak.steered_at), None)
-
-    def limit_reached(self) -> bool:
-        return self.exhausted() is not None
-
-
 # --------------------------------------------------------------------------
 # Tool dispatch
 # --------------------------------------------------------------------------
@@ -1228,7 +1148,7 @@ def _call_scopes(telemetry: Telemetry, trace: bool, call_id: str, registry: Tool
 
 async def _run_call(way: _CallWay, name: str, raw_args: str, *, call_id: str, called_name: str | None,
                     telemetry: Telemetry, cap_bytes: int, trace: bool, trace_together: bool,
-                    error_tracker: ToolErrorTracker | None, registry: ToolRegistry,
+                    error_tracker: tool_errors.ToolErrorTracker | None, registry: ToolRegistry,
                     context: ToolContext) -> tuple[dict, Any]:
     """One tool call from the model's raw arguments to the result the model
     gets: parse, resolve, trace, log, run the handler ``way`` says, cap,
@@ -1302,7 +1222,7 @@ def _run_to_end(call: Coroutine[Any, Any, Any]) -> Any:
 
 def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
               cap_bytes: int, trace: bool = False,
-              error_tracker: ToolErrorTracker | None = None,
+              error_tracker: tool_errors.ToolErrorTracker | None = None,
               registry: ToolRegistry | None = None,
               tool_context: ToolContext | None = None,
               trace_together: bool = False,
@@ -1325,7 +1245,7 @@ async def _dispatch_fan_out_async(
     telemetry: Telemetry,
     cap_bytes: int,
     trace: bool,
-    error_tracker: ToolErrorTracker,
+    error_tracker: tool_errors.ToolErrorTracker,
     registry: ToolRegistry,
     tool_context: ToolContext,
     trace_together: bool = False,
@@ -1341,7 +1261,7 @@ async def _dispatch_fan_out_async(
 
 async def _dispatch_async_tool(
     pc: _PendingToolCall, telemetry: Telemetry, cap_bytes: int, trace: bool,
-    error_tracker: ToolErrorTracker, registry: ToolRegistry, tool_context: ToolContext,
+    error_tracker: tool_errors.ToolErrorTracker, registry: ToolRegistry, tool_context: ToolContext,
 ) -> tuple[_PendingToolCall, dict, Any]:
     """Execute one call of an async handler on the current loop."""
     args, result = await _run_call(
@@ -1419,7 +1339,7 @@ def _dispatch_tool_calls(
     telemetry: Telemetry,
     cap_bytes: int,
     trace: bool,
-    error_tracker: ToolErrorTracker,
+    error_tracker: tool_errors.ToolErrorTracker,
     registry: ToolRegistry,
     tool_context: ToolContext,
     progress: _DispatchProgress | None = None,
@@ -1559,7 +1479,7 @@ async def _dispatch_batch(
     telemetry: Telemetry,
     cap_bytes: int,
     trace: bool,
-    error_tracker: ToolErrorTracker,
+    error_tracker: tool_errors.ToolErrorTracker,
     registry: ToolRegistry,
     tool_context: ToolContext,
     loop: asyncio.AbstractEventLoop,
@@ -1956,7 +1876,7 @@ def _send_resume_nudge(convo: TurnConvo, *, n: int, limit: int,
 async def _record_tool_results(pending_calls: list[_PendingToolCall], *, cfg: Config, trace: bool,
                                messages: list[dict], convo: TurnConvo, registry: ToolRegistry,
                                dispatch_registry: ToolRegistry, context: ToolContext,
-                               error_tracker: ToolErrorTracker, telemetry: Telemetry,
+                               error_tracker: tool_errors.ToolErrorTracker, telemetry: Telemetry,
                                events: TurnEvents) -> list[tuple[_PendingToolCall, dict, Any]]:
     """Run the batch and append its results to the history and the convo.
     Returns the (call, arguments, result) records of the calls that ran.
@@ -2208,7 +2128,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         alias=functools.partial(_aliased_tool_specs, alias_map=alias_map), mcp_host=mcp_host,
         call_stats=call_stats, trace=trace, suppress_output=suppress_output,
     )
-    error_tracker = ToolErrorTracker.from_settings(getattr(cfg, "settings", None))
+    error_tracker = tool_errors.ToolErrorTracker.from_settings(getattr(cfg, "settings", None))
 
     output_token = output.set_sink(output.sink_of(telemetry))
     net_role_token = stream_transport.set_role(

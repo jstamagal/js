@@ -17,6 +17,7 @@ from js import (
     runtime,
     setcmd,
     settings,
+    tool_errors,
     toolkit as runtime_tools,
 )
 from js.model_client import ModelStreamResult, ModelToolCall
@@ -632,7 +633,7 @@ def test_sanitize_assistant_message_repairs_sdk_tool_call_parts():
 
 
 def test_retry_metadata_is_appended_and_resets_after_success():
-    tracker = runtime.ToolErrorTracker(limit=2)
+    tracker = tool_errors.ToolErrorTracker(limit=2)
 
     assert tracker.record("read", "ERROR: bad path") == (
         "ERROR: bad path\n<retry>attempts_left=1, allowed_max_attempts=2</retry>"
@@ -663,7 +664,7 @@ def test_dispatch_uses_canonical_name_repairs_args_and_adds_retry_metadata(tmp_p
         '{"file_path":"created.txt","content":"ok",}',
         TelemetryStub(),
         cap_bytes=4096,
-        error_tracker=runtime.ToolErrorTracker(limit=2),
+        error_tracker=tool_errors.ToolErrorTracker(limit=2),
     )
 
     assert args == {"file_path": "created.txt", "content": "ok"}
@@ -674,7 +675,7 @@ def test_dispatch_uses_canonical_name_repairs_args_and_adds_retry_metadata(tmp_p
     assert kind == "tool_ok"
     assert payload["tool"] == "write"
 
-    tracker = runtime.ToolErrorTracker(limit=2)
+    tracker = tool_errors.ToolErrorTracker(limit=2)
     _, error = runtime._dispatch(
         "missing_tool",
         "{}",
@@ -1083,7 +1084,7 @@ def test_task_tool_calls_from_one_assistant_batch_run_in_parallel_and_restore_or
         runtime.Telemetry(None),
         cap_bytes=4096,
         trace=False,
-        error_tracker=runtime.ToolErrorTracker(limit=2),
+        error_tracker=tool_errors.ToolErrorTracker(limit=2),
         registry=registry,
         tool_context=ToolContext(),
     )
@@ -1460,7 +1461,7 @@ def test_patch_fuzzy_match_still_requires_prior_read(tmp_path):
 
 
 def test_tool_error_tracker_uses_registered_limit():
-    tracker = runtime.ToolErrorTracker.from_settings({"TOOL_ERRORS_MAX": 1})
+    tracker = tool_errors.ToolErrorTracker.from_settings({"TOOL_ERRORS_MAX": 1})
     tracker.record("read", "ERROR: missing")
     assert tracker.steer_due() == [("read", 1)]
 

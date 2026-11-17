@@ -11,7 +11,7 @@ import ai.types.messages
 import ai.types.usage
 from turn_driver import one_turn, recording, registry as turn_registry, run
 
-from js import runtime, tool_args
+from js import runtime, tool_args, tool_errors
 from js.config import Config
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import (
@@ -197,14 +197,14 @@ def test_undeclared_underscore_properties_are_dropped_before_validation(monkeypa
 
 
 def test_numbers_paths_and_quotes_do_not_make_errors_different():
-    tracker = runtime.ToolErrorTracker(limit=2)
+    tracker = tool_errors.ToolErrorTracker(limit=2)
     tracker.record("read", "ERROR: /a/b.txt not found at line 3 ('x')")
     tracker.record("read", "ERROR: /c/d.py not found at line 90 ('yy')")
     assert tracker.steer_due() == [("read", 2)]
 
 
 def test_a_different_error_or_a_success_starts_the_count_over():
-    tracker = runtime.ToolErrorTracker(limit=2)
+    tracker = tool_errors.ToolErrorTracker(limit=2)
     tracker.record("read", "ERROR: no such file")
     tracker.record("read", "ERROR: permission denied")
     assert tracker.steer_due() == []
@@ -219,7 +219,7 @@ def test_a_different_error_or_a_success_starts_the_count_over():
 
 
 def test_the_same_error_after_the_steer_ends_the_turn():
-    tracker = runtime.ToolErrorTracker(limit=2)
+    tracker = tool_errors.ToolErrorTracker(limit=2)
     tracker.record("read", "ERROR: no such file")
     tracker.record("read", "ERROR: no such file")
     assert tracker.steer_due() == [("read", 2)]
