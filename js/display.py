@@ -280,7 +280,7 @@ def render_markdown(source: str, width: int, settings: Any = None) -> str:
     """ANSI rendering of Markdown source at `width` columns: no blank lines
     before or after, ending in one newline. Inline code is a chip: its text in
     COLOR_CODE on COLOR_PANEL, a space of padding each side."""
-    console = render_console(width, _markdown_styles(theme(settings)))
+    console = render_console(width, _markdown_styles(theme()))
     document = _Markdown(source, code_theme=fset.code_style(), hyperlinks=False)
     for token in document.parsed:
         for child in token.children or ():
@@ -644,6 +644,6 @@ _THEME_ROLES = {
 }
 
 
-def theme(settings: Any = None) -> Theme:
-    """The colours /fset gives now; ``settings`` is unused, kept for callers."""
+def theme() -> Theme:
+    """The colours /fset gives now."""
     return Theme(**{field: fset.hex_for(role) or "default" for field, role in _THEME_ROLES.items()})

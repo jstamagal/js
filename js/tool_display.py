@@ -378,7 +378,7 @@ def render_fold(name: str, calls: list[dict | None], *, running: int = 0,
                 width: int | None = None, settings: Any = None) -> str:
     """Finished quiet calls of one tool as one row: `mark [name] N things
     label · label · +K`. `running` of them have not returned."""
-    block = _Block(width or block_width(), theme(settings), MARK if running else OK)
+    block = _Block(width or block_width(), theme(), MARK if running else OK)
     one, many = msgs.TOOL_FOLD_NOUNS[declared(name).fold_noun]
     about = msgs.TOOL_FOLD_COUNT.words(value=len(calls), value2=one if len(calls) == 1 else many)
     labels = [label for label in (fold_label(name, args) for args in calls) if label]
@@ -547,7 +547,7 @@ def render_exchange(name: str, args: dict | None, result: Any = None, *, level: 
     """
     if level <= 0:
         return ""
-    colours = theme(settings)
+    colours = theme()
     args = args if isinstance(args, dict) else {}
     if result is None:
         block = _Block(width or block_width(), colours, MARK)
