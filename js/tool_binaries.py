@@ -252,11 +252,11 @@ def _partial_download_path(destination: Path) -> Path:
     return destination.with_name(f".{destination.name}.aria2-part")
 
 
-def _captured_tail(stream, limit: int = 500) -> str:
+def _captured_tail(stream) -> str:
     stream.flush()
     stream.seek(0, os.SEEK_END)
     size = stream.tell()
-    stream.seek(max(0, size - limit))
+    stream.seek(max(0, size - 500))
     return stream.read().decode("utf-8", errors="replace").strip()
 
 
@@ -681,14 +681,12 @@ def _adopt_termux_native_builds(tools_dir: Path, package_bin: Path, missing: lis
     return still_missing
 
 
-def install_all(*, tools_dir: Path = TOOLS_DIR, say=None, provision_brew=None,
-                provision_termux=None, downloader=None) -> None:
+def install_all(*, tools_dir: Path = TOOLS_DIR, say=None, provision_brew=None) -> None:
     announce = msgs.say if say is None else say
     brew = _provision_aria2_via_brew if provision_brew is None else provision_brew
-    termux = _provision_termux_tools if provision_termux is None else provision_termux
     specs, missing = release_plan()
     if is_termux():
-        package_bin = termux(tools_dir)
+        package_bin = _provision_termux_tools(tools_dir)
         missing = _adopt_termux_native_builds(tools_dir, package_bin, missing)
 
     if platform.system() == "Darwin" and not any(s.executable == ARIA2_EXECUTABLE for s in specs):
@@ -725,7 +723,7 @@ def install_all(*, tools_dir: Path = TOOLS_DIR, say=None, provision_brew=None,
                      sha=spec.executable_sha256)
             continue
         announce(msgs.TOOL_DOWNLOAD, name=spec.name, version=spec.version, asset=spec.asset, url=spec.url)
-        state = install_download(spec, tools_dir=tools_dir, downloader=download if downloader is None else downloader)
+        state = install_download(spec, tools_dir=tools_dir, downloader=download)
         announce(msgs.TOOL_INSTALLED, state=state, path=target, asset_sha=spec.asset_sha256,
                  sha=spec.executable_sha256)
     if missing:
