@@ -1,4 +1,4 @@
-"""Regression for the nested-fan-out pool inversion (SWEEP_REVIEW #1/#2).
+"""Nested fan-out does not exhaust the dispatch pool.
 
 The non-blocking REPL runs every turn on ONE loop whose default executor is a
 bounded js-dispatch pool. Before the fix, a parent turn dispatching a `task`

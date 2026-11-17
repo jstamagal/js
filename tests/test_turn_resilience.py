@@ -757,7 +757,7 @@ def test_a_compaction_summary_survives_a_dropped_connection(tmp_path):
     assert len(server.arrivals) == 2
 
 
-# --- an endless Retry-After (ALL-CLAIMS.md:429) -------------------------------
+# --- an endless Retry-After -------------------------------
 
 from js import retry as _retry  # noqa: E402
 

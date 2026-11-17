@@ -1,4 +1,4 @@
-"""`js -p --json`: one JSON event per line on stdout (js-1g1.18).
+"""`js -p --json`: one JSON event per line on stdout.
 
 The schema these tests pin is in docs/headless-json.md."""
 

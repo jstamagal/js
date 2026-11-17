@@ -1,10 +1,10 @@
 """Custom `js --login` providers must be first-class routing citizens.
 
-Regression for the FIXME cluster where a custom login (booty/testes/a local
-llama.cpp box) was visible to /model and --list-models but invisible to
-routing: `provider/model` prefixes shipped the WHOLE string to the default
-provider, and pinning `PROVIDER` resolved base_url but handed the raw js id
-to the SDK ("unknown provider id").
+A custom login (a local llama.cpp box, say) is visible to /model and
+--list-models and to routing. It used to be invisible to routing:
+`provider/model` prefixes shipped the WHOLE string to the default provider,
+and pinning `PROVIDER` resolved base_url but handed the raw js id to the SDK
+("unknown provider id").
 """
 
 from __future__ import annotations
@@ -283,7 +283,7 @@ def test_pinned_gateway_unknown_prefix_passes_through_whole_model_id():
 def test_login_routed_prefix_carries_login_even_when_caller_opts_out(pin):
     # ReplState.config_for_turn routes with use_saved_login=False; a builtin-provider
     # prefix that routes because of its login must still go to the login's
-    # endpoint, not the provider default with an env key. ALL-CLAIMS.md:437.
+    # endpoint, not the provider default with an env key.
     logins.save_login(Login(provider_id="deepseek", provider_base_url="https://private.test/v1",
                             provider_api_key="LOGIN-KEY"))
     route = resolve_model_route(

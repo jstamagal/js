@@ -214,7 +214,7 @@ def test_rolled_back_rows_leave_the_search_text(tmp_path):
     assert _search("zebra") == {}
 
 
-# --- recovery must always re-probe (neema #958, titus #986, kito #964) --------
+# --- recovery must always re-probe --------
 
 import fcntl  # noqa: E402
 import sqlite3  # noqa: E402

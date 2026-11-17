@@ -1,6 +1,6 @@
 """A lone surrogate in tool text (json.loads('"\\ud800"'), a surrogateescape
 read) must not crash the byte budgets: text_bytes and the spill path count and
-write it as the `?` that errors="replace" gives. ALL-CLAIMS.md:449,586."""
+write it as the `?` that errors="replace" gives."""
 from __future__ import annotations
 
 from js import runtime
@@ -78,7 +78,7 @@ def test_surrogate_dict_keys_never_merge_into_other_keys():
 
 
 def test_normalizing_a_large_dict_is_linear_work(monkeypatch):
-    # shinda #408: a per-entry set union made 30000 keys take 16 s. Count
+    # A per-entry set union made 30000 keys take 16 s. Count
     # _well_formed_key calls, not time.
     calls = []
     real = runtime._well_formed_key

@@ -359,7 +359,7 @@ def test_prompt_mode_displays_reasoning_separately_and_persists_it(monkeypatch, 
     assert THOUGHT not in log_path.read_text()
 
 
-# --- a broken stderr (ALL-CLAIMS.md:414) -------------------------------------
+# --- a broken stderr -------------------------------------
 
 from js.reasoning_display import StderrReasoning  # noqa: E402
 

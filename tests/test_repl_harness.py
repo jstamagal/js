@@ -870,7 +870,7 @@ def test_model_command_with_prefixed_provider_resets_provider_state(tmp_path):
 
 
 def test_model_command_unlogged_vendor_prefix_stays_on_pinned_endpoint(tmp_path):
-    """Ruling C: `/model vendor/model` may switch direct ONLY when that vendor is
+    """`/model vendor/model` switches directly only when that vendor is
     a saved login. With no login and a pinned gateway, the REPL agrees with the
     router — the endpoint holds and the whole id rides it (no hijack)."""
     from js import logins
@@ -904,7 +904,7 @@ def test_model_command_unlogged_vendor_prefix_stays_on_pinned_endpoint(tmp_path)
 
 
 def test_model_command_unlogged_vendor_prefix_stays_bare_without_pinned_endpoint(tmp_path):
-    """Ruling C: even with no pinned provider, a vendor prefix is only an
+    """Even with no pinned provider, a vendor prefix is only an
     endpoint switch when that vendor is a saved login; otherwise it is a plain
     model id."""
     from js import logins

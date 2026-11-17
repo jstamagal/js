@@ -1,5 +1,5 @@
 """Session usage: tokens and cost per model call, totals that survive resume,
-/cost, and the status bar's session figure (js-1g1.19)."""
+/cost, and the status bar's session figure."""
 
 from __future__ import annotations
 
@@ -275,7 +275,7 @@ def test_concurrent_charges_leave_the_file_with_the_final_totals(tmp_path):
 def test_sibling_task_workers_of_an_unsaved_session_do_not_see_each_other(tmp_path, monkeypatch):
     """Unsaved sessions all map to /dev/null; two `task` workers of an unsaved
     parent must each see only their own call, while the parent is charged
-    for both (ALL-CLAIMS usage.py:181)."""
+    for both."""
     import os
 
     cfg = replace(_priced_cfg(tmp_path), session_file=Path(os.devnull))

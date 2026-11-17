@@ -1,7 +1,7 @@
 """apply_unset mirrors apply_set's guard: children of non-map knobs are not
 unset targets, and the the value as it stands message follows the real change.
 
-ALL-CLAIMS setcmd.py HIGH x2 + MED: `set -MCP_SERVERS.foo` leaked secret
+`set -MCP_SERVERS.foo` leaked secret
 headers with raw str(after) and mutated nothing-but-said-changed; unsetting
 a child of a scalar knob (MODEL.child) was accepted while setting the
 same path errors.

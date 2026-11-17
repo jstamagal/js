@@ -754,7 +754,7 @@ def _write_model_cache_records(records: dict[str, dict[str, Any]]) -> None:
     The old in-place ``open("w")`` truncated first and wrote second; a
     reader between the two saw an empty or half file, parsed it as {} and
     the next writer persisted only its own provider: every other cached
-    model list gone (ALL-CLAIMS logins.py:428).
+    model list gone.
     """
     _ensure_config_dir()
     payload: dict[str, Any] = {}

@@ -1,5 +1,5 @@
-"""One bad record must not poison a session's `.txt` (js.session_text):
-ALL-CLAIMS.md:523-526. Every test runs in the tmp HOME the conftest installs."""
+"""One bad record must not poison a session's `.txt` (js.session_text).
+Every test runs in the tmp HOME the conftest installs."""
 from __future__ import annotations
 
 import json

@@ -149,7 +149,7 @@ def test_collect_settings_layers_global_project_and_local_jsrc(tmp_path):
 def test_from_env_uses_the_js_home_and_writes_no_global_jsrc(monkeypatch, tmp_path):
     config_home, data_home = _env_dirs(monkeypatch, tmp_path)
     # Explicit pin (PROVIDER / JS_PROVIDER) authorizes reading the provider's
-    # native env key: an env key alone would create no route (ruling #1).
+    # native env key: an env key alone would create no route.
     monkeypatch.setenv("JS_PROVIDER", "deepseek")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 

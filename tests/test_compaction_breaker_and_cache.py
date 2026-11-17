@@ -452,7 +452,7 @@ def test_cache_break_is_silent_below_net_level_two(monkeypatch, tmp_path, net_li
 
 
 def test_a_paid_summary_that_saves_too_little_counts_toward_the_breaker(monkeypatch, tmp_path):
-    """ALL-CLAIMS compaction.py:955-963: the post-summary savings skip was not a
+    """The post-summary savings skip was not a
     failure, so every turn paid for the same summary again."""
     cfg = _config(tmp_path, {**_SMALL_WINDOW, "COMPACTION_FAILURES_MAX": 2})
     context = ToolContext(cwd=tmp_path)

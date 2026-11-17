@@ -123,7 +123,7 @@ def test_turn_end_cancelled_emitted_on_cancel(tmp_path, monkeypatch):
 
 
 def test_turn_end_error_emitted_on_unexpected_exception(tmp_path, monkeypatch):
-    # ALL-CLAIMS.md:451: an Exception escaping the turn (a provider bug, a
+    # An Exception escaping the turn (a provider bug, a
     # crash in a safety net) left turn_start unpaired.
     rec = _Recorder()
 
@@ -208,7 +208,7 @@ def test_partial_text_closed_before_retry(tmp_path, monkeypatch, capsys):
 
 
 # --------------------------------------------------------------------------
-# --debug-file request trace is byte-honest (finding 62)
+# --debug-file request trace is byte-honest
 # --------------------------------------------------------------------------
 
 def test_request_trace_is_byte_honest(capsys):

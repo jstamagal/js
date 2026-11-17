@@ -272,7 +272,7 @@ def test_overflow_recovery_with_nothing_to_clear_summarizes(tmp_path, monkeypatc
 
 def test_a_failed_clear_is_a_skipped_step_not_a_dead_turn(tmp_path, monkeypatch):
     """Disk full / read-only while clearing used to raise out of fit() and kill
-    the turn (ALL-CLAIMS turn_budget.py MED _clear). Now: history restored,
+    the turn. Now: history restored,
     warning, and the turn goes on."""
     _summaries(monkeypatch)
     setup = _Setup(tmp_path, _prefix_then_turn(0, 22))

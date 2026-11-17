@@ -215,7 +215,7 @@ def _status_error(message, status, **kwargs):
 
 
 def test_rate_limit_with_413_in_request_id_is_not_overflow():
-    """ALL-CLAIMS:136 — "413" inside req_84133 made a 429 look like an overflow."""
+    """A "413" inside a request id (req_84133) does not make a 429 an overflow."""
     exc = _status_error(
         "Rate limit reached for gpt-x. Limit 2000000, Used 1999000. request id req_84133",
         429, code="rate_limit_exceeded",

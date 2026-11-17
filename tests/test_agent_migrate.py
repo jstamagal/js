@@ -164,7 +164,7 @@ def _keep_all(_entry):
 
 
 def test_message_and_benchmark_frontmatter_are_content_not_manifests(tmp_path):
-    """ALL-CLAIMS:18 + tuck #138: 00-user/00-agent/00-benchmark keep their frontmatter."""
+    """00-user/00-agent/00-benchmark keep their frontmatter."""
     for name, head in (("00-user.md", "model: user-text"), ("00-agent.md", "model: seed"),
                        ("00-benchmark.md", "max_tokens: 42")):
         text = f"---\n{head}\n---\nBODY\n"
@@ -176,7 +176,7 @@ def test_message_and_benchmark_frontmatter_are_content_not_manifests(tmp_path):
 
 
 def test_legacy_yaml_beside_message_and_benchmark_files_migrates(tmp_path):
-    """ALL-CLAIMS:19: a message file is not a competing manifest."""
+    """A message file is not a competing manifest."""
     bench = "---\nmax_tokens: 42\n---\nbench\n"
     agent = _agent(tmp_path, "legacy", {
         "00-tools.yaml": "tools: [read]\n", "00-user.md": "seed\n", "00-benchmark.md": bench})
@@ -188,7 +188,7 @@ def test_legacy_yaml_beside_message_and_benchmark_files_migrates(tmp_path):
 
 
 def test_undecodable_agent_is_an_error_and_later_agents_still_migrate(tmp_path):
-    """ALL-CLAIMS:20: one non-UTF-8 file must not kill the whole root."""
+    """One non-UTF-8 file must not kill the whole root."""
     root = tmp_path / "agents"
     bad = _agent(root, "a_bad", {"01-prompt.md": "X\n"})
     (bad / "00-tools.yaml").write_bytes(b"tools: [\xff]\n")
@@ -233,7 +233,7 @@ def test_failed_manifest_write_leaves_the_legacy_agent_and_a_rerun_finishes(tmp_
 
 
 def test_failed_legacy_removal_takes_agent_yaml_back_out(tmp_path, monkeypatch):
-    """ALL-CLAIMS:22: a crash between writes must not leave `skip BOTH` forever."""
+    """A crash between writes must not leave `skip BOTH` forever."""
     agent = _agent(tmp_path, "fault", {"00-tools.yaml": "tools: [read]\n", "01-prompt.md": "X\n"})
     with monkeypatch.context() as m:
         _refuse(m, agent / "00-tools.yaml", attr="unlink")
@@ -283,7 +283,7 @@ def test_both_finish_failing_restores_the_existing_agent_yaml_bytes(tmp_path, mo
 
 
 def test_mcp_globs_and_project_agents_survive_a_partial_registry(tmp_path, monkeypatch):
-    """ALL-CLAIMS:21: entries the registry cannot see are not proven dead."""
+    """Entries the registry cannot see are not proven dead."""
     project = tmp_path / "project"
     _agent(project / ".js" / "agents", "local_helper", {"01-prompt.md": "H\n"})
     monkeypatch.chdir(project)
@@ -298,7 +298,7 @@ def test_mcp_globs_and_project_agents_survive_a_partial_registry(tmp_path, monke
 
 
 def test_finishing_both_never_rewrites_the_existing_agent_yaml(tmp_path):
-    """neema #705: the user's agent.yaml (CRLF, comments) stays byte for byte."""
+    """The user's agent.yaml (CRLF, comments) stays byte for byte."""
     yaml_bytes = b"# mine\r\ntools:\r\n  - read:eager\r\n"
     agent = _agent(tmp_path, "both", {"00-tools.yaml": "tools: [read]\n"})
     (agent / "agent.yaml").write_bytes(yaml_bytes)
@@ -308,7 +308,7 @@ def test_finishing_both_never_rewrites_the_existing_agent_yaml(tmp_path):
 
 
 def test_both_whose_agent_yaml_does_not_load_is_left_alone(tmp_path):
-    """neema #734: never delete the old manifest beside an agent.yaml the loader refuses."""
+    """Never delete the old manifest beside an agent.yaml the loader refuses."""
     files = {"00-tools.yaml": "max_tokens: bad\n", "agent.yaml": "max_tokens: bad\n"}
     agent = _agent(tmp_path, "both", files)
     assert agent_migration.migrate_agent_dir(agent, apply=True, keep=_keep_all).action == "skip"

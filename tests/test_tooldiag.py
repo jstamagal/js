@@ -69,7 +69,7 @@ def test_shell_row_shrinks_when_fs_search_is_absent():
     assert "fs_search" not in text_without
 
 
-# --- the command line (ALL-CLAIMS.md:618,621) ---------------------------------
+# --- the command line ---------------------------------
 
 import pytest  # noqa: E402
 

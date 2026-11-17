@@ -1,7 +1,6 @@
 """memory.py replay: malformed records skip, destructive marks with a bad
 payload are inert, and the old writer's double appends are undone only in
-the epoch that shows them (ALL-CLAIMS.md:290-291). Ported from nyira's
-scratch acceptance gate; the source journal is never rewritten."""
+the epoch that shows them. The source journal is never rewritten."""
 import json
 import tempfile
 import unittest
@@ -159,7 +158,7 @@ class MemoryReplayGuards(unittest.TestCase):
         self.assertEqual(M.load_replay_messages(path), [user('big')])
 
     def test_an_epoch_flagged_only_against_the_unrepaired_history_is_not_repaired(self):
-        # doc #1083: epoch 0 is legacy (X twice); its compaction keep_from=3
+        # Epoch 0 is legacy (X twice); its compaction keep_from=3
         # was written against the repaired history, so nothing of epoch 0
         # survives and epoch 1's single X is no repeat. Epoch 1 also repeats
         # an exchange by content, which a wrong repair would drop.

@@ -66,7 +66,7 @@ _SEPARATORS = ["a\u2028b", "c\u2029d", "e\x85f", "ok"]
 
 
 def test_unicode_line_separators_survive_the_round_trip(tmp_path):
-    # ALL-CLAIMS.md:392: 4 written, 1 read back.
+    # 4 written, 1 read back.
     path = tmp_path / "history.jsonl"
     _write(path, *[(float(i), "/p", text) for i, text in enumerate(_SEPARATORS)])
 

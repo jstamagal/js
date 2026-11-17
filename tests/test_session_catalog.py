@@ -202,7 +202,7 @@ def test_context_manager_releases_liveness(tmp_path):
     assert session_in_flight(session) is False
 
 
-# --- read-only, tri-state liveness (ALL-CLAIMS session_catalog.py:133) -------------
+# --- read-only, tri-state liveness -------------
 
 import pytest  # noqa: E402
 

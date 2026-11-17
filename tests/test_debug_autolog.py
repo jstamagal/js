@@ -2,7 +2,7 @@
 (logs/<agent>/<session>.log, on by default), never dumped to the terminal, while
 `-d` keeps the concise per-turn diagnostics on stdout.
 
-Regression guard for FIXME3 item 10: a plain run leaked the whole request trace
+A plain run used to leak the whole request trace
 (unclipped system prompt + all tool schemas + messages JSON) to stdout because
 the model-boundary dump was wired to the always-on `TRACE` flag.
 """

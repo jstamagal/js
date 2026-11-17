@@ -1,5 +1,5 @@
 """Repair must not edit string VALUES: trailing-comma stripping is
-structure-only (ALL-CLAIMS tool_args.py HIGH)."""
+structure-only."""
 
 from js.tool_args import canonical_tool_args, repair_jsonish, sdk_safe_tool_args
 
@@ -31,7 +31,7 @@ def test_escaped_quotes_and_backslashes_survive():
 
 
 def test_anyof_object_branch_coerces_stringified_object():
-    """fetch's headers is anyOf[object, array] (ALL-CLAIMS tool_args MED)."""
+    """fetch's headers is anyOf[object, array]."""
     from js.tool_args import coerce_to_schema
 
     schema = {"anyOf": [{"type": "object"}, {"type": "array"}]}
@@ -61,8 +61,7 @@ def test_oneof_scalar_union_and_non_json_unchanged():
 
 
 def test_recursion_depth_spam_is_safe():
-    """A model spamming brackets must not kill the stream handler
-    (ALL-CLAIMS tool_args MED: RecursionError escaped every guard)."""
+    """A model spamming brackets must not kill the stream handler."""
     from js.tool_args import canonical_tool_args, is_json_object
 
     raw = "[" * 200000
@@ -74,7 +73,7 @@ def test_recursion_depth_spam_is_safe():
 
 
 def test_coerce_does_not_mutate_the_schema():
-    """The declared type list must survive repeated calls (shinda #824)."""
+    """The declared type list must survive repeated calls."""
     import copy
 
     from js.tool_args import coerce_to_schema
@@ -87,7 +86,7 @@ def test_coerce_does_not_mutate_the_schema():
 
 
 def test_nested_anyof_string_branch_keeps_the_string():
-    """A string valid under a NESTED anyOf branch is not coerced (shinda #871)."""
+    """A string valid under a NESTED anyOf branch is not coerced."""
     from js.tool_args import coerce_to_schema
 
     schema = {"anyOf": [{"anyOf": [{"type": "string"}, {"type": "object"}]}, {"type": "array"}]}

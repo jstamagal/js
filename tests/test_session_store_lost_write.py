@@ -1,6 +1,6 @@
 """A writer must land on the inode the path names, not the one it opened.
 
-ALL-CLAIMS session_store.py HIGH: append opened ("a+b") before flocking, so
+Append opened ("a+b") before flocking, so
 a link_file that replaced the file between the open and the lock left the
 appender writing into the unlinked inode — the record vanished with a
 successful return. Both writers now revalidate (dev, ino) after the lock
@@ -121,8 +121,7 @@ def patch_object_replace(side_effect):
 
 
 def test_open_locked_closes_the_stream_when_stat_fails(tmp_path, monkeypatch):
-    """A failed attempt owns nothing: stream closed AND flock released
-    (maggie #905 / titus #923)."""
+    """A failed attempt owns nothing: stream closed AND flock released."""
     import errno as _errno
 
     path = tmp_path / "s.jsonl"
@@ -164,7 +163,7 @@ def test_open_locked_closes_the_stream_when_stat_fails(tmp_path, monkeypatch):
 
 def test_open_locked_never_resurrects_a_gone_file(tmp_path, monkeypatch):
     """Only attempt 0 may create; if the path disappears mid-flight the retry
-    raises instead of making a fresh empty journal (titus #923.2)."""
+    raises instead of making a fresh empty journal."""
     path = tmp_path / "gone.jsonl"
     path.write_text("x\n")
 
@@ -180,7 +179,7 @@ def test_open_locked_never_resurrects_a_gone_file(tmp_path, monkeypatch):
 
 
 def test_reopened_append_still_writes_at_the_end(tmp_path):
-    """The retry's r+b stream must not write at offset 0 (shinda #1031)."""
+    """The retry's r+b stream must not write at offset 0."""
     path = tmp_path / "s.jsonl"
     path.write_text(json.dumps({"role": "user", "content": "first"}) + "\n")
 
@@ -228,7 +227,7 @@ def _fd_ino(fd: int) -> int:
 
 def test_chain_reads_in_chunks_with_long_lines(tmp_path):
     """A cold cache over a multi-MB session reads in chunks, never the whole
-    file at once (ALL-CLAIMS session_store MED). A line longer than the chunk
+    file at once. A line longer than the chunk
     still feeds once, whole."""
     path = tmp_path / "big.jsonl"
     # records with real ids, the shape the chain tracks
@@ -245,7 +244,7 @@ def test_chain_reads_in_chunks_with_long_lines(tmp_path):
 
 def test_chain_lf_split_only(tmp_path):
     """Records split on LF only: \\x0c or \\r inside a JSON string must not
-    split a record (doc #1114)."""
+    split a record."""
     path = tmp_path / "s.jsonl"
     record = {"id": "c" * 8, "parent": None, "role": "user", "content": "page"}
     # raw \x0c/\x0b bytes in the file: what a writer with ensure_ascii=False emits

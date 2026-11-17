@@ -385,7 +385,7 @@ def test_aria2_argv_refuses_headers_without_an_input_file(aria2c: str, tmp_path:
 def test_headers_reach_the_server_without_touching_argv(
     transfer_server, aria2c: str, tmp_path: Path, monkeypatch
 ) -> None:
-    """ALL-CLAIMS tool_binaries.py:213: headers on argv are world-readable in ps."""
+    """Headers on argv are world-readable in ps."""
     base_url, state = transfer_server
     _clear_server_state(state)
     seen_argv: list[list[str]] = []
@@ -414,7 +414,7 @@ def test_headers_reach_the_server_without_touching_argv(
 
 
 def test_a_url_with_a_tab_is_refused(tmp_path: Path) -> None:
-    """neema #1095: TAB on the input-file URI line means 'another mirror URI'."""
+    """TAB on the input-file URI line means 'another mirror URI'."""
     with pytest.raises(tool_binaries.DownloadError):
         tool_binaries.write_aria2_input(tmp_path / "in", "https://x.test/f\thttps://evil.test/g",
                                         {"X": "1"}, tmp_path / ".f.aria2-part")
@@ -429,7 +429,7 @@ def test_a_header_with_a_line_break_is_refused(tmp_path: Path) -> None:
 def test_aria2c_is_stopped_when_the_caller_gives_up(
     transfer_server, aria2c: str, tmp_path: Path, monkeypatch
 ) -> None:
-    """ALL-CLAIMS tool_binaries.py:280: Ctrl-C or a cancelled task left aria2c
+    """Ctrl-C or a cancelled task left aria2c
     running and writing after the caller was gone."""
     base_url, state = transfer_server
     _clear_server_state(state)

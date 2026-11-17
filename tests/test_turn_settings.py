@@ -109,7 +109,7 @@ def test_config_and_context_declare_the_rows_as_fields():
     assert issubclass(ToolContext, turn_settings.ContextSettings)
 
 
-# --- the store's values get set's range rules (ALL-CLAIMS.md:639-643) ---------
+# --- the store's values get set's range rules ---------
 
 
 def test_an_empty_jail_bind_entry_is_refused():

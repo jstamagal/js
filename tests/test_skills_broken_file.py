@@ -1,6 +1,6 @@
 """A broken SKILL.md file must be skipped, not crash discovery.
 
-ALL-CLAIMS skills.py HIGH: discover_skills catches only ValueError from
+discover_skills catches only ValueError from
 _index_skill; a dangling symlink, a mode-000 file or a SKILL.md that is a
 directory raises OSError and stops the whole session from starting.
 """
@@ -51,7 +51,7 @@ def test_unreadable_skill_md_is_skipped(tmp_path):
 def test_glob_match_is_bounded_on_hostile_patterns(monkeypatch):
     """A path skill glob with many ``**`` segments must stay cheap.
 
-    ALL-CLAIMS skills.py MED: naive recursion over every split point per
+    Naive recursion over every split point per
     ``**`` took 6.2 s for one matches_path against a hostile SKILL.md. The
     memo bounds work to (len(parts) + 1) * (len(pattern) + 1) states.
     """

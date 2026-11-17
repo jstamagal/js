@@ -830,7 +830,7 @@ def test_prompt_mode_invalid_reasoning_errors_cleanly_before_provider(monkeypatc
 
 
 def test_bench_mode_invalid_reasoning_errors_cleanly(monkeypatch, tmp_path):
-    """The bench loop validates --reasoning up front too (same ruling B path)."""
+    """The bench loop validates --reasoning up front too."""
     monkeypatch.setenv("HOME", str(tmp_path))
     actual = cli._run_bench(
         "someagent", model=None, reasoning="not one", maxout=None, quiet=True,

@@ -3479,9 +3479,9 @@ def _print_json(value: object) -> int:
     return 0
 
 
-# External binaries js leans on. Assume NO box has them (owner runs many); warn
-# once per missing one at startup so a run without one has an obvious cause, but
-# NEVER crash or block — `just install` provisions them.
+# External binaries js leans on. Each missing one is warned about once at
+# startup, so a run without it has an obvious cause, and startup goes on
+# without it. `just install` provisions them.
 _EXPECTED_BINARIES: tuple[tuple[str, str], ...] = (
     ("rg", "fs_search"),
     ("fd", "file finding"),

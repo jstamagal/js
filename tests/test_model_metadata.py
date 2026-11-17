@@ -312,7 +312,7 @@ def test_routed_catalog_prefers_issuer_limits(monkeypatch):
 
 
 def test_a_pinned_latest_id_takes_its_own_catalog_row(monkeypatch):
-    """ALL-CLAIMS:328: the exact provider lookup was skipped for every `-latest`
+    """The exact provider lookup was skipped for every `-latest`
     id, so openai's real gpt-5.2-chat-latest (128k) fell through to routing."""
     from types import SimpleNamespace
 

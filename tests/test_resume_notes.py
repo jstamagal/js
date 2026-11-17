@@ -1,4 +1,4 @@
-"""Resume picks its model and tells the model what changed (js-1g1.21).
+"""Resume picks its model and tells the model what changed.
 
 An explicit -m beats the stamp; a stamp whose provider has no login falls back
 to the configured model with one line; a model switch puts one note on the

@@ -1,5 +1,4 @@
-"""Which layer supplies the system prompt, manifest, seeds and benchmarks
-(ALL-CLAIMS persona.py:241-249 HIGH, :125-127 LOW)."""
+"""Which layer supplies the system prompt, manifest, seeds and benchmarks."""
 from __future__ import annotations
 
 import pytest

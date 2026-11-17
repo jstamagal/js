@@ -603,7 +603,7 @@ def test_history_messages_can_be_roundtripped():
 @pytest.mark.parametrize("target", ["reasoning.anthropic_thinking", "_build_inference_params", "stream_transport.begin_call"])
 def test_provider_is_closed_when_request_setup_fails(monkeypatch, target):
     """The provider owns an HTTP client from resolve_model on; a failure while
-    the request is assembled must still close it (ALL-CLAIMS model_client MED)."""
+    the request is assembled must still close it."""
     import asyncio
     from types import SimpleNamespace
 

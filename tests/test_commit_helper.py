@@ -383,7 +383,7 @@ def test_stage_path_is_literal_not_a_pathspec_glob(repo):
 
 @pytest.mark.parametrize("suffix", ["\n", "\r", "\r\n", "x\ry"])
 def test_repo_root_with_control_chars_stays_that_repo(tmp_path, suffix):
-    """A root named `repo\\n` must not resolve to its sibling `repo` (tuck #375)."""
+    """A root named `repo\\n` must not resolve to its sibling `repo`."""
     roots = [tmp_path / "repo", tmp_path / f"repo{suffix}"]
     for root in roots:
         root.mkdir()

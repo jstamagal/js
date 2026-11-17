@@ -111,7 +111,7 @@ def test_stat_only_lookups_are_cheap(tmp_logins_dir, monkeypatch):
 def test_catalog_failure_degrades_to_no_dynamic_providers_and_retries(monkeypatch):
     """Offline fresh install: no catalog and the refresh fails. Builtins and
     unknown ids still resolve instead of raising, nothing is cached, and the
-    next lookup tries the catalog again (ALL-CLAIMS providers.py MED)."""
+    next lookup tries the catalog again."""
     monkeypatch.setattr(providers, "_dynamic", None)
     calls = []
 

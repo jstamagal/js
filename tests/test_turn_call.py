@@ -329,8 +329,7 @@ def test_call_limits_read_the_resilience_settings():
 
 def test_escalation_respects_window_when_usage_has_no_prompt_tokens():
     """Room must come from the window even when the usage carries no prompt
-    count (ALL-CLAIMS turn_call LOW: the old expression dropped the window
-    constraint entirely when prompt_tokens was falsy)."""
+    count."""
     from js.turn_call import CallLimits, ModelRequest
 
     request = ModelRequest(

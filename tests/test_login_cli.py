@@ -82,7 +82,7 @@ def test_login_picker_accepts_action_keymaps(monkeypatch):
 
 
 def test_collect_api_login_offers_env_key_and_accepting_uses_it(monkeypatch, tmp_path: Path):
-    # Owner ruling: login never silently farms env keys. It OFFERS the env key;
+    # Login never takes an env key silently. It offers the env key;
     # answering yes uses it, and only then.
     logins.set_config_dir(tmp_path)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-env-deepseek")

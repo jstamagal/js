@@ -134,12 +134,11 @@ def _shutdown_live_kernels() -> None:
 
 
 def resolve_verbosity(context: Any, override: str = "") -> str:
-    """Per-call parameter beats the config knob beats its js/jsrc value.
+    """Per-call parameter beats the setting beats its js/jsrc value.
 
-    Both exist on purpose. The knob (`KERNEL_VERBOSITY`) is how the operator
-    sets the baseline he wants to read all session without editing tool calls;
-    the parameter is how one noisy cell gets squelched, or one mystery cell
-    cranked to verbose, without restarting anything.
+    `KERNEL_VERBOSITY` sets the level for the session; the per-call parameter
+    changes it for one cell, so a noisy cell can be quieted or one cell made
+    verbose without changing the setting.
     """
     chosen = str(override or "").strip().lower()
     if chosen in VERBOSITY_LEVELS:

@@ -340,7 +340,7 @@ def test_turn_that_recovers_by_retry_prints_the_retry_at_level_1(monkeypatch, si
 
 
 def test_a_multi_line_provider_error_is_one_capped_banner_line():
-    # ALL-CLAIMS.md:570: the fallback and connect branches printed str(exc) whole.
+    # The fallback and connect branches printed str(exc) whole.
     body = '{\n  "error": {\n    "message": "boom",\n    "type": "server_error"\n  }\n}'
     text = _plain(stream_transport.describe_failure(RuntimeError(body)))
     assert len(text.splitlines()) == 1 and '"message": "boom"' in text

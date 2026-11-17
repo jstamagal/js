@@ -295,7 +295,7 @@ def _chain(key: str, fd: int) -> tuple[_Chain, bool]:
     if chain is None or (chain.device, chain.inode) != (info.st_dev, info.st_ino) or info.st_size < chain.offset:
         chain = _Chain(info.st_dev, info.st_ino)
     # Chunked: a cold cache on a 100+ MB session must not load the whole
-    # file at once just to collect ids (ALL-CLAIMS session_store MED). The
+    # file at once just to collect ids. The
     # read position advances by bytes READ; `chain.offset` stays at the byte
     # after the last complete line, so a torn tail is re-fed on the next
     # append. Chunks split on LF only, so a boundary inside a multibyte

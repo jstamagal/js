@@ -267,7 +267,7 @@ def test_configured_window_tracks_live_setting_and_catalog(tmp_path):
 
 
 def test_get_bool_always_returns_a_bool(tmp_path):
-    """ALL-CLAIMS compaction.py:60-71: garbage returned a non-bool default unchanged."""
+    """Garbage returned a non-bool default unchanged."""
     cfg = _compact_test_cfg(tmp_path, {"COMPACTION_AUTO": "maybe"})
     assert compaction.get_bool(cfg, "COMPACTION_AUTO", "not-a-bool") is False
     assert compaction.get_bool(cfg, "COMPACTION_AUTO", True) is True

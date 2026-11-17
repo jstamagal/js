@@ -410,7 +410,7 @@ def test_unlogged_vendor_prefix_does_not_hijack_pinned_gateway():
 def test_env_key_alone_creates_no_route_and_errors():
     from js.routing import ProviderNotLoggedInError, resolve_model_route
 
-    # RULING #1: a provider-native env key never creates a route. The default
+    # A provider-native env key never creates a route. The default
     # model prefixes deepseek; with DEEPSEEK_API_KEY set but no login and nothing
     # pinned, routing must fail loud rather than farm the key.
     with pytest.raises(ProviderNotLoggedInError) as excinfo:
@@ -438,7 +438,7 @@ def test_catalog_prefix_with_env_token_but_no_login_errors():
 def test_js_namespace_env_routes_without_any_login():
     from js.routing import resolve_model_route
 
-    # RULING carve-out: JS_* vars are explicit js-directed instructions, not
+    # JS_* vars are explicit js-directed instructions, not
     # provider-native env farming. They arrive as configured PROVIDER/base/key
     # and must route with no login at all.
     route = resolve_model_route(

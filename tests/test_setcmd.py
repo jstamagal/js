@@ -221,8 +221,8 @@ def test_registry_defaults_seed_and_env_overrides_roundtrip():
 
 def _env_case(spec: settings.SettingSpec) -> tuple[str, object]:
     if spec.key == "EFFORT":
-        # restricted domain (RULING B): an arbitrary string is rejected, so
-        # the generic str-fallback below doesn't apply to this one knob.
+        # EFFORT has its own value rules, so the generic str fallback below
+        # does not apply to it.
         return "high", "high"
     if spec.key == "PROVIDER":
         # validated domain: must name a known provider or saved login.

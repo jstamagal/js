@@ -211,7 +211,7 @@ def test_the_host_tmp_on_path_does_not_replace_the_private_tmp(jailed):
 def test_a_path_directory_inside_the_jail_dir_stays_writable(jailed, monkeypatch):
     """DIR sits in a hidden tree (the test HOME); its own .venv/bin on PATH is
     not bound back read-only by argv (covered by DIR's rw bind), so the file
-    tools must not call it read-only either (ALL-CLAIMS jail.py MED)."""
+    tools must not call it read-only either."""
     active = jail.active()
     bin_dir = active.root / ".venv" / "bin"
     bin_dir.mkdir(parents=True)

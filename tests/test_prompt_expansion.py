@@ -389,7 +389,7 @@ def test_global_instruction_files_are_js_md_only(tmp_path, monkeypatch):
 
 
 def test_fenced_directive_with_empty_body_does_not_swallow_the_next_fence():
-    """An empty ```! body must not swallow the next fence (ALL-CLAIMS:380)."""
+    """An empty ```! body must not swallow the next fence."""
     text = "```!sh\n```\nfoo\n```!sh\necho HI\n```\n"
     bodies = []
     real = promptexpand._run_subsystem
@@ -405,14 +405,14 @@ def test_fenced_directive_with_empty_body_does_not_swallow_the_next_fence():
 
 
 def test_fenced_directive_allows_indented_closer():
-    """A fence closed with the same indent the opener has must run (ALL-CLAIMS:380)."""
+    """A fence closed with the same indent the opener has must run."""
     text = "  ```!sh\necho IND\n  ```\n"
     out = expand_prompt(text, allow_code=True)
     assert out == "  IND\n", repr(out)
 
 
 def test_unterminated_stream_after_python_fence_fails_closed():
-    """A ```! opener must not close at the next ```python opener (ALL-CLAIMS:380):
+    """A ```! opener must not close at the next ```python opener:
     the body never runs, the unterminated directive is dropped, the python
     fence stays."""
     text = "```!sh\necho SWALLOWED\n```python\nprint(1)\n```\n"
@@ -421,7 +421,7 @@ def test_unterminated_stream_after_python_fence_fails_closed():
 
 
 def test_fenced_directive_accepts_crlf_closer():
-    """A CRLF-terminated fence closes and runs (ALL-CLAIMS:380, shinda #488)."""
+    """A CRLF-terminated fence closes and runs."""
     text = "```!sh\r\necho CRLF\r\n```\r\n"
     out = expand_prompt(text, allow_code=True)
     assert "CRLF" in out, repr(out)
@@ -429,7 +429,7 @@ def test_fenced_directive_accepts_crlf_closer():
 
 def test_fenced_directive_with_foreign_fence_in_body_never_executes(tmp_path):
     """A body carrying its own ``` opener must not run AT ALL: the shell would
-    execute everything before the stray fence (ALL-CLAIMS:380, shinda #559)."""
+    execute everything before the stray fence."""
     marker = tmp_path / "marker"
     text = "```!sh\nprintf SIDE_EFFECT > " + str(marker) + "\n```python\nprint(1)\n```\n"
     assert "\n" in text  # real newlines, not escaped ones
@@ -449,7 +449,7 @@ def test_fenced_directive_with_foreign_fence_in_body_never_executes(tmp_path):
 
 def test_file_directive_with_non_utf8_bytes_embeds_nothing(tmp_path):
     """A non-UTF-8 file raises UnicodeDecodeError (a ValueError), not OSError;
-    embeds nothing either way (ALL-CLAIMS:379)."""
+    embeds nothing either way."""
     path = tmp_path / "bin.dat"
     path.write_bytes(b"\xff\xfe\x00binary\xff")
     # warns and embeds nothing (on_error=drop default)
