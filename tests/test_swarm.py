@@ -18,8 +18,9 @@ import ai
 import ai.types.usage
 import pytest
 from ai.providers import history_utils
+from turn_driver import js
 
-from js import cli, headless, memory, runtime, swarm, swarm_run
+from js import cli, memory, runtime, swarm, swarm_run
 from js.config import Config
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
@@ -577,8 +578,7 @@ def test_compaction_runs_before_a_swarm_agent_sleeps(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda cfg, state: timeline.append("compact"))
 
-    code = cli._run_prompt("go", session="s1", swarm=str(tmp_path / "bus" / "a"),
-                           events=headless.JsonEvents(io.StringIO()))
+    code = js(monkeypatch, "--json", "--session", "s1", "--swarm", str(tmp_path / "bus" / "a"), "-p", "go")
 
     assert code == 0
     assert timeline.count("turn") == 2
