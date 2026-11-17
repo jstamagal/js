@@ -26,7 +26,7 @@ from prompt_toolkit.filters import emacs_insert_mode, vi_insert_mode
 from prompt_toolkit.key_binding import DynamicKeyBindings, KeyBindings, KeyBindingsBase
 
 from . import messages as msgs, output, setting_values, settings as _settings
-from .toolkit.fs import _detect_visual_mime
+from .toolkit.fs import detect_visual_mime
 
 WAYLAND_COMMAND = ("wl-paste", "--type", "image/png")
 X11_COMMAND = ("xclip", "-selection", "clipboard", "-t", "image/png", "-o")
@@ -151,7 +151,7 @@ def read_image(
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ClipboardError(msgs.CLIPBOARD_READ_FAILED, tool=argv[0], error=exc) from exc
     data = done.stdout or b""
-    mime = _detect_visual_mime(_DETECT_NAME, data[:16])
+    mime = detect_visual_mime(_DETECT_NAME, data[:16])
     if done.returncode != 0 or not mime or not mime.startswith("image/"):
         raise ClipboardError(msgs.CLIPBOARD_NO_IMAGE)
     return data

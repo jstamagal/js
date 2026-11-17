@@ -11,7 +11,7 @@ from pathlib import Path
 
 from . import clipimage, imagefit, media, messages as msgs, settings as _settings
 from .config import Config
-from .toolkit.fs import _detect_visual_mime
+from .toolkit.fs import detect_visual_mime
 
 STDIN_ATTACHMENT_NAME = "<stdin>"
 # A name without a suffix, so image detection goes by the magic bytes alone and
@@ -21,7 +21,7 @@ _DETECT_NAME = Path("attachment")
 
 def _image_mime(header: bytes) -> str | None:
     """The image mime type ``header`` starts with; None when it is no image."""
-    mime = _detect_visual_mime(_DETECT_NAME, header)
+    mime = detect_visual_mime(_DETECT_NAME, header)
     return mime if mime and mime.startswith("image/") else None
 
 

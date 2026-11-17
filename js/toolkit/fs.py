@@ -205,7 +205,7 @@ def changed_since_read(
     )
 
 
-def _read_regular_bytes(path: Path, limit: int | None = None) -> bytes:
+def read_regular_bytes(path: Path, limit: int | None = None) -> bytes:
     """Read bytes from *path*, refusing anything that is not a regular file and
     never blocking on a FIFO/socket/device.
 
@@ -238,13 +238,13 @@ def _is_binary(path: Path) -> bool:
     if path.suffix.lower() in _TEXT_EXTS:
         return False
     try:
-        chunk = _read_regular_bytes(path, 4096)
+        chunk = read_regular_bytes(path, 4096)
     except OSError:
         return False
     return b"\x00" in chunk
 
 
-def _detect_visual_mime(path: Path, header: bytes) -> str | None:
+def detect_visual_mime(path: Path, header: bytes) -> str | None:
     suffix_mime = _IMAGE_MIME_BY_EXT.get(path.suffix.lower())
     if header.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png"
@@ -277,7 +277,7 @@ def image_marker(path: Path, mime: str, size: int, data: bytes) -> str:
 
 
 def _read_pdf_text(path: Path, context: ToolContext) -> tuple[str, bytes]:
-    data = _read_regular_bytes(path)
+    data = read_regular_bytes(path)
     rc, out, err = run(["pdftotext", str(path), "-"], context)
     if rc == 0 and out.strip():
         return truncate(out, context), data
@@ -286,7 +286,7 @@ def _read_pdf_text(path: Path, context: ToolContext) -> tuple[str, bytes]:
 
 
 def _read_text(path: Path, context: ToolContext) -> tuple[str, bytes]:
-    data = _read_regular_bytes(path)
+    data = read_regular_bytes(path)
     if len(data) > context.max_file_bytes:
         raise ValueError(
             f"File size ({len(data)} bytes) exceeds the maximum allowed size of {context.max_file_bytes} bytes"
@@ -366,7 +366,7 @@ def _read_byte_range(target: Path, context: ToolContext, start_byte: int, end_by
     whole: bytes | None = None
     try:
         if size <= context.max_file_bytes:
-            whole = _read_regular_bytes(target)
+            whole = read_regular_bytes(target)
             size = len(whole)
             base, buf = 0, whole
         else:
@@ -578,18 +578,18 @@ def fs_read(
 
     try:
         size = target.stat().st_size
-        header = _read_regular_bytes(target, 16)
+        header = read_regular_bytes(target, 16)
     except OSError as exc:
         return f"ERROR: {exc}"
 
-    mime = _detect_visual_mime(target, header)
+    mime = detect_visual_mime(target, header)
     if byte_ranged:
         if mime or _is_binary(target):
             return f"ERROR: byte ranges read text files; {target} is not text"
         return _read_byte_range(target, context, max(0, byte_start), None if byte_end == -1 else byte_end)
     if mime and mime.startswith("image/"):
         try:
-            data = _read_regular_bytes(target)
+            data = read_regular_bytes(target)
         except OSError as exc:
             return f"ERROR: {exc}"
         content_hash = hash_bytes(data)
@@ -779,7 +779,7 @@ def _write_text(context: ToolContext, raw_path: str | None, content: str, *, ove
         # is. The hash proves nothing moved since; the snapshot makes the
         # discard undoable.
         try:
-            current = _read_regular_bytes(target)
+            current = read_regular_bytes(target)
         except OSError as exc:
             return f"ERROR: {exc}"
         current_hash = hash_bytes(current)

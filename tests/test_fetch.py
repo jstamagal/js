@@ -371,10 +371,10 @@ def test_file_url_read_is_bounded_by_the_hard_ceiling(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     context = ToolContext(cwd=tmp_path, max_tool_result_bytes=64)
     seen: list[int | None] = []
-    real = fetch._read_regular_bytes
+    real = fetch.read_regular_bytes
     monkeypatch.setattr(
         fetch,
-        "_read_regular_bytes",
+        "read_regular_bytes",
         lambda path, limit=None: (seen.append(limit), real(path, limit))[1],
     )
 

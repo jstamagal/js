@@ -18,7 +18,7 @@ from pathlib import Path
 from .. import jail
 from ..tool_binaries import resolve_binary
 from .core import ToolContext
-from .fs import _read_regular_bytes, format_numbered_lines, hash_bytes, unified_diff
+from .fs import format_numbered_lines, hash_bytes, read_regular_bytes, unified_diff
 from .path_hints import missing_path_hint
 from .results import truncate
 from .sanitize import int_or_default
@@ -515,7 +515,7 @@ def _ast_records(
     used_stdin = False
     if rc == 1 and not lines and lang and root.is_file():
         try:
-            source = _read_regular_bytes(root).decode("utf-8")
+            source = read_regular_bytes(root).decode("utf-8")
         except (OSError, UnicodeDecodeError) as exc:
             return [], rc, stderr, timed_out, str(exc), used_stdin
         lines, rc, stderr, timed_out = _rg_stream(
@@ -819,7 +819,7 @@ def ast_search(
     rc = 0
     try:
         for target, (source, _updated) in prepared.items():
-            if _read_regular_bytes(target) != source:
+            if read_regular_bytes(target) != source:
                 return f"ERROR: {target} changed while preparing the structural rewrite"
         for target, (_source, updated) in prepared.items():
             target.write_bytes(updated)

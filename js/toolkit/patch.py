@@ -8,11 +8,11 @@ from pathlib import Path
 
 from .core import ToolContext, view as _view
 from .fs import (
-    _read_regular_bytes,
     changed_since_read,
     detect_line_ending,
     hash_bytes,
     normalize_line_endings,
+    read_regular_bytes,
     unified_diff,
 )
 from .path_hints import no_such_file
@@ -403,7 +403,7 @@ def patch(
     if not target.is_file():
         return f"ERROR: not a regular file: {target}"
     try:
-        source_bytes = _read_regular_bytes(target)
+        source_bytes = read_regular_bytes(target)
         source = source_bytes.decode("utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         return f"ERROR: {exc}"

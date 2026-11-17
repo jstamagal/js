@@ -161,7 +161,7 @@ def _post_compact_rehydration(
             return 0.0
     paths.sort(key=_mtime, reverse=True)
 
-    from .toolkit.fs import _detect_visual_mime, _read_regular_bytes
+    from .toolkit.fs import detect_visual_mime, read_regular_bytes
 
     sections: list[str] = []
     spent = 0
@@ -171,14 +171,14 @@ def _post_compact_rehydration(
     byte_limit = character_limit * 4
     for path in paths[:max_files]:
         try:
-            header = _read_regular_bytes(path, 4096)
-            if _detect_visual_mime(path, header) or b"\x00" in header:
+            header = read_regular_bytes(path, 4096)
+            if detect_visual_mime(path, header) or b"\x00" in header:
                 sections.append(snippets.render('compaction-file-nontext', PATH=path))
                 continue
             if path.stat().st_size > byte_limit:
                 sections.append(snippets.render('compaction-file-too-large', PATH=path))
                 continue
-            data = _read_regular_bytes(path, byte_limit + 1)
+            data = read_regular_bytes(path, byte_limit + 1)
             if len(data) > byte_limit:
                 sections.append(snippets.render('compaction-file-too-large', PATH=path))
                 continue

@@ -22,7 +22,7 @@ from typing import Any
 
 from .core import Tool, ToolContext
 from .descriptions import load_description, load_parameter_description
-from .fs import _read_regular_bytes, detect_line_ending, hash_bytes, normalize_line_endings
+from .fs import detect_line_ending, hash_bytes, normalize_line_endings, read_regular_bytes
 from .presentation import Presentation
 from .reads import require_read
 from .sanitize import int_or_default
@@ -165,7 +165,7 @@ def read_view(target: Path, context: ToolContext) -> str | None:
         if size > context.max_file_bytes:
             return (f"ERROR: file size ({size} bytes) exceeds the maximum allowed size of "
                     f"{context.max_file_bytes} bytes")
-        data = _read_regular_bytes(target)
+        data = read_regular_bytes(target)
     except OSError as exc:
         return f"ERROR: {exc}"
     try:
@@ -242,7 +242,7 @@ def notebook_edit(
     if not target.is_file():
         return f"ERROR: no such notebook: {target}"
     try:
-        data = _read_regular_bytes(target)
+        data = read_regular_bytes(target)
     except OSError as exc:
         return f"ERROR: {exc}"
     current_hash = hash_bytes(data)

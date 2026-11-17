@@ -36,7 +36,7 @@ def test_sparse_oversized_file_never_uses_unbounded_read(tmp_path, monkeypatch):
     with path.open("wb") as handle:
         handle.write(b"x" * 4096)
         handle.truncate(1024 * 1024 * 1024)
-    original = fs._read_regular_bytes
+    original = fs.read_regular_bytes
     limits = []
 
     def bounded(path, limit=None):
@@ -44,7 +44,7 @@ def test_sparse_oversized_file_never_uses_unbounded_read(tmp_path, monkeypatch):
         assert limit is not None
         return original(path, limit)
 
-    monkeypatch.setattr(fs, "_read_regular_bytes", bounded)
+    monkeypatch.setattr(fs, "read_regular_bytes", bounded)
     assert str(path) in rehydrate(path, per_file_tokens=10)
     assert limits and max(limits) <= 4096
 
@@ -54,7 +54,7 @@ def test_text_growth_after_stat_still_uses_bounded_read(tmp_path, monkeypatch):
 
     path = tmp_path / "growth.log"
     path.write_text("x")
-    original = fs._read_regular_bytes
+    original = fs.read_regular_bytes
     limits = []
 
     def grow(target, limit=None):
@@ -64,7 +64,7 @@ def test_text_growth_after_stat_still_uses_bounded_read(tmp_path, monkeypatch):
             target.write_text("LARGE_PAYLOAD" * 10000)
         return original(target, limit)
 
-    monkeypatch.setattr(fs, "_read_regular_bytes", grow)
+    monkeypatch.setattr(fs, "read_regular_bytes", grow)
     content = rehydrate(path, per_file_tokens=10)
     assert "LARGE_PAYLOAD" not in content
     assert limits == [4096, 173]
@@ -117,7 +117,7 @@ def test_unreadable_file_is_named_without_inline_contents(tmp_path, monkeypatch)
     def unreadable(*args, **kwargs):
         raise PermissionError("cannot read")
 
-    monkeypatch.setattr(fs, "_read_regular_bytes", unreadable)
+    monkeypatch.setattr(fs, "read_regular_bytes", unreadable)
     content = rehydrate(path)
     assert str(path) in content
     assert "UNREADABLE_PAYLOAD" not in content

@@ -28,7 +28,7 @@ from ..tool_binaries import (
 )
 from .core import Tool, ToolContext
 from .descriptions import load_description
-from .fs import _detect_visual_mime, _read_regular_bytes, image_marker
+from .fs import detect_visual_mime, image_marker, read_regular_bytes
 from .presentation import Presentation
 from .results import spill_oversized_result
 from .sanitize import text_or_default
@@ -209,7 +209,7 @@ def _image_mime(path: Path | None, content_type: str, data: bytes) -> str | None
     media_type = _media_type(content_type)
     if media_type.startswith("image/"):
         return media_type
-    detected = _detect_visual_mime(path or Path("fetched"), data[:32])
+    detected = detect_visual_mime(path or Path("fetched"), data[:32])
     if detected and detected.startswith("image/"):
         return detected
     return None
@@ -217,7 +217,7 @@ def _image_mime(path: Path | None, content_type: str, data: bytes) -> str | None
 
 def _guess_file_content_type(path: Path, data: bytes) -> str:
     guessed, _encoding = mimetypes.guess_type(path.name)
-    detected = _detect_visual_mime(path, data[:32])
+    detected = detect_visual_mime(path, data[:32])
     if detected:
         return detected
     if _looks_binary(data):
@@ -462,7 +462,7 @@ def _fetch_file_url(
             # Copying a local file to another path is a transfer, not a read: it
             # streams, so the size of the thing is the caller's business. The
             # head read doubles as the non-regular-file guard.
-            head = _read_regular_bytes(path, _SNIFF_BYTES + 1)
+            head = read_regular_bytes(path, _SNIFF_BYTES + 1)
             content_type = _guess_file_content_type(path, head)
             with path.open("rb") as source:
                 return _stream_download(
@@ -472,11 +472,11 @@ def _fetch_file_url(
         # Read the whole file, not just cap+1: an oversized text response is
         # spilled in full below, and the spill is only honest if the tail was
         # actually read. _DOWNLOAD_MAX_BYTES bounds that so a multi-GB log does
-        # not land in RAM, and _read_regular_bytes refuses devices/FIFOs whose
+        # not land in RAM, and read_regular_bytes refuses devices/FIFOs whose
         # st_size is 0 and whose read never reaches EOF.
         if size > _DOWNLOAD_MAX_BYTES:
             return f'ERROR: file exceeds {_DOWNLOAD_MAX_BYTES} byte read limit; use save= or fs_read'
-        data = _read_regular_bytes(path, _DOWNLOAD_MAX_BYTES + 1)
+        data = read_regular_bytes(path, _DOWNLOAD_MAX_BYTES + 1)
         if len(data) > _DOWNLOAD_MAX_BYTES:
             return f'ERROR: file exceeds {_DOWNLOAD_MAX_BYTES} byte read limit; use save= or fs_read'
         truncated = len(data) > context.max_tool_result_bytes
