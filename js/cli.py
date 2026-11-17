@@ -162,10 +162,6 @@ def _registry_for(cfg) -> object:
 # Runtime knobs: name -> (type, label, description)
 # --------------------------------------------------------------------------
 
-_BOOL_WORDS_ON = {"on", "true", "yes", "1"}
-_BOOL_WORDS_OFF = {"off", "false", "no", "0"}
-
-
 _MODE_PLACES = {"repl": 'in interactive chat', "-p": 'as a one-shot run'}
 
 
@@ -217,15 +213,6 @@ def _note_model_switch(cfg: Config, message: dict) -> dict:
         PREVIOUS=_stamp_label(stamp["model"], provider),
         CURRENT=_stamp_label(cfg.model, cfg.provider_id),
     ))
-
-
-def _parse_bool(raw: str) -> bool | None:
-    r = raw.lower().strip()
-    if r in _BOOL_WORDS_ON:
-        return True
-    if r in _BOOL_WORDS_OFF:
-        return False
-    return None
 
 
 def _inherit_session_chat(session: str | None) -> bool:
@@ -1138,10 +1125,6 @@ def _changed_model_key(keys: list[str]) -> bool:
 
 def _changed_provider_key(keys: list[str]) -> bool:
     return any(key in {"PROVIDER", "BASE_URL", "API_KEY"} for key in keys)
-
-
-def _changed_sampling_key(keys: list[str]) -> bool:
-    return any(key.lower() in _SAMPLING_FIELDS for key in keys)
 
 
 def _changed_lock_subagent_model_key(keys: list[str]) -> bool:
