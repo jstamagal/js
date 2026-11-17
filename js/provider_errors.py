@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import ai
 import httpx
 import httpx2
 
-from . import messages as msgs, retry, routing
+from . import messages as msgs, routing
+
+if TYPE_CHECKING:
+    from .retry import StreamLimits
 
 
 class FriendlyProviderError(routing.ProviderNotLoggedInError):
@@ -216,7 +219,7 @@ def _connect_timeout(exc: BaseException) -> bool:
     return False
 
 
-def request_failure(exc: BaseException, *, provider: str | None, limits: retry.StreamLimits) -> BaseException:
+def request_failure(exc: BaseException, *, provider: str | None, limits: StreamLimits) -> BaseException:
     """The error a failed model request leaves this module as, its
     `is_retryable` set by `retryable`. A handshake past CONNECT_TIMEOUT is a
     ConnectTimeoutError. The provider SDKs wrap transport errors raised while
