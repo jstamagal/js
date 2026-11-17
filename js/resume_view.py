@@ -9,7 +9,6 @@ from typing import Any
 from .control_sequences import clean
 from .display import agent_speaker, hang, render_markdown, user_line
 from .text_layout import wrap_words
-from .tool_display import render_exchange
 
 
 def content_text(content: Any) -> str:
@@ -63,18 +62,3 @@ def resume_parts(messages: list[dict], count: int, *, width: int,
                 result = results.get(call.get("id"))
                 yield "call", (name, args, None if result is None else content_text(result.get("content")))
 
-
-def render_exchanges(messages: list[dict], count: int, *, width: int,
-                     level: int, preview: int, markdown: bool = True,
-                     settings: Any = None) -> str:
-    """`resume_parts` as one string, each tool exchange at TOOLS_DISPLAY
-    `level` on its own."""
-    out: list[str] = []
-    for kind, part in resume_parts(messages, count, width=width, markdown=markdown):
-        if kind == "text":
-            out.append(part)
-        else:
-            name, args, result = part
-            out.append(render_exchange(name, args, result, level=level, preview=preview, width=width,
-                                       settings=settings))
-    return "".join(out)

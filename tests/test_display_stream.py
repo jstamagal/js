@@ -6,8 +6,12 @@ from __future__ import annotations
 import asyncio
 import io
 import re
+from dataclasses import replace
 
-from js import debug_trace, display, resume_view, screen, text_layout, tool_display, transcript
+from repl_driver import run_async
+
+from js import debug_trace, display, screen, text_layout, tool_display, transcript
+from js.config import from_env
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
@@ -216,15 +220,27 @@ def test_tool_result_name_is_cleaned_at_every_level():
         assert "evil" in out
 
 
-def test_a_tool_message_without_an_id_is_not_shown_under_a_call_without_one():
+def test_a_tool_message_without_an_id_is_not_shown_under_a_call_without_one(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    cfg = replace(from_env(), session_file=tmp_path / "session.jsonl")
+    cfg.settings["RESUME_EXCHANGES"] = 1
+    cfg.settings["TOOLS_DISPLAY"] = 3
     messages = [
-        {"role": "user", "content": "go"},
+        {"role": "user", "content": "RESUMED_PROMPT"},
         {"role": "assistant", "content": "", "tool_calls": [
             {"id": None, "function": {"name": "shell", "arguments": "{\"command\": \"ls\"}"}}]},
         {"role": "tool", "tool_call_id": None, "content": "ORPHAN_RESULT"},
     ]
-    out = resume_view.render_exchanges(messages, 1, width=80, level=3, preview=12, markdown=False)
-    assert "ORPHAN_RESULT" not in out
+    exchanges: list[str] = []
+    for name in ("exchange_open", "exchange_update", "exchange_close"):
+        def record(self, *args, _real=getattr(screen.Scrollback, name)):
+            exchanges.extend(arg for arg in args if isinstance(arg, str))
+            return _real(self, *args)
+        monkeypatch.setattr(screen.Scrollback, name, record)
+    run_async(monkeypatch, cfg, [], messages=messages)
+    shown = capsys.readouterr().out + "".join(exchanges)
+    assert "RESUMED_PROMPT" in shown
+    assert "ORPHAN_RESULT" not in shown
 
 
 # One of every class of sequence the escape parser knows, some cut short.
