@@ -120,7 +120,7 @@ def _clear_caches() -> None:
     model_prices.cache_clear()
     accepts_image_input.cache_clear()
     _image_inputs.cache_clear()
-    _probe_local_context_window_cached.cache_clear()
+    _probe_answers.clear()
 
 
 @lru_cache(maxsize=1)
@@ -344,18 +344,29 @@ def _probe_llamacpp_context_window(base_url: str, model_id: str) -> int | None:
     return _extract_context_window(payload)
 
 
-@lru_cache(maxsize=256)
+_PROBES = {
+    "ollama": lambda base_url, model_id: _probe_ollama_context_window(base_url, model_id),
+    "llama.cpp": lambda base_url, model_id: _probe_llamacpp_context_window(base_url, model_id),
+    "openai": lambda base_url, model_id: _probe_openai_context_window(base_url, model_id),
+}
+# What each server answered, keyed by (probe kind, base URL, model). A probe
+# that failed is not kept: a server still loading is asked again next time.
+_probe_answers: dict[tuple[str, str, str], int | None] = {}
+
+
 def _probe_local_context_window_cached(probe_kind: str, base_url: str, model_id: str) -> int | None:
+    key = (probe_kind, base_url, model_id)
+    if key in _probe_answers:
+        return _probe_answers[key]
+    probe = _PROBES.get(probe_kind)
+    if probe is None:
+        return None
     try:
-        if probe_kind == "ollama":
-            return _probe_ollama_context_window(base_url, model_id)
-        if probe_kind == "llama.cpp":
-            return _probe_llamacpp_context_window(base_url, model_id)
-        if probe_kind == "openai":
-            return _probe_openai_context_window(base_url, model_id)
+        window = probe(base_url, model_id)
     except Exception:  # noqa: BLE001 - local metadata probes are strictly best-effort
         return None
-    return None
+    _probe_answers[key] = window
+    return window
 
 
 def probe_local_context_window(
