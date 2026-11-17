@@ -13,7 +13,7 @@ from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 from repl_driver import run_async
 
-from js import cli, screen
+from js import cli, screen, status_bar
 from js.config import from_env
 from js.memory import load_messages
 from js.toolkit import ToolContext, subagents
@@ -194,7 +194,7 @@ def test_window_numbers_stop_at_nine_and_a_closed_number_is_reused():
 
 
 def test_the_status_bar_names_the_window_and_the_active_ones():
-    line = screen.status_line(
+    line = status_bar.status_line(
         120, clock="12:00", provider="p", model="m", context_tokens=None, phase="", output_tokens=None,
         throbber="", agent_id="a", session_short="s", cache_pct=None, window=2, activity=[3, 5])
 

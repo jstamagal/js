@@ -20,7 +20,7 @@ from js import (
     repl,
     repl_session_commands,
     runtime,
-    screen,
+    status_bar,
     usage,
 )
 from js.model_client import ModelStreamResult, ModelToolCall
@@ -245,8 +245,8 @@ def test_status_line_gives_way_with_the_cost_after_the_count():
                output_tokens=9642, throbber="*", agent_id="defaultagent", session_short="b61643c8",
                cache_pct=100, cost="$1.23")
 
-    assert "$1.23" in screen.status_line(100, **bar)
-    narrow = screen.status_line(40, **bar)
+    assert "$1.23" in status_bar.status_line(100, **bar)
+    narrow = status_bar.status_line(40, **bar)
     assert "$1.23" not in narrow
     assert "b61643c8" in narrow
     assert "9,600" not in narrow

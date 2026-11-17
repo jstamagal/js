@@ -17,10 +17,10 @@ from js import (
     model_client,
     repl,
     runtime,
-    screen,
     setcmd,
     setting_layers,
     settings,
+    status_bar,
 )
 from js.config import Config
 from js.model_client import ModelStreamResult
@@ -65,7 +65,7 @@ def _cfg(tmp_path, *, session_name: str = "s.jsonl", model: str = "test-model") 
 
 
 def test_status_line_overflow_order_at_40_columns():
-    line = screen.status_line(40, **BAR)
+    line = status_bar.status_line(40, **BAR)
 
     assert len(line) == 40
     assert "cache" not in line
@@ -82,39 +82,39 @@ def test_status_line_overflow_order_at_40_columns():
 
 def test_status_line_keeps_the_essentials_at_any_width():
     for width in range(18, 120):
-        line = screen.status_line(width, **BAR)
+        line = status_bar.status_line(width, **BAR)
         assert len(line) == width
         assert "[23:59]" in line and "*" in line and "b61643c8" in line
 
 
 def test_format_count_is_a_heartbeat_not_an_invoice():
-    assert screen.format_count(9642) == "9,600"
-    assert screen.format_count(99) == "0"
-    assert screen.format_count(10_049) == "10.0k"
-    assert screen.format_count(123_456) == "123.5k"
+    assert status_bar.format_count(9642) == "9,600"
+    assert status_bar.format_count(99) == "0"
+    assert status_bar.format_count(10_049) == "10.0k"
+    assert status_bar.format_count(123_456) == "123.5k"
 
 
 def test_turn_centre_prefers_tool_then_compaction_then_first_byte_wait_then_tokens():
     status = TurnStatus()
     status.first_byte_wait(10.0)
 
-    phase, count = screen.turn_centre(status, now=10.5)
+    phase, count = status_bar.turn_centre(status, now=10.5)
     assert phase == "" and count is None          # under a second: nothing yet
-    phase, count = screen.turn_centre(status, now=10.0 + 252)
+    phase, count = status_bar.turn_centre(status, now=10.0 + 252)
     assert "4m12s" in phase and count is None
 
     status.first_byte_done()
     status.stream("x" * 400)
-    phase, count = screen.turn_centre(status, now=300.0)
+    phase, count = status_bar.turn_centre(status, now=300.0)
     assert phase == "" and count == 100
 
     status.compacting = True
-    phase, count = screen.turn_centre(status, now=300.0)
+    phase, count = status_bar.turn_centre(status, now=300.0)
     assert phase and count is None
 
     status.tool_begin(["shell", "read", "read"])
     status.tool_started = 100.0
-    phase, count = screen.turn_centre(status, now=112.4)
+    phase, count = status_bar.turn_centre(status, now=112.4)
     assert "shell" in phase and "+2" in phase and "12s" in phase and count is None
 
 
@@ -142,15 +142,15 @@ def test_turn_status_estimates_tokens_until_the_provider_counts_them():
 
 def test_session_short_is_the_hex_of_the_session_stem(tmp_path):
     path = tmp_path / "20260918T101010000000Z-b61643c8deadbeef.jsonl"
-    assert screen.session_short(path) == "b61643c8"
+    assert status_bar.session_short(path) == "b61643c8"
 
 
 def test_a_named_session_is_whole_or_elided_never_cut_mid_word(tmp_path):
-    name = screen.session_short(tmp_path / "model-swap-comparison.jsonl")
+    name = status_bar.session_short(tmp_path / "model-swap-comparison.jsonl")
     assert name == "model-swap-comparison"
 
     for width in range(12, 120):
-        line = screen.status_line(width, **{**BAR, "session_short": name, "cache_pct": None})
+        line = status_bar.status_line(width, **{**BAR, "session_short": name, "cache_pct": None})
         assert len(line) == width
         shown = line.rstrip().split()[-1].split("/")[-1]
         if shown != name:

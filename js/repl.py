@@ -69,6 +69,7 @@ from . import (
     settings,
     skills,
     snippets,
+    status_bar,
     stream_transport,
     subagent_windows,
     supervisor,
@@ -676,9 +677,9 @@ def _status_bar_line(cfg: Config, state: ReplState, turn_active: bool, width: in
     now = time.monotonic()
     phase, output_tokens, throbber = "", None, ""
     if turn_active:
-        throbber = screen.throbber_frame(now)
-        phase, output_tokens = screen.turn_centre(context.turn_status, now=now)
-    return screen.status_line(
+        throbber = status_bar.throbber_frame(now)
+        phase, output_tokens = status_bar.turn_centre(context.turn_status, now=now)
+    return status_bar.status_line(
         width,
         clock=time.strftime("%H:%M"),
         provider=provider,
@@ -688,7 +689,7 @@ def _status_bar_line(cfg: Config, state: ReplState, turn_active: bool, width: in
         output_tokens=output_tokens,
         throbber=throbber,
         agent_id=agent_id,
-        session_short=screen.session_short(session_file) if session_file is not None else None,
+        session_short=status_bar.session_short(session_file) if session_file is not None else None,
         cache_pct=int(100 * cached_tokens / prompt_tokens) if prompt_tokens else None,
         cost=usage_display.status_text(usage_mod.totals(session_file)) if session_file is not None else None,
         window=window,
@@ -939,7 +940,7 @@ async def _repl_main(cfg, state, telemetry, history, completer, prompt_spec, ban
         flush=sys.stdout.flush,
     )
     telemetry.exchange_factory = lambda: screen.ScreenExchange(loop, scrollback, app)
-    ticker = loop.create_task(screen.tick(app, lambda: sup.turn_active() or bool(sup.jobs("subagent"))))
+    ticker = loop.create_task(status_bar.tick(app, lambda: sup.turn_active() or bool(sup.jobs("subagent"))))
     try:
         with screen.capture_stdio(loop, scrollback, app), transcript_mod.transcript_stdio(telemetry):
             try:
