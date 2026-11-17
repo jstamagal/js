@@ -997,14 +997,6 @@ def test_tool_result_record_keeps_image_as_media_ref(tmp_path):
         "role": "tool", "tool_call_id": "c1", "name": "read", "content": "plain done"}
 
 
-def test_tool_display_keys_are_canonical_tool_names():
-    from js import display
-
-    canonical = {t.name for t in build_default_registry().tools}
-    extra = set(display._BODY_ARG) - canonical
-    assert not extra, f"display._BODY_ARG has non-canonical keys: {extra}"
-
-
 def test_alias_profile_rewrites_outgoing_spec_names_and_descriptions():
     registry = build_default_registry().select(["read:lazy", "write:lazy", "task:lazy", "shell:lazy", "fs_search:lazy"])
     specs = registry.openai_specs()

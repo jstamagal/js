@@ -12,6 +12,7 @@ from .. import settings as _settings
 
 
 PATH_ARGS = ("file_path", "path")
+_PYTHON_FIRST_LINE = re.compile(r"^\s*(?:\S*/)?python[0-9.]*\b")
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,12 @@ class Presentation:
     # The tail of its output shows while it runs.
     live: bool = False
 
+    def language(self, body: str) -> str | None:
+        """The lexer of the call's `body`; None when the path should tell."""
+        if self.lexer == "bash" and _PYTHON_FIRST_LINE.match(body.lstrip().split("\n", 1)[0]):
+            return "python"
+        return self.lexer
+
 
 _GENERIC = Presentation()
 
@@ -81,42 +88,14 @@ def declared(name: str) -> Presentation:
     return _declarations().get(name, _GENERIC)
 
 
-# The argument each tool carries its program or file body in, shown as a
-# highlighted block under the call header instead of on it.
-_BODY_ARG: dict[str, str] = {
-    "plan": "content",
-}
 _SHELL_HEADER = re.compile(r"shell=[^\n]*\nexit=(-?\d+)\n")
 _SHELL_SECTION = re.compile(r"^--- (stdout|stderr) ---$")
-_PYTHON_FIRST_LINE = re.compile(r"^\s*(?:\S*/)?python[0-9.]*\b")
 # A `read` result line: `N|` before the file's own text.
 _READ_GUTTER = re.compile(r"^(\d+)\|")
 # The note a paged `read` ends with, written for the model.
 _READ_PAGING = re.compile(r"^\[(\d+) total lines; continue with .*\]$")
 _PATCHED = re.compile(r"^patched .*?\((.*), hash \w+\)$")
 _HUNK = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
-
-
-# The argument that tells one call of a tool from another on its header: the
-# first of these that the call carries. A tool not named here is told apart by
-# its path, when it has one.
-_KEY_ARGS: dict[str, tuple[str, ...]] = {
-    "skill": ("name",),
-    "plan": ("plan_name",),
-}
-
-
-# Rows of a running command's output kept on screen.
-
-
-def builtin_lexer(name: str, args: dict, body: str) -> str | None:
-    if name == "plan":
-        return "markdown"
-    language = declared(name).lexer
-    if language == "bash" and _PYTHON_FIRST_LINE.match(body.lstrip().split("\n", 1)[0]):
-        return "python"
-    return language
-
 
 
 def _names(settings: Any, key: str) -> frozenset[str]:

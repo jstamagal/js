@@ -42,8 +42,7 @@ from . import messages as msgs
 from . import output
 from . import settings as _settings
 from .toolkit.presentation import (
-    ToolOutput, _BODY_ARG, _KEY_ARGS, PATH_ARGS,
-    builtin_lexer, call_kind, declared, tool_output,
+    PATH_ARGS, ToolOutput, call_kind, declared, tool_output,
 )
 
 _SGR_ONLY = re.compile(r"\x1b\[[0-9;]*m")
@@ -1098,7 +1097,7 @@ def short_path(path: str) -> str:
 def _key_name(name: str, args: dict | None) -> str | None:
     if not isinstance(args, dict):
         return None
-    keys = _KEY_ARGS.get(name, declared(name).key)
+    keys = declared(name).key
     return next((key for key in keys if isinstance(args.get(key), str) and args[key].strip()), None)
 
 
@@ -1148,7 +1147,7 @@ def _other_arguments(name: str, args: dict, whole: bool = False) -> str:
     (a range read, a body's length, an edit count), then every remaining
     argument as `(key=value, …)`."""
     shown = declared(name)
-    body = _BODY_ARG.get(name, shown.body)
+    body = shown.body
     notes: list[str] = []
     if shown.note == "range":
         span = args.get("range")
@@ -1177,7 +1176,7 @@ def _other_arguments(name: str, args: dict, whole: bool = False) -> str:
 
 
 def _lexer(name: str, args: dict, body: str) -> str:
-    language = builtin_lexer(name, args, body)
+    language = declared(name).language(body)
     return _path_lexer(args, body) if language is None else language
 
 
@@ -1246,7 +1245,7 @@ class _Block:
             row.append_text(Text(" ") + fset.to_rich(msgs.TOOL_ARGS_UNPARSED.body_runs(), th.error))
         if about is None:
             # A program shown whole in its own panel keeps only its first line here.
-            whole = self.whole and _BODY_ARG.get(name, declared(name).body) != _key_name(name, args)
+            whole = self.whole and declared(name).body != _key_name(name, args)
             about = key_argument(name, args, 10 ** 6, whole)
         if about:
             row.append(" " + about, fset.setting_value("EXCHANGE_ARGUMENT_STYLE"))
@@ -1396,12 +1395,11 @@ def _program(block: _Block, name: str, args: dict, level: int, preview: int) -> 
     """The call's program under its header at TOOLS_DISPLAY 2 and 3: a `write`'s
     file as a numbered view, any other body of more than one line as a panel."""
     shown = declared(name)
-    body_arg = _BODY_ARG.get(name, shown.body)
-    body = args.get(body_arg or "")
+    body = args.get(shown.body or "")
     if not isinstance(body, str) or not body.strip():
         return
     lines = clean(body).rstrip("\n").split("\n")
-    if not shown.body_is_file and len(lines) == 1 and _key_name(name, args) == body_arg:
+    if not shown.body_is_file and len(lines) == 1 and _key_name(name, args) == shown.body:
         # A one-line program is the header's key argument already.
         return
     hidden = len(lines) - preview if level == 2 and len(lines) > preview else 0
