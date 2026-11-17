@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from js import runtime, session_store, settings
-from js.config import Config, from_env
+from js.config import Config, InvocationSources, from_env
 from js import messages as msgs
 
 
@@ -189,7 +189,7 @@ def test_explicit_default_model_extra_beats_the_agent_model(tmp_path):
     agent.mkdir(parents=True)
     (agent / "agent.yaml").write_text("model: agent-model\ntools: []\n", encoding="utf-8")
     (agent / "01-prompt.md").write_text("PINNED\n", encoding="utf-8")
-    cfg = from_env(cwd=tmp_path, save_session=False, agent_id="pinned", extras=[f"MODEL={model_id}"])
+    cfg = from_env(cwd=tmp_path, save_session=False, agent_id="pinned", sources=InvocationSources(extras=(f"MODEL={model_id}",)))
 
     active = run_assembly.settle(cfg).config
 
@@ -208,23 +208,24 @@ def test_presets_layer_over_base_in_order(monkeypatch, tmp_path):
     assert from_env(save_session=False).model == "base-model"
 
     # Last preset wins on overlap; earlier preset's non-overlapping keys persist.
-    cfg = from_env(save_session=False, presets=["fast", "slow"])
+    cfg = from_env(save_session=False, sources=InvocationSources(presets=("fast", "slow")))
     assert cfg.model == "slow-model"
     assert cfg.fetch_timeout_s == 99
 
-    cfg2 = from_env(save_session=False, presets=["slow", "fast"])
+    cfg2 = from_env(save_session=False, sources=InvocationSources(presets=("slow", "fast")))
     assert cfg2.model == "fast-model"
     assert cfg2.fetch_timeout_s == 99  # from slow; fast didn't set it
 
 
-@pytest.mark.parametrize("presets", [[], ["fast"]])
+@pytest.mark.parametrize("presets", [(), ("fast",)])
 def test_ignoring_global_config_from_home_excludes_global_files(tmp_path, presets):
     config_dir = tmp_path / ".js"
     config_dir.mkdir()
     (config_dir / "jsrc").write_text("set SHELL_WAIT 47\n", encoding="utf-8")
     (config_dir / "jsrc.fast").write_text("set SHELL_WAIT 49\n", encoding="utf-8")
 
-    cfg = from_env(cwd=tmp_path, save_session=False, ignore_global_config=True, presets=presets)
+    cfg = from_env(cwd=tmp_path, save_session=False,
+                   sources=InvocationSources(presets=presets, ignore_global_config=True))
 
     assert cfg.shell_wait_seconds == settings.default_value("SHELL_WAIT")
 
@@ -240,8 +241,9 @@ def test_ignoring_global_config_holds_under_another_name_for_home(tmp_path, monk
     second_name.symlink_to(home, target_is_directory=True)
     monkeypatch.setenv("HOME", str(second_name))
 
-    for presets in ([], ["fast"]):
-        cfg = from_env(cwd=home, save_session=False, ignore_global_config=True, presets=presets)
+    for presets in ((), ("fast",)):
+        cfg = from_env(cwd=home, save_session=False,
+                       sources=InvocationSources(presets=presets, ignore_global_config=True))
         assert cfg.shell_wait_seconds == settings.default_value("SHELL_WAIT")
 
 

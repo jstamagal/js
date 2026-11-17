@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from js import compaction, memory, persona, settings
 from js.capped_process import CappedProcessResult
-from js.config import Config, from_env
+from js.config import Config, InvocationSources, from_env
 from js.toolkit.registry import build_default_registry
 
 
@@ -21,7 +21,7 @@ def test_collect_settings_layers_global_project_and_local_with_env_cli(monkeypat
     monkeypatch.setenv("JS_MODEL", "env")
     monkeypatch.chdir(project)
 
-    cfg = from_env(save_session=False, extras=["MODEL=cli"])
+    cfg = from_env(save_session=False, sources=InvocationSources(extras=("MODEL=cli",)))
 
     assert cfg.model == "cli"
     assert cfg.fetch_timeout_s == 20

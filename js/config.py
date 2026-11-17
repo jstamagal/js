@@ -337,34 +337,6 @@ def _same_config_path(one: Path, other: Path) -> bool:
     return one == other or one.resolve(strict=False) == other.resolve(strict=False)
 
 
-def _preset_config_paths(
-    presets: list[str] | None,
-    project_dir: Path,
-    *,
-    ignore_local_config: bool,
-    ignore_global_config: bool,
-) -> list[Path]:
-    """Resolve ``--preset foo,bar`` to ``jsrc.foo``/``jsrc.bar`` files, in order.
-
-    Each preset name layers on top of the base jsrc files like another `set`
-    script; later presets win over earlier ones, and a project ``.js/jsrc.<name>``
-    wins over the global ``jsrc.<name>``. Missing files are simply skipped by the
-    loader, so an unused preset is a no-op (the CLI warns when a name matches
-    nothing)."""
-    paths: list[Path] = []
-    for raw in presets or []:
-        name = raw.strip()
-        if not name:
-            continue
-        global_path = _paths.global_config_file().with_name(f"jsrc.{name}")
-        local_path = _paths.project_home(project_dir) / f"jsrc.{name}"
-        if not ignore_global_config:
-            paths.append(global_path)
-        if not ignore_local_config and not _same_config_path(local_path, global_path):
-            paths.append(local_path)
-    return paths
-
-
 @dataclass(frozen=True)
 class InvocationSources:
     """What a command line adds to the settings a run loads: ``extras`` from
@@ -377,6 +349,28 @@ class InvocationSources:
     ignore_global_config: bool = False
 
 
+def _preset_config_paths(sources: InvocationSources, project_dir: Path) -> list[Path]:
+    """Resolve ``--preset foo,bar`` to ``jsrc.foo``/``jsrc.bar`` files, in order.
+
+    Each preset name layers on top of the base jsrc files like another `set`
+    script; later presets win over earlier ones, and a project ``.js/jsrc.<name>``
+    wins over the global ``jsrc.<name>``. Missing files are simply skipped by the
+    loader, so an unused preset is a no-op (the CLI warns when a name matches
+    nothing)."""
+    paths: list[Path] = []
+    for raw in sources.presets:
+        name = raw.strip()
+        if not name:
+            continue
+        global_path = _paths.global_config_file().with_name(f"jsrc.{name}")
+        local_path = _paths.project_home(project_dir) / f"jsrc.{name}"
+        if not sources.ignore_global_config:
+            paths.append(global_path)
+        if not sources.ignore_local_config and not _same_config_path(local_path, global_path):
+            paths.append(local_path)
+    return paths
+
+
 # This process's command line. The CLI records it once (`set_invocation`);
 # `run_settings` loads with it.
 _invocation = InvocationSources()
@@ -387,49 +381,35 @@ def set_invocation(sources: InvocationSources) -> None:
     _invocation = sources
 
 
-def run_settings(cwd: Path | None = None, *, held: bool = False) -> dict:
+def run_settings(cwd: Path | None = None, *, sources: InvocationSources | None = None,
+                 held: bool = False) -> dict:
     """The settings a run started in ``cwd`` (default: here) loads: every
-    jsrc layer, the environment and this process's command line. ``held``
-    leaves the live /fset entries as they are."""
-    paths = jsrc_paths(
-        (cwd or Path.cwd()).resolve(strict=False),
-        ignore_local_config=_invocation.ignore_local_config,
-        ignore_global_config=_invocation.ignore_global_config,
-        presets=_invocation.presets,
-    )
+    jsrc layer, the environment and the command line ``sources`` (default:
+    this process's). ``held`` leaves the live /fset entries as they are."""
+    sources = _invocation if sources is None else sources
+    paths = jsrc_paths((cwd or Path.cwd()).resolve(strict=False), sources)
     if held:
         with _fset.held():
-            return _settings.collect_settings(config_paths=paths, extras=_invocation.extras)
-    return _settings.collect_settings(config_paths=paths, extras=_invocation.extras)
+            return _settings.collect_settings(config_paths=paths, extras=sources.extras)
+    return _settings.collect_settings(config_paths=paths, extras=sources.extras)
 
 
-def jsrc_paths(
-    project_dir: Path,
-    *,
-    ignore_local_config: bool = False,
-    ignore_global_config: bool = False,
-    presets: list[str] | None = None,
-) -> list[Path]:
+def jsrc_paths(project_dir: Path, sources: InvocationSources = InvocationSources()) -> list[Path]:
     """The jsrc files a run loads, lowest layer first, each once.
 
     Run from the home directory, the project `.js/` is `~/.js` itself, so its
     jsrc is the global layer and loads there only."""
     paths: list[Path] = []
     global_path = _paths.global_config_file()
-    if not ignore_global_config:
+    if not sources.ignore_global_config:
         paths.append(global_path)
-    if not ignore_local_config:
+    if not sources.ignore_local_config:
         local_path = _paths.project_home(project_dir) / "jsrc"
         if not _same_config_path(local_path, global_path):
             paths.append(local_path)
         paths.append(_paths.project_home(project_dir) / "jsrc.local")
     # Presets layer on top of the base jsrc files (still below env / --extra).
-    paths.extend(_preset_config_paths(
-        presets,
-        project_dir,
-        ignore_local_config=ignore_local_config,
-        ignore_global_config=ignore_global_config,
-    ))
+    paths.extend(_preset_config_paths(sources, project_dir))
     return list(dict.fromkeys(paths))
 
 
@@ -443,29 +423,20 @@ def agent_from_settings(settings: dict, agent_id: str | None = None) -> str:
 def resolve_agent_id(
     agent_id: str | None = None,
     *,
-    extras: list[str] | None = None,
+    sources: InvocationSources = InvocationSources(),
     cwd: Path | None = None,
-    ignore_local_config: bool = False,
-    ignore_global_config: bool = False,
-    presets: list[str] | None = None,
 ) -> str:
     """The agent `from_env` picks for the same arguments, without building a
     Config: ``agent_id`` beats env JS_DEFAULT_AGENT, which beats the jsrc layers."""
-    config_paths = jsrc_paths(
-        (cwd or Path.cwd()).resolve(strict=False),
-        ignore_local_config=ignore_local_config,
-        ignore_global_config=ignore_global_config,
-        presets=presets,
-    )
-    return agent_from_settings(_settings.collect_settings(config_paths=config_paths, extras=extras), agent_id)
+    return agent_from_settings(run_settings(cwd, sources=sources), agent_id)
 
 
-def _set_by_invocation(key: str, env: Mapping[str, str], extras: list[str] | None) -> bool:
+def _set_by_invocation(key: str, env: Mapping[str, str], extras: tuple[str, ...]) -> bool:
     """True when a JS_* env var or a --extra argument sets ``key`` for this run."""
     spec = _settings.SPEC_BY_KEY[key]
     if any(name in env for name in _settings.env_names_for(spec)):
         return True
-    return any(tuple(_settings.parse_extra_arg(arg)[0]) == tuple(spec.path) for arg in extras or ())
+    return any(tuple(_settings.parse_extra_arg(arg)[0]) == tuple(spec.path) for arg in extras)
 
 
 @dataclass(frozen=True)
@@ -483,13 +454,10 @@ class ConfigAssembly:
 def from_env(
     *,
     save_session: bool = True,
-    extras: list[str] | None = None,
+    sources: InvocationSources = InvocationSources(),
     agent_id: str | None = None,
     session: str | None = None,
     cwd: Path | None = None,
-    ignore_local_config: bool = False,
-    ignore_global_config: bool = False,
-    presets: list[str] | None = None,
     assembly: ConfigAssembly | None = None,
 ) -> Config:
     """Read jsrc + env + CLI extras once, populate everything explicitly.
@@ -511,12 +479,7 @@ def from_env(
     resolve_route = _routing.resolve_model_route if assembly.resolve_route is None else assembly.resolve_route
     env = os.environ
     project_dir = (cwd or Path.cwd()).resolve(strict=False)
-    config_paths = jsrc_paths(
-        project_dir,
-        ignore_local_config=ignore_local_config,
-        ignore_global_config=ignore_global_config,
-        presets=presets,
-    )
+    config_paths = jsrc_paths(project_dir, sources)
 
     jsrc_settings = collect(
         config_paths=config_paths,
@@ -525,7 +488,7 @@ def from_env(
     )
     js_root_settings = collect(
         config_paths=config_paths,
-        extras=extras,
+        extras=sources.extras,
     )
     agent_id = agent_from_settings(js_root_settings, agent_id)
     set_banner(str(_settings.knob(js_root_settings, "BANNER")))
@@ -537,7 +500,7 @@ def from_env(
     # Any env name that feeds MODEL makes the model invocation-explicit.
     invocation_explicit_model = any(
         env.get(name) for name in _settings.env_names_for(_settings.SPEC_BY_KEY["MODEL"]))
-    explicit_model = _set_by_invocation("MODEL", env, extras) or raw_model != default_model
+    explicit_model = _set_by_invocation("MODEL", env, sources.extras) or raw_model != default_model
     _cfg_provider_id = _settings.get_dotted(js_root_settings, ("PROVIDER",))
     explicit_provider = _cfg_provider_id is not None
     _cfg_base_url = _settings.get_dotted(js_root_settings, ("BASE_URL",))
@@ -581,7 +544,7 @@ def from_env(
 
     layer_jsrc = _login_defaults.session_values(jsrc_settings)
     layer_env = _login_defaults.env_layer(env)
-    layer_flag = _login_defaults.flag_layer(extras)
+    layer_flag = _login_defaults.flag_layer(sources.extras)
 
     reasoning_effort = _settings.get_dotted(js_root_settings, ("EFFORT",))
     if reasoning_effort is None and provider_def is not None and provider_def.reasoning_effort:
@@ -645,8 +608,8 @@ def from_env(
         mcp=mcp,
         explicit_model=explicit_model,
         explicit_provider=explicit_provider,
-        invocation_model=_set_by_invocation("MODEL", env, extras),
-        invocation_reasoning=_set_by_invocation("EFFORT", env, extras),
+        invocation_model=_set_by_invocation("MODEL", env, sources.extras),
+        invocation_reasoning=_set_by_invocation("EFFORT", env, sources.extras),
         layer_jsrc=layer_jsrc,
         layer_env=layer_env,
         layer_flag=layer_flag,

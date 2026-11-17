@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from js import settings
-from js.config import from_env
+from js.config import InvocationSources, from_env
 
 
 def _env_dirs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path]:
@@ -73,7 +73,7 @@ def test_extra_reasoning_effort_keeps_the_word_as_typed(monkeypatch, tmp_path, w
     _env_dirs(monkeypatch, tmp_path)
 
     path, value = settings.parse_extra_arg(f"EFFORT={word}")
-    cfg = from_env(save_session=False, extras=[f"EFFORT={word}"])
+    cfg = from_env(save_session=False, sources=InvocationSources(extras=(f"EFFORT={word}",)))
 
     assert path == ("EFFORT",)
     assert value == word
@@ -86,7 +86,7 @@ def test_extra_provider_extra_json_uses_registry_map_coercion(monkeypatch, tmp_p
     expected = {"extra_body": {"probe": True}, "mode": "fast"}
 
     path, value = settings.parse_extra_arg(raw)
-    cfg = from_env(save_session=False, extras=[raw])
+    cfg = from_env(save_session=False, sources=InvocationSources(extras=(raw,)))
 
     assert path == ("EXTRA_PARAMS",)
     assert value == expected
@@ -105,7 +105,7 @@ def test_extra_provider_extra_subkeys_use_generic_coercion(monkeypatch, tmp_path
     raw = "EXTRA_PARAMS.live_flag=true"
 
     path, value = settings.parse_extra_arg(raw)
-    cfg = from_env(save_session=False, extras=[raw])
+    cfg = from_env(save_session=False, sources=InvocationSources(extras=(raw,)))
 
     assert path == ("EXTRA_PARAMS", "live_flag")
     assert value is True
@@ -118,7 +118,7 @@ def test_extra_tools_alias_profiles_json_uses_registry_coercion(monkeypatch, tmp
     expected = [{"match": ["offline-test-model"], "aliases": {"read": "r"}}]
 
     path, value = settings.parse_extra_arg(raw)
-    cfg = from_env(save_session=False, extras=[raw])
+    cfg = from_env(save_session=False, sources=InvocationSources(extras=(raw,)))
 
     assert path == ("TOOL_ALIASES",)
     assert value == expected
@@ -131,7 +131,7 @@ def test_extra_tools_alias_profiles_accepts_string_match(monkeypatch, tmp_path):
     expected = [{"match": "offline-test-model", "aliases": {"read": "r"}}]
 
     path, value = settings.parse_extra_arg(raw)
-    cfg = from_env(save_session=False, extras=[raw])
+    cfg = from_env(save_session=False, sources=InvocationSources(extras=(raw,)))
 
     assert path == ("TOOL_ALIASES",)
     assert value == expected
@@ -245,7 +245,7 @@ def test_from_env_extra_wins_over_env_and_jsrc_for_one_run(monkeypatch, tmp_path
     cfg = from_env(
         cwd=project,
         save_session=False,
-        extras=["SUBAGENT_DEPTH_MAX=3", "MODEL=cli-model"],
+        sources=InvocationSources(extras=("SUBAGENT_DEPTH_MAX=3", "MODEL=cli-model")),
     )
     assert cfg.task_max_depth == 3
     assert isinstance(cfg.task_max_depth, int)
@@ -259,7 +259,7 @@ def test_from_env_extra_is_one_shot_not_persisted(monkeypatch, tmp_path):
     cfg_path.parent.mkdir(parents=True)
     cfg_path.write_text("set SUBAGENT_DEPTH_MAX 1\n", encoding="utf-8")
 
-    with_extra = from_env(cwd=project, save_session=False, extras=["SUBAGENT_DEPTH_MAX=3"])
+    with_extra = from_env(cwd=project, save_session=False, sources=InvocationSources(extras=("SUBAGENT_DEPTH_MAX=3",)))
     assert with_extra.task_max_depth == 3
 
     # A subsequent run without the flag falls back to the jsrc value: not sticky.

@@ -824,9 +824,9 @@ def test_a_picked_model_reaches_the_jsrc_only_through_save(monkeypatch, tmp_path
     assert cli._handle_command("/save", state, cfg) is True
     assert config_path.read_text(encoding="utf-8") == "set MODEL openai/gpt-5.5\n"
 
-    from js.config import from_env
+    from js.config import InvocationSources, from_env
 
-    boot_cfg = from_env(save_session=False, cwd=tmp_path, ignore_local_config=True)
+    boot_cfg = from_env(save_session=False, cwd=tmp_path, sources=InvocationSources(ignore_local_config=True))
     assert boot_cfg.provider_id == "openai"
     assert boot_cfg.model == "gpt-5.5"
 

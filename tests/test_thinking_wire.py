@@ -17,7 +17,7 @@ import httpx2
 import pytest
 
 from js import logins, memory, model_client, runtime
-from js.config import from_env
+from js.config import InvocationSources, from_env
 from js.logins import Login
 from js.sampling import Sampling
 from js.toolkit import ToolContext
@@ -403,7 +403,7 @@ def claude(monkeypatch, tmp_path):
     cfg = from_env(
         agent_id="thinking",
         session="thinking",
-        extras=[
+        sources=InvocationSources(extras=(
             "MODEL=claude-sonnet-5-5",
             "PROVIDER=anthropic",
             "API_KEY=fixture",
@@ -413,7 +413,7 @@ def claude(monkeypatch, tmp_path):
             "OUTPUT_TOKENS_MAX=32000",
             "REQUEST_LOG=off",
             "TRANSCRIPT_LOG=off",
-        ],
+        )),
     )
     prompts = tmp_path / ".js" / "agents" / "thinking"
     prompts.mkdir(parents=True)
@@ -842,7 +842,7 @@ def test_a_drop_of_signed_reasoning_on_a_final_answer_survives_resume(tmp_path):
 def test_the_thinking_budget_setting_replaces_the_effort_budget(claude):
     cfg, wire, context = claude
     tuned = from_env(agent_id="thinking", session="thinking",
-                     extras=["THINKING_BUDGET=4000", "PROVIDER=anthropic", "MODEL=claude-sonnet-5-5"])
+                     sources=InvocationSources(extras=("THINKING_BUDGET=4000", "PROVIDER=anthropic", "MODEL=claude-sonnet-5-5")))
     assert tuned.thinking_budget == 4000
     # A turn resolves its settings from the layers: the budget rides the flag layer.
     flagged = replace(cfg, layer_flag={**(cfg.layer_flag or {}), "THINKING_BUDGET": tuned.thinking_budget})

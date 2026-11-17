@@ -7,7 +7,7 @@ import pytest
 
 from js import messages as msgs
 from js import mcp_config, setcmd, settings
-from js.config import from_env
+from js.config import InvocationSources, from_env
 
 ENV_SECRET = "MCP_ENV_SENTINEL_DO_NOT_PRINT"
 HEADER_SECRET = "MCP_HEADER_SENTINEL_DO_NOT_PRINT"
@@ -91,12 +91,13 @@ def test_jsrc_env_extra_layering_reaches_active_config(monkeypatch, tmp_path):
     )
     monkeypatch.setenv("JS_MCP_SERVERS", json.dumps(env_servers))
 
-    env_config = from_env(cwd=project, save_session=False, ignore_global_config=True)
+    env_config = from_env(cwd=project, save_session=False,
+                          sources=InvocationSources(ignore_global_config=True))
     cli_config = from_env(
         cwd=project,
         save_session=False,
-        ignore_global_config=True,
-        extras=[f"MCP_SERVERS={json.dumps(extra_servers)}"],
+        sources=InvocationSources(extras=(f"MCP_SERVERS={json.dumps(extra_servers)}",),
+                                  ignore_global_config=True),
     )
 
     assert [server.name for server in env_config.mcp.servers] == ["env"]

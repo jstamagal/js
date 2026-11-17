@@ -1476,9 +1476,9 @@ def test_tool_error_tracker_uses_registered_limit():
 
 def test_remove_uses_the_configured_trash_size_limit(tmp_path, monkeypatch):
     from js import turn_settings
-    from js.config import from_env
+    from js.config import InvocationSources, from_env
 
-    cfg = from_env(extras=["TRASH_BYTES_MAX=4"])
+    cfg = from_env(sources=InvocationSources(extras=("TRASH_BYTES_MAX=4",)))
     context = ToolContext(cwd=tmp_path)
     turn_settings.install(context, cfg)
     target = tmp_path / "small.txt"

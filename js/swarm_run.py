@@ -35,7 +35,7 @@ from typing import Any, TextIO
 from . import agent_messages, compaction, headless, run_assembly, runtime
 from . import memory as M
 from . import swarm, settings as _settings
-from .config import from_env
+from .config import InvocationSources, from_env
 from .session_catalog import record_session_start
 from .toolkit.core import ToolContext
 from .toolkit.terminal import close_terminal_sessions
@@ -94,9 +94,10 @@ def _slots(cfg: Any, spec_slots: Any) -> int:
 def _configure(spec: AgentSpec) -> run_assembly.SettledRun:
     """The settled run of one agent: the bus tools on its surface and its
     seat file after its system prompt."""
-    extras = [f"{k}={v}" for k, v in spec.opts.items()]
+    extras = tuple(f"{k}={v}" for k, v in spec.opts.items())
     cwd = Path(spec.cwd).expanduser() if spec.cwd else Path.cwd()
-    cfg = from_env(save_session=True, extras=extras, agent_id=spec.agent, session=spec.session, cwd=cwd)
+    cfg = from_env(save_session=True, sources=InvocationSources(extras=extras), agent_id=spec.agent,
+                   session=spec.session, cwd=cwd)
     if spec.effort is not None:
         # The spec's own effort is set for this run like a flag; agent.yaml's
         # effort is then left out of the agent layer.

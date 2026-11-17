@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from js import cli, login_defaults, logins, messages as msgs, providers, run_assembly
-from js.config import from_env
+from js.config import InvocationSources, from_env
 from js.logins import Login
 from js.routing import ProviderNotLoggedInError, resolve_model_route
 
@@ -446,7 +446,7 @@ def test_a_setting_flag_beats_the_saved_login_defaults(monkeypatch, tmp_path, at
     extras, error = cli._setting_flag_extras(args)
     assert error is None
 
-    cfg = from_env(cwd=tmp_path, save_session=False, extras=extras)
+    cfg = from_env(cwd=tmp_path, save_session=False, sources=InvocationSources(extras=tuple(extras)))
     turn = login_defaults.for_turn(replace_model(cfg, "b"))
 
     if key in login_defaults.KEYS:

@@ -8,7 +8,7 @@ import ai.types.messages
 import ai.types.usage
 
 from js import cli, runtime, settings
-from js.config import Config, from_env
+from js.config import Config, InvocationSources, from_env
 from js.model_client import ModelStreamResult
 from js.toolkit import ToolContext, build_default_registry
 
@@ -197,8 +197,8 @@ def test_registered_instruction_files_select_project_context(tmp_path, monkeypat
     monkeypatch.chdir(tmp_path)
     rules = tmp_path / "RULES.md"
     rules.write_text("project instructions")
-    cfg = from_env(save_session=False, extras=[
+    cfg = from_env(save_session=False, sources=InvocationSources(extras=(
         'GLOBAL_INSTRUCTION_FILES=[]', 'PROJECT_INSTRUCTION_FILES=["RULES.md"]',
-    ])
+    )))
     assert cfg.agents_files == (rules,)
 

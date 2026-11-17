@@ -10,7 +10,7 @@ import pytest
 from ai.providers.openai.protocol import _messages_to_openai
 
 from js import cli, memory, model_client, runtime
-from js.config import from_env
+from js.config import InvocationSources, from_env
 from js.toolkit import ToolContext
 from repl_driver import run_async
 
@@ -23,7 +23,7 @@ def replay(monkeypatch, tmp_path):
     cfg = from_env(
         agent_id="replay",
         session="replay",
-        extras=[
+        sources=InvocationSources(extras=(
             "MODEL=qwen3.8-27b",
             "PROVIDER=openai",
             "BASE_URL=http://llamacpp.test/v1",
@@ -33,7 +33,7 @@ def replay(monkeypatch, tmp_path):
             "OUTPUT_TOKENS_MAX=64",
             "REQUEST_LOG=off",
             "TRANSCRIPT_LOG=off",
-        ],
+        )),
     )
     prompts = tmp_path / ".js" / "agents" / "replay"
     prompts.mkdir(parents=True)

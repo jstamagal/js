@@ -9,10 +9,10 @@ from js import cli, config, model_metadata
 def test_live_vision_setting_and_unset_override_environment(monkeypatch):
     monkeypatch.setenv("JS_VISION", "off")
     monkeypatch.setattr(model_metadata, "accepts_image_input", lambda _model: True)
-    cfg = config.from_env(extras=[
+    cfg = config.from_env(sources=config.InvocationSources(extras=(
         "MODEL=private-model", "PROVIDER=openai", "API_KEY=fixture",
         "OUTPUT_TOKENS_MAX=64",
-    ])
+    )))
     assert cfg.vision_enabled is False
     live = deepcopy(cfg.settings)
     state = {"settings": live}

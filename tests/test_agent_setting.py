@@ -13,7 +13,7 @@ import ai.types.usage
 import pytest
 
 from js import cli, runtime, settings
-from js.config import derive_session_name, from_env
+from js.config import InvocationSources, derive_session_name, from_env
 from js import session_store
 from js.session_catalog import first_metadata
 from js.memory import load_messages
@@ -94,7 +94,7 @@ def test_config_resolves_agent_by_layer(monkeypatch, tmp_path, js_agent, argv, e
 def test_extra_agent_beats_env(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path, "fromenv")
 
-    cfg = from_env(save_session=False, extras=["DEFAULT_AGENT=fromflag"])
+    cfg = from_env(save_session=False, sources=InvocationSources(extras=("DEFAULT_AGENT=fromflag",)))
 
     assert cfg.agent_id == "fromflag"
 

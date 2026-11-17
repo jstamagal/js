@@ -249,12 +249,11 @@ def _from_env(
         agent_id = current().agent or (None if agent_id == "none" else agent_id)
     return from_env(
         save_session=save_session,
-        extras=extras,
+        sources=InvocationSources(extras=tuple(extras or ()), presets=tuple(presets or ()),
+                                  ignore_local_config=ignore_local_config,
+                                  ignore_global_config=ignore_global_config),
         session=session,
         agent_id=agent_id,
-        ignore_local_config=ignore_local_config,
-        ignore_global_config=ignore_global_config,
-        presets=presets,
     )
 
 
@@ -444,10 +443,9 @@ def _invocation_agent(args: argparse.Namespace, presets: list[str]) -> str:
     setting, resolved as `from_env` resolves it."""
     return resolve_agent_id(
         args.agent or ("commit" if args.commit else None),
-        extras=args.extras,
-        ignore_local_config=args.no_local_config,
-        ignore_global_config=args.no_global_config,
-        presets=presets,
+        sources=InvocationSources(extras=tuple(args.extras), presets=tuple(presets),
+                                  ignore_local_config=args.no_local_config,
+                                  ignore_global_config=args.no_global_config),
     )
 
 
@@ -3567,9 +3565,9 @@ def _warn_unmatched_presets(presets: list[str], *, ignore_local: bool, ignore_gl
     project_dir = Path.cwd()
     for name in presets:
         candidates = _preset_config_paths(
-            [name], project_dir,
-            ignore_local_config=ignore_local,
-            ignore_global_config=ignore_global,
+            InvocationSources(presets=(name,), ignore_local_config=ignore_local,
+                              ignore_global_config=ignore_global),
+            project_dir,
         )
         if not any(path.exists() for path in candidates):
             if candidates:
@@ -4512,8 +4510,9 @@ def _main(argv: list[str] | None = None) -> int:
             loop_settings = settings.collect_settings(
                 config_paths=jsrc_paths(
                     Path(args.cd).expanduser().resolve() if args.cd else Path.cwd(),
-                    ignore_local_config=args.no_local_config, ignore_global_config=args.no_global_config,
-                    presets=[name for spec in args.presets for name in spec.split(",") if name.strip()],
+                    InvocationSources(
+                        presets=tuple(name for spec in args.presets for name in spec.split(",") if name.strip()),
+                        ignore_local_config=args.no_local_config, ignore_global_config=args.no_global_config),
                 ), extras=args.extras,
             )
             return loop_controller.run(dispatch_argv, args.loop, bench=args.bench, prompt=args.prompt,
@@ -4622,8 +4621,9 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
             endpoint_settings = settings.collect_settings(
                 config_paths=jsrc_paths(
                     Path(args.cd).expanduser().resolve() if args.cd else Path.cwd(),
-                    ignore_local_config=args.no_local_config, ignore_global_config=args.no_global_config,
-                    presets=[name for spec in args.presets for name in spec.split(",") if name.strip()],
+                    InvocationSources(
+                        presets=tuple(name for spec in args.presets for name in spec.split(",") if name.strip()),
+                        ignore_local_config=args.no_local_config, ignore_global_config=args.no_global_config),
                 ), extras=args.extras,
             )
             args.extras = endpoint_uri.parse(
@@ -5061,9 +5061,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         _queue_note(state, snippets.render('turn-cut-off'))
     rc_errors = _run_rc_commands(state, cfg, jsrc_paths(
         Path(getattr(cfg, "project_dir", None) or Path.cwd()),
-        ignore_local_config=args.no_local_config,
-        ignore_global_config=args.no_global_config,
-        presets=presets,
+        InvocationSources(presets=tuple(presets), ignore_local_config=args.no_local_config,
+                          ignore_global_config=args.no_global_config),
     ))
     _mark_saved(state)
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
