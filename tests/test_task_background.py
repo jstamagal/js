@@ -14,6 +14,7 @@ import types
 import pytest
 
 from js import cli, runtime, supervisor
+from js.repl_state import ReplState
 from js.toolkit import ToolContext, meta, task_jobs
 from js.toolkit.registry import ToolRegistry
 
@@ -90,7 +91,7 @@ def _notes(ctx: ToolContext) -> list[str]:
     return task_jobs.completion_notes(ctx.task_owner)
 
 
-def _sent(state: dict, message: dict) -> dict:
+def _sent(state: ReplState, message: dict) -> dict:
     return cli._with_notes(message, cli._take_pending_notes(state))
 
 
@@ -167,13 +168,13 @@ def test_a_finished_unread_task_is_named_in_the_next_user_message(workers, ctx):
     workers.release.set()
     job.future.result(timeout=5)
 
-    sent = _sent({}, _bundle())
+    sent = _sent(ReplState(), _bundle())
     text = sent["content"]
     assert text.startswith("next")
     note = re.search(r"<js-reminder>(.*?)</js-reminder>", text, re.S).group(1)
     assert job.id in note and str(job.result_path) in note
     # Only once.
-    again = _sent({}, _bundle())
+    again = _sent(ReplState(), _bundle())
     assert "<js-reminder>" not in again["content"]
 
 
@@ -217,8 +218,8 @@ def test_reset_drops_the_reminder_for_tasks_of_the_old_conversation(workers, ctx
     workers.release.set()
     _job(handle, ctx).future.result(timeout=5)
     cfg = types.SimpleNamespace(session_file=tmp_path / "session.jsonl")
-    cli._cmd_reset("", {"messages": []}, cfg)
-    assert "<js-reminder>" not in _sent({}, _bundle())["content"]
+    cli._cmd_reset("", ReplState(messages=[]), cfg)
+    assert "<js-reminder>" not in _sent(ReplState(), _bundle())["content"]
 
 
 def test_finished_subagent_tasks_do_not_pile_up(workers, ctx):

@@ -25,6 +25,7 @@ from js import (
 )
 from js.config import Config
 from js.model_client import ModelStreamResult, ModelToolCall
+from js.repl_state import ReplState
 from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry
 
 
@@ -643,7 +644,7 @@ def test_run_turn_dispatches_registered_command_handler(monkeypatch, tmp_path):
     hooks = RecordingHooks()
     live_settings = settings.seed_defaults()
     cfg = offline_config(tmp_path)
-    state = {"messages": [], "system": "system", "settings": live_settings, "events": hooks}
+    state = ReplState(messages=[], system="system", settings=live_settings, events=hooks)
     hooks.set_dispatcher(cli._event_dispatcher(state, cfg))
     hooks.add("turn_start", "set COMPACTION_AUTO off")
 

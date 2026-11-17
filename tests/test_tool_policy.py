@@ -11,6 +11,7 @@ import pytest
 from js import cli, persona, runtime
 from js.config import Config
 from js.model_client import ModelStreamResult, ModelToolCall
+from js.repl_state import ReplState
 from js.toolkit import ToolContext, policy
 from js.toolkit.registry import build_default_registry
 
@@ -251,7 +252,7 @@ def test_tools_command_prints_each_tool_with_its_deciding_entry(tmp_path, capsys
     policy.tools_config_path().parent.mkdir(parents=True, exist_ok=True)
     policy.tools_config_path().write_text(SPEC_TOOLS_YAML, encoding="utf-8")
     cfg = _cfg(tmp_path)
-    state = {"tool_selectors": ("tag:code_hacker",), "settings": {}}
+    state = ReplState(tool_selectors=("tag:code_hacker",), settings={})
 
     assert cli._handle_command("/tools", state, cfg) is True
 
@@ -320,14 +321,14 @@ def test_live_resync_keeps_the_surface_when_tools_yaml_stops_resolving(tmp_path,
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(SPEC_TOOLS_YAML, encoding="utf-8")
     cfg = _cfg(tmp_path)
-    state = {"tool_selectors": ("tag:code_hacker", "todo_write:eager"), "settings": {}}
+    state = ReplState(tool_selectors=("tag:code_hacker", "todo_write:eager"), settings={})
     cli._sync_tool_registry_from_live_settings(cfg, state)
-    before = state["tool_registry"]
+    before = state.tool_registry
     assert "shell" in before.by_name
     assert capsys.readouterr().err == ""
 
     path.write_text("tags:\n  code_hacker:\n    - tag:code_hacker\n", encoding="utf-8")
     cli._sync_tool_registry_from_live_settings(cfg, state)
 
-    assert state["tool_registry"] is before
+    assert state.tool_registry is before
     assert len([line for line in capsys.readouterr().out.splitlines() if line.strip()]) == 1

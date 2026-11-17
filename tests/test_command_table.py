@@ -10,17 +10,18 @@ from repl_driver import repl_state
 
 from js import cli, paths, settings
 from js.config import from_env, jsrc_paths
+from js.repl_state import ReplState
 
 
 def test_assembly_command_is_dispatched_and_completed():
     def clear(arg, state, cfg):
-        state["messages"].clear()
+        state.messages.clear()
 
-    state = {"messages": ["old"], "repl_assembly": cli.ReplAssembly(
+    state = ReplState(messages=["old"], repl_assembly=cli.ReplAssembly(
         commands={"clear": cli.Command(clear, "clear", cli.msgs.CMD_RESET)},
-    )}
+    ))
     assert cli._handle_command("/clear", state, None)
-    assert state["messages"] == []
+    assert state.messages == []
     assert "clear" in cli._command_completions(state)
     assert "reset" not in cli._command_completions(state)
 
@@ -53,11 +54,11 @@ def test_save_then_restart_brings_back_handlers_and_aliases(monkeypatch, tmp_pat
     _cfg, state, errors = _launch(tmp_path)
 
     assert errors == []
-    assert [h.handler for h in state["events"].handlers_for("turn_start")] == ["set COMPACTION_AUTO off"]
-    assert [(h.handler, h.suppress) for h in state["events"].handlers_for("tool_call")] == [
+    assert [h.handler for h in state.events.handlers_for("turn_start")] == ["set COMPACTION_AUTO off"]
+    assert [(h.handler, h.suppress) for h in state.events.handlers_for("tool_call")] == [
         ("set TRANSCRIPT_LOG on", True)
     ]
-    assert state["aliases"] == {"ca": "compact-auto $*"}
+    assert state.aliases == {"ca": "compact-auto $*"}
 
 
 def test_save_keeps_the_jsrc_and_writes_only_what_changed(monkeypatch, tmp_path):
@@ -93,8 +94,8 @@ def test_rc_replay_leaves_set_lines_to_the_settings_layer(monkeypatch, tmp_path)
 
     _cfg, state, _errors = _launch(tmp_path)
 
-    assert settings.get_dotted(state["settings"], ("COMPACTION_AUTO",)) is True
-    assert state["aliases"] == {"t": "turns"}
+    assert settings.get_dotted(state.settings, ("COMPACTION_AUTO",)) is True
+    assert state.aliases == {"t": "turns"}
 
 
 def test_jsrc_load_resolves_beside_the_jsrc_and_stays_under_env(monkeypatch, tmp_path):
@@ -110,8 +111,8 @@ def test_jsrc_load_resolves_beside_the_jsrc_and_stays_under_env(monkeypatch, tmp
     _cfg, state, errors = _launch(project)
 
     assert errors == []
-    assert state["aliases"] == {"t": "turns"}
-    assert settings.get_dotted(state["settings"], ("COMPACTION_AUTO",)) is True
+    assert state.aliases == {"t": "turns"}
+    assert settings.get_dotted(state.settings, ("COMPACTION_AUTO",)) is True
 
 
 def test_settings_in_a_jsrc_loaded_file_apply_at_config_load(tmp_path):
@@ -136,11 +137,11 @@ def test_rc_errors_name_the_line_and_do_not_stop_startup(monkeypatch, tmp_path):
 
     assert len(errors) == 1
     assert f"{jsrc}:1" in errors[0]
-    assert state["aliases"] == {"t": "turns"}
+    assert state.aliases == {"t": "turns"}
 
 
-def _state() -> dict:
-    return {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
+def _state() -> ReplState:
+    return ReplState(messages=[], system="sys", settings=settings.seed_defaults())
 
 
 def test_alias_runs_its_body_with_arguments(tmp_path):
@@ -151,8 +152,8 @@ def test_alias_runs_its_body_with_arguments(tmp_path):
     assert cli._handle_command("/ca off", state, None) is True
     assert cli._handle_command("/trace off", state, None) is True
 
-    assert settings.get_dotted(state["settings"], ("COMPACTION_AUTO",)) is False
-    assert settings.get_dotted(state["settings"], ("TRANSCRIPT_LOG",)) is False
+    assert settings.get_dotted(state.settings, ("COMPACTION_AUTO",)) is False
+    assert settings.get_dotted(state.settings, ("TRANSCRIPT_LOG",)) is False
 
 
 def test_alias_cannot_shadow_a_command_and_can_be_removed():
@@ -161,7 +162,7 @@ def test_alias_cannot_shadow_a_command_and_can_be_removed():
     cli._handle_command("/alias t turns", state, None)
     cli._handle_command("/alias -t", state, None)
 
-    assert state["aliases"] == {}
+    assert state.aliases == {}
 
 
 def test_self_referencing_alias_stops():
@@ -196,11 +197,12 @@ def test_turn_state_commands_come_from_the_table(monkeypatch):
 
 def test_registering_the_same_handler_twice_keeps_one(tmp_path):
     """A handler loaded from one jsrc and saved into another registers once."""
-    state = {**_state(), "events": cli.events.EventHooks()}
+    state = _state()
+    state.events = cli.events.EventHooks()
     cli._handle_command("/on turn_start set COMPACTION_AUTO off", state, None)
     cli._handle_command("/on turn_start set COMPACTION_AUTO off", state, None)
 
-    assert len(state["events"].handlers_for("turn_start")) == 1
+    assert len(state.events.handlers_for("turn_start")) == 1
 
 
 def test_disabled_skills_survive_save_and_restart(monkeypatch, tmp_path):

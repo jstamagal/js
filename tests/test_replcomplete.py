@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from js import cli
+from js.repl_state import ReplState
 from js.replcomplete import JsCompleter, command_candidates, path_candidates, value_candidates
 
 
@@ -15,7 +16,7 @@ def test_completer_uses_supplied_command_prefix():
 
 
 def _table():
-    return cli._command_completions({})
+    return cli._command_completions(ReplState())
 
 
 # ---- command context (first word) ----
@@ -42,13 +43,13 @@ def test_bare_quit_words_complete():
 def test_a_new_table_entry_completes_with_no_completer_change(monkeypatch):
     command = cli.Command(lambda arg, state, cfg: None, "frobnicate", "test entry")
     monkeypatch.setitem(cli.COMMANDS, "frobnicate", command)
-    completer = JsCompleter(commands=lambda: cli._command_completions({}))
+    completer = JsCompleter(commands=lambda: cli._command_completions(ReplState()))
 
     assert completer.candidates("/frob")[0] == ["/frobnicate"]
 
 
 def test_aliases_complete_as_commands():
-    completer = JsCompleter(commands=lambda: cli._command_completions({"aliases": {"ship": "save"}}))
+    completer = JsCompleter(commands=lambda: cli._command_completions(ReplState(aliases={"ship": "save"})))
 
     assert completer.candidates("/sh")[0] == ["/ship", "/show"]
 

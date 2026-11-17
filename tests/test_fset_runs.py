@@ -21,7 +21,7 @@ def test_the_startup_run_of_the_jsrc_leaves_a_model_flag_in_charge(monkeypatch, 
     cfg = from_env()
     state, _spec = repl_state(cfg, model="from-flag")
     cli._run_rc_commands(state, cfg, jsrc_paths(tmp_path))
-    assert state["model"] == "from-flag"
+    assert state.model == "from-flag"
 
 
 def test_the_startup_run_of_the_jsrc_leaves_a_resumed_session_s_effort_in_charge(monkeypatch, tmp_path):
@@ -34,7 +34,7 @@ def test_the_startup_run_of_the_jsrc_leaves_a_resumed_session_s_effort_in_charge
     monkeypatch.chdir(tmp_path)
     cfg = from_env()
     state, _spec = repl_state(cfg)
-    state["live_resume"] = {"EFFORT": "low"}
+    state.live_resume = {"EFFORT": "low"}
     cli._run_rc_commands(state, cfg, jsrc_paths(tmp_path))
     assert cli._cfg_for_live_state(cfg, state).reasoning_effort == "low"
 

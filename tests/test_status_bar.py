@@ -13,6 +13,7 @@ import pytest
 from js import fset, messages as msgs, model_client, runtime, screen, setcmd, settings
 from js.config import Config
 from js.model_client import ModelStreamResult
+from js.repl_state import ReplState
 from js.toolkit.core import ToolContext, TurnStatus
 
 BAR = dict(
@@ -185,7 +186,7 @@ def test_status_bar_line_never_raises_on_sparse_state(tmp_path, turn_active):
     from js import cli
 
     cfg = _cfg(tmp_path, session_name="20260918T101010000000Z-0123456789abcdef.jsonl")
-    line = cli._status_bar_line(cfg, {"settings": {}}, turn_active, 60)
+    line = cli._status_bar_line(cfg, ReplState(settings={}), turn_active, 60)
     assert len(line) == 60
     assert "01234567" in line
 

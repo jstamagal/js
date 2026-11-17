@@ -10,6 +10,7 @@ import ai.types.usage
 from js import cli, runtime, settings
 from js.config import Config, InvocationSources, from_env
 from js.model_client import ModelStreamResult
+from js.repl_state import ReplState
 from js.toolkit import ToolContext, build_default_registry
 
 
@@ -114,7 +115,7 @@ def test_shell_env_allow_is_live_and_installed_on_the_tool_context(monkeypatch, 
         ("SHELL_ENV_KEEP",),
         ["PATH", "FORGECODE_TOKEN"],
     )
-    live_cfg = cli._cfg_for_live_state(cfg, {"settings": live_settings})
+    live_cfg = cli._cfg_for_live_state(cfg, ReplState(settings=live_settings))
     context = ToolContext(cwd=tmp_path)
 
     runtime.run_turn(

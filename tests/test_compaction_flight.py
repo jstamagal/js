@@ -12,6 +12,7 @@ from test_cli_prompt_mode import _auto_state
 from test_config_compaction_layers import _compact_test_cfg
 
 from js import cli, compaction, runtime
+from js.repl_state import ReplState
 
 
 def read_flight(cfg):
@@ -71,13 +72,13 @@ def test_telemetry_writes_autolog_when_optional_debug_log_is_disabled():
 
 def test_between_turn_uses_changed_live_window(monkeypatch, tmp_path):
     cfg = _compact_test_cfg(tmp_path, {"CONTEXT_SIZE": 1000000})
-    state = _auto_state()
-    state["settings"] = {"CONTEXT_SIZE": 128000}
+    state = _auto_state(cfg)
+    state.settings = {"CONTEXT_SIZE": 128000}
     captured = []
     monkeypatch.setattr(compaction, "maybe_auto_compact_async", AsyncMock(side_effect=lambda active, *args, **kwargs: captured.append(active) or compaction.AutoCompactOutcome()))
     cli._maybe_auto_compact(cfg, state)
     assert captured[0].settings["CONTEXT_SIZE"] == 128000
-    state["settings"]["CONTEXT_SIZE"] = 1000000
+    state.settings["CONTEXT_SIZE"] = 1000000
     cli._maybe_auto_compact(cfg, state)
     assert captured[-1].settings["CONTEXT_SIZE"] == 1000000
 
@@ -96,7 +97,9 @@ def test_same_repl_set_override_updates_anchor_then_request_budget(monkeypatch, 
                   provider_api_key="offline", provider_base_url="http://127.0.0.1:1/v1")
     live = settings.seed_defaults()
     live["CONTEXT_SIZE"] = 128000
-    state = {"settings": live, "model": cfg.model, "messages": [], "system": "SYSTEM"}
+    state = ReplState(settings=live, model=cfg.model, provider_id=cfg.provider_id,
+                      provider_base_url=cfg.provider_base_url, provider_api_key=cfg.provider_api_key,
+                      messages=[], system="SYSTEM")
     monkeypatch.setattr(runtime, "_resolve_context_window", lambda *args: None)
     captured = []
 
@@ -115,17 +118,17 @@ def test_same_repl_set_override_updates_anchor_then_request_budget(monkeypatch, 
     registry = build_default_registry().select([])
 
     async def conversation():
-        state["messages"].append({"role": "user", "content": "first"})
-        await runtime.run_turn_async(cli._cfg_for_live_state(cfg, state), "SYSTEM", state["messages"],
+        state.messages.append({"role": "user", "content": "first"})
+        await runtime.run_turn_async(cli._cfg_for_live_state(cfg, state), "SYSTEM", state.messages,
                                      Events(), tool_context=context, tool_registry=registry)
         assert captured[-1] == 128000
         capsys.readouterr()
         assert cli._handle_command("/set CONTEXT_SIZE 1000000", state, cfg)
         immediate = capsys.readouterr().out
         assert "1000000" in immediate
-        assert state["settings"]["CONTEXT_SIZE"] == 1000000
-        state["messages"].append({"role": "user", "content": "second"})
-        await runtime.run_turn_async(cli._cfg_for_live_state(cfg, state), "SYSTEM", state["messages"],
+        assert state.settings["CONTEXT_SIZE"] == 1000000
+        state.messages.append({"role": "user", "content": "second"})
+        await runtime.run_turn_async(cli._cfg_for_live_state(cfg, state), "SYSTEM", state.messages,
                                      Events(), tool_context=context, tool_registry=registry)
         assert captured[-1] == 1000000
         assert "1000000" in capsys.readouterr().out

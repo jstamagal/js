@@ -19,6 +19,7 @@ from test_runtime_offline_integration import (
 
 from js import cli, compaction, events, hookexec, runtime, settings
 from js.memory import load_messages
+from js.repl_state import ReplState
 from js.toolkit import Tool, ToolContext, ToolRegistry
 
 SESSION = "hooks"
@@ -29,16 +30,16 @@ def plain_shell(monkeypatch):
     monkeypatch.setenv("SHELL", "/bin/sh")
 
 
-def _state(tmp_path) -> tuple[dict, object]:
+def _state(tmp_path) -> tuple[ReplState, object]:
     cfg = offline_config(tmp_path)
-    state = {
-        "messages": [],
-        "system": "sys",
-        "model": cfg.model,
-        "settings": settings.seed_defaults(),
-        "events": events.EventHooks(),
-    }
-    state["events"].set_dispatcher(cli._event_dispatcher(state, cfg))
+    state = ReplState(
+        messages=[],
+        system="sys",
+        model=cfg.model,
+        settings=settings.seed_defaults(),
+        events=events.EventHooks(),
+    )
+    state.events.set_dispatcher(cli._event_dispatcher(state, cfg))
     return state, cfg
 
 
@@ -77,7 +78,7 @@ def test_handler_reads_the_event_as_json_on_stdin(tmp_path):
 
     cli._emit_session_event(state, runtime.Telemetry(None), cfg, "session_start")
 
-    [note] = state["pending_notes"]
+    [note] = state.pending_notes
     payload = json.loads(note.removeprefix("<js-reminder>").removesuffix("</js-reminder>"))
     assert payload["event"] == "session_start"
     assert payload["session"] == str(cfg.session_file)
@@ -87,9 +88,9 @@ def test_handler_sees_the_event_name_in_its_environment(tmp_path):
     state, cfg = _state(tmp_path)
     _on(state, cfg, "post_compact exec printf \"$JS_EVENT\"")
 
-    state["events"].emit("post_compact", phase="manual")
+    state.events.emit("post_compact", phase="manual")
 
-    assert state["pending_notes"] == ["<js-reminder>post_compact</js-reminder>"]
+    assert state.pending_notes == ["<js-reminder>post_compact</js-reminder>"]
 
 
 def test_blank_stdout_queues_nothing(tmp_path):
@@ -98,16 +99,16 @@ def test_blank_stdout_queues_nothing(tmp_path):
 
     cli._emit_session_event(state, runtime.Telemetry(None), cfg, "session_start")
 
-    assert not state.get("pending_notes")
+    assert not state.pending_notes
 
 
 def test_a_failing_handler_queues_nothing_and_records_the_failure(tmp_path):
     state, cfg = _state(tmp_path)
     _on(state, cfg, "session_start exec sh -c 'echo partial; echo broken >&2; exit 3'")
 
-    emission = state["events"].emit("session_start")
+    emission = state.events.emit("session_start")
 
-    assert not state.get("pending_notes")
+    assert not state.pending_notes
     assert emission.results[0].error is not None
     assert emission.results[0].refusal is None
 
@@ -124,7 +125,7 @@ def test_exit_2_outside_tool_call_is_a_failure_not_a_refusal(tmp_path):
     state, cfg = _state(tmp_path)
     _on(state, cfg, "turn_end exec sh -c 'echo nope >&2; exit 2'")
 
-    emission = state["events"].emit("turn_end", reason="stop")
+    emission = state.events.emit("turn_end", reason="stop")
 
     assert events.refusal_of(emission) is None
     assert emission.results[0].error is not None
@@ -231,7 +232,7 @@ def _run_one_tool_call(tmp_path, state) -> tuple[list[str], list[dict]]:
         runtime.run_turn(
             offline_config(tmp_path), "system", messages, runtime.Telemetry(None),
             trace_override=False, tool_registry=registry, tool_context=ToolContext(cwd=tmp_path),
-            suppress_output=True, event_hooks=state["events"],
+            suppress_output=True, event_hooks=state.events,
         )
     return ran, [m for m in messages if m.get("role") == "tool"]
 
@@ -265,7 +266,7 @@ def test_tool_call_handler_decides_from_the_call_on_stdin(tmp_path):
 
 def test_tool_call_handler_timeout_refuses_the_call(tmp_path):
     state, cfg = _state(tmp_path)
-    state["settings"]["EXEC_TIMEOUT"] = 1
+    state.settings["EXEC_TIMEOUT"] = 1
     _on(state, cfg, "tool_call exec sh -c 'sleep 5; exit 2'")
 
     ran, results = _run_one_tool_call(tmp_path, state)
@@ -297,10 +298,10 @@ def test_unfinished_refusal_only_marks_refusable_events():
 
 def test_session_start_handler_timeout_is_not_a_refusal(tmp_path):
     state, cfg = _state(tmp_path)
-    state["settings"]["EXEC_TIMEOUT"] = 1
+    state.settings["EXEC_TIMEOUT"] = 1
     _on(state, cfg, "session_start exec sleep 5")
 
-    emission = state["events"].emit("session_start")
+    emission = state.events.emit("session_start")
 
     assert events.refusal_of(emission) is None
     assert emission.results[0].error is not None
@@ -378,18 +379,18 @@ def test_a_tool_call_guard_vets_a_subagents_calls(monkeypatch, tmp_path):
     registry = build_default_registry(prompts_root=worker.parent)
     parent_cfg = make_cfg(tmp_path, "parent", worker.parent / "defaultagent")
     messages = [{"role": "user", "content": "root"}]
-    state["pending_notes"] = []
+    state.pending_notes = []
 
     runtime.run_turn(parent_cfg, "SYS", messages, runtime.Telemetry(None), trace_override=False,
                      tool_registry=registry, tool_context=ToolContext(cwd=tmp_path),
-                     suppress_output=True, event_hooks=state["events"])
+                     suppress_output=True, event_hooks=state.events)
 
     assert not target.exists()
     assert child_results and child_results[0].splitlines()[0] == "ERROR: no writes"
     names = [json.loads(line)["name"] for line in seen.read_text(encoding="utf-8").splitlines()]
     assert "task" in names and "write" in names
     # The subagent's turn fires only tool_call: turn_start ran once, for the parent.
-    assert state["pending_notes"] == ["<js-reminder>turn-started</js-reminder>"]
+    assert state.pending_notes == ["<js-reminder>turn-started</js-reminder>"]
     assert messages[-1]["content"] == "PARENT_DONE"
 
 

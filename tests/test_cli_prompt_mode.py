@@ -17,6 +17,7 @@ from js import cli, messages as msgs, paths as _paths, runtime, session_store, s
 from js.config import Config, InvocationSources
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
+from js.repl_state import ReplState
 
 
 @pytest.fixture(autouse=True)
@@ -1020,12 +1021,8 @@ def _auto_compact_cfg(tmp_path, *, compact: dict | None = None) -> Config:
     )
 
 
-def _auto_state() -> dict:
-    return {
-        "system": "SYSTEM",
-        "messages": [{"role": "user", "content": "hi"}],
-        "auto_compact": cli.compaction.AutoCompactState(),
-    }
+def _auto_state(cfg: Config) -> ReplState:
+    return ReplState(system="SYSTEM", messages=[{"role": "user", "content": "hi"}], settings=cfg.settings)
 
 
 def test_auto_compact_noops_when_disabled_or_paused(monkeypatch, tmp_path, capsys):
@@ -1034,10 +1031,11 @@ def test_auto_compact_noops_when_disabled_or_paused(monkeypatch, tmp_path, capsy
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
 
     disabled = _auto_compact_cfg(tmp_path, compact={"COMPACTION_AUTO": False})
-    cli._maybe_auto_compact(disabled, _auto_state())
-    paused_state = _auto_state()
-    paused_state["auto_compact"].paused = True
-    cli._maybe_auto_compact(_auto_compact_cfg(tmp_path), paused_state)
+    cli._maybe_auto_compact(disabled, _auto_state(disabled))
+    cfg = _auto_compact_cfg(tmp_path)
+    paused_state = _auto_state(cfg)
+    paused_state.auto_compact.paused = True
+    cli._maybe_auto_compact(cfg, paused_state)
 
     assert calls == []
     assert capsys.readouterr().out == ""
@@ -1047,7 +1045,7 @@ def test_auto_compact_notifies_once_at_threshold_and_resets_below(monkeypatch, t
     calls: list[dict] = []
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
     cfg = _auto_compact_cfg(tmp_path)
-    state = _auto_state()
+    state = _auto_state(cfg)
 
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 49, raising=False)
     cli._maybe_auto_compact(cfg, state)
@@ -1064,7 +1062,7 @@ def test_auto_compact_notifies_once_at_threshold_and_resets_below(monkeypatch, t
 
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 40, raising=False)
     cli._maybe_auto_compact(cfg, state)
-    assert state["auto_compact"].notified is False
+    assert state.auto_compact.notified is False
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 50, raising=False)
     cli._maybe_auto_compact(cfg, state)
     assert msgs.AUTO_COMPACT_ARMED.line(colour=False, fullness=0.50) in capsys.readouterr().out
@@ -1080,8 +1078,8 @@ def test_auto_compact_uses_active_model_for_same(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 80, raising=False)
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=compact_stub))
     cfg = _auto_compact_cfg(tmp_path)
-    state = _auto_state()
-    state["model"] = "active-model"
+    state = _auto_state(cfg)
+    state.model = "active-model"
 
     cli._maybe_auto_compact(cfg, state)
 
@@ -1099,9 +1097,9 @@ def test_auto_compact_triggers_at_80_and_forces_at_90(monkeypatch, tmp_path):
     cfg = _auto_compact_cfg(tmp_path)
 
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 80, raising=False)
-    cli._maybe_auto_compact(cfg, _auto_state())
+    cli._maybe_auto_compact(cfg, _auto_state(cfg))
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 90, raising=False)
-    cli._maybe_auto_compact(cfg, _auto_state())
+    cli._maybe_auto_compact(cfg, _auto_state(cfg))
 
     assert [call["forced"] for call in calls] == [False, True]
 
@@ -1112,7 +1110,7 @@ def test_auto_compact_measures_fullness_after_truncated_replies(monkeypatch, tmp
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 10, raising=False)
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_incomplete_reason", "max_output_tokens", raising=False)
     cfg = _auto_compact_cfg(tmp_path)
-    state = _auto_state()
+    state = _auto_state(cfg)
     for _ in range(3):
         cli._maybe_auto_compact(cfg, state)
     assert calls == []
@@ -1126,23 +1124,23 @@ def test_auto_compact_pauses_after_two_consecutive_fires_and_resets_below_trigge
     calls: list[dict] = []
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
     cfg = _auto_compact_cfg(tmp_path)
-    state = _auto_state()
+    state = _auto_state(cfg)
 
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 80, raising=False)
     cli._maybe_auto_compact(cfg, state)
-    assert state["auto_compact"].consecutive == 1
-    assert state["auto_compact"].paused is False
+    assert state.auto_compact.consecutive == 1
+    assert state.auto_compact.paused is False
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 80)
     cli._maybe_auto_compact(cfg, state)
-    assert state["auto_compact"].consecutive == 2
-    assert state["auto_compact"].paused is True
+    assert state.auto_compact.consecutive == 2
+    assert state.auto_compact.paused is True
     cli._maybe_auto_compact(cfg, state)
     assert len(calls) == 2
 
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 79, raising=False)
     cli._maybe_auto_compact(cfg, state)
-    assert state["auto_compact"].consecutive == 0
-    assert state["auto_compact"].paused is False
+    assert state.auto_compact.consecutive == 0
+    assert state.auto_compact.paused is False
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 80, raising=False)
     cli._maybe_auto_compact(cfg, state)
     assert len(calls) == 3
@@ -1169,7 +1167,7 @@ def test_auto_compact_invalid_numeric_config_falls_back_to_defaults(monkeypatch,
         cfg = _auto_compact_cfg(tmp_path, compact=compact)
         monkeypatch.setattr(cli.runtime, "_resolve_context_window", lambda _model, _provider, _base_url=None: 131072)
         monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 104858, raising=False)  # ~80% of mocked metadata window
-        cli._maybe_auto_compact(cfg, _auto_state())
+        cli._maybe_auto_compact(cfg, _auto_state(cfg))
 
     assert len(calls) == 2
     assert [call["forced"] for call in calls] == [False, False]
@@ -1182,7 +1180,8 @@ def test_auto_compact_string_false_values_disable_auto(monkeypatch, tmp_path, ca
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
 
     for raw in ("false", "0", "off", "no"):
-        cli._maybe_auto_compact(_auto_compact_cfg(tmp_path, compact={"COMPACTION_AUTO": raw}), _auto_state())
+        cfg = _auto_compact_cfg(tmp_path, compact={"COMPACTION_AUTO": raw})
+        cli._maybe_auto_compact(cfg, _auto_state(cfg))
 
     assert calls == []
     assert capsys.readouterr().out == ""
@@ -1208,7 +1207,7 @@ def test_auto_compact_fullness_excludes_output_reserve_and_buffer(monkeypatch, t
     cfg = replace(cfg, max_output_tokens=8_000)
 
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 79_000, raising=False)
-    cli._maybe_auto_compact(cfg, _auto_state())
+    cli._maybe_auto_compact(cfg, _auto_state(cfg))
 
     assert len(calls) == 1
     assert calls[0]["forced"] is False
@@ -1229,7 +1228,7 @@ def test_reply_reserve_cap_is_configurable(monkeypatch, tmp_path, capsys):
     cfg = replace(cfg, max_output_tokens=128_000)
 
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 260_000, raising=False)
-    cli._maybe_auto_compact(cfg, _auto_state())
+    cli._maybe_auto_compact(cfg, _auto_state(cfg))
 
     # Same 260k now measured against 237,904 -> over 100%, compaction fires.
     assert len(calls) == 1
@@ -1247,12 +1246,12 @@ def test_context_window_fallback_only_applies_when_the_model_is_unknown(monkeypa
     cfg = replace(cfg, max_output_tokens=128_000)
     # 300k is 81% of a 370k pin but 29% of the real 1.05M window.
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 300_000, raising=False)
-    cli._maybe_auto_compact(cfg, _auto_state())
+    cli._maybe_auto_compact(cfg, _auto_state(cfg))
     assert calls == []
 
     # Unknown model: nothing to resolve, so the fallback is what we measure by.
     monkeypatch.setattr(cli.runtime, "_resolve_context_window", lambda *a, **kw: None)
-    cli._maybe_auto_compact(cfg, _auto_state())
+    cli._maybe_auto_compact(cfg, _auto_state(cfg))
     assert len(calls) == 1
 
 

@@ -53,9 +53,9 @@ def test_set_model_shows_the_model_the_agent_runs(repl, capsys):
     from dataclasses import replace
 
     cfg, state = repl
-    spec = replace(state["prompt_spec"], model="deepseek/review-agent-pick")
+    spec = replace(state.prompt_spec, model="deepseek/review-agent-pick")
     agent_cfg = replace(cfg, model="review-agent-pick", provider_id="deepseek")
-    agent_state = cli._repl_state(agent_cfg, spec, messages=[], live_settings=state["settings"])
+    agent_state = cli._repl_state(agent_cfg, spec, messages=[], live_settings=state.settings)
     capsys.readouterr()
     assert cli._handle_command("/set model", agent_state, agent_cfg) is True
     [line] = capsys.readouterr().out.splitlines()

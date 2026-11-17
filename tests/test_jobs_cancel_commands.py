@@ -5,6 +5,7 @@ cancel are covered in test_supervisor.py."""
 from __future__ import annotations
 
 from js import cli
+from js.repl_state import ReplState
 
 
 class _FakeJob:
@@ -46,7 +47,7 @@ def _set_sup(monkeypatch, sup):
 
 def test_jobs_lists_running(monkeypatch, capsys):
     _set_sup(monkeypatch, _FakeSup([_FakeJob(1, "turn", "fix the bug"), _FakeJob(2, "subagent", "task#1")]))
-    assert cli._handle_command("/jobs", {}, None) is True
+    assert cli._handle_command("/jobs", ReplState(), None) is True
     lines = capsys.readouterr().out.splitlines()
     assert _listed(lines, "1", "turn", "fix the bug")
     assert _listed(lines, "2", "subagent", "task#1")
@@ -54,14 +55,14 @@ def test_jobs_lists_running(monkeypatch, capsys):
 
 def test_jobs_without_supervisor(monkeypatch, capsys):
     _set_sup(monkeypatch, None)
-    assert cli._handle_command("/jobs", {}, None) is True
+    assert cli._handle_command("/jobs", ReplState(), None) is True
     assert capsys.readouterr().out
 
 
 def test_cancel_bare_targets_active_turn_only(monkeypatch):
     sup = _FakeSup([_FakeJob(1, "turn"), _FakeJob(2, "subagent"), _FakeJob(3, "subagent")])
     _set_sup(monkeypatch, sup)
-    assert cli._handle_command("/cancel", {}, None) is True
+    assert cli._handle_command("/cancel", ReplState(), None) is True
     # Only the turn was scheduled for cancel; run the scheduled callback to confirm.
     assert [args for _fn, args in sup.loop.scheduled] == [(1,)]
     for fn, args in sup.loop.scheduled:
@@ -72,14 +73,14 @@ def test_cancel_bare_targets_active_turn_only(monkeypatch):
 def test_cancel_by_id(monkeypatch):
     sup = _FakeSup([_FakeJob(1, "turn"), _FakeJob(2, "subagent", "task#1")])
     _set_sup(monkeypatch, sup)
-    assert cli._handle_command("/cancel 2", {}, None) is True
+    assert cli._handle_command("/cancel 2", ReplState(), None) is True
     assert [args for _fn, args in sup.loop.scheduled] == [(2,)]
 
 
 def test_cancel_bad_arg_shows_usage(monkeypatch, capsys):
     sup = _FakeSup([_FakeJob(1, "turn")])
     _set_sup(monkeypatch, sup)
-    assert cli._handle_command("/cancel nope", {}, None) is True
+    assert cli._handle_command("/cancel nope", ReplState(), None) is True
     assert not sup.loop.scheduled
     assert capsys.readouterr().out
 
@@ -87,7 +88,7 @@ def test_cancel_bad_arg_shows_usage(monkeypatch, capsys):
 def test_cancel_unknown_id_is_noop(monkeypatch, capsys):
     sup = _FakeSup([_FakeJob(1, "turn")])
     _set_sup(monkeypatch, sup)
-    assert cli._handle_command("/cancel 99", {}, None) is True
+    assert cli._handle_command("/cancel 99", ReplState(), None) is True
     assert not sup.loop.scheduled
     assert capsys.readouterr().out
 

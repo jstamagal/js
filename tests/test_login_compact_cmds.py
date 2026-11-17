@@ -8,6 +8,7 @@ import ai
 
 from js import cli, providers, settings
 from js.config import Config
+from js.repl_state import ReplState
 
 
 def make_cfg(tmp_path: Path) -> Config:
@@ -38,22 +39,22 @@ def make_cfg(tmp_path: Path) -> Config:
 
 def test_compact_auto_toggles_setting_and_does_not_compact(tmp_path, monkeypatch):
     cfg = make_cfg(tmp_path)
-    state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
+    state = ReplState(messages=[], system="sys", settings=settings.seed_defaults())
     compacted: list[int] = []
     monkeypatch.setattr(cli.compaction, "compact_now_sync", lambda *a, **k: compacted.append(1) or "nope")
 
     assert cli._handle_command("/compact-auto off", state, cfg) is True
-    assert settings.get_dotted(state["settings"], ("COMPACTION_AUTO",)) is False
+    assert settings.get_dotted(state.settings, ("COMPACTION_AUTO",)) is False
     assert compacted == []  # toggling must NOT trigger a compaction
 
     assert cli._handle_command("/compact-auto on", state, cfg) is True
-    assert settings.get_dotted(state["settings"], ("COMPACTION_AUTO",)) is True
+    assert settings.get_dotted(state.settings, ("COMPACTION_AUTO",)) is True
     assert compacted == []
 
 
 def test_compact_auto_does_not_swallow_plain_compact(tmp_path, monkeypatch):
     cfg = make_cfg(tmp_path)
-    state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
+    state = ReplState(messages=[], system="sys", settings=settings.seed_defaults())
     seen_focus: list[str] = []
     monkeypatch.setattr(cli, "_cfg_for_active_model", lambda cfg, state: cfg)
     monkeypatch.setattr(
@@ -67,7 +68,7 @@ def test_compact_auto_does_not_swallow_plain_compact(tmp_path, monkeypatch):
 
 def test_compact_command_model_flag_picks_the_summarizer(tmp_path, monkeypatch):
     cfg = make_cfg(tmp_path)
-    state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
+    state = ReplState(messages=[], system="sys", settings=settings.seed_defaults())
     seen: list[tuple[str | None, str, bool]] = []
 
     def compact_stub(compact_cfg, system, messages, *, model=None, focus="", forced=False, **_):
@@ -93,7 +94,7 @@ def test_compact_command_model_flag_picks_the_summarizer(tmp_path, monkeypatch):
 
 def test_compact_command_model_flag_without_value_prints_usage(tmp_path, monkeypatch, capsys):
     cfg = make_cfg(tmp_path)
-    state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
+    state = ReplState(messages=[], system="sys", settings=settings.seed_defaults())
     compacted: list[int] = []
     monkeypatch.setattr(cli.compaction, "compact_now_sync", lambda *a, **k: compacted.append(1) or "ok")
 
@@ -105,7 +106,7 @@ def test_compact_command_model_flag_without_value_prints_usage(tmp_path, monkeyp
 
 def test_compact_command_uses_live_compact_settings(tmp_path, monkeypatch):
     cfg = make_cfg(tmp_path)
-    state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
+    state = ReplState(messages=[], system="sys", settings=settings.seed_defaults())
     seen_models: list[str | None] = []
 
     def compact_stub(compact_cfg, system, messages, *, model=None, focus="", forced=False, **_):
@@ -122,12 +123,12 @@ def test_compact_command_uses_live_compact_settings(tmp_path, monkeypatch):
 
 def test_compact_command_applies_live_provider_extra_to_summary_model(tmp_path, monkeypatch):
     cfg = make_cfg(tmp_path)
-    state = {
-        "messages": [{"role": "user", "content": "old context " * 7000},
+    state = ReplState(
+        messages=[{"role": "user", "content": "old context " * 7000},
                      {"role": "assistant", "content": "latest answer"}],
-        "system": "sys",
-        "settings": settings.seed_defaults(),
-    }
+        system="sys",
+        settings=settings.seed_defaults(),
+    )
     params_seen: list[dict] = []
 
     class FakeProvider:
@@ -159,11 +160,11 @@ def test_compact_command_applies_live_provider_extra_to_summary_model(tmp_path, 
 
 def test_compact_auto_bad_arg_usage(tmp_path, capsys):
     cfg = make_cfg(tmp_path)
-    state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
+    state = ReplState(messages=[], system="sys", settings=settings.seed_defaults())
     assert cli._handle_command("/compact-auto maybe", state, cfg) is True  # handled, prints usage
     assert capsys.readouterr().out
     # unchanged
-    assert settings.get_dotted(state["settings"], ("COMPACTION_AUTO",)) is True
+    assert settings.get_dotted(state.settings, ("COMPACTION_AUTO",)) is True
 
 
 # ---- /login <name> [key] [url] [provider] ----
@@ -173,8 +174,8 @@ def test_login_inline_creds_builds_and_saves(tmp_path, monkeypatch):
     saved: list = []
     monkeypatch.setattr(cli.logins, "save_login", lambda login: saved.append(login))
     monkeypatch.setattr(cli, "_apply_saved_login_to_state",
-                        lambda state, name: state.update(provider_id=name) is None)
-    state = {"messages": []}
+                        lambda state, name: setattr(state, "provider_id", name) is None)
+    state = ReplState(messages=[])
 
     assert cli._handle_command("/login fartbox xkey http://127.0.0.1:8020/v1 openai", state, cfg) is True
     assert len(saved) == 1
@@ -190,7 +191,7 @@ def test_login_known_provider_infers_type(tmp_path, monkeypatch):
     saved: list = []
     monkeypatch.setattr(cli.logins, "save_login", lambda login: saved.append(login))
     monkeypatch.setattr(cli, "_apply_saved_login_to_state", lambda state, name: True)
-    state = {"messages": []}
+    state = ReplState(messages=[])
 
     assert cli._handle_command("/login deepseek mykey", state, cfg) is True
     assert len(saved) == 1
@@ -202,7 +203,7 @@ def test_login_custom_name_without_type_errors(tmp_path, monkeypatch, capsys):
     cfg = make_cfg(tmp_path)
     saved: list = []
     monkeypatch.setattr(cli.logins, "save_login", lambda login: saved.append(login))
-    state = {"messages": []}
+    state = ReplState(messages=[])
 
     assert cli._handle_command("/login fartbox xkey", state, cfg) is True  # key given, no provider type
     assert saved == []  # nothing saved
@@ -213,7 +214,7 @@ def test_login_bare_name_loads_saved(tmp_path, monkeypatch):
     cfg = make_cfg(tmp_path)
     loaded: list[str] = []
     monkeypatch.setattr(cli, "_set_provider_state", lambda state, name: loaded.append(name))
-    state = {"messages": []}
+    state = ReplState(messages=[])
 
     assert cli._handle_command("/login deepseek", state, cfg) is True
     assert loaded == ["deepseek"]  # bare /login keeps the old load-saved behavior

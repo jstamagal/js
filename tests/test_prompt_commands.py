@@ -7,6 +7,7 @@ import pytest
 from repl_driver import stub_screen, turn_stub
 
 from js import cli, prompt_commands as pc
+from js.repl_state import ReplState
 from js.replcomplete import JsCompleter
 
 SESSION = "cmds"
@@ -115,7 +116,7 @@ def test_a_file_is_parsed_again_only_when_it_changes(dirs, tmp_path, monkeypatch
 def test_tab_completes_a_command_file_name(dirs):
     global_dir, _ = dirs
     (global_dir / "review.md").write_text("Review $1", encoding="utf-8")
-    completer = JsCompleter(commands=lambda: cli._command_completions({}))
+    completer = JsCompleter(commands=lambda: cli._command_completions(ReplState()))
 
     assert "/review" in completer.candidates("/rev")[0]
     assert "/review" in completer.candidates("rev")[0]

@@ -17,6 +17,7 @@ import pytest
 
 from js import cli, setcmd, settings
 from js.config import Config, from_env
+from js.repl_state import ReplState
 from js.toolkit import ToolContext, kernel
 
 REPO = Path(__file__).resolve().parents[1]
@@ -84,7 +85,7 @@ def test_a_number_changed_in_package_jsrc_changes_behaviour_and_show(monkeypatch
     assert cfg.kernel_wait_seconds == 9
     assert cfg.max_read_lines == 17
 
-    state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
+    state = ReplState(messages=[], system="sys", settings=settings.seed_defaults())
     capsys.readouterr()
     assert cli._handle_command("/show PYTHON_KERNEL_WAIT", state, cfg) is True
     shown = capsys.readouterr().out.splitlines()[0]
@@ -157,7 +158,7 @@ def test_set_dash_in_a_user_jsrc_runs_and_shows_the_package_value(monkeypatch, t
     )
 
     cfg = from_env(save_session=False, cwd=project)
-    state = {"messages": [], "system": "sys", "settings": copy.deepcopy(cfg.settings)}
+    state = ReplState(messages=[], system="sys", settings=copy.deepcopy(cfg.settings))
 
     assert cfg.transcript_log is settings.default_value("TRANSCRIPT_LOG")
     assert cfg.max_read_lines == settings.default_value("READ_LINES_MAX")
@@ -179,7 +180,7 @@ def test_live_set_dash_returns_to_the_session_start_value_in_show_turn_and_save(
     user.parent.mkdir(parents=True)
     user.write_text("set READ_LINES_MAX 33\n", encoding="utf-8")
     cfg = from_env(save_session=False, cwd=project)
-    state = {"messages": [], "system": "sys", "settings": copy.deepcopy(cfg.settings)}
+    state = ReplState(messages=[], system="sys", settings=copy.deepcopy(cfg.settings))
 
     assert cli._handle_command("/set READ_LINES_MAX 5", state, cfg) is True
     assert cli._handle_command("/set -READ_LINES_MAX", state, cfg) is True

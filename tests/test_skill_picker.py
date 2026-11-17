@@ -30,7 +30,7 @@ def test_skills_command_writes_the_picked_names_into_the_setting(monkeypatch, tm
 
     _run(["/skills"], state, cfg)
 
-    assert settings.knob(state["settings"], "SKILLS_DISABLED") == ["alpha"]
+    assert settings.knob(state.settings, "SKILLS_DISABLED") == ["alpha"]
     assert cli._cfg_for_live_state(cfg, state).skills_disabled == ("alpha",)
 
 

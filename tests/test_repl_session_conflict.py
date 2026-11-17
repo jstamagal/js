@@ -40,7 +40,7 @@ def test_repl_reloads_stale_session_and_accepts_next_turn(tmp_path, monkeypatch)
     assert len(requests) == 2
     assert {"role": "assistant", "content": "external answer"} in requests[1]
     saved = memory.load_replay_messages(cfg.session_file)
-    assert saved == state["messages"]
+    assert saved == state.messages
     assert saved[-2:] == [
         {"role": "user", "content": "next question"},
         {"role": "assistant", "content": "reply 2"},

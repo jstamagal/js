@@ -7,10 +7,11 @@ import contextlib
 import io
 
 from js import settings
+from js.repl_state import ReplState
 
 
 def _repl_state():
-    return {"messages": [], "system": "sys", "settings": settings.seed_defaults(), "aliases": {}}
+    return ReplState(messages=[], system="sys", settings=settings.seed_defaults())
 
 
 def test_dollar_names_expand_once_in_aliases_handlers_and_scripts(tmp_path):
@@ -23,18 +24,18 @@ def test_dollar_names_expand_once_in_aliases_handlers_and_scripts(tmp_path):
     cli._handle_command("/set PROVIDER openai", state, cfg)
     cli._handle_command("/alias pin set MODEL $PROVIDER", state, cfg)
     cli._handle_command("/pin", state, cfg)
-    assert settings.knob(state["settings"], "MODEL") == "openai"
+    assert settings.knob(state.settings, "MODEL") == "openai"
 
     script = tmp_path / "boot.irc"
     script.write_text("set BANNER [$MODEL]\n", encoding="utf-8")
     cli._handle_command(f"/load {script}", state, cfg)
-    assert settings.knob(state["settings"], "BANNER") == "[openai]"
+    assert settings.knob(state.settings, "BANNER") == "[openai]"
 
-    state["events"] = events.EventHooks()
-    state["events"].set_dispatcher(cli._event_dispatcher(state, cfg))
+    state.events = events.EventHooks()
+    state.events.set_dispatcher(cli._event_dispatcher(state, cfg))
     cli._handle_command("/on turn_start set BANNER $BANNER$BANNER", state, cfg)
-    state["events"].emit("turn_start")
-    assert settings.knob(state["settings"], "BANNER") == "[openai][openai]"
+    state.events.emit("turn_start")
+    assert settings.knob(state.settings, "BANNER") == "[openai][openai]"
 
 
 def test_a_typed_line_and_an_expanded_value_are_not_expanded():
@@ -45,10 +46,10 @@ def test_a_typed_line_and_an_expanded_value_are_not_expanded():
 
     cfg = SimpleNamespace(settings=None)
     cli._handle_command("/set BANNER $MODEL", state, cfg)
-    assert settings.knob(state["settings"], "BANNER") == "$MODEL"
+    assert settings.knob(state.settings, "BANNER") == "$MODEL"
     cli._handle_command("/alias again set BANNER <$BANNER>", state, cfg)
     cli._handle_command("/again", state, cfg)
-    assert settings.knob(state["settings"], "BANNER") == "<$MODEL>"
+    assert settings.knob(state.settings, "BANNER") == "<$MODEL>"
 
 
 def test_dollar_names_expand_in_a_user_jsrc(tmp_path):
@@ -101,7 +102,7 @@ def _replay(tmp_path, jsrc):
 
     loaded = settings.seed_defaults()
     assert settings.load_jsrc_files([jsrc], loaded) == []
-    state = {"messages": [], "system": "s", "settings": loaded, "aliases": {}}
+    state = ReplState(messages=[], system="s", settings=loaded, aliases={})
     assert cli._run_rc_commands(state, SimpleNamespace(settings=loaded, project_dir=tmp_path), [jsrc]) == []
     return state
 
@@ -115,7 +116,7 @@ def test_a_replayed_alias_loads_relative_to_its_own_jsrc(tmp_path):
     elsewhere = tmp_path / "project"
     elsewhere.mkdir()
     state = _replay(elsewhere, jsrc)
-    assert state["aliases"].get("kid") == "set BANNER kid"
+    assert state.aliases.get("kid") == "set BANNER kid"
 
 
 def _startup_effects(root):
@@ -127,10 +128,10 @@ def _startup_effects(root):
     jsrc.write_text("load f0\n", encoding="utf-8")
     loaded = settings.seed_defaults()
     settings.load_jsrc_files([jsrc], loaded)
-    state = {"messages": [], "system": "s", "settings": loaded, "aliases": {}}
+    state = ReplState(messages=[], system="s", settings=loaded, aliases={})
     cli._run_rc_commands(state, SimpleNamespace(settings=loaded, project_dir=root), [jsrc])
-    live = state["settings"]
-    return (settings.knob(live, "HISTORY_SIZE"), settings.knob(live, "EDITING_MODE"), state["aliases"])
+    live = state.settings
+    return (settings.knob(live, "HISTORY_SIZE"), settings.knob(live, "EDITING_MODE"), state.aliases)
 
 
 def _load_effects(root):
@@ -139,11 +140,11 @@ def _load_effects(root):
     from js import cli
 
     live = settings.seed_defaults()
-    state = {"messages": [], "system": "s", "settings": live, "aliases": {}}
+    state = ReplState(messages=[], system="s", settings=live, aliases={})
     cfg = SimpleNamespace(settings=live, project_dir=root)
     with contextlib.redirect_stdout(io.StringIO()):
         cli._cmd_load(str(root / "f0"), state, cfg)
-    return (settings.knob(live, "HISTORY_SIZE"), settings.knob(live, "EDITING_MODE"), state["aliases"])
+    return (settings.knob(live, "HISTORY_SIZE"), settings.knob(live, "EDITING_MODE"), state.aliases)
 
 
 def test_startup_runs_an_alias_where_it_stands_among_the_settings(tmp_path):

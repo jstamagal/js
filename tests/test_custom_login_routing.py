@@ -17,6 +17,7 @@ import pytest
 from js import cli, login_defaults, logins, messages as msgs, providers, run_assembly
 from js.config import InvocationSources, from_env
 from js.logins import Login
+from js.repl_state import ReplState
 from js.routing import ProviderNotLoggedInError, resolve_model_route
 
 BASE_URL = "http://localhost:8050/v1"
@@ -337,8 +338,10 @@ def test_save_server_writes_the_session_model_settings_into_the_login(monkeypatc
     _save_custom_login("testes")
     monkeypatch.setenv("JS_MODEL", "testes/served")
     cfg = from_env(cwd=tmp_path, save_session=False)
-    state = {"settings": dict(cfg.settings, TEMPERATURE=0.7, CONTEXT_SIZE=65536),
-             "live_set": {"TEMPERATURE": 0.7, "CONTEXT_SIZE": 65536}}
+    state = ReplState(settings=dict(cfg.settings, TEMPERATURE=0.7, CONTEXT_SIZE=65536),
+                      live_set={"TEMPERATURE": 0.7, "CONTEXT_SIZE": 65536},
+                      provider_id=cfg.provider_id, provider_base_url=cfg.provider_base_url,
+                      provider_api_key=cfg.provider_api_key)
 
     assert cli._cmd_save("server", state, cfg) is None
 
@@ -393,7 +396,7 @@ def test_save_server_after_a_switch_writes_the_switched_models_values(monkeypatc
     monkeypatch.setenv("JS_MODEL", "testes/a")
     cfg = from_env(cwd=tmp_path, save_session=False)
 
-    assert cli._cmd_save("server", {"settings": dict(cfg.settings), "model": "testes/b"}, cfg) is None
+    assert cli._cmd_save("server", ReplState(settings=dict(cfg.settings), model="testes/b"), cfg) is None
 
     assert logins.load_logins_fresh()["testes"].model_defaults["b"] == {"CONTEXT_SIZE": 32768}
 
@@ -466,7 +469,7 @@ def test_after_a_model_switch_set_and_save_see_the_values_the_turn_uses(monkeypa
     _two_model_login(a={"CONTEXT_SIZE": 4096}, b={"CONTEXT_SIZE": 32768})
     monkeypatch.setenv("JS_MODEL", "testes/a")
     cfg = from_env(cwd=tmp_path, save_session=False)
-    state = {"settings": dict(cfg.settings), "model": "testes/b"}
+    state = ReplState(settings=dict(cfg.settings), model="testes/b")
 
     turn = cli._cfg_for_live_state(cfg, state)
     shown = cli._live_settings_overlay_for_state(cfg, state)
@@ -483,7 +486,7 @@ def test_save_leaves_a_models_login_defaults_out_of_jsrc(monkeypatch, tmp_path):
     _two_model_login(a={"CONTEXT_SIZE": 4096}, b={"CONTEXT_SIZE": 32768})
     monkeypatch.setenv("JS_MODEL", "testes/a")
     cfg = from_env(cwd=tmp_path, save_session=False)
-    state = {"settings": dict(cfg.settings), "model": "testes/b"}
+    state = ReplState(settings=dict(cfg.settings), model="testes/b")
     cli._cfg_for_live_state(cfg, state)
 
     assert cli._cmd_save("", state, cfg) is None
@@ -500,7 +503,7 @@ def test_resolving_twice_after_a_switch_gives_the_same_sampling(monkeypatch, tmp
     _two_model_login(a={"TEMPERATURE": 0.2}, b={"TEMPERATURE": 0.9})
     monkeypatch.setenv("JS_MODEL", "testes/a")
     cfg = from_env(cwd=tmp_path, save_session=False)
-    state = {"settings": dict(cfg.settings), "model": "testes/b"}
+    state = ReplState(settings=dict(cfg.settings), model="testes/b")
 
     first = cli._cfg_for_live_state(cfg, state)
     second = cli._cfg_for_live_state(cfg, state)
@@ -517,7 +520,7 @@ def test_set_shows_the_agent_sampling_the_turn_sends(monkeypatch, tmp_path):
     monkeypatch.setenv("JS_MODEL", "testes/a")
     cfg = from_env(cwd=tmp_path, save_session=False)
     spec = SimpleNamespace(sampling={"temperature": 0.7}, max_output_tokens=None, reasoning_effort=None)
-    state = {"settings": dict(cfg.settings), "prompt_spec": spec}
+    state = ReplState(settings=dict(cfg.settings), prompt_spec=spec)
 
     turn = cli._cfg_for_live_state(cfg, state)
     shown = cli._live_settings_overlay_for_state(cfg, state)
@@ -551,7 +554,7 @@ def test_after_switch_set_and_unset_the_shown_and_sent_sampling_agree(monkeypatc
     _two_model_login(a={"TEMPERATURE": 0.2}, b={"TEMPERATURE": 0.9})
     monkeypatch.setenv("JS_MODEL", "testes/a")
     cfg = from_env(cwd=tmp_path, save_session=False)
-    state = {"settings": dict(cfg.settings), "model": "testes/b", "messages": [], "system": "s"}
+    state = ReplState(settings=dict(cfg.settings), model="testes/b", messages=[], system="s")
 
     assert cli._cmd_set("TEMPERATURE 0.5", state, cfg) is None
     assert login_defaults.sampling(cli._cfg_for_live_state(cfg, state)).temperature == 0.5
@@ -594,7 +597,7 @@ def test_a_model_switch_stamps_the_effort_the_new_model_resolves_to(monkeypatch,
     _two_model_login(a={"EFFORT": "low"}, b={"EFFORT": "xhigh"})
     monkeypatch.setenv("JS_MODEL", "testes/a")
     cfg = from_env(cwd=tmp_path, save_session=False)
-    state = {"settings": dict(cfg.settings), "model": "testes/b"}
+    state = ReplState(settings=dict(cfg.settings), model="testes/b")
 
     assert cli._live_stamp(cfg, state)["reasoning"] == "xhigh"
 
@@ -656,7 +659,7 @@ def test_only_explicit_set_lines_reach_the_set_layer(monkeypatch, tmp_path):
         monkeypatch, cfg, ["/set TEMPERATURE 0.5", "one", "/model testes/b", "two", "exit"], wait=True,
     )
 
-    assert "TEMPERATURE" not in state["live_set"]
+    assert "TEMPERATURE" not in state.live_set
     assert sent == [0.5, 0.9]
 
 
@@ -665,10 +668,10 @@ def test_an_explicit_set_equal_to_the_current_value_still_pins_it(monkeypatch, t
     _two_model_login(a={"TEMPERATURE": 0.2}, b={"TEMPERATURE": 0.9})
     monkeypatch.setenv("JS_MODEL", "testes/a")
     cfg = from_env(cwd=tmp_path, save_session=False)
-    state = {"settings": dict(cfg.settings), "messages": [], "system": "s"}
+    state = ReplState(settings=dict(cfg.settings), messages=[], system="s")
 
     assert cli._cmd_set("TEMPERATURE 0.2", state, cfg) is None
-    state["model"] = "testes/b"
+    state.model = "testes/b"
 
     assert login_defaults.sampling(cli._cfg_for_live_state(cfg, state)).temperature == 0.2
 

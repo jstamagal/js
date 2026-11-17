@@ -3,6 +3,7 @@
 from copy import deepcopy
 
 from js import cli, config, model_metadata
+from js.repl_state import ReplState
 
 
 def test_live_vision_setting_and_unset_override_environment(monkeypatch):
@@ -14,7 +15,7 @@ def test_live_vision_setting_and_unset_override_environment(monkeypatch):
     )))
     assert cfg.vision_enabled is False
     live = deepcopy(cfg.settings)
-    state = {"settings": live}
+    state = ReplState(settings=live)
     assert cli._cmd_set("VISION on", state, cfg) is None
     active = cli._cfg_for_live_state(cfg, state)
     assert active.vision_enabled is True

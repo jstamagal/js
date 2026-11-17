@@ -587,19 +587,18 @@ async def zero_usage_executor():
     for m in messages:
         M.append_message(cfg.session_file, m)
     from js.persona import PromptSpec
-    from js.sampling import Sampling
+    from js.repl_state import ReplState
 
-    state = {
-        "settings": cfg.settings,
-        "system": "",
-        "messages": messages,
-        "tool_registry": ToolRegistry(tools=(), aliases={}),
-        "sampling_cli": Sampling(),
-        "model": cfg.model,
-        "provider_id": cfg.provider_id,
-        "provider_base_url": cfg.provider_base_url,
-        "provider_api_key": cfg.provider_api_key,
-    }
+    state = ReplState(
+        settings=cfg.settings,
+        system="",
+        messages=messages,
+        tool_registry=ToolRegistry(tools=(), aliases={}),
+        model=cfg.model,
+        provider_id=cfg.provider_id,
+        provider_base_url=cfg.provider_base_url,
+        provider_api_key=cfg.provider_api_key,
+    )
     calls = 0
     error = None
 
@@ -825,19 +824,18 @@ async def compacted_turn_cancel(error=False):
     for m in messages:
         M.append_message(cfg.session_file, m)
     from js.persona import PromptSpec
-    from js.sampling import Sampling
+    from js.repl_state import ReplState
 
-    state = {
-        "settings": cfg.settings,
-        "system": "",
-        "messages": messages,
-        "tool_registry": ToolRegistry(tools=(), aliases={}),
-        "sampling_cli": Sampling(),
-        "model": cfg.model,
-        "provider_id": cfg.provider_id,
-        "provider_base_url": cfg.provider_base_url,
-        "provider_api_key": cfg.provider_api_key,
-    }
+    state = ReplState(
+        settings=cfg.settings,
+        system="",
+        messages=messages,
+        tool_registry=ToolRegistry(tools=(), aliases={}),
+        model=cfg.model,
+        provider_id=cfg.provider_id,
+        provider_base_url=cfg.provider_base_url,
+        provider_api_key=cfg.provider_api_key,
+    )
 
     async def turn(*args, **kw):
         context.compacted_during_turn = True
@@ -888,19 +886,18 @@ async def between_turn_cancel():
     for m in messages:
         M.append_message(cfg.session_file, m)
     from js.persona import PromptSpec
-    from js.sampling import Sampling
+    from js.repl_state import ReplState
 
-    state = {
-        "settings": cfg.settings,
-        "system": "",
-        "messages": messages,
-        "tool_registry": ToolRegistry(tools=(), aliases={}),
-        "sampling_cli": Sampling(),
-        "model": cfg.model,
-        "provider_id": cfg.provider_id,
-        "provider_base_url": cfg.provider_base_url,
-        "provider_api_key": cfg.provider_api_key,
-    }
+    state = ReplState(
+        settings=cfg.settings,
+        system="",
+        messages=messages,
+        tool_registry=ToolRegistry(tools=(), aliases={}),
+        model=cfg.model,
+        provider_id=cfg.provider_id,
+        provider_base_url=cfg.provider_base_url,
+        provider_api_key=cfg.provider_api_key,
+    )
     started = threading.Event()
     released = threading.Event()
     ended = threading.Event()

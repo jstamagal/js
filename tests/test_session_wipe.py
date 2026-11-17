@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from js import cli, memory, session_store
+from js.repl_state import ReplState
 
 
 @pytest.mark.parametrize("append_mark", [False, True])
@@ -10,19 +11,19 @@ def test_wipe_allows_first_new_turn_to_save(tmp_path, append_mark):
     session = tmp_path / "active.jsonl"
     old_messages = [{"role": "user", "content": "old turn"}]
     memory.persist_messages(session, old_messages)
-    state = {"messages": memory.load_replay_messages(session)}
+    state = ReplState(messages=memory.load_replay_messages(session))
 
     cli._cmd_wipe("", state, SimpleNamespace(session_file=session))
 
-    assert state["messages"] == []
+    assert state.messages == []
     if append_mark:
         memory.append_mark(session, "turn_mode:test")
     new_messages = [
         {"role": "user", "content": "new question"},
         {"role": "assistant", "content": "new answer"},
     ]
-    state["messages"].extend(new_messages)
-    memory.persist_messages(session, state["messages"])
+    state.messages.extend(new_messages)
+    memory.persist_messages(session, state.messages)
     assert memory.load_messages(session) == new_messages
     archives = [path for path in tmp_path.glob("*.jsonl") if path != session]
     assert len(archives) == 1

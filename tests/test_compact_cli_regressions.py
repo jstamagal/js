@@ -7,6 +7,7 @@ import pytest
 from test_config_compaction_layers import _compact_test_cfg
 
 from js import cli, paths
+from js.repl_state import ReplState
 
 
 @pytest.mark.parametrize("arguments, stdin, expected", [
@@ -62,7 +63,7 @@ def _run_compact_route(monkeypatch, cfg, route):
     if route == "manual":
         monkeypatch.setattr(cli, "_cfg_for_live_state", lambda cfg, state: cfg)
         monkeypatch.setattr(cli, "_repl_assembly", lambda state: SimpleNamespace(compact_force_focus="forced"))
-        assert cli._cmd_compact("", {"system": "", "messages": []}, cfg) is None
+        assert cli._cmd_compact("", ReplState(system="", messages=[]), cfg) is None
     else:
         cfg.session_file.parent.mkdir(parents=True, exist_ok=True)
         cfg.session_file.touch()

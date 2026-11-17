@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from js.repl_state import ReplState
 from js.skills import (
     SkillCatalog,
     SkillInvocationError,
@@ -333,9 +334,9 @@ def test_repl_assembly_supplies_the_skill_invocation_command(tmp_path, monkeypat
 
     monkeypatch.chdir(tmp_path)
     _write(tmp_path / ".js" / "skills" / "secret" / "SKILL.md", _USER_ONLY)
-    state = {"settings": {}, "repl_assembly": cli.ReplAssembly(
+    state = ReplState(settings={}, repl_assembly=cli.ReplAssembly(
         commands={"use": cli.COMMANDS["skill"]}, skill_command="/use",
-    )}
+    ))
     line = "/use secret sharpen this plan"
     assert cli._handle_command(line, state, None) is False
     message = cli._expand_skill_line(line, state)

@@ -13,6 +13,7 @@ from dataclasses import replace
 
 from js import cli, messages as msgs, setcmd, settings
 from js.config import Config
+from js.repl_state import ReplState
 from js.sampling import Sampling
 
 # ---------------------------------------------------------------------------
@@ -33,19 +34,19 @@ def _repl_cfg(tmp_path) -> Config:
 
 def test_set_display_forms_leave_the_store_alone_and_mutations_reach_live_state(tmp_path):
     cfg = _repl_cfg(tmp_path)
-    state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
+    state = ReplState(messages=[], system="sys", settings=settings.seed_defaults())
     for line in ("/set", "/show", "/set MODEL", "/show PROVIDER"):
-        before = copy.deepcopy(state["settings"])
+        before = copy.deepcopy(state.settings)
         assert cli._handle_command(line, state, cfg) is True
-        assert state["settings"] == before
+        assert state.settings == before
 
     cli._handle_command("/set TEMPERATURE 0.3", state, cfg)
-    assert settings.get_dotted(state["settings"], ("TEMPERATURE",)) == 0.3
-    assert state["live_set"]["TEMPERATURE"] == 0.3
+    assert settings.get_dotted(state.settings, ("TEMPERATURE",)) == 0.3
+    assert state.live_set["TEMPERATURE"] == 0.3
 
     cli._handle_command("/set -TEMPERATURE", state, cfg)
-    assert settings.get_dotted(state["settings"], ("TEMPERATURE",)) is None
-    assert "TEMPERATURE" not in state["live_set"]
+    assert settings.get_dotted(state.settings, ("TEMPERATURE",)) is None
+    assert "TEMPERATURE" not in state.live_set
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +166,7 @@ def test_save_after_logout_keeps_provider_settings_cleared(tmp_path):
     store.update(PROVIDER="ollama", BASE_URL="http://offline.invalid/v1", API_KEY="old-key")
     cfg = replace(_repl_cfg(tmp_path), settings=store, provider_id="ollama",
                   provider_base_url=store["BASE_URL"], provider_api_key=store["API_KEY"])
-    state = {"settings": copy.deepcopy(store), "model": cfg.model, "messages": []}
+    state = ReplState(settings=copy.deepcopy(store), model=cfg.model, messages=[])
 
     assert cli._handle_command("/logout", state, cfg)
     assert cli._cmd_save("", state, cfg) is None

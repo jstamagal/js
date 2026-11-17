@@ -9,6 +9,7 @@ import os
 
 from js import cli
 from js.config import from_env
+from js.repl_state import ReplState
 
 
 def _home(monkeypatch, tmp_path):
@@ -25,8 +26,8 @@ def _home(monkeypatch, tmp_path):
 
 def _session(project):
     cfg = from_env(save_session=False, cwd=project)
-    state = {"messages": [], "system": "sys", "settings": copy.deepcopy(cfg.settings),
-             "model": cfg.model, "provider_id": cfg.provider_id}
+    state = ReplState(messages=[], system="sys", settings=copy.deepcopy(cfg.settings),
+             model=cfg.model, provider_id=cfg.provider_id)
     cli._mark_saved(state)
     return cfg, state
 

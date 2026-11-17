@@ -9,6 +9,7 @@ from jail_probe import needs_bwrap
 from repl_driver import stub_screen, turn_stub
 
 from js import cli, jail, messages as msgs, runtime, snippets
+from js.repl_state import ReplState
 from js.toolkit import call_tool, process_net
 from js.toolkit.registry import build_default_registry
 
@@ -137,11 +138,11 @@ def test_cd_without_a_jail_moves_the_session(monkeypatch, places, turns):
 
 def test_add_and_drop_need_a_jail(places):
     _root, extra = places
-    state: dict = {}
+    state = ReplState()
 
     assert cli._cmd_add(str(extra), state, None).message is msgs.NO_JAIL
     assert cli._cmd_drop(str(extra), state, None).message is msgs.NO_JAIL
-    assert "pending_notes" not in state
+    assert state.pending_notes == []
 
 
 @needs_bwrap

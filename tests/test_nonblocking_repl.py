@@ -95,7 +95,7 @@ def test_mcp_channel_wakes_idle_repl_and_persists_literal_content(monkeypatch, t
 
     def state_with_host(*args, **kwargs):
         state, spec = repl_state(*args, **kwargs)
-        state["mcp_host"] = host
+        state.mcp_host = host
         return state, spec
 
     monkeypatch.setattr("repl_driver.repl_state", state_with_host)

@@ -12,6 +12,7 @@ from js import attach, cli, history_record, media, runtime
 from js.config import Config
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
+from js.repl_state import ReplState
 
 _TINY_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
@@ -434,8 +435,8 @@ def test_copy_puts_the_answer_n_back_on_the_clipboard(monkeypatch):
     runs = []
     monkeypatch.setattr(cli, "_copy_command", lambda: ["clip"])
     monkeypatch.setattr(cli.subprocess, "run", lambda command, input, **kw: runs.append((command, input)))
-    state = {"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "first answer"},
-                          {"role": "assistant", "content": [{"type": "text", "text": "a long line\nsecond"}]}]}
+    state = ReplState(messages=[{"role": "user", "content": "q"}, {"role": "assistant", "content": "first answer"},
+                               {"role": "assistant", "content": [{"type": "text", "text": "a long line\nsecond"}]}])
     cli._cmd_copy("", state, None)
     cli._cmd_copy("2", state, None)
     assert runs == [(["clip"], b"a long line\nsecond\n"), (["clip"], b"first answer\n")]

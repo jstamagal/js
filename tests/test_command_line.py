@@ -10,6 +10,7 @@ import pytest
 
 from js import cli, command_line, home_cli, loop_controller, paths, runtime, sampling, swarm
 from js.cli_options import RunOptions, invocation
+from js.repl_state import ReplState
 
 
 def _parse(argv: list[str]):
@@ -240,7 +241,7 @@ def test_resume_hint_command(monkeypatch, printed, agent, settings, model, custo
     monkeypatch.setattr(paths, "custom_home", lambda: custom_home)
     cfg = SimpleNamespace(session_file=Path("/s/dir/sub/name.jsonl"), sessions_dir=Path("/s/dir"),
                           agent_id=agent, settings=settings)
-    cli._print_resume_hint(cfg, {"messages": ["one"], "model": model})
+    cli._print_resume_hint(cfg, ReplState(messages=["one"], model=model))
     assert printed == [line]
 
 

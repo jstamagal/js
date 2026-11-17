@@ -5,6 +5,7 @@ from pathlib import Path
 
 from js import cli
 from js.config import Config
+from js.repl_state import ReplState
 
 
 def make_cfg(tmp_path: Path) -> Config:
@@ -31,15 +32,15 @@ def make_cfg(tmp_path: Path) -> Config:
 
 
 def test_turns_command_prints_message_count(tmp_path, capsys):
-    # /turns prints len(state["messages"]).
+    # /turns prints len(state.messages).
     cfg = make_cfg(tmp_path)
-    state = {
-        "messages": [
+    state = ReplState(
+        messages=[
             {"role": "user", "content": "one"},
             {"role": "assistant", "content": "two"},
             {"role": "user", "content": "three"},
         ],
-    }
+    )
 
     handled = cli._handle_command("/turns", state, cfg)
 
@@ -49,9 +50,9 @@ def test_turns_command_prints_message_count(tmp_path, capsys):
 
 
 def test_persona_command_prints_system_prompt(tmp_path, capsys):
-    # /persona prints state["system"][:2048].
+    # /persona prints state.system[:2048].
     cfg = make_cfg(tmp_path)
-    state = {"messages": [], "system": "YOU ARE A HELPFUL APE"}
+    state = ReplState(messages=[], system="YOU ARE A HELPFUL APE")
 
     handled = cli._handle_command("/persona", state, cfg)
 
@@ -62,11 +63,11 @@ def test_persona_command_prints_system_prompt(tmp_path, capsys):
 
 
 def test_persona_command_truncates_at_2048_bytes_with_note(tmp_path, capsys):
-    # state["system"] longer than 2048 -> only first 2048 printed + a note that
+    # state.system longer than 2048 -> only first 2048 printed + a note that
     # carries the FULL byte length.
     cfg = make_cfg(tmp_path)
     full = "A" * 2048 + "TAIL_THAT_MUST_NOT_PRINT"
-    state = {"messages": [], "system": full}
+    state = ReplState(messages=[], system=full)
 
     handled = cli._handle_command("/persona", state, cfg)
 
@@ -81,7 +82,7 @@ def test_persona_command_keeps_exactly_2048_without_truncation_note(tmp_path, ca
     # boundary: len == 2048 is not > 2048, so no note is printed.
     cfg = make_cfg(tmp_path)
     full = "B" * 2048
-    state = {"messages": [], "system": full}
+    state = ReplState(messages=[], system=full)
 
     handled = cli._handle_command("/persona", state, cfg)
 

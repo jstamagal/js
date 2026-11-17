@@ -7,6 +7,7 @@ import re
 from types import SimpleNamespace
 
 from js import display, messages as msgs, runtime
+from js.repl_state import ReplState
 from js.toolkit import Tool, ToolContext, ToolRegistry
 from js.transcript import TranscriptLogSink
 
@@ -372,7 +373,7 @@ def test_a_resumed_tool_row_folds_with_its_whole_form_like_a_live_one(capsys):
     ]
     telemetry = runtime.Telemetry(None)
     telemetry.exchange_factory = Exchange
-    state = {"messages": messages, "settings": settings.seed_defaults()}
+    state = ReplState(messages=messages, settings=settings.seed_defaults())
     cli._show_resume(state, telemetry, 60)
     assert closed and closed[0] and all(f"line {n}" in SGR.sub("", closed[0]) for n in range(20))
     shown = SGR.sub("", capsys.readouterr().out)

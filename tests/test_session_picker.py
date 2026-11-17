@@ -24,6 +24,7 @@ from js import (
     session_store,
     session_text,
 )
+from js.repl_state import ReplState
 from js.session_catalog import first_metadata, record_session_start
 from js.session_index import Hit
 
@@ -337,11 +338,11 @@ def test_slash_session_opens_the_picker_and_a_chosen_session_ends_the_repl_to_sw
 
     monkeypatch.setattr(session_picker, "pick_session", pick)
     cfg = make_cfg(tmp_path)
-    state = {"messages": [], "running": True}
+    state = ReplState(messages=[], running=True)
     assert cli._handle_command("/session niri", state, cfg) is True
     assert opened["query"] == "niri"
-    assert state["running"] is False
-    target = state["switch_session"]
+    assert state.running is False
+    target = state.switch_session
     assert (target.path, target.agent, target.cwd) == (other.resolve(), "research", str((tmp_path / "other").resolve()))
 
 
@@ -349,13 +350,13 @@ def test_slash_session_on_the_current_session_or_closed_keeps_the_repl(tmp_path,
     cfg = make_cfg(tmp_path)
     cfg.session_file.parent.mkdir(parents=True, exist_ok=True)
     cfg.session_file.write_text("", encoding="utf-8")
-    state = {"messages": [], "running": True}
+    state = ReplState(messages=[], running=True)
     monkeypatch.setattr(session_picker, "pick_session", lambda cwd, query="": None)
     cli._handle_command("/session", state, cfg)
     monkeypatch.setattr(session_picker, "pick_session",
                         lambda cwd, query="": _choice(cfg.session_file, tmp_path))
     cli._handle_command("/session", state, cfg)
-    assert state["running"] is True and "switch_session" not in state
+    assert state.running is True and state.switch_session is None
 
 
 def test_a_branch_choice_creates_the_branch_in_the_parents_folder(tmp_path):

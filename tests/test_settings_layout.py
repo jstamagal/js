@@ -5,6 +5,7 @@ import json
 import pytest
 
 from js import cli, display, fset, messages, setcmd, settings
+from js.repl_state import ReplState
 
 
 @pytest.mark.parametrize("columns", [20, 40, 50, 60, 100])
@@ -15,7 +16,7 @@ def test_settings_values_wrap_under_the_value(monkeypatch, capsys, columns, key)
     values = {}
     spec = settings.spec_for(key)
     settings.set_dotted(values, spec.path, {"example": {"command": "word " * 60, "url": "https://example.org/" + "a" * 180}})
-    cli._show_settings({"settings": values}, None, key)
+    cli._show_settings(ReplState(settings=values), None, key)
     lines = capsys.readouterr().out.splitlines()
     assert len(lines) > 1
     assert all(display.cells(line) < columns for line in lines)
@@ -81,7 +82,7 @@ def test_hanging_rows_keeps_room_for_wide_characters(width, indent):
 def test_set_confirmation_wraps_and_preserves_ordinary_words(monkeypatch, capsys, columns):
     monkeypatch.setattr(display, "terminal_width", lambda: columns)
     raw = json.dumps({"example": {"command": "pyright-langserver", "url": "https://example.org/" + "x" * 180}})
-    assert cli._cmd_set("LSP_SERVERS " + raw, {"settings": {}}, None) is None
+    assert cli._cmd_set("LSP_SERVERS " + raw, ReplState(settings={}), None) is None
     lines = capsys.readouterr().out.splitlines()
     assert all(display.cells(line) < columns for line in lines)
     assert any("pyright-langserver" in line for line in lines)

@@ -13,6 +13,7 @@ import sys
 import pytest
 
 from js import cli, exline, pastes, paths, settings
+from js.repl_state import ReplState
 
 
 class FakeEditor:
@@ -138,7 +139,7 @@ def test_command_words_dispatch_through_the_table():
 def test_ex_set_model_changes_the_model(tmp_path, verb):
     """`:set model X` from the ex line reaches the live model; the table's verbs
     are case-insensitive there as everywhere."""
-    state = {"messages": [], "system": "sys", "settings": settings.seed_defaults(), "model": "old/model"}
+    state = ReplState(messages=[], system="sys", settings=settings.seed_defaults(), model="old/model")
 
     async def dispatch(command_line: str) -> None:
         cli._handle_command(command_line, state, None)
@@ -146,7 +147,7 @@ def test_ex_set_model_changes_the_model(tmp_path, verb):
     asyncio.run(exline.run_ex(f"{verb} model new/model", FakeEditor(), is_command=lambda v: v in cli.COMMANDS,
                               dispatch=dispatch))
 
-    assert state["model"] == "new/model"
+    assert state.model == "new/model"
 
 
 def test_program_name_edits_the_buffer_and_returns_it_unsent(tmp_path, monkeypatch):

@@ -12,6 +12,7 @@ from repl_driver import run_async, turn_stub
 from js import cli, events, settings
 from js.config import Config
 from js.memory import append_message, load_messages
+from js.repl_state import ReplState
 
 
 def _debug_records(path: Path) -> list[dict]:
@@ -44,12 +45,12 @@ def make_cfg(tmp_path: Path) -> Config:
 def test_reset_command_is_durable_for_later_session_load(tmp_path):
     cfg = make_cfg(tmp_path)
     append_message(cfg.session_file, {"role": "user", "content": "old"})
-    state = {"messages": [{"role": "user", "content": "old"}]}
+    state = ReplState(messages=[{"role": "user", "content": "old"}])
 
     handled = cli._handle_command("/reset", state, cfg)
 
     assert handled is True
-    assert state["messages"] == []
+    assert state.messages == []
     assert load_messages(cfg.session_file) == []
 
 
@@ -64,7 +65,7 @@ def test_refresh_model_catalog_command_forces_refresh(tmp_path, monkeypatch, cap
 
     monkeypatch.setattr(cli, "_force_refresh_model_catalog", refresh_stub)
 
-    handled = cli._handle_command("/refresh-model-catalog", {"messages": []}, cfg)
+    handled = cli._handle_command("/refresh-model-catalog", ReplState(messages=[]), cfg)
 
     assert handled is True
     assert seen == ["forced"]
@@ -77,12 +78,12 @@ def _other_sessions(cfg) -> list:
 def test_wipe_moves_the_conversation_to_a_new_session_and_clears_it_here(tmp_path):
     cfg = make_cfg(tmp_path)
     append_message(cfg.session_file, {"role": "user", "content": "old"})
-    state = {"messages": [{"role": "user", "content": "old"}]}
+    state = ReplState(messages=[{"role": "user", "content": "old"}])
 
     handled = cli._handle_command("/wipe", state, cfg)
 
     assert handled is True
-    assert state["messages"] == []
+    assert state.messages == []
     assert not cfg.session_file.exists()
     moved = _other_sessions(cfg)
     assert len(moved) == 1
@@ -92,10 +93,10 @@ def test_wipe_moves_the_conversation_to_a_new_session_and_clears_it_here(tmp_pat
 def test_each_wipe_keeps_its_conversation_in_a_session_of_its_own(tmp_path):
     cfg = make_cfg(tmp_path)
     append_message(cfg.session_file, {"role": "user", "content": "first"})
-    cli._handle_command("/wipe", {"messages": [{"role": "user", "content": "first"}]}, cfg)
+    cli._handle_command("/wipe", ReplState(messages=[{"role": "user", "content": "first"}]), cfg)
     append_message(cfg.session_file, {"role": "user", "content": "second"})
 
-    handled = cli._handle_command("/wipe", {"messages": [{"role": "user", "content": "second"}]}, cfg)
+    handled = cli._handle_command("/wipe", ReplState(messages=[{"role": "user", "content": "second"}]), cfg)
 
     assert handled is True
     kept = sorted(load_messages(path)[0]["content"] for path in _other_sessions(cfg))
@@ -105,13 +106,13 @@ def test_each_wipe_keeps_its_conversation_in_a_session_of_its_own(tmp_path):
 
 def test_unknown_commands_that_share_prefixes_are_refused_not_swallowed(tmp_path):
     cfg = make_cfg(tmp_path)
-    state = {"messages": [], "system": "sys", "settings": settings.seed_defaults()}
-    before = settings.get_dotted(state["settings"], ("MODEL",))
+    state = ReplState(messages=[], system="sys", settings=settings.seed_defaults())
+    before = settings.get_dotted(state.settings, ("MODEL",))
 
     assert cli._handle_command("/setty MODEL nope", state, cfg) is True
     assert cli._handle_command("/showtime", state, cfg) is True
     assert cli._handle_command("/compact-autoload", state, cfg) is True
-    assert settings.get_dotted(state["settings"], ("MODEL",)) == before
+    assert settings.get_dotted(state.settings, ("MODEL",)) == before
 
 
 def test_repl_runtime_exception_rolls_back_persisted_user_message(monkeypatch, tmp_path, capsys):
@@ -588,20 +589,20 @@ def test_repl_turn_end_hook_partial_load_sampling_change_updates_next_turn(monke
 
 def test_provider_commands_mutate_runtime_state(tmp_path, capsys):
     cfg = make_cfg(tmp_path)
-    state = {
-        "model": cfg.model,
-        "provider_id": cfg.provider_id,
-        "provider_base_url": cfg.provider_base_url,
-        "provider_api_key": cfg.provider_api_key,
-    }
+    state = ReplState(
+        model=cfg.model,
+        provider_id=cfg.provider_id,
+        provider_base_url=cfg.provider_base_url,
+        provider_api_key=cfg.provider_api_key,
+    )
 
     assert cli._handle_command("/provider openai", state, cfg) is True
     assert cli._handle_command("/baseurl http://localhost:11434/v1", state, cfg) is True
     assert cli._handle_command("/apikey ollama", state, cfg) is True
 
-    assert state["provider_id"] == "openai"
-    assert state["provider_base_url"] == "http://localhost:11434/v1"
-    assert state["provider_api_key"] == "ollama"
+    assert state.provider_id == "openai"
+    assert state.provider_base_url == "http://localhost:11434/v1"
+    assert state.provider_api_key == "ollama"
 
 
 def test_first_class_provider_shortcuts_use_defaults(tmp_path, capsys, monkeypatch):
@@ -617,26 +618,26 @@ def test_first_class_provider_shortcuts_use_defaults(tmp_path, capsys, monkeypat
     monkeypatch.setattr(cli.logins, "load_logins", lambda *a, **k: {})
 
     cfg = make_cfg(tmp_path)
-    state = {
-        "model": cfg.model,
-        "provider_id": cfg.provider_id,
-        "provider_base_url": cfg.provider_base_url,
-        "provider_api_key": cfg.provider_api_key,
-    }
+    state = ReplState(
+        model=cfg.model,
+        provider_id=cfg.provider_id,
+        provider_base_url=cfg.provider_base_url,
+        provider_api_key=cfg.provider_api_key,
+    )
 
     assert cli._handle_command("/provider ollama", state, cfg) is True
-    assert state["provider_id"] == "ollama"
-    assert state["provider_base_url"] == "http://127.0.0.1:11434/v1"
-    assert state["provider_api_key"] == "ollama"
+    assert state.provider_id == "ollama"
+    assert state.provider_base_url == "http://127.0.0.1:11434/v1"
+    assert state.provider_api_key == "ollama"
 
     assert cli._handle_command("/provider llama.cpp", state, cfg) is True
-    assert state["provider_id"] == "llama.cpp"
-    assert state["provider_base_url"] == "http://127.0.0.1:8080/v1"
-    assert state["provider_api_key"] == "x"
+    assert state.provider_id == "llama.cpp"
+    assert state.provider_base_url == "http://127.0.0.1:8080/v1"
+    assert state.provider_api_key == "x"
 
     assert cli._handle_command("/provider mimo-token-plan", state, cfg) is True
-    assert state["provider_id"] == "mimo-token-plan"
-    assert state["provider_base_url"] == "https://token-plan-sgp.xiaomimimo.com/v1"
+    assert state.provider_id == "mimo-token-plan"
+    assert state.provider_base_url == "https://token-plan-sgp.xiaomimimo.com/v1"
     out = capsys.readouterr().out
     assert "ollama" in out
     assert "llama.cpp" in out
@@ -656,46 +657,46 @@ def test_login_loads_saved_provider_bundle(tmp_path):
             provider_api_key="ollama",
         )
     )
-    state = {
-        "model": cfg.model,
-        "provider_id": cfg.provider_id,
-        "provider_base_url": cfg.provider_base_url,
-        "provider_api_key": cfg.provider_api_key,
-    }
+    state = ReplState(
+        model=cfg.model,
+        provider_id=cfg.provider_id,
+        provider_base_url=cfg.provider_base_url,
+        provider_api_key=cfg.provider_api_key,
+    )
 
     try:
         assert cli._handle_command("/login openai", state, cfg) is True
-        assert state["provider_id"] == "openai"
-        assert state["provider_base_url"] == "http://localhost:11434/v1"
-        assert state["provider_api_key"] == "ollama"
+        assert state.provider_id == "openai"
+        assert state.provider_base_url == "http://localhost:11434/v1"
+        assert state.provider_api_key == "ollama"
     finally:
         logins.set_config_dir(None)
 
 
 def test_logout_clears_provider_state(tmp_path, capsys):
     cfg = make_cfg(tmp_path)
-    state = {
-        "model": cfg.model,
-        "provider_id": "openai",
-        "provider_base_url": "http://localhost:11434/v1",
-        "provider_api_key": "ollama",
-    }
+    state = ReplState(
+        model=cfg.model,
+        provider_id="openai",
+        provider_base_url="http://localhost:11434/v1",
+        provider_api_key="ollama",
+    )
 
     assert cli._handle_command("/logout", state, cfg) is True
 
-    assert state["provider_id"] is None
-    assert state["provider_base_url"] is None
-    assert state["provider_api_key"] is None
+    assert state.provider_id is None
+    assert state.provider_base_url is None
+    assert state.provider_api_key is None
 
 
 def test_models_command_lists_provider_models(monkeypatch, tmp_path, capsys):
     cfg = make_cfg(tmp_path)
-    state = {
-        "model": cfg.model,
-        "provider_id": "openai",
-        "provider_base_url": "http://localhost:11434/v1",
-        "provider_api_key": "ollama",
-    }
+    state = ReplState(
+        model=cfg.model,
+        provider_id="openai",
+        provider_base_url="http://localhost:11434/v1",
+        provider_api_key="ollama",
+    )
 
     async def fake_list_models():
         return ["model-a", "model-b", "model-c"]
@@ -716,12 +717,12 @@ def test_models_command_lists_provider_models(monkeypatch, tmp_path, capsys):
 
 def test_models_command_refuses_without_provider(tmp_path, monkeypatch, capsys):
     cfg = make_cfg(tmp_path)
-    state = {
-        "model": cfg.model,
-        "provider_id": None,
-        "provider_base_url": None,
-        "provider_api_key": None,
-    }
+    state = ReplState(
+        model=cfg.model,
+        provider_id=None,
+        provider_base_url=None,
+        provider_api_key=None,
+    )
     monkeypatch.setattr(cli, "_models_for_provider", lambda *a: pytest.fail("listed models without a provider"))
 
     assert cli._handle_command("/models", state, cfg) is True
@@ -731,12 +732,12 @@ def test_models_command_refuses_without_provider(tmp_path, monkeypatch, capsys):
 
 def test_provider_command_shows_current_value_when_bare(tmp_path, capsys):
     cfg = make_cfg(tmp_path)
-    state = {
-        "model": cfg.model,
-        "provider_id": "openai",
-        "provider_base_url": None,
-        "provider_api_key": None,
-    }
+    state = ReplState(
+        model=cfg.model,
+        provider_id="openai",
+        provider_base_url=None,
+        provider_api_key=None,
+    )
 
     assert cli._handle_command("/provider", state, cfg) is True
     assert "openai" in capsys.readouterr().out
@@ -746,14 +747,14 @@ def test_model_command_opens_picker_and_updates_state(monkeypatch, tmp_path, cap
     cfg = make_cfg(tmp_path)
     config_path = tmp_path / "config" / "jsrc"
     monkeypatch.setattr(cli._paths, "global_config_file", lambda: config_path)
-    state = {
-        "messages": [],
-        "system": "SYSTEM",
-        "model": cfg.model,
-        "provider_id": None,
-        "provider_base_url": None,
-        "provider_api_key": None,
-    }
+    state = ReplState(
+        messages=[],
+        system="SYSTEM",
+        model=cfg.model,
+        provider_id=None,
+        provider_base_url=None,
+        provider_api_key=None,
+    )
 
     monkeypatch.setattr(
         cli.picker,
@@ -768,9 +769,9 @@ def test_model_command_opens_picker_and_updates_state(monkeypatch, tmp_path, cap
     )
 
     assert cli._handle_command("/model", state, cfg) is True
-    assert state["provider_id"] == "deepseek"
-    assert state["provider_api_key"] == "sk-test"
-    assert state["model"] == "deepseek-v4-flash"
+    assert state.provider_id == "deepseek"
+    assert state.provider_api_key == "sk-test"
+    assert state.model == "deepseek-v4-flash"
     assert not config_path.exists()
 
 
@@ -791,15 +792,15 @@ def test_a_picked_model_reaches_the_jsrc_only_through_save(monkeypatch, tmp_path
     config_path.parent.mkdir(parents=True)
     config_path.write_text("set MODEL deepseek/deepseek-v4-flash\n", encoding="utf-8")
     monkeypatch.setattr(cli._paths, "global_config_file", lambda: config_path)
-    state = {
-        "messages": [],
-        "system": "SYSTEM",
-        "settings": settings.seed_defaults(),
-        "model": cfg.model,
-        "provider_id": cfg.provider_id,
-        "provider_base_url": cfg.provider_base_url,
-        "provider_api_key": cfg.provider_api_key,
-    }
+    state = ReplState(
+        messages=[],
+        system="SYSTEM",
+        settings=settings.seed_defaults(),
+        model=cfg.model,
+        provider_id=cfg.provider_id,
+        provider_base_url=cfg.provider_base_url,
+        provider_api_key=cfg.provider_api_key,
+    )
 
     monkeypatch.setattr(
         cli.picker,
@@ -815,10 +816,10 @@ def test_a_picked_model_reaches_the_jsrc_only_through_save(monkeypatch, tmp_path
 
     assert cli._handle_command("/model", state, cfg) is True
 
-    assert state["provider_id"] == "openai"
-    assert state["provider_base_url"] == "https://api.openai.com/v1"
-    assert state["model"] == "gpt-5.5"
-    assert settings.get_dotted(state["settings"], ("MODEL",)) == "openai/gpt-5.5"
+    assert state.provider_id == "openai"
+    assert state.provider_base_url == "https://api.openai.com/v1"
+    assert state.model == "gpt-5.5"
+    assert settings.get_dotted(state.settings, ("MODEL",)) == "openai/gpt-5.5"
     assert config_path.read_text(encoding="utf-8") == "set MODEL deepseek/deepseek-v4-flash\n"
 
     assert cli._handle_command("/save", state, cfg) is True
@@ -848,22 +849,22 @@ def test_model_command_with_prefixed_provider_resets_provider_state(tmp_path):
             provider_api_key="ollama",
         )
     )
-    state = {
-        "messages": [],
-        "system": "SYSTEM",
-        "model": cfg.model,
-        "provider_id": cfg.provider_id,
-        "provider_base_url": cfg.provider_base_url,
-        "provider_api_key": cfg.provider_api_key,
-        "provider_headers": {"x-deepseek": "1"},
-    }
+    state = ReplState(
+        messages=[],
+        system="SYSTEM",
+        model=cfg.model,
+        provider_id=cfg.provider_id,
+        provider_base_url=cfg.provider_base_url,
+        provider_api_key=cfg.provider_api_key,
+        provider_headers={"x-deepseek": "1"},
+    )
     try:
         assert cli._handle_command("/model ollama/gemma4:e2b", state, cfg) is True
-        assert state["provider_id"] == "ollama"
-        assert state["provider_base_url"] == "http://ollama.test/v1"
-        assert state["provider_api_key"] == "ollama"
-        assert state["provider_headers"] == {}
-        assert state["model"] == "gemma4:e2b"
+        assert state.provider_id == "ollama"
+        assert state.provider_base_url == "http://ollama.test/v1"
+        assert state.provider_api_key == "ollama"
+        assert state.provider_headers == {}
+        assert state.model == "gemma4:e2b"
     finally:
         logins.set_config_dir(None)
 
@@ -881,23 +882,23 @@ def test_model_command_unlogged_vendor_prefix_stays_on_pinned_endpoint(tmp_path)
         provider_api_key="sk-omp",
     )
     logins.set_config_dir(tmp_path / "login-store")  # empty store: no anthropic login
-    state = {
-        "messages": [],
-        "system": "SYSTEM",
-        "model": cfg.model,
-        "provider_id": cfg.provider_id,
-        "provider_base_url": cfg.provider_base_url,
-        "provider_api_key": cfg.provider_api_key,
-        "provider_headers": {"x-omp": "1"},
-    }
+    state = ReplState(
+        messages=[],
+        system="SYSTEM",
+        model=cfg.model,
+        provider_id=cfg.provider_id,
+        provider_base_url=cfg.provider_base_url,
+        provider_api_key=cfg.provider_api_key,
+        provider_headers={"x-omp": "1"},
+    )
     try:
         assert cli._handle_command("/model anthropic/claude-sonnet-4", state, cfg) is True
         # Endpoint unchanged; the full prefixed id is passed through verbatim.
-        assert state["provider_id"] == "omp"
-        assert state["provider_base_url"] == "https://gateway.test/v1"
-        assert state["provider_api_key"] == "sk-omp"
-        assert state["provider_headers"] == {"x-omp": "1"}
-        assert state["model"] == "anthropic/claude-sonnet-4"
+        assert state.provider_id == "omp"
+        assert state.provider_base_url == "https://gateway.test/v1"
+        assert state.provider_api_key == "sk-omp"
+        assert state.provider_headers == {"x-omp": "1"}
+        assert state.model == "anthropic/claude-sonnet-4"
     finally:
         logins.set_config_dir(None)
 
@@ -910,22 +911,22 @@ def test_model_command_unlogged_vendor_prefix_stays_bare_without_pinned_endpoint
 
     cfg = make_cfg(tmp_path)
     logins.set_config_dir(tmp_path / "login-store")
-    state = {
-        "messages": [],
-        "system": "SYSTEM",
-        "model": cfg.model,
-        "provider_id": None,
-        "provider_base_url": None,
-        "provider_api_key": None,
-        "provider_headers": {},
-    }
+    state = ReplState(
+        messages=[],
+        system="SYSTEM",
+        model=cfg.model,
+        provider_id=None,
+        provider_base_url=None,
+        provider_api_key=None,
+        provider_headers={},
+    )
     try:
         assert cli._handle_command("/model anthropic/claude-sonnet-4", state, cfg) is True
-        assert state["provider_id"] is None
-        assert state["provider_base_url"] is None
-        assert state["provider_api_key"] is None
-        assert state["provider_headers"] == {}
-        assert state["model"] == "anthropic/claude-sonnet-4"
+        assert state.provider_id is None
+        assert state.provider_base_url is None
+        assert state.provider_api_key is None
+        assert state.provider_headers == {}
+        assert state.model == "anthropic/claude-sonnet-4"
     finally:
         logins.set_config_dir(None)
 
@@ -943,17 +944,17 @@ def test_provider_command_uses_saved_login(tmp_path):
             provider_api_key="sk-proxy",
         )
     )
-    state = {
-        "model": cfg.model,
-        "provider_id": None,
-        "provider_base_url": None,
-        "provider_api_key": None,
-    }
+    state = ReplState(
+        model=cfg.model,
+        provider_id=None,
+        provider_base_url=None,
+        provider_api_key=None,
+    )
     try:
         assert cli._handle_command("/provider my-proxy", state, cfg) is True
-        assert state["provider_id"] == "my-proxy"
-        assert state["provider_base_url"] == "http://proxy.test/v1"
-        assert state["provider_api_key"] == "sk-proxy"
+        assert state.provider_id == "my-proxy"
+        assert state.provider_base_url == "http://proxy.test/v1"
+        assert state.provider_api_key == "sk-proxy"
     finally:
         logins.set_config_dir(None)
 
@@ -965,14 +966,14 @@ def test_picker_open_preserves_explicit_logout_over_config(monkeypatch, tmp_path
         provider_base_url="http://cfg.test/v1",
         provider_api_key="cfg-key",
     )
-    state = {
-        "messages": [],
-        "system": "SYSTEM",
-        "model": cfg.model,
-        "provider_id": None,
-        "provider_base_url": None,
-        "provider_api_key": None,
-    }
+    state = ReplState(
+        messages=[],
+        system="SYSTEM",
+        model=cfg.model,
+        provider_id=None,
+        provider_base_url=None,
+        provider_api_key=None,
+    )
     captured = {}
 
     def fake_pick_model(**kwargs):
@@ -988,12 +989,12 @@ def test_picker_open_preserves_explicit_logout_over_config(monkeypatch, tmp_path
 
 def test_cfg_for_active_model_carries_provider_overrides(tmp_path):
     cfg = make_cfg(tmp_path)
-    state = {
-        "model": "other-model",
-        "provider_id": None,
-        "provider_base_url": "http://proxy.test/v1",
-        "provider_api_key": "sk-proxy",
-    }
+    state = ReplState(
+        model="other-model",
+        provider_id=None,
+        provider_base_url="http://proxy.test/v1",
+        provider_api_key="sk-proxy",
+    )
 
     active = cli._cfg_for_active_model(cfg, state)
     assert active.model == "other-model"
@@ -1007,13 +1008,13 @@ def test_cfg_for_active_model_keeps_pinned_provider_for_prefixed_model(tmp_path)
     # explicitly pinned provider must NOT let the prefix hijack the provider or
     # inherit the gateway's base/api/headers onto a native provider transport.
     cfg = make_cfg(tmp_path)
-    state = {
-        "model": "anthropic/claude-sonnet-4",
-        "provider_id": "omp",
-        "provider_base_url": "https://gateway.test/v1",
-        "provider_api_key": "sk-omp",
-        "provider_headers": {"x-omp": "1"},
-    }
+    state = ReplState(
+        model="anthropic/claude-sonnet-4",
+        provider_id="omp",
+        provider_base_url="https://gateway.test/v1",
+        provider_api_key="sk-omp",
+        provider_headers={"x-omp": "1"},
+    )
 
     active = cli._cfg_for_active_model(cfg, state)
     assert active.provider_id == "omp"
@@ -1027,12 +1028,12 @@ def test_cfg_for_active_model_strips_same_provider_prefix(tmp_path):
     # When the prefix names the pinned provider, the prefix is stripped without
     # disturbing the pinned credentials.
     cfg = make_cfg(tmp_path)
-    state = {
-        "model": "deepseek/deepseek-v4-flash",
-        "provider_id": "deepseek",
-        "provider_base_url": "https://api.deepseek.com",
-        "provider_api_key": "sk-deepseek",
-    }
+    state = ReplState(
+        model="deepseek/deepseek-v4-flash",
+        provider_id="deepseek",
+        provider_base_url="https://api.deepseek.com",
+        provider_api_key="sk-deepseek",
+    )
 
     active = cli._cfg_for_active_model(cfg, state)
     assert active.provider_id == "deepseek"
@@ -1049,12 +1050,12 @@ def test_cfg_for_active_model_routes_prefix_when_provider_unset(monkeypatch, tmp
     monkeypatch.setattr(logins, "_CONFIG_DIR_OVERRIDE", tmp_path / "logins")
     logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="x"))
     cfg = make_cfg(tmp_path)
-    state = {
-        "model": "deepseek/deepseek-v4-flash",
-        "provider_id": None,
-        "provider_base_url": None,
-        "provider_api_key": None,
-    }
+    state = ReplState(
+        model="deepseek/deepseek-v4-flash",
+        provider_id=None,
+        provider_base_url=None,
+        provider_api_key=None,
+    )
 
     active = cli._cfg_for_active_model(cfg, state)
     assert active.provider_id == "deepseek"
@@ -1086,11 +1087,11 @@ def test_repl_skill_command_sends_user_only_skill_and_rejects_unknown(monkeypatc
 
 def test_bare_skill_command_lists_builtin_skills_without_a_turn(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
-    state = {"messages": []}
+    state = ReplState(messages=[])
 
     assert cli._handle_command("/skill", state, make_cfg(tmp_path)) is True
 
     out = capsys.readouterr().out
-    assert state["messages"] == []
+    assert state.messages == []
     for name in ("grilling", "grill-me", "wayfinder"):
         assert name in out
