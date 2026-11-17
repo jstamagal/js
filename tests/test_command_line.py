@@ -56,6 +56,15 @@ def test_read_takes_the_values_the_parser_takes(argv):
     assert parsed["target"] == (positional[0] if positional else None)
 
 
+@pytest.mark.parametrize("prompt", ["-v is broken, fix", "--fix this", "-4", "-4.5", "-.5", "plain opener", "-", ""])
+@pytest.mark.parametrize("flag", ["-p", "--prompt", "-lp"])
+def test_read_takes_the_prompt_the_parser_takes(flag, prompt):
+    argv = [flag, prompt, "--model", "m"]
+    dest = "last_prompt" if flag == "-lp" else "prompt"
+    assert getattr(command_line.parser().parse_args(argv), dest) == prompt
+    assert [(arg.dest, arg.value) for arg in command_line.read(argv)] == [(dest, prompt), ("model", "m")]
+
+
 def test_argv_gives_each_option_its_value():
     words = command_line.argv(("--chat", True), ("--no-env", False), ("--tools", None), ("--you-are", ""),
                               ("--append-system-prompt", ("a", "b c")), ("-C", "/w"), ("--max-out", 5))
