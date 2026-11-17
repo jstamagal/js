@@ -533,3 +533,26 @@ def test_search_error_secrets_at_truncation_boundary(monkeypatch, tmp_path, fail
         assert "sk-boundar" not in result
     else:
         assert "sk-boundar" in result
+
+
+_LONG = "é" * 400
+# Per search tool: its key setting, and the replies that make its result long.
+_LONG_REPLIES: dict[str, tuple[str | None, tuple[bytes, ...]]] = {
+    "serper_search": ("SERPER_API_KEY", (json.dumps(
+        {"organic": [{"title": "t", "link": "https://x.test", "snippet": _LONG}]}).encode(),)),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_LONG_REPLIES))
+def test_a_long_search_result_is_cut_by_bytes_to_the_result_cap(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, name: str
+) -> None:
+    key_name, replies = _LONG_REPLIES[name]
+    if key_name is not None:
+        monkeypatch.setenv(key_name, "test-key")
+    _responses(monkeypatch, *replies)
+
+    actual = getattr(search, name)("zzz", context=ToolContext(cwd=tmp_path, max_tool_result_bytes=300))
+
+    assert len(actual.encode("utf-8")) <= 300
+    assert "TOOL_RESULT_MAX" in actual

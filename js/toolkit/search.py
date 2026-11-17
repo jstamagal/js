@@ -24,6 +24,7 @@ from ..capped_process import CappedProcessResult, _run_capped, truncation_marker
 from ..tool_binaries import resolve_binary
 from .core import Tool, ToolContext
 from .descriptions import load_description, load_parameter_description
+from .results import truncate
 from .sanitize import int_or_default, text_or_default
 
 
@@ -228,7 +229,7 @@ def serper_search(
     if answer:
         parts.append(f"answer box: {answer}")
     parts.append(numbered)
-    return _cap("\n\n".join(parts), context)
+    return truncate("\n\n".join(parts), context)
 
 
 def tavily_search(
