@@ -20,6 +20,7 @@ import ai
 
 from . import (
     compaction,
+    compaction_settings,
     console,
     context_budget,
     context_window,
@@ -239,7 +240,7 @@ def _prepare_turn_context(context: ToolContext, cfg: Config, request: ModelReque
     context.context_tokens = 0
     context.tokens_until_compaction = None
     context.turn_status.reset()
-    chars_per_token = compaction.get_float(cfg, "COMPACTION_CHARS_PER_TOKEN")
+    chars_per_token = compaction_settings.get_float(cfg, "COMPACTION_CHARS_PER_TOKEN")
     token_state = context.context_budget_state
     if token_state is None:
         token_state = context_budget.TokenState(chars_per_token=chars_per_token)

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from session_marks import append_compaction_mark
 
-from js import compaction, memory, persona, settings
+from js import compaction, compaction_settings, memory, persona, settings
 from js.capped_process import CappedProcessResult
 from js.config import Config, InvocationSources, from_env
 from js.toolkit.registry import build_default_registry
@@ -271,9 +271,9 @@ def test_configured_window_tracks_live_setting_and_catalog(tmp_path):
 def test_get_bool_always_returns_a_bool(tmp_path):
     """Garbage returned a non-bool default unchanged."""
     cfg = _compact_test_cfg(tmp_path, {"COMPACTION_AUTO": "maybe"})
-    assert compaction.get_bool(cfg, "COMPACTION_AUTO", "not-a-bool") is False
-    assert compaction.get_bool(cfg, "COMPACTION_AUTO", True) is True
-    assert compaction.get_bool(_compact_test_cfg(tmp_path, {"COMPACTION_AUTO": "yes"}), "COMPACTION_AUTO", None) is True
+    assert compaction_settings.get_bool(cfg, "COMPACTION_AUTO", "not-a-bool") is False
+    assert compaction_settings.get_bool(cfg, "COMPACTION_AUTO", True) is True
+    assert compaction_settings.get_bool(_compact_test_cfg(tmp_path, {"COMPACTION_AUTO": "yes"}), "COMPACTION_AUTO", None) is True
 
 
 def test_config_assembly_supplies_roots_and_display_services(tmp_path):

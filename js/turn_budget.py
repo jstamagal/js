@@ -20,6 +20,7 @@ from typing import Any
 
 from . import (
     compaction,
+    compaction_settings,
     history_record,
     messages as msgs,
     model_client,
@@ -149,7 +150,7 @@ class TurnBudget:
         knows."""
         return max(
             self._resolve_window() or 0,
-            compaction.get_int(self._cfg, "CONTEXT_SIZE", 0),
+            compaction_settings.get_int(self._cfg, "CONTEXT_SIZE", 0),
         ) or None
 
     async def fit(self, *, phase: str, specs: list[dict], force: bool = False,
@@ -163,14 +164,14 @@ class TurnBudget:
         Returns True when the history changed."""
         cfg, context = self._cfg, self._context
         system, messages = self._convo.system, self._convo.messages
-        if not force and not compaction.get_bool(cfg, "COMPACTION_AUTO"):
+        if not force and not compaction_settings.get_bool(cfg, "COMPACTION_AUTO"):
             return False
         context_window = self.context_window()
         if context_window <= 0 and not force:
             return False
         ai_tools = model_client.tool_specs_to_ai_tools(specs) if specs else None
         reserved = context_window - compaction.effective_context_window(cfg, context_window)
-        buffer_tokens = min(compaction.get_nonnegative_int(cfg, "COMPACTION_HEADROOM_TOKENS"), max(0, reserved))
+        buffer_tokens = min(compaction_settings.get_nonnegative_int(cfg, "COMPACTION_HEADROOM_TOKENS"), max(0, reserved))
         status = self._tokens.budget_status(
             system=system,
             messages=messages,
@@ -237,7 +238,7 @@ class TurnBudget:
         #    A summary that already failed in this check is not retried here.
         if check.summary_failed:
             return check.changed
-        tail_tokens = compaction.get_int(cfg, "COMPACTION_KEEP_RECENT_TOKENS")
+        tail_tokens = compaction_settings.get_int(cfg, "COMPACTION_KEEP_RECENT_TOKENS")
         if force:
             history_tokens = int(compaction.history_chars(messages) / check.chars_per_token)
             tail_tokens = min(tail_tokens, history_tokens) // 2 ** overflow_round

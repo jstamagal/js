@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 import ai
 
 from . import (
+    compaction_settings,
     context_budget,
     history_record,
     jail,
@@ -63,99 +64,8 @@ if TYPE_CHECKING:
 # --------------------------------------------------------------------------
 
 
-# A reader called without a default falls back to the knob's js/jsrc value.
-_JSRC = object()
-
-
-def _fallback(key: str, default: Any) -> Any:
-    return _settings.default_value(key) if default is _JSRC else default
-
-
-def get(cfg: Config, key: str, default: Any = _JSRC) -> Any:
-    """Setting ``key`` (`COMPACTION_AUTO`) from ``cfg.settings``."""
-    default = _fallback(key, default)
-    settings = getattr(cfg, "settings", {}) or {}
-    return settings.get(key, default) if isinstance(settings, dict) else default
-
-
-def get_bool(cfg: Config, key: str, default: Any = _JSRC) -> bool:
-    """A boolean knob. Garbage reads as the default, and a default that is not
-    a bool itself (a bad jsrc value) reads as False, so the result is a bool."""
-    default = _fallback(key, default)
-    value = get(cfg, key, default)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"1", "true", "yes", "on"}:
-            return True
-        if lowered in {"0", "false", "no", "off"}:
-            return False
-    return default if isinstance(default, bool) else False
-
-
-def get_int(cfg: Config, key: str, default: Any = _JSRC, *, max_value: int | None = None) -> int:
-    default = _fallback(key, default)
-    raw = get(cfg, key, default)
-    if isinstance(raw, bool):
-        return default
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return default
-    if value <= 0:
-        return default
-    if max_value is not None:
-        return min(value, max_value)
-    return value
-
-
-def get_nonnegative_int(cfg: Config, key: str, default: Any = _JSRC, *, max_value: int | None = None) -> int:
-    """Like get_int but 0 is a legal value, not a request for the default —
-    a buffer of 0 is a real choice."""
-    default = _fallback(key, default)
-    raw = get(cfg, key, default)
-    if isinstance(raw, bool):
-        return default
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return default
-    if value < 0:
-        return default
-    if max_value is not None:
-        return min(value, max_value)
-    return value
-
-
-def get_float(cfg: Config, key: str, default: Any = _JSRC, *, max_value: float | None = None) -> float:
-    default = _fallback(key, default)
-    raw = get(cfg, key, default)
-    if isinstance(raw, bool):
-        return default
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return default
-    if value <= 0:
-        return default
-    if max_value is not None and value > max_value:
-        return default
-    return value
-
-
-def get_model(cfg: Config) -> str:
-    raw = get(cfg, "COMPACTION_EXTERNAL_MODEL")
-    if not isinstance(raw, str):
-        return cfg.model
-    model = raw.strip()
-    if not model or model.lower() == "same":
-        return cfg.model
-    return model
-
-
 def _pre_hook_command(cfg: Config) -> str:
-    raw = get(cfg, "COMPACTION_HINT_COMMAND")
+    raw = compaction_settings.get(cfg, "COMPACTION_HINT_COMMAND")
     if not isinstance(raw, str):
         return ""
     return raw.strip()
@@ -400,7 +310,7 @@ def recover_overflow(
     """Record and announce tool-result clearing after a provider overflow.
     ``log_dir`` is where the flight log goes (None: no log); notices go to
     ``emit``."""
-    keep_recent = max(0, get_nonnegative_int(cfg, "COMPACTION_OVERFLOW_KEEP_TOOL_RESULTS") // round_)
+    keep_recent = max(0, compaction_settings.get_nonnegative_int(cfg, "COMPACTION_OVERFLOW_KEEP_TOOL_RESULTS") // round_)
     flight = _clearing_flight(
         messages, cfg=cfg, system=system,
         trigger={"phase": "overflow_recovery", "round": round_,
@@ -427,7 +337,7 @@ def clear_for_budget(
     each round down to one. An explicit zero clears all eligible results.
     Returns (results_cleared, chars_reclaimed). ``log_dir`` and ``emit`` are
     as for :func:`recover_overflow`."""
-    keep_recent = get_nonnegative_int(cfg, "COMPACTION_KEEP_TOOL_RESULTS")
+    keep_recent = compaction_settings.get_nonnegative_int(cfg, "COMPACTION_KEEP_TOOL_RESULTS")
     flight = _clearing_flight(messages, cfg=cfg, system=system, trigger=trigger, flight_data=flight_data,
                               log_dir=log_dir, emit=emit)
     with _flight_recording(flight, system, messages):
@@ -474,7 +384,7 @@ CACHE_BREAK_MIN_TOKENS = 2000
 def cache_expired(cfg: Config, context: Any, *, now: float | None = None) -> bool:
     """Whether the prompt cache of ``context``'s conversation has outlived
     ``COMPACTION_CACHE_TTL``. No request yet counts as expired."""
-    ttl = get_nonnegative_int(cfg, "COMPACTION_CACHE_TTL")
+    ttl = compaction_settings.get_nonnegative_int(cfg, "COMPACTION_CACHE_TTL")
     last = context.last_request_at
     if ttl == 0 or last is None:
         return True
@@ -513,14 +423,14 @@ def history_rewritten(context: Any) -> None:
 
 def auto_paused(cfg: Config, context: Any) -> bool:
     """Whether failed summaries have paused automatic compaction on ``context``."""
-    return context.summary_failures >= get_int(cfg, "COMPACTION_FAILURES_MAX")
+    return context.summary_failures >= compaction_settings.get_int(cfg, "COMPACTION_FAILURES_MAX")
 
 
 def record_auto_failure(cfg: Config, context: Any) -> msgs.Said | None:
     """Count one failed automatic summary. Returns the pause notice on the
     failure that reaches ``COMPACTION_FAILURES_MAX``, else None."""
     context.summary_failures += 1
-    limit = get_int(cfg, "COMPACTION_FAILURES_MAX")
+    limit = compaction_settings.get_int(cfg, "COMPACTION_FAILURES_MAX")
     if context.summary_failures == limit:
         return msgs.AUTO_COMPACT_BREAKER.said(failures=limit)
     return None
@@ -631,9 +541,9 @@ def _post_compact_rehydration(
 
 
 def thresholds(cfg: Config) -> tuple[float, float, float]:
-    notify_at = get_float(cfg, "COMPACTION_WARN_AT", max_value=1.0)
-    trigger_at = get_float(cfg, "COMPACTION_START_AT", max_value=1.0)
-    force_at = get_float(cfg, "COMPACTION_FORCE_AT", max_value=1.0)
+    notify_at = compaction_settings.get_float(cfg, "COMPACTION_WARN_AT", max_value=1.0)
+    trigger_at = compaction_settings.get_float(cfg, "COMPACTION_START_AT", max_value=1.0)
+    force_at = compaction_settings.get_float(cfg, "COMPACTION_FORCE_AT", max_value=1.0)
     if not (notify_at <= trigger_at <= force_at):
         return (
             _settings.default_value("COMPACTION_WARN_AT"),
@@ -646,8 +556,8 @@ def thresholds(cfg: Config) -> tuple[float, float, float]:
 def configured_context_window(cfg: Config, resolve_window: Any) -> int:
     """One configured window for the banner and both compaction triggers:
     CONTEXT_SIZE, else the resolved window, else CONTEXT_SIZE_UNKNOWN."""
-    window = get_int(cfg, "CONTEXT_SIZE", 0) or int(resolve_window() or 0)
-    return window if window > 0 else get_int(cfg, "CONTEXT_SIZE_UNKNOWN")
+    window = compaction_settings.get_int(cfg, "CONTEXT_SIZE", 0) or int(resolve_window() or 0)
+    return window if window > 0 else compaction_settings.get_int(cfg, "CONTEXT_SIZE_UNKNOWN")
 
 
 def effective_context_window(cfg: Config, context_window: int) -> int:
@@ -667,9 +577,9 @@ def effective_context_window(cfg: Config, context_window: int) -> int:
     # happens. Cap it the way Claude Code does (min(max_output, 20k)).
     reserve = min(
         max(0, int(max_out or 0)),
-        get_nonnegative_int(cfg, "COMPACTION_REPLY_RESERVE_TOKENS"),
+        compaction_settings.get_nonnegative_int(cfg, "COMPACTION_REPLY_RESERVE_TOKENS"),
     )
-    buffer_tokens = get_nonnegative_int(cfg, "COMPACTION_HEADROOM_TOKENS")
+    buffer_tokens = compaction_settings.get_nonnegative_int(cfg, "COMPACTION_HEADROOM_TOKENS")
     # Never let the reserve eat the whole window on a model with a huge declared
     # output cap; keep at least half the window addressable for input.
     return max(context_window // 2, context_window - reserve - buffer_tokens)
@@ -701,7 +611,7 @@ def estimated_prompt_tokens(cfg: Config, system: str, messages: list[dict]) -> i
     reads 0, does nothing, and the history that caused the failure survives
     into the next attempt unchanged.
     """
-    cpt = get_float(cfg, "COMPACTION_CHARS_PER_TOKEN")
+    cpt = compaction_settings.get_float(cfg, "COMPACTION_CHARS_PER_TOKEN")
     try:
         return (
             context_budget.estimate_messages_tokens(messages or [], chars_per_token=cpt)
@@ -720,7 +630,7 @@ def _calibrated_chars_per_token(cfg: Config, system: str, messages: list[dict], 
     estimator drifts far enough that "keep 16k of tail" kept something quite
     different from 16k.
     """
-    configured = get_float(cfg, "COMPACTION_CHARS_PER_TOKEN")
+    configured = compaction_settings.get_float(cfg, "COMPACTION_CHARS_PER_TOKEN")
     try:
         # The tracker lives on the tool context (set in run_turn_async), not in
         # module scope — reading a global here would silently always miss.
@@ -760,12 +670,12 @@ def _run_pre_hook(cfg: Config) -> str:
     hook = _pre_hook_command(cfg)
     if not hook:
         return ""
-    shell_path = get(cfg, "COMPACTION_HINT_SHELL_PROGRAM") or os.environ.get("SHELL", "/bin/sh")
+    shell_path = compaction_settings.get(cfg, "COMPACTION_HINT_SHELL_PROGRAM") or os.environ.get("SHELL", "/bin/sh")
     cap = int(_settings.knob_attr(cfg, "max_bash_output_bytes", "SHELL_OUTPUT_MAX"))
     try:
         result = _run_capped(
             [shell_path, "-c", hook],
-            timeout=get_int(cfg, "COMPACTION_HINT_TIMEOUT"),
+            timeout=compaction_settings.get_int(cfg, "COMPACTION_HINT_TIMEOUT"),
             cwd=str(getattr(cfg, "project_dir", os.getcwd())),
             env=None,
             cap=cap,
@@ -901,7 +811,7 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
         explicit_model=True,
     )
     previous, rest = _split_previous_summary(list(messages))
-    tool_result_chars = get_nonnegative_int(cfg, "COMPACTION_SUMMARY_RESULT_CHARS_MAX")
+    tool_result_chars = compaction_settings.get_nonnegative_int(cfg, "COMPACTION_SUMMARY_RESULT_CHARS_MAX")
     settings = getattr(cfg, "settings", None)
     limits = retry.StreamLimits.from_settings(settings)
     budget = retry.Budget.from_settings(settings)
@@ -917,7 +827,7 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
                 provider_api_key=route.api_key,
                 messages=[ai.user_message(prompt)],
                 tools=None,
-                max_output_tokens=get_int(cfg, "COMPACTION_SUMMARY_TOKENS_MAX", max_value=get_int(cfg, "COMPACTION_SUMMARY_REQUEST_TOKENS_MAX")),
+                max_output_tokens=compaction_settings.get_int(cfg, "COMPACTION_SUMMARY_TOKENS_MAX", max_value=compaction_settings.get_int(cfg, "COMPACTION_SUMMARY_REQUEST_TOKENS_MAX")),
                 reasoning_effort=None,
                 on_text=lambda text: ACTIVE_FLIGHT.get().record("summary_chunk", text=text) if ACTIVE_FLIGHT.get() else None,
                 provider_headers=model_client.turn_headers(route.headers, cfg),
@@ -1033,8 +943,8 @@ async def compact_now(
     with _flight_recording(flight, system, messages):
         chars_per_token = _calibrated_chars_per_token(cfg, system, messages, context)
         if tail_tokens is None:
-            tail_tokens = get_int(cfg, "COMPACTION_KEEP_RECENT_TOKENS")
-        min_savings = get_int(cfg, "COMPACTION_MIN_SAVINGS_TOKENS")
+            tail_tokens = compaction_settings.get_int(cfg, "COMPACTION_KEEP_RECENT_TOKENS")
+        min_savings = compaction_settings.get_int(cfg, "COMPACTION_MIN_SAVINGS_TOKENS")
         original_len = len(messages)
         keep_from = _safe_tail_start(messages, tail_tokens, chars_per_token)
         if preserve_from is not None:
@@ -1052,7 +962,7 @@ async def compact_now(
             result = msgs.COMPACT_SKIPPED_SAVINGS.said(savings=original_est - tail_est, required=min_savings)
             flight.finish("skipped", system, messages, result=result)
             return result
-        compact_model = model or get_model(cfg)
+        compact_model = model or compaction_settings.get_model(cfg)
         flight.notice("start", msgs.COMPACTION_FLIGHT_START.words(compact_model=compact_model, value=trigger or 'manual', original_len=original_len))
         phase = (trigger or {}).get("phase", "manual")
         if emit is not None:
@@ -1068,9 +978,9 @@ async def compact_now(
         rehydrated = _post_compact_rehydration(
             context or T.STOCK_CONTEXT,
             chars_per_token=chars_per_token,
-            max_files=get_nonnegative_int(cfg, "COMPACTION_REATTACH_FILES_MAX"),
-            token_budget=get_nonnegative_int(cfg, "COMPACTION_REATTACH_TOKENS_MAX"),
-            per_file_tokens=get_nonnegative_int(cfg, "COMPACTION_REATTACH_FILE_TOKENS_MAX"),
+            max_files=compaction_settings.get_nonnegative_int(cfg, "COMPACTION_REATTACH_FILES_MAX"),
+            token_budget=compaction_settings.get_nonnegative_int(cfg, "COMPACTION_REATTACH_TOKENS_MAX"),
+            per_file_tokens=compaction_settings.get_nonnegative_int(cfg, "COMPACTION_REATTACH_FILE_TOKENS_MAX"),
         )
         marker, after = M.compaction_mark(messages, keep_from, summary=summary, forced=forced,
                                           trigger=recorded_trigger, rehydrated=rehydrated)
@@ -1224,7 +1134,7 @@ async def maybe_auto_compact_async(
     context.last_prompt_tokens = 0
     context.last_output_tokens = 0
     ac.consecutive += 1
-    if ac.consecutive >= get_int(cfg, "COMPACTION_CONSECUTIVE_MAX"):
+    if ac.consecutive >= compaction_settings.get_int(cfg, "COMPACTION_CONSECUTIVE_MAX"):
         ac.paused = True
         out.notices.append(msgs.AUTO_COMPACT_PAUSED.said())
     return out

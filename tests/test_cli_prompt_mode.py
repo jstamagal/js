@@ -18,6 +18,7 @@ from js import (
     bench,
     cli,
     commit_cli,
+    compaction_settings,
     context_window,
     conversation,
     listings,
@@ -875,7 +876,7 @@ def test_offline_compact_model_flag_overrides_same_model(monkeypatch, tmp_path):
     seen: list[str] = []
 
     def compact_stub(cfg, system, messages, *, model=None, focus="", forced=False, **kwargs):
-        seen.append(model or cli.compaction.get_model(cfg))
+        seen.append(model or compaction_settings.get_model(cfg))
         return msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")
 
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=compact_stub))

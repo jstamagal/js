@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextvars import ContextVar
 from typing import Any
 
-from . import compaction, model_metadata, providers
+from . import compaction_settings, model_metadata, providers
 from .config import Config
 
 _CONTEXT_WINDOW_OVERRIDES: ContextVar[dict[str, int] | None] = ContextVar(
@@ -56,7 +56,7 @@ def install_context_window_overrides(cfg: Config) -> None:
     OUTPUT_TOKENS_MAX, and wins — it names the model actually running.
     CONTEXT_SIZE_PER_MODEL is the multi-model map.
     """
-    overrides = dict(compaction.get(cfg, "CONTEXT_SIZE_PER_MODEL", None) or {})
+    overrides = dict(compaction_settings.get(cfg, "CONTEXT_SIZE_PER_MODEL", None) or {})
     explicit = getattr(cfg, "model_context_window", None)
     if explicit:
         key = f"{cfg.provider_id}/{cfg.model}" if cfg.provider_id else cfg.model

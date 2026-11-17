@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 from . import (
     attach,
     compaction,
+    compaction_settings,
     context_window,
     memory,
     messages as msgs,
@@ -122,7 +123,7 @@ class Conversation:
         """The between-turn check: compact when the history is full enough,
         as COMPACTION_AUTO says. ``emit`` and ``log_dir`` go to
         `compaction.compact_now`."""
-        if not compaction.get_bool(self.cfg, "COMPACTION_AUTO"):
+        if not compaction_settings.get_bool(self.cfg, "COMPACTION_AUTO"):
             return False
         window = lambda: context_window.resolve_context_window(  # noqa: E731
             self.cfg.model, self.cfg.provider_id, self.cfg.provider_base_url)
@@ -204,7 +205,7 @@ async def maybe_auto_compact_async(cfg: Config, state: ReplState) -> None:
     printing lives here. The gate reads the live settings, so a /set made
     during the turn decides whether the turn's end compacts."""
     active_cfg = state.config_for_turn(cfg)
-    if not compaction.get_bool(active_cfg, "COMPACTION_AUTO"):
+    if not compaction_settings.get_bool(active_cfg, "COMPACTION_AUTO"):
         return
     turn_status = runtime.T.STOCK_CONTEXT.turn_status
     turn_status.compacting = True

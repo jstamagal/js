@@ -13,7 +13,15 @@ import ai
 import pytest
 from test_lazy_tool_discovery import _cfg, _result
 
-from js import compaction, context_budget, context_window, messages as msgs, model_client, runtime
+from js import (
+    compaction,
+    compaction_settings,
+    context_budget,
+    context_window,
+    messages as msgs,
+    model_client,
+    runtime,
+)
 from js.toolkit import ToolContext
 from js.toolkit.core import TurnStatus
 from js.toolkit.registry import build_default_registry
@@ -236,7 +244,7 @@ def test_a_turn_over_budget_on_its_own_summarizes_itself_keeping_a_tail(tmp_path
     assert kinds.index("context_clearing_deferred") < kinds.index("context_results_cleared")
     assert len(calls) == 1
     assert calls[0]["preserve_from"] is None
-    assert calls[0]["tail_tokens"] == compaction.get_int(setup.cfg, "COMPACTION_KEEP_RECENT_TOKENS")
+    assert calls[0]["tail_tokens"] == compaction_settings.get_int(setup.cfg, "COMPACTION_KEEP_RECENT_TOKENS")
 
 
 def test_a_failed_summary_is_not_retried_in_the_same_check(tmp_path, monkeypatch):

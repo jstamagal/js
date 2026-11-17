@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from test_config_compaction_layers import _compact_test_cfg
 
-from js import cli, paths, repl_session_commands, repl_state, run_assembly
+from js import cli, compaction_settings, paths, repl_session_commands, repl_state, run_assembly
 from js.repl_state import ReplState
 
 
@@ -130,7 +130,7 @@ def test_offline_compaction_explicit_model_wins_without_rewriting_config(monkeyp
     observed = []
 
     def compact(actual_cfg, system, messages, *, model=None, **kwargs):
-        observed.append((actual_cfg.model, model or cli.compaction.get_model(actual_cfg)))
+        observed.append((actual_cfg.model, model or compaction_settings.get_model(actual_cfg)))
         return "summary complete"
 
     monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
