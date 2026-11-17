@@ -780,13 +780,13 @@ def _rewrites_history(marker: object) -> bool:
         marker == "session_reset" or marker.startswith("rollback_to:") or marker.startswith("compaction:"))
 
 
-def _lines_newest_first(stream, block: int = 1 << 16):
+def _lines_newest_first(stream):
     """The lines of a binary ``stream``, last line first, read back from the end in blocks."""
     stream.seek(0, 2)
     position = stream.tell()
     rest = b""
     while position > 0:
-        step = min(block, position)
+        step = min(1 << 16, position)
         position -= step
         stream.seek(position)
         lines = (stream.read(step) + rest).split(b"\n")
