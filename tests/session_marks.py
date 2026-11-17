@@ -12,5 +12,6 @@ def append_compaction_mark(memory_file: Path, *, summary: str, keep_from: int, f
                            trigger: dict | None = None, rehydrated: dict | None = None) -> None:
     """Append the mark a compaction to ``summary`` keeping messages from
     ``keep_from`` on would write."""
-    memory.append_mark(memory_file, memory._compaction_marker(
-        summary=summary, keep_from=keep_from, forced=forced, trigger=trigger, rehydrated=rehydrated))
+    marker, _history = memory.compaction_mark([], keep_from, summary=summary, forced=forced,
+                                              trigger=trigger, rehydrated=rehydrated)
+    memory.append_mark(memory_file, marker)

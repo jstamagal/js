@@ -30,7 +30,8 @@ def test_malformed_or_unsupported_part_mappings_still_fail(role, item):
 def test_sdk_parts_are_preserved_by_identity():
     text = ai.types.messages.TextPart(text="text")
     reasoning = ai.thinking("reasoning")
-    parts = history_record._coerce_parts([text, reasoning])
+    [message] = history_record.history_to_ai_messages("", [{"role": "assistant", "content": [text, reasoning]}])
+    parts = message.parts
     assert parts[0] is text
     assert parts[1] is reasoning
 

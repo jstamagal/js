@@ -163,7 +163,6 @@ async def wire(mode):
         for n in range(8)
     ]
     messages.append({"role": "user", "content": "run tools"})
-    user = messages[-1]
     for message in messages:
         M.append_message(cfg.session_file, message)
     stats = []
@@ -180,7 +179,7 @@ async def wire(mode):
                 suppress_output=True,
                 call_stats=stats,
             )
-            persist_turn(cfg, messages, user)
+            persist_turn(cfg, messages)
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
     finally:

@@ -66,6 +66,24 @@ def stderr_of(monkeypatch, fn):
 # toolbox on disk — no kernel needed
 # ---------------------------------------------------------------------------
 
+# A tool file's provenance header: one comment line holding a JSON object.
+HEADER_PREFIX = "# js-toolbox: "
+
+
+def header_line(meta: dict) -> str:
+    return HEADER_PREFIX + json.dumps(meta, separators=(",", ":"), sort_keys=True)
+
+
+def saved_header(path: Path) -> dict:
+    [line] = [line for line in path.read_text(encoding="utf-8").splitlines() if line.startswith(HEADER_PREFIX)]
+    return json.loads(line[len(HEADER_PREFIX):])
+
+
+def archived_revisions(record) -> list[int]:
+    """The revisions of `record` kept in its directory's .history."""
+    archived = (record.path.parent / ".history").glob(f"{record.name}.r*.py")
+    return sorted(int(path.name.removeprefix(f"{record.name}.r").removesuffix(".py")) for path in archived)
+
 
 @pytest.mark.parametrize("definition", [
     "def sample():\n    return 1\n",
@@ -93,7 +111,7 @@ def test_malformed_history_entries_preserve_listing_and_valid_revisions(ctx, bad
     directory = tbmod.toolbox_dirs(cwd)[0]
     directory.mkdir(parents=True)
     valid = {"revision": 1, "model": "first", "date": "2026-01-01", "note": "original"}
-    original = tbmod._render_header({"revision": 2, "history": [bad_entry, valid]})
+    original = header_line({"revision": 2, "history": [bad_entry, valid]})
     original += "\n\ndef sample():\n    return 1\n"
     target = directory / "sample.py"
     target.write_text(original, encoding="utf-8")
@@ -107,7 +125,7 @@ def test_malformed_history_entries_preserve_listing_and_valid_revisions(ctx, bad
 
     report = tbmod.write_revision(cwd, "sample", "def sample():\n    return 3\n", model="next")
     assert "sample r3" in report
-    saved = tbmod._parse_header(target.read_text(encoding="utf-8"))
+    saved = saved_header(target)
     assert saved["history"][0] == valid
     assert [entry["model"] for entry in saved["history"]] == ["first", "next"]
     assert (directory / ".history" / "sample.r2.py").read_text(encoding="utf-8") == original
@@ -120,7 +138,7 @@ def test_non_string_history_models_do_not_break_listing_or_saving(ctx, model):
     directory.mkdir(parents=True)
     history = [{"revision": 1, "model": model}]
     target = directory / "sample.py"
-    target.write_text(tbmod._render_header({"revision": 1, "history": history})
+    target.write_text(header_line({"revision": 1, "history": history})
                       + "\n\ndef sample():\n    return 1\n", encoding="utf-8")
 
     assert "sample r1 [global] unknown" in tbmod.describe(cwd)
@@ -135,7 +153,7 @@ def test_save_writes_a_parseable_provenance_header_with_model_note_and_revision(
                          model="qwen", note="first cut", stamp=time.time())
 
     path = tbmod.toolbox_dirs(Path(ctx.cwd))[0] / "adder.py"
-    header = tbmod._parse_header(path.read_text(encoding="utf-8"))
+    header = saved_header(path)
 
     assert header["name"] == "adder"
     assert header["revision"] == 1
@@ -203,7 +221,7 @@ def test_revision_numbering_does_not_mix_global_and_project_archives(ctx):
     archive.write_text("global revision nine")
 
     tbmod.write_revision(cwd, "adder", "def adder():\n    return 2\n", scope="project")
-    assert tbmod._parse_header((project_dir / "adder.py").read_text())["revision"] == 2
+    assert saved_header(project_dir / "adder.py")["revision"] == 2
     assert archive.read_text() == "global revision nine"
 
 
@@ -238,7 +256,7 @@ def test_restore_writes_the_old_body_as_a_new_revision_so_history_only_grows(ctx
     assert "return a + b" in record.path.read_text(encoding="utf-8")
     assert [entry["note"] for entry in record.history] == [
         "", "broke it", "rolled back to r1"]
-    assert tbmod._archived_revisions(record) == [1, 2]
+    assert archived_revisions(record) == [1, 2]
 
 
 def test_history_reports_every_revision_and_what_can_be_restored(ctx):
@@ -362,7 +380,7 @@ def test_toolbox_save_refuses_source_without_the_named_definition(ctx):
     assert path.read_bytes() == before
     assert result.startswith("ERROR")
     assert tbmod.discover(cwd)["adder"].revision == 1
-    assert tbmod._archived_revisions(tbmod.discover(cwd)["adder"]) == []
+    assert archived_revisions(tbmod.discover(cwd)["adder"]) == []
 
 
 def test_model_facing_cap_uses_the_js_limit_knob_and_names_it_in_the_marker(ctx):

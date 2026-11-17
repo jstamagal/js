@@ -172,8 +172,7 @@ def test_from_env_respects_provider_runtime_caps_agent_and_no_save(monkeypatch, 
     assert not hasattr(actual, "OPENAI_API_BASE")
     assert not hasattr(actual, "OPENAI_API_KEY")
     assert actual.trace is False
-    # `max` is a real ladder stop (reasoning.py) -- config._norm_effort no
-    # longer collapses it to "high" (dropped from _EFFORT_ALIASES).
+    # `max` is a real ladder stop (reasoning.py), kept as it is.
     assert actual.reasoning_effort == "max"
     assert actual.max_output_tokens == 1234
     assert actual.max_tool_iterations == 7

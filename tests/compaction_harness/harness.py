@@ -127,13 +127,9 @@ def observed(name, checks, **evidence):
     print(json.dumps(rec, default=str), flush=True)
 
 
-def persist_turn(cfg, messages, user):
-    import inspect
-
-    if "user_recorded" in inspect.signature(repl._persist_turn_messages).parameters:
-        repl._persist_turn_messages(cfg, messages, user, user_recorded=True)
-    else:
-        repl._persist_turn_messages(cfg, messages)
+def persist_turn(cfg, messages):
+    """Write the turn's messages to the session as the REPL does after a turn."""
+    M.persist_messages(cfg.session_file, messages, stamp=microcompact.cfg_stamp(cfg))
 
 
 async def summary_fault(mode):
@@ -379,7 +375,7 @@ async def run_loop(mode):
                 tool_registry=registry,
                 suppress_output=True,
             )
-            persist_turn(cfg, messages, user)
+            persist_turn(cfg, messages)
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
     loaded = M.load_messages(cfg.session_file)
@@ -629,9 +625,8 @@ async def zero_usage_executor():
                 state,
                 R.Telemetry(None),
                 PromptSpec("", ()),
-                SimpleNamespace(runtime_message=user, history_message=user),
+                user,
                 cfg,
-                2,
                 asyncio.get_running_loop(),
             )
         except Exception as exc:
@@ -774,12 +769,7 @@ async def journal_sequence():
                 await C.compact_now(cfg, "", messages, forced=True)
         elif op == "resume":
             messages = M.load_messages(cfg.session_file)
-        if hasattr(M, "persist_messages"):
-            M.persist_messages(cfg.session_file, messages)
-        else:
-            # Legacy CLI persistence only appends current-turn suffix. Compare the current implementation directly.
-            if messages:
-                repl._persist_turn_messages(cfg, messages, messages[-1], user_recorded=False)
+        M.persist_messages(cfg.session_file, messages)
         if M.load_messages(cfg.session_file) != messages:
             mismatches.append(step)
         operations.append(op)
@@ -792,12 +782,20 @@ async def journal_sequence():
 
 
 async def tail_budget():
+    cfg = cfg_for("tail_budget", COMPACTION_KEEP_RECENT_TOKENS=100, COMPACTION_CHARS_PER_TOKEN=4)
     messages = [
         {"role": "user", "content": "old " * 15000},
         {"role": "assistant", "content": "prior answer"},
         {"role": "user", "content": "continue"},
     ]
-    start = C._safe_tail_start(messages, 100, 4)
+
+    async def provider(**kw):
+        return result("summary")
+
+    with patch.object(MC, "stream_model_async", provider):
+        await C.compact_now(cfg, "", messages, forced=True, context=ToolContext(cwd=cfg.agent_dir))
+    marks = [json.loads(line).get("marker", "") for line in cfg.session_file.read_text().splitlines()]
+    start = json.loads(next(m for m in marks if m.startswith("compaction:")).split(":", 1)[1])["keep_from"]
     observed("tail_budget", {"oversized_old_message_not_kept": start == 1}, keep_from=start)
 
 
@@ -863,9 +861,8 @@ async def compacted_turn_cancel(error=False):
                 state,
                 R.Telemetry(None),
                 PromptSpec("", ()),
-                SimpleNamespace(runtime_message=user, history_message=user),
+                user,
                 cfg,
-                20,
                 asyncio.get_running_loop(),
             )
         except asyncio.CancelledError:
@@ -932,9 +929,8 @@ async def between_turn_cancel():
                 state,
                 R.Telemetry(None),
                 PromptSpec("", ()),
-                SimpleNamespace(runtime_message=user, history_message=user),
+                user,
                 cfg,
-                1,
                 asyncio.get_running_loop(),
             )
         )

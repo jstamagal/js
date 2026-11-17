@@ -8,7 +8,7 @@ from js import memory
 @pytest.mark.parametrize("reader, expected", [
     (memory.load_replay_messages, []),
     (memory.load_messages, []),
-    (lambda path: memory._last_mark_payload(path, "checkpoint:"), None),
+    (memory.last_prompt_seen, None),
     (memory.last_reply_stamp, None),
 ])
 def test_missing_session_read_leaves_parent_absent(tmp_path, reader, expected):
@@ -41,5 +41,5 @@ def test_existing_session_reads_and_append_creation_still_work(tmp_path):
     before = path.read_bytes()
     assert [message["content"] for message in memory.load_replay_messages(path)] == ["question", "answer"]
     assert memory.last_reply_stamp(path) == stamp
-    assert memory._last_mark_payload(path, "not-present:") is None
+    assert memory.last_prompt_seen(path) is None
     assert path.read_bytes() == before

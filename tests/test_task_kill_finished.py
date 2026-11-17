@@ -62,8 +62,10 @@ def test_open_loop_runtime_error_is_not_swallowed(monkeypatch):
         raise failure
 
     monkeypatch.setattr(loop, "call_soon_threadsafe", fail)
+    # Still running as far as kill can tell, so kill runs the job's cancel hook.
+    monkeypatch.setattr(job.future, "done", lambda: False)
     with pytest.raises(RuntimeError) as caught:
-        job._cancel()
+        job.kill()
     assert caught.value is failure
 
 

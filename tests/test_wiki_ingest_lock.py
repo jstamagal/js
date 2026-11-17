@@ -68,6 +68,9 @@ def test_failed_lock_index_cleanup_does_not_continue_commit(tmp_path, monkeypatc
     vault = tmp_path / "vault"
     vault.mkdir()
     git(vault, "init")
+    (vault / "PURPOSE.md").write_text("fixture wiki")
+    (vault / "inbox" / "u1").mkdir(parents=True)
+    (vault / "inbox" / "u1" / "data.md").write_text("intended archive")
     context = ToolContext(cwd=vault)
     original_run = ops.run
     commands = []
@@ -79,7 +82,7 @@ def test_failed_lock_index_cleanup_does_not_continue_commit(tmp_path, monkeypatc
         return original_run(cmd, context, *args, **kwargs)
 
     monkeypatch.setattr(ops, "run", fail_remove)
-    result = ops._commit(vault, "fixture", context)
+    result = ops.wiki_finish_ingest(str(vault), "u1", "fixture", context=context)
 
     assert result.startswith("ERROR:")
     assert not any("add" in cmd or "commit" in cmd for cmd in commands)

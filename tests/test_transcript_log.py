@@ -61,19 +61,19 @@ def _cfg(tmp_path: Path, log_dir: Path, *, session_name: str = "sess.jsonl") -> 
 
 
 def test_transcript_log_knob_defaults_on(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_SESSION", raising=False)
-    monkeypatch.delenv("JS_TRANSCRIPT_LOG", raising=False)
+    from js import settings
 
-    from js.config import from_env
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_kwargs: _fake_stream_result("OK"))
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", AsyncMock())
 
-    cfg = from_env()
-    path = transcript._transcript_log_path(cfg, cfg.settings)
-    assert cfg.transcript_log is True
-    assert path is not None
+    assert js(monkeypatch, "-p", "hello") == 0
+
+    [path] = (tmp_path / ".js" / "logs" / "transcript").rglob("*.log")
+    [session] = (tmp_path / ".js" / "sessions").rglob("*.jsonl")
     assert path.parent.parent.name == "transcript"
-    assert path.parent.name == cfg.agent_id
-    assert path.stem == cfg.session_file.stem
+    assert path.parent.name == settings.default_value("DEFAULT_AGENT")
+    assert path.stem == session.stem
 
 
 def test_prompt_mode_transcript_logs_final_answer_with_ape(monkeypatch, tmp_path, capsys):

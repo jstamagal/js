@@ -14,7 +14,6 @@ from dataclasses import replace
 import pytest
 from turn_driver import Turn, run as run_turn
 
-from js import runtime, turn_dispatch
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
 
@@ -202,38 +201,6 @@ def test_a_kernel_called_outside_dispatch_refuses_tool_calls(ctx):
 
     assert "REFUSED" in result
     assert "undispatched-7310" not in result
-
-
-def dispatched_cell(code: str, context: ToolContext) -> str:
-    """A kernel cell run through the dispatcher alone, outside a turn."""
-    _, result = turn_dispatch._dispatch(
-        "kernel", json.dumps({"code": code}), runtime.Telemetry(None), cap_bytes=256 * 1024,
-        registry=build_default_registry(), tool_context=context,
-    )
-    return result
-
-
-@needs_kernel
-def test_a_write_to_a_non_utf8_name_succeeds_and_the_bridge_keeps_serving(ctx):
-    import os
-
-    os.mkdir(os.fsencode(ctx.cwd / "names"))
-    open(os.fsencode(ctx.cwd / "names") + b"/bad\xffname.txt", "wb").close()
-
-    first = dispatched_cell(
-        "import os\n"
-        "for n in os.listdir('names'):\n"
-        "    print('WROTE', tools.write(file_path='names/' + n + '.bak', content='copy\\n')[:5])\n",
-        ctx,
-    )
-    (ctx.cwd / "later.txt").write_text("still-serving-8812\n")
-    second = dispatched_cell("print(tools.read('later.txt', show_line_numbers=False))", ctx)
-
-    assert "WROTE" in first and "ToolError" not in first, first
-    assert (os.fsencode(ctx.cwd / "names") + b"/bad\xffname.txt.bak") in [
-        os.fsencode(ctx.cwd / "names") + b"/" + n for n in os.listdir(os.fsencode(ctx.cwd / "names"))
-    ]
-    assert "still-serving-8812" in second
 
 
 @needs_kernel

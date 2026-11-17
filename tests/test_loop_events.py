@@ -30,9 +30,9 @@ def test_retry_emits_its_wait_and_failure_without_rendering(capsys):
     assert capsys.readouterr() == ("", "")
 
 
-def test_compaction_flight_failure_goes_to_the_callback(monkeypatch, capsys):
-    import pytest
-
+def test_compaction_flight_failure_goes_to_the_callback(monkeypatch, tmp_path, capsys):
+    import ai
+    from test_config_compaction_layers import _compact_test_cfg
 
     failure = OSError("read only")
     def unavailable(*args, **kwargs):
@@ -41,8 +41,9 @@ def test_compaction_flight_failure_goes_to_the_callback(monkeypatch, capsys):
     monkeypatch.setattr(microcompact, "CompactionFlight", unavailable)
     events = []
     with pytest.raises(OSError):
-        microcompact._clearing_flight([], cfg=None, system="", trigger={}, flight_data={},
-                                    log_dir=None, emit=lambda name, **fields: events.append((name, fields)))
+        microcompact.recover_overflow([], 1, cfg=_compact_test_cfg(tmp_path, {}), system="",
+                                      error=ai.ProviderAPIError("context length exceeded"), flight_data={},
+                                      log_dir=None, emit=lambda name, **fields: events.append((name, fields)))
     assert events[0][0] == "compaction_output"
     notice = events[0][1]["output"]
     assert dict(notice.fields)["fields"]["error"] is failure

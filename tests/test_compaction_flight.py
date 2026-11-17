@@ -85,7 +85,7 @@ def test_between_turn_uses_changed_live_window(monkeypatch, tmp_path):
 def test_same_repl_set_override_updates_anchor_then_request_budget(monkeypatch, tmp_path, capsys):
     from dataclasses import replace
 
-    from repl_driver import output_of, run_async
+    from repl_driver import output_of, run_async, within
     from test_lazy_tool_discovery import _result
 
     from js import settings, supervisor
@@ -113,9 +113,9 @@ def test_same_repl_set_override_updates_anchor_then_request_budget(monkeypatch, 
 
     async def conversation(enter):
         await enter("first")
-        await answered.wait()
+        await within(answered.wait(), "the first turn's model call")
         [first] = supervisor.get_current().jobs("turn")
-        await asyncio.wait({first.task})
+        await within(asyncio.wait({first.task}), "the first turn to end")
         immediate.append(await output_of(enter, capsys, "/set CONTEXT_SIZE 1000000"))
         await enter("second")
 

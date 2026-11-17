@@ -14,7 +14,7 @@ import threading
 import ai
 import ai.types.usage
 from ai.providers import history_utils
-from repl_driver import run_async
+from repl_driver import run_async, thread_event, within
 from turn_driver import one_turn
 
 from js import cli, repl_state, runtime, turn_budget
@@ -183,8 +183,7 @@ class _Harness:
         run_async(self.monkeypatch, from_env(), run_script)
 
     async def wait_hold(self) -> None:
-        while not self.hold_started.is_set():
-            await asyncio.sleep(0.01)
+        await thread_event(self.hold_started, "the turn to reach the hold tool")
 
     def transcript(self) -> str:
         found = list((self.tmp_path / ".js" / "logs" / "transcript").rglob("*.log"))
@@ -224,7 +223,7 @@ def test_steer_now_without_a_boundary_left_arrives_after_the_turn(monkeypatch, t
 
     async def script(on_line, h):
         await on_line("first")
-        await h.text_gate_entered.wait()
+        await within(h.text_gate_entered.wait(), "the turn's first model call")
         await on_line("one more thing")
         await on_line("and another")
         h.text_gate.set()

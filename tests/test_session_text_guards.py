@@ -56,10 +56,12 @@ def test_malformed_tool_calls_do_not_break_transcript_or_later_records(tmp_path,
 
 
 def test_a_failed_write_leaves_no_staging_file(tmp_path, monkeypatch):
-    target = tmp_path / "out.txt"
+    path = _session(tmp_path)
+    target = session_store.text_path(path)
+    target.unlink()
     monkeypatch.setattr(session_text.os, "replace", lambda *a: (_ for _ in ()).throw(OSError("full")))
-    session_text._write(target, "body")
-    assert list(tmp_path.glob(".out.txt.*.tmp")) == []
+    session_text.refresh(path)
+    assert _staging(path) == []
     assert not target.exists()
 
 

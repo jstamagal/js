@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ai
+from test_compaction_rehydration import compaction_rehydration
 
 from js import compaction, microcompact, provider_errors, result_caps
 from js.toolkit import ToolContext
@@ -77,7 +78,7 @@ def test_spill_leaves_small_results_alone_and_can_be_disabled(tmp_path):
     assert list(tmp_path.glob("result-*.txt")) == []
 
 
-def test_post_compact_rehydration_reattaches_recent_files(tmp_path):
+def test_post_compact_rehydration_reattaches_recent_files(tmp_path, monkeypatch):
     a = tmp_path / "a.py"
     a.write_text("print('a')\n", encoding="utf-8")
     b = tmp_path / "b.py"
@@ -87,29 +88,29 @@ def test_post_compact_rehydration_reattaches_recent_files(tmp_path):
     context.reads.remember(a, "read")
     context.reads.remember(b, "read")
 
-    msg = compaction._post_compact_rehydration(context)
+    msg = compaction_rehydration(monkeypatch, tmp_path, context)
     assert msg["role"] == "user"
     assert "print('a')" in msg["content"]
     assert "print('b')" in msg["content"]
     assert "post-compaction-files" in msg["content"]
 
 
-def test_post_compact_rehydration_names_but_skips_huge_files(tmp_path):
+def test_post_compact_rehydration_names_but_skips_huge_files(tmp_path, monkeypatch):
     big = tmp_path / "big.log"
     big.write_text("q" * 500_000, encoding="utf-8")
 
     context = ToolContext()
     context.reads.remember(big, "read")
 
-    msg = compaction._post_compact_rehydration(context, per_file_tokens=1_000)
+    msg = compaction_rehydration(monkeypatch, tmp_path, context, per_file_tokens=1_000)
     assert "too large to re-attach" in msg["content"]
     assert "qqqq" not in msg["content"]
 
 
-def test_post_compact_rehydration_is_none_without_reads():
+def test_post_compact_rehydration_is_none_without_reads(tmp_path, monkeypatch):
     context = ToolContext()
 
-    assert compaction._post_compact_rehydration(context) is None
+    assert compaction_rehydration(monkeypatch, tmp_path, context) is None
 
 
 def test_post_compact_rehydration_rechecks_the_jail_after_a_file_becomes_a_symlink(tmp_path, monkeypatch):
@@ -131,7 +132,7 @@ def test_post_compact_rehydration_rechecks_the_jail_after_a_file_becomes_a_symli
     target.unlink()
     target.symlink_to(outside)
 
-    assert compaction._post_compact_rehydration(context) is None
+    assert compaction_rehydration(monkeypatch, tmp_path, context) is None
 
 
 # Overflow classification: recovery, microcompaction and the manual /compact path

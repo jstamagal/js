@@ -8,12 +8,21 @@ from js.toolkit.core import ToolContext
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
 @pytest.mark.parametrize("matched_lines", [1, 2])
-def test_line_span_excludes_line_after_terminal_newline(newline, matched_lines):
-    text = newline.join(["one", "", "three", "four", ""])
-    end = len(newline.join(["one", ""] + ([""] if matched_lines == 2 else [])))
+def test_line_span_excludes_line_after_terminal_newline(tmp_path, newline, matched_lines):
+    """A match ending in a newline spans only the lines it ends; one more
+    character reaches the next line, which must have been read too."""
+    original = newline.join(["one", "", "three", "four", ""]).encode()
+    matched = "one\n" + "\n" * (matched_lines - 1)
 
-    assert patch._line_span(text, 0, end) == (1, matched_lines)
-    assert patch._line_span(text, 0, end + 1) == (1, matched_lines + 1)
+    def patched(old_string):
+        target = tmp_path / "file.txt"
+        target.write_bytes(original)
+        context = ToolContext(cwd=tmp_path)
+        fs.fs_read(str(target), start_line=1, end_line=matched_lines, context=context)
+        return patch.patch(str(target), old_string=old_string, new_string="X\n", context=context)
+
+    assert patched(matched).startswith("patched ")
+    assert patched(matched + ("t" if matched_lines == 2 else "\n")).startswith("ERROR:")
 
 
 @pytest.mark.parametrize("newline", [b"\n", b"\r\n", b"\r"])

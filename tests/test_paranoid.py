@@ -11,19 +11,58 @@ import pytest
 from js import login_cli, logins, providers, setting_layers
 
 
-def test_login_test_request_carries_extra_headers_and_the_scrub_header(monkeypatch):
+def _no_provider_env(monkeypatch, provider_id):
+    provider = providers.provider_for_login(provider_id)
+    for name in provider.api_key_env + provider.base_url_env + provider.model_env:
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_login_test_request_carries_extra_headers_and_the_scrub_header(monkeypatch, tmp_path: Path):
+    from js import cli
+
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("JS_EXTRA_HEADERS", "X-Pool: fofa")
     monkeypatch.setenv("JS_PARANOID_MODE", "extra")
+    _no_provider_env(monkeypatch, "opencode-go")
     sent = {}
 
     def fake_stream_model(**kwargs):
         sent.update(kwargs)
         return SimpleNamespace(text="2")
 
+    # A saved login's headers carry over when it logs in again; opencode-go's
+    # model listing does not prove the key, so a model number tests it.
+    logins.save_login(logins.Login(provider_id="opencode-go", provider_api_key="sk",
+                                   provider_headers={"X-Saved": "1"}))
+    monkeypatch.setattr(login_cli, "_input", lambda _prompt, *, default=None, secret=False: default or "")
+    monkeypatch.setattr(login_cli, "test_login_with_metadata", lambda login: (["m"], {}))
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "1")
     monkeypatch.setattr(login_cli.model_client, "stream_model", fake_stream_model)
-    login = logins.Login(provider_id="vllm", provider_base_url="http://x/v1", provider_headers={"X-Saved": "1"})
-    assert login_cli._run_secondary_test(login, providers.provider_for_login("vllm"), "m")
+    assert cli.main(["--login", "opencode-go"]) == 0
+    assert sent["model_id"] == "m"
     assert sent["provider_headers"] == {"X-Saved": "1", "X-Pool": "fofa", "X-JS-Scrub": "on"}
+
+
+def _login_key_as_shown(monkeypatch, *argv: str) -> str:
+    """The key in OPENAI_API_KEY as `js ARGV` shows it when it offers that
+    key during the openai login; the login is cancelled there."""
+    from js import cli, messages as msgs
+
+    _no_provider_env(monkeypatch, "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-1234567890abcd")
+    before, after = msgs.LOGIN_ASK_ENV_KEY.text(name="OPENAI_API_KEY", key="\0").split("\0")
+    shown = []
+
+    def scripted_input(prompt, *, default=None, secret=False):
+        if prompt.startswith(before) and prompt.endswith(after):
+            shown.append(prompt[len(before):len(prompt) - len(after)])
+            return None
+        return default
+
+    monkeypatch.setattr(login_cli, "_input", scripted_input)
+    assert cli.main(list(argv)) == 0
+    [key] = shown
+    return key
 
 
 def test_project_jsrc_paranoid_mode_masks_login_keys(monkeypatch, tmp_path: Path):
@@ -32,7 +71,7 @@ def test_project_jsrc_paranoid_mode_masks_login_keys(monkeypatch, tmp_path: Path
     (project / ".js").mkdir(parents=True)
     (project / ".js" / "jsrc").write_text("set PARANOID_MODE on\n")
     monkeypatch.chdir(project)
-    assert login_cli._mask("sk-1234567890abcd") != "sk-1234567890abcd"
+    assert _login_key_as_shown(monkeypatch, "--login", "openai") != "sk-1234567890abcd"
 
 
 SENTINEL = "SENTINEL-SECRET-4417"
@@ -80,17 +119,15 @@ def test_every_secret_setting_is_masked_everywhere_settings_are_shown(tmp_path):
 
 
 def test_an_extra_on_the_login_command_line_masks_the_login_screens(monkeypatch, tmp_path: Path):
-    from js import cli, config
+    from js import config
 
     monkeypatch.delenv("JS_PARANOID_MODE", raising=False)
     monkeypatch.chdir(tmp_path)
-    seen = {}
-    monkeypatch.setattr(login_cli, "main", lambda argv: seen.update(masked=login_cli._mask("sk-1234567890abcd")) or 0)
     try:
-        assert cli.main(["--extra", "PARANOID_MODE=on", "--login=openai"]) == 0
+        shown = _login_key_as_shown(monkeypatch, "--extra", "PARANOID_MODE=on", "--login=openai")
     finally:
         config.set_invocation(config.InvocationSources())
-    assert seen["masked"] != "sk-1234567890abcd"
+    assert shown != "sk-1234567890abcd"
 
 
 BAD_SECRET_VALUES = {

@@ -9,10 +9,9 @@ import json
 import re
 
 import pytest
-from repl_driver import _telemetry, repl_state, stub_screen, turn_stub
+from repl_driver import stub_screen, turn_stub
 
-from js import cli, owning_loop, repl, runtime, screen, screen_scrollback
-from js.config import from_env
+from js import cli, runtime, screen, screen_scrollback
 from js.memory import load_messages, load_replay_messages
 
 SGR = re.compile(r"\x1b\[[0-9;]*m")
@@ -176,19 +175,18 @@ def test_quitting_mid_turn_interrupts_it_and_writes_nothing_after_the_screen_clo
 
     terminal = _Recorder()
     screens = _install_screen(monkeypatch, script, terminal)
-    cfg = from_env()
-    state, prompt_spec = repl_state(cfg)
-    assert owning_loop.run_owning_loop(
-        repl._repl_main(cfg, state, _telemetry(cfg, state), None, None, prompt_spec)
-    ) == 0
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    assert cli.main([]) == 0
 
+    session_file = _session_file(tmp_path)
     assert screens[0].exits == 1
-    assert terminal.after_close == ""
+    # After the screen closes the terminal gets js's resume hint and nothing else.
+    [hint] = SGR.sub("", terminal.after_close).splitlines()
+    assert session_file.stem in hint
     shown = SGR.sub("", screens[0].scrollback.buffer.text)
     assert "The answer so far" in shown
     assert "interrupted" in shown.lower()
 
-    session_file = _session_file(tmp_path)
     assert "turn_interrupted" in _marks(session_file)
     saved = load_messages(session_file)
     assert [m["role"] for m in saved] == ["user", "assistant"]

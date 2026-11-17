@@ -206,7 +206,12 @@ def test_context_manager_releases_liveness(tmp_path):
 
 import pytest  # noqa: E402
 
-from js import home, session_catalog as C  # noqa: E402
+from js import home, paths, session_catalog as C  # noqa: E402
+
+
+def _home_refuses(session: Path) -> bool:
+    """Whether refiling the old per-agent sessions folders refuses to move `session`."""
+    return any(step.kind == "refuse" and step.source == session for step in home.refile_sessions(apply=False))
 
 
 def _sidecars(session: Path) -> tuple[Path, Path]:
@@ -221,7 +226,8 @@ def _state_live(session: Path) -> None:
 
 @pytest.fixture
 def session(tmp_path):
-    path = tmp_path / "sessions" / "agent" / "s.jsonl"
+    # An old per-agent sessions folder: home refiles the sessions in it.
+    path = paths.sessions_root() / "agent" / "s.jsonl"
     path.parent.mkdir(parents=True)
     path.write_text("")
     return path
@@ -283,7 +289,7 @@ def test_an_unsearchable_parent_is_unknown_not_missing(session):
 @pytest.mark.parametrize("answer, refused", [(None, True), (True, True), (False, False)])
 def test_home_refuses_to_move_a_journal_it_cannot_prove_idle(session, monkeypatch, answer, refused):
     monkeypatch.setattr(C, "session_in_flight", lambda _path: answer)
-    assert home._in_use(session) is refused
+    assert _home_refuses(session) is refused
 
 
 @pytest.mark.parametrize("data", [b'{"version":1,"opens":[]}', b'{"version":1,"opens":[{"pid":999999999}]}'])
@@ -295,7 +301,7 @@ def test_well_formed_state_with_no_live_opener_is_idle(session, data):
 @pytest.mark.parametrize("data", [b'{"version":1,"opens":[42]}', b'{"version":1,"opens":[{"pid":"bad"}]}'])
 def test_home_refuses_a_journal_whose_state_rows_are_unreadable(session, data):
     _sidecars(session)[0].write_bytes(data)
-    assert home._in_use(session) is True
+    assert _home_refuses(session) is True
 
 
 def test_a_symlink_loop_is_unknown_not_a_crash(tmp_path):
@@ -316,4 +322,4 @@ def test_a_live_pid_with_a_malformed_start_is_unknown(session):
     _sidecars(session)[0].write_text(json.dumps(
         {"version": 1, "opens": [{"pid": os.getpid(), "process_start": 42}]}))
     assert session_in_flight(session) is None
-    assert home._in_use(session) is True
+    assert _home_refuses(session) is True

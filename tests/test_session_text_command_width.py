@@ -10,11 +10,17 @@ from js import memory, session_store, session_text
 
 @pytest.mark.parametrize("length", [10, session_text._ARG_WIDTH - 2, session_text._ARG_WIDTH - 1, 1000])
 @pytest.mark.parametrize("encoded", [False, True])
-def test_shell_command_summary_uses_same_width_cap(length, encoded):
+def test_shell_command_summary_uses_same_width_cap(tmp_path, length, encoded):
     arguments = {"command": "x" * length + "\nsecond line"}
     before = copy.deepcopy(arguments)
+    path = session_store.reserve(session_store.folder_for(tmp_path))
+    memory.append_message(path, {"role": "assistant", "content": "", "tool_calls": [{
+        "id": "c1", "function": {"name": "shell", "arguments": json.dumps(arguments) if encoded else arguments},
+    }]})
+    memory.append_message(path, {"role": "tool", "tool_call_id": "c1", "content": "done"})
 
-    result = session_text._call_line(json.dumps(arguments) if encoded else arguments)
+    [row] = [row for row in session_text.rows(path) if row.role == "tool"]
+    result = row.call
 
     expected = "$ " + "x" * length
     if len(expected) > session_text._ARG_WIDTH:

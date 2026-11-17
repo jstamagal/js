@@ -25,7 +25,6 @@ from js import (
     compaction_summary,
     events,
     history_record,
-    repl,
     runtime,
     settings,
     tool_display,
@@ -33,7 +32,6 @@ from js import (
 )
 from js.config import Config
 from js.model_client import ModelStreamResult, ModelToolCall
-from js.repl_state import ReplState
 from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry
 
 
@@ -649,32 +647,34 @@ def test_persisted_truncated_tool_call_history_does_not_reerror_while_new_tool_r
 
 
 def test_run_turn_dispatches_registered_command_handler(monkeypatch, tmp_path):
-    hooks = RecordingHooks()
-    live_settings = settings.seed_defaults()
-    cfg = offline_config(tmp_path)
-    state = ReplState(messages=[], system="system", settings=live_settings, events=hooks)
-    hooks.set_dispatcher(repl._event_dispatcher(state, cfg))
-    hooks.add("turn_start", "set COMPACTION_AUTO off")
+    from repl_driver import run_async
+
+    from js.config import from_env
+
+    monkeypatch.chdir(tmp_path)
+    emissions: list[events.EventEmission] = []
+    emit = events.EventHooks.emit
+
+    def recording_emit(self, event, **payload):
+        emission = emit(self, event, **payload)
+        emissions.append(emission)
+        return emission
+
+    monkeypatch.setattr(events.EventHooks, "emit", recording_emit)
 
     def stream_stub(**kwargs):
         kwargs["on_text"]("OK")
         return model_text_result("OK")
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
-    messages = [{"role": "user", "content": "Say OK."}]
+    live_settings = settings.seed_defaults()
+    assert settings.get_dotted(live_settings, ("COMPACTION_AUTO",)) is not False
 
-    one_turn(
-        cfg,
-        "system",
-        messages,
-        runtime.Telemetry(None),
-        trace_override=False,
-        suppress_output=True,
-        event_hooks=hooks,
-    )
+    run_async(monkeypatch, from_env(), ["/on turn_start set COMPACTION_AUTO off", "Say OK."], wait=True,
+              live_settings=live_settings)
 
     assert settings.get_dotted(live_settings, ("COMPACTION_AUTO",)) is False
-    turn_start = next(emission for emission in hooks.emissions if emission.event == "turn_start")
+    turn_start = next(emission for emission in emissions if emission.event == "turn_start")
     assert turn_start.results[0].error is None
 
 

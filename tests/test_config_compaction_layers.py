@@ -13,7 +13,6 @@ from js import (
     persona,
     settings,
 )
-from js.capped_process import CappedProcessResult
 from js.config import Config, InvocationSources, from_env
 from js.toolkit.registry import build_default_registry
 
@@ -179,55 +178,48 @@ def test_summarize_invalid_summary_max_tokens_falls_back(monkeypatch, tmp_path):
     assert captured == [settings.default_value("COMPACTION_SUMMARY_TOKENS_MAX")]
 
 
-def test_compact_pre_hook_ignores_malformed_and_blank_values(monkeypatch, tmp_path):
-    calls: list[str] = []
-
-    def run_stub(cmd, **kwargs):
-        calls.append(cmd)
-        raise AssertionError(f"pre_hook should not run for malformed value: {cmd!r}")
-
-    monkeypatch.setattr(compaction_summary, "_run_capped", run_stub)
-
-    for raw in (["echo hi"], {"cmd": "echo hi"}, 123, "   "):
+def test_compact_pre_hook_ignores_malformed_and_blank_values(tmp_path):
+    marker = tmp_path / "ran"
+    for raw in ([f"touch {marker}"], {"cmd": f"touch {marker}"}, 123, "   "):
         cfg = _compact_test_cfg(tmp_path, {"COMPACTION_HINT_COMMAND": raw})
         assert compaction_summary.run_pre_hook(cfg) == ""
 
-    assert calls == []
+    assert not marker.exists(), "pre_hook ran for a malformed value"
 
 
-def test_compact_pre_hook_trims_valid_command(monkeypatch, tmp_path):
-    captured: dict[str, object] = {}
+def _recording_shell(tmp_path):
+    """A shell program that records the arguments it was given, one per
+    line, then runs them with /bin/sh."""
+    shell = tmp_path / "recording-sh"
+    shell.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$0.args"\nexec /bin/sh "$@"\n', encoding="utf-8")
+    shell.chmod(0o755)
+    return shell, tmp_path / "recording-sh.args"
 
-    def run_stub(cmd, **kwargs):
-        captured["cmd"] = cmd
-        captured.update(kwargs)
-        return CappedProcessResult(returncode=0, stdout=b"hook guidance\n", stderr=b"")
 
-    monkeypatch.setattr(compaction_summary, "_run_capped", run_stub)
-    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_HINT_COMMAND": "  echo guidance  "})
+def test_compact_pre_hook_trims_valid_command(tmp_path):
+    shell, recorded = _recording_shell(tmp_path)
+    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_HINT_COMMAND": "  echo 'hook guidance'  ",
+                                       "COMPACTION_HINT_SHELL_PROGRAM": str(shell)})
 
     assert compaction_summary.run_pre_hook(cfg) == "hook guidance"
-    assert captured["cmd"][-2:] == ["-c", "echo guidance"]
-    assert captured["timeout"] == 30
+    assert recorded.read_text(encoding="utf-8").splitlines() == ["-c", "echo 'hook guidance'"]
 
 
-def test_compact_pre_hook_output_is_capped_and_marked(monkeypatch, tmp_path):
-    def run_stub(cmd, **kwargs):
-        assert kwargs["cap"] == 128
-        return CappedProcessResult(
-            returncode=0,
-            stdout=b"x" * 128,
-            stderr=b"",
-            stdout_truncated=True,
-        )
+def test_compact_pre_hook_is_stopped_at_its_timeout(tmp_path):
+    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_HINT_COMMAND": "echo early; exec sleep 60",
+                                       "COMPACTION_HINT_TIMEOUT": 1})
 
-    monkeypatch.setattr(compaction_summary, "_run_capped", run_stub)
-    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_HINT_COMMAND": "yes"})
+    assert compaction_summary.run_pre_hook(cfg) == ""
+
+
+def test_compact_pre_hook_output_is_capped_and_marked(tmp_path):
+    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_HINT_COMMAND": "head -c 1000 /dev/zero | tr '\\0' x"})
     cfg = Config(**{**cfg.__dict__, "max_bash_output_bytes": 128})
 
     actual = compaction_summary.run_pre_hook(cfg)
 
     assert actual.startswith("x" * 128)
+    assert "x" * 129 not in actual
     assert "[truncated: SHELL_OUTPUT_MAX (128) reached]" in actual
 
 def test_compact_model_same_is_normalized_and_malformed_values_fall_back(monkeypatch, tmp_path):

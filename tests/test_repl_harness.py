@@ -468,8 +468,8 @@ def test_repl_set_reasoning_effort_updates_turn_config(monkeypatch, tmp_path):
 
     run_async(monkeypatch, cfg, ["/set EFFORT max", "hello", "exit"], wait=True)
 
-    # `max` is a real ladder stop (reasoning.py) — config._norm_effort no longer
-    # collapses it to "high"; reasoning.snap_effort floors it per-model instead.
+    # `max` is a real ladder stop (reasoning.py); reasoning.snap_effort floors
+    # it per model.
     assert reasoning_efforts == ["max"]
 
 

@@ -13,6 +13,7 @@ import asyncio
 import copy
 import inspect
 import sys
+import threading
 from dataclasses import dataclass
 
 from js import (
@@ -185,7 +186,7 @@ def handled_while_a_turn_runs(monkeypatch, cfg, lines, **state_kwargs) -> list[s
 
     async def typing(enter):
         await enter("go")
-        await asyncio.wait_for(started.wait(), timeout=10)
+        await within(started.wait(), "the turn to start")
         for line in lines:
             await enter(line)
         release.set()
@@ -194,6 +195,27 @@ def handled_while_a_turn_runs(monkeypatch, cfg, lines, **state_kwargs) -> list[s
     monkeypatch.setattr(repl_commands, "handle_command", recording)
     run_async(monkeypatch, cfg, typing, **state_kwargs)
     return handled
+
+
+WAIT_TIMEOUT = 10
+
+
+async def within(awaitable, what: str, timeout: float = WAIT_TIMEOUT):
+    """The result of `awaitable`; the test fails naming `what` when it has
+    not finished within `timeout` seconds. Something only a turn's model call
+    produces is waited for this way, so a turn that fails fails the test
+    instead of hanging it."""
+    try:
+        return await asyncio.wait_for(awaitable, timeout)
+    except TimeoutError:
+        raise AssertionError(f"waited {timeout}s for {what}") from None
+
+
+async def thread_event(event: threading.Event, what: str, timeout: float = WAIT_TIMEOUT) -> None:
+    """Wait off the loop for `event`, set on a tool's thread; the test fails
+    as with `within` when it is not set within `timeout` seconds."""
+    if not await asyncio.to_thread(event.wait, timeout):
+        raise AssertionError(f"waited {timeout}s for {what}")
 
 
 async def settled() -> None:

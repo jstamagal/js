@@ -13,13 +13,12 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from test_config_compaction_layers import _compact_test_cfg
 
-from js import compaction, compaction_summary, memory as M, repl_session_commands
-from js.repl_state import ReplState
+from js import compaction, compaction_summary, memory as M
+from js.toolkit import ToolContext
 
 FIXTURES = Path(__file__).parent / "fixtures" / "session_journal"
 EXPECTED = json.loads((FIXTURES / "expected.json").read_text(encoding="utf-8"))
@@ -57,30 +56,40 @@ def test_persist_writes_a_rollback_to_the_common_prefix(tmp_path):
     assert _marks(path) == ["rollback_to:2"]
 
 
-def test_closing_note_rewrites_the_last_user_message(tmp_path):
-    path = tmp_path / "s.jsonl"
-    messages = [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"},
-                {"role": "user", "content": "unanswered"}]
-    M.persist_messages(path, messages)
-    state = ReplState(messages=messages)
+def test_closing_note_rewrites_the_last_user_message(monkeypatch, tmp_path):
+    from repl_driver import run_async
 
-    repl_session_commands._append_closing_note(SimpleNamespace(session_file=path), state, "<js-reminder>bye</js-reminder>")
+    monkeypatch.chdir(tmp_path)
+    cfg = _compact_test_cfg(tmp_path, {})
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "agent.yaml").write_text("tools: []\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
+    path = cfg.session_file
+    M.persist_messages(path, [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"},
+                              {"role": "user", "content": "unanswered"}])
 
-    assert _marks(path) == ["rollback_to:2"]
+    messages = run_async(monkeypatch, cfg, ["/quit bye"]).messages
+
+    assert [mark for mark in _marks(path) if mark.startswith("rollback_to:")] == ["rollback_to:2"]
     assert list(M.load_replay_messages(path)) == messages
-    assert messages[-1] == {"role": "user", "content": "unanswered\n\n<js-reminder>bye</js-reminder>"}
+    assert len(messages) == 3 and messages[-1]["role"] == "user"
+    question, _, note = messages[-1]["content"].partition("\n\n")
+    assert question == "unanswered"
+    assert note.startswith("<js-reminder>") and note.endswith("bye</js-reminder>")
 
 
-_FILES = {"role": "user", "content": "<post-compaction-files>\nfile.py\n</post-compaction-files>"}
-
-
-@pytest.mark.parametrize("rehydrated", [None, _FILES])
-def test_compaction_writes_its_mark_and_the_live_history_replays(monkeypatch, tmp_path, rehydrated):
+@pytest.mark.parametrize("file_read", [False, True])
+def test_compaction_writes_its_mark_and_the_live_history_replays(monkeypatch, tmp_path, file_read):
     async def summarize(*_args, **_kwargs):
         return "SUMMARY"
 
     monkeypatch.setattr(compaction_summary, "summarize", summarize)
-    monkeypatch.setattr(compaction, "_post_compact_rehydration", lambda *_a, **_k: rehydrated)
+    # A file read before compaction is re-attached after the summary.
+    context = ToolContext()
+    if file_read:
+        read = tmp_path / "file.py"
+        read.write_text("print('kept')\n", encoding="utf-8")
+        context.reads.remember(read, "read")
     cfg = _compact_test_cfg(tmp_path, {"COMPACTION_KEEP_RECENT_TOKENS": 10,
                                        "COMPACTION_MIN_SAVINGS_TOKENS": 1})
     messages = [
@@ -94,11 +103,17 @@ def test_compaction_writes_its_mark_and_the_live_history_replays(monkeypatch, tm
          "reasoning_from": {"provider": "anthropic", "model": "m"}},
     ]
 
-    result = compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True)
+    result = compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True, context=context)
 
     assert compaction.compacted(result)
     marker = _marks(cfg.session_file)[-1]
     trigger = json.loads(marker.split(":", 1)[1])["trigger"]
+    rehydrated = json.loads(marker.split(":", 1)[1]).get("rehydrated")
+    if file_read:
+        assert rehydrated["role"] == "user"
+        assert str(read) in rehydrated["content"] and "print('kept')" in rehydrated["content"]
+    else:
+        assert rehydrated is None
     payload = {"summary": "SUMMARY", "keep_from": 4, "forced": True}
     if rehydrated is not None:
         payload["rehydrated"] = rehydrated

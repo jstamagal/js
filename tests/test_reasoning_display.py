@@ -16,6 +16,7 @@ from js import (
     history_record,
     memory,
     model_client,
+    paths,
     run_assembly,
     runtime,
     screen,
@@ -357,8 +358,8 @@ def test_prompt_mode_displays_reasoning_separately_and_persists_it(monkeypatch, 
     else:
         assert messages[-1]["content"] == "answer"
         assert "answer" in displayed.out
-    log_path = transcript._transcript_log_path(cfg, cfg.settings)
-    assert log_path is not None
+    [log_path] = (paths.logs_root() / "transcript").rglob("*.log")
+    assert log_path.stem == cfg.session_file.stem
     assert THOUGHT not in log_path.read_text()
 
 

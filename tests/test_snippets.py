@@ -69,21 +69,41 @@ def test_parameter_prose_is_loaded_separately_from_tool_contract(monkeypatch, tm
 
 
 def test_output_limit_recovery_reads_the_current_snippet(monkeypatch, tmp_path):
+    from dataclasses import replace
+
+    from turn_driver import config, one_turn, reply
+
     from js import runtime
-    from js.turn_budget import TurnConvo
+    from js.toolkit import ToolContext
 
     path = tmp_path / "resume.md"
-    monkeypatch.setattr(paths, "find", lambda relative: path, raising=False)
-    messages = []
-    convo = TurnConvo("", messages, provider_id=None, model="fixture")
-    for text in ["continue A", "continue B"]:
-        path.write_text(text)
-        runtime._send_resume_nudge(
-            convo, n=1, limit=2, incomplete_reason="max_output_tokens",
-            model="fixture", telemetry=runtime.Telemetry(None), suppress_output=True,
-        )
-    assert [message["content"] for message in messages] == ["continue A", "continue B"]
-    assert [message.text for message in convo.ai] == ["continue A", "continue B"]
+    real_find = paths.find
+    monkeypatch.setattr(paths, "find", lambda relative: (
+        path if Path(relative).name == "output-limit-resume.md" else real_find(relative)
+    ))
+    # The first cut-off reply is asked again with room to finish; the next
+    # two are answered with a resume nudge, the snippet changing before each.
+    nudges = iter([None, "continue A", "continue B"])
+    received = []
+
+    async def model(**kwargs):
+        received.append(list(kwargs["messages"]))
+        if len(received) <= 3:
+            if (nudge := next(nudges)) is not None:
+                path.write_text(nudge)
+            return replace(reply(text="partial"), finish_reason="incomplete:max_output_tokens",
+                           incomplete_reason="max_output_tokens")
+        return reply(text="done")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", model)
+    messages = [{"role": "user", "content": "go"}]
+    one_turn(config(tmp_path, {"OUTPUT_RESUMES_MAX": 2}), "SYS", messages, runtime.Telemetry(None),
+             tool_context=ToolContext(cwd=tmp_path), suppress_output=True)
+
+    assert [message["content"] for message in messages if message.get("resume_nudge")] == ["continue A", "continue B"]
+    user_texts = ["".join(part.text for part in message.parts if part.kind == "text")
+                  for message in received[-1] if message.role == "user"]
+    assert user_texts[-2:] == ["continue A", "continue B"]
 
 
 @pytest.mark.parametrize("text", ["", "\n  "])
@@ -172,7 +192,8 @@ def test_missing_runtime_snippet_exits_two(monkeypatch, tmp_path, capsys, mode):
 
 
 def test_missing_rehydration_snippet_is_not_a_file_read_failure(monkeypatch, tmp_path):
-    from js import compaction
+    from test_compaction_rehydration import compaction_rehydration
+
     from js.toolkit import ToolContext
 
     path = tmp_path / "binary.dat"
@@ -184,7 +205,7 @@ def test_missing_rehydration_snippet_is_not_a_file_read_failure(monkeypatch, tmp
         tmp_path / "missing" / relative if str(relative).startswith("snippets/") else real_find(relative)
     ))
     with pytest.raises(snippets.SnippetError, match="compaction-file-nontext"):
-        compaction._post_compact_rehydration(context)
+        compaction_rehydration(monkeypatch, tmp_path, context)
 
 
 def test_tool_dispatch_propagates_snippet_configuration_failure(monkeypatch, tmp_path):

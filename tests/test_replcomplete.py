@@ -5,9 +5,8 @@ from __future__ import annotations
 import pytest
 from repl_driver import type_into_js
 
-from js import repl, repl_commands, repl_state
-from js.repl_state import ReplState
-from js.replcomplete import JsCompleter, command_candidates, path_candidates, value_candidates
+from js import repl_commands, repl_state
+from js.replcomplete import JsCompleter, path_candidates, value_candidates
 
 
 def test_completer_uses_supplied_command_prefix():
@@ -17,28 +16,8 @@ def test_completer_uses_supplied_command_prefix():
 
 
 def _table():
-    return repl._command_completions(ReplState())
-
-
-# ---- command context (first word) ----
-
-def test_command_prefix_match_not_fuzzy():
-    assert "/compact" in command_candidates("/comp", _table())
-    assert "/compact" in command_candidates("comp", _table())   # bare word -> implicit slash
-    assert command_candidates("cpt", _table()) == []            # subsequence must NOT match
-
-
-def test_every_table_command_completes():
-    assert command_candidates("/", _table()) == sorted("/" + verb for verb in repl_commands.COMMANDS)
-
-
-def test_bare_quit_words_complete():
-    completer = JsCompleter(commands=_table, bare_words=repl_state.QUIT_WORDS)
-
-    assert "exit" in completer.candidates("ex")[0]
-    assert {"quit", "/quit"} <= set(completer.candidates("qu")[0])
-    for word in repl_state.QUIT_WORDS:
-        assert word in completer.candidates(word)[0]
+    """Verb -> argument completion source, as the command table gives it."""
+    return {verb: command.complete for verb, command in repl_commands.COMMANDS.items()}
 
 
 def _repl_completer(monkeypatch, tmp_path, lines=()) -> JsCompleter:
@@ -48,6 +27,31 @@ def _repl_completer(monkeypatch, tmp_path, lines=()) -> JsCompleter:
     built: dict = {}
     assert type_into_js(monkeypatch, list(lines), screen_parts=built) == 0
     return built["completer"]
+
+
+@pytest.fixture
+def completer(monkeypatch, tmp_path) -> JsCompleter:
+    """The completer of js started at a terminal."""
+    return _repl_completer(monkeypatch, tmp_path)
+
+
+# ---- command context (first word) ----
+
+def test_command_prefix_match_not_fuzzy(completer):
+    assert "/compact" in completer.candidates("/comp")[0]
+    assert "/compact" in completer.candidates("comp")[0]   # bare word -> implicit slash
+    assert completer.candidates("cpt")[0] == []            # subsequence must NOT match
+
+
+def test_every_table_command_completes(completer):
+    assert completer.candidates("/")[0] == sorted("/" + verb for verb in repl_commands.COMMANDS)
+
+
+def test_bare_quit_words_complete(completer):
+    assert "exit" in completer.candidates("ex")[0]
+    assert {"quit", "/quit"} <= set(completer.candidates("qu")[0])
+    for word in repl_state.QUIT_WORDS:
+        assert word in completer.candidates(word)[0]
 
 
 def test_a_new_table_entry_completes_with_no_completer_change(monkeypatch, tmp_path):
@@ -64,14 +68,14 @@ def test_aliases_complete_as_commands(monkeypatch, tmp_path):
     assert completer.candidates("/sh")[0] == ["/ship", "/show"]
 
 
-def test_shared_prefix_yields_all_for_rotation():
-    cands = command_candidates("/re", _table())
+def test_shared_prefix_yields_all_for_rotation(completer):
+    cands = completer.candidates("/re")[0]
     assert {"/reset", "/refresh-model-catalog"} <= set(cands)
 
 
-def test_compact_prefix_rotates_compact_and_compact_auto():
+def test_compact_prefix_rotates_compact_and_compact_auto(completer):
     # /compac is a prefix of both -> Tab rotates between them
-    assert set(command_candidates("/compac", _table())) == {"/compact", "/compact-auto"}
+    assert set(completer.candidates("/compac")[0]) == {"/compact", "/compact-auto"}
 
 
 # ---- routing through JsCompleter.candidates ----

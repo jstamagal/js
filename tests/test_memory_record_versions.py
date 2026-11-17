@@ -4,11 +4,17 @@ import json
 
 import pytest
 
-from js import memory
+from js import memory, messages as msgs
 
 
 def write_records(path, records):
     path.write_text("".join(json.dumps(record) + "\n" for record in records))
+
+
+def skipped_notice(session, count):
+    """The notice that replaying `session` skipped `count` records."""
+    records = f"{count} record{'' if count == 1 else 's'}"
+    return msgs.SESSION_RECORDS_SKIPPED.text(path=session, records=records, version=memory.SCHEMA_VERSION)
 
 
 def message(version=memory.SCHEMA_VERSION):
@@ -24,11 +30,8 @@ def test_noninteger_version_cannot_load_or_reset_messages(tmp_path, capsys, vers
         "kind": "mark", "ts": 2, "version": version, "marker": "session_reset"}
     write_records(session, [message(), invalid])
 
-    messages, skipped = memory._replay(session)
-    assert messages == [{"role": "user", "content": "keep"}]
-    assert skipped == 1
-    assert memory.load_messages(session) == messages
-    assert capsys.readouterr().err.strip()
+    assert memory.load_messages(session) == [{"role": "user", "content": "keep"}]
+    assert skipped_notice(session, 1) in capsys.readouterr().err
 
 
 def test_integer_current_version_remains_valid(tmp_path, capsys):
@@ -48,8 +51,5 @@ def test_missing_owned_versions_are_counted_without_counting_foreign_records(tmp
         {"kind": "future_sidecar", "version": True},
         {"role": "assistant", "content": "legacy bare message"},
     ])
-    messages, skipped = memory._replay(session)
-    assert messages == [{"role": "user", "content": "keep"}]
-    assert skipped == 2
-    assert memory.load_messages(session) == messages
-    assert capsys.readouterr().err.strip()
+    assert memory.load_messages(session) == [{"role": "user", "content": "keep"}]
+    assert skipped_notice(session, 2) in capsys.readouterr().err

@@ -60,11 +60,13 @@ class FakeResponse:
         ("<title>Example Domain</title><h1>Example Domain</h1>", "Example Domain\nExample Domain"),
     ],
 )
-def test_html_block_siblings_keep_their_boundary(html, expected):
+def test_html_block_siblings_keep_their_boundary(tmp_path, html, expected):
     """The sweep that removes the remaining tags runs with an empty replacement,
     so a boundary the source expressed as a tag has to be turned into whitespace
     before it. Without that, `<h1>H</h1><p>P</p>` reads as `HP`."""
-    assert fetch._html_to_text(html, "https://example.test/") == expected
+    page = tmp_path / "page.html"
+    page.write_text(html, encoding="utf-8")
+    assert fetch.fetch(page.as_uri(), context=ToolContext(cwd=tmp_path)) == expected
 
 
 def test_file_url_html_defaults_to_readable_text_and_raw_can_keep_source(tmp_path):

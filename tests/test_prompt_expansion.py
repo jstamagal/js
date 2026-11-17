@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 from pathlib import Path
-from unittest import mock
 
 import pytest
 
@@ -388,18 +388,23 @@ def test_global_instruction_files_are_js_md_only(tmp_path, monkeypatch):
 # --- the stock agent's environment block -----------------------------------------
 
 
+def _recording_sh(bodies: list[str]):
+    """An `sh` code subsystem that records each body it runs, then runs it;
+    its output loses its trailing newlines, as the stock runner's does."""
+
+    def run(body, *, timeout_s, max_output_bytes):
+        bodies.append(body)
+        result = subprocess.run(["sh", "-c", body], capture_output=True, text=True, timeout=timeout_s)
+        return result.stdout.rstrip("\n")
+
+    return run
+
+
 def test_fenced_directive_with_empty_body_does_not_swallow_the_next_fence():
     """An empty ```! body must not swallow the next fence."""
     text = "```!sh\n```\nfoo\n```!sh\necho HI\n```\n"
     bodies = []
-    real = promptexpand._run_subsystem
-
-    def spy(sub, body, *args, **kwargs):
-        bodies.append(body)
-        return real(sub, body, *args, **kwargs)
-
-    with mock.patch.object(promptexpand, "_run_subsystem", spy):
-        out = expand_prompt(text, allow_code=True)
+    out = expand_prompt(text, allow_code=True, subsystems={"sh": (True, _recording_sh(bodies))})
     assert bodies == ["", "echo HI"], bodies
     assert out == "\nfoo\nHI\n", repr(out)
 
@@ -434,14 +439,7 @@ def test_fenced_directive_with_foreign_fence_in_body_never_executes(tmp_path):
     text = "```!sh\nprintf SIDE_EFFECT > " + str(marker) + "\n```python\nprint(1)\n```\n"
     assert "\n" in text  # real newlines, not escaped ones
     runner_calls = []
-    real = promptexpand._run_subsystem
-
-    def spy(sub, body, *args, **kwargs):
-        runner_calls.append(body)
-        return real(sub, body, *args, **kwargs)
-
-    with mock.patch.object(promptexpand, "_run_subsystem", spy):
-        out = expand_prompt(text, allow_code=True)
+    out = expand_prompt(text, allow_code=True, subsystems={"sh": (True, _recording_sh(runner_calls))})
     assert runner_calls == [], runner_calls
     assert not marker.exists()
     assert out == "```python\nprint(1)\n```\n"

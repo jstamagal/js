@@ -84,11 +84,14 @@ def test_mixed_case_encoded_and_repeated_query_credentials(tmp_path):
     assert "model=useful" in raw
 
 
-def test_harmless_url_is_preserved_exactly():
-    from js.compaction_flight import _diagnostic
-
+def test_harmless_url_is_preserved_exactly(tmp_path):
     url = "HTTPS://box:8080/v1?sort_key=x&model=hello%20world&flag#section"
-    assert _diagnostic(url) == url
+    cfg = _flight_cfg(tmp_path, tmp_path / "s.jsonl")
+    cfg.provider_base_url = url
+    flight = CompactionFlight(cfg, "", [], trigger={}, forced=True, focus=None,
+                              preserve_from=0, details={}, directory=tmp_path / "flights")
+    flight.close()
+    assert url in flight.path.read_text()
 
 
 def test_malformed_credential_url_cannot_crash_or_leak_into_flight(tmp_path):

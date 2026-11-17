@@ -1,10 +1,11 @@
 """Provider management uses real stores and headless terminal input."""
 import curses
 import re
+import sys
 
 import pytest
 
-from js import curses_menu, listings, login_cli, logins
+from js import cli, curses_menu, listings, login_cli, logins
 
 
 class Screen:
@@ -33,16 +34,59 @@ class Screen:
 
 @pytest.fixture(autouse=True)
 def store(tmp_path, monkeypatch):
-    monkeypatch.setattr(logins, "_CONFIG_DIR_OVERRIDE", tmp_path)
+    logins.set_config_dir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(curses, "curs_set", lambda _: None)
-    # Pickers refuse without a terminal; these tests drive them through a fake
-    # curses screen, so they stand in for one.
-    monkeypatch.setattr(login_cli, "_interactive", lambda: True)
+
+
+def at_a_terminal(monkeypatch) -> None:
+    """Pickers refuse without a terminal; these tests drive them through a
+    fake curses screen, so stdin and stdout stand in for one."""
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+
+
+def screens(monkeypatch, *keys) -> list[str]:
+    """Each curses screen js opens reads the next of `keys`; the titles of
+    the screens opened are returned."""
+    pending = iter(keys)
+    titles: list[str] = []
+
+    def wrapper(fn, *args, **kwargs):
+        titles.append(args[1])
+        return fn(Screen(next(pending)), *args, **kwargs)
+
+    monkeypatch.setattr(curses, "wrapper", wrapper)
+    return titles
+
+
+def js_login(monkeypatch) -> int:
+    """`js --login` with no provider, at a terminal: the provider manager."""
+    at_a_terminal(monkeypatch)
+    return cli.main(["--login"])
+
+
+# The manager's keys that open its only saved provider, the row after
+# <add custom provider>; the saved provider's keys for Update and Models;
+# the models screen's keys for Select, Add and Re-fetch; q leaves a screen.
+OPEN_SAVED = [curses.KEY_DOWN, 10]
+UPDATE = [10]
+MODELS = [curses.KEY_DOWN, 10]
+SELECT = [10]
+ADD = [curses.KEY_DOWN, 10]
+REFETCH = [curses.KEY_DOWN, curses.KEY_DOWN, 10]
+QUIT = [ord("q")]
 
 
 def test_registry_picker_accepts_direct_typeahead(monkeypatch):
-    monkeypatch.setattr(curses, "wrapper", lambda fn, *a, **kw: fn(Screen(map(ord, "de\n")), *a, **kw))
-    assert login_cli._select_provider() == "deepseek"
+    # The manager's last row opens the registry picker; typing "de" picks deepseek.
+    fetched = []
+    monkeypatch.setattr(login_cli, "_input", lambda prompt, *, default=None, secret=False: default or "sk")
+    monkeypatch.setattr(login_cli, "test_login_with_metadata",
+                        lambda login: fetched.append(login.provider_id) or ([], {}))
+    screens(monkeypatch, [curses.KEY_END, 10], map(ord, "de\n"), QUIT)
+    assert js_login(monkeypatch) == 0
+    assert fetched == ["deepseek"]
 
 
 def test_rename_preserves_login_and_cache_metadata(tmp_path):
@@ -72,9 +116,12 @@ def test_rename_rejects_collisions_and_invalid_names(target, tmp_path):
 
 
 def test_invalid_custom_provider_name_stops_before_shape_selection(monkeypatch):
+    from js import messages as msgs
+
     monkeypatch.setattr(login_cli, "_input", lambda *a, **kw: "'cpa")
-    monkeypatch.setattr(login_cli, "_select_api_shape", lambda: pytest.fail("invalid name reached API shape selection"))
-    assert login_cli._ask_custom_provider() is None
+    opened = screens(monkeypatch, [10], QUIT)
+    assert js_login(monkeypatch) == 0
+    assert msgs.LOGIN_PICK_SHAPE.text() not in opened, "invalid name reached API shape selection"
     assert logins.load_logins() == {}
 
 
@@ -151,7 +198,7 @@ def test_manager_rename_and_delete_shortcuts(monkeypatch):
                     Screen([curses.KEY_DOWN, ord("d")]), Screen([ord("q")])])
     monkeypatch.setattr(curses, "wrapper", lambda fn, *a, **kw: fn(next(screens), *a, **kw))
     monkeypatch.setattr(login_cli, "_input", lambda *a, **kw: "renamed")
-    assert login_cli._run_login() == 0
+    assert js_login(monkeypatch) == 0
     assert logins.load_logins() == {}
     assert logins.load_model_cache() == {}
 
@@ -174,8 +221,15 @@ def test_search_no_matches_does_not_select_wrong_provider():
 
 
 def test_add_custom_is_first_and_selectable(monkeypatch):
-    monkeypatch.setattr(curses, "wrapper", lambda fn, *a, **kw: fn(Screen([10]), *a, **kw))
-    assert login_cli._select_provider() == "__custom__"
+    from js import messages as msgs
+
+    # The manager's last row opens the registry picker; Enter on its first row
+    # adds a custom provider, which asks for its id first.
+    asked = []
+    monkeypatch.setattr(login_cli, "_input", lambda prompt, **kw: asked.append(prompt))
+    screens(monkeypatch, [curses.KEY_END, 10], [10], QUIT)
+    assert js_login(monkeypatch) == 0
+    assert asked == [msgs.LOGIN_ASK_CUSTOM_ID.text()]
 
 
 def test_manager_displays_saved_details_with_masked_credentials(monkeypatch):
@@ -184,7 +238,7 @@ def test_manager_displays_saved_details_with_masked_credentials(monkeypatch):
     logins.cache_models("mine", [f"model-{i}" for i in range(37)])
     screen = Screen([curses.KEY_DOWN, ord("q")])
     monkeypatch.setattr(curses, "wrapper", lambda fn, *a, **kw: fn(screen, *a, **kw))
-    assert login_cli._run_login() == 0
+    assert js_login(monkeypatch) == 0
     output = "\n".join(screen.rendered)
     assert "http://localhost:8000/v1" in output
     assert "private" not in output
@@ -198,8 +252,9 @@ def test_saved_update_is_offline(monkeypatch):
     answers = iter(["http://localhost:9000/v1", "new", "Authorization=Bearer token"])
     monkeypatch.setattr(login_cli, "_input", lambda *a, **kw: next(answers))
     monkeypatch.setattr(login_cli, "test_login_with_metadata", lambda *_: pytest.fail("unexpected fetch"))
-    monkeypatch.setattr(login_cli, "_run_secondary_test", lambda *_: pytest.fail("unexpected test"))
-    login_cli._edit_saved_provider(logins.load_logins()["mine"])
+    monkeypatch.setattr(login_cli.model_client, "stream_model", lambda **_: pytest.fail("unexpected test"))
+    screens(monkeypatch, OPEN_SAVED, UPDATE, QUIT, QUIT)
+    assert js_login(monkeypatch) == 0
     saved = logins.load_logins()["mine"]
     assert saved.provider_base_url == "http://localhost:9000/v1"
     assert saved.provider_api_key == "new"
@@ -211,7 +266,8 @@ def test_cancel_update_leaves_store_untouched(monkeypatch, tmp_path):
     before = (tmp_path / "logins.toml").read_bytes()
     answers = iter(["http://changed", None])
     monkeypatch.setattr(login_cli, "_input", lambda *a, **kw: next(answers))
-    login_cli._edit_saved_provider(logins.load_logins()["mine"])
+    screens(monkeypatch, OPEN_SAVED, UPDATE, QUIT, QUIT)
+    assert js_login(monkeypatch) == 0
     assert (tmp_path / "logins.toml").read_bytes() == before
 
 
@@ -220,54 +276,50 @@ def test_manager_removes_provider_and_cache(monkeypatch):
     logins.cache_models("mine", ["model"])
     screens = iter([Screen([curses.KEY_DOWN, 10]), Screen([curses.KEY_END, 10]), Screen([ord("q")])])
     monkeypatch.setattr(curses, "wrapper", lambda fn, *a, **kw: fn(next(screens), *a, **kw))
-    assert login_cli._run_login() == 0
+    assert js_login(monkeypatch) == 0
     assert logins.load_logins() == {}
     assert logins.load_model_cache() == {}
 
 
 def test_models_add_works_with_empty_cache_and_deduplicates(monkeypatch):
-    login = logins.Login("mine")
-    screens = iter([Screen([curses.KEY_DOWN, 10]), Screen([ord("q")])])
-    monkeypatch.setattr(curses, "wrapper", lambda fn, *a, **kw: fn(next(screens), *a, **kw))
+    logins.save_login(logins.Login("mine"))
+    screens(monkeypatch, OPEN_SAVED, MODELS, ADD, QUIT, QUIT, QUIT)
     monkeypatch.setattr(login_cli, "_input", lambda *a, **kw: " first, first, second, ")
-    login_cli._manage_models(login)
+    assert js_login(monkeypatch) == 0
     assert logins.load_model_cache()["mine"] == ["first", "second"]
 
 
 def test_models_refetch_curates_live_list_and_preserves_metadata(monkeypatch):
-    login = logins.Login("mine")
+    logins.save_login(logins.Login("mine"))
     logins.cache_models("mine", ["old"])
     metadata = {"new": logins.ModelCacheMetadata(context_window=12345)}
     monkeypatch.setattr(login_cli, "test_login_with_metadata", lambda _: (["new", "other"], metadata))
-    monkeypatch.setattr(login_cli, "_select_models_to_cache", lambda *a, **kw: ["new"])
-    screens = iter([Screen([curses.KEY_DOWN, curses.KEY_DOWN, 10]), Screen([ord("q")])])
-    monkeypatch.setattr(curses, "wrapper", lambda fn, *a, **kw: fn(next(screens), *a, **kw))
-    login_cli._manage_models(login)
+    monkeypatch.setattr(login_cli, "_input", lambda *a, **kw: "")
+    # The keep-list shows new, other (both kept) and old: drop other.
+    keep_new = [curses.KEY_DOWN, ord(" "), 10]
+    screens(monkeypatch, OPEN_SAVED, MODELS, REFETCH, keep_new, QUIT, QUIT, QUIT)
+    assert js_login(monkeypatch) == 0
     assert logins.load_model_cache()["mine"] == ["new"]
     assert logins.load_model_cache_metadata()["mine"] == metadata
 
 
 def test_models_refetch_failure_leaves_cache_unchanged(monkeypatch):
-    login = logins.Login("mine")
+    logins.save_login(logins.Login("mine"))
     logins.cache_models("mine", ["old"])
     def fail(_):
         raise RuntimeError("offline")
     monkeypatch.setattr(login_cli, "test_login_with_metadata", fail)
-    screens = iter([Screen([curses.KEY_DOWN, curses.KEY_DOWN, 10]), Screen([ord("q")])])
-    monkeypatch.setattr(curses, "wrapper", lambda fn, *a, **kw: fn(next(screens), *a, **kw))
-    login_cli._manage_models(login)
+    screens(monkeypatch, OPEN_SAVED, MODELS, REFETCH, QUIT, QUIT, QUIT)
+    assert js_login(monkeypatch) == 0
     assert logins.load_model_cache()["mine"] == ["old"]
 
 
 def test_manager_model_edit_search_persists_choices(monkeypatch):
-    login = logins.Login("mine")
+    logins.save_login(logins.Login("mine"))
     logins.cache_models("mine", ["alpha", "beta", "gamma"])
-    screens = iter([Screen([10]), Screen(map(ord, "/beta\n \n")), Screen([ord("q")])])
-    monkeypatch.setattr(login_cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(login_cli.sys.stdout, "isatty", lambda: True)
     monkeypatch.setattr(login_cli, "_input", lambda *a, **kw: "")
-    monkeypatch.setattr(curses, "wrapper", lambda fn, *a, **kw: fn(next(screens), *a, **kw))
-    login_cli._manage_models(login)
+    screens(monkeypatch, OPEN_SAVED, MODELS, SELECT, map(ord, "/beta\n \n"), QUIT, QUIT, QUIT)
+    assert js_login(monkeypatch) == 0
     assert logins.load_model_cache()["mine"] == ["alpha", "gamma"]
 
 
@@ -280,11 +332,13 @@ def test_update_enter_keeps_secrets_and_dash_clears(monkeypatch):
     logins.save_login(logins.Login("mine", provider_api_key="old", provider_headers={"Secret": "token"}))
     answers = iter(["", "", "", "-", "-", "-"])
     monkeypatch.setattr(login_cli, "_input", lambda *a, **kw: next(answers))
-    login_cli._edit_saved_provider(logins.load_logins()["mine"])
+    screens(monkeypatch, OPEN_SAVED, UPDATE, QUIT, QUIT)
+    assert js_login(monkeypatch) == 0
     saved = logins.load_logins()["mine"]
     assert saved.provider_api_key == "old"
     assert saved.provider_headers == {"Secret": "token"}
-    login_cli._edit_saved_provider(saved)
+    screens(monkeypatch, OPEN_SAVED, UPDATE, QUIT, QUIT)
+    assert js_login(monkeypatch) == 0
     saved = logins.load_logins()["mine"]
     assert saved.provider_base_url is None
     assert saved.provider_api_key is None
@@ -292,13 +346,12 @@ def test_update_enter_keeps_secrets_and_dash_clears(monkeypatch):
 
 
 def test_model_refetch_cancel_preserves_cache_bytes(monkeypatch, tmp_path):
+    logins.save_login(logins.Login("mine"))
     logins.cache_models("mine", ["old"])
     before = (tmp_path / "models-cache.json").read_bytes()
     monkeypatch.setattr(login_cli, "test_login_with_metadata", lambda _: (["new"], {}))
-    monkeypatch.setattr(login_cli, "_select_models_to_cache", lambda *a, **kw: None)
-    screens = iter([Screen([curses.KEY_DOWN, curses.KEY_DOWN, 10]), Screen([ord("q")])])
-    monkeypatch.setattr(curses, "wrapper", lambda fn, *a, **kw: fn(next(screens), *a, **kw))
-    login_cli._manage_models(logins.Login("mine"))
+    screens(monkeypatch, OPEN_SAVED, MODELS, REFETCH, QUIT, QUIT, QUIT, QUIT)
+    assert js_login(monkeypatch) == 0
     assert (tmp_path / "models-cache.json").read_bytes() == before
 
 
@@ -306,11 +359,10 @@ def test_deselect_all_keeps_list_models_empty_without_network(monkeypatch, capsy
 
     logins.save_login(logins.Login("mine", sdk_provider_id="openai"))
     logins.cache_models("mine", ["old"])
-    monkeypatch.setattr(login_cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(login_cli.sys.stdout, "isatty", lambda: True)
     monkeypatch.setattr(login_cli, "_input", lambda *a, **kw: "")
     monkeypatch.setattr(curses, "wrapper", lambda fn, *a, **kw: fn(Screen(map(ord, "n\n")), *a, **kw))
-    assert login_cli._run_models_edit("mine") == 0
+    at_a_terminal(monkeypatch)
+    assert cli.main(["--models-edit", "mine"]) == 0
     capsys.readouterr()
     monkeypatch.setattr(logins, "test_login", lambda *_: pytest.fail("empty curated cache must not fetch"))
     assert listings.print_model_list("mine", None) == 0

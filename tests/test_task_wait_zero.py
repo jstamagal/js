@@ -8,8 +8,22 @@ from js.toolkit import ToolContext, subagents, task_jobs
 
 
 @pytest.mark.parametrize(("value", "expected"), [(None, None), (0, 0.0), (-2, 0.0), (2, 2.0)])
-def test_wait_limit_only_omitted_is_indefinite(value, expected):
-    assert subagents._wait_limit(value) == expected
+def test_wait_limit_only_omitted_is_indefinite(monkeypatch, value, expected):
+    monkeypatch.setattr(task_jobs, "_JOBS", {})
+    context = ToolContext()
+
+    async def worker(index, item):
+        return "done"
+
+    job = task_jobs.start([(1, "work")], worker, lambda results: results[0],
+                          agent_id="worker", depth=0, owner=context.task_owner, on_loop=False)
+    task_jobs.wait(job, 2)
+    limits = []
+    monkeypatch.setattr(task_jobs, "wait", lambda _job, limit: limits.append(limit))
+
+    subagents.task(action="wait", handle=job.id, timeout=value, context=context)
+
+    assert limits == [expected]
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])

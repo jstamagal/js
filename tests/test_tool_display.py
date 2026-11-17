@@ -12,13 +12,11 @@ from js import (
     console,
     control_sequences,
     messages as msgs,
-    repl,
     runtime,
     screen_scrollback,
     tool_display,
     tool_errors,
 )
-from js.repl_state import ReplState
 from js.toolkit import Tool, ToolContext, ToolRegistry, presentation
 from js.transcript import TranscriptLogSink
 
@@ -356,8 +354,10 @@ def test_a_failed_repeat_of_a_quiet_call_leaves_the_earlier_result_in_the_whole_
     assert any(expanded and "alpha_line" in expanded for expanded in closed), closed
 
 
-def test_a_resumed_tool_row_folds_with_its_whole_form_like_a_live_one(capsys):
-    from js import settings
+def test_a_resumed_tool_row_folds_with_its_whole_form_like_a_live_one(monkeypatch, tmp_path, capsys):
+    from repl_driver import type_into_js
+
+    from js import memory, screen, session_store
 
     closed: list[str | None] = []
 
@@ -379,10 +379,14 @@ def test_a_resumed_tool_row_folds_with_its_whole_form_like_a_live_one(capsys):
         {"role": "tool", "tool_call_id": "c1", "content": output},
         {"role": "assistant", "content": "done"},
     ]
-    telemetry = runtime.Telemetry(None)
-    telemetry.exchange_factory = Exchange
-    state = ReplState(messages=messages, settings=settings.seed_defaults())
-    repl._show_resume(state, telemetry, 60)
+    monkeypatch.chdir(tmp_path)
+    session = session_store.folder_for(tmp_path) / "resumed.jsonl"
+    session.parent.mkdir(parents=True)
+    for message in messages:
+        memory.append_message(session, message)
+    # The screen draws a tool exchange through this; the resumed one is recorded.
+    monkeypatch.setattr(screen, "ScreenExchange", lambda *_args: Exchange())
+    assert type_into_js(monkeypatch, [], "--session", "resumed") == 0
     assert closed and closed[0] and all(f"line {n}" in SGR.sub("", closed[0]) for n in range(20))
     shown = SGR.sub("", capsys.readouterr().out)
     assert "build it" in shown and "done" in shown

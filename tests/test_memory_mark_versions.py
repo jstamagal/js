@@ -34,7 +34,8 @@ def test_foreign_marks_do_not_override_supported_session_state(tmp_path, version
     before = path.read_bytes()
 
     assert memory.first_turn_mode(path) == "valid-first"
-    assert memory._last_mark_payload(path, "turn_mode:") == "valid-last"
+    # The newest supported turn mode is valid-last: recording it again is no change.
+    assert memory.record_turn_mode(path, "valid-last") is None
     assert memory.load_system_prompt(path) == "valid system"
     assert memory.last_workspace(path) == {"cwd": "valid directory"}
     assert memory.last_prompt_seen(path) == "valid-fingerprint"

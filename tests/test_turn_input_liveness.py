@@ -16,7 +16,7 @@ from dataclasses import replace
 import ai
 import ai.types.usage
 import pytest
-from repl_driver import run_async
+from repl_driver import run_async, thread_event
 
 from js import cli, runtime
 from js.config import Config, from_env
@@ -110,8 +110,7 @@ def test_second_line_is_processed_while_a_tool_runs(monkeypatch, tmp_path):
 
     async def script(on_line):
         await on_line("first")
-        while not started.is_set():
-            await asyncio.sleep(0.01)
+        await thread_event(started, "the turn to reach the nap tool")
         await asyncio.wait_for(on_line("second"), timeout=10)
         seen["tool_finished_before_second_line"] = finished.is_set()
         release.set()

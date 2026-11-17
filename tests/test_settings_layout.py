@@ -10,14 +10,23 @@ from js.repl_state import ReplState
 
 @pytest.mark.parametrize("columns", [20, 40, 50, 60, 100])
 @pytest.mark.parametrize("key", ["LSP_SERVERS", "MCP_SERVERS"])
-def test_settings_values_wrap_under_the_value(monkeypatch, capsys, columns, key):
+def test_settings_values_wrap_under_the_value(monkeypatch, tmp_path, capsys, columns, key):
+    from repl_driver import output_of, run_async
+
+    from js.config import from_env
+
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(text_layout, "terminal_width", lambda: columns)
-    monkeypatch.setattr(repl_settings_commands, "_live_settings_overlay_for_state", lambda _cfg, _state: {})
-    values = {}
+    values = settings.seed_defaults()
     spec = settings.spec_for(key)
     settings.set_dotted(values, spec.path, {"example": {"command": "word " * 60, "url": "https://example.org/" + "a" * 180}})
-    repl_settings_commands._show_settings(ReplState(settings=values), None, key)
-    lines = capsys.readouterr().out.splitlines()
+    shown = []
+
+    async def typing(enter):
+        shown.append(await output_of(enter, capsys, f"/set {key}"))
+
+    run_async(monkeypatch, from_env(), typing, live_settings=values)
+    lines = shown[0].splitlines()
     assert len(lines) > 1
     assert all(text_layout.cells(line) < columns for line in lines)
     value = setcmd.render_value(spec, settings.knob(values, key), masked=setcmd.masks_secrets(values))

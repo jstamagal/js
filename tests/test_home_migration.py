@@ -542,8 +542,8 @@ def test_old_sessions_are_filed_by_start_directory_and_keep_their_names(tmp_path
     assert config.resolve_session_file(session_store.folder_for(tmp_path), generated.stem) == filed
     assert config.resolve_session_file(session_store.folder_for(tmp_path), "3ea7213") == filed
     assert config.resolve_session_file(session_store.folder_for(tmp_path), "merrygoround") == folder / "merrygoround.jsonl"
-    # --last finds the session latest.json named.
-    assert cli._latest_session_name("defaultagent") == str(filed)
+    # latest.json, where --last looks, names the filed session.
+    assert session_store.read_latest(paths.state_root() / "defaultagent") == filed
 
 
 def test_a_migrated_session_has_an_id_and_a_parent_on_every_record(tmp_path):

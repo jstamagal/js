@@ -181,13 +181,16 @@ def test_failed_undo_retains_snapshot_for_retry(tmp_path, monkeypatch, restart, 
         (target / "child").write_text("original")
     elif kind == "symlink":
         target.symlink_to("original")
-    fs._snapshot_remove_target(context, target)
-    if kind == "directory":
-        (target / "child").write_text("changed")
+    # The tool's own snapshot: removing what is there, or creating what is not.
+    if kind == "missing":
+        assert fs.write(file_path=str(target), content="changed", context=context).startswith("wrote")
     else:
-        if kind == "symlink":
-            target.unlink()
-        target.write_text("changed")
+        assert fs.remove(str(target), permanent=True, context=context).startswith("removed")
+        if kind == "directory":
+            target.mkdir()
+            (target / "child").write_text("changed")
+        else:
+            target.write_text("changed")
     entries = sorted(context.undo.directory.glob("*/*.snapshot"))
     method = {"file": "write_bytes", "directory": "write_bytes", "symlink": "symlink_to", "missing": "unlink"}[kind]
 

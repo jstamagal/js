@@ -530,14 +530,17 @@ def test_replay_puts_each_signed_part_back_between_its_tool_calls():
     assert shape == [("a", "S1"), "call_1", ("b", "S2"), "call_2"]
 
 
-def test_the_reduced_history_view_drops_signed_reasoning_with_the_text():
+def test_the_reduced_history_view_drops_signed_reasoning_with_the_text(tmp_path):
     record = {
         "role": "assistant", "content": "ok", "reasoning_content": _THOUGHT,
         "reasoning_parts": [{"text": _THOUGHT, "provider_metadata": {"anthropic": {"signature": _SIGNATURE}}}],
         "reasoning_from": {"provider": "anthropic", "model": "claude-sonnet-5-5"},
     }
 
-    assert memory._strip_orphan_reasoning([record]) == [{"role": "assistant", "content": "ok"}]
+    session = tmp_path / "s.jsonl"
+    memory.append_message(session, record)
+    assert memory.load_messages(session) == [{"role": "assistant", "content": "ok"}]
+    assert memory.load_messages(session, preserve_reasoning=True) == [record]
 
 
 # --- edits to earlier history -------------------------------------------------

@@ -6,8 +6,7 @@ from types import SimpleNamespace
 import pytest
 from test_config_compaction_layers import _compact_test_cfg
 
-from js import cli, compaction_settings, paths, repl_session_commands, repl_state, run_assembly
-from js.repl_state import ReplState
+from js import cli, compaction_settings, paths, run_assembly
 
 
 @pytest.mark.parametrize("arguments, stdin, expected", [
@@ -62,6 +61,7 @@ def test_compact_only_deduplicates_already_published_skip(monkeypatch, tmp_path,
     monkeypatch.setattr(cli.compaction, "printing", lambda *args: lambda event, **payload: observed.append((event, payload)))
     monkeypatch.setattr(cli.msgs, "say", lambda message, **fields: done.append((message, fields)))
     _run_compact_route(monkeypatch, cfg, route)
+    done = [said for said in done if said[0] is cli.msgs.COMPACTION_DONE]
     assert bool(done) is done_expected
     if done:
         assert done == [(cli.msgs.COMPACTION_DONE, {"result": result})]
@@ -70,9 +70,12 @@ def test_compact_only_deduplicates_already_published_skip(monkeypatch, tmp_path,
 
 def _run_compact_route(monkeypatch, cfg, route):
     if route == "manual":
-        monkeypatch.setattr(ReplState, "config_for_turn", lambda state, cfg: cfg)
-        monkeypatch.setattr(repl_state, "repl_assembly", lambda state: SimpleNamespace(compact_force_focus="forced"))
-        assert repl_session_commands._cmd_compact("", ReplState(system="", messages=[]), cfg) is None
+        from repl_driver import run_async
+
+        cfg.prompts_dir.mkdir(parents=True, exist_ok=True)
+        (cfg.prompts_dir / "agent.yaml").write_text("tools: []\n", encoding="utf-8")
+        (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
+        run_async(monkeypatch, cfg, ["/compact"])
     else:
         cfg.session_file.parent.mkdir(parents=True, exist_ok=True)
         cfg.session_file.touch()

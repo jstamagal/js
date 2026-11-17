@@ -24,11 +24,16 @@ from js.toolkit.core import ToolContext
     ("visible\x1b[31", "visible"),
     ("visible\x1b]unfinished title", "visibleunfinished title"),
 ])
-def test_plain_shell_cleaning_and_exact_keep_ansi(text, expected):
+def test_plain_shell_cleaning_and_exact_keep_ansi(tmp_path, text, expected):
     raw = text.encode("utf-8")
+    command = shlex.quote(sys.executable) + " -c " + shlex.quote(f"import os; os.write(1, {raw!r})")
 
-    assert shell._clean(raw, keep_ansi=False) == expected
-    assert shell._clean(raw, keep_ansi=True) == text
+    def stdout(keep_ansi):
+        result = shell.shell(command=command, keep_ansi=keep_ansi, context=ToolContext(cwd=tmp_path))
+        return result.split("--- stdout ---\n", 1)[1]
+
+    assert stdout(False) == expected
+    assert stdout(True) == text
 
 
 @pytest.mark.parametrize("keep_ansi", [False, True])

@@ -14,7 +14,6 @@ from js import agent_messages, console, logins, memory, output, runtime
 from js.config import from_env
 from js.logins import Login
 from js.toolkit import ToolContext, subagents
-from js.toolkit.registry import build_default_registry
 
 
 class _Events:
@@ -58,6 +57,8 @@ def child_turn(monkeypatch):
 
     async def turn(child_cfg, system, messages, telemetry, **kwargs):
         seen["cfg"] = child_cfg
+        # Each child's cfg by the task it was given.
+        seen[messages[-1]["content"]] = child_cfg
         kwargs["call_stats"].append({"prompt_tokens": 1200, "output_tokens": 34})
         messages.append({"role": "assistant", "content": "done"})
 
@@ -71,32 +72,39 @@ def child_turn(monkeypatch):
 
 
 def _run(cfg, tmp_path, *, total=1, idx=1):
+    """`total` worker subagents run through the task tool: its result, and
+    the events of the subagent numbered `idx`."""
     events = _Events()
+    context = ToolContext(cwd=tmp_path)
+    context.config = cfg
 
     async def go():
         with output.using_sink(events):
-            return await subagents._run_one_task_async(
-                idx, total, "work", ToolContext(cwd=tmp_path), cfg, build_default_registry(), "worker", None)
+            tasks = ["work"] if total == 1 else [f"work {n}" for n in range(1, total + 1)]
+            return await subagents.task_async(tasks=tasks, agent_id="worker", context=context)
 
-    return asyncio.run(go()), events
+    result = asyncio.run(go())
+    events.seen = [event for event in events.seen if dict(event.fields).get("index", idx) == idx]
+    return result, events
 
 
 def test_the_start_event_carries_the_childs_own_model_effort_and_tools(parent_cfg, child_turn, tmp_path):
     cfg = parent_cfg("model: testes/child-model\nreasoning: high\ntools:\n  - read:eager\n  - shell:eager\n")
 
     result, events = _run(cfg, tmp_path, idx=2, total=3)
+    child_cfg = child_turn["work 2"]
 
-    assert result == "done"
+    assert "2. done" in result
     (start,) = events.named("subagent_start")
     assert start["agent"] == "worker"
     assert (start["index"], start["total"]) == (2, 3)
-    assert start["model"] == child_turn["cfg"].model == "child-model"
+    assert start["model"] == child_cfg.model == "child-model"
     assert start["provider"] == "testes"
     assert start["route"] == "testes/child-model"
     assert start["effort"] == "high"
     assert start["tools"] == 2
-    assert start["session_file"] == str(child_turn["cfg"].session_file)
-    assert start["session"] == child_turn["cfg"].session_file.stem
+    assert start["session_file"] == str(child_cfg.session_file)
+    assert start["session"] == child_cfg.session_file.stem
 
 
 def test_a_child_without_its_own_model_shows_the_parents(parent_cfg, child_turn, tmp_path):
