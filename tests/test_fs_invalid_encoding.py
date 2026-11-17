@@ -1,6 +1,5 @@
 """Invalid UTF-8 content returns an error before files or undo state change."""
 
-import copy
 
 import pytest
 
@@ -22,7 +21,7 @@ def test_invalid_surrogate_preserves_file_and_undo_state(tmp_path, surrogate, op
         assert fs.write(str(target), content="before\n", overwrite=True, context=context).startswith("wrote ")
     original = target.read_bytes() if target.exists() else None
     prior_stat = target.stat() if target.exists() else None
-    snapshots = copy.deepcopy(context.snapshots)
+    entries = context.undo.count(target)
     coverage = context.reads.coverage(target)
 
     if operation in {"new", "overwrite"}:
@@ -36,7 +35,7 @@ def test_invalid_surrogate_preserves_file_and_undo_state(tmp_path, surrogate, op
         ], context=context)
 
     assert result.startswith("ERROR:")
-    assert context.snapshots == snapshots
+    assert context.undo.count(target) == entries
     assert context.reads.coverage(target) == coverage
     if original is None:
         assert not target.exists()

@@ -28,7 +28,7 @@ context = ToolContext(cwd=target.parent)
 result = fs.write(str(target), content='replacement', overwrite=True, context=context)
 assert result.startswith('ERROR:'), result
 assert stat.S_ISFIFO(target.stat().st_mode)
-assert not context.snapshots
+assert not context.undo.count(target)
 assert not context.reads.paths()
 assert context.reads.coverage(target).content_hash is None
 """
@@ -53,7 +53,7 @@ def test_write_refuses_other_nonregular_files_without_snapshot(tmp_path, kind):
     result = fs.write(str(target), content="replacement", overwrite=True, context=context)
 
     assert result.startswith("ERROR:")
-    assert not context.snapshots
+    assert not context.undo.count(target)
     assert not context.reads.paths()
     assert context.reads.coverage(target).content_hash is None
 

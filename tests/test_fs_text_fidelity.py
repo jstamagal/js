@@ -98,7 +98,7 @@ def test_failed_patch_batch_preserves_bytes_and_snapshot_state(tmp_path, newline
 
     assert result.startswith("ERROR: edit 2: Could not find match")
     assert target.read_bytes() == original
-    assert context.snapshots == {}
+    assert not context.undo.count(target)
     assert context.reads.coverage(target) == coverage
 
 
@@ -113,7 +113,7 @@ def test_patch_refuses_an_ambiguous_overlapping_match(tmp_path):
 
     assert result.startswith("ERROR: Multiple matches found")
     assert target.read_text() == original
-    assert not context.snapshots
+    assert not context.undo.count(target)
 
 
 def test_patch_replace_all_rewrites_non_overlapping_occurrences(tmp_path):

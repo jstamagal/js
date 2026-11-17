@@ -131,7 +131,7 @@ def test_patch_edits_list_is_atomic_when_a_later_edit_cannot_match(tmp_path):
     assert result.startswith("ERROR: edit 2: Could not find match for search text: 'gamma'")
     # The first edit resolved cleanly; nothing may reach disk regardless.
     assert target.read_bytes() == before
-    assert not context.snapshots.get(target)
+    assert not context.undo.count(target)
 
 
 def test_patch_identical_edit_is_skipped_in_both_scalar_and_list_form(tmp_path):
@@ -462,7 +462,7 @@ def test_remove_chonker_requires_confirmed_permanent_delete(tmp_path, monkeypatc
         "confirm with the operator and pass permanent=true to delete directly."
     )
     assert target.exists()
-    assert not context.snapshots.get(target)
+    assert not context.undo.count(target)
 
 
 def test_remove_symlink_does_not_follow_target_and_undo_restores_link(tmp_path):
@@ -1489,4 +1489,4 @@ def test_remove_uses_the_configured_trash_size_limit(tmp_path, monkeypatch):
 
     assert result.startswith("ERROR")
     assert target.read_bytes() == b"too large"
-    assert not context.snapshots.get(target)
+    assert not context.undo.count(target)

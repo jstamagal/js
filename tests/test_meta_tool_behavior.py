@@ -75,12 +75,12 @@ def test_plan_snapshot_lets_undo_restore_prior_plan(tmp_path):
 
     assert result == f"plan overwritten at {target}"
     assert target.read_text() == "second"
-    snaps = context.snapshots.get(target)
-    assert snaps is not None
-    # Two writes -> two snapshots; the first recorded a nonexistent file (None).
-    assert snaps[0] is None
+    # Two writes -> two undo entries; the first recorded a file that did not exist.
+    assert context.undo.count(target) == 2
     assert fs.undo(str(target), context=context).startswith("restored")
     assert target.read_text() == "first"
+    assert fs.undo(str(target), context=context).startswith("restored")
+    assert not target.exists()
 
 
 def test_plan_refuses_to_silently_replace_an_existing_version(tmp_path):

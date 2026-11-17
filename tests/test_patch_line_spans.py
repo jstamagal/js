@@ -45,4 +45,4 @@ def test_patch_that_reaches_following_unread_line_is_still_refused(tmp_path, new
 
     assert result.startswith("ERROR:")
     assert target.read_bytes() == original
-    assert not context.snapshots
+    assert not context.undo.count(target)

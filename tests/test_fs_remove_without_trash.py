@@ -78,4 +78,4 @@ def test_trash_remove_without_trash_refuses_and_leaves_the_file(trashless_box):
 
     assert result.startswith("ERROR")
     assert target.read_bytes() == b"keep me\n"
-    assert not context.snapshots.get(target)
+    assert not context.undo.count(target)

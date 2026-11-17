@@ -41,7 +41,7 @@ def test_patch_refuses_unsupported_line_coordinates(tmp_path, separator):
     result = fs.patch(str(target), old_string="three", new_string="THREE", context=context)
     assert result.startswith("ERROR: unsupported line separator")
     assert target.read_text() == original
-    assert not context.snapshots
+    assert not context.undo.count(target)
 
 
 def test_patch_refuses_a_fifo_without_blocking(tmp_path):

@@ -93,7 +93,7 @@ def _trash_command() -> str | None:
 
 def _snapshot_remove_target(context: ToolContext, target: Path) -> None:
     if target.is_symlink():
-        context.record_snapshot(target, {"kind": "symlink", "target": os.readlink(target)})
+        context.undo.record(target, {"kind": "symlink", "target": os.readlink(target)})
         return
     context.snapshot(target)
 
@@ -960,7 +960,7 @@ def remove(path: str, permanent: bool | None = False, context: ToolContext | Non
         if not permanent:
             error = _trash_target(target, context)
             if error:
-                context.discard_snapshot(target)
+                context.undo.discard(target)
                 return error
             _view(path=str(target), trashed=True)
             return f"trashed {target}"
@@ -979,12 +979,12 @@ def undo(path: str, context: ToolContext | None = None) -> str:
     # write/patch key snapshots under resolve_path (follows symlinks); remove keys
     # under the no-follow abspath. Try both so undo finds the snapshot either laid it.
     target = context.resolve_path(path, write=True)
-    if not context.snapshots.get(target):
+    if not context.undo.count(target):
         no_follow = _resolve_path_no_follow(context, path, write=True)
-        if context.snapshots.get(no_follow):
+        if context.undo.count(no_follow):
             target = no_follow
     try:
-        with context.restoring_snapshot(target) as (found, previous):
+        with context.undo.restoring(target) as (found, previous):
             if not found:
                 return f"ERROR: no snapshot available for {target}"
             if isinstance(previous, dict) and previous.get("kind") in {"corrupt", "unavailable"}:
