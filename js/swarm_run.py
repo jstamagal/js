@@ -34,7 +34,6 @@ from . import (
     agent_messages,
     compaction,
     headless,
-    memory as M,
     messages as msgs,
     run_assembly,
     runtime,
@@ -42,6 +41,7 @@ from . import (
     swarm,
 )
 from .config import InvocationSources, from_env
+from .conversation import Conversation
 from .session_catalog import record_session_start
 from .toolkit.core import ToolContext
 from .toolkit.terminal import close_terminal_sessions
@@ -184,8 +184,7 @@ class Runner:
     async def run_agent(self, spec: AgentSpec) -> None:
         events = AgentEvents(self.out, self.lock, spec.name)
         reason = "stopped"
-        cfg = None
-        messages: list[dict] = []
+        chat = None
         context = ToolContext(cwd=Path(spec.cwd).expanduser() if spec.cwd else Path.cwd())
         context.net_label = spec.name
         try:
@@ -199,33 +198,33 @@ class Runner:
                 slots = _slots(cfg, self.spec_slots)
                 self.gate = asyncio.Semaphore(slots) if slots > 0 else contextlib.nullcontext()
             telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
-            messages = M.load_replay_messages(cfg.session_file)
-            if not messages and Path(cfg.session_file) != Path(os.devnull):
+
+            async def gated(*args: Any, **kwargs: Any) -> None:
+                async with self.gate:
+                    await runtime.run_turn_async(*args, **kwargs)
+
+            chat = Conversation(cfg, system, registry=settled.registry, context=context, telemetry=telemetry,
+                                on_notice=lambda _notice: None, run_turn=gated)
+            if not chat.messages and Path(cfg.session_file) != Path(os.devnull):
                 record_session_start(cfg.session_file, cwd=context.cwd, agent=cfg.agent_id, model=cfg.model,
                                      provider=cfg.provider_id, mode="swarm")
-            turn_kwargs = settled.turn_kwargs(tool_context=context, suppress_output=True, trace_override=False,
-                                              steer=agent.steer, event_sink=events.runtime_event)
-            stamp = M.stamp_for(cfg.model, cfg.provider_id, cfg.reasoning_effort)
-            turn_kwargs["checkpoint"] = lambda: M.persist_messages(cfg.session_file, messages, stamp=stamp)
-            auto = compaction.AutoCompactState()
+            turn_kwargs = settled.turn_kwargs(suppress_output=True, trace_override=False, steer=agent.steer,
+                                              event_sink=events.runtime_event)
             events.emit("agent_start", model=cfg.model, provider=cfg.provider_id, session=str(cfg.session_file),
                         cwd=str(context.cwd))
-            await agent_messages.initialize(cfg, settled.prompt_spec, messages, telemetry, system=system, **turn_kwargs)
-            messages.append(M.note_time({"role": "user", "content": spec.opener}))
-            async with self.gate:
-                await runtime.run_turn_async(cfg, system, messages, telemetry, **turn_kwargs)
+            await agent_messages.initialize(cfg, settled.prompt_spec, chat.messages, telemetry, system=system,
+                                            tool_context=context, checkpoint=chat.save, **turn_kwargs)
+            await chat.turn({"role": "user", "content": spec.opener}, **turn_kwargs)
             while not agent.stop_seen:
-                M.persist_messages(cfg.session_file, messages, stamp=stamp)
-                await self.compact(cfg, auto, context, system, messages)
+                with contextlib.suppress(Exception):
+                    await chat.maybe_compact(emit=compaction.printing(), log_dir=compaction.flight_log_dir(cfg))
                 events.emit("sleep")
                 landed = await agent.sleep_async()
                 events.emit("wake", count=len(landed), seqs=[m.seq for m in landed if m.seq],
                             kinds=sorted({m.kind for m in landed}))
                 if all(m.kind == swarm.STOP for m in landed):
                     break
-                messages.append(M.note_time(agent.wake_message(landed)))
-                async with self.gate:
-                    await runtime.run_turn_async(cfg, system, messages, telemetry, **turn_kwargs)
+                await chat.turn(agent.wake_message(landed), **turn_kwargs)
             reason = "retired" if agent.retired else "stopped"
         except asyncio.CancelledError:
             reason = "cancelled"
@@ -235,24 +234,11 @@ class Runner:
                 self.code = 1
             events.emit("error", message=f"{type(exc).__name__}: {exc}", retryable=False)
         finally:
-            if cfg is not None:
+            if chat is not None:
                 with contextlib.suppress(Exception):
-                    M.persist_messages(cfg.session_file, messages,
-                                       stamp=M.stamp_for(cfg.model, cfg.provider_id, cfg.reasoning_effort))
+                    chat.save()
             close_terminal_sessions(context)
             events.emit("agent_end", reason=reason)
-
-    @staticmethod
-    async def compact(cfg: Any, auto: compaction.AutoCompactState, context: ToolContext, system: str,
-                      messages: list[dict]) -> None:
-        if not compaction.get_bool(cfg, "COMPACTION_AUTO"):
-            return
-        with contextlib.suppress(Exception):
-            await compaction.maybe_auto_compact_async(
-                cfg, auto, context, system, messages,
-                lambda: runtime._resolve_context_window(cfg.model, cfg.provider_id, cfg.provider_base_url),
-                emit=compaction.printing(), log_dir=compaction.flight_log_dir(cfg),
-            )
 
 
 def load_spec(path: str | os.PathLike[str]) -> tuple[Path, list[AgentSpec], int | None]:
