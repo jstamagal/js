@@ -734,80 +734,55 @@ def resolve_model(
 ) -> ai.Model:
     """Return an `ai.Model`, optionally bound to an explicit js provider.
 
-    ``provider_id`` is a user-facing js id.  The provider registry translates it
-    to the SDK/API shape while the model id is passed through verbatim.
+    ``provider_id`` is a user-facing js id; `routing.resolve_wire` translates
+    it to the SDK and protocol, and the model id is passed through verbatim.
+    With no provider, an explicit base URL is a deliberate endpoint choice:
+    an anonymous OpenAI-compatible endpoint on chat completions, like every
+    custom base. `ai.get_model` takes neither a base URL nor a key and would
+    route a bare id to the Vercel gateway.
     """
-    if provider_id is None:
-        # No js provider resolved. An explicit base URL is a deliberate endpoint
-        # choice: honor it as an anonymous OpenAI-compatible endpoint with the
-        # given key, on chat completions like every custom base. `ai.get_model`
-        # takes neither a base URL nor a key and would route a bare id to the
-        # Vercel gateway. A missing key goes out as "" (keyless local server),
-        # never as the SDK's env key. With neither a provider nor a base URL,
-        # riding the SDK's own env keys (AI_GATEWAY_API_KEY, OPENAI_API_KEY, ...)
-        # is exactly the env-farming the login gate forbids: fail with the same
-        # actionable not-logged-in message instead.
-        if provider_base_url:
-            provider = ai.get_provider(
-                "openai",
-                base_url=provider_base_url,
-                api_key=provider_api_key or "",
-                headers=_without_framing(provider_headers) or None,
-                protocol=_ReasoningContentProtocol(),
-            )
-            return ai.Model(id=model_id, provider=provider)
+    wire = routing.resolve_wire(provider_id, base_url=provider_base_url)
+    if provider_id is None and not provider_base_url:
+        # With neither a provider nor a base URL, riding the SDK's own env keys
+        # (AI_GATEWAY_API_KEY, OPENAI_API_KEY, ...) is exactly the env-farming
+        # the login gate forbids: fail with the same actionable not-logged-in
+        # message instead.
         raise routing.ProviderNotLoggedInError(routing.unconfigured_model_message(model_id))
-
-    provider_def = providers.get_provider(provider_id)
     # No client-side allowlist gate: ``allowed_models`` is a curated hint used to
     # filter noisy /models listings, NOT an authority on what the endpoint serves.
     # It goes stale the moment a provider ships a new id (e.g. opencode-go's
     # glm-5.2), so refusing here only blocks a model the server happily answers.
     # Let the request through; the provider is the one source of truth and will
     # 400 with its own message if the id is genuinely unknown.
-    canonical_id = providers.normalize_provider_id(provider_id) or provider_id
+    if wire.provider is not None:
+        providers.assert_endpoint_configured(wire.provider, provider_base_url)
 
-    if provider_def is not None:
-        providers.assert_endpoint_configured(provider_def, provider_base_url)
-
-    sdk_provider_id = (
-        provider_def.effective_sdk_provider_id
-        if provider_def is not None and provider_def.effective_sdk_provider_id
-        else canonical_id
-    )
-    headers = dict(provider_headers or {})
-    if provider_def is not None and provider_def.headers:
-        headers = {**provider_def.headers, **headers}
-    headers = _without_framing(headers)
+    headers = {**(wire.provider.headers if wire.provider is not None else {}), **(provider_headers or {})}
     # ai>=0.2.1 flipped the openai SDK's default wire to the Responses API; every
     # chat-completions endpoint js targets through the openai SDK (opencode-go,
     # mimo, ollama, llama.cpp, custom OpenAI-compatible bases) 404s on /responses.
     # Pin chat-completions for those; only the explicit Responses transport keeps
     # the new default.
-    protocol = (
-        _AnthropicThinkingProtocol(explicit_prompt_cache=canonical_id != "anthropic")
-        if sdk_provider_id == "anthropic" else None
-    )
-    transport = provider_def.transport if provider_def is not None else None
-    if sdk_provider_id == "openai" and transport == "custom_responses":
+    protocol = None
+    if wire.sdk == "anthropic":
+        protocol = _AnthropicThinkingProtocol(explicit_prompt_cache=wire.provider_id != "anthropic")
+    elif wire.sdk == "openai" and wire.responses:
         protocol = _ResponsesProtocol()
-    elif sdk_provider_id == "openai":
-        custom_base = providers.is_custom_base_url(provider_def, provider_base_url)
-        operator_endpoint = provider_def is not None and (
-            provider_def.local or not provider_def.established
-        )
+    elif wire.sdk == "openai":
         protocol = (
             # Only a CLIProxyAPI route sends `reasoning_blocks`: its plugin
             # takes them; a direct endpoint would not know the field.
-            _ReasoningContentProtocol(reasoning_blocks=transport == "cliproxyapi")
-            if operator_endpoint or transport == "custom_openai" or custom_base
+            _ReasoningContentProtocol(reasoning_blocks=wire.transport == "cliproxyapi")
+            if wire.reasoning_content
             else OpenAIChatCompletionsProtocol()
         )
     provider = ai.get_provider(
-        sdk_provider_id,
+        wire.sdk,
         base_url=provider_base_url,
-        api_key=provider_api_key,
-        headers=headers or None,
+        # With no provider a missing key goes out as "" (a keyless local
+        # server), never as the SDK's env key.
+        api_key=provider_api_key if provider_id is not None else provider_api_key or "",
+        headers=_without_framing(headers) or None,
         protocol=protocol,
     )
     return ai.Model(id=model_id, provider=provider)
