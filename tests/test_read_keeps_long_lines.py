@@ -14,7 +14,7 @@ def test_a_long_line_is_returned_whole(tmp_path):
     (tmp_path / "prompt.txt").write_text(f"short\n{long_value}\ntail\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    out = fs.read("prompt.txt", context=context)
+    out = fs.fs_read("prompt.txt", context=context)
 
     assert long_value in out
     assert "truncated" not in out
@@ -27,14 +27,14 @@ def test_every_suffix_keeps_long_lines_whole(tmp_path):
     (tmp_path / "data.py").write_text(record + "\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    assert long_value in fs.read("data.jsonl", context=context)
-    assert long_value in fs.read("data.py", context=context)
+    assert long_value in fs.fs_read("data.jsonl", context=context)
+    assert long_value in fs.fs_read("data.py", context=context)
 
 
 def test_whole_file_byte_cap_still_refuses_with_a_range_hint(tmp_path):
     (tmp_path / "big.txt").write_text("z" * 5_000, encoding="utf-8")
     context = ToolContext(cwd=tmp_path, max_read_bytes=1_000)
 
-    out = fs.read("big.txt", context=context)
+    out = fs.fs_read("big.txt", context=context)
 
     assert out.startswith("ERROR:")

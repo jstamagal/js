@@ -49,7 +49,7 @@ def test_numbered_read_patch_and_undo_are_grounded_in_temp_cwd(tmp_path):
     unread_patch = patch.patch(path="sample.txt", old_string="alpha", new_string="ALPHA", context=context)
     assert unread_patch == "ERROR: You must read the file with the read tool before attempting to edit it."
 
-    read_result = fs.read("sample.txt", context=context)
+    read_result = fs.fs_read("sample.txt", context=context)
     assert NUMBERED_RE.search(read_result)
     assert "2" in read_result and "|beta" in read_result
 
@@ -67,7 +67,7 @@ def test_read_prefix_is_the_line_number_alone(tmp_path):
     target.write_text("alpha\nbeta\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    rendered = fs.read("numbered.txt", context=context)
+    rendered = fs.fs_read("numbered.txt", context=context)
 
     assert rendered.splitlines() == ["1|alpha", "2|beta"]
 
@@ -78,7 +78,7 @@ def _read_file(tmp_path, name: str, body: str) -> tuple:
     target = tmp_path / name
     target.write_text(body, encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
-    fs.read(name, context=context)
+    fs.fs_read(name, context=context)
     return target, context
 
 
@@ -245,7 +245,7 @@ def test_patch_refuses_a_match_outside_the_ranges_actually_read(tmp_path):
     target = tmp_path / "ranged.txt"
     target.write_text("one\ntwo\nthree\nfour\nfive\nsix\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
-    fs.read("ranged.txt", start_line=1, end_line=2, context=context)
+    fs.fs_read("ranged.txt", start_line=1, end_line=2, context=context)
 
     blocked = patch.patch(
         file_path="ranged.txt",
@@ -262,8 +262,8 @@ def test_patch_accepts_target_covered_by_union_of_ranged_reads(tmp_path):
     target = tmp_path / "pieces.txt"
     target.write_text("one\ntwo\nthree\nfour\nfive\nsix\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
-    fs.read("pieces.txt", start_line=1, end_line=2, context=context)
-    fs.read("pieces.txt", start_line=4, end_line=5, context=context)
+    fs.fs_read("pieces.txt", start_line=1, end_line=2, context=context)
+    fs.fs_read("pieces.txt", start_line=4, end_line=5, context=context)
 
     result = patch.patch(
         file_path="pieces.txt",
@@ -280,7 +280,7 @@ def test_implicit_read_page_does_not_unlock_unrendered_remainder(tmp_path):
     target = tmp_path / "paged.txt"
     target.write_text("one\ntwo\nthree\nfour\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path, max_read_lines=2)
-    fs.read("paged.txt", context=context)
+    fs.fs_read("paged.txt", context=context)
 
     result = patch.patch(
         file_path="paged.txt",
@@ -334,7 +334,7 @@ def test_patch_matches_crlf_search_text_per_edit(tmp_path):
     target = tmp_path / "crlf.txt"
     target.write_bytes(b"alpha\r\nbeta\r\ngamma\r\n")
     context = ToolContext(cwd=tmp_path)
-    fs.read("crlf.txt", context=context)
+    fs.fs_read("crlf.txt", context=context)
 
     result = patch.patch(
         file_path="crlf.txt",
@@ -355,7 +355,7 @@ def test_read_boolean_line_range_values_are_ignored(tmp_path):
     target.write_text("alpha\nbeta\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    actual = fs.read("lines.txt", start_line=True, end_line=True, context=context)
+    actual = fs.fs_read("lines.txt", start_line=True, end_line=True, context=context)
 
     assert "alpha" in actual
     assert "beta" in actual
@@ -367,7 +367,7 @@ def test_read_start_past_eof_returns_non_error_note(tmp_path):
     target.write_text("alpha\nbeta\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    actual = fs.read("lines.txt", start_line=50, end_line=80, context=context)
+    actual = fs.fs_read("lines.txt", start_line=50, end_line=80, context=context)
 
     assert not actual.startswith("ERROR")
     assert "2 total lines" in actual
@@ -382,7 +382,7 @@ def test_write_replaces_an_existing_file_once_it_has_been_read(tmp_path):
     assert fs.write("known.txt", "new\n", context=context).startswith("ERROR")
     assert fs.write("known.txt", "new\n", overwrite=True, context=context).startswith("ERROR")
     assert target.read_text(encoding="utf-8") == "old\n"
-    fs.read("known.txt", context=context)
+    fs.fs_read("known.txt", context=context)
 
     assert fs.write("known.txt", "new\n", context=context).startswith(f"wrote 4 bytes to {target}")
     assert target.read_text(encoding="utf-8") == "new\n"
@@ -392,7 +392,7 @@ def test_write_require_overwrite_also_demands_the_flag_on_a_read_file(tmp_path):
     target = tmp_path / "guarded.txt"
     target.write_text("old\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path, write_require_overwrite=True)
-    fs.read("guarded.txt", context=context)
+    fs.fs_read("guarded.txt", context=context)
 
     refused = fs.write("guarded.txt", "new\n", context=context)
     assert refused.startswith("ERROR") and "overwrite=true" in refused
@@ -406,7 +406,7 @@ def test_write_overwrite_is_authorized_by_a_partial_read(tmp_path):
     target = tmp_path / "partial.txt"
     target.write_text("one\ntwo\nthree\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
-    fs.read("partial.txt", start_line=1, end_line=1, context=context)
+    fs.fs_read("partial.txt", start_line=1, end_line=1, context=context)
 
     written = fs.write("partial.txt", "replacement\n", overwrite=True, context=context)
 
@@ -1066,8 +1066,8 @@ def test_long_lines_are_returned_whole_for_every_suffix(tmp_path):
     (tmp_path / "data.jsonl").write_text(record + "\n", encoding="utf-8")
     (tmp_path / "data.py").write_text(record + "\n", encoding="utf-8")
 
-    jsonl_out = fs.read("data.jsonl", context=context)
-    py_out = fs.read("data.py", context=context)
+    jsonl_out = fs.fs_read("data.jsonl", context=context)
+    py_out = fs.fs_read("data.py", context=context)
 
     assert long_value in jsonl_out
     assert long_value in py_out
@@ -1350,17 +1350,17 @@ def test_whole_file_read_is_capped_but_ranged_read_is_not(tmp_path):
     target.write_text("".join(f"line {i}\n" for i in range(20_000)), encoding="utf-8")
     context = ToolContext(cwd=tmp_path, max_read_bytes=1024)
 
-    whole = fs.read("big.txt", context=context)
+    whole = fs.fs_read("big.txt", context=context)
     assert whole.startswith("ERROR")
     assert "READ_BYTES_MAX" in whole
     assert "start_line" in whole
 
-    ranged = fs.read("big.txt", start_line=5, end_line=7, context=context)
+    ranged = fs.fs_read("big.txt", start_line=5, end_line=7, context=context)
     assert not ranged.startswith("ERROR")
     assert "|line 4" in ranged and "|line 6" in ranged
 
     # A bogus range must not smuggle the whole file past the cap.
-    bogus = fs.read("big.txt", start_line=True, end_line=True, context=context)
+    bogus = fs.fs_read("big.txt", start_line=True, end_line=True, context=context)
     assert bogus.startswith("ERROR")
     assert "READ_BYTES_MAX" in bogus
 
@@ -1370,7 +1370,7 @@ def test_whole_file_read_under_cap_is_untouched(tmp_path):
     target.write_text("alpha\nbeta\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path, max_read_bytes=1024)
 
-    actual = fs.read("small.txt", context=context)
+    actual = fs.fs_read("small.txt", context=context)
     assert not actual.startswith("ERROR")
     assert "|alpha" in actual
 

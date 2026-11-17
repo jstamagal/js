@@ -106,7 +106,7 @@ def test_read_with_start_byte_reaches_any_byte_of_the_spill_file(tmp_path):
     middle = MB_OUTPUT.index(b"MIDDLE_TOKEN")
     for offset, expected in ((middle, "MIDDLE_TOKEN"), (len(MB_OUTPUT) - len(b"LAST_LINE\n"), "LAST_LINE"),
                              (0, "FIRST_LINE")):
-        read = fs.read(file_path=spill, range={"start_byte": offset}, context=context)
+        read = fs.fs_read(file_path=spill, range={"start_byte": offset}, context=context)
         assert expected in read
 
 

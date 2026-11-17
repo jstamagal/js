@@ -16,7 +16,7 @@ def _read_file(tmp_path, name: str, body: str) -> tuple:
     target = tmp_path / name
     target.write_text(body, encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
-    fs.read(name, context=context)
+    fs.fs_read(name, context=context)
     return target, context
 
 
@@ -119,7 +119,7 @@ def test_a_line_range_wins_over_a_byte_range_with_a_note(numbered, tmp_path, mon
     result = _model_read(tmp_path, monkeypatch, context, {"file_path": str(target), "start_line": 3, "end_line": 4,
                                    "start_byte": 0, "end_byte": 10})
 
-    plain = fs.read(str(target), start_line=3, end_line=4, context=ToolContext(cwd=target.parent))
+    plain = fs.fs_read(str(target), start_line=3, end_line=4, context=ToolContext(cwd=target.parent))
     assert result.startswith(plain)
     assert result.count("\n") == plain.count("\n") + 1
 
@@ -130,7 +130,7 @@ def test_a_line_range_of_a_file_over_file_bytes_max_is_streamed(tmp_path):
     assert target.stat().st_size > 3_000_000
     context = ToolContext(cwd=tmp_path, max_file_bytes=1_000_000, max_read_bytes=0)
 
-    result = fs.read(str(target), start_line=20_000, end_line=20_010, context=context)
+    result = fs.fs_read(str(target), start_line=20_000, end_line=20_010, context=context)
 
     assert not result.startswith("ERROR"), result[:200]
     shown = _shown_lines(result)
@@ -143,11 +143,11 @@ def test_a_whole_read_of_a_file_over_file_bytes_max_names_the_ranged_call(tmp_pa
     target.write_text("line\n" * 1000, encoding="utf-8")
     context = ToolContext(cwd=tmp_path, max_file_bytes=100, max_read_bytes=0)
 
-    result = fs.read(str(target), context=context)
+    result = fs.fs_read(str(target), context=context)
 
     assert result.startswith("ERROR")
     call = json.loads(result[result.index("{"):result.rindex("}") + 1])
-    page = fs.read(context=context, **call)
+    page = fs.fs_read(context=context, **call)
     assert page.splitlines()[0] == "1|line"
 
 
@@ -156,7 +156,7 @@ def test_a_missing_file_suggests_the_near_name_beside_it(tmp_path):
     (tmp_path / "test_jev_tool.py").write_text("x = 1\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    missed = fs.read(str(tmp_path / "result.py"), context=context)
+    missed = fs.fs_read(str(tmp_path / "result.py"), context=context)
     missed_test = patch.patch(file_path="test_jev.py", old_string="x", new_string="y", context=context)
 
     assert missed.startswith("ERROR")
@@ -172,7 +172,7 @@ def test_a_missing_path_suggests_the_existing_path_with_the_same_tail(tmp_path):
     real.write_text("# moonpie\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    read_miss = fs.read(str(tmp_path / "out" / "moonpie" / "README.md"), context=context)
+    read_miss = fs.fs_read(str(tmp_path / "out" / "moonpie" / "README.md"), context=context)
     search_miss = file_search.fs_search("moonpie", path=str(tmp_path / "out" / "moonpie"), context=context)
 
     assert read_miss.startswith("ERROR")
@@ -187,7 +187,7 @@ def test_a_missing_path_search_skips_vendored_trees(tmp_path):
     vendored.write_text("", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    result = fs.read(str(tmp_path / "src" / "pkg" / "index.js"), context=context)
+    result = fs.fs_read(str(tmp_path / "src" / "pkg" / "index.js"), context=context)
 
     assert result.startswith("ERROR")
     assert str(vendored) not in result

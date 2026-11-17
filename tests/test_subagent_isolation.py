@@ -409,7 +409,7 @@ def test_subagent_cannot_undo_parent_snapshot(monkeypatch, tmp_path):
     target = tmp_path / "owned.txt"
     target.write_text("old\n", encoding="utf-8")
     parent = ToolContext(cwd=tmp_path)
-    fs.read("owned.txt", context=parent)
+    fs.fs_read("owned.txt", context=parent)
     patch.patch("owned.txt", old_string="old", new_string="new", context=parent)
     tool_results: list[str] = []
     calls = 0
@@ -437,7 +437,7 @@ def test_subagent_does_not_inherit_parent_read_set(monkeypatch, tmp_path):
     target = tmp_path / "guard.txt"
     target.write_text("old\n", encoding="utf-8")
     parent = ToolContext(cwd=tmp_path)
-    fs.read("guard.txt", context=parent)
+    fs.fs_read("guard.txt", context=parent)
     tool_results: list[str] = []
     calls = 0
 

@@ -11,7 +11,7 @@ def _read(tmp_path, body: str, name: str = "f.txt"):
     target = tmp_path / name
     target.write_bytes(body.encode("utf-8"))
     context = ToolContext(cwd=tmp_path)
-    assert not fs.read(name, context=context).startswith("ERROR")
+    assert not fs.fs_read(name, context=context).startswith("ERROR")
     return target, context
 
 
@@ -131,7 +131,7 @@ def test_a_fuzzy_match_still_needs_its_lines_read(tmp_path):
     target = tmp_path / "f.txt"
     target.write_bytes("".join(f"line {n}\n" for n in range(1, 11)).encode() + "say “hi”\n".encode())
     context = ToolContext(cwd=tmp_path)
-    fs.read("f.txt", start_line=1, end_line=5, context=context)
+    fs.fs_read("f.txt", start_line=1, end_line=5, context=context)
 
     refused = patch.patch(file_path="f.txt", old_string='say "hi"', new_string='say "bye"', context=context)
 

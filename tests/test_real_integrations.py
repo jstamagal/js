@@ -14,7 +14,7 @@ from js.config import from_env
 from js.runtime import Telemetry
 from js.toolkit import ToolContext
 from js.toolkit.file_search import fs_search
-from js.toolkit.fs import read, write
+from js.toolkit.fs import fs_read, write
 from js.toolkit.patch import patch
 from js.toolkit.subagents import task
 
@@ -46,7 +46,7 @@ def test_toolkit_exercises_grounded_file_lifecycle_and_search(tmp_path):
     actual_unread = patch("code.py", old_string="old", new_string="new", context=context)
     assert actual_unread == "ERROR: You must read the file with the read tool before attempting to edit it."
 
-    actual_read = read("code.py", context=context)
+    actual_read = fs_read("code.py", context=context)
     assert re.search(r"^1\|class TaskRunner:", actual_read, re.MULTILINE)
 
     actual_patch = patch("code.py", old_string="return 'old'", new_string="return 'new'", context=context)

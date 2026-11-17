@@ -113,7 +113,7 @@ def test_wiki_write_frontmatter_overwrite_guard_and_upsert(tmp_path):
         context=context,
     )
     after_blocked = page.read_text(encoding="utf-8")
-    fs.read(str(page), context=context)
+    fs.fs_read(str(page), context=context)
     upserted = wiki_write(
         str(vault),
         "concept",
@@ -583,7 +583,7 @@ def test_wiki_upsert_rejects_a_page_changed_since_read(tmp_path):
     context = _ctx(tmp_path)
     wiki_write(str(vault), "concept", "initial", slug="shared", context=context)
     page = vault / "concepts" / "shared.md"
-    fs.read(str(page), context=context)
+    fs.fs_read(str(page), context=context)
     updated = page.read_text() + "\nAnother worker's evidence.\n"
     page.write_text(updated)
 
@@ -599,7 +599,7 @@ def test_wiki_upsert_follows_this_contexts_own_upsert(tmp_path):
     context = _ctx(tmp_path)
     wiki_write(str(vault), "concept", "initial", slug="shared", context=context)
     page = vault / "concepts" / "shared.md"
-    fs.read(str(page), context=context)
+    fs.fs_read(str(page), context=context)
     wiki_write(str(vault), "concept", "first source", slug="shared", source_count=2,
                overwrite=True, context=context)
 
@@ -678,7 +678,7 @@ def test_failed_upsert_preserves_the_complete_existing_page(tmp_path, monkeypatc
     original = b"# Article\n\nOriginal research notes.\n"
     page.write_bytes(original)
     context = _ctx(tmp_path)
-    fs.read(str(page), context=context)
+    fs.fs_read(str(page), context=context)
     real_open = Path.open
 
     @contextmanager

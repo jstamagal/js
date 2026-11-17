@@ -17,7 +17,7 @@ def test_write_preserves_existing_newlines(tmp_path, newline):
     original = newline.join([b"a", b"b", b""])
     target.write_bytes(original)
     context = ToolContext(cwd=tmp_path)
-    assert not fs.read(str(target), context=context).startswith("ERROR")
+    assert not fs.fs_read(str(target), context=context).startswith("ERROR")
 
     result = fs.write(str(target), "A\nB\n", overwrite=True, context=context)
 
@@ -33,7 +33,7 @@ def test_patch_preserves_unedited_bytes(tmp_path, newline):
     original = newline.join([b"alpha", b"beta", b"gamma", b""])
     target.write_bytes(original)
     context = ToolContext(cwd=tmp_path)
-    assert not fs.read(str(target), context=context).startswith("ERROR")
+    assert not fs.fs_read(str(target), context=context).startswith("ERROR")
 
     result = patch.patch(str(target), old_string="beta\n", new_string="BETA\n", context=context)
 
@@ -48,7 +48,7 @@ def test_cr_patch_requires_read_of_actual_target_line(tmp_path, original):
     target = tmp_path / "file.txt"
     target.write_bytes(original)
     context = ToolContext(cwd=tmp_path)
-    fs.read(str(target), start_line=1, end_line=1, context=context)
+    fs.fs_read(str(target), start_line=1, end_line=1, context=context)
 
     result = patch.patch(str(target), old_string="gamma", new_string="GAMMA", context=context)
 
@@ -60,7 +60,7 @@ def test_cr_patch_tracks_read_ranges_after_inserting_lines(tmp_path):
     target = tmp_path / "file.txt"
     target.write_bytes(b"alpha\rbeta\rgamma\r")
     context = ToolContext(cwd=tmp_path)
-    fs.read(str(target), start_line=2, end_line=2, context=context)
+    fs.fs_read(str(target), start_line=2, end_line=2, context=context)
 
     result = patch.patch(
         str(target),
@@ -84,7 +84,7 @@ def test_failed_patch_batch_preserves_bytes_and_snapshot_state(tmp_path, newline
     original = newline.join([b"alpha", b"beta", b""])
     target.write_bytes(original)
     context = ToolContext(cwd=tmp_path)
-    fs.read(str(target), context=context)
+    fs.fs_read(str(target), context=context)
     coverage = context.reads.coverage(target)
 
     result = patch.patch(
@@ -107,7 +107,7 @@ def test_patch_refuses_an_ambiguous_overlapping_match(tmp_path):
     original = "ababa\n"
     target.write_text(original)
     context = ToolContext(cwd=tmp_path)
-    fs.read(str(target), context=context)
+    fs.fs_read(str(target), context=context)
 
     result = patch.patch(str(target), old_string="aba", new_string="X", context=context)
 
@@ -120,7 +120,7 @@ def test_patch_replace_all_rewrites_non_overlapping_occurrences(tmp_path):
     target = tmp_path / "file.txt"
     target.write_text("ababa\n")
     context = ToolContext(cwd=tmp_path)
-    fs.read(str(target), context=context)
+    fs.fs_read(str(target), context=context)
 
     result = patch.patch(
         str(target), old_string="aba", new_string="X", replace_all=True, context=context
@@ -134,7 +134,7 @@ def test_patch_batch_skips_an_edit_that_normalizes_to_a_noop(tmp_path):
     target = tmp_path / "file.txt"
     target.write_bytes(b"alpha\nbeta\n")
     context = ToolContext(cwd=tmp_path)
-    fs.read(str(target), context=context)
+    fs.fs_read(str(target), context=context)
 
     result = patch.patch(
         str(target),
@@ -154,7 +154,7 @@ def test_patch_diff_marks_a_missing_final_newline(tmp_path):
     target = tmp_path / "file.txt"
     target.write_bytes(b"one\ntwo\nthree")
     context = ToolContext(cwd=tmp_path)
-    fs.read(str(target), context=context)
+    fs.fs_read(str(target), context=context)
 
     result = patch.patch(str(target), old_string="three", new_string="THREE", context=context)
 
@@ -186,7 +186,7 @@ assert codecs.lookup(locale.getpreferredencoding(False)).name == "ascii"
 target = Path(sys.argv[1]) / "file.txt"
 target.write_bytes(b"caf\xc3\xa9\r\n")
 context = ToolContext(cwd=target.parent)
-result = fs.read(str(target), context=context)
+result = fs.fs_read(str(target), context=context)
 assert not result.startswith("ERROR"), ascii(result)
 if sys.argv[2] == "patch":
     result = patch.patch(str(target), old_string="caf\u00e9", new_string="th\u00e9", context=context)
@@ -211,7 +211,7 @@ def test_patch_miss_names_the_closest_line(tmp_path):
     target = tmp_path / "cli.cpp"
     target.write_text('int a;\n" charts examples/revenue.csv -t pie3d -T \'Revenue mix\'\\n"\nint b;\n')
     context = ToolContext(cwd=tmp_path)
-    fs.read(str(target), context=context)
+    fs.fs_read(str(target), context=context)
     result = patch.patch(
         str(target),
         old_string='" charts example/revenue.csv -t pie3d -T \'Revenue mix\'\\n"',
@@ -234,6 +234,6 @@ def test_registered_setting_can_disable_fuzzy_edits(tmp_path):
     target.write_text(original)
     context = ToolContext(cwd=tmp_path)
     turn_settings.install(context, SimpleNamespace(**turn_settings.project({"EDIT_FUZZY": False})))
-    fs.read(str(target), context=context)
+    fs.fs_read(str(target), context=context)
     patch.patch(str(target), old_string='say "before"', new_string='say "after"', context=context)
     assert target.read_text() == original

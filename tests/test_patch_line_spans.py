@@ -21,7 +21,7 @@ def test_patch_line_including_newline_needs_only_that_line_read(tmp_path, newlin
     target = tmp_path / "file.txt"
     target.write_bytes(newline.join([b"one", b"two", b"three", b"four", b"five", b""]))
     context = ToolContext(cwd=tmp_path)
-    fs.read(str(target), start_line=1, end_line=1, context=context)
+    fs.fs_read(str(target), start_line=1, end_line=1, context=context)
 
     result = patch.patch(str(target), old_string="one\n", new_string="A\nB\n", context=context)
 
@@ -39,7 +39,7 @@ def test_patch_that_reaches_following_unread_line_is_still_refused(tmp_path, new
     original = newline.join([b"one", b"two", b"three", b""])
     target.write_bytes(original)
     context = ToolContext(cwd=tmp_path)
-    fs.read(str(target), start_line=1, end_line=1, context=context)
+    fs.fs_read(str(target), start_line=1, end_line=1, context=context)
 
     result = patch.patch(str(target), old_string="one\nt", new_string="changed", context=context)
 

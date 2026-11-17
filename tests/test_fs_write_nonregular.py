@@ -64,7 +64,7 @@ def test_write_follows_regular_file_symlink(tmp_path):
     link = tmp_path / "link.txt"
     link.symlink_to(target)
     context = ToolContext(cwd=tmp_path)
-    fs.read(str(link), context=context)
+    fs.fs_read(str(link), context=context)
 
     result = fs.write(str(link), content="after\n", overwrite=True, context=context)
 

@@ -219,7 +219,7 @@ def test_undo_restores_a_patch_after_context_restart(tmp_path):
     target = tmp_path / "restart.txt"
     target.write_text("before\n", encoding="utf-8")
     first_process = _persistent_context(tmp_path, "restart")
-    fs.read("restart.txt", context=first_process)
+    fs.fs_read("restart.txt", context=first_process)
     patched = patch.patch(
         file_path="restart.txt",
         old_string="before",
@@ -252,7 +252,7 @@ def test_snapshot_history_is_scoped_to_its_session(tmp_path):
     target = tmp_path / "isolated.txt"
     target.write_text("before\n", encoding="utf-8")
     session_a = _persistent_context(tmp_path, "session-a")
-    fs.read("isolated.txt", context=session_a)
+    fs.fs_read("isolated.txt", context=session_a)
     patch.patch(
         file_path="isolated.txt",
         old_string="before",
@@ -271,7 +271,7 @@ def test_corrupt_persisted_snapshot_costs_one_undo_entry(tmp_path):
     target = tmp_path / "corrupt.txt"
     target.write_text("zero\n", encoding="utf-8")
     first_process = _persistent_context(tmp_path, "corrupt")
-    fs.read("corrupt.txt", context=first_process)
+    fs.fs_read("corrupt.txt", context=first_process)
     patch.patch(file_path="corrupt.txt", old_string="zero", new_string="one", context=first_process)
     patch.patch(file_path="corrupt.txt", old_string="one", new_string="two", context=first_process)
     snapshot_files = sorted(first_process.undo.directory.glob("*/*.snapshot"))
@@ -321,7 +321,7 @@ def test_oversized_snapshot_stays_bounded_and_warns_that_restart_undo_is_unavail
         tmp_path / "sessions" / "oversized.jsonl",
         state_dir=tmp_path / "state",
     )
-    fs.read("oversized.txt", show_line_numbers=False, context=first_process)
+    fs.fs_read("oversized.txt", show_line_numbers=False, context=first_process)
     patch_tool = build_default_registry().resolve("patch")
 
     result = call_tool(

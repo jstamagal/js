@@ -16,7 +16,7 @@ def test_invalid_surrogate_preserves_file_and_undo_state(tmp_path, surrogate, op
         target.parent.mkdir()
         target.write_bytes(b"original\r\n")
         target.chmod(0o640)
-        fs.read(str(target), context=context)
+        fs.fs_read(str(target), context=context)
         # Keep a real earlier undo entry: a rejected operation must not alter it.
         assert fs.write(str(target), content="before\n", overwrite=True, context=context).startswith("wrote ")
     original = target.read_bytes() if target.exists() else None

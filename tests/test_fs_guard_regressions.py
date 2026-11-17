@@ -18,7 +18,7 @@ def test_undo_restores_original_coverage(tmp_path, restart):
     target.write_text(original)
     context = ToolContext(cwd=tmp_path)
     context.configure_snapshot_store("audit", tmp_path / "session.jsonl", state_dir=tmp_path / "state")
-    fs.read(str(target), range={"start_line": 1, "end_line": 1}, context=context)
+    fs.fs_read(str(target), range={"start_line": 1, "end_line": 1}, context=context)
     assert patch.patch(str(target), old_string="HEAD", new_string="HEAD\n" + "owned\n" * 12, context=context).startswith("patched ")
     if restart:
         context = ToolContext(cwd=tmp_path)
@@ -36,7 +36,7 @@ def test_patch_refuses_unsupported_line_coordinates(tmp_path, separator):
     original = f"one{separator}two{separator}three\n"
     target.write_text(original)
     context = ToolContext(cwd=tmp_path)
-    shown = fs.read(str(target), range={"start_line": 1, "end_line": 1}, context=context)
+    shown = fs.fs_read(str(target), range={"start_line": 1, "end_line": 1}, context=context)
     assert shown == f"1|one{separator}two{separator}three"
     result = patch.patch(str(target), old_string="three", new_string="THREE", context=context)
     assert result.startswith("ERROR: unsupported line separator")

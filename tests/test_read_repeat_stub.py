@@ -210,9 +210,9 @@ def test_a_read_outside_a_tool_call_never_stubs(tmp_path):
     target = _file(tmp_path)
     context = ToolContext(cwd=tmp_path)
 
-    first = fs.read(str(target), context=context)
+    first = fs.fs_read(str(target), context=context)
     context.reads.settle()
-    second = fs.read(str(target), context=context)
+    second = fs.fs_read(str(target), context=context)
 
     assert first == second
 
@@ -221,13 +221,13 @@ def test_the_ledger_forgets_a_read_whose_result_text_changed(tmp_path):
     target = _file(tmp_path)
     context = ToolContext(cwd=tmp_path)
     with call_scope("r1"):
-        shown = fs.read(str(target), context=context)
+        shown = fs.fs_read(str(target), context=context)
     context.reads.settle()
     context.reads.keep_shown({"r1": shown})
     with call_scope("r2"):
-        assert "r1" in fs.read(str(target), context=context)
+        assert "r1" in fs.fs_read(str(target), context=context)
     context.reads.settle()
 
     context.reads.keep_shown({"r1": shown[:-1]})
     with call_scope("r3"):
-        assert fs.read(str(target), context=context) == shown
+        assert fs.fs_read(str(target), context=context) == shown

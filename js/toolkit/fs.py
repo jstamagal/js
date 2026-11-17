@@ -729,9 +729,6 @@ def _read_call(target: Path, start_line: int, end_line: int | None = None) -> st
     return json.dumps(args)
 
 
-read = fs_read
-
-
 def write(file_path: str | None = None, content: str | None = None, overwrite: bool = False, context: ToolContext | None = None, path: str | None = None, expected_hash: str | None = None, from_held: str | None = None, append: bool = False) -> str:
     assert context is not None
     raw_path = file_path or path
