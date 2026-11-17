@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from repl_driver import record_turns, run_async
 from test_repl_info_cmds import make_cfg
 
 from js import (
@@ -24,7 +25,6 @@ from js import (
     session_store,
     session_text,
 )
-from js.repl_state import ReplState
 from js.session_catalog import first_metadata, record_session_start
 from js.session_index import Hit
 
@@ -328,6 +328,15 @@ def _choice(path: Path, cwd: Path, agent: str = "defaultagent", action=session_p
     return session_picker.Choice(action, session, message, message_id)
 
 
+def _repl_cfg(tmp_path, monkeypatch):
+    """make_cfg with its agent prompt in place, the working directory `tmp_path`."""
+    monkeypatch.chdir(tmp_path)
+    cfg = make_cfg(tmp_path)
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
+    return cfg
+
+
 def test_slash_session_opens_the_picker_and_a_chosen_session_ends_the_repl_to_switch(tmp_path, monkeypatch):
     other = _write_session(tmp_path / "other", agent="research")
     opened = {}
@@ -337,26 +346,28 @@ def test_slash_session_opens_the_picker_and_a_chosen_session_ends_the_repl_to_sw
         return _choice(other, tmp_path / "other", agent="research")
 
     monkeypatch.setattr(session_picker, "pick_session", pick)
-    cfg = make_cfg(tmp_path)
-    state = ReplState(messages=[], running=True)
-    assert cli._handle_command("/session niri", state, cfg) is True
+    cfg = _repl_cfg(tmp_path, monkeypatch)
+    turns = record_turns(monkeypatch)
+
+    state = run_async(monkeypatch, cfg, ["/session niri", "typed after"], wait=True)
+
     assert opened["query"] == "niri"
-    assert state.running is False
+    assert turns == []  # the REPL closed: the line after it never ran
     target = state.switch_session
     assert (target.path, target.agent, target.cwd) == (other.resolve(), "research", str((tmp_path / "other").resolve()))
 
 
 def test_slash_session_on_the_current_session_or_closed_keeps_the_repl(tmp_path, monkeypatch):
-    cfg = make_cfg(tmp_path)
+    cfg = _repl_cfg(tmp_path, monkeypatch)
     cfg.session_file.parent.mkdir(parents=True, exist_ok=True)
     cfg.session_file.write_text("", encoding="utf-8")
-    state = ReplState(messages=[], running=True)
-    monkeypatch.setattr(session_picker, "pick_session", lambda cwd, query="": None)
-    cli._handle_command("/session", state, cfg)
-    monkeypatch.setattr(session_picker, "pick_session",
-                        lambda cwd, query="": _choice(cfg.session_file, tmp_path))
-    cli._handle_command("/session", state, cfg)
-    assert state.running is True and state.switch_session is None
+    picks = iter([None, _choice(cfg.session_file, tmp_path)])
+    monkeypatch.setattr(session_picker, "pick_session", lambda cwd, query="": next(picks))
+    turns = record_turns(monkeypatch)
+
+    state = run_async(monkeypatch, cfg, ["/session", "/session", "typed after"], wait=True)
+
+    assert len(turns) == 1 and state.switch_session is None
 
 
 def test_a_branch_choice_creates_the_branch_in_the_parents_folder(tmp_path):

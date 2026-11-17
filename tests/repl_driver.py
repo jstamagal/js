@@ -70,6 +70,9 @@ def stub_screen(monkeypatch, lines, *, wait: bool = False) -> None:
     `wait` each line is sent once the turns before it have ended, as at an
     idle prompt.
 
+    Once the REPL closes its screen, as `exit` or a chosen `/session` does,
+    no further line is typed and no EOF follows.
+
     `lines` may instead be an async function; it is called with the Enter
     handler and EOF follows when it returns and the turns have ended."""
     queues = []
@@ -82,24 +85,28 @@ def stub_screen(monkeypatch, lines, *, wait: bool = False) -> None:
     class AppStub:
         def __init__(self, on_line, on_eof):
             self._on_line, self._on_eof = on_line, on_eof
+            self._exited = False
 
         async def run_async(self):
             if callable(lines):
                 await lines(self._on_line)
             else:
                 for line in lines:
+                    if self._exited:
+                        break
                     await self._on_line(line.strip())
                     if wait:
                         await self._idle()
             await self._idle()
-            self._on_eof()
+            if not self._exited:
+                self._on_eof()
 
         async def _idle(self):
             for queue in queues:
                 await queue.join()
 
         def exit(self):
-            pass
+            self._exited = True
 
         def invalidate(self):
             pass
