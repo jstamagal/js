@@ -139,8 +139,8 @@ branch the audit was made on; they move as the code changes.
 | `js/toolkit/process_net.py:70,81-83` | _shell_argv | policy | Adds `-o pipefail` for bash and zsh with no setting. | js-2lg.47 |
 | `js/toolkit/process_net.py:393-399` | shell | policy | Puts the managed tools directory first on the command's PATH. | js-2lg.47 |
 | `js/toolkit/process_net.py:426-431` | shell | policy | Never kills a command that outlives SHELL_WAIT; it returns a handle instead. | js-2lg.47 |
-| `js/toolkit/search.py:127-129,180-182,222-224,264-266,342` | _key and the search backends | default | API keys come only from fixed environment variables, not from registered settings. | js-2lg.52 |
-| `js/toolkit/search.py:481-483,531,546-547` | _obscura_status / browse | policy | Always runs obscura with `--stealth`, and adds `--allow-private-network` by itself for a private IP literal. | js-2lg.52 |
+| `js/toolkit/web_search.py:127-129,180-182,222-224,264-266,342` | _key and the search backends | default | API keys come only from fixed environment variables, not from registered settings. | js-2lg.52 |
+| `js/toolkit/web_search.py:481-483,531,546-547` | _obscura_status / browse | policy | Always runs obscura with `--stealth`, and adds `--allow-private-network` by itself for a private IP literal. | js-2lg.52 |
 | `js/toolkit/terminal.py:285-291` | terminal_session | policy | Runs `$SHELL` or /bin/sh instead of SHELL_PROGRAM, and passes the full environment when no jail is active. | js-2lg.54 |
 | `js/toolkit/browser.py:24,202-210` | _launch_browser | policy | Falls back to a fixed Chrome-for-Testing path when the Playwright launch fails. | js-2lg.57 |
 | `js/toolkit/subagents.py:320-332` | _run_one_task_async | policy | Caps each child's reply to an equal share of TOOL_RESULT_MAX. | js-2lg.60 |
@@ -337,7 +337,7 @@ Resolution notes (the rows below record the original audit):
 | `js/toolkit/registry.py:501-502,577-601` | _default_prompts_root / build_default_registry | policy | Fixes the list of tool suites that exist, and falls back to the stock defaults/agents/ directory when no roots are given. | js-2lg.38 |
 | `js/toolkit/fs.py:2107-2126` | _offering_path_skills | policy | Wraps read, write and patch so their results start with a skill-offer reminder on their own. | js-2lg.46 |
 | `js/toolkit/process_net.py:932-1023` | fetch | policy | Prefers aria2c when present and falls back to urllib on its own. | js-2lg.49 |
-| `js/toolkit/search.py:56-63,350,387` | _http_body / docs_search | policy | Retries a 401 or 403 once without the Authorization header. | js-2lg.51 |
+| `js/toolkit/web_search.py:56-63,350,387` | _http_body / docs_search | policy | Retries a 401 or 403 once without the Authorization header. | js-2lg.51 |
 | `js/toolkit/terminal.py:53-83` | module constants / _draw_screen | presentation | Fixes the font list and colour palette of terminal snapshots. | js-2lg.56 |
 | `js/toolkit/subagents.py:172-312` | _run_one_task_async | policy | Builds the whole subagent turn itself (persona, routing, run_turn_async), with suppress_output=True fixed. | js-2lg.59 |
 | `js/toolkit/subagents.py:472,477-478` | _prepare_fan_out | default | Falls back to from_env(save_session=True) when the context has no config, and builds the subagent registry with build_default_registry. | js-2lg.59 |

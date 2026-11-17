@@ -150,7 +150,7 @@ retry failed children with backoff, stopping after five consecutive failures.
 ```text
 fs.py           file tools
 process_net.py  shell and fetch
-search.py       web search, docs search and browse
+web_search.py   web search, docs search and browse
 jev.py          jev
 terminal.py     terminal sessions
 browser.py      browser probe

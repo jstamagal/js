@@ -22,7 +22,7 @@ from js.toolkit import (
     fs,
     kernel,
     process_net,
-    search,
+    web_search,
 )
 
 
@@ -317,9 +317,9 @@ def test_kernel_stays_when_its_dependencies_are_present(monkeypatch, tmp_path):
 
 
 def test_search_tools_without_their_api_key_are_left_out(monkeypatch, tmp_path):
-    for setting in search.API_KEY_SETTINGS.values():
+    for setting in web_search.API_KEY_SETTINGS.values():
         monkeypatch.delenv(setting, raising=False)
-    registry = build_default_registry(suites=(("search", search.tools()),), prompts_root=[])
+    registry = build_default_registry(suites=(("search", web_search.tools()),), prompts_root=[])
     context = ToolContext(cwd=tmp_path)
     context.tavily_api_key = "key"
     runnable, left_out = registry.runnable(context)

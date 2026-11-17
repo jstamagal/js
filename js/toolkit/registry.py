@@ -24,10 +24,10 @@ from . import (
     notebook,
     policy,
     process_net,
-    search,
     subagents,
     terminal,
     toolbox,
+    web_search,
     wiki,
 )
 from .core import CatalogEntry, Tool
@@ -98,7 +98,7 @@ class ToolRegistry:
                 if problem:
                     left_out[tool.name] = problem
                 continue
-            setting = search.missing_api_key(tool.name, context)
+            setting = web_search.missing_api_key(tool.name, context)
             if setting is not None:
                 left_out[tool.name] = f"ERROR: {tool.name} needs {setting}, which is not set, so it is not on this agent's tools."
         if not left_out:
@@ -634,7 +634,7 @@ def build_default_registry(
         suites = (
             ("fs", fs.tools()),
             ("shell", process_net.tools()),
-            ("search", search.tools()),
+            ("search", web_search.tools()),
             ("jev", jev.tools()),
             ("terminal", terminal.tools()),
             ("browser", browser.tools()),

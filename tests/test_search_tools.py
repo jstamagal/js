@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from js.capped_process import CappedProcessResult, truncation_marker
-from js.toolkit import fs, search
+from js.toolkit import fs, web_search
 from js.toolkit.core import ToolContext
 
 
@@ -38,22 +38,22 @@ def _responses(monkeypatch: pytest.MonkeyPatch, *bodies: bytes) -> list[tuple[An
         calls.append((request, timeout))
         return _Response(next(pending))
 
-    monkeypatch.setattr(search.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(web_search.urllib.request, "urlopen", fake_urlopen)
     return calls
 
 
 def _browse_stub(monkeypatch: pytest.MonkeyPatch, run: Callable[..., CappedProcessResult]) -> None:
-    monkeypatch.setattr(search, "resolve_binary", lambda _name: "/test/bin/obscura")
-    monkeypatch.setattr(search, "_run_capped", run)
+    monkeypatch.setattr(web_search, "resolve_binary", lambda _name: "/test/bin/obscura")
+    monkeypatch.setattr(web_search, "_run_capped", run)
 
 
 @pytest.mark.parametrize(
     ("handler", "key_name", "host"),
     [
-        (search.serper_search, "SERPER_API_KEY", "google.serper.dev"),
-        (search.tavily_search, "TAVILY_API_KEY", "api.tavily.com"),
-        (search.exa_search, "EXA_API_KEY", "api.exa.ai"),
-        (search.docs_search, None, "context7.com"),
+        (web_search.serper_search, "SERPER_API_KEY", "google.serper.dev"),
+        (web_search.tavily_search, "TAVILY_API_KEY", "api.tavily.com"),
+        (web_search.exa_search, "EXA_API_KEY", "api.exa.ai"),
+        (web_search.docs_search, None, "context7.com"),
     ],
 )
 @pytest.mark.parametrize(
@@ -80,10 +80,10 @@ def test_provider_root_response_must_be_an_object(
 @pytest.mark.parametrize(
     ("handler", "key_name", "body"),
     [
-        (search.serper_search, "SERPER_API_KEY", b'{"organic":["bad hit"]}'),
-        (search.tavily_search, "TAVILY_API_KEY", b'{"results":["bad hit"]}'),
-        (search.exa_search, "EXA_API_KEY", b'{"results":["bad hit"]}'),
-        (search.docs_search, None, b'{"results":["bad hit"]}'),
+        (web_search.serper_search, "SERPER_API_KEY", b'{"organic":["bad hit"]}'),
+        (web_search.tavily_search, "TAVILY_API_KEY", b'{"results":["bad hit"]}'),
+        (web_search.exa_search, "EXA_API_KEY", b'{"results":["bad hit"]}'),
+        (web_search.docs_search, None, b'{"results":["bad hit"]}'),
     ],
 )
 def test_provider_result_entries_must_be_objects(
@@ -104,7 +104,7 @@ def test_provider_result_entries_must_be_objects(
 def test_provider_results_field_must_be_an_array(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _responses(monkeypatch, b'{"organic":"bad results"}')
 
-    actual = search.serper_search("test query", context=ToolContext(cwd=tmp_path, serper_api_key="test-key"))
+    actual = web_search.serper_search("test query", context=ToolContext(cwd=tmp_path, serper_api_key="test-key"))
 
     assert actual == "ERROR: expected search results to be an array, got string"
 
@@ -112,7 +112,7 @@ def test_provider_results_field_must_be_an_array(monkeypatch: pytest.MonkeyPatch
 def test_serper_answer_box_must_be_an_object(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _responses(monkeypatch, b'{"answerBox":[],"organic":[]}')
 
-    actual = search.serper_search("test query", context=ToolContext(cwd=tmp_path, serper_api_key="test-key"))
+    actual = web_search.serper_search("test query", context=ToolContext(cwd=tmp_path, serper_api_key="test-key"))
 
     assert actual == "ERROR: expected answerBox to be an object, got array"
 
@@ -120,10 +120,10 @@ def test_serper_answer_box_must_be_an_object(monkeypatch: pytest.MonkeyPatch, tm
 @pytest.mark.parametrize(
     ("handler", "key_name"),
     [
-        (search.serper_search, "SERPER_API_KEY"),
-        (search.tavily_search, "TAVILY_API_KEY"),
-        (search.exa_search, "EXA_API_KEY"),
-        (search.docs_search, None),
+        (web_search.serper_search, "SERPER_API_KEY"),
+        (web_search.tavily_search, "TAVILY_API_KEY"),
+        (web_search.exa_search, "EXA_API_KEY"),
+        (web_search.docs_search, None),
     ],
 )
 def test_required_search_text_rejects_whitespace(
@@ -137,26 +137,26 @@ def test_required_search_text_rejects_whitespace(
     def unexpected_request(*_args: object, **_kwargs: object) -> Any:
         pytest.fail("whitespace-only input reached the HTTP client")
 
-    monkeypatch.setattr(search.urllib.request, "urlopen", unexpected_request)
+    monkeypatch.setattr(web_search.urllib.request, "urlopen", unexpected_request)
 
     actual = handler(" \t\n ", context=ToolContext(cwd=tmp_path, **keys))
 
-    noun = "library" if handler is search.docs_search else "query"
+    noun = "library" if handler is web_search.docs_search else "query"
     assert actual == f"ERROR: {noun} is required"
 
 
 @pytest.mark.parametrize(
     ("handler", "key_name", "argument", "value", "expected"),
     [
-        (search.serper_search, "SERPER_API_KEY", "num", 0, 1),
-        (search.serper_search, "SERPER_API_KEY", "num", 100_000, 100),
-        (search.serper_search, "SERPER_API_KEY", "num", 2.9, 8),
-        (search.tavily_search, "TAVILY_API_KEY", "max_results", 0, 1),
-        (search.tavily_search, "TAVILY_API_KEY", "max_results", 100_000, 20),
-        (search.tavily_search, "TAVILY_API_KEY", "max_results", 2.9, 8),
-        (search.exa_search, "EXA_API_KEY", "num", 0, 1),
-        (search.exa_search, "EXA_API_KEY", "num", 100_000, 100),
-        (search.exa_search, "EXA_API_KEY", "num", 2.9, 8),
+        (web_search.serper_search, "SERPER_API_KEY", "num", 0, 1),
+        (web_search.serper_search, "SERPER_API_KEY", "num", 100_000, 100),
+        (web_search.serper_search, "SERPER_API_KEY", "num", 2.9, 8),
+        (web_search.tavily_search, "TAVILY_API_KEY", "max_results", 0, 1),
+        (web_search.tavily_search, "TAVILY_API_KEY", "max_results", 100_000, 20),
+        (web_search.tavily_search, "TAVILY_API_KEY", "max_results", 2.9, 8),
+        (web_search.exa_search, "EXA_API_KEY", "num", 0, 1),
+        (web_search.exa_search, "EXA_API_KEY", "num", 100_000, 100),
+        (web_search.exa_search, "EXA_API_KEY", "num", 2.9, 8),
     ],
 )
 def test_search_result_count_is_bounded(
@@ -168,14 +168,14 @@ def test_search_result_count_is_bounded(
     value: object,
     expected: int,
 ) -> None:
-    response = b'{"organic":[]}' if handler is search.serper_search else b'{"results":[]}'
+    response = b'{"organic":[]}' if handler is web_search.serper_search else b'{"results":[]}'
     calls = _responses(monkeypatch, response)
 
     actual = handler("test query", **{argument: value}, context=ToolContext(cwd=tmp_path, **{key_name.lower(): "test-key"}))
 
     assert actual == "no results"
     payload = json.loads(calls[0][0].data)
-    payload_key = "num" if handler is search.serper_search else "max_results" if handler is search.tavily_search else "numResults"
+    payload_key = "num" if handler is web_search.serper_search else "max_results" if handler is web_search.tavily_search else "numResults"
     assert payload[payload_key] == expected
 
 
@@ -187,7 +187,7 @@ def test_exa_text_budget_clamps_to_minimum(
 ) -> None:
     calls = _responses(monkeypatch, b'{"results":[]}')
 
-    actual = search.exa_search("test query", text_chars=text_chars, context=ToolContext(cwd=tmp_path, exa_api_key="test-key"))
+    actual = web_search.exa_search("test query", text_chars=text_chars, context=ToolContext(cwd=tmp_path, exa_api_key="test-key"))
 
     assert actual == "no results"
     payload = json.loads(calls[0][0].data)
@@ -203,7 +203,7 @@ def test_docs_token_budget_clamps_to_minimum(
 ) -> None:
     calls = _responses(monkeypatch, b'{"results":[{"id":"/tiangolo/fastapi"}]}', b"routing docs")
 
-    actual = search.docs_search("fastapi", topic="routing", tokens=tokens, context=ToolContext(cwd=tmp_path))
+    actual = web_search.docs_search("fastapi", topic="routing", tokens=tokens, context=ToolContext(cwd=tmp_path))
 
     assert actual == "[context7 /tiangolo/fastapi, topic: routing]\nrouting docs"
     query = urllib.parse.parse_qs(urllib.parse.urlsplit(calls[1][0].full_url).query)
@@ -225,7 +225,7 @@ def test_docs_search_rejects_a_hit_that_is_not_the_requested_library(
     ).encode()
     _responses(monkeypatch, body)
 
-    actual = search.docs_search("not-a-real-library", context=ToolContext(cwd=tmp_path))
+    actual = web_search.docs_search("not-a-real-library", context=ToolContext(cwd=tmp_path))
 
     assert actual == "no library on context7 matches 'not-a-real-library'"
 
@@ -239,7 +239,7 @@ def test_docs_search_resolves_a_hit_named_after_the_query(
     ).encode()
     calls = _responses(monkeypatch, body, b"zzz docs")
 
-    actual = search.docs_search("zzz", context=ToolContext(cwd=tmp_path))
+    actual = web_search.docs_search("zzz", context=ToolContext(cwd=tmp_path))
 
     assert actual == "[context7 /tardy-org/zzz]\nzzz docs"
     assert "/tardy-org/zzz" in calls[1][0].full_url
@@ -256,7 +256,7 @@ def test_docs_search_picks_the_best_relevant_hit(monkeypatch: pytest.MonkeyPatch
     ).encode()
     calls = _responses(monkeypatch, body, b"next docs")
 
-    actual = search.docs_search("next.js", context=ToolContext(cwd=tmp_path))
+    actual = web_search.docs_search("next.js", context=ToolContext(cwd=tmp_path))
 
     assert actual == "[context7 /vercel/next.js]\nnext docs"
     assert "/vercel/next.js" in calls[1][0].full_url
@@ -265,7 +265,7 @@ def test_docs_search_picks_the_best_relevant_hit(monkeypatch: pytest.MonkeyPatch
 def test_docs_empty_body_is_an_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _responses(monkeypatch, b'{"results":[{"id":"/tiangolo/fastapi"}]}', b" \n\t")
 
-    actual = search.docs_search("fastapi", topic=" routing ", context=ToolContext(cwd=tmp_path))
+    actual = web_search.docs_search("fastapi", topic=" routing ", context=ToolContext(cwd=tmp_path))
 
     assert actual == "ERROR: context7 returned empty docs for /tiangolo/fastapi, topic: routing"
 
@@ -299,9 +299,9 @@ def test_docs_search_retries_rejected_key_without_authorization(
             )
         return _Response(body)
 
-    monkeypatch.setattr(search.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(web_search.urllib.request, "urlopen", fake_urlopen)
 
-    actual = search.docs_search("fastapi", context=ToolContext(cwd=tmp_path, context7_api_key="test-key"))
+    actual = web_search.docs_search("fastapi", context=ToolContext(cwd=tmp_path, context7_api_key="test-key"))
 
     assert actual == "[context7 /tiangolo/fastapi]\nrouting docs"
     assert [request.headers.get("Authorization") for request in calls] == [
@@ -319,9 +319,9 @@ def test_http_error_redacts_api_key(monkeypatch: pytest.MonkeyPatch, tmp_path: P
         body = io.BytesIO(b'{"message":"Unauthorized: bad api key sk-live-ABC123"}')
         raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {}, body)
 
-    monkeypatch.setattr(search.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(web_search.urllib.request, "urlopen", fake_urlopen)
 
-    actual = search.serper_search("test query", context=ToolContext(cwd=tmp_path, paranoid_mode="on", serper_api_key=key))
+    actual = web_search.serper_search("test query", context=ToolContext(cwd=tmp_path, paranoid_mode="on", serper_api_key=key))
 
     assert actual == 'ERROR: HTTP 401 from google.serper.dev: {"message":"Unauthorized: bad api key [REDACTED]"}'
 
@@ -343,7 +343,7 @@ def test_browse_allows_private_ip_literals(monkeypatch: pytest.MonkeyPatch, tmp_
 
     _browse_stub(monkeypatch, run)
 
-    actual = search.browse(url, context=ToolContext(cwd=tmp_path))
+    actual = web_search.browse(url, context=ToolContext(cwd=tmp_path))
 
     assert actual == "private literal allowed"
 
@@ -364,7 +364,7 @@ def test_browse_retains_ssrf_guard_for_hostnames(monkeypatch: pytest.MonkeyPatch
 
     _browse_stub(monkeypatch, run)
 
-    actual = search.browse(url, context=ToolContext(cwd=tmp_path))
+    actual = web_search.browse(url, context=ToolContext(cwd=tmp_path))
 
     assert actual == "public hostname retained guard"
 
@@ -376,7 +376,7 @@ def test_browse_timeout_reports_redacted_url(monkeypatch: pytest.MonkeyPatch, tm
     _browse_stub(monkeypatch, run)
     url = "http://admin:hunter2@127.0.0.1:8733/slow?signature=secret-token"
 
-    actual = search.browse(url, context=ToolContext(cwd=tmp_path, browse_timeout_s=15))
+    actual = web_search.browse(url, context=ToolContext(cwd=tmp_path, browse_timeout_s=15))
 
     assert "http://127.0.0.1:8733/slow" in actual
     assert "admin" not in actual
@@ -393,7 +393,7 @@ def test_browse_sets_obscura_timeout_below_process_backstop(monkeypatch: pytest.
 
     _browse_stub(monkeypatch, run)
 
-    actual = search.browse("https://example.com", context=ToolContext(cwd=tmp_path, browse_timeout_s=15))
+    actual = web_search.browse("https://example.com", context=ToolContext(cwd=tmp_path, browse_timeout_s=15))
 
     assert actual == "partial page"
     assert captured == {
@@ -423,7 +423,7 @@ def test_browse_truncation_marker_fits_result_cap(monkeypatch: pytest.MonkeyPatc
 
     _browse_stub(monkeypatch, run)
 
-    actual = search.browse("https://example.com", context=ToolContext(cwd=tmp_path, max_tool_result_bytes=cap))
+    actual = web_search.browse("https://example.com", context=ToolContext(cwd=tmp_path, max_tool_result_bytes=cap))
 
     marker = truncation_marker(cap, "TOOL_RESULT_MAX")
     expected = "x" * (cap - len(marker.encode()) - 1) + "\n" + marker
@@ -439,7 +439,7 @@ def test_browse_original_preserves_valid_utf8_whitespace_and_line_endings(
 
     _browse_stub(monkeypatch, run)
 
-    actual = search.browse(
+    actual = web_search.browse(
         "https://example.com/padded.txt",
         dump="original",
         context=ToolContext(cwd=tmp_path),
@@ -457,7 +457,7 @@ def test_browse_normalizes_dump(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 
     _browse_stub(monkeypatch, run)
 
-    actual = search.browse("https://example.com", dump=dump, context=ToolContext(cwd=tmp_path))
+    actual = web_search.browse("https://example.com", dump=dump, context=ToolContext(cwd=tmp_path))
 
     assert actual == "normalized markdown"
 
@@ -474,7 +474,7 @@ def test_browse_screenshot_overwrite_can_be_undone(monkeypatch, tmp_path):
 
     _browse_stub(monkeypatch, run)
 
-    result = search.browse("https://example.test/", screenshot=str(target), context=context)
+    result = web_search.browse("https://example.test/", screenshot=str(target), context=context)
     assert not result.startswith("ERROR"), result
     assert target.read_bytes() != original
     fs.undo(str(target), context=context)
@@ -490,7 +490,7 @@ def test_registered_serper_key_reaches_request(monkeypatch, tmp_path):
     calls = _responses(monkeypatch, b'{"organic":[]}')
     context = ToolContext(cwd=tmp_path)
     turn_settings.install(context, SimpleNamespace(**turn_settings.project({"SERPER_API_KEY": "configured-key"})))
-    search.serper_search("query", context=context)
+    web_search.serper_search("query", context=context)
     assert calls[0][0].get_header("X-api-key") == "configured-key"
 
 
@@ -499,8 +499,8 @@ def test_docs_search_can_keep_authorization_on_refusal(monkeypatch, tmp_path):
     def refuse(request, timeout):
         calls.append(request)
         raise urllib.error.HTTPError(request.full_url, 401, "unauthorized", {}, io.BytesIO(b""))
-    monkeypatch.setattr(search.urllib.request, "urlopen", refuse)
-    result = search.docs_search("example", context=ToolContext(cwd=tmp_path, context7_api_key="secret"), retry_without_auth_on=())
+    monkeypatch.setattr(web_search.urllib.request, "urlopen", refuse)
+    result = web_search.docs_search("example", context=ToolContext(cwd=tmp_path, context7_api_key="secret"), retry_without_auth_on=())
     assert len(calls) == 1
     assert calls[0].get_header("Authorization") == "Bearer secret"
     assert result.startswith("ERROR")
@@ -516,8 +516,8 @@ def test_search_error_secrets_at_truncation_boundary(monkeypatch, tmp_path, fail
             raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {}, io.BytesIO(detail.encode()))
         raise OSError(detail)
 
-    monkeypatch.setattr(search.urllib.request, "urlopen", fail)
-    result = search.serper_search("test", context=ToolContext(cwd=tmp_path, paranoid_mode=paranoid_mode, serper_api_key=key))
+    monkeypatch.setattr(web_search.urllib.request, "urlopen", fail)
+    result = web_search.serper_search("test", context=ToolContext(cwd=tmp_path, paranoid_mode=paranoid_mode, serper_api_key=key))
     if paranoid_mode == "on":
         assert "sk-boundar" not in result
     else:
@@ -546,7 +546,7 @@ def test_a_long_search_result_is_cut_by_bytes_to_the_result_cap(
     keys = {key_name.lower(): "test-key"} if key_name is not None else {}
     _responses(monkeypatch, *replies)
 
-    actual = getattr(search, name)("zzz", context=ToolContext(cwd=tmp_path, max_tool_result_bytes=300, **keys))
+    actual = getattr(web_search, name)("zzz", context=ToolContext(cwd=tmp_path, max_tool_result_bytes=300, **keys))
 
     assert len(actual.encode("utf-8")) <= 300
     assert "TOOL_RESULT_MAX" in actual

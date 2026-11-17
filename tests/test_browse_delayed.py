@@ -9,7 +9,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from js.toolkit import ToolContext, search
+from js.toolkit import ToolContext, web_search
 
 pytestmark = pytest.mark.live
 
@@ -47,11 +47,11 @@ def _server() -> Iterator[str]:
 
 
 def test_browse_waits_for_delayed_javascript(tmp_path) -> None:
-    if search.resolve_binary("obscura") is None:
+    if web_search.resolve_binary("obscura") is None:
         pytest.skip("managed obscura binary is not installed")
 
     with _server() as url:
-        actual = search.browse(
+        actual = web_search.browse(
             url,
             context=ToolContext(cwd=tmp_path, browse_timeout_s=15),
         )

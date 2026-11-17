@@ -2,7 +2,7 @@
 
 import pytest
 
-from js.toolkit.search import _redacted_url
+from js.toolkit.web_search import _redacted_url
 
 
 @pytest.mark.parametrize("url, expected", [

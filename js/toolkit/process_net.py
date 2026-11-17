@@ -42,7 +42,7 @@ from .fs import _detect_visual_mime, _image_marker, _read_regular_bytes
 from .presentation import Presentation, looks_around
 from .results import spill_oversized_result
 from .sanitize import int_or_default, text_or_default
-from .search import _absolutize
+from .web_search import _absolutize
 
 # The js/jsrc SHELL_ENV_KEEP, for a context whose own value is not a list.
 _ENV_ALLOW = tuple(_settings.default_value("SHELL_ENV_KEEP"))

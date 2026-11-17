@@ -2,7 +2,7 @@
 
 import pytest
 
-from js.toolkit.search import _absolutize
+from js.toolkit.web_search import _absolutize
 
 
 @pytest.mark.parametrize("target, expected", [

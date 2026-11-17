@@ -13,8 +13,8 @@ import threading
 
 import pytest
 
-from js.toolkit import ToolContext, search as search_mod
-from js.toolkit.search import browse
+from js.toolkit import ToolContext, web_search as web_search_mod
+from js.toolkit.web_search import browse
 
 pytestmark = pytest.mark.live
 
@@ -106,7 +106,7 @@ def test_neither_request_ever_names_js_to_the_site(server, tmp_path):
 
 @requires_obscura
 def test_the_status_comes_from_obscura_not_a_second_client(server, tmp_path):
-    status = search_mod._obscura_status(
+    status = web_search_mod._obscura_status(
         shutil.which("obscura"), f"{server}/503", timeout=20
     )
 
