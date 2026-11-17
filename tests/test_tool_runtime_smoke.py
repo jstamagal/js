@@ -23,18 +23,9 @@ from js import (
     toolkit as runtime_tools,
 )
 from js.model_client import ModelStreamResult, ModelToolCall
-from js.toolkit import (
-    Tool,
-    ToolContext,
-    ToolRegistry,
-    build_default_registry,
-    file_search,
-    fs,
-    fs_tools,
-    patch,
-    shell,
-)
+from js.toolkit import Tool, ToolContext, file_search, fs, fs_tools, patch, shell
 from js.toolkit.core import ToolResult
+from js.toolkit.registry import ToolRegistry, build_default_registry
 
 NUMBERED_RE = re.compile(r"^1\|alpha$", re.MULTILINE)
 

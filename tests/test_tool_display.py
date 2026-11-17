@@ -17,7 +17,8 @@ from js import (
     tool_display,
     tool_errors,
 )
-from js.toolkit import Tool, ToolContext, ToolRegistry, presentation
+from js.toolkit import Tool, ToolContext, presentation
+from js.toolkit.registry import ToolRegistry
 from js.transcript import TranscriptLogSink
 
 SGR = re.compile(r"\x1b\[[0-9;]*m")

@@ -8,8 +8,9 @@ import json
 import pytest
 from turn_driver import config, run
 
-from js.toolkit import build_default_registry, file_search, fs, patch
+from js.toolkit import file_search, fs, patch
 from js.toolkit.core import ToolContext
+from js.toolkit.registry import build_default_registry
 
 
 def _read_file(tmp_path, name: str, body: str) -> tuple:

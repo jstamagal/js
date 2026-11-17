@@ -14,17 +14,8 @@ from turn_driver import one_turn, recording, registry as turn_registry, run
 from js import runtime, tool_args, tool_errors
 from js.config import Config
 from js.model_client import ModelStreamResult, ModelToolCall
-from js.toolkit import (
-    Tool,
-    ToolContext,
-    ToolRegistry,
-    build_default_registry,
-    fs,
-    fs_tools,
-    python_kernel,
-    shell,
-    web_search,
-)
+from js.toolkit import Tool, ToolContext, fs, fs_tools, python_kernel, shell, web_search
+from js.toolkit.registry import ToolRegistry, build_default_registry
 
 
 def _tool(name: str, handler=None, params: dict | None = None) -> Tool:

@@ -35,7 +35,8 @@ from . import (
     stream_transport,
 )
 from .config import Config
-from .toolkit import ToolContext, ToolRegistry
+from .toolkit import ToolContext
+from .toolkit.registry import ToolRegistry
 
 if TYPE_CHECKING:
     from .repl_state import ReplState

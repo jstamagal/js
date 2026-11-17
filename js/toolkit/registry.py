@@ -16,6 +16,7 @@ from .. import messages as msgs, output, paths, snippets
 from ..skills import SkillCatalog, ToolActivationResult, discover_skills, load_skill
 from . import (
     browser,
+    bus_tools,
     discovery,
     fetch,
     fs_tools,
@@ -618,10 +619,7 @@ def registry_for_roots(
 
 def _swarm_tools() -> tuple[Tool, ...]:
     # The bus tools: on every swarm agent's surface (js.swarm_run), selectable by
-    # agent.yaml like any tool otherwise. Imported here: js.swarm imports
-    # js.swarm_run, which reaches this registry again.
-    from . import bus_tools
-
+    # agent.yaml like any tool otherwise.
     return bus_tools.tools()
 
 
@@ -658,3 +656,8 @@ def build_default_registry(
 
 def select(entries: Iterable[str] | None, prompts_root: Path | Sequence[Path] | None = None) -> ToolRegistry:
     return build_default_registry(prompts_root=prompts_root).select(entries)
+
+
+def stock_registry() -> ToolRegistry:
+    """Resolve the fallback tool surface after the invocation selects its home."""
+    return registry_for_roots(paths.agent_roots())

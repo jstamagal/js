@@ -230,7 +230,7 @@ def test_jsrc_tool_knobs_reach_the_turn_tool_context(monkeypatch, tmp_path):
 
     from js import runtime
     from js.model_client import ModelStreamResult
-    from js.toolkit import build_default_registry
+    from js.toolkit.registry import build_default_registry
 
     project = _isolated_home(monkeypatch, tmp_path)
     user = tmp_path / "home" / ".js" / "jsrc"

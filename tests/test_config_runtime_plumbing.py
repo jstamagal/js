@@ -12,7 +12,8 @@ from js import runtime, settings
 from js.config import Config, InvocationSources, from_env
 from js.model_client import ModelStreamResult
 from js.repl_state import ReplState
-from js.toolkit import ToolContext, build_default_registry
+from js.toolkit import ToolContext
+from js.toolkit.registry import build_default_registry
 
 
 def _fake_stream_result(text: str = "ok") -> ModelStreamResult:

@@ -55,7 +55,7 @@ from .toolkit.core import (
     Output,
     ToolContext,
 )
-from .toolkit.registry import ToolRegistry
+from .toolkit.registry import ToolRegistry, stock_registry
 from .turn_budget import TurnBudget, TurnConvo, last_user_message_index as _last_user_message_index
 from .turn_call import (
     CallLimits,
@@ -647,7 +647,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     model, provider_id = request.model, request.provider_id
     convo = TurnConvo(system, messages, provider_id=provider_id, model=model,
                       vision=vision_enabled_for_model(model, getattr(cfg, "settings", None)))
-    base_registry = tool_registry or T.stock_registry()
+    base_registry = tool_registry or stock_registry()
     alias_map = tool_calls.resolve_alias_profile(getattr(cfg, "settings", {}) or {}, model, provider_id, base_registry)
     active_context = tool_context or T.STOCK_CONTEXT
     owns_mcp_host = mcp_host is None

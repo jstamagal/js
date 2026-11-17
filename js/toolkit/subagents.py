@@ -23,6 +23,7 @@ from .. import (
 )
 from ..events import RefusableOnly
 from ..mcp_config import resolve as resolve_mcp
+from ..session_catalog import record_session_start
 from ..text_bytes import cap_text
 from ..toolkit import subagent_gate
 from ..usage import session_key
@@ -271,8 +272,6 @@ async def _run_one_task_async(
                                      *parent_context.usage_chain)
         child_context.net_label = f"Subagent {idx}"
         if Path(cfg.session_file) != Path(os.devnull):
-            from ..session_catalog import record_session_start
-
             record_session_start(cfg.session_file, cwd=child_context.cwd, agent=agent, model=cfg.model,
                                  mode="subagent", parent=parent_cfg.session_file)
         telemetry = Telemetry(debug_log=cfg.debug_log)

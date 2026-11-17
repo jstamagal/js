@@ -212,7 +212,8 @@ def test_tool_dispatch_propagates_snippet_configuration_failure(monkeypatch, tmp
     from test_runtime_offline_integration import model_tool_call_result, offline_config
 
     from js import runtime
-    from js.toolkit import Tool, ToolContext, ToolRegistry
+    from js.toolkit import Tool, ToolContext
+    from js.toolkit.registry import ToolRegistry
 
     real_find = paths.find
     monkeypatch.setattr(paths, "find", lambda relative: (

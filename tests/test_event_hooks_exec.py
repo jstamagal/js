@@ -34,7 +34,8 @@ from js import (
 )
 from js.memory import load_messages
 from js.repl_state import ReplState
-from js.toolkit import Tool, ToolContext, ToolRegistry
+from js.toolkit import Tool, ToolContext
+from js.toolkit.registry import ToolRegistry
 
 SESSION = "hooks"
 

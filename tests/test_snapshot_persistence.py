@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 from turn_driver import one_turn
 
-from js.toolkit import ToolContext, build_default_registry, call_tool, fs, patch, undo
+from js.toolkit import ToolContext, call_tool, fs, patch, undo
+from js.toolkit.registry import build_default_registry
 
 
 def _persistent_context(tmp_path, session_name: str) -> ToolContext:

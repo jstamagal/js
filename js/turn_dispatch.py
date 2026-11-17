@@ -38,7 +38,7 @@ from .toolkit.core import (
     call_view,
     registry_scope,
 )
-from .toolkit.registry import ToolRegistry
+from .toolkit.registry import ToolRegistry, stock_registry
 
 if TYPE_CHECKING:
     from .runtime import Telemetry
@@ -219,7 +219,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
         _ON_THREAD, name, raw_args, call_id=call_id or f"dispatch-{next(_ANONYMOUS_CALLS)}",
         called_name=called_name, telemetry=telemetry, cap_bytes=cap_bytes, trace=trace,
         trace_together=trace_together, error_tracker=error_tracker,
-        registry=registry or T.stock_registry(), context=tool_context or T.STOCK_CONTEXT))
+        registry=registry or stock_registry(), context=tool_context or T.STOCK_CONTEXT))
 
 
 async def _dispatch_fan_out_async(

@@ -32,7 +32,8 @@ from js import (
 )
 from js.config import Config
 from js.model_client import ModelStreamResult, ModelToolCall
-from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry
+from js.toolkit import Tool, ToolContext
+from js.toolkit.registry import ToolRegistry, build_default_registry
 
 
 def _make_assistant_msg(

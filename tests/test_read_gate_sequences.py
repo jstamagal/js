@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import json
 
-from js.toolkit import ToolContext, build_default_registry, call_tool, fs, patch
+from js.toolkit import ToolContext, call_tool, fs, patch
+from js.toolkit.registry import build_default_registry
 from js.toolkit.subagents import _child_context
 
 
