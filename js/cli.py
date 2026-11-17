@@ -1469,14 +1469,14 @@ def _run_compact_offline(session: str, *, agent: str | None = None, focus: str =
         msgs.say(msgs.COMPACTION_DONE, result=result)
     return 0
 
-def _compact(args: argparse.Namespace, sources: InvocationSources, agent: str | None) -> int:
+def _compact(args: argparse.Namespace, setup: Setup) -> int:
     """`js --compact SESSION`: -p TEXT is the focus, `-p -` reads it from stdin."""
     focus = _read_stdin_if_piped() if args.prompt == "-" else args.prompt or ""
-    return _run_compact_offline(args.compact, agent=agent, focus=focus, sources=sources,
+    return _run_compact_offline(args.compact, agent=setup.agent, focus=focus, sources=setup.sources,
                                 model=args.model)
 
 
-def _commit(args: argparse.Namespace, sources: InvocationSources) -> int:
+def _commit(args: argparse.Namespace, setup: Setup) -> int:
     """`js --commit [TARGET]`. It runs the commit agent, so --agent beside it
     exits 2. -p TEXT and piped stdin are extra context for the agent."""
     if args.agent:
@@ -1493,21 +1493,21 @@ def _commit(args: argparse.Namespace, sources: InvocationSources) -> int:
     return commit_cli.run_commit(args.target, model=args.model, debug=args.debug, debug_file=args.debug_file,
                        session=args.session, save=not args.no_save,
                        reasoning=args.reasoning, maxout=args.max_out,
-                       extra_context=extra_context, sources=sources)
+                       extra_context=extra_context, sources=setup.sources)
 
 
-def _agent_bench(args: argparse.Namespace, sources: InvocationSources) -> int | None:
+def _agent_bench(args: argparse.Namespace, setup: Setup) -> int | None:
     """The run's agent runs its NN-benchmark.md cases when it has some and no
     system prompt flag or chat mode replaces its prompt; None otherwise."""
     try:
-        agent = _invocation_agent(args, sources)
+        agent = _invocation_agent(args, setup.sources)
         agent_dir = _paths.agent_dirs(agent)
     except (ValueError, OSError) as exc:
         msgs.warn(msgs.FAILED, error=exc)
         return 2
     from .cli_options import current
     if not current().replaces_prompt and not current().chat and P.has_benchmarks(agent_dir):
-        return bench.run_agent_bench(agent, args, sources)
+        return bench.run_agent_bench(agent, args, setup.sources)
     return None
 
 
@@ -2580,6 +2580,8 @@ def _prepare_run(args: argparse.Namespace, setup: Setup) -> Setup | int:
 
 
 def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
+    """The mode picker: setup, then each mode in turn, the first named on the
+    command line running, then a -p run or the REPL."""
     setup = _setup(args, dispatch_argv)
     if isinstance(setup, int):
         return setup
@@ -2610,68 +2612,72 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     setup = _prepare_run(args, setup)
     if isinstance(setup, int):
         return setup
-    sources, cli_agent = setup.sources, setup.agent
     if args.bench:
-        return bench.run_bench_mode(args, sources)
+        return bench.run_bench_mode(args, setup.sources)
     if args.compact:
-        return _compact(args, sources, cli_agent)
+        return _compact(args, setup)
     if args.migrate_config:
         return migrate_config.run_migrate_config()
     if args.commit:
-        return _commit(args, sources)
-    if (code := _agent_bench(args, sources)) is not None:
+        return _commit(args, setup)
+    if (code := _agent_bench(args, setup)) is not None:
         return code
-
     if args.files and args.prompt is None and sys.stdin.isatty():
         msgs.warn(msgs.FILE_NEEDS_PROMPT)
         return 2
-
-    exchanges_only = args.prompt is None and sys.stdin.isatty() and _exchanges_are_the_prompt(args, cli_agent, sources)
+    exchanges_only = (args.prompt is None and sys.stdin.isatty()
+                      and _exchanges_are_the_prompt(args, setup.agent, setup.sources))
     if args.prompt is not None or not sys.stdin.isatty() or exchanges_only:
-        os.environ["JS_MODE"] = "headless"
-        stdin_attachment = None
-        if "-" in args.files:
-            if args.prompt in {None, "-"}:
-                msgs.warn(msgs.STDIN_TWICE)
-                return 2
-            if sys.stdin.isatty():
-                msgs.warn(msgs.STDIN_ATTACHMENT_NOT_PIPED)
-                return 2
-            stdin_attachment = _read_stdin_attachment_if_piped()
-            prompt = args.prompt or ""
-        elif exchanges_only:
-            prompt = None
-        elif args.prompt in {None, "-"}:
-            prompt = _read_stdin_if_piped()
-        elif sys.stdin.isatty():
-            prompt = args.prompt
-        else:
-            stdin_text = _read_stdin_if_piped()
-            prompt = args.prompt if not stdin_text.strip() else f"{args.prompt.rstrip()}\n\n{stdin_text.strip()}"
-        _session_leases.start["mode"] = "-p" if args.prompt is not None or exchanges_only else "pipe"
-        generated_session = (
-            not args.no_save
-            and args.session is None
-            and os.environ.get("JS_SESSION") is None
-        )
-        run = _run_prompt_json if (args.json or args.json_stream) else _run_prompt
-        result = run(prompt, model=args.model, debug=args.debug, debug_file=args.debug_file,
-                     agent=args.agent, session=args.session, save=not args.no_save,
-                     caller_key=args.session_key, announce_generated=generated_session,
-                     reasoning=args.reasoning, maxout=args.max_out,
-                     show_continue=not args.quiet,
-                     sources=sources,
-                     files=args.files,
-                     stdin_attachment=stdin_attachment,
-                     stats_json=args.stats_json, stats_csv=args.stats_csv)
-        if args.no_save:
-            msgs.warn(msgs.NOT_SAVED_NO_RESUME)
-        return result
-
+        return _run_headless(args, setup, exchanges_only=exchanges_only)
     if args.json or args.json_stream:
         msgs.warn(msgs.FAILED, error="--json/--json-stream requires -p, a pipe, an agent run, or --bench")
         return 2
     return start_repl(args, setup)
+
+
+def _run_headless(args: argparse.Namespace, setup: Setup, *, exchanges_only: bool) -> int:
+    """One turn with no REPL: -p PROMPT, piped stdin as the prompt or beside it,
+    `-f -` attaching stdin, or the agent's own exchanges when they are the
+    prompt."""
+    os.environ["JS_MODE"] = "headless"
+    stdin_attachment = None
+    if "-" in args.files:
+        if args.prompt in {None, "-"}:
+            msgs.warn(msgs.STDIN_TWICE)
+            return 2
+        if sys.stdin.isatty():
+            msgs.warn(msgs.STDIN_ATTACHMENT_NOT_PIPED)
+            return 2
+        stdin_attachment = _read_stdin_attachment_if_piped()
+        prompt = args.prompt or ""
+    elif exchanges_only:
+        prompt = None
+    elif args.prompt in {None, "-"}:
+        prompt = _read_stdin_if_piped()
+    elif sys.stdin.isatty():
+        prompt = args.prompt
+    else:
+        stdin_text = _read_stdin_if_piped()
+        prompt = args.prompt if not stdin_text.strip() else f"{args.prompt.rstrip()}\n\n{stdin_text.strip()}"
+    _session_leases.start["mode"] = "-p" if args.prompt is not None or exchanges_only else "pipe"
+    generated_session = (
+        not args.no_save
+        and args.session is None
+        and os.environ.get("JS_SESSION") is None
+    )
+    run = _run_prompt_json if (args.json or args.json_stream) else _run_prompt
+    result = run(prompt, model=args.model, debug=args.debug, debug_file=args.debug_file,
+                 agent=args.agent, session=args.session, save=not args.no_save,
+                 caller_key=args.session_key, announce_generated=generated_session,
+                 reasoning=args.reasoning, maxout=args.max_out,
+                 show_continue=not args.quiet,
+                 sources=setup.sources,
+                 files=args.files,
+                 stdin_attachment=stdin_attachment,
+                 stats_json=args.stats_json, stats_csv=args.stats_csv)
+    if args.no_save:
+        msgs.warn(msgs.NOT_SAVED_NO_RESUME)
+    return result
 
 
 def start_repl(args: argparse.Namespace, setup: Setup) -> int:
