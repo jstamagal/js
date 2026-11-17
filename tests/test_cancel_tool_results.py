@@ -196,7 +196,7 @@ def test_cancel_revokes_a_kernel_tools_pending_approval(tmp_path, monkeypatch):
     import tempfile
     from pathlib import Path
 
-    from js.toolkit.kernel_bridge import ToolBridge
+    from js.toolkit.python_kernel_bridge import ToolBridge
 
     target = tmp_path / "written"
     messages = [{"role": "user", "content": "run"}]

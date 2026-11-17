@@ -6,7 +6,7 @@ kernel as a cell, which builds the `js_tools` module from it and binds
 only the standard library: the kernel under `js -C` runs in the jail, where
 the js package is not importable.
 
-Each call is one connection to the unix socket kernel_bridge.py serves in the
+Each call is one connection to the unix socket python_kernel_bridge.py serves in the
 js process: the request is one JSON document, the connection is half-closed,
 and the reply is one JSON document. js runs the tool and answers.
 """

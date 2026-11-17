@@ -261,7 +261,7 @@ def bridge():
     import tempfile
     from pathlib import Path
 
-    from js.toolkit.kernel_bridge import ToolBridge
+    from js.toolkit.python_kernel_bridge import ToolBridge
 
     folder = Path(tempfile.mkdtemp(prefix="jsb-"))
     served = ToolBridge(folder / "tools.sock")

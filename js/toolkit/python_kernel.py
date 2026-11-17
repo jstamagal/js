@@ -48,7 +48,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import jail, messages as msgs, output, paths, settings as _settings
-from . import kernel_bridge
+from . import python_kernel_bridge
 from .core import Tool, ToolContext, ToolOutput, current_observer, current_registry
 from .descriptions import load_description
 from .presentation import Presentation
@@ -238,7 +238,7 @@ class KernelSession:
     log_handle: Any = None
     socket_dir: Path | None = None
     # Serves the `tools.<name>(...)` calls cells make; its socket is in socket_dir.
-    bridge: kernel_bridge.ToolBridge | None = None
+    bridge: python_kernel_bridge.ToolBridge | None = None
     # Under `js -C` the kernel runs in the jail with these binds and only the
     # allowlisted environment names; taken from the ToolContext that started it.
     jail_bind: tuple[str, ...] = ()
@@ -266,7 +266,7 @@ class KernelSession:
         # temp dir rather than the artifacts dir because a socket path is
         # limited to about 100 bytes.
         self.socket_dir = Path(tempfile.mkdtemp(prefix="js-kernel-"))
-        self.bridge = kernel_bridge.ToolBridge(self.socket_dir / "tools.sock")
+        self.bridge = python_kernel_bridge.ToolBridge(self.socket_dir / "tools.sock")
         self.manager = KernelManager(
             kernel_name="python3",
             transport="ipc",
@@ -288,7 +288,7 @@ class KernelSession:
         A failure goes to the kernel log; the kernel runs on without `tools`."""
         if self.bridge is None:
             return
-        cell = kernel_bridge.install_cell(self.bridge.socket_path, self.bridge.token)
+        cell = python_kernel_bridge.install_cell(self.bridge.socket_path, self.bridge.token)
         result = run_cell(self, cell, timeout=60, store_history=False)
         problem = result.error or ("timed out" if result.timed_out else "")
         if problem and self.log_handle is not None:

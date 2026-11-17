@@ -147,7 +147,7 @@ pi retries once. Codex does not recover inside a normal turn.
 | Paste collapse to `[paste #N +X lines]` | pi `editor.ts:1259` | done in js-1g1.23: `pastes.py`, `PASTE_COLLAPSE_LINES`, `PASTE_COLLAPSE_CHARS` |
 | Clipboard image paste as `[image #N]` | Claude Code `usePasteHandler.ts`, pi `clipboard-image.ts`, Codex `clipboard_paste.rs` | done in js-1g1.30: `clipimage.py`, `PASTE_IMAGE_KEY` |
 | Hooks that return context or block | Claude Code `utils/hooks.ts:418` | done in js-1g1.20: `on EVENT exec CMD`, `hookexec.py`; session and compact events |
-| Kernel-to-tools bridge (`tools.read(...)` in a cell) | Codex code mode, pi codemode | done in js-1g1.22: `kernel_bridge.py`, `kernel_client.py` |
+| Kernel-to-tools bridge (`tools.read(...)` in a cell) | Codex code mode, pi codemode | done in js-1g1.22: `python_kernel_bridge.py`, `kernel_client.py` |
 
 ## Entirely lacking
 

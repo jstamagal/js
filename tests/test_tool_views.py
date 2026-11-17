@@ -5,12 +5,12 @@ from test_output import _Sink
 
 def test_kernel_calls_preserve_their_structured_view(monkeypatch, tmp_path):
     from js import runtime
-    from js.toolkit import kernel_bridge
+    from js.toolkit import python_kernel_bridge
     from js.toolkit.core import ToolContext, call_scope, call_view, view
     from js.toolkit.registry import build_default_registry
 
-    monkeypatch.setattr(kernel_bridge.ToolBridge, "_listen", lambda self: None)
-    bridge = kernel_bridge.ToolBridge(tmp_path / "unused.sock")
+    monkeypatch.setattr(python_kernel_bridge.ToolBridge, "_listen", lambda self: None)
+    bridge = python_kernel_bridge.ToolBridge(tmp_path / "unused.sock")
     sink = _Sink()
     context = ToolContext(cwd=tmp_path)
     bridge.attach(build_default_registry(), context,
