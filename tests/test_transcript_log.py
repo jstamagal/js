@@ -7,7 +7,7 @@ from prompt_toolkit.application import Application, create_app_session
 from repl_driver import stub_screen, turn_stub
 from turn_driver import js
 
-from js import cli, conversation, run_assembly, runtime, transcript
+from js import cli, conversation, run_assembly, runtime, screen, transcript
 from js.config import Config
 from js.model_client import ModelStreamResult
 
@@ -125,7 +125,7 @@ def test_the_screen_draws_on_the_terminal_not_on_the_transcript_tee(monkeypatch,
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
     stub_screen(monkeypatch, [])
-    stub = cli.screen.build_app
+    stub = screen.build_app
 
     def build_app(**kwargs):
         # The real screen is a prompt_toolkit Application, which takes the
@@ -134,7 +134,7 @@ def test_the_screen_draws_on_the_terminal_not_on_the_transcript_tee(monkeypatch,
         Application()
         return stub(**kwargs)
 
-    monkeypatch.setattr(cli.screen, "build_app", build_app)
+    monkeypatch.setattr(screen, "build_app", build_app)
 
     with create_app_session():
         assert cli.main([]) == 0

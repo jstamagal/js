@@ -224,8 +224,8 @@ def test_turn_state_commands_come_from_the_table(monkeypatch):
     command = repl_commands.Command(lambda arg, state, cfg: None, "scrub", "test entry", turn_state=True)
     monkeypatch.setitem(repl_commands.COMMANDS, "scrub", command)
 
-    assert cli._is_turn_state_command("/scrub now")
-    assert not cli._is_turn_state_command("/turns")
+    assert repl._is_turn_state_command("/scrub now")
+    assert not repl._is_turn_state_command("/turns")
 
 
 def test_registering_the_same_handler_twice_keeps_one(tmp_path, monkeypatch):

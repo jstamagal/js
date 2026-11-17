@@ -14,7 +14,7 @@ import ai.types.usage
 import pytest
 from test_lazy_tool_discovery import _cfg
 
-from js import cli, compaction, repl_commands, runtime, screen, usage
+from js import compaction, repl, repl_commands, runtime, screen, usage
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.repl_state import ReplState
 from js.toolkit.core import ToolContext
@@ -216,7 +216,7 @@ def test_status_bar_shows_the_session_cost(tmp_path, monkeypatch):
     cfg = _priced_cfg(tmp_path)
     _run(cfg, monkeypatch, [_reply(text="hi", use=_usage(1_000_000, 0))])
 
-    line = cli._status_bar_line(cfg, ReplState(settings={}), False, 120)
+    line = repl._status_bar_line(cfg, ReplState(settings={}), False, 120)
 
     assert usage.format_dollars(1.25) in line
 
@@ -226,7 +226,7 @@ def test_status_bar_shows_tokens_when_no_call_was_priced(tmp_path, monkeypatch):
     cfg.session_file.parent.mkdir(parents=True, exist_ok=True)
     _run(cfg, monkeypatch, [_reply(text="hi", use=_usage(40_000, 2_000))])
 
-    line = cli._status_bar_line(cfg, ReplState(settings={}), False, 120)
+    line = repl._status_bar_line(cfg, ReplState(settings={}), False, 120)
 
     assert "$" not in line
     assert usage.format_tokens(42_000) in line

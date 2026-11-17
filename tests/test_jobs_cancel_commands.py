@@ -8,7 +8,7 @@ import asyncio
 
 from repl_driver import output_of, settled, type_into_js
 
-from js import cli, repl_commands, supervisor
+from js import cli, repl, repl_commands, supervisor
 from js.repl_state import ReplState
 
 
@@ -18,7 +18,7 @@ def _listed(lines, *fields):
 
 
 def _set_sup(monkeypatch, sup):
-    monkeypatch.setattr(cli.supervisor, "get_current", lambda: sup)
+    monkeypatch.setattr(supervisor, "get_current", lambda: sup)
 
 
 def _with_jobs(monkeypatch, tmp_path, typing) -> None:
@@ -141,12 +141,12 @@ def test_drain_queue_drops_all_pending_and_balances_task_done():
         queue: asyncio.Queue = asyncio.Queue()
         for line in ("one", "two", "three"):
             queue.put_nowait(line)
-        dropped = cli._drain_queue(queue)
+        dropped = repl._drain_queue(queue)
         # Every item gone, count returned, and join() unblocks immediately.
         assert dropped == 3
         assert queue.qsize() == 0
         await asyncio.wait_for(queue.join(), timeout=1.0)
         # Draining an empty queue is a clean no-op.
-        assert cli._drain_queue(queue) == 0
+        assert repl._drain_queue(queue) == 0
 
     asyncio.run(drive())

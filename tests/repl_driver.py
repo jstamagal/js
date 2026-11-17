@@ -1,7 +1,7 @@
 """Run the REPL headless on a given Config: a stub screen feeds the lines.
 
 `stub_screen` replaces the screen with one that hands each line to the REPL's
-Enter handler and then sends EOF. `run_async` drives `cli._repl_main` over it
+Enter handler and then sends EOF. `run_async` drives `repl._repl_main` over it
 and returns the session's state; `type_into_js` starts js through `cli.main`
 over it. `turn_stub` stands a plain function in for the turn the REPL awaits;
 `record_turns` stands in one that records each turn.
@@ -15,7 +15,7 @@ import inspect
 import sys
 from dataclasses import dataclass
 
-from js import cli, model_client, persona as P, repl, runtime
+from js import cli, model_client, persona as P, repl, runtime, screen
 from js.config import Config
 
 
@@ -118,7 +118,7 @@ def stub_screen(monkeypatch, lines, *, wait: bool = False) -> None:
         def invalidate(self):
             pass
 
-    class VisibleScrollback(cli.screen.Scrollback):
+    class VisibleScrollback(screen.Scrollback):
         """What the screen would show, mirrored to the test's stdout in the
         order the screen receives it: the real `capture_stdio` routes stdout
         through the loop the same way the live answer arrives."""
@@ -139,7 +139,7 @@ def stub_screen(monkeypatch, lines, *, wait: bool = False) -> None:
         return AppStub(on_line, on_eof, on_ex), VisibleScrollback(sys.stdout)
 
     monkeypatch.setattr(repl, "_turn_consumer", recording_consumer)
-    monkeypatch.setattr(cli.screen, "build_app", build_app_stub)
+    monkeypatch.setattr(screen, "build_app", build_app_stub)
 
 
 def run_async(monkeypatch, cfg, lines, *, wait: bool = False, **state_kwargs) -> dict:
@@ -147,7 +147,7 @@ def run_async(monkeypatch, cfg, lines, *, wait: bool = False, **state_kwargs) ->
     stub_screen(monkeypatch, lines, wait=wait)
     state, prompt_spec = repl_state(cfg, **state_kwargs)
     assert model_client.run_owning_loop(
-        cli._repl_main(cfg, state, _telemetry(cfg, state), None, None, prompt_spec)
+        repl._repl_main(cfg, state, _telemetry(cfg, state), None, None, prompt_spec)
     ) == 0
     return state
 

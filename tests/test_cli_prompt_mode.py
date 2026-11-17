@@ -25,6 +25,7 @@ from js import (
     paths as _paths,
     run_assembly,
     runtime,
+    screen,
     session_store,
     snippets,
 )
@@ -197,9 +198,9 @@ def test_interactive_prompt_enables_ctrl_z_suspend(monkeypatch, tmp_path):
     monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    real_build_app = cli.screen.build_app
+    real_build_app = screen.build_app
     stub_screen(monkeypatch, [])
-    stub_build_app = cli.screen.build_app
+    stub_build_app = screen.build_app
     suspends = []
 
     def build_app(**kwargs):
@@ -209,7 +210,7 @@ def test_interactive_prompt_enables_ctrl_z_suspend(monkeypatch, tmp_path):
         )
         return stub_build_app(**kwargs)
 
-    monkeypatch.setattr(cli.screen, "build_app", build_app)
+    monkeypatch.setattr(screen, "build_app", build_app)
 
     assert cli.main([]) == 0
     assert suspends

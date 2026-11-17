@@ -309,9 +309,9 @@ def test_the_status_bar_shows_the_running_model_and_follows_model(monkeypatch, t
 
     async def script(on_line):
         [state] = states
-        bars.append(cli._status_bar_line(cfg, state, False, 200))
+        bars.append(repl._status_bar_line(cfg, state, False, 200))
         await on_line("/model model-y")
-        bars.append(cli._status_bar_line(cfg, state, False, 200))
+        bars.append(repl._status_bar_line(cfg, state, False, 200))
 
     monkeypatch.setattr(cli.runtime, "run_turn_async", turn)
     cfg = from_env()

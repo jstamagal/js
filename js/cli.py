@@ -1,13 +1,12 @@
-"""Interactive REPL. prompt_toolkit for proper readline behavior."""
+"""The `js` command line: parse it, settle the run's setup, and run the mode
+it names: a listing, --bench, --compact, --commit, a -p run, or the REPL
+(`js.repl`)."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
 import contextlib
-import contextvars
-import copy
-import functools
 import io
 import json
 import os
@@ -17,20 +16,14 @@ import signal
 import sys
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
-
-from prompt_toolkit.application.current import get_app_session
-from prompt_toolkit.key_binding import merge_key_bindings
 
 from . import (
     agent_lock,
     agent_messages,
     attach,
     bench,
-    clipimage,
     command_line,
     commit_cli,
     compaction,
@@ -40,15 +33,11 @@ from . import (
     dotenv,
     endpoint_uri,
     events,
-    exline,
-    fset,
     headless,
     home as _home,
     jail as _jail,
-    keys as keys_mod,
     listings,
     login_defaults,
-    logins,
     memory as M,
     messages as msgs,
     migrate_config,
@@ -56,19 +45,15 @@ from . import (
     model_metadata,
     network_display,
     output,
-    pastes,
     paths as _paths,
     persona as P,
-    providers,
     repl,
     repl_commands,
     repl_state,
-    replcomplete,
     routing,
     run_assembly,
     runtime,
     sampling as sampling_mod,
-    screen,
     session_catalog,
     session_picker,
     session_store,
@@ -76,12 +61,8 @@ from . import (
     settings,
     snippets,
     stats,
-    stream_transport,
-    subagent_windows,
-    supervisor,
     transcript as transcript_mod,
     usage as usage_mod,
-    usage_display,
 )
 from .cli_options import Setup
 from .config import (
@@ -99,7 +80,6 @@ from .config import (
 from .conversation import Conversation
 from .repl_state import ReplState
 from .tool_binaries import resolve_binary
-from .toolkit import subagents
 
 
 def _blocking_stdio() -> None:
@@ -112,10 +92,6 @@ def _blocking_stdio() -> None:
             if not os.get_blocking(fd):
                 os.set_blocking(fd, True)
 
-
-# --------------------------------------------------------------------------
-# Runtime knobs: name -> (type, label, description)
-# --------------------------------------------------------------------------
 
 def _latest_session_name(agent_id: str) -> str | None:
     """The most recently started session file for *agent_id*, or None when there is none.
@@ -209,21 +185,6 @@ def _run_state(cfg: Config, system: str, messages: list[dict],
         settings=cfg.settings,
         events=hooks,
     )
-
-
-def _repl_input_bindings(settings_store):
-    return [clipimage.key_bindings(settings_store), pastes.key_bindings(settings_store)]
-
-
-def _interrupt_turn_and_queue(sup, drop_pending) -> bool:
-    active = sup.turn_active()
-    if active:
-        n = sup.cancel_kind("turn")
-        msgs.say(msgs.CANCELLING, jobs=msgs.plural(n, "turn"))
-    flushed = drop_pending()
-    if flushed:
-        msgs.say(msgs.DROPPED_QUEUED, prompts=msgs.plural(flushed, "queued prompt"))
-    return bool(active or flushed)
 
 
 def _standalone_dispatcher(cfg: Config):
@@ -836,378 +797,6 @@ def _warn_missing_binaries() -> None:
             msgs.warn(msgs.BINARY_MISSING, name=name, user=why)
 
 
-def _echoes(line: str, state: ReplState) -> bool:
-    """Whether a typed line shows in the scrollback: not when dispatch
-    (`repl_commands.handle_command`) takes it as a command, a command or alias from the
-    table or an invalid one; yes for what goes to the model, `/skill`, a
-    markdown command and a slash-led message (`/usr/bin/x is broken`)."""
-    if not line.startswith("/") or repl_commands.is_skill_invocation(line, state):
-        return True
-    verb = line[1:].split(maxsplit=1)[0].lower() if line[1:].strip() else ""
-    if verb in repl_commands.commands(state) or verb in state.aliases:
-        return False
-    return not repl_commands.is_unknown_command(line)
-
-
-def _is_turn_state_command(line: str, state: ReplState | None = None) -> bool:
-    """Commands that clear/rotate/compact the live message list. Running one while
-    a turn appends to state.messages races the single-writer discipline the turn
-    queue enforces (empty the list mid-turn -> IndexError, dropped output, spurious
-    rollback marks) — refuse until the active turn ends."""
-    parsed = setcmd.split_command(line) if line.startswith("/") else None
-    table = repl_commands.commands(state)
-    return (repl_state.repl_assembly(state).guard_turn_state and parsed is not None
-            and parsed[0] in table and table[parsed[0]].turn_state)
-
-
-def _drain_queue(queue: asyncio.Queue) -> int:
-    """Drop every pending input line, balancing task_done() so the teardown
-    queue.join() still completes. Loop-thread only — asyncio.Queue is not
-    thread-safe, so this never runs from the repl_commands.handle_command executor hop."""
-    return len(repl._take_queued(queue))
-
-
-def _live_level(state: ReplState, key: str) -> int:
-    """A 0-3 display level from live settings; its js/jsrc value when bad."""
-    default = settings.default_value(key)
-    value = settings.knob(state.settings, key)
-    return value if isinstance(value, int) and value in range(4) else default
-
-
-def _status_bar_line(cfg: Config, state: ReplState, turn_active: bool, width: int) -> str:
-    """The REPL status bar from live state: what is running, on what, how full.
-    In a subagent's window it is that subagent's: its model, agent, session
-    and turn."""
-    context = runtime.T.STOCK_CONTEXT
-    provider = state.provider_id or cfg.provider_id
-    model = state.model or cfg.model
-    agent_id, session_file = cfg.agent_id, cfg.session_file
-    windows = state.windows
-    window = activity = None
-    if windows is not None:
-        if len(windows.windows.numbers()) > 1:
-            window = windows.windows.current
-        activity = windows.windows.activity()
-        shown = windows.on_screen()
-        if shown is not None:
-            launch = shown.launch
-            provider, model, agent_id = launch["provider"], launch["model"], launch["agent"]
-            session_file = Path(launch["session_file"]) if launch["session_file"] else None
-            context = shown.context or context
-            turn_active = shown.busy()
-    if provider and isinstance(model, str) and model.startswith(f"{provider}/"):
-        model = model[len(provider) + 1:]
-    prompt_tokens = int(getattr(context, "last_prompt_tokens", 0) or 0)
-    cached_tokens = int(getattr(context, "last_cached_tokens", 0) or 0)
-    now = time.monotonic()
-    phase, output_tokens, throbber = "", None, ""
-    if turn_active:
-        throbber = screen.throbber_frame(now)
-        phase, output_tokens = screen.turn_centre(context.turn_status, now=now)
-    return screen.status_line(
-        width,
-        clock=time.strftime("%H:%M"),
-        provider=provider,
-        model=model,
-        context_tokens=int(getattr(context, "context_tokens", 0) or 0),
-        phase=phase,
-        output_tokens=output_tokens,
-        throbber=throbber,
-        agent_id=agent_id,
-        session_short=screen.session_short(session_file) if session_file is not None else None,
-        cache_pct=int(100 * cached_tokens / prompt_tokens) if prompt_tokens else None,
-        cost=usage_display.status_text(usage_mod.totals(session_file)) if session_file is not None else None,
-        window=window,
-        activity=activity,
-    )
-
-
-def _show_resume(state: ReplState, telemetry: runtime.Telemetry, width: int) -> None:
-    """Draw the last RESUME_EXCHANGES exchanges of the session the way a turn
-    draws them: its text printed, its tool calls through the turn's tool trace,
-    so a resumed row folds, carries its whole form and unfolds as a live one
-    does. ``telemetry``'s exchange factory is the screen's, when there is one."""
-    live = state.settings
-    count = settings.knob(live, "RESUME_EXCHANGES")
-    replay = runtime.Telemetry(None)
-    replay.exchange_factory = getattr(telemetry, "exchange_factory", None)
-    context = SimpleNamespace(config=SimpleNamespace(settings=live))
-    for kind, part in display_mod.resume_parts(state.messages, count if isinstance(count, int) else 0,
-                                               width=width, markdown=display_mod.markdown_enabled(live)):
-        if kind == "text":
-            runtime.settle_tool_trace(replay)
-            print(msgs.for_stream(part), end="", flush=True)
-            continue
-        name, args, result = part
-        if result is None:
-            # A call the session holds no result for is drawn as it was left, running.
-            runtime.settle_tool_trace(replay)
-            print(msgs.for_stream(display_mod.render_exchange(
-                name, args, None, level=display_mod.tools_level(live), preview=display_mod.preview_lines(live),
-                settings=live)), end="")
-            continue
-        opened = runtime._trace_call(replay, context, name, args)
-        runtime._trace_result(replay, context, name, result, args=args, exchange=opened)
-    runtime.settle_tool_trace(replay)
-
-
-async def _initialize_repl_agent(cfg, state, telemetry, prompt_spec) -> None:
-    """Run the agent's startup exchanges as the REPL draws a turn: each fired
-    user line, then its reply as it streams."""
-    if not prompt_spec.exchanges or state.messages:
-        return
-    turn_cfg = state.config_for_turn(cfg)
-    try:
-        await agent_messages.initialize(
-            turn_cfg, prompt_spec, state.messages, telemetry, system=state.system,
-            tool_registry=state.tool_registry,
-            sampling=login_defaults.sampling(turn_cfg),
-            event_hooks=state.events, mcp_host=state.mcp_host,
-            echo_user=display_mod.echo_user,
-        )
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        msgs.warn(msgs.TURN_INTERRUPTED)
-    except snippets.SnippetError:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        msgs.warn(msgs.FAILED, error=network_display.error_text(exc))
-
-
-async def _repl_main(cfg, state, telemetry, history, completer, prompt_spec, banner: str = "") -> int:
-    """The REPL: input, the active turn, and subagents all share ONE
-    event loop. The screen has three regions (scrollback, status, input); turn
-    output lands in the scrollback and never touches the input line. ^C cancels
-    the active turn instead of killing the process; a line typed during a turn
-    steers it or queues behind it, per STEER_MODE."""
-    loop = asyncio.get_running_loop()
-    loop.set_default_executor(ThreadPoolExecutor(max_workers=32, thread_name_prefix="js-dispatch"))
-    sup = supervisor.Supervisor(loop)
-    supervisor.set_current(sup)
-    queue: asyncio.Queue = asyncio.Queue()
-    steer_inbox: list[str] = []
-    mcp_host = state.mcp_host
-    # Each subagent a turn launches gets a window; set before the consumer
-    # starts, so every turn it runs inherits it.
-    windows = screen.Windows()
-    child_windows = subagent_windows.SubagentWindows(windows, sup)
-    state.windows = child_windows
-    opener_token = subagents.window_opener.set(child_windows.open)
-
-    channel_instructed: set[str] = set()
-
-    def channel_message(server: str, params: dict) -> None:
-        content = params.get("content")
-        if not isinstance(content, str) or not content.strip() or not state.running:
-            return
-        text = f"External MCP channel {json.dumps(server)}\n"
-        if server not in channel_instructed:
-            # The server's rules for its channel ride the first push from it.
-            channel_instructed.add(server)
-            instructions = mcp_host.server_instructions(server=server).get(server)
-            if instructions:
-                text += f"Server instructions: {instructions}\n"
-        if isinstance(params.get("meta"), dict):
-            text += f"Metadata: {json.dumps(params['meta'], ensure_ascii=False)}\n"
-        message = {"role": "user", "content": text + "\n" + content}
-        queue.put_nowait(message)
-
-    if mcp_host is not None:
-        mcp_host.channel_sink = channel_message
-    if prompt_spec.exchanges and not state.messages:
-        # Runs inside the screen, as the first turn, so its output streams into
-        # the scrollback instead of being drawn after the fact.
-        queue.put_nowait(functools.partial(_initialize_repl_agent, cfg, state, telemetry, prompt_spec))
-    consumer = loop.create_task(
-        repl._turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop, steer_inbox)
-    )
-
-    def drop_pending() -> int:
-        dropped = _drain_queue(queue) + len(steer_inbox)
-        steer_inbox.clear()
-        return dropped
-
-    async def _on_line(line: str) -> None:
-        if not line:
-            return
-        shown = child_windows.on_screen()
-        if shown is not None:
-            # In a subagent's window a command runs as anywhere, its output
-            # in that window; any other line is the subagent's.
-            if _is_turn_state_command(line, state) and sup.turn_active():
-                with screen.writing(shown.scrollback):
-                    msgs.say(repl_state.repl_hint(msgs.TURN_RUNNING, state), command=line.split()[0])
-                return
-            command = contextvars.copy_context()
-            command.run(screen.writing_to.set, shown.scrollback)
-            handled = await loop.run_in_executor(None, command.run, repl_commands.handle_command, line, state, cfg)
-            if handled:
-                repl._sync_telemetry_from_live_settings(cfg, state, telemetry)
-                if not state.running:
-                    await close()
-                return
-            shown.send(line)
-            return
-        if line in repl_state.repl_assembly(state).flush_lines:
-            # Drop pending input without touching the active turn. Handled
-            # here (not in repl_commands.handle_command) because the queue is loop-owned
-            # and repl_commands.handle_command runs on an executor thread.
-            flushed = drop_pending()
-            msgs.say(msgs.DROPPED_QUEUED, prompts=msgs.plural(flushed, "queued prompt"))
-            return
-        if _is_turn_state_command(line, state) and sup.turn_active():
-            msgs.say(repl_state.repl_hint(msgs.TURN_RUNNING, state), command=line.split()[0])
-            return
-        handled = await loop.run_in_executor(None, repl_commands.handle_command, line, state, cfg)
-        if handled:
-            repl._sync_telemetry_from_live_settings(cfg, state, telemetry)
-            if not state.running:
-                await close()
-            return
-        if sup.turn_active() and repl._steer_mode(state) == "now":
-            # The turn writes it to the transcript where the model receives it.
-            steer_inbox.append(line)
-            return
-        queue.put_nowait(line)
-        if sup.turn_active() or queue.qsize() > 1:
-            msgs.say(msgs.QUEUED, ahead=queue.qsize())
-
-    snippet_failures: list[snippets.SnippetError] = []
-
-    def fail_snippet(error: snippets.SnippetError) -> None:
-        snippet_failures.append(error)
-        state.running = False
-        app.exit()
-
-    async def on_line(line: str) -> None:
-        try:
-            await _on_line(line)
-        except snippets.SnippetError as exc:
-            fail_snippet(exc)
-
-    def consumer_done(task: asyncio.Task) -> None:
-        if not task.cancelled() and isinstance(error := task.exception(), snippets.SnippetError):
-            fail_snippet(error)
-
-    consumer.add_done_callback(consumer_done)
-
-    def on_interrupt() -> bool:
-        shown = child_windows.on_screen()
-        if shown is not None:
-            # In a subagent's window the key stops what runs there.
-            return shown.cancel()
-        handler = repl_state.repl_assembly(state).interrupt or _interrupt_turn_and_queue
-        return handler(sup, drop_pending)
-
-    async def wind_down() -> None:
-        # Cancels the running turn, and any turn the consumer starts from a
-        # line it took before the queue emptied, and waits for them to end.
-        drop_pending()
-        joined = loop.create_task(queue.join())
-        while not joined.done() and not consumer.done():
-            sup.cancel_kind("turn")
-            await asyncio.wait({joined}, timeout=0.05)
-        joined.cancel()
-
-    closing: list[asyncio.Future] = []
-
-    async def close_screen() -> None:
-        on_interrupt()
-        await wind_down()
-        app.exit()
-
-    def close() -> asyncio.Future:
-        # exit and EOF cancel a running turn as ^C does. The screen closes
-        # once it has ended, so everything the turn prints lands in the
-        # scrollback.
-        if not closing:
-            closing.append(asyncio.ensure_future(close_screen()))
-        return closing[0]
-
-    def on_eof() -> asyncio.Future:
-        state.running = False
-        return close()
-
-    async def on_ex(line: str, editor: screen.InputEditor) -> None:
-        await exline.run_ex(
-            line,
-            editor,
-            is_command=lambda verb: verb in repl_commands.commands(state) or verb in state.aliases,
-            dispatch=on_line,
-        )
-
-    app, scrollback = screen.build_app(
-        prompt=display_mod.prompt,
-        history=history,
-        completer=completer,
-        on_line=on_line,
-        on_interrupt=on_interrupt,
-        on_eof=on_eof,
-        turn_active=sup.turn_active,
-        status=lambda width: _status_bar_line(cfg, state, sup.turn_active(), width),
-        editing_mode=lambda: settings.knob(state.settings, "EDITING_MODE"),
-        echo=lambda line: _echoes(line, state),
-        on_ex=on_ex,
-        key_bindings=merge_key_bindings([
-            *(repl_state.repl_assembly(state).input_bindings or _repl_input_bindings)(lambda: state.settings),
-        ]),
-        keymap=state.keymap,
-        windows=windows,
-    )
-    windows.set_main(scrollback)
-    child_windows.attach(app)
-    previous_reasoning_factory = telemetry.reasoning_factory
-    previous_display_factory = telemetry.display_factory
-    previous_exchange_factory = telemetry.exchange_factory
-    telemetry.reasoning_factory = lambda level: screen.ScreenReasoningDisplay(loop, scrollback, app, level)
-    telemetry.display_factory = lambda markdown: display_mod.Display(
-        getattr(sys.stdout, "write_unlogged", sys.stdout.write),
-        live=screen.ScreenLive(loop, scrollback, app) if markdown else None,
-        flush=sys.stdout.flush,
-    )
-    telemetry.exchange_factory = lambda: screen.ScreenExchange(loop, scrollback, app)
-    ticker = loop.create_task(screen.tick(app, lambda: sup.turn_active() or bool(sup.jobs("subagent"))))
-    try:
-        with screen.capture_stdio(loop, scrollback, app), transcript_mod.transcript_stdio(telemetry):
-            try:
-                stream_transport.install_sink(stream_transport.NetSink(
-                    level=lambda: _live_level(state, "NET_DISPLAY"),
-                    emit=lambda line: print(line, flush=True),
-                ))
-                if banner:
-                    print(banner)
-                repl_state.emit_session_event(state, telemetry, cfg, "session_start")
-                _show_resume(state, telemetry, screen.ScreenLive(loop, scrollback, app).width())
-                await app.run_async()
-            finally:
-                # Whatever still runs ends while stdout is the scrollback, so
-                # nothing reaches the terminal after the screen has closed.
-                await wind_down()
-                for task in closing:
-                    with contextlib.suppress(Exception):
-                        await task
-    finally:
-        if mcp_host is not None:
-            mcp_host.channel_sink = None
-        stream_transport.install_sink(None)
-        ticker.cancel()
-        telemetry.reasoning_factory = previous_reasoning_factory
-        telemetry.display_factory = previous_display_factory
-        telemetry.exchange_factory = previous_exchange_factory
-        supervisor.set_current(None)
-        subagents.window_opener.reset(opener_token)
-        state.windows = None
-        consumer.cancel()
-        with contextlib.suppress(asyncio.CancelledError, snippets.SnippetError):
-            await consumer
-        for job in sup.jobs():  # backstop: cancel any straggler
-            job.task.cancel()
-        repl_state.emit_session_event(state, telemetry, cfg, "session_end")
-        await repl._close_session_mcp_host(state)
-    if snippet_failures:
-        raise snippet_failures[0]
-    return 0
-
-
 def main(argv: list[str] | None = None) -> int:
     try:
         code = _main(argv)
@@ -1577,7 +1166,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     if args.json or args.json_stream:
         msgs.warn(msgs.FAILED, error="--json/--json-stream requires -p, a pipe, an agent run, or --bench")
         return 2
-    return start_repl(args, setup)
+    return repl.start_repl(args, setup)
 
 
 def _run_headless(args: argparse.Namespace, setup: Setup, *, exchanges_only: bool) -> int:
@@ -1623,149 +1212,6 @@ def _run_headless(args: argparse.Namespace, setup: Setup, *, exchanges_only: boo
     if args.no_save:
         msgs.warn(msgs.NOT_SAVED_NO_RESUME)
     return result
-
-
-def start_repl(args: argparse.Namespace, setup: Setup) -> int:
-    """The REPL: resume the session on its stamped model and its recorded
-    system prompt, seed the live settings from the flags, run the jsrc, then
-    the loop. Its exit code."""
-    os.environ["JS_MODE"] = "repl"
-    session_catalog.session_leases.start["mode"] = "repl"
-    try:
-        cfg = run_assembly.from_env(args.session, save_session=not args.no_save, sources=setup.sources,
-                        agent_id=setup.agent)
-    except ValueError as e:
-        msgs.warn(msgs.FAILED, error=e)
-        return 2
-
-    # Startup notices go out with the banner, which the screen shows before
-    # its prompt.
-    notices: list[str] = []
-    # Resuming with no --model comes back on the model of the session's last
-    # stamp, not the config default; with no --reasoning, on its reasoning
-    # level. An explicit flag still wins. A stamp that matches what config
-    # already resolved is left alone: applying it as an explicit override would
-    # put an otherwise fine launch through the login gate for a model it was
-    # going to use anyway.
-    resumed = run_assembly.resume(cfg, args.model, args.reasoning)
-    if resumed.from_stamp:
-        args.model = resumed.model
-        notices.append(msgs.line_for(msgs.RESUMED_MODEL, model=resumed.model))
-    # A session sends the system prompt it was born with, byte for byte, for its
-    # whole life. Rebuilding it per launch puts a fresh clock and load average in
-    # front of an append-only history and breaks the shared prefix at byte zero.
-    # A change to the prompt files on disk is reported to the model as a message
-    # at the end instead. The change is judged on the files before directive
-    # expansion, since expanded output such as a clock differs on every launch.
-    # The live state resolves the agent and login layers every turn.
-    try:
-        settled = run_assembly.settle(cfg, resumed=resumed, config_pins=True, layered=False,
-                                      expand_recorded=True)
-    except run_assembly.RunNotSettled as e:
-        msgs.warn(msgs.FAILED, error=P.format_prompt_load_error(cfg, e.cause) if e.loading else e.cause)
-        return 2
-    cfg, prompt_spec, system = settled.config, settled.prompt_spec, settled.system
-    recorded_system = settled.recorded_system
-    # Compared with what the resumed model and agent resolve to, not the
-    # startup model.
-    resumed_reasoning = resumed.layer.get("EFFORT")
-    if resumed_reasoning is not None and resumed_reasoning == login_defaults.for_turn(
-            login_defaults.with_agent(cfg, prompt_spec)).reasoning_effort:
-        resumed_reasoning = None
-    if resumed.unreachable is not None:
-        msgs.say(msgs.RESUME_MODEL_FALLBACK, stamped=resumed.unreachable,
-                 model=conversation.stamp_label(cfg.model, cfg.provider_id))
-
-    keymap, key_errors = keys_mod.load(keys_mod.keys_file(cfg.settings))
-    completer = replcomplete.JsCompleter(
-        commands=lambda: repl._command_completions(state),
-        setting_keys=[spec.key for spec in settings.REGISTRY],
-        fset_names=fset.names(),
-        names=lambda: sorted(set(providers.known_provider_ids()) | set(logins.load_logins())),
-        spell=replcomplete.hunspell_suggest,
-        bare_words=repl_state.QUIT_WORDS,
-    )
-    history = repl._repl_history(cfg)
-
-    messages = M.load_replay_messages(cfg.session_file)
-    cut_off = M.turn_cut_off(messages)
-    repl_commands.restore_workspace(cfg)
-    if messages:
-        notices.append(msgs.line_for(msgs.RESUMED, messages=msgs.plural(len(messages), "prior message")))
-    elif args.session is not None:
-        # Asked for a specific session and got nothing. Silence here reads as a
-        # successful resume, so an empty one has to say so.
-        notices.append(msgs.line_for(msgs.EMPTY_SESSION, path=cfg.session_file))
-    if args.no_save:
-        # -n with --session reads the named session and writes nothing back.
-        cfg = replace(cfg, session_file=Path(os.devnull))
-    session_catalog.activate_saved_session(cfg, caller_key=args.session_key, model=args.model)
-    M.append_mark(cfg.session_file, "session_start")
-    prompt_changed = M.record_prompt_seen(cfg.session_file, prompt_spec.source)
-    if recorded_system is None:
-        M.append_system_prompt(cfg.session_file, system)
-    elif prompt_changed:
-        # The prompt on disk differs from the one the previous launch saw. The
-        # recorded one is still what gets sent; the model is told once, at the
-        # launch that first sees the change.
-        notice = {"role": "user", "content": snippets.render('prompt-changed')}
-        messages.append(notice)
-        conversation.append_turn(cfg, notice)
-        notices.append(msgs.line_for(msgs.PROMPT_CHANGED))
-
-    live_settings = copy.deepcopy(cfg.settings) if isinstance(cfg.settings, dict) else {}
-    if args.reasoning is not None:
-        reasoning_seed, effort_error = settings.validate_cli_reasoning(args.reasoning)
-        if effort_error is not None:
-            msgs.warn(msgs.BAD_REASONING, value=args.reasoning, error=effort_error)
-            return 2
-        settings.set_dotted(live_settings, ("EFFORT",), reasoning_seed)
-    elif resumed_reasoning is not None:
-        settings.set_dotted(live_settings, ("EFFORT",), resumed_reasoning)
-    if args.max_out is not None:
-        settings.set_dotted(live_settings, ("OUTPUT_TOKENS_MAX",), args.max_out)
-    elif (prompt_spec.max_output_tokens is not None
-          and settings.get_dotted(live_settings, ("OUTPUT_TOKENS_MAX",), None) is None):
-        # Agent default from agent.yaml — seed the per-turn source of truth so
-        # it survives the per-turn rebuild (ReplState.config_for_turn). Config/env/--max-out win.
-        settings.set_dotted(live_settings, ("OUTPUT_TOKENS_MAX",), prompt_spec.max_output_tokens)
-    state = repl._repl_state(
-        cfg, prompt_spec,
-        messages=messages,
-        system=system,
-        model=args.model,
-        live_settings=live_settings,
-        tool_registry=settled.registry,
-    )
-    state.keymap = keymap
-    # A resumed session's reasoning is this session's own choice.
-    state.live_resume = resumed.layer
-    if cut_off:
-        repl_state.queue_note(state, snippets.render('turn-cut-off'))
-    rc_errors = repl_commands.run_rc_commands(state, cfg, jsrc_paths(
-        Path(getattr(cfg, "project_dir", None) or Path.cwd()), setup.sources))
-    repl_commands.mark_saved(state)
-    telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
-    state.mcp_host = repl._session_mcp_host(cfg, telemetry)
-    # Attach the debug autolog sink before the first turn.
-    repl._sync_telemetry_from_live_settings(cfg, state, telemetry)
-
-    banner = repl._startup_banner(cfg, state, notices, [*rc_errors, *key_errors])
-    transcript_stack = contextlib.ExitStack()
-    # prompt_toolkit creates its output from sys.stdout on first use. The
-    # screen and the pickers draw on the terminal, so that first use is here,
-    # before stdout becomes the transcript tee.
-    get_app_session().output
-    transcript_mod.enter_transcript_stdio(transcript_stack, telemetry)
-    try:
-        code = model_client.run_owning_loop(
-            _repl_main(cfg, state, telemetry, history, completer, prompt_spec, banner)
-        )
-    finally:
-        transcript_stack.close()
-    repl._print_resume_hint(cfg, state)
-    repl._queue_switch(state)
-    return code
 
 
 if __name__ == "__main__":

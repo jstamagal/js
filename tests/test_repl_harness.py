@@ -630,7 +630,7 @@ def test_first_class_provider_shortcuts_use_defaults(tmp_path, capsys, monkeypat
         "XIAOMI_TP_BASE_URL", "MIMO_TP_BASE_URL", "XIAOMI_TP_KEY", "MIMO_TP_KEY",
     ):
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setattr(cli.logins, "load_logins", lambda *a, **k: {})
+    monkeypatch.setattr(logins, "load_logins", lambda *a, **k: {})
 
     cfg = repl_cfg(tmp_path, monkeypatch)
     turns = record_turns(monkeypatch)

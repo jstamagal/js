@@ -6,7 +6,7 @@ import pytest
 from repl_driver import run_async
 from turn_driver import js
 
-from js import cli, memory, persona, runtime, session_store
+from js import cli, memory, persona, runtime, screen, session_store
 from js.config import from_env
 from js.model_client import ModelStreamResult
 from js.session_catalog import last_stamp
@@ -248,14 +248,14 @@ def test_benchmark_files_select_bench_mode_without_a_flag_or_prompt(tmp_path, mo
 def test_even_an_empty_benchmark_file_prevents_entering_repl(tmp_path, monkeypatch):
     _agent(tmp_path, monkeypatch, {"01-benchmark.md": ""})
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli.screen, "build_app", lambda **kwargs: pytest.fail("entered REPL"))
+    monkeypatch.setattr(screen, "build_app", lambda **kwargs: pytest.fail("entered REPL"))
     assert cli.main([]) == 2
 
 
 def test_exchange_files_run_as_a_one_shot_without_a_prompt(tmp_path, monkeypatch, capsys):
     _agent(tmp_path, monkeypatch, {"01-user.md": "first step", "02-user.md": "last step"})
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli.screen, "build_app", lambda **kwargs: pytest.fail("entered REPL"))
+    monkeypatch.setattr(screen, "build_app", lambda **kwargs: pytest.fail("entered REPL"))
     requests = _model(monkeypatch, ["first reply", "last reply"])
     assert cli.main(["--session", "seeded", "-q"]) == 0
     assert [request[-1] for request in requests] == [("user", "first step"), ("user", "last step")]
@@ -268,7 +268,7 @@ def test_exchange_files_run_as_a_one_shot_without_a_prompt(tmp_path, monkeypatch
 def test_exchange_files_with_a_prompt_send_it_after_them_and_exit(tmp_path, monkeypatch, capsys):
     _agent(tmp_path, monkeypatch, {"01-user.md": "the workflow"})
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli.screen, "build_app", lambda **kwargs: pytest.fail("entered REPL"))
+    monkeypatch.setattr(screen, "build_app", lambda **kwargs: pytest.fail("entered REPL"))
     requests = _model(monkeypatch, ["workflow reply", "opinion"])
     assert cli.main(["-p", "your opinion", "-q"]) == 0
     assert [request[-1] for request in requests] == [("user", "the workflow"), ("user", "your opinion")]
@@ -286,7 +286,7 @@ def test_resumed_session_with_exchange_files_opens_the_repl(tmp_path, monkeypatc
 
     def entered(**kwargs):
         raise EnteredRepl
-    monkeypatch.setattr(cli.screen, "build_app", entered)
+    monkeypatch.setattr(screen, "build_app", entered)
     with pytest.raises(EnteredRepl):
         cli.main(["--session", "seeded"])
 

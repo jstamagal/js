@@ -11,7 +11,7 @@ import re
 import pytest
 from repl_driver import _telemetry, repl_state, stub_screen, turn_stub
 
-from js import cli, runtime
+from js import cli, repl, runtime, screen
 from js.config import from_env
 from js.memory import load_messages, load_replay_messages
 
@@ -70,11 +70,11 @@ def _install_screen(monkeypatch, script, terminal: _Recorder) -> list[_Screen]:
     screens: list[_Screen] = []
 
     def build_app(*, on_line, on_eof, **_kwargs):
-        scrollback = cli.screen.Scrollback()
+        scrollback = screen.Scrollback()
         screens.append(_Screen(script, on_line, on_eof, scrollback, terminal))
         return screens[-1], scrollback
 
-    monkeypatch.setattr(cli.screen, "build_app", build_app)
+    monkeypatch.setattr(screen, "build_app", build_app)
     monkeypatch.setattr(cli.sys, "stdout", terminal)
     monkeypatch.setattr(cli.sys, "stderr", terminal)
     return screens
@@ -179,7 +179,7 @@ def test_quitting_mid_turn_interrupts_it_and_writes_nothing_after_the_screen_clo
     cfg = from_env()
     state, prompt_spec = repl_state(cfg)
     assert runtime.model_client.run_owning_loop(
-        cli._repl_main(cfg, state, _telemetry(cfg, state), None, None, prompt_spec)
+        repl._repl_main(cfg, state, _telemetry(cfg, state), None, None, prompt_spec)
     ) == 0
 
     assert screens[0].exits == 1

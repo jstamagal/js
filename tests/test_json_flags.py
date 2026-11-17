@@ -112,7 +112,7 @@ def test_models_json_shape_with_stubbed_provider(monkeypatch, tmp_logins_dir):
     # Stub the network boundary (logins.test_login) the way prompt-mode tests
     # stub stream_model, then assert the {"models": [...]} envelope.
     logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="sk-test"))
-    monkeypatch.setattr(cli.logins, "test_login", lambda login: ["m-alpha", "m-beta"])
+    monkeypatch.setattr(logins, "test_login", lambda login: ["m-alpha", "m-beta"])
 
     assert listings.models_json("deepseek") == {"models": ["deepseek/m-alpha", "deepseek/m-beta"]}
 
@@ -152,7 +152,7 @@ def test_models_json_no_arg_uses_config_provider(monkeypatch, tmp_logins_dir, ca
         )
     )
     monkeypatch.setenv("JS_PROVIDER", "that-provider")
-    monkeypatch.setattr(cli.logins, "test_login", fake_test_login)
+    monkeypatch.setattr(logins, "test_login", fake_test_login)
 
     rc = cli.main(["--list-models", "--json"])
     payload = _stdout_json(capsys)
@@ -180,7 +180,7 @@ def test_list_models_loads_the_preset_on_its_command_line(monkeypatch, tmp_login
 
 def test_list_models_human_output_is_provider_slash_model(monkeypatch, tmp_logins_dir, capsys):
     logins.save_login(logins.Login(provider_id="openai", provider_api_key="sk"))
-    monkeypatch.setattr(cli.logins, "test_login", lambda login: ["gpt-5.4", "gpt-5.5"])
+    monkeypatch.setattr(logins, "test_login", lambda login: ["gpt-5.4", "gpt-5.5"])
 
     rc = listings.print_model_list("openai", None)
     out = capsys.readouterr().out
@@ -201,7 +201,7 @@ def test_list_models_no_arg_covers_every_saved_login(monkeypatch, tmp_logins_dir
     def _no_live(*_a, **_k):
         raise AssertionError("cache hit should avoid a live fetch")
 
-    monkeypatch.setattr(cli.logins, "test_login", _no_live)
+    monkeypatch.setattr(logins, "test_login", _no_live)
     rc = listings.print_model_list(None, SimpleNamespace(provider_id=None))
     out = capsys.readouterr().out
 
@@ -264,7 +264,7 @@ def test_text_and_json_model_listings_cover_the_same_cached_routes(monkeypatch, 
     logins.save_login(logins.Login(provider_id="opencode-go", provider_api_key="sk"))
     logins.cache_models("deepseek", ["a"])
     logins.cache_models("opencode-go", ["b"])
-    monkeypatch.setattr(cli.logins, "test_login", lambda login: pytest.fail("cached listing went online"))
+    monkeypatch.setattr(logins, "test_login", lambda login: pytest.fail("cached listing went online"))
     cfg = SimpleNamespace(provider_id=None)
     assert listings.print_model_list(None, cfg) == 0
     text = capsys.readouterr().out.splitlines()

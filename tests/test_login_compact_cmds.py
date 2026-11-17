@@ -7,7 +7,7 @@ from pathlib import Path
 import ai
 from repl_driver import record_turns, run_async
 
-from js import cli, providers, repl_state, settings
+from js import cli, logins, providers, repl_state, settings
 from js.config import Config
 from js.memory import append_message
 
@@ -193,7 +193,7 @@ def test_compact_auto_bad_arg_usage(tmp_path, monkeypatch, capsys):
 def test_login_inline_creds_builds_and_saves(tmp_path, monkeypatch):
     cfg = repl_cfg(tmp_path, monkeypatch)
     saved: list = []
-    monkeypatch.setattr(cli.logins, "save_login", lambda login: saved.append(login))
+    monkeypatch.setattr(logins, "save_login", lambda login: saved.append(login))
     monkeypatch.setattr(repl_state, "apply_saved_login_to_state",
                         lambda state, name: setattr(state, "provider_id", name) is None)
     turns = record_turns(monkeypatch)
@@ -212,7 +212,7 @@ def test_login_inline_creds_builds_and_saves(tmp_path, monkeypatch):
 def test_login_known_provider_infers_type(tmp_path, monkeypatch):
     cfg = repl_cfg(tmp_path, monkeypatch)
     saved: list = []
-    monkeypatch.setattr(cli.logins, "save_login", lambda login: saved.append(login))
+    monkeypatch.setattr(logins, "save_login", lambda login: saved.append(login))
     monkeypatch.setattr(repl_state, "apply_saved_login_to_state", lambda state, name: True)
     turns = record_turns(monkeypatch)
 
@@ -227,7 +227,7 @@ def test_login_known_provider_infers_type(tmp_path, monkeypatch):
 def test_login_custom_name_without_type_errors(tmp_path, monkeypatch, capsys):
     cfg = repl_cfg(tmp_path, monkeypatch)
     saved: list = []
-    monkeypatch.setattr(cli.logins, "save_login", lambda login: saved.append(login))
+    monkeypatch.setattr(logins, "save_login", lambda login: saved.append(login))
     turns = record_turns(monkeypatch)
 
     run_async(monkeypatch, cfg, ["/login fartbox xkey"])  # key given, no provider type
