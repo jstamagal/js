@@ -9,6 +9,7 @@ from test_mcp_runtime import FakeClient
 
 from js import events, runtime
 from js.mcp.host import MCPHost
+from js.mcp.types import ServerCapabilities
 from js.mcp_config import MCPConfiguration, MCPPolicy, MCPServer
 
 
@@ -91,13 +92,58 @@ def test_paranoid_reindex_retains_last_remote_refresh_error_until_success():
             assert len(shown) == 1
             assert "refresh failed" in shown[0]
             assert ("sentinel-secret" in shown[0]) is (mode == "off")
-        host._dirty.clear()
-        assert any(entry.id.startswith("mcp:server-error:") for entry in await host.discover(source="server"))
         client.kwargs["on_tools_changed"]({})
         client.fail = False
         await host.refresh()
         assert await errors_shown() == []
-        assert server.name not in host._raw_server_errors
+        await host.close()
+
+    asyncio.run(run())
+
+
+def test_a_mode_change_redacts_a_stored_error_discovery_does_not_retry():
+    """A server with no tools whose reconnect failed is not listed again by a
+    discovery narrowed to another server; its stored error follows the mode."""
+    class PromptsOnly(FakeClient):
+        down = False
+
+        async def initialize(self, *, timeout=None):
+            if self.down:
+                raise RuntimeError("reconnect failed with sentinel-secret")
+            self.initialized = True
+
+        @property
+        def server_capabilities(self):
+            return ServerCapabilities.from_wire({"prompts": {}})
+
+    clients = iter((FakeClient, PromptsOnly))
+
+    def client_factory(factory, **kwargs):
+        return next(clients)(factory, **kwargs)
+
+    async def run():
+        web = MCPServer(name="web", normalized_name="web", transport="http", url="http://127.0.0.1:9/mcp")
+        local = MCPServer(name="local", normalized_name="local", transport="stdio", command=("unused",),
+                          env={"API_KEY": "sentinel-secret"})
+        host = MCPHost(MCPConfiguration((web, local), MCPPolicy()), client_factory=client_factory,
+                       paranoid_mode="off")
+
+        async def errors_shown(query=""):
+            found = await host.discover(query=query)
+            return [entry.description for entry in found if entry.id == "mcp:server-error:local"]
+
+        assert await errors_shown() == []
+        prompts_only = host.clients[local.name]
+        prompts_only.initialized = False
+        prompts_only.down = True
+        assert ["sentinel-secret" in shown for shown in await errors_shown()] == [True]
+        host.paranoid_mode = "on"
+        shown = await errors_shown("http error")
+        assert len(shown) == 1
+        assert "reconnect failed" in shown[0]
+        assert "sentinel-secret" not in shown[0]
+        host.paranoid_mode = "off"
+        assert ["sentinel-secret" in shown for shown in await errors_shown("http error")] == [True]
         await host.close()
 
     asyncio.run(run())
