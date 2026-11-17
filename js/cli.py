@@ -3577,8 +3577,8 @@ def _session_mcp_host(cfg, telemetry):
     return MCPHost(cfg.mcp, telemetry=telemetry, paranoid_mode=getattr(cfg, "paranoid_mode", "off"))
 
 
-async def _close_session_mcp_host(state: dict) -> None:
-    host = state.get("mcp_host")
+async def _close_session_mcp_host(state: ReplState) -> None:
+    host = state.mcp_host
     if host is not None:
         await host.close()
 
@@ -3596,80 +3596,80 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_message, turn_cfg, l
     them back in the queue.
     """
     try:
-        before_turn_model = _model_from_live_settings(state["settings"])
-        before_turn_provider = _provider_from_live_settings(state["settings"])
+        before_turn_model = _model_from_live_settings(state.settings)
+        before_turn_provider = _provider_from_live_settings(state.settings)
         before_turn_lock = _live_bool_setting(
-            state["settings"], ("SUBAGENT_MODEL_LOCK",), cfg.lock_subagent_model
+            state.settings, ("SUBAGENT_MODEL_LOCK",), cfg.lock_subagent_model
         )
         await runtime.run_turn_async(
             turn_cfg,
-            state["system"],
-            state["messages"],
+            state.system,
+            state.messages,
             telemetry,
             trace_override=bool(
-                settings.get_dotted(state["settings"], ("TRACE",), cfg.trace)
+                settings.get_dotted(state.settings, ("TRACE",), cfg.trace)
             ),
             reasoning_effort_override=turn_cfg.reasoning_effort,
             max_output_override=turn_cfg.max_output_tokens,
-            tool_registry=state["tool_registry"],
+            tool_registry=state.tool_registry,
             sampling=login_defaults.sampling(turn_cfg),
-            event_hooks=state.get("events"),
-            mcp_host=state.get("mcp_host"),
+            event_hooks=state.events,
+            mcp_host=state.mcp_host,
             steer=steer,
-            checkpoint=lambda: _persist_turn_messages(turn_cfg, state["messages"]),
+            checkpoint=lambda: _persist_turn_messages(turn_cfg, state.messages),
         )
-        after_turn_model = _model_from_live_settings(state["settings"])
+        after_turn_model = _model_from_live_settings(state.settings)
         if after_turn_model != before_turn_model:
             _sync_model_from_live_settings(state)
-        after_turn_provider = _provider_from_live_settings(state["settings"])
+        after_turn_provider = _provider_from_live_settings(state.settings)
         _sync_provider_delta_from_live_settings(state, before_turn_provider, after_turn_provider)
         after_turn_lock = _live_bool_setting(
-            state["settings"], ("SUBAGENT_MODEL_LOCK",), cfg.lock_subagent_model
+            state.settings, ("SUBAGENT_MODEL_LOCK",), cfg.lock_subagent_model
         )
         if after_turn_lock != before_turn_lock:
             _sync_tool_registry_from_live_settings(cfg, state)
         _sync_telemetry_from_live_settings(cfg, state, telemetry)
-        _persist_turn_messages(turn_cfg, state["messages"])
+        _persist_turn_messages(turn_cfg, state.messages)
         await _maybe_auto_compact_async(turn_cfg, state)
     except asyncio.CancelledError:
         _emit_repl_event(state, telemetry, "cancel", reason="cancelled")
         _sync_telemetry_from_live_settings(cfg, state, telemetry)
-        if _turn_has_progress(state["messages"], user_message):
+        if _turn_has_progress(state.messages, user_message):
             print()
             msgs.say(msgs.TURN_INTERRUPTED_KEPT)
-            _persist_turn_messages(turn_cfg, state["messages"])
+            _persist_turn_messages(turn_cfg, state.messages)
             M.append_mark(cfg.session_file, "turn_interrupted")
-            state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
+            state.messages[:] = M.balance_orphaned_tool_calls(state.messages)
         else:
             print()
             msgs.say(msgs.TURN_ABORTED)
-            _discard_unstarted_turn(cfg, state["messages"], user_message)
+            _discard_unstarted_turn(cfg, state.messages, user_message)
             _requeue_notes(state, notes)
             M.append_mark(cfg.session_file, "turn_aborted")
         raise
     except snippets.SnippetError:
-        if _turn_has_progress(state["messages"], user_message):
-            _persist_turn_messages(turn_cfg, state["messages"])
+        if _turn_has_progress(state.messages, user_message):
+            _persist_turn_messages(turn_cfg, state.messages)
         else:
-            _discard_unstarted_turn(cfg, state["messages"], user_message)
+            _discard_unstarted_turn(cfg, state.messages, user_message)
             _requeue_notes(state, notes)
         raise
     except Exception as e:  # noqa: BLE001
         msgs.say(msgs.FAILED, error=_error_text(e))
         if isinstance(e, OSError) and e.errno == errno.ESTALE:
-            state["messages"] = M.load_replay_messages(turn_cfg.session_file)
+            state.messages = M.load_replay_messages(turn_cfg.session_file)
             return
-        if _turn_has_progress(state["messages"], user_message):
-            _persist_turn_messages(turn_cfg, state["messages"])
+        if _turn_has_progress(state.messages, user_message):
+            _persist_turn_messages(turn_cfg, state.messages)
         else:
-            _discard_unstarted_turn(cfg, state["messages"], user_message)
+            _discard_unstarted_turn(cfg, state.messages, user_message)
             _requeue_notes(state, notes)
         M.append_mark(cfg.session_file, f"error: {msgs.words_of(_error_text(e))}")
 
 
-def _steer_mode(state: dict) -> str:
+def _steer_mode(state: ReplState) -> str:
     return settings.steer_mode(
-        settings.knob(state["settings"], "STEER_MODE")
+        settings.knob(state.settings, "STEER_MODE")
     )
 
 
@@ -3687,7 +3687,7 @@ def _take_queued(queue: asyncio.Queue) -> list[str]:
 async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop,
                          steer_inbox: list[str] | None = None) -> None:
     """Serialize main turns: one at a time, pulled FIFO from the input queue.
-    This is what keeps state['messages'] single-writer while the input line
+    This is what keeps state.messages single-writer while the input line
     stays live — the producer (`_repl_main`) never blocks on a turn.
 
     ``steer_inbox`` holds lines typed during a turn at STEER_MODE=now. The
@@ -3754,8 +3754,8 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
     user_message = _note_model_switch(turn_cfg, user_message)
     notes = _take_pending_notes(state)
     user_message = _with_notes(user_message, notes)
-    state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
-    state["messages"].append(user_message)
+    state.messages[:] = M.balance_orphaned_tool_calls(state.messages)
+    state.messages.append(user_message)
     _append_turn(cfg, user_message)
     # Logged as the turn starts, not as the line was typed: a line queued
     # behind a running turn joins the transcript where the model sees it.
@@ -3800,12 +3800,12 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
         await job.task  # _do_turn persists partial work on cancel; keep looping
 
 
-def _disabled_skills(state: dict) -> tuple[str, ...]:
+def _disabled_skills(state: ReplState) -> tuple[str, ...]:
     """The SKILLS_DISABLED names in the live settings."""
-    return turn_settings.project(state.get("settings"))["skills_disabled"]
+    return turn_settings.project(state.settings)["skills_disabled"]
 
 
-def _print_skill_catalog(state: dict) -> None:
+def _print_skill_catalog(state: ReplState) -> None:
     """`/skill` alone lists every enabled skill; user-only ones are marked."""
     catalog = skills.discover_skills(Path.cwd(), disabled=_disabled_skills(state))
     if not catalog.skills:
@@ -3817,7 +3817,7 @@ def _print_skill_catalog(state: dict) -> None:
     msgs.say(msgs.SKILL_HINT)
 
 
-def _repl_hint(message: msgs.Message, state: dict) -> msgs.Message:
+def _repl_hint(message: msgs.Message, state: ReplState) -> msgs.Message:
     render = _repl_assembly(state).hint_renderer
     return message if render is None else render(message, state)
 
@@ -3858,14 +3858,14 @@ def _echoes(line: str, state: dict) -> bool:
     return not _is_unknown_command(line)
 
 
-def _is_skill_invocation(line: str, state: dict | None = None) -> bool:
+def _is_skill_invocation(line: str, state: ReplState | None = None) -> bool:
     """An invocation with a skill name is a turn carrying that skill."""
     assembly = _repl_assembly(state)
     match = skills.match_user_invocation(line, command=assembly.skill_command, pattern=assembly.skill_pattern)
     return match is not None and match.group(1) is not None
 
 
-def _expand_skill_line(prompt_text: str, state: dict) -> str:
+def _expand_skill_line(prompt_text: str, state: ReplState) -> str:
     """Expand the assembly's skill invocation, or a discovered markdown command."""
     assembly = _repl_assembly(state)
     match = skills.match_user_invocation(prompt_text, command=assembly.skill_command, pattern=assembly.skill_pattern)
@@ -3881,9 +3881,9 @@ def _expand_skill_line(prompt_text: str, state: dict) -> str:
     return prompt_text if expanded is None else expanded
 
 
-def _is_turn_state_command(line: str, state: dict | None = None) -> bool:
+def _is_turn_state_command(line: str, state: ReplState | None = None) -> bool:
     """Commands that clear/rotate/compact the live message list. Running one while
-    a turn appends to state["messages"] races the single-writer discipline the turn
+    a turn appends to state.messages races the single-writer discipline the turn
     queue enforces (empty the list mid-turn -> IndexError, dropped output, spurious
     rollback marks) — refuse until the active turn ends."""
     parsed = setcmd.split_command(line) if line.startswith("/") else None
@@ -3986,15 +3986,15 @@ def _show_resume(state: dict, telemetry: runtime.Telemetry, width: int) -> None:
 async def _initialize_repl_agent(cfg, state, telemetry, prompt_spec) -> None:
     """Run the agent's startup exchanges as the REPL draws a turn: each fired
     user line, then its reply as it streams."""
-    if not prompt_spec.exchanges or state["messages"]:
+    if not prompt_spec.exchanges or state.messages:
         return
     turn_cfg = _cfg_for_live_state(cfg, state)
     try:
         await agent_messages.initialize(
-            turn_cfg, prompt_spec, state["messages"], telemetry, system=state["system"],
-            tool_registry=state["tool_registry"],
+            turn_cfg, prompt_spec, state.messages, telemetry, system=state.system,
+            tool_registry=state.tool_registry,
             sampling=login_defaults.sampling(turn_cfg),
-            event_hooks=state.get("events"), mcp_host=state.get("mcp_host"),
+            event_hooks=state.events, mcp_host=state.mcp_host,
             echo_user=display_mod.echo_user,
         )
     except (KeyboardInterrupt, asyncio.CancelledError):
