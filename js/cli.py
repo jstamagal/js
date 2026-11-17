@@ -2671,11 +2671,18 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     if args.json or args.json_stream:
         msgs.warn(msgs.FAILED, error="--json/--json-stream requires -p, a pipe, an agent run, or --bench")
         return 2
+    return start_repl(args, setup)
+
+
+def start_repl(args: argparse.Namespace, setup: Setup) -> int:
+    """The REPL: resume the session on its stamped model and its recorded
+    system prompt, seed the live settings from the flags, run the jsrc, then
+    the loop. Its exit code."""
     os.environ["JS_MODE"] = "repl"
     _session_leases.start["mode"] = "repl"
     try:
-        cfg = _from_env(args.session, save_session=not args.no_save, sources=sources,
-                        agent_id=cli_agent)
+        cfg = _from_env(args.session, save_session=not args.no_save, sources=setup.sources,
+                        agent_id=setup.agent)
     except ValueError as e:
         msgs.warn(msgs.FAILED, error=e)
         return 2
@@ -2785,7 +2792,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     if cut_off:
         repl_state.queue_note(state, snippets.render('turn-cut-off'))
     rc_errors = repl_commands.run_rc_commands(state, cfg, jsrc_paths(
-        Path(getattr(cfg, "project_dir", None) or Path.cwd()), sources))
+        Path(getattr(cfg, "project_dir", None) or Path.cwd()), setup.sources))
     repl_commands.mark_saved(state)
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
     state.mcp_host = _session_mcp_host(cfg, telemetry)
@@ -2808,5 +2815,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     _print_resume_hint(cfg, state)
     _queue_switch(state)
     return code
+
+
 if __name__ == "__main__":
     sys.exit(main())
