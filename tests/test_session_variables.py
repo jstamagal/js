@@ -3,6 +3,7 @@ from dataclasses import replace
 import ai
 import ai.types.usage
 import pytest
+from turn_driver import js
 
 from js import cli, logins, persona, runtime
 from js.config import from_env
@@ -86,7 +87,8 @@ def test_system_variable_uses_the_model_selected_for_the_run(tmp_path, monkeypat
         )
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
-    assert cli._run_prompt("hello", model=cli_model, save=False) == 0
+    model_flag = ["--model", cli_model] if cli_model else []
+    assert js(monkeypatch, *model_flag, "--no-save", "-p", "hello") == 0
     model = "agent-model" if cli_model is None else "cli-model"
     assert seen == [(model, f"model={model}\n")]
 
