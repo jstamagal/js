@@ -21,7 +21,7 @@ from repl_driver import run_async
 from js import cli, runtime
 from js.config import Config, from_env
 from js.model_client import ModelStreamResult, ModelToolCall
-from js.toolkit import ToolContext, shell_fetch
+from js.toolkit import ToolContext, shell
 from js.toolkit.core import Tool
 from js.toolkit.registry import ToolRegistry
 
@@ -136,7 +136,7 @@ def test_shell_command_does_not_read_the_operators_terminal(tmp_path):
     os.dup2(read_end, 0)
     try:
         started = time.monotonic()
-        out = shell_fetch.shell("cat", timeout=5, context=ToolContext(cwd=tmp_path))
+        out = shell.shell("cat", timeout=5, context=ToolContext(cwd=tmp_path))
         elapsed = time.monotonic() - started
     finally:
         os.dup2(saved, 0)
@@ -160,7 +160,7 @@ def test_cancelling_a_turn_kills_the_running_shell_command(monkeypatch, tmp_path
         return _call("run", f'{{"command": "{command}", "timeout": 60}}', "call_sleep")
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", model)
-    shell_tool = next(tool for tool in shell_fetch.tools() if tool.name == "shell")
+    shell_tool = next(tool for tool in shell.tools() if tool.name == "shell")
     # Published under its own name so the turn surface does not defer it.
     shell_only = ToolRegistry(tools=(replace(shell_tool, name="run"),), aliases={})
     ctx = ToolContext(cwd=tmp_path)

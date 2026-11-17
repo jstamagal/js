@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from js.toolkit import ToolContext, shell_fetch
+from js.toolkit import ToolContext, shell
 
 needs_bash = pytest.mark.skipif(shutil.which("bash") is None, reason="bash is not installed")
 needs_zsh = pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -27,7 +27,7 @@ def _shell_line(result: str) -> str:
 
 @needs_bash
 def test_default_context_runs_bash(tmp_path):
-    result = shell_fetch.shell('printf %s "${BASH_VERSION:+is-bash}"', context=ToolContext(cwd=tmp_path))
+    result = shell.shell('printf %s "${BASH_VERSION:+is-bash}"', context=ToolContext(cwd=tmp_path))
 
     assert Path(_shell_line(result).removeprefix("shell=")).name == "bash"
     assert "is-bash" in result
@@ -37,7 +37,7 @@ def test_default_context_runs_bash(tmp_path):
 def test_shell_program_zsh_runs_zsh(tmp_path):
     context = ToolContext(cwd=tmp_path, shell_program="zsh")
 
-    result = shell_fetch.shell('printf %s "${ZSH_VERSION:+is-zsh}"', context=context)
+    result = shell.shell('printf %s "${ZSH_VERSION:+is-zsh}"', context=context)
 
     assert Path(_shell_line(result).removeprefix("shell=")).name == "zsh"
     assert "is-zsh" in result
@@ -45,20 +45,20 @@ def test_shell_program_zsh_runs_zsh(tmp_path):
 
 @needs_bash
 def test_bash_pipeline_reports_the_failing_stage(tmp_path):
-    result = shell_fetch.shell("false | cat", context=ToolContext(cwd=tmp_path, shell_program="bash"))
+    result = shell.shell("false | cat", context=ToolContext(cwd=tmp_path, shell_program="bash"))
 
     assert _exit_code(result) == 1
 
 
 @needs_zsh
 def test_zsh_pipeline_reports_the_failing_stage(tmp_path):
-    result = shell_fetch.shell("false | cat", context=ToolContext(cwd=tmp_path, shell_program="zsh"))
+    result = shell.shell("false | cat", context=ToolContext(cwd=tmp_path, shell_program="zsh"))
 
     assert _exit_code(result) == 1
 
 
 def test_sh_runs_without_pipefail(tmp_path):
-    result = shell_fetch.shell("false | cat", context=ToolContext(cwd=tmp_path, shell_program="/bin/sh"))
+    result = shell.shell("false | cat", context=ToolContext(cwd=tmp_path, shell_program="/bin/sh"))
 
     assert _exit_code(result) == 0
 
@@ -66,7 +66,7 @@ def test_sh_runs_without_pipefail(tmp_path):
 def test_missing_shell_program_is_an_error(tmp_path):
     context = ToolContext(cwd=tmp_path, shell_program="no-such-shell-js-test")
 
-    result = shell_fetch.shell("true", context=context)
+    result = shell.shell("true", context=context)
 
     assert result.startswith("ERROR:")
     assert "no-such-shell-js-test" in result
@@ -75,7 +75,7 @@ def test_missing_shell_program_is_an_error(tmp_path):
 def test_failed_command_without_filtered_reference_has_no_env_preamble(tmp_path, monkeypatch):
     monkeypatch.setenv("JS_TEST_FILTERED", "secret")
 
-    result = shell_fetch.shell("echo nope >&2; exit 3", context=ToolContext(cwd=tmp_path, shell_program="/bin/sh"))
+    result = shell.shell("echo nope >&2; exit 3", context=ToolContext(cwd=tmp_path, shell_program="/bin/sh"))
 
     assert _exit_code(result) == 3
     assert "environment=filtered" not in result
@@ -85,7 +85,7 @@ def test_failed_command_without_filtered_reference_has_no_env_preamble(tmp_path,
 def test_command_referencing_filtered_variable_gets_env_preamble(tmp_path, monkeypatch, reference):
     monkeypatch.setenv("JS_TEST_FILTERED", "secret")
 
-    result = shell_fetch.shell(f'echo "{reference}"', context=ToolContext(cwd=tmp_path, shell_program="/bin/sh"))
+    result = shell.shell(f'echo "{reference}"', context=ToolContext(cwd=tmp_path, shell_program="/bin/sh"))
 
     assert "environment=filtered" in result
     assert "JS_TEST_FILTERED" in result
@@ -96,7 +96,7 @@ def test_allowed_or_unset_references_get_no_env_preamble(tmp_path, monkeypatch):
     monkeypatch.delenv("JS_TEST_NEVER_SET", raising=False)
     context = ToolContext(cwd=tmp_path, shell_program="/bin/sh")
 
-    result = shell_fetch.shell(
+    result = shell.shell(
         'echo "$JS_TEST_PASSED $JS_TEST_NEVER_SET $HOME"; exit 1',
         env=["JS_TEST_PASSED"],
         context=context,
@@ -108,7 +108,7 @@ def test_allowed_or_unset_references_get_no_env_preamble(tmp_path, monkeypatch):
 def test_js_home_is_not_reported_as_unset(tmp_path, monkeypatch):
     monkeypatch.setenv("JS_HOME", str(tmp_path))
 
-    result = shell_fetch.shell('echo "$JS_HOME"; exit 1', context=ToolContext(cwd=tmp_path, shell_program="/bin/sh"))
+    result = shell.shell('echo "$JS_HOME"; exit 1', context=ToolContext(cwd=tmp_path, shell_program="/bin/sh"))
 
     assert "environment=filtered" not in result
     assert str(tmp_path) in result
@@ -117,7 +117,7 @@ def test_js_home_is_not_reported_as_unset(tmp_path, monkeypatch):
 def test_shell_own_variables_are_not_reported_as_unset(tmp_path, monkeypatch):
     monkeypatch.setenv("SHLVL", "3")
 
-    result = shell_fetch.shell('echo "$SHLVL $PWD"; exit 1', context=ToolContext(cwd=tmp_path, shell_program="/bin/sh"))
+    result = shell.shell('echo "$SHLVL $PWD"; exit 1', context=ToolContext(cwd=tmp_path, shell_program="/bin/sh"))
 
     assert "environment=filtered" not in result
 
@@ -130,5 +130,5 @@ def test_registered_setting_can_disable_pipefail(tmp_path):
 
     context = ToolContext(cwd=tmp_path, shell_program="bash")
     turn_settings.install(context, SimpleNamespace(**turn_settings.project({"SHELL_PIPEFAIL": False})))
-    result = shell_fetch.shell("false | cat", context=context)
+    result = shell.shell("false | cat", context=context)
     assert _exit_code(result) == 0

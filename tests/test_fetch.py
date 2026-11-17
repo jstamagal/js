@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from js import media
-from js.toolkit import ToolContext, fetch, shell_fetch
+from js.toolkit import ToolContext, fetch, shell
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRtiny"
 
@@ -334,7 +334,7 @@ def test_fetch_tool_schema_exposes_whole_hog_surface():
 def test_shell_tool_schema_exposes_wait_and_job_actions():
     """The wait window and the poll/wait/kill actions must be declared, or a
     schema-enforcing provider can never reach a long-running job."""
-    tool = next(tool for tool in shell_fetch.tools() if tool.name == "shell")
+    tool = next(tool for tool in shell.tools() if tool.name == "shell")
 
     assert tool.params["timeout"]["type"] == "integer"
     assert set(tool.params["action"]["enum"]) == {"run", "poll", "wait", "kill"}

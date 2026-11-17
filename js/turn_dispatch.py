@@ -447,12 +447,12 @@ def _interrupt_inflight(tool_context: ToolContext) -> None:
     shell call blocked on its command gets that command's process tree killed,
     so ^C ends the turn now rather than when the shell wait runs out.
     """
-    from .toolkit import file_search, python_kernel, shell_fetch
+    from .toolkit import file_search, python_kernel, shell
 
     if tool_context.tool_approval is not None:
         tool_context.tool_approval.cancel()
     python_kernel.interrupt_inflight(tool_context)
-    shell_fetch.interrupt_inflight(tool_context)
+    shell.interrupt_inflight(tool_context)
     file_search.interrupt_inflight(tool_context)
 
 

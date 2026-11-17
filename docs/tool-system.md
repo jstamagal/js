@@ -39,7 +39,7 @@ guards, task parallelism, and provider-specific name handling at the boundary.
 `build_default_registry()` concatenates:
 
 1. filesystem tools (`fs_tools.py`)
-2. shell and fetch (`shell_fetch.py`, `fetch.py`)
+2. shell and fetch (`shell.py`, `fetch.py`)
 3. web search, docs search and browse (`web_search.py`)
 4. jev, terminal session and browser probe tools (`jev.py`, `terminal.py`, `browser.py`)
 5. plan, skill and task (`plan.py`, `skill.py`, `subagents.py`)

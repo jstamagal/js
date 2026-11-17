@@ -34,7 +34,7 @@ from js.toolkit import (
     fs,
     fs_tools,
     patch,
-    shell_fetch,
+    shell,
 )
 from js.toolkit.core import ToolResult
 
@@ -934,14 +934,14 @@ def test_shell_sanitizes_bool_command_and_invalid_timeouts(tmp_path, monkeypatch
         def stream(self, name): return capped_process._StreamCapture(0)
         def wait(self, timeout):
             waits.append(timeout)
-            return shell_fetch.CappedProcessResult(returncode=0, stdout=b"", stderr=b"")
+            return shell.CappedProcessResult(returncode=0, stdout=b"", stderr=b"")
 
-    monkeypatch.setattr(shell_fetch, "start_capped", lambda argv, **kw: FakeProcess())
+    monkeypatch.setattr(shell, "start_capped", lambda argv, **kw: FakeProcess())
     context = ToolContext(cwd=tmp_path, shell_wait_seconds=42, shell_program="/bin/sh")
 
-    assert shell_fetch.shell(True, timeout=True, context=context).startswith("ERROR: command is required")
-    shell_fetch.shell("echo ok", timeout=-1, context=context)
-    shell_fetch.shell("echo ok", timeout="bad", context=context)
+    assert shell.shell(True, timeout=True, context=context).startswith("ERROR: command is required")
+    shell.shell("echo ok", timeout=-1, context=context)
+    shell.shell("echo ok", timeout="bad", context=context)
 
     assert waits == [42, 42]
 
@@ -957,7 +957,7 @@ def test_shell_runs_shell_program_with_dash_c_and_reports_shell(tmp_path, monkey
     fake_shell.chmod(0o700)
     context = ToolContext(cwd=tmp_path, shell_program=str(fake_shell))
 
-    actual = shell_fetch.shell("printf should-not-need-real-shell", context=context)
+    actual = shell.shell("printf should-not-need-real-shell", context=context)
 
     expected = (
         f"shell={fake_shell}\n"
@@ -1338,7 +1338,7 @@ def test_shell_returns_output_when_grandchild_holds_pipe(tmp_path, monkeypatch):
     # reader parked waiting for EOF.
     monkeypatch.setattr(capped_process, "READER_GRACE_S", 0.1)
     context = ToolContext(cwd=tmp_path)
-    out = shell_fetch.shell("sleep 30 & printf done", context=context, timeout=20)
+    out = shell.shell("sleep 30 & printf done", context=context, timeout=20)
     assert "exit=0" in out
     assert "done" in out
 

@@ -232,23 +232,23 @@ def test_the_output_of_a_command_still_running_can_be_read():
     import threading
     import time
 
-    from js.toolkit import shell_fetch
+    from js.toolkit import shell
 
     context = ToolContext(cwd="/tmp")
     command = "echo first-line; sleep 30"
-    worker = threading.Thread(target=shell_fetch.shell, kwargs={"command": command, "context": context})
+    worker = threading.Thread(target=shell.shell, kwargs={"command": command, "context": context})
     worker.start()
     try:
         tail = None
         deadline = time.monotonic() + 10
         while tail is None and time.monotonic() < deadline:
-            tail = shell_fetch.live_tail(context, command, 6)
+            tail = shell.live_tail(context, command, 6)
             time.sleep(0.05)
         assert tail is not None and tail[0] == ["first-line"]
     finally:
-        shell_fetch.interrupt_inflight(context)
+        shell.interrupt_inflight(context)
         worker.join(10)
-    assert shell_fetch.live_tail(context, command, 6) is None
+    assert shell.live_tail(context, command, 6) is None
 
 
 def test_ctrl_o_unfolds_a_folded_tool_row_and_folds_it_back():

@@ -129,7 +129,7 @@ pi retries once. Codex does not recover inside a normal turn.
 |---|---|---|
 | Parallel read-only calls behind one RwLock; drain results in order | Codex `core/src/tools/parallel.rs` | done in js-1g1.11: `_dispatch_tool_calls`, `Tool.read_only` and `read_only_when` |
 | Honour `Retry-After`, bigger budget, fallback model after repeated 529s | Claude Code `services/api/withRetry.ts` | done in js-1g1.13 except the fallback model: `retry_after_seconds`, `RETRY_COUNT_MAX` |
-| Keep head and tail; spill the raw stream, not the clipped text | Codex `head_tail_buffer.rs`, pi `output-accumulator.ts` | done in js-1g1.26: `capped_process._StreamCapture`, `shell_fetch._job_output` |
+| Keep head and tail; spill the raw stream, not the clipped text | Codex `head_tail_buffer.rs`, pi `output-accumulator.ts` | done in js-1g1.26: `capped_process._StreamCapture`, `shell._job_output` |
 | Max-output recovery: escalate once, then resume nudges | Claude Code `query.ts:1195` | done in js-1g1.13: `OUTPUT_TOKENS_RETRY_MAX`, `OUTPUT_RESUMES_MAX` |
 | Persist thinking signatures; replay Codex encrypted reasoning | pi `anthropic-messages.ts`, Codex `models.rs` | done in js-1g1.12: `reasoning_parts` on the assistant record, replayed to the same provider and model |
 | Compaction breaker at 3 failures; text serialisation; iterative summary | Claude Code `autoCompact.ts:70`, pi `compaction/utils.ts` | done in js-1g1.14: `compaction.serialize_conversation`, `record_auto_failure` |

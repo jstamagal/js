@@ -254,7 +254,7 @@ def test_skill_discovery_warning_is_an_event(monkeypatch, capsys):
 
 def test_running_shell_follows_its_output_tail(monkeypatch):
     from js import console
-    from js.toolkit import shell_fetch
+    from js.toolkit import shell
     asked = []
     opened = console._OpenCall("shell", {"command": "sleep 9"})
 
@@ -263,7 +263,7 @@ def test_running_shell_follows_its_output_tail(monkeypatch):
         opened.done.set()
         return None
 
-    monkeypatch.setattr(shell_fetch, "live_tail", live_tail)
+    monkeypatch.setattr(shell, "live_tail", live_tail)
     monkeypatch.setattr(console, "_LIVE_AFTER_S", 0)
     monkeypatch.setattr(console, "_LIVE_TICK_S", 0)
     console.ToolTrace._follow(None, opened, None, 1)

@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import time
 
-from js.toolkit import ToolContext, shell_fetch
+from js.toolkit import ToolContext, shell as shell_module
 from js.toolkit.core import for_model
-from js.toolkit.shell_fetch import shell as _shell
+from js.toolkit.shell import shell as _shell
 
 
 def shell(*args, **kwargs):
@@ -24,7 +24,7 @@ def hold_first_wait_until_printed(monkeypatch, marker: bytes) -> None:
     The wait window then opens after the command has printed ``marker``, so
     "printed before the window closed" holds however slowly the shell starts.
     """
-    real_start = shell_fetch.start_capped
+    real_start = shell_module.start_capped
 
     def start(*args, **kwargs):
         process = real_start(*args, **kwargs)
@@ -41,7 +41,7 @@ def hold_first_wait_until_printed(monkeypatch, marker: bytes) -> None:
         process.wait = wait
         return process
 
-    monkeypatch.setattr(shell_fetch, "start_capped", start)
+    monkeypatch.setattr(shell_module, "start_capped", start)
 
 
 def test_command_outliving_the_wait_returns_a_handle_with_output_so_far(tmp_path, monkeypatch):

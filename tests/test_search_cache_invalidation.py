@@ -18,7 +18,7 @@ from js.toolkit import ToolContext, file_search
 from js.toolkit.file_search import ast_search, fs_search
 from js.toolkit.fs import fs_read, undo
 from js.toolkit.patch import patch
-from js.toolkit.shell_fetch import shell
+from js.toolkit.shell import shell
 
 requires_rg = pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep not installed")
 requires_ast_grep = pytest.mark.skipif(

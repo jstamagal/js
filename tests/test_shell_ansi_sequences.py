@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from js.toolkit import shell_fetch
+from js.toolkit import shell
 from js.toolkit.core import ToolContext
 
 
@@ -27,8 +27,8 @@ from js.toolkit.core import ToolContext
 def test_plain_shell_cleaning_and_exact_keep_ansi(text, expected):
     raw = text.encode("utf-8")
 
-    assert shell_fetch._clean(raw, keep_ansi=False) == expected
-    assert shell_fetch._clean(raw, keep_ansi=True) == text
+    assert shell._clean(raw, keep_ansi=False) == expected
+    assert shell._clean(raw, keep_ansi=True) == text
 
 
 @pytest.mark.parametrize("keep_ansi", [False, True])
@@ -37,7 +37,7 @@ def test_actual_shell_output_strips_osc_and_charset_without_losing_text(tmp_path
     code = "import os; os.write(1, " + repr(raw) + ")"
     command = shlex.quote(sys.executable) + " -c " + shlex.quote(code)
 
-    result = shell_fetch.shell(command=command, keep_ansi=keep_ansi, context=ToolContext(cwd=tmp_path))
+    result = shell.shell(command=command, keep_ansi=keep_ansi, context=ToolContext(cwd=tmp_path))
 
     if keep_ansi:
         assert raw.decode("utf-8") in result

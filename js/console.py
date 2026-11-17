@@ -188,7 +188,7 @@ class ToolTrace:
 
     def _follow(self, opened: _OpenCall, tool_context: ToolContext | None, level: int) -> None:
         """Redraw a running command with the tail of its output until it ends."""
-        from .toolkit import shell_fetch
+        from .toolkit import shell
 
         command = (opened.args or {}).get("command")
         if opened.done.wait(_LIVE_AFTER_S):
@@ -196,7 +196,7 @@ class ToolTrace:
         while not opened.done.wait(_LIVE_TICK_S):
             settings = _tool_settings(tool_context)
             rows = int(display.setting(settings, "SHELL_LIVE_LINES_MAX"))
-            tail = shell_fetch.live_tail(tool_context, command, rows)
+            tail = shell.live_tail(tool_context, command, rows)
             if tail is None:
                 continue
             lines, seconds = tail
