@@ -10,7 +10,17 @@ import asyncio
 import ai
 import pytest
 
-from js import fset, messages as msgs, model_client, repl, runtime, screen, setcmd, settings
+from js import (
+    fset,
+    jsrc_save,
+    messages as msgs,
+    model_client,
+    repl,
+    runtime,
+    screen,
+    setcmd,
+    settings,
+)
 from js.config import Config
 from js.model_client import ModelStreamResult
 from js.repl_state import ReplState
@@ -194,7 +204,7 @@ def test_status_colour_survives_save_and_load(tmp_path):
     live = settings.seed_defaults()
     assert setcmd.fset_command(live, "COLOR_STATUS_BACKGROUND #000000").error is None
     path = tmp_path / "jsrc"
-    settings.save_settings_to_jsrc(path, live, keys=[], fset_names=["COLOR_STATUS_BACKGROUND"])
+    jsrc_save.save_settings_to_jsrc(path, live, keys=[], fset_names=["COLOR_STATUS_BACKGROUND"])
     fset.reset()
 
     reloaded = settings.seed_defaults()

@@ -16,7 +16,7 @@ import pytest
 from repl_driver import output_of, record_turns, type_into_js
 from turn_driver import one_turn
 
-from js import cli, setcmd, settings
+from js import cli, jsrc_save, setcmd, settings
 from js.config import Config, from_env
 from js.toolkit import ToolContext, python_kernel
 
@@ -211,7 +211,7 @@ def test_save_uncomments_changed_settings_in_place_and_leaves_the_rest(tmp_path)
     setcmd.set_command(live, "FETCH_TIMEOUT 77")
     setcmd.set_command(live, "PROVIDER deepseek")
 
-    assert settings.save_settings_to_jsrc(target, live, keys=["FETCH_TIMEOUT", "PROVIDER"]) == 2
+    assert jsrc_save.save_settings_to_jsrc(target, live, keys=["FETCH_TIMEOUT", "PROVIDER"]) == 2
     after = target.read_text(encoding="utf-8").splitlines()
     changed = {before[i]: after[i] for i in range(len(before)) if before[i] != after[i]}
 

@@ -7,7 +7,7 @@ from __future__ import annotations
 import io
 import sys
 
-from js import fset, messages as msgs, repl_commands, settings
+from js import fset, jsrc_save, messages as msgs, repl_commands, settings
 
 
 def test_the_startup_run_of_the_jsrc_leaves_a_model_flag_in_charge(monkeypatch, tmp_path):
@@ -81,7 +81,7 @@ def test_save_puts_a_changed_line_after_a_load_that_would_override_it(tmp_path):
     live = settings.seed_defaults()
     settings.set_dotted(live, ("BANNER",), "-!-")
     fset.set_entry("THEME", "paper")
-    settings.save_settings_to_jsrc(path, live, keys=["BANNER"], fset_names=["THEME"])
+    jsrc_save.save_settings_to_jsrc(path, live, keys=["BANNER"], fset_names=["THEME"])
     fset.reset()
     loaded = settings.seed_defaults()
     settings.load_jsrc_files([path], loaded)

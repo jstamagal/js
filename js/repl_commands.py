@@ -24,6 +24,7 @@ from . import (
     fset,
     hookexec,
     jail as _jail,
+    jsrc_save,
     login_defaults,
     logins,
     memory as M,
@@ -351,20 +352,20 @@ def _cmd_save(arg: str, state: ReplState, cfg: Config) -> str | None:
         "fset": {}, "lines": [], "model": (cfg.provider_id, cfg.model),
     }
     live = copy.deepcopy(state.settings)
-    keys = settings.changed_keys(saved["settings"], live)
+    keys = jsrc_save.changed_keys(saved["settings"], live)
     provider_id, model = state.provider_id, state.model
     if (provider_id, model) != saved["model"] and "MODEL" not in keys and isinstance(model, str) and model:
         settings.set_dotted(live, ("MODEL",), providers.qualified_model_id(provider_id, model))
         keys.append("MODEL")
-    fset_names = settings.changed_fset_names(saved["fset"])
+    fset_names = jsrc_save.changed_fset_names(saved["fset"])
     extra = [line for line in _rc_lines(state) if line not in saved["lines"]]
     if not (keys or fset_names or extra):
         msgs.say(msgs.SAVE_NOTHING)
         return None
     path = _paths.global_config_file()
     try:
-        count = settings.save_settings_to_jsrc(path, live, keys=keys, fset_names=fset_names,
-                                               extra_lines=extra)
+        count = jsrc_save.save_settings_to_jsrc(path, live, keys=keys, fset_names=fset_names,
+                                                extra_lines=extra)
     except OSError as exc:
         return msgs.SAVE_FAILED.said(error=f"{type(exc).__name__}: {exc}")
     msgs.say(msgs.SAVED, lines=msgs.plural(count, "line"), path=path)

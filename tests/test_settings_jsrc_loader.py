@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from turn_driver import one_turn
 
-from js import messages as msgs, runtime, session_store, settings
+from js import jsrc_save, messages as msgs, runtime, session_store, settings
 from js.config import Config, InvocationSources, from_env
 
 
@@ -83,7 +83,7 @@ def test_save_preserves_disabled_reasoning(tmp_path):
     assert result.error is None
     path = tmp_path / "jsrc"
 
-    settings.save_settings_to_jsrc(path, store, keys=["EFFORT"])
+    jsrc_save.save_settings_to_jsrc(path, store, keys=["EFFORT"])
 
     loaded = settings.collect_settings([path], env={})
     assert loaded["EFFORT"] == store["EFFORT"] == "off"

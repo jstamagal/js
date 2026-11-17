@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import copy
 
-from js import fset, messages as msgs, setcmd, settings
+from js import fset, jsrc_save, messages as msgs, setcmd, settings
 
 
 def test_holes_name_words_of_the_line_in_any_order():
@@ -48,7 +48,7 @@ def test_fset_lines_survive_save_and_load(tmp_path):
     setcmd.fset_command(live, "MODEL_SET now on $0-")
     setcmd.set_command(live, "TOOLS_DISPLAY 2")
     path = tmp_path / "jsrc"
-    settings.save_changes(path, settings.seed_defaults(), live, fset_before={})
+    jsrc_save.save_changes(path, settings.seed_defaults(), live, fset_before={})
     fset.reset()
 
     reloaded = settings.seed_defaults()
@@ -73,7 +73,7 @@ def _saved_then_reloaded(path, change):
     settings.load_jsrc_files([path], live)
     before, fset_before = copy.deepcopy(live), fset.overrides()
     change(live)
-    settings.save_changes(path, before, live, fset_before=fset_before)
+    jsrc_save.save_changes(path, before, live, fset_before=fset_before)
     fset.reset()
     reloaded = settings.seed_defaults()
     settings.load_jsrc_files([path], reloaded)
@@ -106,7 +106,7 @@ def test_save_leaves_the_live_banner_as_it_is(tmp_path):
     before, fset_before = copy.deepcopy(live), fset.overrides()
     setcmd.set_command(live, "-BANNER")
     stock = msgs.BANNER
-    settings.save_changes(path, before, live, fset_before=fset_before)
+    jsrc_save.save_changes(path, before, live, fset_before=fset_before)
     assert msgs.BANNER == stock != "old"
 
 
@@ -114,7 +114,7 @@ def test_a_format_on_two_lines_survives_save_and_a_fresh_load(tmp_path):
     path = tmp_path / "jsrc"
     live = settings.seed_defaults()
     assert fset.set_entry("MODEL_SET", "first $0\nsecond") is None
-    settings.save_changes(path, settings.seed_defaults(), live, fset_before={})
+    jsrc_save.save_changes(path, settings.seed_defaults(), live, fset_before={})
     fset.reset()
     settings.load_jsrc_files([path], settings.seed_defaults())
     assert fset.lookup("MODEL_SET") == "first $0\nsecond"
@@ -124,7 +124,7 @@ def test_an_entry_set_to_nothing_stays_set_to_nothing_after_save(tmp_path):
     path = tmp_path / "jsrc"
     live = settings.seed_defaults()
     assert setcmd.fset_command(live, 'MODEL_SET ""').error is None
-    settings.save_changes(path, settings.seed_defaults(), live, fset_before={})
+    jsrc_save.save_changes(path, settings.seed_defaults(), live, fset_before={})
     fset.reset()
     settings.load_jsrc_files([path], settings.seed_defaults())
     assert fset.lookup("MODEL_SET") == ""
