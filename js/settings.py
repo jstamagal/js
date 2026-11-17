@@ -470,19 +470,18 @@ def _defaults_error(message: msgs.Message, **fields) -> BaseException:
     return DefaultsError(msgs.line_for(message, file=sys.stderr, **fields))
 
 
-def package_settings(*, error_factory=None) -> dict:
+def package_settings() -> dict:
     """The settings `defaults/jsrc` sets, read once per path. Raises `DefaultsError`
     naming the file when it is missing, a line in it does not apply, or a
     registered setting has no line in it."""
     global _package_cache
-    fail = _defaults_error if error_factory is None else error_factory
     path = PACKAGE_JSRC
     if _package_cache is not None and _package_cache[0] == path:
         return _package_cache[1]
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
-        raise fail(msgs.DEFAULTS_MISSING, path=path) from None
+        raise _defaults_error(msgs.DEFAULTS_MISSING, path=path) from None
     from . import setcmd  # lazy: setcmd imports this module
 
     settings: dict = {}
@@ -491,7 +490,7 @@ def package_settings(*, error_factory=None) -> dict:
         result = setcmd.apply_config_line(settings, raw)
         if result.error or not result.handled:
             problem = result.error or msgs.DEFAULTS_NOT_A_SET_LINE.said()
-            raise fail(msgs.DEFAULTS_BAD_LINE, location=f"{path}:{lineno}", error=problem)
+            raise _defaults_error(msgs.DEFAULTS_BAD_LINE, location=f"{path}:{lineno}", error=problem)
         parsed = setcmd.split_command(raw)
         if parsed is not None:
             name = setcmd.first_word(parsed[1])[0] if parsed[0] in ("set", "fset") else parsed[0]
@@ -500,15 +499,14 @@ def package_settings(*, error_factory=None) -> dict:
                 listed.add(spec.key)
     unlisted = [spec.key for spec in REGISTRY if spec.key not in listed]
     if unlisted:
-        raise fail(msgs.DEFAULTS_UNLISTED, path=path, keys=", ".join(unlisted))
+        raise _defaults_error(msgs.DEFAULTS_UNLISTED, path=path, keys=", ".join(unlisted))
     _package_cache = (path, settings)
     return settings
 
 
-def seed_defaults(*, error_factory=None) -> dict:
+def seed_defaults() -> dict:
     """A fresh copy of the settings `defaults/jsrc` sets: the bottom config layer."""
-    source = package_settings() if error_factory is None else package_settings(error_factory=error_factory)
-    return copy.deepcopy(source)
+    return copy.deepcopy(package_settings())
 
 
 def default_value(key: str) -> Any:
