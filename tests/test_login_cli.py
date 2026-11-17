@@ -989,20 +989,3 @@ def test_registered_local_placeholder_is_used_for_keyless_login(monkeypatch):
     assert cli.main(["--extra", "LOCAL_API_KEY_PLACEHOLDER=local-token", "--login", "vllm"]) == 0
     [login] = fetched
     assert login.provider_api_key == "local-token"
-
-
-def test_login_assembly_runs_without_terminal_or_provider_calls(capsys):
-    login = logins.Login("openai")
-    saved, cached, notices = [], [], []
-    assembly = login_cli.LoginAssembly(
-        collect=lambda *args, **kwargs: login,
-        fetch=lambda value: (["model"], {}),
-        confirm=lambda *args: True,
-        keep=lambda provider, value, models: (models, value),
-        save=saved.append,
-        cache=lambda *args, **kwargs: cached.append((args, kwargs)),
-        say=lambda *args, **kwargs: notices.append(args),
-    )
-    assert login_cli._run_login("openai", assembly=assembly) == 0
-    assert saved == [login] and cached[0][0] == ("openai", ["model"])
-    assert notices and capsys.readouterr().out == ""

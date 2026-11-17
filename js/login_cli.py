@@ -7,7 +7,7 @@ import os
 import re
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from getpass import getpass
 from types import SimpleNamespace
 
@@ -682,31 +682,7 @@ def _manage_saved_provider(provider_id: str) -> None:
             return
 
 
-@dataclass(frozen=True)
-class LoginAssembly:
-    """Services for collecting, checking, curating and saving an API login."""
-
-    collect: Callable | None = None
-    fetch: Callable | None = None
-    confirm: Callable | None = None
-    keep: Callable | None = None
-    save: Callable | None = None
-    cache: Callable | None = None
-    say: Callable | None = None
-    warn: Callable | None = None
-    unreachable: Callable | None = None
-
-
-def _run_login(provider_id: str | None = None, *, assembly: LoginAssembly | None = None) -> int:
-    assembly = assembly or LoginAssembly()
-    collect = _collect_api_login if assembly.collect is None else assembly.collect
-    fetch = test_login_with_metadata if assembly.fetch is None else assembly.fetch
-    confirm = _post_fetch_confirmation if assembly.confirm is None else assembly.confirm
-    keep = _keep_list if assembly.keep is None else assembly.keep
-    save = save_login if assembly.save is None else assembly.save
-    cache = cache_models if assembly.cache is None else assembly.cache
-    say = msgs.say if assembly.say is None else assembly.say
-    warn = msgs.warn if assembly.warn is None else assembly.warn
+def _run_login(provider_id: str | None = None) -> int:
     if provider_id is None:
         return _manage_providers()
     provider_id = providers.normalize_provider_id(provider_id) or provider_id
@@ -721,45 +697,43 @@ def _run_login(provider_id: str | None = None, *, assembly: LoginAssembly | None
         sdk_provider_id = provider.effective_sdk_provider_id
         shape_provider_id = provider.id if provider.id in _API_SHAPE_IDS else None
 
-    login = collect(provider_id, sdk_provider_id, provider, shape_provider_id=shape_provider_id)
+    login = _collect_api_login(provider_id, sdk_provider_id, provider, shape_provider_id=shape_provider_id)
     if login is None:
         return 0
 
-    say(msgs.LOGIN_FETCHING)
+    msgs.say(msgs.LOGIN_FETCHING)
     try:
-        models, model_metadata = fetch(login)
+        models, model_metadata = test_login_with_metadata(login)
     except Exception as exc:  # noqa: BLE001
-        if assembly.unreachable is not None:
-            return assembly.unreachable(login, exc)
         # A server that is down now is still saved; its models come later
         # through Models > Re-fetch.
-        warn(msgs.LOGIN_MODELS_UNREACHABLE, error=f"{type(exc).__name__}: {exc}")
+        msgs.warn(msgs.LOGIN_MODELS_UNREACHABLE, error=f"{type(exc).__name__}: {exc}")
         try:
-            save(login)
+            save_login(login)
         except LoginsCorruptError as save_exc:
-            warn(msgs.LOGIN_NOT_SAVED, error=save_exc)
+            msgs.warn(msgs.LOGIN_NOT_SAVED, error=save_exc)
             return 1
         canonical_id = providers.normalize_provider_id(provider_id) or provider_id
-        say(msgs.PROVIDER_ADDED, provider=canonical_id, models=msgs.plural(0, "model"))
+        msgs.say(msgs.PROVIDER_ADDED, provider=canonical_id, models=msgs.plural(0, "model"))
         return 0
 
-    confirmed = confirm(login, provider, models)
+    confirmed = _post_fetch_confirmation(login, provider, models)
     if confirmed is None:
         return 0
     if confirmed is False:
         return 1
 
     canonical_id = providers.normalize_provider_id(provider_id) or provider_id
-    to_cache, login = keep(canonical_id, login, models)
+    to_cache, login = _keep_list(canonical_id, login, models)
     if to_cache is None:
         return 0
     try:
-        save(login)
-        cache(canonical_id, to_cache, metadata=model_metadata)
+        save_login(login)
+        cache_models(canonical_id, to_cache, metadata=model_metadata)
     except LoginsCorruptError as exc:
-        warn(msgs.LOGIN_NOT_SAVED, error=exc)
+        msgs.warn(msgs.LOGIN_NOT_SAVED, error=exc)
         return 1
-    say(msgs.PROVIDER_ADDED, provider=canonical_id, models=msgs.plural(len(to_cache), "model"))
+    msgs.say(msgs.PROVIDER_ADDED, provider=canonical_id, models=msgs.plural(len(to_cache), "model"))
     return 0
 
 
