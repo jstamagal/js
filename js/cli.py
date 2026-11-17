@@ -2733,9 +2733,9 @@ def _write_requested_stats(json_path, csv_path, payload, rows, *, announce: bool
 def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = False,
                 debug_file: str | None = None,
                 agent: str | None = None, session: str | None = None, save: bool = True,
-                system_override: str | None = None, resume_prefix: str | None = None,
+                resume_prefix: str | None = None,
                 reasoning: str | None = None, maxout: int | None = None,
-                show_continue: bool = True, tool_registry=None,
+                show_continue: bool = True,
                 extras: list[str] | None = None, tool_context=None,
                 ignore_local_config: bool = False, ignore_global_config: bool = False,
                 files: list[str] | None = None, stdin_attachment: bytes | None = None,
@@ -2779,12 +2779,8 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
         announce_generated = save and session is None and os.environ.get("JS_SESSION") is None
     # A resumed session continues on the model, provider and reasoning of its
     # last stamp unless this run names them. Read before this start records its own.
-    resumed = last_stamp(cfg.session_file) if cfg.session_file != Path(os.devnull) else None
-    unreachable_stamp = None
-    if resumed is not None:
-        if model is None:
-            unreachable_stamp = _stamp_without_login(resumed, cfg)
-            model = _resume_model_spec(resumed, cfg)
+    resumed = run_assembly.resume(cfg, model, reasoning_override)
+    model = resumed.model
     if save:
         _activate_saved_session(
             cfg,
@@ -2800,68 +2796,25 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
         opened["say"] = lambda: _say_continue(telemetry, hint, resume_prefix=resume_prefix,
                                               agent=agent, model=model, cfg=cfg, reasoning=reasoning_override)
 
-    prompt_spec = None
-    if system_override is not None:
-        system = system_override
-        active_registry = tool_registry or _registry_for(cfg)
-    else:
-        try:
-            prompt_spec = P.load_configured_prompt_spec(cfg, expand=False)
-        except (FileNotFoundError, ValueError) as e:
-            with _transcript_stdio(telemetry):
-                msgs.warn(msgs.FAILED, error=_format_prompt_load_error(cfg, e))
-            return 2
-        try:
-            # A resumed session stays on its stamp; agent.yaml sets a fresh run.
-            if config_pins or resumed is None:
-                cfg = P.apply_agent_model(cfg, prompt_spec, model, config_pins=config_pins)
-        except ValueError as e:
-            with _transcript_stdio(telemetry):
-                msgs.warn(msgs.FAILED, error=e)
-            return 2
-        if not config_pins and resumed is None and reasoning_override is None:
-            cfg = P.apply_agent_reasoning(cfg, prompt_spec)
-        cfg = P.apply_agent_max_tokens(cfg, prompt_spec)
-
     try:
-        cfg = _resolve_cli_model_override(cfg, model)
-    except ValueError as e:
+        # A resumed session stays on its stamp; agent.yaml sets a fresh run.
+        settled = run_assembly.settle(
+            cfg, reasoning=reasoning_override, resumed=resumed, config_pins=config_pins,
+            stamp_keeps_model=True,
+            agent_reasoning=not config_pins and resumed.stamp is None and reasoning_override is None)
+    except run_assembly.RunNotSettled as e:
         with _transcript_stdio(telemetry):
-            msgs.warn(msgs.FAILED, error=e)
+            msgs.warn(msgs.FAILED, error=_format_prompt_load_error(cfg, e.cause) if e.loading else e.cause)
         return 2
-    if prompt_spec is not None:
-        try:
-            # The run's tools and persona follow the model it settled on.
-            prompt_spec = P.for_model(prompt_spec, cfg)
-        except (FileNotFoundError, ValueError) as e:
-            with _transcript_stdio(telemetry):
-                msgs.warn(msgs.FAILED, error=_format_prompt_load_error(cfg, e))
-            return 2
-        system = prompt_spec.system
-        active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
-    # The model and agent this run uses are settled: the login-default
-    # settings resolve before sampling and attachments are worked out.
-    cfg = login_defaults.for_turn(login_defaults.with_agent(
-        cfg, prompt_spec, reasoning=not config_pins and resumed is None and reasoning_override is None))
-    if resumed is not None and reasoning is None:
-        # A resumed session's reasoning is this session's own choice, like
-        # /set, even when it is what the model would pick: its turns and the
-        # children they start run on it.
-        resumed_layer = _resumed_layer(resumed, None)
-        if resumed_layer:
-            cfg = login_defaults.for_turn(replace(cfg, layer_resume=resumed_layer))
-            reasoning_override = _stamped_reasoning(resumed)
-    if prompt_spec is not None:
-        recorded_system = M.load_system_prompt(cfg.session_file)
-        from .cli_options import current
-        if recorded_system is None or current().changes_prompt or current().chat:
-            prompt_spec = P._expand_spec(prompt_spec, cfg)
-            system = prompt_spec.system
-        else:
-            system = recorded_system
-    if unreachable_stamp is not None:
+    # A resumed session's reasoning is this session's own choice, like /set,
+    # even when it is what the model would pick: its turns and the children
+    # they start run on it.
+    cfg, reasoning_override = settled.config, settled.effort
+    prompt_spec, system, recorded_system = settled.prompt_spec, settled.system, settled.recorded_system
+    active_registry = settled.registry
+    if resumed.unreachable is not None:
         with _transcript_stdio(telemetry):
-            msgs.warn(msgs.RESUME_MODEL_FALLBACK, stamped=unreachable_stamp,
+            msgs.warn(msgs.RESUME_MODEL_FALLBACK, stamped=resumed.unreachable,
                       model=_stamp_label(cfg.model, cfg.provider_id))
 
     bus = swarm_mod.Agent(swarm) if swarm else None
@@ -2877,7 +2830,7 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
     )
     messages = M.load_replay_messages(cfg.session_file)
     cut_off = M.turn_cut_off(messages)
-    if prompt_spec is not None and save:
+    if save:
         prompt_changed = M.record_prompt_seen(cfg.session_file, prompt_spec.source)
         if recorded_system is None:
             M.append_system_prompt(cfg.session_file, system)
@@ -2922,22 +2875,12 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
         M.record_turn_mode(cfg.session_file, "-p")
     if call_stats is None:
         call_stats = []
-    turn_kwargs = {
-        "model_override": cfg.model,
-        "provider_id_override": cfg.provider_id,
-        "provider_base_url_override": cfg.provider_base_url,
-        "provider_api_key_override": cfg.provider_api_key,
-        "tool_registry": active_registry,
-        "sampling": login_defaults.sampling(cfg),
-        "call_stats": call_stats,
-    }
+    turn_kwargs = settled.turn_kwargs(tool_registry=active_registry, call_stats=call_stats)
     if events is not None:
         turn_kwargs["event_sink"] = events.runtime_event
         telemetry.sink = output.Fanout(output.sink_of(telemetry), headless.OutputEvents(events))
     if bus is not None:
         turn_kwargs["steer"] = bus.steer
-    if reasoning_override is not None:
-        turn_kwargs["reasoning_effort_override"] = reasoning_override
     if maxout is not None:
         turn_kwargs["max_output_override"] = maxout
     _t_wall = time.time()
@@ -2956,7 +2899,7 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
     checkpoint = (lambda: _persist_turn_messages(cfg, messages, reasoning_override)) if save else None
     def turns() -> None:
         nonlocal before_len
-        if prompt_spec is not None and prompt_spec.exchanges and not messages:
+        if prompt_spec.exchanges and not messages:
             model_client.run_owning_loop(agent_messages.initialize(
                 cfg, prompt_spec, messages, replace(telemetry, transcript_log=turn_transcript),
                 system=system, save=save,
