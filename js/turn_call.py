@@ -225,7 +225,7 @@ class ModelCaller:
                     self._overflow_rounds += 1
                     telemetry.event("context_overflow_silent", model=model, prompt_tokens=silent,
                                     attempt=attempt, round=self._overflow_rounds, kept_reply=shown)
-                    if await self._recover(compaction.SilentOverflowError(silent, window)):
+                    if await self._recover(provider_errors.SilentOverflowError(silent, window)):
                         if not shown:
                             continue
                         usage_stale = reply.usage_stale = True
@@ -256,7 +256,7 @@ class ModelCaller:
                     call_max_out = max_out
                     continue
                 if (
-                    compaction.is_context_overflow_error(e)
+                    provider_errors.is_context_overflow_error(e)
                     and self._overflow_rounds < limits.overflow_rounds_max
                 ):
                     self._overflow_rounds += 1

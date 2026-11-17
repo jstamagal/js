@@ -227,7 +227,7 @@ def test_a_silent_overflow_is_shed_and_asked_again(tmp_path, monkeypatch):
     turn = _Turn(tmp_path, monkeypatch, [_done("cut input", input_tokens=5000), _done("whole")],
                  budget=_Budget(window=4000))
     assert turn.call().result.text == "whole"
-    assert turn.budget.recoveries == [(compaction.SilentOverflowError, 1)]
+    assert turn.budget.recoveries == [(provider_errors.SilentOverflowError, 1)]
     assert "context_overflow_silent" in turn.kinds()
 
 

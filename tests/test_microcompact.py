@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ai
 
-from js import compaction, result_caps
+from js import compaction, provider_errors, result_caps
 from js.toolkit import ToolContext
 
 
@@ -152,7 +152,7 @@ def test_llamacpp_overflow_wording_is_classified_as_context_overflow():
         error_type="exceed_context_size_error",
     )
 
-    assert compaction.is_context_overflow_error(exc) is True
+    assert provider_errors.is_context_overflow_error(exc) is True
 
 
 def test_overflow_classification_does_not_fire_on_unrelated_provider_errors():
@@ -161,11 +161,11 @@ def test_overflow_classification_does_not_fire_on_unrelated_provider_errors():
         "Error code: 400 - unknown model 'gpt-9'",
         "Error code: 500 - internal server error",
     ):
-        assert compaction.is_context_overflow_error(ai.ProviderAPIError(message)) is False
+        assert provider_errors.is_context_overflow_error(ai.ProviderAPIError(message)) is False
 
 
 def test_overflow_classification_ignores_non_provider_exceptions():
-    assert compaction.is_context_overflow_error(RuntimeError("context length exceeded")) is False
+    assert provider_errors.is_context_overflow_error(RuntimeError("context length exceeded")) is False
 
 
 def test_recovery_records_failure_with_original_tool_bodies(monkeypatch, tmp_path, capsys):
@@ -220,16 +220,16 @@ def test_rate_limit_with_413_in_request_id_is_not_overflow():
         "Rate limit reached for gpt-x. Limit 2000000, Used 1999000. request id req_84133",
         429, code="rate_limit_exceeded",
     )
-    assert compaction.is_context_overflow_error(exc) is False
+    assert provider_errors.is_context_overflow_error(exc) is False
 
 
 def test_openai_tpm_request_too_large_is_not_overflow():
     message = ("Request too large for gpt-4o on tokens per min (TPM): Limit 30000, "
                "Requested 41330. The input or output tokens must be reduced.")
-    assert compaction.is_context_overflow_error(_status_error(message, 429, code="rate_limit_exceeded")) is False
+    assert provider_errors.is_context_overflow_error(_status_error(message, 429, code="rate_limit_exceeded")) is False
     # Same text with the status lost still reads as a rate limit.
-    assert compaction.is_context_overflow_error(ai.ProviderAPIError(message)) is False
-    assert compaction.is_context_overflow_error(ai.ProviderRateLimitError(message)) is False
+    assert provider_errors.is_context_overflow_error(ai.ProviderAPIError(message)) is False
+    assert provider_errors.is_context_overflow_error(ai.ProviderRateLimitError(message)) is False
 
 
 def test_413_in_unrelated_numbers_is_not_overflow():
@@ -238,7 +238,7 @@ def test_413_in_unrelated_numbers_is_not_overflow():
         "Error code: 500 - upstream 10.0.0.1:4130 refused",
         "Error code: 401 - key sk-4131 invalid",
     ):
-        assert compaction.is_context_overflow_error(ai.ProviderAPIError(message)) is False, message
+        assert provider_errors.is_context_overflow_error(ai.ProviderAPIError(message)) is False, message
 
 
 def test_real_overflow_shapes_still_classify():
@@ -254,4 +254,4 @@ def test_real_overflow_shapes_still_classify():
         ai.ProviderAPIError("x", code="exceed_context_size_error"),
     ]
     for exc in cases:
-        assert compaction.is_context_overflow_error(exc) is True, exc
+        assert provider_errors.is_context_overflow_error(exc) is True, exc
