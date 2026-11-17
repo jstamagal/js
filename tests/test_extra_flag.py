@@ -4,7 +4,7 @@
 precedence stack (built-in defaults < jsrc files < env vars < --extra; see
 the ``js/setting_layers.py`` docstring), so it wins over both env and
 the jsrc files. Most right-hand sides are coerced int -> float -> bool/null ->
-str by ``js.setting_layers.coerce_extra_value``; exact registered keys use shared
+str by ``js.setting_values.coerce_extra_value``; exact registered keys use shared
 setting coercion so ``--extra`` matches ``set`` and env/default loading.
 
 These exercise the real load path: the focused ``setting_layers.collect_settings`` /

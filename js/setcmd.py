@@ -22,7 +22,6 @@ from . import (
     fset as _fset,
     messages as msgs,
     paranoid,
-    setting_layers,
     setting_values,
     settings as _s,
     text_layout,
@@ -240,7 +239,7 @@ def apply_set(settings: dict, key: str, raw: str, *, banner_changed=None, column
         # setting (`from_line_literal`); anything else is read loosely.
         text = raw.strip()
         decoded = setting_values.from_line_literal(text)
-        value = decoded if decoded != text else setting_layers.coerce_extra_value(raw)
+        value = decoded if decoded != text else setting_values.coerce_extra_value(raw)
         _s.set_dotted(settings, path, value)
         return CommandResult(
             handled=True,

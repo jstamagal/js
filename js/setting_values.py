@@ -72,6 +72,27 @@ def parse_bool(raw: str) -> bool | None:
     return None
 
 
+def coerce_extra_value(raw: str) -> Any:
+    """Coerce a CLI ``--extra KEY=VALUE`` right-hand side: int, then float, then
+    bool/null tokens, else string."""
+    try:
+        return int(raw)
+    except ValueError:
+        pass
+    try:
+        return float(raw)
+    except ValueError:
+        pass
+    lowered = raw.strip().lower()
+    if lowered in {"true", "yes", "on"}:
+        return True
+    if lowered in {"false", "no", "off"}:
+        return False
+    if lowered in {"null", "none"}:
+        return None
+    return raw
+
+
 _NONNEGATIVE_KNOBS = frozenset({
     "RETRY_COUNT_MAX", "RETRY_WAIT_MAX", "CONNECT_TIMEOUT", "FIRST_BYTE_TIMEOUT", "STREAM_IDLE_TIMEOUT",
     "OUTPUT_TOKENS_RETRY_MAX", "OUTPUT_RESUMES_MAX",

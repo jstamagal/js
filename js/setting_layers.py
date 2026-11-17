@@ -24,9 +24,9 @@ from . import (
     messages as msgs,
     output,
     paths as _paths,
-    setcmd,  # lazy: setcmd imports this module
+    setcmd,
 )
-from .setting_values import coerce_value, from_line_literal
+from .setting_values import coerce_extra_value, coerce_value, from_line_literal
 from .settings import (
     REGISTRY,
     SettingSpec,
@@ -47,27 +47,6 @@ def _parse_dotted_key(key: str) -> tuple[str, ...]:
     if not parts:
         raise ValueError(msgs.SETTING_EMPTY_KEY.format(key=key))
     return parts
-
-
-def coerce_extra_value(raw: str) -> Any:
-    """Coerce a CLI ``--extra KEY=VALUE`` right-hand side: int, then float, then
-    bool/null tokens, else string."""
-    try:
-        return int(raw)
-    except ValueError:
-        pass
-    try:
-        return float(raw)
-    except ValueError:
-        pass
-    lowered = raw.strip().lower()
-    if lowered in {"true", "yes", "on"}:
-        return True
-    if lowered in {"false", "no", "off"}:
-        return False
-    if lowered in {"null", "none"}:
-        return None
-    return raw
 
 
 def parse_extra_arg(arg: str) -> tuple[tuple[str, ...], Any]:
