@@ -8,7 +8,7 @@ import ai
 import pytest
 from test_lazy_tool_discovery import _cfg, _result
 
-from js import compaction, model_client, runtime, settings as _settings, turn_call
+from js import compaction, model_client, runtime, settings as _settings, turn_call, turn_dispatch
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
 
@@ -327,7 +327,7 @@ def test_cached_agent_loop_keeps_context_without_repeated_summaries(monkeypatch,
         return "summary"
 
     monkeypatch.setattr(model_client, "stream_model_async", response)
-    monkeypatch.setattr(runtime, "_dispatch_batch", dispatch)
+    monkeypatch.setattr(turn_dispatch, "dispatch_batch", dispatch)
     monkeypatch.setattr(compaction, "summarize", summarize)
     messages = [{"role": "user", "content": "previous summary"},
                 {"role": "user", "content": "active task " + "material " * 10000}]

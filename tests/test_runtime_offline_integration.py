@@ -31,6 +31,7 @@ from js import (
     tool_calls,
     tool_errors,
     toolkit as runtime_tools,
+    turn_dispatch,
 )
 from js.config import Config
 from js.model_client import ModelStreamResult, ModelToolCall
@@ -1528,7 +1529,7 @@ def test_trace_result_line_is_printed_by_the_async_dispatch_path_too(capsys):
 
     registry = _trace_registry()
 
-    asyncio.run(runtime._dispatch_async_tool(
+    asyncio.run(turn_dispatch._dispatch_async_tool(
         tool_calls.PendingToolCall("c1", "slow", ["{}"]),
         runtime.Telemetry(None), 256 * 1024, True,
         tool_errors.ToolErrorTracker(), registry, _tools_context(3),
@@ -1619,7 +1620,7 @@ def test_a_tool_call_under_zero_tools_runs_nothing_and_returns_the_unknown_tool_
 
     calls = [tool_calls.PendingToolCall("c1", "nope", ['{"cmd": "id"}']),
              tool_calls.PendingToolCall("c2", "shell", ['{"cmd": "id"}'])]
-    results = runtime._dispatch_tool_calls(
+    results = turn_dispatch._dispatch_tool_calls(
         calls, runtime.Telemetry(None), 256 * 1024, False,
         tool_errors.ToolErrorTracker(), surface.dispatch_registry(), _tools_context(0),
     )

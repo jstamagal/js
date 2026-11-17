@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from test_output import _Sink
 
+from js import turn_dispatch
+
 
 def test_kernel_calls_preserve_their_structured_view(monkeypatch, tmp_path):
     from js import runtime
@@ -14,7 +16,7 @@ def test_kernel_calls_preserve_their_structured_view(monkeypatch, tmp_path):
     sink = _Sink()
     context = ToolContext(cwd=tmp_path)
     bridge.attach(build_default_registry(), context,
-                  runtime._cell_call_observer(runtime.Telemetry(None, sink=sink), True, context))
+                  turn_dispatch.cell_call_observer(runtime.Telemetry(None, sink=sink), True, context))
     (tmp_path / "note.txt").write_text("alpha\n")
     with call_scope("outer"):
         view(outer=True)

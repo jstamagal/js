@@ -19,7 +19,7 @@ import pytest
 from jail_probe import bwrap_starts, needs_bwrap
 from test_subagent_isolation import _fake_stream_result, make_cfg, prompt_dir
 
-from js import cli, jail, paths, persona, runtime, settings, tool_calls, tool_errors
+from js import cli, jail, paths, persona, runtime, settings, tool_calls, tool_errors, turn_dispatch
 from js.toolkit import ToolContext, call_tool, fs, python_kernel, shell_fetch, terminal
 from js.toolkit.registry import build_default_registry
 
@@ -167,7 +167,7 @@ def test_parallel_read_only_calls_stay_in_the_jail(jailed):
     ]
     jailed.max_parallel_tools = 8
 
-    records = runtime._dispatch_tool_calls(
+    records = turn_dispatch._dispatch_tool_calls(
         calls, runtime.Telemetry(None), 65536, False, tool_errors.ToolErrorTracker(),
         build_default_registry(), jailed,
     )
@@ -354,7 +354,7 @@ def test_a_host_tmp_path_the_jail_does_not_show_is_refused_without_the_jail_dir(
         (host_dir / "x.txt").write_text("host-only\n")
         calls = [tool_calls.PendingToolCall("r", "read", [f'{{"file_path": "{host_dir}/x.txt"}}'])]
 
-        records = runtime._dispatch_tool_calls(
+        records = turn_dispatch._dispatch_tool_calls(
             calls, runtime.Telemetry(None), 65536, False, tool_errors.ToolErrorTracker(),
             build_default_registry(), jailed,
         )
@@ -598,7 +598,7 @@ def test_a_kernel_cell_calls_tools_under_the_jail(jailed):
             "except tools.ToolError as exc:\n"
             "    print('REFUSED')\n")
     try:
-        _, result = runtime._dispatch("kernel", json.dumps({"code": code}), runtime.Telemetry(None),
+        _, result = turn_dispatch._dispatch("kernel", json.dumps({"code": code}), runtime.Telemetry(None),
                                       cap_bytes=65536, registry=build_default_registry(),
                                       tool_context=jailed)
     finally:

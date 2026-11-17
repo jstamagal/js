@@ -21,6 +21,7 @@ from js import (
     tool_calls,
     tool_errors,
     toolkit as runtime_tools,
+    turn_dispatch,
 )
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry, fs, shell_fetch
@@ -661,7 +662,7 @@ def test_dispatch_uses_canonical_name_repairs_args_and_adds_retry_metadata(tmp_p
         def event(self, kind: str, **payload):
             telemetry_events.append((kind, payload))
 
-    args, result = runtime._dispatch(
+    args, result = turn_dispatch._dispatch(
         "write",
         '{"file_path":"created.txt","content":"ok",}',
         TelemetryStub(),
@@ -678,7 +679,7 @@ def test_dispatch_uses_canonical_name_repairs_args_and_adds_retry_metadata(tmp_p
     assert payload["tool"] == "write"
 
     tracker = tool_errors.ToolErrorTracker(limit=2)
-    _, error = runtime._dispatch(
+    _, error = turn_dispatch._dispatch(
         "missing_tool",
         "{}",
         TelemetryStub(),
@@ -690,7 +691,7 @@ def test_dispatch_uses_canonical_name_repairs_args_and_adds_retry_metadata(tmp_p
     assert "<retry>" not in error
     assert not tracker.limit_reached()
 
-    _, handler_error = runtime._dispatch(
+    _, handler_error = turn_dispatch._dispatch(
         "read", '{"file_path":"does-not-exist.txt"}', TelemetryStub(),
         cap_bytes=4096, error_tracker=tracker, tool_context=context,
     )
@@ -1081,7 +1082,7 @@ def test_task_tool_calls_from_one_assistant_batch_run_in_parallel_and_restore_or
     ]
 
     started = __import__("time").perf_counter()
-    actual = runtime._dispatch_tool_calls(
+    actual = turn_dispatch._dispatch_tool_calls(
         calls,
         runtime.Telemetry(None),
         cap_bytes=4096,

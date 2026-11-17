@@ -2,7 +2,7 @@
 
 These start real kernels. A cell's tool calls run in the js process through
 the registry the kernel call was dispatched through, with the live
-ToolContext, so the tests go through runtime._dispatch the way a model's
+ToolContext, so the tests go through turn_dispatch._dispatch the way a model's
 call does.
 """
 
@@ -14,7 +14,7 @@ from dataclasses import replace
 
 import pytest
 
-from js import runtime
+from js import runtime, turn_dispatch
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
 
@@ -38,7 +38,7 @@ def ctx(tmp_path):
 
 
 def dispatch(name: str, context: ToolContext, registry=None, **args) -> str:
-    _, result = runtime._dispatch(
+    _, result = turn_dispatch._dispatch(
         name, json.dumps(args), runtime.Telemetry(None), cap_bytes=256 * 1024,
         registry=registry or build_default_registry(), tool_context=context,
     )
@@ -229,7 +229,7 @@ def test_a_cell_tool_call_is_logged_like_a_direct_call(ctx):
     telemetry = runtime.Telemetry(None)
     telemetry.event = lambda kind, **fields: events.append((kind, fields))
 
-    runtime._dispatch(
+    turn_dispatch._dispatch(
         "kernel", json.dumps({"code": "tools.read('notes.txt')"}), telemetry,
         cap_bytes=256 * 1024, registry=build_default_registry(), tool_context=ctx,
     )
@@ -375,7 +375,7 @@ def test_a_read_of_content_starting_with_error_is_a_value(ctx):
 
 def model_read(context: ToolContext, call_id: str, file_path: str) -> str:
     """A read the model makes as call ``call_id``."""
-    _, result = runtime._dispatch(
+    _, result = turn_dispatch._dispatch(
         "read", json.dumps({"file_path": file_path, "show_line_numbers": False}),
         runtime.Telemetry(None), cap_bytes=256 * 1024, registry=build_default_registry(),
         tool_context=context, call_id=call_id,

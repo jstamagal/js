@@ -23,7 +23,7 @@ sees each call as a direct call: its tool_call handlers can refuse it, and
 tool_result fires with the result. The turn's approval (ToolContext.tool_approval)
 holds each call the handlers let through until it decides, as it holds a
 direct call. The observer the kernel call was dispatched
-with (runtime._cell_call_observer) traces each call and logs it to the flight
+with (turn_dispatch.cell_call_observer) traces each call and logs it to the flight
 log, as a direct call is.
 
 One request is served at a time, in the order they arrive.

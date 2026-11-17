@@ -811,7 +811,7 @@ async def task_async(
     """Async twin of :func:`task`: awaits child turns
     on the caller's loop via :func:`_fan_out_async` instead of blocking a
     dispatch thread. The runtime routes fan-out calls here
-    (see ``runtime._dispatch_batch``). ``launch`` is "agent" for a
+    (see ``turn_dispatch.dispatch_batch``). ``launch`` is "agent" for a
     named-agent tool's call."""
     assert context is not None
     action = _job_action(action)
