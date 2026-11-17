@@ -18,10 +18,7 @@ from test_lazy_tool_discovery import _cfg
 from js import (
     compaction,
     compaction_summary,
-    repl,
-    repl_session_commands,
     runtime,
-    screen,
     status_bar,
     usage,
 )

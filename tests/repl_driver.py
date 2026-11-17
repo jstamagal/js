@@ -15,7 +15,16 @@ import inspect
 import sys
 from dataclasses import dataclass
 
-from js import cli, owning_loop, persona as P, repl, repl_commands, runtime, screen, screen_scrollback
+from js import (
+    cli,
+    owning_loop,
+    persona as P,
+    repl,
+    repl_commands,
+    runtime,
+    screen,
+    screen_scrollback,
+)
 from js.config import Config
 
 
