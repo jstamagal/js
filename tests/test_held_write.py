@@ -10,8 +10,9 @@ from pathlib import Path
 
 import pytest
 from jail_probe import bwrap_starts
+from turn_driver import run
 
-from js import held, jail, runtime
+from js import held, jail
 from js.toolkit import ToolContext, call_tool
 from js.toolkit.registry import build_default_registry
 
@@ -123,19 +124,18 @@ def test_short_content_is_not_held(tmp_path):
     assert "held id" not in refused
 
 
-def test_truncated_write_arguments_hold_the_prefix_and_append_finishes_it(tmp_path):
+def test_truncated_write_arguments_hold_the_prefix_and_append_finishes_it(tmp_path, monkeypatch):
     context = ToolContext(cwd=tmp_path)
     target = tmp_path / "big.py"
     whole = json.dumps({"file_path": str(target), "content": CONTENT})
     cut = whole[: whole.index("line 30")]
     prefix = CONTENT[: CONTENT.index("line 30")]
-    calls = [runtime._PendingToolCall("w", "write", [cut])]
 
-    normalized, _stats = runtime._normalize_tool_call_batch(calls, build_default_registry(), 8, context)
+    turn = run(tmp_path, monkeypatch, build_default_registry().select(["write:eager"]),
+               [[("w", "write", cut)]], context=context)
 
-    error = normalized[0].validation_error
-    assert error is not None
-    ident = held_id(error)
+    assert [event["invalid"] for event in turn.events("tool_call_batch_normalized")] == [1]
+    ident = held_id(turn.results()["w"])
     assert held.load(context, ident).text == prefix
     assert not target.exists()
 
@@ -155,15 +155,16 @@ def test_a_prefix_cut_inside_an_escape_drops_the_broken_escape():
     assert found == {"file_path": "a.py", "content": "one\ntwo", "append": False}
 
 
-def test_write_unavailable_on_the_surface_holds_the_content(tmp_path):
+def test_write_unavailable_on_the_surface_holds_the_content(tmp_path, monkeypatch):
     context = ToolContext(cwd=tmp_path)
     registry = build_default_registry().select(["read:eager"])
     args = json.dumps({"file_path": str(tmp_path / "x.py"), "content": CONTENT})
 
-    _args, result = runtime._dispatch("write", args, runtime.Telemetry(None), cap_bytes=0,
-                                      registry=registry, tool_context=context)
+    turn = run(tmp_path, monkeypatch, registry, [[("w", "write", args)]], context=context)
 
-    assert held.load(context, held_id(result)).text == CONTENT
+    assert [event["tool"] for event in turn.events("tool_unknown")] == ["write"]
+    assert held.load(context, held_id(turn.results()["w"])).text == CONTENT
+    assert not (tmp_path / "x.py").exists()
 
 
 def test_append_adds_to_a_read_file(tmp_path):
