@@ -224,7 +224,7 @@ def _clean(raw: bytes, keep_ansi: bool) -> str:
     text = raw.decode("utf-8", errors="replace")
     if keep_ansi:
         return text
-    from ..display import StreamCleaner
+    from ..control_sequences import StreamCleaner
 
     cleaner = StreamCleaner(controls=True)
     return cleaner.feed(text) + cleaner.flush()

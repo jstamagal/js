@@ -94,7 +94,7 @@ def render_execution(
 ) -> None:
     if level == "quiet" and not error and not interrupted:
         return
-    from .display import clean
+    from .control_sequences import clean
 
     code, stdout, stderr, display, error = (clean(part) for part in (code, stdout, stderr, display, error))
     _show(lambda console, limit: _draw_execution(
@@ -176,7 +176,7 @@ def render_event(context: Any, level: str, message: str, *, style: str = "COLOR_
                  verbose_only: bool = False) -> None:
     """Lifecycle/activity note made of text: kernel died, tool saved, a
     toolbox listing. The text is cleaned; see `render_note`."""
-    from .display import clean
+    from .control_sequences import clean
 
     lines = [[("", line)] for line in clean(message).splitlines()]
     render_note(context, level, lines, style=style, verbose_only=verbose_only)

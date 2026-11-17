@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 from turn_driver import ExchangeConsole, config, run
 
-from js import console, display, messages as msgs, repl, runtime, tool_errors
+from js import console, control_sequences, display, messages as msgs, repl, runtime, tool_errors
 from js.repl_state import ReplState
 from js.toolkit import Tool, ToolContext, ToolRegistry
 from js.transcript import TranscriptLogSink
@@ -52,7 +52,7 @@ def _headers(lines: list[str]) -> list[str]:
 def test_clean_strips_osc_csi_and_control_bytes_but_keeps_newline_and_tab():
     raw = "a\x1b]0;title\x07b\x1b[31mc\x1b[0m\td\x00e\x07f\x1bcg\x0eh\r\ni\x9b2Jj\x1b(0k\x1bPq#0\x1b\\l"
 
-    assert display.clean(raw) == "abc\tdefgh\nijkl"
+    assert control_sequences.clean(raw) == "abc\tdefgh\nijkl"
 
 
 def test_292_line_result_at_each_tools_level():

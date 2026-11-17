@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Protocol
 
 from . import fset, messages as msgs
-from .display import TAB, StreamCleaner, clean, cut_points, terminal_width
+from .control_sequences import StreamCleaner, clean
+from .display import TAB, cut_points, terminal_width
 
 
 class ReasoningDisplay(Protocol):

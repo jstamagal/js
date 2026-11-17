@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import (
+    control_sequences,
     display as _display,
     fset,
     messages as msgs,
@@ -34,10 +35,10 @@ if TYPE_CHECKING:
 
 
 def strip_ansi(text: str) -> str:
-    """``text`` without terminal escapes, the ones `display.clean` removes,
+    """``text`` without terminal escapes, the ones `control_sequences.clean` removes,
     so no write puts an escape into the log. Other control bytes stay, so the
     log keeps carriage returns and tabs as they were shown."""
-    cleaner = _display.StreamCleaner(controls=True)
+    cleaner = control_sequences.StreamCleaner(controls=True)
     return cleaner.feed(text) + cleaner.flush()
 
 
@@ -60,7 +61,7 @@ class TranscriptLogSink:
         # One escape cleaner per stream, each plain source (`plain:NAME`) and
         # each speaker, so an escape cut between two writes is still taken
         # whole and one stream's open escape never swallows another's text.
-        self._cleaners: dict[str, _display.StreamCleaner] = {}
+        self._cleaners: dict[str, control_sequences.StreamCleaner] = {}
 
     def emit(self, event: output.OutputEvent) -> None:
         fields = dict(event.fields)
@@ -72,7 +73,7 @@ class TranscriptLogSink:
             self.write_assistant(fields["text"])
 
     def _cleaned(self, stream: str, text: str) -> str:
-        cleaner = self._cleaners.setdefault(stream, _display.StreamCleaner(controls=True))
+        cleaner = self._cleaners.setdefault(stream, control_sequences.StreamCleaner(controls=True))
         return cleaner.feed(text)
 
     def _flushed(self, stream: str) -> str:
@@ -317,7 +318,7 @@ class TranscriptSink:
 
     def _on_run_line(self, *, fields: list[str]) -> None:
         parts = msgs.RUN_LINE.runs(fields="".join(
-            _display.FIELD_BREAK + _display.clean(field) for field in fields))
+            _display.FIELD_BREAK + control_sequences.clean(field) for field in fields))
         for row in _display.field_rows(parts, _display.block_width()):
             self._plain(fset.to_ansi(row) + "\n")
 

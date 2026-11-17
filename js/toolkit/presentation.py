@@ -168,7 +168,7 @@ def tool_output(name: str, result: Any) -> ScreenResult:
     """Parse a result for display. A command's result loses its
     `shell=… exit=… --- stdout ---` envelope; exit is kept apart. A failed
     call's retry note leaves the text and becomes `tries`."""
-    from ..display import clean
+    from ..control_sequences import clean
     from .results import result_text
 
     if isinstance(result, ScreenResult):

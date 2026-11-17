@@ -51,7 +51,7 @@ from prompt_toolkit.output import ColorDepth
 from prompt_toolkit.styles import DynamicStyle, Style
 from prompt_toolkit.widgets import SearchToolbar
 
-from . import display, fset, keys, messages as msgs, pastes, session_store
+from . import control_sequences, display, fset, keys, messages as msgs, pastes, session_store
 from .reasoning_display import grey, settled_rows
 
 TICK_BUSY_S = 0.1
@@ -506,7 +506,7 @@ class ReasoningBlock:
         self.collapsed = False
         self.manual = False
         self.tokens: int | None = None
-        self._cleaner = display.StreamCleaner()
+        self._cleaner = control_sequences.StreamCleaner()
         # The finished lines of `text` wrapped, kept between renders: a chunk
         # rewraps only the line still open. (width, length of text wrapped, rows)
         self._wrapped: tuple[int, int, str] = (0, 0, "")
