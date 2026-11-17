@@ -1,0 +1,269 @@
+{
+ "live": [
+  {
+   "parts": [
+    {
+     "kind": "reasoning",
+     "provider_metadata": {
+      "anthropic": {
+       "signature": "S1"
+      }
+     },
+     "text": ""
+    },
+    {
+     "kind": "text",
+     "provider_metadata": null,
+     "text": "Reading the first file."
+    },
+    {
+     "kind": "tool_call",
+     "provider_metadata": null,
+     "tool_args": "{\"path\": \"a\"}",
+     "tool_call_id": "toolu_1",
+     "tool_name": "no_such_tool"
+    },
+    {
+     "kind": "text",
+     "provider_metadata": null,
+     "text": "Now the second."
+    },
+    {
+     "kind": "reasoning",
+     "provider_metadata": {
+      "anthropic": {
+       "signature": "S2"
+      }
+     },
+     "text": "progress note"
+    },
+    {
+     "kind": "tool_call",
+     "provider_metadata": null,
+     "tool_args": "{\"path\": \"b\"}",
+     "tool_call_id": "toolu_2",
+     "tool_name": "no_such_tool"
+    }
+   ],
+   "provider_metadata": {
+    "anthropic": {
+     "signature": "S2"
+    }
+   },
+   "role": "assistant",
+   "turn_id": null,
+   "usage": {
+    "cache_read_tokens": null,
+    "cache_write_tokens": null,
+    "input_tokens": 5,
+    "output_tokens": 5,
+    "raw": {
+     "input_tokens": 5,
+     "output_tokens": 5
+    },
+    "reasoning_tokens": null
+   }
+  }
+ ],
+ "live_body": [
+  {
+   "content": [
+    {
+     "signature": "S1",
+     "thinking": "",
+     "type": "thinking"
+    },
+    {
+     "text": "Reading the first file.",
+     "type": "text"
+    },
+    {
+     "id": "toolu_1",
+     "input": {
+      "path": "a"
+     },
+     "name": "no_such_tool",
+     "type": "tool_use"
+    },
+    {
+     "text": "Now the second.",
+     "type": "text"
+    },
+    {
+     "signature": "S2",
+     "thinking": "progress note",
+     "type": "thinking"
+    },
+    {
+     "id": "toolu_2",
+     "input": {
+      "path": "b"
+     },
+     "name": "no_such_tool",
+     "type": "tool_use"
+    }
+   ],
+   "role": "assistant"
+  }
+ ],
+ "records": [
+  {
+   "content": "Reading the first file.Now the second.",
+   "provider_metadata": {
+    "anthropic": {
+     "signature": "S2"
+    }
+   },
+   "reasoning_content": "progress note",
+   "reasoning_from": {
+    "model": "claude-sonnet-5-5",
+    "provider": "anthropic"
+   },
+   "reasoning_layout": [
+    "reasoning",
+    23,
+    "tool_call",
+    15,
+    "reasoning",
+    "tool_call"
+   ],
+   "reasoning_parts": [
+    {
+     "provider_metadata": {
+      "anthropic": {
+       "signature": "S1"
+      }
+     },
+     "text": ""
+    },
+    {
+     "after_calls": 1,
+     "provider_metadata": {
+      "anthropic": {
+       "signature": "S2"
+      }
+     },
+     "text": "progress note",
+     "text_before": 38
+    }
+   ],
+   "role": "assistant",
+   "tool_calls": [
+    {
+     "function": {
+      "arguments": "{\"path\": \"a\"}",
+      "name": "no_such_tool"
+     },
+     "id": "toolu_1",
+     "text_before": 23,
+     "type": "function"
+    },
+    {
+     "function": {
+      "arguments": "{\"path\": \"b\"}",
+      "name": "no_such_tool"
+     },
+     "id": "toolu_2",
+     "type": "function"
+    }
+   ]
+  }
+ ],
+ "resumed": [
+  {
+   "parts": [
+    {
+     "kind": "reasoning",
+     "provider_metadata": {
+      "anthropic": {
+       "signature": "S1"
+      }
+     },
+     "text": ""
+    },
+    {
+     "kind": "text",
+     "provider_metadata": null,
+     "text": "Reading the first file."
+    },
+    {
+     "kind": "tool_call",
+     "provider_metadata": null,
+     "tool_args": "{\"path\": \"a\"}",
+     "tool_call_id": "toolu_1",
+     "tool_name": "no_such_tool"
+    },
+    {
+     "kind": "text",
+     "provider_metadata": null,
+     "text": "Now the second."
+    },
+    {
+     "kind": "reasoning",
+     "provider_metadata": {
+      "anthropic": {
+       "signature": "S2"
+      }
+     },
+     "text": "progress note"
+    },
+    {
+     "kind": "tool_call",
+     "provider_metadata": null,
+     "tool_args": "{\"path\": \"b\"}",
+     "tool_call_id": "toolu_2",
+     "tool_name": "no_such_tool"
+    }
+   ],
+   "provider_metadata": {
+    "anthropic": {
+     "signature": "S2"
+    }
+   },
+   "role": "assistant",
+   "turn_id": null,
+   "usage": null
+  }
+ ],
+ "resumed_body": [
+  {
+   "content": [
+    {
+     "signature": "S1",
+     "thinking": "",
+     "type": "thinking"
+    },
+    {
+     "text": "Reading the first file.",
+     "type": "text"
+    },
+    {
+     "id": "toolu_1",
+     "input": {
+      "path": "a"
+     },
+     "name": "no_such_tool",
+     "type": "tool_use"
+    },
+    {
+     "text": "Now the second.",
+     "type": "text"
+    },
+    {
+     "signature": "S2",
+     "thinking": "progress note",
+     "type": "thinking"
+    },
+    {
+     "id": "toolu_2",
+     "input": {
+      "path": "b"
+     },
+     "name": "no_such_tool",
+     "type": "tool_use"
+    }
+   ],
+   "role": "assistant"
+  }
+ ]
+}

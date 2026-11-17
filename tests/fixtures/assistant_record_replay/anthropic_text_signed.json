@@ -1,0 +1,100 @@
+{
+ "live": [
+  {
+   "parts": [
+    {
+     "kind": "reasoning",
+     "provider_metadata": {
+      "anthropic": {
+       "signature": "S1"
+      }
+     },
+     "text": "weigh it"
+    },
+    {
+     "kind": "text",
+     "provider_metadata": null,
+     "text": "the answer"
+    }
+   ],
+   "provider_metadata": {
+    "anthropic": {
+     "signature": "S1"
+    }
+   },
+   "role": "assistant",
+   "turn_id": null,
+   "usage": {
+    "cache_read_tokens": null,
+    "cache_write_tokens": null,
+    "input_tokens": 5,
+    "output_tokens": 5,
+    "raw": {
+     "input_tokens": 5,
+     "output_tokens": 5
+    },
+    "reasoning_tokens": null
+   }
+  }
+ ],
+ "live_body": null,
+ "records": [
+  {
+   "content": "the answer",
+   "provider_metadata": {
+    "anthropic": {
+     "signature": "S1"
+    }
+   },
+   "reasoning_content": "weigh it",
+   "reasoning_from": {
+    "model": "claude-sonnet-5-5",
+    "provider": "anthropic"
+   },
+   "reasoning_layout": [
+    "reasoning",
+    10
+   ],
+   "reasoning_parts": [
+    {
+     "provider_metadata": {
+      "anthropic": {
+       "signature": "S1"
+      }
+     },
+     "text": "weigh it"
+    }
+   ],
+   "role": "assistant"
+  }
+ ],
+ "resumed": [
+  {
+   "parts": [
+    {
+     "kind": "reasoning",
+     "provider_metadata": {
+      "anthropic": {
+       "signature": "S1"
+      }
+     },
+     "text": "weigh it"
+    },
+    {
+     "kind": "text",
+     "provider_metadata": null,
+     "text": "the answer"
+    }
+   ],
+   "provider_metadata": {
+    "anthropic": {
+     "signature": "S1"
+    }
+   },
+   "role": "assistant",
+   "turn_id": null,
+   "usage": null
+  }
+ ],
+ "resumed_body": null
+}
