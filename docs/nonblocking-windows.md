@@ -50,8 +50,9 @@ Nothing in the turn path writes to stdout. It emits an `OutputEvent`:
 
 Full async, not worker threads (fork B resolved — see below).
 
-- The REPL owns the ONE event loop. `prompt_async` keeps input live; turns and
-  subagents are `asyncio.Task`s on that loop, tracked by `js/supervisor.py`.
+- The REPL owns the ONE event loop. A prompt_toolkit `Application`
+  (`js/screen.py`) keeps input live; turns and subagents are `asyncio.Task`s
+  on that loop, tracked by `js/supervisor.py`.
 - `model_client.stream_model_async` / `runtime.run_turn_async` are the real
   primitives; the sync `stream_model` is a thin wrapper kept for callers off
   the loop.
@@ -65,10 +66,11 @@ Full async, not worker threads (fork B resolved — see below).
   (`screen.Windows`): window 1 is the main conversation and each subagent
   launched from the REPL gets its own (`js/subagent_windows.py`, user guide
   "Windows").
-- Cancel = `task.cancel()`. Ctrl-C cancels the active turn; the turn's
+- Cancel = `task.cancel()`. Ctrl-C or ESC cancels the active turn; the turn's
   `CancelledError` handler persists partial work and heals orphaned tool_calls.
-  A running tool batch finishes detached (v1 contract) — a per-task flag
-  checked between sequential tools is the later upgrade.
+  A cancelled batch skips its queued tool calls, interrupts the shell, kernel
+  or file-search process a running call is blocked on, and waits for that
+  call to return (`turn_dispatch.dispatch_batch`).
 
 ## Windows (the view)
 
@@ -92,9 +94,10 @@ Today it is a near-complete REPL. Turn it into an embeddable lib:
 
 0. **Event schema + OutputSink** — DONE. `js/output.py`: `OutputEvent`, `Sink`.
 1. **Async runtime + supervisor** — DONE. `stream_model_async` /
-   `run_turn_async` primitives; `js/supervisor.py` job registry; `--nonblocking`
-   REPL (`Repl.run`/`_turn_consumer`/`_do_turn`) with `prompt_async` +
-   `patch_stdout`; subagent fan-out on the shared loop as cancelable jobs.
+   `run_turn_async` primitives; `js/supervisor.py` job registry; the async
+   REPL (`Repl.run`/`_turn_consumer`/`_do_turn` in `js/repl.py`) on the
+   `js/screen.py` Application; subagent fan-out on the shared loop as
+   cancelable jobs.
    (Supersedes the old worker-thread plan.)
 2. **Wire output through events.** — DONE for the turn loop (js-2lg.1):
    `run_turn_async` emits `OutputEvent`s to `Telemetry.sink`; the default sink
@@ -106,8 +109,8 @@ Today it is a near-complete REPL. Turn it into an embeddable lib:
    `/window [N | close [N]]`, `[Act: ...]` on the bar. Binding a window to a
    source glob is step 5.
 5. `model!provider@baseurl` identity on every event; window↔source binding.
-6. Per-task cancel flag checked between tools (kill running tools, not just
-   detach); fire-and-forget subagents into windows.
+6. Fire-and-forget subagents into windows. (The stop flag checked between
+   tools on cancel is done: `turn_dispatch.DispatchProgress`.)
 
 ## Open forks
 

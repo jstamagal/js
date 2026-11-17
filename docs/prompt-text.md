@@ -15,4 +15,5 @@ The main snippets are `commit-task`, `compaction-summary`, `compaction-update`,
 `compaction-rehydrate`, `output-limit-resume` and `flush-context`. Further model
 instructions use the same directory. Tool parameter descriptions live with each
 tool's contract in `defaults/tool_descriptions/`, overridable in the home.
-Result/error text and presentation constants live in their owning Python module.
+Tool result and error text the model reads lives in its owning Python module;
+text shown to the operator lives in `js/messages.py`.

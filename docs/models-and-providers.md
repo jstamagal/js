@@ -2,8 +2,8 @@
 
 `js` uses the Vercel AI Python SDK (`ai`) as the provider adapter. The built-in
 default model is `cpa/claude-opus-5-5`, at effort `medium`. Model routing follows two
-patterns: a slash prefix (`provider/model-id`) routes directly to the named provider,
-matching against known-provider ids and saved logins; an unprefixed id goes to
+patterns: a slash prefix (`provider/model-id`) routes directly to the named provider
+when it has a saved login or is the pinned `PROVIDER`; an unprefixed id goes to
 `PROVIDER`, or with none set, to `BASE_URL` as an OpenAI-compatible endpoint.
 
 ## Provider Routing
@@ -33,9 +33,11 @@ set API_KEY sk-local
 
 When `PROVIDER` is set, the provider is constructed explicitly with the given
 base URL and API key. When unset, js routes the model id as follows: a slash prefix
-(e.g. `cpa/claude-opus-5-5`) matching a known provider or saved login goes directly
-to that provider; an unprefixed id with a `BASE_URL` goes there as an
-OpenAI-compatible endpoint, and with neither it is an error. Direct
+(e.g. `cpa/claude-opus-5-5`) naming a saved login goes directly to that
+provider; a known provider with no login is an error naming it (environment
+keys alone never create a route, `routing.resolve_model_route`); an unprefixed
+id with a `BASE_URL` goes there as an OpenAI-compatible endpoint, and with
+neither it is an error. Direct
 providers use their default endpoint and official SDK env vars (`OPENAI_API_KEY`,
 `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, etc.).
 
@@ -97,7 +99,7 @@ js --login deepseek        # use DEEPSEEK_API_KEY if present, otherwise prompt
 js --login ollama          # local Ollama defaults (http://127.0.0.1:11434/v1, key "ollama")
 js --login llama.cpp       # local llama.cpp defaults (http://127.0.0.1:8080/v1)
 js --login mimo            # Xiaomi MiMo API endpoint
-js --login mimo-token-plan # Xiaomi MiMo Token Plan endpoint (SGP default)
+js --login mimo-token-plan # Xiaomi MiMo Token Plan endpoint (SGP)
 js --models-edit deepseek      # curate only DeepSeek's already-cached model list
 js --logout deepseek           # remove saved DeepSeek login and cached models
 ```
@@ -289,7 +291,7 @@ The record's `reasoning_layout` keeps text block lengths and part kinds so
 adjacent and empty text blocks retain their positions too. Older records use
 the stored offsets.
 
-The `ai` SDK (0.5.2) omits Anthropic `redacted_thinking` in its parser and
+The `ai` SDK (0.9.0) omits Anthropic `redacted_thinking` in its parser and
 serializer. js's Anthropic protocol adapter emits an empty reasoning part
 carrying the whole opaque block in provider metadata, stores it in
 `reasoning_parts`, and serializes it back as `redacted_thinking` in its original
@@ -357,9 +359,10 @@ sampling:
 Precedence for a turn is:
 
 1. `jsrc` set-script sampling
-2. agent manifest `sampling:`
-3. `JS_*` sampling env vars
-4. flags (`--temperature ...`, `--extra TEMPERATURE=...`), REPL `/set ...`
+2. a saved login's server defaults, then its per-model defaults
+3. agent manifest `sampling:`
+4. `JS_*` sampling env vars
+5. flags (`--temperature ...`, `--extra TEMPERATURE=...`), REPL `/set ...`
 
 Every set field is sent; an unset one never is. The fields a wire's SDK takes
 as its own parameters go there, every other one goes in `extra_body` under its
@@ -416,17 +419,17 @@ for providers that need a friendlier first-class login name:
 
 | Provider id | Notes |
 | --- | --- |
-| `deepseek` | DeepSeek direct API. Append-only tool-call history, `max_reasoning_tokens=32000` for reasoning. `DEEPSEEK_API_KEY` in the environment auto-selects this provider with `deepseek-flash`. |
+| `deepseek` | DeepSeek direct API (`sdk=deepseek`), default model `deepseek-flash`. `max_reasoning_tokens` from `DEEPSEEK_REASONING_TOKENS_MAX` (default 32000) for reasoning. |
 | `llama` | Llama API gateway endpoint. |
 | `llama.cpp` / `llamacpp` | Local llama.cpp OpenAI-compatible shortcut at `http://127.0.0.1:8080/v1`. |
-| `opencode-go` | opencode.ai Zen "go" plan over the **OpenAI-compatible** transport (`sdk=openai`, base `https://opencode.ai/zen/go/v1`, key env `OPENCODE_GO_API_KEY`, base env `OPENCODE_GO_BASE_URL`). Model list is filtered to the GLM/Kimi/DeepSeek/MiMo set this transport serves. |
-| `opencode-go-anthropic` | Same Zen "go" plan and API key over the **Anthropic-compatible** transport (`sdk=anthropic`, base `https://opencode.ai/zen/go`, base env `OPENCODE_GO_ANTHROPIC_BASE_URL`). Model list is filtered to the MiniMax/Qwen set this transport serves. |
+| `opencode-go` | opencode.ai Zen "go" plan over the **OpenAI-compatible** transport (`sdk=openai`, base `https://opencode.ai/zen/go/v1`, key env `OPENCODE_GO_API_KEY`, base env `OPENCODE_GO_BASE_URL`). |
+| `opencode-go-anthropic` | Same Zen "go" plan and API key over the **Anthropic-compatible** transport (`sdk=anthropic`, base `https://opencode.ai/zen/go`, base env `OPENCODE_GO_ANTHROPIC_BASE_URL`). |
 | `opencode` | OpenCode Zen registry provider (distinct from the `opencode-go` plan above). |
 | `ollama` | Local Ollama shortcut; user-facing first-class provider backed by the OpenAI-compatible SDK shape at `http://127.0.0.1:11434/v1`. Key env `OLLAMA_API_KEY` / `OLLAMA_LOCAL_API_KEY`, base env `OLLAMA_BASE_URL` / `OLLAMA_LOCAL_BASE_URL`, model env `OLLAMA_MODEL` / `OLLAMA_LOCAL_MODEL`. No API key required. |
 | `ollama-cloud` | Hosted Ollama route on the `ollama` transport over the OpenAI SDK shape (`sdk=openai`, base `https://ollama.com/v1`). Key env `OLLAMA_CLOUD_API_KEY`, base env `OLLAMA_CLOUD_BASE_URL`, model env `OLLAMA_CLOUD_MODEL`. |
 | `minimax` | MiniMax direct API over the **Anthropic-compatible** transport (`sdk=anthropic`, base `https://api.minimax.io/anthropic/v1`). Key env `MINIMAX_API_KEY`, base env `MINIMAX_BASE_URL`, model env `MINIMAX_MODEL`. |
 | `mimo` / `xiaomi` | Xiaomi MiMo API endpoint at `https://api.xiaomimimo.com/v1`. |
-| `mimo-token-plan*` / `xiaomi-token-plan-*` | Xiaomi MiMo Token Plan endpoints; SGP is the default shortcut, AMS/CN variants are explicit. |
+| `mimo-token-plan` / `mimo-tp` / `xiaomi-token-plan` | Xiaomi MiMo Token Plan endpoint at `https://token-plan-sgp.xiaomimimo.com/v1`. |
 | `openai` | Generic OpenAI-compatible endpoint for OpenAI, proxies, and custom compatible servers. |
 | `anthropic` | Anthropic direct API. |
 | `omp` | Oh My Pi gateway over the **OpenAI-compatible** transport (`sdk=openai`, no built-in base URL). Key env `OMP_API_KEY` / `OMP_GATEWAY_API_KEY`, base env `OMP_BASE_URL` / `OMP_GATEWAY_BASE_URL`, model env `OMP_MODEL` / `OMP_GATEWAY_MODEL`. No API key required, but a base URL must be set (see below). |
@@ -444,8 +447,9 @@ endpoint (`api.openai.com`) and `OPENAI_API_KEY`, sending the prompt and key to
 the wrong service, so the runtime raises instead and tells you to run
 `js --login <provider>` or set the provider's base-url env var.
 
-`openai-responses` custom logins are still stored as a first-class shape but
-route through the OpenAI-compatible chat-completions adapter in `ai==0.2.0`.
+`openai-responses` custom logins route through the OpenAI Responses API
+(`stream_protocols.ResponsesProtocol`); every other `sdk=openai` provider is
+pinned to chat-completions.
 
 ### opencode-go transport split and filtered model sets
 
@@ -489,33 +493,30 @@ pickers (e.g. the Go picker), all printing a single line to stdout:
   boolean. With `PARANOID_MODE on` or `extra`, API keys are nulled and
   provider headers are empty. With it off, other providers'
   credentials remain available for a picker to reconnect.
-- `python -m js --list-models <provider> --json` — the (filtered) model list for a
+- `python -m js --list-models <provider> --json` — the model list for a
   provider, using qualified provider/model ids and cached models when available.
   Omit the provider to list all saved providers plus the active provider.
   Text and JSON listings use the same selection.
 
-## Claude Tool Name Handling
+## Tool Name Aliases
 
-If the actual model string contains `claude` case-insensitively, provider-facing
-schemas are transformed:
+`TOOL_ALIASES` (unset by default) renames tools in the provider-facing schemas
+for matching models. It is a list of profiles; each has a `match` string or
+list of case-insensitive substrings tested against the model id and provider
+id, and an `aliases` table from canonical tool names to the names the model
+sees. The first matching profile wins (`tool_calls.resolve_alias_profile`):
 
 ```text
-read  -> Read
-write -> Write
-task  -> Task
+set TOOL_ALIASES [{"match": "claude", "aliases": {"read": "Read", "write": "Write", "task": "Task"}}]
 ```
 
-Only those three names are changed. This is not based on endpoint or provider
-URL. It works through proxies because the check is literally the model name.
+With no profile, every tool keeps its canonical name.
 
 Internally:
 
 - registry names stay canonical lowercase
 - dispatch resolves provider-facing names through aliases
 - persisted session history stores canonical lowercase tool names
-
-This keeps Claude from leaning on Anthropic harness-default names while keeping
-the rest of the runtime stable.
 
 ## Vision
 
@@ -526,9 +527,11 @@ Order:
 
 1. the resolved `VISION` setting: config < `JS_VISION` < `--extra`, followed
    by live `/set VISION on|off` changes. `/set -VISION` restores detection.
-2. models.dev input modalities for the model id, keyed on the model rather than
+2. an endpoint that refused images earlier in the run gets none for the rest of
+   it (`config.mark_text_only`)
+3. models.dev input modalities for the model id, keyed on the model rather than
    the provider
-3. curated model-name hints, minus anti-hints for code/embed/rerank/audio/
+4. curated model-name hints, minus anti-hints for code/embed/rerank/audio/
    image-generation names
 
 There is no public `ai-python` model-capability registry — when models.dev has
@@ -538,8 +541,9 @@ never heard of the id, the harness falls back to the name-based check.
 
 - vision disabled: returns a `VISUAL_FILE ... vision disabled` text stub
 - vision enabled: returns an internal image marker
-- runtime sends image bytes once for that turn
-- session history persists only a text stub
+- the history record keeps the text and a reference to the bytes, stored once
+  by content in the media store (`js/media.py`); every later request, resumed
+  or not, sends the same bytes
 
 ## Shell And Terminal Tools
 

@@ -35,6 +35,7 @@ persists each completed turn.
 ## Module Responsibilities
 
 | Module | Responsibility |
+| --- | --- |
 | `js/cli.py` | `main`: the run's setup, the mode picker, reading stdin into the prompt, `--compact` and `--commit` dispatch |
 | `js/prompt_run.py` | the `-p` run (`run`): its steps from the prompt to the printed answer, its `on` handlers, its stats, the Continue line (`say_continue`) |
 | `js/command_line.py` | the argument parser, and argv read the way it reads it |
@@ -66,22 +67,40 @@ persists each completed turn.
 | `js/setting_layers.py` | the config layers over defaults/jsrc (jsrc files, env vars, `--extra`) and their collection (`collect_settings`) |
 | `js/jsrc_save.py` | `/save`: the changed settings and /fset entries written into the user jsrc, in place (`save_settings_to_jsrc`) |
 | `js/turn_settings.py` | the settings a turn reads: one row each, projected from the settings store onto `Config` and `ToolContext` |
-| `js/model_client.py` | single import boundary for the Vercel AI Python SDK |
-| `js/runtime.py` | the turn loop (`run_turn_async`), recording replies and tool results, dispatch, provider quirks |
+| `js/model_client.py` | the model I/O boundary: one streamed call over the Vercel AI Python SDK (`stream_model_async`), its client and wire protocol |
+| `js/provider_errors.py` | a provider's failures, named: which are retried (`retryable`), `FirstByteTimeoutError`, `StreamIdleError` |
+| `js/stream_protocols.py` | the wire protocols a stream is read through: Anthropic thinking and redacted thinking, `reasoning_content`, Responses |
+| `js/request_params.py` | a request's parameters: sampling per wire, output and reasoning budgets, the prompt-cache key |
+| `js/stream_transport.py` | the request's HTTP layer: response ownership, the network channel (`NetCall`), the first-byte wait |
+| `js/network_display.py` | the network channel's notices and failures, and its installed sink (`NetSink`, `install_sink`) |
+| `js/owning_loop.py` | a coroutine run to its end on a loop of its own (`run_owning_loop`), for sync callers |
+| `js/debug_trace.py` | the request-trace autolog (`DebugTraceSink`), its path, the request trace (`emit_request_trace`) and the stdout tee `-d` writes through |
+| `js/runtime.py` | the turn loop (`run_turn_async`), recording replies and tool results |
+| `js/turn_dispatch.py` | a turn's tool batch run: reads beside reads, writes alone, fan-out on the loop, cancellation (`dispatch_batch`) |
+| `js/tool_calls.py` | the tool calls a model made, made fit to run and to record: aliases, argument repair (`repair_jsonish`), the assistant message |
+| `js/tool_errors.py` | the same error from the same tool counted across a turn (`ToolErrorTracker`) |
+| `js/result_caps.py` | a tool result held to its byte caps (`cap_result`, `cap_batch_results`) |
+| `js/tool_result_messages.py` | a tool result as the model gets it: provider text, history record, SDK messages with media |
+| `js/context_window.py` | a model's context window (`resolve_context_window`), its overrides, and token estimates |
+| `js/console.py` | js's console sink (`ConsoleSink`): draws output events on stdout or the screen, folds tool runs (`ToolTrace`); `trace_call`, `trace_result`, `emit_event` |
 | `js/turn_stream.py` | a turn's events (`TurnEvents`) and its streamed reply as output events (`StreamSink`) |
 | `js/output.py` | output events (`OutputEvent`), the `Sink` a turn emits them to (`Telemetry.sink`), the list of the loop's events and their fields |
-| `js/console.py` | js's console sink (`ConsoleSink`): draws output events on stdout or the screen, folds tool runs (`ToolTrace`) |
 | `js/display.py` | answer text on its way to the terminal: the speakers' marks, Markdown rendering (`render_markdown`), the answer stream (`Display`), the colours (`Theme`) |
 | `js/tool_display.py` | a tool exchange as the screen draws it (`render_exchange`, `render_fold`), and as the transcript records it (`for_transcript`) |
 | `js/resume_view.py` | a resumed session's last exchanges, in the order a turn drew them (`resume_parts`) |
 | `js/text_layout.py` | text in terminal columns: `cells`, `cut_points`, wrapping, the terminal's width |
 | `js/control_sequences.py` | model and tool text kept from acting as terminal control sequences (`StreamCleaner`, `clean`) |
 | `js/transcript.py` | the transcript log (`TranscriptLogSink`), its stdout tee, and its record of output events (`TranscriptSink`) |
-| `js/debug_trace.py` | the request-trace autolog (`DebugTraceSink`), its path, and the stdout tee `-d` writes through |
 | `js/turn_surface.py` | the session file's record of the lazy tool surface, restored per agent and directory |
 | `js/turn_budget.py` | the turn's SDK conversation (`TurnConvo`) and the context budget it is held to (`TurnBudget`) |
 | `js/turn_call.py` | one model call with its retries, overflow recovery, escalated resend and signed-reasoning resend (`ModelCaller`) |
 | `js/memory.py` | locked JSONL persistence and loader control marks |
+| `js/message_times.py` | when each message happened, noted as it happens and taken when its record is written |
+| `js/compaction.py` | the "history is too big" decision and the summary that replaces it (`compact_now`) |
+| `js/compaction_settings.py` | the compaction settings a run reads, each with its jsrc default when unset or out of range |
+| `js/microcompact.py` | old tool results cleared in place, for overflow recovery (`recover_overflow`) or a turn's budget (`clear_for_budget`) |
+| `js/compaction_summary.py` | the summary request: the conversation serialized for the summarizer, the prompt, the call |
+| `js/compaction_flight.py` | the flight record of every compaction attempt (`flight_log_dir`, `printing`) |
 | `js/usage.py` | per-session token and cost totals, the `usage` records, the meter a turn charges its calls to |
 | `js/headless.py` | `js -p --json-stream`: typed runtime events as JSON Lines (docs/headless-json.md); `json_run` wraps a run so stdout ends with its result |
 | `js/messages.py` | every string the operator reads, as named entries; the banner slot; each entry's default format |
@@ -226,8 +245,7 @@ prompt directory whose name collides with an existing tool is skipped.
 - tool result and shell output caps
 - fetch timeout
 - vision enabled flag
-- read-before-write state
-- file hashes
+- the read ledger (`reads`) behind read-before-write checks
 - undo snapshots
 - search cache
 
@@ -253,8 +271,8 @@ its results. The parts it drives live in their own modules, which never import
 tool-surface journal), `turn_budget` (the SDK conversation and the context
 budget) and `turn_call` (one model call and its recovery). Each has a unit-test
 file of the same name. `turn_budget` takes the context-window lookup as a
-callable, so `runtime._resolve_context_window` stays the one place it is
-resolved, and `turn_call` reaches the model through
+callable, so `context_window.resolve_context_window` stays the one place it
+is resolved, and `turn_call` reaches the model through
 `model_client.stream_model_async` on the module.
 
 The loop writes nothing to the screen itself. Every visible thing it produces
@@ -273,13 +291,12 @@ text before and after, line numbers, exit code, stdout and stderr); the
 tool_result event carries them as `view`.
 
 1. Builds `ai` message and tool parts via `js/model_client`.
-2. Calls `model_client.stream_model(...)`.
+2. Calls `model_client.stream_model_async(...)` through `turn_call.ModelCaller`.
 3. Streams events; `model_client` aggregates text, reasoning content, and fragmented tool calls.
-4. Parses each completed tool-call argument string with `_repair_jsonish`.
-5. Dispatches through `call_tool` and appends tool-result messages.
-6. Repeats until the model returns a stop or the tool-iteration cap is hit.
-7. Appends tool result messages.
-8. Stops on tool retry limit or max iterations.
+4. Parses each completed tool-call argument string with `tool_calls.repair_jsonish`.
+5. Dispatches through `call_tool` (`js/turn_dispatch.py`) and appends tool-result messages.
+6. Repeats until the model returns a stop or `TURN_ROUNDS_MAX` model calls are spent.
+7. Stops on tool retry limit or max iterations.
 The model-client stream scope owns HTTP response byte iterators for the OpenAI
 and Anthropic SDKs. `stream_transport.py` closes each iterator before its pool
 entry on normal completion or cancellation. This covers SSE termination before
@@ -319,8 +336,8 @@ compacts. The meter's callback adds the call to the turn's totals, which
 
 Provider request retry:
 
-- One rule decides what is retried: `model_client.retryable`, applied in
-  `_stream_async` as a failure leaves the SDK, which sets the error's
+- One rule decides what is retried: `provider_errors.retryable`, applied in
+  `model_client._stream_async` as a failure leaves the SDK, which sets the error's
   `is_retryable` for every retrying caller. A status in `RETRY_STATUSES`
   (429, 502, 503, 504, 529) is retried; 500 and every other 4xx fail at once. An
   Anthropic `error` event inside a stream that answered 200 counts as the
@@ -360,7 +377,7 @@ Provider request retry:
 - A reply the provider accepted although its reported input tokens exceed the
   window is a silent overflow: the provider cut the input to fit. So is a
   reply cut off by its cap with no output and an input filling 99% of the
-  window. The window is the larger of the model's (`_resolve_context_window`)
+  window. The window is the larger of the model's (`context_window.resolve_context_window`)
   and `CONTEXT_SIZE`, so a catalog that understates the window can be
   corrected there. A silent overflow spends an overflow round the same way
   and the request is sent again. When reply text is already on the screen or
@@ -438,15 +455,19 @@ See [Subagents](subagents.md).
 
 ## Images And Vision
 
-`read` returns special image markers when the model is vision-capable. The
-runtime expands the marker into image bytes for the current model call, then
-persists only a text stub in session history so base64 is not replayed forever.
+`read` returns an image marker (`IMAGE_RESULT\t<path>\t<mime>\t<stub>`) when
+the model is vision-capable; other tools return image or audio blocks. The
+history record of the result (`tool_result_messages.tool_result_record`) keeps
+the text and lists the media under `media.MEDIA_KEY`; the bytes are stored once
+by content under the media directory (`js/media.py`), so the session file
+stays small and every later request, resumed or not, sends the same bytes.
 
-Image result shape:
+Image result shape (`history_record.history_to_ai_messages`):
 
-- the tool-result message carries only the text stub
-- a following user message carries the same stub plus a `FilePart`
-- persisted session history stores only the stub
+- the tool-result message carries the text
+- after the batch's tool messages, a user message per result carries a label
+  naming the call plus a `FilePart` for each media part
+- a text-only model gets a note that the image was dropped instead
 
 ## Built-In Modes
 
@@ -458,10 +479,11 @@ prompt-directory `commit` agent: it snapshots the worktree, then runs the agent.
 `js.commit_helper` is a standalone CLI the `commit` agent shells out to for the
 deterministic parts of committing: surveying repo state and splitting one file
 across commits. These belong in code, not the model
-(`js/commit_helper.py:1`). Both subcommands accept `-C <dir>` / `--repo <dir>`
-(or `--repo=<dir>`) before the subcommand to target a repo explicitly instead of
-the process cwd (`js/commit_helper.py:292`). With no repo flag the helper resolves
-`Path.cwd()` (`js/commit_helper.py:50`).
+(`js/commit_helper.py:1`). Its subcommands are `survey`, `stage` and `commit`;
+each accepts `-C <dir>` / `--repo <dir>` (or `--repo=<dir>`) before the
+subcommand to target a repo explicitly instead of the process cwd
+(`_extract_repo`). With no repo flag the helper resolves `Path.cwd()`
+(`_repo_path`).
 
 `python -m js.commit_helper survey` prints one compact snapshot the agent reads
 once instead of probing (`cmd_survey`). Its lines are `SURVEY_*` entries in
@@ -495,8 +517,8 @@ the survey printed (e.g. `1,3`), or `all`:
   changes each fail with exit code `2`; a `git apply` failure exits `1` and
   prints the `stage <file> all` fallback.
 
-For a bare or unknown subcommand `main()` prints `COMMIT_HELPER_HELP`; exit is
-`2` when no args were given and `0` when an unknown subcommand was passed.
+For a bare or unknown subcommand `main()` prints `COMMIT_HELPER_HELP` on
+stderr and exits `2`; `-h` / `--help` prints it on stdout and exits `0`.
 `stage` or `commit` with the wrong argument count exits `2`. A non-git
 directory exits `2`; other git failures exit `1`.
 
@@ -538,23 +560,19 @@ labels stay in the panel. The commit helper prints its entries with
 Tool results, tool descriptions and prompts are the model's text and stay
 where they are.
 
-`tests/test_messages.py` fails on a `print`, `.print` or stream write in
-`js/` that carries the slot, `error:`, `warning:`, `js:`, `knob` or `(no `;
-on a literal argparse help, description, `parser.error` or command doc; and
-on a setting doc with a paren aside. It drives `/help`, `--help`,
-`--help-full`, a bad flag, the `/tools` table, a failed prompt directive and
-the commit helper to check their output.
+`tests/test_messages.py` fails on a literal argparse help, description,
+`parser.error` or command doc in `js/`, and on a setting doc with a paren
+aside. It drives `--help`, `--help-full`, a bad flag, the `/tools` table, a
+failed prompt directive and the commit helper, and fails when their output
+carries a paren aside or one of `error:`, `warning:`, `js:`, `note:`, `(no `,
+`knob` or `!!`.
 
 ## Backward Compatibility Policy
 
 This project intentionally does not preserve old tool aliases. The canonical
-surface is the contract:
-
-```text
-browse browser_probe commit defaultagent docs_search exa_search fetch
-fs_search patch plan read remove serper_search shell skill task
-tavily_search terminal_session terminal_snapshot undo wiki_convert wiki_finish_ingest wiki_write write
-```
+surface is the contract: the tools `build_default_registry()` assembles, each
+with its model-facing text in `defaults/tool_descriptions/<name>.md`, plus the
+generated prompt-directory agent tools (`commit`, `defaultagent`, ...).
 
 `multi_patch`, `sem_search`, `followup` and the `artifact` suite were removed
 outright; `multi_patch`'s batch form now lives in `patch` as its `edits`
