@@ -144,7 +144,6 @@ class Config(_turn_settings.ConfigSettings):
     explicit_model: bool = False  # MODEL was set by JS_MODEL or config (not the built-in default); gates --agent agent.yaml model
     explicit_provider: bool = False  # PROVIDER was set by config/env/CLI extras, not inferred from a model prefix
     invocation_model: bool = False  # MODEL was set by a JS_* env var or --extra, not a jsrc file
-    invocation_reasoning: bool = False  # EFFORT was set by a JS_* env var or --extra, not a jsrc file
     vision_enabled: bool = False
     settings: dict = field(default_factory=dict, compare=False)  # raw merged view, for the runtime
     prompt_roots: tuple[Path, ...] = field(default_factory=tuple, compare=False)
@@ -596,7 +595,6 @@ def from_env(
         explicit_model=explicit_model,
         explicit_provider=explicit_provider,
         invocation_model=_set_by_invocation("MODEL", env, sources.extras),
-        invocation_reasoning=_set_by_invocation("EFFORT", env, sources.extras),
         layer_jsrc=layer_jsrc,
         layer_env=layer_env,
         layer_flag=layer_flag,
