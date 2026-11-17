@@ -138,3 +138,36 @@ def test_offline_compaction_explicit_model_wins_without_rewriting_config(monkeyp
     assert cli._run_compact_offline("existing", model=explicit) == 0
     expected = explicit or (external if external not in {"", "same"} else cfg.model)
     assert observed == [(cfg.model, expected)]
+
+
+@pytest.mark.parametrize("flags, expected", [
+    ([], {"SHELL_WAIT": 41, "FETCH_TIMEOUT": 42, "SUBAGENT_DEPTH_MAX": None}),
+    (["--preset", "deep"], {"SHELL_WAIT": 41, "FETCH_TIMEOUT": 42, "SUBAGENT_DEPTH_MAX": 7}),
+    (["--no-local-config"], {"SHELL_WAIT": 41, "FETCH_TIMEOUT": None, "SUBAGENT_DEPTH_MAX": None}),
+    (["--no-global-config"], {"SHELL_WAIT": None, "FETCH_TIMEOUT": 42, "SUBAGENT_DEPTH_MAX": None}),
+])
+def test_compact_loads_the_jsrc_stack_its_command_line_names(monkeypatch, tmp_path, flags, expected):
+    from js import session_store, settings
+
+    (tmp_path / ".js").mkdir()
+    (tmp_path / ".js" / "jsrc").write_text("set SHELL_WAIT 41\n", encoding="utf-8")
+    (tmp_path / ".js" / "jsrc.deep").write_text("set SUBAGENT_DEPTH_MAX 7\n", encoding="utf-8")
+    project = tmp_path / "project"
+    (project / ".js").mkdir(parents=True)
+    (project / ".js" / "jsrc").write_text("set FETCH_TIMEOUT 42\n", encoding="utf-8")
+    monkeypatch.chdir(project)
+    session_file = session_store.folder_for(project) / "compact-session.jsonl"
+    session_file.parent.mkdir(parents=True)
+    cli.M.append_message(session_file, {"role": "user", "content": "old"})
+    seen = []
+
+    def compact(cfg, system, messages, **kwargs):
+        seen.append({key: settings.knob(cfg.settings, key) for key in expected})
+        return "summary complete"
+
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", compact)
+
+    assert cli.main(["--compact", "compact-session", *flags]) == 0
+
+    defaults = {key: settings.default_value(key) for key in expected}
+    assert seen == [{key: defaults[key] if value is None else value for key, value in expected.items()}]
