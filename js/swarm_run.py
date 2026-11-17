@@ -21,8 +21,10 @@ either is dropped.
 
 Events go to stdout as JSON lines, every one carrying ``agent``; ``agent_start``,
 ``agent_end``, ``turn_cancelled``, ``restart``, ``dropped`` and ``run_end`` are
-the runner's own. The process ends when every agent has stopped or retired. SIGTERM and SIGINT end it like ^C: every session
-is persisted and the exit code is 130.
+the runner's own. What an agent writes to stderr goes to stderr as
+``[name] line`` and to ROOT/<name>/stderr (`AgentStderr`). The process ends
+when every agent has stopped or retired. SIGTERM and SIGINT end it like ^C:
+every session is persisted and the exit code is 130.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ import os
 import signal
 import sys
 import threading
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, TextIO
@@ -81,6 +84,59 @@ class AgentSpec:
             seat_file=str(d.get("seat_file") or ""),
             opts={str(k): v for k, v in (d.get("opts") or {}).items()},
         )
+
+
+# The agent whose task is running: what it writes to stderr is tagged with it.
+_AGENT: ContextVar[str | None] = ContextVar("js_swarm_agent", default=None)
+
+
+class AgentStderr:
+    """``sys.stderr`` while the runner runs. A line an agent's task writes
+    (a warning, an `on` handler's output, a traceback) goes to the process's
+    stderr as ``[name] line`` and is appended to ROOT/<name>/stderr; what no
+    agent writes passes through as it is."""
+
+    def __init__(self, real: TextIO, root: Path) -> None:
+        self._real, self._root = real, root
+        self._partial: dict[str, str] = {}
+        self._lock = threading.Lock()
+        self.encoding = getattr(real, "encoding", "utf-8")
+
+    def write(self, text: str) -> int:
+        name = _AGENT.get()
+        if name is None:
+            return self._real.write(text)
+        with self._lock:
+            *lines, self._partial[name] = (self._partial.get(name, "") + text).split("\n")
+            self._emit(name, lines)
+        return len(text)
+
+    def finish(self, name: str) -> None:
+        """Write out a line the agent left unended."""
+        with self._lock:
+            rest = self._partial.pop(name, "")
+            if rest:
+                self._emit(name, [rest])
+
+    def _emit(self, name: str, lines: list[str]) -> None:
+        if not lines:
+            return
+        for line in lines:
+            self._real.write(f"[{name}] {line}\n")
+        with contextlib.suppress(OSError):
+            path = self._root / name / "stderr"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8", errors="backslashreplace") as f:
+                f.write("".join(f"{line}\n" for line in lines))
+
+    def flush(self) -> None:
+        self._real.flush()
+
+    def isatty(self) -> bool:
+        return False
+
+    def fileno(self) -> int:
+        return self._real.fileno()
 
 
 class AgentEvents(headless.JsonEvents):
@@ -161,6 +217,7 @@ class Runner:
         for spec in self.specs:
             self.add(spec)
         watcher = loop.create_task(self.watch(), name="swarm:runner")
+        stderr, sys.stderr = sys.stderr, AgentStderr(sys.stderr, self.root)
         try:
             while self.tasks:
                 await asyncio.gather(*list(self.tasks.values()), return_exceptions=True)
@@ -168,6 +225,7 @@ class Runner:
                     self.tasks.pop(name, None)
         finally:
             watcher.cancel()
+            sys.stderr = stderr
         AgentEvents(self.out, self.lock, "").emit("run_end", agents=[s.name for s in self.specs],
                                                    exit_code=self.code)
         return self.code
@@ -251,6 +309,7 @@ class Runner:
         return recruit
 
     async def run_agent(self, spec: AgentSpec) -> None:
+        _AGENT.set(spec.name)
         events = AgentEvents(self.out, self.lock, spec.name)
         reason = "stopped"
         chat = None
@@ -322,6 +381,8 @@ class Runner:
                     chat.save()
             held.close()
             subagents.close_child_tools(context)
+            if isinstance(sys.stderr, AgentStderr):
+                sys.stderr.finish(spec.name)
             events.emit("agent_end", reason=reason)
 
 

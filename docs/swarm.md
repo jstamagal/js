@@ -86,6 +86,7 @@ ROOT/<name>/spawned       who recruited <name> and the runner's pid
 ROOT/hold                 seconds an asleep agent lets messages not addressed to it pile up
 ROOT/<name>/ping          the stamp of the last rollcall
 ROOT/<name>/pong          the answer: ping (that stamp), ts, pid, state (asleep or working), step
+ROOT/<name>/stderr        what the agent wrote to stderr under js.swarm_run, one line each
 ROOT/.seq  ROOT/.lock     the sequence counter and the lock sends and claims take
 ```
 
@@ -170,3 +171,9 @@ Events go to stdout as JSON lines, every one carrying `agent`. The runner adds
 agent has stopped or retired, so a `restart` has to land while another agent
 is still running. `SIGTERM` and `SIGINT` cancel every agent,
 persist every session and exit 130.
+
+What an agent writes to stderr (a warning, an `on` handler's output, a
+traceback) goes to the runner's stderr as `[name] line` and is appended to
+`ROOT/<name>/stderr`, so one agent's errors read apart from another's. A
+line a tool writes from its worker thread is not attributed and passes
+through untagged.

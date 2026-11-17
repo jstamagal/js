@@ -7,6 +7,7 @@ import asyncio
 import io
 import json
 import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -843,3 +844,26 @@ def test_a_second_agent_on_a_running_agents_session_fails_without_writing(tmp_pa
     ends = {e["agent"]: e["reason"] for e in events if e["type"] == "agent_end"}
     assert sorted(ends.values()) == ["error", "stopped"]
     assert len(turns) == 1
+
+
+def test_what_an_agent_writes_to_stderr_is_tagged_and_kept_in_its_own_file(tmp_path, monkeypatch, capsys):
+    _agent_dir(tmp_path, monkeypatch)
+    room = swarm.Room(tmp_path / "bus")
+
+    def stream(**kwargs):
+        me = "a" if "a-opener" in _user_texts(kwargs)[0] else "b"
+        print(f"trouble in {me}", file=sys.stderr)
+        room.send("steer", me, "done", kind=swarm.STOP)
+        kwargs["on_text"]("ok")
+        return _text("ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    spec = _spec(tmp_path, [{"name": n, "agent": "voice", "opener": f"{n}-opener", "session": f"s-{n}",
+                             "cwd": str(tmp_path)} for n in ("a", "b")])
+
+    assert swarm_run.run(spec, out=io.StringIO()) == 0
+
+    err = capsys.readouterr().err.splitlines()
+    assert "[a] trouble in a" in err and "[b] trouble in b" in err
+    for name in ("a", "b"):
+        assert (tmp_path / "bus" / name / "stderr").read_text(encoding="utf-8") == f"trouble in {name}\n"

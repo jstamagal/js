@@ -20,6 +20,7 @@ ROOT/<name>/spawned    present when another agent's `recruit` started <name>
 ROOT/hold              seconds an asleep agent lets messages that are not addressed to it pile up before it wakes
 ROOT/<name>/ping       the stamp of the last rollcall
 ROOT/<name>/pong       <name>'s answer to it: the stamp, pid, asleep or working, when it last stepped
+ROOT/<name>/stderr     what <name> wrote to stderr while js.swarm_run ran it
 
 An agent on the bus never spends a model call waiting:
 
