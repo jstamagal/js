@@ -388,14 +388,6 @@ def load_prompt_spec(prompts_dir: Path | tuple[Path, ...] | list[Path], *, env: 
 
 
 
-def apply_agent_max_tokens(cfg, prompt_spec):
-    """Apply the persona default only when config/env/CLI did not set a cap."""
-    agent_max = getattr(prompt_spec, "max_output_tokens", None)
-    if agent_max is None or cfg.max_output_tokens is not None:
-        return cfg
-    return replace(cfg, max_output_tokens=agent_max)
-
-
 def agent_model_applies(cfg, prompt_spec, model: str | None, *, config_pins: bool = True) -> bool:
     """Whether the agent's agent.yaml `model:` picks the model: it names one,
     no ``model`` was given for this run, and the operator pinned none."""
@@ -422,22 +414,6 @@ def apply_agent_model(cfg, prompt_spec, model: str | None, *, config_pins: bool 
         prefix_overrides_provider=not getattr(cfg, "explicit_provider", False),
     )
     return apply_route(cfg, route)
-
-
-def apply_agent_reasoning(cfg, prompt_spec):
-    """``cfg`` with the agent's agent.yaml `reasoning:`, unless a JS_* env var
-    or --extra set the effort for this run."""
-    effort = getattr(prompt_spec, "reasoning_effort", None) if prompt_spec is not None else None
-    if effort is None or getattr(cfg, "invocation_reasoning", False):
-        return cfg
-    return replace(cfg, reasoning_effort=effort)
-
-
-def apply_agent(cfg, prompt_spec, *, config_pins: bool = True):
-    """``cfg`` with everything the agent's agent.yaml chooses for a fresh run:
-    its model, reasoning and output cap, each unless the operator pinned it."""
-    cfg = apply_agent_model(cfg, prompt_spec, None, config_pins=config_pins)
-    return apply_agent_max_tokens(apply_agent_reasoning(cfg, prompt_spec), prompt_spec)
 
 
 def load_configured_prompt_spec(cfg, *, expand: bool = True) -> PromptSpec:

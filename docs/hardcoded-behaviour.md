@@ -355,7 +355,7 @@ Resolution notes (the rows below record the original audit):
 | `js/toolkit/task_jobs.py:171,195-216` | start | policy | Finds the REPL supervisor through a global and chooses the run strategy itself. | js-2lg.64 |
 | `js/toolkit/lsp.py:319-336` | LanguageServer._answer | policy | Answers every workspace/configuration request with null, so a server gets no settings. | js-2lg.75 |
 | `js/cli.py:2162-2182,2701,4985` | _restore_workspace | policy | On resume, cli restores the jail binds and cwd from the workspace mark by itself. | js-2lg.81 |
-| `js/persona.py`, `js/run_assembly.py` | agent_model_applies, apply_agent_model, apply_agent_reasoning, settle | policy | The precedence that decides when agent.yaml model and reasoning apply over flags, env, jsrc or a resumed stamp is fixed in code. | js-2lg.81 |
+| `js/persona.py`, `js/run_assembly.py` | agent_model_applies, apply_agent_model, settle | policy | The precedence that decides when agent.yaml model and reasoning apply over flags, env, jsrc or a resumed stamp is fixed in code. | js-2lg.81 |
 | `js/cli.py:2668-2674,2693-2700,4943-4951,4997-5007` | _run_prompt, _run_args | policy | Reusing the recorded system prompt and reporting prompt-file changes is copied into two cli paths. | js-2lg.81 |
 | `js/cli.py:1524-1548` | _apply_settings_result | policy | The side effects of a settings change (model-switch record, provider sync, registry rebuild, banner, context-window overrides) are combined with printing the result lines. | js-2lg.81 |
 | `js/cli.py:2791-2822` | _run_prompt.turns | policy | The swarm sleep/wake loop, with auto-compaction before each sleep, is built into the cli one-shot path. | js-2lg.81 |

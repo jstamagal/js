@@ -400,9 +400,7 @@ async def _run_one_task_async(
     except (FileNotFoundError, ValueError) as exc:
         return f"ERROR could not load agent {agent!r}: {exc}"
 
-    cfg = P.apply_agent_max_tokens(
-        _agent_cfg(parent_cfg, agent, task_session_id, write_latest=assembly.write_latest), prompt_spec
-    )
+    cfg = _agent_cfg(parent_cfg, agent, task_session_id, write_latest=assembly.write_latest)
 
     # Subagent model precedence (operator-locked order):
     #   tool-call model (main agent wins, unless lock_subagent_model) >
@@ -447,9 +445,13 @@ async def _run_one_task_async(
     if ran is not None and ran != login_defaults.for_turn(parent_cfg).reasoning_effort:
         cfg = replace(cfg, layer_agent={**(getattr(cfg, "layer_agent", None) or {}), "EFFORT": ran})
     cfg = login_defaults.for_turn(login_defaults.with_agent(cfg, prompt_spec, inherit=True))
-    if getattr(cfg, "layer_jsrc", None) is None and prompt_spec.reasoning_effort is not None:
-        # A Config with no layers resolves nothing: agent.yaml's reasoning is its effort.
-        cfg = replace(cfg, reasoning_effort=prompt_spec.reasoning_effort)
+    if getattr(cfg, "layer_jsrc", None) is None:
+        # A Config with no layers resolves nothing: agent.yaml's reasoning is
+        # its effort, and its max_tokens its cap when it has none.
+        if prompt_spec.reasoning_effort is not None:
+            cfg = replace(cfg, reasoning_effort=prompt_spec.reasoning_effort)
+        if prompt_spec.max_output_tokens is not None and cfg.max_output_tokens is None:
+            cfg = replace(cfg, max_output_tokens=prompt_spec.max_output_tokens)
     if reasoning:
         # The tool call's reasoning wins, as its model does.
         cfg = replace(cfg, reasoning_effort=reasoning)

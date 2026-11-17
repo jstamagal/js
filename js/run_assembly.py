@@ -204,9 +204,6 @@ def settle(cfg: Any, *, model: str | None = None, reasoning: str | None = None,
     try:
         if config_pins or resumed.stamp is None:
             cfg = P.apply_agent_model(cfg, prompt_spec, model, config_pins=config_pins)
-        if layered and agent_reasoning:
-            cfg = P.apply_agent_reasoning(cfg, prompt_spec)
-        cfg = P.apply_agent_max_tokens(cfg, prompt_spec)
         cfg = route(cfg, model)
     except ValueError as exc:
         raise RunNotSettled(exc, loading=False) from exc
