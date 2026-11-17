@@ -1059,19 +1059,19 @@ def live_value(key: str, settings: dict | None = None) -> Any:
 # ---------------------------------------------------------------------------
 
 
-# What config load left for the REPL to run, per top-level jsrc: each line
-# the settings layer does not own (`alias`, `on`, any other command), in the
-# order config load met it inside the files it loaded, already expanded; and
-# each `load` that could not run, as its refusal. The replay runs these and
-# reads, resolves and expands nothing again.
+# A line of a jsrc file the settings layer does not own: (file, line number, text).
+JsrcCommand = tuple[Path, int, str]
+
+
 def _apply_jsrc(path: Path, settings: dict, stack: list[Path], warnings: list[str],
-                lines: list[str] | None = None) -> str | None:
+                lines: list[str] | None = None, commands: list[JsrcCommand] | None = None) -> str | None:
     """Apply the settings lines of the jsrc at ``path`` (or ``lines``, read
     as that file) onto ``settings``, the files it loads with it, in order. A
     loaded file stops at its first bad setting, as `/load` stops it, and so
     does every loaded file containing it; the top-level jsrc goes on. Every
     other line is the REPL's, which runs the whole file again in one pass
-    (`repl_commands.run_rc_commands`). Returns why a loaded file stopped, or None."""
+    (`repl_commands.run_rc_commands`); ``commands`` collects those lines.
+    Returns why a loaded file stopped, or None."""
     from . import setcmd  # lazy: setcmd imports this module
 
     if lines is None:
@@ -1106,12 +1106,14 @@ def _apply_jsrc(path: Path, settings: dict, stack: list[Path], warnings: list[st
                 elif error is None and not target.is_file():
                     error = msgs.LOAD_NOT_FOUND.said(path=target)
                 if error is None:
-                    error = _apply_jsrc(target, settings, stack, warnings)
+                    error = _apply_jsrc(target, settings, stack, warnings, commands=commands)
             else:
                 result = setcmd.apply_config_line(settings, raw, baseline=_package_settings())
                 if result.handled and result.error:
                     error = msgs.SCRIPT_LINE_FAILED.said(path=path, lineno=lineno, error=result.error)
                     warnings.append(error)
+                elif not result.handled and commands is not None:
+                    commands.append((path, lineno, raw))
             if loaded and error is not None:
                 return error
     finally:
@@ -1119,15 +1121,28 @@ def _apply_jsrc(path: Path, settings: dict, stack: list[Path], warnings: list[st
     return None
 
 
-def load_jsrc_files(paths: list[Path], settings: dict) -> list[str]:
-    """Apply each existing jsrc script's settings onto ``settings`` in order.
-    Returns human-readable warnings for bad lines. A named missing theme
-    raises FileNotFoundError with the directories searched."""
+def load_jsrc_files(paths: list[Path], settings: dict, commands: list[JsrcCommand] | None = None) -> list[str]:
+    """Apply each existing jsrc script's settings onto ``settings`` in order;
+    ``commands`` collects every other line. Returns human-readable warnings
+    for bad lines. A named missing theme raises FileNotFoundError with the
+    directories searched."""
     warnings: list[str] = []
     for path in paths:
         if path.exists():
-            _apply_jsrc(path.resolve(strict=False), settings, [], warnings)
+            _apply_jsrc(path.resolve(strict=False), settings, [], warnings, commands=commands)
     return warnings
+
+
+def jsrc_commands(paths: list[Path]) -> list[JsrcCommand]:
+    """The lines of the jsrc files ``paths`` the settings layer does not own
+    (`on`, `alias`, any other command), in the order config load meets them
+    inside the files it loads. The /fset entries in force stay as they are."""
+    from . import fset
+
+    commands: list[JsrcCommand] = []
+    with fset.held():
+        load_jsrc_files(paths, seed_defaults(), commands)
+    return commands
 
 
 # The layers each list of jsrc files was last collected with, to collect it

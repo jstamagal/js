@@ -570,12 +570,12 @@ def _cmd_model(arg: str, state: ReplState, cfg: Config) -> str | None:
     return None
 
 
-def _cmd_refresh_model_catalog(arg: str, state: ReplState, cfg: Config) -> str | None:
+def _cmd_refresh_model_catalog(arg: str, state: ReplState | None, cfg: Config) -> str | None:
     model_metadata.force_refresh_model_catalog()
     return None
 
 
-def _cmd_name(arg: str, state: ReplState, cfg: Config) -> str | None:
+def _cmd_name(arg: str, state: ReplState | None, cfg: Config) -> str | None:
     if cfg.session_file == Path(os.devnull):
         msgs.say(msgs.SESSION_NOT_SAVED_TITLE)
         return None
@@ -630,7 +630,7 @@ def _cost_text(tally: usage_mod.Tally) -> str:
     return dollars
 
 
-def _cmd_cost(arg: str, state: ReplState, cfg: Config) -> str | None:
+def _cmd_cost(arg: str, state: ReplState | None, cfg: Config) -> str | None:
     live = usage_mod.totals(cfg.session_file)
     if live.calls == 0:
         msgs.say(msgs.COST_NONE)
@@ -915,15 +915,16 @@ def _cmd_skills(arg: str, state: ReplState, cfg: Config) -> str | None:
     return _cmd_set(f"SKILLS_DISABLED {json.dumps(list(chosen))}", state, cfg)
 
 
-def _cmd_exec(arg: str, state: ReplState, cfg: Config) -> str | None:
-    """Run ``arg`` in the shell and queue its stdout for the next user message.
+def _cmd_exec(arg: str, state: ReplState | None, cfg: Config) -> str | None:
+    """Run ``arg`` in the shell and queue its stdout for the next user message;
+    with no ``state`` there is no next message and the stdout goes nowhere.
     Run by an `on` handler, the command reads the event as JSON on stdin with
     JS_EVENT naming it. Exit status 2 or a timeout under tool_call refuses the call."""
     command = arg.strip()
     if not command:
         return msgs.USAGE.said(usage="/exec <command>")
     call = events.current_call()
-    live = state.settings
+    live = state.settings if state is not None else cfg.settings
     timeout = int(settings.knob(live, "EXEC_TIMEOUT"))
     env = dict(os.environ)
     stdin_text = ""
@@ -953,7 +954,7 @@ def _cmd_exec(arg: str, state: ReplState, cfg: Config) -> str | None:
             failure = msgs.EXEC_EXITED.said(command=command, status=outcome.returncode, detail=detail)
         else:
             note = hookexec.reminder(outcome.stdout)
-            if note is not None:
+            if note is not None and state is not None:
                 repl_state.queue_note(state, note)
             if call is None:
                 # Typed at the prompt: show what the model will read.
@@ -1065,11 +1066,14 @@ def _cmd_drop(arg: str, state: ReplState, cfg: Config) -> str | None:
 class Command:
     """One command: ``run(arg, state, cfg)`` returns an error string or None."""
 
-    run: Callable[[str, ReplState, Config], str | None]
+    run: Callable[[str, ReplState | None, Config], str | None]
     usage: str
     doc: msgs.Message
     complete: str | None = None  # argument completion source (see replcomplete)
     turn_state: bool = False     # clears/rotates/compacts the live message list
+    # Reads and changes no REPL state: runs with a ``state`` of None, as an
+    # `on` handler of a run outside the REPL.
+    stands_alone: bool = False
 
 
 _MAX_ALIAS_DEPTH = 16
@@ -1218,28 +1222,36 @@ COMMANDS: dict[str, Command] = {
     "skills": Command(_cmd_skills, "skills", msgs.CMD_SKILLS),
     "turns": Command(lambda arg, state, cfg: msgs.say(msgs.TURNS_COUNT, messages=msgs.plural(len(state.messages), "message")),
                      "turns", msgs.CMD_TURNS),
-    "cost": Command(_cmd_cost, "cost", msgs.CMD_COST),
+    "cost": Command(_cmd_cost, "cost", msgs.CMD_COST, stands_alone=True),
     "copy": Command(_cmd_copy, "copy [N]", msgs.CMD_COPY),
     "session": Command(_cmd_session, "session [query]", msgs.CMD_SESSION, turn_state=True),
-    "name": Command(_cmd_name, "name [title]", msgs.CMD_NAME),
+    "name": Command(_cmd_name, "name [title]", msgs.CMD_NAME, stands_alone=True),
     "jobs": Command(_cmd_jobs, "jobs", msgs.CMD_JOBS),
     "cancel": Command(_cmd_cancel, "cancel [id]", msgs.CMD_CANCEL),
     "window": Command(_cmd_window, "window [N | close [N]]", msgs.CMD_WINDOW),
     # The async REPL drains its loop-owned queue before a line reaches the
     # table; this entry runs everywhere else, where nothing queues.
     "flush": Command(lambda arg, state, cfg: msgs.say(msgs.NO_QUEUED_PROMPTS),
-                     "flush", msgs.CMD_FLUSH),
+                     "flush", msgs.CMD_FLUSH, stands_alone=True),
     "compact": Command(_cmd_compact, "compact [-m model] [focus]", msgs.CMD_COMPACT,
                        turn_state=True),
     "compact-auto": Command(_cmd_compact_auto, "compact-auto on|off", msgs.CMD_COMPACT_AUTO),
     "refresh-model-catalog": Command(_cmd_refresh_model_catalog, "refresh-model-catalog",
-                                     msgs.CMD_REFRESH_MODEL_CATALOG),
+                                     msgs.CMD_REFRESH_MODEL_CATALOG, stands_alone=True),
     "quit": Command(_cmd_quit, "quit [note]", msgs.CMD_QUIT),
     "cd": Command(_cmd_cd, "cd [dir]", msgs.CMD_CD, complete="path", turn_state=True),
     "add": Command(_cmd_add, "add <path>[:rw]", msgs.CMD_ADD, complete="path"),
     "drop": Command(_cmd_drop, "drop <path>", msgs.CMD_DROP, complete="path", turn_state=True),
-    "exec": Command(_cmd_exec, "exec <command>", msgs.CMD_EXEC, complete="path"),
+    "exec": Command(_cmd_exec, "exec <command>", msgs.CMD_EXEC, complete="path", stands_alone=True),
 }
+
+
+def standalone(line: str) -> Command | None:
+    """The command ``line`` runs when it stands alone (`Command.stands_alone`);
+    None for any other line."""
+    parsed = setcmd.split_command(line)
+    command = COMMANDS.get(parsed[0]) if parsed is not None else None
+    return command if command is not None and command.stands_alone else None
 
 
 def run_command(line: str, state: ReplState, cfg: Config, depth: int = 0) -> tuple[bool, str | None]:

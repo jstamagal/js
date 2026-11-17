@@ -160,8 +160,10 @@ error stops the file and names the file and line.
 `cancel`, the `mcp_*` events, and:
 
 - `session_start`: the REPL is up, after the jsrc replay and before the first
-  prompt. Both REPLs fire it on every start, a resume included.
-- `session_end`: the REPL is closing, after the last turn.
+  prompt. Both REPLs fire it on every start, a resume included; `-p` fires it
+  before its turns.
+- `session_end`: the REPL is closing, after the last turn; `-p` fires it
+  before the Continue line.
 - `pre_compact`: a compaction is about to summarize the history (`/compact`,
   between turns, or mid-turn). A compaction that finds nothing worth
   summarizing fires neither this nor `post_compact`.
@@ -199,6 +201,19 @@ dropped. `EXEC_OUTPUT_MAX` caps what is kept of each stream. What a
 handler queues during a turn reaches the model with the next user message.
 `exec` commands are the operator's, not the model's: under `-C` they run on
 the host, outside the jail, with js's own environment.
+
+`-p`, a pipe and `--commit` run the `on` lines of the jsrc files (and the
+files they `load`) too, on the same events in the same order: `session_start`,
+`input`, the turn's events, `pre_compact`/`post_compact`, `session_end`. They
+replay nothing else of the jsrc, so only a handler whose command stands alone
+runs there: `exec`, `name`, `cost`, `flush` and `refresh-model-catalog`
+(`stands_alone` on the command's row in `COMMANDS`). A handler whose command
+needs the REPL (`set`, `model`, `fset`, `alias`, `cd`, an alias name, ...) is
+reported once on stderr when it registers and never runs. A handler's output
+and its errors go to stderr, so stdout keeps only the answer, or the
+`--json`/`--json-stream` records. What `exec` would queue for the next user
+message is dropped: the run has no next message. Swarm agents run no `on`
+handlers.
 
 `/alias name command` defines `/name`. `$*` in the command is replaced by the
 alias's arguments; a command without `$*` gets them appended. `/alias -name`

@@ -255,6 +255,8 @@ precedence and apply in `-p` runs too. It follows `load` lines and applies the
 same lines from the loaded files. When the REPL starts it runs every other
 line (`on`, `alias`, `load`, any command in the table) through the command
 table, in file order; errors name the file and line and do not stop startup.
+A `-p` run registers only the `on` lines, and only those whose command stands
+alone (`docs/user-guide.md`); it reports every other `on` line on stderr.
 A relative `load` path in a `jsrc` resolves against that file's directory.
 `/load <file>` runs every line of a file through the same table. Registered
 event handlers run through it too when an event is emitted. Handler failures

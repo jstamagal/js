@@ -113,12 +113,15 @@ class EventHooks:
 
     Handlers are raw command text. A caller can install a dispatcher to interpret
     that text; emit catches dispatcher failures and records them on the returned
-    emission so handler errors never abort the runtime event source.
+    emission so handler errors never abort the runtime event source. ``admit``
+    returns why a hook may not join the table, or None when it may.
     """
 
-    def __init__(self, dispatcher: EventHandlerDispatcher | None = None) -> None:
+    def __init__(self, dispatcher: EventHandlerDispatcher | None = None,
+                 admit: Callable[[EventHook], str | None] | None = None) -> None:
         self._hooks: dict[str, list[EventHook]] = {event: [] for event in CANONICAL_EVENT_NAMES}
         self._dispatcher = dispatcher
+        self._admit = admit
         self._dispatch_depth: ContextVar[int] = ContextVar("js_event_dispatch_depth", default=0)
 
     def set_dispatcher(self, dispatcher: EventHandlerDispatcher | None) -> None:
@@ -133,6 +136,8 @@ class EventHooks:
         if not text:
             raise ValueError(msgs.EVENT_HOOK_ON_NEEDS_A_HANDLER.format())
         hook = EventHook(event=event, handler=text, suppress=suppress)
+        if self._admit is not None and (refusal := self._admit(hook)) is not None:
+            raise ValueError(refusal)
         if hook not in self._hooks[event]:  # the same handler twice would run twice
             self._hooks[event].append(hook)
         return hook

@@ -781,9 +781,10 @@ def _maybe_auto_compact(cfg: Config, state: ReplState) -> None:
     model_client.run_owning_loop(_maybe_auto_compact_async(cfg, state))
 
 
-def _run_state(cfg: Config, system: str, messages: list[dict]) -> ReplState:
+def _run_state(cfg: Config, system: str, messages: list[dict],
+               hooks: events.EventHooks | None = None) -> ReplState:
     """The live state a run outside the REPL compacts between turns with: its
-    own system prompt, messages, route and settings."""
+    own system prompt, messages, route, settings and `on` handlers."""
     return ReplState(
         system=system,
         messages=messages,
@@ -793,6 +794,7 @@ def _run_state(cfg: Config, system: str, messages: list[dict]) -> ReplState:
         provider_api_key=cfg.provider_api_key,
         provider_headers=dict(getattr(cfg, "provider_headers", {}) or {}),
         settings=cfg.settings,
+        events=hooks,
     )
 
 
@@ -914,6 +916,42 @@ def _event_dispatcher(state: ReplState, cfg: Config):
     return dispatch
 
 
+def _standalone_dispatcher(cfg: Config):
+    """Run `on` handler text whose command stands alone, with no REPL state.
+    What the command prints goes to stderr: stdout carries the run's answer."""
+
+    def dispatch(hook: events.EventHook, emission: events.EventEmission) -> events.EventHandlerResult:
+        line = setcmd.expand_line(hook.handler, cfg.settings)
+        verb, arg = setcmd.split_command(line) or ("<blank>", "")
+        command = repl_commands.standalone(line)
+        if command is None:
+            return events.EventHandlerResult(hook=hook, error=msgs.EVENT_HANDLER_COMMAND_UNSUPPORTED.words(value=verb))
+        with contextlib.redirect_stdout(sys.stderr):
+            return events.EventHandlerResult(hook=hook, error=command.run(arg, None, cfg))
+
+    return dispatch
+
+
+def _admit_standalone(hook: events.EventHook) -> str | None:
+    if repl_commands.standalone(hook.handler) is not None:
+        return None
+    verb = (setcmd.split_command(hook.handler) or ("",))[0]
+    return msgs.ON_HANDLER_NEEDS_REPL.said(event=hook.event, command=verb)
+
+
+def _prompt_hooks(cfg: Config, paths: list[Path]) -> events.EventHooks:
+    """The `on` handlers the jsrc files ``paths`` register for a run outside
+    the REPL: those whose command stands alone (`Command.stands_alone`). An
+    `on` line that registers no handler, one whose command needs the REPL
+    among them, is reported on stderr."""
+    hooks = events.EventHooks(_standalone_dispatcher(cfg), admit=_admit_standalone)
+    for path, lineno, line in settings.jsrc_commands(paths):
+        parsed = setcmd.split_command(line)
+        if parsed is not None and parsed[0] == "on" and (error := setcmd.on_command(hooks, parsed[1]).error):
+            msgs.warn(msgs.SCRIPT_LINE_FAILED, path=path, lineno=lineno, error=error)
+    return hooks
+
+
 def _format_prompt_load_error(cfg, exc: Exception) -> str:
     """Turn a persona-load failure into an operator-legible line. A missing prompt
     directory means the named agent doesn't exist anywhere on the search path —
@@ -975,7 +1013,8 @@ def _raise_keyboard_interrupt(*_args) -> None:
 @_session_scope
 def _run_prompt(prompt: str | None, **kwargs) -> int:
     """One `-p` run (`_prompt_run`). Once its session is open, the Continue
-    line prints on every exit: an answer, no answer, an error, ^C."""
+    line prints on every exit: an answer, no answer, an error, ^C; once its
+    turns start, session_end fires before it."""
     opened: dict = {}
     try:
         code = _prompt_run(prompt, opened=opened, **kwargs)
@@ -984,6 +1023,8 @@ def _run_prompt(prompt: str | None, **kwargs) -> int:
             _emit_failure(events, getattr(sys.stderr, "last_line", ""), code)
         return code
     finally:
+        if (end := opened.get("end")) is not None:
+            end()
         if (say_continue := opened.get("say")) is not None:
             say_continue()
 
@@ -1129,9 +1170,12 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
             user_message = attach.with_note(user_message, snippets.render('turn-cut-off'))
     elif save and cfg.session_file != Path(os.devnull):
         M.record_turn_mode(cfg.session_file, "-p")
+    with _transcript_stdio(telemetry):
+        hooks = _prompt_hooks(cfg, jsrc_paths(Path(getattr(cfg, "project_dir", None) or Path.cwd()), sources))
+    run_state = _run_state(cfg, system, messages, hooks)
     if call_stats is None:
         call_stats = []
-    turn_kwargs = settled.turn_kwargs(call_stats=call_stats)
+    turn_kwargs = settled.turn_kwargs(call_stats=call_stats, event_hooks=hooks)
     if events is not None:
         turn_kwargs["event_sink"] = events.runtime_event
         telemetry.sink = output.Fanout(output.sink_of(telemetry), headless.OutputEvents(events))
@@ -1171,6 +1215,7 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
                 tool_context=tool_context, echo_user=echo_user, **turn_kwargs,
             ))
         if user_message is not None:
+            _emit_repl_event(run_state, telemetry, "input", text=prompt, attachments=attachments)
             # In this context as well as the turn's, so the check after the
             # turn reads the same window.
             runtime.install_context_window_overrides(cfg)
@@ -1183,6 +1228,9 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
     previous_sigterm = None
     with contextlib.suppress(ValueError):  # not the main thread: no signal hook
         previous_sigterm = signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
+    _emit_session_event(run_state, telemetry, cfg, "session_start")
+    if opened is not None:
+        opened["end"] = lambda: _emit_session_event(run_state, telemetry, cfg, "session_end")
     try:
         try:
             if debug:
@@ -1224,6 +1272,7 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
                     telemetry.transcript_log = visible_transcript
                     telemetry.display_factory = visible_display
         except (KeyboardInterrupt, asyncio.CancelledError):
+            _emit_repl_event(run_state, telemetry, "cancel", reason="cancelled")
             with _transcript_stdio(telemetry):
                 msgs.warn(msgs.TURN_INTERRUPTED)
             return 130
@@ -1279,7 +1328,7 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
                         markdown=display_mod.markdown_enabled(getattr(cfg, "settings", None)),
                     )
         if save:
-            _maybe_auto_compact(cfg, _run_state(cfg, system, messages))
+            _maybe_auto_compact(cfg, run_state)
     return 0 if stats_ok else 1
 
 
