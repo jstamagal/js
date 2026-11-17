@@ -23,15 +23,14 @@ class _Client:
 
 
 def test_jev_sends_state_and_questions_and_reports_each_answer(tmp_path, monkeypatch):
-    monkeypatch.setenv("TYPESAFE_API_KEY", "k")
     seen: list = []
     answers = {
         "q1": SimpleNamespace(type="noul", noul=0.83),
         "q2": SimpleNamespace(type="choice", choice="oom", confidence=0.9,
                               probabilities={"oom": 0.9, "segv": 0.1}),
     }
-    monkeypatch.setattr(jev, "_client", lambda model: _Client(answers, seen))
-    context = ToolContext(cwd=tmp_path)
+    monkeypatch.setattr(jev, "_client", lambda model, api_key=None: _Client(answers, seen))
+    context = ToolContext(cwd=tmp_path, typesafe_api_key="k")
 
     out = jev.jev(
         '{"log": "killed"}',
@@ -49,7 +48,6 @@ def test_jev_sends_state_and_questions_and_reports_each_answer(tmp_path, monkeyp
 
 
 def test_jev_without_an_api_key_is_an_error(tmp_path, monkeypatch):
-    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     monkeypatch.setattr(jev, "_client", lambda model: (_ for _ in ()).throw(AssertionError("called")))
 
     out = jev.jev("text", [{"question": "x?"}], context=ToolContext(cwd=tmp_path))

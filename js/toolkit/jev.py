@@ -8,7 +8,6 @@ score question places the state on levels given lowest first.
 from __future__ import annotations
 
 import json
-import os
 from typing import Any
 
 from .core import Tool, ToolContext
@@ -111,11 +110,11 @@ def jev(
             reversed_criteria = dict(reversed(list(built["criteria"].items())))
             asked[f"q{n}_reversed"] = dict(built, criteria=reversed_criteria)
     configured_key = context.typesafe_api_key.strip()
-    if not (configured_key or os.environ.get(API_KEY_ENV, "").strip()):
+    if not configured_key:
         return f"ERROR: {API_KEY_ENV} is not set"
     model = context.jev_model or "jev-latest"
     try:
-        with (_client(model, api_key=configured_key) if configured_key else _client(model)) as client:
+        with _client(model, api_key=configured_key) as client:
             response = client.system_one(_state(state), asked)
     except ImportError:
         return 'ERROR: typesafe-sdk is not installed; run `just sync`'

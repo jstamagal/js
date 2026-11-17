@@ -116,8 +116,9 @@ def test_global_config_env_is_the_lowest_precedence_file(
 def test_search_tool_reads_a_key_supplied_only_by_dotenv(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The end the feature exists for: tavily_search finds a .env-only key."""
-    from js.toolkit import search
+    """The end the feature exists for: a .env-only key reaches the setting
+    tavily_search reads."""
+    from js import settings
 
     _isolate(tmp_path, monkeypatch)
     (tmp_path / ".env").write_text("TAVILY_API_KEY=from-dotenv\n")
@@ -125,7 +126,7 @@ def test_search_tool_reads_a_key_supplied_only_by_dotenv(
     # os.environ is removed again at teardown.
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     dotenv.load(cwd=tmp_path)
-    assert search._key("TAVILY_API_KEY", search.ToolContext(cwd=tmp_path)) == "from-dotenv"
+    assert settings.apply_env_overrides({})["TAVILY_API_KEY"] == "from-dotenv"
 
 
 def test_registered_setting_can_stop_dotenv_parent_walk(tmp_path):

@@ -67,7 +67,7 @@ class SettingSpec:
 
     key: str
     type: str            # "str" | "int" | "float" | "bool" | "json" | "map"
-    env: str | None = None      # an older env var also read; JS_<KEY> wins over it
+    env: str | None = None      # another env var also read (an older name, or the vendor's own); JS_<KEY> wins over it
     empty: str = EMPTY_NONE     # how an unset value renders
     live: bool = True           # settable live in the REPL
     secret: bool = False        # mask the value in `show`
@@ -191,17 +191,17 @@ REGISTRY: tuple[SettingSpec, ...] = (
     SettingSpec("LSP_ENVIRONMENT_INHERIT", "bool", group="lsp"),
     SettingSpec("TOOLBOX_REQUIRE_BOUND_NAMES", "bool", group="tools"),
     SettingSpec("TOOLBOX_SEED_EXAMPLES", "bool", group="tools"),
-    SettingSpec("TYPESAFE_API_KEY", "str", secret=True, group="tools"),
+    SettingSpec("TYPESAFE_API_KEY", "str", env="TYPESAFE_API_KEY", secret=True, group="tools"),
     SettingSpec("SUBAGENT_RESULT_SHARE", "bool", group="tools"),
     SettingSpec("BROWSER_FALLBACK_FILE", "str", group="tools"),
     SettingSpec("TERMINAL_ENVIRONMENT_INHERIT", "bool", group="tools"),
     SettingSpec("TERMINAL_SHELL_PROGRAM", "str", group="tools"),
     SettingSpec("BROWSE_ALLOW_PRIVATE_NETWORK", "bool", group="tools"),
     SettingSpec("BROWSE_STEALTH", "bool", group="tools"),
-    SettingSpec("CONTEXT7_API_KEY", "str", secret=True, group="tools"),
-    SettingSpec("EXA_API_KEY", "str", secret=True, group="tools"),
-    SettingSpec("TAVILY_API_KEY", "str", secret=True, group="tools"),
-    SettingSpec("SERPER_API_KEY", "str", secret=True, group="tools"),
+    SettingSpec("CONTEXT7_API_KEY", "str", env="CONTEXT7_API_KEY", secret=True, group="tools"),
+    SettingSpec("EXA_API_KEY", "str", env="EXA_API_KEY", secret=True, group="tools"),
+    SettingSpec("TAVILY_API_KEY", "str", env="TAVILY_API_KEY", secret=True, group="tools"),
+    SettingSpec("SERPER_API_KEY", "str", env="SERPER_API_KEY", secret=True, group="tools"),
     SettingSpec("SHELL_KILL_UNFINISHED", "bool", group="shell"),
     SettingSpec("KILL_LOG_FILE", "str", empty=EMPTY_NONE, group="shell"),
     SettingSpec("SHELL_MANAGED_PATH", "bool", group="shell"),
@@ -877,7 +877,7 @@ def canonical_env_name(key: str) -> str:
 
 def env_names_for(spec: SettingSpec) -> tuple[str, ...]:
     """Env vars that feed ``spec``, highest precedence first: ``JS_<KEY>``,
-    then the older name it was known by, if any."""
+    then ``spec.env``, if any."""
     canon = canonical_env_name(spec.key)
     if spec.env and spec.env != canon:
         return (canon, spec.env)
@@ -885,8 +885,8 @@ def env_names_for(spec: SettingSpec) -> tuple[str, ...]:
 
 
 def apply_env_overrides(settings: dict, env: dict[str, str] | None = None) -> dict:
-    """Overlay JS_* env vars onto ``settings``: each setting's ``JS_<KEY>``,
-    or its older env name when ``JS_<KEY>`` is not set."""
+    """Overlay env vars onto ``settings``: each setting's ``JS_<KEY>``, or
+    its ``spec.env`` name when ``JS_<KEY>`` is not set."""
     source = env if env is not None else os.environ
     endpoint = _env_endpoint(source)
     for spec in REGISTRY:

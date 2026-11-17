@@ -37,9 +37,8 @@ def test_malformed_answer_does_not_hide_valid_neighbor(tmp_path, monkeypatch):
     client = MagicMock()
     client.__enter__.return_value.system_one.return_value = response
     monkeypatch.setattr(jev, "_client", lambda *_args, **_kwargs: client)
-    monkeypatch.setenv("TYPESAFE_API_KEY", "fixture-key")
 
-    result = jev.jev("state", [{"question": "first?"}, {"question": "second?"}], context=ToolContext(cwd=tmp_path))
+    result = jev.jev("state", [{"question": "first?"}, {"question": "second?"}], context=ToolContext(cwd=tmp_path, typesafe_api_key="fixture-key"))
 
     lines = result.splitlines()
     assert lines[0].startswith("1. ERROR:")
@@ -52,10 +51,9 @@ def test_malformed_reversed_answer_does_not_abort_order_check(tmp_path, monkeypa
     client = MagicMock()
     client.__enter__.return_value.system_one.return_value = response
     monkeypatch.setattr(jev, "_client", lambda *_args, **_kwargs: client)
-    monkeypatch.setenv("TYPESAFE_API_KEY", "fixture-key")
 
     result = jev.jev("state", [{"question": "first?", "kind": "choice", "options": ["yes", "no"]}],
-                     check_order=True, context=ToolContext(cwd=tmp_path))
+                     check_order=True, context=ToolContext(cwd=tmp_path, typesafe_api_key="fixture-key"))
 
     assert result.splitlines()[0] == "1. " + jev._format(answer)
     assert "ERROR:" in result.splitlines()[1]

@@ -69,11 +69,10 @@ def test_provider_root_response_must_be_an_object(
     body: bytes,
     kind: str,
 ) -> None:
-    if key_name is not None:
-        monkeypatch.setenv(key_name, "test-key")
+    keys = {key_name.lower(): "test-key"} if key_name is not None else {}
     _responses(monkeypatch, body)
 
-    actual = handler("test query", context=ToolContext(cwd=tmp_path))
+    actual = handler("test query", context=ToolContext(cwd=tmp_path, **keys))
 
     assert actual == f"ERROR: expected a JSON object from {host}, got {kind}"
 
@@ -94,29 +93,26 @@ def test_provider_result_entries_must_be_objects(
     key_name: str | None,
     body: bytes,
 ) -> None:
-    if key_name is not None:
-        monkeypatch.setenv(key_name, "test-key")
+    keys = {key_name.lower(): "test-key"} if key_name is not None else {}
     _responses(monkeypatch, body)
 
-    actual = handler("test query", context=ToolContext(cwd=tmp_path))
+    actual = handler("test query", context=ToolContext(cwd=tmp_path, **keys))
 
     assert actual == "ERROR: expected search result 1 to be an object, got string"
 
 
 def test_provider_results_field_must_be_an_array(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("SERPER_API_KEY", "test-key")
     _responses(monkeypatch, b'{"organic":"bad results"}')
 
-    actual = search.serper_search("test query", context=ToolContext(cwd=tmp_path))
+    actual = search.serper_search("test query", context=ToolContext(cwd=tmp_path, serper_api_key="test-key"))
 
     assert actual == "ERROR: expected search results to be an array, got string"
 
 
 def test_serper_answer_box_must_be_an_object(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("SERPER_API_KEY", "test-key")
     _responses(monkeypatch, b'{"answerBox":[],"organic":[]}')
 
-    actual = search.serper_search("test query", context=ToolContext(cwd=tmp_path))
+    actual = search.serper_search("test query", context=ToolContext(cwd=tmp_path, serper_api_key="test-key"))
 
     assert actual == "ERROR: expected answerBox to be an object, got array"
 
@@ -136,15 +132,14 @@ def test_required_search_text_rejects_whitespace(
     handler: Callable[..., str],
     key_name: str | None,
 ) -> None:
-    if key_name is not None:
-        monkeypatch.setenv(key_name, "test-key")
+    keys = {key_name.lower(): "test-key"} if key_name is not None else {}
 
     def unexpected_request(*_args: object, **_kwargs: object) -> Any:
         pytest.fail("whitespace-only input reached the HTTP client")
 
     monkeypatch.setattr(search.urllib.request, "urlopen", unexpected_request)
 
-    actual = handler(" \t\n ", context=ToolContext(cwd=tmp_path))
+    actual = handler(" \t\n ", context=ToolContext(cwd=tmp_path, **keys))
 
     noun = "library" if handler is search.docs_search else "query"
     assert actual == f"ERROR: {noun} is required"
@@ -173,11 +168,10 @@ def test_search_result_count_is_bounded(
     value: object,
     expected: int,
 ) -> None:
-    monkeypatch.setenv(key_name, "test-key")
     response = b'{"organic":[]}' if handler is search.serper_search else b'{"results":[]}'
     calls = _responses(monkeypatch, response)
 
-    actual = handler("test query", **{argument: value}, context=ToolContext(cwd=tmp_path))
+    actual = handler("test query", **{argument: value}, context=ToolContext(cwd=tmp_path, **{key_name.lower(): "test-key"}))
 
     assert actual == "no results"
     payload = json.loads(calls[0][0].data)
@@ -191,10 +185,9 @@ def test_exa_text_budget_clamps_to_minimum(
     tmp_path: Path,
     text_chars: object,
 ) -> None:
-    monkeypatch.setenv("EXA_API_KEY", "test-key")
     calls = _responses(monkeypatch, b'{"results":[]}')
 
-    actual = search.exa_search("test query", text_chars=text_chars, context=ToolContext(cwd=tmp_path))
+    actual = search.exa_search("test query", text_chars=text_chars, context=ToolContext(cwd=tmp_path, exa_api_key="test-key"))
 
     assert actual == "no results"
     payload = json.loads(calls[0][0].data)
@@ -283,7 +276,6 @@ def test_docs_search_retries_rejected_key_without_authorization(
     tmp_path: Path,
     status: int,
 ) -> None:
-    monkeypatch.setenv("CONTEXT7_API_KEY", "test-key")
     calls: list[Any] = []
     responses = iter(
         [
@@ -309,7 +301,7 @@ def test_docs_search_retries_rejected_key_without_authorization(
 
     monkeypatch.setattr(search.urllib.request, "urlopen", fake_urlopen)
 
-    actual = search.docs_search("fastapi", context=ToolContext(cwd=tmp_path))
+    actual = search.docs_search("fastapi", context=ToolContext(cwd=tmp_path, context7_api_key="test-key"))
 
     assert actual == "[context7 /tiangolo/fastapi]\nrouting docs"
     assert [request.headers.get("Authorization") for request in calls] == [
@@ -322,7 +314,6 @@ def test_docs_search_retries_rejected_key_without_authorization(
 
 def test_http_error_redacts_api_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     key = "sk-live-ABC123"
-    monkeypatch.setenv("SERPER_API_KEY", key)
 
     def fake_urlopen(request: Any, timeout: float) -> Any:
         body = io.BytesIO(b'{"message":"Unauthorized: bad api key sk-live-ABC123"}')
@@ -330,7 +321,7 @@ def test_http_error_redacts_api_key(monkeypatch: pytest.MonkeyPatch, tmp_path: P
 
     monkeypatch.setattr(search.urllib.request, "urlopen", fake_urlopen)
 
-    actual = search.serper_search("test query", context=ToolContext(cwd=tmp_path, paranoid_mode="on"))
+    actual = search.serper_search("test query", context=ToolContext(cwd=tmp_path, paranoid_mode="on", serper_api_key=key))
 
     assert actual == 'ERROR: HTTP 401 from google.serper.dev: {"message":"Unauthorized: bad api key [REDACTED]"}'
 
@@ -496,7 +487,6 @@ def test_registered_serper_key_reaches_request(monkeypatch, tmp_path):
 
     from js import turn_settings
 
-    monkeypatch.setenv("SERPER_API_KEY", "legacy-key")
     calls = _responses(monkeypatch, b'{"organic":[]}')
     context = ToolContext(cwd=tmp_path)
     turn_settings.install(context, SimpleNamespace(**turn_settings.project({"SERPER_API_KEY": "configured-key"})))
@@ -509,9 +499,8 @@ def test_docs_search_can_keep_authorization_on_refusal(monkeypatch, tmp_path):
     def refuse(request, timeout):
         calls.append(request)
         raise urllib.error.HTTPError(request.full_url, 401, "unauthorized", {}, io.BytesIO(b""))
-    monkeypatch.setenv("CONTEXT7_API_KEY", "secret")
     monkeypatch.setattr(search.urllib.request, "urlopen", refuse)
-    result = search.docs_search("example", context=ToolContext(cwd=tmp_path), retry_without_auth_on=())
+    result = search.docs_search("example", context=ToolContext(cwd=tmp_path, context7_api_key="secret"), retry_without_auth_on=())
     assert len(calls) == 1
     assert calls[0].get_header("Authorization") == "Bearer secret"
     assert result.startswith("ERROR")
@@ -520,7 +509,6 @@ def test_docs_search_can_keep_authorization_on_refusal(monkeypatch, tmp_path):
 @pytest.mark.parametrize("paranoid_mode", ["on", "off"])
 def test_search_error_secrets_at_truncation_boundary(monkeypatch, tmp_path, failure, paranoid_mode):
     key = "sk-boundary-" + "SECRET" * 7
-    monkeypatch.setenv("SERPER_API_KEY", key)
     detail = "x" * 190 + key
 
     def fail(request, timeout):
@@ -529,7 +517,7 @@ def test_search_error_secrets_at_truncation_boundary(monkeypatch, tmp_path, fail
         raise OSError(detail)
 
     monkeypatch.setattr(search.urllib.request, "urlopen", fail)
-    result = search.serper_search("test", context=ToolContext(cwd=tmp_path, paranoid_mode=paranoid_mode))
+    result = search.serper_search("test", context=ToolContext(cwd=tmp_path, paranoid_mode=paranoid_mode, serper_api_key=key))
     if paranoid_mode == "on":
         assert "sk-boundar" not in result
     else:
@@ -555,11 +543,10 @@ def test_a_long_search_result_is_cut_by_bytes_to_the_result_cap(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, name: str
 ) -> None:
     key_name, replies = _LONG_REPLIES[name]
-    if key_name is not None:
-        monkeypatch.setenv(key_name, "test-key")
+    keys = {key_name.lower(): "test-key"} if key_name is not None else {}
     _responses(monkeypatch, *replies)
 
-    actual = getattr(search, name)("zzz", context=ToolContext(cwd=tmp_path, max_tool_result_bytes=300))
+    actual = getattr(search, name)("zzz", context=ToolContext(cwd=tmp_path, max_tool_result_bytes=300, **keys))
 
     assert len(actual.encode("utf-8")) <= 300
     assert "TOOL_RESULT_MAX" in actual

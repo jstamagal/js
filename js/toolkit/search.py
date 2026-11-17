@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import ipaddress
 import json
-import os
 import re
 import subprocess
 import urllib.parse
@@ -131,7 +130,7 @@ def _json_kind(value: Any) -> str:
 
 
 def _key(name: str, context: ToolContext) -> str | None:
-    value = (getattr(context, name.lower()) or os.environ.get(name, "")).strip()
+    value = (getattr(context, name.lower()) or "").strip()
     return value or None
 
 
