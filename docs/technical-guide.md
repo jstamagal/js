@@ -125,8 +125,7 @@ or `_benchmark.md` selects benchmark mode automatically for the resolved agent.
 `js --agent codebench` runs its benchmarks rather than entering the REPL; the
 explicit `js --bench codebench` form also works. Even an empty benchmark file
 selects this mode (and reports no runnable benchmarks rather than entering the
-REPL). Explicit maintenance modes such as `--commit` and `--printonly` retain
-their own behavior.
+REPL). Explicit maintenance modes such as `--commit` retain their own behavior.
 
 Each benchmark starts a fresh, unsaved conversation with the system prompt and
 any user/agent setup exchanges, then sends the benchmark body as its user

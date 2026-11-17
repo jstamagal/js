@@ -116,8 +116,7 @@ stdout, a failed `c` compile, missing interpreter/compiler, timeout, unknown
 subsystem — expands to **nothing**, with a one-line warning on stderr; it
 does not abort prompt assembly, and the raw directive never reaches the model.
 (Callers of `expand_prompt` can pass `on_error="raise"` for the strict
-behavior, or `on_error="keep"` to leave it literal, as the env-expanded
-`--printonly=e` preview does.) The
+behavior, or `on_error="keep"` to leave it literal.) The
 default per-directive timeout is 300 seconds; set
 `INLINE_CODE_TIMEOUT` or `JS_INLINE_CODE_TIMEOUT` to override it.
 Output is capped at `SHELL_OUTPUT_MAX`. A failing directive's

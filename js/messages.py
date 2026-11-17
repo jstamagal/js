@@ -788,13 +788,6 @@ OPT_IM_A_PUSSY = Message(
 OPT_NO_SHELL_HISTORY = Message(
     "Keep your recent shell commands out of the prompt for this run: envctx skips its recent_shell block. "
     "Set ENVCTX_HIST=0 in your environment to make that permanent.")
-OPT_PRINTONLY = Message(
-    "Dry run: assemble what would be sent and print it instead of calling the model, then exit. "
-    "LETTERS pick sections: t=tools p=prompt e=env-expanded i=inlines-expanded b=benchmark "
-    "x=startup exchanges a=everything. "
-    "The default is a. An optional :COUNT caps output lines. An optional :PATH writes to a file instead of "
-    "stdout, and an empty slot skips, e.g. p::/tmp/x.md. Unknown letters and unwritable paths are reported "
-    "and skipped. The run still succeeds.")
 OPT_TARGET = Message("Target path for built-in commit mode.")
 
 # `python -m js.home`, `python -m js.toolstats`, `python -m js.tooldiag`.
@@ -867,18 +860,6 @@ SKILL_ROW_USER_ONLY = Message("{name} user-only {source} {description}", banner=
 SKILL_HINT = Message("/skill <name> [request] sends one with your request.")
 DROPPED_QUEUED = Message("Dropped {prompts}.")
 QUEUED = Message("Queued. {ahead} ahead.")
-
-# --- --printonly -------------------------------------------------------------
-
-PRINTONLY_BAD_COUNT = Message("--printonly: {count!r} is not a count. Ignored.")
-PRINTONLY_LETTER_NOT_IMPLEMENTED = Message("--printonly: {letter!r} is not implemented. Skipped.")
-PRINTONLY_UNKNOWN_LETTER = Message("--printonly: unknown letter {letter!r}. Skipped.")
-PRINTONLY_NO_CONFIG = Message("--printonly: config not built: {error}")
-PRINTONLY_NO_PROMPT = Message("--printonly: prompt not loaded: {error}")
-PRINTONLY_NO_BENCHMARKS = Message("No NN-benchmark.md files.")
-PRINTONLY_NO_EXCHANGES = Message("No NN-user.md / NN-agent.md files.")
-PRINTONLY_SECTION_FAILED = Message("--printonly: section {section} unavailable: {error}")
-PRINTONLY_NOT_WRITTEN = Message("--printonly: {path} not written: {error}. Printing to stdout.")
 
 # --- Command-line flags ------------------------------------------------------
 

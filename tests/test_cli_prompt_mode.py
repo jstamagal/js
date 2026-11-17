@@ -150,7 +150,7 @@ def test_cli_rejects_unsafe_agent_id_argument(monkeypatch, tmp_path):
     ("option", "documented_options"),
     [
         ("--help", ["--no-save", "--help-full"]),
-        ("--help-full", ["--help-full", "--list-providers", "--printonly"]),
+        ("--help-full", ["--help-full", "--list-providers"]),
     ],
 )
 def test_cli_help_exposes_options_and_exits_successfully(option, documented_options, capsys):

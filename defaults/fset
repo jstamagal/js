@@ -167,9 +167,6 @@ fset COMMIT_TARGET_MISSING %C04%G%C Commit target does not exist: $0-
 fset COMMIT_TARGET_NOT_DIR %C04%G%C Commit target is not a directory: $0-
 fset GIT_INIT_FAILED %C04%G%C git init failed in $0: $1-
 fset SURVEY_FAILED %C04%G%C Commit survey failed for $0: $1-
-fset PRINTONLY_NO_CONFIG %C04%G%C --printonly: config not built: $0-
-fset PRINTONLY_NO_PROMPT %C04%G%C --printonly: prompt not loaded: $0-
-fset PRINTONLY_SECTION_FAILED %C04%G%C --printonly: section $0 unavailable: $1-
 fset BAD_URL_SPEC %C04%G%C -u: $0-
 fset JAIL_REFUSED %C04%G%C $0-
 fset JSON_NEEDS_LIST %C04%G%C --json requires -p, pipe mode or --list.
@@ -247,10 +244,6 @@ fset PRESET_NOT_FOUND %C07%G%C --preset $0: no jsrc.$0. Looked in $1-.
 fset PRESET_NO_CONFIG_DIRS %C07%G%C --preset $0-: no jsrc.$0-. Every config dir is ignored.
 fset BINARY_MISSING %C07%G%C $0 not in tools/bin or PATH. $1- uses it. just install provisions it.
 fset DROPPED_QUEUED %C07%G%C Dropped $0-.
-fset PRINTONLY_BAD_COUNT %C07%G%C --printonly: $0- is not a count. Ignored.
-fset PRINTONLY_LETTER_NOT_IMPLEMENTED %C07%G%C --printonly: $0- is not implemented. Skipped.
-fset PRINTONLY_UNKNOWN_LETTER %C07%G%C --printonly: unknown letter $0-. Skipped.
-fset PRINTONLY_NOT_WRITTEN %C07%G%C --printonly: $0 not written: $1-. Printing to stdout.
 fset CLIPBOARD_NONE %C07%G%C No clipboard: no Wayland or X11 display. PASTE_IMAGE_COMMAND names a command that prints the image.
 fset CLIPBOARD_TOOL_MISSING %C07%G%C Clipboard image not read: $0- is not installed.
 fset CLIPBOARD_READ_FAILED %C07%G%C Clipboard image not read: $0: $1-

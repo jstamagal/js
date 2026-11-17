@@ -274,7 +274,7 @@ def test_list_models_flag_prints_the_model_list(monkeypatch):
     (["--json", "--json-stream", "-p", "hello"], "--json-stream"),
     *[([flag], "--json") for flag in ("--list-sessions", "--list-providers", "--list-logins")],
     *[([flag, "--json-stream"], flag) for flag in ("--list-models", "--list-agents", "--list-sessions", "--list-providers", "--list-logins", "--verify")],
-    *[([flag, "--json"], flag) for flag in ("--commit", "--compact", "--printonly", "--login", "--migrate-config", "--refresh-model-catalog") if flag != "--compact"],
+    *[([flag, "--json"], flag) for flag in ("--commit", "--compact", "--login", "--migrate-config", "--refresh-model-catalog") if flag != "--compact"],
     (["--compact", "session", "--json"], "--compact"),
     *[([flag, mode], flag) for flag in ("--help", "--help-full", "-h") for mode in ("--json", "--json-stream")],
 ])

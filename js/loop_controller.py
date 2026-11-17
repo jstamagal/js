@@ -110,7 +110,7 @@ def run(argv: list[str], limit: str, *, bench: str | None, prompt: str | None,
     args = child_argv(argv, limit)
     stdin_data = sys.stdin.buffer.read() if not sys.stdin.isatty() else None
     if (prompt is None and bench is None and not stdin_data
-            and not any(a in args for a in ("--commit", "--printonly"))):
+            and "--commit" not in args):
         args += ["-p", snippets.render("fresh-session")]
     deadline = time.monotonic() + seconds if seconds is not None else None
     completed = failures = attempts = 0

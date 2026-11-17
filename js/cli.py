@@ -72,7 +72,6 @@ from . import prompt_commands
 from . import prompt_history
 from . import output
 from . import transcript as transcript_mod
-from .promptexpand import expand_prompt, session_variables
 from . import screen
 from . import session_query
 from . import setcmd
@@ -4536,191 +4535,6 @@ def _repl_history(cfg: Config) -> prompt_history.PromptHistory:
     )
 
 
-# --------------------------------------------------------------------------
-# --printonly: dry-run dump of what would be sent to the model. NEVER errors —
-# every step degrades to a warning and keeps going (that is the whole point).
-# --------------------------------------------------------------------------
-
-_PRINTONLY_KNOWN = "tpeibx"  # a = all of these; s/f dropped (PATH slot decides file vs stdout)
-_PRINTONLY_TITLES = {
-    "t": "TOOLS",
-    "p": "PROMPT (raw)",
-    "e": "PROMPT (env-expanded)",
-    "i": "PROMPT (inlines-expanded)",
-    "b": "BENCHMARKS",
-    "x": "EXCHANGES",
-}
-
-
-def _printonly_slots(spec: str) -> tuple[str, int | None, str | None]:
-    """Parse ``LETTERS[:COUNT][:PATH]``. Positional slots; an empty slot skips.
-    ``p::/tmp/x.md`` -> letters 'p', no count, path '/tmp/x.md'. Never raises."""
-    parts = (spec or "").split(":", 2)
-    letters = parts[0].strip()
-    count: int | None = None
-    if len(parts) >= 2 and parts[1].strip():
-        try:
-            n = int(parts[1].strip())
-            count = n if n >= 0 else None
-        except ValueError:
-            msgs.warn(msgs.PRINTONLY_BAD_COUNT, count=parts[1])
-    path = parts[2].strip() if len(parts) >= 3 and parts[2].strip() else None
-    return letters, count, path
-
-
-def _printonly_letters(letters: str) -> list[str]:
-    """Resolve the letter cluster to an ordered, de-duplicated section list.
-    'a' means everything; unknown letters warn and skip; nothing valid -> all."""
-    if "a" in letters:
-        return list(_PRINTONLY_KNOWN)
-    chosen: list[str] = []
-    for ch in letters:
-        if ch in _PRINTONLY_KNOWN:
-            if ch not in chosen:
-                chosen.append(ch)
-        elif ch == "o":
-            msgs.warn(msgs.PRINTONLY_LETTER_NOT_IMPLEMENTED, letter=ch)
-        else:
-            msgs.warn(msgs.PRINTONLY_UNKNOWN_LETTER, letter=ch)
-    return chosen or list(_PRINTONLY_KNOWN)
-
-
-def _raw_configured_spec(cfg):
-    """The assembled prompt spec BEFORE inline-directive expansion — what
-    load_configured_prompt_spec builds, minus the expansion pass."""
-    roots = tuple(getattr(cfg, "prompt_roots", ()))
-    if len(roots) >= 3:
-        return P.load_agent_prompt_spec(
-            cfg.agent_id, repo_prompts_root=roots[0], global_agents_root=roots[1],
-            project_agents_root=roots[2], agents_files=getattr(cfg, "agents_files", ()),
-        )
-    return P.load_prompt_spec(cfg.prompts_dir)
-
-
-def _printonly_run(spec: str, *, agent: str | None = None, session: str | None = None,
-                   model: str | None = None,
-                   extras: list[str] | None = None, ignore_local_config: bool = False,
-                   ignore_global_config: bool = False, presets: list[str] | None = None) -> int:
-    letters, count, path = _printonly_slots(spec)
-    sections = _printonly_letters(letters)
-
-    try:
-        cfg = _from_env(
-            session, save_session=False, extras=extras, agent_id=agent,
-            ignore_local_config=ignore_local_config, ignore_global_config=ignore_global_config,
-            presets=presets,
-        )
-    except snippets.SnippetError:
-        raise
-    except Exception as e:  # noqa: BLE001 — printonly never errors
-        msgs.warn(msgs.PRINTONLY_NO_CONFIG, error=f"{type(e).__name__}: {e}")
-        return 0
-
-    try:
-        raw_spec = _raw_configured_spec(cfg)
-    except snippets.SnippetError:
-        raise
-    except Exception as e:  # noqa: BLE001
-        msgs.warn(msgs.PRINTONLY_NO_PROMPT, error=f"{type(e).__name__}: {e}")
-        raw_spec = None
-
-    try:
-        cfg = P.apply_agent_model(cfg, raw_spec, model, config_pins=False)
-        cfg = P.apply_agent_reasoning(cfg, raw_spec)
-        cfg = _resolve_cli_model_override(cfg, model)
-    except snippets.SnippetError:
-        raise
-    except Exception as e:  # noqa: BLE001 — model routing cannot prevent a prompt preview
-        msgs.warn(msgs.PRINTONLY_NO_CONFIG, error=f"{type(e).__name__}: {e}")
-
-    allow_code = bool(getattr(cfg, "allow_inline_code", True))
-    timeout_s = int(settings.knob_attr(cfg, "inline_code_timeout_s", "INLINE_CODE_TIMEOUT"))
-    system = raw_spec.system if raw_spec is not None else ""
-    selectors = raw_spec.tool_selectors if raw_spec is not None else ()
-
-    def _tools() -> str:
-        specs = _registry_for(cfg).select(selectors).openai_specs()
-        return json.dumps(specs, indent=2, ensure_ascii=False)
-
-    def _bench() -> str:
-        benches = P.load_benchmarks(P.resolve_agent_prompt_dir(cfg))
-        if not benches:
-            return msgs.PRINTONLY_NO_BENCHMARKS.said()
-        blocks = []
-        for bm in benches:
-            body = expand_prompt(
-                bm.prompt,
-                variables=session_variables(cfg),
-                allow_code=allow_code,
-                timeout_s=timeout_s,
-                max_output_bytes=cfg.max_bash_output_bytes,
-                on_error="drop",
-            )
-            blocks.append(f"# bench {bm.name}\n{body}")
-        return "\n\n".join(blocks)
-
-    def _exchanges() -> str:
-        """The agent's NN-user.md / NN-agent.md startup exchanges as
-        initialize() injects them: expanded, in order, one block per message."""
-        exchanges = raw_spec.exchanges if raw_spec is not None else ()
-        if not exchanges:
-            return msgs.PRINTONLY_NO_EXCHANGES.said()
-        blocks = []
-        for exchange in exchanges:
-            for role in ("user", "agent"):
-                text = getattr(exchange, role)
-                if text is not None:
-                    blocks.append(f"# {role} {exchange.number:02d}\n{P.expand_agent_text(text, cfg)}")
-        return "\n\n".join(blocks)
-
-    builders = {
-        "t": _tools,
-        "p": lambda: system,
-        "e": lambda: expand_prompt(
-            system,
-            variables=session_variables(cfg),
-            allow_code=False,
-            max_output_bytes=cfg.max_bash_output_bytes,
-            on_error="keep",
-        ),
-        "i": lambda: expand_prompt(
-            system,
-            variables=session_variables(cfg),
-            allow_code=allow_code,
-            timeout_s=timeout_s,
-            max_output_bytes=cfg.max_bash_output_bytes,
-            on_error="drop",
-        ),
-        "b": _bench,
-        "x": _exchanges,
-    }
-
-    chunks: list[str] = []
-    for ch in sections:
-        try:
-            body = msgs.words_of(builders[ch]())
-        except snippets.SnippetError:
-            raise
-        except Exception as e:  # noqa: BLE001 — a failed section is reported, never kills the run
-            error = f"{type(e).__name__}: {e}"
-            msgs.warn(msgs.PRINTONLY_SECTION_FAILED, section=_PRINTONLY_TITLES[ch], error=error)
-            body = msgs.PRINTONLY_SECTION_FAILED.plain(section=_PRINTONLY_TITLES[ch], error=error)
-        chunks.append(f"===== {_PRINTONLY_TITLES[ch]} =====\n{body}" if len(sections) > 1 else body)
-
-    text = "\n\n".join(chunks)
-    if count is not None:
-        text = "\n".join(text.splitlines()[:count])
-
-    if path:
-        try:
-            Path(path).expanduser().write_text(text + "\n", encoding="utf-8")
-            return 0
-        except OSError as e:
-            msgs.warn(msgs.PRINTONLY_NOT_WRITTEN, path=path, error=e)
-    print(text)
-    return 0
-
-
 def main(argv: list[str] | None = None) -> int:
     try:
         code = _main(argv)
@@ -4824,8 +4638,6 @@ def _build_parser() -> argparse.ArgumentParser:
                         help=msgs.OPT_IM_A_PUSSY.words())
     groups['WHAT THE MODEL GETS'].add_argument("-i", "--no-shell-history", dest="no_shell_history", action="store_true",
                         help=msgs.OPT_NO_SHELL_HISTORY.words())
-    groups['OUTPUT & DEBUG'].add_argument("--printonly", dest="printonly", metavar="LETTERS[:COUNT][:PATH]", nargs="?", const="a",
-                        help=msgs.OPT_PRINTONLY.words())
     groups['MODES'].add_argument("target", nargs="?", help=msgs.OPT_TARGET.words())
     return parser
 
@@ -4965,7 +4777,7 @@ def _validate_output_flags(parser: argparse.ArgumentParser, args: argparse.Names
             error = msgs.JSON_UNSUPPORTED.words(mode="--json-stream", command="--" + name.replace("_", "-"))
             parser.error(error)
     if args.json or args.json_stream:
-        for name in ("commit", "compact", "printonly", "login", "logout", "migrate_config", "refresh_model_catalog", "bench_models"):
+        for name in ("commit", "compact", "login", "logout", "migrate_config", "refresh_model_catalog", "bench_models"):
             value = getattr(args, name)
             if value is not None and value is not False:
                 error = msgs.JSON_UNSUPPORTED.words(mode="--json-stream" if args.json_stream else "--json", command="--" + name.replace("_", "-"))
@@ -5191,13 +5003,6 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         except ValueError as e:
             msgs.warn(msgs.FAILED, error=e)
             return 2
-
-    if args.printonly is not None:
-        return _printonly_run(
-            args.printonly, agent=cli_agent, session=args.session, model=args.model, extras=args.extras,
-            ignore_local_config=args.no_local_config, ignore_global_config=args.no_global_config,
-            presets=presets,
-        )
 
     if args.lock:
         try:
