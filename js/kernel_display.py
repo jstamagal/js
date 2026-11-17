@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from . import fset as _fset, messages as msgs, settings as _settings
+from .control_sequences import clean
+from .text_layout import block_width
 from .toolkit.sanitize import int_or_default
 
 
@@ -34,8 +36,6 @@ def _console() -> Any:
     block js draws (`text_layout.block_width`)."""
     from rich.console import Console
 
-    from .text_layout import block_width
-
     system = msgs.color_system(sys.stderr)
     return Console(file=sys.stderr, width=block_width(), soft_wrap=False, highlight=False, color_system=system,
                    force_terminal=system is not None, no_color=system is None)
@@ -52,8 +52,6 @@ def _drawn(draw: Callable[[Any, int | None], None], limit: int | None) -> str:
     """What ``draw`` prints with sections capped at ``limit`` lines, as text
     for stderr."""
     from rich.console import Console
-
-    from .text_layout import block_width
 
     system = msgs.color_system(sys.stderr)
     console = Console(file=io.StringIO(), width=block_width(), soft_wrap=False, highlight=False,
@@ -94,8 +92,6 @@ def render_execution(
 ) -> None:
     if level == "quiet" and not error and not interrupted:
         return
-    from .control_sequences import clean
-
     code, stdout, stderr, display, error = (clean(part) for part in (code, stdout, stderr, display, error))
     _show(lambda console, limit: _draw_execution(
         console, limit, level=level, code=code, stdout=stdout, stderr=stderr, display=display, error=error,
@@ -176,8 +172,6 @@ def render_event(context: Any, level: str, message: str, *, style: str = "COLOR_
                  verbose_only: bool = False) -> None:
     """Lifecycle/activity note made of text: kernel died, tool saved, a
     toolbox listing. The text is cleaned; see `render_note`."""
-    from .control_sequences import clean
-
     lines = [[("", line)] for line in clean(message).splitlines()]
     render_note(context, level, lines, style=style, verbose_only=verbose_only)
 

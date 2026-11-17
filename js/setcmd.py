@@ -24,6 +24,7 @@ from . import (
     setting_layers,
     setting_values,
     settings as _s,
+    text_layout,
 )
 
 
@@ -150,8 +151,6 @@ def _setting_lines(message: msgs.Message, key: str, value: str, *,
                    live: LiveValue | None = None, columns: int | None = None) -> list[str]:
     if columns is None:
         return [_annotate(msgs.line_for(message, key=key, value=value), live)]
-    from . import text_layout
-
     def said(text: str) -> msgs.Said:
         line = message.said(key=key, value=text)
         return line if live is None else msgs.SETTING_LIVE.said(line=line, source=live.source)

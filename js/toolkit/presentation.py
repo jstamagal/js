@@ -10,6 +10,7 @@ from functools import cache
 from typing import Any
 
 from .. import settings as _settings
+from ..control_sequences import clean
 
 PATH_ARGS = ("file_path", "path")
 _PYTHON_FIRST_LINE = re.compile(r"^\s*(?:\S*/)?python[0-9.]*\b")
@@ -168,7 +169,6 @@ def tool_output(name: str, result: Any) -> ScreenResult:
     """Parse a result for display. A command's result loses its
     `shell=… exit=… --- stdout ---` envelope; exit is kept apart. A failed
     call's retry note leaves the text and becomes `tries`."""
-    from ..control_sequences import clean
     from .results import result_text
 
     if isinstance(result, ScreenResult):
