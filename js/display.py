@@ -1328,10 +1328,6 @@ def _hidden(count: int) -> list[fset.Run]:
     return msgs.TOOL_MORE_LINES.body_runs(count=count)
 
 
-_FOLD_NOUN: dict[str, str] = {
-    "fs_search": "search", "ast_search": "search", "exa_search": "search", "serper_search": "search",
-    "tavily_search": "search", "docs_search": "search",
-}
 _URL_HOST = re.compile(r"^[a-z][a-z0-9+.-]*://([^/?#]+)", re.I)
 
 
@@ -1358,7 +1354,7 @@ def render_fold(name: str, calls: list[dict | None], *, running: int = 0,
     """Finished quiet calls of one tool as one row: `mark [name] N things
     label · label · +K`. `running` of them have not returned."""
     block = _Block(width or block_width(), theme(settings), MARK if running else OK)
-    one, many = msgs.TOOL_FOLD_NOUNS[_FOLD_NOUN.get(name, declared(name).fold_noun)]
+    one, many = msgs.TOOL_FOLD_NOUNS[declared(name).fold_noun]
     about = msgs.TOOL_FOLD_COUNT.words(value=len(calls), value2=one if len(calls) == 1 else many)
     labels = [label for label in (fold_label(name, args) for args in calls) if label]
     room = block.inner - len(name) - len(about) - 10

@@ -107,13 +107,6 @@ _HUNK = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 # first of these that the call carries. A tool not named here is told apart by
 # its path, when it has one.
 _KEY_ARGS: dict[str, tuple[str, ...]] = {
-    "fs_search": ("pattern",),
-    "ast_search": ("pattern",),
-    "exa_search": ("query",),
-    "serper_search": ("query",),
-    "tavily_search": ("query",),
-    "docs_search": ("topic",),
-    "tool_discovery": ("query",),
     "skill": ("name",),
     "send": ("to",),
     "claim": ("key",),
