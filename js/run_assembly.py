@@ -2,11 +2,14 @@
 
 A settled run holds the Config, system prompt, prompt spec and tool registry
 one run's turns use, and what the run's session said when it was read. The
-steps run in one order: the agent's prompt spec is loaded unexpanded, agent.yaml
-and the named model route the Config, the spec is reloaded for the model it
-settled on, the registry is narrowed to the spec's tools, the agent and login
-layers resolve, and the system prompt is expanded last. The run's tools and
-persona follow the model it settled on.
+steps run in one order: the agent's prompt spec is loaded unexpanded
+(`load_spec`), agent.yaml and the named model route the Config (`route`), the
+spec is reloaded for the model it settled on (`for_model`), the registry is
+narrowed to the spec's tools, the agent and login layers resolve, and the
+system prompt is expanded last (`expand`). The run's tools and persona follow
+the model it settled on. `settle` composes these steps for -p, the REPL,
+--bench and swarm agents; a subagent composes the same steps with its own
+model choice, its own layers and the registry its parent hands it.
 
 `resume` and `settle` read the agent files, the session's last stamp and its
 recorded system prompt. Neither writes anything: a caller activates the
@@ -171,6 +174,28 @@ def route(cfg: Any, model: str | None) -> Any:
     ))
 
 
+def load_spec(cfg: Any) -> P.PromptSpec:
+    """``cfg``'s agent prompt spec, unexpanded. Raises `RunNotSettled`."""
+    try:
+        return P.load_configured_prompt_spec(cfg, expand=False)
+    except (FileNotFoundError, ValueError) as exc:
+        raise RunNotSettled(exc, loading=True) from exc
+
+
+def for_model(prompt_spec: P.PromptSpec, cfg: Any) -> P.PromptSpec:
+    """``prompt_spec`` reloaded for the model ``cfg`` is routed to, when that
+    model matches a different profile. Raises `RunNotSettled`."""
+    try:
+        return P.for_model(prompt_spec, cfg)
+    except (FileNotFoundError, ValueError) as exc:
+        raise RunNotSettled(exc, loading=True) from exc
+
+
+def expand(prompt_spec: P.PromptSpec, cfg: Any) -> P.PromptSpec:
+    """``prompt_spec`` with its system prompt's directives expanded for ``cfg``."""
+    return P._expand_spec(prompt_spec, cfg)
+
+
 def settle(cfg: Any, *, model: str | None = None, reasoning: str | None = None,
            resumed: Resume | None = None, config_pins: bool = False, agent_reasoning: bool = True,
            layered: bool = True, expand_recorded: bool = False) -> SettledRun:
@@ -197,20 +222,14 @@ def settle(cfg: Any, *, model: str | None = None, reasoning: str | None = None,
         model = resumed.model
     else:
         resumed = Resume(model=model)
-    try:
-        prompt_spec = P.load_configured_prompt_spec(cfg, expand=False)
-    except (FileNotFoundError, ValueError) as exc:
-        raise RunNotSettled(exc, loading=True) from exc
+    prompt_spec = load_spec(cfg)
     try:
         if resumed.stamp is None:
             cfg = P.apply_agent_model(cfg, prompt_spec, model, config_pins=config_pins)
         cfg = route(cfg, model)
     except ValueError as exc:
         raise RunNotSettled(exc, loading=False) from exc
-    try:
-        prompt_spec = P.for_model(prompt_spec, cfg)
-    except (FileNotFoundError, ValueError) as exc:
-        raise RunNotSettled(exc, loading=True) from exc
+    prompt_spec = for_model(prompt_spec, cfg)
     registry = registry_for(cfg).select(prompt_spec.tool_selectors)
     effort = reasoning
     if layered:
@@ -224,7 +243,7 @@ def settle(cfg: Any, *, model: str | None = None, reasoning: str | None = None,
     recorded = M.load_system_prompt(cfg.session_file) if reads_session else None
     sends_agent_prompt = recorded is None or options.changes_prompt or options.chat
     if sends_agent_prompt or expand_recorded:
-        prompt_spec = P._expand_spec(prompt_spec, cfg)
+        prompt_spec = expand(prompt_spec, cfg)
     system = prompt_spec.system if sends_agent_prompt else recorded
     return SettledRun(config=cfg, system=system, prompt_spec=prompt_spec, registry=registry,
                       resume=resumed, recorded_system=recorded, effort=effort)
