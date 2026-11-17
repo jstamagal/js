@@ -581,7 +581,7 @@ def test_a_swarm_agent_keeps_its_configured_effort_and_agent_cap(monkeypatch, tm
     spec = swarm_run.AgentSpec(name="one", opener="hi", agent="seat", model="testes/m", effort="high",
                                cwd=str(tmp_path))
 
-    cfg, _system, _prompt_spec, _registry = swarm_run._configure(spec)
+    cfg = swarm_run._configure(spec).config
     turn = runtime._with_login_defaults(cfg, cfg.model, cfg.provider_id, cfg.provider_base_url)
 
     assert turn.reasoning_effort == "high"

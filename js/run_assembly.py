@@ -84,12 +84,17 @@ def registry_for(cfg: Any) -> Any:
     return registry_for_roots(getattr(cfg, "prompt_roots", ()) or (), flags=policy.schema_flags(cfg))
 
 
+def check_effort(raw: str) -> tuple[str | None, str | None]:
+    """``raw`` checked as `set EFFORT` checks it: (value, error)."""
+    return settings.coerce_value(settings.SPEC_BY_KEY["EFFORT"], raw)
+
+
 def stamped_effort(stamp: dict) -> str | None:
     """The effort word of a stamp, when it is a valid one."""
     raw = stamp.get("reasoning")
     if not isinstance(raw, str) or not raw:
         return None
-    value, error = settings.coerce_value(settings.SPEC_BY_KEY["EFFORT"], raw)
+    value, error = check_effort(raw)
     return value if error is None else None
 
 

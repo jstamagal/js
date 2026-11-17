@@ -32,9 +32,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, TextIO
 
-from . import agent_messages, compaction, headless, login_defaults, runtime
+from . import agent_messages, compaction, headless, run_assembly, runtime
 from . import memory as M
-from . import persona as P
 from . import swarm, settings as _settings
 from .config import from_env
 from .session_catalog import record_session_start
@@ -92,32 +91,27 @@ def _slots(cfg: Any, spec_slots: Any) -> int:
         return 0
 
 
-def _configure(spec: AgentSpec) -> tuple[Any, str, Any, Any]:
-    """The config, system prompt, prompt spec and tool registry of one agent."""
-    from . import cli
-
+def _configure(spec: AgentSpec) -> run_assembly.SettledRun:
+    """The settled run of one agent: the bus tools on its surface and its
+    seat file after its system prompt."""
     extras = [f"{k}={v}" for k, v in spec.opts.items()]
     cwd = Path(spec.cwd).expanduser() if spec.cwd else Path.cwd()
     cfg = from_env(save_session=True, extras=extras, agent_id=spec.agent, session=spec.session, cwd=cwd)
-    prompt_spec = P.load_configured_prompt_spec(cfg, expand=False)
-    cfg = P.apply_agent_model(cfg, prompt_spec, spec.model, config_pins=False)
-    cfg = cli._resolve_cli_model_override(cfg, spec.model)
-    prompt_spec = P.for_model(prompt_spec, cfg)
-    # agent.yaml's effort and max_tokens are the agent layers; the spec's own
-    # effort is set for this run like a flag. Every turn resolves them.
-    cfg = login_defaults.with_agent(cfg, prompt_spec, reasoning=spec.effort is None)
     if spec.effort is not None:
-        effort, error = cli._validate_cli_reasoning(spec.effort)
+        # The spec's own effort is set for this run like a flag; agent.yaml's
+        # effort is then left out of the agent layer.
+        effort, error = run_assembly.check_effort(spec.effort)
         if error:
             raise ValueError(error)
         cfg = replace(cfg, layer_flag={**(cfg.layer_flag or {}), "EFFORT": effort})
-    cfg = login_defaults.for_turn(cfg)
-    prompt_spec = P._expand_spec(prompt_spec, cfg)
-    system = prompt_spec.system
+    try:
+        settled = run_assembly.settle(cfg, model=spec.model, agent_reasoning=spec.effort is None)
+    except run_assembly.RunNotSettled as exc:
+        raise exc.cause from None
+    system = settled.system
     if spec.seat_file:
         system = system.rstrip() + "\n\n" + Path(spec.seat_file).expanduser().read_text(encoding="utf-8")
-    registry = swarm.with_bus_tools(cli._registry_for(cfg).select(prompt_spec.tool_selectors))
-    return cfg, system, prompt_spec, registry
+    return replace(settled, system=system, registry=swarm.with_bus_tools(settled.registry))
 
 
 class Runner:
@@ -192,7 +186,8 @@ class Runner:
             agent.recruiter = self.recruiter(spec, agent)
             context.swarm = agent
             configure = _configure if self.configure is None else self.configure
-            cfg, system, prompt_spec, registry = configure(spec)
+            settled = configure(spec)
+            cfg, system = settled.config, settled.system
             if self.gate is None:
                 slots = _slots(cfg, self.spec_slots)
                 self.gate = asyncio.Semaphore(slots) if slots > 0 else contextlib.nullcontext()
@@ -201,24 +196,13 @@ class Runner:
             if not messages and Path(cfg.session_file) != Path(os.devnull):
                 record_session_start(cfg.session_file, cwd=context.cwd, agent=cfg.agent_id, model=cfg.model,
                                      provider=cfg.provider_id, mode="swarm")
-            turn_kwargs: dict[str, Any] = {
-                "model_override": cfg.model,
-                "provider_id_override": cfg.provider_id,
-                "provider_base_url_override": cfg.provider_base_url,
-                "provider_api_key_override": cfg.provider_api_key,
-                "tool_registry": registry,
-                "tool_context": context,
-                "suppress_output": True,
-                "trace_override": False,
-                "sampling": _sampling(cfg, prompt_spec),
-                "steer": agent.steer,
-                "event_sink": events.runtime_event,
-            }
+            turn_kwargs = settled.turn_kwargs(tool_context=context, suppress_output=True, trace_override=False,
+                                              steer=agent.steer, event_sink=events.runtime_event)
             stamp = M.stamp_for(cfg.model, cfg.provider_id, cfg.reasoning_effort)
             auto = compaction.AutoCompactState()
             events.emit("agent_start", model=cfg.model, provider=cfg.provider_id, session=str(cfg.session_file),
                         cwd=str(context.cwd))
-            await agent_messages.initialize(cfg, prompt_spec, messages, telemetry, system=system, **turn_kwargs)
+            await agent_messages.initialize(cfg, settled.prompt_spec, messages, telemetry, system=system, **turn_kwargs)
             messages.append(M.note_time({"role": "user", "content": spec.opener}))
             async with self.gate:
                 await runtime.run_turn_async(cfg, system, messages, telemetry, **turn_kwargs)
@@ -261,10 +245,6 @@ class Runner:
                 lambda: runtime._resolve_context_window(cfg.model, cfg.provider_id, cfg.provider_base_url),
                 emit=compaction.printing(), log_dir=compaction.flight_log_dir(cfg),
             )
-
-
-def _sampling(cfg: Any, prompt_spec: Any):
-    return login_defaults.sampling(cfg)
 
 
 def load_spec(path: str | os.PathLike[str]) -> tuple[Path, list[AgentSpec], int | None]:
