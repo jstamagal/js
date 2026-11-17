@@ -1,4 +1,5 @@
 """The REPL's status bar: its styles, the line it draws (model, context, throbber, clock, session), and the tick that repaints it."""
+
 from __future__ import annotations
 
 import asyncio

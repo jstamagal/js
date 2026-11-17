@@ -10,7 +10,7 @@ from dataclasses import replace
 
 from repl_driver import run_async
 
-from js import debug_trace, display, screen, text_layout, tool_display, transcript
+from js import debug_trace, display, screen_scrollback, text_layout, tool_display, transcript
 from js.config import from_env
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
@@ -113,7 +113,7 @@ def test_markdown_off_on_a_terminal_writes_plain_bytes():
 
 
 def test_scrollback_live_answer_is_replaced_until_committed():
-    scrollback = screen.Scrollback()
+    scrollback = screen_scrollback.Scrollback()
     scrollback.append("before\n")
     scrollback.answer_update("a\n")
     scrollback.answer_update("ab\n")
@@ -127,7 +127,7 @@ def test_scrollback_live_answer_is_replaced_until_committed():
 
 
 def test_scrollback_live_answer_follows_a_collapsing_reasoning_block():
-    scrollback = screen.Scrollback()
+    scrollback = screen_scrollback.Scrollback()
     block = scrollback.reasoning(1)
     block.append("thinking hard\nstill thinking\n")
     scrollback.answer_update("x\n")
@@ -233,10 +233,10 @@ def test_a_tool_message_without_an_id_is_not_shown_under_a_call_without_one(tmp_
     ]
     exchanges: list[str] = []
     for name in ("exchange_open", "exchange_update", "exchange_close"):
-        def record(self, *args, _real=getattr(screen.Scrollback, name)):
+        def record(self, *args, _real=getattr(screen_scrollback.Scrollback, name)):
             exchanges.extend(arg for arg in args if isinstance(arg, str))
             return _real(self, *args)
-        monkeypatch.setattr(screen.Scrollback, name, record)
+        monkeypatch.setattr(screen_scrollback.Scrollback, name, record)
     run_async(monkeypatch, cfg, [], messages=messages)
     shown = capsys.readouterr().out + "".join(exchanges)
     assert "RESUMED_PROMPT" in shown
@@ -247,7 +247,7 @@ def test_a_tool_message_without_an_id_is_not_shown_under_a_call_without_one(tmp_
 
 
 def test_an_open_tool_exchange_is_redrawn_where_it_stands_after_later_text():
-    scrollback = screen.Scrollback()
+    scrollback = screen_scrollback.Scrollback()
     scrollback.append("before\n")
     span = scrollback.exchange_open("running\n")
     scrollback.append("after\n")
@@ -270,7 +270,7 @@ def test_streaming_reasoning_rewraps_only_its_open_paragraph(monkeypatch):
         return real(text, width)
 
     monkeypatch.setattr(text_layout, "wrap_words", counting)
-    scroll = screen.Scrollback()
+    scroll = screen_scrollback.Scrollback()
     block = scroll.reasoning(2)
     text = "".join(f"paragraph {n} " + "x" * 30 + "\n" for n in range(200))
     for start in range(0, len(text), 10):

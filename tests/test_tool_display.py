@@ -14,6 +14,7 @@ from js import (
     messages as msgs,
     repl,
     runtime,
+    screen_scrollback,
     tool_display,
     tool_errors,
 )
@@ -193,9 +194,8 @@ def _traced(calls, *, level: int = 1) -> tuple[list[str], str]:
 def _traced_on_screen(calls) -> list[str]:
     """Trace `(name, args, result)` calls one after another on the screen's
     scrollback; returns the header rows it shows."""
-    from js import screen
 
-    scroll = screen.Scrollback()
+    scroll = screen_scrollback.Scrollback()
     scroll.toggle_key = ""
 
     class Exchange:
@@ -252,9 +252,8 @@ def test_the_output_of_a_command_still_running_can_be_read():
 
 
 def test_ctrl_o_unfolds_a_folded_tool_row_and_folds_it_back():
-    from js import screen
 
-    scroll = screen.Scrollback()
+    scroll = screen_scrollback.Scrollback()
     shell = "shell=bash\nexit=0\n--- stdout ---\n" + "\n".join(f"out {n}" for n in range(8)) + "\n"
     folded = tool_display.render_exchange("shell", {"command": "make"}, shell, level=1, width=60)
     whole = tool_display.render_exchange("shell", {"command": "make"}, shell, level=3, width=60)
@@ -390,9 +389,8 @@ def test_a_resumed_tool_row_folds_with_its_whole_form_like_a_live_one(capsys):
 
 
 def test_a_finished_quiet_call_unfolds_before_its_run_ends(monkeypatch):
-    from js import screen
 
-    scroll = screen.Scrollback()
+    scroll = screen_scrollback.Scrollback()
     scroll.toggle_key = "c-o"
 
     class Exchange:
@@ -447,9 +445,8 @@ def test_a_long_run_of_quiet_calls_renders_each_call_a_fixed_number_of_times(mon
 
 def test_a_quiet_call_shown_only_when_it_returns_unfolds_at_once():
     # A call made inside a kernel cell reaches the trace only with its result.
-    from js import screen
 
-    scroll = screen.Scrollback()
+    scroll = screen_scrollback.Scrollback()
     scroll.toggle_key = "c-o"
 
     class Exchange:

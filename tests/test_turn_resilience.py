@@ -24,6 +24,7 @@ from js import (
     provider_errors,
     retry,
     runtime,
+    screen_scrollback,
     snippets,
     turn_call,
 )
@@ -347,7 +348,7 @@ class _ScrollbackLive:
 
 
 def test_text_streamed_before_a_turn_fails_stays_on_the_screen(tmp_path, monkeypatch):
-    from js import display, screen
+    from js import display
 
     def stream(**kwargs):
         if not replies:
@@ -359,7 +360,7 @@ def test_text_streamed_before_a_turn_fails_stays_on_the_screen(tmp_path, monkeyp
 
     replies: list[str] = []
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
-    scrollback = screen.Scrollback()
+    scrollback = screen_scrollback.Scrollback()
     telemetry = runtime.Telemetry(None)
     telemetry.display_factory = lambda _markdown: display.Display(
         scrollback.append, live=_ScrollbackLive(scrollback), flush=scrollback.flush)

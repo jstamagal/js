@@ -19,6 +19,7 @@ from js import (
     run_assembly,
     runtime,
     screen,
+    screen_scrollback,
     text_layout,
     transcript,
 )
@@ -118,7 +119,7 @@ def test_cancel_during_reasoning_retains_partial_history(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("level", [1, 2, 3])
 def test_scrollback_collapse_restores_reasoning_without_losing_other_output(level):
-    scroll = screen.Scrollback()
+    scroll = screen_scrollback.Scrollback()
     scroll.append("before\n")
     block = scroll.reasoning(level)
     block.append(THOUGHT)
@@ -184,7 +185,7 @@ def test_the_reasoning_toggle_key_keeps_input_intact_and_restores_reasoning():
 
 def test_screen_reasoning_shares_stdout_ordering_without_losing_queued_input():
     async def drive():
-        scroll = screen.Scrollback()
+        scroll = screen_scrollback.Scrollback()
         app = SimpleNamespace(invalidate=lambda: None)
         loop = asyncio.get_running_loop()
         output = screen._ScreenStdout(loop, scroll, app, io.StringIO())
@@ -212,7 +213,7 @@ def test_screen_reasoning_shares_stdout_ordering_without_losing_queued_input():
 @pytest.mark.parametrize("level", [1, 2, 3])
 def test_scrollback_eviction_discards_fold_handles_not_recent_output(monkeypatch, level):
     screen.fset.bind_settings({"SCROLLBACK_LINES_MAX": 8})
-    scroll = screen.Scrollback()
+    scroll = screen_scrollback.Scrollback()
     block = scroll.reasoning(level)
     block.append(THOUGHT)
     block.answer_started()
@@ -278,7 +279,7 @@ def test_http_reasoning_streams_on_screen_before_answer_and_survives_collapse(mo
         "API_KEY=fixture", "OUTPUT_TOKENS_MAX=64", "CONTEXT_SIZE=262144",
         "VISION=off", "REASONING_DISPLAY=1",
     )))
-    scroll = screen.Scrollback()
+    scroll = screen_scrollback.Scrollback()
     app = SimpleNamespace(invalidate=lambda: None)
     received_before_answer = []
 
@@ -413,7 +414,7 @@ def test_stderr_reasoning_shows_every_word_once_when_the_window_is_resized(monke
 
 def test_unfolding_long_reasoning_and_folding_it_back_loses_no_scrollback(monkeypatch):
     screen.fset.bind_settings({"SCROLLBACK_LINES_MAX": 10})
-    scroll = screen.Scrollback()
+    scroll = screen_scrollback.Scrollback()
     scroll.toggle_key = "c-o"
     for n in range(5):
         scroll.append(f"early {n}\n")
@@ -445,7 +446,7 @@ def test_open_reasoning_rewraps_only_its_last_row_as_it_streams(monkeypatch):
     def stream(words: int) -> int:
         measured[0] = 0
         line = " ".join(f"word{n}" for n in range(words))
-        block = screen.Scrollback().reasoning(2)
+        block = screen_scrollback.Scrollback().reasoning(2)
         for start in range(0, len(line), 4):
             block.append(line[start:start + 4])
         assert block._body() == text_layout.wrap_words(line, text_layout.block_width())

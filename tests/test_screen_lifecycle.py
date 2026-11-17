@@ -11,7 +11,7 @@ import re
 import pytest
 from repl_driver import _telemetry, repl_state, stub_screen, turn_stub
 
-from js import cli, owning_loop, repl, runtime, screen
+from js import cli, owning_loop, repl, runtime, screen, screen_scrollback
 from js.config import from_env
 from js.memory import load_messages, load_replay_messages
 
@@ -70,7 +70,7 @@ def _install_screen(monkeypatch, script, terminal: _Recorder) -> list[_Screen]:
     screens: list[_Screen] = []
 
     def build_app(*, on_line, on_eof, **_kwargs):
-        scrollback = screen.Scrollback()
+        scrollback = screen_scrollback.Scrollback()
         screens.append(_Screen(script, on_line, on_eof, scrollback, terminal))
         return screens[-1], scrollback
 

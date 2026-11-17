@@ -13,7 +13,7 @@ from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 from repl_driver import run_async
 
-from js import cli, screen, status_bar
+from js import cli, screen, screen_scrollback, status_bar
 from js.config import from_env
 from js.memory import load_messages
 from js.toolkit import ToolContext, subagents
@@ -21,7 +21,7 @@ from js.toolkit import ToolContext, subagents
 SGR = re.compile(r"\x1b\[[0-9;]*m")
 
 
-def _text(scrollback: screen.Scrollback) -> str:
+def _text(scrollback: screen_scrollback.Scrollback) -> str:
     scrollback.flush()
     return SGR.sub("", scrollback.buffer.text)
 
@@ -163,7 +163,7 @@ def test_ctrl_w_then_another_key_still_deletes_the_word_before_the_cursor():
 
 def test_output_to_a_hidden_window_marks_it_until_it_is_shown():
     windows = screen.Windows()
-    windows.set_main(screen.Scrollback())
+    windows.set_main(screen_scrollback.Scrollback())
     two, three = windows.open(), windows.open()
 
     three.scrollback.append("hi\n")
@@ -181,7 +181,7 @@ def test_output_to_a_hidden_window_marks_it_until_it_is_shown():
 
 def test_window_numbers_stop_at_nine_and_a_closed_number_is_reused():
     windows = screen.Windows()
-    windows.set_main(screen.Scrollback())
+    windows.set_main(screen_scrollback.Scrollback())
     opened = [windows.open() for _ in range(9)]
 
     assert [view.number for view in opened[:8]] == list(range(2, 10))
@@ -205,7 +205,7 @@ def test_the_status_bar_names_the_window_and_the_active_ones():
 def test_prints_in_a_writing_context_land_in_that_window(monkeypatch):
     async def main():
         loop = asyncio.get_running_loop()
-        main_sb, other = screen.Scrollback(), screen.Scrollback()
+        main_sb, other = screen_scrollback.Scrollback(), screen_scrollback.Scrollback()
 
         class App:
             def invalidate(self):

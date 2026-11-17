@@ -23,7 +23,7 @@ import sys
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from . import display, messages as msgs, screen
+from . import display, messages as msgs, screen, screen_scrollback
 
 
 class SubagentWindow:
@@ -44,7 +44,7 @@ class SubagentWindow:
         self._resume: Callable[[str], Awaitable[None]] | None = None
 
     @property
-    def scrollback(self) -> screen.Scrollback:
+    def scrollback(self) -> screen_scrollback.Scrollback:
         return self.view.scrollback
 
     def telemetry(self, debug_log: Any) -> Any:

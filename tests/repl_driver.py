@@ -15,7 +15,7 @@ import inspect
 import sys
 from dataclasses import dataclass
 
-from js import cli, owning_loop, persona as P, repl, runtime, screen
+from js import cli, owning_loop, persona as P, repl, runtime, screen, screen_scrollback
 from js.config import Config
 
 
@@ -118,7 +118,7 @@ def stub_screen(monkeypatch, lines, *, wait: bool = False) -> None:
         def invalidate(self):
             pass
 
-    class VisibleScrollback(screen.Scrollback):
+    class VisibleScrollback(screen_scrollback.Scrollback):
         """What the screen would show, mirrored to the test's stdout in the
         order the screen receives it: the real `capture_stdio` routes stdout
         through the loop the same way the live answer arrives."""

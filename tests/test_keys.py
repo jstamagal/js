@@ -6,7 +6,7 @@ from __future__ import annotations
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.key_binding.key_bindings import _parse_key
 
-from js import keys, screen
+from js import keys, screen, screen_scrollback
 
 # The keys the screen answered to before the keys file existed, with
 # Ctrl-R moved to history_search, reasoning_toggle on Ctrl-O, and Ctrl-W then
@@ -206,7 +206,7 @@ def test_the_screen_binds_the_history_search_keys():
 
 
 def test_a_collapsed_reasoning_block_names_the_toggle_key():
-    scroll = screen.Scrollback()
+    scroll = screen_scrollback.Scrollback()
     scroll.toggle_key = keys.describe(("c-t",))
     block = scroll.reasoning(1)
     block.append("thinking")
