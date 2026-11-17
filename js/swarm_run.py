@@ -140,6 +140,8 @@ class Runner:
         self.tasks: dict[str, asyncio.Task] = {}
         # Each agent's turn in flight, which `cancel` cancels.
         self.turns: dict[str, asyncio.Task] = {}
+        # The turns a `cancel` ended: only those end alone.
+        self.cancelled: set[asyncio.Task] = set()
         # Each agent's spec as first given, and, once it has ended, the spec a
         # `restart` runs: the same, on the session it used.
         self.originals: dict[str, AgentSpec] = {}
@@ -191,6 +193,7 @@ class Runner:
         events = AgentEvents(self.out, self.lock, name)
         turn = self.turns.get(name)
         if msg.kind == swarm.CANCEL and turn is not None and not turn.done():
+            self.cancelled.add(turn)
             turn.cancel()
             return
         if msg.kind == swarm.RESTART and name in self.ended:
@@ -208,11 +211,12 @@ class Runner:
             await task
         except asyncio.CancelledError:
             current = asyncio.current_task()
-            if not task.cancelled() or (current is not None and current.cancelling()):
+            if task not in self.cancelled or (current is not None and current.cancelling()):
                 raise
             events.emit("turn_cancelled")
         finally:
             self.turns.pop(name, None)
+            self.cancelled.discard(task)
 
     def cancel_all(self) -> None:
         self.code = 130
