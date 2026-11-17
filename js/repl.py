@@ -55,6 +55,7 @@ from . import (
     repl_commands,
     repl_settings_commands,
     repl_state,
+    repl_workspace_commands,
     replcomplete,
     resume_view,
     run_assembly,
@@ -1045,7 +1046,7 @@ def start_repl(args: argparse.Namespace, setup: Setup) -> int:
 
     messages = M.load_replay_messages(cfg.session_file)
     cut_off = M.turn_cut_off(messages)
-    repl_commands.restore_workspace(cfg)
+    repl_workspace_commands.restore_workspace(cfg)
     if messages:
         notices.append(msgs.line_for(msgs.RESUMED, messages=msgs.plural(len(messages), "prior message")))
     elif args.session is not None:

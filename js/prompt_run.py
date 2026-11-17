@@ -37,6 +37,7 @@ from . import (
     persona as P,
     repl_commands,
     repl_state,
+    repl_workspace_commands,
     routing,
     run_assembly,
     runtime,
@@ -308,7 +309,7 @@ def _load_history(prepared: _PreparedRun) -> bool:
             notice = {"role": "user", "content": snippets.render('prompt-changed')}
             prepared.messages.append(notice)
             conversation.append_turn(cfg, notice)
-    repl_commands.restore_workspace(cfg)
+    repl_workspace_commands.restore_workspace(cfg)
     if not prepared.inputs.save:
         prepared.cfg = replace(cfg, session_file=Path(os.devnull))
     return cut_off

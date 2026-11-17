@@ -8,7 +8,7 @@ import pytest
 from jail_probe import needs_bwrap
 from repl_driver import stub_screen, turn_stub
 
-from js import cli, conversation, jail, messages as msgs, repl_commands, runtime, snippets
+from js import cli, conversation, jail, messages as msgs, repl_workspace_commands, runtime, snippets
 from js.repl_state import ReplState
 from js.toolkit import call_tool, shell
 from js.toolkit.registry import build_default_registry
@@ -140,8 +140,8 @@ def test_add_and_drop_need_a_jail(places):
     _root, extra = places
     state = ReplState()
 
-    assert repl_commands._cmd_add(str(extra), state, None).message is msgs.NO_JAIL
-    assert repl_commands._cmd_drop(str(extra), state, None).message is msgs.NO_JAIL
+    assert repl_workspace_commands._cmd_add(str(extra), state, None).message is msgs.NO_JAIL
+    assert repl_workspace_commands._cmd_drop(str(extra), state, None).message is msgs.NO_JAIL
     assert state.pending_notes == []
 
 
