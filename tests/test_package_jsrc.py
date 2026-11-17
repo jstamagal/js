@@ -7,17 +7,17 @@ start.
 
 from __future__ import annotations
 
-import copy
+import asyncio
 import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from repl_driver import record_turns, type_into_js
 
 from js import cli, setcmd, settings
 from js.config import Config, from_env
-from js.repl_state import ReplState
 from js.toolkit import ToolContext, python_kernel
 
 REPO = Path(__file__).resolve().parents[1]
@@ -85,11 +85,8 @@ def test_a_number_changed_in_package_jsrc_changes_behaviour_and_show(monkeypatch
     assert cfg.kernel_wait_seconds == 9
     assert cfg.max_read_lines == 17
 
-    state = ReplState(messages=[], system="sys", settings=settings.seed_defaults())
-    capsys.readouterr()
-    assert cli._handle_command("/show PYTHON_KERNEL_WAIT", state, cfg) is True
-    shown = capsys.readouterr().out.splitlines()[0]
-    assert shown.split(": ", 1)[1].split()[0] == "9"
+    printed = _type(monkeypatch, project, capsys, ["/show PYTHON_KERNEL_WAIT"])
+    assert _show_value(printed["/show PYTHON_KERNEL_WAIT"]) == "9"
 
 
 def test_user_jsrc_layers_over_package_jsrc(monkeypatch, tmp_path):
@@ -141,10 +138,26 @@ def test_a_start_writes_no_jsrc_and_leaves_an_existing_one_alone(monkeypatch, tm
     assert user.read_text(encoding="utf-8") == "set READ_LINES_MAX 33\n"
 
 
-def _show_value(cfg, state, key: str, capsys) -> str:
-    capsys.readouterr()
-    assert cli._handle_command(f"/show {key}", state, cfg) is True
-    return capsys.readouterr().out.splitlines()[0].split(": ", 1)[1].split()[0]
+def _type(monkeypatch, project, capsys, lines) -> dict[str, str]:
+    """Type `lines` into js started in `project`: what each printed, by line."""
+    monkeypatch.chdir(project)
+    printed: dict[str, str] = {}
+
+    async def typing(enter):
+        # The banner, queued as the screen came up, lands before the first line.
+        await asyncio.sleep(0)
+        for line in lines:
+            capsys.readouterr()
+            await enter(line)
+            printed[line] = capsys.readouterr().out
+
+    assert type_into_js(monkeypatch, typing) == 0
+    return printed
+
+
+def _show_value(printed: str) -> str:
+    """The value a `/show KEY` line printed."""
+    return printed.splitlines()[0].split(": ", 1)[1].split()[0]
 
 
 def test_set_dash_in_a_user_jsrc_runs_and_shows_the_package_value(monkeypatch, tmp_path, capsys):
@@ -158,16 +171,17 @@ def test_set_dash_in_a_user_jsrc_runs_and_shows_the_package_value(monkeypatch, t
     )
 
     cfg = from_env(save_session=False, cwd=project)
-    state = ReplState(messages=[], system="sys", settings=copy.deepcopy(cfg.settings))
 
     assert cfg.transcript_log is settings.default_value("TRANSCRIPT_LOG")
     assert cfg.max_read_lines == settings.default_value("READ_LINES_MAX")
     assert cfg.allow_inline_code is settings.default_value("INLINE_CODE")
-    assert _show_value(cfg, state, "TRANSCRIPT_LOG", capsys) == (
+    printed = _type(monkeypatch, project, capsys,
+                    ["/show TRANSCRIPT_LOG", "/show READ_LINES_MAX", "/show INLINE_CODE"])
+    assert _show_value(printed["/show TRANSCRIPT_LOG"]) == (
         "on" if cfg.transcript_log else "off"
     )
-    assert _show_value(cfg, state, "READ_LINES_MAX", capsys) == str(cfg.max_read_lines)
-    assert _show_value(cfg, state, "INLINE_CODE", capsys) == (
+    assert _show_value(printed["/show READ_LINES_MAX"]) == str(cfg.max_read_lines)
+    assert _show_value(printed["/show INLINE_CODE"]) == (
         "on" if cfg.allow_inline_code else "off"
     )
 
@@ -179,15 +193,15 @@ def test_live_set_dash_returns_to_the_session_start_value_in_show_turn_and_save(
     user = tmp_path / "home" / ".js" / "jsrc"
     user.parent.mkdir(parents=True)
     user.write_text("set READ_LINES_MAX 33\n", encoding="utf-8")
-    cfg = from_env(save_session=False, cwd=project)
-    state = ReplState(messages=[], system="sys", settings=copy.deepcopy(cfg.settings))
+    turns = record_turns(monkeypatch)
 
-    assert cli._handle_command("/set READ_LINES_MAX 5", state, cfg) is True
-    assert cli._handle_command("/set -READ_LINES_MAX", state, cfg) is True
+    printed = _type(monkeypatch, project, capsys, [
+        "/set READ_LINES_MAX 5", "/set -READ_LINES_MAX", "/show READ_LINES_MAX", "/save", "hello",
+    ])
 
-    assert _show_value(cfg, state, "READ_LINES_MAX", capsys) == "33"
-    assert state.config_for_turn(cfg).max_read_lines == 33
-    assert cli._handle_command("/save", state, cfg) is True
+    assert _show_value(printed["/show READ_LINES_MAX"]) == "33"
+    [turn] = turns
+    assert turn.cfg.max_read_lines == 33
     reloaded = from_env(save_session=False, cwd=project)
     assert reloaded.max_read_lines == 33
 
