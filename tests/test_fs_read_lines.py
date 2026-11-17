@@ -2,7 +2,7 @@
 
 import pytest
 
-from js.toolkit import fs
+from js.toolkit import file_bytes, fs
 from js.toolkit.core import ToolContext
 
 
@@ -51,7 +51,7 @@ def test_read_empty_file_has_no_numbered_lines(tmp_path):
 
     result = fs.fs_read(str(target), context=context)
 
-    assert result == f"{target} is empty (hash {fs.hash_bytes(b'')})"
+    assert result == f"{target} is empty (hash {file_bytes.hash_bytes(b'')})"
     assert not context.reads.coverage(target).ranges
 
 

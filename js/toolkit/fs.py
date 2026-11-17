@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 import difflib
-import hashlib
 import json
 import os
 import re
 import shutil
-import stat
 from pathlib import Path
 
 from .. import held, imagefit, jail, settings as _settings, tool_args as _tool_args
 from ..media import IMAGE_RESULT_PREFIX
-from . import policy
+from . import file_bytes, notebook, policy
 from .core import Output, ToolContext, view as _view
 from .path_hints import no_such_file
 from .reads import require_read
@@ -100,10 +98,6 @@ def _trash_target(target: Path, context: ToolContext) -> str | None:
     if rc != 0:
         return f"ERROR: trash failed: {err.strip() or f'exit {rc}'}; pass permanent=true to delete without trash."
     return None
-
-
-def hash_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()[:16]
 
 
 def _result_page_bytes(context: ToolContext) -> int:
@@ -205,40 +199,13 @@ def changed_since_read(
     )
 
 
-def read_regular_bytes(path: Path, limit: int | None = None) -> bytes:
-    """Read bytes from *path*, refusing anything that is not a regular file and
-    never blocking on a FIFO/socket/device.
-
-    O_NONBLOCK makes the open return immediately for a pipe with no writer (the
-    kernel would otherwise park the caller in fifo_open->wait_for_partner);
-    on a regular file the flag has no effect and the read proceeds normally.
-    Raises OSError for a non-regular file or any read error so callers degrade
-    exactly as they do for a plain OSError."""
-    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
-    try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise OSError(f"not a regular file: {path}")
-        chunks: list[bytes] = []
-        read_so_far = 0
-        while limit is None or read_so_far < limit:
-            want = 65536 if limit is None else min(65536, limit - read_so_far)
-            chunk = os.read(fd, want)
-            if not chunk:
-                break
-            chunks.append(chunk)
-            read_so_far += len(chunk)
-        return b"".join(chunks)
-    finally:
-        os.close(fd)
-
-
 def _is_binary(path: Path) -> bool:
     if path.suffix.lower() in _BINARY_EXTS:
         return True
     if path.suffix.lower() in _TEXT_EXTS:
         return False
     try:
-        chunk = read_regular_bytes(path, 4096)
+        chunk = file_bytes.read_regular_bytes(path, 4096)
     except OSError:
         return False
     return b"\x00" in chunk
@@ -277,7 +244,7 @@ def image_marker(path: Path, mime: str, size: int, data: bytes) -> str:
 
 
 def _read_pdf_text(path: Path, context: ToolContext) -> tuple[str, bytes]:
-    data = read_regular_bytes(path)
+    data = file_bytes.read_regular_bytes(path)
     rc, out, err = run(["pdftotext", str(path), "-"], context)
     if rc == 0 and out.strip():
         return truncate(out, context), data
@@ -286,7 +253,7 @@ def _read_pdf_text(path: Path, context: ToolContext) -> tuple[str, bytes]:
 
 
 def _read_text(path: Path, context: ToolContext) -> tuple[str, bytes]:
-    data = read_regular_bytes(path)
+    data = file_bytes.read_regular_bytes(path)
     if len(data) > context.max_file_bytes:
         raise ValueError(
             f"File size ({len(data)} bytes) exceeds the maximum allowed size of {context.max_file_bytes} bytes"
@@ -303,26 +270,15 @@ def format_numbered_lines(lines: list[str], start_line: int) -> str:
     return "\n".join(out)
 
 
-def detect_line_ending(text: str) -> str:
-    if "\r\n" in text:
-        return "\r\n"
-    return "\r" if "\r" in text and "\n" not in text else "\n"
-
-
-def normalize_line_endings(text: str, target: str) -> str:
-    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
-    return normalized.replace("\n", target)
-
-
 def _encode_preserving_existing_newlines(path: Path, content: str) -> bytes:
     line_ending = "\n"
     if path.exists():
         try:
             existing = path.read_bytes().decode("utf-8")
-            line_ending = detect_line_ending(existing)
+            line_ending = file_bytes.detect_line_ending(existing)
         except UnicodeDecodeError:
             line_ending = "\n"
-    normalized = normalize_line_endings(content, line_ending)
+    normalized = file_bytes.normalize_line_endings(content, line_ending)
     return normalized.encode("utf-8")
 
 
@@ -366,7 +322,7 @@ def _read_byte_range(target: Path, context: ToolContext, start_byte: int, end_by
     whole: bytes | None = None
     try:
         if size <= context.max_file_bytes:
-            whole = read_regular_bytes(target)
+            whole = file_bytes.read_regular_bytes(target)
             size = len(whole)
             base, buf = 0, whole
         else:
@@ -398,7 +354,7 @@ def _remember_byte_read(target: Path, context: ToolContext, data: bytes, start: 
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         return
-    content_hash = hash_bytes(data)
+    content_hash = file_bytes.hash_bytes(data)
     lines = text.splitlines(keepends=True)
     shown: list[tuple[int, int]] = []
     offset = 0
@@ -570,15 +526,13 @@ def fs_read(
     if not target.is_file():
         return f"ERROR: not a regular file: {target}"
     if target.suffix.lower() == ".ipynb" and not ranged and not byte_ranged:
-        from . import notebook
-
         view = notebook.read_view(target, context)
         if view is not None:
             return view
 
     try:
         size = target.stat().st_size
-        header = read_regular_bytes(target, 16)
+        header = file_bytes.read_regular_bytes(target, 16)
     except OSError as exc:
         return f"ERROR: {exc}"
 
@@ -589,10 +543,10 @@ def fs_read(
         return _read_byte_range(target, context, max(0, byte_start), None if byte_end == -1 else byte_end)
     if mime and mime.startswith("image/"):
         try:
-            data = read_regular_bytes(target)
+            data = file_bytes.read_regular_bytes(target)
         except OSError as exc:
             return f"ERROR: {exc}"
-        content_hash = hash_bytes(data)
+        content_hash = file_bytes.hash_bytes(data)
         context.reads.remember(target, content_hash)
         if not context.vision_enabled:
             return _visual_fallback(target, mime, size)
@@ -607,7 +561,7 @@ def fs_read(
             text, data = _read_pdf_text(target, context)
         except OSError as exc:
             return f"ERROR: {exc}"
-        content_hash = hash_bytes(data)
+        content_hash = file_bytes.hash_bytes(data)
         context.reads.remember(target, content_hash)
         return text
 
@@ -645,7 +599,7 @@ def fs_read(
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         return f"ERROR: {exc}"
 
-    content_hash = hash_bytes(data)
+    content_hash = file_bytes.hash_bytes(data)
 
     # File lines end at LF, CRLF or CR; Unicode separators remain content.
     all_lines = re.split(r"\r\n|\r|\n", text)
@@ -779,10 +733,10 @@ def _write_text(context: ToolContext, raw_path: str | None, content: str, *, ove
         # is. The hash proves nothing moved since; the snapshot makes the
         # discard undoable.
         try:
-            current = read_regular_bytes(target)
+            current = file_bytes.read_regular_bytes(target)
         except OSError as exc:
             return f"ERROR: {exc}"
-        current_hash = hash_bytes(current)
+        current_hash = file_bytes.hash_bytes(current)
         action = "append to it" if append else "overwrite it"
         if expected_hash:
             # The hash the model expects is its proof of what it replaces: a
@@ -810,7 +764,7 @@ def _write_text(context: ToolContext, raw_path: str | None, content: str, *, ove
         return f"ERROR: {exc}"
     _view(path=str(target), before=current.decode("utf-8", errors="replace") if replacing else None,
          after=written.decode("utf-8", errors="replace"), bytes=len(written))
-    content_hash = hash_bytes(written)
+    content_hash = file_bytes.hash_bytes(written)
     total = len(written.decode("utf-8", errors="replace").splitlines())
     if appending:
         # The model has seen what it read of the old content and every line
@@ -932,7 +886,7 @@ def undo(path: str, context: ToolContext | None = None) -> str:
             target.write_bytes(previous)
             if mode is not None:
                 target.chmod(mode)
-            content_hash = hash_bytes(previous)
+            content_hash = file_bytes.hash_bytes(previous)
             # Legacy snapshots have no evidence of what was displayed. Never
             # carry transformed coverage from the edited version across undo.
             valid = isinstance(coverage, dict) and coverage.get("hash") == content_hash

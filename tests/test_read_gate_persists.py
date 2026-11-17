@@ -3,7 +3,7 @@ session counts after js restarts on that session, and an overwrite that names
 the hash it expects needs no read at all."""
 from __future__ import annotations
 
-from js.toolkit import fs
+from js.toolkit import file_bytes, fs
 from js.toolkit.core import ToolContext
 
 
@@ -32,7 +32,7 @@ def test_an_overwrite_naming_the_current_hash_needs_no_read(tmp_path):
     context = ToolContext(cwd=tmp_path)
 
     result = fs.write(file_path=str(target), content="new\n", overwrite=True,
-                      expected_hash=fs.hash_bytes(b"old\n"), context=context)
+                      expected_hash=file_bytes.hash_bytes(b"old\n"), context=context)
 
     assert result.startswith("wrote "), result
     assert target.read_text(encoding="utf-8") == "new\n"
@@ -42,13 +42,13 @@ def test_an_overwrite_naming_a_stale_hash_is_refused_with_both_hashes(tmp_path):
     target = tmp_path / "f.txt"
     target.write_text("moved\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
-    stale = fs.hash_bytes(b"old\n")
+    stale = file_bytes.hash_bytes(b"old\n")
 
     result = fs.write(file_path=str(target), content="new\n", overwrite=True,
                       expected_hash=stale, context=context)
 
     assert result.startswith("ERROR")
-    assert stale in result and fs.hash_bytes(b"moved\n") in result
+    assert stale in result and file_bytes.hash_bytes(b"moved\n") in result
     assert target.read_text(encoding="utf-8") == "moved\n"
 
 

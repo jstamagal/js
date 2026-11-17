@@ -22,7 +22,12 @@ from typing import Any
 
 from .core import Tool, ToolContext
 from .descriptions import load_description, load_parameter_description
-from .fs import detect_line_ending, hash_bytes, normalize_line_endings, read_regular_bytes
+from .file_bytes import (
+    detect_line_ending,
+    hash_bytes,
+    normalize_line_endings,
+    read_regular_bytes,
+)
 from .presentation import Presentation
 from .reads import require_read
 from .sanitize import int_or_default

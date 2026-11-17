@@ -15,7 +15,7 @@ import threading
 
 import pytest
 
-from js.toolkit import ToolContext, file_search, fs
+from js.toolkit import ToolContext, file_bytes, file_search
 from js.toolkit.file_search import fs_search
 from js.toolkit.fs import fs_read
 
@@ -450,7 +450,7 @@ def test_fs_read_empty_file_message_uses_resolved_path(tmp_path):
     # target, never the literal "None" that file_path holds on this path.
     actual = fs_read(path="empty.txt", context=context)
 
-    assert actual == f"{empty} is empty (hash {fs.hash_bytes(b'')})"
+    assert actual == f"{empty} is empty (hash {file_bytes.hash_bytes(b'')})"
 
 
 def _hidden_tree(tmp_path):

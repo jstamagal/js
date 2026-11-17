@@ -7,14 +7,13 @@ import difflib
 from pathlib import Path
 
 from .core import ToolContext, view as _view
-from .fs import (
-    changed_since_read,
+from .file_bytes import (
     detect_line_ending,
     hash_bytes,
     normalize_line_endings,
     read_regular_bytes,
-    unified_diff,
 )
+from .fs import changed_since_read, unified_diff
 from .path_hints import no_such_file
 from .reads import require_read
 

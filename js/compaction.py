@@ -161,7 +161,8 @@ def _post_compact_rehydration(
             return 0.0
     paths.sort(key=_mtime, reverse=True)
 
-    from .toolkit.fs import detect_visual_mime, read_regular_bytes
+    from .toolkit.file_bytes import read_regular_bytes
+    from .toolkit.fs import detect_visual_mime
 
     sections: list[str] = []
     spent = 0

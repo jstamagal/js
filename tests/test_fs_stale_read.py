@@ -2,7 +2,7 @@
 the read is refused with the hash mismatch named and the diff handed over."""
 from __future__ import annotations
 
-from js.toolkit import fs, patch
+from js.toolkit import file_bytes, fs, patch
 from js.toolkit.core import ToolContext
 
 
@@ -41,9 +41,9 @@ def test_overwrite_of_a_file_changed_since_the_read_is_refused_naming_both_hashe
     target.write_text("as read\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
     fs.fs_read(file_path=str(target), context=context)
-    read_hash = fs.hash_bytes(b"as read\n")
+    read_hash = file_bytes.hash_bytes(b"as read\n")
     target.write_text("moved underneath\n", encoding="utf-8")
-    now_hash = fs.hash_bytes(b"moved underneath\n")
+    now_hash = file_bytes.hash_bytes(b"moved underneath\n")
 
     result = fs.write(file_path=str(target), content="mine\n", overwrite=True, context=context)
 
@@ -67,8 +67,8 @@ def test_hash_mismatch_is_named_when_no_copy_of_the_read_is_held(tmp_path):
     result = patch.patch(file_path=str(target), old_string="moved", new_string="kept", context=context)
 
     assert result.startswith("ERROR")
-    assert fs.hash_bytes(b"as read\n") in result
-    assert fs.hash_bytes(b"moved underneath\n") in result
+    assert file_bytes.hash_bytes(b"as read\n") in result
+    assert file_bytes.hash_bytes(b"moved underneath\n") in result
     assert target.read_text(encoding="utf-8") == "moved underneath\n"
 
 

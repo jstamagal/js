@@ -18,7 +18,8 @@ from pathlib import Path
 from .. import jail
 from ..tool_binaries import resolve_binary
 from .core import ToolContext
-from .fs import format_numbered_lines, hash_bytes, read_regular_bytes, unified_diff
+from .file_bytes import hash_bytes, read_regular_bytes
+from .fs import format_numbered_lines, unified_diff
 from .path_hints import missing_path_hint
 from .results import truncate
 from .sanitize import int_or_default

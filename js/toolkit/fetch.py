@@ -28,7 +28,8 @@ from ..tool_binaries import (
 )
 from .core import Tool, ToolContext
 from .descriptions import load_description
-from .fs import detect_visual_mime, image_marker, read_regular_bytes
+from .file_bytes import read_regular_bytes
+from .fs import detect_visual_mime, image_marker
 from .presentation import Presentation
 from .results import spill_oversized_result
 from .sanitize import text_or_default
