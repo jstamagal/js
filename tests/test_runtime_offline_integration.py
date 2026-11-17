@@ -12,6 +12,12 @@ import ai.types.messages
 import ai.types.usage
 import pytest
 from tool_loading import after_loading
+from turn_driver import (
+    ExchangeConsole,
+    config as turn_config,
+    registry as scripted_registry,
+    run as run_scripted_turn,
+)
 
 from js import (
     cli,
@@ -1002,37 +1008,32 @@ def test_duplicate_invalid_tool_batch_is_retained_once_without_handler_side_effe
     } == {"received": 200, "retained": 1, "duplicate": 199, "invalid": 1, "capped": 0}
 
 
-def test_tool_batch_aliases_and_json_formatting_deduplicate_before_cap():
+def test_tool_batch_aliases_and_json_formatting_deduplicate_before_cap(monkeypatch, tmp_path):
+    ran: list[dict] = []
     tool = Tool(
         name="write",
         description="write",
-        handler=lambda **_kwargs: "ok",
+        handler=lambda **kwargs: ran.append(kwargs) or "ok",
         params={"path": {"type": "string"}},
         required=("path",),
         aliases=("Write",),
     )
-    registry = ToolRegistry(
-        tools=(tool,),
-        aliases={"write": "write"},
-    ).aliased({"write": "Write"})
-    calls = [
-        runtime._PendingToolCall("first", "Write", ['{"path":"a"}']),
-        runtime._PendingToolCall("second", "write", ['{ "path": "a" }']),
-        runtime._PendingToolCall("third", "write", ['{"path":"b"}']),
-    ]
+    cfg = turn_config(tmp_path, {"TOOL_ALIASES": [{"match": ["offline"], "aliases": {"write": "Write"}}]},
+                      max_tool_calls_per_message=1)
 
-    normalized, stats = runtime._normalize_tool_call_batch(calls, registry, limit=1)
+    turn = run_scripted_turn(tmp_path, monkeypatch, ToolRegistry(tools=(tool,), aliases={"write": "write"}), [[
+        ("first", "Write", '{"path":"a"}'),
+        ("second", "write", '{ "path": "a" }'),
+        ("third", "write", '{"path":"b"}'),
+    ]], cfg=cfg)
 
-    assert [(call.id, call.name, call.arguments()) for call in normalized] == [
-        ("first", "write", '{"path":"a"}')
-    ]
-    assert stats == runtime._ToolBatchStats(
-        received=3,
-        retained=1,
-        duplicate=1,
-        invalid=0,
-        capped=1,
-    )
+    assert turn.calls() == [("first", "write", '{"path":"a"}')]
+    assert ran == [{"path": "a"}]
+    (normalized,) = turn.events("tool_call_batch_normalized")
+    assert {
+        key: normalized[key]
+        for key in ("received", "retained", "duplicate", "invalid", "capped")
+    } == {"received": 3, "retained": 1, "duplicate": 1, "invalid": 0, "capped": 1}
 
 
 def test_distinct_tool_batch_cap_executes_limit_and_reports_one_diagnostic(
@@ -1436,23 +1437,18 @@ def test_scalar_coercion_leaves_genuinely_wrong_arguments_to_fail_validation():
     assert tool_args.schema_error(wrong, schema) is not None
 
 
-def test_string_serialized_edits_reach_the_patch_handler_as_an_array(tmp_path):
+def test_string_serialized_edits_reach_the_patch_handler_as_an_array(monkeypatch, tmp_path):
     """Regression: patch's batch form was rejected as `is not of type 'array'`
     before dispatch, so only one replacement per call ever worked."""
-    from js.toolkit import fs
-
-    tool = next(item for item in fs.tools() if item.name == "patch")
-    registry = ToolRegistry(tools=(tool,), aliases={"patch": "patch"})
+    tool, received = _recording_patch()
     arguments = json.dumps(
         {"file_path": str(tmp_path / "f.txt"), "edits": json.dumps([{"old_string": "a", "new_string": "b"}])}
     )
 
-    normalized, stats = runtime._normalize_tool_call_batch(
-        [runtime._PendingToolCall("call_1", "patch", [arguments])], registry, limit=10
-    )
+    turn = run_scripted_turn(tmp_path, monkeypatch, scripted_registry(tool), [[("call_1", "patch", arguments)]])
 
-    assert stats.invalid == 0
-    assert json.loads(normalized[0].arguments())["edits"] == [{"old_string": "a", "new_string": "b"}]
+    assert [event["invalid"] for event in turn.events("tool_call_batch_normalized")] == [0]
+    assert [args["edits"] for args in received] == [[{"old_string": "a", "new_string": "b"}]]
 
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -1492,19 +1488,17 @@ def _marker_lines(lines: list[str]) -> list[str]:
     return [line for line in lines if line.startswith((display.MARK, display.OK, display.FAIL))]
 
 
-def test_trace_prints_a_result_line_for_success_and_for_error(capsys):
+def _traced_turn(tmp_path, monkeypatch, registry: ToolRegistry, batch: list[tuple[str, str, str]],
+                 level: int) -> None:
+    """Run one turn of ``batch`` with the exchanges drawn on stdout at TOOLS_DISPLAY ``level``."""
+    cfg = turn_config(tmp_path, {"TOOLS_DISPLAY": level, "TOOLS_PREVIEW_LINES": 3})
+    run_scripted_turn(tmp_path, monkeypatch, registry, [batch], cfg=cfg, sink=ExchangeConsole(), trace=True)
+
+
+def test_trace_prints_a_result_line_for_success_and_for_error(capsys, monkeypatch, tmp_path):
     """The trace used to print only the call half of every exchange, so a run
     could show `tool_discovery {...}` and never whether it returned anything."""
-    registry = _trace_registry()
-    calls = [
-        runtime._PendingToolCall("c1", "big", ["{}"]),
-        runtime._PendingToolCall("c2", "boom", ["{}"]),
-    ]
-
-    runtime._dispatch_tool_calls(
-        calls, runtime.Telemetry(None), 256 * 1024, True,
-        runtime.ToolErrorTracker(), registry, _tools_context(1),
-    )
+    _traced_turn(tmp_path, monkeypatch, _trace_registry(), [("c1", "big", "{}"), ("c2", "boom", "{}")], 1)
 
     markers = _marker_lines(_trace_lines(capsys))
     assert len(markers) == 2
@@ -1512,15 +1506,11 @@ def test_trace_prints_a_result_line_for_success_and_for_error(capsys):
     assert markers[1].startswith(display.FAIL) and "boom" in markers[1]
 
 
-def test_trace_result_line_covers_the_unknown_tool_and_invalid_argument_paths(capsys):
-    registry = _trace_registry()
-    invalid = runtime._PendingToolCall("c1", "big", ["{}"], validation_error="'path' is a required property")
-    calls = [invalid, runtime._PendingToolCall("c2", "nope", ["{}"])]
+def test_trace_result_line_covers_the_unknown_tool_and_invalid_argument_paths(capsys, monkeypatch, tmp_path):
+    big = Tool("big", "big", lambda **_kwargs: "big", {"path": {"type": "string"}}, required=("path",))
+    registry = ToolRegistry(tools=(big,), aliases={"big": "big"})
 
-    runtime._dispatch_tool_calls(
-        calls, runtime.Telemetry(None), 256 * 1024, True,
-        runtime.ToolErrorTracker(), registry, _tools_context(2),
-    )
+    _traced_turn(tmp_path, monkeypatch, registry, [("c1", "big", "{}"), ("c2", "nope", "{}")], 2)
 
     lines = _trace_lines(capsys)
     markers = _marker_lines(lines)
@@ -1637,54 +1627,58 @@ def test_a_tool_call_under_zero_tools_runs_nothing_and_returns_the_unknown_tool_
     assert outputs[1].startswith("ERROR") and "shell" in outputs[1]
 
 
-def test_tool_batch_keeps_the_models_argument_text_for_replay():
+def test_tool_batch_keeps_the_models_argument_text_for_replay(monkeypatch, tmp_path):
     """A server's prompt cache holds the tokens the model wrote. Arguments
     replayed with their keys sorted re-render a different prefix, and a
     hybrid-attention server then recomputes the whole prompt."""
     from js.toolkit import fs
 
     tool = next(item for item in fs.tools() if item.name == "write")
-    registry = ToolRegistry(tools=(tool,), aliases={"write": "write"})
     raw = '{"file_path":"hello.txt","content":"hi\\n"}'
 
-    normalized, _ = runtime._normalize_tool_call_batch(
-        [runtime._PendingToolCall("call_1", "write", [raw])], registry, limit=10
-    )
+    turn = run_scripted_turn(tmp_path, monkeypatch, scripted_registry(tool), [[("call_1", "write", raw)]])
 
-    assert normalized[0].arguments() == raw
+    assert turn.calls() == [("call_1", "write", raw)]
+    assert turn.replayed_calls() == [("call_1", "write", raw)]
 
 
-def test_coerced_tool_arguments_keep_the_models_key_order():
-    from js.toolkit import fs
-
-    tool = next(item for item in fs.tools() if item.name == "patch")
-    registry = ToolRegistry(tools=(tool,), aliases={"patch": "patch"})
+def test_coerced_tool_arguments_keep_the_models_key_order(monkeypatch, tmp_path):
+    tool, received = _recording_patch()
     raw = json.dumps({"file_path": "f.txt", "edits": json.dumps([{"old_string": "a", "new_string": "b"}])})
 
-    normalized, _ = runtime._normalize_tool_call_batch(
-        [runtime._PendingToolCall("call_1", "patch", [raw])], registry, limit=10
-    )
+    turn = run_scripted_turn(tmp_path, monkeypatch, scripted_registry(tool), [[("call_1", "patch", raw)]])
 
-    replayed = normalized[0].arguments()
-    assert list(json.loads(replayed)) == ["file_path", "edits"]
-    assert list(json.loads(replayed)["edits"][0]) == ["old_string", "new_string"]
+    assert len(received) == 1
+    for _call_id, _name, replayed in turn.calls() + turn.replayed_calls():
+        assert list(json.loads(replayed)) == ["file_path", "edits"]
+        assert list(json.loads(replayed)["edits"][0]) == ["old_string", "new_string"]
 
 
-def test_duplicate_tool_calls_still_match_across_key_order():
+def test_duplicate_tool_calls_still_match_across_key_order(monkeypatch, tmp_path):
+    ran: list[dict] = []
     tool = Tool(
         name="write",
         description="write",
-        handler=lambda **_kwargs: "ok",
+        handler=lambda **kwargs: ran.append(kwargs) or "ok",
         params={"path": {"type": "string"}, "content": {"type": "string"}},
         required=("path",),
     )
-    registry = ToolRegistry(tools=(tool,), aliases={"write": "write"})
-    calls = [
-        runtime._PendingToolCall("first", "write", ['{"path":"a","content":"x"}']),
-        runtime._PendingToolCall("second", "write", ['{"content":"x","path":"a"}']),
-    ]
 
-    normalized, stats = runtime._normalize_tool_call_batch(calls, registry, limit=10)
+    turn = run_scripted_turn(tmp_path, monkeypatch, scripted_registry(tool), [[
+        ("first", "write", '{"path":"a","content":"x"}'),
+        ("second", "write", '{"content":"x","path":"a"}'),
+    ]])
 
-    assert [call.id for call in normalized] == ["first"]
-    assert stats.duplicate == 1
+    assert [call_id for call_id, _name, _args in turn.calls()] == ["first"]
+    assert len(ran) == 1
+    assert [event["duplicate"] for event in turn.events("tool_call_batch_normalized")] == [1]
+
+
+def _recording_patch() -> tuple[Tool, list[dict]]:
+    """fs's patch tool, schema and all, with a handler that records the
+    arguments it receives and changes nothing."""
+    from js.toolkit import fs
+
+    received: list[dict] = []
+    tool = next(item for item in fs.tools() if item.name == "patch")
+    return replace(tool, handler=lambda **kwargs: received.append(kwargs) or "patched"), received

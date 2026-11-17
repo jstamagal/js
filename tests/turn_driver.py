@@ -15,8 +15,9 @@ import ai
 import ai.types.messages
 import ai.types.usage
 
-from js import runtime
+from js import output, runtime
 from js.config import Config
+from js.console import ConsoleSink
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit.core import Tool, ToolContext
 from js.toolkit.registry import ToolRegistry
@@ -87,6 +88,20 @@ def recording(name: str, params: dict | None = None, required: tuple[str, ...] =
         return result
 
     return Tool(name, f"{name} tool", handler, params or {}, required=required), received
+
+
+class ExchangeConsole:
+    """An output sink that draws the turn's tool exchanges on the console and
+    nothing else."""
+
+    EVENTS = frozenset({"tool_call", "tool_result", "tools_settle"})
+
+    def __init__(self) -> None:
+        self.console = ConsoleSink(None)
+
+    def emit(self, event: output.OutputEvent) -> None:
+        if event.name in self.EVENTS:
+            self.console.emit(event)
 
 
 @dataclass
