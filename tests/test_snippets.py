@@ -58,14 +58,14 @@ def test_parameter_prose_is_loaded_separately_from_tool_contract(monkeypatch, tm
     path = tmp_path / "fixture.md"
     path.write_text("Tool contract.\n\n<!--parameters-->\n\n### path\n\nPath {{LABEL}}.\n")
     monkeypatch.setattr(paths, "find", lambda relative: tmp_path / Path(relative).name)
-    descriptions._load_description.cache_clear()
+    descriptions.reset_cache()
     try:
         assert descriptions.load_description("fixture") == "Tool contract."
         assert descriptions.load_parameter_description("fixture", "path", LABEL="{{LITERAL}}") == "Path {{LITERAL}}."
         with pytest.raises(ValueError, match="absent"):
             descriptions.load_parameter_description("fixture", "absent")
     finally:
-        descriptions._load_description.cache_clear()
+        descriptions.reset_cache()
 
 
 def test_output_limit_recovery_reads_the_current_snippet(monkeypatch, tmp_path):

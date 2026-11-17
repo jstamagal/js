@@ -35,7 +35,7 @@ def test_description_loader_rejects_missing_and_accepts_empty_files(tmp_path, mo
     monkeypatch.setattr(paths, "defaults_dir", lambda root=tmp_path: root)
     tmp_path = tmp_path / "tool_descriptions"
     tmp_path.mkdir()
-    descriptions._load_description.cache_clear()
+    descriptions.reset_cache()
 
     with pytest.raises(FileNotFoundError):
         descriptions.load_description("missing")
@@ -43,11 +43,11 @@ def test_description_loader_rejects_missing_and_accepts_empty_files(tmp_path, mo
     (tmp_path / "empty.md").write_text("\n", encoding="utf-8")
     assert descriptions.load_description("empty") == ""
 
-    descriptions._load_description.cache_clear()
+    descriptions.reset_cache()
 
 
 def test_registered_tools_and_description_files_match():
-    descriptions._load_description.cache_clear()
+    descriptions.reset_cache()
     registry = build_default_registry()
     registered = {tool.name for tool in registry.tools}
     files = {path.stem for path in descriptions.description_dir().glob("*.md")}

@@ -159,13 +159,11 @@ def test_a_theme_in_the_home_wins_over_the_built_in_and_an_unknown_one_is_refuse
     (tmp_path / "themes").mkdir()
     (tmp_path / "themes" / "crush").write_text("fset PALETTE_04 #123456\n", encoding="utf-8")
     (tmp_path / "themes" / "broken").write_text("fset COLOR_ERROR #123456\n", encoding="utf-8")
-    fset._themes.clear()
     assert setcmd.fset_command({}, "THEME crush").error is None
     assert fset.hex_for("COLOR_ERROR") == "#123456"
     assert setcmd.fset_command({}, "THEME no-such-theme").error is not None
     assert setcmd.fset_command({}, "THEME broken").error is not None
     assert fset.theme_name() == "crush"
-    fset._themes.clear()
 
 
 def test_a_display_level_is_a_set_setting_and_fset_refuses_it():

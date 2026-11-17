@@ -216,6 +216,11 @@ def choose(
 _warned_empty: set[tuple[str, ...]] = set()
 
 
+def reset_warnings() -> None:
+    """Forget which profiles were warned about; each warns again once."""
+    _warned_empty.clear()
+
+
 def warn_empty(profile: ModelProfile) -> None:
     """One notice per process for a profile that would leave no tools."""
     if profile.match in _warned_empty:

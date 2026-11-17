@@ -81,6 +81,11 @@ def _warn_once(message: str) -> None:
     output.notice(msgs.DESCRIPTION_PROBLEM, problem=message)
 
 
+def reset_cache() -> None:
+    """Drop the descriptions read; the next load reads its file again."""
+    _load_description.cache_clear()
+
+
 def description_dir() -> Path:
     return paths.defaults_dir() / "tool_descriptions"
 

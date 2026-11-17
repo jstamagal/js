@@ -28,8 +28,8 @@ FOURTEEN = ("read", "write", "fs_search", "remove", "patch", "undo", "shell", "f
 
 
 @pytest.fixture(autouse=True)
-def fresh_warnings(monkeypatch):
-    monkeypatch.setattr(model_profiles, "_warned_empty", set())
+def fresh_warnings():
+    model_profiles.reset_warnings()
 
 
 def _agent(tmp_path: Path, models: list | None = None) -> Path:

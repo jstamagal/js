@@ -100,10 +100,10 @@ def test_description_warning_is_an_event(monkeypatch, capsys):
     descriptions.reset_warnings()
     events = []
     with output.using_sink(SimpleNamespace(emit=events.append)):
-        descriptions._warn_once("invalid marker")
-        descriptions._warn_once("invalid marker")
+        for _ in range(2):
+            descriptions.render_tool_name_sections("{{#if}}body{{/if}}", (), tool="fixture")
     assert len(events) == 1
-    assert dict(events[0].fields)["fields"]["problem"] == "invalid marker"
+    assert "fixture" in dict(events[0].fields)["fields"]["problem"]
     assert capsys.readouterr() == ("", "")
 
 
@@ -260,16 +260,20 @@ def test_a_bad_agent_sampling_value_is_an_error_naming_it(tmp_path):
         persona.load_configured_prompt_spec(config(tmp_path, agent_id="worker", prompts_dir=agent), expand=False)
 
 
-def test_skill_discovery_warning_is_an_event(monkeypatch, capsys):
+def test_skill_discovery_warning_is_an_event(monkeypatch, tmp_path, capsys):
     from js import skills
 
+    broken = tmp_path / "skills" / "broken" / "SKILL.md"
+    broken.parent.mkdir(parents=True)
+    broken.write_text("---\nname: [broken\n---\nbody\n")
     skills.reset_warnings()
     events = []
     with output.using_sink(SimpleNamespace(emit=events.append)):
-        skills._warn_once("invalid skill")
-        skills._warn_once("invalid skill")
+        for _ in range(2):
+            skills.discover_skills(tmp_path, builtin_dir=tmp_path / "none",
+                                   global_dir=tmp_path / "skills", user_dir=tmp_path / "user")
     assert len(events) == 1
-    assert dict(events[0].fields)["fields"]["error"] == "invalid skill"
+    assert str(broken) in dict(events[0].fields)["fields"]["error"]
     assert capsys.readouterr() == ("", "")
 
 

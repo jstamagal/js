@@ -115,7 +115,8 @@ def _takes_image(model: Any) -> bool:
     )
 
 
-def _clear_caches() -> None:
+def reset_caches() -> None:
+    """Drop every catalog lookup and probe answer held; the next lookup reads again."""
     _all_models.cache_clear()
     lookup_limits.cache_clear()
     model_prices.cache_clear()
@@ -552,7 +553,7 @@ def refresh_catalog(*, force: bool = False) -> CatalogStatus:
     if status is None:
         raise RuntimeError(f"refreshed models.dev catalog missing metadata: {output}")
     _write_status_file(status)
-    _clear_caches()
+    reset_caches()
     return status
 
 

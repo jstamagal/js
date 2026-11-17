@@ -10,7 +10,6 @@ def themes_dir(monkeypatch, tmp_path):
     monkeypatch.setattr(paths, "home", lambda: tmp_path)
     themes = tmp_path / "themes"
     themes.mkdir()
-    monkeypatch.setattr(fset, "_themes", {})
     return themes
 
 

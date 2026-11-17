@@ -68,7 +68,7 @@ def test_every_stock_file_uses_default_when_no_override(tmp_path, monkeypatch):
 def test_descriptions_and_tools_yaml_are_file_overrides(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write(paths.home() / 'tool_descriptions/shell.md', '')
-    descriptions._load_description.cache_clear()
+    descriptions.reset_cache()
     assert descriptions.load_description('shell') == ''
     stock = tmp_path / 'stock'
     monkeypatch.setattr(paths, 'defaults_dir', lambda: stock)

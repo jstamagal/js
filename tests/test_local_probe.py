@@ -8,9 +8,9 @@ from js import context_window, model_metadata
 
 @pytest.fixture(autouse=True)
 def clear_probe_cache():
-    model_metadata._clear_caches()
+    model_metadata.reset_caches()
     yield
-    model_metadata._clear_caches()
+    model_metadata.reset_caches()
 
 
 def test_openai_compatible_models_payload_context_window(monkeypatch):
