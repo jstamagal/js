@@ -176,12 +176,12 @@ class NetCall:
             self._sent = True
             self._started = time.perf_counter()
 
-    def connected(self, host: str = "") -> None:
+    def connected(self) -> None:
         if self._connected:
             return
         self._connected = True
         ms = int((time.perf_counter() - self._started) * 1000)
-        host = host or _host(self._url)
+        host = _host(self._url)
         if self._role.label:
             say(3, msgs.NET_ROLE_CONNECTED.said(role=self._role.label, host=host, ms=ms))
         else:
