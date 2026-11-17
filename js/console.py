@@ -632,8 +632,6 @@ def trace_result(telemetry: Telemetry, tool_context: ToolContext | None, name: s
     """Show a finished call. `exchange` is what `trace_call` returned for it;
     without one the call is shown whole now. `view` is what the tool handed
     the screen beside its result (`toolkit.core.view`)."""
-    from .toolkit.presentation import tool_output
-
     screen = tool_output(name, result) if traced else None
     with output.LOCK:
         if exchange is None:
