@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from repl_driver import repl_state, stub_screen, turn_stub
+from turn_driver import js
 
 from js import cli, messages as msgs, paths as _paths, runtime, session_store, snippets
 from js.config import Config, InvocationSources
@@ -202,6 +203,7 @@ def test_interactive_prompt_enables_ctrl_z_suspend(monkeypatch, tmp_path):
 
 
 def test_prompt_model_flag_with_provider_prefix_routes_provider_override(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
@@ -224,7 +226,7 @@ def test_prompt_model_flag_with_provider_prefix_routes_provider_override(monkeyp
     monkeypatch.setattr(cli, "_append_turn", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
 
-    actual = cli._run_prompt("foo", model="openai/gpt-5.5")
+    actual = js(monkeypatch, "--model", "openai/gpt-5.5", "-p", "foo")
 
     assert actual == 0
     assert seen["cfg_model"] == "gpt-5.5"
@@ -423,6 +425,7 @@ def test_config_rejects_absolute_session_outside_sessions(monkeypatch, tmp_path)
 
 
 def test_js_prompt_mode_persists_turn_for_repl_continuity(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
     prompts = tmp_path / "prompts"
     prompts.mkdir()
     (prompts / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
@@ -436,7 +439,7 @@ def test_js_prompt_mode_persists_turn_for_repl_continuity(monkeypatch, tmp_path,
     monkeypatch.setattr(cli, "_from_env", lambda *_args, **_kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
-    actual = cli._run_prompt("Can you write a recipe scraper?")
+    actual = js(monkeypatch, "-p", "Can you write a recipe scraper?")
 
     captured = capsys.readouterr()
     output = captured.out
@@ -507,6 +510,7 @@ def test_prompt_instruction_combines_with_piped_stdin(monkeypatch):
 
 
 def test_prompt_model_override_is_preserved_in_continue_hint(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
@@ -516,7 +520,7 @@ def test_prompt_model_override_is_preserved_in_continue_hint(monkeypatch, tmp_pa
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
-    actual = cli._run_prompt("Reply with MODEL_HINT_OK", model="hint-model")
+    actual = js(monkeypatch, "--model", "hint-model", "-p", "Reply with MODEL_HINT_OK")
 
     captured = capsys.readouterr()
     output = captured.out
@@ -527,6 +531,7 @@ def test_prompt_model_override_is_preserved_in_continue_hint(monkeypatch, tmp_pa
 
 
 def test_resumed_prompt_uses_js_model_over_me_model_and_config(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
@@ -546,7 +551,7 @@ def test_resumed_prompt_uses_js_model_over_me_model_and_config(monkeypatch, tmp_
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
-    actual = cli._run_prompt("continue", session="resume-env-model")
+    actual = js(monkeypatch, "--session", "resume-env-model", "-p", "continue")
 
     err = capsys.readouterr().err
     assert actual == 0
@@ -555,6 +560,7 @@ def test_resumed_prompt_uses_js_model_over_me_model_and_config(monkeypatch, tmp_
 
 
 def test_js_prompt_mode_generated_session_prints_usable_continue_hint(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
@@ -564,7 +570,7 @@ def test_js_prompt_mode_generated_session_prints_usable_continue_hint(monkeypatc
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
-    actual = cli._run_prompt("Reply with GENERATED_OK")
+    actual = js(monkeypatch, "-p", "Reply with GENERATED_OK")
 
     captured = capsys.readouterr()
     # Sessions are filed by the directory js started in.
@@ -589,7 +595,7 @@ def test_the_continue_hint_goes_to_stderr_and_stdout_keeps_only_the_answer(monke
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_k: _fake_stream_result("HINT_OK"))
 
-    assert cli._run_prompt("Reply with HINT_OK", session="hinted") == 0
+    assert js(monkeypatch, "--session", "hinted", "-p", "Reply with HINT_OK") == 0
 
     captured = capsys.readouterr()
     assert captured.out == "HINT_OK\n"
@@ -606,13 +612,14 @@ def test_runtime_trace_shows_the_trace_on_stderr_in_prompt_mode(monkeypatch, tmp
 
     for value, shown in (("on", True), ("off", False)):
         monkeypatch.setenv("JS_TRACE", value)
-        assert cli._run_prompt("Reply with TRACE_OK", save=False) == 0
+        assert js(monkeypatch, "--no-save", "-p", "Reply with TRACE_OK") == 0
         captured = capsys.readouterr()
         assert captured.out == "TRACE_OK\n"
         assert (run_line in captured.err) is shown
 
 
 def test_js_prompt_mode_no_save_writes_no_session_or_latest(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
@@ -622,7 +629,7 @@ def test_js_prompt_mode_no_save_writes_no_session_or_latest(monkeypatch, tmp_pat
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
-    actual = cli._run_prompt("Reply with NO_SAVE_OK", save=False)
+    actual = js(monkeypatch, "--no-save", "-p", "Reply with NO_SAVE_OK")
 
     captured = capsys.readouterr()
     assert actual == 0
@@ -636,7 +643,7 @@ def test_empty_one_shot_reply_records_failed_statistics(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kwargs: _fake_stream_result(""))
     path = tmp_path / "stats.json"
 
-    assert cli._run_prompt("question", save=False, stats_json=str(path)) == 1
+    assert js(monkeypatch, "--no-save", "--stats-json", str(path), "-p", "question") == 1
     row = json.loads(path.read_text(encoding="utf-8"))["turns"][0]
 
     assert row["ok"] is False
@@ -723,6 +730,7 @@ def test_clustered_short_booleans_parse_with_prompt(monkeypatch):
 
 
 def test_prompt_mode_auto_compact_uses_model_override_for_same(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
@@ -740,7 +748,7 @@ def test_prompt_mode_auto_compact_uses_model_override_for_same(monkeypatch, tmp_
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=compact_stub))
     monkeypatch.setattr(cli.runtime, "_resolve_context_window", lambda _model, _provider, _base_url=None: 150_000)
 
-    actual = cli._run_prompt("hi", model="flag-model")
+    actual = js(monkeypatch, "--model", "flag-model", "-p", "hi")
 
     assert actual == 0
     assert "PROMPT_COMPACT_OK" in capsys.readouterr().out
@@ -764,6 +772,7 @@ def test_cli_refresh_model_catalog_flag_exits_after_forced_refresh(monkeypatch):
 
 
 def test_prompt_mode_reasoning_off_and_maxout_forward_explicit_overrides(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("JS_REASONING", "high")
     prompts = tmp_path / "prompts"
     prompts.mkdir()
@@ -779,7 +788,7 @@ def test_prompt_mode_reasoning_off_and_maxout_forward_explicit_overrides(monkeyp
     monkeypatch.setattr(cli, "_from_env", lambda *_args, **_kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
-    actual = cli._run_prompt("hi", reasoning="off", maxout=321)
+    actual = js(monkeypatch, "--reasoning", "off", "--max-out", "321", "-p", "hi")
 
     assert actual == 0
     assert capsys.readouterr().out.splitlines()[0] == "KNOBS_OK"
@@ -809,7 +818,7 @@ def test_prompt_mode_missing_agent_fails_before_the_provider(monkeypatch, tmp_pa
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_k: pytest.fail("provider reached"))
 
-    assert cli._run_prompt("hi", agent="ghostagent") == 2
+    assert js(monkeypatch, "--agent", "ghostagent", "-p", "hi") == 2
 
     err = capsys.readouterr().err
     assert "ghostagent" in err
@@ -822,9 +831,10 @@ def test_prompt_mode_invalid_reasoning_errors_cleanly_before_provider(monkeypatc
     def explode(**kwargs):
         raise AssertionError("provider must not be reached for an invalid --reasoning")
 
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", explode)
 
-    assert cli._run_prompt("hi", reasoning="very default") == 2
+    assert js(monkeypatch, "--reasoning", "very default", "-p", "hi") == 2
 
     assert "very default" in capsys.readouterr().err
 
@@ -922,6 +932,7 @@ def test_commit_mode_rejects_agent_override_and_missing_target(monkeypatch, tmp_
 
 
 def test_resumed_prompt_model_override_is_used_and_preserved_in_continue_hint(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
@@ -937,7 +948,7 @@ def test_resumed_prompt_model_override_is_used_and_preserved_in_continue_hint(mo
 
     monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
 
-    actual = cli._run_prompt("continue", session="resume-model", model="resume-model-override")
+    actual = js(monkeypatch, "--session", "resume-model", "--model", "resume-model-override", "-p", "continue")
 
     err = capsys.readouterr().err
     assert actual == 0
@@ -954,6 +965,7 @@ def test_short_session_and_agent_aliases_parse(monkeypatch):
 
 
 def test_a_session_run_under_an_agent_names_it_in_the_hint(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
@@ -978,7 +990,7 @@ def test_a_session_run_under_an_agent_names_it_in_the_hint(monkeypatch, tmp_path
     monkeypatch.setattr(cli.P, "load_prompt_spec", load_prompt_spec_stub)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
-    actual = cli._run_prompt("Reply with SCOPED_SESSION_OK", agent="scoped", session="scoped-session")
+    actual = js(monkeypatch, "--agent", "scoped", "--session", "scoped-session", "-p", "Reply with SCOPED_SESSION_OK")
 
     err = capsys.readouterr().err
     assert actual == 0
@@ -1326,18 +1338,19 @@ def test_named_nested_sessions_append_stably(monkeypatch, tmp_path):
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_kwargs: _fake_stream_result("OK"))
 
-    assert cli._run_prompt("first", session="caller/nested", show_continue=False) == 0
-    assert cli._run_prompt("second", session="caller/nested", show_continue=False) == 0
+    assert js(monkeypatch, "--session", "caller/nested", "--quiet", "-p", "first") == 0
+    assert js(monkeypatch, "--session", "caller/nested", "--quiet", "-p", "second") == 0
     nested = session_store.folder_for(tmp_path) / "caller" / "nested.jsonl"
     assert [message["content"] for message in load_messages(nested)] == ["first", "OK", "second", "OK"]
 
 
 def test_generated_prompt_emits_machine_session_metadata_even_when_quiet(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_kwargs: _fake_stream_result("ANSWER"))
 
-    assert cli._run_prompt("hello", show_continue=False) == 0
+    assert js(monkeypatch, "--quiet", "-p", "hello") == 0
 
     captured = capsys.readouterr()
     machine_lines = [json.loads(line) for line in captured.err.splitlines() if line.startswith("{")]
@@ -1455,6 +1468,7 @@ def test_json_is_scoped_to_list(monkeypatch):
 @pytest.mark.parametrize("debug", [False, True])
 @pytest.mark.parametrize("failure, status", [(KeyboardInterrupt, 130), (RuntimeError, 1)])
 def test_prompt_failure_preserves_tool_work_and_resumes(monkeypatch, tmp_path, debug, failure, status):
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
     session = session_store.folder_for(Path.cwd()) / "interrupted.jsonl"
     user = {"role": "user", "content": "inspect tests"}
@@ -1476,7 +1490,8 @@ def test_prompt_failure_preserves_tool_work_and_resumes(monkeypatch, tmp_path, d
         raise failure()
 
     monkeypatch.setattr(runtime, "run_turn", interrupted)
-    assert cli._run_prompt("inspect tests", session="interrupted", debug=debug) == status
+    debug_flag = ["--debug"] if debug else []
+    assert js(monkeypatch, "--session", "interrupted", *debug_flag, "-p", "inspect tests") == status
     kept = load_messages(session)
     assert kept[:3] == [user, *exchange]
     assert kept[3]["tool_call_id"] == "read-2"
@@ -1488,7 +1503,7 @@ def test_prompt_failure_preserves_tool_work_and_resumes(monkeypatch, tmp_path, d
         messages.append({"role": "assistant", "content": "finished"})
 
     monkeypatch.setattr(runtime, "run_turn", resumed)
-    assert cli._run_prompt("continue", session="interrupted") == 0
+    assert js(monkeypatch, "--session", "interrupted", "-p", "continue") == 0
     assert load_messages(session) == [
         *kept, resumed_user,
         {"role": "assistant", "content": "finished"},
@@ -1503,8 +1518,9 @@ def test_prompt_interrupt_keeps_streamed_partial(monkeypatch, tmp_path):
         raise asyncio.CancelledError()
 
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", interrupted)
-    assert cli._run_prompt("explain", session="partial") == 130
+    assert js(monkeypatch, "--session", "partial", "-p", "explain") == 130
     session = session_store.folder_for(Path.cwd()) / "partial.jsonl"
     assert load_messages(session) == [
         {"role": "user", "content": "explain"},
@@ -1517,14 +1533,16 @@ def test_prompt_interrupt_without_save(monkeypatch, tmp_path):
         raise KeyboardInterrupt()
 
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(runtime, "run_turn", interrupted)
-    assert cli._run_prompt("explain", save=False) == 130
+    assert js(monkeypatch, "--no-save", "-p", "explain") == 130
     assert not list((tmp_path / ".js/sessions").rglob("*.jsonl"))
 
 
 def test_one_shot_model_override_sends_that_models_saved_sampling(monkeypatch, tmp_path):
     from js import logins
 
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(logins, "_CONFIG_DIR_OVERRIDE", tmp_path / "logins")
     logins.save_login(logins.Login(
         provider_id="testes", sdk_provider_id="openai", provider_base_url="http://localhost:8050/v1",
@@ -1541,7 +1559,7 @@ def test_one_shot_model_override_sends_that_models_saved_sampling(monkeypatch, t
     monkeypatch.setattr(cli, "_append_turn", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
 
-    assert cli._run_prompt("foo", model="testes/b") == 0
+    assert js(monkeypatch, "--model", "testes/b", "-p", "foo") == 0
     assert seen["sampling"].temperature == 0.9
 
 
@@ -1630,15 +1648,14 @@ def _session_metadata(path: Path) -> dict:
 
 @pytest.mark.parametrize("agent,recorded", [(None, "none"), ("defaultagent", "defaultagent")])
 def test_a_chat_session_records_chat_and_its_persona(monkeypatch, tmp_path, agent, recorded):
-    from js.cli_options import RunOptions, invocation
-
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kwargs: _fake_stream_result("ok"))
 
-    with invocation(RunOptions(chat=True, agent=agent)):
-        assert cli._run_prompt("hi", agent=agent, session="chatty") == 0
+    agent_flag = ["--agent", agent] if agent else []
+    assert js(monkeypatch, "--chat", *agent_flag, "--session", "chatty", "-p", "hi") == 0
 
     record = _session_metadata(session_store.folder_for(Path.cwd()) / "chatty.jsonl")
     assert record["chat"] is True
@@ -1646,12 +1663,13 @@ def test_a_chat_session_records_chat_and_its_persona(monkeypatch, tmp_path, agen
 
 
 def test_a_tools_session_records_no_chat(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kwargs: _fake_stream_result("ok"))
 
-    assert cli._run_prompt("hi", session="tooly") == 0
+    assert js(monkeypatch, "--session", "tooly", "-p", "hi") == 0
 
     record = _session_metadata(session_store.folder_for(Path.cwd()) / "tooly.jsonl")
     assert "chat" not in record
