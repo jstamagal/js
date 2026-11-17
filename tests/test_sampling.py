@@ -177,9 +177,9 @@ def test_agent_yaml_sampling_takes_every_sampling_setting(tmp_path):
 
 
 def test_the_sampling_keys_are_the_settings_and_the_flags():
-    from js import cli, settings
+    from js import cli, model_profiles, settings
     from js.sampling import SAMPLING_FIELDS
 
-    assert set(persona._SAMPLING_KEYS) == set(SAMPLING_FIELDS)
+    assert set(model_profiles._SAMPLING_KEYS) == set(SAMPLING_FIELDS)
     assert all(settings.SPEC_BY_KEY[field.upper()].group == "sampling" for field in SAMPLING_FIELDS)
     assert {(field, field.upper()) for field in SAMPLING_FIELDS} <= set(cli.SETTING_FLAGS)

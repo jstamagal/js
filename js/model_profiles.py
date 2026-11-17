@@ -25,13 +25,16 @@ number, so `qwen` matches `Qwen3.6-35B-A3B`. A multi-word entry
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
-from . import messages as msgs, output, settings as _settings
+from . import messages as msgs, output, setting_values, settings as _settings
 from .config import validate_agent_id
+from .sampling import SAMPLING_FIELDS
 from .toolkit import policy
 
 MODES = ("replace", "prepend")
@@ -95,9 +98,59 @@ class ModelProfile:
         return (*self.tools, *core)
 
 
-def parse_profile(raw: Any, where: str) -> ModelProfile:
-    from .persona import _coerce_reasoning_effort, _coerce_sampling
+# Sampling settings an agent may set under `sampling:` in agent.yaml: the
+# sampling settings' own names, in lower case.
+_SAMPLING_KEYS = SAMPLING_FIELDS
 
+
+# The agent.yaml value of `model:` or `reasoning:` that takes the value from
+# the parent (a subagent) or the run's settings (a main agent), as leaving the
+# key out does.
+INHERIT = "inherit"
+
+
+def coerce_reasoning_effort(path: Path, raw: Any) -> str | None:
+    if raw is None:
+        return None
+    if isinstance(raw, str) and raw.strip().lower() == INHERIT:
+        return None
+    # PyYAML's YAML 1.1 resolver parses an unquoted `off` as False.
+    if raw is False:
+        return "off"
+    if not isinstance(raw, str):
+        raise ValueError(msgs.AGENT_MANIFEST_REASONING_IN_MUST_BE_A_STRING.format(path=path))
+    spec = _settings.SPEC_BY_KEY["EFFORT"]
+    value, error = setting_values.coerce_value(spec, raw)
+    if error:
+        raise ValueError(msgs.AGENT_MANIFEST_REASONING_IN.format(path=path, error=error))
+    return value
+
+
+def coerce_sampling(path: Path, raw: Any) -> dict[str, Any]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError(msgs.AGENT_MANIFEST_SAMPLING_FRONTMATTER_IN_MUST_BE_A_MAPPING.format(path=path))
+    out: dict[str, Any] = {}
+    for key, val in raw.items():
+        if key not in _SAMPLING_KEYS:
+            raise ValueError(
+                msgs.AGENT_MANIFEST_UNKNOWN_SAMPLING_KEY_IN_ALLOWED.format(key=key, path=path, value=', '.join(_SAMPLING_KEYS))
+            )
+        if isinstance(val, list):
+            text = json.dumps(val)
+        elif isinstance(val, bool) or not isinstance(val, (int, float)):
+            raise ValueError(msgs.AGENT_MANIFEST_SAMPLING_IN_MUST_BE_A_NUMBER.format(key=key, path=path))
+        else:
+            text = str(val)
+        value, error = setting_values.coerce_value(_settings.SPEC_BY_KEY[key.upper()], text)
+        if error is not None:
+            raise ValueError(msgs.AGENT_MANIFEST_SAMPLING_IN.format(key=key, path=path, error=error))
+        out[key] = value
+    return out
+
+
+def parse_profile(raw: Any, where: str) -> ModelProfile:
     if not isinstance(raw, dict):
         raise ValueError(msgs.MODEL_PROFILE_NOT_A_MAPPING.format(where=where))
     unknown = sorted(str(key) for key in raw if key not in KEYS)
@@ -127,8 +180,8 @@ def parse_profile(raw: Any, where: str) -> ModelProfile:
         mode=mode,
         core=core,
         prompt=prompt,
-        sampling=_coerce_sampling(where, raw.get("sampling")),
-        reasoning=_coerce_reasoning_effort(where, raw.get("reasoning")),
+        sampling=coerce_sampling(where, raw.get("sampling")),
+        reasoning=coerce_reasoning_effort(where, raw.get("reasoning")),
     )
 
 

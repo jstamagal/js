@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import shutil
@@ -17,14 +16,12 @@ from . import (
     model_profiles,
     paths,
     secret_patterns,
-    setting_values,
     settings,
     snippets,
 )
 from .cli_options import current
 from .promptexpand import expand_prompt, session_variables
 from .routing import apply_route, resolve_model_route
-from .sampling import SAMPLING_FIELDS
 from .toolkit import policy
 from .toolkit.registry import registry_for_roots
 
@@ -210,37 +207,9 @@ def _coerce_tool_selectors(path: Path, raw: Any) -> tuple[str, ...]:
     return policy.parse_entries(raw, str(path))
 
 
-# Sampling settings an agent may set under `sampling:` in agent.yaml: the
-# sampling settings' own names, in lower case.
-_SAMPLING_KEYS = SAMPLING_FIELDS
-
-
-# The agent.yaml value of `model:` or `reasoning:` that takes the value from
-# the parent (a subagent) or the run's settings (a main agent), as leaving the
-# key out does.
-INHERIT = "inherit"
-
-
-def _coerce_reasoning_effort(path: Path, raw: Any) -> str | None:
-    if raw is None:
-        return None
-    if isinstance(raw, str) and raw.strip().lower() == INHERIT:
-        return None
-    # PyYAML's YAML 1.1 resolver parses an unquoted `off` as False.
-    if raw is False:
-        return "off"
-    if not isinstance(raw, str):
-        raise ValueError(msgs.AGENT_MANIFEST_REASONING_IN_MUST_BE_A_STRING.format(path=path))
-    spec = settings.SPEC_BY_KEY["EFFORT"]
-    value, error = setting_values.coerce_value(spec, raw)
-    if error:
-        raise ValueError(msgs.AGENT_MANIFEST_REASONING_IN.format(path=path, error=error))
-    return value
-
-
 def _coerce_model(raw: Any) -> str:
     model = str(raw or "").strip()
-    return "" if model.lower() == INHERIT else model
+    return "" if model.lower() == model_profiles.INHERIT else model
 
 
 def _coerce_max_tokens(path: Path, raw: Any) -> int | None:
@@ -251,30 +220,6 @@ def _coerce_max_tokens(path: Path, raw: Any) -> int | None:
     if isinstance(raw, bool) or not isinstance(raw, int):
         raise ValueError(msgs.AGENT_MANIFEST_MAX_TOKENS_IN_MUST_BE_AN_INTEGER.format(path=path))
     return raw if raw > 0 else None
-
-
-def _coerce_sampling(path: Path, raw: Any) -> dict[str, Any]:
-    if raw is None:
-        return {}
-    if not isinstance(raw, dict):
-        raise ValueError(msgs.AGENT_MANIFEST_SAMPLING_FRONTMATTER_IN_MUST_BE_A_MAPPING.format(path=path))
-    out: dict[str, Any] = {}
-    for key, val in raw.items():
-        if key not in _SAMPLING_KEYS:
-            raise ValueError(
-                msgs.AGENT_MANIFEST_UNKNOWN_SAMPLING_KEY_IN_ALLOWED.format(key=key, path=path, value=', '.join(_SAMPLING_KEYS))
-            )
-        if isinstance(val, list):
-            text = json.dumps(val)
-        elif isinstance(val, bool) or not isinstance(val, (int, float)):
-            raise ValueError(msgs.AGENT_MANIFEST_SAMPLING_IN_MUST_BE_A_NUMBER.format(key=key, path=path))
-        else:
-            text = str(val)
-        value, error = setting_values.coerce_value(settings.SPEC_BY_KEY[key.upper()], text)
-        if error is not None:
-            raise ValueError(msgs.AGENT_MANIFEST_SAMPLING_IN.format(key=key, path=path, error=error))
-        out[key] = value
-    return out
 
 
 
@@ -345,10 +290,10 @@ def load_agent_manifest(manifest_path: Path) -> PromptSpec:
     return PromptSpec(
         system="",
         tool_selectors=_coerce_tool_selectors(manifest_path, manifest.get("tools")),
-        sampling=_coerce_sampling(manifest_path, manifest.get("sampling")),
+        sampling=model_profiles.coerce_sampling(manifest_path, manifest.get("sampling")),
         model=_coerce_model(manifest.get("model")),
         secondary_model=str(manifest.get("secondary_model") or "").strip(),
-        reasoning_effort=_coerce_reasoning_effort(manifest_path, manifest.get("reasoning")),
+        reasoning_effort=model_profiles.coerce_reasoning_effort(manifest_path, manifest.get("reasoning")),
         max_output_tokens=_coerce_max_tokens(manifest_path, manifest.get("max_tokens")),
         skills=_coerce_skills(manifest_path, manifest.get("skills")),
         models=model_profiles.parse_profiles(manifest.get("models"), f"{manifest_path} models"),
