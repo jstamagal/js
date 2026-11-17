@@ -125,12 +125,11 @@ def default_model(environ: Mapping[str, str]) -> tuple[str | None, bool]:
     return str(model_id), bool(route.provider_id or route.base_url)
 
 
-def _say_unrouted(model_id: str | None, *, say=None) -> None:
-    announce = msgs.say if say is None else say
+def _say_unrouted(model_id: str | None) -> None:
     if model_id:
-        announce(msgs.INSTALL_MODEL_UNROUTED, model=model_id)
+        msgs.say(msgs.INSTALL_MODEL_UNROUTED, model=model_id)
     else:
-        announce(msgs.INSTALL_MODEL_UNSET)
+        msgs.say(msgs.INSTALL_MODEL_UNSET)
 
 
 MODEL_ANSWERS: Mapping[str, str] = {"a": "add"}
@@ -144,16 +143,15 @@ def _model_question(message: msgs.Message, answers: Mapping[str, str]) -> str:
     return message.with_keymap(keymap(answers), keymap(MODEL_ANSWERS)).words()
 
 
-def ask_model(environ: Mapping[str, str], ask: Ask, *, add_provider: Callable[[], Any], say=None,
+def ask_model(environ: Mapping[str, str], ask: Ask, *, add_provider: Callable[[], Any],
               answers: Mapping[str, str] | None = None) -> None:
     """When the default model does not route: offer the login flow to add a
     provider until the default model routes or the operator skips."""
     answers = MODEL_ANSWERS if answers is None else answers
-    announce = msgs.say if say is None else say
     model_id, routes = default_model(environ)
     if routes:
         return
-    _say_unrouted(model_id, say=announce)
+    _say_unrouted(model_id)
     while True:
         saved = logins.load_logins()
         if saved:
@@ -161,7 +159,7 @@ def ask_model(environ: Mapping[str, str], ask: Ask, *, add_provider: Callable[[]
             rows = ", ".join(msgs.INSTALL_LOGIN_ROW.words(provider=provider_id,
                                                          models=msgs.plural(len(cache.get(provider_id, [])), "model"))
                              for provider_id in sorted(saved))
-            announce(msgs.INSTALL_LOGINS, logins=rows)
+            msgs.say(msgs.INSTALL_LOGINS, logins=rows)
         choice = (ask(_model_question(msgs.INSTALL_ASK_PROVIDER, answers)) or "").strip().lower()
         if not choice:
             return
@@ -173,12 +171,12 @@ def ask_model(environ: Mapping[str, str], ask: Ask, *, add_provider: Callable[[]
                 return
 
 
-def _asker(read: Callable[[str], str], *, write=None) -> Ask:
+def _asker(read: Callable[[str], str]) -> Ask:
     def ask(prompt: str) -> str | None:
         try:
             return read(f"{prompt}: ")
         except (EOFError, KeyboardInterrupt):
-            (print if write is None else write)()
+            print()
             return None
     return ask
 
