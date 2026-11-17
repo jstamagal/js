@@ -26,6 +26,7 @@ from js import (
     persona,
     prompt_run,
     runtime,
+    setting_values,
     settings,
     tool_calls,
     tool_errors,
@@ -503,9 +504,9 @@ def test_the_host_tmp_bound_read_only_leaves_temp_files_writable(jailed):
 def test_jail_bind_setting_refuses_a_relative_path():
     spec = settings.spec_for("JAIL_BIND")
 
-    _value, error = settings.coerce_value(spec, '["relative/dir"]')
+    _value, error = setting_values.coerce_value(spec, '["relative/dir"]')
     assert error is not None
-    value, error = settings.coerce_value(spec, '["~/.cache/uv:rw", "/opt/data"]')
+    value, error = setting_values.coerce_value(spec, '["~/.cache/uv:rw", "/opt/data"]')
     assert error is None
     assert value == ["~/.cache/uv:rw", "/opt/data"]
 

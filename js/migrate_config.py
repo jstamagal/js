@@ -8,7 +8,7 @@ from . import (
     messages as msgs,
     paths as _paths,
     rename,
-    settings,
+    setting_values,
 )
 
 
@@ -52,7 +52,7 @@ def run_migrate_config() -> int:
         else:
             new = rename.renamed_key(key) or key
             verb = "fset" if rename.is_fset(new) else "set"
-            lines.append(f"{verb} {new} {settings.jsrc_text(new, rename.renamed_value(key, str(value)))}")
+            lines.append(f"{verb} {new} {setting_values.jsrc_text(new, rename.renamed_value(key, str(value)))}")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("\n".join(lines) + "\n", encoding="utf-8")
     msgs.say(msgs.MIGRATE_WROTE, path=target, legacy=legacy)

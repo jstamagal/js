@@ -17,7 +17,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import events as _events, fset as _fset, messages as msgs, setting_layers, settings as _s
+from . import (
+    events as _events,
+    fset as _fset,
+    messages as msgs,
+    setting_layers,
+    setting_values,
+    settings as _s,
+)
 
 
 @dataclass
@@ -204,7 +211,7 @@ def apply_set(settings: dict, key: str, raw: str, *, banner_changed=None, column
         return CommandResult(handled=True, error=msgs.UNKNOWN_SETTING.said(key=key))
     spec = _s.spec_for(key)
     if spec is not None:
-        value, error = _s.coerce_value(spec, raw)
+        value, error = setting_values.coerce_value(spec, raw)
         if error is not None:
             return CommandResult(handled=True, error=msgs.FSET_REFUSED.said(name=spec.key, error=error))
         if _events.current_call() is not None and _s.get_dotted(settings, spec.path, _UNSET) == value:
@@ -233,7 +240,7 @@ def apply_set(settings: dict, key: str, raw: str, *, banner_changed=None, column
         # A JSON string literal is the string it spells, as for any string
         # setting (`from_line_literal`); anything else is read loosely.
         text = raw.strip()
-        decoded = _s.from_line_literal(text)
+        decoded = setting_values.from_line_literal(text)
         value = decoded if decoded != text else setting_layers.coerce_extra_value(raw)
         _s.set_dotted(settings, path, value)
         return CommandResult(
@@ -365,7 +372,7 @@ def fset_command(settings: dict, arg: str, baseline: dict | None = None) -> Comm
         return CommandResult(handled=True, lines=rows)
     if not _fset.is_name(name):
         return CommandResult(handled=True, error=msgs.FSET_UNKNOWN.said(name=name))
-    error = _fset.set_entry(name, _s.from_line_literal(value))
+    error = _fset.set_entry(name, setting_values.from_line_literal(value))
     if error is not None:
         return CommandResult(handled=True, error=msgs.FSET_REFUSED.said(name=name, error=error))
     return CommandResult(handled=True, changed=True, lines=fset_rows(settings, name))

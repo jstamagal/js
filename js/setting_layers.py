@@ -20,12 +20,11 @@ from pathlib import Path
 from typing import Any
 
 from . import messages as msgs, output
+from .setting_values import coerce_value, from_line_literal
 from .settings import (
     REGISTRY,
     SettingSpec,
     child_key,
-    coerce_value,
-    from_line_literal,
     package_settings,
     parent_spec,
     seed_defaults,

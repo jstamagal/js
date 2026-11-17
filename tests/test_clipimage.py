@@ -15,7 +15,7 @@ from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
-from js import attach, clipimage, history_record, messages as msgs, screen, settings
+from js import attach, clipimage, history_record, messages as msgs, screen, setting_values, settings
 from js.config import Config
 
 _PNG = base64.b64decode(
@@ -162,9 +162,9 @@ def test_pasted_image_reaches_the_model_as_an_at_path_image_does(tmp_path, visio
 def test_paste_command_setting_refuses_unsplittable_or_empty(command):
     spec = settings.SPEC_BY_KEY["PASTE_IMAGE_COMMAND"]
 
-    value, error = settings.coerce_value(spec, command)
+    value, error = setting_values.coerce_value(spec, command)
     assert value is None and error
-    assert settings.coerce_value(spec, "wl-paste --type image/png") == ("wl-paste --type image/png", None)
+    assert setting_values.coerce_value(spec, "wl-paste --type image/png") == ("wl-paste --type image/png", None)
 
 
 def test_placeholder_takes_plain_bounded_numbers_only():

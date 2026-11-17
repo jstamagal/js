@@ -16,7 +16,16 @@ import pytest
 from repl_driver import turn_stub
 from turn_driver import js, one_turn
 
-from js import cli, login_defaults, logins, messages as msgs, providers, repl_commands, run_assembly
+from js import (
+    cli,
+    login_defaults,
+    logins,
+    messages as msgs,
+    providers,
+    repl_commands,
+    run_assembly,
+    setting_values,
+)
 from js.config import InvocationSources, from_env
 from js.logins import Login
 from js.repl_state import ReplState
@@ -456,7 +465,7 @@ def test_a_setting_flag_beats_the_saved_login_defaults(monkeypatch, tmp_path, at
 
     if key in login_defaults.KEYS:
         assert login_defaults.sources_of(cfg)[key] == "flag"
-    expected = settings.coerce_value(settings.SPEC_BY_KEY[key], value)[0]
+    expected = setting_values.coerce_value(settings.SPEC_BY_KEY[key], value)[0]
     assert turn.settings[key] == expected
 
 

@@ -40,6 +40,7 @@ from . import (
     session_catalog,
     session_picker,
     session_store,
+    setting_values,
     settings,
     snippets,
 )
@@ -145,12 +146,12 @@ def _setting_flag_extras(args: argparse.Namespace) -> tuple[list[str], int | Non
         if value is None:
             continue
         if key == "EFFORT":
-            _seed, effort_error = settings.validate_cli_reasoning(str(value))
+            _seed, effort_error = setting_values.validate_cli_reasoning(str(value))
             if effort_error is not None:
                 msgs.warn(msgs.BAD_REASONING, value=value, error=effort_error)
                 return [], 2
         else:
-            _value, error = settings.coerce_value(settings.SPEC_BY_KEY[key], str(value))
+            _value, error = setting_values.coerce_value(settings.SPEC_BY_KEY[key], str(value))
             if error is not None:
                 msgs.warn(msgs.BAD_FLAG_VALUE, flag="--" + attr.replace("_", "-"), value=value, error=error)
                 return [], 2

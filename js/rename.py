@@ -37,7 +37,8 @@ import re
 import shlex
 from collections.abc import Iterator
 
-from .settings import SPEC_BY_KEY, parse_bool
+from .setting_values import parse_bool
+from .settings import SPEC_BY_KEY
 
 # The names settings had before they were UPPER_SNAKE. `set`, jsrc and
 # --extra take only the new names.

@@ -44,6 +44,7 @@ from . import (
     session_store,
     setcmd,
     setting_layers,
+    setting_values,
     settings,
     snippets,
     stats,
@@ -226,7 +227,7 @@ def _asked(inputs: PromptInputs) -> tuple[str | None, list[str], str | None] | i
             return 2
     effort = None
     if inputs.reasoning is not None:
-        effort, effort_error = settings.validate_cli_reasoning(inputs.reasoning)
+        effort, effort_error = setting_values.validate_cli_reasoning(inputs.reasoning)
         if effort_error is not None:
             msgs.warn(msgs.BAD_REASONING, value=inputs.reasoning, error=effort_error)
             return 2

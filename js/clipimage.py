@@ -25,7 +25,7 @@ from prompt_toolkit.application import run_in_terminal
 from prompt_toolkit.filters import emacs_insert_mode, vi_insert_mode
 from prompt_toolkit.key_binding import DynamicKeyBindings, KeyBindings, KeyBindingsBase
 
-from . import messages as msgs, output, settings as _settings
+from . import messages as msgs, output, setting_values, settings as _settings
 from .toolkit.fs import _detect_visual_mime
 
 WAYLAND_COMMAND = ("wl-paste", "--type", "image/png")
@@ -166,7 +166,7 @@ def key_bindings(get_settings: Callable[[], Mapping | None]) -> KeyBindingsBase:
         key = _settings.knob(get_settings(), "PASTE_IMAGE_KEY")
         if key not in cache:
             cache.clear()
-            cache[key] = _bindings_for(key, get_settings) if _settings.is_key_name(key) else None
+            cache[key] = _bindings_for(key, get_settings) if setting_values.is_key_name(key) else None
         return cache[key]
 
     return DynamicKeyBindings(current)

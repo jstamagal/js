@@ -12,7 +12,15 @@ from typing import Any
 
 import yaml
 
-from . import messages as msgs, model_profiles, paths, secret_patterns, settings, snippets
+from . import (
+    messages as msgs,
+    model_profiles,
+    paths,
+    secret_patterns,
+    setting_values,
+    settings,
+    snippets,
+)
 from .promptexpand import expand_prompt, session_variables
 from .sampling import SAMPLING_FIELDS
 from .toolkit import policy
@@ -218,7 +226,7 @@ def _coerce_reasoning_effort(path: Path, raw: Any) -> str | None:
     if not isinstance(raw, str):
         raise ValueError(msgs.AGENT_MANIFEST_REASONING_IN_MUST_BE_A_STRING.format(path=path))
     spec = settings.SPEC_BY_KEY["EFFORT"]
-    value, error = settings.coerce_value(spec, raw)
+    value, error = setting_values.coerce_value(spec, raw)
     if error:
         raise ValueError(msgs.AGENT_MANIFEST_REASONING_IN.format(path=path, error=error))
     return value
@@ -256,7 +264,7 @@ def _coerce_sampling(path: Path, raw: Any) -> dict[str, Any]:
             raise ValueError(msgs.AGENT_MANIFEST_SAMPLING_IN_MUST_BE_A_NUMBER.format(key=key, path=path))
         else:
             text = str(val)
-        value, error = settings.coerce_value(settings.SPEC_BY_KEY[key.upper()], text)
+        value, error = setting_values.coerce_value(settings.SPEC_BY_KEY[key.upper()], text)
         if error is not None:
             raise ValueError(msgs.AGENT_MANIFEST_SAMPLING_IN.format(key=key, path=path, error=error))
         out[key] = value

@@ -30,7 +30,7 @@ import json
 from dataclasses import replace
 from typing import Any
 
-from . import messages as msgs, setting_layers, settings as _settings
+from . import messages as msgs, setting_layers, setting_values, settings as _settings
 from .sampling import SAMPLING_FIELDS, Sampling
 
 KEYS: tuple[str, ...] = (
@@ -56,7 +56,7 @@ def parse(text: str) -> dict[str, Any]:
         key = name.strip().upper()
         if not sep or key not in KEYS:
             raise ValueError(msgs.LOGIN_DEFAULT_NOT_NAME_VALUE_WITH_NAME_ONE_OF.format(value=', '.join(KEYS), entry=entry))
-        value, error = _settings.coerce_value(_settings.SPEC_BY_KEY[key], raw.strip())
+        value, error = setting_values.coerce_value(_settings.SPEC_BY_KEY[key], raw.strip())
         if error is not None:
             raise ValueError(msgs.LOGIN_DEFAULT_.format(key=key, error=error))
         values[key] = value

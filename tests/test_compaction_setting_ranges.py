@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from js import settings
+from js import setting_values, settings
 
 
 def _coerce(key: str, raw: str):
     spec = settings.spec_for(key)
     assert spec is not None
-    return settings.coerce_value(spec, raw)
+    return setting_values.coerce_value(spec, raw)
 
 
 @pytest.mark.parametrize("key", [

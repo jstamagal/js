@@ -8,7 +8,15 @@ import pytest
 import yaml
 from test_agent_model_selection import _fake_stream_result, _make_cfg, _write_agent_dir
 
-from js import model_metadata, model_profiles, persona, run_assembly, runtime, settings
+from js import (
+    model_metadata,
+    model_profiles,
+    persona,
+    run_assembly,
+    runtime,
+    setting_values,
+    settings,
+)
 from js.cli_options import RunOptions, invocation
 from js.config import Config
 from js.toolkit import ToolContext
@@ -203,7 +211,7 @@ def test_malformed_profiles_fail_the_agent_load_and_the_setting(tmp_path, raw):
 
     with pytest.raises(ValueError):
         persona.load_configured_prompt_spec(_cfg(tmp_path, prompts), expand=False)
-    _value, error = settings.coerce_value(settings.SPEC_BY_KEY["TOOL_PROFILES"], json.dumps([raw]))
+    _value, error = setting_values.coerce_value(settings.SPEC_BY_KEY["TOOL_PROFILES"], json.dumps([raw]))
     assert error is not None
 
 

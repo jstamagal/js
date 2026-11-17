@@ -23,7 +23,16 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from . import config, login_defaults, memory as M, persona as P, routing, session_store, settings
+from . import (
+    config,
+    login_defaults,
+    memory as M,
+    persona as P,
+    routing,
+    session_store,
+    setting_values,
+    settings,
+)
 from .config import Config, InvocationSources, resolve_session_file
 from .session_catalog import first_metadata, last_stamp
 from .toolkit import policy
@@ -90,7 +99,7 @@ def registry_for(cfg: Any) -> Any:
 
 def check_effort(raw: str) -> tuple[str | None, str | None]:
     """``raw`` checked as `set EFFORT` checks it: (value, error)."""
-    return settings.coerce_value(settings.SPEC_BY_KEY["EFFORT"], raw)
+    return setting_values.coerce_value(settings.SPEC_BY_KEY["EFFORT"], raw)
 
 
 def stamped_effort(stamp: dict) -> str | None:

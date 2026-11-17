@@ -33,14 +33,14 @@ from collections.abc import Callable, Iterable, Mapping
 
 from prompt_toolkit.completion import Completer, Completion
 
-from . import events, fset, settings as _settings
+from . import events, fset, setting_values
 
 _TRAILING_TOKEN = re.compile(r"\S*$")  # run of non-space chars before the cursor
 
 # `/set <key> <value>` — keys whose value is a known small enum get their
 # legal values completed instead of falling through to no candidates.
 _VALUE_ENUM_KNOBS: dict[str, tuple[str, ...]] = {
-    "EFFORT": _settings.REASONING_EFFORT_VALUES,
+    "EFFORT": setting_values.REASONING_EFFORT_VALUES,
 }
 
 

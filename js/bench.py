@@ -22,7 +22,7 @@ from . import (
     persona as P,
     run_assembly,
     runtime,
-    settings,
+    setting_values,
     snippets,
     stats,
 )
@@ -101,7 +101,7 @@ def run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         return 2
     reasoning_override = None
     if reasoning is not None:
-        reasoning_override, effort_error = settings.validate_cli_reasoning(reasoning)
+        reasoning_override, effort_error = setting_values.validate_cli_reasoning(reasoning)
         if effort_error is not None:
             msgs.warn(msgs.BAD_REASONING, value=reasoning, error=effort_error)
             return 2

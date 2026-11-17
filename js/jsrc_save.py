@@ -13,12 +13,11 @@ from typing import Any
 
 from . import fset, messages as msgs, setcmd
 from .setting_layers import apply_jsrc
+from .setting_values import config_value_text, jsrc_text
 from .settings import (
     REGISTRY,
     SPEC_BY_KEY,
     SettingSpec,
-    config_value_text,
-    jsrc_text,
     knob,
     seed_defaults,
     spec_for,

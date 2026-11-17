@@ -63,6 +63,7 @@ from . import (
     session_picker,
     session_store,
     setcmd,
+    setting_values,
     settings,
     skills,
     snippets,
@@ -441,7 +442,7 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_message, turn_cfg, l
 
 
 def _steer_mode(state: ReplState) -> str:
-    return settings.steer_mode(
+    return setting_values.steer_mode(
         settings.knob(state.settings, "STEER_MODE")
     )
 
@@ -1069,7 +1070,7 @@ def start_repl(args: argparse.Namespace, setup: Setup) -> int:
 
     live_settings = copy.deepcopy(cfg.settings) if isinstance(cfg.settings, dict) else {}
     if args.reasoning is not None:
-        reasoning_seed, effort_error = settings.validate_cli_reasoning(args.reasoning)
+        reasoning_seed, effort_error = setting_values.validate_cli_reasoning(args.reasoning)
         if effort_error is not None:
             msgs.warn(msgs.BAD_REASONING, value=args.reasoning, error=effort_error)
             return 2

@@ -22,7 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, make_dataclass
 from typing import Any
 
-from . import settings as _settings
+from . import setting_values, settings as _settings
 
 # What a reader returns for a stored value it cannot use.
 INVALID: Any = object()
@@ -93,13 +93,13 @@ def paths(raw: Any) -> Any:
 
 
 def header_lines(raw: Any) -> Any:
-    """`Name: value` entries (`settings.parse_header_lines`) as a dict; unset is none."""
+    """`Name: value` entries (`setting_values.parse_header_lines`) as a dict; unset is none."""
     if raw is None:
         return {}
     if not isinstance(raw, str):
         return INVALID
     try:
-        return _settings.parse_header_lines(raw)
+        return setting_values.parse_header_lines(raw)
     except ValueError:
         return INVALID
 
@@ -251,14 +251,14 @@ _MISSING = object()
 def _in_range(row: TurnSetting, value: Any) -> Any:
     """``value``, or INVALID when `set` would refuse it for this knob (a
     negative or zero where the knob needs more): one range rule, the one
-    settings.coerce_value keeps, for values that skipped it (a JSON store,
+    setting_values.coerce_value keeps, for values that skipped it (a JSON store,
     an agent.yaml)."""
     if isinstance(value, bool) or not isinstance(value, int):
         return value
     spec = _settings.SPEC_BY_KEY.get(row.key)
     if spec is None or spec.type != "int":
         return value
-    _value, error = _settings.coerce_value(spec, str(value))
+    _value, error = setting_values.coerce_value(spec, str(value))
     return INVALID if error else value
 
 

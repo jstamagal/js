@@ -21,6 +21,7 @@ from js import (
     model_client,
     provider_errors,
     request_params,
+    setting_values,
     stream_protocols,
     tool_result_messages,
 )
@@ -660,7 +661,7 @@ def test_extra_headers_go_on_the_turn_request_over_the_login_headers(tmp_path):
 def test_set_refuses_extra_headers_without_a_colon():
     from js import settings
 
-    value, error = settings.coerce_value(settings.SPEC_BY_KEY["EXTRA_HEADERS"], "X-Ok: 1; broken")
+    value, error = setting_values.coerce_value(settings.SPEC_BY_KEY["EXTRA_HEADERS"], "X-Ok: 1; broken")
     assert value is None and error
 
 
