@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from js import fset, messages, repl_commands, setcmd, settings, text_layout
+from js import fset, messages, repl_settings_commands, setcmd, settings, text_layout
 from js.repl_state import ReplState
 
 
@@ -12,11 +12,11 @@ from js.repl_state import ReplState
 @pytest.mark.parametrize("key", ["LSP_SERVERS", "MCP_SERVERS"])
 def test_settings_values_wrap_under_the_value(monkeypatch, capsys, columns, key):
     monkeypatch.setattr(text_layout, "terminal_width", lambda: columns)
-    monkeypatch.setattr(repl_commands, "_live_settings_overlay_for_state", lambda _cfg, _state: {})
+    monkeypatch.setattr(repl_settings_commands, "_live_settings_overlay_for_state", lambda _cfg, _state: {})
     values = {}
     spec = settings.spec_for(key)
     settings.set_dotted(values, spec.path, {"example": {"command": "word " * 60, "url": "https://example.org/" + "a" * 180}})
-    repl_commands._show_settings(ReplState(settings=values), None, key)
+    repl_settings_commands._show_settings(ReplState(settings=values), None, key)
     lines = capsys.readouterr().out.splitlines()
     assert len(lines) > 1
     assert all(text_layout.cells(line) < columns for line in lines)
@@ -82,7 +82,7 @@ def test_hanging_rows_keeps_room_for_wide_characters(width, indent):
 def test_set_confirmation_wraps_and_preserves_ordinary_words(monkeypatch, capsys, columns):
     monkeypatch.setattr(text_layout, "terminal_width", lambda: columns)
     raw = json.dumps({"example": {"command": "pyright-langserver", "url": "https://example.org/" + "x" * 180}})
-    assert repl_commands._cmd_set("LSP_SERVERS " + raw, ReplState(settings={}), None) is None
+    assert repl_settings_commands.cmd_set("LSP_SERVERS " + raw, ReplState(settings={}), None) is None
     lines = capsys.readouterr().out.splitlines()
     assert all(text_layout.cells(line) < columns for line in lines)
     assert any("pyright-langserver" in line for line in lines)

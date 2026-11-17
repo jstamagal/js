@@ -13,7 +13,15 @@ from dataclasses import replace
 
 from repl_driver import record_turns, run_async
 
-from js import cli, jsrc_save, messages as msgs, repl_commands, setcmd, setting_layers, settings
+from js import (
+    cli,
+    jsrc_save,
+    messages as msgs,
+    repl_settings_commands,
+    setcmd,
+    setting_layers,
+    settings,
+)
 from js.config import Config
 from js.sampling import Sampling
 
@@ -121,7 +129,7 @@ def test_overlay_login_provider_and_masked_key():
 
     store = settings.seed_defaults()
     settings.set_dotted(store, ("PARANOID_MODE",), "on")
-    overlay = repl_commands._live_settings_overlay(
+    overlay = repl_settings_commands._live_settings_overlay(
         store,
         live_model=None,
         model_source=None,

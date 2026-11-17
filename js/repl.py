@@ -53,6 +53,7 @@ from . import (
     prompt_history,
     providers,
     repl_commands,
+    repl_settings_commands,
     repl_state,
     replcomplete,
     resume_view,
@@ -1099,7 +1100,7 @@ def start_repl(args: argparse.Namespace, setup: Setup) -> int:
         repl_state.queue_note(state, snippets.render('turn-cut-off'))
     rc_errors = repl_commands.run_rc_commands(state, cfg, jsrc_paths(
         Path(getattr(cfg, "project_dir", None) or Path.cwd()), setup.sources))
-    repl_commands.mark_saved(state)
+    repl_settings_commands.mark_saved(state)
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
     state.mcp_host = _session_mcp_host(cfg, telemetry)
     # Attach the debug autolog sink before the first turn.

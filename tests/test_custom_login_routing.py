@@ -22,8 +22,8 @@ from js import (
     logins,
     messages as msgs,
     providers,
-    repl_commands,
     repl_model_commands,
+    repl_settings_commands,
     run_assembly,
     setting_values,
 )
@@ -355,7 +355,7 @@ def test_save_server_writes_the_session_model_settings_into_the_login(monkeypatc
                       provider_id=cfg.provider_id, provider_base_url=cfg.provider_base_url,
                       provider_api_key=cfg.provider_api_key)
 
-    assert repl_commands._cmd_save("server", state, cfg) is None
+    assert repl_settings_commands._cmd_save("server", state, cfg) is None
 
     saved = logins.load_logins_fresh()["testes"].model_defaults["served"]
     assert saved["TEMPERATURE"] == 0.7
@@ -408,7 +408,7 @@ def test_save_server_after_a_switch_writes_the_switched_models_values(monkeypatc
     monkeypatch.setenv("JS_MODEL", "testes/a")
     cfg = from_env(cwd=tmp_path, save_session=False)
 
-    assert repl_commands._cmd_save("server", ReplState(settings=dict(cfg.settings), model="testes/b"), cfg) is None
+    assert repl_settings_commands._cmd_save("server", ReplState(settings=dict(cfg.settings), model="testes/b"), cfg) is None
 
     assert logins.load_logins_fresh()["testes"].model_defaults["b"] == {"CONTEXT_SIZE": 32768}
 
@@ -484,7 +484,7 @@ def test_after_a_model_switch_set_and_save_see_the_values_the_turn_uses(monkeypa
     state = ReplState(settings=dict(cfg.settings), model="testes/b")
 
     turn = state.config_for_turn(cfg)
-    shown = repl_commands._live_settings_overlay_for_state(cfg, state)
+    shown = repl_settings_commands._live_settings_overlay_for_state(cfg, state)
 
     assert turn.model_context_window == 32768
     assert shown["CONTEXT_SIZE"].display == "32768"
@@ -501,7 +501,7 @@ def test_save_leaves_a_models_login_defaults_out_of_jsrc(monkeypatch, tmp_path):
     state = ReplState(settings=dict(cfg.settings), model="testes/b")
     state.config_for_turn(cfg)
 
-    assert repl_commands._cmd_save("", state, cfg) is None
+    assert repl_settings_commands._cmd_save("", state, cfg) is None
     assert "32768" not in paths.global_config_file().read_text()
 
     monkeypatch.setenv("JS_MODEL", "testes/c")
@@ -535,7 +535,7 @@ def test_set_shows_the_agent_sampling_the_turn_sends(monkeypatch, tmp_path):
     state = ReplState(settings=dict(cfg.settings), prompt_spec=spec)
 
     turn = state.config_for_turn(cfg)
-    shown = repl_commands._live_settings_overlay_for_state(cfg, state)
+    shown = repl_settings_commands._live_settings_overlay_for_state(cfg, state)
 
     assert login_defaults.sampling(turn).temperature == 0.7
     assert shown["TEMPERATURE"].display == "0.7"
@@ -568,12 +568,12 @@ def test_after_switch_set_and_unset_the_shown_and_sent_sampling_agree(monkeypatc
     cfg = from_env(cwd=tmp_path, save_session=False)
     state = ReplState(settings=dict(cfg.settings), model="testes/b", messages=[], system="s")
 
-    assert repl_commands._cmd_set("TEMPERATURE 0.5", state, cfg) is None
+    assert repl_settings_commands.cmd_set("TEMPERATURE 0.5", state, cfg) is None
     assert login_defaults.sampling(state.config_for_turn(cfg)).temperature == 0.5
-    assert repl_commands._cmd_set("-TEMPERATURE", state, cfg) is None
+    assert repl_settings_commands.cmd_set("-TEMPERATURE", state, cfg) is None
 
     turn = state.config_for_turn(cfg)
-    shown = repl_commands._live_settings_overlay_for_state(cfg, state)
+    shown = repl_settings_commands._live_settings_overlay_for_state(cfg, state)
     assert login_defaults.sampling(turn).temperature == 0.9
     assert shown["TEMPERATURE"].display == "0.9"
 
@@ -663,7 +663,7 @@ def test_only_explicit_set_lines_reach_the_set_layer(monkeypatch, tmp_path):
         sent.append(kwargs["sampling"].temperature)
         if len(sent) == 1:
             # An `on turn_end set -TEMPERATURE` handler, run inside the turn.
-            assert repl_commands._cmd_set("-TEMPERATURE", live["state"], cfg) is None
+            assert repl_settings_commands.cmd_set("-TEMPERATURE", live["state"], cfg) is None
 
     monkeypatch.setattr(cli.runtime, "run_turn_async", repl_driver.turn_stub(run_turn_stub))
 
@@ -682,7 +682,7 @@ def test_an_explicit_set_equal_to_the_current_value_still_pins_it(monkeypatch, t
     cfg = from_env(cwd=tmp_path, save_session=False)
     state = ReplState(settings=dict(cfg.settings), messages=[], system="s")
 
-    assert repl_commands._cmd_set("TEMPERATURE 0.2", state, cfg) is None
+    assert repl_settings_commands.cmd_set("TEMPERATURE 0.2", state, cfg) is None
     state.model = "testes/b"
 
     assert login_defaults.sampling(state.config_for_turn(cfg)).temperature == 0.2
