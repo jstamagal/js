@@ -7,6 +7,7 @@ from pathlib import Path
 import ai
 import ai.types.usage
 import pytest
+from repl_driver import output_of, record_turns, run_async
 
 from js import cli, persona, runtime
 from js.config import Config
@@ -248,15 +249,24 @@ def test_an_eager_tool_is_published_on_the_first_call_and_runs(monkeypatch, tmp_
     assert len(results) == 1 and "EAGER CONTENT" in results[0]
 
 
-def test_tools_command_prints_each_tool_with_its_deciding_entry(tmp_path, capsys):
+def test_tools_command_prints_each_tool_with_its_deciding_entry(tmp_path, monkeypatch, capsys):
     policy.tools_config_path().parent.mkdir(parents=True, exist_ok=True)
     policy.tools_config_path().write_text(SPEC_TOOLS_YAML, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
     cfg = _cfg(tmp_path)
-    state = ReplState(tool_selectors=("tag:code_hacker",), settings={})
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "agent.yaml").write_text("tools: [tag:code_hacker]\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
+    turns = record_turns(monkeypatch)
+    printed: list[str] = []
 
-    assert cli._handle_command("/tools", state, cfg) is True
+    async def typing(enter):
+        printed.append(await output_of(enter, capsys, "/tools"))
 
-    rows = {line.split()[0]: line for line in capsys.readouterr().out.splitlines() if line.strip()}
+    run_async(monkeypatch, cfg, typing)
+
+    assert turns == []
+    rows = {line.split()[0]: line for line in printed[0].splitlines() if line.strip()}
     assert "eager" in rows["shell"].split() and "shell:eager" in rows["shell"]
     assert "ban" in rows["fetch"].split() and '*:ban' in rows["fetch"]
     assert "tag:code_editor" in rows["fetch"]
