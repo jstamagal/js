@@ -7,14 +7,13 @@ start.
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from repl_driver import record_turns, type_into_js
+from repl_driver import output_of, record_turns, type_into_js
 
 from js import cli, setcmd, settings
 from js.config import Config, from_env
@@ -144,12 +143,8 @@ def _type(monkeypatch, project, capsys, lines) -> dict[str, str]:
     printed: dict[str, str] = {}
 
     async def typing(enter):
-        # The banner, queued as the screen came up, lands before the first line.
-        await asyncio.sleep(0)
         for line in lines:
-            capsys.readouterr()
-            await enter(line)
-            printed[line] = capsys.readouterr().out
+            printed[line] = await output_of(enter, capsys, line)
 
     assert type_into_js(monkeypatch, typing) == 0
     return printed

@@ -9,6 +9,7 @@ over it. `turn_stub` stands a plain function in for the turn the REPL awaits;
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import sys
 from dataclasses import dataclass
@@ -135,6 +136,24 @@ def run_async(monkeypatch, cfg, lines, *, wait: bool = False, **state_kwargs) ->
         cli._repl_main(cfg, state, _telemetry(cfg, state), None, None, prompt_spec)
     ) == 0
     return state
+
+
+async def settled() -> None:
+    """Let the REPL's loop run what is queued on it. A command runs on an
+    executor thread and queues its output, and any call it hops onto the
+    loop, from there; some of it can still be queued when the line's Enter
+    handler returns."""
+    await asyncio.sleep(0)
+
+
+async def output_of(enter, capsys, line: str) -> str:
+    """What typing `line` into the Enter handler `enter` printed (see
+    `stub_screen` for a `lines` function)."""
+    await settled()
+    capsys.readouterr()
+    await enter(line)
+    await settled()
+    return capsys.readouterr().out
 
 
 def type_into_js(monkeypatch, lines, *argv: str, wait: bool = True) -> int:

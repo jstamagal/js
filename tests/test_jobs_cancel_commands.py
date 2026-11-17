@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 
-from repl_driver import type_into_js
+from repl_driver import output_of, settled, type_into_js
 
 from js import cli, supervisor
 from js.repl_state import ReplState
@@ -66,9 +66,7 @@ def test_jobs_lists_running(monkeypatch, tmp_path, capsys):
 
     async def typing(enter, jobs):
         ids.update({label: job.id for label, job in jobs.items()})
-        capsys.readouterr()
-        await enter("/jobs")
-        listed.extend(capsys.readouterr().out.splitlines())
+        listed.extend((await output_of(enter, capsys, "/jobs")).splitlines())
 
     _with_jobs(monkeypatch, tmp_path, typing)
 
@@ -87,6 +85,7 @@ def test_cancel_bare_targets_active_turn_only(monkeypatch, tmp_path):
 
     async def typing(enter, jobs):
         await enter("/cancel")
+        await settled()
         requests.update(_cancel_requests(jobs))
 
     _with_jobs(monkeypatch, tmp_path, typing)
@@ -99,6 +98,7 @@ def test_cancel_by_id(monkeypatch, tmp_path):
 
     async def typing(enter, jobs):
         await enter(f"/cancel {jobs['task#1'].id}")
+        await settled()
         requests.update(_cancel_requests(jobs))
 
     _with_jobs(monkeypatch, tmp_path, typing)
@@ -111,9 +111,7 @@ def test_cancel_bad_arg_shows_usage(monkeypatch, tmp_path, capsys):
     printed: list[str] = []
 
     async def typing(enter, jobs):
-        capsys.readouterr()
-        await enter("/cancel nope")
-        printed.append(capsys.readouterr().out)
+        printed.append(await output_of(enter, capsys, "/cancel nope"))
         requests.update(_cancel_requests(jobs))
 
     _with_jobs(monkeypatch, tmp_path, typing)
@@ -127,9 +125,7 @@ def test_cancel_unknown_id_is_noop(monkeypatch, tmp_path, capsys):
     printed: list[str] = []
 
     async def typing(enter, jobs):
-        capsys.readouterr()
-        await enter("/cancel 99")
-        printed.append(capsys.readouterr().out)
+        printed.append(await output_of(enter, capsys, "/cancel 99"))
         requests.update(_cancel_requests(jobs))
 
     _with_jobs(monkeypatch, tmp_path, typing)

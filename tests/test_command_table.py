@@ -7,7 +7,7 @@ import os
 from dataclasses import replace
 from pathlib import Path
 
-from repl_driver import record_turns, repl_state, run_async, type_into_js
+from repl_driver import output_of, record_turns, repl_state, run_async, type_into_js
 
 from js import cli, paths, settings
 from js.config import from_env, jsrc_paths
@@ -188,9 +188,7 @@ def test_self_referencing_alias_stops(tmp_path, monkeypatch, capsys):
 
     async def typing(enter):
         await enter("/alias loop loop")
-        capsys.readouterr()
-        await enter("/loop")
-        printed.append(capsys.readouterr().out)
+        printed.append(await output_of(enter, capsys, "/loop"))
 
     assert type_into_js(monkeypatch, typing) == 0
 

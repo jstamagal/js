@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import re
 from pathlib import Path
 
-from repl_driver import record_turns, run_async
+from repl_driver import output_of, record_turns, run_async
 
 from js.config import Config
 from js.memory import append_message
@@ -44,11 +43,7 @@ def _printed(monkeypatch, tmp_path, capsys, line: str, *, system: str = "SYSTEM"
     printed: list[str] = []
 
     async def typing(enter):
-        # The resumed exchanges, drawn as the screen came up, land first.
-        await asyncio.sleep(0)
-        capsys.readouterr()
-        await enter(line)
-        printed.append(capsys.readouterr().out)
+        printed.append(await output_of(enter, capsys, line))
 
     run_async(monkeypatch, cfg, typing, system=system)
     assert turns == []
