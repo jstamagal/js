@@ -4,7 +4,7 @@ import ai
 import pytest
 from turn_driver import js
 
-from js import cli, messages, runtime, stats
+from js import bench, cli, messages, runtime, stats
 from js.config import InvocationSources
 from js.model_client import ModelStreamResult
 
@@ -80,7 +80,7 @@ def test_benchmark_stats_failure_preserves_interrupted_status(tmp_path, monkeypa
         return result("answer")
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
-    assert cli._run_bench(
+    assert bench.run_bench(
         "stats-check", model=None, reasoning=None, maxout=None, quiet=True,
         sources=InvocationSources(),
         stats_json=str(tmp_path), stats_csv=None,

@@ -14,7 +14,17 @@ import pytest
 from repl_driver import record_turns, stub_screen, turn_stub, type_into_js
 from turn_driver import js
 
-from js import cli, messages as msgs, paths as _paths, runtime, session_store, snippets
+from js import (
+    bench,
+    cli,
+    commit_cli,
+    listings,
+    messages as msgs,
+    paths as _paths,
+    runtime,
+    session_store,
+    snippets,
+)
 from js.config import Config, InvocationSources
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
@@ -352,7 +362,7 @@ def test_positional_word_outside_commit_mode_is_refused(monkeypatch, tmp_path, c
 def test_positional_target_reaches_commit_mode(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     seen = {}
-    monkeypatch.setattr(cli, "_run_commit", lambda target, **kw: seen.setdefault("target", target) and 0)
+    monkeypatch.setattr(commit_cli, "run_commit", lambda target, **kw: seen.setdefault("target", target) and 0)
 
     assert cli.main(["--commit", "some/path"]) == 0
     assert seen["target"] == "some/path"
@@ -842,7 +852,7 @@ def test_prompt_mode_invalid_reasoning_errors_cleanly_before_provider(monkeypatc
 def test_bench_mode_invalid_reasoning_errors_cleanly(monkeypatch, tmp_path):
     """The bench loop validates --reasoning up front too."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    actual = cli._run_bench(
+    actual = bench.run_bench(
         "someagent", model=None, reasoning="not one", maxout=None, quiet=True,
         sources=InvocationSources(),
         stats_json=None, stats_csv=None,
@@ -1373,12 +1383,12 @@ def test_list_table_and_json_cover_same_nested_records_without_config(monkeypatc
     record_session_start(nested, cwd=tmp_path, caller_key="job-key", job_id=9, agent="agent")
     monkeypatch.setattr(cli, "_from_env", lambda *_args, **_kwargs: pytest.fail("list loaded config"))
 
-    assert cli._print_session_list(as_json=False) == 0
+    assert listings.print_session_list(as_json=False) == 0
     table = capsys.readouterr().out
     assert "legacy" in table and "caller/nested" in table
     assert "job-key" in table and str(tmp_path) in table
 
-    assert cli._print_session_list(as_json=True) == 0
+    assert listings.print_session_list(as_json=True) == 0
     records = json.loads(capsys.readouterr().out)
     assert {(item["agent"], item["name"]) for item in records} == {
         (None, "legacy"),
@@ -1405,11 +1415,11 @@ def test_list_is_newest_first_across_folders_in_local_time(monkeypatch, tmp_path
             os.utime(path, (now - age, now - age))
             made[name] = now - age
 
-        assert cli._print_session_list(as_json=True) == 0
+        assert listings.print_session_list(as_json=True) == 0
         records = json.loads(capsys.readouterr().out)
         assert [item["name"] for item in records] == ["b-new", "a-mid", "b-old"]
 
-        assert cli._print_session_list(as_json=False) == 0
+        assert listings.print_session_list(as_json=False) == 0
         rows = capsys.readouterr().out.splitlines()[1:]
         assert [row.split()[1] for row in rows] == ["b-new", "a-mid", "b-old"]
         newest = rows[0]
@@ -1422,7 +1432,7 @@ def test_list_is_newest_first_across_folders_in_local_time(monkeypatch, tmp_path
 
 def test_list_flag_prints_the_session_list(monkeypatch):
     calls: list[bool] = []
-    monkeypatch.setattr(cli, "_print_session_list", lambda *, as_json: calls.append(as_json) or 0)
+    monkeypatch.setattr(listings, "print_session_list", lambda *, as_json: calls.append(as_json) or 0)
 
     assert cli.main(["--list-sessions", "--json"]) == 0
     assert calls == [True]
@@ -1448,13 +1458,13 @@ def test_list_reports_subprocess_session_live_only_while_process_alive(monkeypat
         while not ready.exists() and time.monotonic() < deadline:
             time.sleep(0.01)
         assert ready.exists()
-        assert cli._print_session_list(as_json=True) == 0
+        assert listings.print_session_list(as_json=True) == 0
         assert json.loads(capsys.readouterr().out)[0]["in_flight"] is True
     finally:
         process.terminate()
         process.wait(timeout=5)
 
-    assert cli._print_session_list(as_json=True) == 0
+    assert listings.print_session_list(as_json=True) == 0
     assert json.loads(capsys.readouterr().out)[0]["in_flight"] is False
 
 

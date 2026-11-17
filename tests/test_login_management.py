@@ -4,7 +4,7 @@ import re
 
 import pytest
 
-from js import login_cli, logins
+from js import listings, login_cli, logins
 
 
 class Screen:
@@ -303,7 +303,6 @@ def test_model_refetch_cancel_preserves_cache_bytes(monkeypatch, tmp_path):
 
 
 def test_deselect_all_keeps_list_models_empty_without_network(monkeypatch, capsys):
-    from js import cli
 
     logins.save_login(logins.Login("mine", sdk_provider_id="openai"))
     logins.cache_models("mine", ["old"])
@@ -314,7 +313,7 @@ def test_deselect_all_keeps_list_models_empty_without_network(monkeypatch, capsy
     assert login_cli._run_models_edit("mine") == 0
     capsys.readouterr()
     monkeypatch.setattr(logins, "test_login", lambda *_: pytest.fail("empty curated cache must not fetch"))
-    assert cli._print_model_list("mine", None) == 0
+    assert listings.print_model_list("mine", None) == 0
     output = capsys.readouterr()
     assert output.out == ""
     assert output.err == ""

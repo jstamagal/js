@@ -14,7 +14,6 @@ import json
 import os
 import re
 import shlex
-import shutil
 import signal
 import subprocess
 import sys
@@ -23,8 +22,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, replace
-from datetime import UTC, datetime
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -37,8 +35,10 @@ from . import (
     agent_lock,
     agent_messages,
     attach,
+    bench,
     clipimage,
     command_line,
+    commit_cli,
     compaction,
     display as display_mod,
     dotenv,
@@ -51,15 +51,16 @@ from . import (
     hookexec,
     jail as _jail,
     keys as keys_mod,
+    listings,
     login_defaults,
     logins,
     memory as M,
     messages as msgs,
+    migrate_config,
     model_client,
     model_metadata,
     motd,
     output,
-    paranoid,
     pastes,
     paths as _paths,
     persona as P,
@@ -67,7 +68,6 @@ from . import (
     prompt_commands,
     prompt_history,
     providers,
-    rename,
     replcomplete,
     routing,
     run_assembly,
@@ -75,7 +75,6 @@ from . import (
     sampling as sampling_mod,
     screen,
     session_picker,
-    session_query,
     session_store,
     setcmd,
     settings,
@@ -111,14 +110,13 @@ from .session_catalog import (
     acquire_session,
     append_title,
     branch_session,
-    catalog_sessions,
     first_metadata,
     record_model_switch,
     record_session_start,
     session_title,
 )
 from .tool_binaries import resolve_binary
-from .toolkit import ToolContext, policy as tool_policy, subagents, task_jobs
+from .toolkit import policy as tool_policy, subagents, task_jobs
 
 
 def _error_text(e: BaseException) -> str:
@@ -442,42 +440,6 @@ def _invocation_sources(args: argparse.Namespace) -> InvocationSources:
         ignore_local_config=args.no_local_config,
         ignore_global_config=args.no_global_config,
     )
-
-
-def _print_session_list(*, as_json: bool) -> int:
-    """Every session, newest first; the table shows times in local time as the
-    picker does."""
-    records = sorted(catalog_sessions(_paths.sessions_root()), key=lambda record: -record["mtime"])
-    if as_json:
-        print(json.dumps(records, separators=(",", ":"), ensure_ascii=True))
-        return 0
-
-    headings = tuple(msgs.LIST_HEADINGS.words().split())
-    now = time.time()
-    rows = []
-    for record in records:
-        identity = record["caller_key"]
-        if record["job_id"] is not None:
-            identity = str(record["job_id"]) if identity is None else f"{identity}/{record['job_id']}"
-        rows.append(
-            (
-                record["agent"] or "-",
-                record["name"],
-                session_query.when_text(record["mtime"], now),
-                str(record["size"]),
-                str(record["user_turns"]),
-                (msgs.LIST_YES if record["in_flight"] else msgs.LIST_NO).words(),
-                record["cwd"] or "-",
-                identity or "-",
-            )
-        )
-    widths = [len(value) for value in headings]
-    for row in rows:
-        widths = [max(width, len(value)) for width, value in zip(widths, row, strict=True)]
-    print("  ".join(value.ljust(width) for value, width in zip(headings, widths, strict=True)))
-    for row in rows:
-        print("  ".join(value.ljust(width) for value, width in zip(row, widths, strict=True)))
-    return 0
 
 
 def _read_stdin_if_piped() -> str:
@@ -1299,55 +1261,6 @@ def _force_refresh_model_catalog() -> bool:
     providers_count = "?" if status.provider_count is None else str(status.provider_count)
     msgs.say(msgs.CATALOG_REFRESHED, stamp=stamp, providers=providers_count, models=models, path=status.db_path)
     return True
-
-
-def _flatten_toml(data: dict, prefix: str = "") -> list[tuple[str, str]]:
-    """Flatten a nested TOML dict into (dotted_key, scalar_str) set-line pairs.
-    Tables recurse; lists / arrays-of-tables become a JSON value."""
-    out: list[tuple[str, str]] = []
-    for key, value in data.items():
-        dotted = f"{prefix}{key}"
-        if isinstance(value, dict):
-            out.extend(_flatten_toml(value, prefix=f"{dotted}."))
-        elif isinstance(value, bool):
-            out.append((dotted, "on" if value else "off"))
-        elif isinstance(value, (list, tuple)):
-            out.append((dotted, json.dumps(value)))
-        else:
-            out.append((dotted, str(value)))
-    return out
-
-
-def _run_migrate_config() -> int:
-    """One-shot: convert a legacy config.toml into a jsrc set-script, then exit."""
-    import tomllib
-
-    legacy = _paths.legacy_global_config_file()
-    target = _paths.global_config_file()
-    if not legacy.exists():
-        msgs.warn(msgs.MIGRATE_NO_LEGACY, path=legacy)
-        return 1
-    if target.exists():
-        msgs.warn(msgs.MIGRATE_TARGET_EXISTS, path=target)
-        return 1
-    with legacy.open("rb") as fp:
-        data = tomllib.load(fp)
-    lines = ["# migrated from config.toml by `js --migrate-config`", ""]
-    deleted = []
-    for key, value in _flatten_toml(data):
-        if rename.is_deleted(key):
-            deleted.append(key)
-            lines.append(f"# deleted: set {key} {value}")
-        else:
-            new = rename.renamed_key(key) or key
-            verb = "fset" if rename.is_fset(new) else "set"
-            lines.append(f"{verb} {new} {settings.jsrc_text(new, rename.renamed_value(key, str(value)))}")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    msgs.say(msgs.MIGRATE_WROTE, path=target, legacy=legacy)
-    for key in deleted:
-        msgs.warn(msgs.MIGRATE_DELETED, key=key)
-    return 1 if deleted else 0
 
 
 def _append_closing_note(cfg: Config, state: ReplState, reminder: str) -> None:
@@ -3033,308 +2946,6 @@ def _run_prompt_json(prompt: str | None, **kwargs) -> int:
     return code
 
 
-class _BenchTools:
-    """Reserve model call order before parallel tools report their outcomes."""
-
-    outcomes = frozenset({"tool_ok", "tool_error", "tool_exception", "tool_invalid", "tool_call_refused", "tool_unknown"})
-
-    def __init__(self) -> None:
-        self.entries: list[list] = []
-        self.calls: dict[str, list] = {}
-
-    def event(self, kind: str, fields: dict) -> None:
-        call_id = fields.get("call_id")
-        if kind == "tool_scheduled":
-            entry = [str(fields["tool"]), False]
-            self.entries.append(entry)
-            self.calls[call_id] = entry
-        elif kind in self.outcomes:
-            name = ("?" if kind == "tool_unknown" else "") + str(fields["tool"])
-            entry = self.calls.get(call_id) if call_id else None
-            if entry is None:
-                self.entries.append([name, True])
-            else:
-                entry[:] = [name if not entry[0].startswith("?") else entry[0], True]
-
-    @property
-    def names(self) -> list[str]:
-        return [name for name, finished in self.entries if finished]
-
-
-def _bench_row_line(row: dict) -> msgs.Said:
-    if not row.get("ok"):
-        return msgs.BENCH_FAILED.said(name=row["name"], error=row.get("error") or "failed")
-    ttft = f"{row['ttft_s'] * 1000:.0f}ms" if row.get("ttft_s") is not None else "—"
-    return msgs.BENCH_ROW.said(name=row["name"], tokens=row.get("output_tokens", 0),
-                               tps=row.get("tok_per_s", 0.0), ttft=ttft, wall=row.get("wall_s") or 0.0)
-
-
-def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
-               maxout: int | None, quiet: bool, sources: InvocationSources,
-               stats_json: str | None, stats_csv: str | None,
-               debug: bool = False) -> int:
-    """Run an agent's NN-benchmark.md turns, each on a clean slate (fresh
-    context, no session), measuring TTFT / tok-s / turn time. The persona
-    (NN-prompt.md + agent.yaml) is rebuilt into each benchmark's head;
-    benchmarks never see each other."""
-    try:
-        agent_id = validate_agent_id(bench_agent)
-    except (ValueError, OSError) as e:
-        msgs.warn(msgs.FAILED, error=e)
-        return 2
-    reasoning_override = None
-    if reasoning is not None:
-        reasoning_override, effort_error = _validate_cli_reasoning(reasoning)
-        if effort_error is not None:
-            msgs.warn(msgs.BAD_REASONING, value=reasoning, error=effort_error)
-            return 2
-    try:
-        cfg = _from_env(None, save_session=False, sources=sources, agent_id=agent_id)
-        cfg = replace(cfg, session_file=Path(os.devnull))
-    except ValueError as e:
-        msgs.warn(msgs.FAILED, error=e)
-        return 2
-    try:
-        settled = run_assembly.settle(cfg, model=model, reasoning=reasoning_override, config_pins=True)
-    except run_assembly.RunNotSettled as e:
-        msgs.warn(msgs.FAILED, error=_format_prompt_load_error(cfg, e.cause) if e.loading else e.cause)
-        return 2
-    except (FileNotFoundError, ValueError) as e:
-        msgs.warn(msgs.FAILED, error=e)
-        return 2
-    try:
-        benchmarks = P.load_benchmarks(cfg.prompts_dir)
-    except (FileNotFoundError, ValueError) as e:
-        msgs.warn(msgs.FAILED, error=_format_prompt_load_error(cfg, e))
-        return 2
-
-    if not benchmarks:
-        msgs.warn(msgs.NO_BENCHMARKS, agent=agent_id)
-        return 2
-
-    cfg = replace(settled.config, settings={**settled.config.settings, "REASONING_DISPLAY": 3,
-                                            "TOOLS_DISPLAY": 3, "TOOLS_QUIET": [], "SHELL_QUIET": [],
-                                            "MARKDOWN": False})
-    prompt_spec = settled.prompt_spec
-    events = _json_events
-    if events is not None:
-        events.emit("start", version=headless.SCHEMA_VERSION, agent=agent_id,
-                    model=cfg.model, provider=cfg.provider_id)
-    # The resolved OUTPUT_TOKENS_MAX: agent.yaml's max_tokens is one of its layers.
-    agent_default_max = cfg.max_output_tokens
-    system = settled.system
-
-    # The request trace (system prompt, tools, messages, FLIGHT lines) goes to
-    # logs/<agent>/<agent>-<pid>.log like every other run. A bench keeps no session,
-    # so without this nothing records what the model was sent.
-    autolog = _debug_autolog_path(cfg, getattr(cfg, "settings", {}) or {})
-    trace_sink = _open_debug_trace_sink([autolog] if autolog is not None else [])
-
-    rows: list[dict] = []
-    interrupted = False
-    for bench in benchmarks:
-        # max_tokens: --max-out wins; else per-benchmark frontmatter (already
-        # -1 -> None=uncapped); else the agent default from agent.yaml.
-        if maxout is not None:
-            eff_max = maxout
-        elif bench.max_tokens_set:
-            eff_max = bench.max_tokens
-        else:
-            eff_max = agent_default_max
-        prompt_text = bench.prompt
-        messages = []
-        call_stats: list[dict] = []
-        tool_names = _BenchTools()
-        turn_kwargs = settled.turn_kwargs(max_output_override=eff_max, call_stats=call_stats)
-        if events is not None:
-            turn_kwargs["event_sink"] = events.runtime_event
-        ok, err = True, None
-        t_wall = time.time()
-        try:
-            sink = io.StringIO() if quiet else None
-            out = sink if sink is not None else (_StdoutTee(sys.stdout, trace_sink) if trace_sink is not None else None)
-            with contextlib.redirect_stdout(out) if out is not None else contextlib.nullcontext():
-                async def run_benchmark():
-                    nonlocal prompt_text
-                    telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
-                    telemetry.trace_sink = trace_sink
-                    telemetry.event_observer = tool_names.event
-                    if events is not None:
-                        telemetry.sink = output.Fanout(output.sink_of(telemetry), headless.OutputEvents(events))
-                    await agent_messages.initialize(
-                        cfg, prompt_spec, messages, telemetry, save=False,
-                        trace_override=True, **turn_kwargs,
-                    )
-                    prompt_text = P.expand_agent_text(bench.prompt, cfg)
-                    if not quiet:
-                        first = (prompt_text.splitlines() or [""])[0][:80]
-                        msgs.warn(msgs.BENCH_START, name=bench.name, prompt=first)
-                    messages.append({"role": "user", "content": prompt_text})
-                    await runtime.run_turn_async(
-                        cfg, system, messages, telemetry, trace_override=True, **turn_kwargs,
-                    )
-
-                model_client.run_owning_loop(run_benchmark())
-        except KeyboardInterrupt:
-            interrupted, ok, err = True, False, "interrupted"
-        except snippets.SnippetError:
-            raise
-        except Exception as e:  # noqa: BLE001
-            ok, err = False, f"{type(e).__name__}: {e}"
-        row = {
-            "name": bench.name, "prompt": prompt_text, "max_tokens": eff_max,
-            "ok": ok, "error": err, "tools": tool_names.names,
-            **stats.summarize_calls(call_stats, wall_s=time.time() - t_wall),
-        }
-        rows.append(row)
-        msgs.say_said(_bench_row_line(row), file=sys.stderr)
-        if interrupted:
-            break
-
-    if trace_sink is not None:
-        trace_sink.close()
-
-    payload = {"agent": agent_id, "model": cfg.model, "provider": cfg.provider_id, "benchmarks": rows}
-    stats_ok = _write_requested_stats(stats_json, stats_csv, payload, rows, announce=True)
-    if events is not None:
-        events.result = payload
-    elif not stats_json and not stats_csv:
-        print(json.dumps(payload, indent=2, default=str))
-    return 130 if interrupted else 1 if not stats_ok or any(not row["ok"] for row in rows) else 0
-
-
-def _commit_backup_root() -> Path:
-    return _paths.commit_backups_dir()
-
-
-def _worktree_patch(repo_dir: Path, commit_helper) -> str:
-    """The unified diff of every tracked uncommitted change.
-
-    `git diff HEAD` is staged+unstaged against the last commit. A repo with no
-    commits yet has no HEAD, so fall back to staged+unstaged separately.
-    """
-    flags = (*commit_helper._DIFF_FLAGS, "--binary")
-    diff = commit_helper._git("diff", *flags, "HEAD", check=False, repo=repo_dir)
-    if diff.returncode == 0:
-        return diff.stdout
-    staged = commit_helper._git("diff", "--cached", *flags, check=False, repo=repo_dir)
-    unstaged = commit_helper._git("diff", *flags, check=False, repo=repo_dir)
-    return (staged.stdout if staged.returncode == 0 else "") + (unstaged.stdout if unstaged.returncode == 0 else "")
-
-
-def _prune_commit_backups(root: Path, keep: int = 10) -> None:
-    dirs = sorted((d for d in root.iterdir() if d.is_dir()), key=lambda p: p.name)
-    for old in dirs[:-keep]:
-        shutil.rmtree(old, ignore_errors=True)
-
-
-def _snapshot_worktree(repo_dir: Path) -> Path | None:
-    """Copy all uncommitted work into a timestamped backup before the agent touches the tree.
-
-    The commit agent can revert files while splitting commits; a snapshot means any
-    failure path is recoverable. Returns the backup dir, or None on a clean tree.
-    """
-    import hashlib
-
-    from . import commit_helper
-
-    patch = _worktree_patch(repo_dir, commit_helper)
-    others = commit_helper._git("ls-files", "--others", "--exclude-standard", "-z", check=False, repo=repo_dir)
-    untracked = [p for p in others.stdout.split("\0") if p] if others.returncode == 0 else []
-    if not patch.strip() and not untracked:
-        return None
-
-    repo_key = hashlib.sha256(os.fsencode(repo_dir.resolve())).hexdigest()
-    repo_backups = _commit_backup_root() / repo_key
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
-    backup_dir = repo_backups / stamp
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    if patch:
-        (backup_dir / "tracked.patch").write_bytes(patch.encode("utf-8", "surrogateescape"))
-    for rel in untracked:
-        dest = backup_dir / "untracked" / rel
-        try:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(repo_dir / rel, dest, follow_symlinks=False)
-        except OSError:
-            continue  # a vanished/unreadable file must not abort the whole snapshot
-    _prune_commit_backups(repo_backups)
-    return backup_dir
-
-
-def _run_commit(target: str | None,
-                model: str | None = None, debug: bool = False, debug_file: str | None = None,
-                session: str | None = None, save: bool = True,
-                reasoning: str | None = None, maxout: int | None = None,
-                extra_context: str | None = None,
-                sources: InvocationSources = InvocationSources()) -> int:
-    target_dir = Path(target).expanduser() if target else Path.cwd()
-    if not target_dir.is_absolute():
-        target_dir = Path.cwd() / target_dir
-    target_dir = target_dir.resolve(strict=False)
-    if not target_dir.exists():
-        msgs.warn(msgs.COMMIT_TARGET_MISSING, path=target_dir)
-        return 2
-    if not target_dir.is_dir():
-        msgs.warn(msgs.COMMIT_TARGET_NOT_DIR, path=target_dir)
-        return 2
-
-    from . import commit_helper
-
-    probe = commit_helper._git("rev-parse", "--is-inside-work-tree", check=False, repo=target_dir)
-    if probe.returncode != 0 or probe.stdout.strip() != "true":
-        init = commit_helper._git("init", "-q", "-b", "main", check=False, repo=target_dir)
-        if init.returncode != 0:
-            init = commit_helper._git("init", "-q", check=False, repo=target_dir)
-        if init.returncode != 0:
-            detail = (init.stderr or init.stdout).strip() or f"exit {init.returncode}"
-            msgs.warn(msgs.GIT_INIT_FAILED, path=target_dir, error=detail)
-            return 1
-
-    try:
-        backup_dir = _snapshot_worktree(target_dir)
-    except Exception as e:  # noqa: BLE001 — a snapshot failure must never block the commit run
-        msgs.warn(msgs.SNAPSHOT_FAILED, error=f"{type(e).__name__}: {e}")
-    else:
-        if backup_dir is not None:
-            msgs.say(msgs.SNAPSHOT_SAVED, path=backup_dir)
-
-    survey_out = io.StringIO()
-    survey_err = io.StringIO()
-    with contextlib.redirect_stdout(survey_out), contextlib.redirect_stderr(survey_err):
-        survey_rc = commit_helper.main(["-C", str(target_dir), "survey"])
-    survey = survey_out.getvalue().rstrip()
-    if survey_rc != 0:
-        detail = survey_err.getvalue().strip() or survey or msgs.SURVEY_EXITED.said(code=survey_rc)
-        msgs.warn(msgs.SURVEY_FAILED, path=target_dir, error=detail)
-        return 1
-
-    helper_stage = f'python -m js.commit_helper -C {shlex.quote(str(target_dir))} stage <file> <hunks|all>'
-    helper_survey = f'python -m js.commit_helper -C {shlex.quote(str(target_dir))} survey'
-    helper_commit = f'python -m js.commit_helper -C {shlex.quote(str(target_dir))} commit <message-file>'
-    prompt = (
-        snippets.render('commit-task', DIRECTORY=target_dir, STAGE=helper_stage, COMMIT=helper_commit, SURVEY_COMMAND=helper_survey, SURVEY=survey)
-    )
-    if extra_context and extra_context.strip():
-        prompt += f'\n\nOperator context:\n{extra_context.strip()}'
-
-    return _run_prompt(
-        prompt,
-        model=model,
-        debug=debug,
-        debug_file=debug_file,
-        agent="commit",
-        session=session,
-        save=save,
-        resume_prefix=f"js --commit {target_dir}",
-        reasoning=reasoning,
-        maxout=maxout,
-        sources=sources,
-        config_pins=True,
-        tool_context=ToolContext(cwd=target_dir),
-    )
-
-
 def _run_compact_offline(session: str, *, agent: str | None = None, focus: str = "",
                          sources: InvocationSources = InvocationSources(),
                          model: str | None = None) -> int:
@@ -3357,81 +2968,6 @@ def _run_compact_offline(session: str, *, agent: str | None = None, focus: str =
         msgs.say(msgs.COMPACTION_DONE, result=result)
     return 0
 
-def _providers_json() -> list[dict]:
-    saved = logins.load_logins()
-    known_ids = {p.id for p in providers.login_providers()}
-    rows: list[dict] = []
-    for provider in providers.login_providers():
-        env_configured = providers.first_env(provider.api_key_env + provider.base_url_env + provider.model_env) is not None
-        source = "login" if provider.id in saved else ("env" if env_configured else "registry")
-        rows.append({"id": provider.id, "name": provider.display_name, "source": source})
-    for provider_id in sorted(set(saved) - known_ids):
-        rows.append({"id": provider_id, "name": provider_id, "source": "custom"})
-    return rows
-
-
-def _logins_json() -> list[dict]:
-    rows: list[dict] = []
-    masked = paranoid.masks(paranoid.mode())
-    for provider_id, login in sorted(logins.load_logins().items()):
-        item = asdict(login)
-        item["provider_id"] = provider_id
-        item["has_api_key"] = bool(item.get("provider_api_key"))
-        if masked:
-            item["provider_api_key"] = None
-            item["provider_headers"] = {}
-        rows.append(item)
-    return rows
-
-
-def _models_cached_or_live(provider_id: str, cfg: Config | None) -> list[str]:
-    """Models for one provider, cache first (offline-friendly, fast), live on miss."""
-    cached = logins.load_model_cache().get(provider_id)
-    if cached is not None:
-        return cached
-    if cfg is not None and provider_id == cfg.provider_id:
-        return _models_for_provider(provider_id, cfg.provider_base_url, cfg.provider_api_key)
-    return _models_for_provider(provider_id, None, None)
-
-
-def _list_models_provider_ids(provider_arg: str | None, cfg: Config | None) -> list[str]:
-    """Which providers `--list-models` covers: the named one, else every provider
-    the operator has a stake in — saved logins plus the active provider."""
-    if provider_arg:
-        return [providers.normalize_provider_id(provider_arg) or provider_arg]
-    ids = set(logins.load_logins())
-    if cfg is not None and cfg.provider_id:
-        ids.add(cfg.provider_id)
-    return sorted(ids)
-
-
-def _print_model_list(provider_arg: str | None, cfg: Config | None) -> int:
-    """Print one `provider/model` line per model of `provider_arg`, or of
-    every saved login when it is None. A provider whose models cannot be
-    listed gets a `#` line on stderr and the rest still print."""
-    provider_ids = _list_models_provider_ids(provider_arg, cfg)
-    if not provider_ids:
-        msgs.warn(msgs.NO_LOGINS)
-        return 0
-    for pid in provider_ids:
-        try:
-            model_ids = _models_cached_or_live(pid, cfg)
-        except Exception as e:  # noqa: BLE001
-            msgs.warn(msgs.MODEL_LIST_FAILED, provider=pid, error=f"{type(e).__name__}: {e}")
-            continue
-        for model_id in model_ids:
-            print(f"{pid}/{model_id}" if pid else model_id)
-    return 0
-
-
-def _models_json(provider_id: str | None, cfg: Config | None = None) -> dict:
-    models = []
-    for provider in _list_models_provider_ids(provider_id, cfg):
-        models.extend(f"{provider}/{model}" if provider else model
-                      for model in _models_cached_or_live(provider, cfg))
-    return {"models": models}
-
-
 def _warn_unmatched_presets(sources: InvocationSources) -> None:
     from .config import _preset_config_paths
 
@@ -3443,11 +2979,6 @@ def _warn_unmatched_presets(sources: InvocationSources) -> None:
                 msgs.warn(msgs.PRESET_NOT_FOUND, name=name, looked=" or ".join(str(p) for p in candidates))
             else:
                 msgs.warn(msgs.PRESET_NO_CONFIG_DIRS, name=name)
-
-
-def _print_json(value: object) -> int:
-    print(json.dumps(value, ensure_ascii=False))
-    return 0
 
 
 # External binaries js leans on. Each missing one is warned about once at
@@ -4445,7 +3976,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         from .verify import verify
         errors = verify(args.verify or None)
         if args.json:
-            _print_json({'ok': not errors, 'errors': errors})
+            listings.print_json({'ok': not errors, 'errors': errors})
         else:
             for error in errors:
                 print(error, file=sys.stderr)
@@ -4467,7 +3998,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         if ambiguous:
             msgs.warn(msgs.LIST_EXCLUSIVE)
             return 2
-        return _print_session_list(as_json=args.json)
+        return listings.print_session_list(as_json=args.json)
     if args.last:
         if args.session is not None:
             msgs.warn(msgs.LAST_WITH_SESSION)
@@ -4503,21 +4034,21 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         return login_cli.main(["logout", args.logout])
     if args.list_agents:
         names = _paths.agent_names()
-        return _print_json(names) if args.json else (print("\n".join(names)) or 0)
+        return listings.print_json(names) if args.json else (print("\n".join(names)) or 0)
     if args.list_providers:
-        return _print_json(_providers_json())
+        return listings.print_json(listings.providers_json())
     if args.list_logins:
-        return _print_json(_logins_json())
+        return listings.print_json(listings.logins_json())
     if args.list_models is not None:
         try:
             cfg = None
             provider_arg = args.list_models or None
             if provider_arg is None:
                 cfg = _from_env(args.session, save_session=False, sources=sources, agent_id=args.agent)
-            return _print_json(_models_json(provider_arg, cfg)) if args.json else _print_model_list(provider_arg, cfg)
+            return listings.print_json(listings.models_json(provider_arg, cfg)) if args.json else listings.print_model_list(provider_arg, cfg)
         except Exception as e:  # noqa: BLE001
             if args.json:
-                _print_json({"error": f"{type(e).__name__}: {e}"})
+                listings.print_json({"error": f"{type(e).__name__}: {e}"})
             else:
                 msgs.warn(msgs.FAILED, error=f"{type(e).__name__}: {e}")
             return 1
@@ -4573,7 +4104,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         if selected_modes or args.agent:
             msgs.warn(msgs.BENCH_EXCLUSIVE)
             return 2
-        return _run_bench(args.bench, model=args.model, reasoning=args.reasoning,
+        return bench.run_bench(args.bench, model=args.model, reasoning=args.reasoning,
                           maxout=args.max_out, quiet=args.quiet, sources=sources,
                           stats_json=args.stats_json, stats_csv=args.stats_csv,
                           debug=args.debug)
@@ -4584,7 +4115,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
                                     model=args.model)
 
     if args.migrate_config:
-        return _run_migrate_config()
+        return migrate_config.run_migrate_config()
 
     if args.commit:
         if args.agent:
@@ -4598,7 +4129,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
                 stdin_text = _read_stdin_if_piped()
                 extra_context = args.prompt if not stdin_text.strip() else f"{args.prompt.rstrip()}\n\n{stdin_text.strip()}"
         _session_leases.start["mode"] = "commit"
-        return _run_commit(args.target, model=args.model, debug=args.debug, debug_file=args.debug_file,
+        return commit_cli.run_commit(args.target, model=args.model, debug=args.debug, debug_file=args.debug_file,
                            session=args.session, save=not args.no_save,
                            reasoning=args.reasoning, maxout=args.max_out,
                            extra_context=extra_context, sources=sources)
@@ -4611,7 +4142,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         return 2
     from .cli_options import current
     if not current().replaces_prompt and not current().chat and P.has_benchmarks(automatic_dir):
-        return _run_bench(
+        return bench.run_bench(
             automatic_agent, model=args.model, reasoning=args.reasoning,
             maxout=args.max_out, quiet=args.quiet, sources=sources,
             stats_json=args.stats_json, stats_csv=args.stats_csv, debug=args.debug,

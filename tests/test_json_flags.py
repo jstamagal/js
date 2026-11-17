@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from js import cli, logins, paths, providers
+from js import cli, listings, logins, paths, providers
 
 
 @pytest.fixture
@@ -21,7 +21,7 @@ def tmp_logins_dir(tmp_path: Path):
 
 def _stdout_json(capsys) -> object:
     out = capsys.readouterr().out
-    # _print_json writes exactly one json.dumps line.
+    # listings.print_json writes exactly one json.dumps line.
     assert out.endswith("\n")
     return json.loads(out)
 
@@ -36,7 +36,7 @@ def test_providers_json_shape_and_sources(monkeypatch, tmp_logins_dir):
     monkeypatch.delenv("MIMO_API_KEY", raising=False)
     logins.save_login(logins.Login(provider_id="mimo", provider_api_key="sk-mimo"))
 
-    rows = cli._providers_json()
+    rows = listings.providers_json()
 
     assert isinstance(rows, list)
     # Every row is exactly {id, name, source}.
@@ -64,7 +64,7 @@ def test_providers_json_custom_saved_only_provider_appended(monkeypatch, tmp_log
         logins.Login(provider_id=custom_id, provider_base_url="http://proxy.test/v1", provider_api_key="sk-x")
     )
 
-    rows = cli._providers_json()
+    rows = listings.providers_json()
 
     by_id = {row["id"]: row for row in rows}
     assert by_id[custom_id] == {"id": custom_id, "name": custom_id, "source": "custom"}
@@ -75,7 +75,7 @@ def test_providers_json_custom_saved_only_provider_appended(monkeypatch, tmp_log
 # --------------------------------------------------------------------------
 
 def test_logins_json_empty_store(tmp_logins_dir):
-    assert cli._logins_json() == []
+    assert listings.logins_json() == []
 
 
 def test_logins_json_hides_credentials_when_paranoid_mode_is_on(tmp_logins_dir, capsys):
@@ -95,8 +95,8 @@ def test_logins_json_hides_credentials_when_paranoid_mode_is_on(tmp_logins_dir, 
 
 
 def test_json_flags_print_their_payload_as_one_json_line(monkeypatch, capsys):
-    monkeypatch.setattr(cli, "_providers_json", lambda: [{"id": "p"}])
-    monkeypatch.setattr(cli, "_logins_json", lambda: [{"provider_id": "l"}])
+    monkeypatch.setattr(listings, "providers_json", lambda: [{"id": "p"}])
+    monkeypatch.setattr(listings, "logins_json", lambda: [{"provider_id": "l"}])
 
     assert cli.main(["--list-providers", "--json"]) == 0
     assert _stdout_json(capsys) == [{"id": "p"}]
@@ -114,7 +114,7 @@ def test_models_json_shape_with_stubbed_provider(monkeypatch, tmp_logins_dir):
     logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="sk-test"))
     monkeypatch.setattr(cli.logins, "test_login", lambda login: ["m-alpha", "m-beta"])
 
-    assert cli._models_json("deepseek") == {"models": ["deepseek/m-alpha", "deepseek/m-beta"]}
+    assert listings.models_json("deepseek") == {"models": ["deepseek/m-alpha", "deepseek/m-beta"]}
 
 
 def test_models_json_error_path_is_json_and_returns_one(tmp_logins_dir, capsys, monkeypatch):
@@ -182,7 +182,7 @@ def test_list_models_human_output_is_provider_slash_model(monkeypatch, tmp_login
     logins.save_login(logins.Login(provider_id="openai", provider_api_key="sk"))
     monkeypatch.setattr(cli.logins, "test_login", lambda login: ["gpt-5.4", "gpt-5.5"])
 
-    rc = cli._print_model_list("openai", None)
+    rc = listings.print_model_list("openai", None)
     out = capsys.readouterr().out
 
     assert rc == 0
@@ -202,7 +202,7 @@ def test_list_models_no_arg_covers_every_saved_login(monkeypatch, tmp_logins_dir
         raise AssertionError("cache hit should avoid a live fetch")
 
     monkeypatch.setattr(cli.logins, "test_login", _no_live)
-    rc = cli._print_model_list(None, SimpleNamespace(provider_id=None))
+    rc = listings.print_model_list(None, SimpleNamespace(provider_id=None))
     out = capsys.readouterr().out
 
     assert rc == 0
@@ -213,7 +213,7 @@ def test_list_models_no_arg_covers_every_saved_login(monkeypatch, tmp_logins_dir
 
 def test_list_models_flag_prints_the_model_list(monkeypatch):
     calls: list[str | None] = []
-    monkeypatch.setattr(cli, "_print_model_list", lambda provider_arg, cfg: calls.append(provider_arg) or 0)
+    monkeypatch.setattr(listings, "print_model_list", lambda provider_arg, cfg: calls.append(provider_arg) or 0)
 
     assert cli.main(["--list-models", "openai"]) == 0
     assert calls == ["openai"]
@@ -266,6 +266,6 @@ def test_text_and_json_model_listings_cover_the_same_cached_routes(monkeypatch, 
     logins.cache_models("opencode-go", ["b"])
     monkeypatch.setattr(cli.logins, "test_login", lambda login: pytest.fail("cached listing went online"))
     cfg = SimpleNamespace(provider_id=None)
-    assert cli._print_model_list(None, cfg) == 0
+    assert listings.print_model_list(None, cfg) == 0
     text = capsys.readouterr().out.splitlines()
-    assert cli._models_json(None, cfg) == {"models": text}
+    assert listings.models_json(None, cfg) == {"models": text}

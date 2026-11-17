@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from js import cli
+from js import cli, migrate_config
 
 
 def test_migrate_no_legacy_returns_1(tmp_path, monkeypatch):
     monkeypatch.setattr(cli._paths, "legacy_global_config_file", lambda: tmp_path / "missing.toml")
     monkeypatch.setattr(cli._paths, "global_config_file", lambda: tmp_path / "jsrc")
-    assert cli._run_migrate_config() == 1
+    assert migrate_config.run_migrate_config() == 1
 
 
 # --- a jsrc file is rewritten ---

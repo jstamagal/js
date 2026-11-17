@@ -8,7 +8,7 @@ from pathlib import Path
 import ai
 import ai.types.usage
 
-from js import cli, persona, run_assembly
+from js import bench, cli, persona, run_assembly
 from js.config import InvocationSources
 from js.model_client import ModelStreamResult
 
@@ -73,7 +73,7 @@ def _stream_stub(captured_max: list):
 
 
 def _bench(agent: str, *, stats_json: str | None = None, stats_csv: str | None = None) -> int:
-    return cli._run_bench(
+    return bench.run_bench(
         agent, model=None, reasoning=None, maxout=None, quiet=True,
         sources=InvocationSources(),
         stats_json=stats_json, stats_csv=stats_csv,
@@ -82,7 +82,7 @@ def _bench(agent: str, *, stats_json: str | None = None, stats_csv: str | None =
 
 def test_bench_flag_runs_the_named_agent(monkeypatch):
     calls: list[tuple] = []
-    monkeypatch.setattr(cli, "_run_bench", lambda agent, **kwargs: calls.append((agent, kwargs["quiet"], kwargs["stats_json"])) or 0)
+    monkeypatch.setattr(bench, "run_bench", lambda agent, **kwargs: calls.append((agent, kwargs["quiet"], kwargs["stats_json"])) or 0)
 
     assert cli.main(["--bench", "jokertest", "-q", "--stats-json", "out.json"]) == 0
     assert calls == [("jokertest", True, "out.json")]

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from js import cli, login_cli, logins, messages as msgs, paths, providers
+from js import cli, listings, login_cli, logins, messages as msgs, paths, providers
 
 BASE_URL_PROMPT = msgs.LOGIN_ASK_BASE_URL.text()
 KEY_PROMPTS = {msgs.LOGIN_ASK_KEY.text(), msgs.LOGIN_ASK_KEY_OPTIONAL.text(), msgs.LOGIN_ASK_KEY_KEEP.text()}
@@ -586,7 +586,7 @@ def test_login_typed_extras_survive_cache_and_list_models(
         ]
 
         capsys.readouterr()
-        assert cli._print_model_list("openai", None) == 0
+        assert listings.print_model_list("openai", None) == 0
         out = capsys.readouterr().out
         assert out == (
             "openai/gpt-5.5\n"
