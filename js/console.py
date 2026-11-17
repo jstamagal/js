@@ -172,7 +172,7 @@ class ToolTrace:
                 _print_trace(self._telemetry, display.render_exchange(
                     name, args, None, level=level, preview=display.preview_lines(settings),
                     malformed=malformed, settings=settings))
-        if opened.exchange is not None and name == "shell":
+        if opened.exchange is not None and display.declared(name).live:
             threading.Thread(target=self._follow, args=(opened, tool_context, level),
                              name="js-live-output", daemon=True).start()
         return opened

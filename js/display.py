@@ -1098,7 +1098,7 @@ def short_path(path: str) -> str:
 def _key_name(name: str, args: dict | None) -> str | None:
     if not isinstance(args, dict):
         return None
-    keys = _KEY_ARGS.get(name, PATH_ARGS)
+    keys = _KEY_ARGS.get(name, declared(name).key)
     return next((key for key in keys if isinstance(args.get(key), str) and args[key].strip()), None)
 
 
@@ -1330,7 +1330,7 @@ def _hidden(count: int) -> list[fset.Run]:
 
 _FOLD_NOUN: dict[str, str] = {
     "fs_search": "search", "ast_search": "search", "exa_search": "search", "serper_search": "search",
-    "tavily_search": "search", "docs_search": "search", "fetch": "page", "browse": "page", "shell": "look",
+    "tavily_search": "search", "docs_search": "search",
 }
 _URL_HOST = re.compile(r"^[a-z][a-z0-9+.-]*://([^/?#]+)", re.I)
 
@@ -1347,7 +1347,7 @@ def fold_label(name: str, args: dict | None) -> str:
     host = _URL_HOST.match(text)
     if host is not None:
         return host.group(1)
-    if name == "shell":
+    if declared(name).fold_by_program:
         words = text.split()
         return " ".join(words[:2]) if words[:1] == ["git"] else (words[0] if words else "")
     return text if len(text) <= 24 else text[:23] + "…"
@@ -1436,7 +1436,7 @@ def _finished_brief(block: _Block, name: str, args: dict, output: ToolOutput, ki
                     preview: int, malformed: bool) -> None:
     """A finished exchange at TOOLS_DISPLAY 1."""
     colours = block.theme
-    command = kind == "command" or name == "shell"
+    command = kind == "command" or declared(name).result == "command"
     if output.failed:
         if command:
             parts = [msgs.TOOL_EXIT_CODE.words(exit_code=output.exit_code)] if output.exit_code else []

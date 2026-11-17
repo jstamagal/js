@@ -84,15 +84,10 @@ def declared(name: str) -> Presentation:
 # The argument each tool carries its program or file body in, shown as a
 # highlighted block under the call header instead of on it.
 _BODY_ARG: dict[str, str] = {
-    "shell": "command",
-    "terminal_session": "command",
-    "kernel": "code",
-    "toolbox": "source",
     "plan": "content",
 }
 # Arguments the header leaves out: the body, or text the result's diff shows.
 _UNLISTED_ARGS: dict[str, tuple[str, ...]] = {
-    "shell": ("description",),
     "send": ("text",),
     "post_task": ("body",),
     "finish_task": ("result",),
@@ -114,12 +109,6 @@ _HUNK = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 _KEY_ARGS: dict[str, tuple[str, ...]] = {
     "fs_search": ("pattern",),
     "ast_search": ("pattern",),
-    "shell": ("command",),
-    "terminal_session": ("command",),
-    "kernel": ("code",),
-    "toolbox": ("source",),
-    "fetch": ("url",),
-    "browse": ("url",),
     "exa_search": ("query",),
     "serper_search": ("query",),
     "tavily_search": ("query",),
@@ -142,14 +131,12 @@ _SAID_ARG: dict[str, str] = {"send": "text", "post_task": "body", "finish_task":
 
 
 def builtin_lexer(name: str, args: dict, body: str) -> str | None:
-    if name in ("kernel", "toolbox"):
-        return "python"
-    if name in ("shell", "terminal_session"):
-        first = body.lstrip().split("\n", 1)[0]
-        return "python" if _PYTHON_FIRST_LINE.match(first) else "bash"
     if name == "plan":
         return "markdown"
-    return None
+    language = declared(name).lexer
+    if language == "bash" and _PYTHON_FIRST_LINE.match(body.lstrip().split("\n", 1)[0]):
+        return "python"
+    return language
 
 
 
@@ -189,13 +176,10 @@ def call_kind(name: str, args: dict | None, settings: Any = None) -> str:
         return "quiet"
     if isinstance(args.get("tasks"), list):
         return "agent"
-    if name == "shell":
-        return "quiet" if looks_around(args, settings) else "command"
-    if name in ("kernel", "terminal_session", "toolbox"):
-        return "command"
-    if declared(name).kind == "diff":
-        return "diff"
-    return "loud"
+    shown = declared(name)
+    if shown.quiet_when is not None and shown.quiet_when(args, settings):
+        return "quiet"
+    return shown.kind
 
 
 @dataclass
@@ -248,7 +232,8 @@ def tool_output(name: str, result: Any) -> ToolOutput:
     if note is not None:
         tries = (int(note.group(1)), int(note.group(2)))
         text = text[:note.start()]
-    if name == "shell":
+    reads = declared(name).result
+    if reads == "command":
         header = _SHELL_HEADER.match(text)
         if header is not None:
             exit_code = int(header.group(1))
@@ -267,7 +252,6 @@ def tool_output(name: str, result: Any) -> ToolOutput:
     body = text.rstrip("\n")
     output = ToolOutput([(line, False) for line in body.split("\n")] if body else [],
                         is_error=is_error, tries=tries)
-    reads = declared(name).result
     if reads == "file":
         output.read = read_data(output)
     elif reads == "diff":
