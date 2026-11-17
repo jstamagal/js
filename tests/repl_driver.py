@@ -9,6 +9,7 @@ over it. `turn_stub` stands a plain function in for the turn the REPL awaits;
 
 from __future__ import annotations
 
+import copy
 import sys
 from dataclasses import dataclass
 
@@ -28,10 +29,12 @@ def turn_stub(turn):
 @dataclass
 class TurnCall:
     """One turn the REPL started: the Config it ran on, a copy of the messages
-    it was given (its own user message last), and its keyword arguments."""
+    it was given (its own user message last), a copy of the live settings as
+    it started, and its keyword arguments."""
 
     cfg: Config
     messages: list[dict]
+    settings: dict
     kwargs: dict
 
 
@@ -41,7 +44,7 @@ def record_turns(monkeypatch) -> list[TurnCall]:
     turns: list[TurnCall] = []
 
     def turn(cfg, system, messages, *args, **kwargs):
-        turns.append(TurnCall(cfg, list(messages), kwargs))
+        turns.append(TurnCall(cfg, list(messages), copy.deepcopy(cfg.settings), kwargs))
 
     monkeypatch.setattr(runtime, "run_turn_async", turn_stub(turn))
     return turns
