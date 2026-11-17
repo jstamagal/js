@@ -42,7 +42,7 @@ from . import messages as msgs
 from . import output
 from . import settings as _settings
 from .toolkit.presentation import (
-    ToolOutput, _BODY_ARG, _UNLISTED_ARGS, _KEY_ARGS, _SAID_ARG, PATH_ARGS,
+    ToolOutput, _BODY_ARG, _KEY_ARGS, PATH_ARGS,
     builtin_lexer, call_kind, declared, tool_output,
 )
 
@@ -1167,8 +1167,8 @@ def _other_arguments(name: str, args: dict, whole: bool = False) -> str:
         notes.append(_count(len(args["edits"]), msgs.TOOL_EDIT_NOUN.words()))
     # The whole form leaves out only what it shows elsewhere: the key
     # argument, the body, a message's text.
-    shown_elsewhere = (_SAID_ARG.get(name),) if whole else _UNLISTED_ARGS.get(name, shown.unlisted)
-    left_out = {_key_name(name, args), body, *shown_elsewhere}
+    shown_elsewhere = () if whole else shown.unlisted
+    left_out = {_key_name(name, args), body, shown.said, *shown_elsewhere}
     rest = [f"{clean(str(key))}={_single_line(value, whole)}" for key, value in args.items()
             if key not in left_out and value is not None and value != ""]
     if rest:
@@ -1432,7 +1432,8 @@ def _finished_brief(block: _Block, name: str, args: dict, output: ToolOutput, ki
                     preview: int, malformed: bool) -> None:
     """A finished exchange at TOOLS_DISPLAY 1."""
     colours = block.theme
-    command = kind == "command" or declared(name).result == "command"
+    shown = declared(name)
+    command = kind == "command" or shown.result == "command"
     if output.failed:
         if command:
             parts = [msgs.TOOL_EXIT_CODE.words(exit_code=output.exit_code)] if output.exit_code else []
@@ -1461,7 +1462,7 @@ def _finished_brief(block: _Block, name: str, args: dict, output: ToolOutput, ki
         block.header(name, args, malformed=malformed, tail=lead)
         _capped(block, rows, preview, lambda shown: block.numbered(shown, sign=2))
         return
-    said = args.get(_SAID_ARG.get(name, ""))
+    said = args.get(shown.said or "")
     if isinstance(said, str) and said.strip():
         block.header(name, args, malformed=malformed, tail=_last_line(output))
         lines = [Text(line, colours.panel_text) for line in clean(said).strip("\n").split("\n")]
@@ -1481,7 +1482,7 @@ def _finished_full(block: _Block, name: str, args: dict, output: ToolOutput, lev
     colours = block.theme
     block.header(name, args, malformed=malformed)
     _program(block, name, args, level, preview)
-    said = args.get(_SAID_ARG.get(name, ""))
+    said = args.get(declared(name).said or "")
     if isinstance(said, str) and said.strip():
         # What the call itself said, which TOOLS_DISPLAY 1 shows in place of the result.
         lines = [Text(line, colours.panel_text) for line in clean(said).strip("\n").split("\n")]

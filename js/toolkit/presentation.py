@@ -86,12 +86,6 @@ def declared(name: str) -> Presentation:
 _BODY_ARG: dict[str, str] = {
     "plan": "content",
 }
-# Arguments the header leaves out: the body, or text the result's diff shows.
-_UNLISTED_ARGS: dict[str, tuple[str, ...]] = {
-    "send": ("text",),
-    "post_task": ("body",),
-    "finish_task": ("result",),
-}
 _SHELL_HEADER = re.compile(r"shell=[^\n]*\nexit=(-?\d+)\n")
 _SHELL_SECTION = re.compile(r"^--- (stdout|stderr) ---$")
 _PYTHON_FIRST_LINE = re.compile(r"^\s*(?:\S*/)?python[0-9.]*\b")
@@ -108,18 +102,10 @@ _HUNK = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 # its path, when it has one.
 _KEY_ARGS: dict[str, tuple[str, ...]] = {
     "skill": ("name",),
-    "send": ("to",),
-    "claim": ("key",),
-    "release": ("key",),
     "plan": ("plan_name",),
-    "post_task": ("title",),
-    "task": ("agent_id",),
 }
 
 
-# The argument a call's own text is in, shown at TOOLS_DISPLAY 1 in place of the
-# result, which only acknowledges it.
-_SAID_ARG: dict[str, str] = {"send": "text", "post_task": "body", "finish_task": "result"}
 # Rows of a running command's output kept on screen.
 
 
