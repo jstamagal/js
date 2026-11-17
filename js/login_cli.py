@@ -966,9 +966,6 @@ def _run_login(provider_id: str | None = None, *, assembly: LoginAssembly | None
         # A server that is down now is still saved; its models come later
         # through Models > Re-fetch.
         warn(msgs.LOGIN_MODELS_UNREACHABLE, error=f"{type(exc).__name__}: {exc}")
-        base = login.provider_base_url or ""
-        if "404" in str(exc) and base and not base.rstrip("/").endswith("/v1"):
-            warn(msgs.LOGIN_TRY_V1, base=base, suggested=f"{base.rstrip('/')}/v1")
         try:
             save(login)
         except LoginsCorruptError as save_exc:
