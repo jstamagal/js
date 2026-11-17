@@ -673,12 +673,18 @@ def test_an_explicit_set_equal_to_the_current_value_still_pins_it(monkeypatch, t
     assert login_defaults.sampling(cli._cfg_for_live_state(cfg, state)).temperature == 0.2
 
 
-def test_a_resumed_repl_session_pins_its_effort_even_when_it_is_the_default():
-    stamp = {"model": "b", "provider": "testes", "reasoning": "low"}
+def test_a_resumed_session_pins_its_effort_even_when_it_is_the_default(monkeypatch, tmp_path):
+    from js import memory, run_assembly
 
-    assert cli._resumed_layer(stamp, None) == {"EFFORT": "low"}
-    assert cli._resumed_layer(stamp, "high") == {}
-    assert cli._resumed_layer(None, None) == {}
+    _isolate_config(monkeypatch, tmp_path)
+    cfg = from_env(cwd=tmp_path, session="one")
+    assert run_assembly.resume(cfg, None, None).layer == {}
+    memory.persist_messages(cfg.session_file, [{"role": "user", "content": "hi"},
+                                               {"role": "assistant", "content": "yo"}],
+                            stamp=memory.stamp_for("b", "testes", "low"))
+
+    assert run_assembly.resume(cfg, None, None).layer == {"EFFORT": "low"}
+    assert run_assembly.resume(cfg, None, "high").layer == {}
 
 
 def test_a_child_session_stamps_the_effort_its_turn_resolves(monkeypatch, tmp_path):

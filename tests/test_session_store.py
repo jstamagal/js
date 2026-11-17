@@ -13,7 +13,7 @@ from pathlib import Path
 import ai
 import pytest
 
-from js import cli, runtime, session_store, supervisor, usage
+from js import cli, run_assembly, runtime, session_store, supervisor, usage
 from js import memory as M
 from js.config import from_env
 from js.memory import load_messages
@@ -378,14 +378,14 @@ def test_the_stamped_provider_rides_only_where_routing_takes_it():
 
     on_deepseek = SimpleNamespace(model="deepseek-v4-flash", provider_id="deepseek")
 
-    assert cli._resume_model_spec({"model": "deepseek-v4-flash", "provider": "deepseek"}, on_deepseek) is None
-    assert cli._resume_model_spec({"model": "deepseek-v4-pro", "provider": "deepseek"}, on_deepseek) == \
+    assert run_assembly.stamp_model({"model": "deepseek-v4-flash", "provider": "deepseek"}, on_deepseek) is None
+    assert run_assembly.stamp_model({"model": "deepseek-v4-pro", "provider": "deepseek"}, on_deepseek) == \
         "deepseek/deepseek-v4-pro"
     # A stamped provider that is not the configured one and has no login
     # falls back to the configured model.
-    assert cli._resume_model_spec({"model": "a/b", "provider": "no-such-provider"}, on_deepseek) is None
-    assert cli._resume_model_spec({"model": "gpt-x", "provider": "openai"}, on_deepseek) is None
-    assert cli._resume_model_spec({"model": "m"}, SimpleNamespace(model="m", provider_id=None)) is None
+    assert run_assembly.stamp_model({"model": "a/b", "provider": "no-such-provider"}, on_deepseek) is None
+    assert run_assembly.stamp_model({"model": "gpt-x", "provider": "openai"}, on_deepseek) is None
+    assert run_assembly.stamp_model({"model": "m"}, SimpleNamespace(model="m", provider_id=None)) is None
 
 
 # --- start metadata ----------------------------------------------------------------

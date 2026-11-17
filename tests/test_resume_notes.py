@@ -13,10 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from js import cli, runtime, session_store
+from js import cli, run_assembly, runtime, session_store
 from js import memory as M
 from js.config import from_env
 from js.memory import load_messages
+from js.session_catalog import last_stamp
 from repl_driver import stub_screen, turn_stub
 
 
@@ -123,7 +124,7 @@ def test_a_stamp_on_a_logged_in_provider_is_resumed(monkeypatch):
     path = _stamped_elsewhere()
     monkeypatch.setattr(cli.routing, "_saved_login", lambda provider: object() if provider == "openai" else None)
 
-    assert cli._stamp_without_login(cli.last_stamp(path), from_env()) is None
+    assert run_assembly.unreachable_stamp(last_stamp(path), from_env()) is None
 
 
 # --- the model-switch note ------------------------------------------------------------

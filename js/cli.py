@@ -109,7 +109,6 @@ from .session_catalog import (
     branch_session,
     catalog_sessions,
     first_metadata,
-    last_stamp,
     record_model_switch,
     record_session_start,
     session_title,
@@ -395,65 +394,6 @@ def _recorded_model(model: str | None, cfg: Config) -> tuple[str | None, str | N
     except ValueError:
         return None, model
     return provider, bare
-
-
-def _resume_model_spec(stamp: dict, cfg: Config) -> str | None:
-    """The --model value that puts a resumed session back on its stamped model,
-    or None when the configuration already resolves to it.
-
-    A stamp whose provider is neither the configured one nor logged in gives
-    None: the session continues on the configured model. The stamped provider
-    rides as a prefix when it parses as a known provider and is the configured
-    one or has a saved login. A stamp without a provider, or one whose prefix
-    does not parse, gives the model id alone."""
-    model = stamp.get("model")
-    if not isinstance(model, str) or not model:
-        return None
-    provider = stamp.get("provider") if isinstance(stamp.get("provider"), str) else None
-    if model == cfg.model and (not provider or provider == cfg.provider_id):
-        return None
-    if _stamp_without_login(stamp, cfg) is not None:
-        return None
-    prefixed = f"{provider}/{model}"
-    if (provider and providers.parse_model_prefix(prefixed) == (provider, model)
-            and (provider == cfg.provider_id or routing._saved_login(provider) is not None)):
-        return prefixed
-    return None if model == cfg.model else model
-
-
-def _stamp_without_login(stamp: dict, cfg: Config) -> str | None:
-    """``provider/model`` of a stamp whose provider is neither the configured
-    one nor logged in, else None. Such a session resumes on the configured model."""
-    model = stamp.get("model")
-    provider = stamp.get("provider")
-    if not isinstance(model, str) or not model or not isinstance(provider, str) or not provider:
-        return None
-    if provider == cfg.provider_id or routing._saved_login(provider) is not None:
-        return None
-    return f"{provider}/{model}"
-
-
-def _stamped_reasoning(stamp: dict) -> str | None:
-    """The effort word of a stamp, when it is a valid one."""
-    raw = stamp.get("reasoning")
-    if not isinstance(raw, str) or not raw:
-        return None
-    value, error = _validate_cli_reasoning(raw)
-    return value if error is None else None
-
-
-def _resumed_layer(stamp: dict | None, cli_reasoning: str | None) -> dict:
-    """The resume layer a resumed session starts with: its stamped effort,
-    the session's own choice, pinned even when it equals what the startup
-    model would pick. A -r on the command line wins instead."""
-    effort = _stamped_reasoning(stamp) if stamp is not None and cli_reasoning is None else None
-    return {"EFFORT": effort} if effort else {}
-
-
-def _resume_reasoning(stamp: dict, cfg: Config) -> str | None:
-    """The reasoning level of the last stamp, when it is valid and differs from the configured one."""
-    value = _stamped_reasoning(stamp)
-    return value if value is not None and value != cfg.reasoning_effort else None
 
 
 def _print_resume_hint(cfg: Config, state: dict) -> None:
@@ -5048,54 +4988,34 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     # already resolved is left alone: applying it as an explicit override would
     # put an otherwise fine launch through the login gate for a model it was
     # going to use anyway.
-    resumed = last_stamp(cfg.session_file)
-    unreachable_stamp = (_stamp_without_login(resumed, cfg)
-                         if args.model is None and resumed is not None else None)
-    if args.model is None and resumed is not None:
-        remembered_model = _resume_model_spec(resumed, cfg)
-        if remembered_model:
-            args.model = remembered_model
-            notices.append(msgs.line_for(msgs.RESUMED_MODEL, model=remembered_model))
-    try:
-        prompt_spec = P.load_configured_prompt_spec(cfg, expand=False)
-    except (FileNotFoundError, ValueError) as e:
-        msgs.warn(msgs.FAILED, error=_format_prompt_load_error(cfg, e))
-        return 2
-    system = prompt_spec.system
+    resumed = run_assembly.resume(cfg, args.model, args.reasoning)
+    if resumed.from_stamp:
+        args.model = resumed.model
+        notices.append(msgs.line_for(msgs.RESUMED_MODEL, model=resumed.model))
     # A session sends the system prompt it was born with, byte for byte, for its
     # whole life. Rebuilding it per launch puts a fresh clock and load average in
     # front of an append-only history and breaks the shared prefix at byte zero.
     # A change to the prompt files on disk is reported to the model as a message
     # at the end instead. The change is judged on the files before directive
     # expansion, since expanded output such as a clock differs on every launch.
-    recorded_system = M.load_system_prompt(cfg.session_file)
-    if recorded_system is not None and not (current().changes_prompt or current().chat):
-        system = recorded_system
+    # The live state resolves the agent and login layers every turn.
     try:
-        cfg = P.apply_agent_model(cfg, prompt_spec, args.model)
-        cfg = P.apply_agent_max_tokens(cfg, prompt_spec)
-        cfg = _resolve_cli_model_override(cfg, args.model)
-    except ValueError as e:
-        msgs.warn(msgs.FAILED, error=e)
+        settled = run_assembly.settle(cfg, resumed=resumed, config_pins=True, layered=False,
+                                      expand_recorded=True)
+    except run_assembly.RunNotSettled as e:
+        msgs.warn(msgs.FAILED, error=_format_prompt_load_error(cfg, e.cause) if e.loading else e.cause)
         return 2
-    try:
-        # The session's tools and persona follow the model it settled on.
-        prompt_spec = P.for_model(prompt_spec, cfg)
-    except (FileNotFoundError, ValueError) as e:
-        msgs.warn(msgs.FAILED, error=_format_prompt_load_error(cfg, e))
-        return 2
-    active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
+    cfg, prompt_spec, system = settled.config, settled.prompt_spec, settled.system
+    recorded_system = settled.recorded_system
     # Compared with what the resumed model and agent resolve to, not the
     # startup model.
-    resumed_reasoning = (
-        _resume_reasoning(resumed, login_defaults.for_turn(login_defaults.with_agent(cfg, prompt_spec)))
-        if resumed is not None and args.reasoning is None else None)
-    if unreachable_stamp is not None:
-        msgs.say(msgs.RESUME_MODEL_FALLBACK, stamped=unreachable_stamp,
+    resumed_reasoning = resumed.layer.get("EFFORT")
+    if resumed_reasoning is not None and resumed_reasoning == login_defaults.for_turn(
+            login_defaults.with_agent(cfg, prompt_spec)).reasoning_effort:
+        resumed_reasoning = None
+    if resumed.unreachable is not None:
+        msgs.say(msgs.RESUME_MODEL_FALLBACK, stamped=resumed.unreachable,
                  model=_stamp_label(cfg.model, cfg.provider_id))
-    prompt_spec = P._expand_spec(prompt_spec, cfg)
-    if recorded_system is None or current().changes_prompt or current().chat:
-        system = prompt_spec.system
 
     keymap, key_errors = keys_mod.load(keys_mod.keys_file(cfg.settings))
     completer = replcomplete.JsCompleter(
@@ -5135,8 +5055,6 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         notices.append(msgs.line_for(msgs.PROMPT_CHANGED))
 
     live_settings = copy.deepcopy(cfg.settings) if isinstance(cfg.settings, dict) else {}
-    # A resumed session's reasoning is this session's own choice.
-    resumed_layer = _resumed_layer(resumed, args.reasoning)
     if args.reasoning is not None:
         reasoning_seed, effort_error = _validate_cli_reasoning(args.reasoning)
         if effort_error is not None:
@@ -5158,10 +5076,11 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         system=system,
         model=args.model,
         live_settings=live_settings,
-        tool_registry=active_registry,
+        tool_registry=settled.registry,
     )
     state["keymap"] = keymap
-    state["live_resume"] = resumed_layer
+    # A resumed session's reasoning is this session's own choice.
+    state["live_resume"] = resumed.layer
     if cut_off:
         _queue_note(state, snippets.render('turn-cut-off'))
     rc_errors = _run_rc_commands(state, cfg, jsrc_paths(
