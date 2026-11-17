@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from js import memory, repl_commands, session_store
+from js import memory, repl_session_commands, session_store
 from js.repl_state import ReplState
 
 
@@ -13,7 +13,7 @@ def test_wipe_allows_first_new_turn_to_save(tmp_path, append_mark):
     memory.persist_messages(session, old_messages)
     state = ReplState(messages=memory.load_replay_messages(session))
 
-    repl_commands._cmd_wipe("", state, SimpleNamespace(session_file=session))
+    repl_session_commands._cmd_wipe("", state, SimpleNamespace(session_file=session))
 
     assert state.messages == []
     if append_mark:

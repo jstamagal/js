@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from test_config_compaction_layers import _compact_test_cfg
 
-from js import cli, paths, repl_commands, repl_state, run_assembly
+from js import cli, paths, repl_session_commands, repl_state, run_assembly
 from js.repl_state import ReplState
 
 
@@ -63,7 +63,7 @@ def _run_compact_route(monkeypatch, cfg, route):
     if route == "manual":
         monkeypatch.setattr(ReplState, "config_for_turn", lambda state, cfg: cfg)
         monkeypatch.setattr(repl_state, "repl_assembly", lambda state: SimpleNamespace(compact_force_focus="forced"))
-        assert repl_commands._cmd_compact("", ReplState(system="", messages=[]), cfg) is None
+        assert repl_session_commands._cmd_compact("", ReplState(system="", messages=[]), cfg) is None
     else:
         cfg.session_file.parent.mkdir(parents=True, exist_ok=True)
         cfg.session_file.touch()

@@ -13,7 +13,15 @@ import types
 
 import pytest
 
-from js import repl, repl_commands, runtime, supervisor, tool_calls, tool_errors, turn_dispatch
+from js import (
+    repl,
+    repl_session_commands,
+    runtime,
+    supervisor,
+    tool_calls,
+    tool_errors,
+    turn_dispatch,
+)
 from js.repl_state import ReplState
 from js.toolkit import ToolContext, subagents, task_jobs
 from js.toolkit.registry import ToolRegistry
@@ -218,7 +226,7 @@ def test_reset_drops_the_reminder_for_tasks_of_the_old_conversation(workers, ctx
     workers.release.set()
     _job(handle, ctx).future.result(timeout=5)
     cfg = types.SimpleNamespace(session_file=tmp_path / "session.jsonl")
-    repl_commands._cmd_reset("", ReplState(messages=[]), cfg)
+    repl_session_commands._cmd_reset("", ReplState(messages=[]), cfg)
     assert "<js-reminder>" not in _sent(ReplState(), _bundle())["content"]
 
 

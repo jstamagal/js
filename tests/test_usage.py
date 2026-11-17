@@ -14,7 +14,7 @@ import ai.types.usage
 import pytest
 from test_lazy_tool_discovery import _cfg
 
-from js import compaction, repl, repl_commands, runtime, screen, usage
+from js import compaction, repl, repl_session_commands, runtime, screen, usage
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.repl_state import ReplState
 from js.toolkit.core import ToolContext
@@ -193,7 +193,7 @@ def test_cost_command_prints_the_totals(tmp_path, monkeypatch, capsys):
     _run(cfg, monkeypatch, [_reply(text="hi", use=_usage(12_345, 678, cache_read=2_000, cache_write=0))])
     live = usage.totals(cfg.session_file)
 
-    repl_commands._cmd_cost("", ReplState(), cfg)
+    repl_session_commands._cmd_cost("", ReplState(), cfg)
 
     out = capsys.readouterr().out
     for figure in ("12,345", "678", "2,000", usage.format_dollars(live.cost), "gpt-5"):
@@ -205,7 +205,7 @@ def test_cost_command_shows_tokens_only_for_an_unpriced_model(tmp_path, monkeypa
     cfg.session_file.parent.mkdir(parents=True, exist_ok=True)
     _run(cfg, monkeypatch, [_reply(text="hi", use=_usage(4_321, 99))])
 
-    repl_commands._cmd_cost("", ReplState(), cfg)
+    repl_session_commands._cmd_cost("", ReplState(), cfg)
 
     out = capsys.readouterr().out
     assert "4,321" in out and "99" in out
@@ -252,7 +252,7 @@ def test_wipe_starts_the_totals_again(tmp_path, monkeypatch, capsys):
     cfg = _priced_cfg(tmp_path)
     _run(cfg, monkeypatch, [_reply(text="hi", use=_usage(100, 10))])
 
-    repl_commands._cmd_wipe("", ReplState(messages=[]), cfg)
+    repl_session_commands._cmd_wipe("", ReplState(messages=[]), cfg)
 
     assert usage.totals(Path(cfg.session_file)).calls == 0
 

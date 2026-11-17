@@ -52,6 +52,7 @@ persists each completed turn.
 | `js/repl.py` | the interactive REPL: startup (`start_repl`), the input loop, the turn queue and steering, the status bar, the `/session` switch |
 | `js/repl_commands.py` | the REPL's slash commands: the command table (`COMMANDS`), dispatch, aliases, `/load` and the startup run of the jsrc files |
 | `js/repl_model_commands.py` | `/model`, `/pick-model`, `/provider`, `/baseurl`, `/apikey`, `/login`, `/logout`, `/models`, `/refresh-model-catalog`; the model stamp a turn would write (`live_stamp`) |
+| `js/repl_session_commands.py` | `/reset`, `/wipe`, `/turns`, `/cost`, `/copy`, `/session`, `/name`, `/compact`, `/quit`: the session file and the conversation in it |
 | `js/repl_settings_commands.py` | `/set`, `/fset`, `/show`, `/save`, `/compact-auto`: the effective `/set` view, what `/save` compares against (`mark_saved`), and live state following a changed setting (`apply_settings_result`) |
 | `js/repl_state.py` | the REPL's live state (`ReplState`), its assembly, the command-table row (`Command`), and carrying live settings into the route and tool registry |
 | `js/config.py` | environment parsing, session reservation, model/provider caps, vision heuristic |

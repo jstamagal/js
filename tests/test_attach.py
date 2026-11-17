@@ -9,7 +9,16 @@ import ai
 from repl_driver import run_async, turn_stub
 from turn_driver import js
 
-from js import attach, cli, history_record, media, prompt_run, repl_commands, run_assembly, runtime
+from js import (
+    attach,
+    cli,
+    history_record,
+    media,
+    prompt_run,
+    repl_session_commands,
+    run_assembly,
+    runtime,
+)
 from js.config import Config
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
@@ -441,10 +450,10 @@ def test_repl_missing_attachment_becomes_note(tmp_path):
 
 def test_copy_puts_the_answer_n_back_on_the_clipboard(monkeypatch):
     runs = []
-    monkeypatch.setattr(repl_commands, "_copy_command", lambda: ["clip"])
-    monkeypatch.setattr(repl_commands.subprocess, "run", lambda command, input, **kw: runs.append((command, input)))
+    monkeypatch.setattr(repl_session_commands, "_copy_command", lambda: ["clip"])
+    monkeypatch.setattr(repl_session_commands.subprocess, "run", lambda command, input, **kw: runs.append((command, input)))
     state = ReplState(messages=[{"role": "user", "content": "q"}, {"role": "assistant", "content": "first answer"},
                                {"role": "assistant", "content": [{"type": "text", "text": "a long line\nsecond"}]}])
-    repl_commands._cmd_copy("", state, None)
-    repl_commands._cmd_copy("2", state, None)
+    repl_session_commands._cmd_copy("", state, None)
+    repl_session_commands._cmd_copy("2", state, None)
     assert runs == [(["clip"], b"a long line\nsecond\n"), (["clip"], b"first answer\n")]
