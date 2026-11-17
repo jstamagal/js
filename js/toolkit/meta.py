@@ -372,11 +372,11 @@ async def _run_one_task_async(
     model: str = "",
     reasoning: str = "",
 ) -> str:
-    from .. import agent_messages, memory as M, persona as P, routing
-    from ..runtime import Telemetry, run_turn_async
+    from .. import agent_messages, persona as P, routing
+    from ..conversation import Conversation
+    from ..runtime import Telemetry
 
     assembly = parent_context.subagent_assembly or SubagentAssembly()
-    turn = run_turn_async if assembly.turn is None else assembly.turn
     prompt = _task_text(item)
     if not prompt:
         return "ERROR task is empty"
@@ -466,10 +466,11 @@ async def _run_one_task_async(
 
             record_session_start(cfg.session_file, cwd=child_context.cwd, agent=agent, model=cfg.model,
                                  mode="subagent", parent=parent_cfg.session_file)
-        messages = M.load_replay_messages(cfg.session_file)
+        telemetry = Telemetry(debug_log=cfg.debug_log)
+        chat = Conversation(cfg, system, registry=registry, context=child_context, telemetry=telemetry,
+                            run_turn=assembly.turn)
         parent_hooks = parent_context.tool_call_hooks
         parent_approval = parent_context.tool_approval
-        telemetry = Telemetry(debug_log=cfg.debug_log)
         launch = _launch_fields(idx, total, agent, cfg, registry)
         opener = window_opener.get()
         window = opener(launch) if opener is not None else None
@@ -478,7 +479,7 @@ async def _run_one_task_async(
         output.emit(output.event("subagent_start", **launch))
         if window is not None:
             # Its window shows what it streams, as window 1 shows a REPL turn.
-            telemetry = window.telemetry(cfg.debug_log)
+            telemetry = chat.telemetry = window.telemetry(cfg.debug_log)
             window.running(child_context)
             with window.writing():
                 output.sink_of(telemetry).emit(output.event("subagent_start", **launch))
@@ -488,8 +489,6 @@ async def _run_one_task_async(
         error: str | None = None
         turn_kwargs = {
             "trace_override": None if window is not None else False,
-            "tool_registry": registry,
-            "tool_context": child_context,
             "suppress_output": False if window is not None else assembly.suppress_output,
             "sampling": sampling,
             "event_hooks": None if parent_hooks is None else RefusableOnly(parent_hooks),
@@ -497,20 +496,11 @@ async def _run_one_task_async(
         }
         if window is not None:
             turn_kwargs["steer"] = window.steer
-        stamp = M.stamp_for(cfg.model, cfg.provider_id, cfg.reasoning_effort)
-        turn_kwargs["checkpoint"] = lambda: M.persist_messages(cfg.session_file, messages, stamp=stamp)
         try:
             with window.writing() if window is not None else nullcontext():
-                await agent_messages.initialize(cfg, prompt_spec, messages, telemetry, **turn_kwargs)
-                messages.append(M.note_time({"role": "user", "content": prompt}))
-                await turn(
-                    cfg,
-                    system,
-                    messages,
-                    telemetry,
-                    call_stats=call_stats,
-                    **turn_kwargs,
-                )
+                await agent_messages.initialize(cfg, prompt_spec, chat.messages, telemetry, tool_registry=registry,
+                                                tool_context=child_context, checkpoint=chat.save, **turn_kwargs)
+                await chat.turn({"role": "user", "content": prompt}, call_stats=call_stats, **turn_kwargs)
             outcome = "ok"
         except snippets.SnippetError:
             raise
@@ -527,7 +517,6 @@ async def _run_one_task_async(
                 calls=len(call_stats))
             output.emit(end)
             _close_child_tools(child_context)
-            M.persist_messages(cfg.session_file, messages, stamp=stamp)
             if window is not None:
                 with window.writing():
                     output.sink_of(telemetry).emit(end)
@@ -535,12 +524,10 @@ async def _run_one_task_async(
                 async def resume(text: str) -> None:
                     """One turn typed in its window, on its own session."""
                     with _worker_session(Path(cfg.session_file)), window.writing():
-                        messages.append(M.note_time({"role": "user", "content": text}))
                         try:
-                            await turn(cfg, system, messages, telemetry, **turn_kwargs)
+                            await chat.turn({"role": "user", "content": text}, **turn_kwargs)
                         finally:
                             _close_child_tools(child_context)
-                            M.persist_messages(cfg.session_file, messages, stamp=stamp)
 
                 # Called before the session lock is let go; a turn it starts
                 # runs as its own job, after this one has returned.
@@ -549,12 +536,7 @@ async def _run_one_task_async(
     if error is not None:
         return error
 
-    final = ""
-    for msg in reversed(messages):
-        if msg.get("role") == "assistant" and msg.get("content"):
-            final = str(msg["content"]).strip()
-            break
-    final = final or "(no final response)"
+    final = chat.answer().strip() or "(no final response)"
     # Give each child a FAIR SHARE of the aggregate budget, not the whole thing.
     # The parent's dispatch layer re-clips the joined TASK_RESULTS at
     # max_tool_result_bytes; if every child could fill that full budget, one fat
