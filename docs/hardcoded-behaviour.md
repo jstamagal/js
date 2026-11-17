@@ -204,7 +204,7 @@ branch the audit was made on; they move as the code changes.
 
 | file:line | function | kind | what the part decides | bead |
 |---|---|---|---|---|
-| `js/cli.py:131-143` | _registry_for | policy | cli decides that the task tool's model parameter exists only when the subagent model lock is off. | js-2lg.80 |
+| `js/run_assembly.py` | registry_for | policy | The run's registry offers the task tool's model parameter only when the subagent model lock is off. | js-2lg.80 |
 | `js/agent_migration.py:108` | _convert_entry | policy | A bare tools entry is rewritten as NAME:eager, so the modifier is fixed in code. | js-2lg.178 |
 
 ## S7 prompts
@@ -354,9 +354,8 @@ Resolution notes (the rows below record the original audit):
 | `js/toolkit/meta.py:105,111` | _session_file_for_id / _reserve_worker_session | policy | A subagent run moves the agent's latest-session pointer to its own session. | js-2lg.59 |
 | `js/toolkit/task_jobs.py:171,195-216` | start | policy | Finds the REPL supervisor through a global and chooses the run strategy itself. | js-2lg.64 |
 | `js/toolkit/lsp.py:319-336` | LanguageServer._answer | policy | Answers every workspace/configuration request with null, so a server gets no settings. | js-2lg.75 |
-| `js/cli.py:389-446,2609-2614,2660-2667,4929-4936,4962-4964` | _resume_model_spec, _stamp_without_login, _resumed_layer, _resume_reasoning, _run_prompt, _run_args | policy | The rule that a resumed session goes back to its stamped model and reasoning, or falls back when the stamped provider has no login, is copied into two cli entry paths. | js-2lg.81 |
 | `js/cli.py:2162-2182,2701,4985` | _restore_workspace | policy | On resume, cli restores the jail binds and cwd from the workspace mark by itself. | js-2lg.81 |
-| `js/cli.py:2462-2503` | _agent_model_applies, _apply_agent_model, _apply_agent_reasoning | policy | The precedence that decides when agent.yaml model and reasoning apply over flags, env, jsrc or a resumed stamp lives only in cli. | js-2lg.81 |
+| `js/persona.py`, `js/run_assembly.py` | agent_model_applies, apply_agent_model, apply_agent_reasoning, settle | policy | The precedence that decides when agent.yaml model and reasoning apply over flags, env, jsrc or a resumed stamp is fixed in code. | js-2lg.81 |
 | `js/cli.py:2668-2674,2693-2700,4943-4951,4997-5007` | _run_prompt, _run_args | policy | Reusing the recorded system prompt and reporting prompt-file changes is copied into two cli paths. | js-2lg.81 |
 | `js/cli.py:1524-1548` | _apply_settings_result | policy | The side effects of a settings change (model-switch record, provider sync, registry rebuild, banner, context-window overrides) are combined with printing the result lines. | js-2lg.81 |
 | `js/cli.py:2791-2822` | _run_prompt.turns | policy | The swarm sleep/wake loop, with auto-compaction before each sleep, is built into the cli one-shot path. | js-2lg.81 |
@@ -412,7 +411,6 @@ Resolution notes (the rows below record the original audit):
 | `js/session_query.py:542,550-599` | session_line / hit_line / message_lines | presentation | Fixes the picker row layout, column widths, tree glyphs and #NNNN numbering in the part. | js-2lg.183 |
 | `js/session_text.py:47-48` | module constants | presentation | Fixes the speaker labels "you" and "ape" for every transcript row and search entry. | js-2lg.184 |
 | `js/session_text.py:394-407` | _Transcript.header | presentation | Fixes the .txt transcript header layout and its English field labels in code. | js-2lg.184 |
-| `js/swarm_run.py:95,101-102,107,116` | _configure | policy | Reaches into cli private helpers (_apply_agent_model, _resolve_cli_model_override, _validate_cli_reasoning, _registry_for) for the model and tool surface. | js-2lg.196 |
 | `js/jail.py:807-811,924-927` | enter / active | policy | Keeps the jail as one process-wide global (ACTIVE plus the JS_JAIL env var) instead of taking it from the caller. | js-2lg.206 |
 | `js/commit_helper.py:150-159,284,304,326,345,370,421,424` | _print / _out / _err / cmd_survey / cmd_stage / cmd_commit | presentation | The command functions print to stdout/stderr themselves and return only exit codes, not results to the caller. | js-2lg.209 |
 | `js/mcp/host.py:555-567` | MCPHost._ensure_server | default | Never passes a client name or version, so every MCP server sees the client default "js" "0.1.0" (client.py:52-53). | js-2lg.216 |

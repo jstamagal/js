@@ -139,7 +139,7 @@ pi retries once. Codex does not recover inside a normal turn.
 | Fuzzy edit that keeps untouched bytes | pi `edit-diff.ts:132,207` | done in js-1g1.15: `fs._apply_edit`, `fs._keep_untouched` |
 | Unchanged re-read returns a stub | Claude Code `FileReadTool.ts:528` | done in js-1g1.15: `ToolContext.shown_read`, kept only while the earlier result is in history |
 | Record ids and parents; branching becomes a pointer move | pi `session-manager.ts:57` | `memory.Record` (before the picker) |
-| Explicit `-m` beats the stamp; fallback message if the stamped model has no login; `<model_switch>` note | Codex `config_persistence.rs`, `model_switch_instructions.rs` | done in js-1g1.21: `_stamp_without_login`, `_note_model_switch` |
+| Explicit `-m` beats the stamp; fallback message if the stamped model has no login; `<model_switch>` note | Codex `config_persistence.rs`, `model_switch_instructions.rs` | done in js-1g1.21: `run_assembly.unreachable_stamp`, `_note_model_switch` |
 | Head/tail metadata reads for listing | Claude Code `sessionStorage.ts:4744` | `session_catalog._session_details` |
 | Interrupted-turn note on resume | Claude Code `conversationRecovery.ts` | done in js-1g1.21: `memory.turn_cut_off`, `_CUT_OFF_NOTICE` |
 | Path-scoped rules and skills | Claude Code `claudemd.ts:250` | skills done in js-1g1.24: `paths:` frontmatter, `TurnToolSurface.offer_path_skills`; rules still missing |

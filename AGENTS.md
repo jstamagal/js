@@ -48,8 +48,11 @@ provider creds: `just test-live`. One test directly:
 
 Streaming tool-use loop: sync runtime over the async SDK.
 `js/model_client.py` is the model I/O boundary (new providers land next to
-`codex_provider.py`); `js/runtime.py` is the loop (streaming, dispatch,
-subagent fan-out); `js/toolkit/` is the tools — model-facing contracts live
+`codex_provider.py`); `js/runtime.py` is the loop (dispatch, subagent
+fan-out), and a turn's model call and streamed reply live in
+`js/turn_call.py` and `js/turn_stream.py`; `js/run_assembly.py` turns config,
+agent and model into a settled run, the ready-to-run turn that `-p`, the REPL
+at startup, `--bench` and swarm agents start from; `js/toolkit/` is the tools — model-facing contracts live
 in `tool_descriptions/*.md`, not in code. Agents are prompt directories
 (`js/persona.py` + `defaults/agents/`; layered per file, project > home > defaults; `agent.yaml`
 beside the prompt picks model, reasoning and tool surface, resolved against
