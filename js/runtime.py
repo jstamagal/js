@@ -6,10 +6,11 @@ from __future__ import annotations
 from . import snippets
 
 from concurrent.futures import ThreadPoolExecutor
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine, Iterator
 from contextvars import ContextVar
 import asyncio
 import base64
+import contextlib
 import functools
 import inspect
 import json
@@ -1255,6 +1256,124 @@ def _cell_call_observer(telemetry: Telemetry, trace: bool,
     return observe
 
 
+@dataclass(frozen=True)
+class _CallWay:
+    """How one way of running a tool call differs from the others."""
+    # Runs the handler: (tool, args, context) -> awaitable of its result.
+    invoke: Callable[[Any, dict, ToolContext], Awaitable[Any]]
+    # The handler runs under the turn's output sink, `call_scope` and `registry_scope`.
+    scoped: bool = True
+    # A read's coverage is narrowed to what the cap let through.
+    reconcile_reads: bool = True
+    # The error tracker counts the result before the cap cuts it, not after.
+    track_before_cap: bool = False
+    # An unknown tool's error is capped.
+    cap_unknown: bool = True
+    # A call of an unknown `write` holds its content.
+    hold_unknown_write: bool = False
+
+
+async def _call_on_this_thread(tool: Any, args: dict, context: ToolContext) -> Any:
+    return call_tool(tool, args, context)
+
+
+async def _call_fan_out(tool: Any, args: dict, context: ToolContext) -> Any:
+    from .toolkit import meta
+
+    return await meta.dispatch_fan_out_async(tool, args, context)
+
+
+# A sync handler on a dispatch worker thread.
+_ON_THREAD = _CallWay(_call_on_this_thread, track_before_cap=True, hold_unknown_write=True)
+# An async handler awaited on the loop.
+_ON_LOOP = _CallWay(call_tool_async, cap_unknown=False)
+# A fan-out (task / named-agent) handler awaited on the loop.
+_FAN_OUT = _CallWay(_call_fan_out, scoped=False, reconcile_reads=False)
+
+
+@contextlib.contextmanager
+def _call_scopes(telemetry: Telemetry, trace: bool, call_id: str, registry: ToolRegistry,
+                 context: ToolContext) -> Iterator[None]:
+    with output.using_sink(output.sink_of(telemetry)), call_scope(call_id), registry_scope(
+            registry, _cell_call_observer(telemetry, trace, context)):
+        yield
+
+
+async def _run_call(way: _CallWay, name: str, raw_args: str, *, call_id: str, called_name: str | None,
+                    telemetry: Telemetry, cap_bytes: int, trace: bool, trace_together: bool,
+                    error_tracker: ToolErrorTracker | None, registry: ToolRegistry,
+                    context: ToolContext) -> tuple[dict, Any]:
+    """One tool call from the model's raw arguments to the result the model
+    gets: parse, resolve, trace, log, run the handler ``way`` says, cap,
+    count errors, narrow read coverage. Returns (parsed_args, result)."""
+    logged_name = called_name or name
+    try:
+        args = _repair_jsonish(raw_args)
+    except ValueError as exc:
+        opened = _trace_call(telemetry, context, name, None, malformed=True,
+                             traced=trace, deferred=trace_together)
+        telemetry.event("tool_error", tool=logged_name, call_id=call_id, error=f"argparse: {exc}")
+        result = f'ERROR: could not parse arguments for {name}: {exc}'
+        if error_tracker is not None:
+            result = error_tracker.record(name, result)
+        _trace_result(telemetry, context, name, result, malformed=True, exchange=opened, traced=trace)
+        return {}, result
+
+    tool = registry.resolve(name)
+    opened = _trace_call(telemetry, context, tool.name if tool is not None else name, args,
+                         traced=trace, deferred=trace_together)
+    if tool is None:
+        telemetry.event("tool_unknown", tool=logged_name, call_id=call_id, args=args)
+        result = registry.unavailable_error(name)
+        if way.hold_unknown_write and _canonical_tool_call_name(name, registry) == "write":
+            result += held.hold_failed_call(context, raw_args, args)
+        if way.cap_unknown:
+            result = _cap_result(result, cap_bytes, context=context)
+        _trace_result(telemetry, context, name, result, args=args, exchange=opened, traced=trace)
+        return args, result
+
+    started = time.time()
+    view = None
+    try:
+        with (_call_scopes(telemetry, trace, call_id, registry, context) if way.scoped
+              else contextlib.nullcontext()):
+            result = await way.invoke(tool, args, context)
+            if way.scoped:
+                view = call_view()
+        telemetry.event("tool_ok", tool=logged_name, call_id=call_id,
+                        latency_ms=int((time.time() - started) * 1000))
+    except snippets.SnippetError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        telemetry.event("tool_exception", tool=logged_name, call_id=call_id,
+                        error=f"{type(exc).__name__}: {exc}",
+                        latency_ms=int((time.time() - started) * 1000))
+        result = _jail.shown(f'ERROR running {tool.name}: {type(exc).__name__}: {exc}')
+    produced = as_output(result)
+    result = produced.model
+    if way.track_before_cap and error_tracker is not None and isinstance(result, str):
+        result = error_tracker.record(tool.name, result)
+    capped = _cap_result(result, cap_bytes, context=context)
+    if way.reconcile_reads:
+        _reconcile_read_delivery(tool.name, args, result, capped, context, call_id)
+    if not way.track_before_cap and error_tracker is not None and isinstance(capped, str):
+        capped = error_tracker.record(tool.name, capped)
+    _trace_result(telemetry, context, tool.name, _operator_sees(produced, result), args=args,
+                  exchange=opened, view=view, traced=trace)
+    return args, capped
+
+
+def _run_to_end(call: Coroutine[Any, Any, Any]) -> Any:
+    """The value of ``call``, run on this thread; a call made `_ON_THREAD`
+    never suspends."""
+    try:
+        call.send(None)
+    except StopIteration as done:
+        return done.value
+    call.close()
+    raise RuntimeError("a tool call on a dispatch thread suspended")
+
+
 def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
               cap_bytes: int, trace: bool = False,
               error_tracker: ToolErrorTracker | None = None,
@@ -1262,63 +1381,48 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
               tool_context: ToolContext | None = None,
               trace_together: bool = False,
               call_id: str | None = None, called_name: str | None = None) -> tuple[dict, str]:
-    """Parse + execute one tool call. Returns (parsed_args, result_string).
+    """Parse + execute one tool call with a sync handler, on this thread.
+    Returns (parsed_args, result_string).
 
     `trace_together` prints the call header with the result instead of before
     the call runs; concurrent calls use it so their exchanges do not interleave.
     `call_id` is the model's id for the call; read coverage is recorded under it."""
-    call_id = call_id or f"dispatch-{next(_ANONYMOUS_CALLS)}"
-    opened = None
-    try:
-        args = _repair_jsonish(raw_args)
-    except ValueError as e:
-        opened = _trace_call(telemetry, tool_context, name, None, malformed=True,
-                             traced=trace, deferred=trace_together)
-        telemetry.event("tool_error", tool=called_name or name, call_id=call_id, error=f"argparse: {e}")
-        result = f'ERROR: could not parse arguments for {name}: {e}'
-        if error_tracker is not None:
-            result = error_tracker.record(name, result)
-        _trace_result(telemetry, tool_context, name, result, malformed=True, exchange=opened, traced=trace)
-        return {}, result
+    return _run_to_end(_run_call(
+        _ON_THREAD, name, raw_args, call_id=call_id or f"dispatch-{next(_ANONYMOUS_CALLS)}",
+        called_name=called_name, telemetry=telemetry, cap_bytes=cap_bytes, trace=trace,
+        trace_together=trace_together, error_tracker=error_tracker,
+        registry=registry or T.stock_registry(), context=tool_context or T.STOCK_CONTEXT))
 
-    active_registry = registry or T.stock_registry()
-    context = tool_context or T.STOCK_CONTEXT
-    tool = active_registry.resolve(name)
-    trace_name = tool.name if tool is not None else name
-    opened = _trace_call(telemetry, context, trace_name, args, traced=trace, deferred=trace_together)
-    if tool is None:
-        telemetry.event("tool_unknown", tool=called_name or name, call_id=call_id, args=args)
-        result = active_registry.unavailable_error(name)
-        if _canonical_tool_call_name(name, active_registry) == "write":
-            result += held.hold_failed_call(context, raw_args, args)
-        capped = _cap_result(result, cap_bytes, context=context)
-        _trace_result(telemetry, context, trace_name, capped, args=args, exchange=opened, traced=trace)
-        return args, capped
 
-    started = time.time()
-    view = None
-    try:
-        with output.using_sink(output.sink_of(telemetry)), call_scope(call_id), registry_scope(
-                active_registry, _cell_call_observer(telemetry, trace, context)):
-            result = call_tool(tool, args, context)
-            view = call_view()
-        telemetry.event("tool_ok", tool=called_name or name, call_id=call_id, latency_ms=int((time.time() - started) * 1000))
-    except snippets.SnippetError:
-        raise
-    except Exception as e:  # noqa: BLE001
-        telemetry.event("tool_exception", tool=called_name or name, call_id=call_id,
-                        error=f"{type(e).__name__}: {e}",
-                        latency_ms=int((time.time() - started) * 1000))
-        result = _jail.shown(f'ERROR running {tool.name}: {type(e).__name__}: {e}')
-    produced = as_output(result)
-    result = produced.model
-    if error_tracker is not None and isinstance(result, str):
-        result = error_tracker.record(tool.name, result)
-    capped = _cap_result(result, cap_bytes, context=context)
-    _reconcile_read_delivery(tool.name, args, result, capped, context, call_id)
-    _trace_result(telemetry, context, tool.name, _operator_sees(produced, result), args=args, exchange=opened,
-                  view=view, traced=trace)
-    return args, capped
+async def _dispatch_fan_out_async(
+    pc: _PendingToolCall,
+    telemetry: Telemetry,
+    cap_bytes: int,
+    trace: bool,
+    error_tracker: ToolErrorTracker,
+    registry: ToolRegistry,
+    tool_context: ToolContext,
+    trace_together: bool = False,
+) -> tuple[_PendingToolCall, dict, str]:
+    """Execute ONE fan-out (task / named-agent) tool call by awaiting its child
+    turns on the current loop (never a dispatch thread)."""
+    args, result = await _run_call(
+        _FAN_OUT, pc.name, pc.arguments(), call_id=pc.id, called_name=pc.called_name,
+        telemetry=telemetry, cap_bytes=cap_bytes, trace=trace, trace_together=trace_together,
+        error_tracker=error_tracker, registry=registry, context=tool_context)
+    return pc, args, result
+
+
+async def _dispatch_async_tool(
+    pc: _PendingToolCall, telemetry: Telemetry, cap_bytes: int, trace: bool,
+    error_tracker: ToolErrorTracker, registry: ToolRegistry, tool_context: ToolContext,
+) -> tuple[_PendingToolCall, dict, Any]:
+    """Execute one call of an async handler on the current loop."""
+    args, result = await _run_call(
+        _ON_LOOP, pc.name, pc.arguments(), call_id=pc.id, called_name=pc.called_name,
+        telemetry=telemetry, cap_bytes=cap_bytes, trace=trace, trace_together=False,
+        error_tracker=error_tracker, registry=registry, context=tool_context)
+    return pc, args, result
 
 
 def _operator_sees(output: ToolOutput, model: Any) -> Any:
@@ -1503,110 +1607,6 @@ def _dispatch_tool_calls(
         for pc, record in zip(tool_calls, records, strict=True)
         if record is not None
     ]
-
-
-async def _dispatch_fan_out_async(
-    pc: _PendingToolCall,
-    telemetry: Telemetry,
-    cap_bytes: int,
-    trace: bool,
-    error_tracker: ToolErrorTracker,
-    registry: ToolRegistry,
-    tool_context: ToolContext,
-    trace_together: bool = False,
-) -> tuple[_PendingToolCall, dict, str]:
-    """Execute ONE fan-out (task / named-agent) tool call by awaiting its child
-    turns on the current loop (never a dispatch thread). Mirrors ``_dispatch``'s
-    parse/trace/telemetry/error-tracking so a fan-out call is indistinguishable
-    from a threaded one to the caller."""
-    from .toolkit import meta
-
-    opened = None
-    try:
-        args = _repair_jsonish(pc.arguments())
-    except ValueError as e:
-        opened = _trace_call(telemetry, tool_context, pc.name, None, malformed=True,
-                             traced=trace, deferred=trace_together)
-        telemetry.event("tool_error", tool=pc.called_name or pc.name, call_id=pc.id, error=f"argparse: {e}")
-        result = f'ERROR: could not parse arguments for {pc.name}: {e}'
-        recorded = error_tracker.record(pc.name, result)
-        _trace_result(telemetry, tool_context, pc.name, recorded, malformed=True, exchange=opened, traced=trace)
-        return pc, {}, recorded
-
-    tool = registry.resolve(pc.name)
-    trace_name = tool.name if tool is not None else pc.name
-    opened = _trace_call(telemetry, tool_context, trace_name, args, traced=trace, deferred=trace_together)
-    if tool is None:
-        telemetry.event("tool_unknown", tool=pc.called_name or pc.name, call_id=pc.id, args=args)
-        result = registry.unavailable_error(pc.name)
-        recorded = _cap_result(result, cap_bytes, context=tool_context)
-        _trace_result(telemetry, tool_context, trace_name, recorded, args=args, exchange=opened, traced=trace)
-        return pc, args, recorded
-
-    started = time.time()
-    try:
-        result = await meta.dispatch_fan_out_async(tool, args, tool_context)
-        telemetry.event("tool_ok", tool=pc.called_name or pc.name, call_id=pc.id, latency_ms=int((time.time() - started) * 1000))
-    except snippets.SnippetError:
-        raise
-    except Exception as e:  # noqa: BLE001
-        telemetry.event("tool_exception", tool=pc.called_name or pc.name, call_id=pc.id,
-                        error=f"{type(e).__name__}: {e}",
-                        latency_ms=int((time.time() - started) * 1000))
-        result = _jail.shown(f'ERROR running {tool.name}: {type(e).__name__}: {e}')
-    output = as_output(result)
-    recorded = error_tracker.record(tool.name, _cap_result(output.model, cap_bytes, context=tool_context))
-    _trace_result(telemetry, tool_context, tool.name, _operator_sees(output, output.model), args=args,
-                  exchange=opened, traced=trace)
-    return pc, args, recorded
-
-
-async def _dispatch_async_tool(
-    pc: _PendingToolCall, telemetry: Telemetry, cap_bytes: int, trace: bool,
-    error_tracker: ToolErrorTracker, registry: ToolRegistry, tool_context: ToolContext,
-) -> tuple[_PendingToolCall, dict, Any]:
-    opened = None
-    try:
-        args = _repair_jsonish(pc.arguments())
-    except ValueError as exc:
-        opened = _trace_call(telemetry, tool_context, pc.name, None, malformed=True, traced=trace)
-        telemetry.event("tool_error", tool=pc.called_name or pc.name, call_id=pc.id, error=f"argparse: {exc}")
-        result = error_tracker.record(pc.name, f'ERROR: could not parse arguments for {pc.name}: {exc}')
-        _trace_result(telemetry, tool_context, pc.name, result, malformed=True, exchange=opened, traced=trace)
-        return pc, {}, result
-    tool = registry.resolve(pc.name)
-    opened = _trace_call(telemetry, tool_context, tool.name if tool is not None else pc.name, args, traced=trace)
-    if tool is None:
-        telemetry.event("tool_unknown", tool=pc.called_name or pc.name, call_id=pc.id, args=args)
-        result = registry.unavailable_error(pc.name)
-        _trace_result(telemetry, tool_context, pc.name, result, args=args, exchange=opened, traced=trace)
-        return pc, args, result
-    started = time.time()
-    view = None
-    try:
-        with call_scope(pc.id), registry_scope(
-                registry, _cell_call_observer(telemetry, trace, tool_context)):
-            result = await call_tool_async(tool, args, tool_context)
-            view = call_view()
-        telemetry.event("tool_ok", tool=pc.called_name or pc.name, call_id=pc.id, latency_ms=int((time.time() - started) * 1000))
-    except asyncio.CancelledError:
-        raise
-    except snippets.SnippetError:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        telemetry.event("tool_exception", tool=pc.called_name or pc.name, call_id=pc.id,
-                        error=f"{type(exc).__name__}: {exc}",
-                        latency_ms=int((time.time() - started) * 1000))
-        result = _jail.shown(f'ERROR running {tool.name}: {type(exc).__name__}: {exc}')
-    output = as_output(result)
-    raw_result = output.model
-    result = _cap_result(raw_result, cap_bytes, context=tool_context)
-    _reconcile_read_delivery(tool.name, args, raw_result, result, tool_context, pc.id)
-    if isinstance(result, str):
-        result = error_tracker.record(tool.name, result)
-    _trace_result(telemetry, tool_context, tool.name, _operator_sees(output, raw_result), args=args,
-                  exchange=opened, view=view, traced=trace)
-    return pc, args, result
 
 
 def _interrupt_inflight(tool_context: ToolContext) -> None:
