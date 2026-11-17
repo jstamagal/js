@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import dataclasses
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from .compaction import AutoCompactState
 
@@ -61,35 +60,3 @@ class ReplState:
     running: bool = True
     # The session `/session` chose to continue in.
     switch_session: _SessionTarget | None = None
-
-    def __getitem__(self, key: str) -> Any:
-        return getattr(self, key)
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        setattr(self, key, value)
-
-    def __contains__(self, key: str) -> bool:
-        return key in _FIELDS
-
-    def keys(self) -> tuple[str, ...]:
-        return _FIELDS
-
-    def get(self, key: str, default: Any = None) -> Any:
-        return getattr(self, key)
-
-    def setdefault(self, key: str, default: Any) -> Any:
-        if getattr(self, key) is None:
-            setattr(self, key, default)
-        return getattr(self, key)
-
-    def pop(self, key: str, default: Any = None) -> Any:
-        value = getattr(self, key)
-        setattr(self, key, _DEFAULTS[key]())
-        return value
-
-
-_FIELDS = tuple(f.name for f in dataclasses.fields(ReplState))
-_DEFAULTS = {
-    f.name: (f.default_factory if f.default is dataclasses.MISSING else (lambda value=f.default: value))
-    for f in dataclasses.fields(ReplState)
-}
