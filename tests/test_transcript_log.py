@@ -5,6 +5,7 @@ from pathlib import Path
 import ai
 from prompt_toolkit.application import Application, create_app_session
 from repl_driver import stub_screen
+from turn_driver import js
 
 from js import cli, runtime, transcript
 from js.config import Config
@@ -81,11 +82,12 @@ def test_prompt_mode_transcript_logs_final_answer_with_ape(monkeypatch, tmp_path
     def completion_stub(**_kwargs):
         return _fake_stream_result("FINAL_OK")
 
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
 
-    rc = cli._run_prompt("hello")
+    rc = js(monkeypatch, "-p", "hello")
 
     assert rc == 0
     assert capsys.readouterr().out.splitlines()[0] == "FINAL_OK"
@@ -247,11 +249,12 @@ def test_prompt_mode_transcript_records_each_tool_call_whole(monkeypatch, tmp_pa
         runtime._trace_result(telemetry, context, "shell", result, args={"command": "make"}, exchange=opened)
         messages.append({"role": "assistant", "content": "FINAL_OK"})
 
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime, "run_turn", run_turn)
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
 
-    cli._run_prompt("hello")
+    js(monkeypatch, "-p", "hello")
 
     capsys.readouterr()
     log = (log_dir / "sess.log").read_text(encoding="utf-8")
