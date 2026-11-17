@@ -168,11 +168,11 @@ def env_layer(env: Any) -> dict[str, Any]:
     return out
 
 
-def flag_layer(extras: list[str] | None) -> dict[str, Any]:
+def flag_layer(extras: tuple[str, ...]) -> dict[str, Any]:
     """The `KEYS` values the --extra arguments (and the flags turned into
     them) set; a later argument wins."""
     out: dict[str, Any] = {}
-    for arg in extras or ():
+    for arg in extras:
         try:
             path, value = _settings.parse_extra_arg(arg)
         except ValueError:
