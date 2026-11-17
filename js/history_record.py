@@ -24,7 +24,7 @@ import ai
 import ai.types.messages
 
 # reasoning imports only after settings, which tool_args loads.
-from . import media, reasoning, routing, snippets, tool_args
+from . import media, message_times, reasoning, routing, snippets, tool_args
 from .text_bytes import byte_prefix, cap_text
 
 # Where js keeps an assistant message's `reasoning_blocks` on the SDK message.
@@ -428,7 +428,6 @@ def restart_thinking_turn(messages: list[dict], *, require_tool_calls: bool) -> 
     Earlier turns keep their signed blocks. The new user context contains the
     visible replies, calls and results so the next reply can use work already done.
     """
-    from . import memory
 
     latest = next((i for i in range(len(messages) - 1, -1, -1)
                    if messages[i].get("role") == "assistant"), None)
@@ -451,7 +450,7 @@ def restart_thinking_turn(messages: list[dict], *, require_tool_calls: bool) -> 
 
     def flush_context() -> None:
         if context:
-            rewritten.append(memory.note_time({"role": "user", "content": (
+            rewritten.append(message_times.note_time({"role": "user", "content": (
                 snippets.render('flush-context')
                 + json.dumps(context, ensure_ascii=False)
             )}))

@@ -29,6 +29,7 @@ from . import (
     compaction_settings,
     context_window,
     memory,
+    message_times,
     messages as msgs,
     runtime,
     snippets,
@@ -103,7 +104,7 @@ class Conversation:
         when one turn outgrows the window; between turns, `maybe_compact`
         decides.
         """
-        self.messages.append(memory.note_time(message))
+        self.messages.append(message_times.note_time(message))
         run = runtime.run_turn_async if self.run_turn is None else self.run_turn
         try:
             if started is not None:

@@ -27,7 +27,7 @@ from . import (
     held,
     history_record,
     login_defaults,
-    memory,
+    message_times,
     messages as msgs,
     model_client,
     model_metadata,
@@ -407,7 +407,7 @@ def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, 
         provider_id=request.provider_id,
         model_id=request.model,
     )
-    convo.append(memory.note_time(record), message=tool_calls.sanitize_assistant_message(assistant_message))
+    convo.append(message_times.note_time(record), message=tool_calls.sanitize_assistant_message(assistant_message))
     # Recorded in full now; a later ^C in this turn must not re-append it.
     sink.clear()
     token_state.record_provider_usage(
@@ -526,7 +526,7 @@ async def _record_tool_results(pending_calls: list[tool_calls.PendingToolCall], 
                 result=result_value,
             )
             record = tool_result_messages.tool_result_record(pc.id, canonical_pc.name, result_value)
-            records.append(memory.note_time(record, progress.finished.get(pc.id)))
+            records.append(message_times.note_time(record, progress.finished.get(pc.id)))
         # One append for the batch: its media follow all of its tool messages.
         convo.append(*records)
     return dispatch_records
@@ -539,7 +539,7 @@ def _steer_off_repeated_errors(due: list[tuple[str, int]], *, convo: TurnConvo,
     text = "\n".join(snippets.render('repeated-tool-error', TOOL=name, COUNT=count)
                      for name, count in due)
     message = {"role": "user", "content": text, "steered": True}
-    convo.append(memory.note_time(message))
+    convo.append(message_times.note_time(message))
     for name, count in due:
         telemetry.event("tool_error_steered", tool=name, repeats=count)
 
@@ -557,7 +557,7 @@ def _record_tool_error_limit(name: str, dispatch_records: list[tuple[tool_calls.
         "",
     )
     failure = f'ERROR: tool retry limit reached: {name} repeated the same error after being told to stop retrying it\n{last_error}'
-    convo.append(memory.note_time({"role": "assistant", "content": failure}),
+    convo.append(message_times.note_time({"role": "assistant", "content": failure}),
                  message=ai.messages.Message(role="assistant", parts=[ai.types.messages.TextPart(text=failure)]))
     events.emit("error", error=failure, retryable=False)
     events.end("tool_error_limit")
@@ -570,7 +570,7 @@ async def _take_steer(steer: Callable[[], dict | None | Awaitable[dict | None]],
     if inspect.isawaitable(steered):
         steered = await steered
     if steered is not None:
-        convo.append(memory.note_time(steered))
+        convo.append(message_times.note_time(steered))
         telemetry.event("steered", message_index=len(convo.messages) - 1)
         if not suppress_output:
             _notice(telemetry, msgs.STEERED, flush=True)

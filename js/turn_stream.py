@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import memory, output, settings as _settings, usage as usage_mod
+from . import message_times, output, settings as _settings, usage as usage_mod
 
 
 class TurnEvents:
@@ -154,4 +154,4 @@ class StreamSink:
         record = {"role": "assistant", "content": partial, "incomplete_reason": "cancelled"}
         if partial_reasoning:
             record["reasoning_content"] = partial_reasoning
-        messages.append(memory.note_time(record))
+        messages.append(message_times.note_time(record))
