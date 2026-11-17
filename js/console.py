@@ -23,7 +23,6 @@ from . import (
     messages as msgs,
     network_display,
     output,
-    stream_transport,
     text_layout,
     tool_display,
     toolkit as T,
@@ -330,7 +329,7 @@ def call_stats_visible(label: str, trace: bool | None, suppressed: bool) -> bool
 
     if trace is None:
         return True
-    net = stream_transport.net_level()
+    net = network_display.net_level()
     return bool(net >= 3 and (label or not suppressed)) if net is not None else trace
 
 
@@ -415,7 +414,7 @@ class ConsoleSink:
             msgs.say(message, file=sys.stderr if stderr else None, flush=flush, **fields)
 
     def _on_network(self, *, level: int, line: Any, fallback: bool) -> None:
-        if fallback and stream_transport._sink is None:
+        if fallback and network_display.installed_sink is None:
             with _muted_tee(getattr(self._telemetry, "transcript_log", None)):
                 network_display.draw(level, line, fallback=fallback)
         else:

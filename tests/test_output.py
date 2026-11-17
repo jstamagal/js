@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import socket
 
-from js import console
+from js import console, network_display
 from js.output import OutputEvent
 
 
@@ -50,7 +50,7 @@ def test_custom_sink_receives_retry_and_network_lines_without_using_the_screen(m
     from js import retry, runtime, stream_transport
 
     screen = []
-    monkeypatch.setattr(stream_transport, "_sink", stream_transport.NetSink(lambda: 3, screen.append))
+    monkeypatch.setattr(network_display, "installed_sink", network_display.NetSink(lambda: 3, screen.append))
 
     def respond(**kwargs):
         retry.announce(1, retry.Budget.from_settings({}), 10, ValueError("offline failure"))

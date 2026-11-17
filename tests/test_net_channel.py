@@ -18,7 +18,7 @@ import httpx2
 import pytest
 from test_status_bar import _cfg
 
-from js import model_client, output, runtime, stream_transport, turn_call
+from js import model_client, network_display, output, runtime, stream_transport, turn_call
 from js.model_client import ModelStreamResult
 from js.toolkit.core import ToolContext, TurnStatus
 
@@ -27,13 +27,13 @@ from js.toolkit.core import ToolContext, TurnStatus
 def sink():
     lines: list[str] = []
     level = {"value": 2}
-    stream_transport.install_sink(stream_transport.NetSink(
+    network_display.install_sink(network_display.NetSink(
         level=lambda: level["value"], emit=lines.append,
     ))
     try:
         yield lines, level
     finally:
-        stream_transport.install_sink(None)
+        network_display.install_sink(None)
 
 
 def _plain(line: str) -> str:
@@ -108,7 +108,7 @@ def test_level_3_prints_connecting_then_connected_before_any_token(sink):
     events: list = []
     status = _RecordingStatus()
     real_emit = lines.append
-    stream_transport.install_sink(stream_transport.NetSink(
+    network_display.install_sink(network_display.NetSink(
         level=lambda: 3, emit=lambda line: (real_emit(line), events.append(("net", line))),
     ))
 
@@ -200,9 +200,9 @@ def test_dns_failure_prints_nothing_at_level_0(monkeypatch, sink):
 
 
 def test_no_sink_no_channel(monkeypatch):
-    stream_transport.install_sink(None)
+    network_display.install_sink(None)
     assert stream_transport.begin_call("https://x/v1", "m") is None
-    assert stream_transport.net_level() is None
+    assert network_display.net_level() is None
     _fail_stream(monkeypatch, _dns_failure())
 
 

@@ -26,7 +26,6 @@ from . import (
     output,
     paths as _paths,
     settings as _settings,
-    stream_transport,
     text_layout,
     tool_display,
     toolkit as _toolkit,
@@ -350,7 +349,7 @@ class TranscriptSink:
         self._plain(msgs.SUBAGENT_FINISHED.line(**subagent_finished_fields(fields)) + "\n", stderr=True)
 
     def _on_network(self, *, level: int, line: Any, fallback: bool) -> None:
-        if fallback and stream_transport._sink is None:
+        if fallback and network_display.installed_sink is None:
             self._plain(network_display._net_line(line) + "\n", stderr=True)
 
     def _on_retry_wait(self, *, n: int, attempts: int, delay: float, error: BaseException, label: str) -> None:

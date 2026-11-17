@@ -20,8 +20,8 @@ from js import (
     messages as msgs,
     microcompact,
     model_client,
+    network_display,
     runtime,
-    stream_transport,
 )
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
@@ -37,11 +37,11 @@ def offline_metadata(monkeypatch):
 def net_lines():
     lines: list[str] = []
     level = {"value": 2}
-    stream_transport.install_sink(stream_transport.NetSink(level=lambda: level["value"], emit=lines.append))
+    network_display.install_sink(network_display.NetSink(level=lambda: level["value"], emit=lines.append))
     try:
         yield lines, level
     finally:
-        stream_transport.install_sink(None)
+        network_display.install_sink(None)
 
 
 def _config(tmp_path, compact: dict | None = None):

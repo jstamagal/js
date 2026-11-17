@@ -5,13 +5,14 @@ from __future__ import annotations
 import re
 import socket
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import ai
 import httpx
 import httpx2
 
-from . import fset, messages as msgs, provider_errors, routing
+from . import fset, messages as msgs, output, provider_errors, routing
 
 
 @dataclass(frozen=True)
@@ -33,12 +34,10 @@ class LabelledLine:
 
 def draw(level: int, line: str, *, fallback: bool = False) -> None:
     """Draw a network notice through the installed channel or its stderr fallback."""
-    from . import stream_transport
-
-    sink = stream_transport._sink
+    sink = installed_sink
     if sink is None and fallback:
         print(msgs.for_stream(_net_line(line), sys.stderr), file=sys.stderr)
-    elif sink is not None and (stream_transport.net_level() or 0) >= level:
+    elif sink is not None and (net_level() or 0) >= level:
         try:
             sink.emit(_net_line(line))
         except Exception:  # noqa: BLE001 — a display failure never fails the request
@@ -48,9 +47,7 @@ def draw(level: int, line: str, *, fallback: bool = False) -> None:
 def always(line: object) -> None:
     """Draw a notice whatever NET_DISPLAY says: through the installed channel,
     else on stderr."""
-    from . import stream_transport
-
-    sink = stream_transport._sink
+    sink = installed_sink
     if sink is not None:
         sink.emit(_net_line(line))
     else:
@@ -66,13 +63,11 @@ def countdown_start(line_for, seconds: float) -> None:
     redrawn in place and erased when it ends. Only on a terminal with no
     channel installed (`js -p`): the REPL's status bar counts both."""
     global _countdown
-    from . import stream_transport
-
     try:
         tty = sys.stderr.isatty()
     except (AttributeError, ValueError, OSError):
         tty = False
-    if stream_transport._sink is not None or not tty:
+    if installed_sink is not None or not tty:
         return
     _countdown = line_for
     countdown_tick(seconds)
@@ -239,3 +234,30 @@ def error_text(e: BaseException) -> str:
     if isinstance(e, ai.ProviderStatusError) and (status := provider_errors.error_status(e)) is not None:
         return msgs.ERROR_OF_STATUS.said(status=status, error=provider_errors.error_message(e))
     return msgs.ERROR_OF_KIND.said(kind=type(e).__name__, error=said)
+
+
+@dataclass(frozen=True)
+class NetSink:
+    """Where network lines go and how many of them: `level()` is read live."""
+
+    level: Callable[[], int]
+    emit: Callable[[str], None]
+
+
+installed_sink: NetSink | None = None
+
+
+def install_sink(sink: NetSink | None) -> None:
+    global installed_sink
+    installed_sink = sink
+
+
+def net_level() -> int | None:
+    """The live NET_DISPLAY level while a sink is installed, else None."""
+    if installed_sink is None:
+        return None
+    try:
+        return int(installed_sink.level())
+    except Exception as exc:  # noqa: BLE001 — a bad setting silences the channel, never the turn
+        output.failed_once("NET_DISPLAY level", exc)
+        return 0

@@ -71,7 +71,6 @@ from . import (
     skills,
     snippets,
     status_bar,
-    stream_transport,
     subagent_windows,
     supervisor,
     tool_display,
@@ -1006,7 +1005,7 @@ class Repl:
         try:
             with screen.capture_stdio(loop, scrollback, app), transcript_mod.transcript_stdio(telemetry):
                 try:
-                    stream_transport.install_sink(stream_transport.NetSink(
+                    network_display.install_sink(network_display.NetSink(
                         level=lambda: _live_level(state, "NET_DISPLAY"),
                         emit=lambda line: print(line, flush=True),
                     ))
@@ -1025,7 +1024,7 @@ class Repl:
         finally:
             if mcp_host is not None:
                 mcp_host.channel_sink = None
-            stream_transport.install_sink(None)
+            network_display.install_sink(None)
             ticker.cancel()
             telemetry.reasoning_factory = previous_reasoning_factory
             telemetry.display_factory = previous_display_factory

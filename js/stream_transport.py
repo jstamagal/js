@@ -29,16 +29,8 @@ from httpx._transports.default import AsyncResponseStream as HttpxAsyncResponseS
 from httpx2._client import BoundAsyncStream
 from httpx2._transports.default import AsyncResponseStream
 
-from . import messages as msgs, output
+from . import messages as msgs, network_display, output
 from .network_display import Failure, LabelledLine, describe_failure  # noqa: F401 — public failure formatter
-
-
-@dataclass(frozen=True)
-class NetSink:
-    """Where network lines go and how many of them: `level()` is read live."""
-
-    level: Callable[[], int]
-    emit: Callable[[str], None]
 
 
 class FailureHold:
@@ -62,7 +54,6 @@ class NetRole:
     hold: FailureHold | None = None
 
 
-_sink: NetSink | None = None
 _role: contextvars.ContextVar[NetRole] = contextvars.ContextVar("js_net_role", default=NetRole())
 _output: contextvars.ContextVar[Callable | None] = contextvars.ContextVar("js_net_output", default=None)
 
@@ -74,22 +65,6 @@ def set_output(emit: Callable[[int, Any, bool], None]) -> contextvars.Token:
 
 def reset_output(token: contextvars.Token) -> None:
     _output.reset(token)
-
-
-def install_sink(sink: NetSink | None) -> None:
-    global _sink
-    _sink = sink
-
-
-def net_level() -> int | None:
-    """The live NET_DISPLAY level while a sink is installed, else None."""
-    if _sink is None:
-        return None
-    try:
-        return int(_sink.level())
-    except Exception as exc:  # noqa: BLE001 — a bad setting silences the channel, never the turn
-        output.failed_once("NET_DISPLAY level", exc)
-        return 0
 
 
 def set_role(label: str = "", *, agent: str = "", status: Any = None,
@@ -288,7 +263,7 @@ def current_call() -> NetCall | None:
 
 def begin_call(url: str, model: str) -> NetCall | None:
     """Open the network channel for one model request, or None with no sink."""
-    if _sink is None:
+    if network_display.installed_sink is None:
         return None
     return NetCall(_role.get(), url, model)
 
