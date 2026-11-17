@@ -9,6 +9,7 @@ import ai
 import pytest
 from ai.providers.openai.protocol import _messages_to_openai
 from repl_driver import run_async
+from turn_driver import js
 
 from js import cli, history_record, memory, model_client, runtime
 from js.config import InvocationSources, from_env
@@ -75,7 +76,7 @@ def test_live_next_turn_retains_tool_free_reasoning(replay):
 
 
 @pytest.mark.parametrize("mode", ["prompt", "repl"])
-def test_resume_retains_reasoning_without_rewriting_the_journal(replay, mode, monkeypatch):
+def test_resume_retains_reasoning_without_rewriting_the_journal(replay, mode, monkeypatch, tmp_path):
     cfg, wire, _context = replay
     memory.append_message(cfg.session_file, {"role": "user", "content": "first"})
     memory.append_message(cfg.session_file, {
@@ -83,7 +84,8 @@ def test_resume_retains_reasoning_without_rewriting_the_journal(replay, mode, mo
     })
     original = cfg.session_file.read_bytes()
     if mode == "prompt":
-        assert cli._run_prompt("next") == 0
+        monkeypatch.chdir(tmp_path)
+        assert js(monkeypatch, "-p", "next") == 0
     else:
         run_async(monkeypatch, cfg, ["next", "exit"], wait=True)
     prior = next(m for m in wire[0] if m["role"] == "assistant")
