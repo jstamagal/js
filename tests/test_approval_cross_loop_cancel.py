@@ -63,7 +63,7 @@ def test_cross_loop_cancellation_distinguishes_caller(foreign_loop, repeat, mode
                     await asyncio.wait_for(task, timeout=2)
                 assert task.cancelling() > 0
             assert await asyncio.to_thread(finished.wait, 2)
-            assert not approval._pending
+            assert approval.decisions_in_flight == 0
         finally:
             if not task.done():
                 task.cancel()
@@ -85,4 +85,4 @@ def test_cross_loop_ordinary_approval_outcomes_unchanged(foreign_loop, answer):
         assert result.startswith("ERROR")
     else:
         assert result == answer
-    assert not approval._pending
+    assert approval.decisions_in_flight == 0

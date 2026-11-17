@@ -232,6 +232,12 @@ class Approval:
     _cancelled: threading.Event = field(default_factory=threading.Event, init=False, repr=False, compare=False)
     _lock: Any = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
 
+    @property
+    def decisions_in_flight(self) -> int:
+        """Decisions this approval is still waiting on."""
+        with self._lock:
+            return len(self._pending)
+
     def cancel(self) -> None:
         """Revoke this turn's pending decisions, including kernel bridge calls."""
         with self._lock:
