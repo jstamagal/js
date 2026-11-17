@@ -3,7 +3,9 @@
 `Conversation` is the session lifecycle the REPL runs around each turn,
 without the REPL: replay the session file, run the turn, save what it
 added, then the between-turn compaction check. A program gives it a Config,
-a system prompt and a tool registry; everything else is optional.
+a system prompt and a tool registry; everything else is optional. Swarm
+agents (`swarm_run`) and subagents (`toolkit.meta`) run their turns through
+`Conversation.turn`.
 
     chat = Conversation(cfg, system, registry=tools)
     await chat.ask("what is in this directory?")
