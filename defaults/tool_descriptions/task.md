@@ -57,7 +57,8 @@ Parallelism:
   pool.
 - Multiple separate `task` tool calls emitted in one assistant turn also run in
   parallel at the runtime orchestration layer.
-- Non-task tools run sequentially.
+- Other tools run in model order: consecutive read-only calls run together,
+  and any other call runs alone, after the calls before it.
 - Results are restored to the original task/tool-call order before being sent
   back to the model. One task returns the worker's reply verbatim; a fan-out
   returns them numbered under a `TASK_RESULTS` header.

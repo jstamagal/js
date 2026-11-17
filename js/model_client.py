@@ -1,8 +1,8 @@
-"""Single import boundary for the Vercel AI Python SDK (`ai`).
+"""The model I/O boundary over the Vercel AI Python SDK (`ai`).
 
-This is the only production module that imports `ai`. It adapts the SDK's
-async, part-based API to the synchronous, dict-based runtime used by `js`.
-This is the canonical provider boundary for the migration.
+It resolves a route to an SDK model and streams a request, adapting the SDK's
+part-based stream to the records js keeps. Modules that only need the SDK's
+types (messages, tools, errors) import `ai` themselves.
 """
 
 from __future__ import annotations

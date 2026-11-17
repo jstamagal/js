@@ -4,9 +4,9 @@
 #
 #   js --agent twotool
 #
-# Needs jupyter_client and ipykernel, which are base dependencies — `just
-# install` (the js on PATH) and `just sync` (this checkout's venv) put them
-# there. If an env somehow lacks them the kernel tool returns one clear ERROR
+# Needs jupyter_client and ipykernel, the `kernel` extra — `just install` (the
+# js on PATH) and `just sync` (this checkout's venv) put them there (not on
+# Termux). If an env somehow lacks them the kernel tool returns one clear ERROR
 # naming the package and shell still works.
 tools:
   - kernel:eager
