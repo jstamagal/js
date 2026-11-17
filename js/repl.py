@@ -506,7 +506,20 @@ async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop,
 
 
 async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, steer_inbox: list[str]) -> None:
-    """Run ``line`` as one supervised turn and wait for it to end."""
+    """Run ``line`` as one supervised turn and wait for it to end. An error
+    that escapes the turn is shown and ends it, and the consumer takes the
+    next line; a snippet failure ends the REPL."""
+    try:
+        await _supervised_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, steer_inbox)
+    except snippets.SnippetError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        msgs.say(msgs.FAILED, error=network_display.error_text(e))
+
+
+async def _supervised_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, steer_inbox: list[str]) -> None:
+    """Build ``line``'s user message, start its turn as a supervised job and
+    wait for the job to end."""
     external_message = line if isinstance(line, dict) else None
     prompt_text, line_attachments = (
         (external_message["content"], []) if external_message is not None
