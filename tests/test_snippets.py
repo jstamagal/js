@@ -129,6 +129,7 @@ def test_missing_runtime_snippet_exits_two(monkeypatch, tmp_path, capsys, mode):
     from dataclasses import replace
 
     from test_cli_prompt_mode import _fake_stream_result, _prompt_cfg
+    from turn_driver import js
 
     from js import cli, runtime
     from js.toolkit import ToolContext
@@ -154,10 +155,11 @@ def test_missing_runtime_snippet_exits_two(monkeypatch, tmp_path, capsys, mode):
                        incomplete_reason="max_output_tokens")
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", model)
+    monkeypatch.chdir(tmp_path)
     if mode == "prompt":
-        assert cli._run_prompt("go") == 2
+        assert js(monkeypatch, "-p", "go") == 2
     elif mode == "json":
-        assert cli._json_run(lambda: cli._run_prompt("go")) == 2
+        assert js(monkeypatch, "--json", "-p", "go") == 2
     else:
         from repl_driver import stub_screen
 
