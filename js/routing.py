@@ -4,7 +4,7 @@ ONE place turns a requested model id plus configured/env provider hints into a
 fully-resolved route: the model id, the js provider id, base URL, api key,
 headers, and the provider's transport/wire. This replaces the prefix/provider
 parsing that used to be copy-pasted across ``config.from_env``,
-``cli._cfg_for_active_model``, subagent selection, and compaction.
+the REPL's per-turn route (``ReplState.config_for_turn``), subagent selection, and compaction.
 
 ``model_client.resolve_model`` stays the final ``ai`` provider factory and
 nothing more — all routing decisions live here.
