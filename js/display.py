@@ -100,12 +100,11 @@ def markdown_enabled(settings: Any) -> bool:
     return setting(settings, "MARKDOWN") is not False
 
 
-def render_console(width: int, styles: dict[str, str] | None = None, style: str | None = None) -> Console:
+def render_console(width: int, styles: dict[str, str] | None = None) -> Console:
     """A console that renders into a string at ``width``: 24-bit colour, none
-    under NO_COLOR, ``style`` under everything it draws."""
+    under NO_COLOR."""
     return Console(
         theme=_RichTheme(styles) if styles else None,
-        style=style,
         file=io.StringIO(),
         force_terminal=True,
         color_system="truecolor",
@@ -276,7 +275,7 @@ def _with_source(children: list[Token]) -> list[Token]:
     return kept
 
 
-def render_markdown(source: str, width: int, settings: Any = None) -> str:
+def render_markdown(source: str, width: int) -> str:
     """ANSI rendering of Markdown source at `width` columns: no blank lines
     before or after, ending in one newline. Inline code is a chip: its text in
     COLOR_CODE on COLOR_PANEL, a space of padding each side."""
@@ -285,9 +284,9 @@ def render_markdown(source: str, width: int, settings: Any = None) -> str:
     for token in document.parsed:
         for child in token.children or ():
             if child.type == "code_inline":
-                padding = setting(settings, "MARKDOWN_INLINE_PADDING")
+                padding = setting(None, "MARKDOWN_INLINE_PADDING")
                 child.content = f"{padding}{child.content}{padding}"
-            elif child.type == "softbreak" and setting(settings, "MARKDOWN_HARD_BREAKS"):
+            elif child.type == "softbreak" and setting(None, "MARKDOWN_HARD_BREAKS"):
                 child.type = "hardbreak"
     console.print(document)
     return _rendered_text(console, width).strip("\n") + "\n"
