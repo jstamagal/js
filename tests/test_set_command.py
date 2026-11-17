@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from repl_driver import output_of, record_turns, type_into_js
 
-from js import compaction, logins, messages as msgs, settings
+from js import context_window, logins, messages as msgs, settings
 
 
 def _out(monkeypatch, tmp_path, capsys, line: str, *argv: str) -> list[str]:
@@ -41,7 +41,7 @@ def test_set_context_size_is_the_window_of_the_next_request(monkeypatch, tmp_pat
     assert type_into_js(monkeypatch, ["/set CONTEXT_SIZE 123456", "hello"]) == 0
 
     [turn] = turns
-    assert compaction.configured_context_window(turn.cfg, lambda: None) == 123456
+    assert context_window.configured_context_window(turn.cfg, lambda: None) == 123456
 
 
 def test_set_model_shows_the_model_the_agent_runs(monkeypatch, tmp_path, capsys):

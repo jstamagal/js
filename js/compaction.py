@@ -12,7 +12,6 @@ there is exactly one implementation. This module also owns every read of the
 from __future__ import annotations
 
 import asyncio
-import json
 import math
 import os
 import re
@@ -28,14 +27,13 @@ import ai
 
 from . import (
     compaction_settings,
-    context_budget,
+    context_window,
     history_record,
     jail,
     media,
     memory as M,
     messages as msgs,
     model_client,
-    model_metadata,
     output,
     owning_loop,
     provider_errors,
@@ -445,114 +443,13 @@ def _post_compact_rehydration(
 
 
 # --------------------------------------------------------------------------
-# Shared math: thresholds, effective window, token estimates
+# Shared math: context_window.thresholds, effective window, token estimates
 # --------------------------------------------------------------------------
-
-
-def thresholds(cfg: Config) -> tuple[float, float, float]:
-    notify_at = compaction_settings.get_float(cfg, "COMPACTION_WARN_AT", max_value=1.0)
-    trigger_at = compaction_settings.get_float(cfg, "COMPACTION_START_AT", max_value=1.0)
-    force_at = compaction_settings.get_float(cfg, "COMPACTION_FORCE_AT", max_value=1.0)
-    if not (notify_at <= trigger_at <= force_at):
-        return (
-            _settings.default_value("COMPACTION_WARN_AT"),
-            _settings.default_value("COMPACTION_START_AT"),
-            _settings.default_value("COMPACTION_FORCE_AT"),
-        )
-    return notify_at, trigger_at, force_at
-
-
-def configured_context_window(cfg: Config, resolve_window: Any) -> int:
-    """One configured window for the banner and both compaction triggers:
-    CONTEXT_SIZE, else the resolved window, else CONTEXT_SIZE_UNKNOWN."""
-    window = compaction_settings.get_int(cfg, "CONTEXT_SIZE", 0) or int(resolve_window() or 0)
-    return window if window > 0 else compaction_settings.get_int(cfg, "CONTEXT_SIZE_UNKNOWN")
-
-
-def effective_context_window(cfg: Config, context_window: int) -> int:
-    """Window minus the room the next turn already owes: one full reply plus the
-    compaction buffer. Both triggers measure against this so they agree on what
-    'full' means. A fraction of the raw window does not survive a small model —
-    0.8 of 32k leaves 6.4k, less than a single max-length reply, so compaction
-    would arm only after the turn it needed to prevent."""
-    if context_window <= 0:
-        return 0
-    max_out = cfg.max_output_tokens
-    if max_out is None:
-        max_out = model_metadata.resolve_max_output(cfg.model, cfg.provider_id)
-    # Reserve what a reply plausibly costs, NOT what the model is willing to
-    # emit. gpt-5.6-sol declares max_output 128000; holding all of that back
-    # would hand a third of a 370k window to an outcome that essentially never
-    # happens. Cap it the way Claude Code does (min(max_output, 20k)).
-    reserve = min(
-        max(0, int(max_out or 0)),
-        compaction_settings.get_nonnegative_int(cfg, "COMPACTION_REPLY_RESERVE_TOKENS"),
-    )
-    buffer_tokens = compaction_settings.get_nonnegative_int(cfg, "COMPACTION_HEADROOM_TOKENS")
-    # Never let the reserve eat the whole window on a model with a huge declared
-    # output cap; keep at least half the window addressable for input.
-    return max(context_window // 2, context_window - reserve - buffer_tokens)
 
 
 def is_max_output_incomplete(reason: object) -> bool:
     text = str(reason or "").lower()
     return text in {"max_output_tokens", "max_tokens", "length"} or "max_output" in text
-
-
-def _message_text_for_estimate(message: dict) -> str:
-    return json.dumps(message, ensure_ascii=False, separators=(",", ":"), default=str)
-
-
-def history_chars(messages: list[dict]) -> int:
-    return sum(len(_message_text_for_estimate(m)) for m in messages)
-
-
-def _estimate_tokens(messages: list[dict], chars_per_token: float = 4.0) -> int:
-    ratio = chars_per_token if chars_per_token and chars_per_token > 0 else 4.0
-    return int(history_chars(messages) / ratio)
-
-
-def estimated_prompt_tokens(cfg: Config, system: str, messages: list[dict]) -> int:
-    """Local estimate of what the next request will cost, in tokens.
-
-    Only used when the provider reported nothing — which is exactly the case
-    after a turn that failed for being too large. Without this the trigger
-    reads 0, does nothing, and the history that caused the failure survives
-    into the next attempt unchanged.
-    """
-    cpt = compaction_settings.get_float(cfg, "COMPACTION_CHARS_PER_TOKEN")
-    try:
-        return (
-            context_budget.estimate_messages_tokens(messages or [], chars_per_token=cpt)
-            + context_budget.estimate_system_tokens(system or "", chars_per_token=cpt)
-        )
-    except Exception as exc:  # noqa: BLE001 - an estimate must never break the turn
-        output.failed_once("compaction token estimate", exc)
-        return 0
-
-
-def _calibrated_chars_per_token(cfg: Config, system: str, messages: list[dict], context: Any = None) -> float:
-    """Configured chars_per_token, corrected against real provider counts.
-
-    tail_tokens and min_savings_tokens used the raw 4.0 estimate while the
-    trigger that called them used provider tokens. On a tool-heavy session the
-    estimator drifts far enough that "keep 16k of tail" kept something quite
-    different from 16k.
-    """
-    configured = compaction_settings.get_float(cfg, "COMPACTION_CHARS_PER_TOKEN")
-    try:
-        # The tracker lives on the tool context (set in run_turn_async), not in
-        # module scope — reading a global here would silently always miss.
-        context = context or T.STOCK_CONTEXT
-        tracker = context.context_budget_state
-        if tracker is None:
-            return configured
-        registry = context.tool_registry
-        tools = model_client.tool_specs_to_ai_tools(registry.openai_specs()) if registry else None
-        return tracker.calibrated_chars_per_token(messages=messages, system=system, tools=tools)
-    except Exception as exc:  # noqa: BLE001 - calibration must never break compaction
-        output.failed_once("compaction chars-per-token calibration", exc)
-        return configured
 
 
 # --------------------------------------------------------------------------
@@ -802,7 +699,7 @@ def _safe_tail_start(messages: list[dict], tail_tokens: int, chars_per_token: fl
     total = 0
     start = len(messages)
     for idx in range(len(messages) - 1, -1, -1):
-        size = len(_message_text_for_estimate(messages[idx]))
+        size = len(context_window.message_text_for_estimate(messages[idx]))
         if start < len(messages) and total + size > budget_chars:
             break
         total += size
@@ -850,7 +747,7 @@ async def compact_now(
         directory=log_dir, emit=emit,
     )
     with _flight_recording(flight, system, messages):
-        chars_per_token = _calibrated_chars_per_token(cfg, system, messages, context)
+        chars_per_token = context_window.calibrated_chars_per_token(cfg, system, messages, context)
         if tail_tokens is None:
             tail_tokens = compaction_settings.get_int(cfg, "COMPACTION_KEEP_RECENT_TOKENS")
         min_savings = compaction_settings.get_int(cfg, "COMPACTION_MIN_SAVINGS_TOKENS")
@@ -858,8 +755,8 @@ async def compact_now(
         keep_from = _safe_tail_start(messages, tail_tokens, chars_per_token)
         if preserve_from is not None:
             keep_from = min(keep_from, max(0, int(preserve_from)))
-        original_est = _estimate_tokens(messages, chars_per_token)
-        tail_est = _estimate_tokens(messages[keep_from:], chars_per_token)
+        original_est = context_window.estimate_tokens(messages, chars_per_token)
+        tail_est = context_window.estimate_tokens(messages[keep_from:], chars_per_token)
         flight.record("decision", chars_per_token=chars_per_token, tail_tokens=tail_tokens,
                       min_savings=min_savings, keep_from=keep_from,
                       original_estimate=original_est, tail_estimate=tail_est)
@@ -894,11 +791,11 @@ async def compact_now(
         marker, after = M.compaction_mark(messages, keep_from, summary=summary, forced=forced,
                                           trigger=recorded_trigger, rehydrated=rehydrated)
         required_savings = 1 if forced else min_savings
-        if original_est - _estimate_tokens(after, chars_per_token) < required_savings and rehydrated:
+        if original_est - context_window.estimate_tokens(after, chars_per_token) < required_savings and rehydrated:
             rehydrated = None
             marker, after = M.compaction_mark(messages, keep_from, summary=summary, forced=forced,
                                               trigger=recorded_trigger)
-        savings = original_est - _estimate_tokens(after, chars_per_token)
+        savings = original_est - context_window.estimate_tokens(after, chars_per_token)
         if savings < required_savings:
             result = msgs.COMPACT_SKIPPED_SAVINGS.said(savings=savings, required=required_savings)
             # A summary was paid for and thrown away. Count it like a failed
@@ -1002,13 +899,13 @@ async def maybe_auto_compact_async(
     else:
         prompt_tokens = context.last_prompt_tokens + context.last_output_tokens
         if prompt_tokens <= 0:
-            prompt_tokens = estimated_prompt_tokens(cfg, system, messages)
+            prompt_tokens = context_window.estimated_prompt_tokens(cfg, system, messages)
     if prompt_tokens <= 0:
         return out
-    context_window = configured_context_window(cfg, resolve_window)
-    effective_window = effective_context_window(cfg, context_window)
+    window = context_window.configured_context_window(cfg, resolve_window)
+    effective_window = context_window.effective_context_window(cfg, window)
     fullness = (prompt_tokens / effective_window) if effective_window > 0 else 0.0
-    notify_at, trigger_at, force_at = thresholds(cfg)
+    notify_at, trigger_at, force_at = context_window.thresholds(cfg)
     if fullness < trigger_at:
         ac.consecutive = 0
         ac.paused = False
@@ -1026,7 +923,7 @@ async def maybe_auto_compact_async(
     out.forced = fullness >= force_at
     try:
         out.result = await _between_turn_compact(cfg, ac, context, system, messages, out.forced,
-                                                 prompt_tokens, context_window, effective_window, emit,
+                                                 prompt_tokens, window, effective_window, emit,
                                                  log_dir)
     except snippets.SnippetError:
         raise

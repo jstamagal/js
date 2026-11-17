@@ -25,6 +25,7 @@ from . import (
     tool_errors,
     toolkit as T,
 )
+from .tool_calls import PendingToolCall
 from .toolkit.core import (
     ToolContext,
     ToolOutput,
@@ -223,7 +224,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
 
 
 async def _dispatch_fan_out_async(
-    pc: tool_calls.PendingToolCall,
+    pc: PendingToolCall,
     telemetry: Telemetry,
     cap_bytes: int,
     trace: bool,
@@ -231,7 +232,7 @@ async def _dispatch_fan_out_async(
     registry: ToolRegistry,
     tool_context: ToolContext,
     trace_together: bool = False,
-) -> tuple[tool_calls.PendingToolCall, dict, str]:
+) -> tuple[PendingToolCall, dict, str]:
     """Execute ONE fan-out (task / named-agent) tool call by awaiting its child
     turns on the current loop (never a dispatch thread)."""
     args, result = await _run_call(
@@ -242,9 +243,9 @@ async def _dispatch_fan_out_async(
 
 
 async def _dispatch_async_tool(
-    pc: tool_calls.PendingToolCall, telemetry: Telemetry, cap_bytes: int, trace: bool,
+    pc: PendingToolCall, telemetry: Telemetry, cap_bytes: int, trace: bool,
     error_tracker: tool_errors.ToolErrorTracker, registry: ToolRegistry, tool_context: ToolContext,
-) -> tuple[tool_calls.PendingToolCall, dict, Any]:
+) -> tuple[PendingToolCall, dict, Any]:
     """Execute one call of an async handler on the current loop."""
     args, result = await _run_call(
         _ON_LOOP, pc.name, pc.arguments(), call_id=pc.id, called_name=pc.called_name,
@@ -261,11 +262,11 @@ def _operator_sees(output: ToolOutput, model: Any) -> Any:
     return model if output.whole is None else output.whole
 
 
-def _is_task_call(pc: tool_calls.PendingToolCall) -> bool:
+def _is_task_call(pc: PendingToolCall) -> bool:
     return pc.name.lower() == "task"
 
 
-def _is_read_only_call(pc: tool_calls.PendingToolCall, registry: ToolRegistry) -> bool:
+def _is_read_only_call(pc: PendingToolCall, registry: ToolRegistry) -> bool:
     """True when ``pc`` names a tool that writes nothing with these arguments.
     A call that cannot be resolved or parsed is not read-only."""
     tool = registry.resolve(pc.name)
@@ -308,16 +309,16 @@ class DispatchProgress:
     """Known outcomes survive cancellation; the stop flag gates queued leaves."""
 
     stopped: threading.Event = field(default_factory=threading.Event)
-    records: dict[str, tuple[tool_calls.PendingToolCall, dict, Any]] = field(default_factory=dict)
+    records: dict[str, tuple[PendingToolCall, dict, Any]] = field(default_factory=dict)
     finished: dict[str, float] = field(default_factory=dict)   # call id -> when its result came
 
-    def record(self, pc: tool_calls.PendingToolCall, args: dict, result: Any) -> None:
+    def record(self, pc: PendingToolCall, args: dict, result: Any) -> None:
         self.records[pc.id] = (pc, args, result)
         self.finished[pc.id] = time.time()
 
 
 def _dispatch_tool_calls(
-    tool_calls: list[tool_calls.PendingToolCall],
+    tool_calls: list[PendingToolCall],
     telemetry: Telemetry,
     cap_bytes: int,
     trace: bool,
@@ -326,7 +327,7 @@ def _dispatch_tool_calls(
     tool_context: ToolContext,
     progress: DispatchProgress | None = None,
     trace_together: bool = False,
-) -> list[tuple[tool_calls.PendingToolCall, dict, str]]:
+) -> list[tuple[PendingToolCall, dict, str]]:
     """Dispatch one assistant batch.
 
     All `task` calls from the same assistant turn run concurrently first. The
@@ -457,7 +458,7 @@ def _interrupt_inflight(tool_context: ToolContext) -> None:
 
 
 async def dispatch_batch(
-    tool_calls: list[tool_calls.PendingToolCall],
+    tool_calls: list[PendingToolCall],
     telemetry: Telemetry,
     cap_bytes: int,
     trace: bool,
@@ -466,7 +467,7 @@ async def dispatch_batch(
     tool_context: ToolContext,
     loop: asyncio.AbstractEventLoop,
     progress: DispatchProgress | None = None,
-) -> list[tuple[tool_calls.PendingToolCall, dict, Any]]:
+) -> list[tuple[PendingToolCall, dict, Any]]:
     """Drain running sync leaves on cancel, cancel async work, retain outcomes.
 
     Fan-out stays on the event loop to avoid blocking descendant dispatch on
@@ -487,7 +488,7 @@ async def dispatch_batch(
         elif inspect.iscoroutinefunction(tool.handler):
             async_leaves.add(i)
 
-    async def sync_calls(calls: list[tool_calls.PendingToolCall]) -> None:
+    async def sync_calls(calls: list[PendingToolCall]) -> None:
         if not calls or progress.stopped.is_set():
             return
         # A running Python worker cannot be cancelled. Keep its future alive,

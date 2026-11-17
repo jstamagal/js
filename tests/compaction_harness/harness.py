@@ -29,6 +29,7 @@ from session_marks import append_compaction_mark  # noqa: E402
 from js import (  # noqa: E402
     compaction as C,
     context_budget as B,
+    context_window,
     memory as M,
     model_client as MC,
     runtime as R,
@@ -734,7 +735,7 @@ async def small_window():
         "small_window",
         {
             "same_effective_budget": all(
-                b["effective_input_limit"] == C.effective_context_window(cfg, 4000) for b in budgets
+                b["effective_input_limit"] == context_window.effective_context_window(cfg, 4000) for b in budgets
             )
         },
         budgets=budgets,

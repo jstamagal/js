@@ -19,7 +19,6 @@ from typing import Any
 import ai
 
 from . import (
-    compaction,
     compaction_settings,
     console,
     context_budget,
@@ -280,7 +279,7 @@ def _trace_banner(telemetry: Telemetry, request: ModelRequest, context: ToolCont
     # ctx is the number that decides when compaction fires and how much room
     # is left to work in; max_out only bounds one reply. Showing the second
     # without the first invites reading 128000 as the window.
-    ctx = compaction.configured_context_window(context.config, resolve_window)
+    ctx = context_window.configured_context_window(context.config, resolve_window)
     # key=none: no key, or the ENDPOINT_DEFAULT_KEY stand-in. The key itself
     # is never shown.
     dummy_key = _settings.knob(request.settings, "ENDPOINT_DEFAULT_KEY")

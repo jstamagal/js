@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from session_marks import append_compaction_mark
 
-from js import compaction, compaction_settings, memory, persona, settings
+from js import compaction, compaction_settings, context_window, memory, persona, settings
 from js.capped_process import CappedProcessResult
 from js.config import Config, InvocationSources, from_env
 from js.toolkit.registry import build_default_registry
@@ -260,12 +260,12 @@ def test_compact_now_model_argument_overrides_the_configured_summary_model(monke
 
 def test_configured_window_tracks_live_setting_and_catalog(tmp_path):
     cfg = _compact_test_cfg(tmp_path, {})
-    assert compaction.configured_context_window(cfg, lambda: None) == 1000000
-    assert compaction.configured_context_window(cfg, lambda: 500000) == 500000
+    assert context_window.configured_context_window(cfg, lambda: None) == 1000000
+    assert context_window.configured_context_window(cfg, lambda: 500000) == 500000
     cfg.settings["CONTEXT_SIZE"] = 750000
-    assert compaction.configured_context_window(cfg, lambda: 500000) == 750000
+    assert context_window.configured_context_window(cfg, lambda: 500000) == 750000
     cfg.settings["CONTEXT_SIZE"] = 1000000
-    assert compaction.configured_context_window(cfg, lambda: None) == 1000000
+    assert context_window.configured_context_window(cfg, lambda: None) == 1000000
 
 
 def test_get_bool_always_returns_a_bool(tmp_path):

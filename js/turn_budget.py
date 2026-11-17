@@ -21,6 +21,7 @@ from typing import Any
 from . import (
     compaction,
     compaction_settings,
+    context_window,
     history_record,
     messages as msgs,
     model_client,
@@ -142,7 +143,7 @@ class TurnBudget:
 
     def context_window(self) -> int:
         """The window the budget holds requests to; 0 when none is known."""
-        return compaction.configured_context_window(self._cfg, self._resolve_window)
+        return context_window.configured_context_window(self._cfg, self._resolve_window)
 
     def provider_window(self) -> int | None:
         """The window the provider holds its input to, or None. A CONTEXT_SIZE
@@ -166,17 +167,17 @@ class TurnBudget:
         system, messages = self._convo.system, self._convo.messages
         if not force and not compaction_settings.get_bool(cfg, "COMPACTION_AUTO"):
             return False
-        context_window = self.context_window()
-        if context_window <= 0 and not force:
+        window = self.context_window()
+        if window <= 0 and not force:
             return False
         ai_tools = model_client.tool_specs_to_ai_tools(specs) if specs else None
-        reserved = context_window - compaction.effective_context_window(cfg, context_window)
+        reserved = window - context_window.effective_context_window(cfg, window)
         buffer_tokens = min(compaction_settings.get_nonnegative_int(cfg, "COMPACTION_HEADROOM_TOKENS"), max(0, reserved))
         status = self._tokens.budget_status(
             system=system,
             messages=messages,
             tools=ai_tools,
-            context_window=context_window if context_window > 0 else None,
+            context_window=window if window > 0 else None,
             output_reserve_tokens=max(0, reserved - buffer_tokens),
             buffer_tokens=buffer_tokens,
         )
@@ -196,7 +197,7 @@ class TurnBudget:
         check = _Check(
             phase=phase, force=force, status=status,
             trigger={"phase": phase, "context_tokens": status.current_context_tokens,
-                     "context_window": context_window,
+                     "context_window": window,
                      "effective_input_limit": status.effective_input_limit,
                      "forced_recovery": force},
             flight_data={"budget": asdict(status), "tools": specs,
@@ -240,7 +241,7 @@ class TurnBudget:
             return check.changed
         tail_tokens = compaction_settings.get_int(cfg, "COMPACTION_KEEP_RECENT_TOKENS")
         if force:
-            history_tokens = int(compaction.history_chars(messages) / check.chars_per_token)
+            history_tokens = int(context_window.history_chars(messages) / check.chars_per_token)
             tail_tokens = min(tail_tokens, history_tokens) // 2 ** overflow_round
         keep_from = compaction.tail_start(messages, tail_tokens, check.chars_per_token)
         if keep_from > 0 and compaction.prefix_worth_summarizing(messages, keep_from):
@@ -316,7 +317,7 @@ class TurnBudget:
             self._telemetry.event("context_compaction_skipped", phase=check.phase,
                                   reason="paused_after_failures")
             return False
-        before_chars = compaction.history_chars(messages)
+        before_chars = context_window.history_chars(messages)
         self._status.compacting = True
         try:
             with stream_transport.net_role(msgs.COMPACTING_ROLE.words()):
@@ -341,7 +342,7 @@ class TurnBudget:
         if not compaction.compacted(result):
             self._telemetry.event("context_compaction_skipped", phase=check.phase, reason=result)
             return False
-        check.reclaimed += before_chars - compaction.history_chars(messages)
+        check.reclaimed += before_chars - context_window.history_chars(messages)
         check.changed = True
         self._rewritten()
         self._telemetry.event("context_compacted", phase=check.phase, result=result)
