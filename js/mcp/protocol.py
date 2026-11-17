@@ -87,6 +87,11 @@ class JSONRPCPeer:
     def closed(self) -> bool:
         return self._closed
 
+    @property
+    def requests_in_flight(self) -> int:
+        """Requests sent and not yet answered, timed out or cancelled."""
+        return len(self._pending)
+
     @classmethod
     async def connect(cls, factory: TransportFactory) -> JSONRPCPeer:
         transport = await _resolve(factory())

@@ -68,14 +68,14 @@ def test_request_timeout_preserves_server_state_and_does_not_retry(method):
             assert client.peer is original_peer
             assert client.initialized
             assert process.returncode is None
-            assert original_peer._pending == {}
+            assert original_peer.requests_in_flight == 0
             result = await client.call_tool("stats", {}, timeout=2)
             assert result.structured_content[method] == 1
             assert await client.list_tools(timeout=2) == []
             assert client.peer is original_peer
             assert transports[0].process is process
             assert len(transports) == 1
-            assert original_peer._pending == {}
+            assert original_peer.requests_in_flight == 0
         finally:
             await client.close()
         assert all(transport.process.returncode == 0 for transport in transports)
