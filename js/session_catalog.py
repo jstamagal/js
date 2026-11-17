@@ -142,10 +142,10 @@ def _with_liveness_lock(session_file: Path, operation):
         return result
 
 
-def acquire_session(session_file: Path, *, pid: int | None = None) -> SessionLease:
+def acquire_session(session_file: Path) -> SessionLease:
     """Record one open of *session_file* and return its release handle."""
     session_file = Path(session_file).resolve(strict=False)
-    owner_pid = os.getpid() if pid is None else int(pid)
+    owner_pid = os.getpid()
     lease = SessionLease(session_file, secrets.token_hex(16), owner_pid, _process_start(owner_pid))
 
     def add(opens):
@@ -340,7 +340,7 @@ def _metadata_stamp(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def branch_session(parent_file: Path, message: str, *, cwd: Path | str, agent: str | None = None,
-                   mode: str | None = None, command: list[str] | None = None) -> Path:
+                   mode: str | None = None) -> Path:
     """A new session in the parent's folder holding the parent's records up to
     and including the message record whose id is `message`, with its branch
     point recorded. The copied records keep their ids. Usage records are not
@@ -362,7 +362,7 @@ def branch_session(parent_file: Path, message: str, *, cwd: Path | str, agent: s
         stream.writelines(kept)
     stamp = last_stamp(branch)
     record_session_start(branch, cwd=cwd, agent=agent, model=stamp.get("model") if stamp else None,
-                         provider=stamp.get("provider") if stamp else None, mode=mode, command=command,
+                         provider=stamp.get("provider") if stamp else None, mode=mode,
                          chat=bool((first_metadata(parent_file) or {}).get("chat")),
                          branched_from={"session": str(parent_file), "message": message})
     return branch
