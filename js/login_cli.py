@@ -162,7 +162,7 @@ def _menu(*args, **kwargs):
     return curses.wrapper(*args, **kwargs)
 
 
-def _login_provider_rows(*, hidden=("openai-completions", "openai-responses")) -> list[tuple[str, str, str]]:
+def _login_provider_rows() -> list[tuple[str, str, str]]:
     saved = load_logins()
     rows: list[tuple[str, str, str]] = []
     seen: set[str] = set()
@@ -179,7 +179,7 @@ def _login_provider_rows(*, hidden=("openai-completions", "openai-responses")) -
             continue
         # openai-completions / openai-responses live under <add custom provider>;
         # a top-level row is a duplicate path to the same shape.
-        if provider.id in hidden:
+        if provider.id in ("openai-completions", "openai-responses"):
             continue
         env_configured = providers.first_env(provider.api_key_env + provider.base_url_env + provider.model_env) is not None
         target = env_rows if env_configured else registry_rows
@@ -213,14 +213,14 @@ def _select_api_shape() -> tuple[str, str] | None:
     return pid, sdk
 
 
-def _input(prompt: str, *, default: str | None = None, secret: bool = False, read=None, read_secret=None, write=None) -> str | None:
+def _input(prompt: str, *, default: str | None = None, secret: bool = False) -> str | None:
     label = prompt if default in (None, "") else f"{prompt} [{default}]"
     try:
         hidden = secret and paranoid.masks(paranoid.mode())
-        reader = (getpass if read_secret is None else read_secret) if hidden else (input if read is None else read)
+        reader = getpass if hidden else input
         value = reader(f"{label}: ")
     except (EOFError, KeyboardInterrupt):
-        (print if write is None else write)()
+        print()
         return None
     stripped = value.strip()
     if stripped:
@@ -259,9 +259,6 @@ def _collect_api_login(
     provider: providers.ProviderDef,
     *,
     shape_provider_id: str | None = None,
-    accept_env_key: Callable[[str], bool] | None = None,
-    env_key_default: str = "n",
-    env_key_question: msgs.Message = msgs.LOGIN_ASK_ENV_KEY,
 ) -> Login | None:
     existing = load_logins().get(providers.normalize_provider_id(provider_id) or provider_id)
     env = os.environ
@@ -294,10 +291,10 @@ def _collect_api_login(
     base_url = entered_base_url or None
 
     if env_key_name and env_key:
-        answer = _input(env_key_question.text(name=env_key_name, key=_mask(env_key)), default=env_key_default)
+        answer = _input(msgs.LOGIN_ASK_ENV_KEY.text(name=env_key_name, key=_mask(env_key)), default="n")
         if answer is None:
             return None
-        if (accept_env_key or _accept_env_key)(answer):
+        if _accept_env_key(answer):
             api_key = env_key
 
     keyless_ok = provider.local or not provider.established
@@ -393,20 +390,19 @@ def _secondary_test_choice(models: list[str]) -> str | None | bool:
             return result
         msgs.say(msgs.LOGIN_TEST_CHOICES)
 
-def _run_secondary_test(login: Login, provider: providers.ProviderDef, model_id: str, *, settings=None, say=None) -> bool:
+def _run_secondary_test(login: Login, provider: providers.ProviderDef, model_id: str) -> bool:
     # Seeing a real answer back IS the confirmation; a further "hit enter to
     # add" after that just re-asked the same question the model number already
     # answered, so it's gone — a bad answer or an exception is still visible
     # right here, and Ctrl-C still works anywhere above this point.
-    announce = msgs.say if say is None else say
-    announce(msgs.LOGIN_TEST_USER, prompt=_SECONDARY_TEST_PROMPT)
+    msgs.say(msgs.LOGIN_TEST_USER, prompt=_SECONDARY_TEST_PROMPT)
     chunks: list[str] = []
 
     def on_text(chunk: str) -> None:
         chunks.append(chunk)
 
     try:
-        settings = config.run_settings() if settings is None else settings
+        settings = config.run_settings()
         run = SimpleNamespace(**turn_settings.project(settings))
         result = model_client.stream_model(
             model_id=model_id,
@@ -424,11 +420,11 @@ def _run_secondary_test(login: Login, provider: providers.ProviderDef, model_id:
             settings=settings,
         )
     except Exception as exc:  # noqa: BLE001
-        announce(msgs.LOGIN_TEST_FAILED, error=f"{type(exc).__name__}: {exc}")
+        msgs.say(msgs.LOGIN_TEST_FAILED, error=f"{type(exc).__name__}: {exc}")
         return False
 
     answer = result.text.strip() or "".join(chunks).strip()
-    announce(msgs.LOGIN_TEST_ANSWER, answer=answer)
+    msgs.say(msgs.LOGIN_TEST_ANSWER, answer=answer)
     return True
 
 def _post_fetch_confirmation(login: Login, provider: providers.ProviderDef, models: list[str]) -> bool | None:
