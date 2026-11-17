@@ -4,15 +4,15 @@ from unittest.mock import Mock
 
 import pytest
 
-from js.toolkit import shell_fetch
+from js.toolkit import fetch
 from js.toolkit.core import ToolContext
 
 
 @pytest.mark.parametrize("character", ["é", "界", "😀"])
 def test_utf8_character_crossing_sniff_boundary_is_text(character):
     payload = ("a" * 4095 + character + "tail").encode()
-    assert not shell_fetch._looks_binary(payload)
-    assert shell_fetch._is_text_response("", payload)
+    assert not fetch._looks_binary(payload)
+    assert fetch._is_text_response("", payload)
 
 
 @pytest.mark.parametrize("payload", [
@@ -20,12 +20,12 @@ def test_utf8_character_crossing_sniff_boundary_is_text(character):
     b"a" * 100 + b"\xff" + b"a" * 5000, b"a" * 100 + b"\x00" + b"a" * 5000,
 ])
 def test_invalid_eof_and_interior_binary_bytes_are_not_ignored(payload):
-    assert shell_fetch._looks_binary(payload)
+    assert fetch._looks_binary(payload)
 
 
 @pytest.mark.parametrize("payload", [b"", b"plain ASCII", b"a" * 4094 + "é".encode()])
 def test_complete_utf8_still_text(payload):
-    assert not shell_fetch._looks_binary(payload)
+    assert not fetch._looks_binary(payload)
 
 
 @pytest.mark.parametrize("character", ["é", "界", "😀"])
@@ -34,7 +34,7 @@ def test_extensionless_file_fetch_preserves_text_classification(tmp_path, charac
     source = tmp_path / "notes"
     text = "a" * 4095 + character + "tail"
     source.write_text(text)
-    result = shell_fetch.fetch(
+    result = fetch.fetch(
         source.as_uri(), save="copy" if save else None, context=ToolContext(cwd=tmp_path),
     )
     assert not result.startswith("ERROR:")
@@ -55,5 +55,5 @@ def test_extensionless_file_fetch_preserves_text_classification(tmp_path, charac
 def test_saved_download_fallback_knows_if_sniff_window_is_truncated(tmp_path, monkeypatch, payload, expected):
     target = tmp_path / "download"
     target.write_bytes(payload)
-    monkeypatch.setattr(shell_fetch.urllib.request, "urlopen", Mock(side_effect=OSError("no HEAD response")))
-    assert shell_fetch._saved_content_type("https://example.test/item", target, {}, 1) == expected
+    monkeypatch.setattr(fetch.urllib.request, "urlopen", Mock(side_effect=OSError("no HEAD response")))
+    assert fetch._saved_content_type("https://example.test/item", target, {}, 1) == expected

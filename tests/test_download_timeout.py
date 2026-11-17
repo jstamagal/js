@@ -9,8 +9,7 @@ import io
 
 import pytest
 
-from js.toolkit import ToolContext, shell_fetch
-from js.toolkit.shell_fetch import fetch
+from js.toolkit import ToolContext, fetch
 
 
 class _FakeResponse:
@@ -38,18 +37,18 @@ def seen(monkeypatch):
         box["timeout"] = timeout
         return _FakeResponse()
 
-    monkeypatch.setattr(shell_fetch.urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr(shell_fetch, "resolve_binary", lambda _name: None)
+    monkeypatch.setattr(fetch.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(fetch, "resolve_binary", lambda _name: None)
     return box
 
 
 def test_a_saved_download_uses_the_download_budget(tmp_path, seen):
     context = ToolContext(cwd=tmp_path, fetch_timeout_s=15, download_timeout_s=300)
-    fetch("https://example.com/big.bin", save="big.bin", context=context)
+    fetch.fetch("https://example.com/big.bin", save="big.bin", context=context)
     assert seen["timeout"] == 300
 
 
 def test_an_unsaved_fetch_still_uses_the_request_budget(tmp_path, seen):
     context = ToolContext(cwd=tmp_path, fetch_timeout_s=15, download_timeout_s=300)
-    fetch("https://example.com/api", context=context)
+    fetch.fetch("https://example.com/api", context=context)
     assert seen["timeout"] == 15

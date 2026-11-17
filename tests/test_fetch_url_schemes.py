@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 from js import jail
-from js.toolkit import shell_fetch
+from js.toolkit import fetch
 from js.toolkit.core import ToolContext
 
 
@@ -20,10 +20,10 @@ def test_wrapped_file_url_uses_jail_checks(tmp_path, monkeypatch, wrapper, schem
     context = ToolContext(cwd=root)
     urlopen = Mock(side_effect=AssertionError("file URL reached network backend"))
     resolver = Mock(side_effect=AssertionError("file URL reached downloader"))
-    monkeypatch.setattr(shell_fetch.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(fetch.urllib.request, "urlopen", urlopen)
     url = wrapper.format(outside.as_uri().replace("file:", scheme + ":", 1))
 
-    result = shell_fetch.fetch(url, context=context, download_resolver=resolver)
+    result = fetch.fetch(url, context=context, download_resolver=resolver)
 
     assert result.startswith("ERROR: JailError:")
     assert "outside sentinel" not in result
@@ -36,9 +36,9 @@ def test_wrapped_file_url_can_read_visible_regular_file(tmp_path, monkeypatch, w
     source = tmp_path / "visible.txt"
     source.write_text("visible sentinel")
     urlopen = Mock(side_effect=AssertionError("file URL reached network backend"))
-    monkeypatch.setattr(shell_fetch.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(fetch.urllib.request, "urlopen", urlopen)
 
-    result = shell_fetch.fetch(wrapper.format(source.as_uri()), context=ToolContext(cwd=tmp_path))
+    result = fetch.fetch(wrapper.format(source.as_uri()), context=ToolContext(cwd=tmp_path))
 
     assert "visible sentinel" in result
     urlopen.assert_not_called()
@@ -52,9 +52,9 @@ def test_wrapped_file_url_can_read_visible_regular_file(tmp_path, monkeypatch, w
 def test_unsupported_scheme_never_reaches_backends(tmp_path, monkeypatch, url, save):
     urlopen = Mock(side_effect=AssertionError("unsupported scheme reached network backend"))
     resolver = Mock(side_effect=AssertionError("unsupported scheme reached downloader"))
-    monkeypatch.setattr(shell_fetch.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(fetch.urllib.request, "urlopen", urlopen)
 
-    result = shell_fetch.fetch(url, save=save, context=ToolContext(cwd=tmp_path), download_resolver=resolver)
+    result = fetch.fetch(url, save=save, context=ToolContext(cwd=tmp_path), download_resolver=resolver)
 
     assert result.startswith("ERROR:")
     urlopen.assert_not_called()
@@ -65,10 +65,10 @@ def test_unsupported_scheme_never_reaches_backends(tmp_path, monkeypatch, url, s
 @pytest.mark.parametrize("url", ["http://example.test/item", "HTTPS://example.test/item"])
 def test_wrapped_http_download_receives_normalized_url(tmp_path, monkeypatch, url):
     download = Mock(side_effect=lambda _binary, _url, target, **_kwargs: target.write_bytes(b"downloaded"))
-    monkeypatch.setattr(shell_fetch, "download_with_aria2", download)
-    monkeypatch.setattr(shell_fetch, "_saved_content_type", lambda *_args: "text/plain")
+    monkeypatch.setattr(fetch, "download_with_aria2", download)
+    monkeypatch.setattr(fetch, "_saved_content_type", lambda *_args: "text/plain")
 
-    result = shell_fetch.fetch(
+    result = fetch.fetch(
         "  <URL:" + url + ">  ", save="output.bin", context=ToolContext(cwd=tmp_path),
         download_resolver=lambda _name: "/fake/aria2c",
     )

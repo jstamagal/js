@@ -17,6 +17,7 @@ from ..skills import SkillCatalog, ToolActivationResult, discover_skills, load_s
 from . import (
     browser,
     discovery,
+    fetch,
     fs_tools,
     jev,
     lsp,
@@ -635,7 +636,7 @@ def build_default_registry(
     if suites is None:
         suites = (
             ("fs", fs_tools.tools()),
-            ("shell", shell_fetch.tools()),
+            ("shell", shell_fetch.tools() + fetch.tools()),
             ("search", web_search.tools()),
             ("jev", jev.tools()),
             ("terminal", terminal.tools()),

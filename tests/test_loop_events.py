@@ -109,17 +109,17 @@ def test_description_warning_is_an_event(monkeypatch, capsys):
 
 def test_fetch_fallback_warning_is_an_event(monkeypatch, tmp_path, capsys):
     from js import tool_binaries
-    from js.toolkit import ToolContext, shell_fetch
+    from js.toolkit import ToolContext, fetch
 
     monkeypatch.setattr(tool_binaries, "_URLLIB_FALLBACK_REPORTED", set())
-    monkeypatch.setattr(shell_fetch, "resolve_binary", lambda name: None)
+    monkeypatch.setattr(fetch, "resolve_binary", lambda name: None)
     def unavailable(*args, **kwargs):
         raise OSError("offline")
 
-    monkeypatch.setattr(shell_fetch.urllib.request, "urlopen", unavailable)
+    monkeypatch.setattr(fetch.urllib.request, "urlopen", unavailable)
     events = []
     with output.using_sink(SimpleNamespace(emit=events.append)):
-        shell_fetch.fetch("https://example.invalid/file", save="file", context=ToolContext(cwd=tmp_path))
+        fetch.fetch("https://example.invalid/file", save="file", context=ToolContext(cwd=tmp_path))
     assert len(events) == 1
     assert dict(events[0].fields)["fields"]["purpose"] == "fetch(save=...)"
     assert capsys.readouterr() == ("", "")

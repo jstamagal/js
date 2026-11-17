@@ -284,7 +284,7 @@ def test_config_and_tool_context_defaults_come_from_package_jsrc(monkeypatch, tm
 
 
 def test_fetch_sends_the_configured_user_agent(monkeypatch, tmp_path):
-    from js.toolkit import shell_fetch
+    from js.toolkit import fetch
 
     seen = {}
 
@@ -308,11 +308,11 @@ def test_fetch_sends_the_configured_user_agent(monkeypatch, tmp_path):
         seen["agent"] = req.get_header("User-agent")
         return Response()
 
-    monkeypatch.setattr(shell_fetch, "resolve_binary", lambda _name: None)
-    monkeypatch.setattr(shell_fetch.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(fetch, "resolve_binary", lambda _name: None)
+    monkeypatch.setattr(fetch.urllib.request, "urlopen", fake_urlopen)
     context = ToolContext(cwd=tmp_path, user_agent="knob-agent/2")
 
-    shell_fetch.fetch("https://example.test/", context=context)
+    fetch.fetch("https://example.test/", context=context)
 
     assert seen["agent"] == "knob-agent/2"
 

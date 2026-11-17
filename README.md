@@ -75,7 +75,8 @@ js/toolkit/fs_tools.py            the file tools' table
 js/toolkit/fs.py                  read/write/remove/undo
 js/toolkit/patch.py               patch
 js/toolkit/file_search.py         fs_search and ast_search
-js/toolkit/shell_fetch.py         shell and fetch
+js/toolkit/shell_fetch.py         shell
+js/toolkit/fetch.py               fetch
 js/toolkit/plan.py                plan
 js/toolkit/skill.py               skill
 js/toolkit/subagents.py           task and subagents

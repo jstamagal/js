@@ -86,7 +86,8 @@ persists each completed turn.
 | `js/toolkit/patch.py` | patch tool: exact and fuzzy string replacement behind the read guard |
 | `js/toolkit/file_search.py` | fs_search (ripgrep) and ast_search (ast-grep), their child processes, and stopping them on cancel |
 | `js/toolkit/path_hints.py` | the hint for a path that does not exist: nearest directory, close names, same-tail paths |
-| `js/toolkit/shell_fetch.py` | shell and fetch tools |
+| `js/toolkit/shell_fetch.py` | shell tool: commands, their background jobs and the output it reports |
+| `js/toolkit/fetch.py` | fetch tool: http, https and file:// requests, read inline or saved with `save=` |
 | `js/toolkit/plan.py` | plan tool |
 | `js/toolkit/skill.py` | skill tool |
 | `js/toolkit/subagents.py` | task and generated agent tools |
@@ -182,7 +183,8 @@ retry failed children with backoff, stopping after five consecutive failures.
 
 ```text
 fs_tools.py       file tools
-shell_fetch.py    shell and fetch
+shell_fetch.py    shell
+fetch.py          fetch
 web_search.py     web search, docs search and browse
 jev.py            jev
 terminal.py       terminal sessions
