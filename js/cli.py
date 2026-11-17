@@ -1055,10 +1055,11 @@ def _apply_saved_login_to_state(state: ReplState, provider_name: str) -> bool:
 
 async def _maybe_auto_compact_async(cfg: Config, state: ReplState) -> None:
     """The REPL's between-turn trigger: the policy lives in compaction, the
-    printing lives here."""
-    if not compaction.get_bool(cfg, "COMPACTION_AUTO"):
-        return
+    printing lives here. The gate reads the live settings, so a /set made
+    during the turn decides whether the turn's end compacts."""
     active_cfg = state.config_for_turn(cfg)
+    if not compaction.get_bool(active_cfg, "COMPACTION_AUTO"):
+        return
     turn_status = runtime.T.STOCK_CONTEXT.turn_status
     turn_status.compacting = True
     try:
@@ -1083,7 +1084,7 @@ async def _maybe_auto_compact_async(cfg: Config, state: ReplState) -> None:
 
 
 def _maybe_auto_compact(cfg: Config, state: ReplState) -> None:
-    asyncio.run(_maybe_auto_compact_async(cfg, state))
+    model_client.run_owning_loop(_maybe_auto_compact_async(cfg, state))
 
 
 def _run_state(cfg: Config, system: str, messages: list[dict]) -> ReplState:
