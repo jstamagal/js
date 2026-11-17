@@ -32,7 +32,6 @@ def home(monkeypatch, tmp_path):
         sent.append(str(messages[-1]["content"]))
         messages.append({"role": "assistant", "content": "ok"})
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
     monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
     return sent
 

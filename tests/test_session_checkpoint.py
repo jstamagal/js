@@ -6,6 +6,7 @@ import os
 import signal
 from pathlib import Path
 
+from repl_driver import turn_stub
 from test_steering import _call, _cfg, _text
 from turn_driver import js
 
@@ -60,7 +61,7 @@ def test_prompt_mode_turn_is_on_disk_before_the_run_ends(monkeypatch, tmp_path):
         on_disk.append(load_messages(cfg.session_file))
         messages.append({"role": "assistant", "content": "done"})
 
-    monkeypatch.setattr(runtime, "run_turn", turn)
+    monkeypatch.setattr(runtime, "run_turn_async", turn_stub(turn))
     assert js(monkeypatch, "--session", "kept", "-p", "look") == 0
     assert on_disk == [[{"role": "user", "content": "look"}, *EXCHANGE]]
 
@@ -73,7 +74,7 @@ def test_prompt_mode_sigterm_keeps_the_turn(monkeypatch, tmp_path):
         messages.extend(EXCHANGE)
         os.kill(os.getpid(), signal.SIGTERM)
 
-    monkeypatch.setattr(runtime, "run_turn", turn)
+    monkeypatch.setattr(runtime, "run_turn_async", turn_stub(turn))
     assert js(monkeypatch, "--session", "termed", "-p", "look") == 130
     session = session_store.folder_for(Path.cwd()) / "termed.jsonl"
     assert load_messages(session)[:3] == [{"role": "user", "content": "look"}, *EXCHANGE]

@@ -232,7 +232,7 @@ def test_prompt_model_flag_with_provider_prefix_routes_provider_override(monkeyp
         seen["provider_id_override"] = kwargs.get("provider_id_override")
         messages.append({"role": "assistant", "content": "ok"})
 
-    monkeypatch.setattr(cli.runtime, "run_turn", fake_run_turn)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(fake_run_turn))
     monkeypatch.setattr(cli.M, "load_messages", lambda _path: [])
     monkeypatch.setattr(cli, "_append_turn", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
@@ -755,7 +755,7 @@ def test_prompt_mode_auto_compact_uses_model_override_for_same(monkeypatch, tmp_
         seen.append(cfg.model)
         return msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=compact_stub))
     monkeypatch.setattr(cli.runtime, "_resolve_context_window", lambda _model, _provider, _base_url=None: 150_000)
 
@@ -956,7 +956,7 @@ def test_resumed_prompt_model_override_is_used_and_preserved_in_continue_hint(mo
         seen.append(kwargs.get("model_override"))
         messages.append({"role": "assistant", "content": "RESUME_MODEL_OK"})
 
-    monkeypatch.setattr(cli.runtime, "run_turn", run_turn_stub)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
     actual = js(monkeypatch, "--session", "resume-model", "--model", "resume-model-override", "-p", "continue")
 
@@ -1499,7 +1499,7 @@ def test_prompt_failure_preserves_tool_work_and_resumes(monkeypatch, tmp_path, d
         messages.extend(exchange)
         raise failure()
 
-    monkeypatch.setattr(runtime, "run_turn", interrupted)
+    monkeypatch.setattr(runtime, "run_turn_async", turn_stub(interrupted))
     debug_flag = ["--debug"] if debug else []
     assert js(monkeypatch, "--session", "interrupted", *debug_flag, "-p", "inspect tests") == status
     kept = load_messages(session)
@@ -1512,7 +1512,7 @@ def test_prompt_failure_preserves_tool_work_and_resumes(monkeypatch, tmp_path, d
         assert messages == [*kept, resumed_user]
         messages.append({"role": "assistant", "content": "finished"})
 
-    monkeypatch.setattr(runtime, "run_turn", resumed)
+    monkeypatch.setattr(runtime, "run_turn_async", turn_stub(resumed))
     assert js(monkeypatch, "--session", "interrupted", "-p", "continue") == 0
     assert load_messages(session) == [
         *kept, resumed_user,
@@ -1544,7 +1544,7 @@ def test_prompt_interrupt_without_save(monkeypatch, tmp_path):
 
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(runtime, "run_turn", interrupted)
+    monkeypatch.setattr(runtime, "run_turn_async", turn_stub(interrupted))
     assert js(monkeypatch, "--no-save", "-p", "explain") == 130
     assert not list((tmp_path / ".js/sessions").rglob("*.jsonl"))
 
@@ -1564,7 +1564,7 @@ def test_one_shot_model_override_sends_that_models_saved_sampling(monkeypatch, t
         seen["sampling"] = kwargs.get("sampling")
         messages.append({"role": "assistant", "content": "ok"})
 
-    monkeypatch.setattr(cli.runtime, "run_turn", fake_run_turn)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(fake_run_turn))
     monkeypatch.setattr(cli.M, "load_messages", lambda _path: [])
     monkeypatch.setattr(cli, "_append_turn", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)

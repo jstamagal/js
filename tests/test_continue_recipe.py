@@ -26,8 +26,8 @@ def _requests(monkeypatch):
         text="answer", tool_calls=[], reasoning="", usage=None, finish_reason="stop",
         assistant_message=ai.assistant_message("answer")))
     requests = []
-    original = runtime.run_turn
-    def run(cfg, system, messages, telemetry, **kw):
+    original = runtime.run_turn_async
+    async def run(cfg, system, messages, telemetry, **kw):
         requests.append({
             "model": kw["model_override"], "provider": kw["provider_id_override"],
             "url": kw["provider_base_url_override"],
@@ -35,8 +35,8 @@ def _requests(monkeypatch):
             "sampling": kw["sampling"].as_dict_nonnull(),
             "tools": kw["tool_registry"].openai_specs(), "system": system,
         })
-        return original(cfg, system, messages, telemetry, **kw)
-    monkeypatch.setattr(runtime, "run_turn", run)
+        return await original(cfg, system, messages, telemetry, **kw)
+    monkeypatch.setattr(runtime, "run_turn_async", run)
     return requests
 
 

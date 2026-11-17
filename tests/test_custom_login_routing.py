@@ -13,6 +13,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from repl_driver import turn_stub
 from turn_driver import js
 
 from js import cli, login_defaults, logins, messages as msgs, providers, repl_commands, run_assembly
@@ -615,7 +616,7 @@ def test_a_resumed_session_keeps_its_saved_effort_on_its_model(monkeypatch, tmp_
         seen["effort"] = kwargs.get("reasoning_effort_override", cfg.reasoning_effort)
         messages.append({"role": "assistant", "content": "ok"})
 
-    monkeypatch.setattr(cli.runtime, "run_turn", fake_run_turn)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(fake_run_turn))
     assert js(monkeypatch, "--session", "kept", "--model", "testes/b", "--reasoning", "low", "-p", "first") == 0
 
     assert js(monkeypatch, "--session", "kept", "-p", "again") == 0

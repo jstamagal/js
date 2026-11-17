@@ -99,6 +99,7 @@ from .config import (
     validate_agent_id,
     vision_enabled_for_model,
 )
+from .conversation import Conversation
 from .repl_state import ReplState
 from .session_catalog import (
     acquire_session,
@@ -237,15 +238,15 @@ def _append_turn(cfg: Config, message: dict) -> None:
     M.append_message(cfg.session_file, message)
 
 
-def _session_stamp(cfg: Config, reasoning: str | None = None) -> dict:
+def _session_stamp(cfg: Config) -> dict:
     """The stamp for assistant messages a turn on `cfg` writes."""
     return M.stamp_for(getattr(cfg, "model", None), getattr(cfg, "provider_id", None),
-                       reasoning if reasoning is not None else getattr(cfg, "reasoning_effort", None))
+                       getattr(cfg, "reasoning_effort", None))
 
 
-def _persist_turn_messages(cfg: Config, messages: list[dict], reasoning: str | None = None) -> None:
+def _persist_turn_messages(cfg: Config, messages: list[dict]) -> None:
     """Persist the turn; `cfg` is the one the turn ran on, so its stamp is the turn's model."""
-    M.persist_messages(cfg.session_file, messages, stamp=_session_stamp(cfg, reasoning))
+    M.persist_messages(cfg.session_file, messages, stamp=_session_stamp(cfg))
 
 
 def _turn_user_index(messages: list[dict], user_message: dict) -> int | None:
@@ -1158,29 +1159,35 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
     # -d shows the conversation as the REPL draws it: each user line, typed or
     # fired from the agent's files, ahead of the answer it got.
     echo_user = display_mod.echo_user if debug else None
-    # Saved after every tool batch, so a run killed mid-turn keeps what it did.
-    checkpoint = (lambda: _persist_turn_messages(cfg, messages, reasoning_override)) if save else None
+    trace_override = debug or bool(debug_file) or cfg.trace
+    chat = Conversation(cfg, system, registry=active_registry, context=tool_context or runtime.T.STOCK_CONTEXT,
+                        telemetry=telemetry, messages=messages)
+
+    def turn(message: dict, shown: str) -> None:
+        """One turn on ``message``, which is on disk before the model is
+        called. ``shown`` is its line in the transcript and the -d echo."""
+        def started() -> None:
+            if save:
+                _append_turn(cfg, message)
+            if turn_transcript is not None:
+                turn_transcript.emit(output.event("transcript_user", text=shown))
+            if echo_user is not None:
+                echo_user(shown)
+
+        # In this context as well as the turn's, so the check after the turn
+        # reads the same window.
+        runtime.install_context_window_overrides(cfg)
+        model_client.run_owning_loop(chat.turn(message, started=started, trace_override=trace_override, **turn_kwargs))
+
     def turns() -> None:
-        nonlocal before_len
         if prompt_spec.exchanges and not messages:
             model_client.run_owning_loop(agent_messages.initialize(
                 cfg, prompt_spec, messages, replace(telemetry, transcript_log=turn_transcript),
-                system=system, save=save,
-                trace_override=debug or bool(debug_file) or cfg.trace,
+                system=system, save=save, trace_override=trace_override,
                 tool_context=tool_context, echo_user=echo_user, **turn_kwargs,
             ))
-        before_len = len(messages)
         if user_message is not None:
-            messages.append(user_message)
-            if save:
-                _append_turn(cfg, user_message)
-            if turn_transcript is not None:
-                turn_transcript.emit(output.event("transcript_user", text=prompt))
-            if echo_user is not None:
-                echo_user(prompt)
-            runtime.run_turn(cfg, system, messages, telemetry,
-                             trace_override=debug or bool(debug_file) or cfg.trace,
-                             tool_context=tool_context, checkpoint=checkpoint, **turn_kwargs)
+            turn(user_message, prompt)
         if bus is None:
             return
         # On a bus, a turn ending is the agent going idle, not the run ending.
@@ -1191,23 +1198,14 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
         auto_state = _run_state(cfg, system, messages)
         while not bus.stop_seen:
             if save:
-                _persist_turn_messages(cfg, messages, reasoning_override)
+                chat.save()
                 with _transcript_stdio(telemetry):
                     _maybe_auto_compact(cfg, auto_state)
             landed = bus.sleep()
             if all(m.kind == swarm_mod.STOP for m in landed):
                 return
-            wake = M.note_time(bus.wake_message(landed))
-            messages.append(wake)
-            if save:
-                _append_turn(cfg, wake)
-            if turn_transcript is not None:
-                turn_transcript.emit(output.event("transcript_user", text=wake["content"]))
-            if echo_user is not None:
-                echo_user(wake["content"])
-            runtime.run_turn(cfg, system, messages, telemetry,
-                             trace_override=debug or bool(debug_file) or cfg.trace,
-                             tool_context=tool_context, checkpoint=checkpoint, **turn_kwargs)
+            wake = bus.wake_message(landed)
+            turn(wake, wake["content"])
 
     # SIGTERM (a runner, `timeout`, a swarm stopping) ends the run like ^C:
     # the session is persisted and the exit code says interrupted. The
@@ -1269,7 +1267,7 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
     finally:
         try:
             if save:
-                _persist_turn_messages(cfg, messages, reasoning_override)
+                chat.save()
         finally:
             if trace_sink is not None:
                 trace_sink.close()

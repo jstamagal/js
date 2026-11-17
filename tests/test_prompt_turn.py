@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 import ai
 import ai.types.usage
+from repl_driver import turn_stub
 from test_agent_messages import _agent, _model
 from turn_driver import js
 
@@ -99,3 +100,18 @@ def test_the_check_after_the_turn_reads_the_window_context_size_per_model_sets(t
     assert js(monkeypatch, "--session", "kept",
               "--extra", 'CONTEXT_SIZE_PER_MODEL={"offline-test-model": 200000}', "-p", "look") == 0
     assert compact.await_count == 1
+
+
+def test_a_debug_file_run_traces_its_turn(tmp_path, monkeypatch):
+    _agent(tmp_path, monkeypatch, {})
+    monkeypatch.setenv("JS_TRACE", "off")
+    traced: list[bool] = []
+
+    def turn(cfg, system, messages, telemetry, **kwargs):
+        traced.append(kwargs["trace_override"])
+        messages.append({"role": "assistant", "content": "done"})
+
+    monkeypatch.setattr(runtime, "run_turn_async", turn_stub(turn))
+    assert js(monkeypatch, "-n", "-p", "look") == 0
+    assert js(monkeypatch, "-n", "--debug-file", str(tmp_path / "trace.log"), "-p", "look") == 0
+    assert traced == [False, True]

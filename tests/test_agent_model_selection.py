@@ -6,6 +6,7 @@ from pathlib import Path
 import ai
 import ai.types.usage
 import pytest
+from repl_driver import turn_stub
 from turn_driver import js
 
 from js import cli, logins, model_metadata, persona, run_assembly, runtime
@@ -475,7 +476,7 @@ def _one_shot_home(monkeypatch, tmp_path, manifest: str = "model: agent-model\nr
         seen["effort"] = override
         messages.append({"role": "assistant", "content": "ok"})
 
-    monkeypatch.setattr(cli.runtime, "run_turn", fake_run_turn)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(fake_run_turn))
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
     return seen
 

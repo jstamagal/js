@@ -2313,9 +2313,8 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
 
 def run_turn(*args, **kwargs) -> None:
     """Sync wrapper over :func:`run_turn_async`: one turn on a loop of its own,
-    for callers off the event loop (`-p`, bench, subagent threads). The REPL
-    awaits ``run_turn_async`` on its shared loop. `messages` is mutated in
-    place, so ^C mid-turn leaves the partial work in it.
+    for a caller off the event loop. `messages` is mutated in place, so ^C
+    mid-turn leaves the partial work in it.
     """
     # The sync caller also resolves this window between turns, outside the
     # task context the runner copies for the turn itself.

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import ai
 from prompt_toolkit.application import Application, create_app_session
-from repl_driver import stub_screen
+from repl_driver import stub_screen, turn_stub
 from turn_driver import js
 
 from js import cli, runtime, transcript
@@ -251,7 +251,7 @@ def test_prompt_mode_transcript_records_each_tool_call_whole(monkeypatch, tmp_pa
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
-    monkeypatch.setattr(runtime, "run_turn", run_turn)
+    monkeypatch.setattr(runtime, "run_turn_async", turn_stub(run_turn))
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
 
     js(monkeypatch, "-p", "hello")

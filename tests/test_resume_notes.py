@@ -44,7 +44,7 @@ class Turns:
 
 def _prompt(monkeypatch, argv) -> Turns:
     turns = Turns()
-    monkeypatch.setattr(cli.runtime, "run_turn", turns)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(turns))
     assert cli.main(argv) == 0
     return turns
 

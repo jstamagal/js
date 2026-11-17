@@ -24,9 +24,10 @@ One normal prompt run follows this path:
 4. `ToolRegistry.select()` filters the default registry by prompt selectors.
 5. Existing session messages are loaded through `js.memory.load_replay_messages()`,
    which keeps every assistant's reasoning for replay.
-6. The new user message is appended to the in-memory list.
-7. `js.runtime.run_turn()` loops over model calls and tool calls.
-8. The CLI persists new messages after a final assistant response.
+6. `js.conversation.Conversation.turn()` appends the new user message, which
+   `-p` writes to the session file before the model is called.
+7. `js.runtime.run_turn_async()` loops over model calls and tool calls.
+8. The turn is saved after each batch of tool results and when it ends.
 
 The REPL uses the same runtime but keeps the message list in process and
 persists each completed turn.
