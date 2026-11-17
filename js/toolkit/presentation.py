@@ -161,16 +161,6 @@ class ToolOutput:
         return self.is_error or bool(self.exit_code)
 
 
-def result_text(result: Any) -> tuple[str, bool]:
-    """Flatten a tool result to (text, is_error)."""
-    from .core import Output
-    dehydrated = getattr(result, "dehydrated", None)
-    if callable(dehydrated):
-        return dehydrated(), bool(getattr(result, "is_error", False))
-    text = result if isinstance(result, str) else str(result)
-    return text, not isinstance(result, Output) and text.lstrip().startswith("ERROR")
-
-
 # The count `runtime.ToolErrorTracker` appends to a failed result for the model.
 _RETRY_NOTE = re.compile(r"\s*<retry>attempts_left=(\d+), allowed_max_attempts=(\d+)</retry>\s*$")
 
@@ -180,10 +170,11 @@ def tool_output(name: str, result: Any) -> ToolOutput:
     `shell=… exit=… --- stdout ---` envelope; exit is kept apart. A failed
     call's retry note leaves the text and becomes `tries`."""
     from ..display import clean
+    from .results import result_text
 
     if isinstance(result, ToolOutput):
         return result
-    text, is_error = result_text(result)
+    text, is_error = result_text(result, screen=True)
     text = clean(text)
     tries: tuple[int, int] | None = None
     note = _RETRY_NOTE.search(text)

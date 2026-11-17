@@ -17,13 +17,25 @@ from ..text_bytes import byte_prefix, byte_size, cap_text
 from .core import Output, ToolResult
 
 
-def summary_text(result: Any) -> tuple[str, bool]:
-    """A tool result's text and whether it reports an error."""
+def result_text(result: Any, *, screen: bool = False) -> tuple[str, bool]:
+    """A tool result's text and whether it reports an error.
+
+    A `ToolResult` is its dehydrated text, an error when it says so. Any
+    other result is an error when its text starts with ERROR, unless it is
+    an `Output`. ``screen`` reads a result as the screen does; without it, as
+    the JSON summary does. The two differ three ways: without ``screen`` a
+    `ToolResult` whose text starts with ERROR is an error too; with it ERROR
+    may follow leading whitespace; and a result that is not a string is its
+    `str()` with it, its JSON without."""
     if isinstance(result, ToolResult):
         text = result.dehydrated()
-        return text, result.is_error or text.startswith("ERROR")
-    text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
-    return text, not isinstance(result, Output) and text.startswith("ERROR")
+        return text, result.is_error or (not screen and text.startswith("ERROR"))
+    if isinstance(result, str):
+        text = result
+    else:
+        text = str(result) if screen else json.dumps(result, ensure_ascii=False, default=str)
+    lead = text.lstrip() if screen else text
+    return text, not isinstance(result, Output) and lead.startswith("ERROR")
 
 
 def truncate(text: str, context: Any, *, cut: bool = False) -> str:

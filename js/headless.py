@@ -6,7 +6,7 @@ import json
 import threading
 from typing import Any, TextIO
 
-from .toolkit.results import summary_text
+from .toolkit.results import result_text
 from . import usage as usage_mod
 
 SCHEMA_VERSION = 2
@@ -16,7 +16,7 @@ SUMMARY_CHARS = 200
 def tool_result_summary(result: Any) -> dict[str, Any]:
     """`ok`, `bytes`, `lines` and `summary` (the first non-blank line, cut to
     SUMMARY_CHARS characters) of a tool result."""
-    text, failed = summary_text(result)
+    text, failed = result_text(result)
     first = next((line.strip() for line in text.splitlines() if line.strip()), "")
     if len(first) > SUMMARY_CHARS:
         first = first[:SUMMARY_CHARS - 1] + "…"
