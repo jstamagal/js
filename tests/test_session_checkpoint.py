@@ -7,6 +7,7 @@ import signal
 from pathlib import Path
 
 from test_steering import _call, _cfg, _text
+from turn_driver import js
 
 from js import cli, runtime, session_store
 from js.memory import load_messages
@@ -48,6 +49,7 @@ def test_checkpoint_runs_after_each_tool_batch_with_its_results(monkeypatch, tmp
 
 
 def test_prompt_mode_turn_is_on_disk_before_the_run_ends(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
     on_disk: list[list[dict]] = []
 
@@ -59,11 +61,12 @@ def test_prompt_mode_turn_is_on_disk_before_the_run_ends(monkeypatch, tmp_path):
         messages.append({"role": "assistant", "content": "done"})
 
     monkeypatch.setattr(runtime, "run_turn", turn)
-    assert cli._run_prompt("look", session="kept") == 0
+    assert js(monkeypatch, "--session", "kept", "-p", "look") == 0
     assert on_disk == [[{"role": "user", "content": "look"}, *EXCHANGE]]
 
 
 def test_prompt_mode_sigterm_keeps_the_turn(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
 
     def turn(cfg, system, messages, telemetry, **kwargs):
@@ -71,7 +74,7 @@ def test_prompt_mode_sigterm_keeps_the_turn(monkeypatch, tmp_path):
         os.kill(os.getpid(), signal.SIGTERM)
 
     monkeypatch.setattr(runtime, "run_turn", turn)
-    assert cli._run_prompt("look", session="termed") == 130
+    assert js(monkeypatch, "--session", "termed", "-p", "look") == 130
     session = session_store.folder_for(Path.cwd()) / "termed.jsonl"
     assert load_messages(session)[:3] == [{"role": "user", "content": "look"}, *EXCHANGE]
     assert signal.getsignal(signal.SIGTERM) is not cli._raise_keyboard_interrupt
