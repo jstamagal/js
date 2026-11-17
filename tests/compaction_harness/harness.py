@@ -31,6 +31,7 @@ from js import (  # noqa: E402
     context_budget as B,
     context_window,
     memory as M,
+    microcompact,
     model_client as MC,
     runtime as R,
 )  # noqa: E402
@@ -567,7 +568,7 @@ async def clearing_restart():
         )
     for m in messages:
         M.append_message(cfg.session_file, m)
-    action, cleared, _ = C.recover_overflow(
+    action, cleared, _ = microcompact.recover_overflow(
         messages, 1, cfg=cfg, system="", error=overflow(), flight_data={}
     )
     observed(

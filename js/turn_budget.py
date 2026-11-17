@@ -24,6 +24,7 @@ from . import (
     context_window,
     history_record,
     messages as msgs,
+    microcompact,
     model_client,
     output,
     snippets,
@@ -223,7 +224,7 @@ class TurnBudget:
         #    verbatim along with the turn's work so far.
         preserve_from = last_user_message_index(messages)
         if (preserve_from is not None and preserve_from > 0
-                and compaction.prefix_worth_summarizing(messages, preserve_from)
+                and microcompact.prefix_worth_summarizing(messages, preserve_from)
                 and await self._summarize(check, preserve_from, f"{phase} context budget")
                 and (force or not check.over_budget())):
             return True
@@ -244,7 +245,7 @@ class TurnBudget:
             history_tokens = int(context_window.history_chars(messages) / check.chars_per_token)
             tail_tokens = min(tail_tokens, history_tokens) // 2 ** overflow_round
         keep_from = compaction.tail_start(messages, tail_tokens, check.chars_per_token)
-        if keep_from > 0 and compaction.prefix_worth_summarizing(messages, keep_from):
+        if keep_from > 0 and microcompact.prefix_worth_summarizing(messages, keep_from):
             await self._summarize(check, None, f"{phase} context budget: current turn over budget",
                                   tail_tokens=tail_tokens)
         elif not check.changed:
@@ -258,7 +259,7 @@ class TurnBudget:
         registry's specs for the flight record, ``specs`` the specs the
         request sends. True when the history changed and the request is worth
         sending again."""
-        action, _cleared, _reclaimed = compaction.recover_overflow(
+        action, _cleared, _reclaimed = microcompact.recover_overflow(
             self._convo.messages, overflow_round, cfg=self._cfg,
             system=self._convo.system, error=error,
             flight_data={"context_window": self.context_window(),
@@ -289,7 +290,7 @@ class TurnBudget:
         messages = self._convo.messages
         before = list(messages)
         try:
-            cleared, chars = compaction.clear_for_budget(
+            cleared, chars = microcompact.clear_for_budget(
                 messages, cfg=self._cfg, system=self._convo.system, trigger=check.trigger,
                 flight_data=check.flight_data, over_budget=check.over_budget,
                 log_dir=compaction.flight_log_dir(self._cfg), emit=compaction.printing(warn=self._warn),

@@ -19,6 +19,7 @@ from js import (
     compaction,
     context_window,
     history_record,
+    microcompact,
     model_client,
     provider_errors,
     retry,
@@ -592,7 +593,7 @@ def test_a_stop_whose_input_exceeds_the_window_is_treated_as_overflow(monkeypatc
 
     assert len(calls) == 2
     assert messages[-1] == {"role": "assistant", "content": "real answer"}
-    assert any(m["content"] == compaction.MICROCOMPACT_CLEARED_MESSAGE for m in messages if m["role"] == "tool")
+    assert any(m["content"] == microcompact.MICROCOMPACT_CLEARED_MESSAGE for m in messages if m["role"] == "tool")
     assert events.named("context_overflow_silent")[0]["prompt_tokens"] == 24_000
 
 
@@ -708,7 +709,7 @@ def test_a_silent_overflow_reply_already_printed_is_kept_and_history_shed(monkey
     assert len(calls) == 1
     assert capsys.readouterr().out.count("SHOWN") == 1
     assert messages[-1]["content"] == "SHOWN"
-    assert any(m["content"] == compaction.MICROCOMPACT_CLEARED_MESSAGE for m in messages if m["role"] == "tool")
+    assert any(m["content"] == microcompact.MICROCOMPACT_CLEARED_MESSAGE for m in messages if m["role"] == "tool")
 
 
 def test_a_cap_stop_with_no_output_and_a_full_window_is_overflow(monkeypatch, tmp_path):

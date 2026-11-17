@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from js import output, setting_layers, stream_transport
+from js import microcompact, output, setting_layers, stream_transport
 
 
 def test_network_fallback_emits_an_event_before_rendering(capsys):
@@ -33,16 +33,15 @@ def test_retry_emits_its_wait_and_failure_without_rendering(capsys):
 def test_compaction_flight_failure_goes_to_the_callback(monkeypatch, capsys):
     import pytest
 
-    from js import compaction
 
     failure = OSError("read only")
     def unavailable(*args, **kwargs):
         raise failure
 
-    monkeypatch.setattr(compaction, "CompactionFlight", unavailable)
+    monkeypatch.setattr(microcompact, "CompactionFlight", unavailable)
     events = []
     with pytest.raises(OSError):
-        compaction._clearing_flight([], cfg=None, system="", trigger={}, flight_data={},
+        microcompact._clearing_flight([], cfg=None, system="", trigger={}, flight_data={},
                                     log_dir=None, emit=lambda name, **fields: events.append((name, fields)))
     assert events[0][0] == "compaction_output"
     notice = events[0][1]["output"]

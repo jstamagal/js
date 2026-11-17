@@ -10,7 +10,7 @@ from test_compaction_flight import _flight_cfg
 from test_config_compaction_layers import _compact_test_cfg
 from test_turn_budget import _Setup, _tool_history
 
-from js import compaction, compaction_flight
+from js import compaction, compaction_flight, microcompact
 
 
 def no_space(*args, **kwargs):
@@ -79,7 +79,7 @@ def test_unwritable_flight_does_not_disable_overflow_clearing(tmp_path, monkeypa
     bad_dir.write_text("occupied")
     setup.cfg.settings["COMPACTION_LOG_DIR"] = str(bad_dir)
     assert asyncio.run(setup.budget.recover_overflow(RuntimeError("context overflow"), overflow_round=1, tools=[], specs=[]))
-    assert compaction.MICROCOMPACT_CLEARED_MESSAGE in str(setup.convo.ai)
+    assert microcompact.MICROCOMPACT_CLEARED_MESSAGE in str(setup.convo.ai)
     assert setup.context.compacted_during_turn
 
 

@@ -13,10 +13,10 @@ import httpx
 import pytest
 
 from js import (
-    compaction,
     config,
     media,
     messages as msgs,
+    microcompact,
     model_client,
     provider_errors,
     retry,
@@ -208,12 +208,12 @@ def test_an_overflow_is_recovered_and_the_request_sent_again(tmp_path, monkeypat
 
 
 def test_overflow_rounds_are_counted_across_the_turns_calls(tmp_path, monkeypatch):
-    replies = [_overflow()] * compaction.MAX_OVERFLOW_ROUNDS + [_done(), _overflow()]
+    replies = [_overflow()] * microcompact.MAX_OVERFLOW_ROUNDS + [_done(), _overflow()]
     turn = _Turn(tmp_path, monkeypatch, replies)
     turn.call()
     with pytest.raises(ai.ProviderAPIError):
         turn.call()
-    assert len(turn.budget.recoveries) == compaction.MAX_OVERFLOW_ROUNDS
+    assert len(turn.budget.recoveries) == microcompact.MAX_OVERFLOW_ROUNDS
 
 
 def test_an_overflow_nothing_can_shed_ends_the_turn(tmp_path, monkeypatch):

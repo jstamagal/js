@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ai
 
-from js import compaction, provider_errors, result_caps
+from js import compaction, microcompact, provider_errors, result_caps
 from js.toolkit import ToolContext
 
 
@@ -18,27 +18,27 @@ def _history(n_tools: int, body_chars: int = 5_000) -> list[dict]:
 
 def test_microcompact_clears_old_tool_bodies_and_keeps_recent_ones():
     msgs = _history(30)
-    cleared, reclaimed = compaction.microcompact(msgs, keep_recent=20)
+    cleared, reclaimed = microcompact.microcompact(msgs, keep_recent=20)
 
     assert cleared == 10
     assert reclaimed > 40_000
     tools = [m for m in msgs if m["role"] == "tool"]
-    assert all(t["content"] == compaction.MICROCOMPACT_CLEARED_MESSAGE for t in tools[:10])
-    assert all(t["content"] != compaction.MICROCOMPACT_CLEARED_MESSAGE for t in tools[10:])
+    assert all(t["content"] == microcompact.MICROCOMPACT_CLEARED_MESSAGE for t in tools[:10])
+    assert all(t["content"] != microcompact.MICROCOMPACT_CLEARED_MESSAGE for t in tools[10:])
     # Assistant reasoning about those results is untouched.
     assert all(m["content"].startswith("thinking") for m in msgs if m["role"] == "assistant")
 
 
 def test_microcompact_leaves_small_results_alone():
     msgs = _history(30, body_chars=10)
-    cleared, reclaimed = compaction.microcompact(msgs, keep_recent=0, min_chars=400)
+    cleared, reclaimed = microcompact.microcompact(msgs, keep_recent=0, min_chars=400)
     assert (cleared, reclaimed) == (0, 0)
 
 
 def test_microcompact_is_idempotent():
     msgs = _history(30)
-    first = compaction.microcompact(msgs, keep_recent=0)
-    second = compaction.microcompact(msgs, keep_recent=0)
+    first = microcompact.microcompact(msgs, keep_recent=0)
+    second = microcompact.microcompact(msgs, keep_recent=0)
     assert first[0] == 30
     assert second == (0, 0)
 
@@ -46,7 +46,7 @@ def test_microcompact_is_idempotent():
 def test_microcompact_preserves_tool_call_ids_so_the_history_stays_valid():
     # A tool message orphaned from its call id breaks the next request.
     msgs = _history(5)
-    compaction.microcompact(msgs, keep_recent=0)
+    microcompact.microcompact(msgs, keep_recent=0)
     tools = [m for m in msgs if m["role"] == "tool"]
     assert [t["tool_call_id"] for t in tools] == [f"c{i}" for i in range(5)]
     assert all(t["name"] == "read" for t in tools)
@@ -54,7 +54,7 @@ def test_microcompact_preserves_tool_call_ids_so_the_history_stays_valid():
 
 def test_microcompact_keep_recent_larger_than_history_clears_nothing():
     msgs = _history(3)
-    assert compaction.microcompact(msgs, keep_recent=20) == (0, 0)
+    assert microcompact.microcompact(msgs, keep_recent=20) == (0, 0)
 
 
 def test_spill_writes_the_full_result_and_returns_a_pointer(tmp_path):
@@ -181,9 +181,9 @@ def test_recovery_records_failure_with_original_tool_bodies(monkeypatch, tmp_pat
     def fail(*args, **kwargs):
         raise RuntimeError("clear failed")
 
-    monkeypatch.setattr(compaction, "microcompact", fail)
+    monkeypatch.setattr(microcompact, "microcompact", fail)
     with pytest.raises(RuntimeError, match="clear failed"):
-        compaction.recover_overflow(msgs, 1, cfg=cfg, system="SYSTEM",
+        microcompact.recover_overflow(msgs, 1, cfg=cfg, system="SYSTEM",
                                     error=ai.ProviderAPIError("context length exceeded"), flight_data={},
                                     log_dir=compaction.flight_log_dir(cfg), emit=compaction.printing())
     records = [json.loads(line) for line in next((tmp_path / "flights").glob("*.jsonl")).read_text().splitlines()]
@@ -200,7 +200,7 @@ def test_recovery_records_no_eligible_results(tmp_path, capsys):
 
     cfg = _compact_test_cfg(tmp_path, {"COMPACTION_LOG_DIR": str(tmp_path / "flights")})
     msgs = _history(2)
-    assert compaction.recover_overflow(msgs, 1, cfg=cfg, system="SYSTEM",
+    assert microcompact.recover_overflow(msgs, 1, cfg=cfg, system="SYSTEM",
                                       error=ai.ProviderAPIError("context length exceeded"), flight_data={},
                                       log_dir=compaction.flight_log_dir(cfg),
                                       emit=compaction.printing()) == ("summarize", 0, 0)

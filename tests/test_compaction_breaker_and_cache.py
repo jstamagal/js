@@ -17,6 +17,7 @@ from js import (
     context_window,
     memory,
     messages as msgs,
+    microcompact,
     model_client,
     runtime,
     stream_transport,
@@ -265,7 +266,7 @@ def test_budget_clears_tool_results_once_the_cache_expired(monkeypatch, tmp_path
     monkeypatch.setattr(compaction, "summarize", summary)
     messages = _tool_heavy_history()
     _turn(cfg, messages, context)
-    assert any(m.get("content") == compaction.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
+    assert any(m.get("content") == microcompact.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
     assert summaries == []
 
 
@@ -287,7 +288,7 @@ def test_budget_summarizes_instead_of_clearing_while_the_cache_is_warm(monkeypat
     messages = _tool_heavy_history()
     _turn(cfg, messages, context)
     assert summaries
-    assert not any(m.get("content") == compaction.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
+    assert not any(m.get("content") == microcompact.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
 
 
 def _current_turn_tool_heavy_history(n: int = 30, body: int = 2000) -> list[dict]:
@@ -317,7 +318,7 @@ def test_paused_summaries_still_clear_while_the_cache_is_warm(monkeypatch, tmp_p
     messages = history()
     _turn(cfg, messages, context)
     assert summaries == []
-    assert any(m.get("content") == compaction.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
+    assert any(m.get("content") == microcompact.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
 
 
 def test_warm_cache_clears_the_current_turn_before_summarizing_it(monkeypatch, tmp_path):
@@ -338,7 +339,7 @@ def test_warm_cache_clears_the_current_turn_before_summarizing_it(monkeypatch, t
     messages = _current_turn_tool_heavy_history()
     _turn(cfg, messages, context)
     assert summaries == []
-    assert any(m.get("content") == compaction.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
+    assert any(m.get("content") == microcompact.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
 
 
 def test_one_budget_check_counts_one_failed_summary(monkeypatch, tmp_path):
@@ -375,7 +376,7 @@ def test_provider_overflow_clears_even_while_the_cache_is_warm(monkeypatch, tmp_
     monkeypatch.setattr(model_client, "_stream_async", sdk)
     messages = _tool_heavy_history(n=22)
     _turn(cfg, messages, context)
-    assert any(m.get("content") == compaction.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
+    assert any(m.get("content") == microcompact.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
     assert messages[-1]["content"] == "ok"
 
 

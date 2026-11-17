@@ -17,7 +17,16 @@ import httpx2
 import pytest
 from turn_driver import one_turn
 
-from js import history_record, logins, memory, model_client, request_params, runtime, tool_calls
+from js import (
+    history_record,
+    logins,
+    memory,
+    microcompact,
+    model_client,
+    request_params,
+    runtime,
+    tool_calls,
+)
 from js.config import InvocationSources, from_env
 from js.logins import Login
 from js.sampling import Sampling
@@ -575,10 +584,9 @@ def _wire_signatures(monkeypatch, messages: list[dict]) -> list[list[str]]:
 
 
 def test_signed_thinking_after_a_cleared_tool_result_is_not_replayed(monkeypatch):
-    from js import compaction
 
     messages = _three_tool_rounds()
-    cleared, _ = compaction.microcompact(messages, keep_recent=1)
+    cleared, _ = microcompact.microcompact(messages, keep_recent=1)
 
     assert cleared == 2
     assert _wire_signatures(monkeypatch, messages) == [["S1"], [], []]

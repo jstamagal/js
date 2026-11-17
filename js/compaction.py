@@ -3,7 +3,7 @@
 Three triggers funnel through here so they can never drift on what "full"
 means: the REPL between-turn trigger (``maybe_auto_compact_async``), the in-turn
 budget check (the runtime measures, then calls ``compact_now``), and the
-overflow recovery escalation (``recover_overflow``). The summarize pipeline
+overflow recovery escalation (``microcompact.recover_overflow``). The summarize pipeline
 exists only as an async core; ``compact_now_sync`` is one ``asyncio.run``, so
 there is exactly one implementation. This module also owns every read of the
 ``compact.*`` settings subtree.
@@ -16,9 +16,7 @@ import math
 import os
 import re
 import time
-import traceback
 from collections.abc import Callable
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -26,15 +24,15 @@ from typing import TYPE_CHECKING, Any
 import ai
 
 from . import (
+    compaction_flight,
     compaction_settings,
     context_window,
-    history_record,
     jail,
     media,
     memory as M,
     messages as msgs,
+    microcompact,
     model_client,
-    output,
     owning_loop,
     provider_errors,
     retry,
@@ -57,224 +55,12 @@ from .config import Config
 if TYPE_CHECKING:
     from .repl_state import ReplState
 
-# --------------------------------------------------------------------------
-# compact.* settings readers — the one family
-# --------------------------------------------------------------------------
-
 
 def _pre_hook_command(cfg: Config) -> str:
     raw = compaction_settings.get(cfg, "COMPACTION_HINT_COMMAND")
     if not isinstance(raw, str):
         return ""
     return raw.strip()
-
-
-# --------------------------------------------------------------------------
-# Overflow classification and recovery escalation
-# --------------------------------------------------------------------------
-
-# How many rounds of recovery a single turn may attempt after the provider
-# rejects the request for size. One was never enough: the first compaction
-# targets whatever window we *believe* we have, and if that belief is wrong
-# the retry lands on the wall again.
-MAX_OVERFLOW_ROUNDS = _settings.default_value("COMPACTION_OVERFLOW_ROUNDS_MAX")
-
-MICROCOMPACT_CLEARED_MESSAGE = '[old tool result cleared]'
-
-
-# Tool results shorter than this are not worth clearing.
-_MICROCOMPACT_MIN_CHARS = 400
-
-
-# Tool results are the bulk of a long session and the cheapest thing to drop:
-# the assistant's own reasoning about them survives in its messages, and the
-# file can always be read again. Clearing them needs no model call, so unlike a
-# summary it cannot fail at the exact moment the context is too big to send.
-def microcompact(
-    messages: list[dict],
-    *,
-    keep_recent: int = 20,
-    min_chars: int = _MICROCOMPACT_MIN_CHARS,
-) -> tuple[int, int]:
-    """Blank the bodies of old tool results in place.
-
-    Leaves the newest ``keep_recent`` tool results untouched (the model is
-    usually still working with those) and ignores results already small enough
-    that clearing them buys nothing; a result carrying media (`js.media`) is
-    always worth clearing, and loses its media too. Signed reasoning after the
-    first cleared result is dropped (`history_record.drop_signed_reasoning`). Returns
-    (results_cleared, chars_reclaimed).
-    """
-    indexes = [
-        i for i, m in enumerate(messages)
-        if isinstance(m, dict)
-        and m.get("role") == "tool"
-        and isinstance(m.get("content"), str)
-        and m["content"] != MICROCOMPACT_CLEARED_MESSAGE
-    ]
-    if keep_recent > 0:
-        indexes = indexes[:-keep_recent] if keep_recent < len(indexes) else []
-    cleared = 0
-    reclaimed = 0
-    first: int | None = None
-    for i in indexes:
-        body = messages[i]["content"]
-        has_media = bool(messages[i].get(media.MEDIA_KEY))
-        if len(body) < min_chars and not has_media:
-            continue
-        cleared_record = {**messages[i], "content": MICROCOMPACT_CLEARED_MESSAGE}
-        cleared_record.pop(media.MEDIA_KEY, None)
-        messages[i] = cleared_record
-        cleared += 1
-        reclaimed += max(0, len(body) - len(MICROCOMPACT_CLEARED_MESSAGE))
-        first = i if first is None else first
-    if first is not None:
-        history_record.drop_signed_reasoning(messages, first + 1)
-    return cleared, reclaimed
-
-
-def _notice(message: msgs.Message, /, *, emit=None, stderr=True, flush=True, **fields) -> None:
-    """Send a compaction message through the attempt's callback or output sink."""
-    flight = ACTIVE_FLIGHT.get()
-    if emit is None and flight is not None:
-        emit = flight.emit
-    notice = output.event("notice", message=message, fields=fields, stderr=stderr, flush=flush)
-    if emit is None:
-        output.emit(notice)
-    else:
-        emit("compaction_output", output=notice)
-
-
-def _clearing_flight(messages: list[dict], *, cfg: Config, system: str, trigger: dict,
-                     flight_data: dict, log_dir: Path | None,
-                     emit: Callable[..., Any] | None) -> CompactionFlight:
-    try:
-        return CompactionFlight(
-            cfg, system, messages, trigger=trigger,
-            forced=True, focus="clear old tool-result bodies", preserve_from=None,
-            details=flight_data, directory=log_dir, emit=emit, operation="tool-result-clearing",
-        )
-    except OSError as exc:
-        _notice(msgs.CLEARING_FLIGHT_FAILED, emit=emit, error=exc)
-        raise
-
-
-def _stamp(cfg: Config) -> dict:
-    """The stamp of the conversation's model, for assistant messages written here."""
-    return M.stamp_for(getattr(cfg, "model", None), getattr(cfg, "provider_id", None),
-                       getattr(cfg, "reasoning_effort", None))
-
-
-@contextmanager
-def _flight_recording(flight: CompactionFlight, system: str, messages: list[dict]):
-    token = ACTIVE_FLIGHT.set(flight)
-    failure = None
-    try:
-        yield
-    except BaseException as exc:
-        failure = exc
-        phase = "cancelled" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "failure"
-        try:
-            flight.finish(phase, system, messages, error=f"{type(exc).__name__}: {exc}",
-                          traceback=traceback.format_exc())
-        except Exception as recording_error:
-            exc.add_note(f"Compaction flight recording failed: {recording_error}")
-        raise
-    finally:
-        ACTIVE_FLIGHT.reset(token)
-        try:
-            flight.close()
-        except Exception as close_error:
-            if failure is None:
-                raise
-            failure.add_note(f"Compaction flight close failed: {close_error}")
-
-
-def _record_cleared(flight: CompactionFlight, messages: list[dict], *, keep_recent: int) -> tuple[int, int]:
-    before = messages.copy()
-    cleared, reclaimed = microcompact(messages, keep_recent=keep_recent)
-    changed = [
-        {"message_index": index, "tool_call_id": old.get("tool_call_id"),
-         "tool_name": old.get("name"), "original_chars": len(old["content"]),
-         "replacement_chars": len(new["content"])}
-        for index, (old, new) in enumerate(zip(before, messages, strict=True))
-        if old != new and old.get("role") == "tool"
-    ]
-    flight.record("cleared_results", results=changed, cleared=cleared,
-                  reclaimed_chars=reclaimed, keep_recent=keep_recent, min_chars=_MICROCOMPACT_MIN_CHARS)
-    if cleared:
-        stamp = _stamp(flight.cfg)
-        M.persist_messages(flight.cfg.session_file, before, stamp=stamp)
-        M.persist_messages(flight.cfg.session_file, messages, stamp=stamp)
-    return cleared, reclaimed
-
-
-def recover_overflow(
-    messages: list[dict], round_: int, *, cfg: Config, system: str,
-    error: BaseException, flight_data: dict,
-    log_dir: Path | None = None, emit: Callable[..., Any] | None = None,
-) -> tuple[str, int, int]:
-    """Record and announce tool-result clearing after a provider overflow.
-    ``log_dir`` is where the flight log goes (None: no log); notices go to
-    ``emit``."""
-    keep_recent = max(0, compaction_settings.get_nonnegative_int(cfg, "COMPACTION_OVERFLOW_KEEP_TOOL_RESULTS") // round_)
-    flight = _clearing_flight(
-        messages, cfg=cfg, system=system,
-        trigger={"phase": "overflow_recovery", "round": round_,
-                 "error": f"{type(error).__name__}: {error}",
-                 "provider_error": provider_errors.provider_error_fields(error)},
-        flight_data=flight_data, log_dir=log_dir, emit=emit,
-    )
-    with _flight_recording(flight, system, messages):
-        flight.notice("start", msgs.CLEARING_OVERFLOW_START.words(round_=round_, keep_recent=keep_recent))
-        cleared, reclaimed = _record_cleared(flight, messages, keep_recent=keep_recent)
-        result = (msgs.CLEARING_OVERFLOW_RESULT.words(cleared=cleared, reclaimed=reclaimed)
-                  if cleared else msgs.CLEARING_NO_RESULTS.words())
-        flight.finish("success" if cleared else "skipped", system, messages, result=result)
-        return ("cleared", cleared, reclaimed) if cleared else ("summarize", 0, 0)
-
-
-def clear_for_budget(
-    messages: list[dict], *, cfg: Config, system: str, trigger: dict, flight_data: dict,
-    over_budget: Any, log_dir: Path | None = None, emit: Callable[..., Any] | None = None,
-) -> tuple[int, int]:
-    """Clear old tool-result bodies until ``over_budget(reclaimed_chars)`` is false.
-
-    Starts with ``COMPACTION_KEEP_TOOL_RESULTS`` intact results and halves that
-    each round down to one. An explicit zero clears all eligible results.
-    Returns (results_cleared, chars_reclaimed). ``log_dir`` and ``emit`` are
-    as for :func:`recover_overflow`."""
-    keep_recent = compaction_settings.get_nonnegative_int(cfg, "COMPACTION_KEEP_TOOL_RESULTS")
-    flight = _clearing_flight(messages, cfg=cfg, system=system, trigger=trigger, flight_data=flight_data,
-                              log_dir=log_dir, emit=emit)
-    with _flight_recording(flight, system, messages):
-        flight.notice("start", msgs.CLEARING_BUDGET_START.words(value=trigger.get('phase'), keep_recent=keep_recent))
-        total = 0
-        reclaimed = 0
-        while True:
-            cleared, chars = _record_cleared(flight, messages, keep_recent=keep_recent)
-            total += cleared
-            reclaimed += chars
-            still_over = over_budget(reclaimed)
-            if not still_over or keep_recent <= 1:
-                break
-            keep_recent = max(1, keep_recent // 2)
-        result = (msgs.CLEARING_BUDGET_RESULT.words(total=total, reclaimed=reclaimed)
-                  + (msgs.CLEARING_STILL_OVER_BUDGET.words() if still_over else ""))
-        flight.finish("success" if total else "skipped", system, messages, result=result)
-        return total, reclaimed
-
-
-def prefix_worth_summarizing(messages: list[dict], preserve_from: int) -> bool:
-    """Whether the prefix contains new history beyond a previous summary and files."""
-    for message in messages[:preserve_from]:
-        content = message.get("content", "")
-        if message.get("role") == "user" and isinstance(content, str) and (
-            content.startswith("<compaction-summary>") or content.startswith("<post-compaction-files>")
-        ):
-            continue
-        return True
-    return False
 
 
 # --------------------------------------------------------------------------
@@ -442,11 +228,6 @@ def _post_compact_rehydration(
     }
 
 
-# --------------------------------------------------------------------------
-# Shared math: context_window.thresholds, effective window, token estimates
-# --------------------------------------------------------------------------
-
-
 def is_max_output_incomplete(reason: object) -> bool:
     text = str(reason or "").lower()
     return text in {"max_output_tokens", "max_tokens", "length"} or "max_output" in text
@@ -487,7 +268,7 @@ def _run_pre_hook(cfg: Config) -> str:
             cap=cap,
         )
     except Exception as exc:  # noqa: BLE001
-        _notice(msgs.FAILED_WARN, error=f"COMPACTION_HINT_COMMAND failed: {type(exc).__name__}: {exc}")
+        compaction_flight.notice(msgs.FAILED_WARN, error=f"COMPACTION_HINT_COMMAND failed: {type(exc).__name__}: {exc}")
         return ""
     if not isinstance(result, CappedProcessResult):
         result = CappedProcessResult(result[0], result[1], result[2])
@@ -498,7 +279,7 @@ def _run_pre_hook(cfg: Config) -> str:
     if result.stderr_truncated:
         stderr = stderr.rstrip("\n") + f"\n{truncation_marker(cap)}\n"
     if result.returncode != 0:
-        _notice(msgs.FAILED_WARN,
+        compaction_flight.notice(msgs.FAILED_WARN,
                   error=f"COMPACTION_HINT_COMMAND exited {result.returncode}: {(stderr or stdout).strip()}")
         return ""
     return stdout.strip()
@@ -649,7 +430,7 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
             middle = len(head) // 2
             if (flight := ACTIVE_FLIGHT.get()) is not None:
                 flight.record("summary_overflow", depth=depth, split_at=middle, error=str(exc), messages=head)
-            _notice(msgs.SUMMARY_SPLIT, depth=depth + 1, stderr=False, flush=True)
+            compaction_flight.notice(msgs.SUMMARY_SPLIT, depth=depth + 1, stderr=False, flush=True)
             # The previous summary travels with the older half only, so each
             # request carries at most one summary's worth of extra text.
             left = await summarize_chunk(head[:middle], depth + 1, previous)
@@ -746,7 +527,7 @@ async def compact_now(
         forced=forced, focus=focus, preserve_from=preserve_from, details=flight_data,
         directory=log_dir, emit=emit,
     )
-    with _flight_recording(flight, system, messages):
+    with microcompact.flight_recording(flight, system, messages):
         chars_per_token = context_window.calibrated_chars_per_token(cfg, system, messages, context)
         if tail_tokens is None:
             tail_tokens = compaction_settings.get_int(cfg, "COMPACTION_KEEP_RECENT_TOKENS")
@@ -760,7 +541,7 @@ async def compact_now(
         flight.record("decision", chars_per_token=chars_per_token, tail_tokens=tail_tokens,
                       min_savings=min_savings, keep_from=keep_from,
                       original_estimate=original_est, tail_estimate=tail_est)
-        if keep_from <= 0 or not prefix_worth_summarizing(messages, keep_from):
+        if keep_from <= 0 or not microcompact.prefix_worth_summarizing(messages, keep_from):
             result = msgs.COMPACT_SKIPPED_NO_PREFIX.said()
             flight.finish("skipped", system, messages, result=result)
             return result
@@ -804,11 +585,11 @@ async def compact_now(
             if trigger and trigger.get("phase") == "between-turn":
                 owner = context or T.STOCK_CONTEXT
                 if (paused := record_auto_failure(cfg, owner)) is not None:
-                    _notice(paused.message, **paused.fields)
+                    compaction_flight.notice(paused.message, **paused.fields)
             flight.finish("skipped", system, messages, result=result)
             return result
         flight.record("commit_pending", summary=summary, keep_from=keep_from, rehydrated=rehydrated)
-        M.persist_messages(cfg.session_file, messages, stamp=_stamp(cfg))
+        M.persist_messages(cfg.session_file, messages, stamp=microcompact.cfg_stamp(cfg))
         M.append_mark(cfg.session_file, marker)
         messages[:] = after
         owner = context or T.STOCK_CONTEXT

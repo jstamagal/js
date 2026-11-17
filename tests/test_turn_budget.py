@@ -19,6 +19,7 @@ from js import (
     context_budget,
     context_window,
     messages as msgs,
+    microcompact,
     model_client,
     runtime,
 )
@@ -72,8 +73,8 @@ def test_overflow_cleared_resends_the_rebuilt_conversation_from_the_top(monkeypa
         tool_context=ToolContext(cwd=tmp_path), suppress_output=True,
     ))
     assert len(calls) == 2
-    assert compaction.MICROCOMPACT_CLEARED_MESSAGE not in str(calls[0]["messages"])
-    assert compaction.MICROCOMPACT_CLEARED_MESSAGE in str(calls[1]["messages"])
+    assert microcompact.MICROCOMPACT_CLEARED_MESSAGE not in str(calls[0]["messages"])
+    assert microcompact.MICROCOMPACT_CLEARED_MESSAGE in str(calls[1]["messages"])
     assert calls[1]["trace_request_from"] == 0
     assert calls[1]["trace_request_schemas"] is True
     assert messages[-1]["content"] == "ok"
@@ -218,7 +219,7 @@ def test_a_cold_cache_clears_old_tool_results_first(tmp_path, monkeypatch):
     assert "context_results_cleared" in setup.kinds()
     assert calls == []
     assert setup.convo.ai is not before
-    assert compaction.MICROCOMPACT_CLEARED_MESSAGE in str(setup.convo.ai)
+    assert microcompact.MICROCOMPACT_CLEARED_MESSAGE in str(setup.convo.ai)
     assert setup.context.compacted_during_turn is True
     assert setup.context.cache_read_baseline is None
 
@@ -263,7 +264,7 @@ def test_overflow_recovery_clears_and_rebuilds_the_convo(tmp_path, monkeypatch):
     changed = asyncio.run(setup.budget.recover_overflow(_overflow(), overflow_round=1, tools=[], specs=[]))
     assert changed is True
     assert calls == []
-    assert compaction.MICROCOMPACT_CLEARED_MESSAGE in str(setup.convo.ai)
+    assert microcompact.MICROCOMPACT_CLEARED_MESSAGE in str(setup.convo.ai)
     assert (setup.convo.sent, setup.convo.schemas) == (0, True)
     assert setup.context.compacted_during_turn is True
     assert setup.context.cache_read_baseline is None
@@ -284,15 +285,15 @@ def test_a_failed_clear_is_a_skipped_step_not_a_dead_turn(tmp_path, monkeypatch)
     warning, and the turn goes on."""
     _summaries(monkeypatch)
     setup = _Setup(tmp_path, _prefix_then_turn(0, 22))
-    real_clear = compaction.microcompact
+    real_clear = microcompact.microcompact
 
     def clear_then_fail(messages, **kwargs):
         real_clear(messages, **kwargs)  # edits in place, as the real one does
         raise OSError(28, "No space left on device")
 
-    monkeypatch.setattr(compaction, "microcompact", clear_then_fail)
+    monkeypatch.setattr(microcompact, "microcompact", clear_then_fail)
     setup.fit(phase="preflight")  # must not raise
     assert "context_clear_failed" in setup.kinds()
     # The half-done clear was undone: no tool result carries the cleared
     # marker, whatever later steps did to the rest of the history.
-    assert compaction.MICROCOMPACT_CLEARED_MESSAGE not in str(setup.messages)
+    assert microcompact.MICROCOMPACT_CLEARED_MESSAGE not in str(setup.messages)

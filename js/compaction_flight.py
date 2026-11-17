@@ -260,3 +260,15 @@ class CompactionFlight:
                 stream.close()
             except OSError as exc:
                 self._disable(exc)
+
+
+def notice(message: msgs.Message, /, *, emit=None, stderr=True, flush=True, **fields) -> None:
+    """Send a compaction message through the attempt's callback or output sink."""
+    flight = ACTIVE_FLIGHT.get()
+    if emit is None and flight is not None:
+        emit = flight.emit
+    notice = output.event("notice", message=message, fields=fields, stderr=stderr, flush=flush)
+    if emit is None:
+        output.emit(notice)
+    else:
+        emit("compaction_output", output=notice)

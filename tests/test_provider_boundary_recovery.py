@@ -11,6 +11,7 @@ from test_lazy_tool_discovery import _cfg, _result
 from js import (
     compaction,
     context_window,
+    microcompact,
     model_client,
     request_params,
     runtime,
@@ -117,8 +118,8 @@ def test_runtime_recovers_through_real_boundary(monkeypatch, tmp_path, kind, per
         assert len(attempts) == (1 if kind == "fatal" else budget + 1 if persistent else 2)
         assert all(m["content"] == "x" * 1000 for m in messages if m["role"] == "tool")
     else:
-        assert len(attempts) <= compaction.MAX_OVERFLOW_ROUNDS + 1
-        assert any(m["content"] == compaction.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
+        assert len(attempts) <= microcompact.MAX_OVERFLOW_ROUNDS + 1
+        assert any(m["content"] == microcompact.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
 
 
 def test_summary_does_not_peel_non_overflow(monkeypatch, tmp_path):
@@ -301,7 +302,7 @@ def test_overflow_clearing_is_visible_with_stdout_redirected(monkeypatch, tmp_pa
     assert changes["cleared"] == 2
     assert [r["tool_call_id"] for r in changes["results"]] == ["c0", "c1"]
     assert before["messages"][1]["content"] == "x" * 1000
-    assert after["messages"][1]["content"] == compaction.MICROCOMPACT_CLEARED_MESSAGE
+    assert after["messages"][1]["content"] == microcompact.MICROCOMPACT_CLEARED_MESSAGE
     assert records[-1]["event"] == "success"
     visible = capsys.readouterr().err
     notices = [line for line in visible.splitlines() if start["id"][:12] in line]

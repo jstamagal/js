@@ -10,7 +10,7 @@ from dataclasses import replace
 
 from test_lazy_tool_discovery import _cfg, _result
 
-from js import compaction, runtime
+from js import microcompact, runtime
 from js.toolkit import ToolContext, fs
 from js.toolkit.core import call_scope
 from js.toolkit.registry import build_default_registry
@@ -151,7 +151,7 @@ def test_a_cleared_earlier_result_is_not_named(tmp_path, monkeypatch):
         if n == 2:
             for i, message in enumerate(messages):
                 if message.get("tool_call_id") == "first":
-                    messages[i] = {**message, "content": compaction.MICROCOMPACT_CLEARED_MESSAGE}
+                    messages[i] = {**message, "content": microcompact.MICROCOMPACT_CLEARED_MESSAGE}
 
     messages, _ = _run(tmp_path, monkeypatch, [
         [_read_call("first", target)],
