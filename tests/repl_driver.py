@@ -231,7 +231,9 @@ async def settled() -> None:
 
 async def output_of(enter, capsys, line: str) -> str:
     """What typing `line` into the Enter handler `enter` printed (see
-    `stub_screen` for a `lines` function)."""
+    `stub_screen` for a `lines` function). A line typed before it may still
+    have writes queued (`settled`); they land before the capture starts."""
+    await settled()
     capsys.readouterr()
     await enter(line)
     await settled()
