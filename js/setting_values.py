@@ -277,16 +277,6 @@ def _coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
                 (jail.parse_binds if spec.key == "JAIL_BIND" else jail.parse_hides)(value)
             except ValueError as exc:
                 return None, str(exc)
-        if spec.key in {"MCP_SERVERS", "MCP_AGENT_POLICY"}:
-            from . import mcp_config
-
-            try:
-                if spec.key == "MCP_SERVERS":
-                    mcp_config.parse_servers(value)
-                else:
-                    mcp_config.parse_agents(value)
-            except mcp_config.MCPConfigError as exc:
-                return None, str(exc)
         return value, None
     return text, None  # str
 
