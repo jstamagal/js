@@ -40,6 +40,7 @@ from .. import messages as msgs
 from .. import paths as _paths
 from . import kernel as _kernel
 from .core import Tool, ToolContext
+from .presentation import Presentation
 from .descriptions import load_description
 from .sanitize import int_or_default, text_or_default
 
@@ -647,5 +648,6 @@ def tools() -> tuple[Tool, ...]:
                 "verbosity": {"type": "string", "enum": list(_kernel.VERBOSITY_LEVELS)},
             },
             required=("action",),
+            presentation=Presentation(key=("source",), body="source", lexer="python", kind="command"),
         ),
     )

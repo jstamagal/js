@@ -42,7 +42,7 @@ from . import messages as msgs
 from . import output
 from . import settings as _settings
 from .toolkit.presentation import (
-    ToolOutput, _BODY_ARG, _UNLISTED_ARGS, _KEY_ARGS, _SAID_ARG, _PATH_ARGS,
+    ToolOutput, _BODY_ARG, _UNLISTED_ARGS, _KEY_ARGS, _SAID_ARG, PATH_ARGS,
     builtin_lexer, call_kind, tool_output,
 )
 
@@ -1098,7 +1098,7 @@ def short_path(path: str) -> str:
 def _key_name(name: str, args: dict | None) -> str | None:
     if not isinstance(args, dict):
         return None
-    keys = _KEY_ARGS.get(name, _PATH_ARGS)
+    keys = _KEY_ARGS.get(name, PATH_ARGS)
     return next((key for key in keys if isinstance(args.get(key), str) and args[key].strip()), None)
 
 
@@ -1111,14 +1111,14 @@ def key_argument(name: str, args: dict | None, room: int, whole: bool = False) -
         return ""
     lines = clean(args[key]).strip().split("\n")  # type: ignore[index]
     if whole:
-        return fset.setting_value("ARGUMENT_NEWLINE_MARK").join(short_path(line.strip()) if key in _PATH_ARGS else line.strip() for line in lines)
+        return fset.setting_value("ARGUMENT_NEWLINE_MARK").join(short_path(line.strip()) if key in PATH_ARGS else line.strip() for line in lines)
     text = lines[0].strip()
     more = fset.setting_value("DISPLAY_ELLIPSIS") if len(lines) > 1 else ""
-    if key in _PATH_ARGS:
+    if key in PATH_ARGS:
         text = short_path(text)
     if len(text) + len(more) <= room:
         return text + more
-    if key in _PATH_ARGS:
+    if key in PATH_ARGS:
         return fset.setting_value("DISPLAY_ELLIPSIS") + text[-(room - 1):]
     return text[:room - 1] + fset.setting_value("DISPLAY_ELLIPSIS")
 
@@ -1335,7 +1335,7 @@ def fold_label(name: str, args: dict | None) -> str:
     if key is None:
         return ""
     text = clean(args[key]).strip().split("\n", 1)[0].strip()  # type: ignore[index]
-    if key in _PATH_ARGS:
+    if key in PATH_ARGS:
         return os.path.basename(text.rstrip("/")) or text
     host = _URL_HOST.match(text)
     if host is not None:

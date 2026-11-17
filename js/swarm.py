@@ -933,6 +933,7 @@ def _tasks(context: Any = None) -> str:
 
 def tools() -> tuple:
     from .toolkit.core import Tool
+    from .toolkit.presentation import Presentation
     from .toolkit.descriptions import load_description, load_parameter_description
 
     return (
@@ -941,15 +942,15 @@ def tools() -> tuple:
             "text": {"type": "string", "description": load_parameter_description('send', 'text')},
             "kind": {"type": "string", "default": "say",
                      "description": load_parameter_description('send', 'kind')},
-        }, required=("to", "text"), source="swarm"),
+        }, required=("to", "text"), source="swarm", presentation=Presentation(key=("to",), said="text")),
         Tool("who", load_description("who"), _who, {}, read_only=True, source="swarm"),
         Tool("claim", load_description("claim"), _claim, {
             "key": {"type": "string", "description": load_parameter_description('claim', 'key')},
             "ttl": {"type": "number", "description": load_parameter_description('claim', 'ttl', SECONDS=f"{CLAIM_TTL_S:g}")},
-        }, required=("key",), source="swarm"),
+        }, required=("key",), source="swarm", presentation=Presentation(key=("key",))),
         Tool("release", load_description("release"), _release, {
             "key": {"type": "string", "description": load_parameter_description('release', 'key')},
-        }, required=("key",), source="swarm"),
+        }, required=("key",), source="swarm", presentation=Presentation(key=("key",))),
         Tool("subscribe", load_description("subscribe"), _subscribe, {
             "kind": {"type": "string", "description": load_parameter_description('subscribe', 'kind')},
             "off": {"type": "boolean", "default": False, "description": load_parameter_description('subscribe', 'off')},
@@ -967,14 +968,14 @@ def tools() -> tuple:
         Tool("post_task", load_description("post_task"), _post_task, {
             "title": {"type": "string", "description": load_parameter_description('post_task', 'title')},
             "body": {"type": "string", "default": "", "description": load_parameter_description('post_task', 'body')},
-        }, required=("title",), source="swarm"),
+        }, required=("title",), source="swarm", presentation=Presentation(key=("title",), said="body")),
         Tool("take_task", load_description("take_task"), _take_task, {
             "id": {"type": "integer", "description": load_parameter_description('take_task', 'id')},
         }, required=("id",), source="swarm"),
         Tool("finish_task", load_description("finish_task"), _finish_task, {
             "id": {"type": "integer", "description": load_parameter_description('finish_task', 'id')},
             "result": {"type": "string", "default": "", "description": load_parameter_description('finish_task', 'result')},
-        }, required=("id",), source="swarm"),
+        }, required=("id",), source="swarm", presentation=Presentation(said="result")),
         Tool("tasks", load_description("tasks"), _tasks, {}, read_only=True, source="swarm"),
     )
 

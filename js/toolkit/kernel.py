@@ -54,6 +54,7 @@ from .. import paths
 from .. import settings as _settings
 from . import kernel_bridge
 from .core import Tool, ToolContext, ToolOutput, current_observer, current_registry
+from .presentation import Presentation
 from .descriptions import load_description
 from .results import truncate
 from .sanitize import text_or_default
@@ -1015,5 +1016,6 @@ def tools() -> tuple[Tool, ...]:
                 "restart": {"type": "boolean", "default": False},
                 "verbosity": {"type": "string", "enum": list(VERBOSITY_LEVELS)},
             },
+            presentation=Presentation(key=("code",), body="code", lexer="python", kind="command"),
         ),
     )

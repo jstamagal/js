@@ -28,6 +28,7 @@ from .. import settings as _settings
 from . import policy
 from ..tool_binaries import resolve_binary
 from .core import Output, Tool, ToolContext, view as _view
+from .presentation import Presentation
 from .reads import require_read
 from .results import truncate
 from .sanitize import int_or_default
@@ -2414,6 +2415,8 @@ def tools(*, result_wrapper=_offering_path_skills) -> tuple[Tool, ...]:
             required=("file_path",),
             read_only=True,
             prepare_args=prepare_read_arguments,
+            presentation=Presentation(unlisted=("range", "start_line", "end_line", "start_byte", "end_byte"),
+                                      note="range", result="file", fold_noun="file"),
         ),
         Tool(
             "write",
@@ -2428,6 +2431,7 @@ def tools(*, result_wrapper=_offering_path_skills) -> tuple[Tool, ...]:
                 "append": {"type": "boolean", "default": False, "description": load_parameter_description('write', 'append')},
             },
             required=("file_path",),
+            presentation=Presentation(body="content", body_is_file=True, note="lines", kind="diff"),
         ),
         Tool(
             "fs_search",
@@ -2453,6 +2457,7 @@ def tools(*, result_wrapper=_offering_path_skills) -> tuple[Tool, ...]:
             },
             required=("pattern",),
             read_only=True,
+            presentation=Presentation(key=("pattern",), fold_noun="search"),
         ),
         Tool(
             "ast_search",
@@ -2468,6 +2473,7 @@ def tools(*, result_wrapper=_offering_path_skills) -> tuple[Tool, ...]:
             },
             required=("pattern",),
             read_only_when=lambda args: not args.get("apply"),
+            presentation=Presentation(key=("pattern",), fold_noun="search"),
         ),
         Tool("remove", load_description("remove"), remove, {"path": {"type": "string", "description": load_parameter_description('remove', 'path')}, "permanent": {"type": "boolean", "default": False, "description": load_parameter_description('remove', 'permanent')}}, required=("path",)),
         Tool(
@@ -2523,6 +2529,8 @@ def tools(*, result_wrapper=_offering_path_skills) -> tuple[Tool, ...]:
                 "required": ["file_path"],
                 "additionalProperties": False,
             },
+            presentation=Presentation(unlisted=("old_string", "new_string", "edits"), note="edits",
+                                      kind="diff", result="diff"),
         ),
         Tool("undo", load_description("undo"), undo, {"path": {"type": "string", "description": load_parameter_description('undo', 'path')}}, required=("path",)),
     )

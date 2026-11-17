@@ -39,6 +39,7 @@ from ..tool_binaries import (
     warn_urllib_fallback,
 )
 from .core import Tool, ToolContext, ToolOutput, view as _view
+from .presentation import Presentation, looks_around
 from .descriptions import load_description, load_parameter_description
 from .fs import _detect_visual_mime, _image_marker, _read_regular_bytes
 from .results import spill_oversized_result
@@ -1177,6 +1178,9 @@ def tools() -> tuple[Tool, ...]:
                 "description": {"type": "string"},
             },
             required=(),
+            presentation=Presentation(key=("command",), body="command", lexer="bash", unlisted=("description",),
+                                      kind="command", quiet_when=looks_around, result="command",
+                                      fold_noun="look", fold_by_program=True, live=True),
         ),
         Tool(
             "fetch",
@@ -1198,5 +1202,6 @@ def tools() -> tuple[Tool, ...]:
             },
             required=("url",),
             read_only_when=_fetch_is_read_only,
+            presentation=Presentation(key=("url",), fold_noun="page"),
         ),
     )

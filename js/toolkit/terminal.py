@@ -17,6 +17,7 @@ from .. import jail
 from .. import paths
 from . import fs
 from .core import Tool, ToolContext
+from .presentation import Presentation
 from .descriptions import load_description
 from .results import truncate
 from .sanitize import int_or_default, text_or_default
@@ -625,6 +626,7 @@ def tools() -> tuple[Tool, ...]:
                 "rows": {"type": "integer", "minimum": 1, "maximum": 200},
             },
             required=("action",),
+            presentation=Presentation(key=("command",), body="command", lexer="bash", kind="command"),
         ),
         Tool(
             "terminal_snapshot",

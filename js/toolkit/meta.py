@@ -26,6 +26,7 @@ from ..events import RefusableOnly
 from ..text_bytes import cap_text
 from ..skills import discover_skills, load_skill
 from .core import Tool, ToolContext
+from .presentation import Presentation
 from . import task_jobs
 from .descriptions import load_description, load_parameter_description
 from .sanitize import int_or_default, text_or_default
@@ -999,12 +1000,15 @@ def _task_params(flags: tuple[str, ...]) -> dict:
 
 def tools(flags: tuple[str, ...] = ("model_override",)) -> tuple[Tool, ...]:
     return (
-        Tool("plan", load_description("plan"), plan, {"plan_name": {"type": "string", "description": load_parameter_description('plan', 'plan_name')}, "version": {"type": "string", "description": load_parameter_description('plan', 'version')}, "content": {"type": "string", "description": load_parameter_description('plan', 'content')}, "overwrite": {"type": "boolean", "default": False, "description": load_parameter_description('plan', 'overwrite')}}, required=("plan_name", "version", "content")),
-        Tool("skill", load_description("skill"), skill, {"name": {"type": "string", "description": load_parameter_description('skill', 'name')}}, required=("name",), read_only=True),
+        Tool("plan", load_description("plan"), plan, {"plan_name": {"type": "string", "description": load_parameter_description('plan', 'plan_name')}, "version": {"type": "string", "description": load_parameter_description('plan', 'version')}, "content": {"type": "string", "description": load_parameter_description('plan', 'content')}, "overwrite": {"type": "boolean", "default": False, "description": load_parameter_description('plan', 'overwrite')}}, required=("plan_name", "version", "content"),
+             presentation=Presentation(key=("plan_name",), body="content", lexer="markdown")),
+        Tool("skill", load_description("skill"), skill, {"name": {"type": "string", "description": load_parameter_description('skill', 'name')}}, required=("name",), read_only=True,
+             presentation=Presentation(key=("name",))),
         Tool(
             "task",
             load_description("task", flags=flags),
             task,
             _task_params(flags),
+            presentation=Presentation(key=("agent_id",)),
         ),
     )

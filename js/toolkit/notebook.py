@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from .core import Tool, ToolContext
+from .presentation import Presentation
 from .descriptions import load_description, load_parameter_description
 from .fs import _detect_line_ending, _hash_bytes, _normalize_line_endings, _read_regular_bytes
 from .reads import require_read
@@ -341,5 +342,6 @@ def tools() -> tuple[Tool, ...]:
                 "edit_mode": {"type": "string", "enum": list(EDIT_MODES), "default": "replace", "description": load_parameter_description('notebook_edit', 'edit_mode')},
             },
             required=("file_path",),
+            presentation=Presentation(kind="diff"),
         ),
     )

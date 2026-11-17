@@ -10,6 +10,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from .core import CatalogEntry, Tool, ToolContext
+from .presentation import Presentation
 from .descriptions import load_description, load_parameter_description
 
 
@@ -40,6 +41,7 @@ def discovery_tool(surface: Any) -> Tool:
             "source": {"type": "string", "description": load_parameter_description('tool_discovery', 'source')},
             "load": {"type": "string", "description": load_parameter_description('tool_discovery', 'load')},
         },
+        presentation=Presentation(key=("query",)),
     )
 
 

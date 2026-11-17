@@ -26,6 +26,7 @@ from .. import jail as _jail
 from .. import turn_settings as _turn_settings
 from ..media import IMAGE_RESULT_PREFIX
 from ..skills import SkillCatalog
+from .presentation import Presentation
 from . import reads as _reads
 from .reads import ReadLedger
 from .undo import UndoStore, session_directory
@@ -233,6 +234,8 @@ class Tool:
     # schema coercion and validation; it returns a new dict and leaves its
     # input as it was. None when the tool takes its arguments as sent.
     prepare_args: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+    # How the screen shows its calls and results.
+    presentation: Presentation = Presentation()
 
     def openai_spec(self) -> dict:
         parameters = self.input_schema if self.input_schema is not None else {

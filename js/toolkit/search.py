@@ -23,6 +23,7 @@ from .. import paranoid, settings as _settings
 from ..capped_process import CappedProcessResult, _run_capped
 from ..tool_binaries import resolve_binary
 from .core import Tool, ToolContext
+from .presentation import Presentation
 from .descriptions import load_description, load_parameter_description
 from .results import truncate
 from .sanitize import int_or_default, text_or_default
@@ -628,6 +629,7 @@ def tools() -> tuple[Tool, ...]:
             },
             required=("query",),
             read_only=True,
+            presentation=Presentation(key=("query",), fold_noun="search"),
         ),
         Tool(
             "tavily_search",
@@ -639,6 +641,7 @@ def tools() -> tuple[Tool, ...]:
             },
             required=("query",),
             read_only=True,
+            presentation=Presentation(key=("query",), fold_noun="search"),
         ),
         Tool(
             "exa_search",
@@ -651,6 +654,7 @@ def tools() -> tuple[Tool, ...]:
             },
             required=("query",),
             read_only=True,
+            presentation=Presentation(key=("query",), fold_noun="search"),
         ),
         Tool(
             "docs_search",
@@ -663,6 +667,7 @@ def tools() -> tuple[Tool, ...]:
             },
             required=("library",),
             read_only=True,
+            presentation=Presentation(key=("topic",), fold_noun="search"),
         ),
         Tool(
             "browse",
@@ -686,5 +691,6 @@ def tools() -> tuple[Tool, ...]:
             required=("url",),
             # Each call is its own obscura process; only a screenshot writes a file.
             read_only_when=lambda args: not text_or_default(args.get("screenshot")).strip(),
+            presentation=Presentation(key=("url",), fold_noun="page"),
         ),
     )
