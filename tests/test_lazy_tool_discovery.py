@@ -470,7 +470,7 @@ def test_context_budget_tool_tokens_track_each_emitted_schema_set(monkeypatch, t
     )
 
     assert estimates[1] > estimates[0]
-    assert context.context_budget_state._anchor.tool_tokens == estimates[1]
+    assert context.context_budget_state.anchor.tool_tokens == estimates[1]
 
 
 def test_persisted_call_names_canonicalize_even_for_unloaded_lazy_tools(tmp_path):

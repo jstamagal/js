@@ -314,6 +314,12 @@ class TokenState:
         )
 
     @property
+    def anchor(self) -> _UsageAnchor | None:
+        """The last provider usage and the request it measured; None before
+        any, or after a reply that reported no prompt tokens."""
+        return self._anchor
+
+    @property
     def last_usage(self) -> TokenUsage | None:
         return self._anchor.usage if self._anchor is not None else None
 

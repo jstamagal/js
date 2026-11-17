@@ -497,7 +497,7 @@ async def _between_turn_compact(cfg: Config, ac: AutoCompactState, context: Any,
         flight_data={"auto_state": dict(vars(ac)), "last_prompt_tokens": context.last_prompt_tokens,
                      "last_cached_tokens": context.last_cached_tokens,
                      "last_incomplete_reason": context.last_incomplete_reason,
-                     "usage_anchor": vars(context.context_budget_state).get("_anchor")
+                     "usage_anchor": context.context_budget_state.anchor
                          if context.context_budget_state is not None else None,
                      "tools": context.tool_registry.openai_specs() if context.tool_registry else []},
     )

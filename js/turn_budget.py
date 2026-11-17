@@ -202,7 +202,7 @@ class TurnBudget:
                      "effective_input_limit": status.effective_input_limit,
                      "forced_recovery": force},
             flight_data={"budget": asdict(status), "tools": specs,
-                         "usage_anchor": vars(self._tokens).get("_anchor"),
+                         "usage_anchor": self._tokens.anchor,
                          "ai_messages": self._convo.ai},
             chars_per_token=self._tokens.calibrated_chars_per_token(
                 system=system, messages=messages, tools=ai_tools,
@@ -264,7 +264,7 @@ class TurnBudget:
             system=self._convo.system, error=error,
             flight_data={"context_window": self.context_window(),
                          "max_output_tokens": self._max_out,
-                         "usage_anchor": vars(self._tokens).get("_anchor"),
+                         "usage_anchor": self._tokens.anchor,
                          "tools": tools,
                          "ai_messages": self._convo.ai},
             log_dir=compaction.flight_log_dir(self._cfg), emit=compaction.printing(warn=self._warn),
