@@ -52,11 +52,11 @@ from .. import jail
 from .. import messages as msgs
 from .. import paths
 from .. import settings as _settings
-from ..capped_process import truncation_marker
 from . import kernel_bridge
 from .core import Tool, ToolContext, ToolOutput, current_observer, current_registry
 from .descriptions import load_description
-from .sanitize import int_or_default, text_or_default
+from .results import truncate
+from .sanitize import text_or_default
 
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
@@ -772,15 +772,10 @@ def refresh_namespace(session: KernelSession) -> tuple[list[str], list[str]]:
 
 
 def cap_for_model(text: str, context: Any) -> str | ToolOutput:
-    """Cap the model-facing string with js's own knob and a visible marker;
-    cut, it comes back as a `ToolOutput` whose ``whole`` the operator sees."""
-    budget = int_or_default(getattr(context, "max_tool_result_bytes", None), 256 * 1024, minimum=1)
-    encoded = text.encode("utf-8")
-    if len(encoded) <= budget:
-        return text
-    marker = truncation_marker(budget, "TOOL_RESULT_MAX")
-    keep = max(0, budget - len(marker.encode("utf-8")) - 1)
-    return ToolOutput(encoded[:keep].decode("utf-8", errors="ignore") + "\n" + marker, text)
+    """``text`` within TOOL_RESULT_MAX (`results.truncate`); cut, it comes
+    back as a `ToolOutput` whose ``whole`` the operator sees."""
+    model = truncate(text, context)
+    return text if model == text else ToolOutput(model, text)
 
 
 # --------------------------------------------------------------------------

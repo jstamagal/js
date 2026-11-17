@@ -379,6 +379,13 @@ def test_model_facing_cap_uses_the_js_limit_knob_and_names_it_in_the_marker(ctx)
     assert "[truncated: TOOL_RESULT_MAX (200) reached]" in capped
 
 
+def test_model_facing_cap_of_zero_cuts_nothing(ctx):
+    ctx.max_tool_result_bytes = 0
+    text = "x" * 300_000
+
+    assert kmod.cap_for_model(text, ctx) == text
+
+
 def test_per_call_verbosity_beats_the_config_knob_which_beats_normal(ctx):
     ctx.kernel_verbosity = "quiet"
 
