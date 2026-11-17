@@ -6,9 +6,10 @@ from pathlib import Path
 import ai
 import ai.types.usage
 import pytest
+from turn_driver import js
 
 from js import cli, logins, model_metadata, persona, run_assembly, runtime
-from js.config import Config, InvocationSources
+from js.config import Config
 from js.model_client import ModelStreamResult
 from js.toolkit import ToolContext
 from js.toolkit.meta import task
@@ -458,6 +459,7 @@ def test_js_namespace_env_routes_without_any_login():
 def _one_shot_home(monkeypatch, tmp_path, manifest: str = "model: agent-model\nreasoning: low\ntools: []\n"):
     """A HOME whose jsrc pins a model and effort and whose `pinned` agent names its own."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
     for name in ("JS_DEFAULT_AGENT", "JS_SESSION", "JS_MODEL", "JS_REASONING", "JS_EFFORT"):
         monkeypatch.delenv(name, raising=False)
     (tmp_path / ".js").mkdir(parents=True, exist_ok=True)
@@ -481,7 +483,7 @@ def _one_shot_home(monkeypatch, tmp_path, manifest: str = "model: agent-model\nr
 def test_one_shot_agent_manifest_beats_jsrc_model_and_effort(monkeypatch, tmp_path):
     seen = _one_shot_home(monkeypatch, tmp_path)
 
-    assert cli._run_prompt("foo", agent="pinned", save=False) == 0
+    assert js(monkeypatch, "--agent", "pinned", "--no-save", "-p", "foo") == 0
 
     assert seen == {"model": "agent-model", "effort": "low"}
 
@@ -489,28 +491,28 @@ def test_one_shot_agent_manifest_beats_jsrc_model_and_effort(monkeypatch, tmp_pa
 def test_one_shot_without_manifest_pins_keeps_jsrc_model_and_effort(monkeypatch, tmp_path):
     seen = _one_shot_home(monkeypatch, tmp_path, manifest="tools: []\n")
 
-    assert cli._run_prompt("foo", agent="pinned", save=False) == 0
+    assert js(monkeypatch, "--agent", "pinned", "--no-save", "-p", "foo") == 0
 
     assert seen == {"model": "jsrc-model", "effort": "high"}
 
 
 @pytest.mark.parametrize(
-    ("kwargs", "env", "expected"),
+    ("argv", "env", "expected"),
     [
-        ({"model": "flag-model"}, {}, {"model": "flag-model", "effort": "low"}),
-        ({"reasoning": "xhigh"}, {}, {"model": "agent-model", "effort": "xhigh"}),
-        ({}, {"JS_MODEL": "env-model"}, {"model": "env-model", "effort": "low"}),
-        ({}, {"JS_REASONING": "medium"}, {"model": "agent-model", "effort": "medium"}),
-        ({"sources": InvocationSources(extras=("MODEL=extra-model",))}, {}, {"model": "extra-model", "effort": "low"}),
-        ({"sources": InvocationSources(extras=("EFFORT=medium",))}, {}, {"model": "agent-model", "effort": "medium"}),
+        (["--model", "flag-model"], {}, {"model": "flag-model", "effort": "low"}),
+        (["--reasoning", "xhigh"], {}, {"model": "agent-model", "effort": "xhigh"}),
+        ([], {"JS_MODEL": "env-model"}, {"model": "env-model", "effort": "low"}),
+        ([], {"JS_REASONING": "medium"}, {"model": "agent-model", "effort": "medium"}),
+        (["--extra", "MODEL=extra-model"], {}, {"model": "extra-model", "effort": "low"}),
+        (["--extra", "EFFORT=medium"], {}, {"model": "agent-model", "effort": "medium"}),
     ],
 )
-def test_one_shot_invocation_pins_beat_agent_manifest(monkeypatch, tmp_path, kwargs, env, expected):
+def test_one_shot_invocation_pins_beat_agent_manifest(monkeypatch, tmp_path, argv, env, expected):
     seen = _one_shot_home(monkeypatch, tmp_path)
     for name, value in env.items():
         monkeypatch.setenv(name, value)
 
-    assert cli._run_prompt("foo", agent="pinned", save=False, **kwargs) == 0
+    assert js(monkeypatch, "--agent", "pinned", "--no-save", *argv, "-p", "foo") == 0
 
     assert seen == expected
 
@@ -525,12 +527,12 @@ def test_one_shot_config_pins_keeps_jsrc_model_and_effort(monkeypatch, tmp_path)
 
 def test_resumed_one_shot_stays_on_its_stamp_when_manifest_changes(monkeypatch, tmp_path):
     seen = _one_shot_home(monkeypatch, tmp_path)
-    assert cli._run_prompt("foo", agent="pinned", session="kept") == 0
+    assert js(monkeypatch, "--agent", "pinned", "--session", "kept", "-p", "foo") == 0
     assert seen == {"model": "agent-model", "effort": "low"}
 
     (tmp_path / ".js" / "agents" / "pinned" / "agent.yaml").write_text(
         "model: other-model\nreasoning: xhigh\ntools: []\n", encoding="utf-8")
-    assert cli._run_prompt("again", agent="pinned", session="kept") == 0
+    assert js(monkeypatch, "--agent", "pinned", "--session", "kept", "-p", "again") == 0
 
     assert seen == {"model": "agent-model", "effort": "low"}
 
