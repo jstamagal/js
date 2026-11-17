@@ -609,15 +609,6 @@ def apply_refreshed_token(login: Login, token: CodexToken) -> Login:
     )
 
 
-def refreshed_login(login: Login) -> Login:
-    if not login.codex_refresh_token:
-        raise RuntimeError(
-            msgs.CODEX_OAUTH_OPENAI_CODEX_LOGIN_HAS_NO_REFRESH_TOKEN.format()
-        )
-    token = refresh_token(login.codex_refresh_token, previous=_token_from_login(login))
-    return apply_refreshed_token(login, token)
-
-
 async def refreshed_login_async(login: Login, *, client: httpx.AsyncClient | None = None) -> Login:
     if not login.codex_refresh_token:
         raise RuntimeError(

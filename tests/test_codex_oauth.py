@@ -614,25 +614,6 @@ def test_apply_refreshed_token_falls_back_to_default_base_url_when_missing():
     assert refreshed.provider_base_url == codex_auth.CODEX_BASE_URL
 
 
-def test_refreshed_login_preserves_provider_headers(monkeypatch):
-    login = logins.Login(
-        provider_id="openai-codex",
-        sdk_provider_id="openai-codex",
-        provider_base_url="https://chatgpt.com/backend-api",
-        provider_api_key="old-access",
-        provider_headers={"x-custom": "1"},
-        codex_refresh_token="old-refresh",
-        codex_token_expires=0.0,
-        codex_account_id="acct_old",
-    )
-    new_token = codex_auth.CodexToken(access="new-access", refresh="new-refresh", expires_at=999.0, account_id="acct_new")
-    monkeypatch.setattr(codex_auth, "refresh_token", lambda *a, **k: new_token)
-    refreshed = codex_auth.refreshed_login(login)
-    assert refreshed.provider_headers == {"x-custom": "1"}
-    assert refreshed.provider_api_key == "new-access"
-    assert refreshed.codex_refresh_token == "new-refresh"
-
-
 def test_refreshed_login_async_preserves_provider_headers(monkeypatch):
     login = logins.Login(
         provider_id="openai-codex",
