@@ -574,15 +574,12 @@ def _saved_login_provider_def(provider_id: str) -> ProviderDef | None:
     but invisible to routing: its ``provider/model`` prefix never splits and
     model_client hands the raw js id to the SDK, which rejects it. The stored
     SDK shape picks the transport; the stored base URL and key are defaults, so
-    explicit /set or env values still win. Lazy import + broad except because
-    a missing or corrupt login store must never break routing.
+    explicit /set or env values still win. A missing or corrupt login store
+    reads as no logins (``logins.load_logins``).
     """
-    try:
-        from . import logins as _logins
+    from . import logins as _logins
 
-        login = _logins.load_logins().get(provider_id)
-    except Exception:  # noqa: BLE001
-        return None
+    login = _logins.load_logins().get(provider_id)
     if login is None:
         return None
     sdk = (login.sdk_provider_id or "openai").strip().lower()
@@ -620,12 +617,9 @@ def get_provider(provider_id: str | None) -> ProviderDef | None:
 def known_provider_ids() -> set[str]:
     ids = set(_aliases())
     ids.update(provider.id for provider in login_providers())
-    try:
-        from . import logins as _logins
+    from . import logins as _logins
 
-        ids.update(_logins.load_logins())
-    except Exception:  # noqa: BLE001
-        pass
+    ids.update(_logins.load_logins())
     return ids
 
 

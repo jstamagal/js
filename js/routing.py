@@ -137,18 +137,16 @@ def unconfigured_model_message(model: str) -> str:
 def _saved_login(provider_id: str | None):
     """Return the saved Login for ``provider_id`` (normalized), or None.
 
-    Resilient by design: a missing/unreadable login store must never block
-    routing — it just means no login-driven override or credential fill.
+    A missing, unreadable or malformed login store reads as no logins
+    (``logins.load_logins``), so it means no login-driven override or
+    credential fill.
     """
     normalized = providers.normalize_provider_id(provider_id)
     if not normalized:
         return None
-    try:
-        from . import logins as _logins
+    from . import logins as _logins
 
-        return _logins.load_logins().get(normalized)
-    except Exception:  # noqa: BLE001
-        return None
+    return _logins.load_logins().get(normalized)
 
 
 def provider_extra_params(cfg) -> dict | None:
