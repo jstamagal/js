@@ -72,10 +72,18 @@ class TurnConvo:
         self._vision = False
         self.rebuild()
 
-    def add(self, records: list[dict]) -> None:
-        """Append history records already appended to ``messages``."""
+    def append(self, *records: dict, message: Any = None) -> None:
+        """Append ``records`` to the history, and their SDK form to ``ai``:
+        the messages `history_record.history_to_ai_messages` builds from them,
+        or ``message`` for one record whose SDK message the turn already has.
+        A batch of tool records goes in one call, so their media follow all of
+        the batch's tool messages."""
+        self.messages.extend(records)
+        if message is not None:
+            self.ai.append(message)
+            return
         self.ai.extend(history_record.history_to_ai_messages(
-            "", records, provider_id=self._provider_id, model_id=self._model, vision=self._vision,
+            "", list(records), provider_id=self._provider_id, model_id=self._model, vision=self._vision,
         ))
 
     def traced(self) -> None:

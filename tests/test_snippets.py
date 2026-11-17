@@ -68,23 +68,21 @@ def test_parameter_prose_is_loaded_separately_from_tool_contract(monkeypatch, tm
 
 
 def test_output_limit_recovery_reads_the_current_snippet(monkeypatch, tmp_path):
-    from types import SimpleNamespace
-
     from js import runtime
+    from js.turn_budget import TurnConvo
 
     path = tmp_path / "resume.md"
     monkeypatch.setattr(paths, "find", lambda relative: path, raising=False)
     messages = []
-    observed = []
-    convo = SimpleNamespace(add=lambda records: observed.extend(records))
+    convo = TurnConvo("", messages, provider_id=None, model="fixture")
     for text in ["continue A", "continue B"]:
         path.write_text(text)
         runtime._send_resume_nudge(
-            messages, convo, n=1, limit=2, incomplete_reason="max_output_tokens",
+            convo, n=1, limit=2, incomplete_reason="max_output_tokens",
             model="fixture", telemetry=runtime.Telemetry(None), suppress_output=True,
         )
     assert [message["content"] for message in messages] == ["continue A", "continue B"]
-    assert observed == messages
+    assert [message.text for message in convo.ai] == ["continue A", "continue B"]
 
 
 @pytest.mark.parametrize("text", ["", "\n  "])

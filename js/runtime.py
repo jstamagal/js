@@ -1897,8 +1897,7 @@ def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, 
         provider_id=request.provider_id,
         model_id=request.model,
     )
-    convo.ai.append(_sanitize_assistant_message(assistant_message))
-    messages.append(memory.note_time(record))
+    convo.append(memory.note_time(record), message=_sanitize_assistant_message(assistant_message))
     # Recorded in full now; a later ^C in this turn must not re-append it.
     sink.clear()
     token_state.record_provider_usage(
@@ -1923,14 +1922,13 @@ def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, 
     return pending_calls, incomplete_reason, dispatch_registry
 
 
-def _send_resume_nudge(messages: list[dict], convo: TurnConvo, *, n: int, limit: int,
+def _send_resume_nudge(convo: TurnConvo, *, n: int, limit: int,
                        incomplete_reason: str | None, model: str, telemetry: Telemetry,
                        suppress_output: bool) -> None:
     """Keep the partial reply and ask the model to carry on from where the
     cap cut it."""
     nudge = {"role": "user", "content": snippets.render("output-limit-resume"), "resume_nudge": True}
-    messages.append(nudge)
-    convo.add([nudge])
+    convo.append(nudge)
     telemetry.event("max_output_resume", model=model, n=n, incomplete_reason=incomplete_reason)
     if not suppress_output:
         _notice(telemetry, msgs.MAX_OUTPUT_RESUMING, stderr=True, flush=True, n=n, limit=limit)
@@ -2019,28 +2017,25 @@ async def _record_tool_results(pending_calls: list[_PendingToolCall], *, cfg: Co
             )
             record = model_client.tool_result_record(pc.id, canonical_pc.name, result_value)
             records.append(memory.note_time(record, progress.finished.get(pc.id)))
-        messages.extend(records)
-        # One add for the batch: its media follow all of its tool messages.
-        convo.add(records)
+        # One append for the batch: its media follow all of its tool messages.
+        convo.append(*records)
     return dispatch_records
 
 
-def _steer_off_repeated_errors(due: list[tuple[str, int]], *, messages: list[dict], convo: TurnConvo,
+def _steer_off_repeated_errors(due: list[tuple[str, int]], *, convo: TurnConvo,
                                telemetry: Telemetry) -> None:
     """Tell the model, in one message that joins the running turn, to stop
     retrying each tool in ``due`` (tool, repeats)."""
     text = "\n".join(snippets.render('repeated-tool-error', TOOL=name, COUNT=count)
                      for name, count in due)
     message = {"role": "user", "content": text, "steered": True}
-    messages.append(memory.note_time(message))
-    convo.add([message])
+    convo.append(memory.note_time(message))
     for name, count in due:
         telemetry.event("tool_error_steered", tool=name, repeats=count)
 
 
 def _record_tool_error_limit(name: str, dispatch_records: list[tuple[_PendingToolCall, dict, Any]], *,
-                             registry: ToolRegistry, messages: list[dict], convo: TurnConvo,
-                             events: TurnEvents) -> None:
+                             registry: ToolRegistry, convo: TurnConvo, events: TurnEvents) -> None:
     """End the turn on an assistant message naming ``name``, the tool that
     repeated its error after being told to stop, and its last error."""
     last_error = next(
@@ -2052,22 +2047,21 @@ def _record_tool_error_limit(name: str, dispatch_records: list[tuple[_PendingToo
         "",
     )
     failure = f'ERROR: tool retry limit reached: {name} repeated the same error after being told to stop retrying it\n{last_error}'
-    convo.ai.append(ai.messages.Message(role="assistant", parts=[ai.types.messages.TextPart(text=failure)]))
-    messages.append(memory.note_time({"role": "assistant", "content": failure}))
+    convo.append(memory.note_time({"role": "assistant", "content": failure}),
+                 message=ai.messages.Message(role="assistant", parts=[ai.types.messages.TextPart(text=failure)]))
     events.emit("error", error=failure, retryable=False)
     events.end("tool_error_limit")
 
 
-async def _take_steer(steer: Callable[[], dict | None | Awaitable[dict | None]], messages: list[dict],
-                      convo: TurnConvo, telemetry: Telemetry, suppress_output: bool) -> None:
+async def _take_steer(steer: Callable[[], dict | None | Awaitable[dict | None]], convo: TurnConvo,
+                      telemetry: Telemetry, suppress_output: bool) -> None:
     """Append the message ``steer`` returns, if any, at this tool boundary."""
     steered = steer()
     if inspect.isawaitable(steered):
         steered = await steered
     if steered is not None:
-        messages.append(memory.note_time(steered))
-        convo.add([steered])
-        telemetry.event("steered", message_index=len(messages) - 1)
+        convo.append(memory.note_time(steered))
+        telemetry.event("steered", message_index=len(convo.messages) - 1)
         if not suppress_output:
             _notice(telemetry, msgs.STEERED, flush=True)
 
@@ -2237,7 +2231,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
                 _notice(telemetry, msgs.RESPONSE_INCOMPLETE, stderr=True, flush=True, reason=incomplete_reason)
             if resuming:
                 resumes_sent += 1
-                _send_resume_nudge(messages, convo, n=resumes_sent, limit=limits.max_output_resumes,
+                _send_resume_nudge(convo, n=resumes_sent, limit=limits.max_output_resumes,
                                    incomplete_reason=incomplete_reason, model=model,
                                    telemetry=telemetry, suppress_output=suppress_output)
                 continue
@@ -2257,13 +2251,13 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
             exhausted = error_tracker.exhausted()
             if exhausted is not None:
                 _record_tool_error_limit(exhausted, dispatch_records, registry=active_registry,
-                                         messages=messages, convo=convo, events=events)
+                                         convo=convo, events=events)
                 return
             due = error_tracker.steer_due()
             if due:
-                _steer_off_repeated_errors(due, messages=messages, convo=convo, telemetry=telemetry)
+                _steer_off_repeated_errors(due, convo=convo, telemetry=telemetry)
             if steer is not None and iteration + 1 < cfg.max_tool_iterations:
-                await _take_steer(steer, messages, convo, telemetry, suppress_output)
+                await _take_steer(steer, convo, telemetry, suppress_output)
 
         _notice(telemetry, msgs.MAX_ITERATIONS, limit=cfg.max_tool_iterations)
         events.end("max_iterations")

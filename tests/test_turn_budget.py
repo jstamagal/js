@@ -99,15 +99,25 @@ def test_a_rebuild_replaces_the_list_and_restarts_the_trace():
     assert (convo.sent, convo.schemas) == (0, True)
 
 
-def test_added_records_extend_the_convo_without_a_system_message():
+def test_appended_records_extend_the_history_and_the_convo_without_a_system_message():
     messages = [{"role": "user", "content": "hi"}]
     convo = _convo(messages)
     convo.traced()
     nudge = {"role": "user", "content": "go on"}
-    messages.append(nudge)
-    convo.add([nudge])
+    convo.append(nudge)
+    assert messages[-1] is nudge
     assert [m.role for m in convo.ai] == ["system", "user", "user"]
     assert (convo.sent, convo.schemas) == (2, False)
+
+
+def test_a_record_appended_with_its_message_keeps_that_message():
+    messages = [{"role": "user", "content": "hi"}]
+    convo = _convo(messages)
+    record = {"role": "assistant", "content": "hello"}
+    live = ai.assistant_message("hello")
+    convo.append(record, message=live)
+    assert messages[-1] is record
+    assert convo.ai[-1] is live
 
 
 # --------------------------------------------------------------------------
