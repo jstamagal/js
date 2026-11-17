@@ -523,11 +523,10 @@ def pump(session: KernelSession, deadline: float) -> None:
         session.record(msg)
 
 
-def interrupt_and_collect(session: KernelSession, handle: CellHandle,
-                          grace: float = INTERRUPT_GRACE) -> None:
+def interrupt_and_collect(session: KernelSession, handle: CellHandle) -> None:
     """SIGINT the cell, then keep reading until it reports idle."""
     signal_cell(session, handle)
-    collect_until(session, handle, time.monotonic() + grace)
+    collect_until(session, handle, time.monotonic() + INTERRUPT_GRACE)
 
 
 def signal_cell(session: Any, handle: CellHandle) -> None:
