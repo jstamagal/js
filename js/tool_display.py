@@ -18,7 +18,7 @@ from rich.syntax import Syntax
 from rich.text import Text
 
 from . import fset, messages as msgs, settings as _settings
-from .control_sequences import clean
+from .control_sequences import SGR, clean
 from .display import Theme, render_console, setting, theme
 from .text_layout import TAB, block_width, cells, cut_points
 from .toolkit.presentation import (
@@ -53,7 +53,6 @@ FAIL = "✗"
 # The bar down the left edge of an exchange, in the colour of how it stands.
 RAIL = "▌"
 _RAIL = 2
-_SGR = re.compile(r"\x1b\[[0-9;]*m")
 # Columns a body sits in from the rail, and a panel's inner padding.
 _INDENT = 1
 _PAD = 1
@@ -68,7 +67,7 @@ def for_transcript(rendered: str) -> str:
     rail = re.compile(rf"^{re.escape(fset.setting_value('EXCHANGE_RAIL'))} ?", re.M)
     marks = "|".join(re.escape(fset.setting_value(key)) for key in ("EXCHANGE_MARK_RUNNING", "EXCHANGE_MARK_OK", "EXCHANGE_MARK_FAILED"))
     header = re.compile(rf"^(?:{marks}) +", re.M)
-    return header.sub(f"{TOOL_MARKER} ", rail.sub("", _SGR.sub("", rendered)))
+    return header.sub(f"{TOOL_MARKER} ", rail.sub("", SGR.sub("", rendered)))
 
 
 def _byte_len(text: str) -> int:

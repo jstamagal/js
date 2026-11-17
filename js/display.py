@@ -17,7 +17,6 @@ import asyncio
 import contextlib
 import io
 import os
-import re
 import shutil
 import time
 from collections import Counter
@@ -34,10 +33,8 @@ from rich.text import Text
 from rich.theme import Theme as _RichTheme
 
 from . import fset, output, settings as _settings
-from .control_sequences import StreamCleaner, clean
+from .control_sequences import SGR, StreamCleaner, clean
 from .text_layout import TAB, block_width, cells, cut_points, terminal_width, wrap_words
-
-_SGR_ONLY = re.compile(r"\x1b\[[0-9;]*m")
 
 
 # The two voices of a conversation hang off their marks: column 0 holds only
@@ -70,7 +67,7 @@ def hang(text: str, mark: str, indent: int, *, first: bool = True) -> str:
     anything, painted spaces included; empty rows stay empty."""
     rows = text.split("\n")
     for index, row in enumerate(rows):
-        plain = _SGR_ONLY.sub("", row)
+        plain = SGR.sub("", row)
         if not plain:
             continue
         if first and plain.strip():
@@ -430,7 +427,7 @@ class Display:
         if self._speaker is None:
             return rendered
         hung = hang(rendered, *self._speaker, first=not self._spoke)
-        if keep and _SGR_ONLY.sub("", rendered).strip():
+        if keep and SGR.sub("", rendered).strip():
             self._spoke = True
         return hung
 

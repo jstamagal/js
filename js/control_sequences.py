@@ -25,6 +25,8 @@ _STRING_STOP = re.compile(r"[\x07\x18\x1a\x1b\x80-\x9f]")
 # Ground, for a cleaner that keeps the other controls: ESC and C1 only.
 _ESCAPE_STOP = re.compile(r"[\x1b\x80-\x9f]")
 _UNPRINTED = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+# An SGR sequence (CSI ... m): the colour and style a rendered row carries.
+SGR = re.compile(r"\x1b\[[0-9;]*m")
 
 # Where ESC and each C1 introducer lead, from any state.
 _AFTER_ESC = {"[": CSI_ENTRY, "]": OSC_STRING, "P": DCS_ENTRY, "X": SOS_PM_APC_STRING, "^": SOS_PM_APC_STRING,
