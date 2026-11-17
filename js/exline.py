@@ -130,14 +130,12 @@ async def run_ex(
     dispatch: Callable[[str], Awaitable[None]],
     program_allowed: Callable[[str], bool] | None = None,
     commands: Mapping[str, ExCommand] | None = None,
-    force_forms: Mapping[str, str] | None = None,
 ) -> None:
     """Run one ex line. ``dispatch`` takes a `/command` line for the table."""
     verb, _, arg = line.strip().removeprefix("/").partition(" ")
     arg = arg.strip()
     table = EX_COMMANDS if commands is None else commands
-    aliases = EX_FORCE_FORMS if force_forms is None else force_forms
-    verb = aliases.get(verb, verb)
+    verb = EX_FORCE_FORMS.get(verb, verb)
     try:
         if (command := table.get(verb)) is not None:
             await command(arg, editor, dispatch)
