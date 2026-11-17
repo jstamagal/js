@@ -12,7 +12,6 @@ from test_cli_prompt_mode import _auto_state
 from test_config_compaction_layers import _compact_test_cfg
 
 from js import cli, compaction, runtime
-from js.repl_state import ReplState
 
 
 def read_flight(cfg):
@@ -86,54 +85,47 @@ def test_between_turn_uses_changed_live_window(monkeypatch, tmp_path):
 def test_same_repl_set_override_updates_anchor_then_request_budget(monkeypatch, tmp_path, capsys):
     from dataclasses import replace
 
+    from repl_driver import output_of, run_async
     from test_lazy_tool_discovery import _result
 
-    from js import settings
-    from js.toolkit import ToolContext
-    from js.toolkit.registry import build_default_registry
+    from js import settings, supervisor
 
+    monkeypatch.chdir(tmp_path)
+    debug_log = tmp_path / "debug.log"
     cfg = _compact_test_cfg(tmp_path, {})
-    cfg = replace(cfg, trace=True, max_output_tokens=128, provider_id="openai",
+    cfg = replace(cfg, trace=True, max_output_tokens=128, provider_id="openai", debug_log=debug_log,
                   provider_api_key="offline", provider_base_url="http://127.0.0.1:1/v1")
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "agent.yaml").write_text("tools: []\n", encoding="utf-8")
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     live = settings.seed_defaults()
     live["CONTEXT_SIZE"] = 128000
-    state = ReplState(settings=live, model=cfg.model, provider_id=cfg.provider_id,
-                      provider_base_url=cfg.provider_base_url, provider_api_key=cfg.provider_api_key,
-                      messages=[], system="SYSTEM")
+    live["DEBUG_LOG"] = True
     monkeypatch.setattr(runtime, "_resolve_context_window", lambda *args: None)
-    captured = []
-
-    class Events:
-        trace_sink = None
-        transcript_log = None
-        def event(self, kind, **fields):
-            if kind == "context_budget":
-                captured.append(fields["context_window"])
+    answered = asyncio.Event()
 
     async def sdk(**kwargs):
+        answered.set()
         return _result(text="ok")
 
     monkeypatch.setattr(runtime.model_client, "_stream_async", sdk)
-    context = ToolContext(cwd=tmp_path)
-    registry = build_default_registry().select([])
+    immediate: list[str] = []
 
-    async def conversation():
-        state.messages.append({"role": "user", "content": "first"})
-        await runtime.run_turn_async(state.config_for_turn(cfg), "SYSTEM", state.messages,
-                                     Events(), tool_context=context, tool_registry=registry)
-        assert captured[-1] == 128000
-        capsys.readouterr()
-        assert cli._handle_command("/set CONTEXT_SIZE 1000000", state, cfg)
-        immediate = capsys.readouterr().out
-        assert "1000000" in immediate
-        assert state.settings["CONTEXT_SIZE"] == 1000000
-        state.messages.append({"role": "user", "content": "second"})
-        await runtime.run_turn_async(state.config_for_turn(cfg), "SYSTEM", state.messages,
-                                     Events(), tool_context=context, tool_registry=registry)
-        assert captured[-1] == 1000000
-        assert "1000000" in capsys.readouterr().out
+    async def conversation(enter):
+        await enter("first")
+        await answered.wait()
+        [first] = supervisor.get_current().jobs("turn")
+        await asyncio.wait({first.task})
+        immediate.append(await output_of(enter, capsys, "/set CONTEXT_SIZE 1000000"))
+        await enter("second")
 
-    asyncio.run(conversation())
+    run_async(monkeypatch, cfg, conversation, live_settings=live)
+
+    windows = [json.loads(line)["context_window"] for line in debug_log.read_text(encoding="utf-8").splitlines()
+               if json.loads(line)["kind"] == "context_budget"]
+    assert windows == [128000, 1000000]
+    assert "1000000" in immediate[0]
+    assert "1000000" in capsys.readouterr().out
 
 
 def test_summary_request_and_response_are_recorded(monkeypatch, tmp_path):
