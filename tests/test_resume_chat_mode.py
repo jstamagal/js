@@ -10,7 +10,7 @@ import pytest
 from repl_driver import stub_screen
 
 from js import cli, runtime, session_catalog, session_picker, session_query, session_store
-from js.cli_options import RunOptions, current, invocation
+from js.cli_options import current
 from js.model_client import ModelStreamResult
 
 
@@ -74,9 +74,8 @@ def test_direct_prompt_resume_restores_chat_and_named_persona(tmp_path, monkeypa
     agent = tmp_path / ".js" / "agents" / "chat-persona"
     agent.mkdir(parents=True)
     (agent / "01-prompt.md").write_text("NAMED_CHAT_PERSONA")
-    with invocation(RunOptions(chat=True, agent="chat-persona")):
-        assert cli._run_prompt("first", agent="chat-persona", session="named-chat") == 0
-    assert cli._run_prompt("again", session="named-chat") == 0
+    assert cli.main(["--chat", "--agent", "chat-persona", "--session", "named-chat", "-p", "first"]) == 0
+    assert cli.main(["--session", "named-chat", "-p", "again"]) == 0
     assert all(request["tools"] == [] and request["chat"] for request in requests)
     assert all("NAMED_CHAT_PERSONA" in request["system"] for request in requests)
     assert current().chat is False
