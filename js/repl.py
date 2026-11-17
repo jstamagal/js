@@ -122,9 +122,7 @@ def _sync_telemetry_from_live_settings(cfg: Config, state: ReplState, telemetry:
     transcript_mod.sync_transcript_sink(cfg, state.settings, telemetry)
 
 
-def _sync_trace_sink(
-    cfg: Config, live_settings: dict, telemetry: runtime.Telemetry, extra_paths: tuple[Path, ...] = ()
-) -> None:
+def _sync_trace_sink(cfg: Config, live_settings: dict, telemetry: runtime.Telemetry) -> None:
     """Attach/refresh ``telemetry.trace_sink`` for the always-on autolog. Reopens
     only when the target path set changes, so a long REPL session keeps one open
     handle; toggling ``REQUEST_LOG`` off closes it."""
@@ -132,7 +130,6 @@ def _sync_trace_sink(
     autolog = debug_trace.debug_autolog_path(cfg, live_settings)
     if autolog is not None:
         desired.append(autolog)
-    desired.extend(extra_paths)
     old = telemetry.trace_sink
     if isinstance(old, debug_trace.DebugTraceSink) and old.paths == desired:
         return  # already open on exactly these targets
