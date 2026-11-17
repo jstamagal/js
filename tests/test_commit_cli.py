@@ -4,6 +4,7 @@ import subprocess
 
 
 from js import cli, messages as msgs, paths
+from js.config import InvocationSources
 
 
 def _git(repo, *args):
@@ -43,10 +44,7 @@ def test_cli_commit_arg_dispatches_target_and_operator_context(tmp_path, monkeyp
                 "reasoning": None,
                 "maxout": None,
                 "extra_context": "operator note",
-                "extras": [],
-                "ignore_local_config": False,
-                "ignore_global_config": False,
-                "presets": [],
+                "sources": InvocationSources(),
             },
         }
     ]

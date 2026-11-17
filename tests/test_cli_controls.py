@@ -3,7 +3,7 @@ import pytest
 from js import persona, skills
 from js import cli, run_assembly, verify
 from types import SimpleNamespace
-from js.config import Config
+from js.config import Config, InvocationSources
 from js.cli_options import RunOptions, invocation
 
 
@@ -178,9 +178,8 @@ def test_bench_models_visits_each_model_and_continues_after_error(monkeypatch):
             raise ValueError('unknown model')
         return 0
     monkeypatch.setattr(cli, '_run_prompt', run)
-    args = SimpleNamespace(extras=[], agent=None, no_local_config=False, no_global_config=False,
-                           reasoning=None, max_out=None, stats_json=None, stats_csv=None)
-    assert cli._run_model_bench(args, []) == 1
+    args = SimpleNamespace(agent=None, reasoning=None, max_out=None, stats_json=None, stats_csv=None)
+    assert cli._run_model_bench(args, InvocationSources()) == 1
     assert visited == ['p/bad', 'p/good']
 
 

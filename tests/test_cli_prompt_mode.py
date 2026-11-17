@@ -18,7 +18,7 @@ from js import cli, runtime
 from js import paths as _paths
 from js import session_store
 from js import messages as msgs
-from js.config import Config
+from js.config import Config, InvocationSources
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
 from repl_driver import repl_state, stub_screen, turn_stub
@@ -836,8 +836,8 @@ def test_bench_mode_invalid_reasoning_errors_cleanly(monkeypatch, tmp_path):
     """The bench loop validates --reasoning up front too (same ruling B path)."""
     monkeypatch.setenv("HOME", str(tmp_path))
     actual = cli._run_bench(
-        "someagent", model=None, reasoning="not one", maxout=None, quiet=True, extras=None,
-        ignore_local_config=False, ignore_global_config=False, presets=None,
+        "someagent", model=None, reasoning="not one", maxout=None, quiet=True,
+        sources=InvocationSources(),
         stats_json=None, stats_csv=None,
     )
     assert actual == 2

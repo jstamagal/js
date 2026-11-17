@@ -8,7 +8,7 @@ import pytest
 import ai.types.usage
 
 from js import cli, logins, model_metadata, persona, run_assembly, runtime
-from js.config import Config
+from js.config import Config, InvocationSources
 from js.model_client import ModelStreamResult
 from js.toolkit import ToolContext
 from js.toolkit.meta import task
@@ -502,8 +502,8 @@ def test_one_shot_without_manifest_pins_keeps_jsrc_model_and_effort(monkeypatch,
         ({"reasoning": "xhigh"}, {}, {"model": "agent-model", "effort": "xhigh"}),
         ({}, {"JS_MODEL": "env-model"}, {"model": "env-model", "effort": "low"}),
         ({}, {"JS_REASONING": "medium"}, {"model": "agent-model", "effort": "medium"}),
-        ({"extras": ["MODEL=extra-model"]}, {}, {"model": "extra-model", "effort": "low"}),
-        ({"extras": ["EFFORT=medium"]}, {}, {"model": "agent-model", "effort": "medium"}),
+        ({"sources": InvocationSources(extras=("MODEL=extra-model",))}, {}, {"model": "extra-model", "effort": "low"}),
+        ({"sources": InvocationSources(extras=("EFFORT=medium",))}, {}, {"model": "agent-model", "effort": "medium"}),
     ],
 )
 def test_one_shot_invocation_pins_beat_agent_manifest(monkeypatch, tmp_path, kwargs, env, expected):

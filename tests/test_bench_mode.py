@@ -9,6 +9,7 @@ import ai
 import ai.types.usage
 
 from js import cli, persona, run_assembly
+from js.config import InvocationSources
 from js.model_client import ModelStreamResult
 
 
@@ -73,8 +74,8 @@ def _stream_stub(captured_max: list):
 
 def _bench(agent: str, *, stats_json: str | None = None, stats_csv: str | None = None) -> int:
     return cli._run_bench(
-        agent, model=None, reasoning=None, maxout=None, quiet=True, extras=None,
-        ignore_local_config=False, ignore_global_config=False, presets=None,
+        agent, model=None, reasoning=None, maxout=None, quiet=True,
+        sources=InvocationSources(),
         stats_json=stats_json, stats_csv=stats_csv,
     )
 

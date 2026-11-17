@@ -4,6 +4,7 @@ import ai
 import pytest
 
 from js import cli, messages, runtime, stats
+from js.config import InvocationSources
 from js.model_client import ModelStreamResult
 
 
@@ -79,8 +80,8 @@ def test_benchmark_stats_failure_preserves_interrupted_status(tmp_path, monkeypa
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
     assert cli._run_bench(
-        "stats-check", model=None, reasoning=None, maxout=None, quiet=True, extras=None,
-        ignore_local_config=False, ignore_global_config=False, presets=None,
+        "stats-check", model=None, reasoning=None, maxout=None, quiet=True,
+        sources=InvocationSources(),
         stats_json=str(tmp_path), stats_csv=None,
     ) == expected
     captured = capsys.readouterr()

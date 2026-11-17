@@ -9,7 +9,7 @@ setting coercion so ``--extra`` matches ``set`` and env/default loading.
 
 These exercise the real load path: the focused ``settings.collect_settings`` /
 ``settings.parse_extra_arg`` unit and the integrated ``js.config.from_env``
-(the same call ``js/cli.py`` makes with ``args.extras``).
+(the same call ``js/cli.py`` makes with the command line's ``InvocationSources``).
 """
 
 from __future__ import annotations
@@ -225,7 +225,7 @@ def test_collect_settings_extra_registered_keys_use_registry_coercion(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# from_env integration: the path js/cli.py actually drives (extras=args.extras)
+# from_env integration: the path js/cli.py actually drives
 # ---------------------------------------------------------------------------
 
 def test_from_env_extra_wins_over_env_and_jsrc_for_one_run(monkeypatch, tmp_path):

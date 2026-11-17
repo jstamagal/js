@@ -238,20 +238,15 @@ def _from_env(
     session: str | None = None,
     *,
     save_session: bool = True,
-    extras: list[str] | None = None,
+    sources: InvocationSources = InvocationSources(),
     agent_id: str | None = None,
-    ignore_local_config: bool = False,
-    ignore_global_config: bool = False,
-    presets: list[str] | None = None,
 ) -> Config:
     if _inherit_session_chat(session):
         from .cli_options import current
         agent_id = current().agent or (None if agent_id == "none" else agent_id)
     return from_env(
         save_session=save_session,
-        sources=InvocationSources(extras=tuple(extras or ()), presets=tuple(presets or ()),
-                                  ignore_local_config=ignore_local_config,
-                                  ignore_global_config=ignore_global_config),
+        sources=sources,
         session=session,
         agent_id=agent_id,
     )
@@ -413,14 +408,13 @@ def _print_resume_hint(cfg: Config, state: dict) -> None:
     msgs.say(msgs.RESUME_HINT, command=resume)
 
 
-def _exchanges_are_the_prompt(args: argparse.Namespace, agent: str | None, presets: list[str]) -> bool:
+def _exchanges_are_the_prompt(args: argparse.Namespace, agent: str | None,
+                              sources: InvocationSources) -> bool:
     """Whether a run with no -p runs the agent's NN-user.md / NN-agent.md
     exchanges as a one-shot: the agent has them and the session is fresh,
     so they are what the run sends."""
     try:
-        cfg = _from_env(None, save_session=False, extras=args.extras, agent_id=agent,
-                        ignore_local_config=args.no_local_config,
-                        ignore_global_config=args.no_global_config, presets=presets)
+        cfg = _from_env(None, save_session=False, sources=sources, agent_id=agent)
         spec = P.load_configured_prompt_spec(cfg, expand=False)
     except (FileNotFoundError, ValueError):
         # The REPL path reports the error.
@@ -438,14 +432,21 @@ def _exchanges_are_the_prompt(args: argparse.Namespace, agent: str | None, prese
     return not M.load_replay_messages(session_file)
 
 
-def _invocation_agent(args: argparse.Namespace, presets: list[str]) -> str:
+def _invocation_agent(args: argparse.Namespace, sources: InvocationSources) -> str:
     """The agent this invocation runs: --agent, --commit, then the `DEFAULT_AGENT`
     setting, resolved as `from_env` resolves it."""
     return resolve_agent_id(
-        args.agent or ("commit" if args.commit else None),
-        sources=InvocationSources(extras=tuple(args.extras), presets=tuple(presets),
-                                  ignore_local_config=args.no_local_config,
-                                  ignore_global_config=args.no_global_config),
+        args.agent or ("commit" if args.commit else None), sources=sources)
+
+
+def _invocation_sources(args: argparse.Namespace) -> InvocationSources:
+    """What the parsed command line adds to settings: its --extra values, its
+    --preset names split at commas, and its --no-*-config switches."""
+    return InvocationSources(
+        extras=tuple(args.extras),
+        presets=tuple(name for spec in args.presets for name in spec.split(",") if name.strip()),
+        ignore_local_config=args.no_local_config,
+        ignore_global_config=args.no_global_config,
     )
 
 
@@ -2671,10 +2672,8 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
                 resume_prefix: str | None = None,
                 reasoning: str | None = None, maxout: int | None = None,
                 show_continue: bool = True,
-                extras: list[str] | None = None, tool_context=None,
-                ignore_local_config: bool = False, ignore_global_config: bool = False,
+                sources: InvocationSources = InvocationSources(), tool_context=None,
                 files: list[str] | None = None, stdin_attachment: bytes | None = None,
-                presets: list[str] | None = None,
                 stats_json: str | None = None, stats_csv: str | None = None,
                 caller_key: str | None = None, announce_generated: bool | None = None,
                 events: headless.JsonEvents | None = None,
@@ -2698,15 +2697,7 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
             msgs.warn(msgs.BAD_REASONING, value=reasoning, error=effort_error)
             return 2
     try:
-        cfg = _from_env(
-            session,
-            save_session=save,
-            extras=extras,
-            agent_id=agent,
-            ignore_local_config=ignore_local_config,
-            ignore_global_config=ignore_global_config,
-            presets=presets,
-        )
+        cfg = _from_env(session, save_session=save, sources=sources, agent_id=agent)
     except ValueError as e:
         msgs.warn(msgs.FAILED, error=e)
         return 2
@@ -3150,9 +3141,7 @@ def _bench_row_line(row: dict) -> msgs.Said:
 
 
 def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
-               maxout: int | None, quiet: bool, extras: list[str] | None,
-               ignore_local_config: bool, ignore_global_config: bool,
-               presets: list[str] | None,
+               maxout: int | None, quiet: bool, sources: InvocationSources,
                stats_json: str | None, stats_csv: str | None,
                debug: bool = False) -> int:
     """Run an agent's NN-benchmark.md turns, each on a clean slate (fresh
@@ -3171,11 +3160,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
             msgs.warn(msgs.BAD_REASONING, value=reasoning, error=effort_error)
             return 2
     try:
-        cfg = _from_env(
-            None, save_session=False, extras=extras, agent_id=agent_id,
-            ignore_local_config=ignore_local_config,
-            ignore_global_config=ignore_global_config, presets=presets,
-        )
+        cfg = _from_env(None, save_session=False, sources=sources, agent_id=agent_id)
         cfg = replace(cfg, session_file=Path(os.devnull))
     except ValueError as e:
         msgs.warn(msgs.FAILED, error=e)
@@ -3353,9 +3338,7 @@ def _run_commit(target: str | None,
                 session: str | None = None, save: bool = True,
                 reasoning: str | None = None, maxout: int | None = None,
                 extra_context: str | None = None,
-                extras: list[str] | None = None,
-                ignore_local_config: bool = False, ignore_global_config: bool = False,
-                presets: list[str] | None = None) -> int:
+                sources: InvocationSources = InvocationSources()) -> int:
     target_dir = Path(target).expanduser() if target else Path.cwd()
     if not target_dir.is_absolute():
         target_dir = Path.cwd() / target_dir
@@ -3417,18 +3400,17 @@ def _run_commit(target: str | None,
         resume_prefix=f"js --commit {target_dir}",
         reasoning=reasoning,
         maxout=maxout,
-        extras=extras,
+        sources=sources,
         config_pins=True,
         tool_context=ToolContext(cwd=target_dir),
-        ignore_local_config=ignore_local_config,
-        ignore_global_config=ignore_global_config,
-        presets=presets,
     )
 
 
-def _run_compact_offline(session: str, *, agent: str | None = None, focus: str = "", extras: list[str] | None = None, model: str | None = None) -> int:
+def _run_compact_offline(session: str, *, agent: str | None = None, focus: str = "",
+                         sources: InvocationSources = InvocationSources(),
+                         model: str | None = None) -> int:
     try:
-        cfg = _from_env(session, save_session=False, extras=extras, agent_id=agent)
+        cfg = _from_env(session, save_session=False, sources=sources, agent_id=agent)
         if not cfg.session_file.is_file():
             raise ValueError(msgs.CONFIG_SESSION_MUST_IDENTIFY_AN_EXISTING_JSONL_FILE.format(session=session))
         prompt_spec = P.load_configured_prompt_spec(cfg)
@@ -3513,10 +3495,8 @@ def _print_model_list(provider_arg: str | None, cfg: Config | None) -> int:
     return 0
 
 
-def _run_model_bench(args: argparse.Namespace, presets: list[str]) -> int:
-    cfg = _from_env(None, save_session=False, extras=args.extras, agent_id=args.agent,
-                    ignore_local_config=args.no_local_config, ignore_global_config=args.no_global_config,
-                    presets=presets)
+def _run_model_bench(args: argparse.Namespace, sources: InvocationSources) -> int:
+    cfg = _from_env(None, save_session=False, sources=sources, agent_id=args.agent)
     prompt = ('Respond with EXACTLY the full text of the first 5 sections of Article I '
               'of the United States Constitution. No introduction or commentary.')
     rows = []
@@ -3536,9 +3516,7 @@ def _run_model_bench(args: argparse.Namespace, presets: list[str]) -> int:
             try:
                 code = _run_prompt(prompt, model=route, agent=args.agent, save=False,
                                    reasoning=args.reasoning, maxout=args.max_out,
-                                   extras=args.extras, ignore_local_config=args.no_local_config,
-                                   ignore_global_config=args.no_global_config, presets=presets,
-                                   show_continue=False, call_stats=calls)
+                                   sources=sources, show_continue=False, call_stats=calls)
                 error = None if code == 0 else msgs.NO_ANSWER.words()
             except Exception as exc:  # noqa: BLE001 - one sick model must not stop the list
                 code, error = 1, str(exc)
@@ -3559,16 +3537,12 @@ def _models_json(provider_id: str | None, cfg: Config | None = None) -> dict:
     return {"models": models}
 
 
-def _warn_unmatched_presets(presets: list[str], *, ignore_local: bool, ignore_global: bool) -> None:
+def _warn_unmatched_presets(sources: InvocationSources) -> None:
     from .config import _preset_config_paths
 
     project_dir = Path.cwd()
-    for name in presets:
-        candidates = _preset_config_paths(
-            InvocationSources(presets=(name,), ignore_local_config=ignore_local,
-                              ignore_global_config=ignore_global),
-            project_dir,
-        )
+    for name in sources.presets:
+        candidates = _preset_config_paths(replace(sources, presets=(name,)), project_dir)
         if not any(path.exists() for path in candidates):
             if candidates:
                 msgs.warn(msgs.PRESET_NOT_FOUND, name=name, looked=" or ".join(str(p) for p in candidates))
@@ -4507,14 +4481,8 @@ def _main(argv: list[str] | None = None) -> int:
     if args.loop is not None:
         from . import loop_controller
         try:
-            loop_settings = settings.collect_settings(
-                config_paths=jsrc_paths(
-                    Path(args.cd).expanduser().resolve() if args.cd else Path.cwd(),
-                    InvocationSources(
-                        presets=tuple(name for spec in args.presets for name in spec.split(",") if name.strip()),
-                        ignore_local_config=args.no_local_config, ignore_global_config=args.no_global_config),
-                ), extras=args.extras,
-            )
+            loop_settings = run_settings(Path(args.cd).expanduser() if args.cd else None,
+                                         sources=_invocation_sources(args))
             return loop_controller.run(dispatch_argv, args.loop, bench=args.bench, prompt=args.prompt,
                                        settings=loop_settings)
         except (ValueError, OSError) as exc:
@@ -4613,21 +4581,16 @@ def _agents_listing() -> list[str]:
 
 def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     _session_leases.start = {"mode": None, "command": ["js", *dispatch_argv]}
+    sources = _invocation_sources(args)
     if args.url:
-        # Desugar before anything reads args.extras. Prepended, not appended, so
+        # Desugar before anything reads the extras. Prepended, not appended, so
         # an explicit --extra on the same command line still overrides a field
         # the spec filled in.
         try:
-            endpoint_settings = settings.collect_settings(
-                config_paths=jsrc_paths(
-                    Path(args.cd).expanduser().resolve() if args.cd else Path.cwd(),
-                    InvocationSources(
-                        presets=tuple(name for spec in args.presets for name in spec.split(",") if name.strip()),
-                        ignore_local_config=args.no_local_config, ignore_global_config=args.no_global_config),
-                ), extras=args.extras,
-            )
-            args.extras = endpoint_uri.parse(
-                args.url, settings=endpoint_settings, env=os.environ).as_settings() + list(args.extras)
+            endpoint_settings = run_settings(Path(args.cd).expanduser() if args.cd else None,
+                                             sources=sources)
+            endpoint = endpoint_uri.parse(args.url, settings=endpoint_settings, env=os.environ)
+            sources = replace(sources, extras=(*endpoint.as_settings(), *sources.extras))
         except endpoint_uri.EndpointSpecError as exc:
             msgs.warn(msgs.BAD_URL_SPEC, error=exc)
             return 2
@@ -4643,11 +4606,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     if flag_error is not None:
         return flag_error
     # After --extra, so a flag beats an --extra naming the same setting.
-    args.extras = [*args.extras, *flag_extras]
-    presets = [name for spec in args.presets for name in spec.split(",") if name.strip()]
-    set_invocation(InvocationSources(extras=tuple(args.extras), presets=tuple(presets),
-                                     ignore_local_config=args.no_local_config,
-                                     ignore_global_config=args.no_global_config))
+    sources = replace(sources, extras=(*sources.extras, *flag_extras))
+    set_invocation(sources)
     if args.session == "":
         # A bare --session opens the picker; the chosen session is resumed in
         # its own directory and agent, jailed there when it started under -C.
@@ -4705,7 +4665,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
             print(f'Verification: {len(errors)} error(s).')
         return int(bool(errors))
     if args.bench_models:
-        return _run_model_bench(args, presets)
+        return _run_model_bench(args, sources)
     if args.list_sessions:
         ambiguous = any(
             (
@@ -4728,7 +4688,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
             msgs.warn(msgs.LAST_WITH_SESSION)
             return 2
         try:
-            last_agent = _invocation_agent(args, presets)
+            last_agent = _invocation_agent(args, sources)
         except ValueError as e:
             msgs.warn(msgs.FAILED, error=e)
             return 2
@@ -4739,17 +4699,17 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         args.session = resolved_last
     if args.session_key is not None:
         try:
-            effective_agent = _invocation_agent(args, presets)
+            effective_agent = _invocation_agent(args, sources)
         except ValueError as e:
             msgs.warn(msgs.FAILED, error=e)
             return 2
         args.session = derive_session_name(effective_agent, Path.cwd(), args.session_key)
     _session_leases.caller_key = args.session_key
     _inherit_session_chat(args.session)
-    if presets:
+    if sources.presets:
         # Resolve against the now-final cwd (after any -C). A name that matches no
         # file anywhere is almost certainly a typo — say so rather than no-op.
-        _warn_unmatched_presets(presets, ignore_local=args.no_local_config, ignore_global=args.no_global_config)
+        _warn_unmatched_presets(sources)
     if args.login is not None:
         from . import login_cli
         return login_cli.main([args.login] if args.login else [])
@@ -4768,14 +4728,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
             cfg = None
             provider_arg = args.list_models or None
             if provider_arg is None:
-                cfg = _from_env(
-                    args.session,
-                    save_session=False,
-                    extras=args.extras,
-                    agent_id=args.agent,
-                    ignore_local_config=args.no_local_config,
-                    ignore_global_config=args.no_global_config,
-                )
+                cfg = _from_env(args.session, save_session=False,
+                                sources=replace(sources, presets=()), agent_id=args.agent)
             return _print_json(_models_json(provider_arg, cfg)) if args.json else _print_model_list(provider_arg, cfg)
         except Exception as e:  # noqa: BLE001
             if args.json:
@@ -4818,7 +4772,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
 
     if args.lock:
         try:
-            agent_lock.acquire(args.bench and validate_agent_id(args.bench) or _invocation_agent(args, presets))
+            agent_lock.acquire(args.bench and validate_agent_id(args.bench) or _invocation_agent(args, sources))
         except (ValueError, agent_lock.Busy, OSError) as e:
             msgs.warn(msgs.FAILED, error=e)
             return 2
@@ -4836,15 +4790,14 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
             msgs.warn(msgs.BENCH_EXCLUSIVE)
             return 2
         return _run_bench(args.bench, model=args.model, reasoning=args.reasoning,
-                          maxout=args.max_out, quiet=args.quiet, extras=args.extras,
-                          ignore_local_config=args.no_local_config,
-                          ignore_global_config=args.no_global_config, presets=presets,
+                          maxout=args.max_out, quiet=args.quiet, sources=sources,
                           stats_json=args.stats_json, stats_csv=args.stats_csv,
                           debug=args.debug)
 
     if args.compact:
         focus = _read_stdin_if_piped() if args.prompt == "-" else args.prompt or ""
-        return _run_compact_offline(args.compact, agent=cli_agent, focus=focus, extras=args.extras, model=args.model)
+        return _run_compact_offline(args.compact, agent=cli_agent, focus=focus,
+                                    sources=InvocationSources(extras=sources.extras), model=args.model)
 
     if args.migrate_config:
         return _run_migrate_config()
@@ -4864,12 +4817,10 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         return _run_commit(args.target, model=args.model, debug=args.debug, debug_file=args.debug_file,
                            session=args.session, save=not args.no_save,
                            reasoning=args.reasoning, maxout=args.max_out,
-                           extra_context=extra_context, extras=args.extras,
-                           ignore_local_config=args.no_local_config,
-                           ignore_global_config=args.no_global_config, presets=presets)
+                           extra_context=extra_context, sources=sources)
 
     try:
-        automatic_agent = _invocation_agent(args, presets)
+        automatic_agent = _invocation_agent(args, sources)
         automatic_dir = P._most_specific_prompt_dir(
             automatic_agent, _paths.defaults_dir() / "agents",
             _paths.global_agents_dir(), _paths.project_home() / "agents",
@@ -4881,16 +4832,15 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     if not current().replaces_prompt and not current().chat and P.has_benchmarks(automatic_dir):
         return _run_bench(
             automatic_agent, model=args.model, reasoning=args.reasoning,
-            maxout=args.max_out, quiet=args.quiet, extras=args.extras,
-            ignore_local_config=args.no_local_config, ignore_global_config=args.no_global_config,
-            presets=presets, stats_json=args.stats_json, stats_csv=args.stats_csv, debug=args.debug,
+            maxout=args.max_out, quiet=args.quiet, sources=sources,
+            stats_json=args.stats_json, stats_csv=args.stats_csv, debug=args.debug,
         )
 
     if args.files and args.prompt is None and sys.stdin.isatty():
         msgs.warn(msgs.FILE_NEEDS_PROMPT)
         return 2
 
-    exchanges_only = args.prompt is None and sys.stdin.isatty() and _exchanges_are_the_prompt(args, cli_agent, presets)
+    exchanges_only = args.prompt is None and sys.stdin.isatty() and _exchanges_are_the_prompt(args, cli_agent, sources)
     if args.prompt is not None or not sys.stdin.isatty() or exchanges_only:
         os.environ["JS_MODE"] = "headless"
         stdin_attachment = None
@@ -4924,12 +4874,9 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
                      caller_key=args.session_key, announce_generated=generated_session,
                      reasoning=args.reasoning, maxout=args.max_out,
                      show_continue=not args.quiet,
-                     extras=args.extras,
-                     ignore_local_config=args.no_local_config,
-                     ignore_global_config=args.no_global_config,
+                     sources=sources,
                      files=args.files,
                      stdin_attachment=stdin_attachment,
-                     presets=presets,
                      stats_json=args.stats_json, stats_csv=args.stats_csv,
                      swarm=args.swarm)
         if args.no_save:
@@ -4942,15 +4889,8 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     os.environ["JS_MODE"] = "repl"
     _session_leases.start["mode"] = "repl"
     try:
-        cfg = _from_env(
-            args.session,
-            save_session=not args.no_save,
-            extras=args.extras,
-            agent_id=cli_agent,
-            ignore_local_config=args.no_local_config,
-            ignore_global_config=args.no_global_config,
-            presets=presets,
-        )
+        cfg = _from_env(args.session, save_session=not args.no_save, sources=sources,
+                        agent_id=cli_agent)
     except ValueError as e:
         msgs.warn(msgs.FAILED, error=e)
         return 2
@@ -5060,10 +5000,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     if cut_off:
         _queue_note(state, snippets.render('turn-cut-off'))
     rc_errors = _run_rc_commands(state, cfg, jsrc_paths(
-        Path(getattr(cfg, "project_dir", None) or Path.cwd()),
-        InvocationSources(presets=tuple(presets), ignore_local_config=args.no_local_config,
-                          ignore_global_config=args.no_global_config),
-    ))
+        Path(getattr(cfg, "project_dir", None) or Path.cwd()), sources))
     _mark_saved(state)
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
     state["mcp_host"] = _session_mcp_host(cfg, telemetry)
