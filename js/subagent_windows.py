@@ -23,7 +23,8 @@ import sys
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from . import display, messages as msgs, screen, screen_scrollback
+from . import display, messages as msgs, runtime, screen, screen_scrollback
+from .toolkit import subagents
 
 
 class SubagentWindow:
@@ -49,7 +50,6 @@ class SubagentWindow:
 
     def telemetry(self, debug_log: Any) -> Any:
         """A Telemetry whose answer, reasoning and tool exchanges draw in this window."""
-        from . import runtime
 
         loop, app, scrollback = self._owner.loop, self._owner.app, self.scrollback
         out = screen._ScreenStdout(loop, scrollback, app, sys.__stdout__)
@@ -183,7 +183,6 @@ class SubagentWindows:
 @contextlib.contextmanager
 def opening(windows: SubagentWindows):
     """Give the subagents this context launches windows from ``windows``."""
-    from .toolkit import subagents
 
     token = subagents.window_opener.set(windows.open)
     try:

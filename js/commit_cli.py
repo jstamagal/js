@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from . import (
+    commit_helper,
     messages as msgs,
     paths as _paths,
     prompt_run,
@@ -55,7 +56,6 @@ def _snapshot_worktree(repo_dir: Path) -> Path | None:
     """
     import hashlib
 
-    from . import commit_helper
 
     patch = _worktree_patch(repo_dir, commit_helper)
     others = commit_helper.git("ls-files", "--others", "--exclude-standard", "-z", check=False, repo=repo_dir)
@@ -98,7 +98,6 @@ def run_commit(target: str | None,
         msgs.warn(msgs.COMMIT_TARGET_NOT_DIR, path=target_dir)
         return 2
 
-    from . import commit_helper
 
     probe = commit_helper.git("rev-parse", "--is-inside-work-tree", check=False, repo=target_dir)
     if probe.returncode != 0 or probe.stdout.strip() != "true":

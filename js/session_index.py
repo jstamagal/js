@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import paths
+from . import paths, session_text
 
 _SCHEMA = 2  # Rebuild summaries written before model_switch stamps were parsed.
 _MARK_OPEN = "\x01"
@@ -269,8 +269,6 @@ def forget(session_file: Path) -> None:
 
 
 def _index_file(session_file: Path, info: os.stat_result) -> dict[str, Any] | None:
-    from . import session_text
-
     try:
         transcript = session_text.parse(session_file)
     except OSError:

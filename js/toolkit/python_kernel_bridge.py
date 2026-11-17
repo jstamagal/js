@@ -42,7 +42,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .. import jail as _jail, messages as msgs, output
+from .. import events, jail as _jail, messages as msgs, output, tool_args
+from . import subagents
 from .core import Output, ToolContext, ToolResult, as_output, call_scope, call_tool, registry_scope
 
 # How long the server waits for one request's bytes after a connection opens.
@@ -84,7 +85,6 @@ def install_cell(socket_path: Path, token: str) -> str:
 
 def _refusal(tool: Any) -> str | None:
     """Why ``tool`` cannot run from a cell, or None when it can."""
-    from . import subagents
 
     reason = _REFUSED_TOOLS.get(tool.name)
     if reason is None and subagents.is_fan_out_handler(tool.handler):
@@ -249,8 +249,6 @@ class ToolBridge:
         return self._call(registry, context, request)
 
     def _call(self, registry: Any, context: ToolContext, request: dict) -> dict[str, Any]:
-        from .. import tool_args
-
         name = str(request.get("tool", ""))
         tool = registry.resolve(name)
         if tool is None:
@@ -334,7 +332,6 @@ def _emit(hooks: Any, event: str, **payload: Any) -> Any:
 def _hook_refusal(hooks: Any, call_id: str, name: str, arguments: dict) -> str | None:
     """The refusal an `on tool_call` handler gives this call, or None. The
     payload has the shape a direct call's has: arguments as JSON text."""
-    from .. import events
 
     emission = _emit(hooks, "tool_call", id=call_id, name=name,
                      arguments=json.dumps(arguments, default=str))

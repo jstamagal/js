@@ -63,7 +63,10 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from . import messages as msgs
+from . import messages as msgs, swarm_run
+from .toolkit.core import Tool, view
+from .toolkit.descriptions import load_description, load_parameter_description
+from .toolkit.presentation import Presentation
 
 POLL_S = 0.25
 COALESCE_S = 0.3
@@ -670,8 +673,6 @@ _OFF_BUS = 'ERROR: this agent is not on a swarm bus (run it with python -m js.sw
 
 
 def _view(**fields: Any) -> None:
-    from .toolkit.core import view
-
     view(**fields)
 
 
@@ -878,10 +879,6 @@ def _tasks(context: Any = None) -> str:
 
 
 def tools() -> tuple:
-    from .toolkit.core import Tool
-    from .toolkit.descriptions import load_description, load_parameter_description
-    from .toolkit.presentation import Presentation
-
     return (
         Tool("send", load_description("send"), _send, {
             "to": {"type": "string", "description": load_parameter_description('send', 'to')},
@@ -976,8 +973,6 @@ def main(argv: list[str] | None = None) -> int:
         cell = Room(a.root).post_cell(a.by, a.title, body)
         print(msgs.SWARM_POSTED.words(id=cell.id))
     else:
-        from . import swarm_run
-
         return swarm_run.main(a.spec)
     return 0
 

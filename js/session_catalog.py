@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import messages as msgs, paths, providers, session_store, session_text, usage as usage_mod
+from .cli_options import current, invocation
 
 if TYPE_CHECKING:
     from .config import Config
@@ -468,7 +469,6 @@ def session_scope(func):
         start = len(leases)
         old_caller_key = getattr(session_leases, "caller_key", None)
         old_start = getattr(session_leases, "start", None)
-        from .cli_options import current, invocation
         try:
             with invocation(current()):
                 return func(*args, **kwargs)
@@ -493,7 +493,6 @@ def activate_saved_session(
     effective_key = caller_key if caller_key is not None else getattr(session_leases, "caller_key", None)
     start = getattr(session_leases, "start", None) or {}
     provider, bare = _recorded_model(model, cfg)
-    from .cli_options import current
     options = current()
     record_session_start(
         cfg.session_file,

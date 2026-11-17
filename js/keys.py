@@ -23,7 +23,7 @@ from pathlib import Path
 from prompt_toolkit.keys import KEY_ALIASES, Keys
 from prompt_toolkit.search import SearchDirection
 
-from . import messages as msgs, paths, setcmd
+from . import messages as msgs, paths, setcmd, settings as _settings
 
 KeySequence = tuple[str, ...]
 Keymap = dict[str, tuple[KeySequence, ...]]
@@ -71,7 +71,6 @@ _KEY_NAMES = frozenset(key.value for key in Keys if not key.value.startswith("<"
 
 def keys_file(settings: dict | None) -> Path:
     """The keys file `KEYBINDS_FILE` names, or ~/.js/keys when it is unset."""
-    from . import settings as _settings
 
     value = _settings.knob(settings, "KEYBINDS_FILE")
     return Path(value).expanduser() if value else paths.keys_file()

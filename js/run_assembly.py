@@ -28,11 +28,13 @@ from . import (
     login_defaults,
     memory as M,
     persona as P,
+    providers,
     routing,
     session_store,
     setting_values,
     settings,
 )
+from .cli_options import current, restore_chat
 from .config import Config, InvocationSources, resolve_session_file
 from .session_catalog import first_metadata, last_stamp
 from .toolkit import policy
@@ -132,7 +134,6 @@ def stamp_model(stamp: dict, cfg: Any) -> str | None:
     rides as a prefix when it parses as a known provider and is the configured
     one or has a saved login. A stamp without a provider, or one whose prefix
     does not parse, gives the model id alone."""
-    from . import providers
 
     model = stamp.get("model")
     if not isinstance(model, str) or not model:
@@ -248,7 +249,6 @@ def settle(cfg: Any, *, model: str | None = None, reasoning: str | None = None,
             cfg = login_defaults.for_turn(replace(cfg, layer_resume=resumed.layer))
             if effort is None:
                 effort = resumed.layer["EFFORT"]
-    from .cli_options import current
     options = current()
     recorded = M.load_system_prompt(cfg.session_file) if reads_session else None
     sends_agent_prompt = recorded is None or options.changes_prompt or options.chat
@@ -260,8 +260,6 @@ def settle(cfg: Any, *, model: str | None = None, reasoning: str | None = None,
 
 
 def inherit_session_chat(session: str | None) -> bool:
-    from .cli_options import current, restore_chat
-
     session = session or os.environ.get("JS_SESSION")
     if not session:
         return False
@@ -289,7 +287,6 @@ def from_env(
     agent_id: str | None = None,
 ) -> Config:
     if inherit_session_chat(session):
-        from .cli_options import current
         agent_id = current().agent or (None if agent_id == "none" else agent_id)
     return config.from_env(
         save_session=save_session,

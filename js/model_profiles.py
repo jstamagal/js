@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import messages as msgs, output, settings as _settings
+from .config import validate_agent_id
 from .toolkit import policy
 
 MODES = ("replace", "prepend")
@@ -95,7 +96,6 @@ class ModelProfile:
 
 
 def parse_profile(raw: Any, where: str) -> ModelProfile:
-    from .config import validate_agent_id
     from .persona import _coerce_reasoning_effort, _coerce_sampling
 
     if not isinstance(raw, dict):

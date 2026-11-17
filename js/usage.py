@@ -30,7 +30,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
-from . import output, session_store
+from . import model_metadata, output, session_store
 from .usage_display import (
     format_dollars as format_dollars,
     format_tokens as format_tokens,
@@ -163,8 +163,6 @@ def call_usage(usage: Any, *, model: str, provider_id: str | None) -> CallUsage:
         tokens["input_tokens"] += tokens["cache_write_tokens"]
     cost = None
     if usage is not None:
-        from . import model_metadata
-
         try:
             tiers = model_metadata.model_prices(model, provider_id)
         except Exception:  # noqa: BLE001 - a catalog failure leaves the call unpriced

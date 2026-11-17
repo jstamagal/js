@@ -12,7 +12,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-from .. import messages as msgs, output, snippets
+from .. import messages as msgs, output, paths, snippets
 from ..skills import SkillCatalog, ToolActivationResult, discover_skills, load_skill
 from . import (
     browser,
@@ -552,8 +552,6 @@ def _registry_from_tools(
 
 
 def _default_prompts_root() -> Path:
-    from .. import paths
-
     return paths.defaults_dir() / "agents"
 
 

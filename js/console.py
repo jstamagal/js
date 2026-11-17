@@ -19,13 +19,18 @@ from . import (
     control_sequences,
     display,
     fset,
+    kernel_display,
     messages as msgs,
+    network_display,
     output,
+    stream_transport,
     text_layout,
     tool_display,
     toolkit as T,
 )
 from .reasoning_display import ReasoningDisplay, StderrReasoning
+from .screen import Windows
+from .toolkit import shell
 from .toolkit.core import ToolContext
 from .toolkit.presentation import call_kind, declared, tool_output
 
@@ -188,7 +193,6 @@ class ToolTrace:
 
     def _follow(self, opened: _OpenCall, tool_context: ToolContext | None, level: int) -> None:
         """Redraw a running command with the tail of its output until it ends."""
-        from .toolkit import shell
 
         command = (opened.args or {}).get("command")
         if opened.done.wait(_LIVE_AFTER_S):
@@ -296,8 +300,6 @@ def _window_words(window: int | None) -> str:
     if window is None:
         return ""
     if window == 0:
-        from .screen import Windows
-
         return msgs.SUBAGENT_NO_WINDOW.words(last=Windows.LAST)
     return msgs.SUBAGENT_WINDOW.words(number=window)
 
@@ -325,7 +327,6 @@ def _print_run_line(fields: list[str]) -> None:
 
 def call_stats_visible(label: str, trace: bool | None, suppressed: bool) -> bool:
     """Whether js's views show the statistics for this call."""
-    from . import stream_transport
 
     if trace is None:
         return True
@@ -395,8 +396,6 @@ class ConsoleSink:
         if repeated is not None and repeated[0][0] == label:
             self._retry_repeat.set(None)
             if repeated[1] > 1:
-                from . import network_display
-
                 line = msgs.NET_RETRY_RECOVERED.said(count=repeated[1])
                 with _muted_tee(getattr(self._telemetry, "transcript_log", None)):
                     network_display.always(network_display.LabelledLine(label, line) if label else line)
@@ -416,8 +415,6 @@ class ConsoleSink:
             msgs.say(message, file=sys.stderr if stderr else None, flush=flush, **fields)
 
     def _on_network(self, *, level: int, line: Any, fallback: bool) -> None:
-        from . import network_display, stream_transport
-
         if fallback and stream_transport._sink is None:
             with _muted_tee(getattr(self._telemetry, "transcript_log", None)):
                 network_display.draw(level, line, fallback=fallback)
@@ -426,8 +423,6 @@ class ConsoleSink:
 
     def _on_retry_wait(self, *, n: int, attempts: int, delay: float,
                        error: BaseException, label: str) -> None:
-        from . import network_display
-
         record = getattr(self._telemetry, "event", None)
         if callable(record):
             record("provider_retry", n=n, label=label, error=str(error))
@@ -449,18 +444,12 @@ class ConsoleSink:
                 lambda left: msgs.RETRY_COUNTDOWN.said(n=n, of=attempts, seconds=left), delay)
 
     def _on_retry_tick(self, *, left: float) -> None:
-        from . import network_display
-
         network_display.countdown_tick(left)
 
     def _on_retry_done(self) -> None:
-        from . import network_display
-
         network_display.countdown_end()
 
     def _on_first_byte_tick(self, *, waited: float) -> None:
-        from . import network_display
-
         if network_display.counting():
             network_display.countdown_tick(waited)
         else:
@@ -468,13 +457,9 @@ class ConsoleSink:
                 lambda seconds: msgs.FIRST_BYTE_COUNTER.said(waited=msgs.duration(seconds)), waited)
 
     def _on_first_byte_done(self) -> None:
-        from . import network_display
-
         network_display.countdown_end()
 
     def _on_retry_gave_up(self, *, n: int, error: BaseException, label: str) -> None:
-        from . import network_display
-
         record = getattr(self._telemetry, "event", None)
         if callable(record):
             record("provider_retry_stopped", n=n, label=label, error=str(error))
@@ -498,14 +483,10 @@ class ConsoleSink:
             msgs.say(msgs.SUBAGENT_FINISHED, file=sys.stderr, flush=True, **subagent_finished_fields(fields))
 
     def _on_kernel_execution(self, *, context: Any, **fields: Any) -> None:
-        from . import kernel_display
-
         kernel_display.render_execution(context, **fields)
 
     def _on_kernel_note(self, *, context: Any, kind: str, level: str, content: Any,
                         style: str, verbose_only: bool) -> None:
-        from . import kernel_display
-
         getattr(kernel_display, f"render_{kind}")(context, level, content,
                                                   style=style, verbose_only=verbose_only)
 

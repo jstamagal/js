@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from . import paths as _paths, settings as _settings
+from . import config, paths as _paths, settings as _settings
 
 FILENAME = ".env"
 
@@ -67,8 +67,6 @@ def candidate_files(cwd: Path | None = None, *, settings: dict | None = None) ->
 def load(cwd: Path | None = None, environ: dict[str, str] | None = None, *, settings: dict | None = None) -> list[Path]:
     """Fill unset env names from `.env` files. Returns the files that applied."""
     if settings is None:
-        from . import config
-
         try:
             settings = config.run_settings(cwd, held=True)
         except ValueError:

@@ -26,6 +26,7 @@ from . import (
     toolkit as T,
 )
 from .tool_calls import PendingToolCall
+from .toolkit import file_search, python_kernel, shell, subagents
 from .toolkit.core import (
     ToolContext,
     ToolOutput,
@@ -104,8 +105,6 @@ async def _call_on_this_thread(tool: Any, args: dict, context: ToolContext) -> A
 
 
 async def _call_fan_out(tool: Any, args: dict, context: ToolContext) -> Any:
-    from .toolkit import subagents
-
     return await subagents.dispatch_fan_out_async(tool, args, context)
 
 
@@ -448,7 +447,6 @@ def _interrupt_inflight(tool_context: ToolContext) -> None:
     shell call blocked on its command gets that command's process tree killed,
     so ^C ends the turn now rather than when the shell wait runs out.
     """
-    from .toolkit import file_search, python_kernel, shell
 
     if tool_context.tool_approval is not None:
         tool_context.tool_approval.cancel()
@@ -474,7 +472,6 @@ async def dispatch_batch(
     an ancestor's worker. Mixed async batches retain model order; pure fan-out
     batches run concurrently with their sync leaves, as before.
     """
-    from .toolkit import subagents
 
     progress = progress if progress is not None else DispatchProgress()
     fan_out = set()

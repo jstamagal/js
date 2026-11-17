@@ -28,6 +28,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from . import settings as _settings
+
 EFFORT_LADDER: tuple[str, ...] = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 _RANK: dict[str, int] = {name: i for i, name in enumerate(EFFORT_LADDER)}
 
@@ -157,7 +159,6 @@ def anthropic_thinking(model_name: str, effort: str | None, budget: int | None =
     budget of that many tokens."""
     # settings reads EFFORT_LADDER from this module as it loads, so this
     # module reads settings only when called.
-    from . import settings as _settings
 
     if effort is None:
         return None

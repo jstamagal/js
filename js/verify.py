@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from . import listings, paths, persona, setting_layers, settings, skills
+from .config import validate_agent_id
 from .toolkit import policy
 
 
@@ -43,7 +44,6 @@ def verify(agent: str | None = None) -> list[str]:
         errors.append(str(exc))
 
     if agent:
-        from .config import validate_agent_id
         validate_agent_id(agent)
         agent_ids = [agent]
     else:

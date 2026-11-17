@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from . import (
+    fset as _fset,
     messages as msgs,
     prompt_commands,
     repl_agent_commands,
@@ -282,7 +283,6 @@ def run_rc_commands(state: ReplState, cfg: Config, paths: list[Path]) -> list[st
     load found takes its value in the live settings, under the env and CLI
     layers, and what the session put on top of the jsrc layer stays. Output
     is dropped; the errors come back for the banner."""
-    from . import fset as _fset
 
     errors: list[str] = []
     stack = state.load_stack

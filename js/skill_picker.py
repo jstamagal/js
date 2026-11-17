@@ -26,7 +26,7 @@ from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.output import Output, create_output
 from prompt_toolkit.styles import Style
 
-from . import fset, keys, messages as msgs
+from . import fset, keys, messages as msgs, picker, skills
 from .skills import SkillMetadata
 
 _PAGE = 10
@@ -256,7 +256,6 @@ class SkillPicker:
 def pick_skills(cwd: str | Path, disabled: Iterable[str] = (), *, input=None, output=None, picker_factory=None) -> tuple[str, ...] | None:
     """Run the picker over every skill discovered from ``cwd`` and return the
     new SKILLS_DISABLED value, or None when closed."""
-    from . import picker, skills
 
     factory = SkillPicker if picker_factory is None else picker_factory
     state = factory(skills.discover_skills(Path(cwd)).skills, disabled)

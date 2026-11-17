@@ -12,6 +12,7 @@ import ai.types.messages
 
 from . import history_record, media
 from .history_record import MEDIA_LABEL_ID_MAX, media_label
+from .toolkit.core import ToolResult
 
 
 def strip_reasoning_parts(messages: list[ai.messages.Message]) -> list[ai.messages.Message]:
@@ -63,8 +64,6 @@ def _visual_read_error(raw_path: str, exc: OSError) -> str:
 
 
 def _mixed_result_parts(result: Any) -> tuple[str, list[Any], bool]:
-    from .toolkit.core import ToolResult
-
     if not isinstance(result, ToolResult):
         return str(result), [], False
     text: list[str] = []

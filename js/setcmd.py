@@ -21,6 +21,7 @@ from . import (
     events as _events,
     fset as _fset,
     messages as msgs,
+    paranoid,
     setting_layers,
     setting_values,
     settings as _s,
@@ -51,7 +52,6 @@ def _empty_display(spec: _s.SettingSpec) -> str:
 
 def masks_secrets(settings: dict | None) -> bool:
     """True when ``settings``' PARANOID_MODE hides secret values."""
-    from . import paranoid
 
     # The store alone: `js/jsrc` itself is applied through `apply_set`.
     return paranoid.masks(paranoid.read(_s.get_dotted(settings or {}, ("PARANOID_MODE",))))

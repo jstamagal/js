@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 import modelsdotdev
 from ai.providers.base import _PROVIDER_REGISTRY
 
-from . import messages as msgs
+from . import logins as _logins, messages as msgs
 
 Transport = str
 
@@ -583,7 +583,6 @@ def _saved_login_provider_def(provider_id: str) -> ProviderDef | None:
     explicit /set or env values still win. A missing or corrupt login store
     reads as no logins (``logins.load_logins``).
     """
-    from . import logins as _logins
 
     login = _logins.load_logins().get(provider_id)
     if login is None:
@@ -623,7 +622,6 @@ def get_provider(provider_id: str | None) -> ProviderDef | None:
 def known_provider_ids() -> set[str]:
     ids = set(_aliases())
     ids.update(provider.id for provider in login_providers())
-    from . import logins as _logins
 
     ids.update(_logins.load_logins())
     return ids

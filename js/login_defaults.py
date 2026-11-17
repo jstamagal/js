@@ -30,7 +30,15 @@ import json
 from dataclasses import replace
 from typing import Any
 
-from . import messages as msgs, setting_layers, setting_values, settings as _settings
+from . import (
+    logins,
+    messages as msgs,
+    providers,
+    setting_layers,
+    setting_values,
+    settings as _settings,
+    turn_settings,
+)
 from .sampling import SAMPLING_FIELDS, Sampling
 
 KEYS: tuple[str, ...] = (
@@ -132,7 +140,6 @@ def login_for(provider_id: str | None, base_url: str | None) -> Any:
     None. The URL decides first: a saved login with that base URL, the
     provider's own when several match. With no match, the provider's own
     login only when it names no URL of its own."""
-    from . import logins
 
     own = logins.get_login(provider_id) if provider_id else None
     if not base_url:
@@ -268,7 +275,6 @@ def for_turn(cfg: Any) -> Any:
     returned as it is."""
     if getattr(cfg, "layer_jsrc", None) is None:
         return cfg
-    from . import providers, turn_settings
     from .config import _norm_effort, vision_enabled_for_model
 
     layers = layers_of(cfg)

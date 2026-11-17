@@ -41,7 +41,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import messages as msgs, paths, settings as _settings
+from . import messages as msgs, paths, settings, settings as _settings
 
 # Filesystem types whose mounts are hidden in the jail. `find /` over an NFS
 # home is the sweep the jail exists to stop.
@@ -117,8 +117,6 @@ def parse_hides(specs) -> list[Path]:
 
 
 def _default_hides() -> tuple[str, ...]:
-    from . import settings
-
     return tuple(settings.default_value("JAIL_HIDE") or ())
 
 

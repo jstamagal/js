@@ -19,7 +19,13 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from . import messages as msgs, output
+from . import (
+    fset,
+    messages as msgs,
+    output,
+    paths as _paths,
+    setcmd,  # lazy: setcmd imports this module
+)
 from .setting_values import coerce_value, from_line_literal
 from .settings import (
     REGISTRY,
@@ -187,7 +193,6 @@ def apply_jsrc(path: Path, settings: dict, stack: list[Path], warnings: list[str
     other line is the REPL's, which runs the whole file again in one pass
     (`repl_commands.run_rc_commands`); ``commands`` collects those lines.
     Returns why a loaded file stopped, or None."""
-    from . import setcmd  # lazy: setcmd imports this module
 
     if lines is None:
         try:
@@ -252,7 +257,6 @@ def jsrc_commands(paths: list[Path]) -> list[JsrcCommand]:
     """The lines of the jsrc files ``paths`` the settings layer does not own
     (`on`, `alias`, any other command), in the order config load meets them
     inside the files it loads. The /fset entries in force stay as they are."""
-    from . import fset
 
     commands: list[JsrcCommand] = []
     with fset.held():
@@ -279,12 +283,10 @@ def collect_settings(
     passes the global, project, and project-local files explicitly.
     """
     settings = seed_defaults()
-    from . import fset
 
     # The /fset entries the jsrc files set are rebuilt with the settings.
     (fset.reset if reset_formats is None else reset_formats)()
 
-    from . import paths as _paths
     paths = config_paths if config_paths is not None else [_paths.global_config_file()]
     load_jsrc_files(paths, settings)
 

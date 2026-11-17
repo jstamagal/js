@@ -24,12 +24,15 @@ from .. import (
     turn_settings as _turn_settings,
 )
 from ..events import RefusableOnly
+from ..mcp_config import resolve as resolve_mcp
 from ..text_bytes import cap_text
+from ..usage import session_key
 from . import task_jobs
 from .core import Tool, ToolContext
 from .descriptions import load_description, load_parameter_description
 from .presentation import Presentation
 from .sanitize import int_or_default, text_or_default
+from .terminal import close_terminal_sessions
 
 
 @dataclass(frozen=True)
@@ -275,7 +278,6 @@ def _worker_session(session_file: Path):
 
 def _agent_cfg(parent_cfg: Any, agent: str, session_id: str | None, *, write_latest=None) -> Any:
     from .. import persona as P
-    from ..mcp_config import resolve as resolve_mcp
 
     # The per-agent data dir holds that agent's latest.json and input history.
     # A subagent run is filed in the folder named after its parent session; a
@@ -391,7 +393,6 @@ async def _run_one_task_async(
 
         child_context = _child_context(parent_context, registry, agent)
         child_context.config = cfg
-        from ..usage import session_key
 
         child_context.usage_chain = (session_key(Path(parent_cfg.session_file), parent_context),
                                      *parent_context.usage_chain)
@@ -494,7 +495,6 @@ async def _run_one_task_async(
 
 def _close_child_tools(child_context: ToolContext) -> None:
     """Close a child's terminal sessions and its private kernel."""
-    from .terminal import close_terminal_sessions
 
     close_terminal_sessions(child_context)
     if child_context.kernel_session is not None:

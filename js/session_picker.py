@@ -33,8 +33,22 @@ from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.output import Output, create_output
 from prompt_toolkit.styles import Style
 
-from . import fset, keys, messages as msgs, runtime, session_query as Q, session_store
+from . import (
+    context_budget,
+    fset,
+    keys,
+    memory,
+    messages as msgs,
+    paths,
+    picker,
+    runtime,
+    session_index,
+    session_query as Q,
+    session_store,
+    session_text,
+)
 from .session_catalog import branch_session
+from .session_text import USER
 
 RESUME = "resume"
 BRANCH = "branch"
@@ -405,8 +419,6 @@ class SessionPicker:
             out += [("class:selected" if selected else "", text), ("", "\n")]
             line += 1
             if selected:
-                from .session_text import USER
-
                 for who, said in zip((USER, session.agent or "-"), self.preview(session)):
                     if said:
                         out += [("class:preview", f"        {who}: {said}"), ("", "\n")]
@@ -542,8 +554,6 @@ def _file_stamp(path: str) -> tuple[int, int] | None:
 
 
 def _tokens(path: str) -> int | None:
-    from . import context_budget, memory
-
     try:
         return context_budget.estimate_messages_tokens(memory.load_replay_messages(Path(path)))
     except (OSError, ValueError):
@@ -551,15 +561,12 @@ def _tokens(path: str) -> int | None:
 
 
 def _messages(path: str) -> list[dict]:
-    from . import memory
-
     return memory.retained_messages(Path(path))
 
 
 def load(cwd: str | Path, query: str = "") -> SessionPicker:
     """A picker over every session in the catalog, with search, message rows,
     previews and token counts read from the index and the session files."""
-    from . import paths, session_index, session_text
 
     sessions = [Q.Session.from_summary(summary) for summary in session_index.catalog()]
     return SessionPicker(
@@ -577,7 +584,6 @@ def load(cwd: str | Path, query: str = "") -> SessionPicker:
 
 def pick_session(cwd: str | Path, query: str = "", *, input=None, output=None, load_picker=None) -> Choice | None:
     """Run the picker on the terminal and return the choice, or None when closed."""
-    from . import picker
 
     factory = load if load_picker is None else load_picker
     state = factory(cwd, query)

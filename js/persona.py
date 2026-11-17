@@ -21,9 +21,12 @@ from . import (
     settings,
     snippets,
 )
+from .cli_options import current
 from .promptexpand import expand_prompt, session_variables
+from .routing import apply_route, resolve_model_route
 from .sampling import SAMPLING_FIELDS
 from .toolkit import policy
+from .toolkit.registry import registry_for_roots
 
 
 @dataclass(frozen=True)
@@ -402,7 +405,6 @@ def apply_agent_model(cfg, prompt_spec, model: str | None, *, config_pins: bool 
     pins only when ``config_pins``."""
     if not agent_model_applies(cfg, prompt_spec, model, config_pins=config_pins):
         return cfg
-    from .routing import apply_route, resolve_model_route
 
     route = resolve_model_route(
         prompt_spec.model,
@@ -419,7 +421,6 @@ def apply_agent_model(cfg, prompt_spec, model: str | None, *, config_pins: bool 
 def load_configured_prompt_spec(cfg, *, expand: bool = True) -> PromptSpec:
     """The run's prompt spec, with the model profile that matches ``cfg``'s
     model and provider applied."""
-    from .cli_options import current
     options = current()
     if options.you_are is not None:
         # _expand_spec writes the whole system prompt.
@@ -458,7 +459,6 @@ def _with_model_profile(spec: PromptSpec, cfg, persona_text) -> PromptSpec:
     its `prompt:` agent's prompt text through ``persona_text`` when given, its
     sampling over the agent's and its reasoning in place of the agent's. A
     profile whose chain selects no tool is not applied."""
-    from .cli_options import current
     options = current()
     profile = _profile_for(spec, cfg)
     spec = replace(spec, model_profile=profile)
@@ -468,7 +468,6 @@ def _with_model_profile(spec: PromptSpec, cfg, persona_text) -> PromptSpec:
     if options.tools is None and not options.zero_tools:
         config = policy.load_tools_config()
         chain = profile.chain(spec.tool_selectors, config)
-        from .toolkit.registry import registry_for_roots
         registry = registry_for_roots(getattr(cfg, "prompt_roots", ()) or (), flags=policy.schema_flags(cfg))
         chosen = policy.select(registry.tools, options.selectors(chain), config, warn=False)
         if not (chosen.eager or chosen.lazy):
@@ -495,7 +494,6 @@ def for_model(spec: PromptSpec, cfg) -> PromptSpec:
 
 
 def _finish_configured_spec(spec: PromptSpec, cfg, expand: bool) -> PromptSpec:
-    from .cli_options import current
     options = current()
     if options.append_system_prompt:
         spec = _with_system(spec, '\n\n'.join((spec.system.rstrip(), *options.append_system_prompt)))
@@ -506,7 +504,6 @@ def _finish_configured_spec(spec: PromptSpec, cfg, expand: bool) -> PromptSpec:
     if options.tools is not None:
         # The registry the run's surface is selected from; tool entries never
         # select MCP tools, which come only through tool_discovery.
-        from .toolkit.registry import registry_for_roots
         registry = registry_for_roots(getattr(cfg, "prompt_roots", ()) or (), flags=policy.schema_flags(cfg))
         unmatched = options.unmatched_tools(registry.tools)
         if unmatched:
@@ -569,7 +566,6 @@ def expand_agent_text(text: str, cfg) -> str:
 
 def _expand_spec(spec: PromptSpec, cfg) -> PromptSpec:
     """Expand directives in the assembled system prompt, retaining its source."""
-    from .cli_options import current
     options = current()
     text = spec.system
     if options.you_are is not None:

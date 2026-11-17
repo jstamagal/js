@@ -20,6 +20,7 @@ from ..capped_process import (
     CappedProcessResult,
     start_capped,
 )
+from ..control_sequences import StreamCleaner
 from ..tool_binaries import TOOLS_DIR
 from .core import Tool, ToolContext, ToolOutput, view as _view
 from .descriptions import load_description, load_parameter_description
@@ -193,7 +194,6 @@ def _clean(raw: bytes, keep_ansi: bool) -> str:
     text = raw.decode("utf-8", errors="replace")
     if keep_ansi:
         return text
-    from ..control_sequences import StreamCleaner
 
     cleaner = StreamCleaner(controls=True)
     return cleaner.feed(text) + cleaner.flush()

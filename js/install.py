@@ -23,6 +23,7 @@ from typing import Any
 from . import (
     dotenv,
     home,
+    login_cli,
     logins,
     messages as msgs,
     paranoid,
@@ -183,8 +184,6 @@ def _asker(read: Callable[[str], str], *, write=None) -> Ask:
 
 
 def _add_provider() -> None:
-    from . import login_cli
-
     login_cli.main([])
 
 

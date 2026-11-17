@@ -16,7 +16,8 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
-from . import messages as msgs, output, paranoid, paths
+from . import messages as msgs, output, paranoid, paths, setcmd
+from .console import compaction_events
 
 ACTIVE_FLIGHT: ContextVar[CompactionFlight | None] = ContextVar("compaction_flight", default=None)
 
@@ -84,7 +85,6 @@ def _redact(value):
 def _snapshot_settings(settings: dict, mode: str) -> dict:
     """The settings a flight records: each secret setting masked the way
     `/set` shows it, and credential-named keys dropped, when ``mode`` masks."""
-    from . import setcmd
 
     if not paranoid.masks(mode):
         return settings
@@ -119,7 +119,6 @@ NOTICE = "compaction_notice"
 def printing(emit: Callable[..., Any] | None = None, *,
              warn: Callable[..., Any] | None = None) -> Callable[..., Any]:
     """The console adapter for compaction's callback protocol."""
-    from .console import compaction_events
 
     return compaction_events(emit, warn=warn)
 

@@ -22,13 +22,16 @@ from . import (
     control_sequences,
     fset,
     messages as msgs,
+    network_display,
     output,
     paths as _paths,
     settings as _settings,
+    stream_transport,
     text_layout,
     tool_display,
     toolkit as _toolkit,
 )
+from .console import call_stats_visible, subagent_finished_fields, subagent_started_fields
 
 if TYPE_CHECKING:
     from . import runtime
@@ -326,8 +329,6 @@ class TranscriptSink:
     def _on_call_stats(self, *, label: str, elapsed_s: float, finish: Any, tool_calls: int, tokens: int,
                        first_token_s: float | None, prompt_tokens: int, cached_tokens: int,
                        trace: bool | None = None, suppressed: bool = False) -> None:
-        from .console import call_stats_visible
-
         if not call_stats_visible(label, trace, suppressed):
             return
         tps = (tokens / elapsed_s) if elapsed_s > 0 else 0.0
@@ -343,31 +344,21 @@ class TranscriptSink:
         self._plain(message.line(**fields) + "\n", stderr=stderr)
 
     def _on_subagent_start(self, **fields: Any) -> None:
-        from .console import subagent_started_fields
-
         self._plain(msgs.SUBAGENT_STARTED.line(**subagent_started_fields(fields)) + "\n", stderr=True)
 
     def _on_subagent_end(self, **fields: Any) -> None:
-        from .console import subagent_finished_fields
-
         self._plain(msgs.SUBAGENT_FINISHED.line(**subagent_finished_fields(fields)) + "\n", stderr=True)
 
     def _on_network(self, *, level: int, line: Any, fallback: bool) -> None:
-        from . import network_display, stream_transport
-
         if fallback and stream_transport._sink is None:
             self._plain(network_display._net_line(line) + "\n", stderr=True)
 
     def _on_retry_wait(self, *, n: int, attempts: int, delay: float, error: BaseException, label: str) -> None:
-        from . import network_display
-
         line = msgs.RETRY_WAIT.said(n=n, of=attempts, seconds=delay, failure=network_display.describe_failure(error))
         self._plain(network_display._net_line(network_display.LabelledLine(label, line) if label else line)
                     + "\n", stderr=True)
 
     def _on_retry_gave_up(self, *, n: int, error: BaseException, label: str) -> None:
-        from . import network_display
-
         line = msgs.RETRY_GAVE_UP.said(n=n, failure=network_display.describe_failure(error))
         self._plain(network_display._net_line(network_display.LabelledLine(label, line) if label else line)
                     + "\n", stderr=True)

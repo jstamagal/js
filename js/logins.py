@@ -24,7 +24,7 @@ import ai
 import httpx
 import tomli_w
 
-from . import messages as msgs, output, paths, providers
+from . import login_defaults, messages as msgs, output, paths, providers
 
 _CONFIG_DIR_OVERRIDE: Path | None = None
 _LOGINS_FILE = "logins.toml"
@@ -347,7 +347,6 @@ def _login_from_section(provider_id: str, raw: dict[str, Any]) -> Login:
     if not isinstance(model_defaults_raw, dict) or not all(
             isinstance(v, dict) for v in model_defaults_raw.values()):
         raise _BadSection(msgs.LOGIN_STORE_MODEL_DEFAULTS_MUST_BE_A_TABLE_OF.format())
-    from . import login_defaults
 
     model_defaults = {str(model): login_defaults.checked(values) for model, values in model_defaults_raw.items()}
     return Login(

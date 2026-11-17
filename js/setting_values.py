@@ -10,7 +10,14 @@ import re
 import shlex
 from typing import Any
 
-from . import messages as msgs, reasoning as _reasoning, sampling as _sampling
+from . import (
+    fset,  # lazy: fset reads settings
+    jail,
+    mcp_config,
+    messages as msgs,
+    reasoning as _reasoning,
+    sampling as _sampling,
+)
 from .settings import SPEC_BY_KEY, SettingSpec, default_value
 
 # What a line typed while a turn runs does: now = join the running turn at its
@@ -229,8 +236,6 @@ def _coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         return number, None
     if kind in ("json", "map"):
         if spec.key in {"MCP_SERVERS", "MCP_AGENT_POLICY"}:
-            from . import mcp_config
-
             try:
                 value = (
                     mcp_config.parse_servers_json(raw)
@@ -271,8 +276,6 @@ def _coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             ):
                 return None, msgs.EXPECTED_SKILL_NAMES.said()
         if spec.key in {"JAIL_BIND", "JAIL_HIDE"}:
-            from . import jail
-
             try:
                 (jail.parse_binds if spec.key == "JAIL_BIND" else jail.parse_hides)(value)
             except ValueError as exc:
@@ -383,7 +386,6 @@ def jsrc_text(name: str, text: str) -> str:
     ``name``, so the line loads back to ``text`` (`line_literal`): a `$` is
     written `$$`, since a jsrc line's `$NAME`s expand when it loads, except
     in a format or colour, which keeps its `$NAME`s for when it is drawn."""
-    from . import fset  # lazy: fset reads settings
 
     text = line_literal(text)
     return text if fset.read_when_drawn(name) else text.replace("$", "$$")

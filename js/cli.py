@@ -25,6 +25,7 @@ from . import (
     home as _home,
     jail as _jail,
     listings,
+    loop_controller,
     memory as M,
     messages as msgs,
     migrate_config,
@@ -43,10 +44,12 @@ from . import (
     setting_values,
     settings,
     snippets,
+    verify,
 )
-from .cli_options import Setup
+from .cli_options import RunOptions, Setup, current, invocation
 from .config import (
     InvocationSources,
+    _preset_config_paths,
     derive_session_name,
     resolve_agent_id,
     resolve_session_file,
@@ -54,6 +57,7 @@ from .config import (
     set_invocation,
     validate_agent_id,
 )
+from .home_cli import configure_home
 from .tool_binaries import resolve_binary
 
 
@@ -217,15 +221,12 @@ def _agent_bench(args: argparse.Namespace, setup: Setup) -> int | None:
     except (ValueError, OSError) as exc:
         msgs.warn(msgs.FAILED, error=exc)
         return 2
-    from .cli_options import current
     if not current().replaces_prompt and not current().chat and P.has_benchmarks(agent_dir):
         return bench.run_agent_bench(agent, args, setup.sources)
     return None
 
 
 def _warn_unmatched_presets(sources: InvocationSources) -> None:
-    from .config import _preset_config_paths
-
     project_dir = Path.cwd()
     for name in sources.presets:
         candidates = _preset_config_paths(replace(sources, presets=(name,)), project_dir)
@@ -278,7 +279,6 @@ def main(argv: list[str] | None = None) -> int:
 
 @session_catalog.session_scope
 def _main(argv: list[str] | None = None) -> int:
-    from .home_cli import configure_home
     try:
         dispatch_argv = configure_home(list(argv if argv is not None else sys.argv[1:]))
     except ValueError as exc:
@@ -330,7 +330,6 @@ def _main(argv: list[str] | None = None) -> int:
     if args.bare and args.agent is not None:
         parser.error(msgs.BARE_WITH_AGENT.text())
     if args.loop is not None:
-        from . import loop_controller
         try:
             loop_settings = run_settings(Path(args.cd).expanduser() if args.cd else None,
                                          sources=_invocation_sources(args))
@@ -338,7 +337,6 @@ def _main(argv: list[str] | None = None) -> int:
                                        settings=loop_settings)
         except (ValueError, OSError) as exc:
             parser.error(str(exc))
-    from .cli_options import RunOptions, invocation
     if args.bare:
         args.agent = 'slim'
     options = RunOptions(
@@ -586,7 +584,6 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     if isinstance(setup, int):
         return setup
     if args.verify is not None:
-        from . import verify
         return verify.run_verify(args)
     if args.list_sessions:
         return listings.run_list_sessions(args)

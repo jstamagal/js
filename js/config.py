@@ -12,7 +12,10 @@ from pathlib import Path
 
 from . import (
     fset as _fset,
+    login_defaults as _login_defaults,
+    mcp_config,
     messages as msgs,
+    model_metadata,
     paths as _paths,
     providers as _providers,
     routing as _routing,
@@ -96,7 +99,6 @@ def vision_enabled_for_model(model: str, settings: dict | None = None) -> bool:
         return explicit
     if model in _TEXT_ONLY_MODELS:
         return False
-    from . import model_metadata
 
     try:
         catalog = model_metadata.accepts_image_input(model)
@@ -483,7 +485,6 @@ def from_env(
     agent_id = agent_from_settings(js_root_settings, agent_id)
     set_banner(str(_settings.knob(js_root_settings, "BANNER")))
     default_model = _settings.default_value("MODEL")
-    from . import model_metadata
 
     model_metadata.bind_settings(js_root_settings)
     raw_model = _settings.get_dotted(js_root_settings, ("MODEL",)) or default_model
@@ -530,7 +531,6 @@ def from_env(
     provider_def = _providers.get_provider(provider_id)
 
     # The layers js.login_defaults resolves the login-default settings from.
-    from . import login_defaults as _login_defaults
 
     layer_jsrc = _login_defaults.session_values(jsrc_settings)
     layer_env = _login_defaults.env_layer(env)
@@ -542,7 +542,6 @@ def from_env(
 
     runtime_debug = bool(_settings.knob(js_root_settings, "DEBUG_LOG"))
 
-    from . import mcp_config
     from .cli_options import current
     options = current()
     mcp = None if options.skips_mcp else mcp_config.resolve(js_root_settings, agent_id)

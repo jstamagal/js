@@ -16,7 +16,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 
-from . import messages as msgs, providers
+from . import logins as _logins, messages as msgs, providers
 
 
 @dataclass(frozen=True)
@@ -144,7 +144,6 @@ def _saved_login(provider_id: str | None):
     normalized = providers.normalize_provider_id(provider_id)
     if not normalized:
         return None
-    from . import logins as _logins
 
     return _logins.load_logins().get(normalized)
 

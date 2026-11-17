@@ -49,7 +49,11 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from . import paths
+from . import (
+    messages as _msgs,  # lazy: messages imports this
+    paths,
+    settings as _s,
+)
 from .control_sequences import SGR
 
 PALETTE_SIZE = 99
@@ -169,7 +173,6 @@ def theme_entries(name: str) -> dict[str, str]:
 def theme_error(name: str) -> str | None:
     """Why ``name`` cannot be THEME, or None: no such theme, or a theme
     file with an entry that is not a palette slot's colour."""
-    from . import messages as _msgs
 
     if not name:
         return None
@@ -207,8 +210,6 @@ def entry_value(name: str) -> str | None:
     a format nobody set, the format its message has by default."""
     found = lookup(name)
     if found is None:
-        from . import messages as _msgs  # lazy: messages imports this
-
         entry = _msgs.ENTRIES.get(name)
         found = entry.default_format() if entry is not None else None
     return found
@@ -239,7 +240,6 @@ def held() -> Iterator[None]:
 
 def setting_value(name: str):
     """A registered setting from the bound live store, or its shipped default."""
-    from . import settings as _s
 
     return _s.knob(_settings, name)
 
@@ -248,7 +248,6 @@ def bind_settings(settings: dict | None) -> None:
     """The live settings `$NAME` reads."""
     global _settings
     _settings = settings
-    from . import settings as _s
 
     _s.bind_live_settings(settings)
 
@@ -284,7 +283,6 @@ def expand_names(text: str, settings: dict | None = None) -> str:
 def read_when_drawn(name: str) -> bool:
     """Whether entry ``name`` keeps its `$NAME`s until it is drawn: a format
     or a colour. Any other entry's line expands when it loads, as `set` does."""
-    from . import messages as _msgs
 
     return name in _msgs.ENTRIES or is_colour_name(name)
 
@@ -292,7 +290,6 @@ def read_when_drawn(name: str) -> bool:
 def banner_text() -> str:
     """The banner slot, the BANNER setting: what starts every line where js
     reports its state."""
-    from . import messages as _msgs  # lazy: messages imports this
 
     return _msgs.current_banner()
 
@@ -302,8 +299,6 @@ def banner_text() -> str:
 # ---------------------------------------------------------------------------
 
 def format_names() -> list[str]:
-    from . import messages as _msgs  # lazy: messages imports this
-
     return sorted(_msgs.ENTRIES)
 
 
@@ -314,7 +309,6 @@ def is_colour_name(name: str) -> bool:
 
 def is_name(name: str) -> bool:
     """``name`` is an fset entry this module holds."""
-    from . import messages as _msgs
 
     return name in FIXED or is_colour_name(name) or name in _msgs.ENTRIES
 
@@ -327,7 +321,6 @@ def names() -> list[str]:
 
 def check(name: str, value: str) -> str | None:
     """Why ``value`` cannot be entry ``name``'s, or None."""
-    from . import messages as _msgs
 
     if not is_name(name):
         return _msgs.FSET_UNKNOWN.said(name=name)
@@ -494,7 +487,6 @@ def format_error(fmt: str, fields: int) -> str | None:
     """Why ``fmt`` is not a format for an event that passes ``fields``
     fields, or None. Each `%` and `$` starts a code or a hole; a hole names
     a field the event passes."""
-    from . import messages as _msgs
 
     pos = 0
     for match in _TOKEN.finditer(fmt):

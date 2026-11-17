@@ -41,7 +41,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import session_store
+from . import memory, session_index, session_store, settings
 from .text_bytes import well_formed
 
 USER = "you"
@@ -232,8 +232,6 @@ class _Transcript:
     style: TranscriptStyle = field(default_factory=TranscriptStyle)
 
     def __post_init__(self) -> None:
-        from . import memory
-
         self.replay = memory.History(self._superseded)
 
     def _superseded(self, lights: list[dict]) -> None:
@@ -241,8 +239,6 @@ class _Transcript:
             self.entries.pop(light.get("_entry"), None)
 
     def feed(self, record: Any) -> None:
-        from . import memory
-
         if not isinstance(record, dict):
             return
         if record.get("kind") == "tags":
@@ -517,7 +513,6 @@ def refresh(session_file: Path) -> None:
 
     Only a `.jsonl` gets one. A failure to read or write leaves the `.txt` as
     it was: it is derived, and the record is what matters."""
-    from . import settings
 
     if not settings.live_value("SESSION_TEXT_AUTO_REFRESH"):
         return
@@ -566,7 +561,6 @@ def _refresh(session_file: Path, key: str) -> None:
 def _index(session_file: Path, transcript: _Transcript, *, size: int, mtime_ns: int) -> None:
     """Keep the session's catalog entry and search text in step with its `.txt`.
     The index is derived; a failure leaves it for the next catalog open."""
-    from . import session_index
 
     try:
         session_index.store(session_file, _well_formed(transcript.summary()),
@@ -590,7 +584,6 @@ def _well_formed(value: Any) -> Any:
 def forget(session_file: Path) -> None:
     """Drop the `.txt` and the index entry of a session file that no longer
     exists as such."""
-    from . import session_index
 
     session_file = Path(session_file)
     with _lock:
