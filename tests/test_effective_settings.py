@@ -8,16 +8,19 @@ reload reproduces the running configuration.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 from dataclasses import replace
 
-from repl_driver import record_turns, run_async
+import pytest
+from repl_driver import record_turns, run_async, within
 
 from js import (
     jsrc_save,
     messages as msgs,
     paths,
     repl_settings_commands,
+    runtime,
     setcmd,
     setting_layers,
     settings,
@@ -71,6 +74,35 @@ def test_set_display_forms_leave_the_store_alone_and_mutations_reach_live_state(
 
     assert settings.get_dotted(cleared.settings, ("TEMPERATURE",)) is None
     assert "TEMPERATURE" not in cleared.cfg.layer_set
+
+
+@pytest.mark.parametrize("steer_mode", ["now", "batch", "one"])
+def test_a_turn_runs_on_the_live_settings_of_its_start(tmp_path, monkeypatch, steer_mode):
+    """A prompt typed while a turn runs waits for it; a /set typed after that
+    prompt, before its turn starts, applies to its turn and not to the one
+    already running."""
+    cfg = _with_prompt(tmp_path, monkeypatch, _repl_cfg(tmp_path))
+    started, release = asyncio.Event(), asyncio.Event()
+    turns: list[tuple[str, object]] = []
+
+    async def turn(cfg, system, messages, *args, **kwargs):
+        turns.append((messages[-1]["content"], settings.get_dotted(cfg.settings, ("TEMPERATURE",))))
+        if not started.is_set():
+            started.set()
+            await release.wait()
+
+    async def typing(enter):
+        await enter(f"/set STEER_MODE {steer_mode}")
+        await enter("first")
+        await within(started.wait(), "the first turn to start")
+        await enter("second")
+        await enter("/set TEMPERATURE 0.3")
+        release.set()
+
+    monkeypatch.setattr(runtime, "run_turn_async", turn)
+    run_async(monkeypatch, cfg, typing, live_settings=settings.seed_defaults())
+
+    assert turns == [("first", None), ("second", 0.3)]
 
 
 # ---------------------------------------------------------------------------
