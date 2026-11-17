@@ -23,6 +23,7 @@ from js import (
     messages as msgs,
     providers,
     repl_commands,
+    repl_model_commands,
     run_assembly,
     setting_values,
 )
@@ -610,7 +611,7 @@ def test_a_model_switch_stamps_the_effort_the_new_model_resolves_to(monkeypatch,
     cfg = from_env(cwd=tmp_path, save_session=False)
     state = ReplState(settings=dict(cfg.settings), model="testes/b")
 
-    assert repl_commands._live_stamp(cfg, state)["reasoning"] == "xhigh"
+    assert repl_model_commands.live_stamp(cfg, state)["reasoning"] == "xhigh"
 
 
 def test_a_resumed_session_keeps_its_saved_effort_on_its_model(monkeypatch, tmp_path):
