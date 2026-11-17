@@ -7,7 +7,7 @@ import ai
 import pytest
 import ai.types.usage
 
-from js import cli, logins, model_metadata, persona, runtime
+from js import cli, logins, model_metadata, persona, run_assembly, runtime
 from js.config import Config
 from js.model_client import ModelStreamResult
 from js.toolkit import ToolContext
@@ -133,17 +133,16 @@ def _capture_single_task_route(
     return seen
 
 
-def test_apply_agent_model_uses_frontmatter_model_and_prefixed_provider_route(tmp_path):
+def test_a_run_settles_on_its_agents_frontmatter_model_and_prefixed_provider_route(tmp_path):
     prompts = _write_agent_dir(
         tmp_path / "prompts",
         "agent-model",
         "model: deepseek/agent-frontmatter-model\ntools: []\n",
     )
     cfg = _make_cfg(tmp_path, prompts)
-    prompt_spec = persona.load_prompt_spec(prompts)
     _save_login("deepseek")
 
-    actual = persona.apply_agent_model(cfg, prompt_spec, None)
+    actual = run_assembly.settle(cfg).config
 
     assert actual.model == "agent-frontmatter-model"
     assert actual.provider_id == "deepseek"
@@ -163,21 +162,19 @@ def test_operator_pinned_model_overrides_agent_frontmatter_model(tmp_path, model
         "model: deepseek/agent-frontmatter-model\ntools: []\n",
     )
     cfg = _make_cfg(tmp_path, prompts, explicit_model=explicit_model)
-    prompt_spec = persona.load_prompt_spec(prompts)
 
-    actual = persona.apply_agent_model(cfg, prompt_spec, model_arg)
+    actual = run_assembly.settle(cfg, model=model_arg, config_pins=True).config
 
-    assert actual is cfg
+    assert (actual.model, actual.provider_id) == (model_arg or cfg.model, None)
 
 
-def test_apply_agent_model_noops_without_frontmatter_model(tmp_path):
+def test_a_run_without_a_frontmatter_model_stays_on_its_configured_model(tmp_path):
     prompts = _write_agent_dir(tmp_path / "prompts", "agent-model", "tools: []\n")
     cfg = _make_cfg(tmp_path, prompts)
-    prompt_spec = persona.load_prompt_spec(prompts)
 
-    actual = persona.apply_agent_model(cfg, prompt_spec, None)
+    actual = run_assembly.settle(cfg).config
 
-    assert actual is cfg
+    assert (actual.model, actual.provider_id) == (cfg.model, None)
 
 
 @pytest.mark.parametrize(
@@ -209,11 +206,13 @@ def test_subagent_inherit_takes_parent_model_and_effort(monkeypatch, tmp_path):
     assert seen["reasoning_effort"] == "low"
 
 
-def test_apply_agent_model_noops_on_inherit(tmp_path):
+def test_a_run_whose_agent_inherits_its_model_stays_on_its_configured_model(tmp_path):
     prompts = _write_agent_dir(tmp_path / "prompts", "agent-model", "model: inherit\ntools: []\n")
     cfg = _make_cfg(tmp_path, prompts)
 
-    assert persona.apply_agent_model(cfg, persona.load_prompt_spec(prompts), None) is cfg
+    actual = run_assembly.settle(cfg).config
+
+    assert (actual.model, actual.provider_id) == (cfg.model, None)
 
 
 def test_subagent_rejects_a_frontmatter_reasoning_effort_that_is_not_one_word(tmp_path):
@@ -300,8 +299,8 @@ def test_lock_subagent_model_removes_task_model_schema_property(tmp_path):
     prompts = _write_agent_dir(tmp_path / "prompts", "parent", "tools: []\n")
     cfg = _make_cfg(tmp_path, prompts)
 
-    unlocked_tool = cli._registry_for(cfg).resolve("task")
-    locked_tool = cli._registry_for(replace(cfg, lock_subagent_model=True)).resolve("task")
+    unlocked_tool = run_assembly.registry_for(cfg).resolve("task")
+    locked_tool = run_assembly.registry_for(replace(cfg, lock_subagent_model=True)).resolve("task")
 
     assert unlocked_tool is not None
     assert locked_tool is not None

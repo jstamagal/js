@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
 import yaml
 
-from js import model_metadata, model_profiles, persona, runtime, settings
+from js import model_metadata, model_profiles, persona, run_assembly, runtime, settings
 from js.cli_options import RunOptions, invocation
 from js.config import Config
 from js.toolkit import ToolContext
@@ -178,16 +177,17 @@ def test_profile_prompt_sampling_and_reasoning_apply(tmp_path):
     assert spec.reasoning_effort == "low"
 
 
-def test_for_model_reloads_for_the_model_the_run_settled_on(tmp_path):
+def test_a_run_reloads_its_spec_for_the_model_it_settled_on(tmp_path):
     prompts = _agent(tmp_path, [{"match": "qwen", "tools": ["shell:eager"], "core": False}])
     cfg = _cfg(tmp_path, prompts, model="startup-model")
     spec = persona.load_configured_prompt_spec(cfg, expand=False)
     assert _selected(spec) == set(FOURTEEN)
 
-    settled = persona.for_model(spec, replace(cfg, model="qwen3-coder"))
+    settled = run_assembly.settle(cfg, model="qwen3-coder")
 
-    assert _selected(settled) == {"shell"}
-    assert persona.for_model(settled, replace(cfg, model="qwen3-coder")) is settled
+    assert settled.config.model == "qwen3-coder"
+    assert _selected(settled.prompt_spec) == {"shell"}
+    assert persona.for_model(settled.prompt_spec, settled.config) is settled.prompt_spec
 
 
 @pytest.mark.parametrize("raw", [

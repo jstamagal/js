@@ -658,12 +658,11 @@ def test_commit_helper_dash_C_is_not_the_jail(tmp_path):
 
 
 def test_system_prompt_commands_see_the_shell_program(tmp_path):
-    spec = persona.PromptSpec(system="shell={{JS_SHELL}}", tool_selectors=())
     cfg = type("Cfg", (), {"settings": {"SHELL_PROGRAM": "sh"}, "allow_inline_code": False})()
 
-    expanded = persona._expand_spec(spec, cfg)
+    expanded = persona.expand_agent_text("shell={{JS_SHELL}}", cfg)
 
-    assert expanded.system == f"shell={shutil.which('sh')}"
+    assert expanded == f"shell={shutil.which('sh')}"
 
 
 @pytest.mark.skipif(shutil.which("cc") is None, reason="no C compiler for envctx")

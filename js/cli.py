@@ -116,7 +116,6 @@ from .session_catalog import (
 from .tool_binaries import resolve_binary
 from .toolkit import policy as tool_policy
 from .toolkit import meta, task_jobs
-from .toolkit.registry import registry_for_roots
 from .toolkit import ToolContext
 
 
@@ -154,9 +153,6 @@ def _blocking_stdio() -> None:
             if not os.get_blocking(fd):
                 os.set_blocking(fd, True)
 
-
-def _registry_for(cfg) -> object:
-    return registry_for_roots(getattr(cfg, "prompt_roots", ()) or (), flags=tool_policy.schema_flags(cfg))
 
 # --------------------------------------------------------------------------
 # Runtime knobs: name -> (type, label, description)
@@ -823,7 +819,7 @@ def _sync_tool_registry_from_live_settings(cfg: Config, state: dict) -> None:
     current registry and prints one line."""
     selectors = state.get("tool_selectors", ())
     try:
-        state["tool_registry"] = _registry_for(_cfg_for_live_state(cfg, state)).select(selectors, warn=False)
+        state["tool_registry"] = run_assembly.registry_for(_cfg_for_live_state(cfg, state)).select(selectors, warn=False)
     except tool_policy.ToolPolicyError as exc:
         msgs.say(msgs.TOOL_SURFACE_KEPT, error=exc)
 
@@ -1448,7 +1444,7 @@ def _split_compact_model(arg: str) -> tuple[str | None, str, bool]:
 
 def _print_tool_chain(state: dict, cfg: Config) -> None:
     """Every tool with its resolved state and the chain entry that decided it."""
-    full = _registry_for(_cfg_for_live_state(cfg, state))
+    full = run_assembly.registry_for(_cfg_for_live_state(cfg, state))
     try:
         config = tool_policy.load_tools_config()
         rules = tool_policy.expand(state.get("tool_selectors", ()), config, f"agent {cfg.agent_id!r}")
@@ -3483,23 +3479,6 @@ def _logins_json() -> list[dict]:
     return rows
 
 
-def _resolve_cli_model_override(cfg: Config, model: str | None) -> Config:
-    if model is None:
-        return cfg
-    route = routing.resolve_model_route(
-        model,
-        configured_provider_id=cfg.provider_id,
-        configured_base_url=cfg.provider_base_url,
-        configured_api_key=cfg.provider_api_key,
-        configured_headers=getattr(cfg, "provider_headers", {}),
-        env=os.environ,
-        explicit_model=True,
-        prefix_overrides_provider=not getattr(cfg, "explicit_provider", False),
-    )
-    return routing.apply_route(cfg, route)
-
-
-
 def _models_cached_or_live(provider_id: str, cfg: Config | None) -> list[str]:
     """Models for one provider, cache first (offline-friendly, fast), live on miss."""
     cached = logins.load_model_cache().get(provider_id)
@@ -4327,7 +4306,7 @@ def _repl_state(cfg, prompt_spec, *, messages: list[dict] | None = None,
         live_settings = copy.deepcopy(cfg.settings) if isinstance(cfg.settings, dict) else {}
     fset.bind_settings(live_settings)
     if tool_registry is None:
-        tool_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
+        tool_registry = run_assembly.registry_for(cfg).select(prompt_spec.tool_selectors)
     event_hooks = events.EventHooks()
     state = {
         "running": True,

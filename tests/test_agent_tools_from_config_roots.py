@@ -4,11 +4,11 @@ Regression for: `js -p "foo"` printing
 
     js: tool selector 'reviewer' matched no tool; ignoring
 
-for every agent under ~/.config/js/agents. cli._registry_for returned a module-level
+for every agent under ~/.config/js/agents. The run's registry was a module-level
 registry built with NO prompt roots, so only the js repo's own prompts/ dir was ever
 scanned; cfg.prompt_roots reached the builder solely on the lock_subagent_model branch.
 
-These tests go through cli._registry_for rather than calling build_default_registry with
+These tests go through run_assembly.registry_for rather than calling build_default_registry with
 an explicit path — a test that passes the path directly cannot catch this bug, because
 the bug was that the path was never passed.
 """
@@ -21,7 +21,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from js import cli
+from js import run_assembly
 from js.toolkit.registry import registry_for_roots
 
 
@@ -40,7 +40,7 @@ def test_agent_in_a_config_root_becomes_a_selectable_tool(tmp_path):
     root = tmp_path / "agents"
     _agent_dir(root, "reviewer")
 
-    registry = cli._registry_for(_cfg((root,)))
+    registry = run_assembly.registry_for(_cfg((root,)))
 
     assert registry.resolve("reviewer") is not None
     assert "reviewer" in registry.select(["reviewer:lazy"]).by_name
@@ -50,7 +50,7 @@ def test_selector_for_a_config_agent_does_not_warn(tmp_path, capsys):
     root = tmp_path / "agents"
     _agent_dir(root, "triage")
 
-    cli._registry_for(_cfg((root,))).select(["triage:lazy"])
+    run_assembly.registry_for(_cfg((root,))).select(["triage:lazy"])
 
     assert capsys.readouterr().err == ""
 
@@ -60,7 +60,7 @@ def test_locked_subagent_model_still_sees_config_agents(tmp_path):
     root = tmp_path / "agents"
     _agent_dir(root, "coder")
 
-    registry = cli._registry_for(_cfg((root,), lock=True))
+    registry = run_assembly.registry_for(_cfg((root,), lock=True))
 
     assert registry.resolve("coder") is not None
     assert "model" not in registry.resolve("task").params
@@ -71,7 +71,7 @@ def test_later_roots_shadow_earlier_ones(tmp_path):
     _agent_dir(early, "research")
     _agent_dir(late, "research")
 
-    registry = cli._registry_for(_cfg((early, late)))
+    registry = run_assembly.registry_for(_cfg((early, late)))
 
     assert len([t for t in registry.tools if t.name == "research"]) == 1
 
@@ -155,7 +155,7 @@ def test_unreachable_agent_dir_is_skipped_not_fatal(tmp_path, monkeypatch, capsy
 
     monkeypatch.setattr(Path, "is_dir", is_dir)
 
-    registry = cli._registry_for(_cfg((root,)))
+    registry = run_assembly.registry_for(_cfg((root,)))
 
     assert registry.resolve("alive") is not None
     assert registry.resolve("asleep") is None

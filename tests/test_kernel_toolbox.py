@@ -1153,12 +1153,12 @@ def test_the_kernel_panel_draws_plain_on_a_stderr_that_is_not_a_terminal(ctx, mo
 def test_an_agent_listing_kernel_and_toolbox_gets_them_with_default_settings(monkeypatch):
     from types import SimpleNamespace
 
-    from js import cli
+    from js import run_assembly
     from js.toolkit import policy
 
     seen = []
     monkeypatch.setattr(policy.output, "notice", lambda message, **_fields: seen.append(message))
-    surface = cli._registry_for(SimpleNamespace(prompt_roots=())).select(["kernel:eager", "toolbox:eager"])
+    surface = run_assembly.registry_for(SimpleNamespace(prompt_roots=())).select(["kernel:eager", "toolbox:eager"])
 
     assert {"kernel", "toolbox"} <= set(surface.by_name)
     assert seen == []

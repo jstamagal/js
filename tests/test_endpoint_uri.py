@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from js import cli, logins, runtime, settings
+from js import cli, logins, run_assembly, runtime, settings
 from js.config import from_env
 from js.endpoint_uri import DUMMY_KEY, EndpointSpecError, from_env as endpoint_from_env, parse
 from js.logins import Login
@@ -284,7 +284,7 @@ def test_model_flag_with_a_login_beats_an_exported_endpoint_js_base_url(monkeypa
                             provider_base_url=LOGIN_BASE, provider_api_key="x"))
     monkeypatch.setenv("JS_BASE_URL", "http://qwen3:27b@stray.test/v1")
 
-    actual = cli._resolve_cli_model_override(from_env(cwd=tmp_path, save_session=False), "testes/other")
+    actual = run_assembly.route(from_env(cwd=tmp_path, save_session=False), "testes/other")
 
     assert actual.provider_id == "testes"
     assert actual.model == "other"

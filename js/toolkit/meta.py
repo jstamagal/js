@@ -742,7 +742,7 @@ def _prepare_fan_out(
     # Honor the subagent-model lock at every depth: when locked, rebuild the
     # nested registry without the `model_override` flag so the task tool's
     # `model` param is gone from the schema/description, not just ignored
-    # (mirrors cli._registry_for).
+    # (mirrors run_assembly.registry_for).
     reg_flags = () if getattr(parent_cfg, "lock_subagent_model", False) else ("model_override",)
     full_registry = registry_factory(getattr(parent_cfg, "prompt_roots", None), flags=reg_flags)
     total = len(normalized_items)

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from js import cli, login_defaults, logins, messages as msgs, providers
+from js import cli, login_defaults, logins, messages as msgs, providers, run_assembly
 from js.config import from_env
 from js.logins import Login
 from js.routing import ProviderNotLoggedInError, resolve_model_route
@@ -166,7 +166,7 @@ def test_explicit_model_known_unlogged_prefix_does_not_ride_saved_default(
     assert cfg.model == "test"
 
     with pytest.raises(ProviderNotLoggedInError) as excinfo:
-        cli._resolve_cli_model_override(cfg, "huggingface/foo")
+        run_assembly.route(cfg, "huggingface/foo")
 
     assert str(excinfo.value) == msgs.PROVIDER_NOT_LOGGED_IN.text(provider="huggingface")
 
@@ -206,7 +206,7 @@ def test_cli_model_override_keeps_known_provider_id_under_explicit_gateway(monke
     monkeypatch.setenv("JS_BASE_URL", "https://omp.test/v1")
 
     cfg = from_env(cwd=tmp_path, save_session=False)
-    actual = cli._resolve_cli_model_override(cfg, "anthropic/claude-x")
+    actual = run_assembly.route(cfg, "anthropic/claude-x")
 
     assert actual.provider_id == "omp"
     assert actual.model == "anthropic/claude-x"
@@ -236,7 +236,7 @@ def test_explicit_model_same_saved_prefix_routes_to_saved_login(monkeypatch, tmp
     config_file.write_text("set MODEL testes/test\n", encoding="utf-8")
 
     cfg = from_env(cwd=tmp_path, save_session=False)
-    actual = cli._resolve_cli_model_override(cfg, "testes/other")
+    actual = run_assembly.route(cfg, "testes/other")
 
     assert actual.provider_id == "testes"
     assert actual.model == "other"
@@ -254,7 +254,7 @@ def test_model_flag_to_another_provider_does_not_ride_a_stray_base_url(monkeypat
     config_file.write_text("set MODEL alpha/m\n", encoding="utf-8")
     monkeypatch.setenv("JS_BASE_URL", "http://stray.test/v1")
 
-    actual = cli._resolve_cli_model_override(from_env(cwd=tmp_path, save_session=False), "testes/other")
+    actual = run_assembly.route(from_env(cwd=tmp_path, save_session=False), "testes/other")
 
     assert actual.provider_id == "testes"
     assert actual.provider_base_url == BASE_URL

@@ -1,9 +1,7 @@
-from dataclasses import replace
-
 import pytest
 
 from js import persona, skills
-from js import cli, verify
+from js import cli, run_assembly, verify
 from types import SimpleNamespace
 from js.config import Config
 from js.cli_options import RunOptions, invocation
@@ -76,13 +74,14 @@ def test_you_are_is_identity_text_and_appends_with_zero_tools(tmp_path):
     roots = _roots_with_agent(tmp_path, 'defaultagent')
     instructions = tmp_path / 'AGENTS.md'
     instructions.write_text('PROJECT RULES')
-    cfg = Config(model='before', agent_id='defaultagent', prompt_roots=roots, agents_files=(instructions,))
+    cfg = Config(model='cpa/hyper/glm-5.3', agent_id='defaultagent', prompt_roots=roots,
+                 agents_files=(instructions,))
     with invocation(RunOptions(you_are='Answer in one word.', append_system_prompt=('tail',))):
-        spec = persona.load_configured_prompt_spec(cfg, expand=False)
-        spec = persona._expand_spec(spec, replace(cfg, model='cpa/hyper/glm-5.3'))
-    assert spec.system == 'You are glm-5.3 running inside the js agent\nAnswer in one word.\n\ntail'
-    assert spec.tool_selectors == ()
-    assert not spec.exchanges
+        settled = run_assembly.settle(cfg)
+    assert settled.system == 'You are glm-5.3 running inside the js agent\nAnswer in one word.\n\ntail'
+    assert settled.prompt_spec.tool_selectors == ()
+    assert not settled.registry.tools
+    assert not settled.prompt_spec.exchanges
 
 
 def test_you_are_without_text_runs_no_envctx(tmp_path, monkeypatch):
