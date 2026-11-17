@@ -566,7 +566,7 @@ see `<dir>`, and it puts the tools in a jail:
   removed when it exits. The network stays on. The command's environment is
   `SHELL_ENV_KEEP`, so provider keys are not in it.
 - The file tools (`read`, `write`, `patch`, `remove`, `undo`, `fs_search`,
-  `ast_search`, `list_dir`, `fetch file://` and `save=`, `browse` screenshots)
+  `ast_search`, `fetch file://` and `save=`, `browse` screenshots)
   refuse a path outside `<dir>` and the bound paths with one `ERROR` line. A
   path under `/tmp` or `~/.js/tmp` names the file the jailed commands see there.
 - Subagents run in the same jail.

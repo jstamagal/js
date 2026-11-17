@@ -19,7 +19,6 @@ from collections import deque
 from functools import lru_cache
 from itertools import islice
 from pathlib import Path
-from collections.abc import Callable, Iterable
 
 from .. import held
 from .. import imagefit
@@ -1564,27 +1563,6 @@ def _real_dir(path: Path) -> Path:
         return Path(os.path.abspath(path))
 
 
-def _iter_files(root: Path, hidden: Callable[[Path], bool] | None = None) -> Iterable[Path]:
-    """Regular files under ``root``, leaving out every path ``hidden`` says
-    lies in a hidden tree (it resolves symlinks, so a link into one is out)."""
-    if root.is_file():
-        yield root
-        return
-    for base, dirs, files in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in {".git", "__pycache__", "node_modules", ".venv", "venv"}
-                   and not (hidden and hidden(Path(base) / d))]
-        for name in files:
-            candidate = Path(base) / name
-            if hidden and hidden(candidate):
-                continue
-            # Regular files only: a FIFO/socket/device (or a symlink to one) in
-            # the walk would otherwise reach a reader and, for a pipe with no
-            # writer, hang the whole turn on open(). is_file() stats (never
-            # opens) and follows symlinks, so only true regular files pass.
-            if candidate.is_file():
-                yield candidate
-
-
 _RG_MISSING = 'ERROR: rg (ripgrep) not found in tools/bin or PATH; run `just install` to provision it.'
 _RG_TIMEOUT_S = 120
 # ripgrep's line for a path its walk could not open or read, e.g.
@@ -2410,26 +2388,6 @@ def ast_search(
     if warning:
         out = f"{warning}\n{out}"
     return out
-
-
-def list_dir(path: str, recursive: bool = False, context: ToolContext | None = None) -> str:
-    assert context is not None
-    root = context.resolve_path(path)
-    if not root.exists():
-        return f"ERROR: no such path: {root}"
-    if not root.is_dir():
-        return f"ERROR: not a directory: {root}"
-    lines: list[str] = []
-    if recursive:
-        for p in _iter_files(root, jail.hider(context)):
-            rel = p.relative_to(root)
-            lines.append(f"  {rel} ({p.stat().st_size}b)")
-    else:
-        for entry in sorted(root.iterdir()):
-            marker = "/" if entry.is_dir() else ""
-            size = "" if entry.is_dir() else f" ({entry.stat().st_size}b)"
-            lines.append(f"  {entry.name}{marker}{size}")
-    return f"{root}:\n" + ("\n".join(lines) if lines else "  (empty)")
 
 
 def _offering_path_skills(handler):

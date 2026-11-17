@@ -16,7 +16,7 @@ import pytest
 
 from js.toolkit import ToolContext
 from js.toolkit import fs
-from js.toolkit.fs import _iter_files, fs_read, fs_search
+from js.toolkit.fs import fs_read, fs_search
 
 
 requires_rg = pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep not installed")
@@ -430,16 +430,6 @@ def test_fs_search_missing_rg_binary_degrades_cleanly(tmp_path, monkeypatch):
     actual = fs_search("needle", path=".", context=context)
 
     assert actual == fs._RG_MISSING
-
-
-def test_iter_files_skips_fifo_and_yields_regular_only(tmp_path):
-    (tmp_path / "real.txt").write_text("x\n", encoding="utf-8")
-    os.mkfifo(tmp_path / "pipe")
-
-    found = _call_with_timeout(lambda: list(_iter_files(tmp_path)), timeout=10.0)
-
-    names = {p.name for p in found}
-    assert names == {"real.txt"}
 
 
 def test_fs_read_of_fifo_refuses_without_hanging(tmp_path):
