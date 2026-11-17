@@ -542,6 +542,8 @@ _LONG_REPLIES: dict[str, tuple[str | None, tuple[bytes, ...]]] = {
         {"organic": [{"title": "t", "link": "https://x.test", "snippet": _LONG}]}).encode(),)),
     "tavily_search": ("TAVILY_API_KEY", (json.dumps(
         {"results": [{"title": "t", "url": "https://x.test", "content": _LONG}]}).encode(),)),
+    "exa_search": ("EXA_API_KEY", (json.dumps(
+        {"results": [{"title": "t", "url": "https://x.test", "text": _LONG}]}).encode(),)),
 }
 
 

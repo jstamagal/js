@@ -305,7 +305,7 @@ def exa_search(
     results = reply.get("results")
     if results is None:
         results = []
-    return _cap(_numbered(results, url_key="url", body_key="text"), context)
+    return truncate(_numbered(results, url_key="url", body_key="text"), context)
 
 
 # Context7's search is best-effort keyword matching: a query that is not a real
