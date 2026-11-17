@@ -483,7 +483,7 @@ def start_capped(
     return CappedProcess(proc, captures, threads, stop_readers)
 
 
-def _run_capped(
+def run_capped(
     argv: list[str],
     *,
     timeout: int,

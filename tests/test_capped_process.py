@@ -8,7 +8,7 @@ import time
 import pytest
 
 from js import capped_process
-from js.capped_process import CappedProcessTimeout, _run_capped
+from js.capped_process import CappedProcessTimeout, run_capped
 
 
 def test_excerpt_does_not_advertise_a_spill_that_fails_during_read(tmp_path, monkeypatch):
@@ -30,7 +30,7 @@ def test_excerpt_does_not_advertise_a_spill_that_fails_during_read(tmp_path, mon
 
 def test_run_capped_timeout_attaches_captured_stdout_and_stderr():
     with pytest.raises(CappedProcessTimeout) as raised:
-        _run_capped(
+        run_capped(
             [
                 "/bin/sh",
                 "-c",
@@ -52,7 +52,7 @@ def test_run_capped_timeout_attaches_captured_stdout_and_stderr():
 
 def test_run_capped_timeout_retains_truncation_metadata():
     with pytest.raises(CappedProcessTimeout) as raised:
-        _run_capped(
+        run_capped(
             ["/bin/sh", "-c", "head -c 4096 /dev/zero; sleep 30"],
             timeout=0.2,
             cwd=None,
@@ -83,7 +83,7 @@ def test_run_capped_stops_readers_when_grandchild_keeps_pipes_open(monkeypatch):
 
     monkeypatch.setattr(capped_process.threading, "Thread", ObservedThread)
     monkeypatch.setattr(capped_process, "READER_GRACE_S", 0.1)
-    result = _run_capped(
+    result = run_capped(
         ["/bin/sh", "-c", "sleep 30 & printf '%s\\n' \"$!\""],
         timeout=5,
         cwd=None,

@@ -52,7 +52,7 @@ from contextvars import ContextVar
 from pathlib import Path
 
 from . import messages as msgs, paths, settings
-from .capped_process import CappedProcessResult, _run_capped, truncation_marker
+from .capped_process import CappedProcessResult, run_capped, truncation_marker
 
 __all__ = ["expand_prompt", "session_variables", "PromptExpansionError"]
 
@@ -319,11 +319,11 @@ def _decode_capped(data: bytes, *, truncated: bool, max_output_bytes: int) -> st
     return text
 
 
-def _run_capture(
+def run_capture(
     argv, *, cwd=None, timeout_s: int, label: str, max_output_bytes: int, strict: bool = False, warn=None
 ) -> str:
     try:
-        proc = _run_capped(
+        proc = run_capped(
             argv,
             cwd=cwd,
             env=_CODE_ENV.get(),
@@ -360,7 +360,7 @@ def _run_capture(
 
 
 def _sub_sh(body: str, *, timeout_s: int, max_output_bytes: int) -> str:
-    return _run_capture(
+    return run_capture(
         ["sh", "-c", body],
         timeout_s=timeout_s,
         label="!{sh}",
@@ -369,7 +369,7 @@ def _sub_sh(body: str, *, timeout_s: int, max_output_bytes: int) -> str:
 
 
 def _sub_bash(body: str, *, timeout_s: int, max_output_bytes: int) -> str:
-    return _run_capture(
+    return run_capture(
         ["bash", "-c", body],
         timeout_s=timeout_s,
         label="!{bash}",
@@ -389,7 +389,7 @@ def _interpreted(label: str, interp_argv, ext: str):
         with tempfile.TemporaryDirectory(dir=paths.tmp_dir()) as d:
             src = Path(d) / f"snippet{ext}"
             src.write_text(body, encoding="utf-8")
-            return _run_capture(
+            return run_capture(
                 [*interp_argv, str(src)],
                 timeout_s=timeout_s,
                 label=label,
@@ -410,7 +410,7 @@ def _compiled(label: str, compiler: str, ext: str):
             src = Path(d) / f"snippet{ext}"
             exe = Path(d) / "snippet.out"
             src.write_text(body, encoding="utf-8")
-            _run_capture(
+            run_capture(
                 [cc, str(src), "-o", str(exe)],
                 cwd=d,
                 timeout_s=timeout_s,
@@ -418,7 +418,7 @@ def _compiled(label: str, compiler: str, ext: str):
                 max_output_bytes=max_output_bytes,
                 strict=True,
             )
-            return _run_capture(
+            return run_capture(
                 [str(exe)],
                 timeout_s=timeout_s,
                 label=label,

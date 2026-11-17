@@ -42,7 +42,7 @@ def test_explicit_code_environment_is_isolated_between_concurrent_expansions():
     barrier = threading.Barrier(2)
     def runner(body, *, timeout_s, max_output_bytes):
         barrier.wait(timeout=2)
-        return promptexpand._run_capture(
+        return promptexpand.run_capture(
             [sys.executable, "-c", "import os; print(os.environ['EXPANSION_SENTINEL'], end='')"],
             timeout_s=timeout_s, max_output_bytes=max_output_bytes, label="python",
         )

@@ -21,7 +21,7 @@ from . import (
     snippets,
     usage as usage_mod,
 )
-from .capped_process import CappedProcessResult, _run_capped, truncation_marker
+from .capped_process import CappedProcessResult, run_capped, truncation_marker
 from .compaction_flight import ACTIVE_FLIGHT
 from .config import Config
 
@@ -57,7 +57,7 @@ def run_pre_hook(cfg: Config) -> str:
     shell_path = compaction_settings.get(cfg, "COMPACTION_HINT_SHELL_PROGRAM") or os.environ.get("SHELL", "/bin/sh")
     cap = int(_settings.knob_attr(cfg, "max_bash_output_bytes", "SHELL_OUTPUT_MAX"))
     try:
-        result = _run_capped(
+        result = run_capped(
             [shell_path, "-c", hook],
             timeout=compaction_settings.get_int(cfg, "COMPACTION_HINT_TIMEOUT"),
             cwd=str(getattr(cfg, "project_dir", os.getcwd())),

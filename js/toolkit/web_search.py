@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import paranoid, settings as _settings
-from ..capped_process import CappedProcessResult, _run_capped
+from ..capped_process import CappedProcessResult, run_capped
 from ..tool_binaries import resolve_binary
 from .core import Tool, ToolContext
 from .descriptions import load_description, load_parameter_description
@@ -571,7 +571,7 @@ def browse(
     try:
         if shot_path is not None:
             context.snapshot(shot_path)
-        result = _run_capped(
+        result = run_capped(
             argv,
             timeout=process_timeout,
             cwd=str(context.cwd),

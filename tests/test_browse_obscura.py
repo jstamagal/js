@@ -109,7 +109,7 @@ def test_browse_uses_the_browser_budget_not_the_plain_fetch_one(tmp_path, monkey
         seen["timeout"] = kwargs.get("timeout")
         raise RuntimeError("stop here")
 
-    monkeypatch.setattr("js.toolkit.web_search._run_capped", fake_run)
+    monkeypatch.setattr("js.toolkit.web_search.run_capped", fake_run)
     context = ToolContext(cwd=tmp_path, fetch_timeout_s=15, browse_timeout_s=90)
     browse("https://example.com", context=context)
 

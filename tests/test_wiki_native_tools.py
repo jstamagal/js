@@ -632,7 +632,7 @@ def test_external_conversion_discloses_truncation_within_the_byte_cap(tmp_path, 
         return SimpleNamespace(returncode=0, stdout=("é" * 4000).encode(), stderr=b"",
                                stdout_truncated=False, stderr_truncated=False)
 
-    monkeypatch.setattr(wiki_helpers_module, "_run_capped", run)
+    monkeypatch.setattr(wiki_helpers_module, "run_capped", run)
     monkeypatch.setattr(wiki_convert_module, "_which", lambda binary: f"/usr/bin/{binary}")
 
     result = wiki_convert(str(document), context=_ctx(tmp_path, max_bytes=cap))
