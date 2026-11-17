@@ -9,11 +9,13 @@ import re
 import stat
 import subprocess
 import sys
+from dataclasses import replace
 
 import pytest
+from repl_driver import record_turns, run_async
 
-from js import cli, exline, pastes, paths, settings
-from js.repl_state import ReplState
+from js import exline, pastes, paths, settings
+from js.config import from_env
 
 
 class FakeEditor:
@@ -136,18 +138,21 @@ def test_command_words_dispatch_through_the_table():
 
 
 @pytest.mark.parametrize("verb", ["set", "Set"])
-def test_ex_set_model_changes_the_model(tmp_path, verb):
+def test_ex_set_model_changes_the_model(tmp_path, monkeypatch, verb):
     """`:set model X` from the ex line reaches the live model; the table's verbs
     are case-insensitive there as everywhere."""
-    state = ReplState(messages=[], system="sys", settings=settings.seed_defaults(), model="old/model")
+    monkeypatch.chdir(tmp_path)
+    cfg = replace(from_env(), session_file=tmp_path / "session.jsonl")
+    turns = record_turns(monkeypatch)
 
-    async def dispatch(command_line: str) -> None:
-        cli._handle_command(command_line, state, None)
+    async def typing(enter, ex):
+        await ex(f"{verb} model new/model", FakeEditor())
+        await enter("hello")
 
-    asyncio.run(exline.run_ex(f"{verb} model new/model", FakeEditor(), is_command=lambda v: v in cli.COMMANDS,
-                              dispatch=dispatch))
+    run_async(monkeypatch, cfg, typing, model="old/model", live_settings=settings.seed_defaults())
 
-    assert state.model == "new/model"
+    [turn] = turns
+    assert turn.cfg.model == "new/model"
 
 
 def test_program_name_edits_the_buffer_and_returns_it_unsent(tmp_path, monkeypatch):

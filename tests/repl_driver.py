@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import inspect
 import sys
 from dataclasses import dataclass
 
@@ -74,7 +75,9 @@ def stub_screen(monkeypatch, lines, *, wait: bool = False) -> None:
     no further line is typed and no EOF follows.
 
     `lines` may instead be an async function; it is called with the Enter
-    handler and EOF follows when it returns and the turns have ended."""
+    handler, and with the ex line's handler `on_ex(line, editor)` as well
+    when it takes two arguments. EOF follows when it returns and the turns
+    have ended."""
     queues = []
     turn_consumer = cli._turn_consumer
 
@@ -83,13 +86,14 @@ def stub_screen(monkeypatch, lines, *, wait: bool = False) -> None:
         return turn_consumer(queue, *args, **kwargs)
 
     class AppStub:
-        def __init__(self, on_line, on_eof):
-            self._on_line, self._on_eof = on_line, on_eof
+        def __init__(self, on_line, on_eof, on_ex):
+            self._on_line, self._on_eof, self._on_ex = on_line, on_eof, on_ex
             self._exited = False
 
         async def run_async(self):
             if callable(lines):
-                await lines(self._on_line)
+                handlers = (self._on_line, self._on_ex)
+                await lines(*handlers[:len(inspect.signature(lines).parameters)])
             else:
                 for line in lines:
                     if self._exited:
@@ -128,8 +132,8 @@ def stub_screen(monkeypatch, lines, *, wait: bool = False) -> None:
             self._out.write(rendered)
             super().answer_commit(rendered)
 
-    def build_app_stub(*, on_line, on_eof, **_kwargs):
-        return AppStub(on_line, on_eof), VisibleScrollback(sys.stdout)
+    def build_app_stub(*, on_line, on_eof, on_ex, **_kwargs):
+        return AppStub(on_line, on_eof, on_ex), VisibleScrollback(sys.stdout)
 
     monkeypatch.setattr(cli, "_turn_consumer", recording_consumer)
     monkeypatch.setattr(cli.screen, "build_app", build_app_stub)
