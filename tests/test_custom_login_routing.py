@@ -828,6 +828,46 @@ def test_a_child_takes_the_effort_its_parents_turn_ran_with(monkeypatch, tmp_pat
     assert seen["turn"] == expected
 
 
+@pytest.mark.parametrize(("worker", "expected"), [("tools: []\n", "low"), ("reasoning: medium\ntools: []\n", "medium")])
+def test_a_parents_resumed_effort_sits_below_the_childs_agent_yaml(monkeypatch, tmp_path, worker, expected):
+    import asyncio
+    from dataclasses import replace
+
+    from js import agent_messages, memory, runtime
+    from js.toolkit import ToolContext, meta
+    from js.toolkit.registry import build_default_registry
+
+    _isolate_config(monkeypatch, tmp_path)
+    _two_model_login(a={"EFFORT": "high"})
+    monkeypatch.setenv("JS_MODEL", "testes/a")
+    root = tmp_path / "agents"
+    for name, yaml in (("parent", "tools: []\n"), ("worker", worker)):
+        (root / name).mkdir(parents=True)
+        (root / name / "agent.yaml").write_text(yaml, encoding="utf-8")
+        (root / name / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
+    base = replace(from_env(cwd=tmp_path, save_session=False), prompts_dir=root / "parent",
+                   prompt_roots=(root,), session_file=tmp_path / "parent.jsonl")
+    parent = login_defaults.for_turn(replace(base, layer_resume={"EFFORT": "low"}))
+    seen = {}
+
+    async def child_turn(child_cfg, system, messages, telemetry, **kwargs):
+        seen["turn"] = runtime._with_login_defaults(child_cfg, None, None, None).reasoning_effort
+        messages.append({"role": "assistant", "content": "done"})
+
+    async def no_init(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(runtime, "run_turn_async", child_turn)
+    monkeypatch.setattr(agent_messages, "initialize", no_init)
+    monkeypatch.setattr(memory, "persist_messages", lambda *a, **k: None)
+
+    asyncio.run(meta._run_one_task_async(
+        0, 1, "work", ToolContext(cwd=tmp_path), parent, build_default_registry(), "worker", None))
+
+    assert parent.reasoning_effort == "low"
+    assert seen["turn"] == expected
+
+
 def test_route_prefix_policy_and_login_lookup_are_injectable():
     looked_up = []
     def lookup(provider):

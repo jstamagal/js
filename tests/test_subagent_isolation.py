@@ -273,6 +273,23 @@ def test_worker_system_prompt_ends_with_the_agent_own_prompt(monkeypatch, tmp_pa
     assert system.rstrip().endswith(delivery)
 
 
+@pytest.mark.parametrize(("reasoning", "expected"), [("", "high"), ("low", "low")])
+def test_a_child_of_a_config_without_layers_runs_its_agent_yaml_reasoning(monkeypatch, tmp_path, reasoning, expected):
+    prompts = prompt_dir(tmp_path, "worker", "reasoning: high\ntools: []\n")
+    context = ToolContext(cwd=tmp_path)
+    context.config = make_cfg(tmp_path, "parent", prompts.parent / "parent")
+    seen = []
+
+    async def stream(**kwargs):
+        seen.append(kwargs["reasoning_effort"])
+        return _fake_stream_result("ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    assert "ok" in task(["work"], agent_id="worker", context=context, reasoning=reasoning)
+
+    assert seen == [expected]
+
+
 @pytest.mark.parametrize("async_dispatch", [False, True])
 @pytest.mark.parametrize("session_id", [None, "existing"])
 def test_missing_agent_fails_without_worker_or_session_changes(monkeypatch, tmp_path, async_dispatch, session_id):
