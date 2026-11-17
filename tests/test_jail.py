@@ -19,7 +19,18 @@ import pytest
 from jail_probe import bwrap_starts, needs_bwrap
 from test_subagent_isolation import _fake_stream_result, make_cfg, prompt_dir
 
-from js import cli, jail, paths, persona, prompt_run, runtime, settings, tool_calls, tool_errors, turn_dispatch
+from js import (
+    cli,
+    jail,
+    paths,
+    persona,
+    prompt_run,
+    runtime,
+    settings,
+    tool_calls,
+    tool_errors,
+    turn_dispatch,
+)
 from js.toolkit import ToolContext, call_tool, fs, python_kernel, shell_fetch, terminal
 from js.toolkit.registry import build_default_registry
 
