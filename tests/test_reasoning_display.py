@@ -9,6 +9,7 @@ import ai
 import ai.types.events as events
 import httpx2
 import pytest
+from turn_driver import js
 
 from js import (
     cli,
@@ -341,9 +342,10 @@ def test_prompt_mode_displays_reasoning_separately_and_persists_it(monkeypatch, 
         "API_KEY=fixture", "OUTPUT_TOKENS_MAX=64", "CONTEXT_SIZE=262144",
         "VISION=off", "REQUEST_LOG=off", f"REASONING_DISPLAY={level}",
     )))
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli, "_from_env", lambda *a, **kw: cfg)
     scripted(monkeypatch, cancel=cancel)
-    assert cli._run_prompt("first") == (130 if cancel else 0)
+    assert js(monkeypatch, "-p", "first") == (130 if cancel else 0)
     displayed = capsys.readouterr()
     assert (THOUGHT in transcript.strip_ansi(displayed.err)) is (level > 0)
     assert THOUGHT not in displayed.out
