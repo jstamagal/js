@@ -383,19 +383,19 @@ def _recorded_model(model: str | None, cfg: Config) -> tuple[str | None, str | N
     return provider, bare
 
 
-def _print_resume_hint(cfg: Config, state: dict) -> None:
+def _print_resume_hint(cfg: Config, state: ReplState) -> None:
     """Print the command that reopens this session.
 
     Without it the name is only recoverable by hunting through the sessions
     directory, and the session is effectively lost the moment the screen scrolls.
     The model is folded in so the resume comes back on the one in use."""
-    if cfg.session_file == Path(os.devnull) or not state.get("messages"):
+    if cfg.session_file == Path(os.devnull) or not state.messages:
         return
     # A bare `js --session` runs the `DEFAULT_AGENT` setting, so the hint names the
     # agent unless both this run and that setting are on the js/jsrc default.
     stock = settings.default_value("DEFAULT_AGENT")
     named = cfg.agent_id != stock or settings.knob(cfg.settings, "DEFAULT_AGENT") != stock
-    model = state.get("model")
+    model = state.model
     resume = command_line.argv(("--agent", cfg.agent_id if named else None),
                                ("--model", model if isinstance(model, str) and model else None),
                                ("--home", str(_paths.home()) if _paths.custom_home() else None),
@@ -1803,8 +1803,8 @@ def _cmd_session(arg: str, state: ReplState, cfg: Config) -> str | None:
 _pending_switch: dict[str, object] = {}
 
 
-def _queue_switch(state: dict) -> None:
-    target = state.get("switch_session")
+def _queue_switch(state: ReplState) -> None:
+    target = state.switch_session
     if isinstance(target, _SessionTarget):
         _pending_switch.update(target=target)
 
@@ -3821,16 +3821,16 @@ def _repl_hint(message: msgs.Message, state: ReplState) -> msgs.Message:
     render = _repl_assembly(state).hint_renderer
     return message if render is None else render(message, state)
 
-def _default_startup_banner(cfg: Config, state: dict, notices: list[str], errors: list[str]) -> str:
+def _default_startup_banner(cfg: Config, state: ReplState, notices: list[str], errors: list[str]) -> str:
     """What the REPL prints into its scrollback when it is up: the MOTD
     (`js.motd`) raw with its colours reset after, then the startup line,
     notices and errors."""
-    text = motd.pick(settings.knob(state["settings"], "MOTD_FILE"), settings.knob(state["settings"], "MOTD_DIR"))
+    text = motd.pick(settings.knob(state.settings, "MOTD_FILE"), settings.knob(state.settings, "MOTD_DIR"))
     return "\n".join([
         *([motd.lines_for_scrollback(text.rstrip("\r\n")) + motd.RESET] if text else []),
         msgs.STARTUP_TITLE.line(),
         msgs.STARTUP_AGENT.line(agent=cfg.agent_id),
-        msgs.STARTUP_MODEL.line(model=state["model"]),
+        msgs.STARTUP_MODEL.line(model=state.model),
         msgs.STARTUP_PROMPT.line(prompt=", ".join(map(str, cfg.prompts_dir)) if isinstance(cfg.prompts_dir, tuple) else cfg.prompts_dir),
         msgs.STARTUP_MEMORY.line(memory=cfg.session_file),
         "",
@@ -3841,11 +3841,11 @@ def _default_startup_banner(cfg: Config, state: dict, notices: list[str], errors
     ])
 
 
-def _startup_banner(cfg: Config, state: dict, notices: list[str], errors: list[str]) -> str:
+def _startup_banner(cfg: Config, state: ReplState, notices: list[str], errors: list[str]) -> str:
     render = _repl_assembly(state).banner or _default_startup_banner
     return render(cfg, state, notices, errors)
 
-def _echoes(line: str, state: dict) -> bool:
+def _echoes(line: str, state: ReplState) -> bool:
     """Whether a typed line shows in the scrollback: not when dispatch
     (`_handle_command`) takes it as a command, a command or alias from the
     table or an invalid one; yes for what goes to the model, `/skill`, a
@@ -3853,7 +3853,7 @@ def _echoes(line: str, state: dict) -> bool:
     if not line.startswith("/") or _is_skill_invocation(line, state):
         return True
     verb = line[1:].split(maxsplit=1)[0].lower() if line[1:].strip() else ""
-    if verb in _commands(state) or verb in (state.get("aliases") or {}):
+    if verb in _commands(state) or verb in (state.aliases or {}):
         return False
     return not _is_unknown_command(line)
 
@@ -3899,22 +3899,22 @@ def _drain_queue(queue: asyncio.Queue) -> int:
     return len(_take_queued(queue))
 
 
-def _live_level(state: dict, key: str) -> int:
+def _live_level(state: ReplState, key: str) -> int:
     """A 0-3 display level from live settings; its js/jsrc value when bad."""
     default = settings.default_value(key)
-    value = settings.knob(state.get("settings") or {}, key)
+    value = settings.knob(state.settings or {}, key)
     return value if isinstance(value, int) and value in range(4) else default
 
 
-def _status_bar_line(cfg: Config, state: dict, turn_active: bool, width: int) -> str:
+def _status_bar_line(cfg: Config, state: ReplState, turn_active: bool, width: int) -> str:
     """The REPL status bar from live state: what is running, on what, how full.
     In a subagent's window it is that subagent's: its model, agent, session
     and turn."""
     context = runtime.T.STOCK_CONTEXT
-    provider = state.get("provider_id") or cfg.provider_id
-    model = state.get("model") or cfg.model
+    provider = state.provider_id or cfg.provider_id
+    model = state.model or cfg.model
     agent_id, session_file = cfg.agent_id, cfg.session_file
-    windows = state.get("windows")
+    windows = state.windows
     window = activity = None
     if windows is not None:
         if len(windows.windows.numbers()) > 1:
@@ -3954,17 +3954,17 @@ def _status_bar_line(cfg: Config, state: dict, turn_active: bool, width: int) ->
     )
 
 
-def _show_resume(state: dict, telemetry: runtime.Telemetry, width: int) -> None:
+def _show_resume(state: ReplState, telemetry: runtime.Telemetry, width: int) -> None:
     """Draw the last RESUME_EXCHANGES exchanges of the session the way a turn
     draws them: its text printed, its tool calls through the turn's tool trace,
     so a resumed row folds, carries its whole form and unfolds as a live one
     does. ``telemetry``'s exchange factory is the screen's, when there is one."""
-    live = state.get("settings") or {}
+    live = state.settings or {}
     count = settings.knob(live, "RESUME_EXCHANGES")
     replay = runtime.Telemetry(None)
     replay.exchange_factory = getattr(telemetry, "exchange_factory", None)
     context = SimpleNamespace(config=SimpleNamespace(settings=live))
-    for kind, part in display_mod.resume_parts(state["messages"], count if isinstance(count, int) else 0,
+    for kind, part in display_mod.resume_parts(state.messages, count if isinstance(count, int) else 0,
                                                width=width, markdown=display_mod.markdown_enabled(live)):
         if kind == "text":
             runtime.settle_tool_trace(replay)
@@ -4017,19 +4017,19 @@ async def _repl_main(cfg, state, telemetry, history, completer, prompt_spec, ban
     supervisor.set_current(sup)
     queue: asyncio.Queue = asyncio.Queue()
     steer_inbox: list[str] = []
-    mcp_host = state.get("mcp_host")
+    mcp_host = state.mcp_host
     # Each subagent a turn launches gets a window; set before the consumer
     # starts, so every turn it runs inherits it.
     windows = screen.Windows()
     child_windows = subagent_windows.SubagentWindows(windows, sup)
-    state["windows"] = child_windows
+    state.windows = child_windows
     opener_token = meta.window_opener.set(child_windows.open)
 
     channel_instructed: set[str] = set()
 
     def channel_message(server: str, params: dict) -> None:
         content = params.get("content")
-        if not isinstance(content, str) or not content.strip() or not state["running"]:
+        if not isinstance(content, str) or not content.strip() or not state.running:
             return
         text = f"External MCP channel {json.dumps(server)}\n"
         if server not in channel_instructed:
@@ -4045,7 +4045,7 @@ async def _repl_main(cfg, state, telemetry, history, completer, prompt_spec, ban
 
     if mcp_host is not None:
         mcp_host.channel_sink = channel_message
-    if prompt_spec.exchanges and not state["messages"]:
+    if prompt_spec.exchanges and not state.messages:
         # Runs inside the screen, as the first turn, so its output streams into
         # the scrollback instead of being drawn after the fact.
         queue.put_nowait(functools.partial(_initialize_repl_agent, cfg, state, telemetry, prompt_spec))
@@ -4074,7 +4074,7 @@ async def _repl_main(cfg, state, telemetry, history, completer, prompt_spec, ban
             handled = await loop.run_in_executor(None, command.run, _handle_command, line, state, cfg)
             if handled:
                 _sync_telemetry_from_live_settings(cfg, state, telemetry)
-                if not state["running"]:
+                if not state.running:
                     await close()
                 return
             shown.send(line)
@@ -4092,7 +4092,7 @@ async def _repl_main(cfg, state, telemetry, history, completer, prompt_spec, ban
         handled = await loop.run_in_executor(None, _handle_command, line, state, cfg)
         if handled:
             _sync_telemetry_from_live_settings(cfg, state, telemetry)
-            if not state["running"]:
+            if not state.running:
                 await close()
             return
         if sup.turn_active() and _steer_mode(state) == "now":
@@ -4107,7 +4107,7 @@ async def _repl_main(cfg, state, telemetry, history, completer, prompt_spec, ban
 
     def fail_snippet(error: snippets.SnippetError) -> None:
         snippet_failures.append(error)
-        state["running"] = False
+        state.running = False
         app.exit()
 
     async def on_line(line: str) -> None:
@@ -4156,14 +4156,14 @@ async def _repl_main(cfg, state, telemetry, history, completer, prompt_spec, ban
         return closing[0]
 
     def on_eof() -> asyncio.Future:
-        state["running"] = False
+        state.running = False
         return close()
 
     async def on_ex(line: str, editor: screen.InputEditor) -> None:
         await exline.run_ex(
             line,
             editor,
-            is_command=lambda verb: verb in _commands(state) or verb in (state.get("aliases") or {}),
+            is_command=lambda verb: verb in _commands(state) or verb in (state.aliases or {}),
             dispatch=on_line,
         )
 
@@ -4176,13 +4176,13 @@ async def _repl_main(cfg, state, telemetry, history, completer, prompt_spec, ban
         on_eof=on_eof,
         turn_active=sup.turn_active,
         status=lambda width: _status_bar_line(cfg, state, sup.turn_active(), width),
-        editing_mode=lambda: settings.knob(state["settings"], "EDITING_MODE"),
+        editing_mode=lambda: settings.knob(state.settings, "EDITING_MODE"),
         echo=lambda line: _echoes(line, state),
         on_ex=on_ex,
         key_bindings=merge_key_bindings([
-            *(_repl_assembly(state).input_bindings or _repl_input_bindings)(lambda: state["settings"]),
+            *(_repl_assembly(state).input_bindings or _repl_input_bindings)(lambda: state.settings),
         ]),
-        keymap=state.get("keymap"),
+        keymap=state.keymap,
         windows=windows,
     )
     windows.set_main(scrollback)
@@ -4227,7 +4227,7 @@ async def _repl_main(cfg, state, telemetry, history, completer, prompt_spec, ban
         telemetry.exchange_factory = previous_exchange_factory
         supervisor.set_current(None)
         meta.window_opener.reset(opener_token)
-        state.pop("windows", None)
+        state.windows = None
         consumer.cancel()
         with contextlib.suppress(asyncio.CancelledError, snippets.SnippetError):
             await consumer
@@ -4871,16 +4871,16 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         live_settings=live_settings,
         tool_registry=settled.registry,
     )
-    state["keymap"] = keymap
+    state.keymap = keymap
     # A resumed session's reasoning is this session's own choice.
-    state["live_resume"] = resumed.layer
+    state.live_resume = resumed.layer
     if cut_off:
         _queue_note(state, snippets.render('turn-cut-off'))
     rc_errors = _run_rc_commands(state, cfg, jsrc_paths(
         Path(getattr(cfg, "project_dir", None) or Path.cwd()), sources))
     _mark_saved(state)
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
-    state["mcp_host"] = _session_mcp_host(cfg, telemetry)
+    state.mcp_host = _session_mcp_host(cfg, telemetry)
     # Attach the debug autolog sink before the first turn.
     _sync_telemetry_from_live_settings(cfg, state, telemetry)
 
