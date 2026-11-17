@@ -147,12 +147,6 @@ def test_code_while_off_expands_to_nothing(capsys):
     assert capsys.readouterr().err  # a warning, and the load goes on
 
 
-def test_keep_leaves_a_failed_directive_literal(capsys):
-    out = expand_prompt("run !{sh echo hi} now", allow_code=False, on_error="keep")
-    assert out == "run !{sh echo hi} now"
-    assert capsys.readouterr().err
-
-
 def test_one_bad_directive_does_not_kill_the_others():
     # The good !{env} still expands even though the sibling directive failed.
     out = expand_prompt("!{wat x} then !{env WHO}", env={"WHO": "ape"})

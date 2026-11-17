@@ -140,8 +140,6 @@ def expand_prompt(
       ``"drop"`` (default) -- that directive expands to nothing, one line goes
       to stderr, and expansion goes on. A broken directive never aborts the
       load and never reaches the model as raw directive text.
-      ``"keep"`` -- as ``"drop"``, but the directive stays literal; for
-      previews that show the prompt with code directives unrun.
       ``"raise"`` -- raise :class:`PromptExpansionError` at the first failure
       (the strict behavior; used by tests).
 
@@ -246,8 +244,6 @@ def expand_prompt(
             if on_error == "raise":
                 raise
             warning(msgs.DIRECTIVE_NOT_EXPANDED, error=exc)
-            if on_error == "keep":
-                return m.group(0)
             return exc.remainder
 
     token = _WARNING.set(warning)
