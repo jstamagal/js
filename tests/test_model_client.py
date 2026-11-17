@@ -16,7 +16,7 @@ import ai.types.usage
 import pytest
 from turn_driver import one_turn
 
-from js import history_record, model_client, provider_errors
+from js import history_record, model_client, provider_errors, stream_protocols
 from js.sampling import Sampling
 
 
@@ -185,7 +185,7 @@ def test_resolve_model_gateway_needs_explicit_base_else_errors(monkeypatch):
     assert result.provider.api_key == "sk-explicit"
     assert result.provider.headers.get("X-Test") == "1"
     assert "gateway" not in type(result.provider).__name__.lower()
-    assert isinstance(result.provider.protocol_override, model_client._ReasoningContentProtocol)
+    assert isinstance(result.provider.protocol_override, stream_protocols.ReasoningContentProtocol)
 
     # No key given: keyless local endpoint, never the env decoy.
     keyless = model_client.resolve_model(
@@ -686,7 +686,7 @@ def _cpa_chunk(delta: dict, finish: str | None = None):
 
 
 def test_streamed_reasoning_block_fragments_join_by_index():
-    collected = model_client.ReasoningBlocks()
+    collected = stream_protocols.ReasoningBlocks()
     for delta in (
         {"reasoning_blocks": [{"index": 0, "type": "thinking", "thinking": "Let me "}]},
         {"reasoning_blocks": [{"index": 0, "type": "thinking", "thinking": "think."}]},
@@ -702,7 +702,7 @@ def test_streamed_reasoning_block_fragments_join_by_index():
 
 
 def test_a_non_streaming_reply_gives_its_blocks_whole():
-    collected = model_client.ReasoningBlocks()
+    collected = stream_protocols.ReasoningBlocks()
     collected.observe({"choices": [{"message": {"content": "hi", "reasoning_blocks": [
         {"index": 0, "type": "thinking", "thinking": "t", "signature": "s"}]}}]})
     assert collected.blocks() == [{"type": "thinking", "thinking": "t", "signature": "s"}]
@@ -741,7 +741,7 @@ _HISTORY = [
 def test_a_cpa_route_sends_stored_blocks_back_instead_of_reasoning_content():
     import asyncio
 
-    sent = asyncio.run(_wire_messages(model_client._ReasoningContentProtocol(reasoning_blocks=True), _HISTORY))
+    sent = asyncio.run(_wire_messages(stream_protocols.ReasoningContentProtocol(reasoning_blocks=True), _HISTORY))
     assistant = next(m for m in sent if m["role"] == "assistant")
     assert assistant["reasoning_blocks"] == _BLOCKS
     assert "reasoning_content" not in assistant and "reasoning" not in assistant
@@ -750,7 +750,7 @@ def test_a_cpa_route_sends_stored_blocks_back_instead_of_reasoning_content():
 def test_blocks_are_never_sent_off_cpa():
     import asyncio
 
-    sent = asyncio.run(_wire_messages(model_client._ReasoningContentProtocol(), _HISTORY))
+    sent = asyncio.run(_wire_messages(stream_protocols.ReasoningContentProtocol(), _HISTORY))
     assistant = next(m for m in sent if m["role"] == "assistant")
     assert "reasoning_blocks" not in assistant
     assert assistant["reasoning_content"] == "plan"
@@ -823,7 +823,7 @@ def test_blocks_go_back_on_their_own_message_when_answers_repeat():
          "reasoning_from": _FROM},
         {"role": "user", "content": "three"},
     ]
-    sent = asyncio.run(_wire_messages(model_client._ReasoningContentProtocol(reasoning_blocks=True), history))
+    sent = asyncio.run(_wire_messages(stream_protocols.ReasoningContentProtocol(reasoning_blocks=True), history))
     first, second = [m for m in sent if m["role"] == "assistant"]
     assert "reasoning_blocks" not in first
     assert second["reasoning_blocks"] == _BLOCKS
@@ -869,8 +869,8 @@ def test_blocks_go_back_only_to_the_model_that_wrote_them(monkeypatch, tmp_path)
 
     same = history_record.history_to_ai_messages("", messages, provider_id=cfg.provider_id, model_id=cfg.model)
     other = history_record.history_to_ai_messages("", messages, provider_id=cfg.provider_id, model_id="other-model")
-    assert model_client._stored_reasoning_blocks(same[-1]) == blocks
-    assert model_client._stored_reasoning_blocks(other[-1]) is None
+    assert stream_protocols._stored_reasoning_blocks(same[-1]) == blocks
+    assert stream_protocols._stored_reasoning_blocks(other[-1]) is None
 
 
 def test_registered_deepseek_budget_reaches_wire(monkeypatch):

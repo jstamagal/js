@@ -22,7 +22,7 @@
   "decoder_keeps_reasoning": false,
   "resolve_model": {
    "explicit_prompt_cache": false,
-   "protocol": "_AnthropicThinkingProtocol",
+   "protocol": "AnthropicThinkingProtocol",
    "sdk": "anthropic"
   },
   "route": {
@@ -42,7 +42,7 @@
   "decoder_keeps_reasoning": false,
   "resolve_model": {
    "explicit_prompt_cache": true,
-   "protocol": "_AnthropicThinkingProtocol",
+   "protocol": "AnthropicThinkingProtocol",
    "sdk": "anthropic"
   },
   "route": {
@@ -137,7 +137,7 @@
  "cliproxyapi": {
   "decoder_keeps_reasoning": true,
   "resolve_model": {
-   "protocol": "_ReasoningContentProtocol",
+   "protocol": "ReasoningContentProtocol",
    "reasoning_blocks": true,
    "sdk": "openai"
   },
@@ -176,7 +176,7 @@
  "jan": {
   "decoder_keeps_reasoning": true,
   "resolve_model": {
-   "protocol": "_ReasoningContentProtocol",
+   "protocol": "ReasoningContentProtocol",
    "reasoning_blocks": false,
    "sdk": "openai"
   },
@@ -196,7 +196,7 @@
  "koboldcpp": {
   "decoder_keeps_reasoning": true,
   "resolve_model": {
-   "protocol": "_ReasoningContentProtocol",
+   "protocol": "ReasoningContentProtocol",
    "reasoning_blocks": false,
    "sdk": "openai"
   },
@@ -216,7 +216,7 @@
  "llama.cpp": {
   "decoder_keeps_reasoning": true,
   "resolve_model": {
-   "protocol": "_ReasoningContentProtocol",
+   "protocol": "ReasoningContentProtocol",
    "reasoning_blocks": false,
    "sdk": "openai"
   },
@@ -236,7 +236,7 @@
  "llamafile": {
   "decoder_keeps_reasoning": true,
   "resolve_model": {
-   "protocol": "_ReasoningContentProtocol",
+   "protocol": "ReasoningContentProtocol",
    "reasoning_blocks": false,
    "sdk": "openai"
   },
@@ -256,7 +256,7 @@
  "lmstudio": {
   "decoder_keeps_reasoning": true,
   "resolve_model": {
-   "protocol": "_ReasoningContentProtocol",
+   "protocol": "ReasoningContentProtocol",
    "reasoning_blocks": false,
    "sdk": "openai"
   },
@@ -276,7 +276,7 @@
  "localai": {
   "decoder_keeps_reasoning": true,
   "resolve_model": {
-   "protocol": "_ReasoningContentProtocol",
+   "protocol": "ReasoningContentProtocol",
    "reasoning_blocks": false,
    "sdk": "openai"
   },
@@ -335,7 +335,7 @@
   "decoder_keeps_reasoning": false,
   "resolve_model": {
    "explicit_prompt_cache": true,
-   "protocol": "_AnthropicThinkingProtocol",
+   "protocol": "AnthropicThinkingProtocol",
    "sdk": "anthropic"
   },
   "route": {
@@ -354,7 +354,7 @@
  "no provider, base URL": {
   "decoder_keeps_reasoning": true,
   "resolve_model": {
-   "protocol": "_ReasoningContentProtocol",
+   "protocol": "ReasoningContentProtocol",
    "reasoning_blocks": false,
    "sdk": "openai"
   },
@@ -374,7 +374,7 @@
  "no provider, base URL, deepseek model": {
   "decoder_keeps_reasoning": true,
   "resolve_model": {
-   "protocol": "_ReasoningContentProtocol",
+   "protocol": "ReasoningContentProtocol",
    "reasoning_blocks": false,
    "sdk": "openai"
   },
@@ -410,7 +410,7 @@
  "ollama": {
   "decoder_keeps_reasoning": true,
   "resolve_model": {
-   "protocol": "_ReasoningContentProtocol",
+   "protocol": "ReasoningContentProtocol",
    "reasoning_blocks": false,
    "sdk": "openai"
   },
@@ -449,7 +449,7 @@
  "omp": {
   "decoder_keeps_reasoning": true,
   "resolve_model": {
-   "protocol": "_ReasoningContentProtocol",
+   "protocol": "ReasoningContentProtocol",
    "reasoning_blocks": false,
    "sdk": "openai"
   },
@@ -488,7 +488,7 @@
  "openai, custom base URL": {
   "decoder_keeps_reasoning": true,
   "resolve_model": {
-   "protocol": "_ReasoningContentProtocol",
+   "protocol": "ReasoningContentProtocol",
    "reasoning_blocks": false,
    "sdk": "openai"
   },
@@ -508,7 +508,7 @@
  "openai-completions": {
   "decoder_keeps_reasoning": true,
   "resolve_model": {
-   "protocol": "_ReasoningContentProtocol",
+   "protocol": "ReasoningContentProtocol",
    "reasoning_blocks": false,
    "sdk": "openai"
   },
@@ -528,7 +528,7 @@
  "openai-completions, hosted deepseek model": {
   "decoder_keeps_reasoning": true,
   "resolve_model": {
-   "protocol": "_ReasoningContentProtocol",
+   "protocol": "ReasoningContentProtocol",
    "reasoning_blocks": false,
    "sdk": "openai"
   },
@@ -548,7 +548,7 @@
  "openai-responses": {
   "decoder_keeps_reasoning": false,
   "resolve_model": {
-   "protocol": "_ResponsesProtocol",
+   "protocol": "ResponsesProtocol",
    "sdk": "openai"
   },
   "route": {
@@ -587,7 +587,7 @@
   "decoder_keeps_reasoning": false,
   "resolve_model": {
    "explicit_prompt_cache": true,
-   "protocol": "_AnthropicThinkingProtocol",
+   "protocol": "AnthropicThinkingProtocol",
    "sdk": "anthropic"
   },
   "route": {
@@ -645,7 +645,7 @@
   "decoder_keeps_reasoning": false,
   "resolve_model": {
    "explicit_prompt_cache": false,
-   "protocol": "_AnthropicThinkingProtocol",
+   "protocol": "AnthropicThinkingProtocol",
    "sdk": "anthropic"
   },
   "route": {
@@ -684,7 +684,7 @@
   "decoder_keeps_reasoning": false,
   "resolve_model": {
    "explicit_prompt_cache": true,
-   "protocol": "_AnthropicThinkingProtocol",
+   "protocol": "AnthropicThinkingProtocol",
    "sdk": "anthropic"
   },
   "route": {
@@ -719,7 +719,7 @@
  "saved login, cliproxyapi shape": {
   "decoder_keeps_reasoning": true,
   "resolve_model": {
-   "protocol": "_ReasoningContentProtocol",
+   "protocol": "ReasoningContentProtocol",
    "reasoning_blocks": true,
    "sdk": "openai"
   },
@@ -758,7 +758,7 @@
  "saved login, openai sdk": {
   "decoder_keeps_reasoning": true,
   "resolve_model": {
-   "protocol": "_ReasoningContentProtocol",
+   "protocol": "ReasoningContentProtocol",
    "reasoning_blocks": false,
    "sdk": "openai"
   },
@@ -778,7 +778,7 @@
  "saved login, openai-responses shape": {
   "decoder_keeps_reasoning": false,
   "resolve_model": {
-   "protocol": "_ResponsesProtocol",
+   "protocol": "ResponsesProtocol",
    "sdk": "openai"
   },
   "route": {
@@ -797,7 +797,7 @@
  "sglang": {
   "decoder_keeps_reasoning": true,
   "resolve_model": {
-   "protocol": "_ReasoningContentProtocol",
+   "protocol": "ReasoningContentProtocol",
    "reasoning_blocks": false,
    "sdk": "openai"
   },
@@ -817,7 +817,7 @@
  "tabbyapi": {
   "decoder_keeps_reasoning": true,
   "resolve_model": {
-   "protocol": "_ReasoningContentProtocol",
+   "protocol": "ReasoningContentProtocol",
    "reasoning_blocks": false,
    "sdk": "openai"
   },
@@ -837,7 +837,7 @@
  "text-generation-webui": {
   "decoder_keeps_reasoning": true,
   "resolve_model": {
-   "protocol": "_ReasoningContentProtocol",
+   "protocol": "ReasoningContentProtocol",
    "reasoning_blocks": false,
    "sdk": "openai"
   },
@@ -857,7 +857,7 @@
  "tgi": {
   "decoder_keeps_reasoning": true,
   "resolve_model": {
-   "protocol": "_ReasoningContentProtocol",
+   "protocol": "ReasoningContentProtocol",
    "reasoning_blocks": false,
    "sdk": "openai"
   },
@@ -925,7 +925,7 @@
  "vllm": {
   "decoder_keeps_reasoning": true,
   "resolve_model": {
-   "protocol": "_ReasoningContentProtocol",
+   "protocol": "ReasoningContentProtocol",
    "reasoning_blocks": false,
    "sdk": "openai"
   },
@@ -964,7 +964,7 @@
  "xai, custom base URL": {
   "decoder_keeps_reasoning": true,
   "resolve_model": {
-   "protocol": "_ReasoningContentProtocol",
+   "protocol": "ReasoningContentProtocol",
    "reasoning_blocks": false,
    "sdk": "openai"
   },
@@ -984,7 +984,7 @@
  "xinference": {
   "decoder_keeps_reasoning": true,
   "resolve_model": {
-   "protocol": "_ReasoningContentProtocol",
+   "protocol": "ReasoningContentProtocol",
    "reasoning_blocks": false,
    "sdk": "openai"
   },

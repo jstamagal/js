@@ -144,9 +144,9 @@ def _kinds(observed: dict) -> dict[str, str]:
     resolved = observed["resolve_model"]
     if isinstance(resolved, dict):
         kinds["resolve_model"] = {
-            "_AnthropicThinkingProtocol": "anthropic",
-            "_ResponsesProtocol": "responses",
-            "_ReasoningContentProtocol": "chat",
+            "AnthropicThinkingProtocol": "anthropic",
+            "ResponsesProtocol": "responses",
+            "ReasoningContentProtocol": "chat",
             "OpenAIChatCompletionsProtocol": "chat",
         }.get(resolved["protocol"], resolved["sdk"])
     route = observed["route"]
