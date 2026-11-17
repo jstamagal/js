@@ -6,10 +6,11 @@ import json
 import re
 
 import pytest
+from turn_driver import config, registry, run
 
-from js import runtime, toolkit
+from js import runtime
 from js.toolkit import fs
-from js.toolkit.core import ToolContext
+from js.toolkit.core import Tool, ToolContext
 
 _POINTER = re.compile(r"the full text is at (.+) — read it")
 _RANGE = re.compile(r"range (\{[^}]*\})")
@@ -19,7 +20,6 @@ _CONTINUE = re.compile(r"continue with (\{.*\})\]$")
 @pytest.fixture
 def context(tmp_path, monkeypatch):
     ctx = ToolContext(cwd=tmp_path, max_tool_result_inline_bytes=4_000)
-    monkeypatch.setattr(toolkit, "STOCK_CONTEXT", ctx)
     real_spill = runtime.spill_oversized_result
     monkeypatch.setattr(
         runtime,
@@ -29,11 +29,26 @@ def context(tmp_path, monkeypatch):
     return ctx
 
 
-def _dispatch_read(context: ToolContext, args: dict) -> str:
-    _args, delivered = runtime._dispatch(
-        "read", json.dumps(args), runtime.Telemetry(None), cap_bytes=0, tool_context=context
-    )
-    return delivered
+@pytest.fixture
+def in_turn(context, tmp_path, monkeypatch):
+    """The result the model gets for one call of ``tool`` with ``args``, in a
+    turn under the context's inline limit."""
+    cfg = config(tmp_path, max_tool_result_inline_bytes=context.max_tool_result_inline_bytes,
+                 max_tool_result_bytes=0)
+
+    def call(tool: Tool, args: dict) -> str:
+        turn = run(tmp_path, monkeypatch, registry(tool), [[("c", tool.name, json.dumps(args))]],
+                   cfg=cfg, context=context)
+        return turn.results()["c"]
+
+    return call
+
+
+@pytest.fixture
+def model_read(in_turn):
+    """The result of the model's read call with ``args``."""
+    read = next(tool for tool in fs.tools() if tool.name == "read")
+    return lambda args: in_turn(read, args)
 
 
 def test_a_byte_range_has_a_structured_view_of_the_actual_utf8_window(context):
@@ -50,8 +65,10 @@ def test_a_byte_range_has_a_structured_view_of_the_actual_utf8_window(context):
                      "total_bytes": 9, "text": "é\nbe"}
 
 
-def _spill(context: ToolContext, payload: str) -> tuple[str, str, list[dict]]:
-    spilled = runtime._cap_result(payload, 0, context.max_tool_result_inline_bytes)
+def _spill(in_turn, payload: str) -> tuple[str, str, list[dict]]:
+    """The spill file, the preview and the recovery ranges the model gets for
+    a tool result of ``payload``."""
+    spilled = in_turn(Tool("emit", "emit", lambda: payload, {}), {})
     pointer = _POINTER.search(spilled)
     assert pointer is not None, spilled
     preview = spilled.rsplit("\n\n[result was ", 1)[0]
@@ -59,11 +76,11 @@ def _spill(context: ToolContext, payload: str) -> tuple[str, str, list[dict]]:
     return pointer.group(1), preview, ranges
 
 
-def _read_bytes_to_end(context: ToolContext, path: str, first_range: dict) -> str:
+def _read_bytes_to_end(model_read, path: str, first_range: dict) -> str:
     collected: list[str] = []
     args = {"file_path": path, "range": first_range}
     for _ in range(1_000):
-        page = _dispatch_read(context, args)
+        page = model_read(args)
         assert not page.startswith("ERROR"), page
         assert "the full text is at" not in page, "a page of a spill spilled again"
         body, _, footer = page.rpartition("\n")
@@ -75,26 +92,26 @@ def _read_bytes_to_end(context: ToolContext, path: str, first_range: dict) -> st
     raise AssertionError("byte pages never reached the end of the file")
 
 
-def test_single_line_payload_is_recovered_whole_by_the_named_byte_range(context):
+def test_single_line_payload_is_recovered_whole_by_the_named_byte_range(context, in_turn, model_read):
     instructions = "\n# Driving a pane — é ü 漢字\n\nstep one, step two\n" * 600
     payload = json.dumps({"id": "skill:tuios", "instructions": instructions}, ensure_ascii=False)
     assert "\n" not in payload and len(payload.encode("utf-8")) > 5 * context.max_tool_result_inline_bytes
 
-    path, preview, ranges = _spill(context, payload)
+    path, preview, ranges = _spill(in_turn, payload)
 
     assert ranges == [{"start_byte": len(preview.encode("utf-8"))}]
-    assert preview + _read_bytes_to_end(context, path, ranges[0]) == payload
+    assert preview + _read_bytes_to_end(model_read, path, ranges[0]) == payload
 
 
-def test_multiline_payload_names_both_byte_and_line_recovery(context):
+def test_multiline_payload_names_both_byte_and_line_recovery(in_turn, model_read):
     payload = "".join(f"record {n:05d} " + "x" * 60 + "\n" for n in range(400))
 
-    path, preview, ranges = _spill(context, payload)
+    path, preview, ranges = _spill(in_turn, payload)
 
     by_byte = next(r for r in ranges if "start_byte" in r)
     by_line = next(r for r in ranges if "start_line" in r)
-    assert preview + _read_bytes_to_end(context, path, by_byte) == payload
-    page = _dispatch_read(context, {"file_path": path, "range": by_line, "show_line_numbers": False})
+    assert preview + _read_bytes_to_end(model_read, path, by_byte) == payload
+    page = model_read({"file_path": path, "range": by_line, "show_line_numbers": False})
     resumed_at = payload.splitlines()[by_line["start_line"] - 1]
     assert page.startswith(resumed_at)
     assert preview.splitlines()[-1] in resumed_at
