@@ -4569,14 +4569,6 @@ def _json_run_requested(args: argparse.Namespace) -> bool:
     )
 
 
-def _agents_listing() -> list[str]:
-    names = set()
-    for directory in _paths.agent_roots():
-        if directory.is_dir():
-            names.update(path.name for path in directory.iterdir() if path.is_dir())
-    return sorted(names)
-
-
 def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     _session_leases.start = {"mode": None, "command": ["js", *dispatch_argv]}
     sources = _invocation_sources(args)
@@ -4715,7 +4707,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         from . import login_cli
         return login_cli.main(["logout", args.logout])
     if args.list_agents:
-        names = _agents_listing()
+        names = _paths.agent_names()
         return _print_json(names) if args.json else (print("\n".join(names)) or 0)
     if args.list_providers:
         return _print_json(_providers_json())
@@ -4818,7 +4810,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
 
     try:
         automatic_agent = _invocation_agent(args, sources)
-        automatic_dir = P._most_specific_prompt_dir(automatic_agent, *_paths.agent_roots())
+        automatic_dir = _paths.agent_dirs(automatic_agent)
     except (ValueError, OSError) as exc:
         msgs.warn(msgs.FAILED, error=exc)
         return 2

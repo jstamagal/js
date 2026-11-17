@@ -99,6 +99,29 @@ def agent_roots(cwd: Path | None = None) -> tuple[Path, ...]:
     return defaults_dir() / "agents", global_agents_dir(), project_home(cwd) / "agents"
 
 
+def agent_dirs(agent_id: str, roots: tuple[Path, ...] | None = None) -> tuple[Path, ...]:
+    """Agent ``agent_id``'s directory in each of ``roots`` (default
+    `agent_roots()`) that has one, lowest layer first, or every candidate
+    when none has. A directory that cannot be listed is a ValueError, so a
+    lower layer never stands in for it."""
+    candidates = tuple(dict.fromkeys(root / agent_id for root in (agent_roots() if roots is None else roots)))
+    existing = []
+    for candidate in candidates:
+        try:
+            if candidate.is_dir():
+                tuple(candidate.iterdir())
+                existing.append(candidate)
+        except OSError as exc:
+            raise ValueError(f"agent {agent_id!r} at {candidate} is unreadable: {exc}") from exc
+    return tuple(existing) or candidates
+
+
+def agent_names(roots: tuple[Path, ...] | None = None) -> list[str]:
+    """Sorted names of the agent directories in ``roots`` (default `agent_roots()`)."""
+    return sorted({entry.name for root in (agent_roots() if roots is None else roots)
+                   if root.is_dir() for entry in root.iterdir() if entry.is_dir()})
+
+
 def _file_layers(rel: str | Path) -> tuple[Path, ...]:
     path = Path(rel)
     if path.is_absolute() or ".." in path.parts:

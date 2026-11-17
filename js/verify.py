@@ -40,11 +40,14 @@ def verify(agent: str | None = None) -> list[str]:
                 def validate_config(path=path):
                     errors.extend(settings.load_jsrc_files([path], settings.seed_defaults()))
                 check(path, validate_config)
-        agent_ids = sorted({directory.name for root in roots if root.is_dir()
-                            for directory in root.iterdir() if directory.is_dir()})
+        agent_ids = paths.agent_names(roots)
 
     for agent_id in agent_ids:
-        directories = persona._most_specific_prompt_dir(agent_id, *roots)
+        try:
+            directories = paths.agent_dirs(agent_id, roots)
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
         location = ", ".join(map(str, directories))
 
         def validate_agent(agent_id=agent_id, directories=directories, location=location):

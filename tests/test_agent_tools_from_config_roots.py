@@ -195,37 +195,15 @@ def test_symlinked_agent_is_a_tool_without_following_the_link(tmp_path, monkeypa
     assert capsys.readouterr().err == ""
 
 
-def test_task_child_on_unreachable_agent_is_an_error_result_not_a_crash(tmp_path, monkeypatch):
-    """The task worker's own dir lookup: ENODEV must become ValueError, which the
+def test_selecting_an_unreachable_agent_stops_with_a_plain_error(tmp_path, monkeypatch):
+    """Skipping is only for the startup scan. `js -a asleep` and a task child
+    on `asleep` must stop, cleanly: ENODEV becomes a ValueError, which the task
     worker returns as `ERROR could not load agent ...` to the calling agent."""
     import errno
 
     import pytest
 
-    from js.toolkit.meta import _select_agent_prompt_dir
-
-    root = tmp_path / "agents"
-    dead = _agent_dir(root, "research")
-    real_is_dir = Path.is_dir
-
-    def is_dir(self, *args, **kwargs):
-        if self == dead:
-            raise OSError(errno.ENODEV, "No such device", str(self))
-        return real_is_dir(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "is_dir", is_dir)
-
-    with pytest.raises(ValueError, match="research.*No such device"):
-        _select_agent_prompt_dir("research", (root,))
-
-
-def test_selecting_an_unreachable_agent_stops_with_a_plain_error(tmp_path, monkeypatch):
-    """Skipping is only for the startup scan. `js -a asleep` must stop, cleanly."""
-    import errno
-
-    import pytest
-
-    from js.config import _agent_prompt_layers
+    from js import paths
 
     root = tmp_path / "agents"
     dead = _agent_dir(root, "asleep")
@@ -239,15 +217,14 @@ def test_selecting_an_unreachable_agent_stops_with_a_plain_error(tmp_path, monke
     monkeypatch.setattr(Path, "is_dir", is_dir)
 
     with pytest.raises(ValueError, match="asleep.*No such device"):
-        _agent_prompt_layers("asleep", (tmp_path / "repo", root, tmp_path / "project"))
+        paths.agent_dirs("asleep", (tmp_path / "repo", root, tmp_path / "project"))
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root can list an unreadable directory")
-def test_task_child_of_an_unlistable_project_agent_does_not_fall_back(tmp_path):
-    """The task worker's dir lookup refuses like the main agent's: a project agent
-    whose directory cannot be listed must not become the global agent of the same
-    name, which would run a different agent silently."""
-    from js.toolkit.meta import _select_agent_prompt_dir
+def test_an_unlistable_project_agent_does_not_fall_back(tmp_path):
+    """A project agent whose directory cannot be listed must not become the
+    global agent of the same name, which would run a different agent silently."""
+    from js import paths
 
     repo_root = tmp_path / "repo" / "prompts"
     global_root = tmp_path / "global" / "agents"
@@ -259,6 +236,6 @@ def test_task_child_of_an_unlistable_project_agent_does_not_fall_back(tmp_path):
     project_agent.chmod(0)
     try:
         with pytest.raises(ValueError, match="worker.*Permission denied"):
-            _select_agent_prompt_dir("worker", (repo_root, global_root, project_root))
+            paths.agent_dirs("worker", (repo_root, global_root, project_root))
     finally:
         project_agent.chmod(0o700)

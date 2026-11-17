@@ -280,19 +280,6 @@ def _existing_text_parts(paths: list[Path]) -> list[str]:
     return parts
 
 
-def _agent_directories(agent_id: str, roots) -> tuple[Path, ...]:
-    candidates = tuple(dict.fromkeys(root / agent_id for root in roots))
-    existing = tuple(path for path in candidates if path.is_dir())
-    if not existing:
-        raise FileNotFoundError(f"unknown agent {agent_id!r}; searched " + ", ".join(map(str, candidates)))
-    return existing
-
-
-def _most_specific_prompt_dir(agent_id: str, repo_prompts_root: Path, global_agents_root: Path, project_agents_root: Path) -> tuple[Path, ...]:
-    candidates = tuple(dict.fromkeys(root / agent_id for root in (repo_prompts_root, global_agents_root, project_agents_root)))
-    return tuple(path for path in candidates if path.is_dir()) or candidates
-
-
 def _prompt_files(sources: Path | tuple[Path, ...] | list[Path]) -> list[Path]:
     """Assemble source directories or files by filename, highest layer winning."""
     entries = (sources,) if isinstance(sources, Path) else sources
@@ -319,7 +306,7 @@ def load_agent_prompt_spec(
     prompt: str | None = None,
 ) -> PromptSpec:
     """Assemble every agent filename from stock, home and project layers."""
-    directories = _agent_directories(agent_id, (repo_prompts_root, global_agents_root, project_agents_root))
+    directories = paths.agent_dirs(agent_id, (repo_prompts_root, global_agents_root, project_agents_root))
     spec = load_prompt_spec(directories, env=env, prompt=prompt)
     agents_parts = _existing_text_parts(list(agents_files))
     if not agents_parts:
@@ -353,7 +340,7 @@ def load_prompt_spec(prompts_dir: Path | tuple[Path, ...] | list[Path], *, env: 
     its lower copy. ``env=False`` skips env files; ``prompt`` replaces prompt files."""
     sources = (prompts_dir,) if isinstance(prompts_dir, Path) else tuple(prompts_dir)
     if not any(source.is_dir() or source.is_file() for source in sources):
-        raise FileNotFoundError("agent sources missing; searched " + ", ".join(map(str, sources)))
+        raise FileNotFoundError(f"unknown agent {sources[0].name!r}; searched " + ", ".join(map(str, sources)))
     files = _prompt_files(sources)
     md_files = [path for path in files if path.suffix == ".md"]
     legacy = next((path for path in files if path.suffix == ".yaml" and _is_zero_file(path)), None)
@@ -442,7 +429,7 @@ def load_configured_prompt_spec(cfg, *, expand: bool = True) -> PromptSpec:
         return _finish_configured_spec(replace(spec, model_profile=_profile_for(spec, cfg)), cfg, expand)
     if options.system_prompt_file is not None:
         manifest_roots = roots or paths.agent_roots()[:2]
-        files = _prompt_files(_agent_directories('defaultagent', manifest_roots))
+        files = _prompt_files(paths.agent_dirs('defaultagent', manifest_roots))
         manifest = next((path for path in files if path.name == AGENT_MANIFEST), None)
         base = load_agent_manifest(manifest) if manifest else PromptSpec(system="", tool_selectors=())
         spec = PromptSpec(system=options.prompt_text(), tool_selectors=base.tool_selectors, models=base.models)
@@ -548,7 +535,7 @@ def resolve_agent_prompt_dir(cfg) -> Path | tuple[Path, ...]:
     the same resolved dir as the persona."""
     roots = tuple(getattr(cfg, "prompt_roots", ()))
     if len(roots) >= 3:
-        return _most_specific_prompt_dir(cfg.agent_id, roots[0], roots[1], roots[2])
+        return paths.agent_dirs(cfg.agent_id, roots)
     return cfg.prompts_dir
 
 

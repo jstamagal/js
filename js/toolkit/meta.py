@@ -327,12 +327,6 @@ def _worker_session(session_file: Path):
         yield
 
 
-def _select_agent_prompt_dir(agent: str, prompt_roots: tuple[Path, ...]) -> tuple[Path, ...]:
-    from ..config import _agent_prompt_layers
-
-    return _agent_prompt_layers(agent, prompt_roots)
-
-
 def _agent_cfg(parent_cfg: Any, agent: str, session_id: str | None, *, write_latest=None) -> Any:
     from ..mcp_config import resolve as resolve_mcp
 
@@ -359,7 +353,7 @@ def _agent_cfg(parent_cfg: Any, agent: str, session_id: str | None, *, write_lat
         agent_dir=agent_dir,
         sessions_dir=sessions_dir,
         session_file=session_file,
-        prompts_dir=_select_agent_prompt_dir(agent, prompt_roots),
+        prompts_dir=paths.agent_dirs(agent, prompt_roots),
         mcp=resolve_mcp(parent_cfg.settings, agent),
     )
 
@@ -395,7 +389,7 @@ async def _run_one_task_async(
     try:
         prompt_spec = P.load_configured_prompt_spec(replace(
             parent_cfg, agent_id=agent,
-            prompts_dir=_select_agent_prompt_dir(agent, prompt_roots),
+            prompts_dir=paths.agent_dirs(agent, prompt_roots),
         ), expand=False)
     except (FileNotFoundError, ValueError) as exc:
         return f"ERROR could not load agent {agent!r}: {exc}"

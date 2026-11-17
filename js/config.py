@@ -315,19 +315,6 @@ def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = Fal
     return concrete_path
 
 
-def _agent_prompt_layers(agent_id: str, roots: tuple[Path, ...]) -> tuple[Path, ...]:
-    candidates = tuple(dict.fromkeys(root / agent_id for root in roots))
-    existing = []
-    for candidate in candidates:
-        try:
-            if candidate.is_dir():
-                tuple(candidate.iterdir())
-                existing.append(candidate)
-        except OSError as exc:
-            raise ValueError(f"agent {agent_id!r} at {candidate} is unreadable: {exc}") from exc
-    return tuple(existing) or candidates
-
-
 def _same_config_path(one: Path, other: Path) -> bool:
     """True when two jsrc paths name the same file, however each is spelled.
 
@@ -597,7 +584,7 @@ def from_env(
         sessions_dir=sessions_dir,
         session_file=session_file,
         history_file=history_file,
-        prompts_dir=_agent_prompt_layers(agent_id, prompt_roots),
+        prompts_dir=_paths.agent_dirs(agent_id, prompt_roots),
         vision_enabled=vision_enabled_for_model(model, js_root_settings),
         settings=js_root_settings,
         prompt_roots=prompt_roots,
