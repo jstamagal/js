@@ -42,9 +42,9 @@ def _worktree_patch(repo_dir: Path, commit_helper) -> str:
     return (staged.stdout if staged.returncode == 0 else "") + (unstaged.stdout if unstaged.returncode == 0 else "")
 
 
-def _prune_commit_backups(root: Path, keep: int = 10) -> None:
+def _prune_commit_backups(root: Path) -> None:
     dirs = sorted((d for d in root.iterdir() if d.is_dir()), key=lambda p: p.name)
-    for old in dirs[:-keep]:
+    for old in dirs[:-10]:
         shutil.rmtree(old, ignore_errors=True)
 
 
