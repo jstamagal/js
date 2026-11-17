@@ -20,6 +20,7 @@ from js import (
     context_window,
     history_record,
     model_client,
+    provider_errors,
     retry,
     runtime,
     snippets,
@@ -305,7 +306,7 @@ def test_a_prefill_past_first_byte_timeout_fails_once_naming_it(tmp_path):
     server, _messages, error = _served_turn(
         tmp_path, [_after(2.0, _answer("late"))], {"FIRST_BYTE_TIMEOUT": 0.3})
 
-    assert isinstance(error, model_client.FirstByteTimeoutError) and not error.is_retryable
+    assert isinstance(error, provider_errors.FirstByteTimeoutError) and not error.is_retryable
     assert "FIRST_BYTE_TIMEOUT" in str(error)
     assert len(server.arrivals) == 1
 

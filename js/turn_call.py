@@ -31,6 +31,7 @@ from . import (
     model_client,
     model_metadata,
     output,
+    provider_errors,
     retry,
     settings as _settings,
     stream_transport,
@@ -268,17 +269,17 @@ class ModelCaller:
                     )
                     if await self._recover(e):
                         continue
-                if limits.signed_reasoning_recovery and not signed_reasoning_dropped and model_client.is_signed_reasoning_rejection(e):
+                if limits.signed_reasoning_recovery and not signed_reasoning_dropped and provider_errors.is_signed_reasoning_rejection(e):
                     signed_reasoning_dropped = True
                     restarted = (history_record.restart_thinking_turn(
-                        self._convo.messages, require_tool_calls=not model_client.is_modified_thinking_rejection(e))
-                                 if model_client.is_anthropic_thinking_rejection(e) else 0)
+                        self._convo.messages, require_tool_calls=not provider_errors.is_modified_thinking_rejection(e))
+                                 if provider_errors.is_anthropic_thinking_rejection(e) else 0)
                     # A tool continuation requires the original thinking blocks.
                     # An unrestorable turn becomes fresh user context; completed
                     # turns and other providers can discard refused signatures.
                     # A refused signature can be in any earlier turn.
                     dropped = (history_record.drop_signed_reasoning(self._convo.messages)
-                               if not restarted or model_client.is_signature_rejection(e) else 0)
+                               if not restarted or provider_errors.is_signature_rejection(e) else 0)
                     telemetry.event("thinking_turn_restarted" if restarted else "signed_reasoning_dropped",
                                     model=model, messages=restarted or dropped,
                                     error=f"{type(e).__name__}: {e}")
@@ -288,7 +289,7 @@ class ModelCaller:
                     self._convo.rebuild()
                     compaction.history_rewritten(context)
                     continue
-                if self._convo.vision and model_client.is_image_rejection(e):
+                if self._convo.vision and provider_errors.is_image_rejection(e):
                     # The route takes text only: drop the images and go on
                     # rather than end the turn on them.
                     mark_text_only(model)
@@ -377,10 +378,10 @@ class ModelCaller:
         )
         incomplete_reason = (
             getattr(result, "incomplete_reason", None)
-            or model_client.incomplete_reason_from_metadata(provider_metadata)
+            or provider_errors.incomplete_reason_from_metadata(provider_metadata)
         )
         if incomplete_reason:
-            finish = model_client.incomplete_finish_reason(incomplete_reason)
+            finish = provider_errors.incomplete_finish_reason(incomplete_reason)
         usage = result.usage
         usage_mod.record(usage, model=model, provider_id=provider_id)
         context.last_prompt_tokens = int(getattr(usage, "input_tokens", 0) or 0) if usage else 0

@@ -36,6 +36,7 @@ from . import (
     model_client,
     model_metadata,
     output,
+    provider_errors,
     retry,
     routing,
     settings as _settings,
@@ -946,7 +947,7 @@ async def summarize(cfg: Config, model: str, messages: list[dict], focus: str, g
                           incomplete_reason=getattr(result, "incomplete_reason", None),
                           provider_metadata=getattr(result, "provider_metadata", None))
         incomplete = (getattr(result, "incomplete_reason", None)
-                      or model_client.incomplete_reason_from_metadata(getattr(result, "provider_metadata", None)))
+                      or provider_errors.incomplete_reason_from_metadata(getattr(result, "provider_metadata", None)))
         finish = str(getattr(result, "finish_reason", ""))
         if incomplete or finish.startswith("incomplete") or is_max_output_incomplete(finish):
             raise ValueError(msgs.SUMMARY_RESPONSE_INCOMPLETE.words(value=incomplete or finish))

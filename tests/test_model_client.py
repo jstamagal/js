@@ -16,7 +16,7 @@ import ai.types.usage
 import pytest
 from turn_driver import one_turn
 
-from js import history_record, model_client
+from js import history_record, model_client, provider_errors
 from js.sampling import Sampling
 
 
@@ -201,7 +201,7 @@ def test_stream_model_maps_unknown_sdk_provider_id(monkeypatch):
 
     monkeypatch.setattr(model_client, "resolve_model", raise_unknown_provider)
 
-    with pytest.raises(model_client.FriendlyProviderError) as excinfo:
+    with pytest.raises(provider_errors.FriendlyProviderError) as excinfo:
         model_client.stream_model(
             model_id="test",
             provider_id="stale",

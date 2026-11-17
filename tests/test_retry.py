@@ -4,7 +4,7 @@ import ai
 import httpx2
 import pytest
 
-from js import messages as msgs, model_client, network_display, output, retry
+from js import messages as msgs, network_display, output, provider_errors, retry
 
 
 def test_backoff_uses_the_registered_curve():
@@ -51,14 +51,14 @@ def _status(code: int, error_type: str | None = None) -> ai.ProviderStatusError:
     (500, False), (400, False), (401, False), (404, False), (408, False), (409, False),
 ])
 def test_only_429_gateway_and_overloaded_statuses_are_retried(code, retried):
-    assert model_client.retryable(_status(code)) is retried
+    assert provider_errors.retryable(_status(code)) is retried
 
 
 @pytest.mark.parametrize(("error_type", "retried"), [
     ("rate_limit_error", True), ("timeout_error", True), ("overloaded_error", True), ("api_error", False),
 ])
 def test_an_error_event_in_a_200_stream_is_retried_as_its_type_status(error_type, retried):
-    assert model_client.retryable(_status(200, error_type)) is retried
+    assert provider_errors.retryable(_status(200, error_type)) is retried
 
 
 @pytest.mark.parametrize(("code", "retried"), [
@@ -66,22 +66,22 @@ def test_an_error_event_in_a_200_stream_is_retried_as_its_type_status(error_type
     ("context_length_exceeded", False),
 ])
 def test_a_responses_stream_code_is_retried_as_the_status_it_stands_for(code, retried):
-    assert model_client.retryable(ai.ProviderAPIError("failed", code=code)) is retried
+    assert provider_errors.retryable(ai.ProviderAPIError("failed", code=code)) is retried
 
 
 def test_a_connection_lost_is_retried():
-    assert model_client.retryable(ai.ProviderConnectionError("Connection error."))
-    assert model_client.retryable(ai.ProviderTimeoutError("Request timed out."))
+    assert provider_errors.retryable(ai.ProviderConnectionError("Connection error."))
+    assert provider_errors.retryable(ai.ProviderTimeoutError("Request timed out."))
 
 
 def test_an_answer_with_no_status_is_not_retried():
-    assert not model_client.retryable(ai.ProviderResponseError("tool arguments do not match their deltas"))
+    assert not provider_errors.retryable(ai.ProviderResponseError("tool arguments do not match their deltas"))
 
 
 def test_js_clocks_say_for_themselves():
-    assert model_client.retryable(model_client.StreamIdleError(300))
-    assert not model_client.retryable(model_client.FirstByteTimeoutError(60))
-    assert model_client.retryable(model_client.ConnectTimeoutError(15))
+    assert provider_errors.retryable(provider_errors.StreamIdleError(300))
+    assert not provider_errors.retryable(provider_errors.FirstByteTimeoutError(60))
+    assert provider_errors.retryable(provider_errors.ConnectTimeoutError(15))
 
 
 def test_a_handshake_past_connect_timeout_names_the_setting():
@@ -91,10 +91,10 @@ def test_a_handshake_past_connect_timeout_names_the_setting():
         except httpx2.ConnectTimeout as exc:
             raise ai.ProviderTimeoutError("Request timed out.") from exc
     except ai.ProviderTimeoutError as exc:
-        failure = model_client._request_failure(
+        failure = provider_errors.request_failure(
             exc, provider="openai", limits=retry.StreamLimits(connect=15.0))
 
-    assert isinstance(failure, model_client.ConnectTimeoutError) and failure.is_retryable
+    assert isinstance(failure, provider_errors.ConnectTimeoutError) and failure.is_retryable
     assert "CONNECT_TIMEOUT" in str(failure)
 
 

@@ -11,7 +11,7 @@ import ai
 import httpx
 import httpx2
 
-from . import fset, messages as msgs, routing
+from . import fset, messages as msgs, provider_errors, routing
 
 
 @dataclass(frozen=True)
@@ -119,20 +119,19 @@ def describe_failure(exc: BaseException) -> msgs.Said:
         seen.add(id(current))
         chain.append(current)
         current = current.__cause__ or current.__context__
-    from . import model_client
 
     outage = outage_failure(chain)
     if outage is not None:
         return outage
     for err in chain:
-        status = model_client.error_status(err)
+        status = provider_errors.error_status(err)
         if status is None:
             status = getattr(err, "status_code", None)
         if isinstance(status, int):
             return msgs.NET_STATUS_FAILURE.said(status=msgs.NET_FAILURE_STATUS.said(status=status),
-                                                reason=_capped(model_client.error_message(err)))
+                                                reason=_capped(provider_errors.error_message(err)))
     for err in chain:
-        if isinstance(err, model_client.RequestTimeoutError):
+        if isinstance(err, provider_errors.RequestTimeoutError):
             return _failure(msgs.NET_TIMEOUT, _one_line(err))
     host = next((h for h in (_request_host(e) for e in chain) if h), "")
     for err in chain:
@@ -160,7 +159,6 @@ def is_outage(failure: msgs.Said) -> bool:
 
 def outage_failure(chain: list[BaseException]) -> msgs.Said | None:
     """A diagnosis based on provider metadata, never on a gateway status alone."""
-    from . import model_client
 
     details = []
     statuses = []
@@ -168,7 +166,7 @@ def outage_failure(chain: list[BaseException]) -> msgs.Said | None:
     for err in chain:
         details.extend((str(err), str(getattr(err, "code", "")),
                         str(getattr(err, "body", ""))))
-        statuses.append(model_client.error_status(err) or getattr(err, "status_code", None))
+        statuses.append(provider_errors.error_status(err) or getattr(err, "status_code", None))
         identities.extend((str(getattr(err, "provider", "")), _request_host(err)))
     text = " ".join(details).lower()
     identity = " ".join(identities).lower()
@@ -231,7 +229,6 @@ def error_text(e: BaseException) -> str:
     a provider's status failure as its status and message, any other error
     after its kind; a `said()` entry inside either keeps its format
     (`msgs.of_error`)."""
-    from . import model_client
 
     failure = describe_failure(e)
     if is_outage(failure):
@@ -239,6 +236,6 @@ def error_text(e: BaseException) -> str:
     said = msgs.of_error(e)
     if isinstance(e, routing.ProviderNotLoggedInError):
         return said
-    if isinstance(e, ai.ProviderStatusError) and (status := model_client.error_status(e)) is not None:
-        return msgs.ERROR_OF_STATUS.said(status=status, error=model_client.error_message(e))
+    if isinstance(e, ai.ProviderStatusError) and (status := provider_errors.error_status(e)) is not None:
+        return msgs.ERROR_OF_STATUS.said(status=status, error=provider_errors.error_message(e))
     return msgs.ERROR_OF_KIND.said(kind=type(e).__name__, error=said)
