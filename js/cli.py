@@ -4275,10 +4275,6 @@ def _repl_state(cfg, prompt_spec, *, messages: list[dict] | None = None,
         "events": event_hooks,
         "tool_registry": tool_registry,
         "tool_selectors": prompt_spec.tool_selectors,
-        "compact_notified": False,
-        "compact_consecutive": 0,
-        "compact_incomplete_consecutive": 0,
-        "compact_paused": False,
     }
     if assembly is not None:
         state["repl_assembly"] = assembly
