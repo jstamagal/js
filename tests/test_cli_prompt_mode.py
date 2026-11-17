@@ -20,6 +20,7 @@ from js import (
     commit_cli,
     listings,
     messages as msgs,
+    model_metadata,
     paths as _paths,
     runtime,
     session_store,
@@ -772,7 +773,7 @@ def test_cli_refresh_model_catalog_flag_exits_after_forced_refresh(monkeypatch):
         seen.append("forced")
         return True
 
-    monkeypatch.setattr(cli, "_force_refresh_model_catalog", refresh_stub)
+    monkeypatch.setattr(model_metadata, "force_refresh_model_catalog", refresh_stub)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
     actual = cli.main(["--refresh-model-catalog"])

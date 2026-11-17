@@ -932,3 +932,26 @@ def test_login_with_metadata(login: Login) -> tuple[list[str], dict[str, ModelCa
 def login_path() -> Path:
     _ensure_config_dir()
     return _logins_path()
+
+
+def login_for_provider(provider_id: str | None, base_url: str | None, api_key: str | None) -> Login:
+    canonical_id = providers.normalize_provider_id(provider_id) or provider_id
+    if not canonical_id:
+        raise ValueError(msgs.NO_PROVIDER_SET.said())
+    saved = load_logins().get(canonical_id)
+    if saved is not None:
+        return saved
+    provider_def = providers.provider_for_login(canonical_id)
+    resolved_api_key = providers.provider_api_key(provider_def, api_key, os.environ)
+    if provider_def.requires_api_key and not resolved_api_key:
+        raise ValueError(msgs.PROVIDER_NEEDS_KEY.said(provider=canonical_id))
+    return Login(
+        provider_id=canonical_id,
+        sdk_provider_id=provider_def.effective_sdk_provider_id,
+        provider_base_url=providers.provider_base_url(provider_def, base_url, os.environ),
+        provider_api_key=resolved_api_key,
+    )
+
+
+def models_for_provider(provider_id: str | None, base_url: str | None, api_key: str | None) -> list[str]:
+    return test_login(login_for_provider(provider_id, base_url, api_key))

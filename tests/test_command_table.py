@@ -9,9 +9,10 @@ from pathlib import Path
 
 from repl_driver import output_of, record_turns, repl_state, run_async, type_into_js
 
-from js import cli, paths, settings
+from js import cli, paths, repl_commands, settings
 from js.config import from_env, jsrc_paths
 from js.memory import append_message
+from js.repl_state import ReplAssembly
 
 
 def _repl_cfg(tmp_path, monkeypatch):
@@ -27,7 +28,7 @@ def test_assembly_command_is_dispatched_and_completed(tmp_path, monkeypatch):
     cfg = _repl_cfg(tmp_path, monkeypatch)
     append_message(cfg.session_file, {"role": "user", "content": "old"})
     turns = record_turns(monkeypatch)
-    assembly = cli.ReplAssembly(commands={"clear": cli.Command(clear, "clear", cli.msgs.CMD_RESET)})
+    assembly = ReplAssembly(commands={"clear": repl_commands.Command(clear, "clear", cli.msgs.CMD_RESET)})
 
     state = run_async(monkeypatch, cfg, ["/clear", "new"], wait=True, assembly=assembly)
 
@@ -43,7 +44,7 @@ def _launch(cwd):
     os.chdir(cwd)
     cfg = from_env()
     state, _spec = repl_state(cfg)
-    errors = cli._run_rc_commands(state, cfg, jsrc_paths(Path(cfg.project_dir or cwd)))
+    errors = repl_commands.run_rc_commands(state, cfg, jsrc_paths(Path(cfg.project_dir or cwd)))
     return cfg, state, errors
 
 
@@ -215,13 +216,13 @@ def test_skill_with_a_name_is_a_turn_and_bare_skill_is_a_command(tmp_path, monke
     assert type_into_js(monkeypatch, ["/skill grilling check the plan"]) == 0
 
     assert len(turns) == 1
-    assert "skill" in cli.COMMANDS
-    assert "tools" in cli.COMMANDS
+    assert "skill" in repl_commands.COMMANDS
+    assert "tools" in repl_commands.COMMANDS
 
 
 def test_turn_state_commands_come_from_the_table(monkeypatch):
-    command = cli.Command(lambda arg, state, cfg: None, "scrub", "test entry", turn_state=True)
-    monkeypatch.setitem(cli.COMMANDS, "scrub", command)
+    command = repl_commands.Command(lambda arg, state, cfg: None, "scrub", "test entry", turn_state=True)
+    monkeypatch.setitem(repl_commands.COMMANDS, "scrub", command)
 
     assert cli._is_turn_state_command("/scrub now")
     assert not cli._is_turn_state_command("/turns")

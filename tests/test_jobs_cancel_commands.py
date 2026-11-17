@@ -8,7 +8,7 @@ import asyncio
 
 from repl_driver import output_of, settled, type_into_js
 
-from js import cli, supervisor
+from js import cli, repl_commands, supervisor
 from js.repl_state import ReplState
 
 
@@ -76,7 +76,7 @@ def test_jobs_lists_running(monkeypatch, tmp_path, capsys):
 
 def test_jobs_without_supervisor(monkeypatch, capsys):
     _set_sup(monkeypatch, None)
-    assert cli._handle_command("/jobs", ReplState(), None) is True
+    assert repl_commands.handle_command("/jobs", ReplState(), None) is True
     assert capsys.readouterr().out
 
 

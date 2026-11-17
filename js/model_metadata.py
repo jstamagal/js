@@ -586,6 +586,20 @@ def ensure_fresh_catalog(*, force: bool = False) -> CatalogStatus | None:
     return status
 
 
+def force_refresh_model_catalog() -> bool:
+    try:
+        status = ensure_fresh_catalog(force=True)
+    except Exception as e:  # noqa: BLE001
+        msgs.say(msgs.CATALOG_REFRESH_FAILED, error=f"{type(e).__name__}: {e}")
+        return False
+    checked_at = status.refreshed_at or status.generated_at
+    stamp = checked_at.isoformat(timespec="seconds") if checked_at else "unknown"
+    models = "?" if status.model_count is None else str(status.model_count)
+    providers_count = "?" if status.provider_count is None else str(status.provider_count)
+    msgs.say(msgs.CATALOG_REFRESHED, stamp=stamp, providers=providers_count, models=models, path=status.db_path)
+    return True
+
+
 def _is_wrapper_request(catalog_id: str, request: str) -> bool:
     """True when ``request`` is ``catalog_id`` plus a wrapper suffix, e.g. the
     catalog id ``deepseek-v4-pro`` against the request ``deepseek-v4-pro:cloud``.

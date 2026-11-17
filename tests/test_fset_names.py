@@ -9,7 +9,7 @@ import io
 
 from repl_driver import record_turns, turn_stub, type_into_js
 
-from js import settings
+from js import repl_commands, settings
 from js.repl_state import ReplState
 
 
@@ -107,12 +107,11 @@ def test_a_format_line_keeps_its_dollar_names_for_when_it_is_drawn(tmp_path):
 def _replay(tmp_path, jsrc):
     from types import SimpleNamespace
 
-    from js import cli
 
     loaded = settings.seed_defaults()
     assert settings.load_jsrc_files([jsrc], loaded) == []
     state = ReplState(messages=[], system="s", settings=loaded, aliases={})
-    assert cli._run_rc_commands(state, SimpleNamespace(settings=loaded, project_dir=tmp_path), [jsrc]) == []
+    assert repl_commands.run_rc_commands(state, SimpleNamespace(settings=loaded, project_dir=tmp_path), [jsrc]) == []
     return state
 
 
@@ -131,14 +130,13 @@ def test_a_replayed_alias_loads_relative_to_its_own_jsrc(tmp_path):
 def _startup_effects(root):
     from types import SimpleNamespace
 
-    from js import cli
 
     jsrc = root / "jsrc"
     jsrc.write_text("load f0\n", encoding="utf-8")
     loaded = settings.seed_defaults()
     settings.load_jsrc_files([jsrc], loaded)
     state = ReplState(messages=[], system="s", settings=loaded, aliases={})
-    cli._run_rc_commands(state, SimpleNamespace(settings=loaded, project_dir=root), [jsrc])
+    repl_commands.run_rc_commands(state, SimpleNamespace(settings=loaded, project_dir=root), [jsrc])
     live = state.settings
     return (settings.knob(live, "HISTORY_SIZE"), settings.knob(live, "EDITING_MODE"), state.aliases)
 
@@ -146,13 +144,12 @@ def _startup_effects(root):
 def _load_effects(root):
     from types import SimpleNamespace
 
-    from js import cli
 
     live = settings.seed_defaults()
     state = ReplState(messages=[], system="s", settings=live, aliases={})
     cfg = SimpleNamespace(settings=live, project_dir=root)
     with contextlib.redirect_stdout(io.StringIO()):
-        cli._cmd_load(str(root / "f0"), state, cfg)
+        repl_commands._cmd_load(str(root / "f0"), state, cfg)
     return (settings.knob(live, "HISTORY_SIZE"), settings.knob(live, "EDITING_MODE"), state.aliases)
 
 

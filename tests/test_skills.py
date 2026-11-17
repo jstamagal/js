@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from js import repl_commands, repl_state
 from js.skills import (
     SkillCatalog,
     SkillInvocationError,
@@ -333,13 +334,13 @@ def test_repl_assembly_supplies_the_skill_invocation_command(tmp_path, monkeypat
 
     from repl_driver import record_turns, run_async
 
-    from js import cli, skills
+    from js import skills
     from js.config import from_env
 
     monkeypatch.chdir(tmp_path)
     _write(tmp_path / ".js" / "skills" / "secret" / "SKILL.md", _USER_ONLY)
     cfg = replace(from_env(), session_file=tmp_path / "session.jsonl")
-    assembly = cli.ReplAssembly(commands={"use": cli.COMMANDS["skill"]}, skill_command="/use")
+    assembly = repl_state.ReplAssembly(commands={"use": repl_commands.COMMANDS["skill"]}, skill_command="/use")
     turns = record_turns(monkeypatch)
 
     run_async(monkeypatch, cfg, ["/use secret sharpen this plan"], wait=True, assembly=assembly)

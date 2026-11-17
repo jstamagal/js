@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from js import cli
+from js import cli, repl_commands, repl_state
 from js.repl_state import ReplState
 from js.replcomplete import JsCompleter, command_candidates, path_candidates, value_candidates
 
@@ -28,21 +28,21 @@ def test_command_prefix_match_not_fuzzy():
 
 
 def test_every_table_command_completes():
-    assert command_candidates("/", _table()) == sorted("/" + verb for verb in cli.COMMANDS)
+    assert command_candidates("/", _table()) == sorted("/" + verb for verb in repl_commands.COMMANDS)
 
 
 def test_bare_quit_words_complete():
-    completer = JsCompleter(commands=_table, bare_words=cli.QUIT_WORDS)
+    completer = JsCompleter(commands=_table, bare_words=repl_state.QUIT_WORDS)
 
     assert "exit" in completer.candidates("ex")[0]
     assert {"quit", "/quit"} <= set(completer.candidates("qu")[0])
-    for word in cli.QUIT_WORDS:
+    for word in repl_state.QUIT_WORDS:
         assert word in completer.candidates(word)[0]
 
 
 def test_a_new_table_entry_completes_with_no_completer_change(monkeypatch):
-    command = cli.Command(lambda arg, state, cfg: None, "frobnicate", "test entry")
-    monkeypatch.setitem(cli.COMMANDS, "frobnicate", command)
+    command = repl_commands.Command(lambda arg, state, cfg: None, "frobnicate", "test entry")
+    monkeypatch.setitem(repl_commands.COMMANDS, "frobnicate", command)
     completer = JsCompleter(commands=lambda: cli._command_completions(ReplState()))
 
     assert completer.candidates("/frob")[0] == ["/frobnicate"]

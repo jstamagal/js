@@ -1071,7 +1071,7 @@ def _apply_jsrc(path: Path, settings: dict, stack: list[Path], warnings: list[st
     loaded file stops at its first bad setting, as `/load` stops it, and so
     does every loaded file containing it; the top-level jsrc goes on. Every
     other line is the REPL's, which runs the whole file again in one pass
-    (`cli._run_rc_commands`). Returns why a loaded file stopped, or None."""
+    (`repl_commands.run_rc_commands`). Returns why a loaded file stopped, or None."""
     from . import setcmd  # lazy: setcmd imports this module
 
     if lines is None:

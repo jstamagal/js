@@ -9,7 +9,7 @@ import ai
 import pytest
 from repl_driver import record_turns, run_async, turn_stub
 
-from js import cli, events, settings
+from js import cli, events, logins, model_metadata, picker, settings
 from js.config import Config
 from js.memory import append_message, load_messages
 from js.repl_state import ReplState
@@ -77,7 +77,7 @@ def test_refresh_model_catalog_command_forces_refresh(tmp_path, monkeypatch, cap
         print("refreshed")
         return True
 
-    monkeypatch.setattr(cli, "_force_refresh_model_catalog", refresh_stub)
+    monkeypatch.setattr(model_metadata, "force_refresh_model_catalog", refresh_stub)
     turns = record_turns(monkeypatch)
 
     run_async(monkeypatch, cfg, ["/refresh-model-catalog"])
@@ -709,7 +709,7 @@ def test_models_command_lists_provider_models(monkeypatch, tmp_path, capsys):
 
 def test_models_command_refuses_without_provider(tmp_path, monkeypatch, capsys):
     cfg = repl_cfg(tmp_path, monkeypatch)
-    monkeypatch.setattr(cli, "_models_for_provider", lambda *a: pytest.fail("listed models without a provider"))
+    monkeypatch.setattr(logins, "models_for_provider", lambda *a: pytest.fail("listed models without a provider"))
     turns = record_turns(monkeypatch)
 
     run_async(monkeypatch, cfg, ["/models"])
@@ -735,7 +735,7 @@ def test_model_command_opens_picker_and_updates_state(monkeypatch, tmp_path, cap
     turns = record_turns(monkeypatch)
 
     monkeypatch.setattr(
-        cli.picker,
+        picker,
         "pick_model",
         lambda **kwargs: {
             "provider_id": "deepseek",
@@ -782,7 +782,7 @@ def test_a_picked_model_reaches_the_jsrc_only_through_save(monkeypatch, tmp_path
         await enter("hello")
 
     monkeypatch.setattr(
-        cli.picker,
+        picker,
         "pick_model",
         lambda **kwargs: {
             "provider_id": "openai",
@@ -908,7 +908,7 @@ def test_picker_open_preserves_explicit_logout_over_config(monkeypatch, tmp_path
         captured.update(kwargs)
         return None
 
-    monkeypatch.setattr(cli.picker, "pick_model", fake_pick_model)
+    monkeypatch.setattr(picker, "pick_model", fake_pick_model)
 
     run_async(monkeypatch, cfg, ["/logout", "/model"])
 

@@ -7,7 +7,7 @@ from pathlib import Path
 import ai
 from repl_driver import record_turns, run_async
 
-from js import cli, providers, settings
+from js import cli, providers, repl_state, settings
 from js.config import Config
 from js.memory import append_message
 
@@ -194,7 +194,7 @@ def test_login_inline_creds_builds_and_saves(tmp_path, monkeypatch):
     cfg = repl_cfg(tmp_path, monkeypatch)
     saved: list = []
     monkeypatch.setattr(cli.logins, "save_login", lambda login: saved.append(login))
-    monkeypatch.setattr(cli, "_apply_saved_login_to_state",
+    monkeypatch.setattr(repl_state, "apply_saved_login_to_state",
                         lambda state, name: setattr(state, "provider_id", name) is None)
     turns = record_turns(monkeypatch)
 
@@ -213,7 +213,7 @@ def test_login_known_provider_infers_type(tmp_path, monkeypatch):
     cfg = repl_cfg(tmp_path, monkeypatch)
     saved: list = []
     monkeypatch.setattr(cli.logins, "save_login", lambda login: saved.append(login))
-    monkeypatch.setattr(cli, "_apply_saved_login_to_state", lambda state, name: True)
+    monkeypatch.setattr(repl_state, "apply_saved_login_to_state", lambda state, name: True)
     turns = record_turns(monkeypatch)
 
     run_async(monkeypatch, cfg, ["/login deepseek mykey"])
@@ -240,7 +240,7 @@ def test_login_custom_name_without_type_errors(tmp_path, monkeypatch, capsys):
 def test_login_bare_name_loads_saved(tmp_path, monkeypatch):
     cfg = repl_cfg(tmp_path, monkeypatch)
     loaded: list[str] = []
-    monkeypatch.setattr(cli, "_set_provider_state", lambda state, name: loaded.append(name))
+    monkeypatch.setattr(repl_state, "set_provider_state", lambda state, name: loaded.append(name))
     turns = record_turns(monkeypatch)
 
     run_async(monkeypatch, cfg, ["/login deepseek"])

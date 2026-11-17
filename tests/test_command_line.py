@@ -8,7 +8,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from js import cli, command_line, home_cli, loop_controller, paths, runtime, sampling, swarm
+from js import (
+    cli,
+    command_line,
+    home_cli,
+    loop_controller,
+    paths,
+    runtime,
+    sampling,
+    session_picker,
+    swarm,
+)
 from js.cli_options import RunOptions, invocation
 from js.repl_state import ReplState
 
@@ -246,10 +256,10 @@ def test_resume_hint_command(monkeypatch, printed, agent, settings, model, custo
 
 
 @pytest.mark.parametrize(("target", "argv"), [
-    (cli._SessionTarget(Path("/s/a.jsonl"), "/w", "research"), ["--session", "/s/a.jsonl", "-a", "research"]),
-    (cli._SessionTarget(Path("/s/a.jsonl"), "/w", None, True), ["--session", "/s/a.jsonl", "-C", "/w"]),
-    (cli._SessionTarget(Path("/s/a.jsonl"), None, "", True), ["--session", "/s/a.jsonl"]),
-    (cli._SessionTarget(Path("/s/a.jsonl"), "/w", "r", True), ["--session", "/s/a.jsonl", "-a", "r", "-C", "/w"]),
+    (session_picker.SessionTarget(Path("/s/a.jsonl"), "/w", "research"), ["--session", "/s/a.jsonl", "-a", "research"]),
+    (session_picker.SessionTarget(Path("/s/a.jsonl"), "/w", None, True), ["--session", "/s/a.jsonl", "-C", "/w"]),
+    (session_picker.SessionTarget(Path("/s/a.jsonl"), None, "", True), ["--session", "/s/a.jsonl"]),
+    (session_picker.SessionTarget(Path("/s/a.jsonl"), "/w", "r", True), ["--session", "/s/a.jsonl", "-a", "r", "-C", "/w"]),
 ])
 def test_session_switch_command(monkeypatch, target, argv):
     ran = []

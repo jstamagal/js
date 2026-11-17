@@ -35,6 +35,8 @@ persists each completed turn.
 
 | Module | Responsibility |
 | `js/cli.py` | argument parser, REPL, prompt/pipe mode, commit orchestration |
+| `js/repl_commands.py` | the REPL's slash commands: the command table (`COMMANDS`), dispatch, aliases, `/load` and the startup run of the jsrc files |
+| `js/repl_state.py` | the REPL's live state (`ReplState`), its assembly, and carrying live settings into the route and tool registry |
 | `js/config.py` | environment parsing, session reservation, model/provider caps, vision heuristic |
 | `js/turn_settings.py` | the settings a turn reads: one row each, projected from the settings store onto `Config` and `ToolContext` |
 | `js/model_client.py` | single import boundary for the Vercel AI Python SDK |

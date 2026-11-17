@@ -22,7 +22,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import ai
 
@@ -52,6 +52,9 @@ from .compaction_flight import (
     printing as printing,
 )
 from .config import Config
+
+if TYPE_CHECKING:
+    from .repl_state import ReplState
 
 # --------------------------------------------------------------------------
 # compact.* settings readers — the one family
@@ -1249,3 +1252,24 @@ def maybe_auto_compact(
 ) -> AutoCompactOutcome:
     """Between-turn compaction for callers outside an event loop."""
     return asyncio.run(maybe_auto_compact_async(cfg, ac, context, system, messages, resolve_window))
+
+
+def compact_hooks(state: ReplState, cfg: Config) -> dict:
+    """The ``emit`` and ``log_dir`` keywords a compaction call takes: notices
+    print, other events go to the state's `on` handler table when it has one,
+    and the flight log goes to js's flight log directory."""
+    hook_table = state.events
+    return {"emit": printing(None if hook_table is None else hook_table.emit),
+            "log_dir": flight_log_dir(cfg)}
+
+
+def track_compact_skips(emit: Callable[..., Any]) -> tuple[Callable[..., Any], set[str]]:
+    skipped: set[str] = set()
+
+    def tracked(event: str, **payload: Any) -> Any:
+        result = emit(event, **payload)
+        if event == "compaction_notice" and payload.get("stage") == "skipped":
+            skipped.add(payload.get("detail", ""))
+        return result
+
+    return tracked, skipped

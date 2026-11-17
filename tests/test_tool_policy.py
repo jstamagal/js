@@ -9,7 +9,7 @@ import ai.types.usage
 import pytest
 from repl_driver import output_of, record_turns, run_async
 
-from js import cli, persona, runtime
+from js import persona, repl_state, runtime
 from js.config import Config
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.repl_state import ReplState
@@ -332,13 +332,13 @@ def test_live_resync_keeps_the_surface_when_tools_yaml_stops_resolving(tmp_path,
     path.write_text(SPEC_TOOLS_YAML, encoding="utf-8")
     cfg = _cfg(tmp_path)
     state = ReplState(tool_selectors=("tag:code_hacker", "todo_write:eager"), settings={})
-    cli._sync_tool_registry_from_live_settings(cfg, state)
+    repl_state.sync_tool_registry_from_live_settings(cfg, state)
     before = state.tool_registry
     assert "shell" in before.by_name
     assert capsys.readouterr().err == ""
 
     path.write_text("tags:\n  code_hacker:\n    - tag:code_hacker\n", encoding="utf-8")
-    cli._sync_tool_registry_from_live_settings(cfg, state)
+    repl_state.sync_tool_registry_from_live_settings(cfg, state)
 
     assert state.tool_registry is before
     assert len([line for line in capsys.readouterr().out.splitlines() if line.strip()]) == 1

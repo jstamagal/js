@@ -33,6 +33,7 @@ from prompt_toolkit.output import Output, create_output
 from prompt_toolkit.styles import Style
 
 from . import fset, keys, messages as msgs, session_query as Q, session_store
+from .session_catalog import branch_session
 
 RESUME = "resume"
 BRANCH = "branch"
@@ -582,3 +583,29 @@ def pick_session(cwd: str | Path, query: str = "", *, input=None, output=None, l
     app = state.application(input=create_input(sys.__stdin__) if input is None else input,
                             output=create_output(sys.__stdout__) if output is None else output)
     return picker.run_modal(app)
+
+
+@dataclass(frozen=True)
+class SessionTarget:
+    """A session the picker chose to continue in: its file, start directory and
+    agent, and whether it started under a -C jail rooted at that directory."""
+
+    path: Path
+    cwd: str | None
+    agent: str | None
+    jailed: bool = False
+
+
+def session_target(choice: Choice) -> SessionTarget:
+    """The session a picker choice continues in. A branch choice creates the
+    branch first, in the parent's folder."""
+    session = choice.session
+    path = Path(session.path)
+    if choice.action == BRANCH and choice.message_id is not None:
+        branch = branch_session(path, choice.message_id, cwd=session.cwd or Path.cwd(),
+                                agent=session.agent, mode="repl")
+        msgs.say(msgs.SESSIONS_BRANCHED, parent=session_store.display_name(path),
+                 point=session_store.point_label(choice.message) if choice.message is not None else "-",
+                 name=session_store.display_name(branch))
+        path = branch
+    return SessionTarget(path, session.cwd, session.agent, session.jailed)

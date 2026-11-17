@@ -17,7 +17,7 @@ from test_runtime_offline_integration import (
     offline_config,
 )
 
-from js import cli, compaction, events, hookexec, runtime, settings
+from js import cli, compaction, events, hookexec, repl_commands, runtime, settings
 from js.memory import load_messages
 from js.repl_state import ReplState
 from js.toolkit import Tool, ToolContext, ToolRegistry
@@ -44,7 +44,7 @@ def _state(tmp_path) -> tuple[ReplState, object]:
 
 
 def _on(state, cfg, line: str) -> None:
-    assert cli._run_command(f"on {line}", state, cfg) == (True, None)
+    assert repl_commands.run_command(f"on {line}", state, cfg) == (True, None)
 
 
 def _user_text(state, text: str) -> str:
@@ -116,7 +116,7 @@ def test_a_failing_handler_queues_nothing_and_records_the_failure(tmp_path):
 def test_exec_typed_at_the_prompt_queues_its_stdout(tmp_path):
     state, cfg = _state(tmp_path)
 
-    assert cli._run_command("/exec printf 'git status: clean'", state, cfg) == (True, None)
+    assert repl_commands.run_command("/exec printf 'git status: clean'", state, cfg) == (True, None)
 
     assert "<js-reminder>git status: clean</js-reminder>" in _user_text(state, "go")
 

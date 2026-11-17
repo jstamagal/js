@@ -37,7 +37,7 @@ class Supervisor:
     `spawn_from_thread` is the one method safe to call off-loop.
 
     One exception today: the REPL runs slash commands in an executor
-    (`cli._handle_command` via `run_in_executor`), so `/jobs`, `/cancel` and
+    (`repl_commands.handle_command` via `run_in_executor`), so `/jobs`, `/cancel` and
     the input-queue check read `jobs()` and `turn_active()` from another
     thread. That is safe only because each copies `self._jobs` in one C call
     under the GIL; anything that iterates or mutates the dict off-loop must go

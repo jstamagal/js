@@ -13,7 +13,7 @@ import threading
 
 from repl_driver import run_async
 
-from js import cli
+from js import cli, repl_commands
 from js.config import from_env
 
 
@@ -43,7 +43,7 @@ def test_turn_start_waits_for_a_command_that_is_half_applied(monkeypatch, tmp_pa
     seen = _setup(monkeypatch, tmp_path, pairs=2)
     halfway = threading.Event()
     turn_ran = threading.Event()
-    real_set_model = cli._set_model_via_route
+    real_set_model = repl_commands._set_model_via_route
 
     def set_model_after_a_pause(state, cfg, model):
         if model == "m1":
@@ -52,7 +52,7 @@ def test_turn_start_waits_for_a_command_that_is_half_applied(monkeypatch, tmp_pa
             turn_ran.wait(timeout=0.5)
         real_set_model(state, cfg, model)
 
-    monkeypatch.setattr(cli, "_set_model_via_route", set_model_after_a_pause)
+    monkeypatch.setattr(repl_commands, "_set_model_via_route", set_model_after_a_pause)
 
     async def stub_turn_marks(cfg, system, messages, telemetry, **kwargs):
         seen.append((cfg.model, cfg.provider_base_url))

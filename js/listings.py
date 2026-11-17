@@ -87,14 +87,12 @@ def logins_json() -> list[dict]:
 
 def _models_cached_or_live(provider_id: str, cfg: Config | None) -> list[str]:
     """Models for one provider, cache first (offline-friendly, fast), live on miss."""
-    from . import cli as _cli  # cli imports this module
-
     cached = logins.load_model_cache().get(provider_id)
     if cached is not None:
         return cached
     if cfg is not None and provider_id == cfg.provider_id:
-        return _cli._models_for_provider(provider_id, cfg.provider_base_url, cfg.provider_api_key)
-    return _cli._models_for_provider(provider_id, None, None)
+        return logins.models_for_provider(provider_id, cfg.provider_base_url, cfg.provider_api_key)
+    return logins.models_for_provider(provider_id, None, None)
 
 
 def _list_models_provider_ids(provider_arg: str | None, cfg: Config | None) -> list[str]:

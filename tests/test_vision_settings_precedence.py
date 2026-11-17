@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 
-from js import cli, config, model_metadata
+from js import config, model_metadata, repl_commands
 from js.repl_state import ReplState
 
 
@@ -16,11 +16,11 @@ def test_live_vision_setting_and_unset_override_environment(monkeypatch):
     assert cfg.vision_enabled is False
     live = deepcopy(cfg.settings)
     state = ReplState(settings=live)
-    assert cli._cmd_set("VISION on", state, cfg) is None
+    assert repl_commands._cmd_set("VISION on", state, cfg) is None
     active = state.config_for_turn(cfg)
     assert active.vision_enabled is True
     assert config.vision_enabled_for_model(active.model, active.settings) is True
     # `set -VISION` in the REPL goes back to the session's start: env says off.
-    assert cli._cmd_set("-VISION", state, cfg) is None
+    assert repl_commands._cmd_set("-VISION", state, cfg) is None
     active = state.config_for_turn(cfg)
     assert active.vision_enabled is False

@@ -373,7 +373,7 @@ def test_slash_session_on_the_current_session_or_closed_keeps_the_repl(tmp_path,
 def test_a_branch_choice_creates_the_branch_in_the_parents_folder(tmp_path):
     parent = _write_session(tmp_path / "proj")
     first = session_text.rows(parent)[0]
-    target = cli._session_target(_choice(parent, tmp_path / "proj", action=session_picker.BRANCH,
+    target = session_picker.session_target(_choice(parent, tmp_path / "proj", action=session_picker.BRANCH,
                                          message=first.number, message_id=first.id))
     assert target.path != parent and target.path.parent == parent.parent
     start = first_metadata(target.path)
@@ -383,7 +383,7 @@ def test_a_branch_choice_creates_the_branch_in_the_parents_folder(tmp_path):
 
 
 def test_the_switch_reexecs_js_in_the_sessions_dir_with_its_agent(tmp_path, monkeypatch):
-    target = cli._SessionTarget(tmp_path / "s.jsonl", str(tmp_path), "research")
+    target = session_picker.SessionTarget(tmp_path / "s.jsonl", str(tmp_path), "research")
     ran = {}
 
     def execv(program, argv):
@@ -400,7 +400,7 @@ def test_the_switch_reexecs_js_in_the_sessions_dir_with_its_agent(tmp_path, monk
 
 def test_a_session_started_under_c_resumes_jailed_in_its_dir(tmp_path, monkeypatch):
     path = _write_session(tmp_path / "proj")
-    target = cli._session_target(_choice(path, tmp_path / "proj", command=["js", "-C", "proj"]))
+    target = session_picker.session_target(_choice(path, tmp_path / "proj", command=["js", "-C", "proj"]))
     assert target.jailed
     ran = {}
     monkeypatch.setattr(cli.os, "execv", lambda program, argv: ran.update(argv=argv))
@@ -408,7 +408,7 @@ def test_a_session_started_under_c_resumes_jailed_in_its_dir(tmp_path, monkeypat
     monkeypatch.chdir(Path.cwd())
     cli._exec_session(target)
     assert ran["argv"][ran["argv"].index("-C") + 1] == str((tmp_path / "proj").resolve())
-    assert not cli._session_target(_choice(path, tmp_path / "proj", command=["js", "--commit"])).jailed
+    assert not session_picker.session_target(_choice(path, tmp_path / "proj", command=["js", "--commit"])).jailed
 
 
 class _Terminal:

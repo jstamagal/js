@@ -4,7 +4,7 @@ from pathlib import Path
 
 from repl_driver import record_turns, run_async
 
-from js import cli, events, setcmd, settings
+from js import cli, events, repl_commands, setcmd, settings
 from js.config import Config
 from js.repl_state import ReplState
 
@@ -71,7 +71,7 @@ def test_script_load_treats_bare_slash_line_as_noop(tmp_path):
     script.write_text("/\nset COMPACTION_AUTO off\n", encoding="utf-8")
     state = make_state()
 
-    assert cli._run_command("/load bare-slash.irc", state, make_cfg(tmp_path)) == (True, None)
+    assert repl_commands.run_command("/load bare-slash.irc", state, make_cfg(tmp_path)) == (True, None)
     assert settings.get_dotted(state.settings, ("COMPACTION_AUTO",)) is False
 
 
@@ -108,7 +108,7 @@ def test_script_load_stops_at_the_first_error_and_names_every_file_on_the_way(tm
     outer.write_text("load inner.irc\n", encoding="utf-8")
     state = make_state()
 
-    _, error = cli._run_command(f"/load {outer}", state, make_cfg(tmp_path))
+    _, error = repl_commands.run_command(f"/load {outer}", state, make_cfg(tmp_path))
 
     assert f"{outer}:1" in error
     assert f"{inner}:2" in error
@@ -121,7 +121,7 @@ def test_script_load_refuses_a_cycle(tmp_path):
     loop.write_text("set COMPACTION_AUTO off\nload loop.irc\n", encoding="utf-8")
     state = make_state()
 
-    handled, error = cli._run_command("/load loop.irc", state, make_cfg(tmp_path))
+    handled, error = repl_commands.run_command("/load loop.irc", state, make_cfg(tmp_path))
 
     assert handled is True
     assert f"{loop}:2" in error
@@ -135,7 +135,7 @@ def test_script_load_reports_read_errors_without_raising(tmp_path):
     state = make_state()
     before = settings.seed_defaults()
 
-    handled, error = cli._run_command("/load bad.irc", state, make_cfg(tmp_path))
+    handled, error = repl_commands.run_command("/load bad.irc", state, make_cfg(tmp_path))
 
     assert handled is True
     assert str(script) in error
@@ -260,7 +260,7 @@ def test_cli_load_partial_event_hook_output_keeps_script_order(tmp_path):
         events=hooks,
     )
 
-    handled, error = cli._run_command(f"/load {script.name}", state, cfg)
+    handled, error = repl_commands.run_command(f"/load {script.name}", state, cfg)
 
     assert handled is True
     assert f"{script}:2" in error

@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 from repl_driver import stub_screen, turn_stub
 
-from js import cli, prompt_commands as pc
+from js import cli, prompt_commands as pc, repl_commands
 from js.repl_state import ReplState
 from js.replcomplete import JsCompleter
 
@@ -127,7 +127,7 @@ def test_help_lists_command_files(dirs, capsys, monkeypatch):
     global_dir, _ = dirs
     (global_dir / "review.md").write_text("---\ndescription: Review a file\n---\nReview $1", encoding="utf-8")
 
-    cli._cmd_help("", ReplState(), None)
+    repl_commands._cmd_help("", ReplState(), None)
 
     assert any("/review" in line and "Review a file" in line for line in capsys.readouterr().out.splitlines())
 

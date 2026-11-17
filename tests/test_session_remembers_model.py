@@ -8,7 +8,7 @@ import json
 import pytest
 from repl_driver import stub_screen, turn_stub
 
-from js import cli
+from js import cli, picker
 from js.session_catalog import last_session_model, record_session_start
 
 
@@ -104,7 +104,7 @@ def test_an_explicit_model_flag_still_wins_over_the_recorded_one(monkeypatch, tm
 
 def test_pick_model_is_remembered_before_the_next_turn(monkeypatch, tmp_path):
     cli.logins.save_login(cli.logins.Login("ollama", provider_base_url="http://offline.invalid/v1"))
-    monkeypatch.setattr(cli.picker, "pick_model", lambda **kwargs: {
+    monkeypatch.setattr(picker, "pick_model", lambda **kwargs: {
         "provider_id": "ollama", "provider_base_url": "http://offline.invalid/v1",
         "model": "picked-model",
     })

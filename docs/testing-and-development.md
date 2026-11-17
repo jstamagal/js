@@ -155,7 +155,7 @@ Test the function that does the thing:
 
 - `cli.main()` only for what main itself does: argument parsing and
   validation, reading stdin into the prompt, dispatch to a mode, and what a
-  launch sets up. A `/command` goes through `cli._handle_command`, a
+  launch sets up. A `/command` goes through `repl_commands.handle_command`, a
   one-shot prompt through `cli._run_prompt`, and a REPL session through
   `tests/repl_driver.py` (`run_async` drives `_repl_main` over a stub screen).
 - `runtime.run_turn()` with fake `js.model_client.stream_model` stubs for runtime behavior.

@@ -135,7 +135,7 @@ def test_models_json_error_path_is_json_and_returns_one(tmp_logins_dir, capsys, 
 
 def test_models_json_no_arg_uses_config_provider(monkeypatch, tmp_logins_dir, capsys):
     # `--list-models --json` with no value (const="") sends provider_arg=None, which
-    # builds a Config and feeds cfg.provider_id to _models_for_provider
+    # builds a Config and feeds cfg.provider_id to logins.models_for_provider
     #. Stub the network boundary and capture the cfg.
     seen: list[str | None] = []
 

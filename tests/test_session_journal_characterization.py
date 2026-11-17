@@ -18,7 +18,7 @@ from types import SimpleNamespace
 import pytest
 from test_config_compaction_layers import _compact_test_cfg
 
-from js import cli, compaction, memory as M
+from js import compaction, memory as M, repl_commands
 from js.repl_state import ReplState
 
 FIXTURES = Path(__file__).parent / "fixtures" / "session_journal"
@@ -64,7 +64,7 @@ def test_closing_note_rewrites_the_last_user_message(tmp_path):
     M.persist_messages(path, messages)
     state = ReplState(messages=messages)
 
-    cli._append_closing_note(SimpleNamespace(session_file=path), state, "<js-reminder>bye</js-reminder>")
+    repl_commands._append_closing_note(SimpleNamespace(session_file=path), state, "<js-reminder>bye</js-reminder>")
 
     assert _marks(path) == ["rollback_to:2"]
     assert list(M.load_replay_messages(path)) == messages

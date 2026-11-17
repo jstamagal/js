@@ -1,4 +1,4 @@
-"""Settings verbs for the command table in ``js.cli``.
+"""Settings verbs for the command table in ``js.repl_commands``.
 
 `set`, `show` and `on` operate on a settings dict and an event-hook table,
 using the registry in `js.settings`; `fset` on the entries `js.fset` holds. The REPL's command table calls these;
@@ -123,7 +123,7 @@ def show_lines(settings: dict, key: str | None = None, *, columns: int | None = 
 # But a flag (`--model`), a saved login, and env-read sampling (JS_TEMPERATURE ...) feed
 # the next turn WITHOUT ever landing in the store, so the store lies about what
 # runs. The REPL overlays those live sources onto the display via a per-setting
-# ``LiveValue`` map computed at the call site (cli.py), keeping `show_lines`
+# ``LiveValue`` map computed at the call site (repl_commands.py), keeping `show_lines`
 # itself pure for config-file processing.
 # ---------------------------------------------------------------------------
 

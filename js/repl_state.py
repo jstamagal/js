@@ -1,21 +1,37 @@
-"""The REPL's live state for one session (`cli._repl_state` builds it)."""
+"""The REPL's live state for one session (`cli._repl_state` builds it), the
+assembly a session runs with, and what carries live settings into the state."""
 
 from __future__ import annotations
 
 import os
+import threading
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
-from . import login_defaults, routing, settings as _settings, turn_settings
+from . import (
+    login_defaults,
+    logins,
+    messages as msgs,
+    providers,
+    routing,
+    run_assembly,
+    settings as _settings,
+    turn_settings,
+)
 from .compaction import AutoCompactState
 from .config import Config, _norm_effort, vision_enabled_for_model
+from .toolkit import policy as tool_policy
 
 if TYPE_CHECKING:
-    from .cli import ReplAssembly, _SessionTarget
+    import re
+
     from .events import EventHooks
     from .keys import Keymap
     from .mcp.host import MCPHost
     from .persona import PromptSpec
+    from .repl_commands import Command
+    from .session_picker import SessionTarget
     from .subagent_windows import SubagentWindows
     from .toolkit.registry import ToolRegistry
 
@@ -62,7 +78,7 @@ class ReplState:
     windows: SubagentWindows | None = None
     running: bool = True
     # The session `/session` chose to continue in.
-    switch_session: _SessionTarget | None = None
+    switch_session: SessionTarget | None = None
 
     def config_for_turn(self, cfg: Config) -> Config:
         """The Config a turn started now runs with: ``cfg`` on the live route
@@ -123,3 +139,130 @@ def _live_reasoning_effort(live_settings: dict, default: str | None) -> str | No
     if isinstance(raw, str):
         return _norm_effort(raw)
     return default
+
+
+QUIT_WORDS = ("exit", "quit", ":q")  # quit without the leading '/'
+
+
+@dataclass(frozen=True)
+class ReplAssembly:
+    """Commands and input policy supplied to a REPL session."""
+
+    commands: Mapping[str, Command] | None = None
+    quit_words: tuple[str, ...] = QUIT_WORDS
+    refuse_unknown: bool = True
+    guard_turn_state: bool = True
+    compact_force_focus: str = "up to here"
+    skill_command: str = "/skill"
+    skill_pattern: re.Pattern | None = None
+    flush_lines: tuple[str, ...] = ("/flush", "/cancel queued")
+    interrupt: Callable | None = None
+    banner: Callable | None = None
+    hint_renderer: Callable[[msgs.Message, ReplState], msgs.Message] | None = None
+    input_bindings: Callable | None = None
+
+
+DEFAULT_REPL_ASSEMBLY = ReplAssembly()
+
+
+def repl_assembly(state: ReplState | None) -> ReplAssembly:
+    if state is None or state.repl_assembly is None:
+        return DEFAULT_REPL_ASSEMBLY
+    return state.repl_assembly
+
+
+def repl_hint(message: msgs.Message, state: ReplState) -> msgs.Message:
+    render = repl_assembly(state).hint_renderer
+    return message if render is None else render(message, state)
+
+
+# Orders the async REPL's live-state writes against turn starts. A command holds
+# it for its whole run on its executor thread; a turn takes its cfg snapshot under
+# it, also off the loop thread (cli._live_cfg_snapshot), so a command that waits on
+# the loop (a modal picker) never deadlocks it and a slow command never stalls input.
+LIVE_STATE_LOCK = threading.Lock()
+
+
+def queue_note(state: ReplState, note: str) -> None:
+    state.pending_notes.append(note)
+
+
+def disabled_skills(state: ReplState) -> tuple[str, ...]:
+    """The SKILLS_DISABLED names in the live settings."""
+    return turn_settings.project(state.settings)["skills_disabled"]
+
+
+def model_from_live_settings(live_settings: dict) -> str | None:
+    raw = _settings.get_dotted(live_settings, ("MODEL",), None)
+    return raw if isinstance(raw, str) and raw else None
+
+
+def sync_model_from_live_settings(state: ReplState) -> None:
+    model = model_from_live_settings(state.settings)
+    if model is not None:
+        state.model = model
+        # The store now drives the model, so it is no longer a flag/command override.
+        state.model_source = None
+
+
+def provider_from_live_settings(live_settings: dict) -> tuple[str | None, str | None, str | None]:
+    def _value(path: tuple[str, str]) -> str | None:
+        raw = _settings.get_dotted(live_settings, path, None)
+        return raw if isinstance(raw, str) and raw else None
+
+    return (
+        _value(("PROVIDER",)),
+        _value(("BASE_URL",)),
+        _value(("API_KEY",)),
+    )
+
+
+def sync_provider_from_live_settings(state: ReplState, changed_keys: list[str]) -> None:
+    provider_id, base_url, api_key = provider_from_live_settings(state.settings)
+    changed = set(changed_keys)
+    if "PROVIDER" in changed:
+        if provider_id is None:
+            state.provider_id = None
+            state.provider_base_url = None
+            state.provider_api_key = None
+            state.provider_headers = {}
+        else:
+            set_provider_state(state, provider_id)
+    if "BASE_URL" in changed:
+        state.provider_base_url = base_url
+    if "API_KEY" in changed:
+        state.provider_api_key = api_key
+
+
+def sync_tool_registry_from_live_settings(cfg: Config, state: ReplState) -> None:
+    """Rebuild the live registry. The agent load already printed the
+    unmatched-entry notices; a tools.yaml that no longer resolves keeps the
+    current registry and prints one line."""
+    selectors = state.tool_selectors
+    try:
+        state.tool_registry = run_assembly.registry_for(state.config_for_turn(cfg)).select(selectors, warn=False)
+    except tool_policy.ToolPolicyError as exc:
+        msgs.say(msgs.TOOL_SURFACE_KEPT, error=exc)
+
+
+def apply_saved_login_to_state(state: ReplState, provider_name: str) -> bool:
+    provider_id = providers.normalize_provider_id(provider_name) or provider_name
+    login = logins.load_logins().get(provider_id)
+    if not login:
+        return False
+    state.provider_id = login.provider_id
+    state.provider_headers = dict(login.provider_headers)
+    state.provider_base_url = login.provider_base_url
+    state.provider_api_key = login.provider_api_key
+    return True
+
+
+def set_provider_state(state: ReplState, provider_id: str) -> None:
+    canonical_id = providers.normalize_provider_id(provider_id) or provider_id
+    if apply_saved_login_to_state(state, canonical_id):
+        return
+    provider_def = providers.provider_for_login(canonical_id)
+    state.provider_id = canonical_id
+    state.provider_headers = {}
+    state.provider_base_url = providers.provider_base_url(provider_def, None, os.environ)
+    state.provider_api_key = providers.provider_api_key(provider_def, None, os.environ)
