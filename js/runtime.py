@@ -1569,17 +1569,18 @@ async def _dispatch_async_tool(
     try:
         args = _repair_jsonish(pc.arguments())
     except ValueError as exc:
+        opened = _trace_call(telemetry, tool_context, pc.name, None, malformed=True, traced=trace)
         telemetry.event("tool_error", tool=pc.called_name or pc.name, call_id=pc.id, error=f"argparse: {exc}")
         result = error_tracker.record(pc.name, f'ERROR: could not parse arguments for {pc.name}: {exc}')
-        _trace_result(telemetry, tool_context, pc.name, result, malformed=True, traced=trace)
+        _trace_result(telemetry, tool_context, pc.name, result, malformed=True, exchange=opened, traced=trace)
         return pc, {}, result
     tool = registry.resolve(pc.name)
+    opened = _trace_call(telemetry, tool_context, tool.name if tool is not None else pc.name, args, traced=trace)
     if tool is None:
         telemetry.event("tool_unknown", tool=pc.called_name or pc.name, call_id=pc.id, args=args)
         result = registry.unavailable_error(pc.name)
-        _trace_result(telemetry, tool_context, pc.name, result, args=args, traced=trace)
+        _trace_result(telemetry, tool_context, pc.name, result, args=args, exchange=opened, traced=trace)
         return pc, args, result
-    opened = _trace_call(telemetry, tool_context, tool.name, args, traced=trace)
     started = time.time()
     view = None
     try:
