@@ -41,6 +41,5 @@ compatibility. The harness optimizes for:
 ## What This Project Is Not
 
 - It is not a web app.
-- It is not a generic MCP host.
 - It is not a long-term compatibility layer for old tool names.
 - It has append-only summarizing compaction (`/compact`, `js --compact`) with cache-usage accounting.
