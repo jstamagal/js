@@ -30,7 +30,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
-from . import session_store
+from . import output, session_store
 from .usage_display import (
     format_dollars as format_dollars,
     format_tokens as format_tokens,
@@ -314,6 +314,6 @@ def record(usage: Any, *, model: str, provider_id: str | None,
     if meter is not None and meter.on_call is not None and first is not None:
         try:
             meter.on_call(call, first)
-        except Exception:  # noqa: BLE001 - an observer never breaks the turn
-            pass
+        except Exception as exc:  # noqa: BLE001 - an observer never breaks the turn
+            output.failed_once("usage observer", exc)
     return call

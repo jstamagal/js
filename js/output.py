@@ -65,6 +65,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from . import messages as msgs
+
 # Serializes output from the threads of one dispatch batch.
 LOCK = threading.RLock()
 
@@ -131,6 +133,20 @@ def emit(event: OutputEvent) -> None:
 def notice(message: Any, /, *, stderr: bool = True, flush: bool = True, **fields: Any) -> None:
     """Emit a catalogue message with its fields and destination intact."""
     emit(event("notice", message=message, fields=fields, stderr=stderr, flush=flush))
+
+
+_failed_places: set[str] = set()
+_failed_places_lock = threading.Lock()
+
+
+def failed_once(where: str, exc: BaseException) -> None:
+    """Report ``exc`` the first time ``where`` fails in this process; later
+    failures there stay quiet."""
+    with _failed_places_lock:
+        if where in _failed_places:
+            return
+        _failed_places.add(where)
+    notice(msgs.FAILED_WARN, error=f"{where}: {type(exc).__name__}: {exc}")
 
 
 class Key:

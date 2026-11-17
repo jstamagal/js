@@ -31,6 +31,7 @@ class TurnEvents:
                 self._sink(event, payload)
             except Exception as exc:  # noqa: BLE001 - an observer never breaks the turn
                 self._telemetry.event("event_sink_error", event=event, error=f"{type(exc).__name__}: {exc}")
+                output.failed_once("turn event sink", exc)
 
     def emit(self, event: str, *, sink_extra: dict | None = None, **payload: Any) -> Any:
         """Raise ``event`` to the ON hooks and the event sink; the emission, or

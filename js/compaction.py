@@ -702,7 +702,8 @@ def estimated_prompt_tokens(cfg: Config, system: str, messages: list[dict]) -> i
             context_budget.estimate_messages_tokens(messages or [], chars_per_token=cpt)
             + context_budget.estimate_system_tokens(system or "", chars_per_token=cpt)
         )
-    except Exception:  # noqa: BLE001 - an estimate must never break the turn
+    except Exception as exc:  # noqa: BLE001 - an estimate must never break the turn
+        output.failed_once("compaction token estimate", exc)
         return 0
 
 
@@ -725,7 +726,8 @@ def _calibrated_chars_per_token(cfg: Config, system: str, messages: list[dict], 
         registry = context.tool_registry
         tools = model_client.tool_specs_to_ai_tools(registry.openai_specs()) if registry else None
         return tracker.calibrated_chars_per_token(messages=messages, system=system, tools=tools)
-    except Exception:  # noqa: BLE001 - calibration must never break compaction
+    except Exception as exc:  # noqa: BLE001 - calibration must never break compaction
+        output.failed_once("compaction chars-per-token calibration", exc)
         return configured
 
 
