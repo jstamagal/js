@@ -13,6 +13,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from js import repl
+
 REPO, OUT = map(Path, sys.argv[1:3])
 OUT.mkdir(parents=True, exist_ok=True)
 sys.path.insert(0, str(REPO))
@@ -25,7 +27,6 @@ sys.path.insert(0, str(REPO / "tests"))
 from session_marks import append_compaction_mark  # noqa: E402
 
 from js import (  # noqa: E402
-    cli,
     compaction as C,
     context_budget as B,
     memory as M,
@@ -127,10 +128,10 @@ def observed(name, checks, **evidence):
 def persist_turn(cfg, messages, user):
     import inspect
 
-    if "user_recorded" in inspect.signature(cli._persist_turn_messages).parameters:
-        cli._persist_turn_messages(cfg, messages, user, user_recorded=True)
+    if "user_recorded" in inspect.signature(repl._persist_turn_messages).parameters:
+        repl._persist_turn_messages(cfg, messages, user, user_recorded=True)
     else:
-        cli._persist_turn_messages(cfg, messages)
+        repl._persist_turn_messages(cfg, messages)
 
 
 async def summary_fault(mode):
@@ -621,7 +622,7 @@ async def zero_usage_executor():
         patch.object(R.T, "STOCK_CONTEXT", context),
     ):
         try:
-            await cli._do_turn(
+            await repl._do_turn(
                 cfg,
                 state,
                 R.Telemetry(None),
@@ -776,7 +777,7 @@ async def journal_sequence():
         else:
             # Legacy CLI persistence only appends current-turn suffix. Compare the current implementation directly.
             if messages:
-                cli._persist_turn_messages(cfg, messages, messages[-1], user_recorded=False)
+                repl._persist_turn_messages(cfg, messages, messages[-1], user_recorded=False)
         if M.load_messages(cfg.session_file) != messages:
             mismatches.append(step)
         operations.append(op)
@@ -855,7 +856,7 @@ async def compacted_turn_cancel(error=False):
 
     with patch.object(R, "run_turn_async", turn), patch.object(R.T, "STOCK_CONTEXT", context):
         try:
-            await cli._do_turn(
+            await repl._do_turn(
                 cfg,
                 state,
                 R.Telemetry(None),
@@ -924,7 +925,7 @@ async def between_turn_cancel():
         patch.object(R.T, "STOCK_CONTEXT", context),
     ):
         task = asyncio.create_task(
-            cli._do_turn(
+            repl._do_turn(
                 cfg,
                 state,
                 R.Telemetry(None),

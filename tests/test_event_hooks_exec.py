@@ -60,7 +60,7 @@ def _on(state, cfg, line: str) -> None:
 
 
 def _user_text(state, text: str) -> str:
-    return cli._with_notes({"role": "user", "content": text}, cli._take_pending_notes(state))["content"]
+    return repl._with_notes({"role": "user", "content": text}, repl._take_pending_notes(state))["content"]
 
 
 # --- exec ----------------------------------------------------------------------

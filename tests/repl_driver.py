@@ -79,7 +79,7 @@ def stub_screen(monkeypatch, lines, *, wait: bool = False) -> None:
     when it takes two arguments. EOF follows when it returns and the turns
     have ended."""
     queues = []
-    turn_consumer = cli._turn_consumer
+    turn_consumer = repl._turn_consumer
 
     def recording_consumer(queue, *args, **kwargs):
         queues.append(queue)
@@ -138,7 +138,7 @@ def stub_screen(monkeypatch, lines, *, wait: bool = False) -> None:
     def build_app_stub(*, on_line, on_eof, on_ex, **_kwargs):
         return AppStub(on_line, on_eof, on_ex), VisibleScrollback(sys.stdout)
 
-    monkeypatch.setattr(cli, "_turn_consumer", recording_consumer)
+    monkeypatch.setattr(repl, "_turn_consumer", recording_consumer)
     monkeypatch.setattr(cli.screen, "build_app", build_app_stub)
 
 

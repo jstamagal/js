@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 from types import SimpleNamespace
 
-from js import cli
+from js import repl
 
 
 def test_a_line_typed_during_startup_exchanges_is_sent_when_they_end(monkeypatch):
@@ -16,8 +16,8 @@ def test_a_line_typed_during_startup_exchanges_is_sent_when_they_end(monkeypatch
     async def run_repl_turn(line, *_rest):
         ran.append(line)
 
-    monkeypatch.setattr(cli, "_run_repl_turn", run_repl_turn)
-    monkeypatch.setattr(cli, "_steer_mode", lambda _state: "now")
+    monkeypatch.setattr(repl, "_run_repl_turn", run_repl_turn)
+    monkeypatch.setattr(repl, "_steer_mode", lambda _state: "now")
 
     class Supervisor:
         def spawn(self, coro, **_kwargs):
@@ -31,7 +31,7 @@ def test_a_line_typed_during_startup_exchanges_is_sent_when_they_end(monkeypatch
         queue: asyncio.Queue = asyncio.Queue()
         queue.put_nowait(startup)
         consumer = asyncio.ensure_future(
-            cli._turn_consumer(queue, Supervisor(), None, None, None, None, None, inbox))
+            repl._turn_consumer(queue, Supervisor(), None, None, None, None, None, inbox))
         await queue.join()
         consumer.cancel()
         with contextlib.suppress(asyncio.CancelledError):

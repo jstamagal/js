@@ -13,7 +13,7 @@ import types
 
 import pytest
 
-from js import cli, repl_commands, runtime, supervisor
+from js import repl, repl_commands, runtime, supervisor
 from js.repl_state import ReplState
 from js.toolkit import ToolContext, subagents, task_jobs
 from js.toolkit.registry import ToolRegistry
@@ -92,7 +92,7 @@ def _notes(ctx: ToolContext) -> list[str]:
 
 
 def _sent(state: ReplState, message: dict) -> dict:
-    return cli._with_notes(message, cli._take_pending_notes(state))
+    return repl._with_notes(message, repl._take_pending_notes(state))
 
 
 def _bundle() -> dict:

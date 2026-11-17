@@ -12,7 +12,7 @@ import pytest
 from repl_driver import run_async
 from test_mcp_client import SpecServer
 
-from js import cli
+from js import cli, repl
 from js.config import from_env
 from js.mcp.client import MCPClient
 from js.mcp.host import MCPHost
@@ -80,7 +80,7 @@ def test_nonblocking_repl_skill_line_sends_user_only_skill(monkeypatch, tmp_path
 @pytest.mark.parametrize("mode", ["now", "batch"])
 @pytest.mark.parametrize("busy", [False, True])
 def test_mcp_channel_wakes_idle_repl_and_persists_literal_content(monkeypatch, tmp_path, mode, busy):
-    monkeypatch.setattr(cli, "_steer_mode", lambda _state: mode)
+    monkeypatch.setattr(repl, "_steer_mode", lambda _state: mode)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     server = SpecServer()

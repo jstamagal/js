@@ -7,7 +7,7 @@ import asyncio
 
 from repl_driver import run_async, turn_stub
 
-from js import cli
+from js import cli, repl
 from js.config import from_env
 from js.memory import append_message, load_messages
 
@@ -59,7 +59,7 @@ def test_turn_persistence_journals_mutated_history_without_overwriting(tmp_path)
         {"role": "assistant", "content": "partial work"},
     ]
 
-    cli._persist_turn_messages(
+    repl._persist_turn_messages(
         type("Cfg", (), {"session_file": session_file})(),
         messages,
     )

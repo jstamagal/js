@@ -180,7 +180,7 @@ def repl_hint(message: msgs.Message, state: ReplState) -> msgs.Message:
 
 # Orders the async REPL's live-state writes against turn starts. A command holds
 # it for its whole run on its executor thread; a turn takes its cfg snapshot under
-# it, also off the loop thread (cli._live_cfg_snapshot), so a command that waits on
+# it, also off the loop thread (repl._live_cfg_snapshot), so a command that waits on
 # the loop (a modal picker) never deadlocks it and a slow command never stalls input.
 LIVE_STATE_LOCK = threading.Lock()
 
