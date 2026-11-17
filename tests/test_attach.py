@@ -9,7 +9,7 @@ import ai
 from repl_driver import run_async, turn_stub
 from turn_driver import js
 
-from js import attach, cli, history_record, media, repl_commands, run_assembly, runtime
+from js import attach, cli, history_record, media, prompt_run, repl_commands, run_assembly, runtime
 from js.config import Config
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
@@ -115,7 +115,7 @@ def test_prompt_dash_file_reads_stdin_bytes_as_attachment(monkeypatch):
         def read(self):  # pragma: no cover - -f - must consume buffer bytes instead
             raise AssertionError("text stdin reader should not be used for -f -")
 
-    monkeypatch.setattr(cli, "_run_prompt", lambda prompt, **kwargs: calls.append({"prompt": prompt, **kwargs}) or 0)
+    monkeypatch.setattr(prompt_run, "run", lambda prompt, **kwargs: calls.append({"prompt": prompt, **kwargs}) or 0)
     monkeypatch.setattr(cli.sys, "stdin", StdinStub())
 
     assert cli.main(["-f", "-", "-p", "summarize paste"]) == 0

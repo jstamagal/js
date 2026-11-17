@@ -15,6 +15,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from . import messages as msgs
+
 # CSV column order; JSON rows carry the same keys (plus any caller extras).
 ROW_FIELDS = (
     "name",
@@ -94,3 +96,22 @@ def write_csv(path: str | Path, rows: list[dict]) -> None:
             writer.writeheader()
             for row in rows:
                 writer.writerow({k: row.get(k) for k in ROW_FIELDS})
+
+
+def write_requested(json_path, csv_path, payload, rows, *, announce: bool = False) -> bool:
+    """``payload`` written to ``json_path`` and ``rows`` to ``csv_path``,
+    each when it is set; a file that cannot be written is reported on stderr.
+    False when one was not written."""
+    ok = True
+    for path, writer, data in ((json_path, write_json, payload), (csv_path, write_csv, rows)):
+        if not path:
+            continue
+        try:
+            writer(path, data)
+        except OSError as exc:
+            msgs.warn(msgs.FAILED, error=f"stats output {path}: {exc}")
+            ok = False
+        else:
+            if announce:
+                msgs.warn(msgs.STATS_WRITTEN, path=path)
+    return ok

@@ -21,8 +21,10 @@ from js import (
     conversation,
     listings,
     messages as msgs,
+    model_client,
     model_metadata,
     paths as _paths,
+    prompt_run,
     run_assembly,
     runtime,
     screen,
@@ -238,7 +240,7 @@ def test_prompt_model_flag_with_provider_prefix_routes_provider_override(monkeyp
     monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(fake_run_turn))
     monkeypatch.setattr(cli.M, "load_messages", lambda _path: [])
     monkeypatch.setattr(conversation, "append_turn", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", AsyncMock())
 
     actual = js(monkeypatch, "--model", "openai/gpt-5.5", "-p", "foo")
 
@@ -290,7 +292,7 @@ def test_interactive_model_flag_with_provider_prefix_routes_provider_override(mo
 
 
 def test_cli_rejects_debug_and_debug_file_combination(monkeypatch):
-    monkeypatch.setattr(cli, "_run_prompt", lambda *a, **k: pytest.fail("ran the prompt"))
+    monkeypatch.setattr(prompt_run, "run", lambda *a, **k: pytest.fail("ran the prompt"))
 
     assert cli.main(["--debug", "--debug-file", "/tmp/js-debug.log", "-p", "ignored"]) == 2
 
@@ -481,7 +483,7 @@ def test_js_prompt_mode_reads_pipe_without_prompt_flag(monkeypatch):
         def read(self):
             return "Reply with PIPE_OK"
 
-    monkeypatch.setattr(cli, "_run_prompt", lambda prompt, **kwargs: calls.append({"prompt": prompt, **kwargs}) or 0)
+    monkeypatch.setattr(prompt_run, "run", lambda prompt, **kwargs: calls.append({"prompt": prompt, **kwargs}) or 0)
     monkeypatch.setattr(cli.sys, "stdin", StdinStub())
 
     assert cli.main([]) == 0
@@ -499,7 +501,7 @@ def test_js_prompt_flag_reads_pipe(monkeypatch):
         def read(self):
             return "Reply with PIPE_FLAG_OK"
 
-    monkeypatch.setattr(cli, "_run_prompt", lambda prompt, **kwargs: calls.append(prompt) or 0)
+    monkeypatch.setattr(prompt_run, "run", lambda prompt, **kwargs: calls.append(prompt) or 0)
     monkeypatch.setattr(cli.sys, "stdin", StdinStub())
 
     assert cli.main(["-p"]) == 0
@@ -516,7 +518,7 @@ def test_prompt_instruction_combines_with_piped_stdin(monkeypatch):
         def read(self):
             return "diff --git a/file b/file\n+changed\n"
 
-    monkeypatch.setattr(cli, "_run_prompt", lambda prompt, **kwargs: calls.append(prompt) or 0)
+    monkeypatch.setattr(prompt_run, "run", lambda prompt, **kwargs: calls.append(prompt) or 0)
     monkeypatch.setattr(cli.sys, "stdin", StdinStub())
 
     assert cli.main(["-p", "review this patch"]) == 0
@@ -680,7 +682,7 @@ def test_js_pipe_modes_no_save_pass_save_false(monkeypatch, capsys):
         def read(self):
             return "Reply with PIPE_NO_SAVE_OK"
 
-    monkeypatch.setattr(cli, "_run_prompt", lambda prompt, **kwargs: calls.append({"prompt": prompt, **kwargs}) or 0)
+    monkeypatch.setattr(prompt_run, "run", lambda prompt, **kwargs: calls.append({"prompt": prompt, **kwargs}) or 0)
     monkeypatch.setattr(cli.sys, "stdin", StdinStub())
 
     for argv in (["--no-save"], ["--no-save", "-p"], ["-n", "-p", "hi"]):
@@ -699,7 +701,7 @@ def test_no_save_warning_is_only_for_a_headless_no_save_run(monkeypatch, tmp_pat
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
-    monkeypatch.setattr(cli, "_run_prompt", lambda prompt, **kwargs: 0)
+    monkeypatch.setattr(prompt_run, "run", lambda prompt, **kwargs: 0)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     stub_screen(monkeypatch, [])
 
@@ -726,7 +728,7 @@ def test_clustered_short_booleans_parse_with_prompt(monkeypatch):
         )
         return 0
 
-    monkeypatch.setattr(cli, "_run_prompt", run_prompt_stub)
+    monkeypatch.setattr(prompt_run, "run", run_prompt_stub)
 
     actual = cli.main(["-nd", "-p", "hi"])
 
@@ -891,7 +893,7 @@ def test_commit_mode_defaults_to_cwd_and_uses_prompt_as_operator_context(monkeyp
         calls.append({"prompt": prompt, **kwargs})
         return 0
 
-    monkeypatch.setattr(cli, "_run_prompt", run_prompt_stub)
+    monkeypatch.setattr(prompt_run, "run", run_prompt_stub)
 
     actual = cli.main(["--commit", "-p", "almost all housekeeping tasks", "-n"])
 
@@ -922,7 +924,7 @@ def test_commit_mode_accepts_target_dir_and_pipe_context(monkeypatch, tmp_path):
         calls.append({"prompt": prompt, **kwargs})
         return 0
 
-    monkeypatch.setattr(cli, "_run_prompt", run_prompt_stub)
+    monkeypatch.setattr(prompt_run, "run", run_prompt_stub)
     monkeypatch.setattr(cli.sys, "stdin", StdinStub())
 
     actual = cli.main(["--commit", str(target), "-p", "-"])
@@ -937,7 +939,7 @@ def test_commit_mode_accepts_target_dir_and_pipe_context(monkeypatch, tmp_path):
 
 def test_commit_mode_rejects_agent_override_and_missing_target(monkeypatch, tmp_path):
     missing = tmp_path / "missing"
-    monkeypatch.setattr(cli, "_run_prompt", lambda *a, **k: pytest.fail("ran the commit agent"))
+    monkeypatch.setattr(prompt_run, "run", lambda *a, **k: pytest.fail("ran the commit agent"))
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
     assert cli.main(["--commit", "--agent", "autocoder"]) == 2
@@ -971,7 +973,7 @@ def test_resumed_prompt_model_override_is_used_and_preserved_in_continue_hint(mo
 
 def test_short_session_and_agent_aliases_parse(monkeypatch):
     calls: list[dict] = []
-    monkeypatch.setattr(cli, "_run_prompt", lambda prompt, **kwargs: calls.append(kwargs) or 0)
+    monkeypatch.setattr(prompt_run, "run", lambda prompt, **kwargs: calls.append(kwargs) or 0)
 
     assert cli.main(["-a", "scoped", "-s", "short-session", "-p", "hi"]) == 0
     assert (calls[0]["agent"], calls[0]["session"]) == ("scoped", "short-session")
@@ -1046,6 +1048,11 @@ def _auto_compact_cfg(tmp_path, *, compact: dict | None = None) -> Config:
     )
 
 
+def _auto_compact(cfg: Config, state: ReplState) -> None:
+    """The check a run makes between turns: compact when the context is full enough."""
+    model_client.run_owning_loop(conversation.maybe_auto_compact_async(cfg, state))
+
+
 def _auto_state(cfg: Config) -> ReplState:
     return ReplState(system="SYSTEM", messages=[{"role": "user", "content": "hi"}], settings=cfg.settings)
 
@@ -1056,11 +1063,11 @@ def test_auto_compact_noops_when_disabled_or_paused(monkeypatch, tmp_path, capsy
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
 
     disabled = _auto_compact_cfg(tmp_path, compact={"COMPACTION_AUTO": False})
-    cli._maybe_auto_compact(disabled, _auto_state(disabled))
+    _auto_compact(disabled, _auto_state(disabled))
     cfg = _auto_compact_cfg(tmp_path)
     paused_state = _auto_state(cfg)
     paused_state.auto_compact.paused = True
-    cli._maybe_auto_compact(cfg, paused_state)
+    _auto_compact(cfg, paused_state)
 
     assert calls == []
     assert capsys.readouterr().out == ""
@@ -1073,23 +1080,23 @@ def test_auto_compact_notifies_once_at_threshold_and_resets_below(monkeypatch, t
     state = _auto_state(cfg)
 
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 49, raising=False)
-    cli._maybe_auto_compact(cfg, state)
+    _auto_compact(cfg, state)
     assert capsys.readouterr().out == ""
 
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 50, raising=False)
-    cli._maybe_auto_compact(cfg, state)
+    _auto_compact(cfg, state)
     first = capsys.readouterr().out
-    cli._maybe_auto_compact(cfg, state)
+    _auto_compact(cfg, state)
     second = capsys.readouterr().out
     assert msgs.AUTO_COMPACT_ARMED.line(colour=False, fullness=0.50) in first
     assert second == ""
     assert calls == []
 
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 40, raising=False)
-    cli._maybe_auto_compact(cfg, state)
+    _auto_compact(cfg, state)
     assert state.auto_compact.notified is False
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 50, raising=False)
-    cli._maybe_auto_compact(cfg, state)
+    _auto_compact(cfg, state)
     assert msgs.AUTO_COMPACT_ARMED.line(colour=False, fullness=0.50) in capsys.readouterr().out
 
 
@@ -1106,7 +1113,7 @@ def test_auto_compact_uses_active_model_for_same(monkeypatch, tmp_path):
     state = _auto_state(cfg)
     state.model = "active-model"
 
-    cli._maybe_auto_compact(cfg, state)
+    _auto_compact(cfg, state)
 
     assert seen == ["active-model"]
 
@@ -1122,9 +1129,9 @@ def test_auto_compact_triggers_at_80_and_forces_at_90(monkeypatch, tmp_path):
     cfg = _auto_compact_cfg(tmp_path)
 
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 80, raising=False)
-    cli._maybe_auto_compact(cfg, _auto_state(cfg))
+    _auto_compact(cfg, _auto_state(cfg))
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 90, raising=False)
-    cli._maybe_auto_compact(cfg, _auto_state(cfg))
+    _auto_compact(cfg, _auto_state(cfg))
 
     assert [call["forced"] for call in calls] == [False, True]
 
@@ -1137,10 +1144,10 @@ def test_auto_compact_measures_fullness_after_truncated_replies(monkeypatch, tmp
     cfg = _auto_compact_cfg(tmp_path)
     state = _auto_state(cfg)
     for _ in range(3):
-        cli._maybe_auto_compact(cfg, state)
+        _auto_compact(cfg, state)
     assert calls == []
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 95, raising=False)
-    cli._maybe_auto_compact(cfg, state)
+    _auto_compact(cfg, state)
     assert len(calls) == 1
     assert calls[0]["forced"] is True
 
@@ -1152,22 +1159,22 @@ def test_auto_compact_pauses_after_two_consecutive_fires_and_resets_below_trigge
     state = _auto_state(cfg)
 
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 80, raising=False)
-    cli._maybe_auto_compact(cfg, state)
+    _auto_compact(cfg, state)
     assert state.auto_compact.consecutive == 1
     assert state.auto_compact.paused is False
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 80)
-    cli._maybe_auto_compact(cfg, state)
+    _auto_compact(cfg, state)
     assert state.auto_compact.consecutive == 2
     assert state.auto_compact.paused is True
-    cli._maybe_auto_compact(cfg, state)
+    _auto_compact(cfg, state)
     assert len(calls) == 2
 
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 79, raising=False)
-    cli._maybe_auto_compact(cfg, state)
+    _auto_compact(cfg, state)
     assert state.auto_compact.consecutive == 0
     assert state.auto_compact.paused is False
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 80, raising=False)
-    cli._maybe_auto_compact(cfg, state)
+    _auto_compact(cfg, state)
     assert len(calls) == 3
 
 
@@ -1192,7 +1199,7 @@ def test_auto_compact_invalid_numeric_config_falls_back_to_defaults(monkeypatch,
         cfg = _auto_compact_cfg(tmp_path, compact=compact)
         monkeypatch.setattr(cli.runtime, "_resolve_context_window", lambda _model, _provider, _base_url=None: 131072)
         monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 104858, raising=False)  # ~80% of mocked metadata window
-        cli._maybe_auto_compact(cfg, _auto_state(cfg))
+        _auto_compact(cfg, _auto_state(cfg))
 
     assert len(calls) == 2
     assert [call["forced"] for call in calls] == [False, False]
@@ -1206,14 +1213,14 @@ def test_auto_compact_string_false_values_disable_auto(monkeypatch, tmp_path, ca
 
     for raw in ("false", "0", "off", "no"):
         cfg = _auto_compact_cfg(tmp_path, compact={"COMPACTION_AUTO": raw})
-        cli._maybe_auto_compact(cfg, _auto_state(cfg))
+        _auto_compact(cfg, _auto_state(cfg))
 
     assert calls == []
     assert capsys.readouterr().out == ""
 
 
 def test_dash_C_rejects_missing_dir(monkeypatch, tmp_path):
-    monkeypatch.setattr(cli, "_run_prompt", lambda *a, **k: pytest.fail("ran the prompt"))
+    monkeypatch.setattr(prompt_run, "run", lambda *a, **k: pytest.fail("ran the prompt"))
     assert cli.main(["-C", str(tmp_path / "nope"), "-p", "hi"]) == 2
 
 
@@ -1232,7 +1239,7 @@ def test_auto_compact_fullness_excludes_output_reserve_and_buffer(monkeypatch, t
     cfg = replace(cfg, max_output_tokens=8_000)
 
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 79_000, raising=False)
-    cli._maybe_auto_compact(cfg, _auto_state(cfg))
+    _auto_compact(cfg, _auto_state(cfg))
 
     assert len(calls) == 1
     assert calls[0]["forced"] is False
@@ -1253,7 +1260,7 @@ def test_reply_reserve_cap_is_configurable(monkeypatch, tmp_path, capsys):
     cfg = replace(cfg, max_output_tokens=128_000)
 
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 260_000, raising=False)
-    cli._maybe_auto_compact(cfg, _auto_state(cfg))
+    _auto_compact(cfg, _auto_state(cfg))
 
     # Same 260k now measured against 237,904 -> over 100%, compaction fires.
     assert len(calls) == 1
@@ -1271,12 +1278,12 @@ def test_context_window_fallback_only_applies_when_the_model_is_unknown(monkeypa
     cfg = replace(cfg, max_output_tokens=128_000)
     # 300k is 81% of a 370k pin but 29% of the real 1.05M window.
     monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 300_000, raising=False)
-    cli._maybe_auto_compact(cfg, _auto_state(cfg))
+    _auto_compact(cfg, _auto_state(cfg))
     assert calls == []
 
     # Unknown model: nothing to resolve, so the fallback is what we measure by.
     monkeypatch.setattr(cli.runtime, "_resolve_context_window", lambda *a, **kw: None)
-    cli._maybe_auto_compact(cfg, _auto_state(cfg))
+    _auto_compact(cfg, _auto_state(cfg))
     assert len(calls) == 1
 
 
@@ -1570,7 +1577,7 @@ def test_one_shot_model_override_sends_that_models_saved_sampling(monkeypatch, t
     monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(fake_run_turn))
     monkeypatch.setattr(cli.M, "load_messages", lambda _path: [])
     monkeypatch.setattr(conversation, "append_turn", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", AsyncMock())
 
     assert js(monkeypatch, "--model", "testes/b", "-p", "foo") == 0
     assert seen["sampling"].temperature == 0.9

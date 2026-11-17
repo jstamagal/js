@@ -20,7 +20,6 @@ def home(monkeypatch, tmp_path):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_a, **_k: None)
 
     async def no_compaction(*_a, **_k):
         return None

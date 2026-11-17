@@ -10,7 +10,7 @@ from repl_driver import turn_stub
 from test_steering import _call, _cfg, _text
 from turn_driver import js, one_turn
 
-from js import cli, runtime, session_store
+from js import runtime, session_store
 from js.memory import load_messages
 from js.toolkit import ToolContext
 from js.toolkit.core import Tool
@@ -75,10 +75,11 @@ def test_prompt_mode_sigterm_keeps_the_turn(monkeypatch, tmp_path):
         os.kill(os.getpid(), signal.SIGTERM)
 
     monkeypatch.setattr(runtime, "run_turn_async", turn_stub(turn))
+    before = signal.getsignal(signal.SIGTERM)
     assert js(monkeypatch, "--session", "termed", "-p", "look") == 130
     session = session_store.folder_for(Path.cwd()) / "termed.jsonl"
     assert load_messages(session)[:3] == [{"role": "user", "content": "look"}, *EXCHANGE]
-    assert signal.getsignal(signal.SIGTERM) is not cli._raise_keyboard_interrupt
+    assert signal.getsignal(signal.SIGTERM) is before
 
 
 def test_conversation_turn_is_on_disk_before_it_ends(monkeypatch, tmp_path):

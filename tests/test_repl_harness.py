@@ -169,7 +169,7 @@ def test_repl_cancelled_turn_emits_cancel_event(monkeypatch, tmp_path, capsys):
     def run_turn_stub(*args, **kwargs):
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(cli.events, "EventHooks", RecordingHooks)
+    monkeypatch.setattr(events, "EventHooks", RecordingHooks)
     monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
     run_async(monkeypatch, cfg, ["interrupt me", "exit"], wait=True)

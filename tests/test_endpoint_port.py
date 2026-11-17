@@ -2,7 +2,7 @@
 
 import pytest
 
-from js import cli
+from js import cli, prompt_run
 from js.endpoint_uri import EndpointSpecError, split
 
 
@@ -27,7 +27,7 @@ def test_endpoint_accepts_port_boundaries_without_rewriting_url(port, host):
 def test_invalid_port_cli_exits_before_provider_call(capsys, monkeypatch):
     def forbid_provider(*args, **kwargs):
         pytest.fail("invalid endpoint reached provider execution")
-    monkeypatch.setattr(cli, "_run_prompt", forbid_provider)
+    monkeypatch.setattr(prompt_run, "run", forbid_provider)
     assert cli.main(["-u", "http://Model:sk-TestKey@localhost:99999/v1", "-p", "hi"]) == 2
     captured = capsys.readouterr()
     assert captured.err

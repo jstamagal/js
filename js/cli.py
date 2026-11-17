@@ -1,97 +1,59 @@
 """The `js` command line: parse it, settle the run's setup, and run the mode
-it names: a listing, --bench, --compact, --commit, a -p run, or the REPL
-(`js.repl`)."""
+it names: a listing, --bench, --compact, --commit, a -p run
+(`js.prompt_run`), or the REPL (`js.repl`)."""
 
 from __future__ import annotations
 
 import argparse
-import asyncio
 import contextlib
-import io
-import json
 import os
 import re
-import shlex
-import signal
 import sys
-import time
-from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from pathlib import Path
 
 from . import (
     agent_lock,
-    agent_messages,
-    attach,
     bench,
     command_line,
     commit_cli,
     compaction,
-    conversation,
-    debug_trace,
     display as display_mod,
     dotenv,
     endpoint_uri,
-    events,
     headless,
     home as _home,
     jail as _jail,
     listings,
-    login_defaults,
     memory as M,
     messages as msgs,
     migrate_config,
-    model_client,
     model_metadata,
     network_display,
-    output,
     paths as _paths,
     persona as P,
+    prompt_run,
     repl,
-    repl_commands,
-    repl_state,
-    routing,
     run_assembly,
     runtime,
     sampling as sampling_mod,
     session_catalog,
     session_picker,
     session_store,
-    setcmd,
     settings,
     snippets,
-    stats,
-    transcript as transcript_mod,
-    usage as usage_mod,
 )
 from .cli_options import Setup
 from .config import (
-    Config,
     InvocationSources,
     derive_session_name,
-    jsrc_paths,
     resolve_agent_id,
     resolve_session_file,
     run_settings,
     set_invocation,
     validate_agent_id,
-    vision_enabled_for_model,
 )
-from .conversation import Conversation
-from .repl_state import ReplState
 from .tool_binaries import resolve_binary
-from .toolkit import ToolContext
-
-
-def _blocking_stdio() -> None:
-    """Clear O_NONBLOCK on stdin, stdout and stderr. Every program in a
-    terminal shares one open file description, and one that set it
-    non-blocking (nvim and node do, through libuv) can leave it so; a write
-    bigger than the terminal's buffer then stops part way with EAGAIN."""
-    for fd in (0, 1, 2):
-        with contextlib.suppress(OSError):
-            if not os.get_blocking(fd):
-                os.set_blocking(fd, True)
 
 
 def _latest_session_name(agent_id: str) -> str | None:
@@ -162,68 +124,6 @@ def _read_stdin_attachment_if_piped() -> bytes:
     return sys.stdin.read().encode("utf-8")
 
 
-def _mute_transcript_tee(sink):
-    mute = getattr(sink, "mute_tee", None)
-    return mute() if callable(mute) else contextlib.nullcontext()
-
-
-def _maybe_auto_compact(cfg: Config, state: ReplState) -> None:
-    model_client.run_owning_loop(conversation.maybe_auto_compact_async(cfg, state))
-
-
-def _run_state(cfg: Config, system: str, messages: list[dict],
-               hooks: events.EventHooks | None = None) -> ReplState:
-    """The live state a run outside the REPL compacts between turns with: its
-    own system prompt, messages, route, settings and `on` handlers."""
-    return ReplState(
-        system=system,
-        messages=messages,
-        model=cfg.model,
-        provider_id=cfg.provider_id,
-        provider_base_url=cfg.provider_base_url,
-        provider_api_key=cfg.provider_api_key,
-        provider_headers=dict(getattr(cfg, "provider_headers", {}) or {}),
-        settings=cfg.settings,
-        events=hooks,
-    )
-
-
-def _standalone_dispatcher(cfg: Config):
-    """Run `on` handler text whose command stands alone, with no REPL state.
-    What the command prints goes to stderr: stdout carries the run's answer."""
-
-    def dispatch(hook: events.EventHook, emission: events.EventEmission) -> events.EventHandlerResult:
-        line = setcmd.expand_line(hook.handler, cfg.settings)
-        verb, arg = setcmd.split_command(line) or ("<blank>", "")
-        command = repl_commands.standalone(line)
-        if command is None:
-            return events.EventHandlerResult(hook=hook, error=msgs.EVENT_HANDLER_COMMAND_UNSUPPORTED.words(value=verb))
-        with contextlib.redirect_stdout(sys.stderr):
-            return events.EventHandlerResult(hook=hook, error=command.run(arg, None, cfg))
-
-    return dispatch
-
-
-def _admit_standalone(hook: events.EventHook) -> str | None:
-    if repl_commands.standalone(hook.handler) is not None:
-        return None
-    verb = (setcmd.split_command(hook.handler) or ("",))[0]
-    return msgs.ON_HANDLER_NEEDS_REPL.said(event=hook.event, command=verb)
-
-
-def _prompt_hooks(cfg: Config, paths: list[Path]) -> events.EventHooks:
-    """The `on` handlers the jsrc files ``paths`` register for a run outside
-    the REPL: those whose command stands alone (`Command.stands_alone`). An
-    `on` line that registers no handler, one whose command needs the REPL
-    among them, is reported on stderr."""
-    hooks = events.EventHooks(_standalone_dispatcher(cfg), admit=_admit_standalone)
-    for path, lineno, line in settings.jsrc_commands(paths):
-        parsed = setcmd.split_command(line)
-        if parsed is not None and parsed[0] == "on" and (error := setcmd.on_command(hooks, parsed[1]).error):
-            msgs.warn(msgs.SCRIPT_LINE_FAILED, path=path, lineno=lineno, error=error)
-    return hooks
-
-
 # The command-line flags that set a setting: (args attribute, setting). Each
 # reaches every run path as an --extra, which also records it as a flag value
 # that a saved login's defaults never replace (js.login_defaults).
@@ -256,599 +156,6 @@ def _setting_flag_extras(args: argparse.Namespace) -> tuple[list[str], int | Non
                 return [], 2
         extras.append(f"{key}={value}")
     return extras, None
-
-
-def _raise_keyboard_interrupt(*_args) -> None:
-    raise KeyboardInterrupt
-
-
-@dataclass(frozen=True)
-class PromptInputs:
-    """What one `-p` run is asked to do: the keywords of `_run_prompt`. A
-    ``prompt`` of None runs the agent's startup exchanges as the whole run:
-    the last one is the turn whose answer is printed."""
-
-    prompt: str | None
-    model: str | None = None
-    debug: bool = False
-    debug_file: str | None = None
-    agent: str | None = None
-    session: str | None = None
-    save: bool = True
-    # The words the Continue line starts with in place of `js`.
-    resume_prefix: str | None = None
-    reasoning: str | None = None
-    maxout: int | None = None
-    show_continue: bool = True
-    sources: InvocationSources = InvocationSources()
-    tool_context: ToolContext | None = None
-    files: list[str] | None = None
-    stdin_attachment: bytes | None = None
-    stats_json: str | None = None
-    stats_csv: str | None = None
-    caller_key: str | None = None
-    events: headless.JsonEvents | None = None
-    config_pins: bool = False
-
-
-@dataclass
-class _PreparedRun:
-    """A `-p` run as its steps prepare it. ``cfg`` and ``effort`` are the ones
-    the command line names until `_settle` replaces them with the settled
-    ones; under -n `_load_history` points ``cfg`` at os.devnull."""
-
-    inputs: PromptInputs
-    # The prompt with its @path words taken out, and what it attaches.
-    prompt: str | None
-    attachments: list[str]
-    effort: str | None
-    resumed: run_assembly.Resume
-    cfg: Config
-    telemetry: runtime.Telemetry
-    settled: run_assembly.SettledRun | None = None
-    messages: list[dict] = field(default_factory=list)
-    user_message: dict | None = None
-    state: ReplState | None = None
-    call_stats: list[dict] = field(default_factory=list)
-    started_at: float = 0.0
-
-
-@session_catalog.session_scope
-def _run_prompt(prompt: str | None, **kwargs) -> int:
-    """One `-p` run (`_prompt_run`). Once its session is open, the Continue
-    line prints on every exit: an answer, no answer, an error, ^C; once its
-    turns start, session_end fires before it."""
-    inputs = PromptInputs(prompt, **kwargs)
-    opened: dict = {}
-    try:
-        code = _prompt_run(inputs, opened)
-        events = inputs.events
-        if events is not None and code != 0 and not events.errored:
-            _emit_failure(events, getattr(sys.stderr, "last_line", ""), code)
-        return code
-    finally:
-        if (end := opened.get("end")) is not None:
-            end()
-        if (say_continue := opened.get("say")) is not None:
-            say_continue()
-
-
-def _write_requested_stats(json_path, csv_path, payload, rows, *, announce: bool = False) -> bool:
-    ok = True
-    for path, writer, data in ((json_path, stats.write_json, payload), (csv_path, stats.write_csv, rows)):
-        if not path:
-            continue
-        try:
-            writer(path, data)
-        except OSError as exc:
-            msgs.warn(msgs.FAILED, error=f"stats output {path}: {exc}")
-            ok = False
-        else:
-            if announce:
-                msgs.warn(msgs.STATS_WRITTEN, path=path)
-    return ok
-
-
-def _prompt_run(inputs: PromptInputs, opened: dict) -> int:
-    """The steps of a `-p` run, in order; the first to give an exit code ends
-    it. ``opened`` gets the session_end and Continue line calls."""
-    asked = _asked(inputs)
-    if isinstance(asked, int):
-        return asked
-    run = _open_session(inputs, *asked, opened)
-    if isinstance(run, int):
-        return run
-    if (code := _settle(run)) is not None:
-        return code
-    cut_off = _load_history(run)
-    _emit_start(run)
-    if (code := _build_user_message(run, cut_off)) is not None:
-        return code
-    _open_live_state(run)
-    if (code := _run_turns(run, opened)) is not None:
-        return code
-    return _finish(run)
-
-
-def _asked(inputs: PromptInputs) -> tuple[str | None, list[str], str | None] | int:
-    """The prompt with its @path words taken out, the files it attaches, and
-    the --reasoning effort checked. An exit code when there is nothing to
-    send or the effort is not one."""
-    # @path in the prompt attaches like it does in the REPL, read here before
-    # any jail, so `-p "@/tmp/prompt.txt"` needs no JAIL_BIND.
-    prompt, attachments = inputs.prompt, []
-    if prompt is not None:
-        prompt, named = attach.split_repl_attachments(prompt)
-        attachments = [*(inputs.files or []), *named]
-        if not prompt.strip() and not attachments:
-            msgs.warn(msgs.PROMPT_EMPTY)
-            return 2
-    effort = None
-    if inputs.reasoning is not None:
-        effort, effort_error = settings.validate_cli_reasoning(inputs.reasoning)
-        if effort_error is not None:
-            msgs.warn(msgs.BAD_REASONING, value=inputs.reasoning, error=effort_error)
-            return 2
-    return prompt, attachments, effort
-
-
-def _open_session(inputs: PromptInputs, prompt: str | None, attachments: list[str], effort: str | None,
-                  opened: dict) -> _PreparedRun | int:
-    """The run's config and what its session's last stamp resumes, the saved
-    session made the run's own, the telemetry and transcript, and the
-    Continue line the run prints when it ends. An exit code when the config
-    does not load."""
-    try:
-        cfg = run_assembly.from_env(inputs.session, save_session=inputs.save, sources=inputs.sources,
-                                    agent_id=inputs.agent)
-    except ValueError as e:
-        msgs.warn(msgs.FAILED, error=e)
-        return 2
-    # A resumed session continues on the model, provider and reasoning of its
-    # last stamp unless this run names them. Read before this start records its own.
-    resumed = run_assembly.resume(cfg, inputs.model, effort)
-    if inputs.save:
-        session_catalog.activate_saved_session(
-            cfg,
-            caller_key=inputs.caller_key,
-            announce_generated=inputs.session is None and os.environ.get("JS_SESSION") is None,
-            model=resumed.model,
-        )
-    telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
-    transcript_mod.sync_transcript_sink(cfg, getattr(cfg, "settings", {}) or {}, telemetry)
-    run = _PreparedRun(inputs, prompt, attachments, effort, resumed, cfg, telemetry)
-    if inputs.save and inputs.show_continue:
-        hint = session_store.session_hint_arg(cfg)
-        # The config and effort are read when the line prints: the settled ones by then.
-        opened["say"] = lambda: _say_continue(telemetry, hint, resume_prefix=inputs.resume_prefix,
-                                              agent=inputs.agent, model=resumed.model, cfg=run.cfg,
-                                              reasoning=run.effort)
-    return run
-
-
-def _settle(run: _PreparedRun) -> int | None:
-    """The run settled: its config, prompt, tools and effort. A resumed
-    session stays on its stamp; agent.yaml sets a fresh run. An exit code
-    when it does not settle."""
-    inputs, resumed = run.inputs, run.resumed
-    try:
-        settled = run_assembly.settle(
-            run.cfg, reasoning=run.effort, resumed=resumed, config_pins=inputs.config_pins,
-            agent_reasoning=not inputs.config_pins and resumed.stamp is None and run.effort is None)
-    except run_assembly.RunNotSettled as e:
-        with transcript_mod.transcript_stdio(run.telemetry):
-            msgs.warn(msgs.FAILED, error=P.format_prompt_load_error(run.cfg, e.cause) if e.loading else e.cause)
-        return 2
-    # A resumed session's reasoning is this session's own choice, like /set,
-    # even when it is what the model would pick: its turns and the children
-    # they start run on it.
-    run.settled, run.cfg, run.effort = settled, settled.config, settled.effort
-    if resumed.unreachable is not None:
-        with transcript_mod.transcript_stdio(run.telemetry):
-            msgs.warn(msgs.RESUME_MODEL_FALLBACK, stamped=resumed.unreachable,
-                      model=conversation.stamp_label(run.cfg.model, run.cfg.provider_id))
-    return None
-
-
-def _load_history(run: _PreparedRun) -> bool:
-    """The session's messages; a saved session records its system prompt when
-    it has none, and a note when the agent's prompt changed since it did. The
-    workspace the session last ran in is restored. Whether its last turn was
-    cut off."""
-    cfg, settled = run.cfg, run.settled
-    run.messages = M.load_replay_messages(cfg.session_file)
-    cut_off = M.turn_cut_off(run.messages)
-    if run.inputs.save:
-        prompt_changed = M.record_prompt_seen(cfg.session_file, settled.prompt_spec.source)
-        if settled.recorded_system is None:
-            M.append_system_prompt(cfg.session_file, settled.system)
-        elif prompt_changed:
-            notice = {"role": "user", "content": snippets.render('prompt-changed')}
-            run.messages.append(notice)
-            conversation.append_turn(cfg, notice)
-    repl_commands.restore_workspace(cfg)
-    if not run.inputs.save:
-        run.cfg = replace(cfg, session_file=Path(os.devnull))
-    return cut_off
-
-
-def _emit_start(run: _PreparedRun) -> None:
-    """The `start` record of a --json run."""
-    events, cfg = run.inputs.events, run.cfg
-    if events is None:
-        return
-    saved = cfg.session_file != Path(os.devnull)
-    events.emit(
-        "start", version=headless.SCHEMA_VERSION,
-        id=session_store.session_hint_arg(cfg) if saved else None,
-        file=str(cfg.session_file) if saved else None,
-        resumed=len(run.messages) > 0, agent=cfg.agent_id, model=cfg.model, provider=cfg.provider_id,
-        effort=run.effort if run.effort is not None else cfg.reasoning_effort,
-        cwd=str(Path.cwd()), usage=usage_mod.totals(cfg.session_file).as_dict(),
-    )
-
-
-def _build_user_message(run: _PreparedRun, cut_off: bool) -> int | None:
-    """The message the prompt sends: its attachments, and the notes on a
-    switch of mode or model and on a turn cut off. With no prompt, a saved
-    session records -p as its mode. An exit code when an attachment cannot be
-    read."""
-    inputs = run.inputs
-    if run.prompt is None:
-        if inputs.save and run.cfg.session_file != Path(os.devnull):
-            M.record_turn_mode(run.cfg.session_file, "-p")
-        return None
-    settled_cfg, model = run.settled.config, run.resumed.model
-    attachment_cfg = (
-        replace(settled_cfg, model=model,
-                vision_enabled=vision_enabled_for_model(model, getattr(settled_cfg, "settings", None)))
-        if model is not None
-        else settled_cfg
-    )
-    try:
-        user_message = attach.build_user_message(
-            run.prompt,
-            run.attachments,
-            attachment_cfg,
-            stdin_attachment=inputs.stdin_attachment,
-        )
-    except attach.AttachmentError as e:
-        with transcript_mod.transcript_stdio(run.telemetry):
-            msgs.warn(msgs.FAILED, error=e)
-        return 2
-    if inputs.save:
-        user_message = conversation.note_mode_switch(run.cfg, user_message, "-p")
-    user_message = conversation.note_model_switch(settled_cfg, user_message)
-    if cut_off:
-        user_message = attach.with_note(user_message, snippets.render('turn-cut-off'))
-    run.user_message = user_message
-    return None
-
-
-def _open_live_state(run: _PreparedRun) -> None:
-    """The run's `on` handlers from its jsrc files, and the live state its
-    events and auto-compaction read."""
-    cfg = run.cfg
-    with transcript_mod.transcript_stdio(run.telemetry):
-        hooks = _prompt_hooks(cfg, jsrc_paths(Path(getattr(cfg, "project_dir", None) or Path.cwd()),
-                                              run.inputs.sources))
-    run.state = _run_state(cfg, run.settled.system, run.messages, hooks)
-
-
-def _run_turns(run: _PreparedRun, opened: dict) -> int | None:
-    """The turns, with the debug trace open and session_start fired first;
-    SIGTERM (a runner, `timeout`) ends them like ^C. The session is saved and
-    the handler SIGTERM had put back however they end. An exit code when they
-    fail or are interrupted."""
-    inputs, cfg, telemetry, state = run.inputs, run.cfg, run.telemetry, run.state
-    turn_kwargs = run.settled.turn_kwargs(call_stats=run.call_stats, event_hooks=state.events)
-    if inputs.events is not None:
-        turn_kwargs["event_sink"] = inputs.events.runtime_event
-        telemetry.sink = output.Fanout(output.sink_of(telemetry), headless.OutputEvents(inputs.events))
-    if inputs.maxout is not None:
-        turn_kwargs["max_output_override"] = inputs.maxout
-    run.started_at = time.time()
-    trace_sink = _open_trace_sink(run)
-    telemetry.trace_sink = trace_sink
-    transcript = transcript_mod.transcript_sink(telemetry)
-    chat = Conversation(cfg, run.settled.system, registry=run.settled.registry,
-                        context=inputs.tool_context or runtime.T.STOCK_CONTEXT,
-                        telemetry=telemetry, messages=run.messages)
-
-    def turns() -> None:
-        _turns(run, chat, transcript, turn_kwargs)
-
-    previous_sigterm = None
-    with contextlib.suppress(ValueError):  # not the main thread: no signal hook
-        previous_sigterm = signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
-    repl_state.emit_session_event(state, telemetry, cfg, "session_start")
-    opened["end"] = lambda: repl_state.emit_session_event(state, telemetry, cfg, "session_end")
-    try:
-        try:
-            if inputs.debug:
-                _turns_on_the_terminal(run, trace_sink, turns)
-            else:
-                _turns_captured(run, trace_sink, turns)
-        except (KeyboardInterrupt, asyncio.CancelledError):
-            repl_state.emit_repl_event(state, telemetry, "cancel", reason="cancelled")
-            with transcript_mod.transcript_stdio(telemetry):
-                msgs.warn(msgs.TURN_INTERRUPTED)
-            return 130
-        except Exception as e:  # noqa: BLE001
-            with transcript_mod.transcript_stdio(telemetry):
-                msgs.warn(msgs.FAILED, error=network_display.error_text(e))
-            code = 2 if isinstance(e, snippets.SnippetError) else 1
-            events = inputs.events
-            if events is not None and not events.errored:
-                _emit_failure(events, network_display.error_text(e), code)
-            return code
-    finally:
-        try:
-            if inputs.save:
-                chat.save()
-        finally:
-            if trace_sink is not None:
-                trace_sink.close()
-            telemetry.trace_sink = None
-            if previous_sigterm is not None:
-                signal.signal(signal.SIGTERM, previous_sigterm)
-    return None
-
-
-def _open_trace_sink(run: _PreparedRun) -> debug_trace.DebugTraceSink | None:
-    """The debug trace: the run's autolog and its --debug-file."""
-    cfg = run.cfg
-    autolog = debug_trace.debug_autolog_path(cfg, getattr(cfg, "settings", {}) or {})
-    sink_paths: list[Path] = [p for p in (autolog,) if p is not None]
-    if run.inputs.debug_file:
-        sink_paths.append(Path(run.inputs.debug_file))
-    return debug_trace.open_debug_trace_sink(sink_paths)
-
-
-def _turns(run: _PreparedRun, chat: Conversation, transcript, turn_kwargs: dict) -> None:
-    """The agent's startup exchanges when the session has no messages, then
-    the prompt's turn."""
-    inputs, cfg, telemetry = run.inputs, run.cfg, run.telemetry
-    # -d shows the conversation as the REPL draws it: each user line, typed or
-    # fired from the agent's files, ahead of the answer it got.
-    echo_user = display_mod.echo_user if inputs.debug else None
-    trace_override = inputs.debug or bool(inputs.debug_file) or cfg.trace
-    prompt_spec = run.settled.prompt_spec
-    if prompt_spec.exchanges and not run.messages:
-        model_client.run_owning_loop(agent_messages.initialize(
-            cfg, prompt_spec, run.messages, replace(telemetry, transcript_log=transcript),
-            system=run.settled.system, save=inputs.save, trace_override=trace_override,
-            tool_context=inputs.tool_context, echo_user=echo_user, **turn_kwargs,
-        ))
-    if run.user_message is None:
-        return
-
-    def started() -> None:
-        """The prompt is on disk, in the transcript and echoed before the
-        model is called."""
-        if inputs.save:
-            conversation.append_turn(cfg, run.user_message)
-        if transcript is not None:
-            transcript.emit(output.event("transcript_user", text=run.prompt))
-        if echo_user is not None:
-            echo_user(run.prompt)
-
-    repl_state.emit_repl_event(run.state, telemetry, "input", text=run.prompt, attachments=run.attachments)
-    # In this context as well as the turn's, so the check after the
-    # turn reads the same window.
-    runtime.install_context_window_overrides(cfg)
-    model_client.run_owning_loop(chat.turn(
-        run.user_message, started=started, trace_override=trace_override, **turn_kwargs))
-
-
-def _turns_on_the_terminal(run: _PreparedRun, trace_sink, turns: Callable[[], None]) -> None:
-    """-d: the concise trace and the streamed answer live on the terminal;
-    the giant request trace goes to the log only. stdout is teed so the log
-    also keeps the concise lines and the answer."""
-    with transcript_mod.transcript_stdio(run.telemetry):
-        stdout = sys.stdout
-        stdout_ctx = (
-            contextlib.redirect_stdout(debug_trace.StdoutTee(stdout, trace_sink))
-            if trace_sink is not None
-            else contextlib.nullcontext()
-        )
-        with stdout_ctx:
-            turns()
-
-
-def _turns_captured(run: _PreparedRun, trace_sink, turns: Callable[[], None]) -> None:
-    """Plain and --debug-file: stdout carries only the final answer, which
-    `_finish` prints. The log captures the streamed answer plus, for
-    --debug-file, the concise trace lines; the full request trace lands there
-    via telemetry.trace_sink. With TRACE on, the concise trace also shows on
-    stderr as the model runs."""
-    telemetry = run.telemetry
-    capture = trace_sink if trace_sink is not None else io.StringIO()
-    trace = bool(getattr(run.cfg, "trace", False))
-    visible_transcript = telemetry.transcript_log
-    visible_display = telemetry.display_factory
-    # The answer is recorded once it is printed; the tool calls are recorded
-    # as they finish.
-    telemetry.transcript_log = (transcript_mod.ToolRecordsOnly(visible_transcript)
-                                if visible_transcript is not None else None)
-    if trace:
-        answer_sink = capture
-        telemetry.display_factory = (
-            lambda markdown: display_mod.Display.for_stream(answer_sink, markdown=markdown))
-        capture = debug_trace.StdoutTee(sys.stderr, trace_sink) if trace_sink is not None else sys.stderr
-    try:
-        with contextlib.redirect_stdout(capture):
-            turns()
-    finally:
-        telemetry.transcript_log = visible_transcript
-        telemetry.display_factory = visible_display
-
-
-def _finish(run: _PreparedRun) -> int:
-    """The stats files and the JSON result, then the answer printed and the
-    saved session compacted when it is due. 1 when there is no answer or a
-    stats file was not written."""
-    inputs, cfg, telemetry = run.inputs, run.cfg, run.telemetry
-    answer = _turn_answer(run.messages)
-    stats_ok = _record_stats(run, answer)
-    if not answer:
-        with transcript_mod.transcript_stdio(telemetry):
-            msgs.warn(msgs.NO_ANSWER)
-        return 1
-    # In debug, run_turn already streamed the answer live to stdout — a
-    # second print here is the double-print bug. Only print when the
-    # stream was suppressed (non-debug one-shot/pipe).
-    with transcript_mod.transcript_stdio(telemetry):
-        if not inputs.debug:
-            if (sink := transcript_mod.transcript_sink(telemetry)) is not None:
-                sink.emit(output.event("transcript_assistant", text=answer))
-            if inputs.events is None:
-                _blocking_stdio()
-                with _mute_transcript_tee(transcript_mod.transcript_sink(telemetry)):
-                    display_mod.print_answer(
-                        answer, sys.stdout,
-                        markdown=display_mod.markdown_enabled(getattr(cfg, "settings", None)),
-                    )
-        if inputs.save:
-            _maybe_auto_compact(cfg, run.state)
-    return 0 if stats_ok else 1
-
-
-def _record_stats(run: _PreparedRun, answer: str) -> bool:
-    """The --stats-json and --stats-csv files and the --json result of the
-    run's turn; False when a stats file was not written."""
-    inputs, cfg, events = run.inputs, run.cfg, run.inputs.events
-    if not (inputs.stats_json or inputs.stats_csv or events is not None):
-        return True
-    error = None if answer else msgs.NO_ANSWER.words()
-    row = {"name": "prompt", "prompt": run.prompt or "",
-           "max_tokens": cfg.max_output_tokens if inputs.maxout is None else inputs.maxout,
-           "ok": bool(answer), "error": error,
-           **stats.summarize_calls(run.call_stats, wall_s=time.time() - run.started_at)}
-    payload = {"agent": cfg.agent_id, "model": cfg.model, "provider": cfg.provider_id, "turns": [row]}
-    stats_ok = _write_requested_stats(inputs.stats_json, inputs.stats_csv, payload, [row])
-    if events is not None:
-        events.result = {**payload, "answer": answer,
-                         "session": session_store.session_hint_arg(cfg) if inputs.save else None,
-                         "effort": run.effort if run.effort is not None else cfg.reasoning_effort,
-                         "usage": (usage_mod.totals(cfg.session_file).as_dict() if inputs.save
-                                   else events.usage.as_dict())}
-    return stats_ok
-
-
-def _turn_answer(messages: list[dict]) -> str:
-    """The answer of the turn that ended ``messages``: the text of its last
-    assistant message, "" when that message has none."""
-    for message in reversed(messages):
-        role = message.get("role")
-        if role == "user":
-            break
-        if role == "assistant":
-            content = message.get("content")
-            return content.strip() if isinstance(content, str) else ""
-    return ""
-
-
-def _say_continue(telemetry: runtime.Telemetry, hint: str, *, resume_prefix: str | None,
-                  agent: str | None, model: str | None, cfg: Config | None = None,
-                  reasoning: str | None = None) -> None:
-    from .cli_options import current
-
-    words = shlex.split(resume_prefix) if resume_prefix else ["js"]
-    selected_agent = cfg.agent_id if cfg is not None else agent
-    if resume_prefix is None and selected_agent and selected_agent != settings.default_value("DEFAULT_AGENT"):
-        words += ["--agent", selected_agent]
-    if cfg is not None:
-        saved_login = login_defaults.login_for(cfg.provider_id, cfg.provider_base_url)
-        if cfg.provider_base_url and (saved_login is None or saved_login.provider_id != cfg.provider_id):
-            wire = routing.resolve_wire(cfg.provider_id).name
-            scheme, _, host = cfg.provider_base_url.partition("://")
-            words += ["-u", f"{wire}+{scheme}://{cfg.model}@{host}"]
-        else:
-            route = f"{cfg.provider_id}/{cfg.model}" if cfg.provider_id else cfg.model
-            words += ["--model", route]
-        effort = reasoning if reasoning is not None else cfg.reasoning_effort
-        words += ["-r", effort or "off"]
-        for field, value in login_defaults.sampling(cfg).as_dict_nonnull().items():
-            words += [command_line.flag(field),
-                      json.dumps(list(value)) if isinstance(value, tuple) else str(value)]
-    elif model:
-        words += ["--model", model]
-    words += command_line.options_argv(current())
-    if _paths.custom_home():
-        words += ["--home", str(_paths.home())]
-    words += ["--session", hint]
-    with transcript_mod.transcript_stdio(telemetry):
-        msgs.warn(msgs.CONTINUE_HINT, command=shlex.join(words))
-
-
-_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-
-
-_json_events: headless.JsonEvents | None = None
-
-
-def _json_run(run: Callable[[], int], *, stream: bool = True) -> int:
-    """Keep stdout machine-readable, ending with the completed run object."""
-    global _json_events
-    stdout = sys.stdout
-    events = headless.JsonEvents(stdout if stream else io.StringIO())
-    err = headless.LastLine(sys.stderr)
-    _json_events = events
-    try:
-        with contextlib.redirect_stdout(err), contextlib.redirect_stderr(err):
-            try:
-                code = run()
-            except Exception as exc:  # noqa: BLE001 - the stream must still end with a result
-                msgs.warn(msgs.FAILED, error=network_display.error_text(exc))
-                code = 2 if isinstance(exc, snippets.SnippetError) else 1
-    finally:
-        _json_events = None
-    opened = events.session
-    if opened is None:
-        events.emit("start", version=headless.SCHEMA_VERSION)
-    if code != 0 and not events.errored:
-        _emit_failure(events, err.last_line, code)
-    payload = events.result or {
-        "answer": events.final_text if code == 0 else "",
-        "session": None if opened is None else opened.get("id"),
-        "provider": None if opened is None else opened.get("provider"),
-        "model": None if opened is None else opened.get("model"),
-        "effort": None if opened is None else opened.get("effort"),
-        "usage": None if opened is None else opened.get("usage"),
-    }
-    if "benchmarks" not in payload:
-        if opened is not None and opened.get("file"):
-            payload["usage"] = usage_mod.totals(Path(opened["file"])).as_dict()
-        payload.update(ok=code == 0, exit_code=code)
-    if stream:
-        events.emit("end", **payload)
-    else:
-        print(json.dumps(payload, ensure_ascii=False, default=str), file=stdout)
-    return code
-
-
-def _emit_failure(events: headless.JsonEvents, line: str, code: int) -> None:
-    if events.session is None:
-        events.emit("start", version=headless.SCHEMA_VERSION)
-    message = _WARN_MARK.sub("", _ANSI.sub("", line))
-    events.emit("error", message=message or f"exit {code}", retryable=False)
-
-
-_WARN_MARK = re.compile(r"^\*+\s*")
-
-
-def _run_prompt_json(prompt: str | None, **kwargs) -> int:
-    """`_run_prompt` with its run written to stdout as JSON events
-    (`js.headless`). A failure without an `error` event gets one carrying the
-    last line printed to stderr before `_run_prompt` returned."""
-    events = _json_events
-    if events is None:
-        return _json_run(lambda: _run_prompt_json(prompt, **kwargs))
-    code = _run_prompt(prompt, events=events, **kwargs)
-    if code != 0 and not events.errored:
-        _emit_failure(events, getattr(sys.stderr, "last_line", ""), code)
-    return code
 
 
 def _run_compact_offline(session: str, *, agent: str | None = None, focus: str = "",
@@ -971,7 +278,7 @@ def _main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         msgs.warn(msgs.FAILED, error=exc)
         return 2
-    _blocking_stdio()
+    display_mod.blocking_stdio()
     # Before anything reads or writes ~/.js: move the old locations in, once,
     # then make sure every directory of the layout is there.
     _home.migrate_once()
@@ -1039,7 +346,7 @@ def _main(argv: list[str] | None = None) -> int:
         options.selectors(())
         with invocation(options):
             if _json_run_requested(args):
-                return _json_run(lambda: _run_args(args, dispatch_argv), stream=args.json_stream)
+                return headless.json_run(lambda: _run_args(args, dispatch_argv), stream=args.json_stream)
             return _run_args(args, dispatch_argv)
     except (ValueError, OSError) as exc:
         msgs.warn(msgs.FAILED, error=exc)
@@ -1347,16 +654,16 @@ def _run_headless(args: argparse.Namespace, setup: Setup, *, exchanges_only: boo
         stdin_text = _read_stdin_if_piped()
         prompt = args.prompt if not stdin_text.strip() else f"{args.prompt.rstrip()}\n\n{stdin_text.strip()}"
     session_catalog.session_leases.start["mode"] = "-p" if args.prompt is not None or exchanges_only else "pipe"
-    run = _run_prompt_json if (args.json or args.json_stream) else _run_prompt
-    result = run(prompt, model=args.model, debug=args.debug, debug_file=args.debug_file,
-                 agent=args.agent, session=args.session, save=not args.no_save,
-                 caller_key=args.session_key,
-                 reasoning=args.reasoning, maxout=args.max_out,
-                 show_continue=not args.quiet,
-                 sources=setup.sources,
-                 files=args.files,
-                 stdin_attachment=stdin_attachment,
-                 stats_json=args.stats_json, stats_csv=args.stats_csv)
+    result = prompt_run.run(prompt, model=args.model, debug=args.debug, debug_file=args.debug_file,
+                            agent=args.agent, session=args.session, save=not args.no_save,
+                            caller_key=args.session_key,
+                            reasoning=args.reasoning, maxout=args.max_out,
+                            show_continue=not args.quiet,
+                            sources=setup.sources,
+                            files=args.files,
+                            stdin_attachment=stdin_attachment,
+                            stats_json=args.stats_json, stats_csv=args.stats_csv,
+                            events=headless.active)
     if args.no_save:
         msgs.warn(msgs.NOT_SAVED_NO_RESUME)
     return result

@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import re
+import sys
 import threading
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any, TextIO
 
-from . import usage as usage_mod
+from . import messages as msgs, network_display, snippets, usage as usage_mod
 from .toolkit.results import result_text
 
 SCHEMA_VERSION = 2
@@ -129,3 +135,59 @@ class LastLine:
     def __getattr__(self, name: str) -> Any:
         return getattr(self.target, name)
 
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_WARN_MARK = re.compile(r"^\*+\s*")
+
+
+# The events of the --json run in progress (`json_run`); None outside one.
+active: JsonEvents | None = None
+
+
+def json_run(run: Callable[[], int], *, stream: bool = True) -> int:
+    """Keep stdout machine-readable, ending with the completed run object."""
+    global active
+    stdout = sys.stdout
+    events = JsonEvents(stdout if stream else io.StringIO())
+    err = LastLine(sys.stderr)
+    active = events
+    try:
+        with contextlib.redirect_stdout(err), contextlib.redirect_stderr(err):
+            try:
+                code = run()
+            except Exception as exc:  # noqa: BLE001 - the stream must still end with a result
+                msgs.warn(msgs.FAILED, error=network_display.error_text(exc))
+                code = 2 if isinstance(exc, snippets.SnippetError) else 1
+    finally:
+        active = None
+    opened = events.session
+    if opened is None:
+        events.emit("start", version=SCHEMA_VERSION)
+    if code != 0 and not events.errored:
+        emit_failure(events, err.last_line, code)
+    payload = events.result or {
+        "answer": events.final_text if code == 0 else "",
+        "session": None if opened is None else opened.get("id"),
+        "provider": None if opened is None else opened.get("provider"),
+        "model": None if opened is None else opened.get("model"),
+        "effort": None if opened is None else opened.get("effort"),
+        "usage": None if opened is None else opened.get("usage"),
+    }
+    if "benchmarks" not in payload:
+        if opened is not None and opened.get("file"):
+            payload["usage"] = usage_mod.totals(Path(opened["file"])).as_dict()
+        payload.update(ok=code == 0, exit_code=code)
+    if stream:
+        events.emit("end", **payload)
+    else:
+        print(json.dumps(payload, ensure_ascii=False, default=str), file=stdout)
+    return code
+
+
+def emit_failure(events: JsonEvents, line: str, code: int) -> None:
+    """An `error` record of ``line`` without its colour and warning mark,
+    after a `start` record when the run wrote none."""
+    if events.session is None:
+        events.emit("start", version=SCHEMA_VERSION)
+    message = _WARN_MARK.sub("", _ANSI.sub("", line))
+    events.emit("error", message=message or f"exit {code}", retryable=False)

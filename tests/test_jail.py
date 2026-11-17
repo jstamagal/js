@@ -19,7 +19,7 @@ import pytest
 from jail_probe import bwrap_starts, needs_bwrap
 from test_subagent_isolation import _fake_stream_result, make_cfg, prompt_dir
 
-from js import cli, jail, paths, persona, runtime, settings, tool_calls, tool_errors, turn_dispatch
+from js import cli, jail, paths, persona, prompt_run, runtime, settings, tool_calls, tool_errors, turn_dispatch
 from js.toolkit import ToolContext, call_tool, fs, python_kernel, shell_fetch, terminal
 from js.toolkit.registry import build_default_registry
 
@@ -615,7 +615,7 @@ def test_no_bwrap_refuses_dash_C(monkeypatch, tmp_path, capsys):
     target = tmp_path / "foo"
     target.mkdir()
     monkeypatch.setattr(jail.shutil, "which", lambda name: None)
-    monkeypatch.setattr(cli, "_run_prompt", lambda *a, **k: pytest.fail("ran the prompt unjailed"))
+    monkeypatch.setattr(prompt_run, "run", lambda *a, **k: pytest.fail("ran the prompt unjailed"))
     monkeypatch.chdir(tmp_path)
 
     assert cli.main(["-C", str(target), "-p", "hi"]) == 2

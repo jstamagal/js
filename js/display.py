@@ -17,6 +17,7 @@ with the metrics. The colours are /fset's `COLOR_*` entries (`js.fset`).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import json
 import os
@@ -973,6 +974,17 @@ class Display:
         self._wrote = False
         self._last_char = "\n"
         self.field = None
+
+
+def blocking_stdio() -> None:
+    """Clear O_NONBLOCK on stdin, stdout and stderr. Every program in a
+    terminal shares one open file description, and one that set it
+    non-blocking (nvim and node do, through libuv) can leave it so; a write
+    bigger than the terminal's buffer then stops part way with EAGAIN."""
+    for fd in (0, 1, 2):
+        with contextlib.suppress(OSError):
+            if not os.get_blocking(fd):
+                os.set_blocking(fd, True)
 
 
 def print_answer(text: str, stream: Any, *, markdown: bool = True) -> None:

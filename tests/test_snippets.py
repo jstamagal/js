@@ -105,7 +105,7 @@ def test_snippets_report_invalid_utf8_as_unreadable(monkeypatch, tmp_path):
 def test_missing_commit_snippet_exits_two_before_model_request(monkeypatch, tmp_path, capsys):
     from types import SimpleNamespace
 
-    from js import cli
+    from js import cli, prompt_run
 
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
@@ -114,7 +114,7 @@ def test_missing_commit_snippet_exits_two_before_model_request(monkeypatch, tmp_
         tmp_path / "missing" / relative if str(relative).startswith("snippets/") else real_find(relative)
     ))
     monkeypatch.setattr(paths, "layers", lambda: (tmp_path / "stock", tmp_path / "home"), raising=False)
-    monkeypatch.setattr(cli, "_run_prompt", lambda *a, **k: pytest.fail("model request started"))
+    monkeypatch.setattr(prompt_run, "run", lambda *a, **k: pytest.fail("model request started"))
     target = tmp_path / "repo"
     target.mkdir()
 
@@ -242,12 +242,12 @@ def test_worker_snippet_failures_are_not_tool_results(mode):
 def test_json_stream_preserves_snippet_exit_status(capsys):
     import json
 
-    from js import cli
+    from js import headless
 
     def run():
         raise snippets.SnippetError("missing instruction; searched: fixture")
 
-    assert cli._json_run(run) == 2
+    assert headless.json_run(run) == 2
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert events[-1]["type"] == "end"
     assert events[-1]["exit_code"] == 2

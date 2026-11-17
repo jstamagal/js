@@ -172,7 +172,7 @@ Hot spots over 441 commits in two months:
 2. **Split the internals of `run_turn_async`** (Strong). It is 883 lines, with 19 parameters and 13 closures. Keep the one interface and move the closures into separate modules. Done in js-1g1.32 (`js/turn_stream.py`, `js/turn_surface.py`, `js/turn_budget.py`, `js/turn_call.py`).
 3. **The REPL live-state dict** (Worth exploring). It has 165 use sites, and `provider_base_url` is written from 8 of them. Now a typed dataclass, `ReplState` in `js/repl_state.py`.
 4. **Delete the compat shims in `cli.py`** (Strong, cheapest). They existed only so tests could patch old signatures, and one could mask a real `TypeError`. Done in js-1g1.25.
-5. **Move the run modes out of `cli.py`** (Worth exploring). That is about 500 lines, and `_run_prompt` takes 22 parameters.
+5. **Move the run modes out of `cli.py`** (Worth exploring). Done: the REPL is `js/repl.py`, and the `-p` run is `js/prompt_run.py`, a short function over named steps.
 6. **One session-file reservation module** (Worth exploring). There are two copies, and they disagree on the name format.
 7. **Split code search out of `fs.py`** (Speculative). It would help navigation only.
 

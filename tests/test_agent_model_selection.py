@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import ai
 import ai.types.usage
@@ -9,7 +10,7 @@ import pytest
 from repl_driver import turn_stub
 from turn_driver import js
 
-from js import cli, logins, model_metadata, persona, run_assembly, runtime
+from js import cli, conversation, logins, model_metadata, persona, prompt_run, run_assembly, runtime
 from js.config import Config
 from js.model_client import ModelStreamResult
 from js.toolkit import ToolContext
@@ -477,7 +478,7 @@ def _one_shot_home(monkeypatch, tmp_path, manifest: str = "model: agent-model\nr
         messages.append({"role": "assistant", "content": "ok"})
 
     monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(fake_run_turn))
-    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", AsyncMock())
     return seen
 
 
@@ -521,7 +522,7 @@ def test_one_shot_invocation_pins_beat_agent_manifest(monkeypatch, tmp_path, arg
 def test_one_shot_config_pins_keeps_jsrc_model_and_effort(monkeypatch, tmp_path):
     seen = _one_shot_home(monkeypatch, tmp_path)
 
-    assert cli._run_prompt("foo", agent="pinned", save=False, config_pins=True) == 0
+    assert prompt_run.run("foo", agent="pinned", save=False, config_pins=True) == 0
 
     assert seen == {"model": "jsrc-model", "effort": "high"}
 

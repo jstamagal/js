@@ -11,10 +11,11 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from turn_driver import js
 
-from js import cli, conversation, debug_trace, model_client, run_assembly, runtime
+from js import conversation, debug_trace, model_client, run_assembly, runtime
 from js.config import Config
 from js.model_client import ModelStreamResult
 
@@ -141,7 +142,7 @@ def test_plain_prompt_run_keeps_trace_off_stdout(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(run_assembly, "from_env", lambda *_args, **_kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stub)
     monkeypatch.setattr(conversation, "append_turn", lambda *_a, **_k: None)
-    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_a, **_k: None)
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", AsyncMock())
 
     rc = js(monkeypatch, "-p", "hi")
     out = capsys.readouterr().out
@@ -173,7 +174,7 @@ def test_debug_flag_prints_concise_form(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(run_assembly, "from_env", lambda *_args, **_kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stub)
     monkeypatch.setattr(conversation, "append_turn", lambda *_a, **_k: None)
-    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_a, **_k: None)
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", AsyncMock())
 
     rc = js(monkeypatch, "--debug", "-p", "hi")
     out = capsys.readouterr().out

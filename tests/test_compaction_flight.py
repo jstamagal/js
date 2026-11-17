@@ -8,10 +8,10 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-from test_cli_prompt_mode import _auto_state
+from test_cli_prompt_mode import _auto_compact, _auto_state
 from test_config_compaction_layers import _compact_test_cfg
 
-from js import cli, compaction, runtime
+from js import compaction, runtime
 
 
 def read_flight(cfg):
@@ -75,10 +75,10 @@ def test_between_turn_uses_changed_live_window(monkeypatch, tmp_path):
     state.settings = {"CONTEXT_SIZE": 128000}
     captured = []
     monkeypatch.setattr(compaction, "maybe_auto_compact_async", AsyncMock(side_effect=lambda active, *args, **kwargs: captured.append(active) or compaction.AutoCompactOutcome()))
-    cli._maybe_auto_compact(cfg, state)
+    _auto_compact(cfg, state)
     assert captured[0].settings["CONTEXT_SIZE"] == 128000
     state.settings["CONTEXT_SIZE"] = 1000000
-    cli._maybe_auto_compact(cfg, state)
+    _auto_compact(cfg, state)
     assert captured[-1].settings["CONTEXT_SIZE"] == 1000000
 
 

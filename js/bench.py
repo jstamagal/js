@@ -94,8 +94,6 @@ def run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
     context, no session), measuring TTFT / tok-s / turn time. The persona
     (NN-prompt.md + agent.yaml) is rebuilt into each benchmark's head;
     benchmarks never see each other."""
-    from . import cli as _cli  # cli imports this module
-
     try:
         agent_id = validate_agent_id(bench_agent)
     except (ValueError, OSError) as e:
@@ -135,7 +133,7 @@ def run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
                                             "TOOLS_DISPLAY": 3, "TOOLS_QUIET": [], "SHELL_QUIET": [],
                                             "MARKDOWN": False})
     prompt_spec = settled.prompt_spec
-    events = _cli._json_events
+    events = headless.active
     if events is not None:
         events.emit("start", version=headless.SCHEMA_VERSION, agent=agent_id,
                     model=cfg.model, provider=cfg.provider_id)
@@ -214,7 +212,7 @@ def run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         trace_sink.close()
 
     payload = {"agent": agent_id, "model": cfg.model, "provider": cfg.provider_id, "benchmarks": rows}
-    stats_ok = _cli._write_requested_stats(stats_json, stats_csv, payload, rows, announce=True)
+    stats_ok = stats.write_requested(stats_json, stats_csv, payload, rows, announce=True)
     if events is not None:
         events.result = payload
     elif not stats_json and not stats_csv:

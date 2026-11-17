@@ -12,8 +12,10 @@ from js import (
     cli,
     command_line,
     home_cli,
+    login_defaults,
     loop_controller,
     paths,
+    prompt_run,
     repl,
     runtime,
     sampling,
@@ -162,7 +164,7 @@ def printed(monkeypatch):
 ])
 def test_continue_command_without_config(printed, options, given, line):
     with invocation(RunOptions(**options)):
-        cli._say_continue(runtime.Telemetry(None), "hint", resume_prefix=None, **given)
+        prompt_run.say_continue(runtime.Telemetry(None), "hint", resume_prefix=None, **given)
     assert printed == [line]
 
 
@@ -184,20 +186,20 @@ _SAMPLING = {"temperature": 0.65, "top_k": 37, "dry_sequence_breakers": ["\n", "
 def test_continue_command_with_config(monkeypatch, printed, route, login, sampled, reasoning, options, line):
     cfg = SimpleNamespace(**{"agent_id": "defaultagent", "provider_id": "prov", "provider_base_url": None,
                              "model": "mod", "reasoning_effort": None, **route})
-    monkeypatch.setattr(cli.login_defaults, "login_for",
+    monkeypatch.setattr(login_defaults, "login_for",
                         lambda _provider, _url: None if login is None else SimpleNamespace(provider_id=login))
-    monkeypatch.setattr(cli.login_defaults, "sampling", lambda _cfg: sampling.Sampling.from_mapping(sampled))
+    monkeypatch.setattr(login_defaults, "sampling", lambda _cfg: sampling.Sampling.from_mapping(sampled))
     with invocation(RunOptions(**options)):
-        cli._say_continue(runtime.Telemetry(None), "hint", resume_prefix=None, agent=None, model=None,
+        prompt_run.say_continue(runtime.Telemetry(None), "hint", resume_prefix=None, agent=None, model=None,
                           cfg=cfg, reasoning=reasoning)
     assert printed == [line]
 
 
 def test_continue_command_after_a_prefix(monkeypatch, printed):
     cfg = SimpleNamespace(agent_id="zz", provider_id="prov", provider_base_url=None, model="mod", reasoning_effort=None)
-    monkeypatch.setattr(cli.login_defaults, "login_for", lambda _provider, _url: None)
-    monkeypatch.setattr(cli.login_defaults, "sampling", lambda _cfg: sampling.Sampling())
-    cli._say_continue(runtime.Telemetry(None), "hint", resume_prefix="js-dev --x 'a b'", agent="zz", model=None, cfg=cfg)
+    monkeypatch.setattr(login_defaults, "login_for", lambda _provider, _url: None)
+    monkeypatch.setattr(login_defaults, "sampling", lambda _cfg: sampling.Sampling())
+    prompt_run.say_continue(runtime.Telemetry(None), "hint", resume_prefix="js-dev --x 'a b'", agent="zz", model=None, cfg=cfg)
     assert printed == ["js-dev --x 'a b' --model prov/mod -r off --home '/h o' --session hint"]
 
 

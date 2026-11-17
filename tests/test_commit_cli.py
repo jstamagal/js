@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import subprocess
 
-from js import cli, commit_cli, messages as msgs, paths
+from js import cli, commit_cli, messages as msgs, paths, prompt_run
 from js.config import InvocationSources
 
 
@@ -60,7 +60,7 @@ def test_run_commit_auto_inits_non_repo_and_injects_survey(tmp_path, monkeypatch
         calls.append({"prompt": prompt, "kwargs": kwargs})
         return 0
 
-    monkeypatch.setattr(cli, "_run_prompt", run_prompt_stub)
+    monkeypatch.setattr(prompt_run, "run", run_prompt_stub)
 
     actual = commit_cli.run_commit(str(target), save=False)
 
@@ -107,7 +107,7 @@ def test_run_commit_injects_messy_repo_snapshot_without_crashing(tmp_path, monke
         calls.append({"prompt": prompt, "kwargs": kwargs})
         return 0
 
-    monkeypatch.setattr(cli, "_run_prompt", run_prompt_stub)
+    monkeypatch.setattr(prompt_run, "run", run_prompt_stub)
 
     actual = commit_cli.run_commit(str(repo), save=False)
 
@@ -167,7 +167,7 @@ def test_run_commit_snapshots_tracked_patch_and_untracked_file(tmp_path, monkeyp
     (repo / "f.txt").write_text("changed-line1\n" + "\n".join(f"line{i}" for i in range(2, 31)) + "\n")
     (repo / "new.txt").write_text("brand new untracked\n")
 
-    monkeypatch.setattr(cli, "_run_prompt", lambda prompt, **kwargs: 0)
+    monkeypatch.setattr(prompt_run, "run", lambda prompt, **kwargs: 0)
     assert commit_cli.run_commit(str(repo), save=False) == 0
 
     backups = paths.commit_backups_dir()
@@ -187,7 +187,7 @@ def test_run_commit_makes_no_snapshot_on_clean_tree(tmp_path, monkeypatch):
     repo = tmp_path / "clean"
     _init_repo(repo)
 
-    monkeypatch.setattr(cli, "_run_prompt", lambda prompt, **kwargs: 0)
+    monkeypatch.setattr(prompt_run, "run", lambda prompt, **kwargs: 0)
     assert commit_cli.run_commit(str(repo), save=False) == 0
 
     backups = paths.commit_backups_dir()
@@ -206,7 +206,7 @@ def test_run_commit_snapshot_prune_keeps_ten(tmp_path, monkeypatch):
     for i in range(12):
         (backups / f"20200101T0000{i:02d}000000Z").mkdir()
 
-    monkeypatch.setattr(cli, "_run_prompt", lambda prompt, **kwargs: 0)
+    monkeypatch.setattr(prompt_run, "run", lambda prompt, **kwargs: 0)
     assert commit_cli.run_commit(str(repo), save=False) == 0
 
     remaining = sorted(p.name for p in backups.iterdir())

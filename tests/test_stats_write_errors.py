@@ -4,7 +4,7 @@ import ai
 import pytest
 from turn_driver import js
 
-from js import bench, cli, messages, runtime, stats
+from js import bench, messages, runtime, stats
 from js.config import InvocationSources
 from js.model_client import ModelStreamResult
 
@@ -92,7 +92,7 @@ def test_benchmark_stats_failure_preserves_interrupted_status(tmp_path, monkeypa
 
 def test_stats_helper_attempts_remaining_output_and_does_not_swallow_programming_errors(tmp_path, monkeypatch, capsys):
     csv_path = tmp_path / "stats.csv"
-    assert not cli._write_requested_stats(str(tmp_path), str(csv_path), {}, [])
+    assert not stats.write_requested(str(tmp_path), str(csv_path), {}, [])
     assert csv_path.is_file()
     assert capsys.readouterr().err
 
@@ -101,4 +101,4 @@ def test_stats_helper_attempts_remaining_output_and_does_not_swallow_programming
 
     monkeypatch.setattr(stats, "write_json", broken)
     with pytest.raises(TypeError, match="programming error"):
-        cli._write_requested_stats(str(tmp_path / "stats.json"), None, {}, [])
+        stats.write_requested(str(tmp_path / "stats.json"), None, {}, [])

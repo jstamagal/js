@@ -17,6 +17,7 @@ from js import (
     migrate_config,
     model_metadata,
     paths,
+    prompt_run,
     verify,
 )
 
@@ -45,7 +46,7 @@ def ran(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "_run_compact_offline", record("compact"))
     monkeypatch.setattr(migrate_config, "run_migrate_config", record("migrate-config"))
     monkeypatch.setattr(commit_cli, "run_commit", record("commit"))
-    monkeypatch.setattr(cli, "_run_prompt", record("prompt"))
+    monkeypatch.setattr(prompt_run, "run", record("prompt"))
     monkeypatch.setattr(msgs, "warn", lambda message, **fields: calls.append(message))
     return calls
 

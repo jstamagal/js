@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import ai
 from prompt_toolkit.application import Application, create_app_session
@@ -85,7 +86,7 @@ def test_prompt_mode_transcript_logs_final_answer_with_ape(monkeypatch, tmp_path
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
-    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", AsyncMock())
 
     rc = js(monkeypatch, "-p", "hello")
 
@@ -252,7 +253,7 @@ def test_prompt_mode_transcript_records_each_tool_call_whole(monkeypatch, tmp_pa
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime, "run_turn_async", turn_stub(run_turn))
-    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", AsyncMock())
 
     js(monkeypatch, "-p", "hello")
 

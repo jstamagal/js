@@ -17,7 +17,7 @@ js = "js.cli:main"
 
 One normal prompt run follows this path:
 
-1. `js.cli.main()` parses flags.
+1. `js.cli.main()` parses flags and hands a `-p` run to `js.prompt_run.run()`.
 2. `js.run_assembly.from_env()` builds `Config`.
 3. `js.persona.load_prompt_spec()` loads the selected agent from repo
    `defaults/agents/`, global `~/.js/agents/`, and project `.js/agents/`.
@@ -35,7 +35,8 @@ persists each completed turn.
 ## Module Responsibilities
 
 | Module | Responsibility |
-| `js/cli.py` | `main`: the run's setup, the mode picker, prompt/pipe mode (`-p`, `--json`, `--json-stream`), `--compact` |
+| `js/cli.py` | `main`: the run's setup, the mode picker, reading stdin into the prompt, `--compact` and `--commit` dispatch |
+| `js/prompt_run.py` | the `-p` run (`run`): its steps from the prompt to the printed answer, its `on` handlers, its stats, the Continue line (`say_continue`) |
 | `js/command_line.py` | the argument parser, and argv read the way it reads it |
 | `js/cli_options.py` | invocation-local prompt and tool overrides the modes share (`Setup`) |
 | `js/bench.py` | `--bench AGENT`: an agent over its benchmark cases, one row per case |
@@ -65,7 +66,7 @@ persists each completed turn.
 | `js/turn_call.py` | one model call with its retries, overflow recovery, escalated resend and signed-reasoning resend (`ModelCaller`) |
 | `js/memory.py` | locked JSONL persistence and loader control marks |
 | `js/usage.py` | per-session token and cost totals, the `usage` records, the meter a turn charges its calls to |
-| `js/headless.py` | `js -p --json-stream`: typed runtime events as JSON Lines (docs/headless-json.md) |
+| `js/headless.py` | `js -p --json-stream`: typed runtime events as JSON Lines (docs/headless-json.md); `json_run` wraps a run so stdout ends with its result |
 | `js/messages.py` | every string the operator reads, as named entries; the banner slot; each entry's default format |
 | `js/persona.py` | prompt-directory concatenation and `agent.yaml` |
 | `js/events.py` | event names, `on` handler table, handler refusals, the approval a program passes to `run_turn_async` |

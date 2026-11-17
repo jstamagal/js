@@ -12,7 +12,16 @@ from pathlib import Path
 import pytest
 from repl_driver import stub_screen, turn_stub
 
-from js import cli, conversation, memory as M, run_assembly, runtime, session_store, snippets
+from js import (
+    cli,
+    conversation,
+    memory as M,
+    routing,
+    run_assembly,
+    runtime,
+    session_store,
+    snippets,
+)
 from js.config import from_env
 from js.memory import load_messages
 from js.session_catalog import last_stamp
@@ -119,7 +128,7 @@ def test_a_repl_resume_whose_stamp_has_no_login_runs_on_the_configured_model(mon
 
 def test_a_stamp_on_a_logged_in_provider_is_resumed(monkeypatch):
     path = _stamped_elsewhere()
-    monkeypatch.setattr(cli.routing, "_saved_login", lambda provider: object() if provider == "openai" else None)
+    monkeypatch.setattr(routing, "_saved_login", lambda provider: object() if provider == "openai" else None)
 
     assert run_assembly.unreachable_stamp(last_stamp(path), from_env()) is None
 

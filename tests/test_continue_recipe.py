@@ -5,7 +5,7 @@ import shlex
 import ai
 import pytest
 
-from js import cli, logins, runtime
+from js import cli, logins, prompt_run, runtime
 from js.model_client import ModelStreamResult
 
 
@@ -84,7 +84,7 @@ def test_continue_keeps_an_explicit_home(custom, tmp_path, monkeypatch, capsys):
     from js import paths
     monkeypatch.setenv("JS_HOME", str(tmp_path / "chosen home"))
     monkeypatch.setattr(paths, "custom_home", lambda: custom, raising=False)
-    cli._say_continue(runtime.Telemetry(None), "session", resume_prefix=None, agent=None, model=None)
+    prompt_run.say_continue(runtime.Telemetry(None), "session", resume_prefix=None, agent=None, model=None)
     recipe = _command(capsys.readouterr().err)
     assert ("--home" in recipe) is custom
     if custom:

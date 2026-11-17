@@ -13,6 +13,7 @@ from pathlib import Path
 from . import (
     messages as msgs,
     paths as _paths,
+    prompt_run,
     snippets,
 )
 from .config import (
@@ -86,8 +87,6 @@ def run_commit(target: str | None,
                 reasoning: str | None = None, maxout: int | None = None,
                 extra_context: str | None = None,
                 sources: InvocationSources = InvocationSources()) -> int:
-    from . import cli as _cli  # cli imports this module
-
     target_dir = Path(target).expanduser() if target else Path.cwd()
     if not target_dir.is_absolute():
         target_dir = Path.cwd() / target_dir
@@ -138,7 +137,7 @@ def run_commit(target: str | None,
     if extra_context and extra_context.strip():
         prompt += f'\n\nOperator context:\n{extra_context.strip()}'
 
-    return _cli._run_prompt(
+    return prompt_run.run(
         prompt,
         model=model,
         debug=debug,

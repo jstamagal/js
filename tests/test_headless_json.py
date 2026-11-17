@@ -10,7 +10,7 @@ import ai
 import ai.types.usage
 import pytest
 
-from js import cli, runtime, usage
+from js import cli, conversation, runtime, usage
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit.core import ToolContext
 
@@ -274,12 +274,12 @@ def test_prompt_load_failure_starts_then_errors_before_continue_hint(monkeypatch
 
 @pytest.mark.parametrize('flag', ['--json', '--json-stream'])
 def test_final_usage_includes_tail_compaction(monkeypatch, capsys, flag):
-    def compact(cfg, state):
+    async def compact(cfg, state):
         usage.record(ai.types.usage.Usage(input_tokens=1000, output_tokens=20),
                      model=cfg.model, provider_id=cfg.provider_id,
                      session_file=cfg.session_file)
 
-    monkeypatch.setattr(cli, '_maybe_auto_compact', compact)
+    monkeypatch.setattr(conversation, 'maybe_auto_compact_async', compact)
     code, events, error = _run(monkeypatch, capsys, [_reply('done', use=(10, 5))],
                                ['-p', 'hello', flag])
     assert code == 0, error

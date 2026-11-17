@@ -52,8 +52,9 @@ sync and run on executor threads. `js/model_client.py` is the model I/O boundary
 fan-out), and a turn's model call and streamed reply live in
 `js/turn_call.py` and `js/turn_stream.py`; `js/cli.py` is `main`: it reads
 the command line (`js/command_line.py` defines it) and picks the mode, each
-side mode (`--bench`, `--commit`, `--list-*`) living in a module of its own, and `js/repl.py` is the interactive REPL (startup,
-the input loop, the turn queue, steering); `js/run_assembly.py` turns config,
+side mode (`--bench`, `--commit`, `--list-*`) living in a module of its own, `js/repl.py` is the interactive REPL (startup,
+the input loop, the turn queue, steering), and `js/prompt_run.py` is the `-p`
+run (its steps, the answer, the Continue line); `js/run_assembly.py` turns config,
 agent and model into a settled run, the ready-to-run turn that `-p`, the REPL
 at startup, `--bench` and swarm agents start from; `js/conversation.py` keeps
 a session's history across turns, and `-p` and swarm agents run their turns
