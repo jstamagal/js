@@ -5,10 +5,8 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import os
-import threading
 import time
-from collections import deque
-from contextlib import asynccontextmanager, contextmanager, nullcontext
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -26,6 +24,7 @@ from .. import (
 from ..events import RefusableOnly
 from ..mcp_config import resolve as resolve_mcp
 from ..text_bytes import cap_text
+from ..toolkit import subagent_gate
 from ..usage import session_key
 from . import task_jobs
 from .core import Tool, ToolContext
@@ -56,132 +55,6 @@ _LAUNCH_KIND: ContextVar[str] = ContextVar("js_subagent_launch_kind", default="t
 # subagent_start fields, it returns the window (`subagent_windows.SubagentWindow`)
 # or None when none is free. The REPL screen sets it; None means no windows.
 window_opener: ContextVar[Any] = ContextVar("js_subagent_window_opener", default=None)
-
-
-class _Waiter:
-    __slots__ = ("loop", "future", "limit", "granted")
-
-    def __init__(self, loop: asyncio.AbstractEventLoop, limit: int) -> None:
-        self.loop = loop
-        self.future: asyncio.Future[None] = loop.create_future()
-        self.limit = limit
-        self.granted = False
-
-
-class SubagentGate:
-    """Process-wide count of running subagents, held to SUBAGENT_WORKERS_MAX.
-
-    Subagents run on more than one event loop (the REPL's, a `-p` run's, a
-    background job's private loop), so the count sits behind a thread lock and
-    a waiter is woken on its own loop. Waiters are served in arrival order.
-    Each acquire carries the limit its caller's settings give."""
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._running = 0
-        self._waiters: deque[_Waiter] = deque()
-
-    @property
-    def running(self) -> int:
-        return self._running
-
-    async def acquire(self, limit: int) -> None:
-        loop = asyncio.get_running_loop()
-        with self._lock:
-            if not self._waiters and self._running < limit:
-                self._running += 1
-                return
-            waiter = _Waiter(loop, limit)
-            self._waiters.append(waiter)
-        try:
-            await waiter.future
-        except BaseException:
-            with self._lock:
-                if waiter.granted:
-                    self._release_locked()
-                elif waiter in self._waiters:
-                    self._waiters.remove(waiter)
-                    self._wake_locked()
-            raise
-
-    def release(self) -> None:
-        with self._lock:
-            self._release_locked()
-
-    def _release_locked(self) -> None:
-        self._running -= 1
-        self._wake_locked()
-
-    def _wake_locked(self) -> None:
-        while self._waiters and self._running < self._waiters[0].limit:
-            waiter = self._waiters.popleft()
-            waiter.granted = True
-            self._running += 1
-            try:
-                waiter.loop.call_soon_threadsafe(_grant, waiter.future)
-            except RuntimeError:  # its loop is closed: nobody is waiting
-                waiter.granted = False
-                self._running -= 1
-
-
-def _grant(future: asyncio.Future[None]) -> None:
-    if not future.done():
-        future.set_result(None)
-
-
-_GATE = SubagentGate()
-
-
-@dataclass
-class _Slot:
-    """The gate slot one running subagent holds. While it waits on its own
-    subagents it lends the slot to them, so a parent blocked on its children
-    never holds a place they need."""
-
-    limit: int
-    held: bool = True
-    lent: int = 0
-    # False once its subagent run is over; a later turn in its window runs
-    # outside the gate.
-    active: bool = True
-
-
-# The slot of the subagent this coroutine runs in; None in the main agent.
-_SLOT: ContextVar[_Slot | None] = ContextVar("js_subagent_slot", default=None)
-
-
-@asynccontextmanager
-async def _lend_slot():
-    """Give up this subagent's slot while it waits on subagents it started."""
-    slot = _SLOT.get()
-    if slot is None or not slot.active:
-        yield
-        return
-    slot.lent += 1
-    if slot.held:
-        slot.held = False
-        _GATE.release()
-    try:
-        yield
-    except Exception:
-        await _take_back(slot)
-        raise
-    except BaseException:
-        # Cancelled: the subagent is ending, it needs no slot to end.
-        slot.lent -= 1
-        raise
-    else:
-        await _take_back(slot)
-
-
-async def _take_back(slot: _Slot) -> None:
-    slot.lent -= 1
-    if slot.lent == 0 and not slot.held and slot.active:
-        await _GATE.acquire(slot.limit)
-        if slot.lent or slot.held or not slot.active:
-            _GATE.release()
-        else:
-            slot.held = True
 
 
 def _route(model: str, provider: str | None) -> str:
@@ -667,9 +540,9 @@ def _prepare_fan_out(
     def _coro(idx: int, item: Any):
         async def _gated() -> str:
             _LAUNCH_KIND.set(kind)
-            await _GATE.acquire(limit)
-            slot = _Slot(limit)
-            _SLOT.set(slot)
+            await subagent_gate.GATE.acquire(limit)
+            slot = subagent_gate.Slot(limit)
+            subagent_gate.SLOT.set(slot)
             try:
                 return await worker(
                     idx, total, item, context, parent_cfg, full_registry, agent_id, session_id, model,
@@ -679,7 +552,7 @@ def _prepare_fan_out(
                 slot.active = False
                 if slot.held:
                     slot.held = False
-                    _GATE.release()
+                    subagent_gate.GATE.release()
 
         return _gated()
 
@@ -827,7 +700,7 @@ async def task_async(
             limit = _wait_limit(timeout)
             # A wait to the end lends this subagent's slot to the job; a timed
             # wait keeps it, so it returns when its time is up.
-            async with _lend_slot() if limit is None else nullcontext():
+            async with subagent_gate.lend_slot() if limit is None else nullcontext():
                 await task_jobs.wait_async(job, limit)
         return task_jobs.report(job, action, was_running=was_running)
     agent_id = str(agent_id).strip()
@@ -840,7 +713,7 @@ async def task_async(
     indexed_items, coro_factory = prepared
     if _flag(background):
         return _start_background(indexed_items, coro_factory, agent_id, session_id, context, on_loop=True)
-    async with _lend_slot():
+    async with subagent_gate.lend_slot():
         results = await _fan_out_async(indexed_items, coro_factory)
     context.invalidate_search_cache()
     return _assemble_task_results(results, agent_id, session_id)

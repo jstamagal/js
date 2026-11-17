@@ -15,7 +15,7 @@ import types
 import pytest
 
 from js import settings
-from js.toolkit import ToolContext, registry as registry_mod, subagents
+from js.toolkit import ToolContext, registry as registry_mod, subagent_gate, subagents
 from js.toolkit.registry import build_default_registry, select
 
 # --------------------------------------------------------------------------
@@ -115,11 +115,11 @@ def _nested_probe(cap: int, depth_max: int, width: int, seen: list[int]):
         child.subagent_max_workers = cap
         child.task_max_depth = depth_max
         child.task_depth = getattr(context, "task_depth", 0) + 1
-        seen.append(subagents._GATE.running)
+        seen.append(subagent_gate.GATE.running)
         await asyncio.sleep(0.005)
         if child.task_depth < depth_max:
             await subagents.task_async(tasks=[f"t{n}" for n in range(width)], agent_id="worker", context=child)
-        seen.append(subagents._GATE.running)
+        seen.append(subagent_gate.GATE.running)
         return "done"
 
     return probe
@@ -141,7 +141,7 @@ def test_worker_cap_holds_across_the_whole_tree():
     # 4 + 16 + 64 + 256 subagents ran, two samples each.
     assert len(seen) == 2 * (4 + 16 + 64 + 256)
     assert max(seen) <= 4
-    assert subagents._GATE.running == 0
+    assert subagent_gate.GATE.running == 0
 
 
 def test_parent_waiting_on_children_lends_its_slot():
@@ -156,12 +156,12 @@ def test_parent_waiting_on_children_lends_its_slot():
 
     assert asyncio.run(run()).count("done") == 2
     assert max(seen) <= 1
-    assert subagents._GATE.running == 0
+    assert subagent_gate.GATE.running == 0
 
 
 def test_cancelled_waiter_gives_back_nothing_it_did_not_take():
     async def run():
-        gate = subagents.SubagentGate()
+        gate = subagent_gate.SubagentGate()
         await gate.acquire(1)
         waiter = asyncio.ensure_future(gate.acquire(1))
         await asyncio.sleep(0)
@@ -177,7 +177,7 @@ def test_cancelled_waiter_gives_back_nothing_it_did_not_take():
 
 
 def test_a_waiter_on_a_closed_loop_is_not_counted_twice():
-    gate = subagents.SubagentGate()
+    gate = subagent_gate.SubagentGate()
     main = asyncio.new_event_loop()
     other = asyncio.new_event_loop()
     try:
@@ -216,10 +216,10 @@ def test_a_background_job_that_fails_hands_back_every_slot():
     with pytest.raises(snippets.SnippetError):
         subagents.task_jobs.wait(job, 5)
     deadline = time.monotonic() + 5
-    while subagents._GATE.running and time.monotonic() < deadline:
+    while subagent_gate.GATE.running and time.monotonic() < deadline:
         time.sleep(0.02)
 
-    assert subagents._GATE.running == 0
+    assert subagent_gate.GATE.running == 0
 
 
 def test_a_timed_wait_returns_on_time_while_its_job_is_queued():
@@ -249,7 +249,7 @@ def test_a_timed_wait_returns_on_time_while_its_job_is_queued():
 
     assert result == "parent done"
     assert waited and waited[0] < 0.3
-    assert subagents._GATE.running == 0
+    assert subagent_gate.GATE.running == 0
 
 
 # --------------------------------------------------------------------------
