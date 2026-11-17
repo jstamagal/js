@@ -305,10 +305,9 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
                 sources: InvocationSources = InvocationSources(), tool_context=None,
                 files: list[str] | None = None, stdin_attachment: bytes | None = None,
                 stats_json: str | None = None, stats_csv: str | None = None,
-                caller_key: str | None = None, announce_generated: bool | None = None,
+                caller_key: str | None = None,
                 events: headless.JsonEvents | None = None,
-                config_pins: bool = False,
-                call_stats: list[dict] | None = None, opened: dict | None = None) -> int:
+                config_pins: bool = False, opened: dict | None = None) -> int:
     """A ``prompt`` of None runs the agent's startup exchanges as the whole
     run: the last one is the turn whose answer is printed."""
     # @path in the prompt attaches like it does in the REPL, read here before
@@ -331,8 +330,6 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
     except ValueError as e:
         msgs.warn(msgs.FAILED, error=e)
         return 2
-    if announce_generated is None:
-        announce_generated = save and session is None and os.environ.get("JS_SESSION") is None
     # A resumed session continues on the model, provider and reasoning of its
     # last stamp unless this run names them. Read before this start records its own.
     resumed = run_assembly.resume(cfg, model, reasoning_override)
@@ -341,7 +338,7 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
         session_catalog.activate_saved_session(
             cfg,
             caller_key=caller_key,
-            announce_generated=announce_generated,
+            announce_generated=session is None and os.environ.get("JS_SESSION") is None,
             model=model,
         )
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
@@ -424,8 +421,7 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
     with transcript_mod.transcript_stdio(telemetry):
         hooks = _prompt_hooks(cfg, jsrc_paths(Path(getattr(cfg, "project_dir", None) or Path.cwd()), sources))
     run_state = _run_state(cfg, system, messages, hooks)
-    if call_stats is None:
-        call_stats = []
+    call_stats: list[dict] = []
     turn_kwargs = settled.turn_kwargs(call_stats=call_stats, event_hooks=hooks)
     if events is not None:
         turn_kwargs["event_sink"] = events.runtime_event
@@ -1194,15 +1190,10 @@ def _run_headless(args: argparse.Namespace, setup: Setup, *, exchanges_only: boo
         stdin_text = _read_stdin_if_piped()
         prompt = args.prompt if not stdin_text.strip() else f"{args.prompt.rstrip()}\n\n{stdin_text.strip()}"
     session_catalog.session_leases.start["mode"] = "-p" if args.prompt is not None or exchanges_only else "pipe"
-    generated_session = (
-        not args.no_save
-        and args.session is None
-        and os.environ.get("JS_SESSION") is None
-    )
     run = _run_prompt_json if (args.json or args.json_stream) else _run_prompt
     result = run(prompt, model=args.model, debug=args.debug, debug_file=args.debug_file,
                  agent=args.agent, session=args.session, save=not args.no_save,
-                 caller_key=args.session_key, announce_generated=generated_session,
+                 caller_key=args.session_key,
                  reasoning=args.reasoning, maxout=args.max_out,
                  show_continue=not args.quiet,
                  sources=setup.sources,
