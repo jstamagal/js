@@ -5,7 +5,7 @@ conftest installs."""
 
 from __future__ import annotations
 
-from test_command_table import _launch, _run
+from repl_driver import record_turns, type_into_js
 
 from js import settings, skill_picker
 
@@ -25,13 +25,14 @@ def test_skill_picker_accepts_context_keymaps(tmp_path):
 
 def test_skills_command_writes_the_picked_names_into_the_setting(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    cfg, state, _errors = _launch(tmp_path)
     monkeypatch.setattr(skill_picker, "pick_skills", lambda cwd, disabled: ("alpha",))
+    turns = record_turns(monkeypatch)
 
-    _run(["/skills"], state, cfg)
+    assert type_into_js(monkeypatch, ["/skills", "hello"]) == 0
 
-    assert settings.knob(state.settings, "SKILLS_DISABLED") == ["alpha"]
-    assert state.config_for_turn(cfg).skills_disabled == ("alpha",)
+    [turn] = turns
+    assert settings.knob(turn.settings, "SKILLS_DISABLED") == ["alpha"]
+    assert turn.cfg.skills_disabled == ("alpha",)
 
 
 def test_skill_picker_accepts_its_view_and_streams(monkeypatch, tmp_path):
