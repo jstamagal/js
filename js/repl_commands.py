@@ -20,7 +20,6 @@ from pathlib import Path
 from . import (
     compaction,
     context_window,
-    display as display_mod,
     events,
     fset,
     hookexec,
@@ -35,6 +34,7 @@ from . import (
     prompt_commands,
     providers,
     repl_state,
+    resume_view,
     routing,
     run_assembly,
     runtime,
@@ -668,7 +668,7 @@ def _cmd_copy(arg: str, state: ReplState, cfg: Config) -> str | None:
         return None
     n = int(arg)
     answers = [text for m in state.messages if m.get("role") == "assistant"
-               if (text := display_mod._content_text(m.get("content"))).strip()]
+               if (text := resume_view.content_text(m.get("content"))).strip()]
     if len(answers) < n:
         msgs.say(msgs.COPY_NOTHING, n=n)
         return None

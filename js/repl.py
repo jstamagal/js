@@ -55,6 +55,7 @@ from . import (
     repl_commands,
     repl_state,
     replcomplete,
+    resume_view,
     run_assembly,
     runtime,
     screen,
@@ -701,7 +702,7 @@ def _show_resume(state: ReplState, telemetry: runtime.Telemetry, width: int) -> 
     replay = runtime.Telemetry(None)
     replay.exchange_factory = getattr(telemetry, "exchange_factory", None)
     context = SimpleNamespace(config=SimpleNamespace(settings=live))
-    for kind, part in display_mod.resume_parts(state.messages, count if isinstance(count, int) else 0,
+    for kind, part in resume_view.resume_parts(state.messages, count if isinstance(count, int) else 0,
                                                width=width, markdown=display_mod.markdown_enabled(live)):
         if kind == "text":
             console.settle_tool_trace(replay)

@@ -7,7 +7,7 @@ import asyncio
 import io
 import re
 
-from js import debug_trace, display, screen, text_layout, transcript
+from js import debug_trace, display, resume_view, screen, text_layout, transcript
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
@@ -223,7 +223,7 @@ def test_a_tool_message_without_an_id_is_not_shown_under_a_call_without_one():
             {"id": None, "function": {"name": "shell", "arguments": "{\"command\": \"ls\"}"}}]},
         {"role": "tool", "tool_call_id": None, "content": "ORPHAN_RESULT"},
     ]
-    out = display.render_exchanges(messages, 1, width=80, level=3, preview=12, markdown=False)
+    out = resume_view.render_exchanges(messages, 1, width=80, level=3, preview=12, markdown=False)
     assert "ORPHAN_RESULT" not in out
 
 
