@@ -1,20 +1,82 @@
 """Every js command line js writes or rewrites, word for word."""
 from __future__ import annotations
 
+import argparse
+from dataclasses import fields
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from js import cli, home_cli, loop_controller, paths, runtime, sampling, swarm
+from js import cli, command_line, home_cli, loop_controller, paths, runtime, sampling, swarm
 from js.cli_options import RunOptions, invocation
 
 
 def _parse(argv: list[str]):
     """`argv` as js reads it; a command line js refuses fails the test."""
-    parser = cli._build_parser()
+    parser = command_line.parser()
     cli._refuse_glued_short_options(parser, argv)
     return parser.parse_args(argv)
+
+
+@pytest.mark.parametrize("argv", [
+    ["-p", "hello", "--model", "m"], ["-lp", "x"], ["-lp=x"], ["-lp"], ["--prompt=x y"], ["-p=x"], ["-pfoo"],
+    ["-p", "-"], ["-p", "-4.5"], ["-p", "-v is broken"], ["-p", "-a b"], ["-p", "--model", "m"], ["-p", ""],
+    ["-s", "--model", "m"], ["-s=name"], ["--session", "-5"], ["--session", "-"], ["--swarm", "-x y"],
+    ["-C", "-"], ["--max-out", "5"], ["--extra", "a=1", "--extra", "b=2", "-f", "x", "-f", "y"],
+    ["-qn", "--last", "-d"], ["--commit", "--", "--last"], ["--commit", "msg"], ["--you-are"],
+    ["--you-are", "--chat"], ["--you-are", "voice"], ["--loop", "2h", "-p", "two words"], ["--loop"],
+    ["--system-prompt", "--last x"], ["--extra", "x=--loop", "--loop=3"], ["--home", "/h", "--json"],
+])
+def test_read_takes_the_values_the_parser_takes(argv):
+    js = command_line.parser()
+    parsed = vars(js.parse_args(argv))
+    args = command_line.read(argv)
+    assert command_line.words(args) == argv
+    actions = {action.dest: action for action in js._actions}
+    taken: dict = {}
+    for arg in args:
+        if arg.dest is None:
+            continue
+        action = actions[arg.dest]
+        if action.nargs == 0:
+            value = True
+        elif arg.value is None:
+            value = action.const
+        else:
+            value = action.type(arg.value) if action.type else arg.value
+        if isinstance(action, argparse._AppendAction):
+            taken.setdefault(arg.dest, []).append(value)
+        else:
+            taken[arg.dest] = value
+    assert {dest: parsed[dest] for dest in taken} == taken
+    positional = [arg.value for arg in args if arg.option is None]
+    if positional[:1] == ["--"]:
+        positional = positional[1:]
+    assert parsed["target"] == (positional[0] if positional else None)
+
+
+def test_argv_gives_each_option_its_value():
+    words = command_line.argv(("--chat", True), ("--no-env", False), ("--tools", None), ("--you-are", ""),
+                              ("--append-system-prompt", ("a", "b c")), ("-C", "/w"), ("--max-out", 5))
+    parsed = command_line.parser().parse_args(words)
+    assert (parsed.chat, parsed.no_env, parsed.tools, parsed.you_are) == (True, False, None, "")
+    assert (parsed.append_system_prompt, parsed.cd, parsed.max_out) == (["a", "b c"], "/w", 5)
+    assert "--no-env" not in words and "--tools" not in words
+
+
+@pytest.mark.parametrize("options", [
+    RunOptions(system_prompt="S", append_system_prompt=("a", "b c"), no_env=True, chat=True, tools="read"),
+    RunOptions(you_are="", no_agents_md=True, no_skills=True, no_mcp=True, no_tools=True),
+    RunOptions(system_prompt_file="/p f"),
+    RunOptions(),
+])
+def test_options_argv_reproduces_the_options(options):
+    parsed = command_line.parser().parse_args(command_line.options_argv(options))
+    for field in fields(options):
+        if field.name != "agent":
+            value = getattr(parsed, field.name)
+            assert (tuple(value) if isinstance(value, list) else value) == getattr(options, field.name)
 
 
 @pytest.mark.parametrize(("argv", "sibling"), [
