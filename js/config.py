@@ -122,10 +122,11 @@ class Config(_turn_settings.ConfigSettings):
     A program can build one in code instead: ``model`` is the one required
     argument, and every other field has a default. Built that way, the
     session file is os.devnull, so no session is written; ``agent_dir`` is
-    the agent's state directory and ``prompts_dir`` its stock agent directory,
-    neither of them created. Real configurations report every agent layer in
-    ``prompts_dir``; the per-turn settings are the `defaults/jsrc` values
-    unless ``settings`` holds them."""
+    the agent's state directory, not created. ``prompts_dir`` is what the
+    agent's prompt is assembled from: the agent's directories in
+    ``prompt_roots`` (`paths.agent_dirs`), or with no roots its stock agent
+    directory. The per-turn settings are the `defaults/jsrc` values unless
+    ``settings`` holds them."""
 
     agent_id: str = field(default_factory=lambda: _settings.default_value("DEFAULT_AGENT"))
     agent_dir: Path = None  # type: ignore[assignment]  # None: the agent's state directory
@@ -138,7 +139,7 @@ class Config(_turn_settings.ConfigSettings):
     history_file: Path = field(default_factory=lambda: _paths.prompt_history_file())
     sessions_dir: Path = field(default_factory=lambda: _session_store.folder_for(Path.cwd().resolve(strict=False)))
     session_file: Path = field(default_factory=lambda: Path(os.devnull))
-    prompts_dir: Path | tuple[Path, ...] = None  # type: ignore[assignment]  # None: defaults/agents/<agent_id>
+    prompts_dir: Path | tuple[Path, ...] = None  # type: ignore[assignment]  # None: found in prompt_roots
     provider_headers: dict[str, str] = field(default_factory=dict)
     explicit_model: bool = False  # MODEL was set by JS_MODEL or config (not the built-in default); gates --agent agent.yaml model
     explicit_provider: bool = False  # PROVIDER was set by config/env/CLI extras, not inferred from a model prefix
@@ -165,7 +166,8 @@ class Config(_turn_settings.ConfigSettings):
         if self.agent_dir is None:
             object.__setattr__(self, "agent_dir", _paths.state_root() / self.agent_id)
         if self.prompts_dir is None:
-            object.__setattr__(self, "prompts_dir", _paths.defaults_dir() / "agents" / self.agent_id)
+            object.__setattr__(self, "prompts_dir", _paths.agent_dirs(self.agent_id, self.prompt_roots)
+                               if self.prompt_roots else _paths.defaults_dir() / "agents" / self.agent_id)
         # A key that is not a setting (an old name such as retry_attempts)
         # would be read by nothing; refuse it as `set` does.
         unknown = _unknown_setting_keys(self.settings)
@@ -584,7 +586,6 @@ def from_env(
         sessions_dir=sessions_dir,
         session_file=session_file,
         history_file=history_file,
-        prompts_dir=_paths.agent_dirs(agent_id, prompt_roots),
         vision_enabled=vision_enabled_for_model(model, js_root_settings),
         settings=js_root_settings,
         prompt_roots=prompt_roots,

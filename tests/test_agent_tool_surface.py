@@ -200,12 +200,7 @@ def test_project_dir_missing_manifest_falls_back_to_lower_layer_manifest(tmp_pat
     (project_root / "myagent").mkdir()
     (project_root / "myagent" / "01-prompt.md").write_text("PROJECT PROMPT\n", encoding="utf-8")
 
-    spec = persona.load_agent_prompt_spec(
-        "myagent",
-        repo_prompts_root=repo_root,
-        global_agents_root=global_root,
-        project_agents_root=project_root,
-    )
+    spec = persona.load_agent_prompt_spec("myagent", (repo_root, global_root, project_root))
 
     assert spec.system == "PROJECT PROMPT\n"
     assert spec.tool_selectors == ("wiki_*:lazy",)
@@ -230,12 +225,7 @@ def test_project_dir_with_explicit_empty_manifest_is_not_overridden_by_fallback(
     (project_root / "myagent" / "agent.yaml").write_text("tools: []\n", encoding="utf-8")
     (project_root / "myagent" / "01-prompt.md").write_text("PROJECT PROMPT\n", encoding="utf-8")
 
-    spec = persona.load_agent_prompt_spec(
-        "myagent",
-        repo_prompts_root=repo_root,
-        global_agents_root=global_root,
-        project_agents_root=project_root,
-    )
+    spec = persona.load_agent_prompt_spec("myagent", (repo_root, global_root, project_root))
 
     assert spec.system == "PROJECT PROMPT\n"
     assert spec.tool_selectors == ()

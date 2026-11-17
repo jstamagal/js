@@ -51,9 +51,7 @@ def verify(agent: str | None = None) -> list[str]:
         location = ", ".join(map(str, directories))
 
         def validate_agent(agent_id=agent_id, directories=directories, location=location):
-            spec = persona.load_agent_prompt_spec(
-                agent_id, repo_prompts_root=roots[0], global_agents_root=roots[1],
-                project_agents_root=roots[2])
+            spec = persona.load_agent_prompt_spec(agent_id, roots)
             persona.load_benchmarks(directories)
             if config is not None:
                 policy.expand(spec.tool_selectors, config, location)

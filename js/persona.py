@@ -297,22 +297,33 @@ def _prompt_files(sources: Path | tuple[Path, ...] | list[Path]) -> list[Path]:
 
 def load_agent_prompt_spec(
     agent_id: str,
+    roots: tuple[Path, ...],
     *,
-    repo_prompts_root: Path,
-    global_agents_root: Path,
-    project_agents_root: Path,
     agents_files: list[Path] | tuple[Path, ...] = (),
     env: bool = True,
     prompt: str | None = None,
 ) -> PromptSpec:
-    """Assemble every agent filename from stock, home and project layers."""
-    directories = paths.agent_dirs(agent_id, (repo_prompts_root, global_agents_root, project_agents_root))
-    spec = load_prompt_spec(directories, env=env, prompt=prompt)
+    """Assemble every agent filename from its directories in ``roots``,
+    lowest layer first, with ``agents_files`` ahead of the system prompt."""
+    spec = load_prompt_spec(paths.agent_dirs(agent_id, roots), env=env, prompt=prompt)
+    return _with_agents_files(spec, agents_files)
+
+
+def _with_agents_files(spec: PromptSpec, agents_files) -> PromptSpec:
     agents_parts = _existing_text_parts(list(agents_files))
     if not agents_parts:
         return spec
-    system = "\n\n".join([*agents_parts, spec.system.rstrip()]).rstrip() + "\n"
-    return _with_system(spec, system)
+    return _with_system(spec, "\n\n".join([*agents_parts, spec.system.rstrip()]).rstrip() + "\n")
+
+
+def config_roots(cfg) -> tuple[Path, ...]:
+    """The roots ``cfg`` finds agents in: its ``prompt_roots``, or for a Config
+    built in code with none, the directory holding its ``prompts_dir``."""
+    roots = tuple(getattr(cfg, "prompt_roots", ()) or ())
+    if roots:
+        return roots
+    first = cfg.prompts_dir if isinstance(cfg.prompts_dir, Path) else cfg.prompts_dir[0]
+    return (first.parent,)
 
 def load_agent_manifest(manifest_path: Path) -> PromptSpec:
     """One agent.yaml as a PromptSpec with an empty system prompt."""
@@ -408,7 +419,6 @@ def load_configured_prompt_spec(cfg, *, expand: bool = True) -> PromptSpec:
     model and provider applied."""
     from .cli_options import current
     options = current()
-    roots = tuple(getattr(cfg, "prompt_roots", ()))
     if options.you_are is not None:
         # _expand_spec writes the whole system prompt.
         spec = PromptSpec(system="", tool_selectors=())
@@ -416,11 +426,6 @@ def load_configured_prompt_spec(cfg, *, expand: bool = True) -> PromptSpec:
     if options.chat:
         if options.system_prompt_file is not None or options.system_prompt is not None:
             system = options.prompt_text()
-        elif options.agent is not None and len(roots) >= 3:
-            system = load_agent_prompt_spec(
-                cfg.agent_id, repo_prompts_root=roots[0], global_agents_root=roots[1],
-                project_agents_root=roots[2], env=False,
-            ).system
         elif options.agent is not None:
             system = load_prompt_spec(cfg.prompts_dir, env=False).system
         else:
@@ -428,35 +433,15 @@ def load_configured_prompt_spec(cfg, *, expand: bool = True) -> PromptSpec:
         spec = PromptSpec(system=system, tool_selectors=())
         return _finish_configured_spec(replace(spec, model_profile=_profile_for(spec, cfg)), cfg, expand)
     if options.system_prompt_file is not None:
-        manifest_roots = roots or paths.agent_roots()[:2]
-        files = _prompt_files(paths.agent_dirs('defaultagent', manifest_roots))
-        manifest = next((path for path in files if path.name == AGENT_MANIFEST), None)
-        base = load_agent_manifest(manifest) if manifest else PromptSpec(system="", tool_selectors=())
+        base = load_agent_prompt_spec('defaultagent', getattr(cfg, "prompt_roots", ()) or paths.agent_roots()[:2], env=False)
         spec = PromptSpec(system=options.prompt_text(), tool_selectors=base.tool_selectors, models=base.models)
         return _finish_configured_spec(_with_model_profile(spec, cfg, None), cfg, expand)
     env = not options.skips_env
     agents_files = () if options.skips_agents_md else tuple(getattr(cfg, "agents_files", ()))
 
-    def load(agent_id: str, prompts_dir: Path) -> PromptSpec:
-        if len(roots) >= 3:
-            return load_agent_prompt_spec(
-                agent_id,
-                repo_prompts_root=roots[0],
-                global_agents_root=roots[1],
-                project_agents_root=roots[2],
-                agents_files=agents_files,
-                env=env,
-                prompt=options.system_prompt,
-            )
-        spec = load_prompt_spec(prompts_dir, env=env, prompt=options.system_prompt)
-        agents_parts = _existing_text_parts(list(agents_files))
-        if agents_parts:
-            spec = _with_system(spec, "\n\n".join([*agents_parts, spec.system.rstrip()]).rstrip() + "\n")
-        return spec
-
-    spec = load(getattr(cfg, "agent_id", ""), cfg.prompts_dir)
-    fallback_root = cfg.prompts_dir.parent if isinstance(cfg.prompts_dir, Path) else cfg.prompts_dir[0].parent
-    spec = _with_model_profile(spec, cfg, lambda agent_id: load(agent_id, fallback_root / agent_id).system)
+    spec = _with_agents_files(load_prompt_spec(cfg.prompts_dir, env=env, prompt=options.system_prompt), agents_files)
+    spec = _with_model_profile(spec, cfg, lambda agent_id: load_agent_prompt_spec(
+        agent_id, config_roots(cfg), agents_files=agents_files, env=env, prompt=options.system_prompt).system)
     return _finish_configured_spec(spec, cfg, expand)
 
 
@@ -527,16 +512,6 @@ def _finish_configured_spec(spec: PromptSpec, cfg, expand: bool) -> PromptSpec:
     if expand:
         spec = _expand_spec(spec, cfg)
     return spec
-
-
-def resolve_agent_prompt_dir(cfg) -> Path | tuple[Path, ...]:
-    """The prompt directory `load_configured_prompt_spec` would load for this
-    agent (project > global > repo). --bench reads its NN-benchmark.md files from
-    the same resolved dir as the persona."""
-    roots = tuple(getattr(cfg, "prompt_roots", ()))
-    if len(roots) >= 3:
-        return paths.agent_dirs(cfg.agent_id, roots)
-    return cfg.prompts_dir
 
 
 def load_benchmarks(prompts_dir: Path | tuple[Path, ...]) -> list[Benchmark]:

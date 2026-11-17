@@ -328,6 +328,7 @@ def _worker_session(session_file: Path):
 
 
 def _agent_cfg(parent_cfg: Any, agent: str, session_id: str | None, *, write_latest=None) -> Any:
+    from .. import persona as P
     from ..mcp_config import resolve as resolve_mcp
 
     # The per-agent data dir holds that agent's latest.json and input history.
@@ -337,7 +338,6 @@ def _agent_cfg(parent_cfg: Any, agent: str, session_id: str | None, *, write_lat
     # from the merged settings instead of copying the parent's already-resolved
     # policy.
     agents_root = parent_cfg.agent_dir.parent
-    prompt_roots = tuple(getattr(parent_cfg, "prompt_roots", ()) or (parent_cfg.prompts_dir.parent,))
     agent_dir = agents_root / agent
     parent_file = Path(parent_cfg.session_file)
     if parent_file == Path(os.devnull):
@@ -353,7 +353,7 @@ def _agent_cfg(parent_cfg: Any, agent: str, session_id: str | None, *, write_lat
         agent_dir=agent_dir,
         sessions_dir=sessions_dir,
         session_file=session_file,
-        prompts_dir=paths.agent_dirs(agent, prompt_roots),
+        prompts_dir=paths.agent_dirs(agent, P.config_roots(parent_cfg)),
         mcp=resolve_mcp(parent_cfg.settings, agent),
     )
 
@@ -385,11 +385,10 @@ async def _run_one_task_async(
     agent = agent_id
     task_session_id = global_session_id
     # Validate before reserving a session or changing its latest pointer.
-    prompt_roots = tuple(getattr(parent_cfg, "prompt_roots", ()) or (parent_cfg.prompts_dir.parent,))
     try:
         prompt_spec = P.load_configured_prompt_spec(replace(
             parent_cfg, agent_id=agent,
-            prompts_dir=paths.agent_dirs(agent, prompt_roots),
+            prompts_dir=paths.agent_dirs(agent, P.config_roots(parent_cfg)),
         ), expand=False)
     except (FileNotFoundError, ValueError) as exc:
         return f"ERROR could not load agent {agent!r}: {exc}"

@@ -49,9 +49,7 @@ def test_prompt_spec_uses_most_specific_agent_and_stacks_agents_files(tmp_path):
 
     spec = persona.load_agent_prompt_spec(
         "worker",
-        repo_prompts_root=repo / "prompts",
-        global_agents_root=home / ".js" / "agents",
-        project_agents_root=project / ".js" / "agents",
+        (repo / "prompts", home / ".js" / "agents", project / ".js" / "agents"),
         agents_files=[home / ".js" / "AGENTS.md", home / ".js" / "AGENTS.local.md", project / "AGENTS.md", project / "AGENTS.local.md"],
     )
 
@@ -75,9 +73,7 @@ def test_agent_discovery_unions_roots_with_project_shadowing(tmp_path):
     reg = build_default_registry(prompts_root=[repo, glob, proj])
     same = persona.load_agent_prompt_spec(
         "same",
-        repo_prompts_root=repo,
-        global_agents_root=glob,
-        project_agents_root=proj,
+        (repo, glob, proj),
         agents_files=[],
     )
 

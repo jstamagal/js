@@ -2574,17 +2574,10 @@ def _format_prompt_load_error(cfg, exc: Exception) -> str:
     directory means the named agent doesn't exist anywhere on the search path —
     say so plainly and point at the global agents dir where one is created,
     instead of leaking the raw 'prompts directory missing at <path>'."""
-    if isinstance(exc, FileNotFoundError):
-        try:
-            resolved = P.resolve_agent_prompt_dir(cfg)
-        except Exception:  # noqa: BLE001
-            resolved = None
-        if isinstance(resolved, tuple):
-            return msgs.of_error(exc)
-        if resolved is None or not Path(resolved).is_dir():
-            agents_dir = _paths.global_agents_dir()
-            agent_id = getattr(cfg, "agent_id", "?")
-            return msgs.NO_SUCH_AGENT.said(agent=agent_id, agents_dir=agents_dir, new_dir=agents_dir / agent_id)
+    if isinstance(exc, FileNotFoundError) and isinstance(cfg.prompts_dir, Path) and not cfg.prompts_dir.is_dir():
+        agents_dir = _paths.global_agents_dir()
+        agent_id = getattr(cfg, "agent_id", "?")
+        return msgs.NO_SUCH_AGENT.said(agent=agent_id, agents_dir=agents_dir, new_dir=agents_dir / agent_id)
     return msgs.of_error(exc)
 
 
@@ -3174,7 +3167,7 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         msgs.warn(msgs.FAILED, error=e)
         return 2
     try:
-        benchmarks = P.load_benchmarks(P.resolve_agent_prompt_dir(cfg))
+        benchmarks = P.load_benchmarks(cfg.prompts_dir)
     except (FileNotFoundError, ValueError) as e:
         msgs.warn(msgs.FAILED, error=_format_prompt_load_error(cfg, e))
         return 2

@@ -2,11 +2,10 @@
 (ALL-CLAIMS persona.py:241-249 HIGH, :125-127 LOW)."""
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from js import persona
+from js.config import Config
 
 
 @pytest.fixture
@@ -21,13 +20,11 @@ def layers(tmp_path):
 
 
 def _spec(layers):
-    repo, global_root, project = layers
-    return persona.load_agent_prompt_spec(
-        "x", repo_prompts_root=repo, global_agents_root=global_root, project_agents_root=project)
+    return persona.load_agent_prompt_spec("x", layers)
 
 
 def _cfg(layers):
-    return SimpleNamespace(agent_id="x", prompt_roots=layers, agents_files=())
+    return Config(model="m", agent_id="x", prompt_roots=layers)
 
 
 @pytest.mark.parametrize("name", ["01-benchmark.md", "benchmark.md", "01-user.md", "01-agent.md"])
@@ -46,14 +43,14 @@ def test_seed_only_layer_keeps_its_seed_over_the_lower_one(layers):
 
 def test_benchmark_only_layer_is_still_where_bench_reads(layers):
     (layers[2] / "x" / "01-benchmark.md").write_text("PROJECT BENCH\n", encoding="utf-8")
-    chosen = persona.resolve_agent_prompt_dir(_cfg(layers))
+    chosen = _cfg(layers).prompts_dir
     assert [b.prompt for b in persona.load_benchmarks(chosen)] == ["PROJECT BENCH"]
 
 
 def test_zero_benchmark_with_frontmatter_is_a_benchmark_not_a_legacy_manifest(layers):
     (layers[2] / "x" / "00-benchmark.md").write_text("---\nmax_tokens: 42\n---\nPROJECT BENCH\n", encoding="utf-8")
     assert _spec(layers).system == "LOWER SYSTEM\n"
-    chosen = persona.resolve_agent_prompt_dir(_cfg(layers))
+    chosen = _cfg(layers).prompts_dir
     assert [(b.prompt, b.max_tokens) for b in persona.load_benchmarks(chosen)] == [("PROJECT BENCH", 42)]
 
 

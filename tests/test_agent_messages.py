@@ -184,9 +184,7 @@ def test_project_message_files_survive_lower_layer_manifest_fallback(tmp_path):
     (repo / "voice" / "agent.yaml").write_text("model: lower-model\n", encoding="utf-8")
     (repo / "voice" / "01-user.md").write_text("LOWER", encoding="utf-8")
     (project / "voice" / "01-user.md").write_text("PROJECT", encoding="utf-8")
-    spec = persona.load_agent_prompt_spec(
-        "voice", repo_prompts_root=repo, global_agents_root=global_root, project_agents_root=project,
-    )
+    spec = persona.load_agent_prompt_spec("voice", (repo, global_root, project))
     assert spec.model == "lower-model"
     assert [exchange.user for exchange in spec.exchanges] == ["PROJECT"]
 

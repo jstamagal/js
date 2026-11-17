@@ -39,14 +39,12 @@ def test_default_agent_overrides_prompt_only_and_can_remove_env(tmp_path, monkey
     override = _write(own / 'agents/defaultagent/01-prompt.md', 'replacement prompt')
     roots = (paths.defaults_dir() / 'agents', own / 'agents', tmp_path / '.js/agents')
     stock = persona.load_prompt_spec(roots[0] / 'defaultagent')
-    spec = persona.load_agent_prompt_spec('defaultagent', repo_prompts_root=roots[0],
-        global_agents_root=roots[1], project_agents_root=roots[2])
+    spec = persona.load_agent_prompt_spec('defaultagent', roots)
     assert 'replacement prompt' in spec.system
     assert spec.tool_selectors == stock.tool_selectors
     assert (roots[0] / 'defaultagent/02-env.md').read_text().strip() in spec.system
     _write(own / 'agents/defaultagent/02-env.md', '')
-    spec = persona.load_agent_prompt_spec('defaultagent', repo_prompts_root=roots[0],
-        global_agents_root=roots[1], project_agents_root=roots[2])
+    spec = persona.load_agent_prompt_spec('defaultagent', roots)
     assert spec.system.strip() == override.read_text()
 
 
@@ -92,8 +90,7 @@ def test_real_config_reports_all_agent_layers(tmp_path, monkeypatch):
 def test_unknown_agent_names_searched_directories(tmp_path):
     roots = tuple(tmp_path / name for name in ('stock', 'home', 'project'))
     with pytest.raises(FileNotFoundError) as error:
-        persona.load_agent_prompt_spec('missing', repo_prompts_root=roots[0],
-            global_agents_root=roots[1], project_agents_root=roots[2])
+        persona.load_agent_prompt_spec('missing', roots)
     assert 'missing' in str(error.value)
     assert all(str(root) in str(error.value) for root in roots)
 
