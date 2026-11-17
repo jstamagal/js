@@ -9,6 +9,7 @@ import json
 import ai
 import ai.types.messages
 import ai.types.usage
+from turn_driver import recording, registry as turn_registry, run
 
 from js import runtime, tool_args
 from js.config import Config
@@ -23,7 +24,6 @@ from js.toolkit import (
     process_net,
     search,
 )
-from js.toolkit.core import call_tool
 
 
 def _tool(name: str, handler=None, params: dict | None = None) -> Tool:
@@ -104,23 +104,20 @@ def test_raw_newlines_and_tabs_inside_argument_strings_parse():
     assert tool_args.repair_jsonish('{"content": "a\nb\tc"}') == {"content": "a\nb\tc"}
 
 
-def test_stringified_edits_with_raw_newlines_reach_patch(tmp_path):
+def test_stringified_edits_with_raw_newlines_reach_patch(monkeypatch, tmp_path):
     target = tmp_path / "f.txt"
     target.write_text("one\ntwo\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
     fs.read("f.txt", context=context)
     patch = next(tool for tool in fs.tools() if tool.name == "patch")
-    registry = ToolRegistry(tools=(patch,), aliases={"patch": "patch"})
     # The inner JSON carries literal newlines inside its string values.
     edits = '[{"old_string": "one\ntwo", "new_string": "ONE\nTWO"}]'
     arguments = json.dumps({"file_path": "f.txt", "edits": edits})
 
-    normalized, stats = runtime._normalize_tool_call_batch(
-        [runtime._PendingToolCall("c1", "patch", [arguments])], registry, limit=10)
+    turn = run(tmp_path, monkeypatch, turn_registry(patch), [[("c1", "patch", arguments)]], context=context)
 
-    assert stats.invalid == 0
-    assert normalized[0].validation_error is None
-    call_tool(patch, json.loads(normalized[0].arguments()), context)
+    assert [e["invalid"] for e in turn.events("tool_call_batch_normalized")] == [0]
+    assert not turn.results()["c1"].startswith("ERROR"), turn.results()["c1"]
     assert target.read_text(encoding="utf-8") == "ONE\nTWO\n"
 
 
@@ -162,18 +159,21 @@ def test_promote_shell_dispatches_shell_and_records_the_repair(monkeypatch, tmp_
     assert [(e["received"], e["tool"]) for e in repaired] == [("promote_shell", "shell")]
 
 
-def test_a_cloaked_name_never_reaches_an_unpublished_tool(tmp_path):
+def test_a_cloaked_name_never_reaches_an_unpublished_tool(monkeypatch, tmp_path):
     # shell is allowed but lazy and not loaded, so it is not on the surface.
-    surface = build_default_registry().select(["shell:lazy", "read:eager"]).lazy_surface(tmp_path)
+    allowed = build_default_registry().select(["shell:lazy", "read:eager"])
+    surface = allowed.lazy_surface(tmp_path)
     frozen = surface.dispatch_registry()
     assert frozen.resolve("shell") is None
     assert frozen.repaired_name("promote_shell") == ""
 
-    normalized, stats = runtime._normalize_tool_call_batch(
-        [runtime._PendingToolCall("c1", "promote_shell", ['{"command": "true"}'])], frozen, limit=10)
-    assert stats.repaired == ()
-    assert normalized[0].unavailable
-    assert normalized[0].validation_error is not None
+    marker = tmp_path / "ran"
+    turn = run(tmp_path, monkeypatch, allowed,
+               [[("c1", "promote_shell", json.dumps({"command": f"touch {marker}"}))]])
+    assert turn.events("tool_name_repaired") == []
+    assert [e["tool"] for e in turn.events("tool_unknown")] == ["promote_shell"]
+    assert turn.results()["c1"].startswith("ERROR")
+    assert not marker.exists()
 
     only_read = _registry(_tool("read"))
     assert only_read.repaired_name("promote_shell") == ""
@@ -182,15 +182,15 @@ def test_a_cloaked_name_never_reaches_an_unpublished_tool(tmp_path):
 # --- `_`-named extras ----------------------------------------------------------
 
 
-def test_undeclared_underscore_properties_are_dropped_before_validation():
-    tool = _tool("tasks", params={"name": {"type": "string"}})
-    registry = ToolRegistry(tools=(tool,), aliases={"tasks": "tasks"})
-    normalized, stats = runtime._normalize_tool_call_batch(
-        [runtime._PendingToolCall("c1", "tasks", ['{"name": "a", "_message": "hi"}'])], registry, limit=10)
+def test_undeclared_underscore_properties_are_dropped_before_validation(monkeypatch, tmp_path):
+    tool, received = recording("tasks", params={"name": {"type": "string"}})
 
-    assert stats.invalid == 0
-    assert normalized[0].validation_error is None
-    assert json.loads(normalized[0].arguments()) == {"name": "a"}
+    turn = run(tmp_path, monkeypatch, turn_registry(tool),
+               [[("c1", "tasks", '{"name": "a", "_message": "hi"}')]])
+
+    assert [e["invalid"] for e in turn.events("tool_call_batch_normalized")] == [0]
+    assert received == [{"name": "a"}]
+    assert [json.loads(args) for _id, _name, args in turn.calls()] == [{"name": "a"}]
 
 
 # --- repeated errors -----------------------------------------------------------
