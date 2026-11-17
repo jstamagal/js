@@ -157,7 +157,7 @@ Test the function that does the thing:
   validation, reading stdin into the prompt, dispatch to a mode, and what a
   launch sets up. A `/command` goes through `repl_commands.handle_command`, a
   one-shot prompt through `prompt_run.run`, and a REPL session through
-  `tests/repl_driver.py` (`run_async` drives `repl._repl_main` over a stub screen).
+  `tests/repl_driver.py` (`run_async` runs a `repl.Repl` over a stub screen).
 - `runtime.run_turn_async()`, through `tests/turn_driver.py`, with fake
   `js.model_client.stream_model_async` stubs for runtime behavior.
 - real tool handlers with `ToolContext(tmp_path)` for tool behavior.

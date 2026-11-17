@@ -1,4 +1,4 @@
-"""The REPL's live state for one session (`repl._repl_state` builds it), the
+"""The REPL's live state for one session (`repl.live_state` builds it), the
 assembly a session runs with and the command-table row (`Command`), what
 carries live settings into the state, and the `on` events a state emits."""
 

@@ -1,9 +1,9 @@
 """Run the REPL headless on a given Config: a stub screen feeds the lines.
 
 `stub_screen` replaces the screen with one that hands each line to the REPL's
-Enter handler and then sends EOF. `run_async` drives `repl._repl_main` over it
-and returns the session's state; `type_into_js` starts js through `cli.main`
-over it. `turn_stub` stands a plain function in for the turn the REPL awaits;
+Enter handler and then sends EOF. `run_async` runs a `repl.Repl` over it and
+returns the session's state; `type_into_js` starts js through `cli.main` over
+it. `turn_stub` stands a plain function in for the turn the REPL awaits;
 `record_turns` stands in one that records each turn.
 """
 
@@ -65,35 +65,13 @@ def record_turns(monkeypatch) -> list[TurnCall]:
 def repl_state(cfg, **state_kwargs):
     """The state `main` would start the REPL with, and the agent's prompt spec."""
     prompt_spec = P.load_configured_prompt_spec(cfg)
-    return repl._repl_state(cfg, prompt_spec, **state_kwargs), prompt_spec
+    return repl.live_state(cfg, prompt_spec, **state_kwargs), prompt_spec
 
 
-def _telemetry(cfg, state):
-    telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
-    repl._sync_telemetry_from_live_settings(cfg, state, telemetry)
-    return telemetry
-
-
-def stub_screen(monkeypatch, lines, *, wait: bool = False, screen_parts: dict | None = None) -> None:
-    """Each line reaches the REPL's Enter handler in order, then EOF once
-    every turn they started has ended (EOF cancels a running turn). The lines
-    arrive back to back, so one typed behind a turn queues or steers; with
-    `wait` each line is sent once the turns before it have ended, as at an
-    idle prompt.
-
-    Once the REPL closes its screen, as `exit` or a chosen `/session` does,
-    no further line is typed and no EOF follows.
-
-    `lines` may instead be an async function; it is called with the Enter
-    handler, and with the ex line's handler `on_ex(line, editor)` as well
-    when it takes two arguments. EOF follows when it returns and the turns
-    have ended."""
-    queues = []
-    turn_consumer = repl._turn_consumer
-
-    def recording_consumer(queue, *args, **kwargs):
-        queues.append(queue)
-        return turn_consumer(queue, *args, **kwargs)
+def _screen(lines, wait, screen_parts, idle):
+    """A `build_screen` for `repl.Repl.run` that types `lines` (see
+    `stub_screen`); `idle()` returns once the turns the lines started have
+    ended."""
 
     class AppStub:
         def __init__(self, on_line, on_eof, on_ex):
@@ -113,14 +91,10 @@ def stub_screen(monkeypatch, lines, *, wait: bool = False, screen_parts: dict | 
                         break
                     await self._on_line(line.strip())
                     if wait:
-                        await self._idle()
-            await self._idle()
+                        await idle()
+            await idle()
             if not self._exited:
                 self._on_eof()
-
-        async def _idle(self):
-            for queue in queues:
-                await queue.join()
 
         def exit(self):
             self._exited = True
@@ -145,24 +119,51 @@ def stub_screen(monkeypatch, lines, *, wait: bool = False, screen_parts: dict | 
             self._out.write(rendered)
             super().answer_commit(rendered)
 
-    def build_app_stub(*, on_line, on_eof, on_ex, **kwargs):
+    def build_screen(*, on_line, on_eof, on_ex, **kwargs):
         if screen_parts is not None:
             screen_parts.update(kwargs, on_line=on_line, on_eof=on_eof, on_ex=on_ex)
         return AppStub(on_line, on_eof, on_ex), VisibleScrollback(sys.stdout)
 
-    monkeypatch.setattr(repl, "_turn_consumer", recording_consumer)
-    monkeypatch.setattr(screen, "build_app", build_app_stub)
+    return build_screen
+
+
+_run = repl.Repl.run
+
+
+def stub_screen(monkeypatch, lines, *, wait: bool = False, screen_parts: dict | None = None) -> None:
+    """Each line reaches the REPL's Enter handler in order, then EOF once
+    every turn they started has ended (EOF cancels a running turn). The lines
+    arrive back to back, so one typed behind a turn queues or steers; with
+    `wait` each line is sent once the turns before it have ended, as at an
+    idle prompt.
+
+    Once the REPL closes its screen, as `exit` or a chosen `/session` does,
+    no further line is typed and no EOF follows.
+
+    `lines` may instead be an async function; it is called with the Enter
+    handler, and with the ex line's handler `on_ex(line, editor)` as well
+    when it takes two arguments. EOF follows when it returns and the turns
+    have ended."""
+    sessions: list[repl.Repl] = []
+
+    async def run(session, build_screen=None):
+        sessions.append(session)
+        return await _run(session, build_screen)
+
+    async def idle():
+        for session in sessions:
+            await session.idle()
+
+    monkeypatch.setattr(repl.Repl, "run", run)
+    monkeypatch.setattr(screen, "build_app", _screen(lines, wait, screen_parts, idle))
 
 
 def run_async(monkeypatch, cfg, lines, *, wait: bool = False, screen_parts: dict | None = None,
               **state_kwargs) -> dict:
     """Run the REPL over `lines` (see `stub_screen`) and return its state."""
-    stub_screen(monkeypatch, lines, wait=wait, screen_parts=screen_parts)
     state, prompt_spec = repl_state(cfg, **state_kwargs)
-    assert owning_loop.run_owning_loop(
-        repl._repl_main(cfg, state, _telemetry(cfg, state), None, None, prompt_spec)
-    ) == 0
-    return state
+    session = repl.Repl(cfg, state, prompt_spec)
+    return owning_loop.run_owning_loop(session.run(_screen(lines, wait, screen_parts, session.idle)))
 
 
 def handled_while_a_turn_runs(monkeypatch, cfg, lines, **state_kwargs) -> list[str]:

@@ -18,7 +18,7 @@ import shlex
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -249,7 +249,7 @@ def _prompt_origin(cfg: Config) -> prompt_history.Origin:
     return prompt_history.Origin(cwd=os.getcwd(), session=session, agent=cfg.agent_id)
 
 
-def _repl_state(cfg, prompt_spec, *, messages: list[dict] | None = None,
+def live_state(cfg, prompt_spec, *, messages: list[dict] | None = None,
                 system: str | None = None, model: str | None = None,
                 live_settings: dict | None = None, tool_registry=None,
                 assembly: repl_state.ReplAssembly | None = None) -> ReplState:
@@ -465,7 +465,7 @@ async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop,
                          steer_inbox: list[str] | None = None) -> None:
     """Serialize main turns: one at a time, pulled FIFO from the input queue.
     This is what keeps state.messages single-writer while the input line
-    stays live — the producer (`_repl_main`) never blocks on a turn.
+    stays live — the producer (`Repl.run`) never blocks on a turn.
 
     ``steer_inbox`` holds lines typed during a turn at STEER_MODE=now. The
     running turn takes them at its next tool boundary; what it never reached
@@ -761,239 +761,288 @@ async def _initialize_repl_agent(cfg, state, telemetry, prompt_spec) -> None:
         msgs.warn(msgs.FAILED, error=network_display.error_text(exc))
 
 
-async def _repl_main(cfg, state, telemetry, history, completer, prompt_spec, banner: str = "") -> int:
-    """The REPL: input, the active turn, and subagents all share ONE
-    event loop. The screen has three regions (scrollback, status, input); turn
-    output lands in the scrollback and never touches the input line. ^C cancels
-    the active turn instead of killing the process; a line typed during a turn
-    steers it or queues behind it, per STEER_MODE."""
-    loop = asyncio.get_running_loop()
-    loop.set_default_executor(ThreadPoolExecutor(max_workers=32, thread_name_prefix="js-dispatch"))
-    sup = supervisor.Supervisor(loop)
-    supervisor.set_current(sup)
-    queue: asyncio.Queue = asyncio.Queue()
-    steer_inbox: list[str] = []
-    mcp_host = state.mcp_host
-    # Each subagent a turn launches gets a window; set before the consumer
-    # starts, so every turn it runs inherits it.
-    windows = screen.Windows()
-    child_windows = subagent_windows.SubagentWindows(windows, sup)
-    state.windows = child_windows
-    opener_token = subagents.window_opener.set(child_windows.open)
+@dataclass(eq=False)
+class Repl:
+    """One REPL session as `start_repl` settles it: the Config, the live
+    state, the agent's prompt spec, the input history and the startup banner.
+    It builds the telemetry its turns report to, the completer and the
+    status line; `run` runs the session over a screen."""
 
-    channel_instructed: set[str] = set()
+    cfg: Config
+    state: ReplState
+    prompt_spec: P.PromptSpec
+    history: prompt_history.PromptHistory | None = None
+    banner: str = ""
+    telemetry: runtime.Telemetry = field(init=False)
+    completer: replcomplete.JsCompleter = field(init=False)
+    _sup: supervisor.Supervisor | None = field(init=False, default=None)
+    _queue: asyncio.Queue | None = field(init=False, default=None)
 
-    def channel_message(server: str, params: dict) -> None:
-        content = params.get("content")
-        if not isinstance(content, str) or not content.strip() or not state.running:
-            return
-        text = f"External MCP channel {json.dumps(server)}\n"
-        if server not in channel_instructed:
-            # The server's rules for its channel ride the first push from it.
-            channel_instructed.add(server)
-            instructions = mcp_host.server_instructions(server=server).get(server)
-            if instructions:
-                text += f"Server instructions: {instructions}\n"
-        if isinstance(params.get("meta"), dict):
-            text += f"Metadata: {json.dumps(params['meta'], ensure_ascii=False)}\n"
-        message = {"role": "user", "content": text + "\n" + content}
-        queue.put_nowait(message)
+    def __post_init__(self) -> None:
+        self.telemetry = runtime.Telemetry(debug_log=self.cfg.debug_log)
+        # Attach the debug autolog sink before the first turn.
+        _sync_telemetry_from_live_settings(self.cfg, self.state, self.telemetry)
+        self.completer = replcomplete.JsCompleter(
+            commands=lambda: _command_completions(self.state),
+            setting_keys=[spec.key for spec in settings.REGISTRY],
+            fset_names=fset.names(),
+            names=lambda: sorted(set(providers.known_provider_ids()) | set(logins.load_logins())),
+            spell=replcomplete.hunspell_suggest,
+            bare_words=repl_state.QUIT_WORDS,
+        )
 
-    if mcp_host is not None:
-        mcp_host.channel_sink = channel_message
-    if prompt_spec.exchanges and not state.messages:
-        # Runs inside the screen, as the first turn, so its output streams into
-        # the scrollback instead of being drawn after the fact.
-        queue.put_nowait(functools.partial(_initialize_repl_agent, cfg, state, telemetry, prompt_spec))
-    consumer = loop.create_task(
-        _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop, steer_inbox)
-    )
+    def status(self, width: int) -> str:
+        """The status bar, `width` columns wide."""
+        turn_active = self._sup is not None and self._sup.turn_active()
+        return _status_bar_line(self.cfg, self.state, turn_active, width)
 
-    def drop_pending() -> int:
-        dropped = _drain_queue(queue) + len(steer_inbox)
-        steer_inbox.clear()
-        return dropped
+    async def idle(self) -> None:
+        """Return once every line the running session has taken has had its
+        turn end."""
+        if self._queue is not None:
+            await self._queue.join()
 
-    async def _on_line(line: str) -> None:
-        if not line:
-            return
-        shown = child_windows.on_screen()
-        if shown is not None:
-            # In a subagent's window a command runs as anywhere, its output
-            # in that window; any other line is the subagent's.
-            if _is_turn_state_command(line, state) and sup.turn_active():
-                with screen.writing(shown.scrollback):
-                    msgs.say(repl_state.repl_hint(msgs.TURN_RUNNING, state), command=line.split()[0])
+    async def run(self, build_screen=None) -> ReplState:
+        """Run the session on the running event loop until its screen
+        closes, and return its state. ``build_screen`` takes the keyword
+        arguments of `screen.build_app`, which it defaults to, and returns
+        the app that reads the input and the scrollback it shows. A snippet
+        failure ends the session and is raised from here.
+
+        Input, the active turn, and subagents all share the one event loop.
+        The screen has three regions (scrollback, status, input); turn output
+        lands in the scrollback and never touches the input line. ^C cancels
+        the active turn instead of killing the process; a line typed during a
+        turn steers it or queues behind it, per STEER_MODE."""
+        cfg, state, telemetry, prompt_spec = self.cfg, self.state, self.telemetry, self.prompt_spec
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=32, thread_name_prefix="js-dispatch"))
+        sup = self._sup = supervisor.Supervisor(loop)
+        supervisor.set_current(sup)
+        queue: asyncio.Queue = asyncio.Queue()
+        self._queue = queue
+        steer_inbox: list[str] = []
+        mcp_host = state.mcp_host
+        # Each subagent a turn launches gets a window; set before the consumer
+        # starts, so every turn it runs inherits it.
+        windows = screen.Windows()
+        child_windows = subagent_windows.SubagentWindows(windows, sup)
+        state.windows = child_windows
+        opener_token = subagents.window_opener.set(child_windows.open)
+
+        channel_instructed: set[str] = set()
+
+        def channel_message(server: str, params: dict) -> None:
+            content = params.get("content")
+            if not isinstance(content, str) or not content.strip() or not state.running:
                 return
-            command = contextvars.copy_context()
-            command.run(screen.writing_to.set, shown.scrollback)
-            handled = await loop.run_in_executor(None, command.run, repl_commands.handle_command, line, state, cfg)
+            text = f"External MCP channel {json.dumps(server)}\n"
+            if server not in channel_instructed:
+                # The server's rules for its channel ride the first push from it.
+                channel_instructed.add(server)
+                instructions = mcp_host.server_instructions(server=server).get(server)
+                if instructions:
+                    text += f"Server instructions: {instructions}\n"
+            if isinstance(params.get("meta"), dict):
+                text += f"Metadata: {json.dumps(params['meta'], ensure_ascii=False)}\n"
+            message = {"role": "user", "content": text + "\n" + content}
+            queue.put_nowait(message)
+
+        if mcp_host is not None:
+            mcp_host.channel_sink = channel_message
+        if prompt_spec.exchanges and not state.messages:
+            # Runs inside the screen, as the first turn, so its output streams into
+            # the scrollback instead of being drawn after the fact.
+            queue.put_nowait(functools.partial(_initialize_repl_agent, cfg, state, telemetry, prompt_spec))
+        consumer = loop.create_task(
+            _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop, steer_inbox)
+        )
+
+        def drop_pending() -> int:
+            dropped = _drain_queue(queue) + len(steer_inbox)
+            steer_inbox.clear()
+            return dropped
+
+        async def _on_line(line: str) -> None:
+            if not line:
+                return
+            shown = child_windows.on_screen()
+            if shown is not None:
+                # In a subagent's window a command runs as anywhere, its output
+                # in that window; any other line is the subagent's.
+                if _is_turn_state_command(line, state) and sup.turn_active():
+                    with screen.writing(shown.scrollback):
+                        msgs.say(repl_state.repl_hint(msgs.TURN_RUNNING, state), command=line.split()[0])
+                    return
+                command = contextvars.copy_context()
+                command.run(screen.writing_to.set, shown.scrollback)
+                handled = await loop.run_in_executor(None, command.run, repl_commands.handle_command, line, state, cfg)
+                if handled:
+                    _sync_telemetry_from_live_settings(cfg, state, telemetry)
+                    if not state.running:
+                        await close()
+                    return
+                shown.send(line)
+                return
+            if line in repl_state.repl_assembly(state).flush_lines:
+                # Drop pending input without touching the active turn. Handled
+                # here (not in repl_commands.handle_command) because the queue is loop-owned
+                # and repl_commands.handle_command runs on an executor thread.
+                flushed = drop_pending()
+                msgs.say(msgs.DROPPED_QUEUED, prompts=msgs.plural(flushed, "queued prompt"))
+                return
+            if _is_turn_state_command(line, state) and sup.turn_active():
+                msgs.say(repl_state.repl_hint(msgs.TURN_RUNNING, state), command=line.split()[0])
+                return
+            handled = await loop.run_in_executor(None, repl_commands.handle_command, line, state, cfg)
             if handled:
                 _sync_telemetry_from_live_settings(cfg, state, telemetry)
                 if not state.running:
                     await close()
                 return
-            shown.send(line)
-            return
-        if line in repl_state.repl_assembly(state).flush_lines:
-            # Drop pending input without touching the active turn. Handled
-            # here (not in repl_commands.handle_command) because the queue is loop-owned
-            # and repl_commands.handle_command runs on an executor thread.
-            flushed = drop_pending()
-            msgs.say(msgs.DROPPED_QUEUED, prompts=msgs.plural(flushed, "queued prompt"))
-            return
-        if _is_turn_state_command(line, state) and sup.turn_active():
-            msgs.say(repl_state.repl_hint(msgs.TURN_RUNNING, state), command=line.split()[0])
-            return
-        handled = await loop.run_in_executor(None, repl_commands.handle_command, line, state, cfg)
-        if handled:
-            _sync_telemetry_from_live_settings(cfg, state, telemetry)
-            if not state.running:
-                await close()
-            return
-        if sup.turn_active() and _steer_mode(state) == "now":
-            # The turn writes it to the transcript where the model receives it.
-            steer_inbox.append(line)
-            return
-        queue.put_nowait(line)
-        if sup.turn_active() or queue.qsize() > 1:
-            msgs.say(msgs.QUEUED, ahead=queue.qsize())
+            if sup.turn_active() and _steer_mode(state) == "now":
+                # The turn writes it to the transcript where the model receives it.
+                steer_inbox.append(line)
+                return
+            queue.put_nowait(line)
+            if sup.turn_active() or queue.qsize() > 1:
+                msgs.say(msgs.QUEUED, ahead=queue.qsize())
 
-    snippet_failures: list[snippets.SnippetError] = []
+        snippet_failures: list[snippets.SnippetError] = []
 
-    def fail_snippet(error: snippets.SnippetError) -> None:
-        snippet_failures.append(error)
-        state.running = False
-        app.exit()
+        def fail_snippet(error: snippets.SnippetError) -> None:
+            snippet_failures.append(error)
+            state.running = False
+            app.exit()
 
-    async def on_line(line: str) -> None:
-        try:
-            await _on_line(line)
-        except snippets.SnippetError as exc:
-            fail_snippet(exc)
-
-    def consumer_done(task: asyncio.Task) -> None:
-        if not task.cancelled() and isinstance(error := task.exception(), snippets.SnippetError):
-            fail_snippet(error)
-
-    consumer.add_done_callback(consumer_done)
-
-    def on_interrupt() -> bool:
-        shown = child_windows.on_screen()
-        if shown is not None:
-            # In a subagent's window the key stops what runs there.
-            return shown.cancel()
-        handler = repl_state.repl_assembly(state).interrupt or _interrupt_turn_and_queue
-        return handler(sup, drop_pending)
-
-    async def wind_down() -> None:
-        # Cancels the running turn, and any turn the consumer starts from a
-        # line it took before the queue emptied, and waits for them to end.
-        drop_pending()
-        joined = loop.create_task(queue.join())
-        while not joined.done() and not consumer.done():
-            sup.cancel_kind("turn")
-            await asyncio.wait({joined}, timeout=0.05)
-        joined.cancel()
-
-    closing: list[asyncio.Future] = []
-
-    async def close_screen() -> None:
-        on_interrupt()
-        await wind_down()
-        app.exit()
-
-    def close() -> asyncio.Future:
-        # exit and EOF cancel a running turn as ^C does. The screen closes
-        # once it has ended, so everything the turn prints lands in the
-        # scrollback.
-        if not closing:
-            closing.append(asyncio.ensure_future(close_screen()))
-        return closing[0]
-
-    def on_eof() -> asyncio.Future:
-        state.running = False
-        return close()
-
-    async def on_ex(line: str, editor: screen.InputEditor) -> None:
-        await exline.run_ex(
-            line,
-            editor,
-            is_command=lambda verb: verb in repl_commands.commands(state) or verb in state.aliases,
-            dispatch=on_line,
-        )
-
-    app, scrollback = screen.build_app(
-        prompt=display_mod.prompt,
-        history=history,
-        completer=completer,
-        on_line=on_line,
-        on_interrupt=on_interrupt,
-        on_eof=on_eof,
-        turn_active=sup.turn_active,
-        status=lambda width: _status_bar_line(cfg, state, sup.turn_active(), width),
-        editing_mode=lambda: settings.knob(state.settings, "EDITING_MODE"),
-        echo=lambda line: _echoes(line, state),
-        on_ex=on_ex,
-        key_bindings=merge_key_bindings([
-            *(repl_state.repl_assembly(state).input_bindings or _repl_input_bindings)(lambda: state.settings),
-        ]),
-        keymap=state.keymap,
-        windows=windows,
-    )
-    windows.set_main(scrollback)
-    child_windows.attach(app)
-    previous_reasoning_factory = telemetry.reasoning_factory
-    previous_display_factory = telemetry.display_factory
-    previous_exchange_factory = telemetry.exchange_factory
-    telemetry.reasoning_factory = lambda level: screen.ScreenReasoningDisplay(loop, scrollback, app, level)
-    telemetry.display_factory = lambda markdown: display_mod.Display(
-        getattr(sys.stdout, "write_unlogged", sys.stdout.write),
-        live=screen.ScreenLive(loop, scrollback, app) if markdown else None,
-        flush=sys.stdout.flush,
-    )
-    telemetry.exchange_factory = lambda: screen.ScreenExchange(loop, scrollback, app)
-    ticker = loop.create_task(status_bar.tick(app, lambda: sup.turn_active() or bool(sup.jobs("subagent"))))
-    try:
-        with screen.capture_stdio(loop, scrollback, app), transcript_mod.transcript_stdio(telemetry):
+        async def on_line(line: str) -> None:
             try:
-                stream_transport.install_sink(stream_transport.NetSink(
-                    level=lambda: _live_level(state, "NET_DISPLAY"),
-                    emit=lambda line: print(line, flush=True),
-                ))
-                if banner:
-                    print(banner)
-                repl_state.emit_session_event(state, telemetry, cfg, "session_start")
-                _show_resume(state, telemetry, screen.ScreenLive(loop, scrollback, app).width())
-                await app.run_async()
-            finally:
-                # Whatever still runs ends while stdout is the scrollback, so
-                # nothing reaches the terminal after the screen has closed.
-                await wind_down()
-                for task in closing:
-                    with contextlib.suppress(Exception):
-                        await task
-    finally:
-        if mcp_host is not None:
-            mcp_host.channel_sink = None
-        stream_transport.install_sink(None)
-        ticker.cancel()
-        telemetry.reasoning_factory = previous_reasoning_factory
-        telemetry.display_factory = previous_display_factory
-        telemetry.exchange_factory = previous_exchange_factory
-        supervisor.set_current(None)
-        subagents.window_opener.reset(opener_token)
-        state.windows = None
-        consumer.cancel()
-        with contextlib.suppress(asyncio.CancelledError, snippets.SnippetError):
-            await consumer
-        for job in sup.jobs():  # backstop: cancel any straggler
-            job.task.cancel()
-        repl_state.emit_session_event(state, telemetry, cfg, "session_end")
-        await _close_session_mcp_host(state)
-    if snippet_failures:
-        raise snippet_failures[0]
-    return 0
+                await _on_line(line)
+            except snippets.SnippetError as exc:
+                fail_snippet(exc)
+
+        def consumer_done(task: asyncio.Task) -> None:
+            if not task.cancelled() and isinstance(error := task.exception(), snippets.SnippetError):
+                fail_snippet(error)
+
+        consumer.add_done_callback(consumer_done)
+
+        def on_interrupt() -> bool:
+            shown = child_windows.on_screen()
+            if shown is not None:
+                # In a subagent's window the key stops what runs there.
+                return shown.cancel()
+            handler = repl_state.repl_assembly(state).interrupt or _interrupt_turn_and_queue
+            return handler(sup, drop_pending)
+
+        async def wind_down() -> None:
+            # Cancels the running turn, and any turn the consumer starts from a
+            # line it took before the queue emptied, and waits for them to end.
+            drop_pending()
+            joined = loop.create_task(queue.join())
+            while not joined.done() and not consumer.done():
+                sup.cancel_kind("turn")
+                await asyncio.wait({joined}, timeout=0.05)
+            joined.cancel()
+
+        closing: list[asyncio.Future] = []
+
+        async def close_screen() -> None:
+            on_interrupt()
+            await wind_down()
+            app.exit()
+
+        def close() -> asyncio.Future:
+            # exit and EOF cancel a running turn as ^C does. The screen closes
+            # once it has ended, so everything the turn prints lands in the
+            # scrollback.
+            if not closing:
+                closing.append(asyncio.ensure_future(close_screen()))
+            return closing[0]
+
+        def on_eof() -> asyncio.Future:
+            state.running = False
+            return close()
+
+        async def on_ex(line: str, editor: screen.InputEditor) -> None:
+            await exline.run_ex(
+                line,
+                editor,
+                is_command=lambda verb: verb in repl_commands.commands(state) or verb in state.aliases,
+                dispatch=on_line,
+            )
+
+        app, scrollback = (build_screen or screen.build_app)(
+            prompt=display_mod.prompt,
+            history=self.history,
+            completer=self.completer,
+            on_line=on_line,
+            on_interrupt=on_interrupt,
+            on_eof=on_eof,
+            turn_active=sup.turn_active,
+            status=self.status,
+            editing_mode=lambda: settings.knob(state.settings, "EDITING_MODE"),
+            echo=lambda line: _echoes(line, state),
+            on_ex=on_ex,
+            key_bindings=merge_key_bindings([
+                *(repl_state.repl_assembly(state).input_bindings or _repl_input_bindings)(lambda: state.settings),
+            ]),
+            keymap=state.keymap,
+            windows=windows,
+        )
+        windows.set_main(scrollback)
+        child_windows.attach(app)
+        previous_reasoning_factory = telemetry.reasoning_factory
+        previous_display_factory = telemetry.display_factory
+        previous_exchange_factory = telemetry.exchange_factory
+        telemetry.reasoning_factory = lambda level: screen.ScreenReasoningDisplay(loop, scrollback, app, level)
+        telemetry.display_factory = lambda markdown: display_mod.Display(
+            getattr(sys.stdout, "write_unlogged", sys.stdout.write),
+            live=screen.ScreenLive(loop, scrollback, app) if markdown else None,
+            flush=sys.stdout.flush,
+        )
+        telemetry.exchange_factory = lambda: screen.ScreenExchange(loop, scrollback, app)
+        ticker = loop.create_task(status_bar.tick(app, lambda: sup.turn_active() or bool(sup.jobs("subagent"))))
+        try:
+            with screen.capture_stdio(loop, scrollback, app), transcript_mod.transcript_stdio(telemetry):
+                try:
+                    stream_transport.install_sink(stream_transport.NetSink(
+                        level=lambda: _live_level(state, "NET_DISPLAY"),
+                        emit=lambda line: print(line, flush=True),
+                    ))
+                    if self.banner:
+                        print(self.banner)
+                    repl_state.emit_session_event(state, telemetry, cfg, "session_start")
+                    _show_resume(state, telemetry, screen.ScreenLive(loop, scrollback, app).width())
+                    await app.run_async()
+                finally:
+                    # Whatever still runs ends while stdout is the scrollback, so
+                    # nothing reaches the terminal after the screen has closed.
+                    await wind_down()
+                    for task in closing:
+                        with contextlib.suppress(Exception):
+                            await task
+        finally:
+            if mcp_host is not None:
+                mcp_host.channel_sink = None
+            stream_transport.install_sink(None)
+            ticker.cancel()
+            telemetry.reasoning_factory = previous_reasoning_factory
+            telemetry.display_factory = previous_display_factory
+            telemetry.exchange_factory = previous_exchange_factory
+            supervisor.set_current(None)
+            subagents.window_opener.reset(opener_token)
+            state.windows = None
+            consumer.cancel()
+            with contextlib.suppress(asyncio.CancelledError, snippets.SnippetError):
+                await consumer
+            for job in sup.jobs():  # backstop: cancel any straggler
+                job.task.cancel()
+            repl_state.emit_session_event(state, telemetry, cfg, "session_end")
+            await _close_session_mcp_host(state)
+        if snippet_failures:
+            raise snippet_failures[0]
+        return state
 
 
 def start_repl(args: argparse.Namespace, setup: Setup) -> int:
@@ -1048,14 +1097,6 @@ def start_repl(args: argparse.Namespace, setup: Setup) -> int:
                  model=conversation.stamp_label(cfg.model, cfg.provider_id))
 
     keymap, key_errors = keys_mod.load(keys_mod.keys_file(cfg.settings))
-    completer = replcomplete.JsCompleter(
-        commands=lambda: _command_completions(state),
-        setting_keys=[spec.key for spec in settings.REGISTRY],
-        fset_names=fset.names(),
-        names=lambda: sorted(set(providers.known_provider_ids()) | set(logins.load_logins())),
-        spell=replcomplete.hunspell_suggest,
-        bare_words=repl_state.QUIT_WORDS,
-    )
     history = _repl_history(cfg)
 
     messages = M.load_replay_messages(cfg.session_file)
@@ -1100,7 +1141,7 @@ def start_repl(args: argparse.Namespace, setup: Setup) -> int:
         # Agent default from agent.yaml — seed the per-turn source of truth so
         # it survives the per-turn rebuild (ReplState.config_for_turn). Config/env/--max-out win.
         settings.set_dotted(live_settings, ("OUTPUT_TOKENS_MAX",), prompt_spec.max_output_tokens)
-    state = _repl_state(
+    state = live_state(
         cfg, prompt_spec,
         messages=messages,
         system=system,
@@ -1116,24 +1157,19 @@ def start_repl(args: argparse.Namespace, setup: Setup) -> int:
     rc_errors = repl_commands.run_rc_commands(state, cfg, jsrc_paths(
         Path(getattr(cfg, "project_dir", None) or Path.cwd()), setup.sources))
     repl_settings_commands.mark_saved(state)
-    telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
-    state.mcp_host = _session_mcp_host(cfg, telemetry)
-    # Attach the debug autolog sink before the first turn.
-    _sync_telemetry_from_live_settings(cfg, state, telemetry)
-
-    banner = _startup_banner(cfg, state, notices, [*rc_errors, *key_errors])
+    session = Repl(cfg, state, prompt_spec, history,
+                   _startup_banner(cfg, state, notices, [*rc_errors, *key_errors]))
+    state.mcp_host = _session_mcp_host(cfg, session.telemetry)
     transcript_stack = contextlib.ExitStack()
     # prompt_toolkit creates its output from sys.stdout on first use. The
     # screen and the pickers draw on the terminal, so that first use is here,
     # before stdout becomes the transcript tee.
     get_app_session().output
-    transcript_mod.enter_transcript_stdio(transcript_stack, telemetry)
+    transcript_mod.enter_transcript_stdio(transcript_stack, session.telemetry)
     try:
-        code = owning_loop.run_owning_loop(
-            _repl_main(cfg, state, telemetry, history, completer, prompt_spec, banner)
-        )
+        owning_loop.run_owning_loop(session.run())
     finally:
         transcript_stack.close()
     print_resume_hint(cfg, state)
     _queue_switch(state)
-    return code
+    return 0

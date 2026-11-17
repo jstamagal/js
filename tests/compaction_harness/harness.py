@@ -36,6 +36,8 @@ from js import (  # noqa: E402
     runtime as R,
 )  # noqa: E402
 from js.config import Config  # noqa: E402
+from js.persona import PromptSpec  # noqa: E402
+from js.screen_scrollback import Scrollback  # noqa: E402
 from js.toolkit.core import Tool, ToolContext  # noqa: E402
 from js.toolkit.registry import ToolRegistry  # noqa: E402
 
@@ -125,6 +127,43 @@ def observed(name, checks, **evidence):
     rec = {"name": name, "pass": all(checks.values()), "checks": checks, "evidence": evidence}
     RESULTS.append(rec)
     print(json.dumps(rec, default=str), flush=True)
+
+
+async def type_line(cfg, messages, line, during=None):
+    """Run a REPL session on ``cfg`` over ``messages``: type ``line``, await
+    ``during(interrupt, idle)`` when given (the session's interrupt key, and
+    a wait for its turns to end), then quit once the turn has ended. The marks
+    the session file holds, in order."""
+    state = repl.live_state(cfg, PromptSpec("", ()), messages=messages, system="",
+                            tool_registry=ToolRegistry(tools=(), aliases={}))
+    session = repl.Repl(cfg, state, state.prompt_spec)
+
+    class Keyboard:
+        def __init__(self, on_line, on_eof, on_interrupt):
+            self.on_line, self.on_eof, self.on_interrupt = on_line, on_eof, on_interrupt
+            self.exited = False
+
+        async def run_async(self):
+            await asyncio.sleep(0)
+            await self.on_line(line)
+            if during is not None:
+                await during(self.on_interrupt, session.idle)
+            await session.idle()
+            if not self.exited:
+                self.on_eof()
+
+        def exit(self):
+            self.exited = True
+
+        def invalidate(self):
+            pass
+
+    def build_screen(*, on_line, on_eof, on_interrupt, **_):
+        return Keyboard(on_line, on_eof, on_interrupt), Scrollback()
+
+    await session.run(build_screen)
+    records = map(json.loads, cfg.session_file.read_text(encoding="utf-8").splitlines())
+    return [record["marker"] for record in records if record.get("kind") == "mark"]
 
 
 def persist_turn(cfg, messages):
@@ -581,27 +620,12 @@ async def clearing_restart():
 async def zero_usage_executor():
     cfg = cfg_for("zero_usage_executor", COMPACTION_KEEP_RECENT_TOKENS=1)
     context = ToolContext(cwd=cfg.agent_dir)
-    user = {"role": "user", "content": "current question"}
     messages = [
         {"role": "user", "content": "old " * 12000},
         {"role": "assistant", "content": "answer"},
-        user,
     ]
     for m in messages:
         M.append_message(cfg.session_file, m)
-    from js.persona import PromptSpec
-    from js.repl_state import ReplState
-
-    state = ReplState(
-        settings=cfg.settings,
-        system="",
-        messages=messages,
-        tool_registry=ToolRegistry(tools=(), aliases={}),
-        model=cfg.model,
-        provider_id=cfg.provider_id,
-        provider_base_url=cfg.provider_base_url,
-        provider_api_key=cfg.provider_api_key,
-    )
     calls = 0
     error = None
 
@@ -620,15 +644,8 @@ async def zero_usage_executor():
         patch.object(R.T, "STOCK_CONTEXT", context),
     ):
         try:
-            await repl._do_turn(
-                cfg,
-                state,
-                R.Telemetry(None),
-                PromptSpec("", ()),
-                user,
-                cfg,
-                asyncio.get_running_loop(),
-            )
+            marks = await type_line(cfg, messages, "current question")
+            error = next((mark for mark in marks if mark.startswith("error")), None)
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
     observed(
@@ -820,29 +837,15 @@ async def incomplete_usage():
 async def compacted_turn_cancel(error=False):
     cfg = cfg_for("compacted_turn_error" if error else "compacted_turn_cancel", COMPACTION_AUTO=False)
     context = ToolContext(cwd=cfg.agent_dir)
-    prefix = [
+    messages = [
         {"role": "user" if i % 2 == 0 else "assistant", "content": f"old {i} " * 200}
         for i in range(20)
     ]
-    user = {"role": "user", "content": "current request"}
-    messages = [*prefix, user]
     for m in messages:
         M.append_message(cfg.session_file, m)
-    from js.persona import PromptSpec
-    from js.repl_state import ReplState
-
-    state = ReplState(
-        settings=cfg.settings,
-        system="",
-        messages=messages,
-        tool_registry=ToolRegistry(tools=(), aliases={}),
-        model=cfg.model,
-        provider_id=cfg.provider_id,
-        provider_base_url=cfg.provider_base_url,
-        provider_api_key=cfg.provider_api_key,
-    )
 
     async def turn(*args, **kw):
+        user = messages[-1]
         context.compacted_during_turn = True
         append_compaction_mark(cfg.session_file, summary="previous work", keep_from=20)
         messages[:] = [
@@ -855,18 +858,7 @@ async def compacted_turn_cancel(error=False):
         raise asyncio.CancelledError()
 
     with patch.object(R, "run_turn_async", turn), patch.object(R.T, "STOCK_CONTEXT", context):
-        try:
-            await repl._do_turn(
-                cfg,
-                state,
-                R.Telemetry(None),
-                PromptSpec("", ()),
-                user,
-                cfg,
-                asyncio.get_running_loop(),
-            )
-        except asyncio.CancelledError:
-            pass
+        await type_line(cfg, messages, "current request")
     loaded = M.load_messages(cfg.session_file)
     observed(
         "compacted_turn_error" if error else "compacted_turn_cancel",
@@ -885,26 +877,13 @@ async def between_turn_cancel():
     cfg = cfg_for("between_turn_cancel", COMPACTION_KEEP_RECENT_TOKENS=1)
     context = ToolContext(cwd=cfg.agent_dir)
     context.last_prompt_tokens = 9500
-    user = {"role": "user", "content": "current"}
-    messages = [{"role": "user", "content": "old " * 12000}, user]
+    messages = [{"role": "user", "content": "old " * 12000}]
     for m in messages:
         M.append_message(cfg.session_file, m)
-    from js.persona import PromptSpec
-    from js.repl_state import ReplState
-
-    state = ReplState(
-        settings=cfg.settings,
-        system="",
-        messages=messages,
-        tool_registry=ToolRegistry(tools=(), aliases={}),
-        model=cfg.model,
-        provider_id=cfg.provider_id,
-        provider_base_url=cfg.provider_base_url,
-        provider_api_key=cfg.provider_api_key,
-    )
     started = threading.Event()
     released = threading.Event()
     ended = threading.Event()
+    after_cancel = None
 
     async def turn(*args, **kw):
         messages.append({"role": "assistant", "content": "finished"})
@@ -918,30 +897,13 @@ async def between_turn_cancel():
         finally:
             ended.set()
 
-    with (
-        patch.object(R, "run_turn_async", turn),
-        patch.object(MC, "stream_model_async", provider),
-        patch.object(R.T, "STOCK_CONTEXT", context),
-    ):
-        task = asyncio.create_task(
-            repl._do_turn(
-                cfg,
-                state,
-                R.Telemetry(None),
-                PromptSpec("", ()),
-                user,
-                cfg,
-                asyncio.get_running_loop(),
-            )
-        )
+    async def cancel_during_summary(interrupt, idle):
+        nonlocal after_cancel
         try:
             if not await asyncio.to_thread(started.wait, 3):
                 raise AssertionError("summary never started")
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+            interrupt()
+            await idle()
             after_cancel = copy.deepcopy(messages)
             released.set()
             if not await asyncio.to_thread(ended.wait, 3):
@@ -949,15 +911,20 @@ async def between_turn_cancel():
             await asyncio.sleep(0.1)
         finally:
             released.set()
-            if not task.done():
-                task.cancel()
+
+    with (
+        patch.object(R, "run_turn_async", turn),
+        patch.object(MC, "stream_model_async", provider),
+        patch.object(R.T, "STOCK_CONTEXT", context),
+    ):
+        await type_line(cfg, messages, "current", during=cancel_during_summary)
     observed(
         "between_turn_cancel",
         {
             "cancel_stops_summary_commit": messages == after_cancel,
             "disk_matches_live": M.load_messages(cfg.session_file) == messages,
         },
-        before_count=len(after_cancel),
+        before_count=len(after_cancel or ()),
         after_count=len(messages),
     )
 
