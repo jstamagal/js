@@ -5,10 +5,11 @@ import os
 import ai
 import ai.types.messages
 import pytest
+from turn_driver import config, registry, run
 
-from js import model_client, runtime, settings
+from js import media, model_client, runtime, settings
 from js.text_bytes import byte_size, cap_text
-from js.toolkit.core import ToolResult
+from js.toolkit.core import Tool, ToolResult
 
 
 @pytest.mark.parametrize("cap", [1, 10, 64, 129])
@@ -40,17 +41,15 @@ def test_spill_threshold_is_bytes_even_when_notice_cannot_fit(tmp_path):
 
 def test_dispatch_spills_by_the_active_context_inline_limit(tmp_path, monkeypatch):
     from js import paths
-    from js.toolkit.core import Tool, ToolContext
-    from js.toolkit.registry import ToolRegistry
 
     monkeypatch.setattr(runtime.T.STOCK_CONTEXT, "max_tool_result_inline_bytes", 0)
     payload = "é" * 5000
-    registry = ToolRegistry((Tool("probe", "test", lambda: payload, {}),), {})
-    context = ToolContext(cwd=tmp_path, max_tool_result_inline_bytes=1000)
+    probe = Tool("probe", "test", lambda: payload, {})
 
-    _, delivered = runtime._dispatch("probe", "{}", runtime.Telemetry(None), cap_bytes=0,
-                                     registry=registry, tool_context=context)
+    turn = run(tmp_path, monkeypatch, registry(probe), [[("p", "probe", "{}")]],
+               cfg=config(tmp_path, max_tool_result_inline_bytes=1000, max_tool_result_bytes=0))
 
+    delivered = turn.results()["p"]
     assert byte_size(delivered) < byte_size(payload)
     saved = next(paths.tool_results_dir().glob("result-*.txt"))
     assert saved.read_bytes() == payload.encode("utf-8")
@@ -94,19 +93,18 @@ def test_screenshots_reach_the_provider_under_the_stock_caps(raw_bytes, count):
         parts = [part for message in messages for part in message.parts]
         assert any(isinstance(part, ai.types.messages.FilePart) for part in parts)
 
-def test_dispatch_caps_media_by_the_context_running_the_call(tmp_path):
-    from js.toolkit.core import Tool, ToolContext
-    from js.toolkit.registry import ToolRegistry
-
+def test_dispatch_caps_media_by_the_context_running_the_call(tmp_path, monkeypatch):
     def snap(context=None):
         return ToolResult([{"type": "image", "data": "x" * 5000, "mimeType": "image/png"}])
 
-    registry = ToolRegistry((Tool("snap", "test", snap, {}),), {})
-    context = ToolContext(cwd=tmp_path, max_tool_media_bytes=1000)
-    _, result = runtime._dispatch("snap", "{}", runtime.Telemetry(None), cap_bytes=100000,
-                                  registry=registry, tool_context=context)
-    assert [block["type"] for block in result.blocks] == ["text"]
-    assert "TOOL_MEDIA_MAX" in result.blocks[0]["text"]
+    turn = run(tmp_path, monkeypatch, registry(Tool("snap", "test", snap, {})), [[("s", "snap", "{}")]],
+               cfg=config(tmp_path, max_tool_media_bytes=1000, max_tool_result_bytes=100000))
+
+    (record,) = [message for message in turn.messages if message.get("role") == "tool"]
+    assert "TOOL_MEDIA_MAX" in record["content"]
+    assert media.MEDIA_KEY not in record
+    sent = [part for message in turn.received[1] for part in message.parts]
+    assert not any(isinstance(part, ai.types.messages.FilePart) for part in sent)
 
 
 def _resource_png(raw_bytes: int) -> ToolResult:
