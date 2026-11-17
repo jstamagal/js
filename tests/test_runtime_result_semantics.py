@@ -2,7 +2,7 @@
 
 import pytest
 
-from js import runtime
+from js import paths, runtime
 from js.toolkit.core import Output
 from js.toolkit.presentation import result_text
 from js.toolkit.results import summary_text
@@ -34,7 +34,7 @@ def test_output_semantics_survive_result_caps(cap):
 
 @pytest.mark.parametrize("content", ["ERROR " + "line\n" * 1000, "ERROR \udc80 malformed log"])
 def test_output_semantics_survive_spill_and_sanitizing(content, tmp_path, monkeypatch):
-    monkeypatch.setattr(runtime.paths, "tool_results_dir", lambda: tmp_path)
+    monkeypatch.setattr(paths, "tool_results_dir", lambda: tmp_path)
     capped = runtime._cap_result(Output(content), 2000, inline_cap=1000)
     assert isinstance(capped, Output)
     assert not result_text(capped)[1]
@@ -48,7 +48,7 @@ def test_batch_cap_keeps_spill_pointer(is_content, tmp_path, monkeypatch):
     raw = "ERROR log entry\n" * 10000
     if is_content:
         raw = Output(raw)
-    monkeypatch.setattr(runtime.paths, "tool_results_dir", lambda: tmp_path)
+    monkeypatch.setattr(paths, "tool_results_dir", lambda: tmp_path)
     spilled = runtime._cap_result(raw, 200000, inline_cap=51200)
     capped = runtime._cap_batch_results([spilled] * 8, 200000)
     for result in capped:
@@ -59,7 +59,7 @@ def test_batch_cap_keeps_spill_pointer(is_content, tmp_path, monkeypatch):
 
 
 def test_per_result_cap_keeps_spill_pointer(tmp_path, monkeypatch):
-    monkeypatch.setattr(runtime.paths, "tool_results_dir", lambda: tmp_path)
+    monkeypatch.setattr(paths, "tool_results_dir", lambda: tmp_path)
     capped = runtime._cap_result("line\n" * 1000, 400, inline_cap=1000)
     assert len(capped.encode()) <= 400
     assert str(next(tmp_path.glob("result-*.txt"))) in capped

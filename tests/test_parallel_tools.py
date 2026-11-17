@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from js import runtime
+from js import paths, runtime
 from js.toolkit import core as tool_core, fs
 from js.toolkit.core import Tool, ToolContext, call_is_read_only
 from js.toolkit.registry import ToolRegistry, build_default_registry
@@ -302,7 +302,7 @@ def test_a_call_id_scopes_read_coverage_to_its_call(tmp_path):
 
 
 def test_spilled_parallel_results_are_whole(tmp_path, monkeypatch):
-    monkeypatch.setattr(runtime.paths, "tool_results_dir", lambda: tmp_path / "spill")
+    monkeypatch.setattr(paths, "tool_results_dir", lambda: tmp_path / "spill")
     text = "".join(f"{n:06d}\n" for n in range(20000))
 
     notices = []

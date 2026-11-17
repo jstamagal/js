@@ -41,6 +41,7 @@ from ..tool_binaries import (
 from .core import Tool, ToolContext, ToolOutput, view as _view
 from .descriptions import load_description, load_parameter_description
 from .fs import _detect_visual_mime, _image_marker, _read_regular_bytes
+from .results import spill_oversized_result
 from .sanitize import int_or_default, text_or_default
 from .search import _absolutize
 
@@ -901,8 +902,6 @@ def _format_payload(
         # content-addressed name, preview, and pointer as every other large tool
         # result. Prefer the ordinary inline cap when it is the tighter bound;
         # this also prevents the runtime from spilling the pointer a second time.
-        from ..runtime import spill_oversized_result
-
         hard_cap = max(0, int(context.max_tool_result_bytes))
         inline_cap = max(0, int(getattr(context, "max_tool_result_inline_bytes", 0) or 0))
         spill_cap = inline_cap if inline_cap and (not hard_cap or inline_cap < hard_cap) else hard_cap
