@@ -70,12 +70,12 @@ def test_flight_autolog_failure_goes_to_its_event_callback(tmp_path, capsys):
 def test_agent_registry_warning_is_an_event(tmp_path, capsys):
     from js.toolkit.registry import _agent_tools
 
-    agent = tmp_path / "read"
-    agent.mkdir()
+    agent = tmp_path / "agents" / "read"
+    agent.mkdir(parents=True)
     (agent / "prompt.md").write_text("prompt")
     events = []
     with output.using_sink(SimpleNamespace(emit=events.append)):
-        assert _agent_tools(tmp_path, {"read"}) == ()
+        assert _agent_tools(agent.parent, {"read"}) == ()
     assert len(events) == 1
     assert dict(events[0].fields)["fields"]["agent"] == "read"
     assert capsys.readouterr() == ("", "")

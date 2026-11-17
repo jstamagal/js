@@ -1861,7 +1861,6 @@ MODEL_PROFILE_PROMPT = "prompt in {where}: {error}"
 
 AGENT_MANIFEST_UNKNOWN_KEY_S_IN_ALLOWED = "unknown key(s) {value} in {manifest_path}; allowed: {value2}"
 
-AGENT_MANIFEST_PROMPTS_DIRECTORY_HAS_NO_MD_PROMPT_FILES = "prompts directory {prompts_dir} has no .md prompt files or {AGENT_MANIFEST}."
 
 AGENT_MANIFEST_MIGRATION_HINT = "move its settings to agent.yaml beside the prompt (just migrate-agents)"
 

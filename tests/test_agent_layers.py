@@ -122,7 +122,16 @@ def test_verify_of_a_missing_agent_names_every_directory_searched(layers, capsys
     assert all(str(root / "missing") in errors[0] for root in layers.values())
 
 
-def test_tool_registry_offers_agents_with_a_prompt_file_or_agent_yaml(layers):
+def test_tool_registry_offers_every_agent_directory(layers):
     cfg = config.from_env(cwd=Path.cwd(), save_session=False)
     offered = {tool.name for tool in registry_for_roots(cfg.prompt_roots).tools if tool.source == "agent"}
-    assert offered & set(AGENTS) == set(AGENTS) - {"empty"}
+    assert offered >= set(AGENTS)
+
+
+def test_a_lone_agent_directory_without_prompt_or_manifest_is_an_agent(tmp_path):
+    directory = tmp_path / "bare"
+    directory.mkdir()
+    (directory / "notes.txt").write_text("not an agent file", encoding="utf-8")
+    cfg = config.Config(model="m", agent_id="bare", prompts_dir=directory)
+    spec = persona.load_configured_prompt_spec(cfg, expand=False)
+    assert (spec.system, spec.tool_selectors) == ("\n", ())

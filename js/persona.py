@@ -359,11 +359,7 @@ def load_prompt_spec(prompts_dir: Path | tuple[Path, ...] | list[Path], *, env: 
         raise ValueError(msgs.AGENT_MANIFEST_IS_NO_LONGER_READ.format(legacy=legacy, _MIGRATE_HINT=_MIGRATE_HINT))
     _refuse_legacy_manifest(md_files)
     manifest_path = next((path for path in files if path.name == AGENT_MANIFEST), None)
-    has_manifest = manifest_path is not None
-    if isinstance(prompts_dir, Path) and not md_files and not has_manifest:
-        raise FileNotFoundError(msgs.AGENT_MANIFEST_PROMPTS_DIRECTORY_HAS_NO_MD_PROMPT_FILES.format(prompts_dir=prompts_dir, AGENT_MANIFEST=AGENT_MANIFEST))
-
-    spec = load_agent_manifest(manifest_path) if has_manifest else PromptSpec(system="", tool_selectors=())
+    spec = load_agent_manifest(manifest_path) if manifest_path is not None else PromptSpec(system="", tool_selectors=())
     parts: list[str] = []
     prompt_placed = False
     for path in md_files:

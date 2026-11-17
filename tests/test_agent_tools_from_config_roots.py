@@ -122,16 +122,20 @@ def test_agent_shadowing_a_builtin_tool_name_warns(tmp_path, capsys):
     assert "read" in warning and str(root) in warning
 
 
-def test_directory_without_markdown_or_agent_yaml_is_not_an_agent(tmp_path):
+def test_every_directory_in_a_root_is_an_agent(tmp_path):
     root = tmp_path / "agents"
-    (root / "notanagent").mkdir(parents=True)
-    (root / "notanagent" / "notes.txt").write_text("not a prompt\n", encoding="utf-8")
+    (root / "notesonly").mkdir(parents=True)
+    (root / "notesonly" / "notes.txt").write_text("not a prompt\n", encoding="utf-8")
     (root / "manifestonly").mkdir(parents=True)
     (root / "manifestonly" / "agent.yaml").write_text("tools: []\n", encoding="utf-8")
+    (root / "empty").mkdir(parents=True)
+    (root / "plainfile").write_text("not a directory\n", encoding="utf-8")
 
     registry = registry_for_roots((root,))
-    assert registry.resolve("notanagent") is None
+    assert registry.resolve("notesonly") is not None
     assert registry.resolve("manifestonly") is not None
+    assert registry.resolve("empty") is not None
+    assert registry.resolve("plainfile") is None
 
 
 def test_unreachable_agent_dir_is_skipped_not_fatal(tmp_path, monkeypatch, capsys):
