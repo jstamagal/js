@@ -91,6 +91,9 @@ def stub_screen(monkeypatch, lines, *, wait: bool = False) -> None:
             self._exited = False
 
         async def run_async(self):
+            # The real app draws its first frame before it reads a key, by
+            # which time the loop has run the startup output queued on it.
+            await asyncio.sleep(0)
             if callable(lines):
                 handlers = (self._on_line, self._on_ex)
                 await lines(*handlers[:len(inspect.signature(lines).parameters)])
@@ -150,17 +153,18 @@ def run_async(monkeypatch, cfg, lines, *, wait: bool = False, **state_kwargs) ->
 
 
 async def settled() -> None:
-    """Let the REPL's loop run what is queued on it. A command runs on an
-    executor thread and queues its output, and any call it hops onto the
-    loop, from there; some of it can still be queued when the line's Enter
-    handler returns."""
+    """Run what a command queued on the loop before its Enter handler
+    returned. The command runs on an executor thread and queues its screen
+    writes, and any call it hops onto the loop, from there. When it finishes
+    before the loop thread has chained its future (a fast command, a busy
+    machine), asyncio completes that future at once, the handler's await does
+    not yield, and those writes are still queued when the handler returns."""
     await asyncio.sleep(0)
 
 
 async def output_of(enter, capsys, line: str) -> str:
     """What typing `line` into the Enter handler `enter` printed (see
     `stub_screen` for a `lines` function)."""
-    await settled()
     capsys.readouterr()
     await enter(line)
     await settled()
