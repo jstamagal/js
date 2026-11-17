@@ -407,17 +407,16 @@ def test_a_response_without_usage_keeps_the_baseline(tmp_path):
 
 @pytest.mark.parametrize("command", ["/reset", "/wipe"])
 def test_clearing_the_history_is_not_a_cache_break(monkeypatch, tmp_path, command):
-    from repl_driver import repl_state
+    from repl_driver import run_async
 
-    from js import cli
     from js.config import from_env
 
+    monkeypatch.chdir(tmp_path)
     context = ToolContext(cwd=tmp_path)
     monkeypatch.setattr(runtime.T, "STOCK_CONTEXT", context)
     cfg = replace(from_env(), session_file=tmp_path / "session.jsonl")
-    state, _spec = repl_state(cfg)
     compaction.note_response(context, model_key="p/m", cache_read=100_000, now=0.0)
-    cli._handle_command(command, state, cfg)
+    run_async(monkeypatch, cfg, [command])
     assert compaction.note_response(context, model_key="p/m", cache_read=0, now=1.0) is None
 
 
