@@ -13,6 +13,7 @@ from typing import Any
 import yaml
 
 from . import messages as msgs, output, paths, snippets
+from .cli_options import current
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,78}[A-Za-z0-9])?$")
 _TOOL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:-]*$")
@@ -319,7 +320,6 @@ def discover_skills(
     setting; case does not matter) is left out of the catalog.
     """
 
-    from .cli_options import current
     if current().skips_skills:
         return SkillCatalog()
     builtin_root = builtin_dir or BUILTIN_SKILLS_DIR

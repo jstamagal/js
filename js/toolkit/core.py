@@ -24,7 +24,6 @@ from typing import TYPE_CHECKING, Any
 
 from .. import jail as _jail, turn_settings as _turn_settings
 from ..media import IMAGE_RESULT_PREFIX
-from ..skills import SkillCatalog
 from . import reads as _reads
 from .presentation import Presentation
 from .reads import ReadLedger
@@ -33,6 +32,7 @@ from .undo import UndoStore, session_directory
 if TYPE_CHECKING:
     from ..config import Config
     from ..context_budget import TokenState
+    from ..skills import SkillCatalog
     from .registry import ToolRegistry
 
 
