@@ -1265,8 +1265,6 @@ class _CallWay:
     scoped: bool = True
     # A read's coverage is narrowed to what the cap let through.
     reconcile_reads: bool = True
-    # An unknown tool's error is capped.
-    cap_unknown: bool = True
     # A call of an unknown `write` holds its content.
     hold_unknown_write: bool = False
 
@@ -1284,7 +1282,7 @@ async def _call_fan_out(tool: Any, args: dict, context: ToolContext) -> Any:
 # A sync handler on a dispatch worker thread.
 _ON_THREAD = _CallWay(_call_on_this_thread, hold_unknown_write=True)
 # An async handler awaited on the loop.
-_ON_LOOP = _CallWay(call_tool_async, cap_unknown=False)
+_ON_LOOP = _CallWay(call_tool_async)
 # A fan-out (task / named-agent) handler awaited on the loop.
 _FAN_OUT = _CallWay(_call_fan_out, scoped=False, reconcile_reads=False)
 
@@ -1325,8 +1323,7 @@ async def _run_call(way: _CallWay, name: str, raw_args: str, *, call_id: str, ca
         result = registry.unavailable_error(name)
         if way.hold_unknown_write and _canonical_tool_call_name(name, registry) == "write":
             result += held.hold_failed_call(context, raw_args, args)
-        if way.cap_unknown:
-            result = _cap_result(result, cap_bytes, context=context)
+        result = _cap_result(result, cap_bytes, context=context)
         _trace_result(telemetry, context, name, result, args=args, exchange=opened, traced=trace)
         return args, result
 
