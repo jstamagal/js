@@ -59,6 +59,11 @@ persists each completed turn.
 | `js/turn_stream.py` | a turn's events (`TurnEvents`) and its streamed reply as output events (`StreamSink`) |
 | `js/output.py` | output events (`OutputEvent`), the `Sink` a turn emits them to (`Telemetry.sink`), the list of the loop's events and their fields |
 | `js/console.py` | js's console sink (`ConsoleSink`): draws output events on stdout or the screen, folds tool runs (`ToolTrace`) |
+| `js/display.py` | answer text on its way to the terminal: the speakers' marks, Markdown rendering (`render_markdown`), the answer stream (`Display`), the colours (`Theme`) |
+| `js/tool_display.py` | a tool exchange as the screen draws it (`render_exchange`, `render_fold`), and as the transcript records it (`for_transcript`) |
+| `js/resume_view.py` | a resumed session's last exchanges, in the order a turn drew them (`resume_parts`) |
+| `js/text_layout.py` | text in terminal columns: `cells`, `cut_points`, wrapping, the terminal's width |
+| `js/control_sequences.py` | model and tool text kept from acting as terminal control sequences (`StreamCleaner`, `clean`) |
 | `js/transcript.py` | the transcript log (`TranscriptLogSink`), its stdout tee, and its record of output events (`TranscriptSink`) |
 | `js/debug_trace.py` | the request-trace autolog (`DebugTraceSink`), its path, and the stdout tee `-d` writes through |
 | `js/turn_surface.py` | the session file's record of the lazy tool surface, restored per agent and directory |
