@@ -1,4 +1,4 @@
-"""Subagent delegation (task, named-agent tools, the subagent gate), plus the plan and skill tools."""
+"""Subagent delegation (task, named-agent tools, the subagent gate)."""
 
 from __future__ import annotations
 
@@ -24,7 +24,6 @@ from .. import (
     turn_settings as _turn_settings,
 )
 from ..events import RefusableOnly
-from ..skills import discover_skills, load_skill
 from ..text_bytes import cap_text
 from . import task_jobs
 from .core import Tool, ToolContext
@@ -218,61 +217,6 @@ def _launch_fields(idx: int, total: int, agent: str, cfg: Any, registry: Any) ->
         "session": session.stem if saved else "",
         "session_file": str(session) if saved else "",
     }
-
-
-def _filename_limit(directory: Path) -> int:
-    """Longest single filename component this filesystem accepts, in bytes."""
-    try:
-        limit = os.pathconf(directory, "PC_NAME_MAX")
-    except (OSError, ValueError):
-        return 255
-    return limit if limit > 0 else 255
-
-
-def plan(
-    plan_name: str,
-    version: str,
-    content: str,
-    overwrite: bool = False,
-    context: ToolContext | None = None,
-) -> str:
-    assert context is not None
-    safe_name = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in plan_name).strip("-.") or "plan"
-    safe_version = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in version).strip("-.") or "v1"
-    filename = f"{safe_name}-{safe_version}.md"
-    plans = paths.plans_dir()
-    limit = _filename_limit(plans if plans.is_dir() else plans.parent if plans.parent.is_dir() else context.cwd)
-    if len(filename.encode("utf-8")) > limit:
-        return (
-            f"ERROR: plan filename is {len(filename.encode('utf-8'))} bytes, over this "
-            f"filesystem's {limit}-byte limit for one name; shorten plan_name or version"
-        )
-    target = plans / filename
-    existed = target.exists()
-    if existed and not overwrite:
-        return f"ERROR: plan already exists at {target}; pass overwrite=true to replace it"
-    context.snapshot(target)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(content)
-    action = "overwritten" if existed else "written"
-    return f"plan {action} at {target}" if existed else f"plan written to {target}"
-
-
-def skill(name: str, context: ToolContext | None = None, *, user_command: str = "/skill") -> str:
-    assert context is not None
-    catalog = context.skill_catalog
-    if catalog is None:
-        catalog = discover_skills(context.cwd, disabled=context.skills_disabled)
-    metadata = catalog.get(name)
-    if metadata is not None and not metadata.model_invocable:
-        return f"ERROR: skill {metadata.name!r} is user-only; the user loads it with {user_command} {metadata.name}"
-    try:
-        loaded = load_skill(catalog, name, tool_registry=context.tool_registry)
-    except (OSError, ValueError):
-        return f"ERROR: skill {name!r} instructions could not be read"
-    if loaded is not None:
-        return loaded.render()
-    return f"ERROR: skill {name!r} not found in js/skills or local skills directories"
 
 
 def _task_text(item: Any) -> str:
@@ -975,10 +919,6 @@ def _task_params(flags: tuple[str, ...]) -> dict:
 
 def tools(flags: tuple[str, ...] = ("model_override",)) -> tuple[Tool, ...]:
     return (
-        Tool("plan", load_description("plan"), plan, {"plan_name": {"type": "string", "description": load_parameter_description('plan', 'plan_name')}, "version": {"type": "string", "description": load_parameter_description('plan', 'version')}, "content": {"type": "string", "description": load_parameter_description('plan', 'content')}, "overwrite": {"type": "boolean", "default": False, "description": load_parameter_description('plan', 'overwrite')}}, required=("plan_name", "version", "content"),
-             presentation=Presentation(key=("plan_name",), body="content", lexer="markdown")),
-        Tool("skill", load_description("skill"), skill, {"name": {"type": "string", "description": load_parameter_description('skill', 'name')}}, required=("name",), read_only=True,
-             presentation=Presentation(key=("name",))),
         Tool(
             "task",
             load_description("task", flags=flags),

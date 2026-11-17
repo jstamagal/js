@@ -42,7 +42,7 @@ guards, task parallelism, and provider-specific name handling at the boundary.
 2. shell and fetch (`shell_fetch.py`)
 3. web search, docs search and browse (`web_search.py`)
 4. jev, terminal session and browser probe tools (`jev.py`, `terminal.py`, `browser.py`)
-5. task, plan and skill (`subagents.py`)
+5. plan, skill and task (`plan.py`, `skill.py`, `subagents.py`)
 6. wiki tools (`wiki/`)
 7. kernel, toolbox, lsp and notebook tools (`python_kernel.py`, `toolbox.py`, `lsp.py`, `notebook.py`)
 8. swarm tools (`js/swarm.py`)

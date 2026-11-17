@@ -60,7 +60,9 @@ persists each completed turn.
 | `js/toolkit/policy.py` | `noun:modifier` chains, `tools.yaml` tags and argument bans, `/tools` table |
 | `js/toolkit/fs.py` | file read/write/search/edit/delete/undo tools |
 | `js/toolkit/shell_fetch.py` | shell and fetch tools |
-| `js/toolkit/subagents.py` | plan/skill/task and generated agent tools |
+| `js/toolkit/plan.py` | plan tool |
+| `js/toolkit/skill.py` | skill tool |
+| `js/toolkit/subagents.py` | task and generated agent tools |
 | `js/toolkit/wiki/` | deterministic tools for installed wiki agents |
 
 ## Prompt Loading
@@ -154,7 +156,9 @@ web_search.py     web search, docs search and browse
 jev.py            jev
 terminal.py       terminal sessions
 browser.py        browser probe
-subagents.py      task, plan and skill
+plan.py           plan
+skill.py          skill
+subagents.py      task
 wiki/             wiki tools
 python_kernel.py  kernel
 toolbox.py        toolbox
