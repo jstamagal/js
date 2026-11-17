@@ -11,7 +11,7 @@ import pytest
 from test_cli_prompt_mode import _auto_compact, _auto_state
 from test_config_compaction_layers import _compact_test_cfg
 
-from js import compaction, context_window, runtime
+from js import compaction, compaction_summary, context_window, runtime
 
 
 def read_flight(cfg):
@@ -37,7 +37,7 @@ def test_flight_persists_before_after_and_terminal_outcome(monkeypatch, tmp_path
             raise failure
         return "summary"
 
-    monkeypatch.setattr(compaction, "summarize", summarize)
+    monkeypatch.setattr(compaction_summary, "summarize", summarize)
     if failure is None:
         asyncio.run(compaction.compact_now(cfg, "SYSTEM", messages, forced=True, log_dir=compaction.flight_log_dir(cfg), emit=compaction.printing()))
     else:

@@ -10,7 +10,7 @@ from test_compaction_flight import _flight_cfg
 from test_config_compaction_layers import _compact_test_cfg
 from test_turn_budget import _Setup, _tool_history
 
-from js import compaction, compaction_flight, microcompact
+from js import compaction, compaction_flight, compaction_summary, microcompact
 
 
 def no_space(*args, **kwargs):
@@ -113,7 +113,7 @@ def test_committed_summary_is_applied_despite_final_flight_failure(tmp_path, mon
             self.stream = BadClose()
         return original_close(self)
 
-    monkeypatch.setattr(compaction, "summarize", summarize)
+    monkeypatch.setattr(compaction_summary, "summarize", summarize)
     monkeypatch.setattr(compaction_flight.CompactionFlight, "_record", record)
     monkeypatch.setattr(compaction_flight.CompactionFlight, "close", close)
     assert setup.fit(phase="preflight", force=True)
@@ -144,7 +144,7 @@ def test_required_session_write_failure_still_raises(tmp_path, monkeypatch):
     async def summarize(*a, **kw):
         return "summary"
 
-    monkeypatch.setattr(compaction, "summarize", summarize)
+    monkeypatch.setattr(compaction_summary, "summarize", summarize)
     monkeypatch.setattr(compaction.M, "persist_messages", no_space)
     with pytest.raises(OSError):
         asyncio.run(compaction.compact_now(cfg, "system", messages, forced=True, log_dir=tmp_path / "flights"))

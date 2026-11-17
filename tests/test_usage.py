@@ -14,7 +14,15 @@ import ai.types.usage
 import pytest
 from test_lazy_tool_discovery import _cfg
 
-from js import compaction, repl, repl_session_commands, runtime, screen, usage
+from js import (
+    compaction,
+    compaction_summary,
+    repl,
+    repl_session_commands,
+    runtime,
+    screen,
+    usage,
+)
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.repl_state import ReplState
 from js.toolkit.core import ToolContext
@@ -181,7 +189,7 @@ def test_compaction_summary_calls_are_charged_to_the_session(tmp_path, monkeypat
         return _reply(text="## Goal\nsummary", use=_usage(5000, 300))
 
     monkeypatch.setattr(compaction.model_client, "stream_model_async", summary)
-    asyncio.run(compaction.summarize(cfg, "gpt-5", [{"role": "user", "content": "x"}], "", ""))
+    asyncio.run(compaction_summary.summarize(cfg, "gpt-5", [{"role": "user", "content": "x"}], "", ""))
 
     assert usage.totals(cfg.session_file).input_tokens == 5000
 

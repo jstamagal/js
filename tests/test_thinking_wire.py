@@ -18,6 +18,7 @@ import pytest
 from turn_driver import one_turn
 
 from js import (
+    compaction_summary,
     history_record,
     logins,
     memory,
@@ -602,7 +603,7 @@ def test_a_keep_tail_compaction_drops_the_signed_thinking_it_keeps(monkeypatch, 
     async def summarize(*_a, **_kw):
         return "summary"
 
-    monkeypatch.setattr(compaction, "summarize", summarize)
+    monkeypatch.setattr(compaction_summary, "summarize", summarize)
     messages = _three_tool_rounds()
     messages[0] = {"role": "user", "content": "go " * 2000}
     asyncio.run(compaction.compact_now(cfg, "SYSTEM", messages, forced=True, preserve_from=3,

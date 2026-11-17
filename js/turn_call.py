@@ -56,7 +56,7 @@ def cut_off_by_cap(incomplete_reason: str | None, arguments: list[str]) -> bool:
     the raw arguments of the reply's tool calls."""
     return (
         bool(incomplete_reason)
-        and compaction.is_max_output_incomplete(incomplete_reason)
+        and provider_errors.is_max_output_incomplete(incomplete_reason)
         and (not arguments or dangling_arguments(arguments))
     )
 

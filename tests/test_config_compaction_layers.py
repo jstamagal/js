@@ -4,7 +4,15 @@ from types import SimpleNamespace
 
 from session_marks import append_compaction_mark
 
-from js import compaction, compaction_settings, context_window, memory, persona, settings
+from js import (
+    compaction,
+    compaction_settings,
+    compaction_summary,
+    context_window,
+    memory,
+    persona,
+    settings,
+)
 from js.capped_process import CappedProcessResult
 from js.config import Config, InvocationSources, from_env
 from js.toolkit.registry import build_default_registry
@@ -143,7 +151,7 @@ def test_compact_messages_invalid_numeric_settings_fall_back(monkeypatch, tmp_pa
     async def summarize_stub(*a, **kw):
         return "Summary"
 
-    monkeypatch.setattr(compaction, "summarize", summarize_stub)
+    monkeypatch.setattr(compaction_summary, "summarize", summarize_stub)
 
     result = compaction.compact_now_sync(cfg, "SYSTEM", messages, forced=True)
 
@@ -178,11 +186,11 @@ def test_compact_pre_hook_ignores_malformed_and_blank_values(monkeypatch, tmp_pa
         calls.append(cmd)
         raise AssertionError(f"pre_hook should not run for malformed value: {cmd!r}")
 
-    monkeypatch.setattr(compaction, "_run_capped", run_stub)
+    monkeypatch.setattr(compaction_summary, "_run_capped", run_stub)
 
     for raw in (["echo hi"], {"cmd": "echo hi"}, 123, "   "):
         cfg = _compact_test_cfg(tmp_path, {"COMPACTION_HINT_COMMAND": raw})
-        assert compaction._run_pre_hook(cfg) == ""
+        assert compaction_summary.run_pre_hook(cfg) == ""
 
     assert calls == []
 
@@ -195,10 +203,10 @@ def test_compact_pre_hook_trims_valid_command(monkeypatch, tmp_path):
         captured.update(kwargs)
         return CappedProcessResult(returncode=0, stdout=b"hook guidance\n", stderr=b"")
 
-    monkeypatch.setattr(compaction, "_run_capped", run_stub)
+    monkeypatch.setattr(compaction_summary, "_run_capped", run_stub)
     cfg = _compact_test_cfg(tmp_path, {"COMPACTION_HINT_COMMAND": "  echo guidance  "})
 
-    assert compaction._run_pre_hook(cfg) == "hook guidance"
+    assert compaction_summary.run_pre_hook(cfg) == "hook guidance"
     assert captured["cmd"][-2:] == ["-c", "echo guidance"]
     assert captured["timeout"] == 30
 
@@ -213,11 +221,11 @@ def test_compact_pre_hook_output_is_capped_and_marked(monkeypatch, tmp_path):
             stdout_truncated=True,
         )
 
-    monkeypatch.setattr(compaction, "_run_capped", run_stub)
+    monkeypatch.setattr(compaction_summary, "_run_capped", run_stub)
     cfg = _compact_test_cfg(tmp_path, {"COMPACTION_HINT_COMMAND": "yes"})
     cfg = Config(**{**cfg.__dict__, "max_bash_output_bytes": 128})
 
-    actual = compaction._run_pre_hook(cfg)
+    actual = compaction_summary.run_pre_hook(cfg)
 
     assert actual.startswith("x" * 128)
     assert "[truncated: SHELL_OUTPUT_MAX (128) reached]" in actual
@@ -229,7 +237,7 @@ def test_compact_model_same_is_normalized_and_malformed_values_fall_back(monkeyp
         seen_models.append(model)
         return f"Summary from {model}"
 
-    monkeypatch.setattr(compaction, "summarize", summarize_stub)
+    monkeypatch.setattr(compaction_summary, "summarize", summarize_stub)
 
     for raw in (" SAME ", "same", 123):
         cfg = _compact_test_cfg(tmp_path, {"COMPACTION_EXTERNAL_MODEL": raw})
@@ -247,7 +255,7 @@ def test_compact_now_model_argument_overrides_the_configured_summary_model(monke
         seen_models.append(model)
         return f"Summary from {model}"
 
-    monkeypatch.setattr(compaction, "summarize", summarize_stub)
+    monkeypatch.setattr(compaction_summary, "summarize", summarize_stub)
 
     cfg = _compact_test_cfg(tmp_path, {"COMPACTION_EXTERNAL_MODEL": "configured-summarizer"})
     messages = [{"role": "user", "content": "old " * 20000},

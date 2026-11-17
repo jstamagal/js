@@ -21,6 +21,7 @@ from turn_driver import one_turn
 from js import (
     cli,
     compaction,
+    compaction_summary,
     context_window,
     conversation,
     events,
@@ -423,7 +424,7 @@ def summarize_stub(monkeypatch):
     async def summarize(*_args, **_kwargs):
         return "## Summary\nshort"
 
-    monkeypatch.setattr(compaction, "summarize", summarize)
+    monkeypatch.setattr(compaction_summary, "summarize", summarize)
 
 
 def _compact_cfg(tmp_path):
@@ -481,7 +482,7 @@ def test_mid_turn_compaction_runs_the_compact_handlers(monkeypatch, tmp_path):
             reply = replace(reply, usage=ai.types.usage.Usage(input_tokens=500, output_tokens=10))
         return reply
 
-    monkeypatch.setattr(compaction, "summarize", summarize)
+    monkeypatch.setattr(compaction_summary, "summarize", summarize)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
     messages = [
         {"role": "user", "content": "old context " * 150},

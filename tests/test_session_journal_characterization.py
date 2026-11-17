@@ -18,7 +18,7 @@ from types import SimpleNamespace
 import pytest
 from test_config_compaction_layers import _compact_test_cfg
 
-from js import compaction, memory as M, repl_session_commands
+from js import compaction, compaction_summary, memory as M, repl_session_commands
 from js.repl_state import ReplState
 
 FIXTURES = Path(__file__).parent / "fixtures" / "session_journal"
@@ -79,7 +79,7 @@ def test_compaction_writes_its_mark_and_the_live_history_replays(monkeypatch, tm
     async def summarize(*_args, **_kwargs):
         return "SUMMARY"
 
-    monkeypatch.setattr(compaction, "summarize", summarize)
+    monkeypatch.setattr(compaction_summary, "summarize", summarize)
     monkeypatch.setattr(compaction, "_post_compact_rehydration", lambda *_a, **_k: rehydrated)
     cfg = _compact_test_cfg(tmp_path, {"COMPACTION_KEEP_RECENT_TOKENS": 10,
                                        "COMPACTION_MIN_SAVINGS_TOKENS": 1})

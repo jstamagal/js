@@ -14,6 +14,7 @@ from test_lazy_tool_discovery import _cfg, _result
 
 from js import (
     compaction,
+    compaction_summary,
     context_window,
     memory,
     messages as msgs,
@@ -100,7 +101,7 @@ def test_three_failed_summaries_pause_in_turn_compaction_with_one_line(monkeypat
         raise RuntimeError("summarizer down")
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
-    monkeypatch.setattr(compaction, "summarize", failing_summary)
+    monkeypatch.setattr(compaction_summary, "summarize", failing_summary)
     for _ in range(4):
         _turn(cfg, _over_budget_history(), context)
 
@@ -123,7 +124,7 @@ def test_breaker_limit_is_the_setting(monkeypatch, tmp_path):
         raise RuntimeError("summarizer down")
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
-    monkeypatch.setattr(compaction, "summarize", failing_summary)
+    monkeypatch.setattr(compaction_summary, "summarize", failing_summary)
     _turn(cfg, _over_budget_history(), context)
     _turn(cfg, _over_budget_history(), context)
     assert len(attempts) == 1
@@ -138,7 +139,7 @@ def test_a_successful_summary_resumes_paused_compaction(monkeypatch, tmp_path):
     async def summary(*args, **kwargs):
         return "short summary"
 
-    monkeypatch.setattr(compaction, "summarize", summary)
+    monkeypatch.setattr(compaction_summary, "summarize", summary)
     result = compaction.compact_now_sync(cfg, "system", _over_budget_history(), context=context)
     assert compaction.compacted(result)
     assert context.summary_failures == 0
@@ -186,7 +187,7 @@ def test_summary_request_is_plain_text_with_tool_results_clipped(monkeypatch, tm
             {"id": "c1", "type": "function", "function": {"name": "read", "arguments": '{"path": "a.py"}'}}]},
         {"role": "tool", "tool_call_id": "c1", "name": "read", "content": body},
     ]
-    asyncio.run(compaction.summarize(_config(tmp_path), "offline-test", messages, "", ""))
+    asyncio.run(compaction_summary.summarize(_config(tmp_path), "offline-test", messages, "", ""))
 
     (text,) = requests
     assert user in text                 # verbatim, not JSON-escaped
@@ -201,7 +202,7 @@ def test_summary_tool_result_chars_zero_sends_whole_results(monkeypatch, tmp_pat
     messages = [{"role": "user", "content": "go"},
                 {"role": "tool", "tool_call_id": "c1", "name": "read", "content": body}]
     cfg = _config(tmp_path, {"COMPACTION_SUMMARY_RESULT_CHARS_MAX": 0})
-    asyncio.run(compaction.summarize(cfg, "offline-test", messages, "", ""))
+    asyncio.run(compaction_summary.summarize(cfg, "offline-test", messages, "", ""))
     assert body in requests[0]
 
 
@@ -240,7 +241,7 @@ def test_split_summary_sends_the_previous_summary_once(monkeypatch, tmp_path):
     monkeypatch.setattr(model_client, "_stream_async", sdk)
     messages = [memory.compaction_summary_message("OLD_SUMMARY"),
                 *({"role": "user", "content": f"entry {i}"} for i in range(8))]
-    summary = asyncio.run(compaction.summarize(_config(tmp_path), "offline-test", messages, "", ""))
+    summary = asyncio.run(compaction_summary.summarize(_config(tmp_path), "offline-test", messages, "", ""))
     assert ["OLD_SUMMARY" in r for r in requests] == [True, True, False]
     assert "part 2" in summary and "part 3" in summary
 
@@ -263,7 +264,7 @@ def test_budget_clears_tool_results_once_the_cache_expired(monkeypatch, tmp_path
         return "summary"
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
-    monkeypatch.setattr(compaction, "summarize", summary)
+    monkeypatch.setattr(compaction_summary, "summarize", summary)
     messages = _tool_heavy_history()
     _turn(cfg, messages, context)
     assert any(m.get("content") == microcompact.MICROCOMPACT_CLEARED_MESSAGE for m in messages)
@@ -284,7 +285,7 @@ def test_budget_summarizes_instead_of_clearing_while_the_cache_is_warm(monkeypat
         return "summary"
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
-    monkeypatch.setattr(compaction, "summarize", summary)
+    monkeypatch.setattr(compaction_summary, "summarize", summary)
     messages = _tool_heavy_history()
     _turn(cfg, messages, context)
     assert summaries
@@ -314,7 +315,7 @@ def test_paused_summaries_still_clear_while_the_cache_is_warm(monkeypatch, tmp_p
         return "summary"
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
-    monkeypatch.setattr(compaction, "summarize", summary)
+    monkeypatch.setattr(compaction_summary, "summarize", summary)
     messages = history()
     _turn(cfg, messages, context)
     assert summaries == []
@@ -335,7 +336,7 @@ def test_warm_cache_clears_the_current_turn_before_summarizing_it(monkeypatch, t
         return "summary"
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
-    monkeypatch.setattr(compaction, "summarize", summary)
+    monkeypatch.setattr(compaction_summary, "summarize", summary)
     messages = _current_turn_tool_heavy_history()
     _turn(cfg, messages, context)
     assert summaries == []
@@ -355,7 +356,7 @@ def test_one_budget_check_counts_one_failed_summary(monkeypatch, tmp_path):
         raise RuntimeError("summarizer down")
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
-    monkeypatch.setattr(compaction, "summarize", failing_summary)
+    monkeypatch.setattr(compaction_summary, "summarize", failing_summary)
     _turn(cfg, _over_budget_history(), context)
     assert len(attempts) == 1
     assert context.summary_failures == 1
@@ -470,7 +471,7 @@ def test_a_paid_summary_that_saves_too_little_counts_toward_the_breaker(monkeypa
         calls.append(1)
         return "word " * 60000            # bigger than what it replaces
 
-    monkeypatch.setattr(compaction, "summarize", huge_summary)
+    monkeypatch.setattr(compaction_summary, "summarize", huge_summary)
     trigger = {"phase": "between-turn"}
     for _ in range(4):
         if compaction.auto_paused(cfg, context):
@@ -489,6 +490,6 @@ def test_a_manual_compact_skip_does_not_touch_the_breaker(monkeypatch, tmp_path)
     async def huge_summary(*args, **kwargs):
         return "word " * 60000
 
-    monkeypatch.setattr(compaction, "summarize", huge_summary)
+    monkeypatch.setattr(compaction_summary, "summarize", huge_summary)
     compaction.compact_now_sync(cfg, "system", _over_budget_history(), context=context)
     assert getattr(context, "summary_failures", 0) == 0

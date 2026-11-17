@@ -450,3 +450,8 @@ class SilentOverflowError(ai.ProviderAPIError):
         )
         self.prompt_tokens = prompt_tokens
         self.context_window = context_window
+
+
+def is_max_output_incomplete(reason: object) -> bool:
+    text = str(reason or "").lower()
+    return text in {"max_output_tokens", "max_tokens", "length"} or "max_output" in text

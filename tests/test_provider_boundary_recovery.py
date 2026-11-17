@@ -9,7 +9,7 @@ import pytest
 from test_lazy_tool_discovery import _cfg, _result
 
 from js import (
-    compaction,
+    compaction_summary,
     context_window,
     microcompact,
     model_client,
@@ -65,7 +65,7 @@ def test_summary_partitions_through_real_boundary(monkeypatch, tmp_path, persist
     monkeypatch.setattr(model_client, "_stream_async", sdk)
     messages = [{"role": "user", "content": f"entry {i}"} for i in range(32)]
     entries = [m["content"] for m in messages]
-    call = compaction.summarize(_config(tmp_path), "offline-test", messages, "", "")
+    call = compaction_summary.summarize(_config(tmp_path), "offline-test", messages, "", "")
     if persistent:
         with pytest.raises(ai.ProviderAPIError) as caught:
             asyncio.run(call)
@@ -132,7 +132,7 @@ def test_summary_does_not_peel_non_overflow(monkeypatch, tmp_path):
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
     with pytest.raises(ai.ProviderAPIError) as caught:
-        asyncio.run(compaction.summarize(_config(tmp_path), "offline-test",
+        asyncio.run(compaction_summary.summarize(_config(tmp_path), "offline-test",
                                         [{"role": "user", "content": "x"}] * 12, "", ""))
     assert caught.value is error
     assert len(attempts) == 1
@@ -214,7 +214,7 @@ def test_in_turn_compaction_announces_and_records_trigger(monkeypatch, tmp_path,
         return "Earlier work summary"
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
-    monkeypatch.setattr(compaction, "summarize", summarize)
+    monkeypatch.setattr(compaction_summary, "summarize", summarize)
     asyncio.run(runtime.run_turn_async(
         cfg, "system", messages, runtime.Telemetry(None),
         tool_registry=build_default_registry().select([]),
@@ -249,7 +249,7 @@ def test_large_output_cap_keeps_small_conversation_intact(monkeypatch, tmp_path)
         return "summary"
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
-    monkeypatch.setattr(compaction, "summarize", summarize)
+    monkeypatch.setattr(compaction_summary, "summarize", summarize)
     asyncio.run(runtime.run_turn_async(
         cfg, "system", messages, runtime.Telemetry(None),
         tool_registry=build_default_registry().select([]),
@@ -338,7 +338,7 @@ def test_cached_agent_loop_keeps_context_without_repeated_summaries(monkeypatch,
 
     monkeypatch.setattr(model_client, "stream_model_async", response)
     monkeypatch.setattr(turn_dispatch, "dispatch_batch", dispatch)
-    monkeypatch.setattr(compaction, "summarize", summarize)
+    monkeypatch.setattr(compaction_summary, "summarize", summarize)
     messages = [{"role": "user", "content": "previous summary"},
                 {"role": "user", "content": "active task " + "material " * 10000}]
     asyncio.run(runtime.run_turn_async(

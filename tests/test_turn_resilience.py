@@ -16,7 +16,7 @@ import pytest
 from test_lazy_tool_discovery import _cfg
 
 from js import (
-    compaction,
+    compaction_summary,
     context_window,
     history_record,
     microcompact,
@@ -748,7 +748,7 @@ def _served_summary(tmp_path, script, runtime_settings=None):
             cfg = _config(tmp_path, runtime_settings, provider_id="openai",
                           provider_api_key="k", provider_base_url=server.url)
             summary = await asyncio.wait_for(
-                compaction.summarize(cfg, "m", [{"role": "user", "content": "hi"}], "", ""), 30)
+                compaction_summary.summarize(cfg, "m", [{"role": "user", "content": "hi"}], "", ""), 30)
             return server, summary
 
     return asyncio.run(drive())

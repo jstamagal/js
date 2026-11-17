@@ -22,6 +22,7 @@ from turn_driver import (
 
 from js import (
     compaction,
+    compaction_summary,
     events,
     history_record,
     repl,
@@ -404,7 +405,7 @@ def test_preflight_compacts_before_dispatch_when_request_would_overflow(monkeypa
         calls.append(list(kwargs["messages"]))
         return model_text_result("OK")
 
-    monkeypatch.setattr(compaction, "summarize", summarize_stub)
+    monkeypatch.setattr(compaction_summary, "summarize", summarize_stub)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = _budget_config(tmp_path, context_window=220)
     messages = [
@@ -458,7 +459,7 @@ def test_midturn_compacts_after_fat_tool_result_before_followup(monkeypatch, tmp
         order.append("second_stream")
         return model_text_result("DONE")
 
-    monkeypatch.setattr(compaction, "summarize", summarize_stub)
+    monkeypatch.setattr(compaction_summary, "summarize", summarize_stub)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = _budget_config(tmp_path, context_window=800)
     messages = [
@@ -506,7 +507,7 @@ def test_context_overflow_error_forces_compaction_and_retries_once(monkeypatch, 
         order.append("retry")
         return model_text_result("RECOVERED")
 
-    monkeypatch.setattr(compaction, "summarize", summarize_stub)
+    monkeypatch.setattr(compaction_summary, "summarize", summarize_stub)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = _budget_config(tmp_path, context_window=100_000)
     messages = [
