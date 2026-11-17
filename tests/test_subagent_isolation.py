@@ -9,7 +9,7 @@ import ai
 import pytest
 from tool_loading import after_loading
 
-from js import runtime
+from js import context_window, runtime
 from js.config import Config
 from js.mcp_config import resolve as resolve_mcp
 from js.memory import load_messages
@@ -22,7 +22,7 @@ from js.toolkit.subagents import task
 @pytest.fixture(autouse=True)
 def offline_model_metadata(monkeypatch):
     monkeypatch.setattr(runtime.model_metadata, "accepts_image_input", lambda *a, **k: False)
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
 
 
@@ -229,7 +229,7 @@ def test_child_expands_configured_persona_once_and_applies_token_cap(monkeypatch
     context.config = cfg
     monkeypatch.setenv("CHILD_VALUE", "expanded")
     monkeypatch.setenv("CHILD_INJECT", "{{CHILD_VALUE}}")
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 1_000_000)
     seen = []
 
     async def stream(**kwargs):

@@ -15,7 +15,16 @@ import httpx
 import pytest
 from test_lazy_tool_discovery import _cfg
 
-from js import compaction, history_record, model_client, retry, runtime, snippets, turn_call
+from js import (
+    compaction,
+    context_window,
+    history_record,
+    model_client,
+    retry,
+    runtime,
+    snippets,
+    turn_call,
+)
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
@@ -23,7 +32,7 @@ from js.toolkit.registry import build_default_registry
 
 @pytest.fixture(autouse=True)
 def offline_metadata(monkeypatch):
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: None)
     monkeypatch.setattr(turn_call, "_backoff", lambda _n, _budget: 0)
 
@@ -569,7 +578,7 @@ def _history_with_old_results() -> list[dict]:
 
 
 def test_a_stop_whose_input_exceeds_the_window_is_treated_as_overflow(monkeypatch, tmp_path):
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 20_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 20_000)
     # The SDK counts cache reads inside input_tokens: 24k with 20k of them cached.
     calls = _scripted_model(monkeypatch, [
         _answer_with_usage("answer from a cut input", 24_000, cache_read=20_000),
@@ -587,7 +596,7 @@ def test_a_stop_whose_input_exceeds_the_window_is_treated_as_overflow(monkeypatc
 
 
 def test_a_stop_inside_the_window_is_kept(monkeypatch, tmp_path):
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 20_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 20_000)
     calls = _scripted_model(monkeypatch, [_answer_with_usage("fits", 19_000, cache_read=15_000)])
     messages = _history_with_old_results()
 
@@ -621,7 +630,7 @@ def test_escalation_rejected_for_context_length_falls_back_without_shedding_hist
 
 
 def test_escalation_is_held_to_the_room_the_window_leaves(monkeypatch, tmp_path):
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 20_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 20_000)
     cut = replace(_cut("half"), usage=ai.types.usage.Usage(input_tokens=15_000, output_tokens=1000))
     calls = _scripted_model(monkeypatch, [cut, _done("whole")])
 
@@ -634,7 +643,7 @@ def test_escalation_is_held_to_the_room_the_window_leaves(monkeypatch, tmp_path)
 def test_a_window_with_no_room_left_skips_escalation(monkeypatch, tmp_path):
     # Anthropic's model_context_window_exceeded arrives as a 'length' finish:
     # prompt plus output filled the window before the cap did.
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 20_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 20_000)
     cut = replace(_cut("half"), usage=ai.types.usage.Usage(input_tokens=19_400, output_tokens=600))
     calls = _scripted_model(monkeypatch, [cut, _done("rest")])
     messages = [{"role": "user", "content": "go"}]
@@ -687,7 +696,7 @@ def test_a_cut_reply_already_printed_is_resumed_not_printed_twice(monkeypatch, t
 
 
 def test_a_silent_overflow_reply_already_printed_is_kept_and_history_shed(monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 20_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 20_000)
     calls = _scripted_streaming_model(monkeypatch, [
         _streaming("SHOWN", _answer_with_usage("SHOWN", 24_000)),
     ])
@@ -703,7 +712,7 @@ def test_a_silent_overflow_reply_already_printed_is_kept_and_history_shed(monkey
 
 def test_a_cap_stop_with_no_output_and_a_full_window_is_overflow(monkeypatch, tmp_path):
     # A server that cuts the input to its window leaves no room to answer.
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 20_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 20_000)
     filled = replace(_cut(""), usage=ai.types.usage.Usage(input_tokens=19_900, output_tokens=0))
     calls = _scripted_model(monkeypatch, [filled, _answer_with_usage("real answer", 12_000)])
     events = _Events()
@@ -717,7 +726,7 @@ def test_a_cap_stop_with_no_output_and_a_full_window_is_overflow(monkeypatch, tm
 
 
 def test_a_compact_window_above_the_catalog_is_the_window_silent_overflow_uses(monkeypatch, tmp_path):
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 20_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 20_000)
     calls = _scripted_model(monkeypatch, [_answer_with_usage("fits the real window", 24_000)])
     messages = _history_with_old_results()
 

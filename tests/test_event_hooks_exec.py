@@ -21,6 +21,7 @@ from turn_driver import one_turn
 from js import (
     cli,
     compaction,
+    context_window,
     conversation,
     events,
     hookexec,
@@ -336,7 +337,7 @@ def test_a_tool_call_guard_vets_a_subagents_calls(monkeypatch, tmp_path):
     from js.toolkit.registry import build_default_registry
 
     monkeypatch.setattr(runtime.model_metadata, "accepts_image_input", lambda *a, **k: False)
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
     worker = tmp_path / "prompts" / "worker"
     worker.mkdir(parents=True)

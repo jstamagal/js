@@ -18,7 +18,7 @@ import pytest
 from test_subagent_isolation import make_cfg, prompt_dir
 from test_swarm import _agent_dir, _call, _events, _spec, _text
 
-from js import compaction, runtime, session_store, swarm, swarm_run
+from js import compaction, context_window, runtime, session_store, swarm, swarm_run
 from js.config import Config
 from js.conversation import Conversation
 from js.toolkit import ToolContext, subagents
@@ -29,7 +29,7 @@ OUTCOMES = ("complete", "raise", "cancel")
 @pytest.fixture(autouse=True)
 def offline_model_metadata(monkeypatch):
     monkeypatch.setattr(runtime.model_metadata, "accepts_image_input", lambda *a, **k: False)
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
 
 

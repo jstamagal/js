@@ -21,6 +21,7 @@ from . import (
     agent_messages,
     attach,
     command_line,
+    context_window,
     conversation,
     debug_trace,
     display as display_mod,
@@ -475,7 +476,7 @@ def _turns(prepared: _PreparedRun, chat: Conversation, transcript, turn_kwargs: 
     repl_state.emit_repl_event(prepared.state, telemetry, "input", text=prepared.prompt, attachments=prepared.attachments)
     # In this context as well as the turn's, so the check after the
     # turn reads the same window.
-    runtime.install_context_window_overrides(cfg)
+    context_window.install_context_window_overrides(cfg)
     model_client.run_owning_loop(chat.turn(
         prepared.user_message, started=started, trace_override=trace_override, **turn_kwargs))
 

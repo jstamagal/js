@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from js import context_budget
+from js import context_budget, context_window
 
 
 def test_token_state_prefers_provider_usage_and_estimates_only_delta():
@@ -96,7 +96,7 @@ def test_a_hosted_provider_context_window_comes_from_the_model_catalog(monkeypat
 
     monkeypatch.setattr(runtime.model_metadata, "context_window", lambda *args: 1_050_000)
 
-    assert runtime._resolve_context_window("gpt-5.6-sol", "openai", None) == 1_050_000
+    assert context_window.resolve_context_window("gpt-5.6-sol", "openai", None) == 1_050_000
 
 
 def test_concurrent_turns_keep_their_own_overflow_window(tmp_path, monkeypatch):

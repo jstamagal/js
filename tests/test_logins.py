@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from js import logins, model_metadata, paths, runtime
+from js import context_window, logins, model_metadata, paths
 
 
 @pytest.fixture
@@ -247,9 +247,9 @@ def test_runtime_resolves_server_cached_metadata_before_catalog(monkeypatch, tmp
     monkeypatch.setattr(model_metadata, "context_window", lambda model, _provider: 500000 if model == "train-only" else 999999)
     monkeypatch.setattr(model_metadata, "max_output_tokens", lambda _model, _provider: 1234)
 
-    assert runtime._resolve_context_window("served-model", "vllm") == 32768
+    assert context_window.resolve_context_window("served-model", "vllm") == 32768
     assert model_metadata.resolve_max_output("served-model", "vllm") == 4096
-    assert runtime._resolve_context_window("train-only", "vllm") == 262144
+    assert context_window.resolve_context_window("train-only", "vllm") == 262144
 
 
 def test_runtime_does_not_use_n_ctx_train_as_context_without_fallback(monkeypatch, tmp_logins_dir):
@@ -261,7 +261,7 @@ def test_runtime_does_not_use_n_ctx_train_as_context_without_fallback(monkeypatc
     monkeypatch.setattr(model_metadata, "probe_local_context_window", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(model_metadata, "context_window", lambda _model, _provider: None)
 
-    assert runtime._resolve_context_window("train-only", "vllm") is None
+    assert context_window.resolve_context_window("train-only", "vllm") is None
 
 
 def test_remove_login_clears_cache(tmp_logins_dir):

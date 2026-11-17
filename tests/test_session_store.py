@@ -15,7 +15,17 @@ import pytest
 from repl_driver import stub_screen, turn_stub
 from session_marks import append_compaction_mark
 
-from js import cli, memory as M, repl, run_assembly, runtime, session_store, supervisor, usage
+from js import (
+    cli,
+    context_window,
+    memory as M,
+    repl,
+    run_assembly,
+    runtime,
+    session_store,
+    supervisor,
+    usage,
+)
 from js.config import from_env
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
@@ -34,7 +44,7 @@ from js.toolkit.subagents import task
 @pytest.fixture(autouse=True)
 def offline(monkeypatch):
     monkeypatch.setattr(runtime.model_metadata, "accepts_image_input", lambda *a, **k: False)
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
     for name in ("JS_DEFAULT_AGENT", "JS_SESSION", "JS_MODEL"):
         monkeypatch.delenv(name, raising=False)

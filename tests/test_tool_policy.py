@@ -10,7 +10,7 @@ import pytest
 from repl_driver import output_of, record_turns, run_async
 from turn_driver import one_turn
 
-from js import persona, repl_state, runtime
+from js import context_window, persona, repl_state, runtime
 from js.config import Config
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.repl_state import ReplState
@@ -224,7 +224,7 @@ def _tool_results(messages: list[dict]) -> list[str]:
 @pytest.fixture
 def offline_model(monkeypatch):
     monkeypatch.setattr(runtime.model_metadata, "accepts_image_input", lambda *a, **k: False)
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
 
 

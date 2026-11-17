@@ -14,6 +14,7 @@ from repl_driver import stub_screen, turn_stub
 
 from js import (
     cli,
+    context_window,
     conversation,
     memory as M,
     routing,
@@ -30,7 +31,7 @@ from js.session_catalog import last_stamp
 @pytest.fixture(autouse=True)
 def offline(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime.model_metadata, "accepts_image_input", lambda *a, **k: False)
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
     work = tmp_path / "work"
     work.mkdir()

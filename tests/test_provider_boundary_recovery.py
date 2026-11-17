@@ -8,14 +8,22 @@ import ai
 import pytest
 from test_lazy_tool_discovery import _cfg, _result
 
-from js import compaction, model_client, runtime, settings as _settings, turn_call, turn_dispatch
+from js import (
+    compaction,
+    context_window,
+    model_client,
+    runtime,
+    settings as _settings,
+    turn_call,
+    turn_dispatch,
+)
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
 
 
 @pytest.fixture(autouse=True)
 def offline_metadata(monkeypatch):
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
 
 
@@ -129,7 +137,7 @@ def test_summary_does_not_peel_non_overflow(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("window", [750000, 1000000])
 def test_runtime_banner_and_budget_share_configured_window(monkeypatch, tmp_path, capsys, window):
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: None)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: None)
     cfg = replace(_config(tmp_path), trace=True, settings={"CONTEXT_SIZE": window})
     events = []
 
@@ -155,7 +163,7 @@ def test_runtime_banner_and_budget_share_configured_window(monkeypatch, tmp_path
 
 
 def test_run_line_names_the_base_url_a_model_with_no_provider_goes_to(monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: None)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: None)
     cfg = replace(_config(tmp_path), trace=True, provider_id=None, provider_base_url="http://local.test:8080/v1")
 
     async def sdk(**kwargs):
@@ -174,7 +182,7 @@ def test_run_line_names_the_base_url_a_model_with_no_provider_goes_to(monkeypatc
 
 
 def test_run_line_shows_the_connect_and_first_byte_timeouts(monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: None)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: None)
     cfg = replace(_config(tmp_path), trace=True, settings={"CONNECT_TIMEOUT": 41, "FIRST_BYTE_TIMEOUT": 613})
 
     async def sdk(**kwargs):
@@ -306,7 +314,7 @@ def test_cached_agent_loop_keeps_context_without_repeated_summaries(monkeypatch,
 
     cfg = replace(_config(tmp_path), max_tool_iterations=20, max_output_tokens=None,
                   settings={"CONTEXT_SIZE_UNKNOWN": 128000})
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: None)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: None)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: None)
     calls = []
     summaries = []

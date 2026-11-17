@@ -11,7 +11,7 @@ import pytest
 from test_cli_prompt_mode import _auto_compact, _auto_state
 from test_config_compaction_layers import _compact_test_cfg
 
-from js import compaction, runtime
+from js import compaction, context_window, runtime
 
 
 def read_flight(cfg):
@@ -101,7 +101,7 @@ def test_same_repl_set_override_updates_anchor_then_request_budget(monkeypatch, 
     live = settings.seed_defaults()
     live["CONTEXT_SIZE"] = 128000
     live["DEBUG_LOG"] = True
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *args: None)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *args: None)
     answered = asyncio.Event()
 
     async def sdk(**kwargs):

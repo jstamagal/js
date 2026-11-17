@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from turn_driver import one_turn
 
-from js import paths, run_assembly, snippets
+from js import context_window, paths, run_assembly, snippets
 from js.toolkit import descriptions
 
 
@@ -142,7 +142,7 @@ def test_missing_runtime_snippet_exits_two(monkeypatch, tmp_path, capsys, mode):
     cfg = replace(_prompt_cfg(tmp_path, prompt_dir, "runtime"), max_output_tokens=4096)
     monkeypatch.setattr(run_assembly, "from_env", lambda *a, **k: cfg)
     monkeypatch.setattr(runtime.T, "STOCK_CONTEXT", ToolContext(cwd=tmp_path))
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
     real_find = paths.find
     monkeypatch.setattr(paths, "find", lambda relative: (
@@ -201,7 +201,7 @@ def test_tool_dispatch_propagates_snippet_configuration_failure(monkeypatch, tmp
     registry = ToolRegistry((tool,), {"fixture": "fixture"})
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kwargs: (
         model_tool_call_result("fixture", ["{}"])))
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
     with pytest.raises(snippets.SnippetError, match="absent"):
         one_turn(

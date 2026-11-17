@@ -3,7 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from js import model_metadata, runtime
+from js import context_window, model_metadata
 
 
 @pytest.fixture(autouse=True)
@@ -118,7 +118,7 @@ def test_probe_failure_returns_none_and_runtime_falls_back(monkeypatch, failure)
         )
         is None
     )
-    assert runtime._resolve_context_window(
+    assert context_window.resolve_context_window(
         "served-model",
         "openai-completions",
         "http://vllm.test/v1",
@@ -137,7 +137,7 @@ def test_openai_default_endpoint_is_not_probed(monkeypatch, base):
     monkeypatch.setattr(model_metadata, "context_window", lambda _model, _provider: 777)
 
     assert model_metadata.probe_local_context_window("gpt-4.1", "openai", base_url=base) is None
-    assert runtime._resolve_context_window("gpt-4.1", "openai", base) == 777
+    assert context_window.resolve_context_window("gpt-4.1", "openai", base) == 777
     assert calls == []
 
 
@@ -153,7 +153,7 @@ def test_openai_custom_endpoint_is_probed(monkeypatch):
     # A provider-like prefix in the model name must not redirect the probe away
     # from the route's provider: the server's own n_ctx beats catalog guesses.
     assert (
-        runtime._resolve_context_window(
+        context_window.resolve_context_window(
             "Alibaba/Qwen3.8-27B", "openai", "http://yoda.test:8080/v1"
         )
         == 262144
@@ -179,7 +179,7 @@ def test_explicit_endpoint_preserves_model_prefix_with_multiple_models(monkeypat
 
     monkeypatch.setattr(model_metadata, "_request_json", request)
     monkeypatch.setattr(model_metadata, "context_window", lambda *_args: 32768)
-    assert runtime._resolve_context_window(model, "openai", base) == 262144
+    assert context_window.resolve_context_window(model, "openai", base) == 262144
     expected = [("GET", f"{base}/models")]
     if detail:
         expected.append(("GET", f"{base}/models/Alibaba%2FQwen3.8-27B"))

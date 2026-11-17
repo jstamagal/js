@@ -19,6 +19,7 @@ from pathlib import Path
 
 from . import (
     compaction,
+    context_window,
     display as display_mod,
     events,
     fset,
@@ -258,7 +259,7 @@ def _apply_settings_result(result: setcmd.CommandResult, state: ReplState, cfg: 
     if result.error:
         return result.error
     if any(key.startswith("CONTEXT_SIZE") for key in keys):
-        runtime.install_context_window_overrides(state.config_for_turn(cfg))
+        context_window.install_context_window_overrides(state.config_for_turn(cfg))
     return None
 
 

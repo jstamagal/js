@@ -13,7 +13,7 @@ import ai
 import pytest
 from test_lazy_tool_discovery import _cfg, _result
 
-from js import compaction, context_budget, messages as msgs, model_client, runtime
+from js import compaction, context_budget, context_window, messages as msgs, model_client, runtime
 from js.toolkit import ToolContext
 from js.toolkit.core import TurnStatus
 from js.toolkit.registry import build_default_registry
@@ -22,7 +22,7 @@ from js.turn_budget import TurnBudget, TurnConvo
 
 @pytest.fixture(autouse=True)
 def offline_metadata(monkeypatch):
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
 
 

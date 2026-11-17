@@ -18,6 +18,7 @@ from js import (
     bench,
     cli,
     commit_cli,
+    context_window,
     conversation,
     listings,
     messages as msgs,
@@ -762,7 +763,7 @@ def test_prompt_mode_auto_compact_uses_model_override_for_same(monkeypatch, tmp_
 
     monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=compact_stub))
-    monkeypatch.setattr(cli.runtime, "_resolve_context_window", lambda _model, _provider, _base_url=None: 150_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda _model, _provider, _base_url=None: 150_000)
 
     actual = js(monkeypatch, "--model", "flag-model", "-p", "hi")
 
@@ -1197,7 +1198,7 @@ def test_auto_compact_invalid_numeric_config_falls_back_to_defaults(monkeypatch,
         },
     ):
         cfg = _auto_compact_cfg(tmp_path, compact=compact)
-        monkeypatch.setattr(cli.runtime, "_resolve_context_window", lambda _model, _provider, _base_url=None: 131072)
+        monkeypatch.setattr(context_window, "resolve_context_window", lambda _model, _provider, _base_url=None: 131072)
         monkeypatch.setattr(cli.runtime.T.STOCK_CONTEXT, "last_prompt_tokens", 104858, raising=False)  # ~80% of mocked metadata window
         _auto_compact(cfg, _auto_state(cfg))
 
@@ -1270,7 +1271,7 @@ def test_context_window_fallback_only_applies_when_the_model_is_unknown(monkeypa
     # Known model: metadata wins, the fallback is ignored entirely.
     calls: list[dict] = []
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=lambda *a, **kw: calls.append(kw) or msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")))
-    monkeypatch.setattr(cli.runtime, "_resolve_context_window", lambda *a, **kw: 1_050_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **kw: 1_050_000)
     cfg = _auto_compact_cfg(
         tmp_path,
         compact={"CONTEXT_SIZE_UNKNOWN": 370_000, "COMPACTION_HEADROOM_TOKENS": 4_096},
@@ -1282,7 +1283,7 @@ def test_context_window_fallback_only_applies_when_the_model_is_unknown(monkeypa
     assert calls == []
 
     # Unknown model: nothing to resolve, so the fallback is what we measure by.
-    monkeypatch.setattr(cli.runtime, "_resolve_context_window", lambda *a, **kw: None)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **kw: None)
     _auto_compact(cfg, _auto_state(cfg))
     assert len(calls) == 1
 
@@ -1291,40 +1292,40 @@ def test_context_window_override_beats_catalog_for_a_specific_surface():
     # A provider/model override wins over both the catalog row and a
     # provider-agnostic override for the same model id.
     try:
-        runtime.set_context_window_overrides({
+        context_window.set_context_window_overrides({
             "openai/gpt-5.6-sol": 370_000,
             "gpt-5.6-sol": 999_000,
         })
-        assert runtime._resolve_context_window("gpt-5.6-sol", "openai", None) == 370_000
-        assert runtime._resolve_context_window("gpt-5.6-sol", "openrouter", None) == 999_000
+        assert context_window.resolve_context_window("gpt-5.6-sol", "openai", None) == 370_000
+        assert context_window.resolve_context_window("gpt-5.6-sol", "openrouter", None) == 999_000
         # Untouched models still come from the catalog.
-        assert runtime._resolve_context_window("gpt-5.6-terra", "openai", None) != 370_000
+        assert context_window.resolve_context_window("gpt-5.6-terra", "openai", None) != 370_000
     finally:
-        runtime.set_context_window_overrides(None)
+        context_window.set_context_window_overrides(None)
 
 
 def test_context_window_overrides_ignore_junk_entries():
     try:
-        runtime.set_context_window_overrides({"a/b": "nope", "c/d": 0, "e/f": -5, "g/h": "7000"})
-        assert runtime._resolve_context_window("b", "a", None) is None
-        assert runtime._resolve_context_window("d", "c", None) is None
-        assert runtime._resolve_context_window("f", "e", None) is None
-        assert runtime._resolve_context_window("h", "g", None) == 7000
+        context_window.set_context_window_overrides({"a/b": "nope", "c/d": 0, "e/f": -5, "g/h": "7000"})
+        assert context_window.resolve_context_window("b", "a", None) is None
+        assert context_window.resolve_context_window("d", "c", None) is None
+        assert context_window.resolve_context_window("f", "e", None) is None
+        assert context_window.resolve_context_window("h", "g", None) == 7000
     finally:
-        runtime.set_context_window_overrides(None)
+        context_window.set_context_window_overrides(None)
 
 
 def test_context_window_overrides_rebuild_dotted_model_ids():
     # `set CONTEXT_SIZE_PER_MODEL.openai/gpt-5.6-sol 370000`
     # splits on every dot, so the loader must rejoin the id.
     try:
-        runtime.set_context_window_overrides(
+        context_window.set_context_window_overrides(
             {"openai/gpt-5": {"6-sol": 370_000, "6-terra": 370_000}}
         )
-        assert runtime._resolve_context_window("gpt-5.6-sol", "openai", None) == 370_000
-        assert runtime._resolve_context_window("gpt-5.6-terra", "openai", None) == 370_000
+        assert context_window.resolve_context_window("gpt-5.6-sol", "openai", None) == 370_000
+        assert context_window.resolve_context_window("gpt-5.6-terra", "openai", None) == 370_000
     finally:
-        runtime.set_context_window_overrides(None)
+        context_window.set_context_window_overrides(None)
 
 
 def test_model_context_window_overrides_the_catalog_for_the_active_model(tmp_path):
@@ -1332,12 +1333,12 @@ def test_model_context_window_overrides_the_catalog_for_the_active_model(tmp_pat
     cfg = _auto_compact_cfg(tmp_path)
     cfg = replace(cfg, model="gpt-5.6-sol", provider_id="openai", model_context_window=370_000)
     try:
-        runtime.install_context_window_overrides(cfg)
-        assert runtime._resolve_context_window("gpt-5.6-sol", "openai", None) == 370_000
+        context_window.install_context_window_overrides(cfg)
+        assert context_window.resolve_context_window("gpt-5.6-sol", "openai", None) == 370_000
         # Scoped to the model it names; a sibling still comes from the catalog.
-        assert runtime._resolve_context_window("gpt-5.6-terra", "openai", None) != 370_000
+        assert context_window.resolve_context_window("gpt-5.6-terra", "openai", None) != 370_000
     finally:
-        runtime.set_context_window_overrides(None)
+        context_window.set_context_window_overrides(None)
 
 
 def test_model_context_window_beats_the_multi_model_map(tmp_path):
@@ -1345,10 +1346,10 @@ def test_model_context_window_beats_the_multi_model_map(tmp_path):
     cfg = replace(cfg, model="gpt-5.6-sol", provider_id="openai", model_context_window=370_000)
     cfg.settings["CONTEXT_SIZE_PER_MODEL"] = {"openai/gpt-5": {"6-sol": 900_000}}
     try:
-        runtime.install_context_window_overrides(cfg)
-        assert runtime._resolve_context_window("gpt-5.6-sol", "openai", None) == 370_000
+        context_window.install_context_window_overrides(cfg)
+        assert context_window.resolve_context_window("gpt-5.6-sol", "openai", None) == 370_000
     finally:
-        runtime.set_context_window_overrides(None)
+        context_window.set_context_window_overrides(None)
 
 
 def test_named_nested_sessions_append_stably(monkeypatch, tmp_path):

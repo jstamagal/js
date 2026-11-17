@@ -12,14 +12,22 @@ import pytest
 from ai.types.usage import Usage
 from test_lazy_tool_discovery import _cfg, _result
 
-from js import compaction, memory, messages as msgs, model_client, runtime, stream_transport
+from js import (
+    compaction,
+    context_window,
+    memory,
+    messages as msgs,
+    model_client,
+    runtime,
+    stream_transport,
+)
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
 
 
 @pytest.fixture(autouse=True)
 def offline_metadata(monkeypatch):
-    monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
 
 

@@ -23,7 +23,16 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from . import attach, compaction, memory, messages as msgs, runtime, snippets, stream_transport
+from . import (
+    attach,
+    compaction,
+    context_window,
+    memory,
+    messages as msgs,
+    runtime,
+    snippets,
+    stream_transport,
+)
 from .config import Config
 from .toolkit import ToolContext, ToolRegistry
 
@@ -115,7 +124,7 @@ class Conversation:
         `compaction.compact_now`."""
         if not compaction.get_bool(self.cfg, "COMPACTION_AUTO"):
             return False
-        window = lambda: runtime._resolve_context_window(  # noqa: E731
+        window = lambda: context_window.resolve_context_window(  # noqa: E731
             self.cfg.model, self.cfg.provider_id, self.cfg.provider_base_url)
         outcome = await compaction.maybe_auto_compact_async(
             self.cfg, self.auto, self.context, self.system, self.messages, window, emit=emit, log_dir=log_dir)
@@ -207,7 +216,7 @@ async def maybe_auto_compact_async(cfg: Config, state: ReplState) -> None:
                 runtime.T.STOCK_CONTEXT,
                 state.system,
                 state.messages,
-                lambda: runtime._resolve_context_window(
+                lambda: context_window.resolve_context_window(
                     active_cfg.model, active_cfg.provider_id, active_cfg.provider_base_url
                 ),
                 **compaction.compact_hooks(state, active_cfg),
