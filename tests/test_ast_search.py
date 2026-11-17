@@ -251,3 +251,17 @@ def test_ast_search_refuses_apply_past_max_results(tmp_path):
         "narrow path or increase max_results before applying"
     )
     assert target.read_text(encoding="utf-8") == original
+
+
+@requires_ast_grep
+def test_ast_search_output_is_cut_to_the_result_cap_and_a_cap_of_zero_cuts_nothing(tmp_path):
+    (tmp_path / "a.py").write_text("".join(f"f({n})\n" for n in range(200)), encoding="utf-8")
+
+    def search(cap: int) -> str:
+        return ast_search("f($A)", path="a.py", lang="Python", max_results=500,
+                          context=ToolContext(cwd=tmp_path, max_tool_result_bytes=cap))
+
+    capped = search(300)
+    assert len(capped.encode("utf-8")) <= 300
+    assert "TOOL_RESULT_MAX" in capped
+    assert search(0).count("|f(") == 200

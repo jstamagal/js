@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from .. import paths
+from .. import settings as _settings
+from ..capped_process import truncation_marker
 from ..text_bytes import byte_prefix, byte_size, cap_text
 from .core import Output, ToolResult
 
@@ -22,6 +24,17 @@ def summary_text(result: Any) -> tuple[str, bool]:
         return text, result.is_error or text.startswith("ERROR")
     text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
     return text, not isinstance(result, Output) and text.startswith("ERROR")
+
+
+def truncate(text: str, context: Any, *, cut: bool = False) -> str:
+    """``text`` within the TOOL_RESULT_MAX bytes of ``context``. Text cut
+    here, or that ``cut`` says was cut before it got here, ends in the line
+    that says so. A cap of 0 or less is no cap."""
+    budget = int(_settings.knob_attr(context, "max_tool_result_bytes", "TOOL_RESULT_MAX") or 0)
+    if budget <= 0:
+        return text
+    marker = f"\n{truncation_marker(budget, 'TOOL_RESULT_MAX')}"
+    return cap_text(f"{text}{marker}" if cut else text, budget, marker)
 
 
 class _SpilledResult(str):

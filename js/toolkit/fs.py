@@ -29,6 +29,7 @@ from . import policy
 from ..tool_binaries import resolve_binary
 from .core import Output, Tool, ToolContext, view as _view
 from .reads import require_read
+from .results import truncate
 from .sanitize import int_or_default
 from .wiki.helpers import run
 from .descriptions import load_description, load_parameter_description
@@ -2062,19 +2063,6 @@ def _ast_records(
     return records, rc, stderr, timed_out, None, used_stdin
 
 
-def _cap_ast_output(text: str, context: ToolContext) -> str:
-    cap = max(0, int(context.max_tool_result_bytes))
-    encoded = text.encode("utf-8")
-    if len(encoded) <= cap:
-        return text
-    marker = f"[truncated: TOOL_RESULT_MAX ({cap}) reached]"
-    marker_bytes = marker.encode("utf-8")
-    if len(marker_bytes) >= cap:
-        return marker_bytes[:cap].decode("utf-8", errors="ignore")
-    prefix = encoded[: cap - len(marker_bytes) - 1].decode("utf-8", errors="ignore")
-    return f"{prefix}\n{marker}"
-
-
 def _ast_match_output(records: list[dict], context: ToolContext) -> str:
     blocks: list[str] = []
     for record in records:
@@ -2316,7 +2304,7 @@ def ast_search(
     overflow = len(records) > limit
     visible = records[:limit]
     if rewrite is None:
-        out = _cap_ast_output(_ast_match_output(visible, context), context)
+        out = truncate(_ast_match_output(visible, context), context)
         if overflow:
             out += "\n[additional matches omitted; increase max_results to see them]"
         if warning:
@@ -2332,7 +2320,7 @@ def ast_search(
     if not apply:
         suffix = "\n[additional matches omitted; increase max_results to preview them]" if overflow else ""
         out = f"DRY RUN: no files changed. Pass apply=true to apply.\n{diff}{suffix}"
-        out = _cap_ast_output(out, context)
+        out = truncate(out, context)
         if warning:
             out = f"{warning}\n{out}"
         if memoized:
@@ -2381,7 +2369,7 @@ def ast_search(
         prepared[target] = (source, updated)
     diff = _ast_rewrite_diff(prepared) or "(no changes)"
     summary = f"rewrote {len(visible)} match{'es' if len(visible) != 1 else ''} in {changed} file{'s' if changed != 1 else ''}"
-    out = _cap_ast_output(f"{summary}\n{diff}", context)
+    out = truncate(f"{summary}\n{diff}", context)
     if warning:
         out = f"{warning}\n{out}"
     return out
