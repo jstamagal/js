@@ -145,20 +145,13 @@ def test_an_oversized_result_is_cut_to_the_result_cap(tmp_path, monkeypatch, kin
 
 
 @pytest.mark.parametrize("kind", KINDS)
-def test_an_oversized_error_result(tmp_path, monkeypatch, kind):
+def test_an_oversized_error_is_counted_whole_then_cut_to_the_result_cap(tmp_path, monkeypatch, kind):
     cfg = replace(_cfg(tmp_path), max_tool_result_bytes=CAP)
     result, _ = _one(tmp_path, monkeypatch, kind, '{"mode":"big_error"}', cfg)
     assert result.startswith("ERROR: " + "y" * 100)
-    if kind == "sync":
-        # The error is counted first and then cut: the cap holds and the
-        # retry note is cut off with the tail.
-        assert byte_size(result) <= CAP
-        assert _retry(result) is None
-    else:
-        # The error is cut first and then counted: the retry note follows
-        # the cut text, past the cap.
-        assert byte_size(result) > CAP
-        assert _retry(result) == (2, 3)
+    # The retry note is cut off with the tail.
+    assert byte_size(result) <= CAP
+    assert _retry(result) is None
 
 
 @pytest.mark.parametrize("kind", KINDS)

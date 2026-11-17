@@ -1265,8 +1265,6 @@ class _CallWay:
     scoped: bool = True
     # A read's coverage is narrowed to what the cap let through.
     reconcile_reads: bool = True
-    # The error tracker counts the result before the cap cuts it, not after.
-    track_before_cap: bool = False
     # An unknown tool's error is capped.
     cap_unknown: bool = True
     # A call of an unknown `write` holds its content.
@@ -1284,7 +1282,7 @@ async def _call_fan_out(tool: Any, args: dict, context: ToolContext) -> Any:
 
 
 # A sync handler on a dispatch worker thread.
-_ON_THREAD = _CallWay(_call_on_this_thread, track_before_cap=True, hold_unknown_write=True)
+_ON_THREAD = _CallWay(_call_on_this_thread, hold_unknown_write=True)
 # An async handler awaited on the loop.
 _ON_LOOP = _CallWay(call_tool_async, cap_unknown=False)
 # A fan-out (task / named-agent) handler awaited on the loop.
@@ -1351,13 +1349,13 @@ async def _run_call(way: _CallWay, name: str, raw_args: str, *, call_id: str, ca
         result = _jail.shown(f'ERROR running {tool.name}: {type(exc).__name__}: {exc}')
     produced = as_output(result)
     result = produced.model
-    if way.track_before_cap and error_tracker is not None and isinstance(result, str):
+    # The tracker counts the whole error, and the cap is the last cut: an
+    # error over the cap loses its retry note with the rest of its tail.
+    if error_tracker is not None and isinstance(result, str):
         result = error_tracker.record(tool.name, result)
     capped = _cap_result(result, cap_bytes, context=context)
     if way.reconcile_reads:
         _reconcile_read_delivery(tool.name, args, result, capped, context, call_id)
-    if not way.track_before_cap and error_tracker is not None and isinstance(capped, str):
-        capped = error_tracker.record(tool.name, capped)
     _trace_result(telemetry, context, tool.name, _operator_sees(produced, result), args=args,
                   exchange=opened, view=view, traced=trace)
     return args, capped
