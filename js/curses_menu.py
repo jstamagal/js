@@ -222,11 +222,9 @@ def multiselect(
     return _curses_picker(stdscr, rows, title, preselected=preselected, on_edit=on_edit, keymaps=keymaps)
 
 
-def line_prompt(stdscr: curses.window, prompt: str, default: str, *,
-                   keymap: CursesKeymap | None = None) -> str | None:
+def line_prompt(stdscr: curses.window, prompt: str, default: str) -> str | None:
     """A line of text typed on the bottom row, starting from ``default``.
     Enter returns it, escape returns None."""
-    keymap = _CURSES_TEXT_KEYS if keymap is None else keymap
     h, w = stdscr.getmaxyx()
     text = default
     curses.curs_set(1)
@@ -239,7 +237,7 @@ def line_prompt(stdscr: curses.window, prompt: str, default: str, *,
                 stdscr.addstr(h - 1, 0, line)
             stdscr.refresh()
             key = stdscr.getch()
-            action = _curses_action(keymap, key)
+            action = _curses_action(_CURSES_TEXT_KEYS, key)
             if action == "choose":
                 return text
             if action == "back":
