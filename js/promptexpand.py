@@ -320,7 +320,7 @@ def _decode_capped(data: bytes, *, truncated: bool, max_output_bytes: int) -> st
 
 
 def run_capture(
-    argv, *, cwd=None, timeout_s: int, label: str, max_output_bytes: int, strict: bool = False, warn=None
+    argv, *, cwd=None, timeout_s: int, label: str, max_output_bytes: int, strict: bool = False
 ) -> str:
     try:
         proc = run_capped(
@@ -350,7 +350,7 @@ def run_capture(
         if not strict and stdout:
             # grep with no match or a script ending on a false test exits
             # nonzero after printing what the prompt wants.
-            (warn if warn is not None else _WARNING.get() or msgs.warn)(msgs.DIRECTIVE_EXITED_OUTPUT_USED, label=label, code=proc.returncode)
+            (_WARNING.get() or msgs.warn)(msgs.DIRECTIVE_EXITED_OUTPUT_USED, label=label, code=proc.returncode)
             return stdout.rstrip("\n")
         err = stderr.strip()
         if err:
