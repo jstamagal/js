@@ -93,8 +93,7 @@ def load_description(name: str, flags: tuple[str, ...] = ("model_override",)) ->
 def _description_path(name: str) -> Path:
     path = paths.find(Path("tool_descriptions") / f"{name}.md")
     if path is None:
-        searched = ", ".join(str(root / "tool_descriptions") for root in paths.layers()[:2])
-        raise FileNotFoundError(f"missing tool description {name!r}; searched {searched}")
+        raise FileNotFoundError(f"missing tool description {name!r}; searched {paths.searched('tool_descriptions')}")
     return path
 
 

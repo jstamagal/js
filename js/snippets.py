@@ -22,7 +22,7 @@ def substitute(text: str, values: dict[str, Any]) -> str:
 def render(name: str, **values: Any) -> str:
     """Read a required snippet, preserving its whitespace and inserted values."""
     relative = f"snippets/{name}.md"
-    searched = ", ".join(str(root / relative) for root in reversed(paths.layers()[:2]))
+    searched = paths.searched(relative)
     try:
         path = paths.find(relative)
         if path is None:

@@ -29,6 +29,7 @@ The locations js used before this layout are listed in `legacy_homes()`;
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from pathlib import Path
 
 _ROOT = Path(os.path.realpath(__file__)).parent.parent
@@ -128,6 +129,13 @@ def _file_layers(rel: str | Path) -> tuple[Path, ...]:
         raise ValueError(f"setup path must be relative: {rel}")
     roots = layers()
     return roots if path.parts and path.parts[0] in _PROJECT_SCOPES else roots[:2]
+
+
+def searched(rel: str | Path = "", roots: Iterable[Path] | None = None) -> str:
+    """What a failed lookup read, for its error message: ``rel`` under each of
+    ``roots`` (default: every layer that may hold ``rel``), lowest first,
+    comma-separated."""
+    return ", ".join(str(root / rel) for root in (_file_layers(rel) if roots is None else roots))
 
 
 def find(rel: str | Path) -> Path | None:

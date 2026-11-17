@@ -351,7 +351,7 @@ def load_prompt_spec(prompts_dir: Path | tuple[Path, ...] | list[Path], *, env: 
     its lower copy. ``env=False`` skips env files; ``prompt`` replaces prompt files."""
     sources = (prompts_dir,) if isinstance(prompts_dir, Path) else tuple(prompts_dir)
     if not any(source.is_dir() or source.is_file() for source in sources):
-        raise FileNotFoundError(f"unknown agent {sources[0].name!r}; searched " + ", ".join(map(str, sources)))
+        raise FileNotFoundError(f"unknown agent {sources[0].name!r}; searched " + paths.searched(roots=sources))
     files = _prompt_files(sources)
     md_files = [path for path in files if path.suffix == ".md"]
     legacy = next((path for path in files if path.suffix == ".yaml" and _is_zero_file(path)), None)

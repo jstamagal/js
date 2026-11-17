@@ -173,7 +173,7 @@ def theme_error(name: str) -> str | None:
         return None
     path = theme_path(name)
     if path is None:
-        return f"unknown theme {name!r}; searched " + ", ".join(str(root / "themes") for root in paths.layers()[:2])
+        return f"unknown theme {name!r}; searched " + paths.searched("themes")
     _themes.pop(path, None)
     for entry, value in theme_entries(name).items():
         if not _PALETTE_NAME.fullmatch(entry) or int(entry[-2:]) >= PALETTE_SIZE or not _HEX.fullmatch(value):
