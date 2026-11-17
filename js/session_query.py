@@ -554,20 +554,21 @@ class RowLayout:
 _STOCK_LAYOUT = RowLayout()
 
 
-def header_line(*, layout: RowLayout = _STOCK_LAYOUT) -> str:
+def header_line() -> str:
     return msgs.SESSION_PICKER_HEADER.words(
-        value=msgs.SESSION_COLUMN_WHEN.words(), _WHEN=layout.when,
-        value2=msgs.SESSION_COLUMN_MODE.words(), _MODE=layout.mode,
-        value3=msgs.SESSION_COLUMN_AGENT.words(), _AGENT=layout.agent,
-        value4=msgs.SESSION_COLUMN_DIR.words(), _DIR=layout.directory,
-        value5=msgs.SESSION_COLUMN_TURNS.words(), _TURNS=layout.turns,
-        value6=msgs.SESSION_COLUMN_LENGTH.words(), _LENGTH=layout.length)
+        value=msgs.SESSION_COLUMN_WHEN.words(), _WHEN=_STOCK_LAYOUT.when,
+        value2=msgs.SESSION_COLUMN_MODE.words(), _MODE=_STOCK_LAYOUT.mode,
+        value3=msgs.SESSION_COLUMN_AGENT.words(), _AGENT=_STOCK_LAYOUT.agent,
+        value4=msgs.SESSION_COLUMN_DIR.words(), _DIR=_STOCK_LAYOUT.directory,
+        value5=msgs.SESSION_COLUMN_TURNS.words(), _TURNS=_STOCK_LAYOUT.turns,
+        value6=msgs.SESSION_COLUMN_LENGTH.words(), _LENGTH=_STOCK_LAYOUT.length)
 
 
-def session_line(item: Item, *, now: float, home: str | Path, marker: str = " ", layout: RowLayout = _STOCK_LAYOUT) -> str:
+def session_line(item: Item, *, now: float, home: str | Path, marker: str = " ") -> str:
     """A session row: marker, when, mode, agent, dir, turns, length, then the
     session's name when it has one and its kind. A nested branch shows its
     branch point in place of mode, agent and dir."""
+    layout = _STOCK_LAYOUT
     session = item.session
     assert session is not None
     tail = (f" {session.turns:>{layout.turns}}  {length_text(session):<{layout.length}} {name_kind_text(session)}")
@@ -596,9 +597,9 @@ def excerpt(text: str, spans: tuple[tuple[int, int], ...], *, lead: int = 30,
     return head + cut + tail, moved
 
 
-def hit_line(number: int | None, who: str, text: str, *, layout: RowLayout = _STOCK_LAYOUT) -> str:
+def hit_line(number: int | None, who: str, text: str) -> str:
     """A search hit's matching row, as it shows under the session."""
-    head = layout.number.format(number=number) + " " if isinstance(number, int) and number > 0 else ""
+    head = _STOCK_LAYOUT.number.format(number=number) + " " if isinstance(number, int) and number > 0 else ""
     return f"{head}{who}  {' '.join(text.split())}"
 
 
