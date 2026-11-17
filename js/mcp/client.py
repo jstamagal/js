@@ -211,14 +211,12 @@ class MCPClient:
             "resources/list", "resources", "resources", progress_token, timeout
         )
 
-    async def list_resource_templates(
-        self, *, progress_token: ProgressToken | None = None, timeout: float | None = None
-    ) -> list[dict[str, Any]]:
+    async def list_resource_templates(self, *, timeout: float | None = None) -> list[dict[str, Any]]:
         return await self._paginate(
             "resources/templates/list",
             "resourceTemplates",
             "resources",
-            progress_token,
+            None,
             timeout,
         )
 
