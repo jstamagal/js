@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 
-from js.repl_state import ReplState
 from js.skills import (
     SkillCatalog,
     SkillInvocationError,
@@ -330,16 +329,23 @@ def test_user_invocation_ignores_other_lines_and_rejects_unknown_names(tmp_path)
 
 
 def test_repl_assembly_supplies_the_skill_invocation_command(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    from repl_driver import record_turns, run_async
+
     from js import cli, skills
+    from js.config import from_env
 
     monkeypatch.chdir(tmp_path)
     _write(tmp_path / ".js" / "skills" / "secret" / "SKILL.md", _USER_ONLY)
-    state = ReplState(settings={}, repl_assembly=cli.ReplAssembly(
-        commands={"use": cli.COMMANDS["skill"]}, skill_command="/use",
-    ))
-    line = "/use secret sharpen this plan"
-    assert cli._handle_command(line, state, None) is False
-    message = cli._expand_skill_line(line, state)
+    cfg = replace(from_env(), session_file=tmp_path / "session.jsonl")
+    assembly = cli.ReplAssembly(commands={"use": cli.COMMANDS["skill"]}, skill_command="/use")
+    turns = record_turns(monkeypatch)
+
+    run_async(monkeypatch, cfg, ["/use secret sharpen this plan"], wait=True, assembly=assembly)
+
+    [turn] = turns
+    message = turn.messages[-1]["content"]
     assert skills.user_invoked_skill(message) == "secret"
     assert "user-only body" in message
 
