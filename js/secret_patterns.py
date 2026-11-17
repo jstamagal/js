@@ -7,7 +7,6 @@ at the top of ``defaults/secret-patterns``.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -85,11 +84,6 @@ class SecretPatterns:
 def patterns_file() -> Path:
     """``~/.js/secret-patterns`` when it exists, else the stock defaults file."""
     return paths.find(FILE_NAME) or paths.defaults_dir() / FILE_NAME
-
-
-def export_env() -> None:
-    """Name the file for envctx, which runs as a child of js."""
-    os.environ[ENV_VAR] = str(patterns_file())
 
 
 def _charset(spec: str) -> frozenset[str]:

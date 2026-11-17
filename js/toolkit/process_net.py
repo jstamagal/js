@@ -855,13 +855,6 @@ def _aria_payload(
     )
 
 
-def _write_download(target: Path, data: bytes, content_type: str, context: ToolContext) -> str:
-    context.snapshot(target)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(data)
-    return f"SAVED_RESPONSE path={target} size={len(data)} bytes content-type={content_type or 'unknown'}"
-
-
 def _descriptor(kind: str, content_type: str, size: int, truncated: bool) -> str:
     suffix = " [truncated]" if truncated else ""
     return f"{kind} content-type={content_type or 'unknown'} size={size} bytes{suffix}"

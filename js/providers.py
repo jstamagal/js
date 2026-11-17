@@ -746,10 +746,6 @@ def assert_endpoint_configured(provider: ProviderDef, base_url: str | None) -> N
     )
 
 
-def login_ids() -> list[str]:
-    return [p.id for p in login_providers()]
-
-
 def provider_for_login(provider_id: str) -> ProviderDef:
     normalized = normalize_provider_id(provider_id) or provider_id
     provider = get_provider(normalized)

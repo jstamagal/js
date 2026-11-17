@@ -56,17 +56,6 @@ class DefaultsError(SystemExit):
     so an uncaught one ends the process with its one-line message."""
 
 
-CONFIG_PRECEDENCE_LAYERS = (
-    "defaults/jsrc",
-    "~/.js/jsrc",
-    "project .js/jsrc",
-    "project .js/jsrc.local",
-    "env vars",
-    "--extra CLI flag",
-)
-CANONICAL_CONFIG_PRECEDENCE = " < ".join(CONFIG_PRECEDENCE_LAYERS)
-
-
 # Empty-state display semantics. A setting with no value shows one of these:
 EMPTY_OFF = "off"        # boolean setting, explicitly false
 EMPTY_NONE = "none"      # no value set (rendered "<none>")
@@ -466,12 +455,6 @@ def spec_for(name: str) -> SettingSpec | None:
 _TRUE_TOKENS = {"1", "true", "yes", "on"}
 _FALSE_TOKENS = {"0", "false", "no", "off"}
 _TOOL_ALIAS_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
-_HEX_COLOUR_RE = re.compile(r"#[0-9a-fA-F]{6}")
-
-
-def is_hex_colour(value: object) -> bool:
-    """True for a `#rrggbb` string."""
-    return isinstance(value, str) and _HEX_COLOUR_RE.fullmatch(value) is not None
 
 
 def is_key_name(value: object) -> bool:

@@ -309,14 +309,6 @@ def sources_of(cfg: Any) -> dict[str, str]:
     return resolve(layers_of(cfg))[1]
 
 
-def saved_jsrc_values(cfg: Any) -> dict[str, Any]:
-    """What `/save` writes for `KEYS`: the jsrc layer with the `/set` layer
-    on top. Server, model, agent, env and flag values are not the jsrc's."""
-    values, _ = resolve({"jsrc": _jsrc_layer(cfg),
-                         "set": getattr(cfg, "layer_set", None) or {}})
-    return values
-
-
 def saved_layer(cfg: Any) -> dict[str, Any]:
     """What `/save server` writes as ``cfg``'s model defaults: the effective
     value of every `KEYS` setting that comes from the jsrc, the model's own

@@ -366,7 +366,3 @@ class JSONRPCPeer:
         for future in self._pending.values():
             if not future.done():
                 future.set_exception(error)
-
-
-JsonRpcPeer = JSONRPCPeer
-JsonRpcError = JSONRPCError

@@ -67,8 +67,6 @@ ROLES: tuple[str, ...] = (
     "COLOR_REASONING", "COLOR_SEPARATOR", "COLOR_STATUS_BACKGROUND", "COLOR_STATUS_TEXT",
     "COLOR_STATUS_ACCENT",
 )
-# Roles a theme may leave empty.
-OPTIONAL_ROLES = frozenset({"COLOR_BACKGROUND"})
 
 THEME = "THEME"
 HOST_COLOR = "HOST_COLOR"
@@ -619,12 +617,6 @@ def to_ansi(parts: list[Run]) -> str:
     if not colour_on():
         return to_plain(parts)
     return "".join(f"\x1b[38;2;{_rgb(colour)}m{text}{RESET}" if colour else text for colour, text in parts)
-
-
-def to_fragments(parts: list[Run]) -> list[tuple[str, str]]:
-    """Runs as prompt_toolkit (style, text) fragments, for the status bar."""
-    on = colour_on()
-    return [(colour if on and colour else "", text) for colour, text in parts]
 
 
 def to_rich(parts: list[Run], style: str = "") -> Any:

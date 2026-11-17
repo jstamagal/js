@@ -1060,14 +1060,6 @@ def cache_models(
         _write_model_cache_records(records)
 
 
-def clear_model_cache(provider_id: str) -> None:
-    with hold_login_lock():
-        records = _read_model_cache_records()
-        if provider_id in records:
-            del records[provider_id]
-            _write_model_cache_records(records)
-
-
 def _models_url(base_url: str) -> str:
     return f"{base_url.rstrip('/')}/models"
 

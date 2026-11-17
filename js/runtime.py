@@ -318,9 +318,6 @@ class Telemetry:
     own_sink: Any = field(default=None, init=False, repr=False)
     event_observer: Callable[[str, dict], None] | None = None
 
-    def settle_tools(self) -> None:
-        settle_tool_trace(self)
-
     def event(self, kind: str, **fields: Any) -> None:
         if self.event_observer is not None:
             self.event_observer(kind, fields)
