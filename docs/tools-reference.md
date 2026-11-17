@@ -669,7 +669,7 @@ that is not an identifier.
 
 The kernel is a separate process, so the bridge is a unix socket (`tools.sock`)
 in the session's private `js-kernel-*` directory, which the `-C` jail already
-binds into the kernel. `kernel_client.py` is sent to the kernel as a cell and
+binds into the kernel. `python_kernel_client.py` is sent to the kernel as a cell and
 talks to it; `python_kernel_bridge.py` serves it in the js process, one request at a
 time, and checks a per-session token. A call runs as a direct call does: the
 registry the `kernel` call was dispatched through resolves the name (so a cell

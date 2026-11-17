@@ -3,7 +3,7 @@
 The kernel is a separate process, so a cell reaches js tools over a unix
 socket in the kernel session's private socket directory, the same directory
 that holds the kernel's own sockets and that the `js -C` jail binds into the
-kernel. kernel_client.py is the other end; it runs in the kernel.
+kernel. python_kernel_client.py is the other end; it runs in the kernel.
 
 A cell's call goes through the same steps as a call the model makes: the
 registry the kernel call was dispatched through resolves the name (so a cell
@@ -65,7 +65,7 @@ _REFUSED_TOOLS = {"kernel": _OWN_KERNEL, "toolbox": _OWN_KERNEL}
 
 def client_source() -> str:
     """The source of the module the kernel builds `tools` from."""
-    return (Path(__file__).with_name("kernel_client.py")).read_text(encoding="utf-8")
+    return (Path(__file__).with_name("python_kernel_client.py")).read_text(encoding="utf-8")
 
 
 def install_cell(socket_path: Path, token: str) -> str:
