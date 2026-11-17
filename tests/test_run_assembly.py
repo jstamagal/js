@@ -122,8 +122,8 @@ def test_an_agent_that_does_not_load_and_a_model_that_does_not_route_are_not_set
     assert not failed.value.loading
 
 
-@pytest.mark.parametrize(("config_pins", "expected"), [(False, "stamped"), (True, "agent")])
-def test_a_stamp_beats_agent_yaml_unless_config_pins(tmp_path, config_pins, expected):
+@pytest.mark.parametrize("config_pins", [False, True])
+def test_a_resumed_session_comes_back_on_its_stamp_not_agent_yaml(tmp_path, config_pins):
     from js import settings
 
     model_id = settings.default_value("MODEL")
@@ -137,5 +137,4 @@ def test_a_stamp_beats_agent_yaml_unless_config_pins(tmp_path, config_pins, expe
 
     settled = run_assembly.settle(cfg, resumed=run_assembly.resume(cfg, None, None), config_pins=config_pins)
 
-    stamped = (cfg.provider_id, cfg.model)
-    assert (settled.config.provider_id, settled.config.model) == (stamped if expected == "stamped" else ("testes", "a"))
+    assert (settled.config.provider_id, settled.config.model) == (cfg.provider_id, cfg.model)

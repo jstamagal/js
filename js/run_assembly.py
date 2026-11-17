@@ -182,10 +182,10 @@ def settle(cfg: Any, *, model: str | None = None, reasoning: str | None = None,
     agent's unless the prompt is replaced or the run is a chat. A run without
     ``resumed`` sends the agent's prompt.
 
-    The model the run names beats a resumed session's stamp, and the stamp
-    beats agent.yaml's `model:`. ``config_pins`` lets agent.yaml's `model:`
-    back in on a resumed session, and makes a jsrc `MODEL` keep it out, as
-    -m and a JS_* env var always do.
+    A resumed session comes back on the model of its last stamp: only a
+    model the run names replaces it, and agent.yaml's `model:` is for a fresh
+    session. ``config_pins`` makes a jsrc `MODEL` keep agent.yaml's out of a
+    fresh session, as -m and a JS_* env var always do.
     ``agent_reasoning``: agent.yaml's reasoning is one of the run's layers.
     ``layered`` False leaves the agent and login layers unresolved, for a
     caller that resolves them every turn. ``expand_recorded``: the agent's
@@ -202,7 +202,7 @@ def settle(cfg: Any, *, model: str | None = None, reasoning: str | None = None,
     except (FileNotFoundError, ValueError) as exc:
         raise RunNotSettled(exc, loading=True) from exc
     try:
-        if config_pins or resumed.stamp is None:
+        if resumed.stamp is None:
             cfg = P.apply_agent_model(cfg, prompt_spec, model, config_pins=config_pins)
         cfg = route(cfg, model)
     except ValueError as exc:
