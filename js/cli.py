@@ -804,8 +804,8 @@ def _cfg_for_live_state(cfg: Config, state: ReplState) -> Config:
         reasoning_effort=_live_reasoning_effort_setting(live_settings, active.reasoning_effort),
         layer_agent_default=agent_default,
         layer_agent=agent,
-        layer_set=dict(state.live_set or {}),
-        layer_resume=dict(state.live_resume or {}),
+        layer_set=dict(state.live_set),
+        layer_resume=dict(state.live_resume),
     ))
 
 def _sync_tool_registry_from_live_settings(cfg: Config, state: ReplState) -> None:
@@ -967,7 +967,7 @@ def _rc_lines(state: ReplState) -> list[str]:
     """The session's `on` and `alias` lines, as a jsrc writes them."""
     hooks = state.events
     lines = setcmd.event_lines(hooks) if hooks is not None else []
-    return lines + [f"alias {name} {body}" for name, body in (state.aliases or {}).items()]
+    return lines + [f"alias {name} {body}" for name, body in state.aliases.items()]
 
 
 def _mark_saved(state: ReplState) -> None:
@@ -975,7 +975,7 @@ def _mark_saved(state: ReplState) -> None:
     they stand now: what `/save` compares against, so it writes only what
     the operator changed after this."""
     state.saved = {
-        "settings": copy.deepcopy(state.settings or {}),
+        "settings": copy.deepcopy(state.settings),
         "fset": fset.overrides(),
         "lines": _rc_lines(state),
         "model": (state.provider_id, state.model),
@@ -1102,7 +1102,7 @@ def _emit_session_event(state: ReplState, telemetry: runtime.Telemetry, cfg: Con
         agent=cfg.agent_id,
         model=state.model,
         cwd=str(runtime.T.STOCK_CONTEXT.cwd),
-        messages=len(state.messages or []),
+        messages=len(state.messages),
     )
 
 
@@ -1251,8 +1251,7 @@ def _pick_model_into_state(state: ReplState, cfg: Config) -> None:
     state.provider_headers = dict(selected.get("provider_headers") or {})
     state.model = selected["model"]
     chosen = providers.qualified_model_id(selected.get("provider_id"), selected["model"])
-    if isinstance(state.settings, dict):
-        settings.set_dotted(state.settings, ("MODEL",), chosen)
+    settings.set_dotted(state.settings, ("MODEL",), chosen)
     state.model_source = None  # the store now holds the pick; /save writes it
     msgs.say(msgs.MODEL_SET, model=chosen)
 
@@ -1542,7 +1541,7 @@ def _note_live_set(state: ReplState, name: str, *, unset: bool) -> None:
     spec = settings.spec_for(name)
     if spec is None or spec.key not in login_defaults.KEYS:
         return
-    live = dict(state.live_set or {})
+    live = dict(state.live_set)
     value = None if unset else settings.get_dotted(state.settings, spec.path)
     if value is None:
         live.pop(spec.key, None)
@@ -1550,7 +1549,7 @@ def _note_live_set(state: ReplState, name: str, *, unset: bool) -> None:
         live[spec.key] = value
     state.live_set = live
     # A set or unset of the key ends a resumed session's value for it.
-    if spec.key in (state.live_resume or {}):
+    if spec.key in state.live_resume:
         state.live_resume = {k: v for k, v in state.live_resume.items() if k != spec.key}
 
 
@@ -1653,7 +1652,7 @@ def _cmd_save(arg: str, state: ReplState, cfg: Config) -> str | None:
         "settings": cfg.settings if isinstance(cfg.settings, dict) else {},
         "fset": {}, "lines": [], "model": (cfg.provider_id, cfg.model),
     }
-    live = copy.deepcopy(state.settings or {})
+    live = copy.deepcopy(state.settings)
     keys = settings.changed_keys(saved["settings"], live)
     provider_id, model = state.provider_id, state.model
     if (provider_id, model) != saved["model"] and "MODEL" not in keys and isinstance(model, str) and model:
@@ -1705,9 +1704,6 @@ def _save_server(cfg: Config, state: ReplState) -> str | None:
 def _live_stamp(cfg: Config, state: ReplState) -> dict:
     """The stamp a turn started now would write: its model and the effort that
     model resolves to."""
-    if not isinstance(state.settings, dict):
-        active = _cfg_for_active_model(cfg, state)
-        return M.stamp_for(active.model, active.provider_id, active.reasoning_effort)
     turn = _cfg_for_live_state(cfg, state)
     return M.stamp_for(turn.model, turn.provider_id, turn.reasoning_effort)
 
@@ -2108,10 +2104,10 @@ def _cmd_help(arg: str, state: ReplState, cfg: Config) -> str | None:
     if topic.lower() == "fset":
         return _help_fset(rest.strip())
     rows = [(f"/{c.usage}", c.doc.said()) for c in dict.fromkeys(_commands(state).values())]
-    rows += [(f"/{name}", msgs.HELP_ALIAS.said(body=body)) for name, body in (state.aliases or {}).items()]
+    rows += [(f"/{name}", msgs.HELP_ALIAS.said(body=body)) for name, body in state.aliases.items()]
     rows += [(f"/{name}", msgs.HELP_PROMPT_COMMAND.said(path=command.path, description=command.description))
              for name, command in prompt_commands.discover(Path.cwd()).items()
-             if name not in _commands(state) and name not in (state.aliases or {})]
+             if name not in _commands(state) and name not in state.aliases]
     rows += [("@path/to/file", msgs.HELP_ATTACH.said()), ("exit", msgs.HELP_EXIT.said())]
     columns = max(7, display_mod.terminal_width() - 1)
     width = min(max(display_mod.cells(usage) for usage, _doc in rows), (columns - 3) // 2)
@@ -2210,7 +2206,7 @@ def _with_notes(message: dict, notes: list[str]) -> dict:
 def _requeue_notes(state: ReplState, notes) -> None:
     """Put ``notes`` back in front of the queue: the turn that carried them was discarded."""
     if notes:
-        state.pending_notes = [*notes, *(state.pending_notes or ())]
+        state.pending_notes = [*notes, *state.pending_notes]
 
 
 def _set_working_dir(path: Path) -> None:
@@ -2378,7 +2374,7 @@ def _run_command(line: str, state: ReplState, cfg: Config, depth: int = 0) -> tu
     verb, arg = parsed
     command = _commands(state).get(verb)
     if command is None:
-        body = (state.aliases or {}).get(verb)
+        body = state.aliases.get(verb)
         if body is None:
             return False, None
         if depth >= _MAX_ALIAS_DEPTH:
@@ -2506,7 +2502,7 @@ def _command_completions(state: ReplState) -> dict[str, str | None]:
     """Verb -> argument completion source, for every command and alias."""
     table: dict[str, str | None] = {name: None for name in prompt_commands.discover(Path.cwd())}
     table.update({verb: command.complete for verb, command in _commands(state).items()})
-    table.update({name: None for name in state.aliases or {}})
+    table.update({name: None for name in state.aliases})
     return table
 
 
@@ -3853,7 +3849,7 @@ def _echoes(line: str, state: ReplState) -> bool:
     if not line.startswith("/") or _is_skill_invocation(line, state):
         return True
     verb = line[1:].split(maxsplit=1)[0].lower() if line[1:].strip() else ""
-    if verb in _commands(state) or verb in (state.aliases or {}):
+    if verb in _commands(state) or verb in state.aliases:
         return False
     return not _is_unknown_command(line)
 
@@ -3902,7 +3898,7 @@ def _drain_queue(queue: asyncio.Queue) -> int:
 def _live_level(state: ReplState, key: str) -> int:
     """A 0-3 display level from live settings; its js/jsrc value when bad."""
     default = settings.default_value(key)
-    value = settings.knob(state.settings or {}, key)
+    value = settings.knob(state.settings, key)
     return value if isinstance(value, int) and value in range(4) else default
 
 
@@ -3959,7 +3955,7 @@ def _show_resume(state: ReplState, telemetry: runtime.Telemetry, width: int) -> 
     draws them: its text printed, its tool calls through the turn's tool trace,
     so a resumed row folds, carries its whole form and unfolds as a live one
     does. ``telemetry``'s exchange factory is the screen's, when there is one."""
-    live = state.settings or {}
+    live = state.settings
     count = settings.knob(live, "RESUME_EXCHANGES")
     replay = runtime.Telemetry(None)
     replay.exchange_factory = getattr(telemetry, "exchange_factory", None)
@@ -4163,7 +4159,7 @@ async def _repl_main(cfg, state, telemetry, history, completer, prompt_spec, ban
         await exline.run_ex(
             line,
             editor,
-            is_command=lambda verb: verb in _commands(state) or verb in (state.aliases or {}),
+            is_command=lambda verb: verb in _commands(state) or verb in state.aliases,
             dispatch=on_line,
         )
 
