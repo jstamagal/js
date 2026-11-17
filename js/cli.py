@@ -2993,7 +2993,7 @@ def _say_continue(telemetry: runtime.Telemetry, hint: str, *, resume_prefix: str
     if cfg is not None:
         saved_login = login_defaults.login_for(cfg.provider_id, cfg.provider_base_url)
         if cfg.provider_base_url and (saved_login is None or saved_login.provider_id != cfg.provider_id):
-            wire = model_client.wire_name(cfg.provider_id)
+            wire = routing.resolve_wire(cfg.provider_id).name
             scheme, _, host = cfg.provider_base_url.partition("://")
             words += ["-u", f"{wire}+{scheme}://{cfg.model}@{host}"]
         else:

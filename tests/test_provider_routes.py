@@ -1,8 +1,9 @@
 """What each provider route resolves to, at every place js asks.
 
-Four places decide which wire a route speaks: `model_client.wire_name` (the
-`-u` wire name the CLI and the trace banner show), `model_client.resolve_model`
-(the SDK provider and protocol a request is sent with), `model_client._route`
+Four answers say which wire a route speaks: ``wire_name``, the `-u` wire name
+the CLI and the trace banner show (`routing.resolve_wire(...).name`),
+`model_client.resolve_model` (the SDK provider and protocol a request is sent
+with), `model_client._route`
 (what `build_request_params` and `_stream_with_model` gate on) and
 `history_record.history_to_ai_messages` (whether a replayed reply keeps its
 reasoning). `fixtures/provider_routes.json` pins their answers for every
@@ -24,7 +25,7 @@ from pathlib import Path
 import ai.types.messages
 import pytest
 
-from js import history_record, logins, model_client, providers
+from js import history_record, logins, model_client, providers, routing
 
 SNAPSHOT = Path(__file__).parent / "fixtures" / "provider_routes.json"
 BASE = "https://endpoint.example/v1"
@@ -82,7 +83,7 @@ SAVED_LOGINS = [
 
 
 def _wire_name(provider_id: str | None) -> str:
-    return model_client.wire_name(provider_id)
+    return routing.resolve_wire(provider_id).name
 
 
 def _resolved(provider_id: str | None, base_url: str | None, model_id: str) -> dict | str:

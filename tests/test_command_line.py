@@ -202,7 +202,7 @@ _SAMPLING = {"temperature": 0.65, "top_k": 37, "dry_sequence_breakers": ["\n", "
     ({"agent_id": "other", "reasoning_effort": "high"}, None, _SAMPLING, None, {},
      "js --agent other --model prov/mod -r high --temperature 0.65 --top-k 37"
      """ --dry-sequence-breakers '["\\n", ":"]' --home '/h o' --session hint"""),
-    ({"provider_base_url": "http://local.test/v1", "provider_id": "openai"}, None, {}, "low", {"chat": True},
+    ({"provider_base_url": "http://local.test/v1", "provider_id": "openai-responses"}, None, {}, "low", {"chat": True},
      "js -u responses+http://mod@local.test/v1 -r low --chat --home '/h o' --session hint"),
     ({"provider_base_url": "http://local.test/v1", "provider_id": "mine"}, "mine", {"min_p": 0.07}, None, {},
      "js --model mine/mod -r off --min-p 0.07 --home '/h o' --session hint"),
@@ -215,7 +215,6 @@ def test_continue_command_with_config(monkeypatch, printed, route, login, sample
     monkeypatch.setattr(cli.login_defaults, "login_for",
                         lambda _provider, _url: None if login is None else SimpleNamespace(provider_id=login))
     monkeypatch.setattr(cli.login_defaults, "sampling", lambda _cfg: sampling.Sampling.from_mapping(sampled))
-    monkeypatch.setattr(cli.model_client, "wire_name", lambda _provider: "responses")
     with invocation(RunOptions(**options)):
         cli._say_continue(runtime.Telemetry(None), "hint", resume_prefix=None, agent=None, model=None,
                           cfg=cfg, reasoning=reasoning)

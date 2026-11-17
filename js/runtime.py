@@ -1799,7 +1799,7 @@ def _trace_banner(telemetry: Telemetry, request: ModelRequest, context: ToolCont
     bits = [f"host={socket.gethostname()}",
             f"model={model}",
             f"key={key_state}",
-            f"wire={model_client.wire_name(provider_id)}",
+            f"wire={routing.resolve_wire(provider_id).name}",
             f"provider={provider_label}",
             f"base={base}",
             f"ctx={ctx if ctx else 'unknown'}",
