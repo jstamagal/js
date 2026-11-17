@@ -396,6 +396,18 @@ class StreamableHTTPTransport:
     def last_event_id(self) -> str | None:
         return self._last_event_id
 
+    @property
+    def posts_in_flight(self) -> int:
+        """POST workers this transport still owns, a cancelled one included
+        until its thread returns."""
+        return len(self._request_tasks)
+
+    @property
+    def open_responses(self) -> int:
+        """HTTP responses this transport holds open."""
+        with self._active_lock:
+            return len(self._active)
+
     def set_protocol_version(self, version: str) -> None:
         self._protocol_version = version
 

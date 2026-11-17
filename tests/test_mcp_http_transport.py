@@ -399,8 +399,8 @@ def test_cancelled_post_before_headers_remains_owned_through_close():
         # tracked socket down, the request thread errors out promptly, and
         # ownership is still settled before close returns.
         await asyncio.wait_for(closing, 2)
-        assert not transport._request_tasks
-        assert not transport._active
+        assert transport.posts_in_flight == 0
+        assert transport.open_responses == 0
         state.release_post.set()
 
     with server() as (state, url):
@@ -429,13 +429,13 @@ def test_request_deadline_does_not_wait_for_http_dns_cleanup(monkeypatch):
             assert task in done
             with pytest.raises(TimeoutError):
                 await task
-            assert transport._request_tasks
+            assert transport.posts_in_flight
         finally:
             release.set()
             await asyncio.gather(task, return_exceptions=True)
             await peer.close()
-        assert not transport._request_tasks
-        assert not transport._active
+        assert transport.posts_in_flight == 0
+        assert transport.open_responses == 0
 
     run(drive())
 
