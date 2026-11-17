@@ -73,7 +73,7 @@ js/toolkit/core.py                Tool, ToolContext, call_tool
 js/toolkit/registry.py            registry assembly and selector filtering
 js/toolkit/fs.py                  read/write/search/patch/remove/undo
 js/toolkit/process_net.py         shell and fetch
-js/toolkit/meta.py                plan/skill/task/subagents
+js/toolkit/subagents.py           plan/skill/task/subagents
 js/toolkit/wiki/                  deterministic tools for installed wiki agents
 defaults/tool_descriptions/     model-facing tool contracts
 defaults/                         stock jsrc, fset, agents, themes, help, skills and snippets

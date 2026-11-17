@@ -13,7 +13,7 @@ import pytest
 from turn_driver import config, run
 
 from js.text_bytes import byte_size
-from js.toolkit import meta
+from js.toolkit import subagents
 from js.toolkit.core import Tool
 from js.toolkit.registry import ToolRegistry
 
@@ -52,7 +52,7 @@ def _registry(kind: str, monkeypatch, ran: list[str]) -> ToolRegistry:
         async def dispatch_fan_out(tool, args, context):
             return tool.handler(**args)
 
-        monkeypatch.setattr(meta, "dispatch_fan_out_async", dispatch_fan_out)
+        monkeypatch.setattr(subagents, "dispatch_fan_out_async", dispatch_fan_out)
     return ToolRegistry((Tool("probe", "Probe.", sync_probe, params),), {})
 
 

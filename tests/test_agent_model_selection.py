@@ -12,7 +12,7 @@ from js import cli, logins, model_metadata, persona, run_assembly, runtime
 from js.config import Config
 from js.model_client import ModelStreamResult
 from js.toolkit import ToolContext
-from js.toolkit.meta import task
+from js.toolkit.subagents import task
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 OLLAMA_BASE_URL = "http://parent-ollama.test/v1"

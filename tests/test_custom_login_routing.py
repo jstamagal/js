@@ -696,7 +696,7 @@ def test_a_child_session_stamps_the_effort_its_turn_resolves(monkeypatch, tmp_pa
     from dataclasses import replace
 
     from js import agent_messages, memory, runtime
-    from js.toolkit import ToolContext, meta
+    from js.toolkit import ToolContext, subagents
     from js.toolkit.registry import build_default_registry
 
     _isolate_config(monkeypatch, tmp_path)
@@ -724,7 +724,7 @@ def test_a_child_session_stamps_the_effort_its_turn_resolves(monkeypatch, tmp_pa
     monkeypatch.setattr(memory, "persist_messages",
                         lambda path, messages, stamp=None: seen.setdefault("stamp", stamp))
 
-    result = asyncio.run(meta._run_one_task_async(
+    result = asyncio.run(subagents._run_one_task_async(
         0, 1, "work", ToolContext(cwd=tmp_path), cfg, build_default_registry(), "worker", None))
 
     assert result == "done"
@@ -752,7 +752,7 @@ def test_a_child_whose_manifest_omits_reasoning_keeps_the_parent_agents(monkeypa
     from dataclasses import replace
 
     from js import agent_messages, memory, persona, runtime
-    from js.toolkit import ToolContext, meta
+    from js.toolkit import ToolContext, subagents
     from js.toolkit.registry import build_default_registry
 
     _isolate_config(monkeypatch, tmp_path)
@@ -780,7 +780,7 @@ def test_a_child_whose_manifest_omits_reasoning_keeps_the_parent_agents(monkeypa
     monkeypatch.setattr(agent_messages, "initialize", no_init)
     monkeypatch.setattr(memory, "persist_messages", lambda *a, **k: None)
 
-    asyncio.run(meta._run_one_task_async(
+    asyncio.run(subagents._run_one_task_async(
         0, 1, "work", ToolContext(cwd=tmp_path), cfg, build_default_registry(), "worker", None))
 
     assert cfg.reasoning_effort == "high"
@@ -793,7 +793,7 @@ def test_a_child_takes_the_effort_its_parents_turn_ran_with(monkeypatch, tmp_pat
     from dataclasses import replace
 
     from js import agent_messages, memory, runtime
-    from js.toolkit import ToolContext, meta
+    from js.toolkit import ToolContext, subagents
     from js.toolkit.registry import build_default_registry
 
     _isolate_config(monkeypatch, tmp_path)
@@ -822,7 +822,7 @@ def test_a_child_takes_the_effort_its_parents_turn_ran_with(monkeypatch, tmp_pat
     monkeypatch.setattr(agent_messages, "initialize", no_init)
     monkeypatch.setattr(memory, "persist_messages", lambda *a, **k: None)
 
-    asyncio.run(meta._run_one_task_async(
+    asyncio.run(subagents._run_one_task_async(
         0, 1, "work", ToolContext(cwd=tmp_path), parent, build_default_registry(), "worker", None))
 
     assert seen["turn"] == expected
@@ -834,7 +834,7 @@ def test_a_parents_resumed_effort_sits_below_the_childs_agent_yaml(monkeypatch, 
     from dataclasses import replace
 
     from js import agent_messages, memory, runtime
-    from js.toolkit import ToolContext, meta
+    from js.toolkit import ToolContext, subagents
     from js.toolkit.registry import build_default_registry
 
     _isolate_config(monkeypatch, tmp_path)
@@ -861,7 +861,7 @@ def test_a_parents_resumed_effort_sits_below_the_childs_agent_yaml(monkeypatch, 
     monkeypatch.setattr(agent_messages, "initialize", no_init)
     monkeypatch.setattr(memory, "persist_messages", lambda *a, **k: None)
 
-    asyncio.run(meta._run_one_task_async(
+    asyncio.run(subagents._run_one_task_async(
         0, 1, "work", ToolContext(cwd=tmp_path), parent, build_default_registry(), "worker", None))
 
     assert parent.reasoning_effort == "low"
@@ -873,7 +873,7 @@ def test_a_task_calls_reasoning_is_the_effort_the_childs_requests_send(monkeypat
     from dataclasses import replace
 
     from js import agent_messages, memory, runtime
-    from js.toolkit import ToolContext, meta
+    from js.toolkit import ToolContext, subagents
     from js.toolkit.registry import build_default_registry
 
     _isolate_config(monkeypatch, tmp_path)
@@ -900,7 +900,7 @@ def test_a_task_calls_reasoning_is_the_effort_the_childs_requests_send(monkeypat
     monkeypatch.setattr(agent_messages, "initialize", no_init)
     monkeypatch.setattr(memory, "persist_messages", lambda *a, **k: None)
 
-    asyncio.run(meta._run_one_task_async(
+    asyncio.run(subagents._run_one_task_async(
         0, 1, "work", ToolContext(cwd=tmp_path), parent, build_default_registry(), "worker", None,
         reasoning="low"))
 

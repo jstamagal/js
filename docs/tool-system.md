@@ -38,11 +38,15 @@ guards, task parallelism, and provider-specific name handling at the boundary.
 
 `build_default_registry()` concatenates:
 
-1. filesystem tools
-2. process/network tools
-3. meta tools
-4. wiki tools
-5. generated agent tools from layered prompt roots
+1. filesystem tools (`fs.py`)
+2. shell and fetch (`process_net.py`)
+3. web search, docs search and browse (`search.py`)
+4. jev, terminal session and browser probe tools (`jev.py`, `terminal.py`, `browser.py`)
+5. task, plan and skill (`subagents.py`)
+6. wiki tools (`wiki/`)
+7. kernel, toolbox, lsp and notebook tools (`kernel.py`, `toolbox.py`, `lsp.py`, `notebook.py`)
+8. swarm tools (`js/swarm.py`)
+9. generated agent tools from layered prompt roots
 
 The registry stores canonical names and lowercased aliases. Current aliases are
 only used for provider-facing name transforms; old user-facing aliases are not

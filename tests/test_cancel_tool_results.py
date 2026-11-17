@@ -78,7 +78,7 @@ def test_cancel_keeps_completed_results_and_stops_forward_work(tmp_path, monkeyp
 
 
 def test_cancel_retains_completed_fan_out_and_sync_results_with_batch_cap(tmp_path, monkeypatch):
-    from js.toolkit import meta
+    from js.toolkit import subagents
 
     messages = [{"role": "user", "content": "run"}]
     release = threading.Event()
@@ -97,8 +97,8 @@ def test_cancel_retains_completed_fan_out_and_sync_results_with_batch_cap(tmp_pa
             return "F" * 1000
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(meta, "is_fan_out_handler", lambda handler: handler is fan)
-    monkeypatch.setattr(meta, "dispatch_fan_out_async", dispatch_fan)
+    monkeypatch.setattr(subagents, "is_fan_out_handler", lambda handler: handler is fan)
+    monkeypatch.setattr(subagents, "dispatch_fan_out_async", dispatch_fan)
     monkeypatch.setattr(supervisor, "get_current", lambda: object())
     registry = ToolRegistry((Tool("fan", "test", fan, {"n": {"type": "integer"}}),
                              Tool("leaf", "test", leaf, {})), {})

@@ -13,7 +13,7 @@ import pytest
 from js import agent_messages, console, logins, memory, output, runtime
 from js.config import from_env
 from js.logins import Login
-from js.toolkit import ToolContext, meta
+from js.toolkit import ToolContext, subagents
 from js.toolkit.registry import build_default_registry
 
 
@@ -75,7 +75,7 @@ def _run(cfg, tmp_path, *, total=1, idx=1):
 
     async def go():
         with output.using_sink(events):
-            return await meta._run_one_task_async(
+            return await subagents._run_one_task_async(
                 idx, total, "work", ToolContext(cwd=tmp_path), cfg, build_default_registry(), "worker", None)
 
     return asyncio.run(go()), events
@@ -144,26 +144,26 @@ def test_the_launch_kind_names_how_the_subagent_was_started(monkeypatch, handler
     kinds = []
 
     async def probe(idx, total, item, context, parent_cfg, full_registry, agent_id, session_id, model=""):
-        kinds.append(meta._LAUNCH_KIND.get())
+        kinds.append(subagents._LAUNCH_KIND.get())
         return "ok"
 
-    monkeypatch.setattr(meta, "_run_one_task_async", probe)
+    monkeypatch.setattr(subagents, "_run_one_task_async", probe)
     monkeypatch.setattr(task_jobs, "_JOBS", {})
     context = ToolContext()
     context.config = from_env(save_session=False)
 
     async def go():
         if handler == "named":
-            tool = meta.named_agent_tool("worker")
-            return await meta.dispatch_fan_out_async(tool, {"tasks": ["t"]}, context)
+            tool = subagents.named_agent_tool("worker")
+            return await subagents.dispatch_fan_out_async(tool, {"tasks": ["t"]}, context)
         if handler == "background":
-            text = await meta.task_async(tasks=["t"], agent_id="worker", background=True, context=context)
+            text = await subagents.task_async(tasks=["t"], agent_id="worker", background=True, context=context)
             for _ in range(50):
                 if kinds:
                     break
                 await asyncio.sleep(0.01)
             return text
-        return await meta.task_async(tasks=["t"], agent_id="worker", context=context)
+        return await subagents.task_async(tasks=["t"], agent_id="worker", context=context)
 
     asyncio.run(go())
     assert kinds == [kind]

@@ -118,7 +118,7 @@ from .session_catalog import (
     session_title,
 )
 from .tool_binaries import resolve_binary
-from .toolkit import ToolContext, meta, policy as tool_policy, task_jobs
+from .toolkit import ToolContext, policy as tool_policy, subagents, task_jobs
 
 
 def _error_text(e: BaseException) -> str:
@@ -3921,7 +3921,7 @@ async def _repl_main(cfg, state, telemetry, history, completer, prompt_spec, ban
     windows = screen.Windows()
     child_windows = subagent_windows.SubagentWindows(windows, sup)
     state.windows = child_windows
-    opener_token = meta.window_opener.set(child_windows.open)
+    opener_token = subagents.window_opener.set(child_windows.open)
 
     channel_instructed: set[str] = set()
 
@@ -4124,7 +4124,7 @@ async def _repl_main(cfg, state, telemetry, history, completer, prompt_spec, ban
         telemetry.display_factory = previous_display_factory
         telemetry.exchange_factory = previous_exchange_factory
         supervisor.set_current(None)
-        meta.window_opener.reset(opener_token)
+        subagents.window_opener.reset(opener_token)
         state.windows = None
         consumer.cancel()
         with contextlib.suppress(asyncio.CancelledError, snippets.SnippetError):

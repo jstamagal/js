@@ -12,8 +12,8 @@ from js import model_metadata, model_profiles, persona, run_assembly, runtime, s
 from js.cli_options import RunOptions, invocation
 from js.config import Config
 from js.toolkit import ToolContext
-from js.toolkit.meta import task
 from js.toolkit.registry import TurnToolSurface, build_default_registry
+from js.toolkit.subagents import task
 
 FOURTEEN = ("read", "write", "fs_search", "remove", "patch", "undo", "shell", "fetch",
             "plan", "skill", "task", "lsp", "notebook_edit", "jev")

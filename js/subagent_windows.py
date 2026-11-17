@@ -10,7 +10,7 @@ its own agent, model, effort and tools. That turn stays in the subagent's
 session; the result its task returned to the parent stands, and the parent
 is not told.
 
-`meta._run_one_task_async` calls `window_opener` (set here for the REPL's
+`subagents._run_one_task_async` calls `window_opener` (set here for the REPL's
 tasks) with the subagent_start fields; the `SubagentWindow` it gets back
 supplies the child's telemetry, its steer, and where its prints land.
 """
@@ -123,7 +123,7 @@ class SubagentWindow:
 
 
 class SubagentWindows:
-    """The REPL screen's subagent windows: `open` is `meta.window_opener`."""
+    """The REPL screen's subagent windows: `open` is `subagents.window_opener`."""
 
     def __init__(self, windows: screen.Windows, supervisor: Any) -> None:
         self.windows = windows
@@ -183,10 +183,10 @@ class SubagentWindows:
 @contextlib.contextmanager
 def opening(windows: SubagentWindows):
     """Give the subagents this context launches windows from ``windows``."""
-    from .toolkit import meta
+    from .toolkit import subagents
 
-    token = meta.window_opener.set(windows.open)
+    token = subagents.window_opener.set(windows.open)
     try:
         yield windows
     finally:
-        meta.window_opener.reset(token)
+        subagents.window_opener.reset(token)

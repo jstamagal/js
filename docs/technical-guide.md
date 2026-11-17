@@ -60,7 +60,7 @@ persists each completed turn.
 | `js/toolkit/policy.py` | `noun:modifier` chains, `tools.yaml` tags and argument bans, `/tools` table |
 | `js/toolkit/fs.py` | file read/write/search/edit/delete/undo tools |
 | `js/toolkit/process_net.py` | shell and fetch tools |
-| `js/toolkit/meta.py` | plan/skill/task and generated agent tools |
+| `js/toolkit/subagents.py` | plan/skill/task and generated agent tools |
 | `js/toolkit/wiki/` | deterministic tools for installed wiki agents |
 
 ## Prompt Loading
@@ -148,10 +148,19 @@ retry failed children with backoff, stopping after five consecutive failures.
 `build_default_registry()` assembles tools in this order:
 
 ```text
-fs tools
-process/network tools
-meta tools
-wiki tools
+fs.py           file tools
+process_net.py  shell and fetch
+search.py       web search, docs search and browse
+jev.py          jev
+terminal.py     terminal sessions
+browser.py      browser probe
+subagents.py    task, plan and skill
+wiki/           wiki tools
+kernel.py       kernel
+toolbox.py      toolbox
+lsp.py          lsp
+notebook.py     notebook editing
+js/swarm.py     swarm tools
 generated prompt-directory agent tools
 ```
 

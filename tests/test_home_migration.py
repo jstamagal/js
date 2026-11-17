@@ -406,11 +406,11 @@ def test_no_module_outside_paths_names_the_old_locations():
 
 
 def test_a_fresh_working_directory_is_left_empty_by_plans_and_snapshots(tmp_path, monkeypatch):
-    from js.toolkit import ToolContext, meta
+    from js.toolkit import ToolContext, subagents
 
     work = tmp_path / "fresh"
     work.mkdir()
-    meta.plan(plan_name="p", version="v1", content="x", context=ToolContext(cwd=work))
+    subagents.plan(plan_name="p", version="v1", content="x", context=ToolContext(cwd=work))
 
     assert list(work.iterdir()) == []
     assert (paths.plans_dir() / "p-v1.md").is_file()

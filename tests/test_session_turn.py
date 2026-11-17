@@ -21,7 +21,7 @@ from test_swarm import _agent_dir, _call, _events, _spec, _text
 from js import compaction, runtime, session_store, swarm, swarm_run
 from js.config import Config
 from js.conversation import Conversation
-from js.toolkit import ToolContext, meta
+from js.toolkit import ToolContext, subagents
 
 OUTCOMES = ("complete", "raise", "cancel")
 
@@ -189,7 +189,7 @@ def test_a_subagent_task_turn(monkeypatch, tmp_path, checks, outcome):
     monkeypatch.setattr(runtime.model_client, "stream_model_async", _Model(outcome))
     context = _parent(tmp_path)
 
-    result = meta.task(["work"], agent_id="worker", context=context)
+    result = subagents.task(["work"], agent_id="worker", context=context)
 
     if outcome == "complete":
         assert result == "done"
@@ -235,11 +235,11 @@ def test_a_turn_typed_into_a_subagent_window(monkeypatch, tmp_path, checks, outc
     window = _Window()
 
     async def run() -> None:
-        token = meta.window_opener.set(lambda launch: window)
+        token = subagents.window_opener.set(lambda launch: window)
         try:
-            assert await meta.task_async(tasks=["work"], agent_id="worker", context=context) == "ok"
+            assert await subagents.task_async(tasks=["work"], agent_id="worker", context=context) == "ok"
         finally:
-            meta.window_opener.reset(token)
+            subagents.window_opener.reset(token)
         await window.resume("more")
 
     if outcome == "complete":

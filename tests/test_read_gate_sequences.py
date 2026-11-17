@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 
 from js.toolkit import ToolContext, build_default_registry, call_tool, fs
-from js.toolkit.meta import _child_context
+from js.toolkit.subagents import _child_context
 
 
 def _lines(count: int) -> str:

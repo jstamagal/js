@@ -143,7 +143,7 @@ branch the audit was made on; they move as the code changes.
 | `js/toolkit/search.py:481-483,531,546-547` | _obscura_status / browse | policy | Always runs obscura with `--stealth`, and adds `--allow-private-network` by itself for a private IP literal. | js-2lg.52 |
 | `js/toolkit/terminal.py:285-291` | terminal_session | policy | Runs `$SHELL` or /bin/sh instead of SHELL_PROGRAM, and passes the full environment when no jail is active. | js-2lg.54 |
 | `js/toolkit/browser.py:24,202-210` | _launch_browser | policy | Falls back to a fixed Chrome-for-Testing path when the Playwright launch fails. | js-2lg.57 |
-| `js/toolkit/meta.py:320-332` | _run_one_task_async | policy | Caps each child's reply to an equal share of TOOL_RESULT_MAX. | js-2lg.60 |
+| `js/toolkit/subagents.py:320-332` | _run_one_task_async | policy | Caps each child's reply to an equal share of TOOL_RESULT_MAX. | js-2lg.60 |
 | `js/toolkit/jev.py:17,106-107` | jev | default | The API key comes only from the TYPESAFE_API_KEY environment variable, not from a registered setting. | js-2lg.65 |
 | `js/toolkit/kernel.py:1081,1093,1173` | kernel | default | Interrupts a cell after a default of 120 s that exists only in code. | js-2lg.70 |
 | `js/toolkit/toolbox.py:180-202,530-533` | seed_examples / toolbox | policy | Copies the shipped example tools into the global toolbox on list and load. | js-2lg.71 |
@@ -296,7 +296,7 @@ Resolution notes (the rows below record the original audit):
   supply their own action maps rather than the REPL keymap.
 - js-2lg.101: `EXIT_ARM_TIMEOUT` registers the existing two-second window;
   `screen.build_app(handler_factory=...)` can replace or extend action handlers.
-- js-2lg.61: `meta.skill` accepts the user invocation command used in its refusal.
+- js-2lg.61: `subagents.skill` accepts the user invocation command used in its refusal.
 - js-2lg.86: `cli.ReplAssembly` supplies a session's commands, quit and queue
   words, turn-state guard, unknown-command policy, forced-compaction phrase,
   banner renderer, interrupt handler, input bindings, prompt options and idle
@@ -304,7 +304,7 @@ Resolution notes (the rows below record the original audit):
 
 | file:line | function | kind | what the part decides | bead |
 |---|---|---|---|---|
-| `js/toolkit/meta.py:70,74` | skill | policy | Model-facing refusal text names the `/skill` REPL command. | js-2lg.61 |
+| `js/toolkit/subagents.py:70,74` | skill | policy | Model-facing refusal text names the `/skill` REPL command. | js-2lg.61 |
 | `js/cli.py:1510-1521,2245-2295` | Command, COMMANDS | policy | The REPL slash-command table is a fixed module-level dict. | js-2lg.86 |
 | `js/cli.py:2318-2319,3783-3789,3922-3924` | _run_command, _is_turn_state_command, _repl_main.on_line | policy | cli refuses turn-state commands while a turn runs. | js-2lg.86 |
 | `js/cli.py:2338,2353-2368,2373-2381` | QUIT_WORDS, _handle_command, _is_unknown_command | policy | The quit words, and the rule that an unknown command-shaped slash word is refused instead of sent to the model, are fixed. | js-2lg.86 |
@@ -339,9 +339,9 @@ Resolution notes (the rows below record the original audit):
 | `js/toolkit/process_net.py:932-1023` | fetch | policy | Prefers aria2c when present and falls back to urllib on its own. | js-2lg.49 |
 | `js/toolkit/search.py:56-63,350,387` | _http_body / docs_search | policy | Retries a 401 or 403 once without the Authorization header. | js-2lg.51 |
 | `js/toolkit/terminal.py:53-83` | module constants / _draw_screen | presentation | Fixes the font list and colour palette of terminal snapshots. | js-2lg.56 |
-| `js/toolkit/meta.py:172-312` | _run_one_task_async | policy | Builds the whole subagent turn itself (persona, routing, run_turn_async), with suppress_output=True fixed. | js-2lg.59 |
-| `js/toolkit/meta.py:472,477-478` | _prepare_fan_out | default | Falls back to from_env(save_session=True) when the context has no config, and builds the subagent registry with build_default_registry. | js-2lg.59 |
-| `js/toolkit/meta.py:105,111` | _session_file_for_id / _reserve_worker_session | policy | A subagent run moves the agent's latest-session pointer to its own session. | js-2lg.59 |
+| `js/toolkit/subagents.py:172-312` | _run_one_task_async | policy | Builds the whole subagent turn itself (persona, routing, run_turn_async), with suppress_output=True fixed. | js-2lg.59 |
+| `js/toolkit/subagents.py:472,477-478` | _prepare_fan_out | default | Falls back to from_env(save_session=True) when the context has no config, and builds the subagent registry with build_default_registry. | js-2lg.59 |
+| `js/toolkit/subagents.py:105,111` | _session_file_for_id / _reserve_worker_session | policy | A subagent run moves the agent's latest-session pointer to its own session. | js-2lg.59 |
 | `js/toolkit/task_jobs.py:171,195-216` | start | policy | Finds the REPL supervisor through a global and chooses the run strategy itself. | js-2lg.64 |
 | `js/toolkit/lsp.py:319-336` | LanguageServer._answer | policy | Answers every workspace/configuration request with null, so a server gets no settings. | js-2lg.75 |
 | `js/cli.py:2162-2182,2701,4985` | _restore_workspace | policy | On resume, cli restores the jail binds and cwd from the workspace mark by itself. | js-2lg.81 |

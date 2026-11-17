@@ -1,4 +1,4 @@
-"""meta._fan_out has two ramps. Existing subagent tests cover the no-supervisor
+"""subagents._fan_out has two ramps. Existing subagent tests cover the no-supervisor
 ramp (asyncio.run gather). This covers the supervisor ramp: when a non-blocking
 REPL loop is live, subagents schedule onto it as cancelable jobs via
 run_coroutine_threadsafe, called from an off-loop (tool-dispatch) thread."""
@@ -9,7 +9,7 @@ import asyncio
 import threading
 
 from js import supervisor
-from js.toolkit.meta import _fan_out
+from js.toolkit.subagents import _fan_out
 
 
 def _loop_in_thread() -> tuple[asyncio.AbstractEventLoop, threading.Thread]:

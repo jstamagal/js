@@ -5,7 +5,7 @@ import json
 import pytest
 
 from js import skills
-from js.toolkit import ToolContext, meta
+from js.toolkit import ToolContext, subagents
 from js.toolkit.registry import build_default_registry
 
 VALID = "---\ndescription: inspect files\ntools: [read]\n---\nRead carefully.\n"
@@ -37,7 +37,7 @@ def test_changed_skill_load_is_clean_and_does_not_activate(tmp_path, broken, rai
         with pytest.raises(skills.SkillInvocationError):
             skills.expand_user_invocation(catalog, "/skill inspect")
     elif rail == "native":
-        assert meta.skill("inspect", context).startswith("ERROR")
+        assert subagents.skill("inspect", context).startswith("ERROR")
     else:
         assert surface.discover(load="skill:inspect").startswith("ERROR")
 
@@ -48,7 +48,7 @@ def test_changed_skill_load_is_clean_and_does_not_activate(tmp_path, broken, rai
     if rail == "user":
         assert "Read carefully." in skills.expand_user_invocation(catalog, "/skill inspect")
     elif rail == "native":
-        assert "Read carefully." in meta.skill("inspect", context)
+        assert "Read carefully." in subagents.skill("inspect", context)
         assert surface.resolve("read") is not None
     else:
         assert "Read carefully." in json.loads(surface.discover(load="skill:inspect"))["instructions"]

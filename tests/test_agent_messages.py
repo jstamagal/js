@@ -11,7 +11,7 @@ from js.config import from_env
 from js.model_client import ModelStreamResult
 from js.session_catalog import last_stamp
 from js.toolkit import ToolContext
-from js.toolkit.meta import task
+from js.toolkit.subagents import task
 
 
 def _agent(tmp_path, monkeypatch, files):

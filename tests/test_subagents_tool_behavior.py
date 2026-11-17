@@ -4,7 +4,7 @@ from pathlib import Path
 
 from js import paths
 from js.skills import ToolActivationResult
-from js.toolkit import ToolContext, fs, meta
+from js.toolkit import ToolContext, fs, subagents
 from js.toolkit.registry import select
 
 
@@ -14,7 +14,7 @@ def test_plan_writes_markdown_under_plans_dir_and_reports_target(tmp_path):
     project.mkdir()
     context = ToolContext(cwd=project)
 
-    result = meta.plan(
+    result = subagents.plan(
         plan_name="rollout",
         version="v2",
         content="# Rollout\n\n- step one\n",
@@ -31,10 +31,10 @@ def test_plan_writes_markdown_under_plans_dir_and_reports_target(tmp_path):
 
 
 def test_plan_sanitizes_unsafe_name_and_version_into_filename(tmp_path):
-    # js/toolkit/meta.py:69-70 — non [alnum-_.] chars become "-", edges stripped.
+    # js/toolkit/subagents.py:69-70 — non [alnum-_.] chars become "-", edges stripped.
     context = ToolContext(cwd=tmp_path)
 
-    result = meta.plan(
+    result = subagents.plan(
         plan_name="my plan/draft",
         version="1.0 beta",
         content="body",
@@ -47,10 +47,10 @@ def test_plan_sanitizes_unsafe_name_and_version_into_filename(tmp_path):
 
 
 def test_plan_empty_name_and_version_fall_back_to_defaults(tmp_path):
-    # js/toolkit/meta.py:69-70 — fully-stripped names default to "plan"/"v1".
+    # js/toolkit/subagents.py:69-70 — fully-stripped names default to "plan"/"v1".
     context = ToolContext(cwd=tmp_path)
 
-    result = meta.plan(plan_name="///", version="...", content="x", context=context)
+    result = subagents.plan(plan_name="///", version="...", content="x", context=context)
 
     target = paths.plans_dir() / "plan-v1.md"
     assert result == f"plan written to {target}"
@@ -58,12 +58,12 @@ def test_plan_empty_name_and_version_fall_back_to_defaults(tmp_path):
 
 
 def test_plan_snapshot_lets_undo_restore_prior_plan(tmp_path):
-    # js/toolkit/meta.py:72 — snapshot() captures pre-write state for undo support.
+    # js/toolkit/subagents.py:72 — snapshot() captures pre-write state for undo support.
     context = ToolContext(cwd=tmp_path)
     target = paths.plans_dir() / "rollout-v1.md"
 
-    meta.plan(plan_name="rollout", version="v1", content="first", context=context)
-    result = meta.plan(
+    subagents.plan(plan_name="rollout", version="v1", content="first", context=context)
+    result = subagents.plan(
         plan_name="rollout",
         version="v1",
         content="second",
@@ -84,9 +84,9 @@ def test_plan_snapshot_lets_undo_restore_prior_plan(tmp_path):
 def test_plan_refuses_to_silently_replace_an_existing_version(tmp_path):
     context = ToolContext(cwd=tmp_path)
     target = paths.plans_dir() / "rollout-v1.md"
-    meta.plan(plan_name="rollout", version="v1", content="first", context=context)
+    subagents.plan(plan_name="rollout", version="v1", content="first", context=context)
 
-    result = meta.plan(plan_name="rollout", version="v1", content="second", context=context)
+    result = subagents.plan(plan_name="rollout", version="v1", content="second", context=context)
 
     assert result == f"ERROR: plan already exists at {target}; pass overwrite=true to replace it"
     assert target.read_text(encoding="utf-8") == "first"
@@ -97,7 +97,7 @@ def test_plan_rejects_a_name_over_the_filename_limit(tmp_path):
 
     context = ToolContext(cwd=tmp_path)
 
-    result = meta.plan(plan_name="p" * 300, version="v1", content="x", context=context)
+    result = subagents.plan(plan_name="p" * 300, version="v1", content="x", context=context)
 
     assert result.startswith("ERROR:")
     assert str(os.pathconf(tmp_path, "PC_NAME_MAX")) in result
@@ -116,7 +116,7 @@ def test_skill_loads_local_skill_from_agents_skills_dir(tmp_path):
     context = ToolContext(cwd=tmp_path)
     _write_skill(tmp_path / ".agents" / "skills", "deploy", "# Deploy\n\nrun the thing\n")
 
-    result = meta.skill("deploy", context=context)
+    result = subagents.skill("deploy", context=context)
 
     assert result == "# Deploy\n\nrun the thing\n"
 
@@ -126,7 +126,7 @@ def test_skill_loads_from_native_js_skills_dir(tmp_path):
     context = ToolContext(cwd=tmp_path)
     _write_skill(tmp_path / ".js" / "skills", "lint", "lint skill")
 
-    assert meta.skill("lint", context=context) == "lint skill"
+    assert subagents.skill("lint", context=context) == "lint skill"
 
 
 def test_skill_tool_refuses_user_only_skill(tmp_path):
@@ -137,7 +137,7 @@ def test_skill_tool_refuses_user_only_skill(tmp_path):
         "---\ndisable-model-invocation: true\n---\nuser-only body\n",
     )
 
-    result = meta.skill("secret", context=context)
+    result = subagents.skill("secret", context=context)
 
     assert result.startswith("ERROR:")
     assert "user-only body" not in result
@@ -152,7 +152,7 @@ def test_skill_with_declared_tools_is_unchanged_for_plain_registry(tmp_path):
         "---\ntools: [shell, missing]\n---\nlegacy instructions",
     )
 
-    assert meta.skill("legacy", context=context) == "legacy instructions"
+    assert subagents.skill("legacy", context=context) == "legacy instructions"
 
 
 def test_skill_invocation_activates_declared_tools_and_still_returns_instructions(tmp_path):
@@ -175,7 +175,7 @@ def test_skill_invocation_activates_declared_tools_and_still_returns_instruction
 
     context.tool_registry = Activator()
 
-    result = meta.skill("deploy", context=context)
+    result = subagents.skill("deploy", context=context)
 
     assert context.tool_registry.requested == ("shell", "browser", "absent")
     assert result == (
@@ -185,10 +185,10 @@ def test_skill_invocation_activates_declared_tools_and_still_returns_instruction
 
 
 def test_skill_errors_when_not_found_anywhere(tmp_path):
-    # js/toolkit/meta.py:91 — no candidate matches -> explicit ERROR string.
+    # js/toolkit/subagents.py:91 — no candidate matches -> explicit ERROR string.
     context = ToolContext(cwd=tmp_path)
 
-    result = meta.skill("nope-no-such-skill-xyz", context=context)
+    result = subagents.skill("nope-no-such-skill-xyz", context=context)
 
     assert result == (
         "ERROR: skill 'nope-no-such-skill-xyz' not found in js/skills "

@@ -501,7 +501,7 @@ def test_jail_bind_setting_refuses_a_relative_path():
 
 @needs_bwrap
 def test_a_subagent_is_jailed(jailed, monkeypatch, tmp_path):
-    from js.toolkit.meta import _run_one_task_async
+    from js.toolkit.subagents import _run_one_task_async
 
     prompts = prompt_dir(tmp_path, "worker")
     cfg = make_cfg(tmp_path, "parent", prompts.parent / "parent")
@@ -524,7 +524,7 @@ def test_a_subagent_is_jailed(jailed, monkeypatch, tmp_path):
 
 @needs_bwrap
 def test_a_background_subagent_is_jailed(jailed, monkeypatch, tmp_path):
-    from js.toolkit import meta
+    from js.toolkit import subagents
 
     prompts = prompt_dir(tmp_path, "worker")
     jailed.config = make_cfg(tmp_path, "parent", prompts.parent / "parent")
@@ -536,9 +536,9 @@ def test_a_background_subagent_is_jailed(jailed, monkeypatch, tmp_path):
         messages.append({"role": "assistant", "content": "done"})
 
     monkeypatch.setattr(runtime, "run_turn_async", turn)
-    started = meta.task(tasks=["work"], agent_id="worker", background=True, context=jailed)
+    started = subagents.task(tasks=["work"], agent_id="worker", background=True, context=jailed)
     handle = started.rsplit("HANDLE ", 1)[1].split()[0]
-    finished = meta.task(action="wait", handle=handle, timeout=60, context=jailed)
+    finished = subagents.task(action="wait", handle=handle, timeout=60, context=jailed)
 
     assert "done" in finished
     assert ".zshrc" not in seen["ls"]

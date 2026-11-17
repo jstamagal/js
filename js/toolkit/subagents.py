@@ -1,4 +1,4 @@
-"""Meta tools: plans, skills, and isolated task delegation."""
+"""Subagent delegation (task, named-agent tools, the subagent gate), plus the plan and skill tools."""
 
 from __future__ import annotations
 

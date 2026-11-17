@@ -15,8 +15,8 @@ from js.mcp_config import resolve as resolve_mcp
 from js.memory import load_messages
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext, call_tool, fs
-from js.toolkit.meta import task
 from js.toolkit.registry import build_default_registry, select
+from js.toolkit.subagents import task
 
 
 @pytest.fixture(autouse=True)
@@ -92,8 +92,8 @@ def patch_from_env(monkeypatch, tmp_path: Path, prompt_root: Path):
 
     import js.config as config
 
-    # meta.py does `from ..config import from_env` inside the task function
-    # (a local import), so it can't be monkeypatched through the meta module
+    # subagents.py does `from ..config import from_env` inside the task function
+    # (a local import), so it can't be monkeypatched through the subagents module
     # namespace. Patching js.config.from_env is enough because by the time
     # the local import runs, it re-reads from the same module object —
     # which monkeypatch has already updated.
@@ -152,7 +152,7 @@ def test_task_requires_named_agent_id(tmp_path):
 
 @pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
 def test_child_terminal_sessions_close_when_turn_exits(monkeypatch, tmp_path, outcome):
-    from js.toolkit.meta import _run_one_task_async
+    from js.toolkit.subagents import _run_one_task_async
     from js.toolkit.terminal import close_terminal_sessions, terminal_session
 
     prompts = prompt_dir(tmp_path, "worker")
@@ -193,7 +193,7 @@ def test_child_terminal_sessions_close_when_turn_exits(monkeypatch, tmp_path, ou
 
 
 def test_child_turn_is_on_disk_before_it_ends(monkeypatch, tmp_path):
-    from js.toolkit.meta import _run_one_task_async
+    from js.toolkit.subagents import _run_one_task_async
 
     prompts = prompt_dir(tmp_path, "worker")
     cfg = make_cfg(tmp_path, "parent", prompts.parent / "parent")
@@ -293,7 +293,7 @@ def test_a_child_of_a_config_without_layers_runs_its_agent_yaml_reasoning(monkey
 @pytest.mark.parametrize("async_dispatch", [False, True])
 @pytest.mark.parametrize("session_id", [None, "existing"])
 def test_missing_agent_fails_without_worker_or_session_changes(monkeypatch, tmp_path, async_dispatch, session_id):
-    from js.toolkit.meta import task_async
+    from js.toolkit.subagents import task_async
 
     cfg = make_cfg(tmp_path, "parent", tmp_path / "prompts" / "parent")
     context = ToolContext(cwd=tmp_path)

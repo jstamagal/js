@@ -27,7 +27,7 @@ grep -n "_LIVE_[A-Z_]* *:\|^def _cfg_for_live_state\|^def _live_" js/cli.py
 grep -n "_int_knob(\|_jsrc_field(\|_numeric_setting(\|^class Config\|^def from_env" js/config.py
 grep -n "active_context\.[a-z_]* = getattr(cfg\|_settings.knob(live_settings" js/runtime.py
 grep -n "^class ToolContext\|= _knob(" js/toolkit/core.py
-grep -n "^_INHERITED_FIELDS\|^def _child_context" js/toolkit/meta.py
+grep -n "^_INHERITED_FIELDS\|^def _child_context" js/toolkit/subagents.py
 grep -n "^async def run_turn_async\|^def run_turn(\|^    def \|^    async def \|^        def \|^        async def \|nonlocal" js/runtime.py
 awk '/^async def run_turn_async/{s=NR} /^def run_turn\(/{print NR-s " lines"}' js/runtime.py
 grep -rn 'runtime, "_backoff"\|runtime, "_resolve_context_window"\|runtime, "_dispatch_batch"\|runtime.sys, ' tests
@@ -35,7 +35,7 @@ grep -rn 'runtime, "_backoff"\|runtime, "_resolve_context_window"\|runtime, "_di
 Inventory diff. It is read-only and prints the fields that differ between the four hand-kept lists:
 ```
 uv run python -c "
-import dataclasses, js.config as c, js.toolkit.core as k, js.toolkit.meta as m, js.cli as cli
+import dataclasses, js.config as c, js.toolkit.core as k, js.toolkit.subagents as m, js.cli as cli
 cfg={f.name for f in dataclasses.fields(c.Config)}; ctx={f.name for f in dataclasses.fields(k.ToolContext)}
 live={t[0] for t in cli._LIVE_LIMIT_FIELDS+cli._LIVE_OPTIONAL_INT_FIELDS+cli._LIVE_BOOL_FIELDS+cli._LIVE_STR_FIELDS+cli._LIVE_STR_LIST_FIELDS}
 inh=set(m._INHERITED_FIELDS)
@@ -61,7 +61,7 @@ Every setting a merged bead added shows up in this diff. Each one becomes one ro
 | Live overlay | js/cli.py:490–534 (`_LIVE_LIMIT_FIELDS` 20 rows, `_LIVE_STR_FIELDS`, `_LIVE_STR_LIST_FIELDS`, `_LIVE_OPTIONAL_INT_FIELDS`, `_LIVE_BOOL_FIELDS`), helpers 537–586, loops in `_cfg_for_live_state` 814–842 | Re-derives the same values from the live store with the active cfg as fallback. It **does not** apply the `max(1, …)` clamp to `max_parallel_tools`, so it has already drifted from the loader. |
 | Turn copy | js/runtime.py:1362–1388 | 19 `active_context.X = getattr(cfg, "X", active_context.X)` lines and 5 `_settings.knob(live_settings, ...)` lines (user_agent, shell_program, jail_bind, terminal_cols/rows). Two sourcing rules exist: some fields come from cfg, some from the store. |
 | ToolContext fields | js/toolkit/core.py:360–391 | 26 `_knob(...)` fields |
-| Subagent inheritance | js/toolkit/meta.py:24–50 (`_INHERITED_FIELDS`, 25 names), used by `_child_context`:107 | |
+| Subagent inheritance | js/toolkit/subagents.py:24–50 (`_INHERITED_FIELDS`, 25 names), used by `_child_context`:107 | |
 | Readers | process_net.py:826/847/907, search.py ×5, fetch.md, model_metadata.py:274 | These read `context.fetch_timeout_s` and are the real consumers. |
 
 The interface here is shallow. To add a per-turn setting you have to know six lists and keep them in step, and nothing fails when one is missed except the behaviour.
@@ -109,7 +109,7 @@ So `cfg.X` and `context.X` must remain flat, constructible, mutable-on-context a
 
 **Depth and locality.** The interface is one table plus three functions. Behind it sit coercion, fallback rules, the clamp, defaults, field declaration, live re-projection and subagent inheritance, all in one file. A guard test (every `limits.*` key has a row) turns a forgotten projection into a failing test. The seam is `project()`: the loader, the live overlay and tests all cross it with just a settings dict, so no Config is needed to test it.
 
-**Deletion test.** If you delete `knobs.py`, the six copies reappear across config.py, cli.py, runtime.py, core.py and meta.py. The module earns its keep.
+**Deletion test.** If you delete `knobs.py`, the six copies reappear across config.py, cli.py, runtime.py, core.py and subagents.py. The module earns its keep.
 
 ### Commits (each keeps `just test` and `just lint` green)
 
@@ -136,7 +136,7 @@ Tests:
 
 **K7: Docs.** Add one AGENTS.md sentence next to "Anything settable is a registered setting": *a setting a turn reads is also one `Knob` row in js/knobs.py*. Add a row for `js/knobs.py` to the module table in docs/technical-guide.md (~line 44). Size XS.
 
-Total: about 7 commits, roughly −290 / +330 including ~130 lines of new tests. `fetch_timeout_s` drops from 9 js files to 7 (settings.py, jsrc, knobs.py, process_net.py, search.py, fetch.md, model_metadata.py). It disappears from config.py, cli.py, runtime.py and meta.py, and core.py's fields become generated.
+Total: about 7 commits, roughly −290 / +330 including ~130 lines of new tests. `fetch_timeout_s` drops from 9 js files to 7 (settings.py, jsrc, knobs.py, process_net.py, search.py, fetch.md, model_metadata.py). It disappears from config.py, cli.py, runtime.py and subagents.py, and core.py's fields become generated.
 
 ### Tests that move or change
 None are edited for Part 1. The `Config(...)` and `ToolContext(...)` keyword constructors, attribute reads, and `replace()` calls all keep working through the generated kw_only bases. One new file is added: `tests/test_knobs.py`.

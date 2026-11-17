@@ -215,7 +215,7 @@ def test_worker_snippet_failures_are_not_tool_results(mode):
     import asyncio
 
     from js import supervisor
-    from js.toolkit import meta
+    from js.toolkit import subagents
 
     error = snippets.SnippetError("missing worker instruction")
 
@@ -227,13 +227,13 @@ def test_worker_snippet_failures_are_not_tool_results(mode):
         if mode == "supervised":
             supervisor.set_current(supervisor.Supervisor(asyncio.get_running_loop()))
         try:
-            await meta._fan_out_async([(1, "work")], worker)
+            await subagents._fan_out_async([(1, "work")], worker)
         finally:
             supervisor.set_current(previous)
 
     with pytest.raises(snippets.SnippetError, match="worker instruction"):
         if mode == "sync":
-            meta._fan_out([(1, "work")], worker)
+            subagents._fan_out([(1, "work")], worker)
         else:
             asyncio.run(drive())
 

@@ -27,7 +27,7 @@ from js.session_catalog import (
     session_title,
 )
 from js.toolkit import ToolContext
-from js.toolkit.meta import task
+from js.toolkit.subagents import task
 
 
 @pytest.fixture(autouse=True)

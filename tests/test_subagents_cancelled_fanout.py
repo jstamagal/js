@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from js import supervisor
-from js.toolkit import meta
+from js.toolkit import subagents
 
 
 @pytest.mark.parametrize("items", [[(1, "cancel")], [(1, "ok"), (2, "cancel"), (3, "failure")]])
@@ -17,12 +17,12 @@ def test_sync_fanout_cancelled_results_match_async(items, monkeypatch):
             raise ValueError("worker failed")
         return f"completed {index}"
 
-    results = meta._fan_out(items, worker)
-    expected = asyncio.run(meta._fan_out_async(items, worker))
+    results = subagents._fan_out(items, worker)
+    expected = asyncio.run(subagents._fan_out_async(items, worker))
     assert all(isinstance(result, str) for result in results)
     assert results == expected
     assert "CancelledError" in results[[item for _, item in items].index("cancel")]
-    assembled = meta._assemble_task_results(results, "test-agent", None)
+    assembled = subagents._assemble_task_results(results, "test-agent", None)
     assert isinstance(assembled, str)
     assert "CancelledError" in assembled
     if len(items) > 1:
@@ -38,4 +38,4 @@ def test_sync_fanout_control_flow_propagates(exception, monkeypatch):
         raise exception()
 
     with pytest.raises(exception):
-        meta._fan_out([(1, "control flow")], worker)
+        subagents._fan_out([(1, "control flow")], worker)

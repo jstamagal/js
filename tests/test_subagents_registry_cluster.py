@@ -1,4 +1,4 @@
-"""Cluster coverage for the meta/registry fan-out fixes:
+"""Cluster coverage for the subagents/registry fan-out fixes:
 
 - session_id + multiple tasks is rejected cleanly (never silently shares a file).
 - subagents never run more workers than the cap, across the whole tree.
@@ -15,7 +15,7 @@ import types
 import pytest
 
 from js import settings
-from js.toolkit import ToolContext, meta, registry as registry_mod
+from js.toolkit import ToolContext, registry as registry_mod, subagents
 from js.toolkit.registry import build_default_registry, select
 
 # --------------------------------------------------------------------------
@@ -29,7 +29,7 @@ def _ctx() -> ToolContext:
 
 
 def test_session_id_with_multiple_tasks_is_rejected():
-    error, prepared = meta._prepare_fan_out(
+    error, prepared = subagents._prepare_fan_out(
         ["one", "two"], agent_id="worker", session_id="s1", model="", context=_ctx()
     )
     assert prepared is None
@@ -38,7 +38,7 @@ def test_session_id_with_multiple_tasks_is_rejected():
 
 
 def test_session_id_with_single_task_is_allowed():
-    error, prepared = meta._prepare_fan_out(
+    error, prepared = subagents._prepare_fan_out(
         ["only"], agent_id="worker", session_id="s1", model="", context=_ctx()
     )
     assert error is None
@@ -46,7 +46,7 @@ def test_session_id_with_single_task_is_allowed():
 
 
 def test_multiple_tasks_without_session_id_is_allowed():
-    error, prepared = meta._prepare_fan_out(
+    error, prepared = subagents._prepare_fan_out(
         ["one", "two", "three"], agent_id="worker", session_id=None, model="", context=_ctx()
     )
     assert error is None
@@ -71,12 +71,12 @@ def test_worker_cap_never_exceeds_configured_width(monkeypatch):
             live -= 1
         return f"{idx}. done"
 
-    monkeypatch.setattr(meta, "_run_one_task_async", probe)
+    monkeypatch.setattr(subagents, "_run_one_task_async", probe)
 
     ctx = _ctx()
     ctx.subagent_max_workers = 3
     results = asyncio.run(
-        meta.task_async(tasks=[f"t{n}" for n in range(10)], agent_id="worker", context=ctx)
+        subagents.task_async(tasks=[f"t{n}" for n in range(10)], agent_id="worker", context=ctx)
     )
 
     assert peak <= 3
@@ -98,10 +98,10 @@ def test_worker_cap_defaults_below_the_dispatch_pool(monkeypatch):
             live -= 1
         return f"{idx}. done"
 
-    monkeypatch.setattr(meta, "_run_one_task_async", probe)
+    monkeypatch.setattr(subagents, "_run_one_task_async", probe)
 
     ctx = _ctx()  # no override -> the js/jsrc SUBAGENT_WORKERS_MAX
-    asyncio.run(meta.task_async(tasks=[f"t{n}" for n in range(20)], agent_id="worker", context=ctx))
+    asyncio.run(subagents.task_async(tasks=[f"t{n}" for n in range(20)], agent_id="worker", context=ctx))
 
     assert peak <= settings.default_value("SUBAGENT_WORKERS_MAX")
 
@@ -116,11 +116,11 @@ def _nested_probe(cap: int, depth_max: int, width: int, seen: list[int]):
         child.subagent_max_workers = cap
         child.task_max_depth = depth_max
         child.task_depth = getattr(context, "task_depth", 0) + 1
-        seen.append(meta._GATE.running)
+        seen.append(subagents._GATE.running)
         await asyncio.sleep(0.005)
         if child.task_depth < depth_max:
-            await meta.task_async(tasks=[f"t{n}" for n in range(width)], agent_id="worker", context=child)
-        seen.append(meta._GATE.running)
+            await subagents.task_async(tasks=[f"t{n}" for n in range(width)], agent_id="worker", context=child)
+        seen.append(subagents._GATE.running)
         return "done"
 
     return probe
@@ -135,34 +135,34 @@ def _tree_ctx(cap: int, depth_max: int) -> ToolContext:
 
 def test_worker_cap_holds_across_the_whole_tree(monkeypatch):
     seen: list[int] = []
-    monkeypatch.setattr(meta, "_run_one_task_async", _nested_probe(4, 4, 4, seen))
+    monkeypatch.setattr(subagents, "_run_one_task_async", _nested_probe(4, 4, 4, seen))
 
-    asyncio.run(meta.task_async(tasks=[f"t{n}" for n in range(4)], agent_id="worker", context=_tree_ctx(4, 4)))
+    asyncio.run(subagents.task_async(tasks=[f"t{n}" for n in range(4)], agent_id="worker", context=_tree_ctx(4, 4)))
 
     # 4 + 16 + 64 + 256 subagents ran, two samples each.
     assert len(seen) == 2 * (4 + 16 + 64 + 256)
     assert max(seen) <= 4
-    assert meta._GATE.running == 0
+    assert subagents._GATE.running == 0
 
 
 def test_parent_waiting_on_children_lends_its_slot(monkeypatch):
     # One slot, three levels: a parent that kept its slot while waiting would
     # leave its child no slot to run in.
     seen: list[int] = []
-    monkeypatch.setattr(meta, "_run_one_task_async", _nested_probe(1, 3, 2, seen))
+    monkeypatch.setattr(subagents, "_run_one_task_async", _nested_probe(1, 3, 2, seen))
 
     async def run():
         return await asyncio.wait_for(
-            meta.task_async(tasks=["a", "b"], agent_id="worker", context=_tree_ctx(1, 3)), 10)
+            subagents.task_async(tasks=["a", "b"], agent_id="worker", context=_tree_ctx(1, 3)), 10)
 
     assert asyncio.run(run()).count("done") == 2
     assert max(seen) <= 1
-    assert meta._GATE.running == 0
+    assert subagents._GATE.running == 0
 
 
 def test_cancelled_waiter_gives_back_nothing_it_did_not_take():
     async def run():
-        gate = meta.SubagentGate()
+        gate = subagents.SubagentGate()
         await gate.acquire(1)
         waiter = asyncio.ensure_future(gate.acquire(1))
         await asyncio.sleep(0)
@@ -178,7 +178,7 @@ def test_cancelled_waiter_gives_back_nothing_it_did_not_take():
 
 
 def test_a_waiter_on_a_closed_loop_is_not_counted_twice():
-    gate = meta.SubagentGate()
+    gate = subagents.SubagentGate()
     main = asyncio.new_event_loop()
     other = asyncio.new_event_loop()
     try:
@@ -210,19 +210,19 @@ def test_a_background_job_that_fails_hands_back_every_slot(monkeypatch):
         await asyncio.sleep(30)
         return "slow"
 
-    monkeypatch.setattr(meta, "_run_one_task_async", probe)
+    monkeypatch.setattr(subagents, "_run_one_task_async", probe)
 
     ctx = _tree_ctx(2, 3)
-    started = meta.task(tasks=["boom", "slow", "slower"], agent_id="worker", background=True, context=ctx)
+    started = subagents.task(tasks=["boom", "slow", "slower"], agent_id="worker", background=True, context=ctx)
     handle = started.rsplit("HANDLE ", 1)[1].split()[0]
-    job = meta.task_jobs.find(handle, ctx.task_owner)
+    job = subagents.task_jobs.find(handle, ctx.task_owner)
     with pytest.raises(snippets.SnippetError):
-        meta.task_jobs.wait(job, 5)
+        subagents.task_jobs.wait(job, 5)
     deadline = time.monotonic() + 5
-    while meta._GATE.running and time.monotonic() < deadline:
+    while subagents._GATE.running and time.monotonic() < deadline:
         time.sleep(0.02)
 
-    assert meta._GATE.running == 0
+    assert subagents._GATE.running == 0
 
 
 def test_a_timed_wait_returns_on_time_while_its_job_is_queued(monkeypatch):
@@ -237,23 +237,23 @@ def test_a_timed_wait_returns_on_time_while_its_job_is_queued(monkeypatch):
         child.subagent_max_workers = 1
         child.task_max_depth = 3
         child.task_depth = 1
-        started = await meta.task_async(tasks=["child"], agent_id="worker", background=True, context=child)
+        started = await subagents.task_async(tasks=["child"], agent_id="worker", background=True, context=child)
         handle = started.rsplit("HANDLE ", 1)[1].split()[0]
         await asyncio.sleep(0.1)  # the child is queued behind this slot
         began = time.monotonic()
-        await meta.task_async(action="wait", handle=handle, timeout=0, context=child)
+        await subagents.task_async(action="wait", handle=handle, timeout=0, context=child)
         waited.append(time.monotonic() - began)
-        await meta.task_async(action="wait", handle=handle, context=child)
+        await subagents.task_async(action="wait", handle=handle, context=child)
         return "parent done"
 
-    monkeypatch.setattr(meta, "_run_one_task_async", probe)
+    monkeypatch.setattr(subagents, "_run_one_task_async", probe)
 
     result = asyncio.run(asyncio.wait_for(
-        meta.task_async(tasks=["parent"], agent_id="worker", context=_tree_ctx(1, 3)), 10))
+        subagents.task_async(tasks=["parent"], agent_id="worker", context=_tree_ctx(1, 3)), 10))
 
     assert result == "parent done"
     assert waited and waited[0] < 0.3
-    assert meta._GATE.running == 0
+    assert subagents._GATE.running == 0
 
 
 # --------------------------------------------------------------------------
@@ -277,7 +277,7 @@ def test_locked_subagent_model_strips_override_flag(monkeypatch):
     ctx = ToolContext()
     ctx.config = types.SimpleNamespace(lock_subagent_model=True, prompt_roots=None)
 
-    error, prepared = meta._prepare_fan_out(
+    error, prepared = subagents._prepare_fan_out(
         ["do it"], agent_id="worker", session_id=None, model="", context=ctx
     )
     assert error is None and prepared is not None
@@ -286,7 +286,7 @@ def test_locked_subagent_model_strips_override_flag(monkeypatch):
 
 def test_unlocked_subagent_model_keeps_override_flag(monkeypatch):
     seen = _capture_flags(monkeypatch)
-    error, prepared = meta._prepare_fan_out(
+    error, prepared = subagents._prepare_fan_out(
         ["do it"], agent_id="worker", session_id=None, model="", context=_ctx()
     )
     assert error is None and prepared is not None
@@ -351,12 +351,12 @@ def test_fan_out_accepts_assembly_services():
     async def worker(idx, total, item, parent, parent_cfg, full_registry, *args):
         seen.append((parent, parent_cfg, full_registry))
         return item.upper()
-    context.subagent_assembly = meta.SubagentAssembly(
+    context.subagent_assembly = subagents.SubagentAssembly(
         config_factory=lambda **kwargs: cfg,
         registry_factory=lambda *args, **kwargs: registry,
         worker=worker,
     )
-    error, prepared = meta._prepare_fan_out(["work"], "worker", None, "", context)
+    error, prepared = subagents._prepare_fan_out(["work"], "worker", None, "", context)
     assert error is None
     items, factory = prepared
     assert asyncio.run(factory(*items[0])) == "WORK"

@@ -84,10 +84,10 @@ def install_cell(socket_path: Path, token: str) -> str:
 
 def _refusal(tool: Any) -> str | None:
     """Why ``tool`` cannot run from a cell, or None when it can."""
-    from . import meta
+    from . import subagents
 
     reason = _REFUSED_TOOLS.get(tool.name)
-    if reason is None and meta.is_fan_out_handler(tool.handler):
+    if reason is None and subagents.is_fan_out_handler(tool.handler):
         reason = "it runs subagent turns; call it directly"
     if reason is None and inspect.iscoroutinefunction(tool.handler):
         reason = "it runs on js's event loop; call it directly"

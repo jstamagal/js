@@ -4,12 +4,12 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from js.toolkit import ToolContext, meta, task_jobs
+from js.toolkit import ToolContext, subagents, task_jobs
 
 
 @pytest.mark.parametrize(("value", "expected"), [(None, None), (0, 0.0), (-2, 0.0), (2, 2.0)])
 def test_wait_limit_only_omitted_is_indefinite(value, expected):
-    assert meta._wait_limit(value) == expected
+    assert subagents._wait_limit(value) == expected
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -32,7 +32,7 @@ def test_zero_wait_returns_live_background_handle(monkeypatch, asynchronous, tim
 
     def wait_once():
         args = {"action": "wait", "handle": job.id, "timeout": timeout, "context": context}
-        return asyncio.run(meta.task_async(**args)) if asynchronous else meta.task(**args)
+        return asyncio.run(subagents.task_async(**args)) if asynchronous else subagents.task(**args)
 
     with ThreadPoolExecutor(max_workers=1) as executor:
         result = executor.submit(wait_once)

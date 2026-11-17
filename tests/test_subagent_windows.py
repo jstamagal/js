@@ -16,7 +16,7 @@ from repl_driver import run_async
 from js import cli, screen
 from js.config import from_env
 from js.memory import load_messages
-from js.toolkit import ToolContext, meta
+from js.toolkit import ToolContext, subagents
 
 SGR = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -75,11 +75,11 @@ def test_a_subagent_gets_a_window_that_shows_its_output_and_takes_typed_lines(mo
         print("main says hello")
         context = ToolContext(cwd=tmp_path)
         context.config = cfg
-        seen["result"] = await meta.task_async(tasks=["work"], agent_id="worker", context=context)
+        seen["result"] = await subagents.task_async(tasks=["work"], agent_id="worker", context=context)
         messages.append({"role": "assistant", "content": "main done"})
 
     async def script(on_line):
-        windows = meta.window_opener.get().__self__
+        windows = subagents.window_opener.get().__self__
         await on_line("launch a worker")
         await _until(lambda: windows.windows.view(2) is not None and windows.windows.activity() == [2])
         main = windows.windows.view(1).scrollback

@@ -21,11 +21,11 @@ from . import (
     jev,
     kernel,
     lsp,
-    meta,
     notebook,
     policy,
     process_net,
     search,
+    subagents,
     terminal,
     toolbox,
     wiki,
@@ -588,7 +588,7 @@ def _agent_tools(prompts_root: Path | Sequence[Path], reserved: set[str]) -> tup
                 continue
             # Later roots are more specific and shadow earlier prompt dirs.
             by_id[agent_id] = agent_dir
-    return tuple(replace(meta.named_agent_tool(agent_id), source="agent") for agent_id in sorted(by_id))
+    return tuple(replace(subagents.named_agent_tool(agent_id), source="agent") for agent_id in sorted(by_id))
 
 
 @cache
@@ -638,7 +638,7 @@ def build_default_registry(
             ("jev", jev.tools()),
             ("terminal", terminal.tools()),
             ("browser", browser.tools()),
-            ("meta", meta.tools(flags)),
+            ("meta", subagents.tools(flags)),
             ("wiki", wiki.tools()),
             ("kernel", kernel.tools()),
             ("toolbox", toolbox.tools()),

@@ -1051,7 +1051,7 @@ def _cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None,
     may exceed it so the full result remains reachable.
 
     Original contract below: clip to the byte cap, leaving a visible marker when the slice
-    actually shortens it — same wording the subagent layer uses (meta.py) so a
+    actually shortens it — same wording the subagent layer uses (subagents.py) so a
     truncated leaf result never looks like the tool simply stopped early. A cap of
     0 or less means unlimited (matches the settings convention)."""
     if isinstance(result, ToolResult):
@@ -1205,9 +1205,9 @@ async def _call_on_this_thread(tool: Any, args: dict, context: ToolContext) -> A
 
 
 async def _call_fan_out(tool: Any, args: dict, context: ToolContext) -> Any:
-    from .toolkit import meta
+    from .toolkit import subagents
 
-    return await meta.dispatch_fan_out_async(tool, args, context)
+    return await subagents.dispatch_fan_out_async(tool, args, context)
 
 
 # A sync handler on a dispatch worker thread.
@@ -1571,7 +1571,7 @@ async def _dispatch_batch(
     an ancestor's worker. Mixed async batches retain model order; pure fan-out
     batches run concurrently with their sync leaves, as before.
     """
-    from .toolkit import meta
+    from .toolkit import subagents
 
     progress = progress if progress is not None else _DispatchProgress()
     fan_out = set()
@@ -1580,7 +1580,7 @@ async def _dispatch_batch(
         tool = registry.resolve(pc.name)
         if tool is None or pc.validation_error is not None:
             continue
-        if meta.is_fan_out_handler(tool.handler):
+        if subagents.is_fan_out_handler(tool.handler):
             fan_out.add(i)
         elif inspect.iscoroutinefunction(tool.handler):
             async_leaves.add(i)
