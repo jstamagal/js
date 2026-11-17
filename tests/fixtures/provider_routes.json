@@ -672,9 +672,9 @@
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
-   "provider_name": "mybox",
+   "provider_name": "MyBox",
    "responses_wire": false,
-   "sdk_provider_name": "mybox",
+   "sdk_provider_name": "MyBox",
    "transport": null
   },
   "wire_name": "MyBox"
@@ -852,9 +852,9 @@
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
-   "provider_name": "nosuch",
+   "provider_name": "NoSuch",
    "responses_wire": false,
-   "sdk_provider_name": "nosuch",
+   "sdk_provider_name": "NoSuch",
    "transport": null
   },
   "wire_name": "NoSuch"
@@ -867,9 +867,9 @@
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
-   "provider_name": " nosuch ",
+   "provider_name": "nosuch",
    "responses_wire": false,
-   "sdk_provider_name": " nosuch ",
+   "sdk_provider_name": "nosuch",
    "transport": null
   },
   "wire_name": "nosuch"

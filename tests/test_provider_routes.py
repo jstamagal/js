@@ -170,16 +170,10 @@ _NO_PROVIDER = (
     "With no provider, wire_name says openai and resolve_model sends chat completions, but the "
     "route's SDK name is empty, so the send-time reasoning strip never applies, and the decoder "
     "drops the reasoning of a reply without tool calls.")
-_ID_CASE = (
-    "An id no provider registers: wire_name and resolve_model use it as normalize_provider_id "
-    "leaves it (stripped, case kept); the route lowercases it as given.")
 KNOWN_DISAGREEMENTS: dict[str, str] = {
     "no provider, base URL": _NO_PROVIDER,
     "no provider, base URL, deepseek model": _NO_PROVIDER,
     "no provider, no base URL": _NO_PROVIDER,
-    "unknown id, mixed case": _ID_CASE,
-    "unknown id, padded": _ID_CASE,
-    "saved login, asked in another case": _ID_CASE,
     "saved login, deepseek sdk with openai-responses shape": (
         "The route takes any custom_responses transport for the Responses wire; wire_name and "
         "resolve_model take it only on the openai SDK, and use the deepseek SDK here."),

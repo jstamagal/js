@@ -44,8 +44,8 @@ class Wire:
     the wire in the ``-u`` wire names: openai (chat completions), responses,
     anthropic, or the SDK id.
 
-    ``provider_name`` and ``sdk_provider_name`` are the ids lowercased as
-    given, "" with no provider; ``explicit_provider`` is whether a provider id
+    ``provider_name`` and ``sdk_provider_name`` are ``provider_id`` and
+    ``sdk``, "" with no provider; ``explicit_provider`` is whether a provider id
     was given at all. ``chat_completions`` reads ``sdk_provider_name``, so it is
     False with no provider although ``name`` is openai.
     ``reasoning_content`` is whether an OpenAI chat-completions request goes
@@ -82,8 +82,8 @@ def resolve_wire(provider_id: str | None, *, base_url: str | None = None, model_
     else:
         sdk = (provider.effective_sdk_provider_id if provider is not None else None) or canonical_id
     name = ("responses" if transport == "custom_responses" else "openai") if sdk == "openai" else sdk
-    provider_name = (provider.id if provider is not None else (provider_id or "")).lower()
-    sdk_provider_name = (provider.effective_sdk_provider_id if provider is not None else (provider_id or "")).lower()
+    provider_name = canonical_id or ""
+    sdk_provider_name = sdk if provider_id is not None else ""
     explicit_provider = provider_id is not None
     operator_endpoint = provider is not None and (provider.local or not provider.established)
     return Wire(
