@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from . import messages as msgs, providers
 
@@ -213,3 +213,27 @@ def resolve_model_route(
         headers=headers,
         transport=transport,
     )
+
+
+_CFG_SETTINGS = object()
+
+
+def apply_route(cfg, route: ModelRoute, *, vision: bool = True, settings=_CFG_SETTINGS):
+    """``cfg`` on ``route``: its model, provider id, base URL, API key and
+    headers, and ``vision_enabled`` for the route's model under ``settings``
+    (``cfg.settings`` when not given). ``vision`` False leaves
+    ``vision_enabled`` as ``cfg`` has it."""
+    changes = {
+        "model": route.model,
+        "provider_id": route.provider_id,
+        "provider_base_url": route.base_url,
+        "provider_api_key": route.api_key,
+        "provider_headers": route.headers,
+    }
+    if vision:
+        from .config import vision_enabled_for_model
+
+        if settings is _CFG_SETTINGS:
+            settings = getattr(cfg, "settings", None)
+        changes["vision_enabled"] = vision_enabled_for_model(route.model, settings)
+    return replace(cfg, **changes)

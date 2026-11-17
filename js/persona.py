@@ -410,8 +410,7 @@ def apply_agent_model(cfg, prompt_spec, model: str | None, *, config_pins: bool 
     pins only when ``config_pins``."""
     if not agent_model_applies(cfg, prompt_spec, model, config_pins=config_pins):
         return cfg
-    from .config import vision_enabled_for_model
-    from .routing import resolve_model_route
+    from .routing import apply_route, resolve_model_route
 
     route = resolve_model_route(
         prompt_spec.model,
@@ -422,15 +421,7 @@ def apply_agent_model(cfg, prompt_spec, model: str | None, *, config_pins: bool 
         explicit_model=True,
         prefix_overrides_provider=not getattr(cfg, "explicit_provider", False),
     )
-    return replace(
-        cfg,
-        model=route.model,
-        provider_id=route.provider_id,
-        provider_base_url=route.base_url,
-        provider_api_key=route.api_key,
-        provider_headers=route.headers,
-        vision_enabled=vision_enabled_for_model(route.model, getattr(cfg, "settings", None)),
-    )
+    return apply_route(cfg, route)
 
 
 def apply_agent_reasoning(cfg, prompt_spec):

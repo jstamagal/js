@@ -597,15 +597,7 @@ def _cfg_for_active_model(cfg: Config, state: dict) -> Config:
         or route.headers != getattr(cfg, "provider_headers", {})
         or route_vision != cfg.vision_enabled
     ):
-        return replace(
-            cfg,
-            model=route.model,
-            provider_id=route.provider_id,
-            provider_base_url=route.base_url,
-            provider_api_key=route.api_key,
-            provider_headers=route.headers,
-            vision_enabled=route_vision,
-        )
+        return routing.apply_route(cfg, route, settings=state.get("settings", cfg.settings))
     return cfg
 
 
@@ -3632,15 +3624,7 @@ def _resolve_cli_model_override(cfg: Config, model: str | None) -> Config:
         explicit_model=True,
         prefix_overrides_provider=not getattr(cfg, "explicit_provider", False),
     )
-    return replace(
-        cfg,
-        model=route.model,
-        provider_id=route.provider_id,
-        provider_base_url=route.base_url,
-        provider_api_key=route.api_key,
-        provider_headers=route.headers,
-        vision_enabled=vision_enabled_for_model(route.model, getattr(cfg, "settings", None)),
-    )
+    return routing.apply_route(cfg, route)
 
 
 

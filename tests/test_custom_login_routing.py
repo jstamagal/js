@@ -9,6 +9,7 @@ to the SDK ("unknown provider id").
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -826,3 +827,18 @@ def test_route_prefix_policy_and_login_lookup_are_injectable():
                                 login_lookup=lookup, prefix_allowed=lambda *args: True)
     assert route.provider_id == "openai" and route.model == "model" and route.api_key == "key"
     assert looked_up and set(looked_up) == {"openai"}
+
+
+def test_apply_route_puts_every_route_field_and_vision_on_the_config(monkeypatch, tmp_path):
+    from js.routing import ModelRoute, apply_route
+
+    _isolate_config(monkeypatch, tmp_path)
+    cfg = from_env(save_session=False)
+    route = ModelRoute(model="other-model", provider_id="testes", base_url=BASE_URL,
+                       api_key="k", headers={"X-A": "1"})
+    seeing = apply_route(replace(cfg, vision_enabled=False), route, settings={"VISION": True})
+    assert (seeing.model, seeing.provider_id, seeing.provider_base_url, seeing.provider_api_key,
+            seeing.provider_headers) == ("other-model", "testes", BASE_URL, "k", {"X-A": "1"})
+    assert seeing.vision_enabled is True
+    kept = apply_route(replace(cfg, vision_enabled=False), route, vision=False)
+    assert kept.model == "other-model" and kept.vision_enabled is False
