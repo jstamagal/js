@@ -106,7 +106,6 @@ def _select_models_to_cache(
     annotate_dialects: bool = True,
     saved: Login | None = None,
     pending: list[Login] | None = None,
-    noninteractive=None,
 ) -> list[str] | None:
     """Curate which fetched models to cache. None == user cancelled.
 
@@ -119,7 +118,7 @@ def _select_models_to_cache(
     if not models:
         return models
     if not _interactive():
-        return models if noninteractive is None else noninteractive(provider_id, models)
+        return models
     dialects = _dialect_map(provider_id) if annotate_dialects else {}
     cache = load_model_cache()
     cached = cache.get(provider_id, [])
@@ -375,29 +374,24 @@ def _test_answer(choice: str, models: list[str]) -> str | bool | None:
     return None
 
 
-def _secondary_test_choice(models: list[str], *, require_test: bool, read=None, say=None, write=None,
-                           interpret: Callable[[str, list[str]], str | bool | None] | None = None,
-                           question: msgs.Message = msgs.LOGIN_ASK_TEST) -> str | None | bool:
-    announce = msgs.say if say is None else say
-    reader = input if read is None else read
+def _secondary_test_choice(models: list[str]) -> str | None | bool:
     if not models:
         return True
     # Enter always means "add it, I don't care to test"; a model number means
-    # "test that one first". require_test only adds a heads-up that the listing
-    # didn't prove the key can generate — it never forces a test.
-    if require_test:
-        announce(msgs.LOGIN_LISTING_NOT_PROOF)
-    prompt = question.text()
+    # "test that one first". The heads-up says the listing didn't prove the
+    # key can generate — it never forces a test.
+    msgs.say(msgs.LOGIN_LISTING_NOT_PROOF)
+    prompt = msgs.LOGIN_ASK_TEST.text()
     while True:
         try:
-            choice = reader(prompt).strip()
+            choice = input(prompt).strip()
         except (EOFError, KeyboardInterrupt):
-            (print if write is None else write)()
+            print()
             return False
-        result = (interpret or _test_answer)(choice, models)
+        result = _test_answer(choice, models)
         if result is not None:
             return result
-        announce(msgs.LOGIN_TEST_CHOICES)
+        msgs.say(msgs.LOGIN_TEST_CHOICES)
 
 def _run_secondary_test(login: Login, provider: providers.ProviderDef, model_id: str, *, settings=None, say=None) -> bool:
     # Seeing a real answer back IS the confirmation; a further "hit enter to
@@ -437,13 +431,13 @@ def _run_secondary_test(login: Login, provider: providers.ProviderDef, model_id:
     announce(msgs.LOGIN_TEST_ANSWER, answer=answer)
     return True
 
-def _post_fetch_confirmation(login: Login, provider: providers.ProviderDef, models: list[str], *, listing_proves_auth=None) -> bool | None:
+def _post_fetch_confirmation(login: Login, provider: providers.ProviderDef, models: list[str]) -> bool | None:
     _display_models(models)
-    if (provider.models_list_validates_auth if listing_proves_auth is None else listing_proves_auth(provider)):
+    if provider.models_list_validates_auth:
         # Listing already proved the credentials work — asking "add without a
         # test, or verify first?" here is a prompt with only one sane answer.
         return True
-    choice = _secondary_test_choice(models, require_test=True)
+    choice = _secondary_test_choice(models)
     if choice is True:
         return True
     if choice is False or choice is None:

@@ -734,13 +734,6 @@ def test_secondary_test_enter_adds_without_testing(monkeypatch):
     assert logins.load_model_cache()["opencode-go"] == ["first", "second"]
 
 
-def test_secondary_test_enter_adds_without_testing_when_no_test_is_required(monkeypatch):
-    # The login flow always asks with require_test=True; the False branch is
-    # reached only from here.
-    monkeypatch.setattr("builtins.input", lambda _prompt="": "")
-    assert login_cli._secondary_test_choice(["first", "second"], require_test=False) is True
-
-
 def test_secondary_test_number_picks_that_model(monkeypatch):
     # A model number means "verify that one": the test asks that model.
     _no_provider_env(monkeypatch, "opencode-go")
