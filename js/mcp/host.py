@@ -176,7 +176,7 @@ def _redact_text(value: str, secrets: tuple[str, ...]) -> str:
 MAX_PUBLIC_TOOL_NAME = 64
 
 
-def _bounded_public_name(server: str, component: str, limit: int = MAX_PUBLIC_TOOL_NAME) -> str:
+def _bounded_public_name(server: str, component: str) -> str:
     """server__tool, trimmed to the provider's function-name limit.
 
     Providers commonly reject names over 64 characters, which would fail the
@@ -185,11 +185,11 @@ def _bounded_public_name(server: str, component: str, limit: int = MAX_PUBLIC_TO
     remote names cannot collapse onto the same public name.
     """
     public = f"{server}__{component}"
-    if len(public) <= limit:
+    if len(public) <= MAX_PUBLIC_TOOL_NAME:
         return public
     digest = hashlib.sha256(public.encode("utf-8")).hexdigest()[:6]
-    prefix = server[: max(1, min(len(server), limit // 3))]
-    room = limit - len(prefix) - len(digest) - 3  # two underscores plus one
+    prefix = server[: max(1, min(len(server), MAX_PUBLIC_TOOL_NAME // 3))]
+    room = MAX_PUBLIC_TOOL_NAME - len(prefix) - len(digest) - 3  # two underscores plus one
     return f"{prefix}__{component[: max(1, room)]}_{digest}"
 
 
