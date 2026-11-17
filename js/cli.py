@@ -397,6 +397,7 @@ def _print_resume_hint(cfg: Config, state: dict) -> None:
     model = state.get("model")
     resume = command_line.argv(("--agent", cfg.agent_id if named else None),
                                ("--model", model if isinstance(model, str) and model else None),
+                               ("--home", str(_paths.home()) if _paths.custom_home() else None),
                                ("--session", _session_hint_arg(cfg)))
     msgs.say(msgs.RESUME_HINT, command=shlex.join(["js", *resume]))
 

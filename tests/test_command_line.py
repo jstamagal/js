@@ -230,13 +230,15 @@ def test_continue_command_after_a_prefix(monkeypatch, printed):
     assert printed == ["js-dev --x 'a b' --model prov/mod -r off --home '/h o' --session hint"]
 
 
-@pytest.mark.parametrize(("agent", "settings", "model", "line"), [
-    ("defaultagent", {}, None, "js --session sub/name"),
-    ("defaultagent", {}, "p/m x", "js --model 'p/m x' --session sub/name"),
-    ("other", {}, "m", "js --agent other --model m --session sub/name"),
-    ("defaultagent", {"DEFAULT_AGENT": "other"}, None, "js --agent defaultagent --session sub/name"),
+@pytest.mark.parametrize(("agent", "settings", "model", "custom_home", "line"), [
+    ("defaultagent", {}, None, False, "js --session sub/name"),
+    ("defaultagent", {}, "p/m x", False, "js --model 'p/m x' --session sub/name"),
+    ("other", {}, "m", False, "js --agent other --model m --session sub/name"),
+    ("defaultagent", {"DEFAULT_AGENT": "other"}, None, False, "js --agent defaultagent --session sub/name"),
+    ("other", {}, "m", True, "js --agent other --model m --home '/h o' --session sub/name"),
 ])
-def test_resume_hint_command(printed, agent, settings, model, line):
+def test_resume_hint_command(monkeypatch, printed, agent, settings, model, custom_home, line):
+    monkeypatch.setattr(paths, "custom_home", lambda: custom_home)
     cfg = SimpleNamespace(session_file=Path("/s/dir/sub/name.jsonl"), sessions_dir=Path("/s/dir"),
                           agent_id=agent, settings=settings)
     cli._print_resume_hint(cfg, {"messages": ["one"], "model": model})
