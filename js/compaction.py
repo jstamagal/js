@@ -464,7 +464,7 @@ def cache_expired(cfg: Config, context: Any, *, now: float | None = None) -> boo
     """Whether the prompt cache of ``context``'s conversation has outlived
     ``COMPACTION_CACHE_TTL``. No request yet counts as expired."""
     ttl = get_nonnegative_int(cfg, "COMPACTION_CACHE_TTL")
-    last = getattr(context, "last_request_at", None)
+    last = context.last_request_at
     if ttl == 0 or last is None:
         return True
     return (time.time() if now is None else now) - last >= ttl
@@ -480,9 +480,9 @@ def note_response(context: Any, *, model_key: str, cache_read: int | None, now: 
     if cache_read is None:
         context.last_request_at = now
         return None
-    previous = getattr(context, "cache_read_baseline", None)
-    comparable = previous is not None and getattr(context, "cache_read_model", "") == model_key
-    last = getattr(context, "last_request_at", None)
+    previous = context.cache_read_baseline
+    comparable = previous is not None and context.cache_read_model == model_key
+    last = context.last_request_at
     context.cache_read_baseline = cache_read
     context.cache_read_model = model_key
     context.last_request_at = now
@@ -502,13 +502,13 @@ def history_rewritten(context: Any) -> None:
 
 def auto_paused(cfg: Config, context: Any) -> bool:
     """Whether failed summaries have paused automatic compaction on ``context``."""
-    return int(getattr(context, "summary_failures", 0) or 0) >= get_int(cfg, "COMPACTION_FAILURES_MAX")
+    return context.summary_failures >= get_int(cfg, "COMPACTION_FAILURES_MAX")
 
 
 def record_auto_failure(cfg: Config, context: Any) -> msgs.Said | None:
     """Count one failed automatic summary. Returns the pause notice on the
     failure that reaches ``COMPACTION_FAILURES_MAX``, else None."""
-    context.summary_failures = int(getattr(context, "summary_failures", 0) or 0) + 1
+    context.summary_failures += 1
     limit = get_int(cfg, "COMPACTION_FAILURES_MAX")
     if context.summary_failures == limit:
         return msgs.AUTO_COMPACT_BREAKER.said(failures=limit)
@@ -549,10 +549,9 @@ def _post_compact_rehydration(
     if per_file_tokens is None:
         per_file_tokens = _settings.default_value("COMPACTION_REATTACH_FILE_TOKENS_MAX")
     paths = []
-    resolve_path = getattr(context, "resolve_path", T.STOCK_CONTEXT.resolve_path)
-    for path in list(getattr(context, "read_paths", []) or []):
+    for path in list(context.read_paths):
         try:
-            paths.append(resolve_path(path))
+            paths.append(context.resolve_path(path))
         except (OSError, RuntimeError, jail.JailError):
             continue
     if not paths:
@@ -714,10 +713,10 @@ def _calibrated_chars_per_token(cfg: Config, system: str, messages: list[dict], 
         # The tracker lives on the tool context (set in run_turn_async), not in
         # module scope — reading a global here would silently always miss.
         context = context or T.STOCK_CONTEXT
-        tracker = getattr(context, "context_budget_state", None)
-        if not hasattr(tracker, "calibrated_chars_per_token"):
+        tracker = context.context_budget_state
+        if tracker is None:
             return configured
-        registry = getattr(context, "tool_registry", None)
+        registry = context.tool_registry
         tools = model_client.tool_specs_to_ai_tools(registry.openai_specs()) if registry else None
         return tracker.calibrated_chars_per_token(messages=messages, system=system, tools=tools)
     except Exception:  # noqa: BLE001 - calibration must never break compaction
@@ -1084,7 +1083,7 @@ async def compact_now(
         M.append_mark(cfg.session_file, marker)
         messages[:] = after
         owner = context or T.STOCK_CONTEXT
-        tracker = getattr(owner, "context_budget_state", None)
+        tracker = owner.context_budget_state
         if tracker is not None:
             tracker.reset()
         owner.summary_failures = 0
@@ -1163,14 +1162,13 @@ async def maybe_auto_compact_async(
     Notices are returned, not printed — presentation belongs to the caller.
     """
     out = AutoCompactOutcome()
-    tracker = getattr(context, "context_budget_state", None)
-    if isinstance(tracker, context_budget.TokenState):
-        registry = getattr(context, "tool_registry", None)
+    tracker = context.context_budget_state
+    if tracker is not None:
+        registry = context.tool_registry
         tools = model_client.tool_specs_to_ai_tools(registry.openai_specs()) if registry else None
         prompt_tokens, _, _ = tracker.current_context_tokens(system=system, messages=messages, tools=tools)
     else:
-        prompt_tokens = (int(getattr(context, "last_prompt_tokens", 0) or 0)
-                         + int(getattr(context, "last_output_tokens", 0) or 0))
+        prompt_tokens = context.last_prompt_tokens + context.last_output_tokens
         if prompt_tokens <= 0:
             prompt_tokens = estimated_prompt_tokens(cfg, system, messages)
     if prompt_tokens <= 0:
@@ -1228,12 +1226,12 @@ async def _between_turn_compact(cfg: Config, ac: AutoCompactState, context: Any,
         cfg, system, messages, forced=forced, context=context, emit=emit, log_dir=log_dir,
         trigger={"phase": "between-turn", "context_tokens": prompt_tokens,
                  "context_window": context_window, "effective_input_limit": effective_window},
-        flight_data={"auto_state": dict(vars(ac)), "last_prompt_tokens": getattr(context, "last_prompt_tokens", None),
-                     "last_cached_tokens": getattr(context, "last_cached_tokens", None),
-                     "last_incomplete_reason": getattr(context, "last_incomplete_reason", None),
-                     "usage_anchor": vars(getattr(context, "context_budget_state", object())).get("_anchor")
-                         if hasattr(getattr(context, "context_budget_state", None), "__dict__") else None,
-                     "tools": context.tool_registry.openai_specs() if getattr(context, "tool_registry", None) else []},
+        flight_data={"auto_state": dict(vars(ac)), "last_prompt_tokens": context.last_prompt_tokens,
+                     "last_cached_tokens": context.last_cached_tokens,
+                     "last_incomplete_reason": context.last_incomplete_reason,
+                     "usage_anchor": vars(context.context_budget_state).get("_anchor")
+                         if context.context_budget_state is not None else None,
+                     "tools": context.tool_registry.openai_specs() if context.tool_registry else []},
     )
 
 

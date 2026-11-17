@@ -1819,8 +1819,8 @@ def _prepare_turn_context(context: ToolContext, cfg: Config, request: ModelReque
     context.tokens_until_compaction = None
     context.turn_status.reset()
     chars_per_token = compaction.get_float(cfg, "COMPACTION_CHARS_PER_TOKEN")
-    token_state = getattr(context, "context_budget_state", None)
-    if not isinstance(token_state, context_budget.TokenState):
+    token_state = context.context_budget_state
+    if token_state is None:
         token_state = context_budget.TokenState(chars_per_token=chars_per_token)
     else:
         token_state.chars_per_token = chars_per_token
