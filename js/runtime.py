@@ -49,9 +49,6 @@ from . import (
     usage as usage_mod,
 )
 from .config import Config, vision_enabled_for_model
-
-# The console's printers, reached through runtime by tests of what they print.
-from .console import _print_run_line, _print_trace  # noqa: F401
 from .reasoning_display import ReasoningDisplay
 from .sampling import Sampling
 from .toolkit.core import (
