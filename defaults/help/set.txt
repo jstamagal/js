@@ -102,7 +102,7 @@ KEYBINDS_FILE
     scroll_down, complete. Read when the REPL starts.
 
 PROVIDER
-    Explicit js provider id, e.g. deepseek, openai-codex, ollama.
+    Explicit js provider id, e.g. deepseek, openai, ollama.
 
 BASE_URL
     Explicit provider base URL; unset = provider default.
@@ -117,9 +117,7 @@ EXTRA_HEADERS
     Names match in any case, and each goes out once. A header replaces
     the SDK's own, anthropic-version included, except the auth header a
     login's key or token sets and content-type, content-length,
-    transfer-encoding and host. On the Codex login, Authorization,
-    chatgpt-account-id, OpenAI-Beta, accept and content-type stay js's
-    own; User-Agent and originator can be replaced.
+    transfer-encoding and host.
 
 PARANOID_MODE
     How much js hides keys: off, on or extra. off: nothing hidden; keys
@@ -573,25 +571,6 @@ ANTHROPIC_THINKING_DISPLAY
 ANTHROPIC_REQUIRED_EFFORT
     Effort sent instead of off to an Anthropic model that cannot turn
     thinking off: Fable, Mythos, Claude 5.5 and later.
-
-CODEX_TEXT_VERBOSITY
-    Text verbosity sent with Codex requests: low, medium or high.
-
-CODEX_REASONING_SUMMARY
-    Reasoning summary asked of Codex models: auto, concise or detailed.
-
-CODEX_ORIGINATOR
-    originator header sent with Codex requests.
-
-CODEX_USER_AGENT
-    User-Agent sent with Codex requests. Empty = js's own.
-
-CODEX_CLIENT_VERSION
-    Client version sent with Codex requests. Empty = detected, or the
-    built-in one.
-
-CODEX_CLIENT_DETECT
-    on: the Codex client version is read from an installed codex CLI.
 
 COMPACTION_OVERFLOW_ROUNDS_MAX
     Compaction rounds one call may run to recover from a context overflow.

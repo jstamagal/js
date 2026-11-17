@@ -15,7 +15,6 @@ from js import model_client
     ("openai-completions", "http://custom.test/v1", "test", "reasoning_content", True),
     ("openai", "https://api.openai.com/v1", "test", "reasoning", True),
     ("xai", "https://api.x.ai/v1", "grok-test", "reasoning", True),
-    ("xai-oauth", "https://api.x.ai/v1", "grok-test", "reasoning", True),
     ("vllm", "http://127.0.0.1:8000/v1", "qwen-test", "reasoning_content", True),
     ("lmstudio", "http://127.0.0.1:1234/v1", "qwen-test", "reasoning_content", True),
     ("mimo", "https://api.xiaomimimo.com/v1", "mimo-v2.5", "reasoning", True),

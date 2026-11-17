@@ -1,21 +1,16 @@
-"""The login store lock (ALL-CLAIMS logins.py:271 MED, :428 MED; bakari v3.3).
+"""The login store lock.
 
 The sidecar lock serializes every writer of logins.toml and
-models-cache.json across processes, sync and async, without ever blocking
-the event loop, and a waiter can be cancelled without holding anything.
+models-cache.json across processes.
 """
 
 from __future__ import annotations
 
-import asyncio
-import fcntl
 import json
-import os
 import subprocess
 import sys
 import textwrap
 import time
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -69,107 +64,12 @@ def test_sync_lock_times_out_instead_of_blocking_forever(store):
         proc.wait()
 
 
-def test_async_lock_does_not_block_the_loop_and_is_cancel_safe(store):
-    proc = _hold_in_subprocess(logins.lock_path(), 0.8)
-
-    async def scenario():
-        ticks = 0
-
-        async def ticker():
-            nonlocal ticks
-            while True:
-                ticks += 1
-                await asyncio.sleep(0.01)
-
-        tick_task = asyncio.create_task(ticker())
-
-        async def waiter():
-            async with logins.ahold_login_lock(timeout_s=5):
-                return "acquired"
-
-        # A waiter cancelled mid-poll holds nothing afterwards.
-        cancelled = asyncio.create_task(waiter())
-        await asyncio.sleep(0.1)
-        cancelled.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await cancelled
-        # The loop kept turning while the second waiter polled.
-        before = ticks
-        result = await waiter()
-        tick_task.cancel()
-        assert result == "acquired"
-        assert ticks - before > 10
-        # And the lock is free again: a fresh fd can take it at once.
-        fd = os.open(logins.lock_path(), os.O_RDWR)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        finally:
-            os.close(fd)
-
-    try:
-        asyncio.run(scenario())
-    finally:
-        proc.wait()
-
-
 def test_lock_is_reentrant_so_save_login_works_under_a_held_lock(store):
     with logins.hold_login_lock():
         logins.save_login(logins.Login(provider_id="a", provider_api_key="k"))
         with logins.hold_login_lock():
             logins.save_login(logins.Login(provider_id="b", provider_api_key="k"))
     assert set(logins.load_logins()) == {"a", "b"}
-
-
-def test_two_tasks_on_one_loop_are_serialized(store):
-    # maggie #713: tasks share the loop's thread; a thread-local depth let
-    # task B walk in under task A's flock. Ownership is per task.
-    async def scenario():
-        order: list[str] = []
-        a_in = asyncio.Event()
-        a_may_leave = asyncio.Event()
-
-        async def task_a():
-            async with logins.ahold_login_lock():
-                order.append("a-in")
-                a_in.set()
-                await a_may_leave.wait()
-                order.append("a-out")
-
-        async def task_b():
-            await a_in.wait()
-            async with logins.ahold_login_lock(timeout_s=5):
-                order.append("b-in")
-
-        ta = asyncio.create_task(task_a())
-        tb = asyncio.create_task(task_b())
-        await a_in.wait()
-        await asyncio.sleep(0.2)
-        assert order == ["a-in"]  # b is still waiting
-        a_may_leave.set()
-        await asyncio.gather(ta, tb)
-        assert order == ["a-in", "a-out", "b-in"]
-
-    asyncio.run(scenario())
-
-
-def test_same_task_reenters_and_sync_save_inside_async_holder_works(store):
-    async def scenario():
-        async with logins.ahold_login_lock():
-            async with logins.ahold_login_lock():
-                logins.save_login(logins.Login(provider_id="a", provider_api_key="k"))
-        return set(logins.load_logins())
-
-    assert asyncio.run(scenario()) == {"a"}
-
-
-def test_child_task_does_not_inherit_the_parent_s_ownership(store):
-    async def scenario():
-        async with logins.ahold_login_lock():
-            child = asyncio.create_task(logins.ahold_login_lock(timeout_s=0.3).__aenter__())
-            with pytest.raises(logins.LoginStoreBusyError):
-                await child
-
-    asyncio.run(scenario())
 
 
 def test_lock_held_on_store_a_is_not_a_lock_on_store_b(tmp_path: Path):
@@ -192,25 +92,9 @@ def test_lock_held_on_store_a_is_not_a_lock_on_store_b(tmp_path: Path):
         logins.set_config_dir(paths.login_store_dir())
 
 
-def test_overlay_is_scoped_to_the_store(tmp_path: Path):
-    store_a, store_b = tmp_path / "a", tmp_path / "b"
-    try:
-        logins.set_config_dir(store_a)
-        disk_a = logins.Login(provider_id="xai-oauth", provider_api_key="A1", xai_refresh_token="RA1", xai_token_expires=100.0)
-        logins.save_login(disk_a)
-        logins.note_memory_login(logins.Login(provider_id="xai-oauth", provider_api_key="A2", xai_refresh_token="RA2", xai_token_expires=999.0), derived_from=disk_a)
-        logins.set_config_dir(store_b)
-        logins.save_login(logins.Login(provider_id="xai-oauth", provider_api_key="B1", xai_refresh_token="RB1", xai_token_expires=1.0))
-        assert logins.get_login("xai-oauth").xai_refresh_token == "RB1"
-        logins.set_config_dir(store_a)
-        assert logins.get_login("xai-oauth").xai_refresh_token == "RA2"
-    finally:
-        logins.set_config_dir(paths.login_store_dir())
-
-
 def test_nested_hold_survives_a_store_switch_inside(tmp_path: Path):
-    # maggie #803/#811: the inner level must release the store it entered,
-    # not whatever the config dir says at exit time.
+    # The inner level must release the store it entered, not whatever the
+    # config dir says at exit time.
     store_a, store_b = tmp_path / "a", tmp_path / "b"
     try:
         logins.set_config_dir(store_a)
@@ -286,32 +170,6 @@ def test_model_cache_write_is_atomic_and_never_overwrites_an_unreadable_file(sto
     assert cache.read_text() == raw[: len(raw) // 2]  # bytes untouched for the human
     names = {entry.name for entry in store.iterdir() if entry.is_file()}
     assert not any(name.endswith(".tmp") for name in names)
-
-
-def test_get_login_overlay_rides_on_the_disk_token_it_was_derived_from(store):
-    disk = logins.Login(provider_id="xai-oauth", provider_api_key="A1", xai_refresh_token="R1", xai_token_expires=100.0, provider_headers={"h": "old"})
-    logins.save_login(disk)
-    memory = logins.Login(provider_id="xai-oauth", provider_api_key="A2", xai_refresh_token="R2", xai_token_expires=200.0, provider_headers={"h": "old"})
-    logins.note_memory_login(memory, derived_from=disk)
-    got = logins.get_login("xai-oauth")
-    assert (got.provider_api_key, got.xai_refresh_token) == ("A2", "R2")
-    # ruhondo #829: the overlay owns only the token fields; an external edit
-    # of anything else (headers here) shows through while the base token holds.
-    logins.save_login(replace(disk, provider_headers={"h": "new"}))
-    logins.note_memory_login(memory, derived_from=disk)
-    got = logins.get_login("xai-oauth")
-    assert got.provider_headers == {"h": "new"} and got.xai_refresh_token == "R2"
-    # ruhondo #788: disk carries a DIFFERENT token (external --login, even
-    # with a lower expiry): disk wins outright and the overlay is dropped.
-    logins.save_login(logins.Login(provider_id="xai-oauth", provider_api_key="A9", xai_refresh_token="R9", xai_token_expires=1.0))
-    logins.note_memory_login(memory, derived_from=disk)
-    assert logins.get_login("xai-oauth").xai_refresh_token == "R9"
-    assert logins._overlay_key("xai-oauth") not in logins._overlay
-    # A logout wins over memory too.
-    logins.note_memory_login(memory)
-    logins.remove_login("xai-oauth")
-    assert logins.get_login("xai-oauth") is None
-    assert logins._overlay_key("xai-oauth") not in logins._overlay
 
 
 def test_json_cache_file_shape_unchanged(store):

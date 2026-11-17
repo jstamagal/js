@@ -633,7 +633,7 @@ left, in the same shape. Resume uses whichever came last: an assistant stamp, a
 the configured model).
 
 An assistant message whose reasoning came signed (an Anthropic thinking
-signature, a Codex encrypted reasoning item) also carries `reasoning_parts`,
+signature, an OpenAI Responses encrypted reasoning item) also carries `reasoning_parts`,
 each part's text and provider metadata, and `reasoning_from`, the provider and
 model that signed them. Replay sends the signed parts back only to that
 provider and model. A record after an edit to earlier history (tool-result
@@ -700,8 +700,7 @@ provider that is not built in refreshes a stale catalog, as any provider
 lookup does): fresh input, cache reads, cache writes and output each at
 their own rate per million tokens, cache rates falling back to the input rate,
 and the price tier whose `min_context` the prompt reaches. A call that names a
-provider is priced only from that provider's catalog row (a Codex login is
-priced at OpenAI's API rates), so a local
+provider is priced only from that provider's catalog row, so a local
 server's model is not charged an API price. A call with no provider goes
 through the gateway and takes the routed row. A model with no price counts
 tokens only and adds to `unpriced_calls`.

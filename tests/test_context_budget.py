@@ -90,12 +90,12 @@ def test_cached_prompt_is_counted_once_against_128k_window():
     assert budget.should_compact is False
 
 
-def test_codex_context_window_comes_from_the_model_catalog(monkeypatch):
+def test_a_hosted_provider_context_window_comes_from_the_model_catalog(monkeypatch):
     from js import runtime
 
     monkeypatch.setattr(runtime.model_metadata, "context_window", lambda *args: 1_050_000)
 
-    assert runtime._resolve_context_window("gpt-5.6-sol", "openai-codex", None) == 1_050_000
+    assert runtime._resolve_context_window("gpt-5.6-sol", "openai", None) == 1_050_000
 
 
 def test_concurrent_turns_keep_their_own_overflow_window(tmp_path, monkeypatch):
@@ -170,7 +170,7 @@ def test_signed_reasoning_payload_counts_toward_the_estimate():
 
 
 def test_non_ascii_word_characters_are_counted():
-    """ALL-CLAIMS:169: CJK and accented letters matched no token branch."""
+    """CJK and accented letters are counted as word characters."""
     japanese = "日本語のテキスト" * 100      # 800 chars
     assert context_budget.estimate_text_tokens(japanese) >= 400   # was 200 (chars/4 floor)
     assert context_budget.estimate_text_tokens("é" * 400) >= 200  # was 100

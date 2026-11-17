@@ -95,8 +95,6 @@ js --login ollama          # local Ollama defaults
 js --login llama.cpp       # local llama.cpp defaults
 js --login mimo            # Xiaomi MiMo API
 js --login mimo-token-plan # Xiaomi MiMo Token Plan
-js --login openai-codex        # browser OAuth on localhost:1455
-js --login openai-codex-device # device-code OAuth; prints URL + code
 js --logout deepseek       # remove saved login and cached models
 ```
 

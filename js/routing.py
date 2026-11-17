@@ -13,7 +13,6 @@ nothing more — all routing decisions live here.
 from __future__ import annotations
 
 import os
-import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 
@@ -56,7 +55,7 @@ def unconfigured_model_message(model: str) -> str:
     return msgs.MODEL_UNCONFIGURED.said(model=model)
 
 
-def _saved_login(provider_id: str | None, *, refresh=None):
+def _saved_login(provider_id: str | None):
     """Return the saved Login for ``provider_id`` (normalized), or None.
 
     Resilient by design: a missing/unreadable login store must never block
@@ -68,28 +67,9 @@ def _saved_login(provider_id: str | None, *, refresh=None):
     try:
         from . import logins as _logins
 
-        login = _logins.load_logins().get(normalized)
+        return _logins.load_logins().get(normalized)
     except Exception:  # noqa: BLE001
         return None
-    if login is None:
-        return None
-    # An OAuth login carries a short-lived bearer in provider_api_key. Codex
-    # refreshes inside its own provider; the xAI login rides the plain openai
-    # transport, so the only place the token can be renewed before it is spent
-    # is here, where the credential is read.
-    from . import xai_auth as _xai_auth
-
-    if _xai_auth.is_xai_oauth_provider(normalized):
-        try:
-            return (_xai_auth.ensure_fresh_login if refresh is None else refresh)(login)
-        except Exception:
-            # Refresh starts _REFRESH_SKEW_SECONDS before expiry; until the
-            # bearer has actually expired it still authenticates.
-            expires = login.xai_token_expires
-            if login.provider_api_key and expires is not None and time.time() < _xai_auth._expiry_or_zero(expires):
-                return login
-            raise
-    return login
 
 
 def provider_extra_params(cfg) -> dict | None:

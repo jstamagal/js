@@ -29,7 +29,7 @@ import modelsdotdev
 from modelsdotdev._internal import data as modelsdotdev_data
 from modelsdotdev._internal import sync as modelsdotdev_sync
 
-from . import codex_auth, model_matching, paths, providers, settings as _settings, stream_transport
+from . import model_matching, paths, providers, settings as _settings, stream_transport
 from . import messages as msgs
 
 _policy_settings: ContextVar[dict | None] = ContextVar("js_metadata_settings", default=None)
@@ -182,8 +182,6 @@ def _provider_candidates(provider_id: str | None, *, include_sdk: bool = True) -
         provider = providers.get_provider(normalized)
         if include_sdk and provider is not None and provider.effective_sdk_provider_id:
             candidates.append(provider.effective_sdk_provider_id)
-        if codex_auth.is_codex_provider(normalized):
-            candidates.append("openai")
         candidates.append(normalized)
     seen: set[str] = set()
     ordered: list[str] = []
@@ -722,8 +720,8 @@ def model_prices(model_id: str, provider_id: str | None = None) -> tuple[Any, ..
     million tokens, lowest ``min_context`` first; None when the catalog has no
     price for it.
 
-    A call with a provider is priced only by that provider's own catalog row
-    (Codex uses OpenAI's rates), so a local server running a model that some
+    A call with a provider is priced only by that provider's own catalog row,
+    so a local server running a model that some
     API sells is not charged that API's price. A call with no
     provider goes through the gateway and is priced by the routed row. Looking
     up a provider that is not built in refreshes a stale catalog, as every

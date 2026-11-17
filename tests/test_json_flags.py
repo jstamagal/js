@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from js import cli, codex_auth, logins, paths, providers
+from js import cli, logins, paths, providers
 
 
 @pytest.fixture
@@ -82,7 +82,6 @@ def test_logins_json_hides_credentials_when_paranoid_mode_is_on(tmp_logins_dir, 
     logins.save_login(logins.Login(
         provider_id="private-proxy", provider_api_key="key-secret",
         provider_headers={"Authorization": "Bearer header-secret"},
-        xai_refresh_token="refresh-secret",
     ))
 
     assert cli.main(["--extra", "PARANOID_MODE=on", "--list-logins", "--json"]) == 0
@@ -91,74 +90,8 @@ def test_logins_json_hides_credentials_when_paranoid_mode_is_on(tmp_logins_dir, 
     assert rows[0]["provider_id"] == "private-proxy"
     assert rows[0]["has_api_key"] is True
     assert all(secret not in json.dumps(rows) for secret in (
-        "key-secret", "header-secret", "refresh-secret",
+        "key-secret", "header-secret",
     ))
-
-
-def test_logins_json_masks_api_key_for_codex_but_keeps_for_normal(tmp_logins_dir):
-    # A normal provider login keeps its api key (the picker needs it); a codex
-    # login has its access JWT nulled. Both have refresh tokens nulled.
-    logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="sk-normal-secret"))
-    logins.save_login(
-        logins.Login(
-            provider_id=codex_auth.CODEX_PROVIDER_ID,  # "openai-codex"
-            provider_api_key="codex-access-jwt-secret",
-            codex_refresh_token="codex-refresh-token-secret",
-            codex_account_id="acct-123",
-            codex_email="ape@king.test",
-        )
-    )
-
-    rows = cli._logins_json()
-
-    by_id = {row["provider_id"]: row for row in rows}
-    assert set(by_id) == {"deepseek", "openai-codex"}
-
-    normal = by_id["deepseek"]
-    codex = by_id["openai-codex"]
-
-    # Each row carries the derived booleans and provider_id.
-    for row in (normal, codex):
-        assert "provider_id" in row
-        assert isinstance(row["has_api_key"], bool)
-        assert isinstance(row["has_codex_refresh_token"], bool)
-
-    # Booleans reflect the ORIGINAL (pre-mask) secret presence.
-    assert normal["has_api_key"] is True
-    assert normal["has_codex_refresh_token"] is False
-    assert codex["has_api_key"] is True
-    assert codex["has_codex_refresh_token"] is True
-
-    # ACTUAL behavior: non-codex keeps provider_api_key; codex nulls it.
-    assert normal["provider_api_key"] == "sk-normal-secret"
-    assert codex["provider_api_key"] is None
-
-    # Refresh token is ALWAYS nulled.
-    assert normal["codex_refresh_token"] is None
-    assert codex["codex_refresh_token"] is None
-
-
-def test_logins_json_never_leaks_codex_refresh_token_anywhere(tmp_logins_dir):
-    # Defense-in-depth: scan the raw JSON text for the secret values.
-    refresh_secret = "REFRESH-TOKEN-MUST-NOT-LEAK"
-    access_secret = "CODEX-ACCESS-JWT-MUST-NOT-LEAK"
-    logins.save_login(
-        logins.Login(
-            provider_id=codex_auth.CODEX_PROVIDER_ID,
-            provider_api_key=access_secret,
-            codex_refresh_token=refresh_secret,
-        )
-    )
-
-    raw = json.dumps(cli._logins_json())
-
-    assert refresh_secret not in raw
-    assert access_secret not in raw
-    # Sanity: it is still valid JSON describing the codex login.
-    rows = json.loads(raw)
-    assert rows[0]["provider_id"] == "openai-codex"
-    assert rows[0]["has_codex_refresh_token"] is True
-    assert rows[0]["has_api_key"] is True
 
 
 def test_json_flags_print_their_payload_as_one_json_line(monkeypatch, capsys):
@@ -230,15 +163,15 @@ def test_models_json_no_arg_uses_config_provider(monkeypatch, tmp_logins_dir, ca
 
 
 def test_list_models_human_output_is_provider_slash_model(monkeypatch, tmp_logins_dir, capsys):
-    logins.save_login(logins.Login(provider_id="openai-codex", provider_api_key="jwt"))
+    logins.save_login(logins.Login(provider_id="openai", provider_api_key="sk"))
     monkeypatch.setattr(cli.logins, "test_login", lambda login: ["gpt-5.4", "gpt-5.5"])
 
-    rc = cli._print_model_list("openai-codex", None)
+    rc = cli._print_model_list("openai", None)
     out = capsys.readouterr().out
 
     assert rc == 0
     # Concise: exactly one `provider/model` per line, nothing else.
-    assert out == "openai-codex/gpt-5.4\nopenai-codex/gpt-5.5\n"
+    assert out == "openai/gpt-5.4\nopenai/gpt-5.5\n"
 
 
 def test_list_models_no_arg_covers_every_saved_login(monkeypatch, tmp_logins_dir, capsys):
@@ -266,8 +199,8 @@ def test_list_models_flag_prints_the_model_list(monkeypatch):
     calls: list[str | None] = []
     monkeypatch.setattr(cli, "_print_model_list", lambda provider_arg, cfg: calls.append(provider_arg) or 0)
 
-    assert cli.main(["--list-models", "openai-codex"]) == 0
-    assert calls == ["openai-codex"]
+    assert cli.main(["--list-models", "openai"]) == 0
+    assert calls == ["openai"]
 
 
 @pytest.mark.parametrize("argv,missing", [

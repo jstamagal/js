@@ -173,9 +173,6 @@ branch the audit was made on; they move as the code changes.
 | `js/clipimage.py:34` | READ_TIMEOUT_S | default | The clipboard read timeout of 5 s exists only in code. | js-2lg.127 |
 | `js/config.py:565,585` | from_env | default | The instruction files a run loads (JS.md, JS.local.md, AGENTS.md, AGENTS.local.md) are fixed in code and are not a setting. | js-2lg.136 |
 | `js/login_cli.py:441-443` | _collect_api_login | policy | A keyless local endpoint gets the placeholder key "x" automatically. | js-2lg.148 |
-| `js/codex_provider.py:479,489` | _build_body_async | default | text.verbosity "low" and reasoning summary "detailed" are fixed in code. | js-2lg.154 |
-| `js/codex_provider.py:59-60,108-109` | _codex_headers | default | The originator "pi" and the User-Agent "js/0.1.0" are fixed in code; HTTP_USER_AGENT does not apply here. | js-2lg.154 |
-| `js/codex_provider.py:44,47-58` | _client_version | default | JS_CODEX_CLIENT_VERSION is an env-only setting, and otherwise the part runs `codex --version` as a subprocess. | js-2lg.154 |
 | `js/model_metadata.py:33,517-539` | ensure_fresh_catalog | policy | The models.dev catalog refreshes itself over the network when older than 8 hours, with one try per process; neither the age nor the auto-refresh is a setting. | js-2lg.164 |
 | `js/model_metadata.py:335-368` | probe_local_context_window | policy | Local servers get HTTP probes for their context window automatically, with no setting to turn it off. | js-2lg.164 |
 | `js/dotenv.py:52-63,80` | candidate_files / load | policy | .env files are read from the start directory up to the filesystem root and fill os.environ; the walk-up is fixed in code. | js-2lg.169 |
@@ -248,17 +245,11 @@ constants stay beside their owning code. See [Model text](prompt-text.md).
 | `js/settings.py:454,456` | _coerce_value | presentation | The PASTE_IMAGE_COMMAND refusals are literal strings in code. | js-2lg.137 |
 | `js/settings.py:579,641` | parse_header_lines / _parse_dotted_key | presentation | The header and empty-key error texts are built in code. | js-2lg.137 |
 | `js/login_defaults.py:57,60` | parse | presentation | The refusal for a bad NAME=value entry is built in code. | js-2lg.141 |
-| `js/logins.py:177,213` | hold_login_lock / ahold_login_lock | presentation | The store-busy error text is built in code. | js-2lg.143 |
+| `js/logins.py:176` | hold_login_lock | presentation | The store-busy error text is built in code. | js-2lg.143 |
 | `js/logins.py:443-444` | _refuse_if_corrupt | presentation | The corrupt-file refusal, including the instruction "Fix or remove the file by hand", is built in code. | js-2lg.143 |
 | `js/logins.py:473,504,509,514,517,620,910` | _optional_str / _login_from_section / _read_store / _read_model_cache_records | presentation | The bad-section and parse errors the user sees are built in code. | js-2lg.143 |
 | `js/login_cli.py:105-116,334,345,633,324` | _curses_picker / _select_provider / _select_api_shape / _provider_details / _login_provider_rows | presentation | The picker row layout ("> ", "[x] ", padded id column, "[saved]", "saved/env/registry" tags) is fixed in code. | js-2lg.145 |
 | `js/login_cli.py:32-37,299` | _API_SHAPES / _menu | presentation | The API shape descriptions and the NoTerminalError text are user-facing strings in code. | js-2lg.145 |
-| `js/codex_auth.py:318,320` | _CallbackHandler.do_GET | presentation | The HTML page shown after login is fixed in code. | js-2lg.150 |
-| `js/codex_auth.py:113-125,173,176,363,427-431,447-493,593,602,654,683,686,716,809` | _token_from_response / _post_token_form / login_browser / login_device / relogin_error / ensure_fresh_login / _locked_refresh | presentation | The OAuth errors, including "run js --login openai-codex again" and "fix it before ...", are built in code. | js-2lg.150 |
-| `js/codex_provider.py:84,559` | _account_id_from_token / OpenAICodexProvider.__init__ | presentation | The errors, including "run js --login openai-codex", are built in code. | js-2lg.155 |
-| `js/xai_auth.py:273-274` | login_browser | presentation | The HTML page shown after login is fixed in code. | js-2lg.157 |
-| `js/xai_auth.py:87,92,104-110,174-183,243,368,445,452,457` | _validate_endpoint / discover / _post_token_form / exchange_code_for_token / relogin_error / ensure_fresh_login | presentation | The OAuth errors, including "run js --login xai-oauth again", are built in code. | js-2lg.157 |
-| `js/oauth_loopback.py:119,121,157,159,161,163` | wait_for_code | presentation | The callback errors are built in code from the label. | js-2lg.159 |
 | `js/providers.py:731-740` | assert_endpoint_configured | presentation | The refusal text, including "Run `js --login ...`", is built in code. | js-2lg.162 |
 | `js/messages.py` `ENDPOINT_*` | endpoint_uri.split, from_env | presentation | The -u and JS_BASE_URL errors are worded for a terminal in code. | js-2lg.167 |
 | `js/tool_binaries.py:145,550-551,568,573-574,583-585,622,627,632,634,698-699,730` | aria2_release / release_plan / _provision_termux_tools / install_all | presentation | The missing-tool and refusal texts are built in code. | js-2lg.177 |
@@ -394,13 +385,7 @@ Resolution notes (the rows below record the original audit):
 | `js/login_cli.py:871-885` | _run_login | policy | A login whose server cannot be reached is saved anyway, and a 404 adds a guessed "/v1" hint. | js-2lg.146 |
 | `js/login_cli.py:318-321` | _login_provider_rows | policy | The openai-completions and openai-responses rows are hidden from the provider list in code. | js-2lg.146 |
 | `js/login_cli.py:843-904` | _run_login | policy | The login flow (collect, fetch, confirm, keep-list, save) is tied to the terminal prompts, so another assembly cannot run a login without this UI. | js-2lg.146 |
-| `js/codex_auth.py:368-369,407,465` | login_browser / login_device | presentation | The OAuth flows print the URL, the paste hint and the device code to stdout themselves. | js-2lg.149 |
-| `js/codex_auth.py:378-389` | login_browser | policy | The browser flow reads a pasted callback from sys.stdin itself. | js-2lg.149 |
-| `js/codex_auth.py:381` | login_browser | policy | The flow opens a web browser on its own, and unlike login_device has no open_browser parameter. | js-2lg.149 |
-| `js/codex_provider.py:306-332` | _repair_tool_pairs | policy | Unmatched tool calls and outputs are repaired automatically with no way to turn it off. | js-2lg.153 |
-| `js/xai_auth.py:263-264` | login_browser | presentation | The flow prints the URL itself and always opens a web browser. | js-2lg.156 |
 | `js/providers.py:123-476,561-566` | _BUILTINS / all_providers / login_providers | policy | The provider registry is a fixed tuple with no way for an assembly to add or replace a provider. | js-2lg.160 |
-| `js/routing.py:81-82` | _saved_login | policy | Reading a route refreshes the xAI OAuth token automatically (network POST and file write). | js-2lg.163 |
 | `js/routing.py:144-164` | resolve_model_route | policy | The rule that env keys alone never create a route, and the refusal when a known provider has no login, are fixed in code. | js-2lg.163 |
 | `js/model_metadata.py:192,666,672` | accepts_image_input / context_window / max_output_tokens | policy | Plain capability lookups can start a network catalog refresh. | js-2lg.165 |
 | `js/home.py:629-649` | migrate_once | policy | The startup migration of old locations (agent conversion and session refiling included) runs automatically and prints each step as text to a stream instead of handing Steps to a callback. | js-2lg.170 |

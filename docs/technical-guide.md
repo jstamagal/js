@@ -270,8 +270,7 @@ Provider request retry:
   error as the status its `code` stands for (`rate_limit_exceeded` 429;
   `server_error`, `internal_error`, `model_error` 500). A network failure is
   retried: refused, past `CONNECT_TIMEOUT`, or a connection dropped before
-  or during the reply (including a Codex stream that ends without a
-  terminal event). Any other answer with no status is not.
+  or during the reply. Any other answer with no status is not.
 - A failure the rule retries is retried up to
   `RETRY_COUNT_MAX` times (default 3). Each retry waits what the
   response's `retry-after-ms` or `Retry-After` header asks (seconds or an HTTP
@@ -312,8 +311,8 @@ Provider request retry:
   include cache reads.
 - Unrecovered provider errors propagate to the caller.
 
-Max-output recovery. A reply is cut off by its cap when Codex marks it
-incomplete with `max_output_tokens` or the SDK's finish reason is `length`
+Max-output recovery. A reply is cut off by its cap when a Responses stream marks
+it incomplete with `max_output_tokens` or the SDK's finish reason is `length`
 (OpenAI `length`, Anthropic `max_tokens`), and it has no tool call that can
 run. Then:
 
@@ -321,8 +320,7 @@ run. Then:
    `OUTPUT_TOKENS_RETRY_MAX` (default 64000) as the cap, held to the
    model's known output limit and to what the window leaves after the
    prompt. This happens only when that is larger than the cap the cut reply
-   had, so a model already at its limit, a full window, or Codex (which takes
-   no cap) skips it. It is also skipped when reply text is already on the
+   had, so a model already at its limit or a full window skips it. It is also skipped when reply text is already on the
    screen or stdout, since a resend would print it twice. The cut reply is
    discarded. If the provider rejects the larger cap with a non-retryable
    error, a context-length error included, the request is sent again at the

@@ -101,13 +101,13 @@ def test_the_chat_wire_sends_every_set_field(provider_id):
 
 
 def test_the_responses_wire_sends_presence_penalty_in_extra_body():
-    top, extra = _sent("openai-codex", Sampling(temperature=0.7, top_p=0.9, presence_penalty=1.2))
+    top, extra = _sent("openai-responses", Sampling(temperature=0.7, top_p=0.9, presence_penalty=1.2))
 
     assert top == {"temperature": 0.7, "top_p": 0.9}
     assert extra["presence_penalty"] == 1.2
 
 
-@pytest.mark.parametrize("provider_id", ["anthropic", "openai", "openai-codex", "vllm", None])
+@pytest.mark.parametrize("provider_id", ["anthropic", "openai", "openai-responses", "vllm", None])
 def test_unset_sampling_fields_are_absent_from_the_request(provider_id):
     top, extra = _sent(provider_id, Sampling(temperature=0.3))
 

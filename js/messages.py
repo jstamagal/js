@@ -1054,19 +1054,12 @@ LOGIN_BAD_DEFAULTS = Message("{error}. Nothing saved yet.")
 LOGIN_TRY_V1 = Message("{base} does not end in /v1. OpenAI-compatible servers usually serve at {suggested}")
 LOGIN_NOT_SAVED = Message("Login not saved: {error}")
 PROVIDER_ADDED = Message("Provider added: {provider}. Cached {models}.")
-PROVIDER_ADDED_AS = Message("Provider added: {provider} as {email}. Cached {models}.")
 LOGIN_NO_CACHED_MODELS = Message("No cached models for {provider}")
 LOGIN_CACHE_EDIT_CANCELLED = Message("Model cache edit cancelled. {provider} unchanged.")
 LOGIN_CACHED = Message("Cached {models} for {provider}")
 LOGOUT_FAILED = Message("Logout failed: {error}")
 LOGGED_OUT = Message("Logged out of {provider}")
 NOT_LOGGED_IN = Message("Not logged in to {provider}")
-OAUTH_OPENING = Message("Opening the browser for {service} login. If it does not open, visit:\n{url}")
-OAUTH_PASTE_CALLBACK = Message(
-    "Over SSH, or if the callback page cannot connect, paste the full callback URL here and press Enter.")
-OAUTH_BAD_CALLBACK = Message("Callback URL invalid or its state does not match. Paste the URL from this login attempt.")
-OAUTH_DEVICE = Message("{service} login\n  URL:  {url}\n  Code: {code}\nWaiting for authorization.")
-OAUTH_REFRESH_NOT_SAVED = Message("Refreshed {service} login not saved: {error}")
 
 # --- just install ------------------------------------------------------------
 INSTALL_ASK_KEY = Message("{name} for {use}. Enter skips")
@@ -1748,99 +1741,6 @@ LOGIN_SOURCE_REGISTRY = Message("registry", banner=False)
 
 LOGIN_PICKER_NEEDS_AN_INTERACTIVE_TERMINAL_STDIN_AND_STDOUT = "needs an interactive terminal (stdin and stdout must be a TTY)"
 
-CODEX_OAUTH_OPENAI_CODEX_TOKEN_RESPONSE_DID_NOT_INCLUDE = "OpenAI Codex token response did not include access_token"
-
-CODEX_OAUTH_OPENAI_CODEX_TOKEN_RESPONSE_DID_NOT_INCLUDE_119 = "OpenAI Codex token response did not include refresh_token"
-
-CODEX_OAUTH_OPENAI_CODEX_TOKEN_RESPONSE_DID_NOT_INCLUDE_121 = "OpenAI Codex token response did not include expires_in"
-
-CODEX_OAUTH_OPENAI_CODEX_ACCESS_TOKEN_DID_NOT_INCLUDE = "OpenAI Codex access token did not include chatgpt_account_id"
-
-CODEX_OAUTH_OPENAI_CODEX_TOKEN_REQUEST_FAILED = "OpenAI Codex token request failed: {detail}"
-
-CODEX_OAUTH_OPENAI_CODEX_TOKEN_RESPONSE_WAS_NOT_A = "OpenAI Codex token response was not a JSON object"
-
-CODEX_OAUTH_OPENAI_CODEX_OAUTH_COULD_NOT_BIND_THE = "OpenAI Codex OAuth could not bind the callback port {CALLBACK_PORT} on 127.0.0.1 or ::1"
-
-CODEX_OAUTH_INVALID_CALLBACK = "Invalid callback"
-
-CODEX_OAUTH_OPENAI_CODEX_OAUTH_TIMED_OUT_WAITING_FOR = "OpenAI Codex OAuth timed out waiting for browser callback"
-
-CODEX_OAUTH_OPENAI_CODEX_OAUTH_FAILED = "OpenAI Codex OAuth failed: {received_error}"
-
-CODEX_OAUTH_OPENAI_CODEX_OAUTH_STATE_MISMATCH = "OpenAI Codex OAuth state mismatch"
-
-CODEX_OAUTH_OPENAI_CODEX_DEVICE_AUTHORIZATION_FAILED = "OpenAI Codex device authorization failed: {value}"
-
-CODEX_OAUTH_OPENAI_CODEX_DEVICE_AUTHORIZATION_RESPONSE_WAS_NOT = "OpenAI Codex device authorization response was not a JSON object"
-
-CODEX_OAUTH_OPENAI_CODEX_DEVICE_AUTHORIZATION_RESPONSE_MISSING_DEVICE = "OpenAI Codex device authorization response missing device_auth_id or user_code"
-
-CODEX_OAUTH_OPENAI_CODEX_DEVICE_TOKEN_POLLING_FAILED = "OpenAI Codex device token polling failed: {value}"
-
-CODEX_OAUTH_OPENAI_CODEX_DEVICE_TOKEN_RESPONSE_WAS_NOT = "OpenAI Codex device token response was not a JSON object"
-
-CODEX_OAUTH_OPENAI_CODEX_DEVICE_TOKEN_RESPONSE_MISSING_AUTHORIZATION = "OpenAI Codex device token response missing authorization_code or code_verifier"
-
-CODEX_OAUTH_OPENAI_CODEX_DEVICE_AUTHORIZATION_TIMED_OUT = "OpenAI Codex device authorization timed out"
-
-CODEX_OAUTH_OPENAI_CODEX_LOGIN_HAS_NO_REFRESH_TOKEN = "OpenAI Codex login has no refresh token; run js --login openai-codex again"
-
-CODEX_OAUTH_CANNOT_BE_READ_FIX_IT_BEFORE_THE = "{value} cannot be read; fix it before the OpenAI Codex login can refresh"
-
-CODEX_OAUTH_CANNOT_BE_OPENED_FIX_IT_BEFORE_THE = "{value} cannot be opened ({exc}); fix it before the OpenAI Codex login can refresh"
-
-CODEX_LOGIN_SUCCESS_HTML = "<h1>OpenAI Codex login complete</h1><p>You can close this tab and return to js.</p>"
-
-CODEX_LOGIN_FAILURE_HTML = "<h1>OpenAI Codex login failed</h1><p>Return to js and try again.</p>"
-
-CODEX_REFRESH_REJECTED = "OpenAI Codex refresh token was rejected ({detail}); run js --login openai-codex again"
-
-CODEX_PROVIDER_OPENAI_CODEX_ACCESS_TOKEN_IS_MISSING_CHATGPT = "OpenAI Codex access token is missing chatgpt_account_id"
-
-CODEX_PROVIDER_OPENAI_CODEX_REQUIRES_AN_OAUTH_ACCESS_TOKEN = "OpenAI Codex requires an OAuth access token; run js --login openai-codex"
-
-XAI_OAUTH_XAI_OAUTH_DISCOVERY_RETURNED_A_NON_HTTPS = "xAI OAuth discovery returned a non-HTTPS {field}"
-
-XAI_OAUTH_XAI_OAUTH_HOST_IS_NOT_ON_X = "xAI OAuth {field} host {host!r} is not on x.ai"
-
-XAI_OAUTH_XAI_OAUTH_DISCOVERY_FAILED_HTTP = "xAI OAuth discovery failed: HTTP {status_code}: {value}"
-
-XAI_OAUTH_XAI_OAUTH_DISCOVERY_RETURNED_MALFORMED_JSON = "xAI OAuth discovery returned malformed JSON: {exc}"
-
-XAI_OAUTH_XAI_OAUTH_DISCOVERY_RESPONSE_WAS_NOT_A = "xAI OAuth discovery response was not a JSON object"
-
-XAI_OAUTH_XAI_OAUTH_TOKEN_REQUEST_FAILED_HTTP = "xAI OAuth token request failed: HTTP {status_code}: {value}"
-
-XAI_OAUTH_XAI_OAUTH_TOKEN_RESPONSE_WAS_MALFORMED_JSON = "xAI OAuth token response was malformed JSON: {exc}"
-
-XAI_OAUTH_XAI_OAUTH_TOKEN_RESPONSE_WAS_NOT_A = "xAI OAuth token response was not a JSON object"
-
-XAI_OAUTH_XAI_OAUTH_TOKEN_RESPONSE_OMITTED_ACCESS_TOKEN = "xAI OAuth token response omitted access_token"
-
-XAI_OAUTH_XAI_OAUTH_CODE_EXCHANGE_OMITTED_REFRESH_TOKEN = "xAI OAuth code exchange omitted refresh_token; the login would expire in an hour"
-
-XAI_OAUTH_CANNOT_BE_OPENED_FIX_IT_BEFORE_THE = "{value} cannot be opened ({exc}); fix it before the xAI login can refresh"
-
-XAI_OAUTH_CANNOT_BE_READ_FIX_IT_BEFORE_THE = "{value} cannot be read; fix it before the xAI login can refresh"
-
-XAI_LOGIN_SUCCESS_HTML = "<h1>xAI login complete</h1><p>You can close this tab and return to js.</p>"
-
-XAI_LOGIN_FAILURE_HTML = "<h1>xAI login failed</h1><p>Return to js and try again.</p>"
-
-XAI_REFRESH_REJECTED = "xAI OAuth refresh token was rejected ({detail}); run js --login xai-oauth again"
-
-OAUTH_CALLBACK_COULD_NOT_BIND_THE_CALLBACK_PORT = "{label} could not bind the callback port {port}: {exc}"
-
-OAUTH_CALLBACK_COULD_NOT_BIND_THE_CALLBACK_PORT_ON = "{label} could not bind the callback port {port} on 127.0.0.1 or ::1"
-
-OAUTH_CALLBACK_TIMED_OUT_WAITING_FOR_THE_BROWSER_CALLBACK = "{label} timed out waiting for the browser callback"
-
-OAUTH_CALLBACK_FAILED = "{label} failed: {received_error}"
-
-OAUTH_CALLBACK_STATE_MISMATCH = "{label} state mismatch"
-
-OAUTH_CALLBACK_CALLBACK_CARRIED_NO_AUTHORIZATION_CODE = "{label} callback carried no authorization code"
 
 PROVIDER_ENDPOINT_PROVIDER_HAS_NO_BASE_URL_CONFIGURED_REFUSING = "provider {id!r} has no base URL configured; refusing to fall back to the {sdk!r} SDK default endpoint and credentials. Run `js --login {id2}` or {hint}."
 

@@ -39,7 +39,7 @@ from . import supervisor
 from . import subagent_windows
 from . import swarm as swarm_mod
 
-from . import attach, clipimage, codex_auth
+from . import attach, clipimage
 from . import agent_messages
 from . import compaction
 from . import rename
@@ -3467,13 +3467,9 @@ def _logins_json() -> list[dict]:
         item = asdict(login)
         item["provider_id"] = provider_id
         item["has_api_key"] = bool(item.get("provider_api_key"))
-        item["has_codex_refresh_token"] = bool(item.get("codex_refresh_token"))
-        if masked or codex_auth.is_codex_provider(provider_id):
-            item["provider_api_key"] = None
         if masked:
+            item["provider_api_key"] = None
             item["provider_headers"] = {}
-            item["xai_refresh_token"] = None
-        item["codex_refresh_token"] = None
         rows.append(item)
     return rows
 

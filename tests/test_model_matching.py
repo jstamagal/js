@@ -1,6 +1,4 @@
-"""model_matching: which catalog row answers a routed model name
-(ALL-CLAIMS model_matching.py HIGH x4 + MED dates/window; design ziz #295/#512,
-CALLs ruhondo #274/#530/#648)."""
+"""model_matching: which catalog row answers a routed model name."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -17,7 +15,7 @@ def row(provider, model, family, date, window):
 
 CASES = [
     # A maker's real `-latest` id keeps its own limits over a newer maker sibling
-    # and a reseller relist (ALL-CLAIMS:328).
+    # and a reseller relist.
     ("gpt-5.2-chat-latest", [
         row("openai", "gpt-5.2-chat-latest", "gpt-5.2-chat", "2025-12-11", 128000),
         row("openai", "gpt-5.2-chat", "gpt-5.2-chat", "2026-02-01", 400000),
@@ -58,7 +56,7 @@ CASES = [
         row("anthropic", "claude-opus-4", "claude-opus", "2025-05-01", 200000),
         row("resellerx", "claude-opus-4", "claude-opus", "2026-01-01", 250000),
     ], ("anthropic", "claude-opus-4", 200000), "effort"),
-    # Two resellers copying one number never outvote the maker (#530).
+    # Two resellers copying one number never outvote the maker.
     ("gpt-7", [
         row("openai", "gpt-7", "gpt-7", "2026-01-01", 128000),
         row("r1", "gpt-7", "gpt-7", "2026-02-01", 400000),
@@ -68,7 +66,7 @@ CASES = [
         row("openai", "gpt-8", "gpt-8", "2026-01-01", 128000),
         row("r1", "gpt-8", "gpt-8", "2026-02-01", 64000),
     ], ("openai", "gpt-8", 128000), "normalized"),
-    # No window is no vote: a stated window beats None (#648; a None window
+    # No window is no vote: a stated window beats None (a None window
     # means compaction never fires, context_budget.py:397-407).
     ("gpt-none-1", [
         row("openai", "gpt-none-1", "gpt-none-1", "2026-01-01", None),
@@ -89,7 +87,7 @@ CASES = [
         row("b", "gpt-9", "gpt-9", "2026-02-01", 400000),
         row("c", "gpt-9", "gpt-9", "2026-03-01", 256000),
     ], ("b", "gpt-9", 400000), "normalized"),
-    # Duplicate maker rows that disagree: the smaller (doc #540).
+    # Duplicate maker rows that disagree: the smaller.
     ("gpt-10", [
         row("openai", "gpt-10", "gpt-10", "2026-01-01", 128000),
         row("openai", "gpt-10", "gpt-10", "2026-01-01", 400000),
@@ -107,7 +105,7 @@ def test_match_routed(request_name, rows, expected, method):
 
 
 def test_name_key_folds_only_a_trailing_latest_tag():
-    """ALL-CLAIMS:326: `cpa/opus:latest` resolved nothing."""
+    """`cpa/opus:latest` resolves like `opus-latest`."""
     assert M.name_key("cpa/opus:latest") == "opus-latest"
     assert M.name_key("OPUS:LATEST") == "opus-latest"
     assert M.name_key("openai/gpt-5.2:0731") == "gpt-5-2:0731"
@@ -123,7 +121,7 @@ def test_latest_in_the_middle_of_a_name_is_an_exact_name():
 
 @pytest.mark.parametrize("older,newer", [("2025-12-31", "2026-01"), ("2026-01", "2026-01-15"), ("2025", "2025-02")])
 def test_release_dates_of_mixed_precision_compare_by_calendar(older, newer):
-    """ALL-CLAIMS:330: '2026-01' > '2025-12-31' only by accident of string order."""
+    """'2026-01' > '2025-12-31' holds by calendar, not by string order."""
     rows = (row("anthropic", "claude-x-1", "claude-x", older, 100000),
             row("anthropic", "claude-x-2", "claude-x", newer, 200000))
     found, _ = M.match_routed("claude-x-latest", rows)

@@ -211,7 +211,7 @@ def test_prompt_model_flag_with_provider_prefix_routes_provider_override(monkeyp
     # A `-m provider/model` override routes only when that provider is logged in.
     from js import logins
     monkeypatch.setattr(logins, "_CONFIG_DIR_OVERRIDE", tmp_path / "logins")
-    logins.save_login(logins.Login(provider_id="openai-codex", provider_api_key="x"))
+    logins.save_login(logins.Login(provider_id="openai", provider_api_key="x"))
 
     seen = {}
 
@@ -227,13 +227,13 @@ def test_prompt_model_flag_with_provider_prefix_routes_provider_override(monkeyp
     monkeypatch.setattr(cli, "_append_turn", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
 
-    actual = cli._run_prompt("foo", model="openai-codex/gpt-5.5")
+    actual = cli._run_prompt("foo", model="openai/gpt-5.5")
 
     assert actual == 0
     assert seen["cfg_model"] == "gpt-5.5"
-    assert seen["cfg_provider_id"] == "openai-codex"
+    assert seen["cfg_provider_id"] == "openai"
     assert seen["model_override"] == "gpt-5.5"
-    assert seen["provider_id_override"] == "openai-codex"
+    assert seen["provider_id_override"] == "openai"
 
 
 def test_interactive_model_flag_with_provider_prefix_routes_provider_override(monkeypatch, tmp_path):
@@ -248,7 +248,7 @@ def test_interactive_model_flag_with_provider_prefix_routes_provider_override(mo
     # A `--model provider/model` override routes only when that provider is logged in.
     from js import logins
     monkeypatch.setattr(logins, "_CONFIG_DIR_OVERRIDE", tmp_path / "logins")
-    logins.save_login(logins.Login(provider_id="openai-codex", provider_api_key="x"))
+    logins.save_login(logins.Login(provider_id="openai", provider_api_key="x"))
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     seen = {}
 
@@ -267,11 +267,11 @@ def test_interactive_model_flag_with_provider_prefix_routes_provider_override(mo
     monkeypatch.setattr(cli, "_append_turn", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_maybe_auto_compact_async", no_compaction)
 
-    actual = cli.main(["--model", "openai-codex/gpt-5.5"])
+    actual = cli.main(["--model", "openai/gpt-5.5"])
 
     assert actual == 0
     assert seen["cfg_model"] == "gpt-5.5"
-    assert seen["cfg_provider_id"] == "openai-codex"
+    assert seen["cfg_provider_id"] == "openai"
     assert seen["model_override"] is None
     assert seen["provider_id_override"] is None
 
@@ -1261,18 +1261,17 @@ def test_context_window_fallback_only_applies_when_the_model_is_unknown(monkeypa
 
 
 def test_context_window_override_beats_catalog_for_a_specific_surface():
-    # models.dev has one row per model id, not per surface: openai/gpt-5.6-sol
-    # is 1.05M, but the codex subscription endpoint serving that same id is not
-    # in the catalog at all. provider/model must win over provider-agnostic.
+    # A provider/model override wins over both the catalog row and a
+    # provider-agnostic override for the same model id.
     try:
         runtime.set_context_window_overrides({
-            "openai-codex/gpt-5.6-sol": 370_000,
+            "openai/gpt-5.6-sol": 370_000,
             "gpt-5.6-sol": 999_000,
         })
-        assert runtime._resolve_context_window("gpt-5.6-sol", "openai-codex", None) == 370_000
+        assert runtime._resolve_context_window("gpt-5.6-sol", "openai", None) == 370_000
         assert runtime._resolve_context_window("gpt-5.6-sol", "openrouter", None) == 999_000
         # Untouched models still come from the catalog.
-        assert runtime._resolve_context_window("gpt-5.6-terra", "openai-codex", None) != 370_000
+        assert runtime._resolve_context_window("gpt-5.6-terra", "openai", None) != 370_000
     finally:
         runtime.set_context_window_overrides(None)
 
@@ -1289,14 +1288,14 @@ def test_context_window_overrides_ignore_junk_entries():
 
 
 def test_context_window_overrides_rebuild_dotted_model_ids():
-    # `set CONTEXT_SIZE_PER_MODEL.openai-codex/gpt-5.6-sol 370000`
+    # `set CONTEXT_SIZE_PER_MODEL.openai/gpt-5.6-sol 370000`
     # splits on every dot, so the loader must rejoin the id.
     try:
         runtime.set_context_window_overrides(
-            {"openai-codex/gpt-5": {"6-sol": 370_000, "6-terra": 370_000}}
+            {"openai/gpt-5": {"6-sol": 370_000, "6-terra": 370_000}}
         )
-        assert runtime._resolve_context_window("gpt-5.6-sol", "openai-codex", None) == 370_000
-        assert runtime._resolve_context_window("gpt-5.6-terra", "openai-codex", None) == 370_000
+        assert runtime._resolve_context_window("gpt-5.6-sol", "openai", None) == 370_000
+        assert runtime._resolve_context_window("gpt-5.6-terra", "openai", None) == 370_000
     finally:
         runtime.set_context_window_overrides(None)
 
@@ -1304,23 +1303,23 @@ def test_context_window_overrides_rebuild_dotted_model_ids():
 def test_model_context_window_overrides_the_catalog_for_the_active_model(tmp_path):
     # The single-model form, symmetric with OUTPUT_TOKENS_MAX.
     cfg = _auto_compact_cfg(tmp_path)
-    cfg = replace(cfg, model="gpt-5.6-sol", provider_id="openai-codex", model_context_window=370_000)
+    cfg = replace(cfg, model="gpt-5.6-sol", provider_id="openai", model_context_window=370_000)
     try:
         runtime.install_context_window_overrides(cfg)
-        assert runtime._resolve_context_window("gpt-5.6-sol", "openai-codex", None) == 370_000
+        assert runtime._resolve_context_window("gpt-5.6-sol", "openai", None) == 370_000
         # Scoped to the model it names; a sibling still comes from the catalog.
-        assert runtime._resolve_context_window("gpt-5.6-terra", "openai-codex", None) != 370_000
+        assert runtime._resolve_context_window("gpt-5.6-terra", "openai", None) != 370_000
     finally:
         runtime.set_context_window_overrides(None)
 
 
 def test_model_context_window_beats_the_multi_model_map(tmp_path):
     cfg = _auto_compact_cfg(tmp_path)
-    cfg = replace(cfg, model="gpt-5.6-sol", provider_id="openai-codex", model_context_window=370_000)
-    cfg.settings["CONTEXT_SIZE_PER_MODEL"] = {"openai-codex/gpt-5": {"6-sol": 900_000}}
+    cfg = replace(cfg, model="gpt-5.6-sol", provider_id="openai", model_context_window=370_000)
+    cfg.settings["CONTEXT_SIZE_PER_MODEL"] = {"openai/gpt-5": {"6-sol": 900_000}}
     try:
         runtime.install_context_window_overrides(cfg)
-        assert runtime._resolve_context_window("gpt-5.6-sol", "openai-codex", None) == 370_000
+        assert runtime._resolve_context_window("gpt-5.6-sol", "openai", None) == 370_000
     finally:
         runtime.set_context_window_overrides(None)
 

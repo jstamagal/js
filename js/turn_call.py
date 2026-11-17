@@ -429,8 +429,6 @@ class ModelCaller:
     def _escalation(self, usage: Any, max_out: int | None, window: int | None) -> int | None:
         """The cap to resend a reply cut off at ``max_out`` with, or None."""
         request = self._request
-        if not model_client.sends_max_output(request.provider_id):
-            return None
         prompt_tokens = context_budget.usage_from_provider(usage).prompt_tokens
         out_tokens = self._context.last_output_tokens
         return escalated_max_output(

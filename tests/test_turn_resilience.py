@@ -647,11 +647,6 @@ def test_a_window_with_no_room_left_skips_escalation(monkeypatch, tmp_path):
     assert messages[2]["content"] == snippets.render("output-limit-resume")
 
 
-def test_codex_requests_carry_no_output_cap_to_escalate():
-    assert model_client.sends_max_output("openai")
-    assert not model_client.sends_max_output("openai-codex")
-
-
 def _streaming(text: str, result: ModelStreamResult):
     """A reply that streams `text` through on_text before it returns."""
     def reply(stub_kwargs):

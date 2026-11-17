@@ -207,8 +207,8 @@ def estimate_message_tokens(message: Any, *, chars_per_token: float = 4.0) -> in
             total += estimate_text_tokens(_jsonish(blocks), chars_per_token=chars_per_token)
         elif reasoning:
             total += estimate_text_tokens(reasoning, chars_per_token=chars_per_token)
-        # Signed reasoning replays its provider payload too: a signature, or a
-        # Codex item's encrypted content, which runs to kilobytes.
+        # Signed reasoning replays its provider payload too: a signature, or an
+        # OpenAI Responses item's encrypted content, which runs to kilobytes.
         for part in message.get("reasoning_parts") or []:
             if isinstance(part, dict) and part.get("provider_metadata"):
                 total += estimate_text_tokens(_jsonish(part["provider_metadata"]), chars_per_token=chars_per_token)
