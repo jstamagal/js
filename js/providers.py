@@ -83,9 +83,7 @@ def _p(
     requires_api_key: bool = True,
     established: bool = True,
     append_only: bool = False,
-    reasoning_effort: str | None = None,
     models_list_validates_auth: bool = True,
-    headers: Mapping[str, str] | None = None,
     local: bool = False,
 ) -> ProviderDef:
     return ProviderDef(
@@ -103,9 +101,7 @@ def _p(
         requires_api_key=requires_api_key,
         established=established,
         append_only=append_only,
-        reasoning_effort=reasoning_effort,
         models_list_validates_auth=models_list_validates_auth,
-        headers=headers or {},
         local=local,
     )
 
