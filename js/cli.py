@@ -390,17 +390,15 @@ def _print_resume_hint(cfg: Config, state: dict) -> None:
     The model is folded in so the resume comes back on the one in use."""
     if cfg.session_file == Path(os.devnull) or not state.get("messages"):
         return
-    resume = "js"
     # A bare `js --session` runs the `DEFAULT_AGENT` setting, so the hint names the
     # agent unless both this run and that setting are on the js/jsrc default.
     stock = settings.default_value("DEFAULT_AGENT")
-    if cfg.agent_id != stock or settings.knob(cfg.settings, "DEFAULT_AGENT") != stock:
-        resume += f" --agent {shlex.quote(cfg.agent_id)}"
+    named = cfg.agent_id != stock or settings.knob(cfg.settings, "DEFAULT_AGENT") != stock
     model = state.get("model")
-    if isinstance(model, str) and model:
-        resume += f" --model {shlex.quote(model)}"
-    resume += f" --session {shlex.quote(_session_hint_arg(cfg))}"
-    msgs.say(msgs.RESUME_HINT, command=resume)
+    resume = command_line.argv(("--agent", cfg.agent_id if named else None),
+                               ("--model", model if isinstance(model, str) and model else None),
+                               ("--session", _session_hint_arg(cfg)))
+    msgs.say(msgs.RESUME_HINT, command=shlex.join(["js", *resume]))
 
 
 def _exchanges_are_the_prompt(args: argparse.Namespace, agent: str | None,
@@ -1799,11 +1797,11 @@ def _exec_session(target: _SessionTarget) -> None:
     """Replace this process with js resuming `target` in its own directory
     and agent. Resume puts it back on its last-stamped model."""
     _enter_session_dir(target)
-    argv = [sys.executable, "-m", "js", "--session", str(target.path)]
-    if target.agent:
-        argv += ["-a", target.agent]
-    if target.jailed and target.cwd:
-        argv += ["-C", target.cwd]
+    argv = [sys.executable, "-m", "js", *command_line.argv(
+        ("--session", str(target.path)),
+        ("-a", target.agent or None),
+        ("-C", target.cwd if target.jailed and target.cwd else None),
+    )]
     sys.stdout.flush()
     sys.stderr.flush()
     os.execv(sys.executable, argv)
