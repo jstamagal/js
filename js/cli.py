@@ -106,6 +106,7 @@ from .config import (
     validate_agent_id,
     vision_enabled_for_model,
 )
+from .repl_state import ReplState
 from .sampling import Sampling
 from .session_catalog import (
     acquire_session,
@@ -2433,7 +2434,8 @@ DEFAULT_REPL_ASSEMBLY = ReplAssembly()
 
 
 def _repl_assembly(state: dict | None) -> ReplAssembly:
-    return (state or {}).get("repl_assembly", DEFAULT_REPL_ASSEMBLY)
+    assembly = (state or {}).get("repl_assembly")
+    return DEFAULT_REPL_ASSEMBLY if assembly is None else assembly
 
 
 def _commands(state: dict | None) -> Mapping[str, Command]:
@@ -4237,7 +4239,7 @@ def _prompt_origin(cfg: Config) -> prompt_history.Origin:
 def _repl_state(cfg, prompt_spec, *, messages: list[dict] | None = None,
                 system: str | None = None, model: str | None = None,
                 live_settings: dict | None = None, tool_registry=None,
-                assembly: ReplAssembly | None = None) -> dict:
+                assembly: ReplAssembly | None = None) -> ReplState:
     """The REPL's live state for one session.
 
     ``model`` is a --model flag value; without one the session runs on
@@ -4255,29 +4257,26 @@ def _repl_state(cfg, prompt_spec, *, messages: list[dict] | None = None,
     if tool_registry is None:
         tool_registry = run_assembly.registry_for(cfg).select(prompt_spec.tool_selectors)
     event_hooks = events.EventHooks()
-    state = {
-        "running": True,
-        "messages": messages,
-        "system": system,
-        "model": model if model is not None else cfg.model,
-        # Where state["model"] came from, for the effective /set view. A --model
-        # flag never lands in the settings store, so record it here so /set can
-        # annotate `MODEL = ... (live: --model flag)`; agent.yaml's `model:` is
-        # recorded the same way.
-        "model_source": "--model flag" if model is not None else (
+    state = ReplState(
+        messages=messages,
+        system=system,
+        model=model if model is not None else cfg.model,
+        # A --model flag never lands in the settings store, so /set annotates
+        # `MODEL = ... (live: --model flag)` from here; agent.yaml's `model:`
+        # is recorded the same way.
+        model_source="--model flag" if model is not None else (
             f"agent {cfg.agent_id}" if P.agent_model_applies(cfg, prompt_spec, None) else None),
-        "provider_id": cfg.provider_id,
-        "provider_base_url": cfg.provider_base_url,
-        "provider_api_key": cfg.provider_api_key,
-        "provider_headers": dict(getattr(cfg, "provider_headers", {}) or {}),
-        "settings": live_settings,
-        "prompt_spec": prompt_spec,
-        "events": event_hooks,
-        "tool_registry": tool_registry,
-        "tool_selectors": prompt_spec.tool_selectors,
-    }
-    if assembly is not None:
-        state["repl_assembly"] = assembly
+        provider_id=cfg.provider_id,
+        provider_base_url=cfg.provider_base_url,
+        provider_api_key=cfg.provider_api_key,
+        provider_headers=dict(getattr(cfg, "provider_headers", {}) or {}),
+        settings=live_settings,
+        prompt_spec=prompt_spec,
+        events=event_hooks,
+        tool_registry=tool_registry,
+        tool_selectors=prompt_spec.tool_selectors,
+        repl_assembly=assembly,
+    )
     event_hooks.set_dispatcher(_event_dispatcher(state, cfg))
     return state
 
