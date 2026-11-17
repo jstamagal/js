@@ -42,7 +42,7 @@ from . import messages as msgs
 from . import output
 from . import settings as _settings
 from .toolkit.presentation import (
-    PATH_ARGS, ToolOutput, call_kind, declared, tool_output,
+    PATH_ARGS, ScreenResult, call_kind, declared, tool_output,
 )
 
 _SGR_ONLY = re.compile(r"\x1b\[[0-9;]*m")
@@ -1060,7 +1060,7 @@ def _count(number: int, noun: str) -> str:
     return msgs.COUNT_ONE.words(number=number, noun=noun) if number == 1 else msgs.COUNT_MANY.words(number=number, noun=noun)
 
 
-def metrics(output: ToolOutput, *, shown: int | None = None, lines: int | None = None,
+def metrics(output: ScreenResult, *, shown: int | None = None, lines: int | None = None,
             of: int | None = None) -> str:
     """`[failed · L of N tries left · ][exit N · ]{lines} lines[ of {of}] · {size}`,
     plain text. `shown` is how many of the lines are on screen when some are
@@ -1369,7 +1369,7 @@ def render_fold(name: str, calls: list[dict | None], *, running: int = 0,
     return block.render()
 
 
-def _read_view(output: ToolOutput, args: dict | None) -> tuple[list[tuple[str, Text]], int | None] | None:
+def _read_view(output: ScreenResult, args: dict | None) -> tuple[list[tuple[str, Text]], int | None] | None:
     if output.read is None:
         return None
     rows, total = output.read
@@ -1379,7 +1379,7 @@ def _read_view(output: ToolOutput, args: dict | None) -> tuple[list[tuple[str, T
     return [(number, text) for (number, _), text in zip(kept, code, strict=True)] + notes, total
 
 
-def _diff_view(output: ToolOutput, colours: Theme) -> tuple[list[tuple[str, Text]], str] | None:
+def _diff_view(output: ScreenResult, colours: Theme) -> tuple[list[tuple[str, Text]], str] | None:
     if output.diff is None:
         return None
     rows, summary = output.diff
@@ -1387,7 +1387,7 @@ def _diff_view(output: ToolOutput, colours: Theme) -> tuple[list[tuple[str, Text
              else Text(text, getattr(colours, role))) for number, text, role in rows], summary
 
 
-def _last_line(output: ToolOutput) -> str:
+def _last_line(output: ScreenResult) -> str:
     return next((line.strip() for line, _ in reversed(output.lines) if line.strip()), "")
 
 
@@ -1413,7 +1413,7 @@ def _program(block: _Block, name: str, args: dict, level: int, preview: int) -> 
         block.note(_hidden(hidden))
 
 
-def _result_rows(output: ToolOutput, colours: Theme) -> list[Text]:
+def _result_rows(output: ScreenResult, colours: Theme) -> list[Text]:
     return [Text(line, colours.error if output.is_error else colours.warn if err else colours.panel_text)
             for line, err in output.lines]
 
@@ -1426,7 +1426,7 @@ def _capped(block: _Block, rows: list[Any], limit: int, draw: Callable[[list[Any
     return min(limit, len(rows))
 
 
-def _finished_brief(block: _Block, name: str, args: dict, output: ToolOutput, kind: str,
+def _finished_brief(block: _Block, name: str, args: dict, output: ScreenResult, kind: str,
                     preview: int, malformed: bool) -> None:
     """A finished exchange at TOOLS_DISPLAY 1."""
     colours = block.theme
@@ -1473,7 +1473,7 @@ def _finished_brief(block: _Block, name: str, args: dict, output: ToolOutput, ki
     _capped(block, _result_rows(output, colours), preview, lambda rows: block.panel(rows))
 
 
-def _finished_full(block: _Block, name: str, args: dict, output: ToolOutput, level: int,
+def _finished_full(block: _Block, name: str, args: dict, output: ScreenResult, level: int,
                    preview: int, malformed: bool) -> None:
     """A finished exchange at TOOLS_DISPLAY 2 and 3: the program, the result as
     a file view, a diff or a panel, and its metrics."""

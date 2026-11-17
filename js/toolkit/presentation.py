@@ -1,4 +1,5 @@
-"""Tool-specific screen metadata and adapters for legacy text results."""
+"""How the screen shows a tool: the `Presentation` each tool declares, and
+its result parsed into what the screen draws."""
 
 from __future__ import annotations
 
@@ -46,8 +47,7 @@ class Presentation:
     # What TOOLS_DISPLAY 1 shows of a call (`call_kind`): "loud", "command"
     # or "diff".
     kind: str = "loud"
-    # For a command: True when a call with these arguments, under these
-    # settings, is quiet.
+    # True when a call with these arguments, under these settings, is quiet.
     quiet_when: Callable[[dict, Any], bool] | None = None
     # How the result reads: "text"; "command", a `shell=… exit=…` envelope
     # around stdout and stderr; "file", a `read`'s numbered `N|` rows;
@@ -141,7 +141,7 @@ def call_kind(name: str, args: dict | None, settings: Any = None) -> str:
 
 
 @dataclass
-class ToolOutput:
+class ScreenResult:
     """A tool result as the screen shows it: cleaned lines with their stream."""
 
     lines: list[tuple[str, bool]]  # (text, is_stderr)
@@ -165,14 +165,14 @@ class ToolOutput:
 _RETRY_NOTE = re.compile(r"\s*<retry>attempts_left=(\d+), allowed_max_attempts=(\d+)</retry>\s*$")
 
 
-def tool_output(name: str, result: Any) -> ToolOutput:
-    """Parse a result for display. A finished shell result loses its
+def tool_output(name: str, result: Any) -> ScreenResult:
+    """Parse a result for display. A command's result loses its
     `shell=… exit=… --- stdout ---` envelope; exit is kept apart. A failed
     call's retry note leaves the text and becomes `tries`."""
     from ..display import clean
     from .results import result_text
 
-    if isinstance(result, ToolOutput):
+    if isinstance(result, ScreenResult):
         return result
     text, is_error = result_text(result, screen=True)
     text = clean(text)
@@ -197,9 +197,9 @@ def tool_output(name: str, result: Any) -> ToolOutput:
                     lines.append((line, stream == "stderr"))
             while lines and not lines[-1][0]:
                 lines.pop()
-            return ToolOutput(lines, exit_code=exit_code or None, is_error=is_error)
+            return ScreenResult(lines, exit_code=exit_code or None, is_error=is_error)
     body = text.rstrip("\n")
-    output = ToolOutput([(line, False) for line in body.split("\n")] if body else [],
+    output = ScreenResult([(line, False) for line in body.split("\n")] if body else [],
                         is_error=is_error, tries=tries)
     if reads == "file":
         output.read = read_data(output)
@@ -208,7 +208,7 @@ def tool_output(name: str, result: Any) -> ToolOutput:
     return output
 
 
-def read_data(output: ToolOutput) -> tuple[list[tuple[str, str]], int | None] | None:
+def read_data(output: ScreenResult) -> tuple[list[tuple[str, str]], int | None] | None:
     """A `read` result as numbered file rows and the file's total line count
     from the paging note; None when the result has no `N|` lines."""
     matches = [_READ_GUTTER.match(line) for line, _ in output.lines]
@@ -229,7 +229,7 @@ def read_data(output: ToolOutput) -> tuple[list[tuple[str, str]], int | None] | 
 
 
 
-def diff_data(output: ToolOutput) -> tuple[list[tuple[str, str, str]], str] | None:
+def diff_data(output: ScreenResult) -> tuple[list[tuple[str, str, str]], str] | None:
     """A `patch` result as numbered diff rows and its summary; None when the
     result is not `patched … (summary, hash …)` followed by a unified diff."""
     if not output.lines:
