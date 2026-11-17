@@ -1594,7 +1594,9 @@ async def _dispatch_async_tool(
     except snippets.SnippetError:
         raise
     except Exception as exc:  # noqa: BLE001
-        telemetry.event("tool_exception", tool=pc.called_name or pc.name, call_id=pc.id, error=f"{type(exc).__name__}: {exc}")
+        telemetry.event("tool_exception", tool=pc.called_name or pc.name, call_id=pc.id,
+                        error=f"{type(exc).__name__}: {exc}",
+                        latency_ms=int((time.time() - started) * 1000))
         result = _jail.shown(f'ERROR running {tool.name}: {type(exc).__name__}: {exc}')
     output = as_output(result)
     raw_result = output.model
