@@ -17,7 +17,7 @@ Schema:
 ```json
 {
   "tasks": ["inspect the runtime loop", "inspect the registry"],
-  "agent_id": "autocoder",
+  "agent_id": "slim",
   "session_id": "optional-session"
 }
 ```
@@ -28,7 +28,8 @@ Rules:
 - Agent IDs contain only letters, numbers, underscores, and hyphens.
 - `tasks` must be a list of strings.
 - Empty task strings are ignored; an all-empty list is an error.
-- `session_id` is optional and resumes that worker agent session.
+- `session_id` is optional, takes a single task, and resumes that worker agent
+  session.
 - A session with an active worker refuses another concurrent run.
 - Recursive task depth defaults to `2` and is set by `SUBAGENT_DEPTH_MAX` in
   config or `--extra SUBAGENT_DEPTH_MAX=N`. (There is no `JS_TASK_MAX_DEPTH`
@@ -41,7 +42,7 @@ project `.js/agents/` become direct tools. Files layer per relative name: projec
 
 ```json
 {
-  "tool": "autocoder",
+  "tool": "slim",
   "arguments": {
     "tasks": ["implement this focused fix and report tests"]
   }
@@ -49,9 +50,10 @@ project `.js/agents/` become direct tools. Files layer per relative name: projec
 ```
 
 Direct tools call the same task implementation with the agent id fixed. They
-only expose `tasks`; they do not expose `agent_id` or `session_id`.
+expose `tasks`, `model` and `reasoning`; they do not expose `agent_id` or
+`session_id`.
 
-The default prompt currently selects direct `autocoder` and `commit` tools.
+The stock `defaultagent` selects the `task` tool and the direct `commit` tool.
 
 ## Parallelism
 
@@ -144,12 +146,12 @@ Child contexts do not inherit:
 - undo snapshots
 - search cache
 
-## Wiki Agents And Built-In Artifact Mode
+## Wiki Agents
 
 Wiki workers are ordinary prompt-directory agents selected with `--agent`; the
 `wiki` wrapper routes friendly commands to installed `wiki-*` agents. Native
 `wiki_convert`, `wiki_write`, and `wiki_finish_ingest` tools provide deterministic
-ingestion operations. Artifact remains a built-in CLI mode.
+ingestion operations.
 
 ## Predefined Subagent Types
 
@@ -162,7 +164,7 @@ What exists today:
 - prompt-directory agents: any `<root>/<agent_id>` directory under repo
   `defaults/agents/`, global `~/.js/agents/`, and project `.js/agents/`.
 - generated direct tools for prompt directories.
-- bundled prompt dirs: `defaultagent`, `autocoder`, `commit`.
+- bundled prompt dirs: `commit`, `defaultagent`, `slim`, `twotool`.
 - built-in CLI mode: commit, exposed as a prompt-directory agent and a
   `js --commit` wrapper.
 

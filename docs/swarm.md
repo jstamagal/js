@@ -101,6 +101,11 @@ and no tool call. `python -m js.swarm quiet ROOT` exits 0 when every member
 is asleep with an empty inbox: the swarm has nothing to do until someone
 posts. A runner uses it to call a run over without asking a model.
 
+`js.swarm` imports with the standard library alone: troop loads it into its own
+interpreter, without js's packages, to read and write the bus (`Room`). Its
+imports of the rest of js are made where they are needed
+(`tests/test_swarm_stdlib_only.py`).
+
 ## Hold
 
 `ROOT/hold` holds a number of seconds; `Room.set_hold(seconds)` writes it and
@@ -147,7 +152,7 @@ the troop changes shape without a runner's say-so.
              "seat_file": "/tmp/troop-42/kivu.seat.md", "opts": {"SHELL_ENV_KEEP": "[\"PATH\"]"}}]}
 ```
 
-Each agent is built the way the task tool builds a child turn: its own config from the layered settings plus `opts`
+Each agent is a settled run (`run_assembly.settle`, as `-p` starts from): its own config from the layered settings plus `opts`
 (the same form as `--extra key=value`), its agent's prompt directory with the
 contents of `seat_file` appended to the system prompt, `model` and `effort`
 resolved like `-m` and `-r`, a session under its own `cwd`'s session folder

@@ -1,9 +1,9 @@
 # Sessions, the ~/.js home, and the fixes around them
 
 Design agreed with the operator on 2026-09-29. Built: the migration in §1
-(js-1g1.1), §2 Storage (js-1g1.2) and record ids, and §2 Session kinds, The
-picker and Search (js-1g1.4, js-1g1.5; see configuration-and-sessions.md). The
-rest is not built yet.
+(js-1g1.1), §2 Storage (js-1g1.2) and record ids, §2 Session kinds, The
+picker and Search (js-1g1.4, js-1g1.5; see configuration-and-sessions.md),
+and §3 to §6. The questions under Open are not settled.
 Beads: epic js-1g1.
 
 The harness is for the agent. Layouts and formats here are chosen first for
@@ -54,12 +54,13 @@ Separately, `paths.ensure_home()` creates every directory of the layout on
 each start, so `ls ~/.js` always shows the whole structure:
 
     ~/.js/
-      jsrc           written with every setting on the first run
-      JS.md  tools.yaml   files; not created, only read
+      jsrc           operator overrides; /save writes session changes
+      JS.md  tools.yaml  keys   files; not created, only read
       agents/  skills/  toolbox/
       logins/        credentials and the model-list cache
-      sessions/      every session, flat
-      state/         undo store, kernel output, spilled results, commit backups
+      sessions/      every session, filed by the directory it started in
+      state/         prompt history, undo store, kernel output, spilled results,
+                     commit backups
       logs/          logs, transcripts
       cache/         models.dev catalog, env probe cache, session search index
       work/          agent keepers (was ~/inbox/agents/js); `:n` notes
@@ -283,8 +284,8 @@ own: how a turn ends belongs in the operator's prompt files.
 
 ## 4. Shell tool
 
-- New setting `SHELL_PROGRAM`, default `bash` in `defaults/jsrc`. Today the tool
-  runs `$SHELL` with no setting; models write bash, and zsh broke a model's
+- New setting `SHELL_PROGRAM`, default `bash` in `defaults/jsrc`. Before it the tool
+  ran `$SHELL` with no setting; models write bash, and zsh broke a model's
   `echo ===` separator on 2026-09-29.
 - Under bash, commands run with `pipefail`, so `dmesg … 2>/dev/null | rg … |
   tail` reports dmesg's failure instead of `exit 0` with no output.
@@ -301,7 +302,7 @@ own: how a turn ends belongs in the operator's prompt files.
   came from an earlier row with a `⚠️` in it. prompt_toolkit counts U+26A0
   U+FE0F as one column and the terminal draws it two wide, so that row sat
   one column right of prompt_toolkit's screen model, and the next frame's
-  diff paint left some of its characters in place. `js/screen.py` now drops
+  diff paint left some of its characters in place. `js/screen_scrollback.py` now drops
   variation selectors from scrollback text; `tests/test_screen_redraw.py`
   replays the answer through a terminal model.
 

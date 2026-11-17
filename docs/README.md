@@ -44,5 +44,3 @@ compatibility. The harness optimizes for:
 - It is not a generic MCP host.
 - It is not a long-term compatibility layer for old tool names.
 - It has append-only summarizing compaction (`/compact`, `js --compact`) with cache-usage accounting.
-- It does not currently have subagent progress handles, cancellation handles, or
-  per-task model/endpoint override tools.

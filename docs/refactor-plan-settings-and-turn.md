@@ -158,7 +158,7 @@ None are edited for Part 1. The `Config(...)` and `ToolContext(...)` keyword con
 > is a turn-scoped `ModelCaller` rather than a `call_model` function, because
 > overflow rounds and the one escalated resend are counted across the turn's
 > calls. The resilience settings are read once per turn as `CallLimits`, not
-> as `TurnSetting` rows, because `compaction.summarize` and the `/login` test
+> as `TurnSetting` rows, because `compaction_summary.summarize` and the `/login` test
 > read the same settings from the store through `js/retry.py`. The code is the
 > reference now; the text below is the plan as written.
 

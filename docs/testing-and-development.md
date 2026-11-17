@@ -52,10 +52,12 @@ uv run pytest --version
 ## Main Offline Suite
 
 ```bash
-python -m pytest -m "not ai_provider and not vision and not e2e and not live" -p no:cacheprovider -n logical --dist worksteal
+uv run --extra test pytest -q -m "not ai_provider and not vision and not e2e and not live" -p no:cacheprovider -n logical --dist worksteal
 ```
 
-`just test` runs exactly that. `-n logical` starts one pytest-xdist worker per
+`just test` runs exactly that, through `scripts/cached-test.sh`: a run on the
+same HEAD, working-tree diff and command replays the last run's output and
+exit code, and `just test --force` reruns. `-n logical` starts one pytest-xdist worker per
 hardware thread (pytest-xdist is in the `test` extra). `--dist worksteal` lets
 an idle worker take queued tests from a busy one; without it, xdist hands each
 worker a run of neighbouring tests up front, and one worker ends up alone with
@@ -73,7 +75,7 @@ pytest -q tests/test_tool_descriptions.py tests/test_agent_tool_surface.py
 Runtime and tool smoke tests:
 
 ```bash
-pytest -q tests/test_runtime_offline_integration.py tests/test_tool_runtime_smoke.py
+pytest -q tests/test_runtime_offline_integration.py tests/test_tool_runtime_smoke.py tests/test_turn_stream.py tests/test_turn_surface.py tests/test_turn_budget.py tests/test_turn_call.py
 ```
 
 Subagents:
@@ -120,13 +122,15 @@ Declared in `pyproject.toml`:
 - `e2e`: complete user-visible runtime path.
 - `ai_provider`: requires configured `ai-python` provider credentials or local endpoint.
 - `vision`: requires local vision model and Pillow.
+- `live`: drives a real browser or network endpoint.
 
 ## Quality Gate
 
 `just check` runs `lint` and the dependency-freshness gate: it fails once
-`uv.lock` is five or more commits behind HEAD, with a prompt to run `just upgrade`,
-rerun the suites, and bump the version in `pyproject.toml`. Raise the limit for
-a one-off run with `just --set deps-stale-limit 20 check`.
+`uv.lock` has gone 14 days without changing, with a prompt to run `just upgrade`
+and `just tools-upgrade`, rerun the suites, and bump the version in
+`pyproject.toml`. Raise the limit for a one-off run with
+`just --set deps-stale-days 30 check`.
 
 ## Current Coverage Areas
 
@@ -147,7 +151,6 @@ The offline suite covers:
 - Subagent context/session/tool-surface isolation.
 - Parallel subagent sibling failure preservation.
 - Wiki conversion, guarded page writes, and ordered closeout.
-- Artifact native tools.
 
 ## Development Style
 
