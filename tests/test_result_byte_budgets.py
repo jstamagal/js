@@ -7,7 +7,7 @@ import ai.types.messages
 import pytest
 from turn_driver import config, registry, run
 
-from js import media, model_client, runtime, settings
+from js import media, model_client, result_caps, runtime, settings
 from js.text_bytes import byte_size, cap_text
 from js.toolkit.core import Tool, ToolResult
 
@@ -15,17 +15,17 @@ from js.toolkit.core import Tool, ToolResult
 @pytest.mark.parametrize("cap", [1, 10, 64, 129])
 @pytest.mark.parametrize("text", ["é" * 200, "😀" * 200], ids=["two-byte", "four-byte"])
 def test_hard_result_caps_include_marker_bytes(cap, text):
-    result = runtime._cap_result(text, cap, inline_cap=0)
+    result = result_caps.cap_result(text, cap, inline_cap=0)
     assert len(result.encode("utf-8")) <= cap
     assert result != text
     assert "�" not in result
     assert "truncated" in result or result.endswith("~")
-    assert runtime._cap_result("é", 2, inline_cap=0) == "é"
+    assert result_caps.cap_result("é", 2, inline_cap=0) == "é"
 
 
 def test_spill_counts_utf8_and_budgets_notice_and_preview(tmp_path):
     text = "é😀" * 300
-    result = runtime.spill_oversized_result(text, 1000, spill_dir=tmp_path)
+    result = result_caps.spill_oversized_result(text, 1000, spill_dir=tmp_path)
     assert "result was 1800 bytes" in result
     assert len(result.encode("utf-8")) <= 1000
     assert "�" not in result
@@ -33,7 +33,7 @@ def test_spill_counts_utf8_and_budgets_notice_and_preview(tmp_path):
 
 
 def test_spill_threshold_is_bytes_even_when_notice_cannot_fit(tmp_path):
-    result = runtime.spill_oversized_result("é" * 100, 150, spill_dir=tmp_path)
+    result = result_caps.spill_oversized_result("é" * 100, 150, spill_dir=tmp_path)
     assert "result was 200 bytes" in result
     assert result.startswith("[result was")
     assert next(tmp_path.glob("result-*.txt")).read_bytes() == ("é" * 100).encode()
@@ -58,7 +58,7 @@ def test_dispatch_spills_by_the_active_context_inline_limit(tmp_path, monkeypatc
 
 def test_batch_caps_multibyte_and_structured_text():
     results = ["😀" * 100, ToolResult.text("é" * 100), "ok"]
-    capped = runtime._cap_batch_results(results, 180)
+    capped = result_caps.cap_batch_results(results, 180)
     assert sum(byte_size(r.dehydrated() if isinstance(r, ToolResult) else r) for r in capped) <= 180
     assert capped[-1] == "ok"
 
@@ -70,7 +70,7 @@ def test_cap_text_zero_means_no_share_not_unlimited():
 def test_media_over_tool_media_max_is_replaced_by_a_line_naming_the_cap(monkeypatch):
     monkeypatch.setattr(runtime.T.STOCK_CONTEXT, "max_tool_media_bytes", 1000)
     result = ToolResult([{"type": "image", "data": "x" * 5000, "mimeType": "image/png"}])
-    capped = runtime._cap_result(result, 100000)
+    capped = result_caps.cap_result(result, 100000)
     assert [block["type"] for block in capped.blocks] == ["text"]
     assert "TOOL_MEDIA_MAX" in capped.blocks[0]["text"]
 
@@ -87,8 +87,8 @@ def _screenshot(raw_bytes: int) -> ToolResult:
 def test_screenshots_reach_the_provider_under_the_stock_caps(raw_bytes, count):
     per_result = settings.default_value("TOOL_RESULT_MAX")
     per_batch = settings.default_value("PARALLEL_RESULTS_MAX")
-    results = [runtime._cap_result(_screenshot(raw_bytes), per_result) for _ in range(count)]
-    for result in runtime._cap_batch_results(results, per_batch):
+    results = [result_caps.cap_result(_screenshot(raw_bytes), per_result) for _ in range(count)]
+    for result in result_caps.cap_batch_results(results, per_batch):
         messages = model_client.build_tool_result_messages("call-1", "screenshot", result)
         parts = [part for message in messages for part in message.parts]
         assert any(isinstance(part, ai.types.messages.FilePart) for part in parts)
@@ -117,8 +117,8 @@ def _resource_png(raw_bytes: int) -> ToolResult:
 
 
 def test_an_embedded_resource_image_reaches_the_provider_under_the_stock_caps():
-    result = runtime._cap_result(_resource_png(160_000), settings.default_value("TOOL_RESULT_MAX"))
-    result = runtime._cap_batch_results([result], settings.default_value("PARALLEL_RESULTS_MAX"))[0]
+    result = result_caps.cap_result(_resource_png(160_000), settings.default_value("TOOL_RESULT_MAX"))
+    result = result_caps.cap_batch_results([result], settings.default_value("PARALLEL_RESULTS_MAX"))[0]
     messages = model_client.build_tool_result_messages("call-1", "screenshot", result)
     parts = [part for message in messages for part in message.parts]
     assert any(isinstance(part, ai.types.messages.FilePart) for part in parts)
@@ -128,7 +128,7 @@ def test_the_media_notice_survives_text_clipping(monkeypatch):
     monkeypatch.setattr(runtime.T.STOCK_CONTEXT, "max_tool_media_bytes", 1000)
     result = ToolResult([{"type": "text", "text": "x" * 4000},
                          {"type": "image", "data": "y" * 5000, "mimeType": "image/png"}])
-    capped = runtime._cap_result(result, 1000)
+    capped = result_caps.cap_result(result, 1000)
     assert "TOOL_MEDIA_MAX" in capped.dehydrated()
     assert "truncated" in capped.dehydrated()
 
@@ -171,7 +171,7 @@ def test_an_image_with_an_awkward_file_name_reaches_the_model_and_the_session(tm
     context.vision_enabled = True
     marker = fs.fs_read(os.fsdecode(raw), context=context)
 
-    capped = runtime._cap_result(marker, cap)
+    capped = result_caps.cap_result(marker, cap)
     texts, _media = _sent(capped)
     record = model_client.tool_result_record("c1", "read", capped)
 

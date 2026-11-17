@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ai
 
-from js import compaction, runtime
+from js import compaction, result_caps
 from js.toolkit import ToolContext
 
 
@@ -59,7 +59,7 @@ def test_microcompact_keep_recent_larger_than_history_clears_nothing():
 
 def test_spill_writes_the_full_result_and_returns_a_pointer(tmp_path):
     big = "y" * 200_000
-    out = runtime.spill_oversized_result(big, 50_000, spill_dir=tmp_path)
+    out = result_caps.spill_oversized_result(big, 50_000, spill_dir=tmp_path)
 
     assert len(out) < len(big)
     assert "TOOL_RESULT_INLINE_MAX" in out
@@ -71,9 +71,9 @@ def test_spill_writes_the_full_result_and_returns_a_pointer(tmp_path):
 
 def test_spill_leaves_small_results_alone_and_can_be_disabled(tmp_path):
     small = "z" * 100
-    assert runtime.spill_oversized_result(small, 50_000, spill_dir=tmp_path) == small
+    assert result_caps.spill_oversized_result(small, 50_000, spill_dir=tmp_path) == small
     big = "z" * 200_000
-    assert runtime.spill_oversized_result(big, 0, spill_dir=tmp_path) == big
+    assert result_caps.spill_oversized_result(big, 0, spill_dir=tmp_path) == big
     assert list(tmp_path.glob("result-*.txt")) == []
 
 

@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from test_lazy_tool_discovery import _cfg, _result
 
-from js import paths, runtime, tool_errors
+from js import paths, result_caps, runtime, tool_errors
 from js.toolkit import core as tool_core, fs
 from js.toolkit.core import Tool, ToolContext, call_is_read_only
 from js.toolkit.registry import ToolRegistry, build_default_registry
@@ -308,7 +308,7 @@ def test_spilled_parallel_results_are_whole(tmp_path, monkeypatch):
     notices = []
 
     def spill() -> None:
-        notices.append(runtime.spill_oversized_result(text, 1000))
+        notices.append(result_caps.spill_oversized_result(text, 1000))
 
     threads = [threading.Thread(target=spill) for _ in range(8)]
     for thread in threads:

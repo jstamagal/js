@@ -14,6 +14,7 @@ from js import (
     capped_process,
     history_record,
     model_client,
+    result_caps,
     runtime,
     setcmd,
     settings,
@@ -696,9 +697,9 @@ def test_dispatch_uses_canonical_name_repairs_args_and_adds_retry_metadata(tmp_p
 
 
 def _spill_to(tmp_path, monkeypatch) -> None:
-    real_spill = runtime.spill_oversized_result
+    real_spill = result_caps.spill_oversized_result
     monkeypatch.setattr(
-        runtime,
+        result_caps,
         "spill_oversized_result",
         lambda text, cap, **kwargs: real_spill(text, cap, spill_dir=tmp_path, **kwargs),
     )
@@ -1375,8 +1376,8 @@ def test_tool_result_cap_preserves_boundary_and_dehydrates_oversized_content(blo
     cap = len(payload)
     result = ToolResult([block])
 
-    assert runtime._cap_result(result, cap) is result
-    capped = runtime._cap_result(result, cap - 1)
+    assert result_caps.cap_result(result, cap) is result
+    capped = result_caps.cap_result(result, cap - 1)
 
     assert isinstance(capped, ToolResult)
     assert len(capped.blocks) == 1
@@ -1400,8 +1401,8 @@ def test_batch_cap_preserves_tool_result_at_boundary_and_dehydrates_when_over(bl
     result = ToolResult([block])
     size = len(payload)
 
-    assert runtime._cap_batch_results([result], size) == [result]
-    capped = runtime._cap_batch_results([result], size - 1)
+    assert result_caps.cap_batch_results([result], size) == [result]
+    capped = result_caps.cap_batch_results([result], size - 1)
 
     assert isinstance(capped[0], ToolResult)
     assert capped[0].blocks[0]["type"] == "text"
@@ -1413,7 +1414,7 @@ def test_batch_result_cap_clips_the_fat_result_and_spares_the_small_ones():
     # One runaway result in a turn of seven must not cost the other six their
     # content — the aggregate cap takes bytes off the biggest first.
     results = ["x" * 400_000] + ["small"] * 6
-    capped = runtime._cap_batch_results(results, 200_000)
+    capped = result_caps.cap_batch_results(results, 200_000)
 
     assert capped[1:] == ["small"] * 6
     assert capped[0] != results[0]
@@ -1423,8 +1424,8 @@ def test_batch_result_cap_clips_the_fat_result_and_spares_the_small_ones():
 
 def test_batch_result_cap_is_a_noop_under_budget_and_when_disabled():
     results = ["small", "also small"]
-    assert runtime._cap_batch_results(results, 200_000) == results
-    assert runtime._cap_batch_results(["x" * 500_000], 0) == ["x" * 500_000]
+    assert result_caps.cap_batch_results(results, 200_000) == results
+    assert result_caps.cap_batch_results(["x" * 500_000], 0) == ["x" * 500_000]
 
 
 def test_patch_exact_long_match_needs_no_prior_read(tmp_path):

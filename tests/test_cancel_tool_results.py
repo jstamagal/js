@@ -6,7 +6,7 @@ from dataclasses import replace
 import pytest
 from test_lazy_tool_discovery import _cfg, _result
 
-from js import memory, runtime, supervisor
+from js import memory, result_caps, runtime, supervisor
 from js.toolkit.core import Tool, ToolContext
 from js.toolkit.registry import ToolRegistry
 
@@ -126,7 +126,7 @@ def test_cancel_retains_completed_fan_out_and_sync_results_with_batch_cap(tmp_pa
     asyncio.run(run())
     answered = {m["tool_call_id"]: m["content"] for m in messages if m["role"] == "tool"}
     assert list(answered) == ["f1", "l1"]
-    assert list(answered.values()) == runtime._cap_batch_results(["F" * 1000, "L" * 1000], 300)
+    assert list(answered.values()) == result_caps.cap_batch_results(["F" * 1000, "L" * 1000], 300)
     healed = memory.balance_orphaned_tool_calls(messages)
     assert next(m["content"] for m in healed if m.get("tool_call_id") == "f2") == (
         "ERROR: tool result was not recorded (session interrupted)"

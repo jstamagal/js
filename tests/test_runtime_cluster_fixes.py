@@ -13,7 +13,7 @@ import ai
 import pytest
 from turn_driver import one_turn
 
-from js import history_record, model_client as MC, runtime, turn_call
+from js import history_record, model_client as MC, result_caps, runtime, turn_call
 from js.config import Config
 from js.model_client import ModelStreamResult
 from js.toolkit import ToolContext
@@ -344,9 +344,9 @@ def test_normal_stop_stays_normal_with_no_incomplete_metadata(tmp_path, monkeypa
 # --------------------------------------------------------------------------
 
 def test_cap_result_marks_only_when_it_shortens():
-    assert runtime._cap_result("short", 100) == "short"           # untouched
-    assert runtime._cap_result("x" * 100, 0) == "x" * 100          # 0 == unlimited
-    clipped = runtime._cap_result("x" * 100, 64)
+    assert result_caps.cap_result("short", 100) == "short"           # untouched
+    assert result_caps.cap_result("x" * 100, 0) == "x" * 100          # 0 == unlimited
+    clipped = result_caps.cap_result("x" * 100, 64)
     assert clipped.startswith("x")
     assert len(clipped.encode("utf-8")) <= 64
     assert "[truncated: TOOL_RESULT_MAX (64) reached]" in clipped

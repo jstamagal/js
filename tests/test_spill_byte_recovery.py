@@ -8,7 +8,7 @@ import re
 import pytest
 from turn_driver import config, registry, run
 
-from js import runtime
+from js import result_caps
 from js.toolkit import fs
 from js.toolkit.core import Tool, ToolContext
 
@@ -20,9 +20,9 @@ _CONTINUE = re.compile(r"continue with (\{.*\})\]$")
 @pytest.fixture
 def context(tmp_path, monkeypatch):
     ctx = ToolContext(cwd=tmp_path, max_tool_result_inline_bytes=4_000)
-    real_spill = runtime.spill_oversized_result
+    real_spill = result_caps.spill_oversized_result
     monkeypatch.setattr(
-        runtime,
+        result_caps,
         "spill_oversized_result",
         lambda text, cap, **kwargs: real_spill(text, cap, spill_dir=tmp_path / "spill", **kwargs),
     )
