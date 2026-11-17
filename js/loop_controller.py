@@ -1,6 +1,7 @@
 """Repeat complete CLI invocations as fresh, isolated processes."""
 from __future__ import annotations
 
+from . import command_line
 from . import snippets
 
 from . import messages as msgs
@@ -32,21 +33,28 @@ def parse_limit(value: str) -> tuple[int | None, float | None]:
 
 def child_argv(argv: list[str], limit: str | None = None) -> list[str]:
     """Remove the parsed loop option, preserving prompt text and literal args."""
-    end = argv.index("--") if "--" in argv else len(argv)
-    candidates = []
-    for index, arg in enumerate(argv[:end]):
-        prompt_value = bool(index and argv[index - 1] in {"-p", "--prompt"})
-        if arg == "--loop":
-            value = (argv[index + 1] if index + 1 < end and
-                     (argv[index + 1].isdecimal() or _DURATION.fullmatch(argv[index + 1])) else "")
-            if limit is None or value == limit:
-                candidates.append((index, bool(value), prompt_value))
-        elif arg.startswith("--loop=") and (limit is None or arg[7:] == limit):
-            candidates.append((index, False, prompt_value))
+    args: list[command_line.Arg] = []
+    for arg in command_line.read(argv):
+        if arg.dest == "loop" and arg.sep is None and arg.value is not None and not _count_or_duration(arg.value):
+            # Only a count or a duration is a --loop value here.
+            args += [command_line.Arg(arg.words[:1], arg.option, arg.dest),
+                     command_line.Arg(arg.words[1:], value=arg.value)]
+        else:
+            args.append(arg)
+    candidates = [index for index, arg in enumerate(args)
+                  if arg.dest == "loop" and (limit is None or (arg.value or "") == limit)]
     if not candidates:
         return list(argv)
-    index, has_value, _ = next((item for item in reversed(candidates) if not item[2]), candidates[-1])
-    return argv[:index] + argv[index + 1 + has_value:]
+
+    def after_prompt(index: int) -> bool:
+        return index > 0 and args[index - 1].words[-1] in {"-p", "--prompt"}
+
+    index = next((index for index in reversed(candidates) if not after_prompt(index)), candidates[-1])
+    return command_line.words(args[:index] + args[index + 1:])
+
+
+def _count_or_duration(value: str) -> bool:
+    return value.isdecimal() or _DURATION.fullmatch(value) is not None
 
 
 def _detached_descendant_groups(root_pid: int) -> set[int]:
