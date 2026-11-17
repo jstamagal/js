@@ -31,10 +31,10 @@ def _piece(runs: list, style: str = "") -> Any:
 def _console() -> Any:
     """Where the kernel panel draws: stderr, in the colour it takes
     (`messages.color_system`), one column short of the window as every
-    block js draws (`display.block_width`)."""
+    block js draws (`text_layout.block_width`)."""
     from rich.console import Console
 
-    from .display import block_width
+    from .text_layout import block_width
 
     system = msgs.color_system(sys.stderr)
     return Console(file=sys.stderr, width=block_width(), soft_wrap=False, highlight=False, color_system=system,
@@ -53,7 +53,7 @@ def _drawn(draw: Callable[[Any, int | None], None], limit: int | None) -> str:
     for stderr."""
     from rich.console import Console
 
-    from .display import block_width
+    from .text_layout import block_width
 
     system = msgs.color_system(sys.stderr)
     console = Console(file=io.StringIO(), width=block_width(), soft_wrap=False, highlight=False,

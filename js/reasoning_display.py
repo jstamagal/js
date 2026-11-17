@@ -6,7 +6,7 @@ from typing import Protocol
 
 from . import fset, messages as msgs
 from .control_sequences import StreamCleaner, clean
-from .display import TAB, cut_points, terminal_width
+from .text_layout import TAB, cut_points, terminal_width
 
 
 class ReasoningDisplay(Protocol):

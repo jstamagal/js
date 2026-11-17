@@ -51,7 +51,16 @@ from prompt_toolkit.output import ColorDepth
 from prompt_toolkit.styles import DynamicStyle, Style
 from prompt_toolkit.widgets import SearchToolbar
 
-from . import control_sequences, display, fset, keys, messages as msgs, pastes, session_store
+from . import (
+    control_sequences,
+    display,
+    fset,
+    keys,
+    messages as msgs,
+    pastes,
+    session_store,
+    text_layout,
+)
 from .reasoning_display import grey, settled_rows
 
 TICK_BUSY_S = 0.1
@@ -153,8 +162,8 @@ def _field(message: msgs.Message, **fields) -> str:
 
 
 def _width(text: str) -> int:
-    """Columns ``text`` takes on the bar (`js.display.cells`)."""
-    return display.cells(text)
+    """Columns ``text`` takes on the bar (`js.text_layout.cells`)."""
+    return text_layout.cells(text)
 
 
 def status_line(
@@ -271,7 +280,7 @@ def session_short(session_file) -> str:
 
 def _cut(text: str, room: int) -> str:
     """The head of plain ``text`` that fits in ``room`` columns."""
-    return text[:display.cut_points(text, max(room, 0), words=False)[0]] if room > 0 else ""
+    return text[:text_layout.cut_points(text, max(room, 0), words=False)[0]] if room > 0 else ""
 
 
 def _elide(text: str, room: int) -> str:
@@ -475,12 +484,12 @@ class AnswerSpan:
             return self.text
         first, sep, rest = self.text.partition("\n")
         hint = msgs.TOOL_EXPAND.body_runs(key=key)
-        width = display.block_width()
-        if display.cells(first) + 2 + display.cells(fset.to_plain(hint)) <= width and not _goes_on(first, rest, width):
-            return f"{first}  {display.drawn_rows(hint, width, 'COLOR_DIM')[0]}{sep}{rest}"
+        width = text_layout.block_width()
+        if text_layout.cells(first) + 2 + text_layout.cells(fset.to_plain(hint)) <= width and not _goes_on(first, rest, width):
+            return f"{first}  {text_layout.drawn_rows(hint, width, 'COLOR_DIM')[0]}{sep}{rest}"
         # On rows of its own after the block, wrapped like any row, so a
         # header that wraps stays in one piece.
-        rows = display.drawn_rows(hint, max(width - 2, 1), "COLOR_DIM")
+        rows = text_layout.drawn_rows(hint, max(width - 2, 1), "COLOR_DIM")
         body = self.text.rstrip("\n")
         return body + "".join(f"\n  {row}" for row in rows) + self.text[len(body):]
 
@@ -492,7 +501,7 @@ def _goes_on(first: str, rest: str, width: int) -> bool:
     following = fset.plain(rest.partition("\n")[0]).removeprefix(display.RAIL).split()
     if not following:
         return False
-    return display.cells(first.rstrip(" ")) + 1 + display.cells(following[0]) > width
+    return text_layout.cells(first.rstrip(" ")) + 1 + text_layout.cells(following[0]) > width
 
 
 class ReasoningBlock:
@@ -517,20 +526,20 @@ class ReasoningBlock:
     def _body(self) -> str:
         """`text` word-wrapped to the window, reusing the rows wrapped before:
         a chunk rewraps only the last row of the open line."""
-        width = display.block_width()
+        width = text_layout.block_width()
         done_width, done, rows = self._wrapped
         if done_width != width:
             done, rows = 0, ""
             self._open = (0, "")
         last = self.text.rfind("\n") + 1
         if last > done:
-            rows += display.wrap_words(self.text[done:last - 1], width) + "\n"
+            rows += text_layout.wrap_words(self.text[done:last - 1], width) + "\n"
             done = last
             self._open = (0, "")
         self._wrapped = (width, done, rows)
         if done == len(self.text):
             return rows
-        line = self.text[done:].expandtabs(display.TAB)
+        line = self.text[done:].expandtabs(text_layout.TAB)
         held, open_rows = self._open
         settled, start = settled_rows(line, held, width, whole=False)
         open_rows += "".join(row + "\n" for row in settled)
@@ -563,7 +572,7 @@ class ReasoningBlock:
         """`N tok reasoning` and the hint after it, in COLOR_REASONING,
         wrapped to the window."""
         parts = [*count, *([("", " ")] if count else []), *msgs.REASONING_HEADING.body_runs(), *hint]
-        return "\n".join(display.drawn_rows(parts, display.block_width(), "COLOR_REASONING")) + "\n"
+        return "\n".join(text_layout.drawn_rows(parts, text_layout.block_width(), "COLOR_REASONING")) + "\n"
 
     def append(self, text: str) -> None:
         # Model text is cleaned here, before anything measures or wraps it.
@@ -1106,7 +1115,7 @@ def build_app(
                        # A long line wraps; the box grows to half the screen before it scrolls.
                        height=_input_height, dont_extend_height=True, wrap_lines=True,
                        get_line_prefix=lambda lineno, wrap: to_formatted_text(ANSI(_prompt() if lineno == 0 and not wrap
-                                                                                   else " " * display.cells(_prompt())))),
+                                                                                   else " " * text_layout.cells(_prompt())))),
                 ConditionalContainer(
                     Window(FormattedTextControl(_exit_hint), height=1),
                     filter=Condition(lambda: bool(armed)),

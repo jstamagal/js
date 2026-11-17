@@ -48,6 +48,7 @@ from . import (
     snippets,
     stream_transport,
     supervisor,
+    text_layout,
     usage as usage_mod,
     usage_display,
 )
@@ -267,7 +268,7 @@ def _show_settings(state: ReplState, cfg: Config, key: str | None) -> str | None
     """Render the values the NEXT turn uses, annotating knobs whose live source
     bypasses the store."""
     overlay = _live_settings_overlay_for_state(cfg, state)
-    result = setcmd.show_lines_effective(state.settings, overlay, key, columns=display_mod.block_width())
+    result = setcmd.show_lines_effective(state.settings, overlay, key, columns=text_layout.block_width())
     for out in result.lines:
         print(out)
     return result.error
@@ -279,7 +280,7 @@ def _cmd_set(arg: str, state: ReplState, cfg: Config) -> str | None:
         return _show_settings(state, cfg, parts[0] if parts else None)
     # `set -key` goes back to the value the session started with.
     baseline = cfg.settings if isinstance(getattr(cfg, "settings", None), dict) else None
-    columns = None if state.rc_replay else display_mod.block_width()
+    columns = None if state.rc_replay else text_layout.block_width()
     result = setcmd.set_command(state.settings, arg, baseline, columns=columns)
     if state.rc_replay:
         return _replayed(result)
@@ -1178,16 +1179,16 @@ def _cmd_help(arg: str, state: ReplState, cfg: Config) -> str | None:
              for name, command in prompt_commands.discover(Path.cwd()).items()
              if name not in commands(state) and name not in state.aliases]
     rows += [("@path/to/file", msgs.HELP_ATTACH.said()), ("exit", msgs.HELP_EXIT.said())]
-    columns = max(7, display_mod.terminal_width() - 1)
-    width = min(max(display_mod.cells(usage) for usage, _doc in rows), (columns - 3) // 2)
+    columns = max(7, text_layout.terminal_width() - 1)
+    width = min(max(text_layout.cells(usage) for usage, _doc in rows), (columns - 3) // 2)
     msgs.say(msgs.HELP_HEADING)
     for usage, doc in rows:
-        usages = display_mod.wrap_words(usage, width).splitlines()
-        docs = display_mod.wrap_words(msgs.words_of(doc), columns - width - 3).splitlines()
+        usages = text_layout.wrap_words(usage, width).splitlines()
+        docs = text_layout.wrap_words(msgs.words_of(doc), columns - width - 3).splitlines()
         for index in range(max(len(usages), len(docs))):
             label = usages[index] if index < len(usages) else ""
             text = docs[index] if index < len(docs) else ""
-            msgs.say(msgs.HELP_ROW, usage=label + " " * (width - display_mod.cells(label)), doc=text)
+            msgs.say(msgs.HELP_ROW, usage=label + " " * (width - text_layout.cells(label)), doc=text)
     return None
 
 

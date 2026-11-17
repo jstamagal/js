@@ -143,7 +143,7 @@ def _setting_lines(message: msgs.Message, key: str, value: str, *,
                    live: LiveValue | None = None, columns: int | None = None) -> list[str]:
     if columns is None:
         return [_annotate(msgs.line_for(message, key=key, value=value), live)]
-    from . import display as display_mod
+    from . import text_layout
 
     def said(text: str) -> msgs.Said:
         line = message.said(key=key, value=text)
@@ -152,14 +152,14 @@ def _setting_lines(message: msgs.Message, key: str, value: str, *,
     marker = "\x00"
     marked = said(marker)
     plain = marked.message.plain(**marked.fields)
-    indent = display_mod.cells(plain.partition(marker)[0]) if plain.count(marker) == 1 else 0
+    indent = text_layout.cells(plain.partition(marker)[0]) if plain.count(marker) == 1 else 0
     line = said(value)
     unwrapped = line.message.plain(**line.fields)
-    if indent > columns // 2 and any(display_mod.cells(row) > columns for row in unwrapped.splitlines()):
+    if indent > columns // 2 and any(text_layout.cells(row) > columns for row in unwrapped.splitlines()):
         value = "\n" + value
         indent = min(4, columns // 2)
         line = said(value)
-    return [msgs.for_stream(row) for row in display_mod.hanging_rows(
+    return [msgs.for_stream(row) for row in text_layout.hanging_rows(
         line.message.runs(**line.fields), columns, indent)]
 
 

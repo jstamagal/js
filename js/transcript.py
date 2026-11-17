@@ -26,6 +26,7 @@ from . import (
     output,
     paths as _paths,
     settings as _settings,
+    text_layout,
     toolkit as _toolkit,
 )
 
@@ -318,8 +319,8 @@ class TranscriptSink:
 
     def _on_run_line(self, *, fields: list[str]) -> None:
         parts = msgs.RUN_LINE.runs(fields="".join(
-            _display.FIELD_BREAK + control_sequences.clean(field) for field in fields))
-        for row in _display.field_rows(parts, _display.block_width()):
+            text_layout.FIELD_BREAK + control_sequences.clean(field) for field in fields))
+        for row in text_layout.field_rows(parts, text_layout.block_width()):
             self._plain(fset.to_ansi(row) + "\n")
 
     def _on_call_stats(self, *, label: str, elapsed_s: float, finish: Any, tool_calls: int, tokens: int,

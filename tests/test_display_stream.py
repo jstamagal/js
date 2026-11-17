@@ -7,7 +7,7 @@ import asyncio
 import io
 import re
 
-from js import debug_trace, display, screen, transcript
+from js import debug_trace, display, screen, text_layout, transcript
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
@@ -247,13 +247,13 @@ def test_an_open_tool_exchange_is_redrawn_where_it_stands_after_later_text():
 
 def test_streaming_reasoning_rewraps_only_its_open_paragraph(monkeypatch):
     wrapped: list[int] = []
-    real = display.wrap_words
+    real = text_layout.wrap_words
 
     def counting(text: str, width: int) -> str:
         wrapped.append(len(text))
         return real(text, width)
 
-    monkeypatch.setattr(display, "wrap_words", counting)
+    monkeypatch.setattr(text_layout, "wrap_words", counting)
     scroll = screen.Scrollback()
     block = scroll.reasoning(2)
     text = "".join(f"paragraph {n} " + "x" * 30 + "\n" for n in range(200))
@@ -264,7 +264,7 @@ def test_streaming_reasoning_rewraps_only_its_open_paragraph(monkeypatch):
 
 
 def test_plain_streaming_shows_each_full_row_of_an_unbroken_run_as_it_arrives(monkeypatch):
-    monkeypatch.setattr(display, "terminal_width", lambda: 40)
+    monkeypatch.setattr(text_layout, "terminal_width", lambda: 40)
     for char in ("漢", "x"):
         out = io.StringIO()
         sink = display.Display(out.write)
@@ -278,7 +278,7 @@ def test_plain_streaming_shows_each_full_row_of_an_unbroken_run_as_it_arrives(mo
 
 
 def test_a_markdown_table_cell_wraps_instead_of_losing_its_tail(monkeypatch):
-    monkeypatch.setattr(display, "terminal_width", lambda: 40)
+    monkeypatch.setattr(text_layout, "terminal_width", lambda: 40)
     live = RecordingLive()
     live.width = lambda: 39
     sink = display.Display(lambda _text: None, live=live, refresh_s=0)

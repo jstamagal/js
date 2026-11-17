@@ -15,7 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from . import control_sequences, display, fset, messages as msgs, output, toolkit as T
+from . import control_sequences, display, fset, messages as msgs, output, text_layout, toolkit as T
 from .reasoning_display import ReasoningDisplay, StderrReasoning
 from .toolkit.core import ToolContext
 
@@ -308,8 +308,8 @@ def subagent_finished_fields(event: dict) -> dict:
 
 def _print_run_line(fields: list[str]) -> None:
     """The run line through its format, wrapped between two fields."""
-    parts = msgs.RUN_LINE.runs(fields="".join(display.FIELD_BREAK + control_sequences.clean(field) for field in fields))
-    for row in display.field_rows(parts, display.block_width()):
+    parts = msgs.RUN_LINE.runs(fields="".join(text_layout.FIELD_BREAK + control_sequences.clean(field) for field in fields))
+    for row in text_layout.field_rows(parts, text_layout.block_width()):
         print(msgs.for_stream(fset.to_ansi(row)), flush=True)
 
 

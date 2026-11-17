@@ -13,13 +13,13 @@ from turn_driver import js, one_turn
 
 from js import (
     config,
-    display,
     history_record,
     memory,
     model_client,
     run_assembly,
     runtime,
     screen,
+    text_layout,
     transcript,
 )
 from js.toolkit import ToolContext
@@ -432,15 +432,15 @@ def test_unfolding_long_reasoning_and_folding_it_back_loses_no_scrollback(monkey
 
 def test_open_reasoning_rewraps_only_its_last_row_as_it_streams(monkeypatch):
     # A long line streamed in small chunks costs work in step with its length.
-    monkeypatch.setattr(display, "terminal_width", lambda: 80)
+    monkeypatch.setattr(text_layout, "terminal_width", lambda: 80)
     measured = [0]
-    cut_points = display.cut_points
+    cut_points = text_layout.cut_points
 
     def counting(plain, *args, **kwargs):
         measured[0] += len(plain)
         return cut_points(plain, *args, **kwargs)
 
-    monkeypatch.setattr(display, "cut_points", counting)
+    monkeypatch.setattr(text_layout, "cut_points", counting)
 
     def stream(words: int) -> int:
         measured[0] = 0
@@ -448,7 +448,7 @@ def test_open_reasoning_rewraps_only_its_last_row_as_it_streams(monkeypatch):
         block = screen.Scrollback().reasoning(2)
         for start in range(0, len(line), 4):
             block.append(line[start:start + 4])
-        assert block._body() == display.wrap_words(line, display.block_width())
+        assert block._body() == text_layout.wrap_words(line, text_layout.block_width())
         return measured[0]
 
     assert stream(2000) < 3 * stream(1000)

@@ -8,7 +8,7 @@ import re
 
 import pytest
 
-from js import display, fset
+from js import display, fset, text_layout
 
 SGR = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -25,7 +25,7 @@ def marks(request):
 @pytest.fixture(params=[20, 40, 80])
 def width(request, monkeypatch):
     """The terminal's width; js draws one column short of it."""
-    monkeypatch.setattr(display, "terminal_width", lambda: request.param)
+    monkeypatch.setattr(text_layout, "terminal_width", lambda: request.param)
     return request.param
 
 

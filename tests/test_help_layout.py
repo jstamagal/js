@@ -4,18 +4,18 @@ from types import SimpleNamespace
 
 import pytest
 
-from js import display, prompt_commands, repl_commands
+from js import prompt_commands, repl_commands, text_layout
 from js.repl_state import ReplState
 
 
 @pytest.mark.parametrize("columns", [32, 60, 100])
 def test_help_wraps_descriptions_under_their_column(monkeypatch, capsys, columns):
-    monkeypatch.setattr(display, "terminal_width", lambda: columns)
+    monkeypatch.setattr(text_layout, "terminal_width", lambda: columns)
     monkeypatch.setattr(prompt_commands, "discover", lambda _cwd: {})
     description = "ordinary description words remain readable while browsing command help"
     repl_commands._cmd_help("", ReplState(aliases={"example": description}), None)
     lines = capsys.readouterr().out.splitlines()
-    assert all(display.cells(line) < columns for line in lines)
+    assert all(text_layout.cells(line) < columns for line in lines)
     start = next(index for index, line in enumerate(lines) if "/example " in line)
     first = lines[start]
     doc_column = first.index("Alias:")
@@ -29,24 +29,24 @@ def test_help_wraps_descriptions_under_their_column(monkeypatch, capsys, columns
 
 @pytest.mark.parametrize("columns", [20, 60, 100])
 def test_help_bounds_long_wide_alias_names(monkeypatch, capsys, columns):
-    monkeypatch.setattr(display, "terminal_width", lambda: columns)
+    monkeypatch.setattr(text_layout, "terminal_width", lambda: columns)
     monkeypatch.setattr(prompt_commands, "discover", lambda _cwd: {})
     alias = "界" * 100
     repl_commands._cmd_help("", ReplState(aliases={alias: "short description"}), None)
     output = capsys.readouterr().out
-    assert all(display.cells(line) < columns for line in output.splitlines())
+    assert all(text_layout.cells(line) < columns for line in output.splitlines())
     assert output.count("界") == 100
 
 
 def test_help_keeps_long_prompt_path_and_description_when_wrapped(monkeypatch, capsys):
-    monkeypatch.setattr(display, "terminal_width", lambda: 60)
+    monkeypatch.setattr(text_layout, "terminal_width", lambda: 60)
     monkeypatch.setattr(repl_commands, "commands", lambda _state: {})
     path = "/" + "a" * 200 + "/review.md"
     command = SimpleNamespace(path=path, description="Review a file")
     monkeypatch.setattr(prompt_commands, "discover", lambda _cwd: {"review": command})
     repl_commands._cmd_help("", ReplState(), None)
     lines = capsys.readouterr().out.splitlines()
-    assert all(display.cells(line) < 60 for line in lines)
+    assert all(text_layout.cells(line) < 60 for line in lines)
     start = next(index for index, line in enumerate(lines) if "/review " in line)
     column = lines[start].index("Command file")
     parts = [lines[start][column:]]

@@ -6,7 +6,14 @@ from __future__ import annotations
 import pytest
 from repl_driver import stub_screen, turn_stub
 
-from js import cli, conversation, prompt_commands as pc, repl as repl_mod, repl_commands
+from js import (
+    cli,
+    conversation,
+    prompt_commands as pc,
+    repl as repl_mod,
+    repl_commands,
+    text_layout,
+)
 from js.repl_state import ReplState
 from js.replcomplete import JsCompleter
 
@@ -123,7 +130,7 @@ def test_tab_completes_a_command_file_name(dirs):
 
 
 def test_help_lists_command_files(dirs, capsys, monkeypatch):
-    monkeypatch.setattr(cli.display_mod, "terminal_width", lambda: 500)
+    monkeypatch.setattr(text_layout, "terminal_width", lambda: 500)
     global_dir, _ = dirs
     (global_dir / "review.md").write_text("---\ndescription: Review a file\n---\nReview $1", encoding="utf-8")
 
