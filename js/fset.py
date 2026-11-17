@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import Any
 
 from . import paths
+from .control_sequences import SGR
 
 PALETTE_SIZE = 99
 PACKAGE_FSET = paths.defaults_dir() / "fset"
@@ -79,7 +80,6 @@ _HEX = re.compile(r"#[0-9a-fA-F]{6}")
 _DIGITS = re.compile(r"[0-9]+")
 _SLOT = re.compile(r"\d\d")
 _TOKEN = re.compile(r"%%|%G|%C(\d\d)?|\$\$|\$\*|\$(\d)(-)?")
-_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 # Variation selectors and skin-tone modifiers: terminals disagree on their width.
 _MARK_MODIFIER = re.compile("[\uFE0E\uFE0F\U0001F3FB-\U0001F3FF]")
 
@@ -448,7 +448,7 @@ def code_style() -> str:
 
 def plain(text: str) -> str:
     """``text`` without colour escapes."""
-    return _ESCAPE.sub("", text)
+    return SGR.sub("", text)
 
 
 # ---------------------------------------------------------------------------

@@ -1156,13 +1156,6 @@ def build_app(
     return app, scrollback
 
 
-_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
-
-
-def _plain(text: str) -> str:
-    return _ANSI_ESCAPE.sub("", text)
-
-
 class capture_stdio:
     """Route sys.stdout/sys.stderr into the scrollback while the app runs."""
 
