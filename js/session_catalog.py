@@ -448,9 +448,6 @@ def catalog_sessions(sessions_root: Path) -> list[dict[str, Any]]:
     return records
 
 
-# Explicitly named aliases make the lifecycle API easy to discover at call sites.
-acquire_session_liveness = acquire_session
-release_session_liveness = release_session
 list_sessions = catalog_sessions
 
 
