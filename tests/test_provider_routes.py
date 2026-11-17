@@ -174,9 +174,6 @@ KNOWN_DISAGREEMENTS: dict[str, str] = {
     "no provider, base URL": _NO_PROVIDER,
     "no provider, base URL, deepseek model": _NO_PROVIDER,
     "no provider, no base URL": _NO_PROVIDER,
-    "saved login, deepseek sdk with openai-responses shape": (
-        "The route takes any custom_responses transport for the Responses wire; wire_name and "
-        "resolve_model take it only on the openai SDK, and use the deepseek SDK here."),
 }
 
 

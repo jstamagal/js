@@ -42,7 +42,8 @@ class Wire:
     registers it. ``sdk`` is the SDK provider id requests are built with: the
     provider's, else ``provider_id``, and openai with no provider. ``name`` is
     the wire in the ``-u`` wire names: openai (chat completions), responses,
-    anthropic, or the SDK id.
+    anthropic, or the SDK id. ``responses`` is the OpenAI Responses API: the
+    custom_responses transport on the openai SDK.
 
     ``provider_name`` and ``sdk_provider_name`` are ``provider_id`` and
     ``sdk``, "" with no provider; ``explicit_provider`` is whether a provider id
@@ -81,7 +82,8 @@ def resolve_wire(provider_id: str | None, *, base_url: str | None = None, model_
         sdk = "openai"
     else:
         sdk = (provider.effective_sdk_provider_id if provider is not None else None) or canonical_id
-    name = ("responses" if transport == "custom_responses" else "openai") if sdk == "openai" else sdk
+    responses = sdk == "openai" and transport == "custom_responses"
+    name = "responses" if responses else sdk
     provider_name = canonical_id or ""
     sdk_provider_name = sdk if provider_id is not None else ""
     explicit_provider = provider_id is not None
@@ -96,8 +98,8 @@ def resolve_wire(provider_id: str | None, *, base_url: str | None = None, model_
         provider_name=provider_name,
         sdk_provider_name=sdk_provider_name,
         anthropic=sdk_provider_name == "anthropic" or provider_name == "anthropic",
-        responses=transport == "custom_responses",
-        chat_completions=sdk_provider_name == "openai" and transport != "custom_responses",
+        responses=responses,
+        chat_completions=sdk_provider_name == "openai" and not responses,
         reasoning_content=(operator_endpoint or transport == "custom_openai"
                            or providers.is_custom_base_url(provider, base_url)),
         # Whether the ENDPOINT takes DeepSeek's extras, which is not whether the

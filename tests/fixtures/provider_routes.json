@@ -710,7 +710,7 @@
    "explicit_provider": true,
    "minimax": false,
    "provider_name": "mybox-mixed",
-   "responses_wire": true,
+   "responses_wire": false,
    "sdk_provider_name": "deepseek",
    "transport": "custom_responses"
   },

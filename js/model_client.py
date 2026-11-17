@@ -766,7 +766,7 @@ def resolve_model(
     protocol = None
     if wire.sdk == "anthropic":
         protocol = _AnthropicThinkingProtocol(explicit_prompt_cache=wire.provider_id != "anthropic")
-    elif wire.sdk == "openai" and wire.responses:
+    elif wire.responses:
         protocol = _ResponsesProtocol()
     elif wire.sdk == "openai":
         protocol = (
