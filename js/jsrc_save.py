@@ -177,15 +177,6 @@ def changed_fset_names(before: Mapping[str, str]) -> list[str]:
     return sorted(name for name in set(now) | set(before) if now.get(name) != before.get(name))
 
 
-def save_changes(path: Path, before: dict, after: dict, *, fset_before: Mapping[str, str],
-                 extra_lines: list[str] | None = None) -> int:
-    """Write into the jsrc at ``path`` what changed since ``before`` and
-    ``fset_before``: the settings that differ in ``after``, the /fset
-    entries that differ now, and ``extra_lines`` (`save_settings_to_jsrc`)."""
-    return save_settings_to_jsrc(path, after, keys=changed_keys(before, after),
-                                 fset_names=changed_fset_names(fset_before), extra_lines=extra_lines)
-
-
 def save_settings_to_jsrc(
     path: Path,
     settings: dict,
