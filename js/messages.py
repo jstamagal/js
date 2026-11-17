@@ -1592,19 +1592,14 @@ TOOL_LINE_RANGE = Message("lines {value}-{value2}", banner=False)
 
 TOOL_FOLD_COUNT = Message("{value} {value2}", banner=False)
 
+# What a fold row counts, by a tool's `Presentation.fold_noun`: singular, plural.
 TOOL_FOLD_NOUNS = {
-    "read": ("file", "files"),
-    "fs_search": ("search", "searches"),
-    "ast_search": ("search", "searches"),
-    "exa_search": ("search", "searches"),
-    "serper_search": ("search", "searches"),
-    "tavily_search": ("search", "searches"),
-    "docs_search": ("search", "searches"),
-    "fetch": ("page", "pages"),
-    "browse": ("page", "pages"),
-    "shell": ("look", "looks"),
+    "call": ("call", "calls"),
+    "file": ("file", "files"),
+    "search": ("search", "searches"),
+    "page": ("page", "pages"),
+    "look": ("look", "looks"),
 }
-TOOL_FOLD_DEFAULT_NOUNS = ("call", "calls")
 
 TOOL_LINE_NOUN = Message("line", banner=False)
 

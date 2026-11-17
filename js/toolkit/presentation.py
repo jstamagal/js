@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import cache
 from typing import Any
 
 from .. import settings as _settings
@@ -38,8 +39,8 @@ class Presentation:
     # at TOOLS_DISPLAY 1 in place of the result, which only acknowledges it.
     said: str | None = None
     # The dim note the header opens its other arguments with: "range", the
-    # line or byte range read; "lines", the body's line count; "edits", the
-    # number of edits.
+    # line or byte range read; "lines", the body's line count; "edits", how
+    # many `edits` the call carries.
     note: str | None = None
     # What TOOLS_DISPLAY 1 shows of a call (`call_kind`): "loud", "command"
     # or "diff".
@@ -60,6 +61,26 @@ class Presentation:
     live: bool = False
 
 
+_GENERIC = Presentation()
+
+
+@cache
+def _declarations() -> dict[str, Presentation]:
+    from .discovery import discovery_tool
+    from .registry import build_default_registry
+
+    # The discovery tool is bound to one turn's surface; this one is built
+    # only for its declaration.
+    tools = (*build_default_registry(()).tools, discovery_tool(None))
+    return {tool.name: tool.presentation for tool in tools}
+
+
+def declared(name: str) -> Presentation:
+    """How the screen shows calls of the stock tool called `name`; for any
+    other name, the generic way."""
+    return _declarations().get(name, _GENERIC)
+
+
 # The argument each tool carries its program or file body in, shown as a
 # highlighted block under the call header instead of on it.
 _BODY_ARG: dict[str, str] = {
@@ -67,13 +88,10 @@ _BODY_ARG: dict[str, str] = {
     "terminal_session": "command",
     "kernel": "code",
     "toolbox": "source",
-    "write": "content",
     "plan": "content",
 }
 # Arguments the header leaves out: the body, or text the result's diff shows.
 _UNLISTED_ARGS: dict[str, tuple[str, ...]] = {
-    "patch": ("old_string", "new_string", "edits"),
-    "read": ("range", "start_line", "end_line", "start_byte", "end_byte"),
     "shell": ("description",),
     "send": ("text",),
     "post_task": ("body",),
@@ -175,7 +193,7 @@ def call_kind(name: str, args: dict | None, settings: Any = None) -> str:
         return "quiet" if looks_around(args, settings) else "command"
     if name in ("kernel", "terminal_session", "toolbox"):
         return "command"
-    if name in ("patch", "write", "notebook_edit"):
+    if declared(name).kind == "diff":
         return "diff"
     return "loud"
 
@@ -249,9 +267,10 @@ def tool_output(name: str, result: Any) -> ToolOutput:
     body = text.rstrip("\n")
     output = ToolOutput([(line, False) for line in body.split("\n")] if body else [],
                         is_error=is_error, tries=tries)
-    if name == "read":
+    reads = declared(name).result
+    if reads == "file":
         output.read = read_data(output)
-    elif name == "patch":
+    elif reads == "diff":
         output.diff = diff_data(output)
     return output
 

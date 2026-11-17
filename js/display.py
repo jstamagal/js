@@ -43,7 +43,7 @@ from . import output
 from . import settings as _settings
 from .toolkit.presentation import (
     ToolOutput, _BODY_ARG, _UNLISTED_ARGS, _KEY_ARGS, _SAID_ARG, PATH_ARGS,
-    builtin_lexer, call_kind, tool_output,
+    builtin_lexer, call_kind, declared, tool_output,
 )
 
 _SGR_ONLY = re.compile(r"\x1b\[[0-9;]*m")
@@ -1144,14 +1144,16 @@ def _single_line(value: Any, whole: bool = False) -> str:
 
 
 def _other_arguments(name: str, args: dict, whole: bool = False) -> str:
-    """What the header shows after the key argument, dim: a `read`'s range, a
-    `write`'s length, a `patch`'s edit count, then every remaining argument as
-    `(key=value, …)`."""
+    """What the header shows after the key argument, dim: the declared note
+    (a range read, a body's length, an edit count), then every remaining
+    argument as `(key=value, …)`."""
+    shown = declared(name)
+    body = _BODY_ARG.get(name, shown.body)
     notes: list[str] = []
-    span = args.get("range")
-    if name == "read" and not isinstance(span, dict):
-        span = {key: args[key] for key in ("start_line", "end_line", "start_byte", "end_byte") if key in args}
-    if name == "read" and isinstance(span, dict):
+    if shown.note == "range":
+        span = args.get("range")
+        if not isinstance(span, dict):
+            span = {key: args[key] for key in ("start_line", "end_line", "start_byte", "end_byte") if key in args}
         span = {key: clean(value) if isinstance(value, str) else value for key, value in span.items()}
         if "range" in args:
             args = {**args, "range": span}
@@ -1159,14 +1161,14 @@ def _other_arguments(name: str, args: dict, whole: bool = False) -> str:
             notes.append(msgs.TOOL_LINE_RANGE.words(value=span.get('start_line', 1), value2=span.get('end_line', '')))
         elif "start_byte" in span or "end_byte" in span:
             notes.append(msgs.TOOL_BYTE_RANGE.words(value=span.get('start_byte', 0), value2=span.get('end_byte', '')))
-    if name == "write" and isinstance(args.get("content"), str):
-        notes.append(_count(len(args["content"].rstrip("\n").split("\n")), msgs.TOOL_LINE_NOUN.words()))
-    if name == "patch" and isinstance(args.get("edits"), list):
+    if shown.note == "lines" and body is not None and isinstance(args.get(body), str):
+        notes.append(_count(len(args[body].rstrip("\n").split("\n")), msgs.TOOL_LINE_NOUN.words()))
+    if shown.note == "edits" and isinstance(args.get("edits"), list):
         notes.append(_count(len(args["edits"]), msgs.TOOL_EDIT_NOUN.words()))
     # The whole form leaves out only what it shows elsewhere: the key
     # argument, the body, a message's text.
-    shown_elsewhere = (_SAID_ARG.get(name),) if whole else _UNLISTED_ARGS.get(name, ())
-    left_out = {_key_name(name, args), _BODY_ARG.get(name), *shown_elsewhere}
+    shown_elsewhere = (_SAID_ARG.get(name),) if whole else _UNLISTED_ARGS.get(name, shown.unlisted)
+    left_out = {_key_name(name, args), body, *shown_elsewhere}
     rest = [f"{clean(str(key))}={_single_line(value, whole)}" for key, value in args.items()
             if key not in left_out and value is not None and value != ""]
     if rest:
@@ -1176,8 +1178,11 @@ def _other_arguments(name: str, args: dict, whole: bool = False) -> str:
 
 def _lexer(name: str, args: dict, body: str) -> str:
     language = builtin_lexer(name, args, body)
-    if language is not None:
-        return language
+    return _path_lexer(args, body) if language is None else language
+
+
+def _path_lexer(args: dict, body: str) -> str:
+    """The lexer for `body`, guessed from the call's path."""
     path = args.get("file_path") or args.get("path")
     if isinstance(path, str) and path:
         try:
@@ -1241,7 +1246,7 @@ class _Block:
             row.append_text(Text(" ") + fset.to_rich(msgs.TOOL_ARGS_UNPARSED.body_runs(), th.error))
         if about is None:
             # A program shown whole in its own panel keeps only its first line here.
-            whole = self.whole and _BODY_ARG.get(name) != _key_name(name, args)
+            whole = self.whole and _BODY_ARG.get(name, declared(name).body) != _key_name(name, args)
             about = key_argument(name, args, 10 ** 6, whole)
         if about:
             row.append(" " + about, fset.setting_value("EXCHANGE_ARGUMENT_STYLE"))
@@ -1323,8 +1328,10 @@ def _hidden(count: int) -> list[fset.Run]:
     return msgs.TOOL_MORE_LINES.body_runs(count=count)
 
 
-# What a fold row counts, singular and plural; a tool not named counts calls.
-_FOLD_NOUN: dict[str, tuple[str, str]] = msgs.TOOL_FOLD_NOUNS
+_FOLD_NOUN: dict[str, str] = {
+    "fs_search": "search", "ast_search": "search", "exa_search": "search", "serper_search": "search",
+    "tavily_search": "search", "docs_search": "search", "fetch": "page", "browse": "page", "shell": "look",
+}
 _URL_HOST = re.compile(r"^[a-z][a-z0-9+.-]*://([^/?#]+)", re.I)
 
 
@@ -1351,7 +1358,7 @@ def render_fold(name: str, calls: list[dict | None], *, running: int = 0,
     """Finished quiet calls of one tool as one row: `mark [name] N things
     label · label · +K`. `running` of them have not returned."""
     block = _Block(width or block_width(), theme(settings), MARK if running else OK)
-    one, many = _FOLD_NOUN.get(name, msgs.TOOL_FOLD_DEFAULT_NOUNS)
+    one, many = msgs.TOOL_FOLD_NOUNS[_FOLD_NOUN.get(name, declared(name).fold_noun)]
     about = msgs.TOOL_FOLD_COUNT.words(value=len(calls), value2=one if len(calls) == 1 else many)
     labels = [label for label in (fold_label(name, args) for args in calls) if label]
     room = block.inner - len(name) - len(about) - 10
@@ -1373,7 +1380,7 @@ def _read_view(output: ToolOutput, args: dict | None) -> tuple[list[tuple[str, T
     rows, total = output.read
     kept = [(number, text) for number, text in rows if number]
     notes = [(number, Text(text)) for number, text in rows if not number]
-    code = _highlight([text for _, text in kept], _lexer("read", args or {}, "\n".join(t for _, t in kept)))
+    code = _highlight([text for _, text in kept], _path_lexer(args or {}, "\n".join(t for _, t in kept)))
     return [(number, text) for (number, _), text in zip(kept, code, strict=True)] + notes, total
 
 
@@ -1392,17 +1399,19 @@ def _last_line(output: ToolOutput) -> str:
 def _program(block: _Block, name: str, args: dict, level: int, preview: int) -> None:
     """The call's program under its header at TOOLS_DISPLAY 2 and 3: a `write`'s
     file as a numbered view, any other body of more than one line as a panel."""
-    body = args.get(_BODY_ARG.get(name, ""))
+    shown = declared(name)
+    body_arg = _BODY_ARG.get(name, shown.body)
+    body = args.get(body_arg or "")
     if not isinstance(body, str) or not body.strip():
         return
     lines = clean(body).rstrip("\n").split("\n")
-    if name != "write" and len(lines) == 1 and _key_name(name, args) == _BODY_ARG.get(name):
+    if not shown.body_is_file and len(lines) == 1 and _key_name(name, args) == body_arg:
         # A one-line program is the header's key argument already.
         return
     hidden = len(lines) - preview if level == 2 and len(lines) > preview else 0
     lines = lines[:len(lines) - hidden]
     code = _highlight(lines, _lexer(name, args, "\n".join(lines)))
-    if name == "write":
+    if shown.body_is_file:
         block.numbered([(str(n), text) for n, text in enumerate(code, 1)])
     else:
         block.panel(code)
@@ -1450,7 +1459,7 @@ def _finished_brief(block: _Block, name: str, args: dict, output: ToolOutput, ki
     if command:
         block.header(name, args, malformed=malformed, tail=_last_line(output))
         return
-    diff = _diff_view(output, colours) if name == "patch" else None
+    diff = _diff_view(output, colours)
     if diff is not None:
         rows, lead = diff
         block.header(name, args, malformed=malformed, tail=lead)
@@ -1486,8 +1495,8 @@ def _finished_full(block: _Block, name: str, args: dict, output: ToolOutput, lev
     if not output.lines:
         block.note(metrics(output) if output.failed else msgs.TOOL_NO_OUTPUT.body_runs(), note_style)
         return
-    read = _read_view(output, args) if name == "read" else None
-    diff = _diff_view(output, colours) if name == "patch" else None
+    read = _read_view(output, args)
+    diff = _diff_view(output, colours)
     if read is not None:
         rows, of = read
         shown = _capped(block, rows, limit, lambda part: block.numbered(part))
