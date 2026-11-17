@@ -132,6 +132,18 @@ def test_terminal_sessions_are_real_persistent_ptys_and_accept_keys(tmp_path):
         close_terminal_sessions(context)
 
 
+def test_a_terminal_report_over_the_result_cap_is_cut_to_it(tmp_path):
+    context = ToolContext(cwd=tmp_path, max_tool_result_bytes=300)
+    try:
+        report = terminal_session(action="start", session="long", command="seq 1 500; sleep 5",
+                                  wait_ms=300, context=context)
+    finally:
+        close_terminal_sessions(context)
+
+    assert len(report.encode("utf-8")) <= 300
+    assert "TOOL_RESULT_MAX" in report
+
+
 def test_terminal_session_state_is_isolated_by_tool_context(tmp_path):
     first = ToolContext(cwd=tmp_path / "first")
     second = ToolContext(cwd=tmp_path / "second")

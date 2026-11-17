@@ -18,6 +18,7 @@ from .. import paths
 from . import fs
 from .core import Tool, ToolContext
 from .descriptions import load_description
+from .results import truncate
 from .sanitize import int_or_default, text_or_default
 
 
@@ -115,12 +116,7 @@ def _render_lines(screen: Any) -> list[str]:
 
 
 def _report(payload: dict[str, Any], context: ToolContext) -> str:
-    text = json.dumps(payload, indent=2)
-    if len(text.encode("utf-8")) <= context.max_tool_result_bytes:
-        return text
-    return text.encode("utf-8")[: context.max_tool_result_bytes].decode(
-        "utf-8", errors="ignore"
-    ) + "\n[truncated]"
+    return truncate(json.dumps(payload, indent=2), context)
 
 
 class _TerminalStream:
