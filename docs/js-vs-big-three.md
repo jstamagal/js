@@ -63,10 +63,10 @@ Safety, sandboxing and approval flows are left out on purpose.
 pi retries once. Codex does not recover inside a normal turn.
 
 **Edit safety is the strictest, and cheap to recover from.**
-- A stale edit is refused, and js returns the diff between what was read and what is on disk now. Coverage is tracked per line range (`fs.py:138`). A stale edit costs one turn in js and two in Claude Code. Codex and pi have no guard.
+- A stale edit is refused, and js returns the diff between what was read and what is on disk now. Coverage is tracked per line range (`fs.changed_since_read`). A stale edit costs one turn in js and two in Claude Code. Codex and pi have no guard.
 - `patch` returns the diff it wrote. None of the others show the model its own edit.
-- A miss gets "closest line is N" (`fs._nearest_hint`).
-- A near-miss on smart quotes, Unicode dashes, no-break spaces or trailing whitespace still applies, and every line and character the edit kept is written back from the file (`fs._keep_untouched`, js-1g1.15).
+- A miss gets "closest line is N" (`patch._nearest_hint`).
+- A near-miss on smart quotes, Unicode dashes, no-break spaces or trailing whitespace still applies, and every line and character the edit kept is written back from the file (`patch._keep_untouched`, js-1g1.15).
 - Batch edits are all-or-nothing, and each edit sees the result of the one before it.
 
 **Shell never kills a long job.** It hands back `HANDLE n RUNNING` with poll, wait and kill, and later reads return only new bytes. This is on par with Claude Code and Codex. pi blocks.
@@ -136,7 +136,7 @@ pi retries once. Codex does not recover inside a normal turn.
 | Cache-aware clearing; cache-break detection | Claude Code `microCompact.ts`, `promptCacheBreakDetection.ts` | done in js-1g1.14: `compaction.cache_expired`, `note_response` |
 | Async subagents with a completion message | Claude Code `AgentTool` `run_in_background` | done in js-1g1.17: `task_jobs.py`, `task(background=true)` |
 | BM25 discovery; "load it first" hint on calls to deferred tools | Codex `tool_search.rs`, Claude Code `ToolSearchTool.ts` | done in js-1g1.16: `discovery.ranked_entries`, `CatalogEntry.search_text` |
-| Fuzzy edit that keeps untouched bytes | pi `edit-diff.ts:132,207` | done in js-1g1.15: `fs._apply_edit`, `fs._keep_untouched` |
+| Fuzzy edit that keeps untouched bytes | pi `edit-diff.ts:132,207` | done in js-1g1.15: `patch._apply_edit`, `patch._keep_untouched` |
 | Unchanged re-read returns a stub | Claude Code `FileReadTool.ts:528` | done in js-1g1.15: `ReadLedger.shown_by`, kept only while the earlier result is in history |
 | Record ids and parents; branching becomes a pointer move | pi `session-manager.ts:57` | `memory.Record` (before the picker) |
 | Explicit `-m` beats the stamp; fallback message if the stamped model has no login; `<model_switch>` note | Codex `config_persistence.rs`, `model_switch_instructions.rs` | done in js-1g1.21: `run_assembly.unreachable_stamp`, `conversation.note_model_switch` |
@@ -174,7 +174,7 @@ Hot spots over 441 commits in two months:
 4. **Delete the compat shims in `cli.py`** (Strong, cheapest). They existed only so tests could patch old signatures, and one could mask a real `TypeError`. Done in js-1g1.25.
 5. **Move the run modes out of `cli.py`** (Worth exploring). Done: the REPL is `js/repl.py`, and the `-p` run is `js/prompt_run.py`, a short function over named steps.
 6. **One session-file reservation module** (Worth exploring). There are two copies, and they disagree on the name format.
-7. **Split code search out of `fs.py`** (Speculative). It would help navigation only.
+7. **Split code search out of `fs.py`** (Speculative). It would help navigation only. Done: the searches are `js/toolkit/file_search.py` and patch is `js/toolkit/patch.py`.
 
 ## Priorities
 

@@ -71,7 +71,10 @@ js/model_client.py                 single `ai` SDK import boundary
 js/runtime.py                      streaming loop and tool dispatch
 js/toolkit/core.py                Tool, ToolContext, call_tool
 js/toolkit/registry.py            registry assembly and selector filtering
-js/toolkit/fs.py                  read/write/search/patch/remove/undo
+js/toolkit/fs_tools.py            the file tools' table
+js/toolkit/fs.py                  read/write/remove/undo
+js/toolkit/patch.py               patch
+js/toolkit/file_search.py         fs_search and ast_search
 js/toolkit/shell_fetch.py         shell and fetch
 js/toolkit/plan.py                plan
 js/toolkit/skill.py               skill

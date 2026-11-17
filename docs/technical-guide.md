@@ -81,7 +81,11 @@ persists each completed turn.
 | `js/toolkit/core.py` | `Tool`, `ToolContext`, argument coercion, handler invocation |
 | `js/toolkit/registry.py` | default registry assembly, per-agent surfaces, lazy catalog |
 | `js/toolkit/policy.py` | `noun:modifier` chains, `tools.yaml` tags and argument bans, `/tools` table |
-| `js/toolkit/fs.py` | file read/write/search/edit/delete/undo tools |
+| `js/toolkit/fs_tools.py` | the fs suite's tool table, and the path-skill offer on read, write and patch results |
+| `js/toolkit/fs.py` | read, write, remove and undo tools; the file byte and text helpers and the stale-read guard patch and the searches share |
+| `js/toolkit/patch.py` | patch tool: exact and fuzzy string replacement behind the read guard |
+| `js/toolkit/file_search.py` | fs_search (ripgrep) and ast_search (ast-grep), their child processes, and stopping them on cancel |
+| `js/toolkit/path_hints.py` | the hint for a path that does not exist: nearest directory, close names, same-tail paths |
 | `js/toolkit/shell_fetch.py` | shell and fetch tools |
 | `js/toolkit/plan.py` | plan tool |
 | `js/toolkit/skill.py` | skill tool |
@@ -177,7 +181,7 @@ retry failed children with backoff, stopping after five consecutive failures.
 `build_default_registry()` assembles tools in this order:
 
 ```text
-fs.py             file tools
+fs_tools.py       file tools
 shell_fetch.py    shell and fetch
 web_search.py     web search, docs search and browse
 jev.py            jev
