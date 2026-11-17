@@ -14,8 +14,9 @@ import threading
 
 import pytest
 
-from js.toolkit import ToolContext, fs
-from js.toolkit.fs import fs_read, fs_search
+from js.toolkit import ToolContext, file_search, fs
+from js.toolkit.file_search import fs_search
+from js.toolkit.fs import fs_read
 
 requires_rg = pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep not installed")
 
@@ -46,7 +47,7 @@ def test_rg_stream_drains_large_walk_diagnostics_without_losing_hits():
         "sys.stderr.flush(); "
         "print('match.txt:1:needle'); sys.exit(2)"
     )
-    lines, code, stderr, timed_out = fs._rg_stream(
+    lines, code, stderr, timed_out = file_search._rg_stream(
         [sys.executable, "-c", script], want=100, timeout=2,
     )
 
@@ -423,11 +424,11 @@ def test_fs_search_explicit_fifo_path_refuses_without_hanging(tmp_path):
 def test_fs_search_missing_rg_binary_degrades_cleanly(tmp_path, monkeypatch):
     context = ToolContext(cwd=tmp_path)
     (tmp_path / "a.txt").write_text("needle\n", encoding="utf-8")
-    monkeypatch.setattr(fs, "resolve_binary", lambda _cmd: None)
+    monkeypatch.setattr(file_search, "resolve_binary", lambda _cmd: None)
 
     actual = fs_search("needle", path=".", context=context)
 
-    assert actual == fs._RG_MISSING
+    assert actual == file_search._RG_MISSING
 
 
 def test_fs_read_of_fifo_refuses_without_hanging(tmp_path):
@@ -537,14 +538,14 @@ def test_fs_search_explicit_hidden_path_still_searches_it(tmp_path):
 
 
 def test_glob_asks_for_hidden_reads_only_dot_prefixed_components():
-    assert fs._glob_asks_for_hidden(".env")
-    assert fs._glob_asks_for_hidden("**/.github/*")
-    assert not fs._glob_asks_for_hidden("!.env")
-    assert not fs._glob_asks_for_hidden("!.git/**")
-    assert not fs._glob_asks_for_hidden("*.py")
-    assert not fs._glob_asks_for_hidden("./src/*.py")
-    assert not fs._glob_asks_for_hidden("../lib/**")
-    assert not fs._glob_asks_for_hidden(None)
+    assert file_search._glob_asks_for_hidden(".env")
+    assert file_search._glob_asks_for_hidden("**/.github/*")
+    assert not file_search._glob_asks_for_hidden("!.env")
+    assert not file_search._glob_asks_for_hidden("!.git/**")
+    assert not file_search._glob_asks_for_hidden("*.py")
+    assert not file_search._glob_asks_for_hidden("./src/*.py")
+    assert not file_search._glob_asks_for_hidden("../lib/**")
+    assert not file_search._glob_asks_for_hidden(None)
 
 
 def test_fs_search_stays_on_one_file_system_in_every_mode(tmp_path, monkeypatch):
@@ -554,10 +555,10 @@ def test_fs_search_stays_on_one_file_system_in_every_mode(tmp_path, monkeypatch)
         seen.append(list(argv))
         return [], 1, "", False
 
-    monkeypatch.setattr(fs, "_rg_stream", fake_stream)
+    monkeypatch.setattr(file_search, "_rg_stream", fake_stream)
     context = ToolContext(cwd=tmp_path)
     for mode in ("files", "files_with_matches", "content", "count"):
-        fs.fs_search("needle", path=str(tmp_path), output_mode=mode, context=context)
+        file_search.fs_search("needle", path=str(tmp_path), output_mode=mode, context=context)
 
     assert len(seen) == 4
     assert all("--one-file-system" in argv for argv in seen)

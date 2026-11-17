@@ -14,7 +14,7 @@ from js.config import Config
 from js.mcp_config import resolve as resolve_mcp
 from js.memory import load_messages
 from js.model_client import ModelStreamResult, ModelToolCall
-from js.toolkit import ToolContext, call_tool, fs, patch
+from js.toolkit import ToolContext, call_tool, file_search, fs, patch
 from js.toolkit.registry import build_default_registry, select
 from js.toolkit.subagents import task
 
@@ -463,7 +463,7 @@ def test_subagent_search_cache_is_fresh(monkeypatch, tmp_path):
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     (tmp_path / "needle.txt").write_text("needle\n", encoding="utf-8")
     parent = ToolContext(cwd=tmp_path)
-    fs.fs_search("needle", path=".", context=parent)
+    file_search.fs_search("needle", path=".", context=parent)
     tool_results: list[str] = []
     calls = 0
 
@@ -488,7 +488,7 @@ def test_task_return_clears_the_parent_search_cache(monkeypatch, tmp_path):
     patch_from_env(monkeypatch, tmp_path, prompts.parent)
     (tmp_path / "needle.txt").write_text("needle\n", encoding="utf-8")
     parent = ToolContext(cwd=tmp_path)
-    fs.fs_search("needle", path="needle.txt", context=parent)
+    file_search.fs_search("needle", path="needle.txt", context=parent)
     assert parent.search_cache
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kwargs: _fake_stream_result("CACHE_TEST_DONE"))

@@ -8,7 +8,7 @@ import json
 import pytest
 from turn_driver import config, run
 
-from js.toolkit import build_default_registry, fs, patch
+from js.toolkit import build_default_registry, file_search, fs, patch
 from js.toolkit.core import ToolContext
 
 
@@ -173,7 +173,7 @@ def test_a_missing_path_suggests_the_existing_path_with_the_same_tail(tmp_path):
     context = ToolContext(cwd=tmp_path)
 
     read_miss = fs.read(str(tmp_path / "out" / "moonpie" / "README.md"), context=context)
-    search_miss = fs.fs_search("moonpie", path=str(tmp_path / "out" / "moonpie"), context=context)
+    search_miss = file_search.fs_search("moonpie", path=str(tmp_path / "out" / "moonpie"), context=context)
 
     assert read_miss.startswith("ERROR")
     assert str(real) in read_miss

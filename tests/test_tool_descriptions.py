@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from js import paths
-from js.toolkit import descriptions, fs
+from js.toolkit import descriptions, file_search
 from js.toolkit.core import Tool
 from js.toolkit.registry import ToolRegistry, build_default_registry
 
@@ -139,7 +139,7 @@ def test_core_tool_schemas_match_canonical_surface_names():
     assert not {"-A", "-B", "-C", "-i", "-n", "type"} & set(search.params)
     assert ast_search.required == ("pattern",)
     assert set(ast_search.params) == {"pattern", "path", "lang", "rewrite", "apply", "max_results"}
-    assert set(ast_search.params["lang"]["enum"]) == set(fs.AST_GREP_LANGUAGES)
+    assert set(ast_search.params["lang"]["enum"]) == set(file_search.AST_GREP_LANGUAGES)
     assert plan.required == ("plan_name", "version", "content")
     assert set(plan.params) == {"plan_name", "version", "content", "overwrite"}
     # poll, wait and kill of a background handle take neither tasks nor agent_id.

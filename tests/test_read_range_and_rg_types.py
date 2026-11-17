@@ -8,7 +8,8 @@ import time
 import pytest
 
 from js.toolkit import ToolContext
-from js.toolkit.fs import _rg_stream, _rg_types, fs_read, fs_search
+from js.toolkit.file_search import _rg_stream, _rg_types, fs_search
+from js.toolkit.fs import fs_read
 
 requires_rg = pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep not installed")
 

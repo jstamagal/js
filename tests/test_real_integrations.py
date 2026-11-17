@@ -13,7 +13,8 @@ from js import history_record, toolkit as runtime_tools
 from js.config import from_env
 from js.runtime import Telemetry
 from js.toolkit import ToolContext
-from js.toolkit.fs import fs_search, read, write
+from js.toolkit.file_search import fs_search
+from js.toolkit.fs import read, write
 from js.toolkit.patch import patch
 from js.toolkit.subagents import task
 

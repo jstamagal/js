@@ -29,6 +29,7 @@ from js.toolkit import (
     ToolContext,
     ToolRegistry,
     build_default_registry,
+    file_search,
     fs,
     fs_tools,
     patch,
@@ -503,7 +504,7 @@ def test_fs_search_negative_offset_and_context_are_ignored(tmp_path):
     (tmp_path / "two.txt").write_text("needle\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    actual = fs.fs_search("needle", path=".", offset=-1, context_lines=-1, context=context)
+    actual = file_search.fs_search("needle", path=".", offset=-1, context_lines=-1, context=context)
 
     assert str(tmp_path / "one.txt") in actual
     assert str(tmp_path / "two.txt") in actual
@@ -514,7 +515,7 @@ def test_fs_search_boolean_head_limit_is_ignored(tmp_path):
     (tmp_path / "two.txt").write_text("needle\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    actual = fs.fs_search("needle", path=".", head_limit=True, context=context)
+    actual = file_search.fs_search("needle", path=".", head_limit=True, context=context)
 
     assert str(tmp_path / "one.txt") in actual
     assert str(tmp_path / "two.txt") in actual
@@ -523,8 +524,8 @@ def test_fs_search_repeated_query_is_deduplicated(tmp_path):
     (tmp_path / "one.txt").write_text("needle\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    first = fs.fs_search("needle", path="one.txt", output_mode="files_with_matches", context=context)
-    second = fs.fs_search("needle", path="one.txt", output_mode="files_with_matches", context=context)
+    first = file_search.fs_search("needle", path="one.txt", output_mode="files_with_matches", context=context)
+    second = file_search.fs_search("needle", path="one.txt", output_mode="files_with_matches", context=context)
 
     assert str(tmp_path / "one.txt") in first
     assert second == first + "\n[deduplicated repeated search]"

@@ -31,7 +31,7 @@ from js import (
     tool_errors,
     turn_dispatch,
 )
-from js.toolkit import ToolContext, call_tool, fs, python_kernel, shell_fetch, terminal
+from js.toolkit import ToolContext, call_tool, file_search, python_kernel, shell_fetch, terminal
 from js.toolkit.registry import build_default_registry
 
 needs_kernel = pytest.mark.skipif(
@@ -412,7 +412,7 @@ def test_file_tool_results_name_the_jail_tmp_not_the_host_dir(jailed):
         assert private not in result
     assert f"/tmp/{name}/a.txt" in results[0]
     assert "gamma" in results[5] + results[6] and f"/tmp/{name}/a.txt" in results[6]
-    if fs._ast_grep_binary() is not None:
+    if file_search._ast_grep_binary() is not None:
         assert f"/tmp/{name}/b.py" in results[8]
     assert str(Path.home() / ".js" / "tmp" / f"{name}.txt") in results[9]
     for error in (results[1], results[4], results[14]):

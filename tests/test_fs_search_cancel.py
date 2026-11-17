@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from js import runtime, tool_calls, tool_errors, turn_dispatch
-from js.toolkit import fs
+from js.toolkit import file_search
 from js.toolkit.core import Tool, ToolContext
 from js.toolkit.registry import _registry_from_tools
 
@@ -28,11 +28,11 @@ def test_dispatch_cancellation_stops_fs_search(monkeypatch, tmp_path):
         "time.sleep(60)\n"
     )
     binary.chmod(0o755)
-    monkeypatch.setattr(fs, "resolve_binary", lambda name: str(binary))
-    monkeypatch.setattr(fs, "_RG_TIMEOUT_S", 2)
+    monkeypatch.setattr(file_search, "resolve_binary", lambda name: str(binary))
+    monkeypatch.setattr(file_search, "_RG_TIMEOUT_S", 2)
     context = ToolContext(cwd=tmp_path)
     registry = _registry_from_tools((Tool(
-        "fs_search", "search", fs.fs_search, {"pattern": {"type": "string"}},
+        "fs_search", "search", file_search.fs_search, {"pattern": {"type": "string"}},
     ),))
 
     async def drive():
@@ -55,7 +55,7 @@ def test_dispatch_cancellation_stops_fs_search(monkeypatch, tmp_path):
     pid = int(ready.read_text())
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
-    assert fs.interrupt_inflight(context) == 0
+    assert file_search.interrupt_inflight(context) == 0
 
 
 def test_search_interrupt_is_scoped_and_reaps_descendants(tmp_path):
@@ -70,19 +70,19 @@ def test_search_interrupt_is_scoped_and_reaps_descendants(tmp_path):
     )
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(
-            fs._rg_stream, [sys.executable, "-c", script], 100, 3, context=context,
+            file_search._rg_stream, [sys.executable, "-c", script], 100, 3, context=context,
         )
         deadline = time.monotonic() + 2
         while not ready.exists():
             assert time.monotonic() < deadline
             time.sleep(0.01)
-        assert fs.interrupt_inflight(other) == 0
+        assert file_search.interrupt_inflight(other) == 0
         assert not future.done()
-        assert fs.interrupt_inflight(context) == 1
+        assert file_search.interrupt_inflight(context) == 1
         _lines, code, _stderr, timed_out = future.result(timeout=1)
     assert code == -9
     assert not timed_out
-    assert fs.interrupt_inflight(context) == 0
+    assert file_search.interrupt_inflight(context) == 0
     # SIGKILL lands asynchronously: the killed descendant is briefly still
     # exiting, then an init-owned zombie until init reaps it, then gone.
     # Either end state means it can no longer compute or hold a pipe open.
@@ -124,15 +124,15 @@ def test_search_keyboard_interrupt_reaps_child(monkeypatch, tmp_path):
         proc.stdout = InterruptedOutput(proc.stdout)
         return proc
 
-    monkeypatch.setattr(fs.subprocess, "Popen", start)
+    monkeypatch.setattr(file_search.subprocess, "Popen", start)
     try:
         with pytest.raises(KeyboardInterrupt):
-            fs._rg_stream(
+            file_search._rg_stream(
                 [sys.executable, "-c", "import time; time.sleep(60)"],
                 want=100, timeout=3, context=context,
             )
         assert spawned[0].poll() is not None
-        assert fs.interrupt_inflight(context) == 0
+        assert file_search.interrupt_inflight(context) == 0
     finally:
         if spawned and spawned[0].poll() is None:
             os.killpg(spawned[0].pid, signal.SIGKILL)
@@ -140,7 +140,7 @@ def test_search_keyboard_interrupt_reaps_child(monkeypatch, tmp_path):
 
 
 def test_search_deadline_survives_closed_stdout():
-    lines, code, _stderr, timed_out = fs._rg_stream(
+    lines, code, _stderr, timed_out = file_search._rg_stream(
         [sys.executable, "-c", "import os, time; os.close(1); time.sleep(60)"],
         want=100, timeout=0.2,
     )
