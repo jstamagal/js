@@ -722,7 +722,6 @@ OPT_NO_SKILLS = Message("Disable skill discovery and the skill tool.")
 OPT_NO_MCP = Message("Disable MCP servers.")
 OPT_BARE = Message("Use slim without envctx, skills, or MCP.")
 OPT_VERIFY = Message("Validate configuration, agents, and reachable skills without executing prompts.")
-OPT_BENCH_MODELS = Message("Benchmark each saved model with Article I, sections 1–5.")
 OPT_BENCH = Message(
     "Benchmark mode: run AGENT's NN-benchmark.md turns each on a clean slate without a session, "
     "measuring TTFT, tok/s and turn time. Pair with --stats-json or --stats-csv.")

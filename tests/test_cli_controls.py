@@ -1,10 +1,9 @@
-from types import SimpleNamespace
 
 import pytest
 
-from js import cli, persona, run_assembly, skills, verify
+from js import persona, run_assembly, skills, verify
 from js.cli_options import RunOptions, invocation
-from js.config import Config, InvocationSources
+from js.config import Config
 
 
 def test_prompt_file_bypasses_agent_and_instructions(tmp_path, monkeypatch):
@@ -165,22 +164,6 @@ def test_verify_reports_bad_manifest_without_executing_prompt(tmp_path, monkeypa
     (directory / 'prompt.md').write_text('!{sh exit 99}')
     errors = verify.verify('broken')
     assert errors and str(directory) in errors[0]
-
-
-def test_bench_models_visits_each_model_and_continues_after_error(monkeypatch):
-    monkeypatch.setattr(cli, '_from_env', lambda *a, **kw: Config(model='test'))
-    monkeypatch.setattr(cli, '_list_models_provider_ids', lambda *a: ['p'])
-    monkeypatch.setattr(cli, '_models_cached_or_live', lambda *a: ['bad', 'good'])
-    visited = []
-    def run(prompt, **kw):
-        visited.append(kw['model'])
-        if kw['model'] == 'p/bad':
-            raise ValueError('unknown model')
-        return 0
-    monkeypatch.setattr(cli, '_run_prompt', run)
-    args = SimpleNamespace(agent=None, reasoning=None, max_out=None, stats_json=None, stats_csv=None)
-    assert cli._run_model_bench(args, InvocationSources()) == 1
-    assert visited == ['p/bad', 'p/good']
 
 
 def test_verify_checks_the_agent_roots_only(tmp_path, monkeypatch):

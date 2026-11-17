@@ -80,7 +80,6 @@ def parser() -> argparse.ArgumentParser:
     groups['WHAT THE MODEL GETS'].add_argument('--no-mcp', action='store_true', help=msgs.OPT_NO_MCP.words())
     groups['WHAT THE MODEL GETS'].add_argument('--bare', action='store_true', help=msgs.OPT_BARE.words())
     groups['MODES'].add_argument('--verify', nargs='?', const='', metavar='AGENT', help=msgs.OPT_VERIFY.words())
-    groups['MODES'].add_argument('--bench-models', action='store_true', help=msgs.OPT_BENCH_MODELS.words())
     groups['MODES'].add_argument("--bench", metavar="AGENT", help=msgs.OPT_BENCH.words())
     groups['MODES'].add_argument("--loop", nargs="?", const="", metavar="N|NM|NH", help=msgs.OPT_LOOP.words())
     groups['MODES'].add_argument("--lock", action="store_true", help=msgs.OPT_LOCK.words())

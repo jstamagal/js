@@ -3419,40 +3419,6 @@ def _print_model_list(provider_arg: str | None, cfg: Config | None) -> int:
     return 0
 
 
-def _run_model_bench(args: argparse.Namespace, sources: InvocationSources) -> int:
-    cfg = _from_env(None, save_session=False, sources=sources, agent_id=args.agent)
-    prompt = ('Respond with EXACTLY the full text of the first 5 sections of Article I '
-              'of the United States Constitution. No introduction or commentary.')
-    rows = []
-    failed = False
-    for provider in _list_models_provider_ids(None, cfg):
-        try:
-            models = _models_cached_or_live(provider, cfg)
-        except Exception as exc:  # noqa: BLE001 - continue benchmarking other providers
-            msgs.warn(msgs.MODEL_LIST_FAILED, provider=provider, error=str(exc))
-            failed = True
-            continue
-        for model in models:
-            route = f'{provider}/{model}'
-            print(f'Benchmarking {route}', file=sys.stderr)
-            started = time.perf_counter()
-            calls = []
-            try:
-                code = _run_prompt(prompt, model=route, agent=args.agent, save=False,
-                                   reasoning=args.reasoning, maxout=args.max_out,
-                                   sources=sources, show_continue=False, call_stats=calls)
-                error = None if code == 0 else msgs.NO_ANSWER.words()
-            except Exception as exc:  # noqa: BLE001 - one sick model must not stop the list
-                code, error = 1, str(exc)
-            row = {'name': route, 'ok': code == 0, 'error': error,
-                   **stats.summarize_calls(calls, wall_s=time.perf_counter() - started)}
-            rows.append(row)
-            print(_bench_row_line(row))
-            failed |= code != 0
-    stats_ok = _write_requested_stats(args.stats_json, args.stats_csv, {'turns': rows}, rows)
-    return int(failed or not rows or not stats_ok)
-
-
 def _models_json(provider_id: str | None, cfg: Config | None = None) -> dict:
     models = []
     for provider in _list_models_provider_ids(provider_id, cfg):
@@ -4378,7 +4344,7 @@ def _validate_output_flags(parser: argparse.ArgumentParser, args: argparse.Names
             error = msgs.JSON_UNSUPPORTED.words(mode="--json-stream", command="--" + name.replace("_", "-"))
             parser.error(error)
     if args.json or args.json_stream:
-        for name in ("commit", "compact", "login", "logout", "migrate_config", "refresh_model_catalog", "bench_models"):
+        for name in ("commit", "compact", "login", "logout", "migrate_config", "refresh_model_catalog"):
             value = getattr(args, name)
             if value is not None and value is not False:
                 error = msgs.JSON_UNSUPPORTED.words(mode="--json-stream" if args.json_stream else "--json", command="--" + name.replace("_", "-"))
@@ -4477,8 +4443,6 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
                 print(error, file=sys.stderr)
             print(f'Verification: {len(errors)} error(s).')
         return int(bool(errors))
-    if args.bench_models:
-        return _run_model_bench(args, sources)
     if args.list_sessions:
         ambiguous = any(
             (
