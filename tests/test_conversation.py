@@ -85,3 +85,25 @@ def test_a_failed_turn_is_still_saved(tmp_path):
 
     replayed = Conversation(_cfg(tmp_path), "system").messages
     assert any(message.get("content") == "remember this" for message in replayed)
+
+
+def test_a_conversation_given_messages_continues_them_and_saves_them_to_its_session(tmp_path):
+    earlier = [{"role": "user", "content": "my number is 7311"}, {"role": "assistant", "content": "noted"}]
+    chat = Conversation(_cfg(tmp_path), "system", messages=list(earlier))
+
+    assert "my number is 7311" in _ask(chat, "what is my number?")
+    assert Conversation(_cfg(tmp_path), "system").messages[:2] == earlier
+
+
+def test_started_sees_the_message_in_the_history_before_the_turn_runs(tmp_path):
+    chat = Conversation(_cfg(tmp_path), "system")
+    seen: list[list[str]] = []
+
+    async def run() -> None:
+        with _echo_model():
+            await chat.turn({"role": "user", "content": "hello"}, suppress_output=True,
+                            started=lambda: seen.append([m["role"] for m in chat.messages]))
+    asyncio.run(run())
+
+    assert seen == [["user"]]
+    assert [m["role"] for m in chat.messages] == ["user", "assistant"]
