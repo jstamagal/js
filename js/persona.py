@@ -185,7 +185,10 @@ def _frontmatter_source(path: Path, text: str) -> tuple[str, str]:
     return text[first_line_end + 1:close.start()], text[close.end():]
 
 
-def _split_frontmatter(path: Path, text: str) -> tuple[dict[str, Any] | None, str]:
+def split_frontmatter(path: Path, text: str) -> tuple[dict[str, Any] | None, str]:
+    """The YAML mapping and right-stripped body of an agent prompt file; the
+    mapping is None when ``text`` has no frontmatter. Malformed frontmatter
+    raises ValueError naming ``path``."""
     if not text.startswith("---"):
         return None, text.rstrip()
     yaml_text, body = _frontmatter_source(path, text)
@@ -520,7 +523,7 @@ def load_benchmarks(prompts_dir: Path | tuple[Path, ...]) -> list[Benchmark]:
     for path in _prompt_files(prompts_dir):
         if path.suffix != ".md" or not _is_benchmark_file(path):
             continue
-        frontmatter, body = _split_frontmatter(path, path.read_text(encoding="utf-8"))
+        frontmatter, body = split_frontmatter(path, path.read_text(encoding="utf-8"))
         body = body.strip()
         if not body:
             continue

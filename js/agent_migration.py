@@ -258,7 +258,7 @@ def plan(agent_dir: Path, keep: Keep, *, _beside_manifest: bool = False) -> tupl
         old = frontmatter_md
         md_text = frontmatter_md.read_text(encoding="utf-8")
         try:
-            data, new_body = persona._split_frontmatter(frontmatter_md, md_text)
+            data, new_body = persona.split_frontmatter(frontmatter_md, md_text)
         except ValueError as exc:
             return Result(agent_dir, "error", str(exc)), None, None
         text, _ = persona._frontmatter_source(frontmatter_md, md_text)
