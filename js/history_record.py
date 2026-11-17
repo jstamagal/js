@@ -24,7 +24,7 @@ import ai
 import ai.types.messages
 
 # reasoning imports only after settings, which tool_args loads.
-from . import media, providers, reasoning, snippets, tool_args
+from . import media, reasoning, routing, snippets, tool_args
 from .text_bytes import byte_prefix, cap_text
 
 # Where js keeps an assistant message's `reasoning_blocks` on the SDK message.
@@ -318,11 +318,7 @@ def history_to_ai_messages(
     give the same messages on every turn, so the provider's prompt cache
     keeps matching past an image.
     """
-    provider = providers.get_provider(provider_id)
-    sdk_id = provider.effective_sdk_provider_id if provider is not None else provider_id
-    preserve_reasoning = sdk_id == "openai" and (
-        provider is None or provider.transport != "custom_responses"
-    )
+    preserve_reasoning = routing.resolve_wire(provider_id).chat_completions
     out: list[ai.messages.Message] = []
     if system:
         out.append(ai.system_message(system))
