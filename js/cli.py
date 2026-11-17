@@ -4728,8 +4728,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
             cfg = None
             provider_arg = args.list_models or None
             if provider_arg is None:
-                cfg = _from_env(args.session, save_session=False,
-                                sources=replace(sources, presets=()), agent_id=args.agent)
+                cfg = _from_env(args.session, save_session=False, sources=sources, agent_id=args.agent)
             return _print_json(_models_json(provider_arg, cfg)) if args.json else _print_model_list(provider_arg, cfg)
         except Exception as e:  # noqa: BLE001
             if args.json:

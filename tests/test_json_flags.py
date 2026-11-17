@@ -162,6 +162,22 @@ def test_models_json_no_arg_uses_config_provider(monkeypatch, tmp_logins_dir, ca
     assert seen == ["that-provider"]
 
 
+def test_list_models_loads_the_preset_on_its_command_line(monkeypatch, tmp_logins_dir, tmp_path, capsys):
+    # The provider --list-models covers comes from the settings the command
+    # line loads, a preset among them.
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    (tmp_path / ".js").mkdir(exist_ok=True)
+    (tmp_path / ".js" / "jsrc.pick").write_text(
+        "set PROVIDER openai\nset API_KEY fixture\nset MODEL preset-model\n", encoding="utf-8")
+    logins.cache_models("openai", ["preset-model"])
+
+    assert cli.main(["--list-models", "--json"]) == 0
+    assert _stdout_json(capsys) == {"models": []}
+
+    assert cli.main(["--list-models", "--json", "--preset", "pick"]) == 0
+    assert _stdout_json(capsys) == {"models": ["openai/preset-model"]}
+
+
 def test_list_models_human_output_is_provider_slash_model(monkeypatch, tmp_logins_dir, capsys):
     logins.save_login(logins.Login(provider_id="openai", provider_api_key="sk"))
     monkeypatch.setattr(cli.logins, "test_login", lambda login: ["gpt-5.4", "gpt-5.5"])
