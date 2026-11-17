@@ -2,64 +2,58 @@
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
+from repl_driver import output_of, record_turns, type_into_js
 
-import pytest
-from repl_driver import repl_state
-
-from js import cli, compaction, messages as msgs, settings
-from js.config import from_env, jsrc_paths
+from js import compaction, logins, messages as msgs, settings
 
 
-@pytest.fixture
-def repl(monkeypatch, tmp_path):
+def _out(monkeypatch, tmp_path, capsys, line: str, *argv: str) -> list[str]:
+    """The lines `line` printed, typed into js started in `tmp_path` with `argv`."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(msgs, "BANNER", msgs.BANNER)
-    os.chdir(tmp_path)
-    cfg = from_env()
-    state, _spec = repl_state(cfg)
-    cli._run_rc_commands(state, cfg, jsrc_paths(Path(cfg.project_dir or tmp_path)))
-    return cfg, state
+    turns = record_turns(monkeypatch)
+    printed: list[str] = []
+
+    async def typing(enter):
+        printed.append(await output_of(enter, capsys, line))
+
+    assert type_into_js(monkeypatch, typing, *argv) == 0
+    assert turns == []
+    return printed[0].splitlines()
 
 
-def _out(line, repl, capsys) -> list[str]:
-    cfg, state = repl
-    capsys.readouterr()
-    assert cli._handle_command(line, state, cfg) is True
-    return capsys.readouterr().out.splitlines()
-
-
-def test_set_group_lists_that_group(repl, capsys):
-    lines = _out("/set compaction", repl, capsys)
+def test_set_group_lists_that_group(monkeypatch, tmp_path, capsys):
+    lines = _out(monkeypatch, tmp_path, capsys, "/set compaction")
     group = [spec.key for spec in settings.REGISTRY if spec.section == "compaction"]
     assert [line.split()[1] for line in lines] == group
 
 
-def test_set_wildcard_lists_names_that_match(repl, capsys):
-    lines = _out("/set *_FILE", repl, capsys)
+def test_set_wildcard_lists_names_that_match(monkeypatch, tmp_path, capsys):
+    lines = _out(monkeypatch, tmp_path, capsys, "/set *_FILE")
     files = [spec.key for spec in settings.REGISTRY if spec.key.endswith("_FILE")]
     assert files and [line.split()[1] for line in lines] == files
 
 
-def test_set_context_size_is_the_window_of_the_next_request(repl, capsys):
-    cfg, state = repl
-    _out("/set CONTEXT_SIZE 123456", repl, capsys)
-    active = state.config_for_turn(cfg)
-    assert compaction.configured_context_window(active, lambda: None) == 123456
+def test_set_context_size_is_the_window_of_the_next_request(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    turns = record_turns(monkeypatch)
+
+    assert type_into_js(monkeypatch, ["/set CONTEXT_SIZE 123456", "hello"]) == 0
+
+    [turn] = turns
+    assert compaction.configured_context_window(turn.cfg, lambda: None) == 123456
 
 
-def test_set_model_shows_the_model_the_agent_runs(repl, capsys):
-    from dataclasses import replace
+def test_set_model_shows_the_model_the_agent_runs(monkeypatch, tmp_path, capsys):
+    agent = tmp_path / ".js" / "agents" / "reviewer"
+    agent.mkdir(parents=True)
+    (agent / "agent.yaml").write_text("model: deepseek/review-agent-pick\n", encoding="utf-8")
+    (agent / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
+    logins.save_login(logins.Login("deepseek", provider_api_key="offline"))
 
-    cfg, state = repl
-    spec = replace(state.prompt_spec, model="deepseek/review-agent-pick")
-    agent_cfg = replace(cfg, model="review-agent-pick", provider_id="deepseek")
-    agent_state = cli._repl_state(agent_cfg, spec, messages=[], live_settings=state.settings)
-    capsys.readouterr()
-    assert cli._handle_command("/set model", agent_state, agent_cfg) is True
-    [line] = capsys.readouterr().out.splitlines()
-    assert "review-agent-pick" in line and f"agent {cfg.agent_id}" in line
+    [line] = _out(monkeypatch, tmp_path, capsys, "/set model", "--agent", "reviewer")
+
+    assert "review-agent-pick" in line and "agent reviewer" in line
 
 
 def test_banner_changes_can_belong_to_the_caller():
