@@ -75,7 +75,7 @@ def test_a_resumed_session_settles_on_its_stamp_and_sends_its_recorded_prompt(tm
                        stamp=M.stamp_for("b", "testes", "medium"))
 
     resumed = run_assembly.resume(cfg, None, None)
-    settled = run_assembly.settle(cfg, resumed=resumed, stamp_keeps_model=True)
+    settled = run_assembly.settle(cfg, resumed=resumed)
 
     assert resumed.from_stamp and resumed.model == "testes/b"
     assert resumed.layer == {"EFFORT": "medium"}
@@ -120,3 +120,22 @@ def test_an_agent_that_does_not_load_and_a_model_that_does_not_route_are_not_set
     with pytest.raises(run_assembly.RunNotSettled) as failed:
         run_assembly.settle(_cfg(tmp_path, "fine", save_session=False), model="deepseek/m")
     assert not failed.value.loading
+
+
+@pytest.mark.parametrize(("config_pins", "expected"), [(False, "stamped"), (True, "agent")])
+def test_a_stamp_beats_agent_yaml_unless_config_pins(tmp_path, config_pins, expected):
+    from js import settings
+
+    model_id = settings.default_value("MODEL")
+    provider_id, _, _ = model_id.partition("/")
+    logins.save_login(Login(provider_id=provider_id, provider_api_key="fixture-key"))
+    _agent(tmp_path, "seat", "model: testes/a\ntools: []\n")
+    cfg = _cfg(tmp_path, session="one")
+    M.persist_messages(cfg.session_file, [{"role": "user", "content": "hi"},
+                                          {"role": "assistant", "content": "yo"}],
+                       stamp=M.stamp_for(cfg.model, cfg.provider_id, None))
+
+    settled = run_assembly.settle(cfg, resumed=run_assembly.resume(cfg, None, None), config_pins=config_pins)
+
+    stamped = (cfg.provider_id, cfg.model)
+    assert (settled.config.provider_id, settled.config.model) == (stamped if expected == "stamped" else ("testes", "a"))

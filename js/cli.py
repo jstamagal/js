@@ -2736,7 +2736,6 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
         # A resumed session stays on its stamp; agent.yaml sets a fresh run.
         settled = run_assembly.settle(
             cfg, reasoning=reasoning_override, resumed=resumed, config_pins=config_pins,
-            stamp_keeps_model=True,
             agent_reasoning=not config_pins and resumed.stamp is None and reasoning_override is None)
     except run_assembly.RunNotSettled as e:
         with _transcript_stdio(telemetry):

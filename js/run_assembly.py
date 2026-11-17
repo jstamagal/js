@@ -172,8 +172,7 @@ def route(cfg: Any, model: str | None) -> Any:
 
 
 def settle(cfg: Any, *, model: str | None = None, reasoning: str | None = None,
-           resumed: Resume | None = None, config_pins: bool = False,
-           stamp_keeps_model: bool = False, agent_reasoning: bool = True,
+           resumed: Resume | None = None, config_pins: bool = False, agent_reasoning: bool = True,
            layered: bool = True, expand_recorded: bool = False) -> SettledRun:
     """The settled run of ``cfg``'s agent on the model this run names.
 
@@ -183,9 +182,10 @@ def settle(cfg: Any, *, model: str | None = None, reasoning: str | None = None,
     agent's unless the prompt is replaced or the run is a chat. A run without
     ``resumed`` sends the agent's prompt.
 
-    ``config_pins``: a jsrc `MODEL` keeps agent.yaml's `model:` out, as -m
-    and a JS_* env var always do. ``stamp_keeps_model``: a resumed session's
-    stamp keeps agent.yaml's `model:` out too, unless ``config_pins``.
+    The model the run names beats a resumed session's stamp, and the stamp
+    beats agent.yaml's `model:`. ``config_pins`` lets agent.yaml's `model:`
+    back in on a resumed session, and makes a jsrc `MODEL` keep it out, as
+    -m and a JS_* env var always do.
     ``agent_reasoning``: agent.yaml's reasoning is one of the run's layers.
     ``layered`` False leaves the agent and login layers unresolved, for a
     caller that resolves them every turn. ``expand_recorded``: the agent's
@@ -202,7 +202,7 @@ def settle(cfg: Any, *, model: str | None = None, reasoning: str | None = None,
     except (FileNotFoundError, ValueError) as exc:
         raise RunNotSettled(exc, loading=True) from exc
     try:
-        if config_pins or not (stamp_keeps_model and resumed.stamp is not None):
+        if config_pins or resumed.stamp is None:
             cfg = P.apply_agent_model(cfg, prompt_spec, model, config_pins=config_pins)
         if layered and agent_reasoning:
             cfg = P.apply_agent_reasoning(cfg, prompt_spec)
