@@ -1513,10 +1513,7 @@ def _append_closing_note(cfg: Config, state: dict, reminder: str) -> None:
         last_user["content"] = [*content, {"type": "text", "text": reminder}]
     else:
         last_user["content"] = reminder
-    # Append-only history cannot edit in place: drop the stale copy, write the
-    # rewritten one, so a reload sees exactly what memory holds.
-    M.append_mark(cfg.session_file, f"rollback_to:{len(messages) - 1}")
-    _append_turn(cfg, last_user)
+    M.replace_last_message(cfg.session_file, messages)
 
 
 def _split_compact_model(arg: str) -> tuple[str | None, str, bool]:

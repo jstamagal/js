@@ -814,7 +814,7 @@ def persist_messages(memory_file: Path, messages: list[dict], stamp: dict | None
             common += 1
         changed = common < len(persisted) or bool(messages[common:])
         if common < len(persisted):
-            _append_owned(memory_file, Record(kind="mark", ts=time.time(), marker=f"rollback_to:{common}"))
+            _append_owned(memory_file, Record(kind="mark", ts=time.time(), marker=_rollback_marker(common)))
         for message in messages[common:]:
             _append_owned(memory_file, _message_record(message, stamp))
         if isinstance(messages, _Snapshot) and memory_file.exists():
@@ -826,6 +826,19 @@ def persist_messages(memory_file: Path, messages: list[dict], stamp: dict | None
 
 def append_mark(memory_file: Path, marker: str) -> None:
     _append(memory_file, Record(kind="mark", ts=time.time(), marker=marker))
+
+
+def _rollback_marker(keep: int) -> str:
+    """The mark that cuts the history back to its first ``keep`` messages."""
+    return f"rollback_to:{keep}"
+
+
+def replace_last_message(memory_file: Path, messages: list[dict]) -> None:
+    """Record that the last message of the live history ``messages`` changed
+    in place: a rollback to the history before it, then the message as it is
+    now, so a reload sees what ``messages`` holds."""
+    append_mark(memory_file, _rollback_marker(len(messages) - 1))
+    append_message(memory_file, messages[-1])
 
 
 _SYSTEM_MARK = "system:"
