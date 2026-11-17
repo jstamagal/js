@@ -1,6 +1,6 @@
 """The REPL's live state for one session (`repl._repl_state` builds it), the
-assembly a session runs with, what carries live settings into the state, and
-the `on` events a state emits."""
+assembly a session runs with and the command-table row (`Command`), what
+carries live settings into the state, and the `on` events a state emits."""
 
 from __future__ import annotations
 
@@ -32,7 +32,6 @@ if TYPE_CHECKING:
     from .keys import Keymap
     from .mcp.host import MCPHost
     from .persona import PromptSpec
-    from .repl_commands import Command
     from .session_picker import SessionTarget
     from .subagent_windows import SubagentWindows
     from .toolkit.registry import ToolRegistry
@@ -144,6 +143,20 @@ def _live_reasoning_effort(live_settings: dict, default: str | None) -> str | No
 
 
 QUIT_WORDS = ("exit", "quit", ":q")  # quit without the leading '/'
+
+
+@dataclass(frozen=True)
+class Command:
+    """One command: ``run(arg, state, cfg)`` returns an error string or None."""
+
+    run: Callable[[str, ReplState | None, Config], str | None]
+    usage: str
+    doc: msgs.Message
+    complete: str | None = None  # argument completion source (see replcomplete)
+    turn_state: bool = False     # clears/rotates/compacts the live message list
+    # Reads and changes no REPL state: runs with a ``state`` of None, as an
+    # `on` handler of a run outside the REPL.
+    stands_alone: bool = False
 
 
 @dataclass(frozen=True)

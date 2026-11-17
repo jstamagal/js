@@ -41,7 +41,7 @@ def test_bare_quit_words_complete():
 
 
 def test_a_new_table_entry_completes_with_no_completer_change(monkeypatch):
-    command = repl_commands.Command(lambda arg, state, cfg: None, "frobnicate", "test entry")
+    command = repl_state.Command(lambda arg, state, cfg: None, "frobnicate", "test entry")
     monkeypatch.setitem(repl_commands.COMMANDS, "frobnicate", command)
     completer = JsCompleter(commands=lambda: repl._command_completions(ReplState()))
 

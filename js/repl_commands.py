@@ -14,7 +14,7 @@ import shlex
 import subprocess
 import textwrap
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 
 from . import (
@@ -55,7 +55,7 @@ from . import (
     usage_display,
 )
 from .config import Config
-from .repl_state import ReplState
+from .repl_state import Command, ReplState
 from .sampling import Sampling
 from .session_catalog import (
     append_title,
@@ -1065,20 +1065,6 @@ def _cmd_drop(arg: str, state: ReplState, cfg: Config) -> str | None:
 # The command table. Every REPL command, rc line, /load line, `on` handler
 # and ex command dispatches through COMMANDS; completion and /help read it.
 # --------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class Command:
-    """One command: ``run(arg, state, cfg)`` returns an error string or None."""
-
-    run: Callable[[str, ReplState | None, Config], str | None]
-    usage: str
-    doc: msgs.Message
-    complete: str | None = None  # argument completion source (see replcomplete)
-    turn_state: bool = False     # clears/rotates/compacts the live message list
-    # Reads and changes no REPL state: runs with a ``state`` of None, as an
-    # `on` handler of a run outside the REPL.
-    stands_alone: bool = False
-
 
 _MAX_ALIAS_DEPTH = 16
 

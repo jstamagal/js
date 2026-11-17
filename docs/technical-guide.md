@@ -51,7 +51,7 @@ persists each completed turn.
 | `js/swarm_run.py` | every agent of a swarm in one process (`python -m js.swarm run SPEC.json`) |
 | `js/repl.py` | the interactive REPL: startup (`start_repl`), the input loop, the turn queue and steering, the status bar, the `/session` switch |
 | `js/repl_commands.py` | the REPL's slash commands: the command table (`COMMANDS`), dispatch, aliases, `/load` and the startup run of the jsrc files |
-| `js/repl_state.py` | the REPL's live state (`ReplState`), its assembly, and carrying live settings into the route and tool registry |
+| `js/repl_state.py` | the REPL's live state (`ReplState`), its assembly, the command-table row (`Command`), and carrying live settings into the route and tool registry |
 | `js/config.py` | environment parsing, session reservation, model/provider caps, vision heuristic |
 | `js/settings.py` | the setting registry (`REGISTRY`, `SettingSpec`), the defaults/jsrc layer (`default_value`, `knob`), the live settings store (`live_value`) |
 | `js/setting_values.py` | what a setting's value can be: text checked and read into a value (`coerce_value`), and a value spelled as a jsrc line holds it (`config_value_text`, `jsrc_text`) |
