@@ -7,6 +7,7 @@ from pathlib import Path
 
 import ai
 from repl_driver import run_async, turn_stub
+from turn_driver import js
 
 from js import attach, cli, history_record, media, runtime
 from js.config import Config
@@ -74,7 +75,7 @@ def test_prompt_file_text_attachment_inlines_content(monkeypatch, tmp_path, caps
     monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
 
-    actual = cli._run_prompt("summarize", files=[str(note)])
+    actual = js(monkeypatch, "--file", str(note), "-p", "summarize")
 
     assert actual == 0
     assert capsys.readouterr().out.splitlines()[0] == "TEXT_OK"
@@ -98,7 +99,7 @@ def test_prompt_at_path_attaches_the_file(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
 
-    assert cli._run_prompt(f"@{note}") == 0
+    assert js(monkeypatch, "-p", f"@{note}") == 0
     assert "review these commits" in seen[0]
 
 
@@ -130,10 +131,17 @@ def test_prompt_stdin_attachment_reaches_the_model(monkeypatch, tmp_path, capsys
         seen.append(kwargs["messages"][-1].parts[0].text)
         return _fake_stream_result("STDIN_FILE_OK")
 
+    class PipedStdin:
+        buffer = io.BytesIO(b"pasted attachment\n")
+
+        def isatty(self):
+            return False
+
     monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
+    monkeypatch.setattr(cli.sys, "stdin", PipedStdin())
 
-    actual = cli._run_prompt("summarize paste", files=["-"], stdin_attachment=b"pasted attachment\n")
+    actual = cli.main(["--file", "-", "-p", "summarize paste"])
 
     assert actual == 0
     assert capsys.readouterr().out.splitlines()[0] == "STDIN_FILE_OK"
@@ -170,7 +178,7 @@ def test_prompt_file_image_attachment_sends_file_part_and_persists_stub(monkeypa
     monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
 
-    actual = cli._run_prompt("what is this?", files=[str(image)])
+    actual = js(monkeypatch, "--file", str(image), "-p", "what is this?")
 
     assert actual == 0
     assert capsys.readouterr().out.splitlines()[0] == "IMAGE_OK"
@@ -204,7 +212,7 @@ def test_prompt_file_image_vision_off_falls_back_to_text(monkeypatch, tmp_path, 
     monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
 
-    actual = cli._run_prompt("what is this?", files=[str(image)])
+    actual = js(monkeypatch, "--file", str(image), "-p", "what is this?")
 
     assert actual == 0
     assert capsys.readouterr().out.splitlines()[0] == "NO_VISION_OK"
@@ -248,7 +256,7 @@ def test_prompt_file_binary_attachment_uses_descriptor(monkeypatch, tmp_path, ca
     monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
 
-    actual = cli._run_prompt("inspect", files=[str(binary)])
+    actual = js(monkeypatch, "--file", str(binary), "-p", "inspect")
 
     assert actual == 0
     assert capsys.readouterr().out.splitlines()[0] == "BINARY_OK"
@@ -267,7 +275,7 @@ def test_missing_attachment_fails_without_model_call(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
 
-    actual = cli._run_prompt("summarize", files=[str(tmp_path / "missing.txt")])
+    actual = js(monkeypatch, "--file", str(tmp_path / "missing.txt"), "-p", "summarize")
 
     assert actual == 2
     assert load_messages(cfg.session_file) == []
