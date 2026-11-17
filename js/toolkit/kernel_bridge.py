@@ -283,9 +283,9 @@ class ToolBridge:
         observer = self.observer
         call_id = f"kernel-tools-{next(self._calls)}"
         with call_scope(call_id, for_model=False):
-            hooks = getattr(context, "tool_call_hooks", None)
+            hooks = context.tool_call_hooks
             refusal = _hook_refusal(hooks, call_id, tool.name, arguments)
-            approval = getattr(context, "tool_approval", None)
+            approval = context.tool_approval
             if refusal is None and approval is not None:
                 refusal = approval.refusal_from_thread(
                     {"id": call_id, "name": tool.name, "arguments": json.dumps(arguments, default=str)})

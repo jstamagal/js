@@ -173,7 +173,7 @@ def read_view(target: Path, context: ToolContext) -> str | None:
     content_hash = _hash_bytes(data)
     context.remember_read(target, content_hash, whole_file=False)
     context.remember_content(target, content_hash, data)
-    max_lines = int_or_default(getattr(context, "notebook_output_lines", None), 10, minimum=0)
+    max_lines = int_or_default(context.notebook_output_lines, 10, minimum=0)
     return render(notebook, target, content_hash, max_lines)
 
 

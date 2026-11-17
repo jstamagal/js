@@ -265,7 +265,7 @@ def skill(name: str, context: ToolContext | None = None, *, user_command: str = 
     if metadata is not None and not metadata.model_invocable:
         return f"ERROR: skill {metadata.name!r} is user-only; the user loads it with {user_command} {metadata.name}"
     try:
-        loaded = load_skill(catalog, name, tool_registry=getattr(context, "tool_registry", None))
+        loaded = load_skill(catalog, name, tool_registry=context.tool_registry)
     except (OSError, ValueError):
         return f"ERROR: skill {name!r} instructions could not be read"
     if loaded is not None:
@@ -280,11 +280,11 @@ def _task_text(item: Any) -> str:
 def _child_context(parent: ToolContext, registry: Any, agent: str) -> ToolContext:
     # A subagent gets its own kernel (kernel_session stays None) but the
     # parent's per-turn settings, kernel verbosity among them.
-    child = ToolContext(cwd=parent.cwd, model=getattr(parent, "model", ""), **_turn_settings.inherit(parent))
+    child = ToolContext(cwd=parent.cwd, model=parent.model, **_turn_settings.inherit(parent))
     child.subagent_assembly = parent.subagent_assembly
     child.tool_registry = registry
     child.agent_id = agent
-    child.task_depth = getattr(parent, "task_depth", 0) + 1
+    child.task_depth = parent.task_depth + 1
     return child
 
 
@@ -467,7 +467,7 @@ async def _run_one_task_async(
         from ..usage import session_key
 
         child_context.usage_chain = (session_key(Path(parent_cfg.session_file), parent_context),
-                                     *getattr(parent_context, "usage_chain", ()))
+                                     *parent_context.usage_chain)
         child_context.net_label = f"Subagent {idx}"
         if Path(cfg.session_file) != Path(os.devnull):
             from ..session_catalog import record_session_start
@@ -475,8 +475,8 @@ async def _run_one_task_async(
             record_session_start(cfg.session_file, cwd=child_context.cwd, agent=agent, model=cfg.model,
                                  mode="subagent", parent=parent_cfg.session_file)
         messages = M.load_replay_messages(cfg.session_file)
-        parent_hooks = getattr(parent_context, "tool_call_hooks", None)
-        parent_approval = getattr(parent_context, "tool_approval", None)
+        parent_hooks = parent_context.tool_call_hooks
+        parent_approval = parent_context.tool_approval
         telemetry = Telemetry(debug_log=cfg.debug_log)
         launch = _launch_fields(idx, total, agent, cfg, registry)
         opener = window_opener.get()
@@ -572,7 +572,7 @@ async def _run_one_task_async(
     # where ALL N are fat still trims the tail at the aggregate cap — inherent to a
     # fixed budget, not silent starvation.) Read the parent context: the child's
     # runtime rewrites child_context.max_tool_result_bytes mid-turn.
-    budget = int(getattr(parent_context, "max_tool_result_bytes", 0) or 0)
+    budget = int(parent_context.max_tool_result_bytes or 0)
     if budget > 0 and parent_context.subagent_result_share:
         cap = budget // max(1, total)
         final = cap_text(final, cap, f"\n[truncated: TOOL_RESULT_MAX ({cap}) reached]")
@@ -687,7 +687,7 @@ def _subagent_worker_cap(context: ToolContext) -> int:
     """SUBAGENT_WORKERS_MAX as ``context`` has it: the most subagents running at
     once in the whole process."""
     default = _settings.default_value("SUBAGENT_WORKERS_MAX")
-    return int_or_default(getattr(context, "subagent_max_workers", default), default, minimum=1)
+    return int_or_default(context.subagent_max_workers, default, minimum=1)
 
 
 def _prepare_fan_out(
@@ -725,8 +725,8 @@ def _prepare_fan_out(
         )
 
     default_depth = _settings.default_value("SUBAGENT_DEPTH_MAX")
-    max_depth = int_or_default(getattr(context, "task_max_depth", default_depth), default_depth, minimum=1)
-    if getattr(context, "task_depth", 0) >= max_depth:
+    max_depth = int_or_default(context.task_max_depth, default_depth, minimum=1)
+    if context.task_depth >= max_depth:
         return f"ERROR: task recursion depth limit reached ({max_depth})", None
 
     from ..config import from_env, validate_agent_id
@@ -741,7 +741,7 @@ def _prepare_fan_out(
     config_factory = from_env if assembly.config_factory is None else assembly.config_factory
     registry_factory = build_default_registry if assembly.registry_factory is None else assembly.registry_factory
     worker = _run_one_task_async if assembly.worker is None else assembly.worker
-    parent_cfg = getattr(context, "config", None) or config_factory(save_session=True)
+    parent_cfg = context.config or config_factory(save_session=True)
     # Honor the subagent-model lock at every depth: when locked, rebuild the
     # nested registry without the `model_override` flag so the task tool's
     # `model` param is gone from the schema/description, not just ignored
@@ -820,7 +820,7 @@ def _start_background(indexed_items, coro_factory, agent_id: str, session_id: st
         indexed_items, coro_factory,
         lambda results: _assemble_task_results(results, agent_id, session_id),
         agent_id=agent_id,
-        depth=int(getattr(context, "task_depth", 0) or 0),
+        depth=context.task_depth,
         owner=context.task_owner,
         # A subagent can write anything, so the parent's memoized fs_search
         # results are stale once it is done.

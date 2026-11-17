@@ -114,7 +114,7 @@ def jev(
     configured_key = context.typesafe_api_key.strip()
     if not (configured_key or os.environ.get(API_KEY_ENV, "").strip()):
         return f"ERROR: {API_KEY_ENV} is not set"
-    model = getattr(context, "jev_model", None) or "jev-latest"
+    model = context.jev_model or "jev-latest"
     try:
         with (_client(model, api_key=configured_key) if configured_key else _client(model)) as client:
             response = client.system_one(_state(state), asked)

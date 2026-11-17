@@ -572,7 +572,7 @@ def _server_env(context: ToolContext) -> dict[str, str]:
     the names `SHELL_ENV_KEEP` lists."""
     if _jail.active() is None and context.lsp_environment_inherit:
         return dict(os.environ)
-    allow = tuple(getattr(context, "shell_env_allow", ()) or ())
+    allow = tuple(context.shell_env_allow or ())
     return {key: os.environ[key] for key in allow if key in os.environ}
 
 
@@ -582,7 +582,7 @@ def server_for(spec: ServerSpec, executable: str, root: Path, context: ToolConte
     when there is none. Raises LspError when it cannot start."""
     jail = _jail.active()
     env = _server_env(context)
-    configuration = getattr(context, "lsp_configuration", None)
+    configuration = context.lsp_configuration
     key = (spec, executable, str(root), tuple(sorted(env.items())),
            None if jail is None else str(jail.root),
            tuple(context.jail_bind) if jail is not None else (),

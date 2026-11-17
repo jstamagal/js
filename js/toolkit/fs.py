@@ -722,7 +722,7 @@ def fs_read(
         context.remember_read(target, content_hash)
         return text
 
-    read_cap = int(getattr(context, "max_read_bytes", 0) or 0)
+    read_cap = int(context.max_read_bytes or 0)
     if not ranged and read_cap > 0 and size > read_cap:
         example = _read_call(target, 1, context.max_read_lines)
         return (
@@ -2402,11 +2402,11 @@ def _offering_path_skills(handler):
         result = handler(*args, **kwargs)
         context = kwargs.get("context")
         raw = kwargs.get("file_path") or kwargs.get("path")
-        offer = getattr(getattr(context, "tool_registry", None), "offer_path_skills", None)
-        if not raw or not callable(offer) or not isinstance(result, str) or result.startswith("ERROR"):
+        registry = None if context is None else context.tool_registry
+        if not raw or registry is None or not isinstance(result, str) or result.startswith("ERROR"):
             return result
         path = Path(os.path.expanduser(str(raw)))
-        reminder = offer(path if path.is_absolute() else context.cwd / path, context.cwd)
+        reminder = registry.offer_path_skills(path if path.is_absolute() else context.cwd / path, context.cwd)
         return f"{reminder}\n{result}" if reminder else result
 
     return wrapped

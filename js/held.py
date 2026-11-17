@@ -64,11 +64,11 @@ def held_dir() -> Path:
 def _session_key(context: Any) -> str:
     """The session this context writes to, as a file-name part without `-`:
     the session file's stem, or the context's own token when it has none."""
-    session_file = getattr(getattr(context, "config", None), "session_file", None)
+    session_file = None if context.config is None else context.config.session_file
     name = ""
     if session_file is not None and Path(session_file).name not in ("", os.devnull, "null"):
         name = Path(session_file).stem
-    name = name or str(getattr(context, "task_owner", "") or "session")
+    name = name or context.task_owner or "session"
     return "".join(ch if ch.isalnum() else "_" for ch in name)
 
 
@@ -221,14 +221,14 @@ def suggested_path(context: Any, raw: str) -> Path | None:
 
 
 def _orientation(context: Any, target_raw: str | None) -> list[str]:
-    agent = getattr(context, "agent_id", "") or _settings.default_value("DEFAULT_AGENT")
-    model = getattr(context, "model", "") or "?"
+    agent = context.agent_id or _settings.default_value("DEFAULT_AGENT")
+    model = context.model or "?"
     active = jail.active()
     if active is None:
         lines = [f'You: agent {agent}, model {model}; cwd {context.cwd}; no jail.']
     else:
         writable = [str(active.root)]
-        writable += [str(b.path) for b in active.binds(getattr(context, "jail_bind", ())) if b.rw]
+        writable += [str(b.path) for b in active.binds(context.jail_bind) if b.rw]
         writable += ["/tmp", str(paths.home() / "tmp")]
         lines = ['You: agent {agent}, model {model}; cwd {cwd}; jail root {root} (writable: {writable}).'.format(
             agent=agent, model=model, cwd=context.cwd, root=active.root,
@@ -238,10 +238,7 @@ def _orientation(context: Any, target_raw: str | None) -> list[str]:
         if resolved is None:
             lines.append(f'Target {_absolute(context, target_raw)}: outside what the jail lets you write.')
         else:
-            lines.append('Target {target}: exists={exists}, read this session={read}.'.format(
-                target=jail.shown(str(resolved)),
-                exists=str(resolved.exists()).lower(),
-                read=str(resolved in getattr(context, "read_paths", ())).lower()))
+            lines.append(f'Target {jail.shown(str(resolved))}: exists={str(resolved.exists()).lower()}, read this session={str(resolved in context.read_paths).lower()}.')
     return lines
 
 

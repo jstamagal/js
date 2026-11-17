@@ -535,7 +535,7 @@ def toolbox(
     scope = "project" if text_or_default(scope, "global").strip().lower() == "project" else "global"
     level = _kernel.resolve_verbosity(context, verbosity)
     cwd = Path(context.cwd)
-    model = str(getattr(context, "model", "") or "unknown")
+    model = context.model or "unknown"
 
     if verb not in ACTIONS:
         return f"ERROR: action must be one of {', '.join(ACTIONS)}"

@@ -23,7 +23,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from collections.abc import Callable
 
 from .. import jail as _jail
@@ -31,6 +31,11 @@ from .. import settings as _settings
 from .. import turn_settings as _turn_settings
 from ..paths import state_root
 from ..skills import SkillCatalog
+
+if TYPE_CHECKING:
+    from ..config import Config
+    from ..context_budget import TokenState
+    from .registry import ToolRegistry
 
 
 Handler = Callable[..., Any]
@@ -489,6 +494,22 @@ class ToolContext(_turn_settings.ContextSettings):
     # The approval (js.events.Approval) that holds the calls of this turn, of
     # the subagents it starts and of its kernel cells; None runs every call.
     tool_approval: Any = field(default=None, repr=False)
+    # The turn's Config with the model, provider and effort the turn runs on;
+    # None until a turn sets it. Subagents started here build theirs from it.
+    config: Config | None = field(default=None, repr=False)
+    # The registry the turn dispatches through; None until a turn sets it.
+    tool_registry: ToolRegistry | None = field(default=None, repr=False)
+    agent_id: str = ""
+    task_depth: int = 0                   # subagent nesting: 0 on the main turn, parent's + 1 on a child
+    # The context size the turn last measured, in tokens, and whether that
+    # number came from the provider's usage rather than an estimate.
+    context_tokens: int = 0
+    context_tokens_used_provider_usage: bool = False
+    tokens_until_compaction: int | None = None
+    compacted_during_turn: bool = False
+    # Token accounting kept across the turns of this context; the runtime
+    # creates it on the first turn.
+    context_budget_state: TokenState | None = field(default=None, repr=False)
     read_paths: set[Path] = field(default_factory=set)
     file_hashes: dict[Path, str] = field(default_factory=dict)
     read_ranges: dict[Path, list[tuple[int, int]]] = field(default_factory=dict)
