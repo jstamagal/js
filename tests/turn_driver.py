@@ -1,4 +1,5 @@
-"""One turn through `runtime.run_turn` with a scripted model.
+"""One turn through `runtime.run_turn` with a scripted model, or one `js`
+command line through `cli.main`.
 
 The model makes each batch of tool calls in turn, one batch per model call,
 then answers. A test reads what came out: the history, what each model call
@@ -15,7 +16,7 @@ import ai
 import ai.types.messages
 import ai.types.usage
 
-from js import output, runtime
+from js import cli, output, runtime
 from js.config import Config
 from js.console import ConsoleSink
 from js.model_client import ModelStreamResult, ModelToolCall
@@ -43,6 +44,13 @@ def reply(*calls: Call, text: str = "") -> ModelStreamResult:
         finish_reason="tool_calls" if tool_calls else "stop",
         assistant_message=ai.messages.Message(role="assistant", parts=parts),
     )
+
+
+def js(monkeypatch, *argv: str) -> int:
+    """The exit code of `js ARGV` run from a terminal: stdin is a tty, so
+    nothing piped joins the prompt."""
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    return cli.main(list(argv))
 
 
 def config(tmp_path: Path, settings: dict | None = None, **fields) -> Config:

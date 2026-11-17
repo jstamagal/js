@@ -4,6 +4,7 @@ import ai
 import ai.types.usage
 import pytest
 from repl_driver import run_async
+from turn_driver import js
 
 from js import cli, memory, persona, runtime, session_store
 from js.config import from_env
@@ -84,7 +85,7 @@ def test_pairs_seed_exact_contents_and_agent_only_files_seed_assistant(tmp_path,
         "02-agent.md": "arr matey\n",
     })
     requests = _model(monkeypatch, ["done"])
-    assert cli._run_prompt("now", session="seeded") == 0
+    assert js(monkeypatch, "--session", "seeded", "-p", "now") == 0
     assert len(requests) == 1
     assert requests[0][1:4] == [
         ("user", "  user\r\n\r\n"),
@@ -102,7 +103,7 @@ def test_user_files_run_numerically_and_expand_after_previous_reply_is_saved(tmp
         "10-user.md": "third",
     })
     requests = _model(monkeypatch, ["arr matey", "aye", "third reply", "done"])
-    assert cli._run_prompt("now", session="seeded") == 0
+    assert js(monkeypatch, "--session", "seeded", "-p", "now") == 0
     assert [request[-1] for request in requests] == [
         ("user", "I want you to talk like a pirate"),
         ("user", "ahoy"),
@@ -117,8 +118,8 @@ def test_user_files_run_numerically_and_expand_after_previous_reply_is_saved(tmp
 def test_resume_keeps_seeded_history_without_duplicating_it(tmp_path, monkeypatch):
     _agent(tmp_path, monkeypatch, {"01-user.md": "example", "01-agent.md": "example reply"})
     requests = _model(monkeypatch, ["first reply", "second reply"])
-    assert cli._run_prompt("first", session="seeded") == 0
-    assert cli._run_prompt("second", session="seeded") == 0
+    assert js(monkeypatch, "--session", "seeded", "-p", "first") == 0
+    assert js(monkeypatch, "--session", "seeded", "-p", "second") == 0
     assert len(requests) == 2
     saved = memory.load_replay_messages(_saved(tmp_path))
     assert [message["content"] for message in saved].count("example") == 1
@@ -132,10 +133,10 @@ def test_headless_resume_keeps_the_original_expanded_system_prompt(tmp_path, mon
     prompt.write_text("SYSTEM {{SESSION_CLOCK}}", encoding="utf-8")
     requests = _model(monkeypatch, ["opening reply", "first reply", "second reply"])
     monkeypatch.setenv("SESSION_CLOCK", "first")
-    assert cli._run_prompt("first", session="seeded") == 0
+    assert js(monkeypatch, "--session", "seeded", "-p", "first") == 0
     monkeypatch.setenv("SESSION_CLOCK", "second")
     prompt.write_text("CHANGED SYSTEM {{SESSION_CLOCK}}", encoding="utf-8")
-    assert cli._run_prompt("second", session="seeded") == 0
+    assert js(monkeypatch, "--session", "seeded", "-p", "second") == 0
 
     assert [request[0] for request in requests] == [("system", "SYSTEM first\n")] * 3
     assert memory.load_system_prompt(_saved(tmp_path)) == "SYSTEM first\n"
@@ -144,11 +145,11 @@ def test_headless_resume_keeps_the_original_expanded_system_prompt(tmp_path, mon
 def test_headless_no_save_resume_leaves_the_saved_session_untouched(tmp_path, monkeypatch):
     _agent(tmp_path, monkeypatch, {})
     requests = _model(monkeypatch, ["saved reply", "temporary reply"])
-    assert cli._run_prompt("saved question", session="seeded") == 0
+    assert js(monkeypatch, "--session", "seeded", "-p", "saved question") == 0
     session = _saved(tmp_path)
     before = session.read_bytes()
 
-    assert cli._run_prompt("temporary question", session="seeded", save=False) == 0
+    assert js(monkeypatch, "--session", "seeded", "--no-save", "-p", "temporary question") == 0
 
     assert ("assistant", "saved reply") in requests[1]
     assert session.read_bytes() == before
@@ -157,10 +158,10 @@ def test_headless_no_save_resume_leaves_the_saved_session_untouched(tmp_path, mo
 def test_empty_headless_reply_does_not_reprint_a_previous_answer(tmp_path, monkeypatch, capsys):
     _agent(tmp_path, monkeypatch, {})
     _model(monkeypatch, ["previous answer", ""])
-    assert cli._run_prompt("first question", session="seeded") == 0
+    assert js(monkeypatch, "--session", "seeded", "-p", "first question") == 0
     capsys.readouterr()
 
-    rc = cli._run_prompt("second question", session="seeded")
+    rc = js(monkeypatch, "--session", "seeded", "-p", "second question")
 
     assert rc == 1
     assert "previous answer" not in capsys.readouterr().out
@@ -198,7 +199,7 @@ def test_duplicate_numeric_role_is_an_error(tmp_path, monkeypatch):
 def test_failed_startup_persists_its_prompt_without_sending_the_cli_prompt(tmp_path, monkeypatch):
     _agent(tmp_path, monkeypatch, {"01-user.md": "opening"})
     requests = _model(monkeypatch, [RuntimeError("offline failure")])
-    assert cli._run_prompt("now", session="seeded") == 1
+    assert js(monkeypatch, "--session", "seeded", "-p", "now") == 1
     assert requests[0][-1] == ("user", "opening")
     assert [message["content"] for message in memory.load_replay_messages(_saved(tmp_path))] == ["opening"]
 
@@ -277,7 +278,7 @@ def test_exchange_files_with_a_prompt_send_it_after_them_and_exit(tmp_path, monk
 def test_resumed_session_with_exchange_files_opens_the_repl(tmp_path, monkeypatch):
     _agent(tmp_path, monkeypatch, {"01-user.md": "the workflow"})
     _model(monkeypatch, ["workflow reply"])
-    assert cli._run_prompt(None, session="seeded") == 0
+    assert js(monkeypatch, "--session", "seeded") == 0
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
 
     class EnteredRepl(Exception):
@@ -336,7 +337,7 @@ def test_transcript_keeps_startup_exchanges_in_conversation_order(tmp_path, monk
     if repl:
         run_async(monkeypatch, from_env(session="seeded"), ["typed prompt"])
     else:
-        assert cli._run_prompt("typed prompt", session="seeded") == 0
+        assert js(monkeypatch, "--session", "seeded", "-p", "typed prompt") == 0
     logs = (tmp_path / "transcript" / "seeded.log").read_text(encoding="utf-8")
     assert logs.index("opening prompt") < logs.index("opening reply") < logs.index("typed prompt") < logs.index("typed reply")
 
@@ -372,7 +373,7 @@ def test_repl_displays_each_fired_message_and_reply(tmp_path, monkeypatch, capsy
 def test_debug_prompt_mode_shows_each_user_line_ahead_of_its_reply(tmp_path, monkeypatch, capsys):
     _agent(tmp_path, monkeypatch, {"01-user.md": "startup prompt"})
     _model(monkeypatch, ["startup reply", "typed reply"])
-    assert cli._run_prompt("typed prompt", session="seeded", debug=True) == 0
+    assert js(monkeypatch, "--session", "seeded", "--debug", "-p", "typed prompt") == 0
     output = capsys.readouterr().out
     assert output.index("startup prompt") < output.index("startup reply")
     assert output.index("startup reply") < output.index("typed prompt")
@@ -382,7 +383,7 @@ def test_debug_prompt_mode_shows_each_user_line_ahead_of_its_reply(tmp_path, mon
 def test_plain_prompt_mode_prints_only_the_answer(tmp_path, monkeypatch, capsys):
     _agent(tmp_path, monkeypatch, {"01-user.md": "startup prompt"})
     _model(monkeypatch, ["startup reply", "typed reply"])
-    assert cli._run_prompt("typed prompt", session="seeded") == 0
+    assert js(monkeypatch, "--session", "seeded", "-p", "typed prompt") == 0
     output = capsys.readouterr().out
     assert "typed reply" in output
     assert "typed prompt" not in output
@@ -407,7 +408,7 @@ def test_benchmarks_never_write_to_a_session_selected_by_environment(tmp_path, m
 def test_startup_reply_records_effective_reasoning_when_the_following_turn_fails(tmp_path, monkeypatch):
     _agent(tmp_path, monkeypatch, {"01-user.md": "opening"})
     _model(monkeypatch, ["opening reply", RuntimeError("following turn failed")])
-    assert cli._run_prompt("now", session="seeded", reasoning="high") == 1
+    assert js(monkeypatch, "--session", "seeded", "--reasoning", "high", "-p", "now") == 1
     assert last_stamp(_saved(tmp_path))["reasoning"] == "high"
 
 
