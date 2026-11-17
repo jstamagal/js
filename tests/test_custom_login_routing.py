@@ -376,7 +376,7 @@ def test_a_model_chosen_after_startup_takes_its_own_login_defaults(monkeypatch, 
     cfg = from_env(cwd=tmp_path, save_session=False)
     assert cfg.settings["TEMPERATURE"] == 0.2
 
-    turn = runtime._with_login_defaults(cfg, "b", None, None)
+    turn = runtime.with_login_defaults(cfg, "b", None, None)
 
     assert turn.model_context_window == 131072
     assert turn.settings["TEMPERATURE"] == 0.9
@@ -422,7 +422,7 @@ def test_a_model_without_defaults_falls_back_to_the_jsrc_values(monkeypatch, tmp
     cfg = from_env(cwd=tmp_path, save_session=False)
     assert cfg.model_context_window == 4096
 
-    turn = runtime._with_login_defaults(cfg, "b", None, None)
+    turn = runtime.with_login_defaults(cfg, "b", None, None)
 
     defaults = turn_settings.project({})
     assert turn.model_context_window == defaults["model_context_window"]
@@ -439,7 +439,7 @@ def test_an_env_value_equal_to_a_default_still_beats_the_next_models_default(mon
     monkeypatch.setenv("JS_CONTEXT_SIZE", "4096")
     cfg = from_env(cwd=tmp_path, save_session=False)
 
-    assert runtime._with_login_defaults(cfg, "b", None, None).model_context_window == 4096
+    assert runtime.with_login_defaults(cfg, "b", None, None).model_context_window == 4096
 
 
 @pytest.mark.parametrize("attr, key", cli.SETTING_FLAGS)
@@ -597,7 +597,7 @@ def test_a_swarm_agent_keeps_its_configured_effort_and_agent_cap(monkeypatch, tm
                                cwd=str(tmp_path))
 
     cfg = swarm_run._configure(spec).config
-    turn = runtime._with_login_defaults(cfg, cfg.model, cfg.provider_id, cfg.provider_base_url)
+    turn = runtime.with_login_defaults(cfg, cfg.model, cfg.provider_id, cfg.provider_base_url)
 
     assert turn.reasoning_effort == "high"
     assert turn.max_output_tokens == 1777
@@ -823,7 +823,7 @@ def test_a_child_takes_the_effort_its_parents_turn_ran_with(monkeypatch, tmp_pat
     seen = {}
 
     async def child_turn(child_cfg, system, messages, telemetry, **kwargs):
-        seen["turn"] = runtime._with_login_defaults(child_cfg, None, None, None).reasoning_effort
+        seen["turn"] = runtime.with_login_defaults(child_cfg, None, None, None).reasoning_effort
         messages.append({"role": "assistant", "content": "done"})
 
     async def no_init(*args, **kwargs):
@@ -862,7 +862,7 @@ def test_a_parents_resumed_effort_sits_below_the_childs_agent_yaml(monkeypatch, 
     seen = {}
 
     async def child_turn(child_cfg, system, messages, telemetry, **kwargs):
-        seen["turn"] = runtime._with_login_defaults(child_cfg, None, None, None).reasoning_effort
+        seen["turn"] = runtime.with_login_defaults(child_cfg, None, None, None).reasoning_effort
         messages.append({"role": "assistant", "content": "done"})
 
     async def no_init(*args, **kwargs):
@@ -900,7 +900,7 @@ def test_a_task_calls_reasoning_is_the_effort_the_childs_requests_send(monkeypat
     seen = {}
 
     async def child_turn(child_cfg, system, messages, telemetry, **kwargs):
-        resolved = runtime._with_login_defaults(child_cfg, None, None, None).reasoning_effort
+        resolved = runtime.with_login_defaults(child_cfg, None, None, None).reasoning_effort
         seen["sent"] = kwargs.get("reasoning_effort_override") or resolved
         messages.append({"role": "assistant", "content": "done"})
 

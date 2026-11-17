@@ -199,9 +199,9 @@ def _tool_count(registry: Any) -> int:
 def _launch_fields(idx: int, total: int, agent: str, cfg: Any, registry: Any) -> dict[str, Any]:
     """What the subagent_start event says of a child about to run: its own
     model, the effort its requests send, its tools and its session."""
-    from ..runtime import _with_login_defaults
+    from ..runtime import with_login_defaults
 
-    effort = _with_login_defaults(cfg, None, None, None).reasoning_effort
+    effort = with_login_defaults(cfg, None, None, None).reasoning_effort
     session = Path(cfg.session_file)
     saved = session != Path(os.devnull)
     return {
