@@ -2,7 +2,7 @@
 
 import pytest
 
-from js.toolkit import fs
+from js.toolkit import fs, patch
 from js.toolkit.core import ToolContext
 
 
@@ -12,8 +12,8 @@ def test_line_span_excludes_line_after_terminal_newline(newline, matched_lines):
     text = newline.join(["one", "", "three", "four", ""])
     end = len(newline.join(["one", ""] + ([""] if matched_lines == 2 else [])))
 
-    assert fs._line_span(text, 0, end) == (1, matched_lines)
-    assert fs._line_span(text, 0, end + 1) == (1, matched_lines + 1)
+    assert patch._line_span(text, 0, end) == (1, matched_lines)
+    assert patch._line_span(text, 0, end + 1) == (1, matched_lines + 1)
 
 
 @pytest.mark.parametrize("newline", [b"\n", b"\r\n", b"\r"])
@@ -23,14 +23,14 @@ def test_patch_line_including_newline_needs_only_that_line_read(tmp_path, newlin
     context = ToolContext(cwd=tmp_path)
     fs.read(str(target), start_line=1, end_line=1, context=context)
 
-    result = fs.patch(str(target), old_string="one\n", new_string="A\nB\n", context=context)
+    result = patch.patch(str(target), old_string="one\n", new_string="A\nB\n", context=context)
 
     assert result.startswith("patched ")
     assert target.read_bytes() == newline.join([b"A", b"B", b"two", b"three", b"four", b"five", b""])
     assert context.reads.coverage(target).ranges == [(1, 2)]
     # Inserted text is known, but the formerly second line remains unread.
-    assert fs.patch(str(target), old_string="B", new_string="BB", context=context).startswith("patched ")
-    assert fs.patch(str(target), old_string="two", new_string="TWO", context=context).startswith("ERROR:")
+    assert patch.patch(str(target), old_string="B", new_string="BB", context=context).startswith("patched ")
+    assert patch.patch(str(target), old_string="two", new_string="TWO", context=context).startswith("ERROR:")
 
 
 @pytest.mark.parametrize("newline", [b"\n", b"\r\n", b"\r"])
@@ -41,7 +41,7 @@ def test_patch_that_reaches_following_unread_line_is_still_refused(tmp_path, new
     context = ToolContext(cwd=tmp_path)
     fs.read(str(target), start_line=1, end_line=1, context=context)
 
-    result = fs.patch(str(target), old_string="one\nt", new_string="changed", context=context)
+    result = patch.patch(str(target), old_string="one\nt", new_string="changed", context=context)
 
     assert result.startswith("ERROR:")
     assert target.read_bytes() == original

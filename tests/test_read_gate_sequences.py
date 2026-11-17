@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 
-from js.toolkit import ToolContext, build_default_registry, call_tool, fs
+from js.toolkit import ToolContext, build_default_registry, call_tool, fs, patch
 from js.toolkit.subagents import _child_context
 
 
@@ -26,7 +26,7 @@ def _outcome(result: str) -> str:
 
 
 def _patch(context: ToolContext, path, old: str, new: str) -> str:
-    return _outcome(fs.patch(file_path=str(path), old_string=old, new_string=new, context=context))
+    return _outcome(patch.patch(file_path=str(path), old_string=old, new_string=new, context=context))
 
 
 def _read(context: ToolContext, path, start: int | None = None, end: int | None = None) -> None:

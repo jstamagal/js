@@ -31,6 +31,7 @@ from js.toolkit import (
     build_default_registry,
     fs,
     fs_tools,
+    patch,
     shell_fetch,
 )
 from js.toolkit.core import ToolResult
@@ -43,14 +44,14 @@ def test_numbered_read_patch_and_undo_are_grounded_in_temp_cwd(tmp_path):
     target.write_text("alpha\nbeta\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    unread_patch = fs.patch(path="sample.txt", old_string="alpha", new_string="ALPHA", context=context)
+    unread_patch = patch.patch(path="sample.txt", old_string="alpha", new_string="ALPHA", context=context)
     assert unread_patch == "ERROR: You must read the file with the read tool before attempting to edit it."
 
     read_result = fs.read("sample.txt", context=context)
     assert NUMBERED_RE.search(read_result)
     assert "2" in read_result and "|beta" in read_result
 
-    patch_result = fs.patch(path="sample.txt", old_string="alpha", new_string="ALPHA", context=context)
+    patch_result = patch.patch(path="sample.txt", old_string="alpha", new_string="ALPHA", context=context)
     assert patch_result.startswith(f"patched {target}")
     assert target.read_text(encoding="utf-8") == "ALPHA\nbeta\n"
 
@@ -82,8 +83,8 @@ def _read_file(tmp_path, name: str, body: str) -> tuple:
 def test_patch_scalar_form_accepts_search_and_content_aliases(tmp_path):
     target, context = _read_file(tmp_path, "aliased.txt", "alpha\nbeta\n")
 
-    named = fs.patch(file_path="aliased.txt", old_string="alpha", new_string="ALPHA", context=context)
-    aliased = fs.patch(path="aliased.txt", search="beta", content="BETA", context=context)
+    named = patch.patch(file_path="aliased.txt", old_string="alpha", new_string="ALPHA", context=context)
+    aliased = patch.patch(path="aliased.txt", search="beta", content="BETA", context=context)
 
     assert named.startswith(f"patched {target} (1 replacement, hash ")
     assert aliased.startswith(f"patched {target} (1 replacement, hash ")
@@ -94,7 +95,7 @@ def test_patch_scalar_form_accepts_search_and_content_aliases(tmp_path):
 def test_patch_edits_list_applies_in_order_so_later_edits_see_earlier_results(tmp_path):
     target, context = _read_file(tmp_path, "chain.txt", "one\ntwo\n")
 
-    result = fs.patch(
+    result = patch.patch(
         file_path="chain.txt",
         edits=[
             {"old_string": "one", "new_string": "two"},   # file now has two\ntwo
@@ -133,7 +134,7 @@ def test_patch_edits_list_is_atomic_when_a_later_edit_cannot_match(tmp_path):
     target, context = _read_file(tmp_path, "atomic.txt", "alpha\nbeta\n")
     before = target.read_bytes()
 
-    result = fs.patch(
+    result = patch.patch(
         file_path="atomic.txt",
         edits=[
             {"old_string": "alpha", "new_string": "ALPHA"},
@@ -152,11 +153,11 @@ def test_patch_identical_edit_is_skipped_in_both_scalar_and_list_form(tmp_path):
     target, context = _read_file(tmp_path, "noop.txt", "alpha\nbeta\n")
     before = target.read_bytes()
 
-    scalar = fs.patch(file_path="noop.txt", old_string="alpha", new_string="alpha", context=context)
+    scalar = patch.patch(file_path="noop.txt", old_string="alpha", new_string="alpha", context=context)
     assert not scalar.startswith("ERROR")
     assert target.read_bytes() == before
 
-    listed = fs.patch(
+    listed = patch.patch(
         file_path="noop.txt",
         edits=[
             {"old_string": "alpha", "new_string": "ALPHA"},
@@ -173,8 +174,8 @@ def test_patch_identical_edit_is_skipped_in_both_scalar_and_list_form(tmp_path):
 def test_patch_ambiguous_match_needs_replace_all_in_both_forms(tmp_path):
     target, context = _read_file(tmp_path, "dupes.txt", "x = 1\ny = 1\n")
 
-    scalar_rejected = fs.patch(file_path="dupes.txt", old_string="1", new_string="2", context=context)
-    list_rejected = fs.patch(
+    scalar_rejected = patch.patch(file_path="dupes.txt", old_string="1", new_string="2", context=context)
+    list_rejected = patch.patch(
         file_path="dupes.txt",
         edits=[{"old_string": "1", "new_string": "2"}],
         context=context,
@@ -183,11 +184,11 @@ def test_patch_ambiguous_match_needs_replace_all_in_both_forms(tmp_path):
     assert list_rejected.startswith("ERROR: edit 1: Multiple matches found for search text: '1'")
     assert target.read_text(encoding="utf-8") == "x = 1\ny = 1\n"
 
-    scalar_ok = fs.patch(file_path="dupes.txt", old_string="1", new_string="2", replace_all=True, context=context)
+    scalar_ok = patch.patch(file_path="dupes.txt", old_string="1", new_string="2", replace_all=True, context=context)
     assert scalar_ok.startswith(f"patched {target} (2 replacements, hash ")
     assert target.read_text(encoding="utf-8") == "x = 2\ny = 2\n"
 
-    list_ok = fs.patch(
+    list_ok = patch.patch(
         file_path="dupes.txt",
         edits=[{"old_string": "2", "new_string": "3", "replace_all": True}],
         context=context,
@@ -200,14 +201,14 @@ def test_patch_rejects_mixing_the_scalar_form_with_edits(tmp_path):
     target, context = _read_file(tmp_path, "mixed.txt", "alpha\n")
     before = target.read_bytes()
 
-    mixed = fs.patch(
+    mixed = patch.patch(
         file_path="mixed.txt",
         old_string="alpha",
         new_string="ALPHA",
         edits=[{"old_string": "alpha", "new_string": "OMEGA"}],
         context=context,
     )
-    with_flag = fs.patch(
+    with_flag = patch.patch(
         file_path="mixed.txt",
         replace_all=True,
         edits=[{"old_string": "alpha", "new_string": "OMEGA"}],
@@ -228,7 +229,7 @@ def test_patch_edits_list_still_requires_a_prior_read(tmp_path):
     target.write_text("alpha\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    result = fs.patch(
+    result = patch.patch(
         file_path="unread.txt",
         edits=[{"old_string": "alpha", "new_string": "ALPHA"}],
         context=context,
@@ -244,7 +245,7 @@ def test_patch_refuses_a_match_outside_the_ranges_actually_read(tmp_path):
     context = ToolContext(cwd=tmp_path)
     fs.read("ranged.txt", start_line=1, end_line=2, context=context)
 
-    blocked = fs.patch(
+    blocked = patch.patch(
         file_path="ranged.txt",
         old_string="five",
         new_string="FIVE",
@@ -262,7 +263,7 @@ def test_patch_accepts_target_covered_by_union_of_ranged_reads(tmp_path):
     fs.read("pieces.txt", start_line=1, end_line=2, context=context)
     fs.read("pieces.txt", start_line=4, end_line=5, context=context)
 
-    result = fs.patch(
+    result = patch.patch(
         file_path="pieces.txt",
         old_string="four\nfive",
         new_string="FOUR\nFIVE",
@@ -279,7 +280,7 @@ def test_implicit_read_page_does_not_unlock_unrendered_remainder(tmp_path):
     context = ToolContext(cwd=tmp_path, max_read_lines=2)
     fs.read("paged.txt", context=context)
 
-    result = fs.patch(
+    result = patch.patch(
         file_path="paged.txt",
         old_string="four",
         new_string="FOUR",
@@ -293,7 +294,7 @@ def test_implicit_read_page_does_not_unlock_unrendered_remainder(tmp_path):
 def test_undo_reverts_a_whole_multi_edit_patch_in_one_step(tmp_path):
     target, context = _read_file(tmp_path, "undoable.txt", "one\ntwo\nthree\n")
 
-    patched = fs.patch(
+    patched = patch.patch(
         file_path="undoable.txt",
         edits=[
             {"old_string": "one", "new_string": "ONE"},
@@ -315,9 +316,9 @@ def test_patch_empty_or_malformed_edits_list_is_rejected(tmp_path):
     target, context = _read_file(tmp_path, "shape.txt", "alpha\n")
     before = target.read_bytes()
 
-    empty = fs.patch(file_path="shape.txt", edits=[], context=context)
-    missing_new = fs.patch(file_path="shape.txt", edits=[{"old_string": "alpha"}], context=context)
-    not_an_object = fs.patch(file_path="shape.txt", edits=["alpha"], context=context)
+    empty = patch.patch(file_path="shape.txt", edits=[], context=context)
+    missing_new = patch.patch(file_path="shape.txt", edits=[{"old_string": "alpha"}], context=context)
+    not_an_object = patch.patch(file_path="shape.txt", edits=["alpha"], context=context)
 
     assert empty == "ERROR: edits must be a non-empty list of {old_string, new_string} objects"
     assert missing_new == "ERROR: edit 1: every edit requires old_string and new_string"
@@ -333,7 +334,7 @@ def test_patch_matches_crlf_search_text_per_edit(tmp_path):
     context = ToolContext(cwd=tmp_path)
     fs.read("crlf.txt", context=context)
 
-    result = fs.patch(
+    result = patch.patch(
         file_path="crlf.txt",
         edits=[
             {"old_string": "alpha\r\nbeta", "new_string": "one\r\ntwo"},
@@ -1443,7 +1444,7 @@ def test_patch_exact_long_match_needs_no_prior_read(tmp_path):
     target.write_text("def compute_total(items):\n    return sum(items)\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    result = fs.patch(
+    result = patch.patch(
         file_path="unread_long.txt",
         old_string="def compute_total(items):\n    return sum(items)",
         new_string="def compute_total(items):\n    return sum(items) + 1",
@@ -1460,7 +1461,7 @@ def test_patch_fuzzy_match_still_requires_prior_read(tmp_path):
     target.write_text("print(“hello there, world”)\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    result = fs.patch(
+    result = patch.patch(
         file_path="unread_fuzzy.txt",
         old_string='print("hello there, world")',
         new_string='print("goodbye there, world")',

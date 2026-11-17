@@ -14,12 +14,12 @@ from .fs import (
     ast_search,
     fs_read,
     fs_search,
-    patch,
     prepare_read_arguments,
     remove,
     undo,
     write,
 )
+from .patch import patch
 from .presentation import Presentation
 
 

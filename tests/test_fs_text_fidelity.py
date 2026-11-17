@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from js.toolkit import fs
+from js.toolkit import fs, patch
 from js.toolkit.core import ToolContext
 
 
@@ -35,7 +35,7 @@ def test_patch_preserves_unedited_bytes(tmp_path, newline):
     context = ToolContext(cwd=tmp_path)
     assert not fs.read(str(target), context=context).startswith("ERROR")
 
-    result = fs.patch(str(target), old_string="beta\n", new_string="BETA\n", context=context)
+    result = patch.patch(str(target), old_string="beta\n", new_string="BETA\n", context=context)
 
     assert result.startswith("patched ")
     assert target.read_bytes() == original.replace(b"beta", b"BETA")
@@ -50,7 +50,7 @@ def test_cr_patch_requires_read_of_actual_target_line(tmp_path, original):
     context = ToolContext(cwd=tmp_path)
     fs.read(str(target), start_line=1, end_line=1, context=context)
 
-    result = fs.patch(str(target), old_string="gamma", new_string="GAMMA", context=context)
+    result = patch.patch(str(target), old_string="gamma", new_string="GAMMA", context=context)
 
     assert result == "ERROR: You must read the target line (3) before attempting to edit it."
     assert target.read_bytes() == original
@@ -62,7 +62,7 @@ def test_cr_patch_tracks_read_ranges_after_inserting_lines(tmp_path):
     context = ToolContext(cwd=tmp_path)
     fs.read(str(target), start_line=2, end_line=2, context=context)
 
-    result = fs.patch(
+    result = patch.patch(
         str(target),
         edits=[
             {"old_string": "beta", "new_string": "one\ntwo"},
@@ -74,7 +74,7 @@ def test_cr_patch_tracks_read_ranges_after_inserting_lines(tmp_path):
     assert result.startswith("patched ")
     assert target.read_bytes() == b"alpha\rone\rTWO\rgamma\r"
     assert context.reads.coverage(target).ranges == [(2, 3)]
-    result = fs.patch(str(target), old_string="gamma", new_string="GAMMA", context=context)
+    result = patch.patch(str(target), old_string="gamma", new_string="GAMMA", context=context)
     assert result == "ERROR: You must read the target line (4) before attempting to edit it."
 
 
@@ -87,7 +87,7 @@ def test_failed_patch_batch_preserves_bytes_and_snapshot_state(tmp_path, newline
     fs.read(str(target), context=context)
     coverage = context.reads.coverage(target)
 
-    result = fs.patch(
+    result = patch.patch(
         str(target),
         edits=[
             {"old_string": "alpha\n", "new_string": "ALPHA\n"},
@@ -109,7 +109,7 @@ def test_patch_refuses_an_ambiguous_overlapping_match(tmp_path):
     context = ToolContext(cwd=tmp_path)
     fs.read(str(target), context=context)
 
-    result = fs.patch(str(target), old_string="aba", new_string="X", context=context)
+    result = patch.patch(str(target), old_string="aba", new_string="X", context=context)
 
     assert result.startswith("ERROR: Multiple matches found")
     assert target.read_text() == original
@@ -122,7 +122,7 @@ def test_patch_replace_all_rewrites_non_overlapping_occurrences(tmp_path):
     context = ToolContext(cwd=tmp_path)
     fs.read(str(target), context=context)
 
-    result = fs.patch(
+    result = patch.patch(
         str(target), old_string="aba", new_string="X", replace_all=True, context=context
     )
 
@@ -136,7 +136,7 @@ def test_patch_batch_skips_an_edit_that_normalizes_to_a_noop(tmp_path):
     context = ToolContext(cwd=tmp_path)
     fs.read(str(target), context=context)
 
-    result = fs.patch(
+    result = patch.patch(
         str(target),
         edits=[
             {"old_string": "alpha\n", "new_string": "ALPHA\n"},
@@ -156,7 +156,7 @@ def test_patch_diff_marks_a_missing_final_newline(tmp_path):
     context = ToolContext(cwd=tmp_path)
     fs.read(str(target), context=context)
 
-    result = fs.patch(str(target), old_string="three", new_string="THREE", context=context)
+    result = patch.patch(str(target), old_string="three", new_string="THREE", context=context)
 
     body = result.splitlines()
     start = body.index("@@ -1,3 +1,3 @@")
@@ -179,7 +179,7 @@ import codecs
 import locale
 import sys
 from pathlib import Path
-from js.toolkit import fs
+from js.toolkit import fs, patch
 from js.toolkit.core import ToolContext
 
 assert codecs.lookup(locale.getpreferredencoding(False)).name == "ascii"
@@ -189,7 +189,7 @@ context = ToolContext(cwd=target.parent)
 result = fs.read(str(target), context=context)
 assert not result.startswith("ERROR"), ascii(result)
 if sys.argv[2] == "patch":
-    result = fs.patch(str(target), old_string="caf\u00e9", new_string="th\u00e9", context=context)
+    result = patch.patch(str(target), old_string="caf\u00e9", new_string="th\u00e9", context=context)
     assert result.startswith("patched "), ascii(result)
 else:
     result = fs.write(str(target), "th\u00e9\n", overwrite=True, context=context)
@@ -207,12 +207,12 @@ assert target.read_bytes() == b"th\xc3\xa9\r\n", repr(target.read_bytes())
 
 
 def test_patch_miss_names_the_closest_line(tmp_path):
-    from js.toolkit import ToolContext, fs
+    from js.toolkit import ToolContext, fs, patch
     target = tmp_path / "cli.cpp"
     target.write_text('int a;\n" charts examples/revenue.csv -t pie3d -T \'Revenue mix\'\\n"\nint b;\n')
     context = ToolContext(cwd=tmp_path)
     fs.read(str(target), context=context)
-    result = fs.patch(
+    result = patch.patch(
         str(target),
         old_string='" charts example/revenue.csv -t pie3d -T \'Revenue mix\'\\n"',
         new_string="x",
@@ -226,7 +226,7 @@ def test_registered_setting_can_disable_fuzzy_edits(tmp_path):
     from types import SimpleNamespace
 
     from js import turn_settings
-    from js.toolkit import fs
+    from js.toolkit import fs, patch
     from js.toolkit.core import ToolContext
 
     target = tmp_path / "quotes.txt"
@@ -235,5 +235,5 @@ def test_registered_setting_can_disable_fuzzy_edits(tmp_path):
     context = ToolContext(cwd=tmp_path)
     turn_settings.install(context, SimpleNamespace(**turn_settings.project({"EDIT_FUZZY": False})))
     fs.read(str(target), context=context)
-    fs.patch(str(target), old_string='say "before"', new_string='say "after"', context=context)
+    patch.patch(str(target), old_string='say "before"', new_string='say "after"', context=context)
     assert target.read_text() == original

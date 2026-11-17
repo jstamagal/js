@@ -3,7 +3,7 @@
 
 import pytest
 
-from js.toolkit import fs
+from js.toolkit import fs, patch
 from js.toolkit.core import ToolContext
 
 
@@ -27,9 +27,9 @@ def test_invalid_surrogate_preserves_file_and_undo_state(tmp_path, surrogate, op
     if operation in {"new", "overwrite"}:
         result = fs.write(str(target), content=f"invalid {surrogate}\n", overwrite=True, context=context)
     elif operation == "patch":
-        result = fs.patch(str(target), old_string="before", new_string=f"invalid {surrogate}", context=context)
+        result = patch.patch(str(target), old_string="before", new_string=f"invalid {surrogate}", context=context)
     else:
-        result = fs.patch(str(target), edits=[
+        result = patch.patch(str(target), edits=[
             {"old_string": "before", "new_string": "valid intermediate"},
             {"old_string": "valid intermediate", "new_string": f"invalid {surrogate}"},
         ], context=context)

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from js.toolkit import fs
+from js.toolkit import fs, patch
 from js.toolkit.core import ToolContext
 
 
@@ -19,15 +19,15 @@ def test_undo_restores_original_coverage(tmp_path, restart):
     context = ToolContext(cwd=tmp_path)
     context.configure_snapshot_store("audit", tmp_path / "session.jsonl", state_dir=tmp_path / "state")
     fs.read(str(target), range={"start_line": 1, "end_line": 1}, context=context)
-    assert fs.patch(str(target), old_string="HEAD", new_string="HEAD\n" + "owned\n" * 12, context=context).startswith("patched ")
+    assert patch.patch(str(target), old_string="HEAD", new_string="HEAD\n" + "owned\n" * 12, context=context).startswith("patched ")
     if restart:
         context = ToolContext(cwd=tmp_path)
         context.configure_snapshot_store("audit", tmp_path / "session.jsonl", state_dir=tmp_path / "state")
     assert fs.undo(str(target), context=context).startswith("restored ")
     assert context.reads.coverage(target).ranges == [(1, 1)]
-    assert fs.patch(str(target), old_string="L11", new_string="ELEVEN", context=context).startswith("ERROR:")
+    assert patch.patch(str(target), old_string="L11", new_string="ELEVEN", context=context).startswith("ERROR:")
     assert target.read_text() == original
-    assert fs.patch(str(target), old_string="HEAD", new_string="head", context=context).startswith("patched ")
+    assert patch.patch(str(target), old_string="HEAD", new_string="head", context=context).startswith("patched ")
 
 
 @pytest.mark.parametrize("separator", list("\v\f\x1c\x1d\x1e\x85\u2028\u2029"))
@@ -38,7 +38,7 @@ def test_patch_refuses_unsupported_line_coordinates(tmp_path, separator):
     context = ToolContext(cwd=tmp_path)
     shown = fs.read(str(target), range={"start_line": 1, "end_line": 1}, context=context)
     assert shown == f"1|one{separator}two{separator}three"
-    result = fs.patch(str(target), old_string="three", new_string="THREE", context=context)
+    result = patch.patch(str(target), old_string="three", new_string="THREE", context=context)
     assert result.startswith("ERROR: unsupported line separator")
     assert target.read_text() == original
     assert not context.undo.count(target)
@@ -55,11 +55,11 @@ def test_patch_refuses_a_fifo_without_blocking(tmp_path):
     script = (
         "import sys\n"
         "from pathlib import Path\n"
-        "from js.toolkit import fs\n"
+        "from js.toolkit import patch\n"
         "from js.toolkit.core import ToolContext\n"
         "target = Path(sys.argv[1])\n"
         "context = ToolContext(cwd=target.parent)\n"
-        "result = fs.patch(str(target), old_string='a', new_string='b', context=context)\n"
+        "result = patch.patch(str(target), old_string='a', new_string='b', context=context)\n"
         "assert result.startswith('ERROR:'), result\n"
     )
     result = subprocess.run(
@@ -77,7 +77,7 @@ def test_patch_refuses_a_device_target(tmp_path):
         pytest.skip("/dev/null is unavailable on this platform")
     context = ToolContext(cwd=tmp_path)
 
-    result = fs.patch(str(device), old_string="a", new_string="b", context=context)
+    result = patch.patch(str(device), old_string="a", new_string="b", context=context)
 
     assert result == f"ERROR: not a regular file: {device}"
 
@@ -88,10 +88,10 @@ def test_a_written_file_counts_as_fully_read_so_patch_needs_no_read_first(tmp_pa
     context = ToolContext(cwd=tmp_path)
     assert fs.write(str(target), content="alpha\nbeta\ngamma\n", context=context).startswith("wrote ")
     assert context.reads.coverage(target).whole
-    assert fs.patch(str(target), old_string="beta", new_string="BETA", context=context).startswith("patched ")
+    assert patch.patch(str(target), old_string="beta", new_string="BETA", context=context).startswith("patched ")
     assert target.read_text() == "alpha\nBETA\ngamma\n"
     assert fs.write(str(target), content="replaced\n", overwrite=True, context=context).startswith("wrote ")
-    assert fs.patch(str(target), old_string="replaced", new_string="again", context=context).startswith("patched ")
+    assert patch.patch(str(target), old_string="replaced", new_string="again", context=context).startswith("patched ")
     assert target.read_text() == "again\n"
 
 
@@ -104,5 +104,5 @@ def test_registered_read_gate_can_allow_an_unread_edit(tmp_path):
     target.write_text("before\n")
     context = ToolContext(cwd=tmp_path)
     turn_settings.install(context, SimpleNamespace(**turn_settings.project({"FILE_REQUIRE_READ": False})))
-    fs.patch(str(target), old_string="before", new_string="after", context=context)
+    patch.patch(str(target), old_string="before", new_string="after", context=context)
     assert target.read_text() == "after\n"

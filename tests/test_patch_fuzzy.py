@@ -4,7 +4,7 @@ file's own bytes: every line and character the edit kept stays as it was."""
 
 from __future__ import annotations
 
-from js.toolkit import ToolContext, fs
+from js.toolkit import ToolContext, fs, patch
 
 
 def _read(tmp_path, body: str, name: str = "f.txt"):
@@ -24,7 +24,7 @@ def test_smart_quotes_in_the_file_match_straight_quotes_in_old_string(tmp_path):
     target, context = _read(tmp_path, body)
     before = _lines(target)
 
-    result = fs.patch(file_path="f.txt", old_string="msg = \"hello\"\nb = 'x'",
+    result = patch.patch(file_path="f.txt", old_string="msg = \"hello\"\nb = 'x'",
                       new_string="msg = \"hello\"\nb = 'y'", context=context)
 
     assert result.startswith("patched "), result
@@ -40,7 +40,7 @@ def test_no_break_space_in_the_file_matches_a_plain_space(tmp_path):
     body = "keep\nprice: 100 euro\nlast\n"
     target, context = _read(tmp_path, body)
 
-    result = fs.patch(file_path="f.txt", old_string="price: 100 euro", new_string="price: 200 euro",
+    result = patch.patch(file_path="f.txt", old_string="price: 100 euro", new_string="price: 200 euro",
                       context=context)
 
     assert result.startswith("patched "), result
@@ -52,7 +52,7 @@ def test_trailing_whitespace_in_the_file_is_ignored_and_kept(tmp_path):
     target, context = _read(tmp_path, body)
     before = _lines(target)
 
-    result = fs.patch(file_path="f.txt", old_string="def f():\n    x = 1\n    return x\n",
+    result = patch.patch(file_path="f.txt", old_string="def f():\n    x = 1\n    return x\n",
                       new_string="def f():\n    x = 2\n    return x\n", context=context)
 
     assert result.startswith("patched "), result
@@ -68,7 +68,7 @@ def test_unicode_dashes_in_the_file_match_a_hyphen(tmp_path):
     target, context = _read(tmp_path, body)
     before = _lines(target)
 
-    result = fs.patch(file_path="f.txt", old_string="title - part one\nrange 1-5",
+    result = patch.patch(file_path="f.txt", old_string="title - part one\nrange 1-5",
                       new_string="title - part two\nrange 1-5", context=context)
 
     assert result.startswith("patched "), result
@@ -82,7 +82,7 @@ def test_crlf_file_keeps_its_line_endings_and_untouched_lines(tmp_path):
     target, context = _read(tmp_path, body)
     before = _lines(target)
 
-    result = fs.patch(file_path="f.txt", old_string="one\nsay \"hi\"\nthree",
+    result = patch.patch(file_path="f.txt", old_string="one\nsay \"hi\"\nthree",
                       new_string="one\nsay \"bye\"\nthree", context=context)
 
     assert result.startswith("patched "), result
@@ -95,7 +95,7 @@ def test_an_exact_match_wins_over_a_fuzzy_one(tmp_path):
     body = 'a = "x"\nb = “x”\n'
     target, context = _read(tmp_path, body)
 
-    result = fs.patch(file_path="f.txt", old_string='= "x"', new_string='= "y"', context=context)
+    result = patch.patch(file_path="f.txt", old_string='= "x"', new_string='= "y"', context=context)
 
     assert result.startswith("patched "), result
     assert target.read_bytes() == 'a = "y"\nb = “x”\n'.encode()
@@ -105,11 +105,11 @@ def test_two_fuzzy_matches_need_replace_all(tmp_path):
     body = "q(“a”)\nr\nq(“a”)\n"
     target, context = _read(tmp_path, body)
 
-    refused = fs.patch(file_path="f.txt", old_string='q("a")', new_string='q("b")', context=context)
+    refused = patch.patch(file_path="f.txt", old_string='q("a")', new_string='q("b")', context=context)
     assert refused.startswith("ERROR"), refused
     assert target.read_bytes() == body.encode()
 
-    result = fs.patch(file_path="f.txt", old_string='q("a")', new_string='q("b")', replace_all=True,
+    result = patch.patch(file_path="f.txt", old_string='q("a")', new_string='q("b")', replace_all=True,
                       context=context)
     assert result.startswith("patched "), result
     assert target.read_bytes() == "q(“b”)\nr\nq(“b”)\n".encode()
@@ -120,7 +120,7 @@ def test_a_fuzzy_edit_that_changes_nothing_is_refused(tmp_path):
     target, context = _read(tmp_path, body)
 
     # new_string only swaps the straight quotes for the smart ones the file has.
-    refused = fs.patch(file_path="f.txt", old_string='say "hi"', new_string="say “hi”",
+    refused = patch.patch(file_path="f.txt", old_string='say "hi"', new_string="say “hi”",
                        context=context)
 
     assert refused.startswith("ERROR"), refused
@@ -133,7 +133,7 @@ def test_a_fuzzy_match_still_needs_its_lines_read(tmp_path):
     context = ToolContext(cwd=tmp_path)
     fs.read("f.txt", start_line=1, end_line=5, context=context)
 
-    refused = fs.patch(file_path="f.txt", old_string='say "hi"', new_string='say "bye"', context=context)
+    refused = patch.patch(file_path="f.txt", old_string='say "hi"', new_string='say "bye"', context=context)
 
     assert refused.startswith("ERROR"), refused
     assert "11" in refused
@@ -144,7 +144,7 @@ def test_a_batch_mixes_exact_and_fuzzy_edits_and_each_sees_the_last(tmp_path):
     body = "x = 1\ny = “old”\n"
     target, context = _read(tmp_path, body)
 
-    result = fs.patch(file_path="f.txt", edits=[
+    result = patch.patch(file_path="f.txt", edits=[
         {"old_string": "x = 1", "new_string": "x = 2"},
         {"old_string": 'y = "old"', "new_string": 'y = "new"'},
         {"old_string": "x = 2", "new_string": "x = 3"},
@@ -158,7 +158,7 @@ def test_undo_restores_the_bytes_before_a_fuzzy_patch(tmp_path):
     body = "a b  \nc\n"
     target, context = _read(tmp_path, body)
 
-    assert fs.patch(file_path="f.txt", old_string="a b\nc", new_string="a b\nd",
+    assert patch.patch(file_path="f.txt", old_string="a b\nc", new_string="a b\nd",
                     context=context).startswith("patched ")
     assert fs.undo("f.txt", context=context).startswith("restored ")
 
@@ -171,7 +171,7 @@ def test_a_whitespace_only_last_line_keeps_the_next_line_as_it_was(tmp_path):
     body = "def f():\n    s = “a”\n    return s\n"
     target, context = _read(tmp_path, body)
 
-    result = fs.patch(file_path="f.txt", old_string='    s = "a"\n    ', new_string='    s = "b"\n    ',
+    result = patch.patch(file_path="f.txt", old_string='    s = "a"\n    ', new_string='    s = "b"\n    ',
                       context=context)
 
     assert result.startswith("patched "), result
@@ -182,7 +182,7 @@ def test_a_whitespace_only_last_line_with_no_indentation_after_it(tmp_path):
     body = "x = “a”\ny = 1\n"
     target, context = _read(tmp_path, body)
 
-    result = fs.patch(file_path="f.txt", old_string='x = "a"\n  ', new_string='x = "b"\n  ',
+    result = patch.patch(file_path="f.txt", old_string='x = "a"\n  ', new_string='x = "b"\n  ',
                       context=context)
 
     assert result.startswith("patched "), result
@@ -193,7 +193,7 @@ def test_a_whitespace_only_last_line_that_the_edit_changes(tmp_path):
     body = "if x:\n    s = “a”\n        return s\n"
     target, context = _read(tmp_path, body)
 
-    result = fs.patch(file_path="f.txt", old_string='    s = "a"\n        ', new_string='    s = "a"\n    ',
+    result = patch.patch(file_path="f.txt", old_string='    s = "a"\n        ', new_string='    s = "a"\n    ',
                       context=context)
 
     assert result.startswith("patched "), result
@@ -204,7 +204,7 @@ def test_a_mid_line_match_that_changes_its_trailing_whitespace(tmp_path):
     body = "a = “x”  # note\n"
     target, context = _read(tmp_path, body)
 
-    result = fs.patch(file_path="f.txt", old_string='a = "x"  ', new_string='a = "y" ', context=context)
+    result = patch.patch(file_path="f.txt", old_string='a = "x"  ', new_string='a = "y" ', context=context)
 
     assert result.startswith("patched "), result
     assert target.read_bytes() == "a = “y” # note\n".encode()
@@ -214,7 +214,7 @@ def test_lengthening_a_unicode_dash_writes_the_new_dashes(tmp_path):
     body = "a – b\n"
     target, context = _read(tmp_path, body)
 
-    result = fs.patch(file_path="f.txt", old_string="a - b", new_string="a -- b", context=context)
+    result = patch.patch(file_path="f.txt", old_string="a - b", new_string="a -- b", context=context)
 
     assert result.startswith("patched "), result
     assert target.read_bytes() == b"a -- b\n"
@@ -224,7 +224,7 @@ def test_replace_all_with_an_exact_occurrence_replaces_only_exact_ones(tmp_path)
     body = 's = "a"\nt = “a”\n'
     target, context = _read(tmp_path, body)
 
-    result = fs.patch(file_path="f.txt", old_string='"a"', new_string='"b"', replace_all=True,
+    result = patch.patch(file_path="f.txt", old_string='"a"', new_string='"b"', replace_all=True,
                       context=context)
 
     assert result.startswith("patched "), result

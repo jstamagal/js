@@ -51,7 +51,7 @@ def test_read_empty_file_has_no_numbered_lines(tmp_path):
 
     result = fs.read(str(target), context=context)
 
-    assert result == f"{target} is empty (hash {fs._hash_bytes(b'')})"
+    assert result == f"{target} is empty (hash {fs.hash_bytes(b'')})"
     assert not context.reads.coverage(target).ranges
 
 

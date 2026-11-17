@@ -448,7 +448,7 @@ def test_fs_read_empty_file_message_uses_resolved_path(tmp_path):
     # target, never the literal "None" that file_path holds on this path.
     actual = fs_read(path="empty.txt", context=context)
 
-    assert actual == f"{empty} is empty (hash {fs._hash_bytes(b'')})"
+    assert actual == f"{empty} is empty (hash {fs.hash_bytes(b'')})"
 
 
 def _hidden_tree(tmp_path):

@@ -8,7 +8,7 @@ import json
 import pytest
 from turn_driver import config, run
 
-from js.toolkit import build_default_registry, fs
+from js.toolkit import build_default_registry, fs, patch
 from js.toolkit.core import ToolContext
 
 
@@ -23,7 +23,7 @@ def _read_file(tmp_path, name: str, body: str) -> tuple:
 def test_a_batch_with_an_identical_edit_applies_the_others(tmp_path):
     target, context = _read_file(tmp_path, "doc.md", "## Purpose\nalpha\nbeta\n")
 
-    result = fs.patch(
+    result = patch.patch(
         file_path="doc.md",
         edits=[
             {"old_string": "alpha", "new_string": "ALPHA"},
@@ -41,7 +41,7 @@ def test_a_batch_with_an_identical_edit_applies_the_others(tmp_path):
 def test_an_edit_identical_after_line_ending_normalization_is_skipped(tmp_path):
     target, context = _read_file(tmp_path, "crlf.txt", "one\r\ntwo\r\n")
 
-    result = fs.patch(
+    result = patch.patch(
         file_path="crlf.txt",
         edits=[
             {"old_string": "one\ntwo", "new_string": "one\r\ntwo"},
@@ -58,7 +58,7 @@ def test_a_patch_whose_every_edit_is_identical_changes_nothing_and_is_no_error(t
     target, context = _read_file(tmp_path, "doc.md", "## Purpose\nbody\n")
     before = target.stat().st_mtime_ns
 
-    result = fs.patch(
+    result = patch.patch(
         file_path="doc.md",
         edits=[{"old_string": "## Purpose", "new_string": "## Purpose"},
                {"old_string": "body", "new_string": "body"}],
@@ -157,7 +157,7 @@ def test_a_missing_file_suggests_the_near_name_beside_it(tmp_path):
     context = ToolContext(cwd=tmp_path)
 
     missed = fs.read(str(tmp_path / "result.py"), context=context)
-    missed_test = fs.patch(file_path="test_jev.py", old_string="x", new_string="y", context=context)
+    missed_test = patch.patch(file_path="test_jev.py", old_string="x", new_string="y", context=context)
 
     assert missed.startswith("ERROR")
     assert "results.py" in missed

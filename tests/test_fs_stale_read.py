@@ -2,7 +2,7 @@
 the read is refused with the hash mismatch named and the diff handed over."""
 from __future__ import annotations
 
-from js.toolkit import fs
+from js.toolkit import fs, patch
 from js.toolkit.core import ToolContext
 
 
@@ -41,9 +41,9 @@ def test_overwrite_of_a_file_changed_since_the_read_is_refused_naming_both_hashe
     target.write_text("as read\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
     fs.fs_read(file_path=str(target), context=context)
-    read_hash = fs._hash_bytes(b"as read\n")
+    read_hash = fs.hash_bytes(b"as read\n")
     target.write_text("moved underneath\n", encoding="utf-8")
-    now_hash = fs._hash_bytes(b"moved underneath\n")
+    now_hash = fs.hash_bytes(b"moved underneath\n")
 
     result = fs.write(file_path=str(target), content="mine\n", overwrite=True, context=context)
 
@@ -64,11 +64,11 @@ def test_hash_mismatch_is_named_when_no_copy_of_the_read_is_held(tmp_path):
     context.configure_snapshot_store("agent", session, state_dir=tmp_path / "state")
     target.write_text("moved underneath\n", encoding="utf-8")
 
-    result = fs.patch(file_path=str(target), old_string="moved", new_string="kept", context=context)
+    result = patch.patch(file_path=str(target), old_string="moved", new_string="kept", context=context)
 
     assert result.startswith("ERROR")
-    assert fs._hash_bytes(b"as read\n") in result
-    assert fs._hash_bytes(b"moved underneath\n") in result
+    assert fs.hash_bytes(b"as read\n") in result
+    assert fs.hash_bytes(b"moved underneath\n") in result
     assert target.read_text(encoding="utf-8") == "moved underneath\n"
 
 
@@ -79,9 +79,9 @@ def test_patch_after_an_outside_change_gets_the_diff_and_retries_without_a_read(
     fs.fs_read(file_path=str(target), context=context)
     target.write_text(_lines(40).replace("line 5\n", "line five, edited elsewhere\n"), encoding="utf-8")
 
-    refused = fs.patch(file_path=str(target), old_string="line 30\n", new_string="line thirty\n", context=context)
-    retried = fs.patch(file_path=str(target), old_string="line 30\n", new_string="line thirty\n", context=context)
-    changed_line = fs.patch(
+    refused = patch.patch(file_path=str(target), old_string="line 30\n", new_string="line thirty\n", context=context)
+    retried = patch.patch(file_path=str(target), old_string="line 30\n", new_string="line thirty\n", context=context)
+    changed_line = patch.patch(
         file_path=str(target), old_string="line five, edited elsewhere\n", new_string="line 5 again\n", context=context
     )
 
@@ -100,10 +100,10 @@ def test_the_diff_does_not_grant_lines_the_model_never_saw(tmp_path):
     fs.fs_read(file_path=str(target), start_line=1, end_line=10, context=context)
     target.write_text(_lines(100).replace("line 50\n", "line fifty\n"), encoding="utf-8")
 
-    refused = fs.patch(file_path=str(target), old_string="line 3\n", new_string="line three\n", context=context)
-    unseen = fs.patch(file_path=str(target), old_string="line 80\n", new_string="line eighty\n", context=context)
-    seen = fs.patch(file_path=str(target), old_string="line 3\n", new_string="line three\n", context=context)
-    shown_by_diff = fs.patch(file_path=str(target), old_string="line fifty\n", new_string="line 50\n", context=context)
+    refused = patch.patch(file_path=str(target), old_string="line 3\n", new_string="line three\n", context=context)
+    unseen = patch.patch(file_path=str(target), old_string="line 80\n", new_string="line eighty\n", context=context)
+    seen = patch.patch(file_path=str(target), old_string="line 3\n", new_string="line three\n", context=context)
+    shown_by_diff = patch.patch(file_path=str(target), old_string="line fifty\n", new_string="line 50\n", context=context)
 
     assert refused.startswith("ERROR")
     assert unseen.startswith("ERROR")
@@ -128,13 +128,13 @@ def _rewrite_lines_100_to_180_outside_js(tmp_path, **context_kwargs):
 def test_a_diff_over_the_result_budget_is_withheld_and_a_short_edit_stays_gated_on_it(tmp_path):
     target, context, _changed = _rewrite_lines_100_to_180_outside_js(tmp_path)
 
-    refused = fs.patch(file_path=str(target), old_string="line 190\n", new_string="x\n", context=context)
-    unchanged_seen = fs.patch(file_path=str(target), old_string="line 190\n", new_string="x\n", context=context)
+    refused = patch.patch(file_path=str(target), old_string="line 190\n", new_string="x\n", context=context)
+    unchanged_seen = patch.patch(file_path=str(target), old_string="line 190\n", new_string="x\n", context=context)
     # Short enough that the exact match is not its own proof, so the withheld
     # diff keeps the edit gated until those lines are read.
-    changed_unshown = fs.patch(file_path=str(target), old_string="js 150\n", new_string="y\n", context=context)
+    changed_unshown = patch.patch(file_path=str(target), old_string="js 150\n", new_string="y\n", context=context)
     fs.fs_read(file_path=str(target), start_line=100, end_line=180, context=context)
-    changed_read = fs.patch(file_path=str(target), old_string="js 150\n", new_string="y\n", context=context)
+    changed_read = patch.patch(file_path=str(target), old_string="js 150\n", new_string="y\n", context=context)
 
     assert refused.startswith("ERROR")
     assert "rewritten outside js" not in refused
@@ -164,6 +164,6 @@ def test_after_a_partial_read_overwrite_the_new_content_is_editable(tmp_path):
     fs.fs_read(file_path=str(target), context=context)
     fs.write(file_path=str(target), content=_lines(3_000, "new {n}"), overwrite=True, context=context)
 
-    result = fs.patch(file_path=str(target), old_string="new 2999\n", new_string="edited\n", context=context)
+    result = patch.patch(file_path=str(target), old_string="new 2999\n", new_string="edited\n", context=context)
 
     assert result.startswith("patched "), result

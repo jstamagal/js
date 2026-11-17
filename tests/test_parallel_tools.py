@@ -15,7 +15,7 @@ import pytest
 from test_lazy_tool_discovery import _cfg, _result
 
 from js import console, paths, result_caps, runtime, tool_calls, tool_errors, turn_dispatch
-from js.toolkit import core as tool_core, fs
+from js.toolkit import core as tool_core, fs, patch as patch_tool
 from js.toolkit.core import Tool, ToolContext, call_is_read_only
 from js.toolkit.registry import ToolRegistry, build_default_registry
 
@@ -133,7 +133,7 @@ def test_read_read_patch_read_runs_the_reads_together_and_the_patch_alone(tmp_pa
         patch_saw.append(reads_running)
         time.sleep(0.2)
         patch_saw.append(reads_running)
-        return fs.patch(context=context, **kwargs)
+        return patch_tool.patch(context=context, **kwargs)
 
     registry = ToolRegistry((
         dataclasses.replace(stock.resolve("read"), handler=read),
@@ -176,7 +176,7 @@ def test_concurrent_reads_of_one_file_leave_consistent_coverage(tmp_path):
         path = target.resolve()
         assert context.reads.coverage(path).ranges == [(1, 80)]
         assert context.reads.coverage(path).whole
-        assert fs.patch(file_path=str(target), old_string="line 55\n", new_string="line 55!\n",
+        assert patch_tool.patch(file_path=str(target), old_string="line 55\n", new_string="line 55!\n",
                         context=context).startswith("patched ")
         target.write_text("".join(f"line {n}\n" for n in range(1, 81)), encoding="utf-8")
 

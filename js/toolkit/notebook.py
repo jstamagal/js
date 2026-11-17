@@ -22,7 +22,7 @@ from typing import Any
 
 from .core import Tool, ToolContext
 from .descriptions import load_description, load_parameter_description
-from .fs import _detect_line_ending, _hash_bytes, _normalize_line_endings, _read_regular_bytes
+from .fs import _read_regular_bytes, detect_line_ending, hash_bytes, normalize_line_endings
 from .presentation import Presentation
 from .reads import require_read
 from .sanitize import int_or_default
@@ -172,7 +172,7 @@ def read_view(target: Path, context: ToolContext) -> str | None:
         notebook = _load(data)
     except NotebookError:
         return None
-    content_hash = _hash_bytes(data)
+    content_hash = hash_bytes(data)
     context.reads.remember(target, content_hash, whole_file=False)
     context.reads.remember_content(target, content_hash, data)
     max_lines = int_or_default(context.notebook_output_lines, 10, minimum=0)
@@ -245,7 +245,7 @@ def notebook_edit(
         data = _read_regular_bytes(target)
     except OSError as exc:
         return f"ERROR: {exc}"
-    current_hash = _hash_bytes(data)
+    current_hash = hash_bytes(data)
     guard = require_read(context, target, f"{mode} a cell of it", content_hash=current_hash)
     if context.notebook_require_read and guard:
         return guard
@@ -302,7 +302,7 @@ def notebook_edit(
     text = json.dumps(notebook, indent=_indent(original), ensure_ascii=False)
     if original.endswith(("\n", "\r")):
         text += "\n"
-    payload = _normalize_line_endings(text, _detect_line_ending(original)).encode("utf-8")
+    payload = normalize_line_endings(text, detect_line_ending(original)).encode("utf-8")
     temporary = None
     try:
         context.snapshot(target)
@@ -320,7 +320,7 @@ def notebook_edit(
         if temporary is not None:
             with contextlib.suppress(OSError):
                 temporary.unlink(missing_ok=True)
-    new_hash = _hash_bytes(payload)
+    new_hash = hash_bytes(payload)
     # The model knows the notebook it just changed; the raw JSON lines moved,
     # so no line coverage carries over.
     context.reads.replace(target, new_hash, [], len(payload.splitlines()), whole_file=False)

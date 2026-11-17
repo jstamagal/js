@@ -14,7 +14,7 @@ from js.config import Config
 from js.mcp_config import resolve as resolve_mcp
 from js.memory import load_messages
 from js.model_client import ModelStreamResult, ModelToolCall
-from js.toolkit import ToolContext, call_tool, fs
+from js.toolkit import ToolContext, call_tool, fs, patch
 from js.toolkit.registry import build_default_registry, select
 from js.toolkit.subagents import task
 
@@ -410,7 +410,7 @@ def test_subagent_cannot_undo_parent_snapshot(monkeypatch, tmp_path):
     target.write_text("old\n", encoding="utf-8")
     parent = ToolContext(cwd=tmp_path)
     fs.read("owned.txt", context=parent)
-    fs.patch("owned.txt", old_string="old", new_string="new", context=parent)
+    patch.patch("owned.txt", old_string="old", new_string="new", context=parent)
     tool_results: list[str] = []
     calls = 0
 

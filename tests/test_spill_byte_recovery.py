@@ -9,7 +9,7 @@ import pytest
 from turn_driver import config, registry, run
 
 from js import result_caps
-from js.toolkit import fs, fs_tools
+from js.toolkit import fs, fs_tools, patch
 from js.toolkit.core import Tool, ToolContext
 
 _POINTER = re.compile(r"the full text is at (.+) — read it")
@@ -144,8 +144,8 @@ def test_lines_a_byte_range_shows_whole_count_as_read(tmp_path):
     context = ToolContext(cwd=tmp_path)
 
     fs.fs_read(file_path=str(target), range={"start_byte": 4, "end_byte": 8}, context=context)
-    unseen = fs.patch(file_path=str(target), old_string="ccc", new_string="CCC", context=context)
-    seen = fs.patch(file_path=str(target), old_string="bbb", new_string="BBB", context=context)
+    unseen = patch.patch(file_path=str(target), old_string="ccc", new_string="CCC", context=context)
+    seen = patch.patch(file_path=str(target), old_string="bbb", new_string="BBB", context=context)
 
     assert unseen.startswith("ERROR")
     assert seen.startswith("patched "), seen

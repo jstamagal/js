@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from turn_driver import one_turn
 
-from js.toolkit import ToolContext, build_default_registry, call_tool, fs, undo
+from js.toolkit import ToolContext, build_default_registry, call_tool, fs, patch, undo
 
 
 def _persistent_context(tmp_path, session_name: str) -> ToolContext:
@@ -220,7 +220,7 @@ def test_undo_restores_a_patch_after_context_restart(tmp_path):
     target.write_text("before\n", encoding="utf-8")
     first_process = _persistent_context(tmp_path, "restart")
     fs.read("restart.txt", context=first_process)
-    patched = fs.patch(
+    patched = patch.patch(
         file_path="restart.txt",
         old_string="before",
         new_string="after",
@@ -253,7 +253,7 @@ def test_snapshot_history_is_scoped_to_its_session(tmp_path):
     target.write_text("before\n", encoding="utf-8")
     session_a = _persistent_context(tmp_path, "session-a")
     fs.read("isolated.txt", context=session_a)
-    fs.patch(
+    patch.patch(
         file_path="isolated.txt",
         old_string="before",
         new_string="after",
@@ -272,8 +272,8 @@ def test_corrupt_persisted_snapshot_costs_one_undo_entry(tmp_path):
     target.write_text("zero\n", encoding="utf-8")
     first_process = _persistent_context(tmp_path, "corrupt")
     fs.read("corrupt.txt", context=first_process)
-    fs.patch(file_path="corrupt.txt", old_string="zero", new_string="one", context=first_process)
-    fs.patch(file_path="corrupt.txt", old_string="one", new_string="two", context=first_process)
+    patch.patch(file_path="corrupt.txt", old_string="zero", new_string="one", context=first_process)
+    patch.patch(file_path="corrupt.txt", old_string="one", new_string="two", context=first_process)
     snapshot_files = sorted(first_process.undo.directory.glob("*/*.snapshot"))
     snapshot_files[-1].write_bytes(b"broken snapshot")
 
