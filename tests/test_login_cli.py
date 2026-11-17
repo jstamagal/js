@@ -176,27 +176,6 @@ def test_empty_api_key_reply_answers_instead_of_cancelling(monkeypatch, tmp_path
         _reset_logins()
 
 
-def test_variable_endpoint_providers_show_base_url_field():
-    for provider_id in (
-        "llama.cpp",
-        "ollama",
-        "vllm",
-        "lmstudio",
-        "koboldcpp",
-        "text-generation-webui",
-        "localai",
-        "tabbyapi",
-        "tgi",
-        "sglang",
-        "llamafile",
-        "jan",
-        "xinference",
-    ):
-        provider = providers.provider_for_login(provider_id)
-        assert provider.variable_endpoint is True
-        assert provider.login_base_url_field is True
-
-
 def test_collect_api_login_enter_keeps_empty_base_url_for_official_provider(tmp_path: Path, monkeypatch):
     logins.set_config_dir(tmp_path)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)

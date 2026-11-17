@@ -59,11 +59,6 @@ class ProviderDef:
     # skipping the prompt here is the catch-22 that silently aims a fresh
     # login at 127.0.0.1 on a box where nothing is listening there.
     local: bool = False
-    # An endpoint family where the operator supplies the actual host, even when
-    # the provider is not strictly local/keyless. This deliberately stays
-    # separate from ``local`` so editable endpoint URLs do not imply local auth
-    # semantics.
-    variable_endpoint: bool = False
 
     @property
     def effective_sdk_provider_id(self) -> str | None:
@@ -72,15 +67,6 @@ class ProviderDef:
     def default_effort(self, settings: dict | None = None) -> str | None:
         """The provider default when the run supplies no EFFORT."""
         return self.reasoning_effort
-
-    @property
-    def login_base_url_field(self) -> bool:
-        return (
-            not self.established
-            or self.local
-            or self.variable_endpoint
-            or self.transport in {"custom_openai", "custom_responses", "custom_anthropic", "cliproxyapi"}
-        )
 
 
 def _p(
@@ -103,7 +89,6 @@ def _p(
     models_list_validates_auth: bool = True,
     headers: Mapping[str, str] | None = None,
     local: bool = False,
-    variable_endpoint: bool = False,
 ) -> ProviderDef:
     return ProviderDef(
         id=id,
@@ -124,7 +109,6 @@ def _p(
         models_list_validates_auth=models_list_validates_auth,
         headers=headers or {},
         local=local,
-        variable_endpoint=variable_endpoint,
     )
 
 
@@ -155,7 +139,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         aliases=("ollama-local",),
         requires_api_key=False,
         local=True,
-        variable_endpoint=True,
     ),
     _p(
         "ollama-cloud",
@@ -180,7 +163,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         aliases=("llamacpp", "llama-cpp"),
         requires_api_key=False,
         local=True,
-        variable_endpoint=True,
     ),
     _p(
         "vllm",
@@ -193,7 +175,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         model_env=("VLLM_MODEL",),
         aliases=("vllm-openai",),
         established=False,
-        variable_endpoint=True,
     ),
     _p(
         "lmstudio",
@@ -206,7 +187,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         model_env=("LMSTUDIO_MODEL", "LM_STUDIO_MODEL"),
         aliases=("lm-studio",),
         established=False,
-        variable_endpoint=True,
     ),
     _p(
         "koboldcpp",
@@ -219,7 +199,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         model_env=("KOBOLDCPP_MODEL", "KOBOLD_MODEL"),
         aliases=("kobold-cpp",),
         established=False,
-        variable_endpoint=True,
     ),
     _p(
         "text-generation-webui",
@@ -232,7 +211,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         model_env=("TEXT_GENERATION_WEBUI_MODEL", "OOBABOOGA_MODEL"),
         aliases=("oobabooga", "textgen-webui", "text-generation-ui"),
         established=False,
-        variable_endpoint=True,
     ),
     _p(
         "localai",
@@ -245,7 +223,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         model_env=("LOCALAI_MODEL", "LOCAL_AI_MODEL"),
         aliases=("local-ai",),
         established=False,
-        variable_endpoint=True,
     ),
     _p(
         "tabbyapi",
@@ -258,7 +235,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         model_env=("TABBYAPI_MODEL", "TABBY_MODEL"),
         aliases=("tabby-api",),
         established=False,
-        variable_endpoint=True,
     ),
     _p(
         "tgi",
@@ -271,7 +247,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         model_env=("TGI_MODEL", "TEXT_GENERATION_INFERENCE_MODEL"),
         aliases=("text-generation-inference",),
         established=False,
-        variable_endpoint=True,
     ),
     _p(
         "sglang",
@@ -284,7 +259,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         model_env=("SGLANG_MODEL",),
         aliases=("sgl",),
         established=False,
-        variable_endpoint=True,
     ),
     _p(
         "llamafile",
@@ -296,7 +270,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         base_env=("LLAMAFILE_BASE_URL",),
         model_env=("LLAMAFILE_MODEL",),
         established=False,
-        variable_endpoint=True,
     ),
     _p(
         "jan",
@@ -308,7 +281,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         base_env=("JAN_BASE_URL",),
         model_env=("JAN_MODEL",),
         established=False,
-        variable_endpoint=True,
     ),
     _p(
         "xinference",
@@ -321,7 +293,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         model_env=("XINFERENCE_MODEL",),
         aliases=("xinference-local",),
         established=False,
-        variable_endpoint=True,
     ),
     _p(
         "opencode-go",
