@@ -11,7 +11,7 @@ import ai
 import pytest
 from ai.types.usage import Usage
 
-from js import compaction, model_client, runtime, stream_transport
+from js import compaction, memory, model_client, runtime, stream_transport
 from js import messages as msgs
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
@@ -230,7 +230,7 @@ def test_split_summary_sends_the_previous_summary_once(monkeypatch, tmp_path):
         return _result(text=f"part {len(requests)}")
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)
-    messages = [compaction._compaction_summary_message("OLD_SUMMARY"),
+    messages = [memory.compaction_summary_message("OLD_SUMMARY"),
                 *({"role": "user", "content": f"entry {i}"} for i in range(8))]
     summary = asyncio.run(compaction.summarize(_config(tmp_path), "offline-test", messages, "", ""))
     assert ["OLD_SUMMARY" in r for r in requests] == [True, True, False]

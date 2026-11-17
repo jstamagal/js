@@ -314,7 +314,7 @@ async def run_loop(mode):
     cfg = cfg_for(mode, CONTEXT_SIZE=1500 if mode == "persist_active" else 10000, COMPACTION_KEEP_RECENT_TOKENS=100)
     context = ToolContext(cwd=cfg.agent_dir)
     if mode == "churn":
-        prefix = C._compaction_summary_message("previous summary " * 100)
+        prefix = M.compaction_summary_message("previous summary " * 100)
         messages = [prefix, {"role": "user", "content": "current task"}]
     elif mode == "persist_active":
         messages = [{"role": "user", "content": "current task"}]
@@ -843,7 +843,7 @@ async def compacted_turn_cancel(error=False):
         context.compacted_during_turn = True
         M.append_compaction_mark(cfg.session_file, summary="previous work", keep_from=20)
         messages[:] = [
-            C._compaction_summary_message("previous work"),
+            M.compaction_summary_message("previous work"),
             user,
             {"role": "assistant", "content": "partial new work"},
         ]

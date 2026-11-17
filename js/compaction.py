@@ -958,10 +958,6 @@ def compacted(result: str) -> bool:
     return isinstance(result, msgs.Said) and result.message == msgs.COMPACTED
 
 
-def _compaction_summary_message(summary: str) -> dict:
-    return {"role": "user", "content": f'<compaction-summary>\n{summary}\n</compaction-summary>'}
-
-
 def tail_start(messages: list[dict], tail_tokens: int, chars_per_token: float) -> int:
     """Index where a summary with no preserved prefix would keep the history from."""
     return _safe_tail_start(messages, tail_tokens, chars_per_token)
@@ -1068,11 +1064,11 @@ async def compact_now(
         # prefix in front of it.
         tail = messages[keep_from:]
         M.drop_signed_reasoning(tail)
-        after = [_compaction_summary_message(summary), *([rehydrated] if rehydrated else []), *tail]
+        after = [M.compaction_summary_message(summary), *([rehydrated] if rehydrated else []), *tail]
         required_savings = 1 if forced else min_savings
         if original_est - _estimate_tokens(after, chars_per_token) < required_savings and rehydrated:
             rehydrated = None
-            after = [_compaction_summary_message(summary), *tail]
+            after = [M.compaction_summary_message(summary), *tail]
         savings = original_est - _estimate_tokens(after, chars_per_token)
         if savings < required_savings:
             result = msgs.COMPACT_SKIPPED_SAVINGS.said(savings=savings, required=required_savings)

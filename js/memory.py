@@ -308,7 +308,8 @@ def _without_answer_reasoning_text(messages: list[dict]) -> list[dict]:
     ]
 
 
-def _compaction_summary_message(summary: str) -> dict:
+def compaction_summary_message(summary: str) -> dict:
+    """The user message replay and compaction put in place of the summarized history."""
     return {"role": "user", "content": f"<compaction-summary>\n{summary}\n</compaction-summary>"}
 
 
@@ -668,7 +669,7 @@ def _replay_records(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | No
                                     stamps[id(copy)] = (copy, entry[1])
                         if log is not None:
                             log.copied(originals, tail)
-                        messages[:] = [_compaction_summary_message(data["summary"]),
+                        messages[:] = [compaction_summary_message(data["summary"]),
                                        *([rehydrated] if rehydrated else []), *tail]
                         next_epoch()
                 undo.reset()
