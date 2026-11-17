@@ -62,10 +62,10 @@ def get_int(cfg: Config, key: str, default: Any = _JSRC, *, max_value: int | Non
     return value
 
 
-def get_nonnegative_int(cfg: Config, key: str, default: Any = _JSRC, *, max_value: int | None = None) -> int:
+def get_nonnegative_int(cfg: Config, key: str) -> int:
     """Like get_int but 0 is a legal value, not a request for the default —
     a buffer of 0 is a real choice."""
-    default = _fallback(key, default)
+    default = _settings.default_value(key)
     raw = get(cfg, key, default)
     if isinstance(raw, bool):
         return default
@@ -75,13 +75,11 @@ def get_nonnegative_int(cfg: Config, key: str, default: Any = _JSRC, *, max_valu
         return default
     if value < 0:
         return default
-    if max_value is not None:
-        return min(value, max_value)
     return value
 
 
-def get_float(cfg: Config, key: str, default: Any = _JSRC, *, max_value: float | None = None) -> float:
-    default = _fallback(key, default)
+def get_float(cfg: Config, key: str, *, max_value: float | None = None) -> float:
+    default = _settings.default_value(key)
     raw = get(cfg, key, default)
     if isinstance(raw, bool):
         return default
