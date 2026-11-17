@@ -26,7 +26,6 @@ from . import (
     paranoid,
     setting_values,
     settings as _s,
-    text_layout,
 )
 
 
@@ -159,6 +158,11 @@ def _setting_lines(message: msgs.Message, key: str, value: str, *,
     marker = "\x00"
     marked = said(marker)
     plain = marked.message.plain(**marked.fields)
+    # Here, not at the top: text_layout needs prompt_toolkit, and js.swarm
+    # (which reaches this module) is imported by programs that have only the
+    # standard library.
+    from . import text_layout
+
     indent = text_layout.cells(plain.partition(marker)[0]) if plain.count(marker) == 1 else 0
     line = said(value)
     unwrapped = line.message.plain(**line.fields)

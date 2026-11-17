@@ -65,7 +65,6 @@ from pathlib import Path
 from typing import Any
 
 from . import messages as msgs
-from .toolkit.core import view
 
 POLL_S = 0.25
 COALESCE_S = 0.3
@@ -668,6 +667,10 @@ class Agent:
 
 
 def bus_view(**fields: Any) -> None:
+    # Here, not at the top: the toolkit needs js's third-party packages, and
+    # the bus is imported by programs that have only the standard library.
+    from .toolkit.core import view
+
     view(**fields)
 
 
