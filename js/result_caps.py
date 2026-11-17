@@ -86,8 +86,8 @@ _MEDIA_NOTICE = object()
 _MEDIA_NOTICE_MAX = 240
 
 
-def _clip_name(text: str, limit: int = 48) -> str:
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+def _clip_name(text: str) -> str:
+    return text if len(text) <= 48 else text[:47] + "…"
 
 
 def _is_media_notice(block: dict) -> bool:
