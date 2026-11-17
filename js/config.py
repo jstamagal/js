@@ -7,7 +7,7 @@ import hashlib
 import os
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import (
@@ -108,6 +108,26 @@ def vision_enabled_for_model(model: str, settings: dict | None = None) -> bool:
     if catalog is not None:
         return catalog
     return _vision_by_name(model)
+
+
+_CFG_SETTINGS = object()
+
+
+def apply_route(cfg, route: _routing.ModelRoute, *, settings=_CFG_SETTINGS):
+    """``cfg`` on ``route``: its model, provider id, base URL, API key and
+    headers, and ``vision_enabled`` for the route's model under ``settings``
+    (``cfg.settings`` when not given)."""
+    if settings is _CFG_SETTINGS:
+        settings = getattr(cfg, "settings", None)
+    return replace(
+        cfg,
+        model=route.model,
+        provider_id=route.provider_id,
+        provider_base_url=route.base_url,
+        provider_api_key=route.api_key,
+        provider_headers=route.headers,
+        vision_enabled=vision_enabled_for_model(route.model, settings),
+    )
 
 
 def _require_model() -> str:

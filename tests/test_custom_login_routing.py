@@ -930,7 +930,8 @@ def test_route_prefix_policy_and_login_lookup_are_injectable():
 
 
 def test_apply_route_puts_every_route_field_and_vision_on_the_config(monkeypatch, tmp_path):
-    from js.routing import ModelRoute, apply_route
+    from js.config import apply_route
+    from js.routing import ModelRoute
 
     _isolate_config(monkeypatch, tmp_path)
     cfg = from_env(save_session=False)

@@ -23,7 +23,7 @@ from . import (
     turn_settings,
 )
 from .compaction import AutoCompactState
-from .config import Config, _norm_effort, vision_enabled_for_model
+from .config import Config, _norm_effort, apply_route, vision_enabled_for_model
 from .toolkit import policy as tool_policy
 
 if TYPE_CHECKING:
@@ -130,7 +130,7 @@ class ReplState:
             or route.headers != getattr(cfg, "provider_headers", {})
             or route_vision != cfg.vision_enabled
         ):
-            return routing.apply_route(cfg, route, settings=self.settings)
+            return apply_route(cfg, route, settings=self.settings)
         return cfg
 
 

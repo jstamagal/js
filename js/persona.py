@@ -20,8 +20,9 @@ from . import (
     snippets,
 )
 from .cli_options import current
+from .config import apply_route
 from .promptexpand import expand_prompt, session_variables
-from .routing import apply_route, resolve_model_route
+from .routing import resolve_model_route
 from .toolkit import policy
 from .toolkit.registry import registry_for_roots
 

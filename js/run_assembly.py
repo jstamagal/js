@@ -173,7 +173,7 @@ def route(cfg: Any, model: str | None) -> Any:
     """``cfg`` routed to ``model``, a model the run names; ``cfg`` when it is None."""
     if model is None:
         return cfg
-    return routing.apply_route(cfg, routing.resolve_model_route(
+    return config.apply_route(cfg, routing.resolve_model_route(
         model,
         configured_provider_id=cfg.provider_id,
         configured_base_url=cfg.provider_base_url,
