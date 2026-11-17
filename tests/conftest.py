@@ -55,7 +55,7 @@ def isolated_user_profile(monkeypatch, tmp_path):
     # A command line one test ran must not shape the next test's settings.
     from js import config as _config
 
-    _config.set_invocation()
+    _config.set_invocation(_config.InvocationSources())
     # `js -C` puts the whole process in a jail; one test's jail must not
     # confine the next test's tools.
     yield

@@ -1028,7 +1028,7 @@ def _startup_policy() -> dict:
     global _policy_cache
     from . import config
 
-    key = (os.getcwd(), frozenset(os.environ.items()), repr(sorted(config._invocation.items())))
+    key = (os.getcwd(), frozenset(os.environ.items()), config._invocation)
     if _policy_cache is None or _policy_cache[0] != key:
         _policy_cache = (key, config.run_settings(held=True))
     return _policy_cache[1]

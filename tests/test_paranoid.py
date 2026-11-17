@@ -89,7 +89,7 @@ def test_an_extra_on_the_login_command_line_masks_the_login_screens(monkeypatch,
     try:
         assert cli.main(["--extra", "PARANOID_MODE=on", "--login=openai"]) == 0
     finally:
-        config.set_invocation()
+        config.set_invocation(config.InvocationSources())
     assert seen["masked"] != "sk-1234567890abcd"
 
 

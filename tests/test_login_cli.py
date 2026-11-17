@@ -911,7 +911,7 @@ def test_registered_local_placeholder_is_used_for_keyless_login(monkeypatch):
 
     for name in ("VLLM_API_KEY", "VLLM_BASE_URL", "VLLM_MODEL"):
         monkeypatch.delenv(name, raising=False)
-    config.set_invocation(extras=["LOCAL_API_KEY_PLACEHOLDER=local-token"])
+    config.set_invocation(config.InvocationSources(extras=("LOCAL_API_KEY_PLACEHOLDER=local-token",)))
     monkeypatch.setattr(login_cli, "_input", lambda _prompt, default=None, **kw: default or "")
     login = login_cli._collect_api_login("vllm", "openai", providers.provider_for_login("vllm"))
     assert login.provider_api_key == "local-token"

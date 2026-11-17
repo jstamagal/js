@@ -88,6 +88,7 @@ from . import sampling as sampling_mod
 from .sampling import Sampling
 from .config import (
     Config,
+    InvocationSources,
     _norm_effort,
     derive_session_name,
     from_env,
@@ -4644,8 +4645,9 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     # After --extra, so a flag beats an --extra naming the same setting.
     args.extras = [*args.extras, *flag_extras]
     presets = [name for spec in args.presets for name in spec.split(",") if name.strip()]
-    set_invocation(extras=args.extras, presets=presets,
-                   ignore_local_config=args.no_local_config, ignore_global_config=args.no_global_config)
+    set_invocation(InvocationSources(extras=tuple(args.extras), presets=tuple(presets),
+                                     ignore_local_config=args.no_local_config,
+                                     ignore_global_config=args.no_global_config))
     if args.session == "":
         # A bare --session opens the picker; the chosen session is resumed in
         # its own directory and agent, jailed there when it started under -C.

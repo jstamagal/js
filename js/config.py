@@ -365,17 +365,26 @@ def _preset_config_paths(
     return paths
 
 
-# What this process's command line adds to the settings it loads: --extra
-# (and the flags turned into it), --preset and the --no-*-config switches. The
-# CLI records them once (`set_invocation`); `run_settings` loads with them.
-_invocation: dict = {}
+@dataclass(frozen=True)
+class InvocationSources:
+    """What a command line adds to the settings a run loads: ``extras`` from
+    --extra and the flags turned into it, ``presets`` from --preset (one name
+    each, in order), and the --no-local-config / --no-global-config switches."""
+
+    extras: tuple[str, ...] = ()
+    presets: tuple[str, ...] = ()
+    ignore_local_config: bool = False
+    ignore_global_config: bool = False
 
 
-def set_invocation(*, extras: list[str] | None = None, presets: list[str] | None = None,
-                   ignore_local_config: bool = False, ignore_global_config: bool = False) -> None:
-    _invocation.clear()
-    _invocation.update(extras=list(extras or []), presets=list(presets or []),
-                       ignore_local_config=ignore_local_config, ignore_global_config=ignore_global_config)
+# This process's command line. The CLI records it once (`set_invocation`);
+# `run_settings` loads with it.
+_invocation = InvocationSources()
+
+
+def set_invocation(sources: InvocationSources) -> None:
+    global _invocation
+    _invocation = sources
 
 
 def run_settings(cwd: Path | None = None, *, held: bool = False) -> dict:
@@ -384,14 +393,14 @@ def run_settings(cwd: Path | None = None, *, held: bool = False) -> dict:
     leaves the live /fset entries as they are."""
     paths = jsrc_paths(
         (cwd or Path.cwd()).resolve(strict=False),
-        ignore_local_config=_invocation.get("ignore_local_config", False),
-        ignore_global_config=_invocation.get("ignore_global_config", False),
-        presets=_invocation.get("presets") or None,
+        ignore_local_config=_invocation.ignore_local_config,
+        ignore_global_config=_invocation.ignore_global_config,
+        presets=_invocation.presets,
     )
     if held:
         with _fset.held():
-            return _settings.collect_settings(config_paths=paths, extras=_invocation.get("extras") or None)
-    return _settings.collect_settings(config_paths=paths, extras=_invocation.get("extras") or None)
+            return _settings.collect_settings(config_paths=paths, extras=_invocation.extras)
+    return _settings.collect_settings(config_paths=paths, extras=_invocation.extras)
 
 
 def jsrc_paths(
