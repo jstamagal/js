@@ -542,9 +542,10 @@ def _sync_telemetry_from_live_settings(cfg: Config, state: ReplState, telemetry:
 
 class _DebugTraceSink:
     """Append-only tee that fans one text stream to N open files (the autolog and
-    any --debug-file). Thread-safe; swallows IO errors so logging never breaks a
-    turn. Stands in for a stdout-like stream (write/flush/isatty) so it can also
-    receive the redirected turn output."""
+    any --debug-file). Thread-safe. A file that fails a write is dropped and
+    its error reported once, so logging never breaks a turn. Stands in for a
+    stdout-like stream (write/flush/isatty) so it can also receive the
+    redirected turn output."""
 
     def __init__(self, files: list, paths: list[Path]) -> None:
         self._files = files
@@ -556,23 +557,27 @@ class _DebugTraceSink:
 
     def emit(self, event: output.OutputEvent) -> None:
         text = dict(event.fields).get("text", "")
-        if not text:
-            return
-        with self._lock:
-            for f in self._files:
-                try:
-                    f.write(text)
-                    f.flush()
-                except Exception:
-                    pass
+        if text:
+            self._each_file(lambda f: (f.write(text), f.flush()))
 
     def flush(self) -> None:
+        self._each_file(lambda f: f.flush())
+
+    def _each_file(self, act) -> None:
+        """Apply ``act`` to every open file. Failures are reported after the
+        lock is released, since the report may be written back into this sink."""
+        failures = []
         with self._lock:
-            for f in self._files:
+            for f in list(self._files):
                 try:
-                    f.flush()
-                except Exception:
-                    pass
+                    act(f)
+                except Exception as exc:
+                    failures.append((str(getattr(f, "name", "")), exc))
+                    with contextlib.suppress(Exception):
+                        f.close()
+                    self._files = [g for g in self._files if g is not f]
+        for name, exc in failures:
+            output.failed_once(f"debug trace {name}", exc)
 
     def isatty(self) -> bool:
         return False
@@ -715,7 +720,7 @@ def _open_debug_trace_sink(paths: list[Path]) -> _DebugTraceSink | None:
     for p in paths:
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
-            files.append(open(p, "a", encoding="utf-8"))  # noqa: SIM115 — sink owns the lifetime
+            files.append(open(p, "a", encoding="utf-8", errors="backslashreplace"))  # noqa: SIM115 — sink owns the lifetime
             opened.append(p)
         except OSError:
             pass  # a bad log path degrades to no logging, never a crash

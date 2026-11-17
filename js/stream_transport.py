@@ -87,7 +87,8 @@ def net_level() -> int | None:
         return None
     try:
         return int(_sink.level())
-    except Exception:  # noqa: BLE001 — a bad setting silences the channel, never the turn
+    except Exception as exc:  # noqa: BLE001 — a bad setting silences the channel, never the turn
+        output.failed_once("NET_DISPLAY level", exc)
         return 0
 
 

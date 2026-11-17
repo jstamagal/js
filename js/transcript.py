@@ -47,6 +47,7 @@ class TranscriptLogSink:
         self._files = files
         self.paths = paths
         self._lock = threading.Lock()
+        self._failures: list[tuple[str, BaseException]] = []
         self._plain_at_line_start = True
         self._speaker_at_line_start: dict[str, bool] = {}
         self._mute = threading.local()
@@ -90,12 +91,24 @@ class TranscriptLogSink:
             try:
                 f.write(text)
                 f.flush()
-            except Exception:
-                if self._failed_locked(f):
+            except Exception as exc:
+                if self._failed_locked(f, exc):
                     break
 
-    def _failed_locked(self, failed: Any) -> bool:
+    @contextlib.contextmanager
+    def _locked(self) -> Iterator[None]:
+        """Hold the lock, then report the files that failed under it. The
+        report is printed after release because the tee may write it back
+        into this sink."""
+        with self._lock:
+            yield
+            failures, self._failures = self._failures, []
+        for name, exc in failures:
+            output.failed_once(f"transcript log {name}", exc)
+
+    def _failed_locked(self, failed: Any, exc: BaseException) -> bool:
         """Disable failed destinations; return whether the whole sink stopped."""
+        self._failures.append((str(getattr(failed, "name", "")), exc))
         if _settings.knob(self.settings, "TRANSCRIPT_DISABLE_ALL_ON_ERROR"):
             self._disable_locked()
             return True
@@ -109,7 +122,7 @@ class TranscriptLogSink:
         ``source`` names the stream it came from: each has its own cleaner."""
         if not text or self.is_muted():
             return
-        with self._lock:
+        with self._locked():
             self._plain_locked(self._cleaned(f"plain:{source}", str(text)))
 
     def _plain_locked(self, clean: str) -> None:
@@ -142,7 +155,7 @@ class TranscriptLogSink:
     def _write_speaker_chunk(self, speaker: str, text: str) -> None:
         if not text:
             return
-        with self._lock:
+        with self._locked():
             self._speaker_locked(speaker, self._cleaned(speaker, str(text)))
 
     def _speaker_locked(self, speaker: str, clean: str) -> None:
@@ -160,19 +173,19 @@ class TranscriptLogSink:
         self._speaker_at_line_start[speaker] = at_line_start
 
     def end_speaker_stream(self, speaker: str) -> None:
-        with self._lock:
+        with self._locked():
             self._speaker_locked(speaker, self._flushed(speaker))
             if not self._speaker_at_line_start.get(speaker, True):
                 self._write_locked("\n")
                 self._speaker_at_line_start[speaker] = True
 
     def flush(self) -> None:
-        with self._lock:
+        with self._locked():
             for f in list(self._files):
                 try:
                     f.flush()
-                except Exception:
-                    if self._failed_locked(f):
+                except Exception as exc:
+                    if self._failed_locked(f, exc):
                         break
 
     def isatty(self) -> bool:
@@ -190,7 +203,7 @@ class TranscriptLogSink:
             self._mute.depth -= 1
 
     def close(self) -> None:
-        with self._lock:
+        with self._locked():
             for stream in list(self._cleaners):
                 if stream.startswith("plain:"):
                     self._plain_locked(self._flushed(stream))
