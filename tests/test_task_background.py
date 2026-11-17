@@ -13,7 +13,7 @@ import types
 
 import pytest
 
-from js import repl, repl_commands, runtime, supervisor, tool_errors
+from js import repl, repl_commands, runtime, supervisor, tool_calls, tool_errors
 from js.repl_state import ReplState
 from js.toolkit import ToolContext, subagents, task_jobs
 from js.toolkit.registry import ToolRegistry
@@ -284,7 +284,7 @@ def test_the_runtime_dispatch_passes_background_and_handle_through(workers, ctx,
     registry = ToolRegistry(subagents.tools(), {})
 
     def dispatch(call_id: str, args: str) -> str:
-        pc = runtime._PendingToolCall(call_id, "task", [args])
+        pc = tool_calls.PendingToolCall(call_id, "task", [args])
 
         async def go():
             return await runtime._dispatch_fan_out_async(

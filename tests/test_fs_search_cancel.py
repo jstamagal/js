@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from js import runtime, tool_errors
+from js import runtime, tool_calls, tool_errors
 from js.toolkit import fs
 from js.toolkit.core import Tool, ToolContext
 from js.toolkit.registry import _registry_from_tools
@@ -37,7 +37,7 @@ def test_dispatch_cancellation_stops_fs_search(monkeypatch, tmp_path):
 
     async def drive():
         task = asyncio.create_task(runtime._dispatch_batch(
-            [runtime._PendingToolCall("1", "fs_search", ['{"pattern":"needle"}'])],
+            [tool_calls.PendingToolCall("1", "fs_search", ['{"pattern":"needle"}'])],
             runtime.Telemetry(debug_log=None), 0, False, tool_errors.ToolErrorTracker(),
             registry, context, asyncio.get_running_loop(),
         ))

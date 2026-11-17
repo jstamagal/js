@@ -18,6 +18,7 @@ from js import (
     runtime,
     setcmd,
     settings,
+    tool_calls,
     tool_errors,
     toolkit as runtime_tools,
 )
@@ -535,26 +536,26 @@ def test_tool_resolution_is_canonical_case_insensitive_and_not_compat_alias_base
 
 
 def test_runtime_repairs_common_jsonish_argument_shapes():
-    assert runtime._repair_jsonish('{"path":"a",}') == {"path": "a"}
-    assert runtime._repair_jsonish('"{\\"path\\":\\"a\\"}"') == {"path": "a"}
-    assert runtime._repair_jsonish('{"path":"a"') == {"path": "a"}
-    assert runtime._repair_jsonish("") == {}
+    assert tool_calls.repair_jsonish('{"path":"a",}') == {"path": "a"}
+    assert tool_calls.repair_jsonish('"{\\"path\\":\\"a\\"}"') == {"path": "a"}
+    assert tool_calls.repair_jsonish('{"path":"a"') == {"path": "a"}
+    assert tool_calls.repair_jsonish("") == {}
 
     with pytest.raises(ValueError, match="tool args must be an object"):
-        runtime._repair_jsonish('["not", "an", "object"]')
+        tool_calls.repair_jsonish('["not", "an", "object"]')
 
 
 def test_canonical_tool_args_preserves_valid_and_repairs_blankable():
     # Valid JSON is returned byte-for-byte (model's exact bytes preserved).
     valid = '{"file_path": "/tmp/out.md", "content": "hi"}'
-    assert runtime._canonical_tool_args(valid) == valid
+    assert tool_calls.canonical_tool_args(valid) == valid
 
     # Trailing comma / unclosed brace: js repairs for execution, but the raw
     # string would be blanked to "{}" by the SDK's integrity pass on resend.
     # _canonical_tool_args must substitute the repaired, json-decodable form.
     for bad in ('{"file_path": "/tmp/out.md", "content": "hi",}',
                 '{"file_path": "/tmp/out.md", "content": "hi"'):
-        fixed = runtime._canonical_tool_args(bad)
+        fixed = tool_calls.canonical_tool_args(bad)
         import json as _json
         assert _json.loads(fixed) == {"file_path": "/tmp/out.md", "content": "hi"}
 
@@ -567,7 +568,7 @@ def test_canonical_tool_args_unwraps_double_encoded_object():
     # was returning the raw string untouched because it happens to be valid JSON.
     import json as _json
     double = '"{\\"file_path\\": \\"/tmp/out.md\\", \\"content\\": \\"hi\\"}"'
-    fixed = runtime._canonical_tool_args(double)
+    fixed = tool_calls.canonical_tool_args(double)
     assert _json.loads(fixed) == {"file_path": "/tmp/out.md", "content": "hi"}
     assert isinstance(_json.loads(fixed), dict)
 
@@ -579,7 +580,7 @@ def test_canonical_tool_args_survives_sdk_integrity_pass():
     from ai.providers import history_utils
 
     bad = '{"file_path": "/tmp/out.md", "content": "hi",}'  # trailing comma
-    fixed = runtime._canonical_tool_args(bad)
+    fixed = tool_calls.canonical_tool_args(bad)
 
     asst = ai.assistant_message(
         ai.types.messages.ToolCallPart(
@@ -613,7 +614,7 @@ def test_sanitize_assistant_message_repairs_sdk_tool_call_parts():
             tool_call_id="c1", tool_name="write", tool_args=bad
         )
     )
-    fixed_msg = runtime._sanitize_assistant_message(msg)
+    fixed_msg = tool_calls.sanitize_assistant_message(msg)
     import json as _json
     parts = [
         p for p in fixed_msg.parts
@@ -630,7 +631,7 @@ def test_sanitize_assistant_message_repairs_sdk_tool_call_parts():
             tool_args='{"file_path": "/tmp/out.md", "content": "hi"}',
         )
     )
-    assert runtime._sanitize_assistant_message(good) is good
+    assert tool_calls.sanitize_assistant_message(good) is good
 
 
 def test_retry_metadata_is_appended_and_resets_after_success():
@@ -985,7 +986,7 @@ def test_alias_profile_rewrites_outgoing_spec_names_and_descriptions():
     specs = registry.openai_specs()
     alias_map = {"read": "Read", "write": "Write", "task": "Task"}
 
-    aliased = runtime._aliased_tool_specs(specs, alias_map)
+    aliased = tool_calls.aliased_tool_specs(specs, alias_map)
     actual_names = [spec["function"]["name"] for spec in aliased]
 
     assert actual_names == ["Read", "Write", "fs_search", "shell", "Task"]
@@ -996,7 +997,7 @@ def test_alias_profile_rewrites_outgoing_spec_names_and_descriptions():
     write_desc = next(s["function"]["description"] for s in aliased if s["function"]["name"] == "Write")
     assert "`Read`" in write_desc and "`read`" not in write_desc
     # Empty alias map is a no-op returning the same object.
-    assert runtime._aliased_tool_specs(specs, {}) is specs
+    assert tool_calls.aliased_tool_specs(specs, {}) is specs
 
 
 def test_alias_profile_skips_existing_tool_name_collisions_from_config():
@@ -1008,8 +1009,8 @@ def test_alias_profile_skips_existing_tool_name_collisions_from_config():
     registry = build_default_registry().select(["read:lazy", "write:lazy"])
 
     assert result.error is None
-    alias_map = runtime._resolve_alias_profile(live_settings, "openai-test", None)
-    specs = runtime._aliased_tool_specs(registry.openai_specs(), alias_map)
+    alias_map = tool_calls.resolve_alias_profile(live_settings, "openai-test", None)
+    specs = tool_calls.aliased_tool_specs(registry.openai_specs(), alias_map)
     aliased_registry = registry.aliased(alias_map)
 
     assert [spec["function"]["name"] for spec in specs] == ["read", "write"]
@@ -1020,15 +1021,15 @@ def test_resolve_alias_profile_matches_model_or_provider_substring():
     settings = {"TOOL_ALIASES": [
         {"match": ["claude"], "aliases": {"read": "Read", "write": "Write", "task": "Task"}},
     ]}
-    assert runtime._resolve_alias_profile(settings, "openai/proxy-claude-sonnet-4", None) == {
+    assert tool_calls.resolve_alias_profile(settings, "openai/proxy-claude-sonnet-4", None) == {
         "read": "Read", "write": "Write", "task": "Task"}
     # Non-matching model id falls through to the default (empty) map.
-    assert runtime._resolve_alias_profile(settings, "openai/proxy-gpt-5", None) == {}
+    assert tool_calls.resolve_alias_profile(settings, "openai/proxy-gpt-5", None) == {}
     # The provider id is also matched against the substrings.
     prov = {"TOOL_ALIASES": [{"match": ["anthropic"], "aliases": {"read": "Read"}}]}
-    assert runtime._resolve_alias_profile(prov, "some-model", "anthropic") == {"read": "Read"}
+    assert tool_calls.resolve_alias_profile(prov, "some-model", "anthropic") == {"read": "Read"}
     # No profiles configured → empty map → default tool names.
-    assert runtime._resolve_alias_profile({}, "openai/proxy-claude-sonnet-4", None) == {}
+    assert tool_calls.resolve_alias_profile({}, "openai/proxy-claude-sonnet-4", None) == {}
 
 
 def test_registry_aliased_resolves_noncase_variant_alias_to_canonical():
@@ -1075,8 +1076,8 @@ def test_task_tool_calls_from_one_assistant_batch_run_in_parallel_and_restore_or
         aliases={"task": "task"},
     )
     calls = [
-        runtime._PendingToolCall(id="slow", name="task", arg_chunks=['{"label":"slow"}']),
-        runtime._PendingToolCall(id="fast", name="Task", arg_chunks=['{"label":"fast"}']),
+        tool_calls.PendingToolCall(id="slow", name="task", arg_chunks=['{"label":"slow"}']),
+        tool_calls.PendingToolCall(id="fast", name="Task", arg_chunks=['{"label":"fast"}']),
     ]
 
     started = __import__("time").perf_counter()

@@ -17,7 +17,7 @@ import httpx2
 import pytest
 from turn_driver import one_turn
 
-from js import history_record, logins, memory, model_client, runtime
+from js import history_record, logins, memory, model_client, runtime, tool_calls
 from js.config import InvocationSources, from_env
 from js.logins import Login
 from js.sampling import Sampling
@@ -740,8 +740,8 @@ def _call(call_id: str) -> ai.types.messages.ToolCallPart:
 
 def test_a_normalized_batch_keeps_each_signed_part_between_its_calls():
     message = ai.assistant_message(_signed("a", "S1"), _call("c1"), _signed("b", "S2"), _call("c2"))
-    calls = [runtime._PendingToolCall(id=c, name="read", arg_chunks=["{}"]) for c in ("c1", "c2")]
-    normalized = runtime._assistant_message_with_tool_calls(message, calls)
+    calls = [tool_calls.PendingToolCall(id=c, name="read", arg_chunks=["{}"]) for c in ("c1", "c2")]
+    normalized = tool_calls.assistant_message_with_tool_calls(message, calls)
 
     shape = [p.provider_metadata["anthropic"]["signature"] if p.kind == "reasoning" else p.tool_call_id
              for p in normalized.parts]
@@ -751,8 +751,8 @@ def test_a_normalized_batch_keeps_each_signed_part_between_its_calls():
 
 def test_a_signed_part_after_a_dropped_call_is_left_out():
     message = ai.assistant_message(_signed("a", "S1"), _call("c1"), _call("dup"), _signed("b", "S2"), _call("c2"))
-    calls = [runtime._PendingToolCall(id=c, name="read", arg_chunks=["{}"]) for c in ("c1", "c2")]
-    normalized = runtime._assistant_message_with_tool_calls(message, calls, diagnostic_suffix="capped")
+    calls = [tool_calls.PendingToolCall(id=c, name="read", arg_chunks=["{}"]) for c in ("c1", "c2")]
+    normalized = tool_calls.assistant_message_with_tool_calls(message, calls, diagnostic_suffix="capped")
 
     shape = [p.provider_metadata["anthropic"]["signature"] if p.kind == "reasoning"
              else p.tool_call_id if p.kind == "tool_call" else p.text

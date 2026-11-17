@@ -44,7 +44,7 @@ from . import (
     skills,
     snippets,
     stream_transport,
-    tool_args,
+    tool_calls,
     tool_errors,
     toolkit as T,
     turn_settings as _turn_settings,
@@ -66,7 +66,6 @@ from .toolkit.core import (
     call_tool,
     call_tool_async,
     call_view,
-    compact_json,
     registry_scope,
 )
 from .toolkit.registry import ToolRegistry
@@ -77,124 +76,11 @@ from .turn_call import (
     ModelReply,
     ModelRequest,
     cut_off_by_cap,
-    dangling_arguments,
 )
 from .turn_stream import StreamSink, TurnEvents
 from .turn_surface import SurfaceJournal
 
 _UNSET = object()
-
-
-def _usable_tool_aliases(alias_map: dict[str, str], tool_names: set[str]) -> dict[str, str]:
-    original_name_owners = {name.lower(): name for name in tool_names}
-    reserved_names = {"tool_discovery"}
-    return {
-        canon: alias
-        for canon, alias in alias_map.items()
-        if canon in tool_names
-        and alias.lower() not in reserved_names
-        and (original_name_owners.get(alias.lower()) in (None, canon))
-    }
-
-
-def _resolve_alias_profile(
-    settings: dict,
-    model: str,
-    provider_id: str | None,
-    registry: ToolRegistry | None = None,
-) -> dict[str, str]:
-    """Pick the canonical->alias map for the first matching tool alias profile.
-
-    Profiles live under ``[[TOOL_ALIASES]]`` in config; each entry has
-    a ``match`` string or list of case-insensitive substrings tested against the
-    model id and provider id, plus an ``aliases`` table mapping canonical tool
-    names to the model-facing names. The first profile whose ``match`` hits
-    wins. No profiles configured (the default) → empty map → default tool
-    names. When a registry is provided, matching profiles with no usable
-    aliases are skipped.
-    """
-    profiles = (settings or {}).get("TOOL_ALIASES")
-    if not isinstance(profiles, list):
-        return {}
-    haystacks = [model.lower()]
-    if provider_id:
-        haystacks.append(str(provider_id).lower())
-    for profile in profiles:
-        if not isinstance(profile, dict):
-            continue
-        match = profile.get("match")
-        if isinstance(match, str):
-            match = [match]
-        aliases = profile.get("aliases")
-        if not isinstance(aliases, dict) or not isinstance(match, list):
-            continue
-        needles = [str(m).strip().lower() for m in match if str(m).strip()]
-        if needles and any(n in h for n in needles for h in haystacks):
-            alias_map = {str(k): str(v) for k, v in aliases.items() if str(v).strip()}
-            if registry is not None:
-                alias_map = _usable_tool_aliases(alias_map, set(registry.by_name))
-                if not alias_map:
-                    continue
-            return alias_map
-    return {}
-
-
-def _aliased_tool_specs(specs: list[dict], alias_map: dict[str, str]) -> list[dict]:
-    """Rewrite outgoing tool schema names and descriptions per ``alias_map``.
-
-    Each spec's function name is swapped for its alias, and backtick-wrapped
-    canonical names inside every tool description are rewritten so the
-    cross-references the model reads stay consistent. ``specs`` is returned
-    untouched (same object) when ``alias_map`` is empty."""
-    if not alias_map:
-        return specs
-    original_names = {
-        fn_name
-        for spec in specs
-        if isinstance((fn := spec.get("function")), dict)
-        and isinstance((fn_name := fn.get("name")), str)
-    }
-    usable_aliases = _usable_tool_aliases(alias_map, original_names)
-    if not usable_aliases:
-        return specs
-    desc_subs = {f"`{canon}`": f"`{alias}`" for canon, alias in usable_aliases.items()}
-    transformed: list[dict] = []
-    for spec in specs:
-        cloned = json.loads(json.dumps(spec))
-        fn = cloned.get("function", {})
-        name = fn.get("name")
-        if name in usable_aliases:
-            fn["name"] = usable_aliases[name]
-        desc = fn.get("description")
-        if isinstance(desc, str) and desc:
-            for needle, repl in desc_subs.items():
-                if needle in desc:
-                    desc = desc.replace(needle, repl)
-            fn["description"] = desc
-        transformed.append(cloned)
-    return transformed
-
-
-def _canonical_tool_call_name(name: str, registry: ToolRegistry) -> str:
-    tool = registry.resolve(name)
-    if tool is not None:
-        return tool.name
-    # An unloaded lazy tool has no Tool object in this dispatch batch, but
-    # its alias still maps to a canonical name; persisted history must
-    # record the canonical, never a configured alias.
-    return registry.aliases.get(str(name).strip().lower(), name)
-
-
-def _pending_with_name(pc: _PendingToolCall, name: str) -> _PendingToolCall:
-    return _PendingToolCall(
-        id=pc.id,
-        name=name,
-        arg_chunks=list(pc.arg_chunks),
-        validation_error=pc.validation_error,
-        unavailable=pc.unavailable,
-        refused=pc.refused,
-        called_name=pc.called_name,
-    )
 
 
 _CONTEXT_WINDOW_OVERRIDES: ContextVar[dict[str, int] | None] = ContextVar(
@@ -354,206 +240,6 @@ class Telemetry:
                 pass  # telemetry must never break the loop
 
 
-@dataclass
-class _PendingToolCall:
-    id: str
-    name: str = ""
-    arg_chunks: list[str] = field(default_factory=list)
-    validation_error: str | None = None
-    unavailable: bool = False
-    # A tools.yaml argument ban matched; validation_error is the ERROR line.
-    refused: bool = False
-    called_name: str = ""
-
-    def arguments(self) -> str:
-        return "".join(self.arg_chunks)
-
-
-@dataclass(frozen=True)
-class _ToolBatchStats:
-    received: int
-    retained: int
-    duplicate: int
-    invalid: int
-    capped: int
-    # (name the model sent, published tool it was dispatched as) per call
-    # whose proxy-cloaked name was repaired.
-    repaired: tuple[tuple[str, str], ...] = ()
-
-
-def _normalize_tool_call_batch(
-    calls: list[_PendingToolCall],
-    registry: ToolRegistry,
-    limit: int,
-    context: ToolContext | None = None,
-) -> tuple[list[_PendingToolCall], _ToolBatchStats]:
-    """Canonicalize, deduplicate, validate, and cap one assistant batch."""
-    retained: list[_PendingToolCall] = []
-    seen: set[tuple[str, str]] = set()
-    duplicate = invalid = capped = 0
-    repaired: list[tuple[str, str]] = []
-    scheduled_loads = set()
-    for call in calls:
-        if _canonical_tool_call_name(call.name, registry) == "tool_discovery":
-            try:
-                args = _repair_jsonish(call.arguments())
-            except ValueError:
-                continue
-            if isinstance(args, dict) and isinstance(args.get("load"), str):
-                scheduled_loads.add(args["load"])
-
-    for call in calls:
-        tool = registry.resolve(call.name)
-        if tool is None and (repaired_name := registry.repaired_name(call.name)):
-            tool = registry.resolve(repaired_name)
-            repaired.append((call.name, repaired_name))
-        canonical_name = tool.name if tool is not None else _canonical_tool_call_name(
-            call.name, registry
-        )
-        schema = tool.openai_spec()["function"]["parameters"] if tool is not None else None
-        validation_error: str | None = None
-        raw_args = call.arguments()
-        try:
-            parsed = _repair_jsonish(raw_args)
-        except ValueError as exc:
-            parsed = arguments = {}
-            validation_error = f'could not parse arguments: {exc}'
-        else:
-            # Before validation, not after: a container or number the model
-            # serialized as a string is the right value in the wrong type, and
-            # rejecting it here means the handler never runs (patch's `edits`
-            # batch form and shell's timeout=15 were unusable for this reason).
-            # A tool's own prepare_args runs first, mapping the shapes it
-            # accepts onto its schema. An undeclared `_`-named key
-            # (`_message`) is then dropped, not refused.
-            prepared = tool.prepare_args(parsed) if tool is not None and tool.prepare_args else parsed
-            arguments = tool_args.without_underscore_extras(
-                tool_args.coerce_to_schema(prepared, schema), schema)
-        # The sorted form is only the duplicate key. History keeps the model's
-        # own text: a server's prompt cache holds the tokens the model wrote,
-        # and a replay with its keys reordered re-renders a different prefix.
-        identity = (canonical_name, json.dumps(
-            arguments,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ))
-        if arguments == parsed and tool_args.is_json_object(raw_args):
-            replay_args = raw_args
-        else:
-            replay_args = compact_json(arguments)
-        if identity in seen:
-            duplicate += 1
-            continue
-        seen.add(identity)
-
-        if tool is None:
-            validation_error = registry.unavailable_error(canonical_name)
-            if scheduled_loads & {f"native:{canonical_name}", f"mcp:{canonical_name}"}:
-                validation_error += ' A load in this same response cannot authorize a sibling call.'
-        if validation_error is None:
-            validation_error = tool_args.schema_error(arguments, schema)
-        refused = False
-        if validation_error is None and tool is not None:
-            refusal = registry.argument_refusal(tool.name, arguments)
-            if refusal is not None:
-                validation_error, refused = refusal, True
-        if validation_error is not None:
-            invalid += 1
-            if canonical_name == "write":
-                validation_error += held.hold_failed_call(context, raw_args, arguments)
-
-        if len(retained) >= limit:
-            capped += 1
-            continue
-        retained.append(
-            _PendingToolCall(
-                id=call.id,
-                name=canonical_name,
-                called_name=call.called_name or call.name,
-                arg_chunks=[replay_args],
-                validation_error=validation_error,
-                unavailable=tool is None,
-                refused=refused,
-            )
-        )
-
-    return retained, _ToolBatchStats(
-        received=len(calls),
-        retained=len(retained),
-        duplicate=duplicate,
-        invalid=invalid,
-        capped=capped,
-        repaired=tuple(repaired),
-    )
-
-
-def _assistant_message_with_tool_calls(
-    message: ai.messages.Message,
-    calls: list[_PendingToolCall],
-    *,
-    diagnostic_suffix: str = "",
-) -> ai.messages.Message:
-    """Replace raw SDK tool-call parts with the normalized batch.
-
-    Parts keep their order and the diagnostic text goes before the first call.
-    A signed reasoning part that follows a call the batch dropped is left out:
-    its signature covers the parts before it.
-    """
-    kept = {call.id: call for call in calls}
-    parts: list[Any] = []
-    placed: set[str] = set()
-    dropped_call = False
-    suffix = diagnostic_suffix
-
-    def _place_suffix() -> None:
-        nonlocal suffix
-        if suffix:
-            if parts and isinstance(parts[-1], ai.types.messages.TextPart):
-                parts[-1] = parts[-1].model_copy(update={"text": parts[-1].text + suffix})
-            else:
-                parts.append(ai.types.messages.TextPart(text=suffix))
-            suffix = ""
-
-    for part in message.parts:
-        if isinstance(part, ai.types.messages.ToolCallPart):
-            _place_suffix()
-            call = kept.get(part.tool_call_id)
-            if call is None or call.id in placed:
-                dropped_call = True
-                continue
-            placed.add(call.id)
-            parts.append(part.model_copy(update={"tool_name": call.name, "tool_args": call.arguments()}))
-        elif isinstance(part, ai.types.messages.ReasoningPart) and part.provider_metadata and dropped_call:
-            continue
-        else:
-            parts.append(part)
-    _place_suffix()
-    for call in calls:
-        if call.id not in placed:
-            parts.append(ai.types.messages.ToolCallPart(
-                tool_call_id=call.id,
-                tool_name=call.name,
-                tool_args=call.arguments(),
-            ))
-    if not parts:
-        parts.append(ai.types.messages.TextPart(text=""))
-    return message.model_copy(update={"parts": parts})
-
-
-def _incomplete_has_dangling_tool_args(pending_calls: list[_PendingToolCall]) -> bool:
-    return dangling_arguments(pc.arguments() for pc in pending_calls)
-
-
-def _truncated_tool_call_notice(reason: str, pending_calls: list[_PendingToolCall]) -> str:
-    names = sorted({pc.name or 'unknown' for pc in pending_calls})
-    joined = ", ".join(names)
-    suffix = f' for {joined}' if joined else ""
-    return (
-        snippets.render('incomplete-tool-call', REASON=reason, TOOLS=suffix)
-    )
-
-
 # --------------------------------------------------------------------------
 # Tool trace
 # --------------------------------------------------------------------------
@@ -604,51 +290,6 @@ def _trace_result(telemetry: Telemetry, tool_context: ToolContext | None, name: 
         _output(telemetry, "tool_result", call=exchange, name=name, args=args, result=result,
                 malformed=malformed, context=tool_context, view=view, screen=screen,
                 traced=traced)
-
-
-def _repair_jsonish(raw: str) -> dict:
-    return tool_args.repair_jsonish(raw)
-
-
-def _canonical_tool_args(raw: str) -> str:
-    """Return tool-call args as a string the `ai` SDK will accept verbatim.
-
-    The model occasionally emits args that are not strictly valid JSON (a
-    trailing comma, an unclosed brace, a double-encoded string) — typically on
-    large `write`/`patch` content payloads. `_dispatch` repairs these for
-    execution via `_repair_jsonish`, but the *history* we resend each turn
-    carries the raw string. The SDK's integrity pass (`ai.types.integrity`)
-    re-validates every prior tool call with `json.loads` and **blanks**
-    unparseable args to ``"{}"`` (logging "invalid-tool-args"), so the model
-    sees its own prior call as empty and flails.
-
-    To keep history and execution consistent we return the raw bytes untouched
-    only when they are already a JSON *object*. Otherwise — unparseable args, or
-    args that are valid JSON of the wrong shape (a double-encoded string wrapping
-    the real object) — we substitute the repaired, canonical object so history
-    matches what executed. If even the repair fails, the raw string is returned
-    unchanged (the SDK will blank it — nothing we can recover there).
-    """
-    return tool_args.canonical_tool_args(raw)
-
-
-def _sanitize_assistant_message(msg: ai.messages.Message) -> ai.messages.Message:
-    """Repair raw tool-call args inside an SDK assistant message before it is
-    resent as history, so the SDK's integrity pass does not blank them to
-    ``{}``. Returns the message unchanged when nothing needs repair (frozen
-    pydantic models require a copy to mutate)."""
-    new_parts: list[Any] = []
-    changed = False
-    for part in msg.parts:
-        if isinstance(part, ai.types.messages.ToolCallPart):
-            fixed = _canonical_tool_args(part.tool_args)
-            if fixed != part.tool_args:
-                part = part.model_copy(update={"tool_args": fixed})
-                changed = True
-        new_parts.append(part)
-    if not changed:
-        return msg
-    return msg.model_copy(update={"parts": new_parts})
 
 
 # --------------------------------------------------------------------------
@@ -758,7 +399,7 @@ async def _run_call(way: _CallWay, name: str, raw_args: str, *, call_id: str, ca
     count errors, narrow read coverage. Returns (parsed_args, result)."""
     logged_name = called_name or name
     try:
-        args = _repair_jsonish(raw_args)
+        args = tool_calls.repair_jsonish(raw_args)
     except ValueError as exc:
         opened = _trace_call(telemetry, context, name, None, malformed=True,
                              traced=trace, deferred=trace_together)
@@ -775,7 +416,7 @@ async def _run_call(way: _CallWay, name: str, raw_args: str, *, call_id: str, ca
     if tool is None:
         telemetry.event("tool_unknown", tool=logged_name, call_id=call_id, args=args)
         result = registry.unavailable_error(name)
-        if way.hold_unknown_write and _canonical_tool_call_name(name, registry) == "write":
+        if way.hold_unknown_write and tool_calls.canonical_tool_call_name(name, registry) == "write":
             result += held.hold_failed_call(context, raw_args, args)
         result = result_caps.cap_result(result, cap_bytes, context=context)
         _trace_result(telemetry, context, name, result, args=args, exchange=opened, traced=trace)
@@ -844,7 +485,7 @@ def _dispatch(name: str, raw_args: str, telemetry: Telemetry,
 
 
 async def _dispatch_fan_out_async(
-    pc: _PendingToolCall,
+    pc: tool_calls.PendingToolCall,
     telemetry: Telemetry,
     cap_bytes: int,
     trace: bool,
@@ -852,7 +493,7 @@ async def _dispatch_fan_out_async(
     registry: ToolRegistry,
     tool_context: ToolContext,
     trace_together: bool = False,
-) -> tuple[_PendingToolCall, dict, str]:
+) -> tuple[tool_calls.PendingToolCall, dict, str]:
     """Execute ONE fan-out (task / named-agent) tool call by awaiting its child
     turns on the current loop (never a dispatch thread)."""
     args, result = await _run_call(
@@ -863,9 +504,9 @@ async def _dispatch_fan_out_async(
 
 
 async def _dispatch_async_tool(
-    pc: _PendingToolCall, telemetry: Telemetry, cap_bytes: int, trace: bool,
+    pc: tool_calls.PendingToolCall, telemetry: Telemetry, cap_bytes: int, trace: bool,
     error_tracker: tool_errors.ToolErrorTracker, registry: ToolRegistry, tool_context: ToolContext,
-) -> tuple[_PendingToolCall, dict, Any]:
+) -> tuple[tool_calls.PendingToolCall, dict, Any]:
     """Execute one call of an async handler on the current loop."""
     args, result = await _run_call(
         _ON_LOOP, pc.name, pc.arguments(), call_id=pc.id, called_name=pc.called_name,
@@ -882,18 +523,18 @@ def _operator_sees(output: ToolOutput, model: Any) -> Any:
     return model if output.whole is None else output.whole
 
 
-def _is_task_call(pc: _PendingToolCall) -> bool:
+def _is_task_call(pc: tool_calls.PendingToolCall) -> bool:
     return pc.name.lower() == "task"
 
 
-def _is_read_only_call(pc: _PendingToolCall, registry: ToolRegistry) -> bool:
+def _is_read_only_call(pc: tool_calls.PendingToolCall, registry: ToolRegistry) -> bool:
     """True when ``pc`` names a tool that writes nothing with these arguments.
     A call that cannot be resolved or parsed is not read-only."""
     tool = registry.resolve(pc.name)
     if tool is None or pc.validation_error is not None:
         return False
     try:
-        args = _repair_jsonish(pc.arguments())
+        args = tool_calls.repair_jsonish(pc.arguments())
     except ValueError:
         return False
     return call_is_read_only(tool, args)
@@ -929,16 +570,16 @@ class _DispatchProgress:
     """Known outcomes survive cancellation; the stop flag gates queued leaves."""
 
     stopped: threading.Event = field(default_factory=threading.Event)
-    records: dict[str, tuple[_PendingToolCall, dict, Any]] = field(default_factory=dict)
+    records: dict[str, tuple[tool_calls.PendingToolCall, dict, Any]] = field(default_factory=dict)
     finished: dict[str, float] = field(default_factory=dict)   # call id -> when its result came
 
-    def record(self, pc: _PendingToolCall, args: dict, result: Any) -> None:
+    def record(self, pc: tool_calls.PendingToolCall, args: dict, result: Any) -> None:
         self.records[pc.id] = (pc, args, result)
         self.finished[pc.id] = time.time()
 
 
 def _dispatch_tool_calls(
-    tool_calls: list[_PendingToolCall],
+    tool_calls: list[tool_calls.PendingToolCall],
     telemetry: Telemetry,
     cap_bytes: int,
     trace: bool,
@@ -947,7 +588,7 @@ def _dispatch_tool_calls(
     tool_context: ToolContext,
     progress: _DispatchProgress | None = None,
     trace_together: bool = False,
-) -> list[tuple[_PendingToolCall, dict, str]]:
+) -> list[tuple[tool_calls.PendingToolCall, dict, str]]:
     """Dispatch one assistant batch.
 
     All `task` calls from the same assistant turn run concurrently first. The
@@ -1078,7 +719,7 @@ def _interrupt_inflight(tool_context: ToolContext) -> None:
 
 
 async def _dispatch_batch(
-    tool_calls: list[_PendingToolCall],
+    tool_calls: list[tool_calls.PendingToolCall],
     telemetry: Telemetry,
     cap_bytes: int,
     trace: bool,
@@ -1087,7 +728,7 @@ async def _dispatch_batch(
     tool_context: ToolContext,
     loop: asyncio.AbstractEventLoop,
     progress: _DispatchProgress | None = None,
-) -> list[tuple[_PendingToolCall, dict, Any]]:
+) -> list[tuple[tool_calls.PendingToolCall, dict, Any]]:
     """Drain running sync leaves on cancel, cancel async work, retain outcomes.
 
     Fan-out stays on the event loop to avoid blocking descendant dispatch on
@@ -1108,7 +749,7 @@ async def _dispatch_batch(
         elif inspect.iscoroutinefunction(tool.handler):
             async_leaves.add(i)
 
-    async def sync_calls(calls: list[_PendingToolCall]) -> None:
+    async def sync_calls(calls: list[tool_calls.PendingToolCall]) -> None:
         if not calls or progress.stopped.is_set():
             return
         # A running Python worker cannot be cancelled. Keep its future alive,
@@ -1354,22 +995,22 @@ def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, 
                       messages: list[dict], convo: TurnConvo, registry: ToolRegistry,
                       context: ToolContext, token_state: context_budget.TokenState,
                       telemetry: Telemetry, events: TurnEvents, sink: StreamSink,
-                      suppress_output: bool) -> tuple[list[_PendingToolCall], str | None, ToolRegistry]:
+                      suppress_output: bool) -> tuple[list[tool_calls.PendingToolCall], str | None, ToolRegistry]:
     """Append the reply to the history and the convo. Returns the tool calls
     to run, the reply's incomplete reason, and the registry that authorizes
     the calls: the surface this model call saw."""
     result = reply.result
     text = result.text
     pending_calls = [
-        _PendingToolCall(id=call.id, name=call.name, arg_chunks=[call.arguments])
+        tool_calls.PendingToolCall(id=call.id, name=call.name, arg_chunks=[call.arguments])
         for call in result.tool_calls
     ]
     provider_metadata, incomplete_reason = reply.provider_metadata, reply.incomplete_reason
     assistant_message_override: ai.messages.Message | None = None
-    if incomplete_reason and pending_calls and _incomplete_has_dangling_tool_args(pending_calls):
-        notice = _truncated_tool_call_notice(incomplete_reason, pending_calls) + "".join(
+    if incomplete_reason and pending_calls and tool_calls.incomplete_has_dangling_tool_args(pending_calls):
+        notice = tool_calls.truncated_tool_call_notice(incomplete_reason, pending_calls) + "".join(
             held.hold_failed_call(context, pc.arguments(), None) for pc in pending_calls
-            if _canonical_tool_call_name(pc.name, registry) == "write")
+            if tool_calls.canonical_tool_call_name(pc.name, registry) == "write")
         telemetry.event(
             "tool_call_dropped",
             reason="incomplete_truncated_args",
@@ -1391,7 +1032,7 @@ def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, 
     dispatch_registry = registry.dispatch_registry()
     batch_diagnostic_suffix = ""
     if pending_calls:
-        pending_calls, batch_stats = _normalize_tool_call_batch(
+        pending_calls, batch_stats = tool_calls.normalize_tool_call_batch(
             pending_calls,
             dispatch_registry,
             getattr(
@@ -1420,7 +1061,7 @@ def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, 
 
     assistant_message = assistant_message_override or result.assistant_message
     if result.tool_calls:
-        assistant_message = _assistant_message_with_tool_calls(
+        assistant_message = tool_calls.assistant_message_with_tool_calls(
             assistant_message,
             pending_calls,
             diagnostic_suffix=batch_diagnostic_suffix,
@@ -1439,7 +1080,7 @@ def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, 
         provider_id=request.provider_id,
         model_id=request.model,
     )
-    convo.append(memory.note_time(record), message=_sanitize_assistant_message(assistant_message))
+    convo.append(memory.note_time(record), message=tool_calls.sanitize_assistant_message(assistant_message))
     # Recorded in full now; a later ^C in this turn must not re-append it.
     sink.clear()
     token_state.record_provider_usage(
@@ -1476,11 +1117,11 @@ def _send_resume_nudge(convo: TurnConvo, *, n: int, limit: int,
         _notice(telemetry, msgs.MAX_OUTPUT_RESUMING, stderr=True, flush=True, n=n, limit=limit)
 
 
-async def _record_tool_results(pending_calls: list[_PendingToolCall], *, cfg: Config, trace: bool,
+async def _record_tool_results(pending_calls: list[tool_calls.PendingToolCall], *, cfg: Config, trace: bool,
                                messages: list[dict], convo: TurnConvo, registry: ToolRegistry,
                                dispatch_registry: ToolRegistry, context: ToolContext,
                                error_tracker: tool_errors.ToolErrorTracker, telemetry: Telemetry,
-                               events: TurnEvents) -> list[tuple[_PendingToolCall, dict, Any]]:
+                               events: TurnEvents) -> list[tuple[tool_calls.PendingToolCall, dict, Any]]:
     """Run the batch and append its results to the history and the convo.
     Returns the (call, arguments, result) records of the calls that ran.
 
@@ -1490,8 +1131,8 @@ async def _record_tool_results(pending_calls: list[_PendingToolCall], *, cfg: Co
     for pc in pending_calls:
         telemetry.event("tool_scheduled", tool=pc.called_name or pc.name, call_id=pc.id)
     for index, pc in enumerate(pending_calls):
-        call = {"id": pc.id, "name": _canonical_tool_call_name(pc.name, registry),
-                "arguments": _canonical_tool_args(pc.arguments())}
+        call = {"id": pc.id, "name": tool_calls.canonical_tool_call_name(pc.name, registry),
+                "arguments": tool_calls.canonical_tool_args(pc.arguments())}
         emission = events.emit("tool_call", **call)
         refusal = event_mod.refusal_of(emission)
         if refusal and pc.validation_error is None:
@@ -1512,7 +1153,7 @@ async def _record_tool_results(pending_calls: list[_PendingToolCall], *, cfg: Co
     # while that earlier result is still in the history the model sees.
     context.reads.keep_shown(_tool_results_in(messages))
     progress = _DispatchProgress()
-    context.turn_status.tool_begin([_canonical_tool_call_name(pc.name, registry) for pc in pending_calls])
+    context.turn_status.tool_begin([tool_calls.canonical_tool_call_name(pc.name, registry) for pc in pending_calls])
     try:
         dispatch_records = await _dispatch_batch(
             pending_calls,
@@ -1535,10 +1176,10 @@ async def _record_tool_results(pending_calls: list[_PendingToolCall], *, cfg: Co
             [r for _, _, r in dispatch_records],
             getattr(cfg, "max_tool_results_per_turn_bytes", 0),
         )
-        reconciled: list[tuple[_PendingToolCall, dict, Any]] = []
+        reconciled: list[tuple[tool_calls.PendingToolCall, dict, Any]] = []
         for (pc, args, old_result), new_result in zip(dispatch_records, capped, strict=True):
             _reconcile_read_delivery(
-                _canonical_tool_call_name(pc.name, registry),
+                tool_calls.canonical_tool_call_name(pc.name, registry),
                 args,
                 old_result,
                 new_result,
@@ -1550,7 +1191,7 @@ async def _record_tool_results(pending_calls: list[_PendingToolCall], *, cfg: Co
         context.reads.settle()
         records: list[dict] = []
         for pc, _args, result_value in dispatch_records:
-            canonical_pc = _pending_with_name(pc, _canonical_tool_call_name(pc.name, registry))
+            canonical_pc = tool_calls.pending_with_name(pc, tool_calls.canonical_tool_call_name(pc.name, registry))
             events.emit(
                 "tool_result",
                 id=pc.id,
@@ -1576,14 +1217,14 @@ def _steer_off_repeated_errors(due: list[tuple[str, int]], *, convo: TurnConvo,
         telemetry.event("tool_error_steered", tool=name, repeats=count)
 
 
-def _record_tool_error_limit(name: str, dispatch_records: list[tuple[_PendingToolCall, dict, Any]], *,
+def _record_tool_error_limit(name: str, dispatch_records: list[tuple[tool_calls.PendingToolCall, dict, Any]], *,
                              registry: ToolRegistry, convo: TurnConvo, events: TurnEvents) -> None:
     """End the turn on an assistant message naming ``name``, the tool that
     repeated its error after being told to stop, and its last error."""
     last_error = next(
         (result_value
          for pc, _, result_value in reversed(dispatch_records)
-         if _canonical_tool_call_name(pc.name, registry) == name
+         if tool_calls.canonical_tool_call_name(pc.name, registry) == name
          and isinstance(result_value, str) and not isinstance(result_value, Output)
          and result_value.startswith("ERROR")),
         "",
@@ -1680,7 +1321,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     convo = TurnConvo(system, messages, provider_id=provider_id, model=model,
                       vision=vision_enabled_for_model(model, getattr(cfg, "settings", None)))
     base_registry = tool_registry or T.stock_registry()
-    alias_map = _resolve_alias_profile(getattr(cfg, "settings", {}) or {}, model, provider_id, base_registry)
+    alias_map = tool_calls.resolve_alias_profile(getattr(cfg, "settings", {}) or {}, model, provider_id, base_registry)
     active_context = tool_context or T.STOCK_CONTEXT
     owns_mcp_host = mcp_host is None
     if owns_mcp_host and getattr(cfg, "mcp", None) is not None and getattr(cfg.mcp, "servers", ()):
@@ -1728,7 +1369,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     caller = ModelCaller(
         request, limits, convo=convo, budget=budget, sink=sink, events=events, telemetry=telemetry,
         context=active_context, turn_status=turn_status, registry=active_registry,
-        alias=functools.partial(_aliased_tool_specs, alias_map=alias_map), mcp_host=mcp_host,
+        alias=functools.partial(tool_calls.aliased_tool_specs, alias_map=alias_map), mcp_host=mcp_host,
         call_stats=call_stats, trace=trace, suppress_output=suppress_output,
     )
     error_tracker = tool_errors.ToolErrorTracker.from_settings(getattr(cfg, "settings", None))

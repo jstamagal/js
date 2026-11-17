@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from test_lazy_tool_discovery import _cfg, _result
 
-from js import paths, result_caps, runtime, tool_errors
+from js import paths, result_caps, runtime, tool_calls, tool_errors
 from js.toolkit import core as tool_core, fs
 from js.toolkit.core import Tool, ToolContext, call_is_read_only
 from js.toolkit.registry import ToolRegistry, build_default_registry
@@ -51,8 +51,8 @@ def _sleeper_registry(probe: Probe, seconds: float, *, read_only: bool = True) -
                               required=("label",), read_only=read_only),), {})
 
 
-def _calls(*labels: str, name: str = "sleeper") -> list[runtime._PendingToolCall]:
-    return [runtime._PendingToolCall(label, name, [json.dumps({"label": label})]) for label in labels]
+def _calls(*labels: str, name: str = "sleeper") -> list[tool_calls.PendingToolCall]:
+    return [tool_calls.PendingToolCall(label, name, [json.dumps({"label": label})]) for label in labels]
 
 
 def _dispatch(calls, registry, context, *, trace: bool = False, progress=None, telemetry=None):
@@ -141,11 +141,11 @@ def test_read_read_patch_read_runs_the_reads_together_and_the_patch_alone(tmp_pa
     ), {})
     read_args = json.dumps({"file_path": str(target)})
     calls = [
-        runtime._PendingToolCall("r1", "read", [read_args]),
-        runtime._PendingToolCall("r2", "read", [read_args]),
-        runtime._PendingToolCall("p1", "patch", [json.dumps(
+        tool_calls.PendingToolCall("r1", "read", [read_args]),
+        tool_calls.PendingToolCall("r2", "read", [read_args]),
+        tool_calls.PendingToolCall("p1", "patch", [json.dumps(
             {"file_path": str(target), "old_string": "beta", "new_string": "BETA"})]),
-        runtime._PendingToolCall("r3", "read", [read_args]),
+        tool_calls.PendingToolCall("r3", "read", [read_args]),
     ]
 
     records = _dispatch(calls, registry, ToolContext(cwd=tmp_path, max_parallel_tools=8))
@@ -166,7 +166,7 @@ def test_concurrent_reads_of_one_file_leave_consistent_coverage(tmp_path):
     for _round in range(5):
         context = ToolContext(cwd=tmp_path, max_parallel_tools=8)
         calls = [
-            runtime._PendingToolCall(f"r{start}", "read", [json.dumps(
+            tool_calls.PendingToolCall(f"r{start}", "read", [json.dumps(
                 {"file_path": str(target), "range": {"start_line": start, "end_line": start + 9}})])
             for start in range(1, 81, 10)
         ]

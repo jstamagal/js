@@ -19,7 +19,7 @@ import pytest
 from jail_probe import bwrap_starts, needs_bwrap
 from test_subagent_isolation import _fake_stream_result, make_cfg, prompt_dir
 
-from js import cli, jail, paths, persona, runtime, settings, tool_errors
+from js import cli, jail, paths, persona, runtime, settings, tool_calls, tool_errors
 from js.toolkit import ToolContext, call_tool, fs, python_kernel, shell_fetch, terminal
 from js.toolkit.registry import build_default_registry
 
@@ -160,10 +160,10 @@ def test_fs_search_refuses_the_home(jailed):
 def test_parallel_read_only_calls_stay_in_the_jail(jailed):
     """One batch of read-only calls runs at once; each is still confined."""
     calls = [
-        runtime._PendingToolCall("in", "read", ['{"file_path": "inside.txt"}']),
-        runtime._PendingToolCall("home", "read", ['{"file_path": "~/.zshrc"}']),
-        runtime._PendingToolCall("grep", "fs_search", ['{"pattern": "inside", "output_mode": "content"}']),
-        runtime._PendingToolCall("grep_home", "fs_search", [f'{{"pattern": "{SECRET}", "path": "~"}}']),
+        tool_calls.PendingToolCall("in", "read", ['{"file_path": "inside.txt"}']),
+        tool_calls.PendingToolCall("home", "read", ['{"file_path": "~/.zshrc"}']),
+        tool_calls.PendingToolCall("grep", "fs_search", ['{"pattern": "inside", "output_mode": "content"}']),
+        tool_calls.PendingToolCall("grep_home", "fs_search", [f'{{"pattern": "{SECRET}", "path": "~"}}']),
     ]
     jailed.max_parallel_tools = 8
 
@@ -352,7 +352,7 @@ def test_a_host_tmp_path_the_jail_does_not_show_is_refused_without_the_jail_dir(
     host_dir = Path(tempfile.mkdtemp(prefix="js-jail-other-", dir="/tmp"))
     try:
         (host_dir / "x.txt").write_text("host-only\n")
-        calls = [runtime._PendingToolCall("r", "read", [f'{{"file_path": "{host_dir}/x.txt"}}'])]
+        calls = [tool_calls.PendingToolCall("r", "read", [f'{{"file_path": "{host_dir}/x.txt"}}'])]
 
         records = runtime._dispatch_tool_calls(
             calls, runtime.Telemetry(None), 65536, False, tool_errors.ToolErrorTracker(),
