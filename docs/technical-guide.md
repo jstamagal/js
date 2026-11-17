@@ -35,7 +35,19 @@ persists each completed turn.
 ## Module Responsibilities
 
 | Module | Responsibility |
-| `js/cli.py` | argument parser, the run's setup, the mode picker, prompt/pipe mode, commit orchestration |
+| `js/cli.py` | `main`: the run's setup, the mode picker, prompt/pipe mode (`-p`, `--json`, `--json-stream`), `--compact` |
+| `js/command_line.py` | the argument parser, and argv read the way it reads it |
+| `js/cli_options.py` | invocation-local prompt and tool overrides the modes share (`Setup`) |
+| `js/bench.py` | `--bench AGENT`: an agent over its benchmark cases, one row per case |
+| `js/commit_cli.py` | `--commit`: snapshot the worktree, then run the commit agent over it |
+| `js/listings.py` | the `--list-*` printers, as text or JSON |
+| `js/migrate_config.py` | `--migrate-config`: a legacy `config.toml` as a jsrc set-script |
+| `js/run_assembly.py` | config, agent and model settled into a run (`settle`), the turn `-p`, the REPL, `--bench` and swarm agents start from |
+| `js/routing.py` | the provider and model route a run resolves to, and its credentials |
+| `js/conversation.py` | a session's history across turns (`Conversation.turn`), as `-p` and swarm agents run them |
+| `js/history_record.py` | the history record of a message, and the SDK message it becomes |
+| `js/swarm.py` | the swarm bus: inboxes, the room log, claims, the work board, the bus tools |
+| `js/swarm_run.py` | every agent of a swarm in one process (`python -m js.swarm run SPEC.json`) |
 | `js/repl.py` | the interactive REPL: startup (`start_repl`), the input loop, the turn queue and steering, the status bar, the `/session` switch |
 | `js/repl_commands.py` | the REPL's slash commands: the command table (`COMMANDS`), dispatch, aliases, `/load` and the startup run of the jsrc files |
 | `js/repl_state.py` | the REPL's live state (`ReplState`), its assembly, and carrying live settings into the route and tool registry |
@@ -68,6 +80,10 @@ persists each completed turn.
 | `js/toolkit/plan.py` | plan tool |
 | `js/toolkit/skill.py` | skill tool |
 | `js/toolkit/subagents.py` | task and generated agent tools |
+| `js/toolkit/results.py` | tool results: the adapters output sinks share, and the spill and cut that bound what a model gets |
+| `js/toolkit/presentation.py` | how the screen shows a tool (`Presentation`), and its result parsed for drawing |
+| `js/toolkit/reads.py` | the read ledger: what of each file the model has seen, so an edit of unread or changed lines is refused |
+| `js/toolkit/undo.py` | undo snapshots, in memory and, for a saved session, in a bounded store on disk |
 | `js/toolkit/wiki/` | deterministic tools for installed wiki agents |
 
 ## Prompt Loading
@@ -410,7 +426,8 @@ Image result shape:
 
 ## Built-In Modes
 
-`--commit` is a convenience wrapper around the prompt-directory `commit` agent.
+`--commit` (`js/commit_cli.py`) is a convenience wrapper around the
+prompt-directory `commit` agent: it snapshots the worktree, then runs the agent.
 
 ## Commit Helper
 

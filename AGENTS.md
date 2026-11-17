@@ -46,15 +46,18 @@ provider creds: `just test-live`. One test directly:
 
 ## Architecture in one breath
 
-Streaming tool-use loop: sync runtime over the async SDK.
-`js/model_client.py` is the model I/O boundary (providers are registered in
+Streaming tool-use loop on one event loop, over the async SDK; tools are
+sync and run on executor threads. `js/model_client.py` is the model I/O boundary (providers are registered in
 `js/providers.py`); `js/runtime.py` is the loop (dispatch, subagent
 fan-out), and a turn's model call and streamed reply live in
-`js/turn_call.py` and `js/turn_stream.py`; `js/cli.py` parses the command
-line and picks the mode, and `js/repl.py` is the interactive REPL (startup,
+`js/turn_call.py` and `js/turn_stream.py`; `js/cli.py` is `main`: it reads
+the command line (`js/command_line.py` defines it) and picks the mode, each
+side mode (`--bench`, `--commit`, `--list-*`) living in a module of its own, and `js/repl.py` is the interactive REPL (startup,
 the input loop, the turn queue, steering); `js/run_assembly.py` turns config,
 agent and model into a settled run, the ready-to-run turn that `-p`, the REPL
-at startup, `--bench` and swarm agents start from; `js/toolkit/` is the tools — model-facing contracts live
+at startup, `--bench` and swarm agents start from; `js/conversation.py` keeps
+a session's history across turns, and `-p` and swarm agents run their turns
+through it; `js/toolkit/` is the tools — model-facing contracts live
 in `tool_descriptions/*.md`, not in code. Agents are prompt directories
 (`js/persona.py` + `defaults/agents/`; layered per file, project > home > defaults; `agent.yaml`
 beside the prompt picks model, reasoning and tool surface, resolved against
