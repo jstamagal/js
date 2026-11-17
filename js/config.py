@@ -437,11 +437,10 @@ def resolve_agent_id(
     agent_id: str | None = None,
     *,
     sources: InvocationSources = InvocationSources(),
-    cwd: Path | None = None,
 ) -> str:
     """The agent `from_env` picks for the same arguments, without building a
     Config: ``agent_id`` beats env JS_DEFAULT_AGENT, which beats the jsrc layers."""
-    return agent_from_settings(run_settings(cwd, sources=sources), agent_id)
+    return agent_from_settings(run_settings(sources=sources), agent_id)
 
 
 def _set_by_invocation(key: str, env: Mapping[str, str], extras: tuple[str, ...]) -> bool:
