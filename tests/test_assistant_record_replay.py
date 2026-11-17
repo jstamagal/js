@@ -25,7 +25,7 @@ import httpx2
 import pytest
 
 from js import history_record, memory, model_client, runtime
-from js.config import from_env
+from js.config import InvocationSources, from_env
 from js.toolkit import ToolContext
 
 SNAPSHOTS = Path(__file__).parent / "fixtures" / "assistant_record_replay"
@@ -338,7 +338,7 @@ def _observe(name: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Obse
               "OUTPUT_TOKENS_RETRY_MAX=0", "REQUEST_LOG=off", "TRANSCRIPT_LOG=off", *case.extras]
     if case.base:
         extras.append(f"BASE_URL={case.base}")
-    cfg = from_env(agent_id="replay", session="replay", extras=extras)
+    cfg = from_env(agent_id="replay", session="replay", sources=InvocationSources(extras=tuple(extras)))
     cfg = replace(cfg, session_file=tmp_path / "session.jsonl", project_dir=tmp_path)
     context = ToolContext(cwd=tmp_path)
     monkeypatch.setattr(runtime.T, "STOCK_CONTEXT", context)
