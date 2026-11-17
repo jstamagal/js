@@ -540,6 +540,8 @@ _LONG = "é" * 400
 _LONG_REPLIES: dict[str, tuple[str | None, tuple[bytes, ...]]] = {
     "serper_search": ("SERPER_API_KEY", (json.dumps(
         {"organic": [{"title": "t", "link": "https://x.test", "snippet": _LONG}]}).encode(),)),
+    "tavily_search": ("TAVILY_API_KEY", (json.dumps(
+        {"results": [{"title": "t", "url": "https://x.test", "content": _LONG}]}).encode(),)),
 }
 
 

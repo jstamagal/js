@@ -270,7 +270,7 @@ def tavily_search(
     if answer:
         parts.append(f"answer: {answer}")
     parts.append(numbered)
-    return _cap("\n\n".join(parts), context)
+    return truncate("\n\n".join(parts), context)
 
 
 def exa_search(
