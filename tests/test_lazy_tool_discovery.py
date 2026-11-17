@@ -7,6 +7,7 @@ from pathlib import Path
 import ai
 import ai.types.messages
 import ai.types.usage
+from turn_driver import run
 
 from js import context_budget, runtime, skills as skills_mod
 from js.config import Config
@@ -77,7 +78,7 @@ def _cfg(tmp_path: Path, settings: dict | None = None) -> Config:
     )
 
 
-def test_catalog_search_is_stable_and_respects_selected_policy(tmp_path):
+def test_catalog_search_is_stable_and_respects_selected_policy(tmp_path, monkeypatch):
     allowed = build_default_registry().select(["browser_probe:lazy", "terminal_session:lazy", "read:lazy"])
     surface = allowed.lazy_surface(tmp_path)
 
@@ -92,14 +93,8 @@ def test_catalog_search_is_stable_and_respects_selected_policy(tmp_path):
     assert json.loads(surface.discover(query="terminal session"))["results"][0]["source"] == "terminal"
     assert surface.discover(load="native:wiki_search").startswith("ERROR: no allowed catalog entry")
 
-    _, rejected = runtime._dispatch(
-        "browser_probe",
-        "{}",
-        runtime.Telemetry(None),
-        cap_bytes=4096,
-        registry=surface,
-        tool_context=ToolContext(cwd=tmp_path),
-    )
+    turn = run(tmp_path, monkeypatch, allowed, [[("probe", "browser_probe", "{}")]])
+    rejected = turn.results()["probe"]
     assert "native:browser_probe" in rejected
     assert "<retry>" not in rejected
 
