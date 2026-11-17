@@ -814,3 +814,32 @@ def test_a_jsrc_handler_that_needs_the_repl_is_reported_once_and_not_run(tmp_pat
 
     assert capsys.readouterr().err.count(f"{tmp_path / '.js' / 'jsrc'}:1") == 1
     assert all(json.loads(line) for line in out.getvalue().splitlines())
+
+
+def test_a_second_agent_on_a_running_agents_session_fails_without_writing(tmp_path, monkeypatch):
+    _agent_dir(tmp_path, monkeypatch)
+    room = swarm.Room(tmp_path / "bus")
+    out = io.StringIO()
+    turns: list[str] = []
+
+    async def stream(**kwargs):
+        turns.append(_user_texts(kwargs)[-1])
+        # The first agent keeps its session until the second has ended.
+        for _ in range(100):
+            if any(e["type"] == "agent_end" for e in _events(out)):
+                break
+            await asyncio.sleep(0.05)
+        room.send("steer", "*", "done", kind=swarm.STOP)
+        kwargs["on_text"]("ok")
+        return _text("ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    spec = _spec(tmp_path, [{"name": n, "agent": "voice", "opener": f"{n}-opener", "session": "shared", "cwd": str(tmp_path)}
+                            for n in ("a", "b")])
+
+    assert swarm_run.run(spec, out=out) == 1
+
+    events = _events(out)
+    ends = {e["agent"]: e["reason"] for e in events if e["type"] == "agent_end"}
+    assert sorted(ends.values()) == ["error", "stopped"]
+    assert len(turns) == 1

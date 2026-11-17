@@ -262,7 +262,7 @@ def _reserve_worker_session(agent_dir: Path, sessions_dir: Path, *, write_latest
 
 
 @contextmanager
-def _worker_session(session_file: Path):
+def worker_session(session_file: Path):
     """Hold one worker's conversation through replay, execution and persistence."""
     if session_file == Path(os.devnull):
         yield
@@ -384,7 +384,7 @@ async def _run_one_task_async(
     if reasoning:
         # The tool call's reasoning wins, as its model does.
         cfg = replace(cfg, reasoning_effort=reasoning)
-    with _worker_session(Path(cfg.session_file)):
+    with worker_session(Path(cfg.session_file)):
         prompt_spec = run_assembly.expand(prompt_spec, cfg)
 
         registry = full_registry.select(prompt_spec.tool_selectors, agent_id=agent)
@@ -463,7 +463,7 @@ async def _run_one_task_async(
 
                 async def resume(text: str) -> None:
                     """One turn typed in its window, on its own session."""
-                    with _worker_session(Path(cfg.session_file)), window.writing():
+                    with worker_session(Path(cfg.session_file)), window.writing():
                         try:
                             await chat.turn({"role": "user", "content": text}, **turn_kwargs)
                         finally:

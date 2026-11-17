@@ -256,6 +256,9 @@ class Runner:
         chat = None
         context = ToolContext(cwd=Path(spec.cwd).expanduser() if spec.cwd else Path.cwd())
         context.net_label = spec.name
+        # The agent's session is its own while it runs a turn or sleeps on it,
+        # as a subagent's is: a second runner on it fails instead of writing.
+        held = contextlib.ExitStack()
         try:
             agent = swarm.Agent(self.root / spec.name)
             agent.recruiter = self.recruiter(spec, agent)
@@ -263,6 +266,7 @@ class Runner:
             configure = _configure if self.configure is None else self.configure
             settled = configure(spec)
             cfg, system = settled.config, settled.system
+            held.enter_context(subagents.worker_session(Path(cfg.session_file)))
             if self.gate is None:
                 slots = _slots(cfg, self.spec_slots)
                 self.gate = asyncio.Semaphore(slots) if slots > 0 else contextlib.nullcontext()
@@ -316,6 +320,7 @@ class Runner:
             if chat is not None:
                 with contextlib.suppress(Exception):
                     chat.save()
+            held.close()
             subagents.close_child_tools(context)
             events.emit("agent_end", reason=reason)
 
