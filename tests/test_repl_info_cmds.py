@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
 
-from js import cli
+from repl_driver import record_turns, run_async
+
 from js.config import Config
-from js.repl_state import ReplState
+from js.memory import append_message
 
 
 def make_cfg(tmp_path: Path) -> Config:
@@ -31,61 +33,67 @@ def make_cfg(tmp_path: Path) -> Config:
     )
 
 
-def test_turns_command_prints_message_count(tmp_path, capsys):
+def _printed(monkeypatch, tmp_path, capsys, line: str, *, system: str = "SYSTEM") -> str:
+    """What `line` printed, typed into the REPL on make_cfg with the system
+    prompt `system`; it is not a turn."""
+    monkeypatch.chdir(tmp_path)
+    cfg = make_cfg(tmp_path)
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
+    turns = record_turns(monkeypatch)
+    printed: list[str] = []
+
+    async def typing(enter):
+        # The resumed exchanges, drawn as the screen came up, land first.
+        await asyncio.sleep(0)
+        capsys.readouterr()
+        await enter(line)
+        printed.append(capsys.readouterr().out)
+
+    run_async(monkeypatch, cfg, typing, system=system)
+    assert turns == []
+    return printed[0]
+
+
+def test_turns_command_prints_message_count(tmp_path, monkeypatch, capsys):
     # /turns prints len(state.messages).
     cfg = make_cfg(tmp_path)
-    state = ReplState(
-        messages=[
-            {"role": "user", "content": "one"},
-            {"role": "assistant", "content": "two"},
-            {"role": "user", "content": "three"},
-        ],
-    )
+    for message in (
+        {"role": "user", "content": "one"},
+        {"role": "assistant", "content": "two"},
+        {"role": "user", "content": "three"},
+    ):
+        append_message(cfg.session_file, message)
 
-    handled = cli._handle_command("/turns", state, cfg)
+    out = _printed(monkeypatch, tmp_path, capsys, "/turns")
 
-    assert handled is True
-    out = capsys.readouterr().out
     assert re.search(r"(?<!\d)3(?!\d)", out)
 
 
-def test_persona_command_prints_system_prompt(tmp_path, capsys):
+def test_persona_command_prints_system_prompt(tmp_path, monkeypatch, capsys):
     # /persona prints state.system[:2048].
-    cfg = make_cfg(tmp_path)
-    state = ReplState(messages=[], system="YOU ARE A HELPFUL APE")
+    out = _printed(monkeypatch, tmp_path, capsys, "/persona", system="YOU ARE A HELPFUL APE")
 
-    handled = cli._handle_command("/persona", state, cfg)
-
-    assert handled is True
-    out = capsys.readouterr().out
     # short prompt -> the prompt and nothing after it.
     assert out == "YOU ARE A HELPFUL APE\n"
 
 
-def test_persona_command_truncates_at_2048_bytes_with_note(tmp_path, capsys):
+def test_persona_command_truncates_at_2048_bytes_with_note(tmp_path, monkeypatch, capsys):
     # state.system longer than 2048 -> only first 2048 printed + a note that
     # carries the FULL byte length.
-    cfg = make_cfg(tmp_path)
     full = "A" * 2048 + "TAIL_THAT_MUST_NOT_PRINT"
-    state = ReplState(messages=[], system=full)
 
-    handled = cli._handle_command("/persona", state, cfg)
+    out = _printed(monkeypatch, tmp_path, capsys, "/persona", system=full)
 
-    assert handled is True
-    out = capsys.readouterr().out
     assert "A" * 2048 in out
     assert "TAIL_THAT_MUST_NOT_PRINT" not in out
     assert str(len(full)) in out  # the note names the full length
 
 
-def test_persona_command_keeps_exactly_2048_without_truncation_note(tmp_path, capsys):
+def test_persona_command_keeps_exactly_2048_without_truncation_note(tmp_path, monkeypatch, capsys):
     # boundary: len == 2048 is not > 2048, so no note is printed.
-    cfg = make_cfg(tmp_path)
     full = "B" * 2048
-    state = ReplState(messages=[], system=full)
 
-    handled = cli._handle_command("/persona", state, cfg)
+    out = _printed(monkeypatch, tmp_path, capsys, "/persona", system=full)
 
-    assert handled is True
-    out = capsys.readouterr().out
     assert out == "B" * 2048 + "\n"
