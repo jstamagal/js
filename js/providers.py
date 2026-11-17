@@ -20,7 +20,6 @@ from collections.abc import Mapping
 import modelsdotdev
 from ai.providers.base import _PROVIDER_REGISTRY
 
-from . import codex_auth, xai_auth
 
 Transport = str
 
@@ -354,30 +353,11 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         model_env=("MINIMAX_MODEL",),
     ),
     _p(
-        "openai-codex",
-        "OpenAI Codex OAuth",
-        "codex_oauth",
-        sdk=codex_auth.CODEX_PROVIDER_ID,
-        base=codex_auth.CODEX_BASE_URL,
-        aliases=(codex_auth.CODEX_DEVICE_PROVIDER_ID, "codex"),
-    ),
-    _p(
-        # Subscription login rather than a console API key: the OAuth bearer is
-        # spent against the same OpenAI-shaped endpoint, so the transport is
-        # ordinary openai and only the credential's origin differs.
-        xai_auth.XAI_PROVIDER_ID,
-        "xAI OAuth",
-        "openai",
-        sdk="openai",
-        base=xai_auth.XAI_BASE_URL,
-        aliases=("grok-oauth", "xai-login"),
-    ),
-    _p(
         "xai",
         "xAI API",
         "openai",
         sdk="openai",
-        base=xai_auth.XAI_BASE_URL,
+        base="https://api.x.ai/v1",
         key_env=("XAI_API_KEY",),
         base_env=("XAI_BASE_URL",),
         model_env=("XAI_MODEL",),

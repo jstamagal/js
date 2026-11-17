@@ -1,5 +1,5 @@
 """logins.toml hand edits: a malformed section must never crash a read, and
-must never be silently dropped by the next write (ALL-CLAIMS logins.py:216)."""
+must never be silently dropped by the next write."""
 
 from __future__ import annotations
 
@@ -65,53 +65,12 @@ def test_unknown_keys_in_a_good_section_round_trip(store):
     assert data["good"]["provider_api_key"] == "k"
 
 
-def test_unparseable_expiry_reads_as_expired_not_crash(store):
-    (store / "logins.toml").write_text(
-        "[openai-codex]\nprovider_id = \"openai-codex\"\nprovider_api_key = \"a\"\n"
-        "codex_refresh_token = \"r\"\ncodex_token_expires = \"soon\"\n"
-        "[xai-oauth]\nprovider_id = \"xai-oauth\"\nprovider_api_key = \"a\"\n"
-        "xai_refresh_token = \"r\"\nxai_token_expires = true\n",
-        encoding="utf-8",
-    )
-    loaded = logins.load_logins()
-    assert loaded["openai-codex"].codex_token_expires is None
-    assert loaded["xai-oauth"].xai_token_expires is None
-    from js import codex_auth, xai_auth
-
-    assert codex_auth.login_needs_refresh(loaded["openai-codex"]) is True
-    assert xai_auth.login_needs_refresh(loaded["xai-oauth"]) is True
-
-
-def test_numeric_string_expiry_is_parsed(store):
-    (store / "logins.toml").write_text(
-        "[openai-codex]\nprovider_id = \"openai-codex\"\ncodex_token_expires = \"1700000000.5\"\n",
-        encoding="utf-8",
-    )
-    assert logins.load_logins()["openai-codex"].codex_token_expires == 1700000000.5
-
-
 def test_bad_headers_table_is_quarantined(store):
     (store / "logins.toml").write_text(
         "[probe]\nprovider_id = \"probe\"\nprovider_headers = \"not a table\"\n",
         encoding="utf-8",
     )
     assert "probe" not in logins.load_logins()
-
-
-@pytest.mark.parametrize("literal", ["nan", "inf", "-inf", "true", "\"nan\"", "\"inf\""])
-def test_nonfinite_or_bool_expiry_reads_as_expired(store, literal):
-    # TOML accepts nan/inf as floats; `now >= nan` is False, so a nan expiry
-    # would never refresh ("fresh forever"). Unknown must mean expired.
-    (store / "logins.toml").write_text(
-        f"[openai-codex]\nprovider_id = \"openai-codex\"\nprovider_api_key = \"a\"\n"
-        f"codex_refresh_token = \"r\"\ncodex_token_expires = {literal}\n",
-        encoding="utf-8",
-    )
-    from js import codex_auth
-
-    login = logins.load_logins()["openai-codex"]
-    assert login.codex_token_expires is None
-    assert codex_auth.login_needs_refresh(login) is True
 
 
 def test_remove_login_of_a_quarantined_section_leaves_it_in_place(store):
@@ -136,8 +95,8 @@ def test_non_table_top_level_value_is_quarantined(store):
 
 
 def test_quarantine_does_not_outlive_a_deleted_file(store):
-    # maggie #625: load a bad section, delete the file, save a new login —
-    # the deleted bad section must not come back from a cache.
+    # Load a bad section, delete the file, save a new login — the deleted
+    # bad section must not come back from a cache.
     (store / "logins.toml").write_text("[bad]\nprovider_id = 5\n", encoding="utf-8")
     logins.load_logins()
     (store / "logins.toml").unlink()
@@ -147,8 +106,8 @@ def test_quarantine_does_not_outlive_a_deleted_file(store):
 
 
 def test_quarantine_does_not_leak_into_another_store(tmp_path: Path):
-    # maggie #619 / mikeno #627: a config-dir switch must not carry A's
-    # quarantined section or A's unknown fields into B.
+    # A config-dir switch must not carry A's quarantined section or A's
+    # unknown fields into B.
     store_a, store_b = tmp_path / "a", tmp_path / "b"
     store_a.mkdir()
     (store_a / "logins.toml").write_text(

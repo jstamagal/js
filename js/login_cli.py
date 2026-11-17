@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import ai
 
-from . import codex_auth, login_defaults, model_client, paranoid, providers, retry, xai_auth
+from . import login_defaults, model_client, paranoid, providers, retry
 from . import config, turn_settings
 from . import messages as msgs
 from .logins import (
@@ -26,7 +26,6 @@ from .logins import (
     remove_login,
     rename_login,
     save_login,
-    test_login,
     test_login_with_metadata,
     update_login,
 )
@@ -666,61 +665,6 @@ def _keep_list(provider_id: str, login: Login, models: list[str]) -> tuple[list[
     return to_cache, pending[0]
 
 
-def _run_codex_login(provider_id: str) -> int:
-    try:
-        if provider_id.strip().lower() == codex_auth.CODEX_DEVICE_PROVIDER_ID:
-            login = codex_auth.login_device()
-        else:
-            login = codex_auth.login_browser()
-        msgs.say(msgs.LOGIN_FETCHING)
-        models = test_login(login)
-    except Exception as exc:  # noqa: BLE001
-        msgs.warn(msgs.LOGIN_FAILED, error=f"{type(exc).__name__}: {exc}")
-        return 1
-
-    to_cache, login = _keep_list(login.provider_id, login, models)
-    if to_cache is None:
-        return 0
-    try:
-        save_login(login)
-        cache_models(login.provider_id, to_cache)
-    except LoginsCorruptError as exc:
-        msgs.warn(msgs.LOGIN_NOT_SAVED, error=exc)
-        return 1
-    _say_provider_added(login.provider_id, login.codex_email, len(to_cache))
-    return 0
-
-
-def _run_xai_login() -> int:
-    try:
-        login = xai_auth.login_browser()
-        msgs.say(msgs.LOGIN_FETCHING)
-        models = test_login(login)
-    except Exception as exc:  # noqa: BLE001
-        msgs.warn(msgs.LOGIN_FAILED, error=f"{type(exc).__name__}: {exc}")
-        return 1
-
-    to_cache, login = _keep_list(login.provider_id, login, models)
-    if to_cache is None:
-        return 0
-    try:
-        save_login(login)
-        cache_models(login.provider_id, to_cache)
-    except LoginsCorruptError as exc:
-        msgs.warn(msgs.LOGIN_NOT_SAVED, error=exc)
-        return 1
-    _say_provider_added(login.provider_id, login.xai_email, len(to_cache))
-    return 0
-
-
-def _say_provider_added(provider_id: str, email: str | None, model_count: int) -> None:
-    models = msgs.plural(model_count, "model")
-    if email:
-        msgs.say(msgs.PROVIDER_ADDED_AS, provider=provider_id, email=email, models=models)
-    else:
-        msgs.say(msgs.PROVIDER_ADDED, provider=provider_id, models=models)
-
-
 def _provider_details(login: Login, model_count: int) -> list[str]:
     provider = providers.get_provider(login.provider_id)
     return [
@@ -826,7 +770,7 @@ def _curses_prompt(stdscr: curses.window, prompt: str, default: str, *,
 
 
 def _edit_saved_provider(login: Login) -> None:
-    """Save local edits without fetching models or changing OAuth metadata."""
+    """Save local edits without fetching models."""
     base = _input(msgs.LOGIN_EDIT_BASE_URL.text(), default=login.provider_base_url or "")
     if base is None:
         return
@@ -997,7 +941,6 @@ def _run_login(provider_id: str | None = None, *, assembly: LoginAssembly | None
     warn = msgs.warn if assembly.warn is None else assembly.warn
     if provider_id is None:
         return _manage_providers()
-    raw_provider_id = provider_id
     provider_id = providers.normalize_provider_id(provider_id) or provider_id
 
     if provider_id == "__custom__":
@@ -1009,11 +952,6 @@ def _run_login(provider_id: str | None = None, *, assembly: LoginAssembly | None
         provider = providers.provider_for_login(provider_id)
         sdk_provider_id = provider.effective_sdk_provider_id
         shape_provider_id = provider.id if provider.id in _API_SHAPE_IDS else None
-
-    if codex_auth.is_codex_provider(provider_id):
-        return _run_codex_login(raw_provider_id)
-    if xai_auth.is_xai_oauth_provider(provider_id):
-        return _run_xai_login()
 
     login = collect(provider_id, sdk_provider_id, provider, shape_provider_id=shape_provider_id)
     if login is None:

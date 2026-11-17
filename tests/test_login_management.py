@@ -144,13 +144,6 @@ def test_rename_refuses_unreadable_cache_without_changing_login(tmp_path):
     assert (tmp_path / "logins.toml").read_bytes() == before
 
 
-def test_rename_oauth_provider_refused_without_losing_credentials():
-    logins.save_login(logins.Login("openai-codex", codex_refresh_token="refresh"))
-    with pytest.raises(ValueError, match="OAuth"):
-        logins.rename_login("openai-codex", "renamed")
-    assert logins.load_logins()["openai-codex"].codex_refresh_token == "refresh"
-
-
 def test_manager_rename_and_delete_shortcuts(monkeypatch):
     logins.save_login(logins.Login("mine", sdk_provider_id="openai"))
     logins.cache_models("mine", ["model"])
@@ -200,8 +193,8 @@ def test_manager_displays_saved_details_with_masked_credentials(monkeypatch):
     assert "<add custom provider>" in output
 
 
-def test_saved_update_is_offline_and_preserves_oauth_fields(monkeypatch):
-    logins.save_login(logins.Login("mine", provider_api_key="old", codex_refresh_token="refresh"))
+def test_saved_update_is_offline(monkeypatch):
+    logins.save_login(logins.Login("mine", provider_api_key="old"))
     answers = iter(["http://localhost:9000/v1", "new", "Authorization=Bearer token"])
     monkeypatch.setattr(login_cli, "_input", lambda *a, **kw: next(answers))
     monkeypatch.setattr(login_cli, "test_login_with_metadata", lambda *_: pytest.fail("unexpected fetch"))
@@ -211,7 +204,6 @@ def test_saved_update_is_offline_and_preserves_oauth_fields(monkeypatch):
     assert saved.provider_base_url == "http://localhost:9000/v1"
     assert saved.provider_api_key == "new"
     assert saved.provider_headers == {"Authorization": "Bearer token"}
-    assert saved.codex_refresh_token == "refresh"
 
 
 def test_cancel_update_leaves_store_untouched(monkeypatch, tmp_path):

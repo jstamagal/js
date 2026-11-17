@@ -47,8 +47,8 @@ provider creds: `just test-live`. One test directly:
 ## Architecture in one breath
 
 Streaming tool-use loop: sync runtime over the async SDK.
-`js/model_client.py` is the model I/O boundary (new providers land next to
-`codex_provider.py`); `js/runtime.py` is the loop (dispatch, subagent
+`js/model_client.py` is the model I/O boundary (providers are registered in
+`js/providers.py`); `js/runtime.py` is the loop (dispatch, subagent
 fan-out), and a turn's model call and streamed reply live in
 `js/turn_call.py` and `js/turn_stream.py`; `js/run_assembly.py` turns config,
 agent and model into a settled run, the ready-to-run turn that `-p`, the REPL

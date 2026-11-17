@@ -90,7 +90,6 @@ black-and-white registry picker of saved, env-configured, and known providers.
 `js --login <provider>` then uses the provider's established defaults: if an
 API key env var already exists it uses that, lists models to validate the
 credential, and offers an optional one-turn secondary model test before saving.
-Codex still uses OAuth.
 
 ```bash
 js --login                 # arrow-key provider registry (saved/env/known)
@@ -99,8 +98,6 @@ js --login ollama          # local Ollama defaults (http://127.0.0.1:11434/v1, k
 js --login llama.cpp       # local llama.cpp defaults (http://127.0.0.1:8080/v1)
 js --login mimo            # Xiaomi MiMo API endpoint
 js --login mimo-token-plan # Xiaomi MiMo Token Plan endpoint (SGP default)
-js --login openai-codex        # browser OAuth on localhost:1455
-js --login openai-codex-device # device-code OAuth; prints URL + code
 js --models-edit deepseek      # curate only DeepSeek's already-cached model list
 js --logout deepseek           # remove saved DeepSeek login and cached models
 ```
@@ -176,9 +173,8 @@ export JS_EFFORT=high
 ```
 
 CLI:
-For OpenAI Codex / ChatGPT OAuth models, reasoning is a separate setting. Use
-`JS_EFFORT=xhigh` or `--reasoning xhigh`; do **not** suffix the model id as
-`gpt-5.5:xhigh`.
+Reasoning is a separate setting. Use `JS_EFFORT=xhigh` or `--reasoning xhigh`;
+do **not** suffix the model id as `gpt-5.5:xhigh`.
 
 ```bash
 js --reasoning off -p "prompt"
@@ -195,7 +191,7 @@ REPL:
 
 `EFFORT` takes any one word and sends it as typed; `/set -EFFORT` restores
 the provider default. Where js recognizes the model by name (the family tables
-in `js/reasoning.py`, Codex, adaptive Claude) a word on the ladder
+in `js/reasoning.py`, adaptive Claude) a word on the ladder
 `off|minimal|low|medium|high|xhigh|max` is snapped to the nearest effort that
 model serves (`off` is the ladder's `none`). Any other word, and every word
 for a model js does not recognize, goes out verbatim, `off` and `spoon`
@@ -260,8 +256,8 @@ reject replayed reasoning (GLM) still have it stripped at the provider boundary.
 Other transports retain the tool-call-only replay policy; some providers require
 reasoning on those messages.
 
-Signed reasoning replays whole. An Anthropic thinking block's signature and a
-Codex reasoning item's encrypted content are stored on the assistant record as
+Signed reasoning replays whole. An Anthropic thinking block's signature and an
+OpenAI Responses reasoning item's encrypted content are stored on the assistant record as
 `reasoning_parts`, with the provider and model they came from in
 `reasoning_from`. They are sent back, on every later turn and after resume, only
 to that same provider and model; after a model switch the record falls back to
@@ -273,7 +269,7 @@ history: after the first tool result that clearing blanks, on the tail a
 keep-tail compaction keeps (in memory and on resume), and after a user message
 whose attached files are left out of the history. Parts before the edit keep
 replaying. If the provider still refuses a replayed signature ("Invalid
-`signature` in `thinking` block", or Codex's `invalid_encrypted_content` for an
+`signature` in `thinking` block", or OpenAI's `invalid_encrypted_content` for an
 item another account produced), the request is retried once with no signed
 reasoning in the history, and the history keeps none from then on, on disk too.
 An Anthropic tool continuation requires its original thinking blocks. If the
@@ -370,7 +366,7 @@ as its own parameters go there, every other one goes in `extra_body` under its
 lower-case name, which puts it at the top of the request body all the same:
 
 - OpenAI chat wires: `temperature`, `top_p`, `presence_penalty` as parameters.
-- Responses wires (`custom_responses`, Codex): `temperature`, `top_p`.
+- Responses wires (`custom_responses`): `temperature`, `top_p`.
 - Anthropic wires: none (the anthropic SDK's stream call takes no sampling
   parameter), so every field rides `extra_body`.
 
@@ -432,7 +428,6 @@ for providers that need a friendlier first-class login name:
 | `mimo` / `xiaomi` | Xiaomi MiMo API endpoint at `https://api.xiaomimimo.com/v1`. |
 | `mimo-token-plan*` / `xiaomi-token-plan-*` | Xiaomi MiMo Token Plan endpoints; SGP is the default shortcut, AMS/CN variants are explicit. |
 | `openai` | Generic OpenAI-compatible endpoint for OpenAI, proxies, and custom compatible servers. |
-| `openai-codex` | ChatGPT/Codex OAuth provider. `js --login openai-codex` opens the browser PKCE flow; `js --login openai-codex-device` uses the device-code flow. Tokens live only in the private login store. Runtime uses the Codex Responses endpoint at `https://chatgpt.com/backend-api/codex/responses`. |
 | `anthropic` | Anthropic direct API. |
 | `omp` | Oh My Pi gateway over the **OpenAI-compatible** transport (`sdk=openai`, no built-in base URL). Key env `OMP_API_KEY` / `OMP_GATEWAY_API_KEY`, base env `OMP_BASE_URL` / `OMP_GATEWAY_BASE_URL`, model env `OMP_MODEL` / `OMP_GATEWAY_MODEL`. No API key required, but a base URL must be set (see below). |
 | `cliproxyapi` | CLIProxyAPI local proxy on its own `cliproxyapi` transport over the OpenAI SDK shape (`sdk=openai`, no built-in base URL, custom login shape). Key env `CLIPROXYAPI_API_KEY` / `CLIPROXY_API_KEY`, base env `CLIPROXYAPI_BASE_URL` / `CLIPROXY_BASE_URL`, model env `CLIPROXYAPI_MODEL` / `CLIPROXY_MODEL`. A base URL must be set (see below). |
@@ -490,11 +485,9 @@ pickers (e.g. the Go picker), all printing a single line to stdout:
   `{"id", "name", "source"}`, where `source` is `login` (saved), `env`
   (configured via env vars), `registry` (known but unconfigured), or `custom`
   (saved login with no built-in def).
-- `python -m js --list-logins --json` — only saved logins, with `has_api_key` /
-  `has_codex_refresh_token` booleans. The Codex refresh token is always nulled
-  in the output, and Codex providers' `provider_api_key` is nulled too.
-  With `PARANOID_MODE on` or `extra`, API keys and xAI refresh tokens are
-  nulled and provider headers are empty. With it off, other providers'
+- `python -m js --list-logins --json` — only saved logins, with a `has_api_key`
+  boolean. With `PARANOID_MODE on` or `extra`, API keys are nulled and
+  provider headers are empty. With it off, other providers'
   credentials remain available for a picker to reconnect.
 - `python -m js --list-models <provider> --json` — the (filtered) model list for a
   provider, using qualified provider/model ids and cached models when available.

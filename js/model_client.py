@@ -26,7 +26,7 @@ import ai
 import httpx
 import httpx2
 
-from . import codex_auth, codex_provider, media, messages as msgs, model_metadata, paranoid, providers, reasoning, retry, routing, stream_transport, tool_args
+from . import media, messages as msgs, model_metadata, paranoid, providers, reasoning, retry, routing, stream_transport, tool_args
 from . import settings as _settings
 from . import sampling as sampling_mod
 from .sampling import Sampling
@@ -118,14 +118,6 @@ class ConnectTimeoutError(RequestTimeoutError):
 
     def __init__(self, seconds: float, *, provider: str | None = None) -> None:
         super().__init__(seconds, provider=provider, retryable=True)
-
-
-def sends_max_output(provider_id: str | None) -> bool:
-    """Whether a request to this provider can carry max_output_tokens. The
-    Codex endpoint takes no output cap."""
-    provider_def = providers.get_provider(provider_id)
-    provider_name = (provider_def.id if provider_def is not None else (provider_id or "")).lower()
-    return not codex_auth.is_codex_provider(provider_name)
 
 
 # The SDK finish reason for a reply that hit its output-token cap: OpenAI chat
@@ -347,7 +339,8 @@ def is_image_rejection(exc: BaseException) -> bool:
 
 def is_signed_reasoning_rejection(exc: BaseException) -> bool:
     """Whether ``exc`` is the provider refusing a replayed signed reasoning
-    block (an Anthropic thinking signature, a Codex encrypted reasoning item)."""
+    block (an Anthropic thinking signature, an OpenAI Responses encrypted
+    reasoning item)."""
     if not isinstance(exc, ai.ProviderBadRequestError):
         return False
     if getattr(exc, "code", None) == _ENCRYPTED_REASONING_CODE:
@@ -385,7 +378,7 @@ def is_modified_thinking_rejection(exc: BaseException) -> bool:
 def incomplete_reason_from_metadata(provider_metadata: Any) -> str | None:
     """Return a stable incomplete reason from provider metadata, if present.
 
-    Codex streams surface ``response.incomplete`` as provider metadata on the
+    Responses streams surface ``response.incomplete`` as provider metadata on the
     assistant message / stream end. Keep this helper permissive so provider
     versions that expose either ``incomplete_reason`` or an OpenAI-shaped
     ``incomplete_details.reason`` do not make a truncated turn look like a clean
@@ -739,8 +732,6 @@ def wire_name(provider_id: str | None) -> str:
     if provider_id is None:
         return "openai"
     canonical_id = providers.normalize_provider_id(provider_id) or provider_id
-    if codex_auth.is_codex_provider(canonical_id):
-        return "responses"
     provider_def = providers.get_provider(provider_id)
     sdk = (provider_def.effective_sdk_provider_id if provider_def is not None else None) or canonical_id
     if sdk == "openai":
@@ -791,13 +782,6 @@ def resolve_model(
     # Let the request through; the provider is the one source of truth and will
     # 400 with its own message if the id is genuinely unknown.
     canonical_id = providers.normalize_provider_id(provider_id) or provider_id
-    if codex_auth.is_codex_provider(canonical_id):
-        provider = codex_provider.provider_from_login_or_token(
-            provider_base_url=provider_base_url,
-            provider_api_key=provider_api_key,
-            provider_headers=provider_headers,
-        )
-        return ai.Model(id=model_id, provider=provider)
 
     if provider_def is not None:
         providers.assert_endpoint_configured(provider_def, provider_base_url)
@@ -927,7 +911,7 @@ def _coerce_parts(content: Any) -> list[Any]:
 
 def signed_reasoning_parts(message: ai.messages.Message) -> list[dict] | None:
     """The message's reasoning parts as history data, or None when no part
-    carries provider metadata (an Anthropic signature, a Codex encrypted item).
+    carries provider metadata (an Anthropic signature, an OpenAI Responses encrypted item).
 
     Each entry is ``{"text", "provider_metadata"?, "after_calls"?, "text_before"?}``;
     ``after_calls`` counts the tool calls that came before the part in the
@@ -1355,10 +1339,6 @@ def _http_client(model: ai.Model) -> Any:
     sdk_client = _sdk_client(model)
     if sdk_client is not None:
         return sdk_client._client
-    if isinstance(model.provider, codex_provider.OpenAICodexProvider):
-        client = model.provider.client
-        if hasattr(client, "event_hooks"):
-            return client
     return None
 
 
@@ -1626,7 +1606,6 @@ class _Route:
     sdk_provider_name: str
     transport: str | None
     explicit_provider: bool
-    codex: bool
     anthropic_wire: bool
     responses_wire: bool
     deepseek_wire: bool
@@ -1643,16 +1622,14 @@ def _route(provider_id: str | None, model_id: str) -> _Route:
     ).lower()
     model_name = model_id.lower()
     explicit_provider = provider_id is not None
-    codex = codex_auth.is_codex_provider(provider_name)
     transport = provider_def.transport if provider_def is not None else None
     return _Route(
         provider_name=provider_name,
         sdk_provider_name=sdk_provider_name,
         transport=transport,
         explicit_provider=explicit_provider,
-        codex=codex,
         anthropic_wire=sdk_provider_name == "anthropic" or provider_name == "anthropic",
-        responses_wire=codex or transport == "custom_responses",
+        responses_wire=transport == "custom_responses",
         # Whether the ENDPOINT takes DeepSeek's extras, which is not whether the
         # model is a DeepSeek model: `nvidia/deepseek-ai/deepseek-v4-pro-0813`
         # is one hosted elsewhere, and DeepSeek's private extras there are a 400.
@@ -1733,14 +1710,13 @@ def build_request_params(
             sampling = replace(sampling, temperature=None, top_k=None)
         standard = _ANTHROPIC_SAMPLING
     else:
-        output_max_tokens = None if route.codex else max_output_tokens
+        output_max_tokens = max_output_tokens
         if reasoning_effort is not None:
             # The effort word as typed, snapped where js knows the model family
             # (js/reasoning.py). With no provider the call goes to a gateway,
             # which normalizes the word itself.
-            if route.codex:
-                allowed: frozenset[str] | None = reasoning.CODEX_EFFORTS
-            elif route.explicit_provider:
+            allowed: frozenset[str] | None
+            if route.explicit_provider:
                 allowed = reasoning.supported_efforts(model_name)
             else:
                 allowed = None
@@ -1795,7 +1771,7 @@ def build_request_params(
     # `Unsupported parameter(s): prompt_cache_key`). Ask the host instead. Losing
     # the hint on an unlisted endpoint costs cache hit rate; sending it costs the
     # entire request.
-    accepts_cache_key = route.codex or accepts_prompt_cache_key(
+    accepts_cache_key = accepts_prompt_cache_key(
         provider_name=route.provider_name,
         sdk_provider_name=route.sdk_provider_name,
         base_url=provider_base_url,
@@ -1894,7 +1870,7 @@ def _emit_request_trace(
     Written ONLY to ``sink`` (the autolog file / --debug-file), never to stdout —
     this dump is far too large for the terminal. If ``sink`` is None it is a no-op.
 
-    Note: for custom providers (codex) this shows the request js hands the SDK,
+    Note: for custom providers this shows the request js hands the SDK,
     including the resolved base_url — the provider's own in-SDK reshaping to its
     wire format happens downstream and is not captured here.
     """
@@ -2027,8 +2003,6 @@ async def stream_model_async(
         if friendly is not None:
             raise friendly from exc
         raise
-    if settings is not None and isinstance(model.provider, codex_provider.OpenAICodexProvider):
-        model.provider._settings = settings
     # The provider owns an HTTP client from here on; every exit below, including
     # a failure while the request is still being assembled, must close it.
     try:

@@ -149,7 +149,6 @@ def _effort_sent(provider_id, model, effort):
         ("openai", "glm-5.2", "off", "none"),           # glm serves none
         ("openai", "mimo-v2.5", "off", "low"),
         ("openai", "kimi-k2.7-code", "spoon", "spoon"), # a non-ladder word stays as typed
-        ("openai-codex", "gpt-5.5", "max", "xhigh"),
         ("deepseek", "deepseek-chat", "high", "high"),
         ("openai", "MiniMax-M3.1-Flash", "off", "low"),  # MiniMax's OpenAI endpoint: reasoning_effort
         ("minimax", "MiniMax-M3.1-Flash", "minimal", "low"),

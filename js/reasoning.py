@@ -21,7 +21,6 @@ the endpoints js targets, not vendor docs:
     kimi  (moonshot/opencode)  minimal, low, medium, high        (none/xhigh/max 400)
     glm   (zhipu/opencode-go)  none, low, medium, high, xhigh, max
     deepseek                   low, medium, high, xhigh, max     (none/minimal 400)
-    codex (gpt-5.x Responses)  minimal, low, medium, high, xhigh
 """
 
 from __future__ import annotations
@@ -33,8 +32,6 @@ from dataclasses import dataclass
 
 EFFORT_LADDER: tuple[str, ...] = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 _RANK: dict[str, int] = {name: i for i, name in enumerate(EFFORT_LADDER)}
-
-CODEX_EFFORTS: frozenset[str] = frozenset({"minimal", "low", "medium", "high", "xhigh"})
 
 # Ordered most-specific-first so e.g. "kimi" wins before a looser match.
 _FAMILY_EFFORTS: tuple[tuple[tuple[str, ...], frozenset[str]], ...] = (
@@ -208,8 +205,8 @@ def minimax_thinking(model_name: str, effort: str | None,
 
 # --- Signed reasoning replay -----------------------------------------------
 #
-# Anthropic thinking blocks carry a signature, and Codex reasoning items carry
-# encrypted content. Both are valid only for the model that produced them, so a
+# Anthropic thinking blocks carry a signature, and OpenAI Responses reasoning
+# items carry encrypted content. Both are valid only for the model that produced them, so a
 # history record keeps them with the provider and model they came from and they
 # are replayed only to that same provider and model. Anywhere else the record's
 # plain ``reasoning_content`` follows the rules above.

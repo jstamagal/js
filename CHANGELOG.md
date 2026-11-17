@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Codex and xAI OAuth logins are removed.** js no longer has an OAuth login
+  of any kind. Gone:
+  - the `openai-codex` provider (with its `openai-codex-device` and `codex`
+    aliases), its Responses client and its browser and device-code logins
+  - the `xai-oauth` provider (`grok-oauth`, `xai-login`) and its browser login
+  - the shared loopback callback server
+  - token refresh, the async store lock, the per-loop refresh locks and the
+    in-memory overlay that kept a rotated token a save could not write
+  - the OAuth token fields on a saved login
+  - the six `CODEX_*` settings
+  - the Codex and OAuth messages
+
+  The `xai` provider (`XAI_API_KEY`) is unchanged. Delete any
+  `[openai-codex]` or `[xai-oauth]` table left in `logins.toml` by hand.
+
 - **The `--blocking` REPL is removed.** js kept two REPL loops, and a fix to
   how a turn is saved, kept or discarded had to land in both; the blocking one
   had fallen behind (it never saved between tool calls) and was not in use.

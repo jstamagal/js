@@ -190,7 +190,7 @@ def set_context_window_overrides(raw: Any) -> None:
     """Install CONTEXT_SIZE_PER_MODEL, a map of model key -> window.
 
     models.dev carries one row per model id, not per *surface*. A subscription
-    endpoint (openai-codex) and the public API can serve the same model id with
+    or proxy endpoint and the public API can serve the same model id with
     different usable windows, and the catalog has no row for the former — so
     there is no upstream truth to fetch, only a local fact the operator knows.
     Keys are matched most specific first: "provider/model", then "model".

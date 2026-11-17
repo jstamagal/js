@@ -52,7 +52,7 @@ def test_an_openai_endpoint_receives_the_conversation_cache_key():
     assert wire["prompt_cache_key"] == "js-defaultagent-session01"
 
 
-def test_the_codex_responses_path_receives_the_same_key():
+def test_the_responses_path_receives_the_same_key():
     wire = _openai_wire(ai_params.CacheParams(key="js-defaultagent-session01"), responses=True)
 
     assert wire["prompt_cache_key"] == "js-defaultagent-session01"

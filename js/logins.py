@@ -10,12 +10,11 @@ import asyncio
 import contextlib
 import fcntl
 import json
-import math
 import os
 import tempfile
 import threading
 import time
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
@@ -33,8 +32,7 @@ _CONFIG_DIR_OVERRIDE: Path | None = None
 _LOGINS_FILE = "logins.toml"
 _CACHE_FILE = "models-cache.json"
 _LOCK_FILE = "logins.toml.lock"
-# How long a caller waits for the store lock. Longer than the refresh POST
-# bound (20s in codex_auth/xai_auth) so a waiter outlives the holder's POST.
+# How long a caller waits for the store lock.
 _LOCK_TIMEOUT_S = 30.0
 _LOCK_POLL_S = 0.05
 
@@ -100,11 +98,10 @@ class _Owner:
     """Who holds a store's lock in this process, for re-entrancy.
 
     Identity is the running asyncio task when there is one, else the
-    thread. A ``threading.local`` depth would be wrong on an event loop:
-    every task shares the loop's thread, so task B would see task A's
-    depth and walk in under A's flock (maggie #713). One record per store
+    thread: every task shares the loop's thread, so a per-thread depth
+    would let task B walk in under task A's flock. One record per store
     path: a lock held on store A is not a lock on store B after a
-    config-dir switch (maggie #736).
+    config-dir switch.
     """
 
     def __init__(self) -> None:
@@ -153,11 +150,11 @@ def _leave(store: Path) -> None:
 
 @contextlib.contextmanager
 def hold_login_lock(timeout_s: float | None = None) -> Iterator[None]:
-    """Hold the cross-process store lock for the block (sync callers).
+    """Hold the cross-process store lock for the block.
 
     Non-blocking flock in a sleep loop, never a blocking flock: a blocking
-    flock has no timeout, and the sync callers (login_cli, routing) must
-    not hang forever behind a stuck holder. Raises LoginStoreBusyError on
+    flock has no timeout, and a caller must not hang forever behind a
+    stuck holder. Raises LoginStoreBusyError on
     timeout. Re-entrant for the same task/thread, so save_login inside a
     held lock works; a different task or thread waits for the flock, which
     excludes separate open-file-descriptions within one process too.
@@ -187,128 +184,9 @@ def hold_login_lock(timeout_s: float | None = None) -> Iterator[None]:
         os.close(fd)
 
 
-@contextlib.asynccontextmanager
-async def ahold_login_lock(timeout_s: float | None = None) -> AsyncIterator[None]:
-    """Async twin of hold_login_lock: the same non-blocking flock, polled with
-    ``asyncio.sleep`` so the event loop never blocks. A waiter cancelled
-    mid-poll holds nothing and just closes its fd; a holder's ``finally``
-    unlocks on every exit, including cancellation.
-
-    Never ``to_thread`` a blocking flock here: a cancelled waiter would leave
-    a thread that later acquires and holds the lock with nobody to release
-    it.
-    """
-    store = lock_path()
-    if _reenter(store):
-        try:
-            yield
-        finally:
-            _leave(store)
-        return
-    fd = _open_lock_fd()
-    try:
-        timeout_s = _LOCK_TIMEOUT_S if timeout_s is None else timeout_s
-        deadline = time.monotonic() + timeout_s
-        while not _try_flock(fd):
-            if time.monotonic() >= deadline:
-                raise LoginStoreBusyError(msgs.LOGIN_STORE_HELD_BY_ANOTHER_PROCESS_FOR_S.format(store=store, timeout_s=timeout_s))
-            await asyncio.sleep(_LOCK_POLL_S)
-        _become_owner(store)
-        try:
-            yield
-        finally:
-            _leave(store)
-            fcntl.flock(fd, fcntl.LOCK_UN)
-    finally:
-        os.close(fd)
-
-# One asyncio.Lock per provider per event loop: coalesces concurrent
-# refreshes inside one process before any of them touches the file lock.
-# Always taken in-process first, then the file lock, never the reverse.
-_refresh_locks: dict[tuple[int, str], asyncio.Lock] = {}
-_refresh_locks_guard = threading.Lock()
-
-
-def refresh_lock(provider_id: str) -> asyncio.Lock:
-    """The in-process refresh lock for ``provider_id`` on the running loop."""
-    loop = asyncio.get_running_loop()
-    key = (id(loop), _normalize_provider_id(provider_id))
-    with _refresh_locks_guard:
-        lock = _refresh_locks.get(key)
-        if lock is None:
-            lock = _refresh_locks[key] = asyncio.Lock()
-        return lock
-
-
-# Logins whose refreshed token could not be written to disk, kept for the
-# life of this process so the next read uses the rotated token instead of
-# re-posting the burned one (bakari #207). get_login() merges it in. Keyed
-# by store path as well, so a config-dir switch never sees another store's
-# memory (shinda #729). Each entry remembers the disk refresh token it was
-# derived from: the overlay is used only while the file still carries that
-# base; any other token on disk (a new --login, another process's save)
-# wins and drops the overlay (ruhondo #788).
-_overlay: dict[tuple[Path, str], tuple[str | None, Login]] = {}
-_overlay_guard = threading.Lock()
-
-
-def _overlay_key(provider_id: str) -> tuple[Path, str]:
-    return (_logins_path(), _normalize_provider_id(provider_id))
-
-
-def _refresh_token_of(login: Login | None) -> str | None:
-    if login is None:
-        return None
-    return login.codex_refresh_token or login.xai_refresh_token
-
-
-def note_memory_login(login: Login, *, derived_from: Login | None = None) -> None:
-    """Remember a refreshed login that did not make it to disk.
-
-    ``derived_from`` is the login whose refresh token was spent to get
-    ``login``; when omitted, the file's current entry is taken as the base.
-    """
-    key = _overlay_key(login.provider_id)
-    base = derived_from if derived_from is not None else load_logins().get(key[1])
-    with _overlay_guard:
-        _overlay[key] = (_refresh_token_of(base), login)
-
-
-def forget_memory_login(provider_id: str) -> None:
-    with _overlay_guard:
-        _overlay.pop(_overlay_key(provider_id), None)
-
-
 def get_login(provider_id: str) -> Login | None:
-    """The stored login for ``provider_id``, with the token fields of a
-    refresh that could not be written laid over it.
-
-    The sole read for the OAuth refresh paths. The overlay answers only
-    while the file still holds the refresh token it was derived from; the
-    moment the file says anything else (a later save, a new ``--login``, a
-    ``--logout``), disk wins and the overlay is dropped. The overlay owns
-    exactly the fields a refresh writes: access token (``provider_api_key``),
-    refresh token, expiry. Everything else (base URL, headers, shape,
-    account, email) always comes from disk, so an external edit shows up at
-    once (ruhondo #829/#835, doc #838).
-    """
-    normalized = _normalize_provider_id(provider_id)
-    store = _current_store()
-    stored = store.logins.get(normalized)
-    with _overlay_guard:
-        entry = _overlay.get(_overlay_key(normalized))
-    if entry is None:
-        return stored
-    base, memory = entry
-    if stored is None and store.unreadable:
-        # The file cannot be read right now (corrupt, mid-repair): that says
-        # nothing about the login, so the rotated token stays the answer
-        # instead of being mistaken for a logout (maggie #1045).
-        return memory
-    if stored is None or _refresh_token_of(stored) != base:
-        forget_memory_login(normalized)
-        return stored
-    return _with_overlay_tokens(stored, memory)
+    """The stored login for ``provider_id``, or None."""
+    return _current_store().logins.get(_normalize_provider_id(provider_id))
 
 
 @dataclass
@@ -323,20 +201,6 @@ class Login:
     provider_base_url: str | None = None
     provider_api_key: str | None = None
     provider_headers: dict[str, str] = field(default_factory=dict)
-    # OpenAI Codex OAuth metadata.  provider_api_key stores the short-lived
-    # access JWT so the existing provider tuple keeps working; these fields keep
-    # the refreshable session private in logins.toml.
-    codex_refresh_token: str | None = None
-    codex_token_expires: float | None = None
-    codex_account_id: str | None = None
-    codex_email: str | None = None
-    # xAI OAuth metadata, same arrangement as the Codex fields above. The token
-    # endpoint is stored rather than pinned because it comes from xAI's own
-    # discovery document.
-    xai_refresh_token: str | None = None
-    xai_token_expires: float | None = None
-    xai_token_endpoint: str | None = None
-    xai_email: str | None = None
     # Setting values a run routed here takes (js.login_defaults): for the
     # server, and per model id on top of those. None (a login built by a
     # login flow) keeps what the saved login has; {} clears it.
@@ -450,14 +314,7 @@ _STR_FIELDS = (
     "shape_provider_id",
     "provider_base_url",
     "provider_api_key",
-    "codex_refresh_token",
-    "codex_account_id",
-    "codex_email",
-    "xai_refresh_token",
-    "xai_token_endpoint",
-    "xai_email",
 )
-_EXPIRY_FIELDS = ("codex_token_expires", "xai_token_expires")
 _KNOWN_FIELDS = frozenset(f.name for f in fields(Login))
 
 
@@ -472,29 +329,6 @@ def _optional_str(raw: dict[str, Any], name: str) -> str | None:
     if not isinstance(value, str):
         raise _BadSection(msgs.LOGIN_STORE_MUST_BE_A_STRING_NOT.format(name=name, __name__=type(value).__name__))
     return value
-
-
-def _optional_expiry(raw: dict[str, Any], name: str) -> float | None:
-    """A token expiry as a float, or None when unreadable.
-
-    None reads as "expired" to login_needs_refresh, so a hand-edited
-    ``codex_token_expires = "soon"`` costs one refresh instead of crashing
-    every request.
-    """
-    value = raw.get(name)
-    if value is None or isinstance(value, bool):
-        return None
-    parsed: float | None = None
-    if isinstance(value, (int, float)):
-        parsed = float(value)
-    elif isinstance(value, str):
-        try:
-            parsed = float(value)
-        except ValueError:
-            parsed = None
-    # nan compares False against everything, so a nan expiry would read as
-    # "fresh forever"; inf would never refresh either. Both mean "unknown".
-    return parsed if parsed is not None and math.isfinite(parsed) else None
 
 
 def _login_from_section(provider_id: str, raw: dict[str, Any]) -> Login:
@@ -523,8 +357,6 @@ def _login_from_section(provider_id: str, raw: dict[str, Any]) -> Login:
         provider_headers={str(k): str(v) for k, v in headers_raw.items()},
         defaults=login_defaults.checked(defaults_raw),
         model_defaults={model: values for model, values in model_defaults.items() if values},
-        codex_token_expires=_optional_expiry(raw, "codex_token_expires"),
-        xai_token_expires=_optional_expiry(raw, "xai_token_expires"),
         **strings,
     )
 
@@ -540,13 +372,9 @@ class _Store:
     logins: dict[str, Login]
     quarantined: dict[str, Any]
     extra_fields: dict[str, dict[str, Any]]
-    # True when the file exists but could not be parsed: nothing is known
-    # about any login, which is not the same as "the login was removed".
-    unreadable: bool = False
 
 
 _EMPTY_STORE = _Store(None, {}, {}, {})
-_UNREADABLE_STORE = _Store(None, {}, {}, {}, unreadable=True)
 
 
 def _parse_store(ident: tuple | None, data: dict[str, Any]) -> _Store:
@@ -593,16 +421,15 @@ def _file_ident(path: Path) -> tuple | None:
 
 def _read_store(*, strict: bool = False) -> _Store:
     """Parse logins.toml now, bypassing the identity cache, and cache the
-    result. An empty store when the file is missing; an UNREADABLE store
-    (nothing known, not "removed") when it exists but cannot be read or
-    parsed (maggie #1045/#1110). Writers use ``strict`` to propagate read
-    failures and refuse malformed TOML."""
+    result. An empty store when the file is missing, unreadable or not
+    TOML. Writers use ``strict`` to propagate read failures and refuse
+    malformed TOML."""
     global _loaded
     path = _logins_path()
     try:
         ident = _file_ident(path)
     except OSError:
-        _loaded = _UNREADABLE_STORE
+        _loaded = _EMPTY_STORE
         if strict:
             raise
         return _loaded
@@ -613,7 +440,7 @@ def _read_store(*, strict: bool = False) -> _Store:
         with path.open("rb") as f:
             data = tomllib.load(f)
     except Exception as exc:  # noqa: BLE001
-        _loaded = _UNREADABLE_STORE
+        _loaded = _EMPTY_STORE
         if strict:
             if isinstance(exc, OSError):
                 raise
@@ -637,18 +464,8 @@ def _current_store() -> _Store:
 
 
 def load_logins_fresh() -> dict[str, Login]:
-    """load_logins() that always re-reads the file.
-
-    For a holder of the store lock deciding whether to refresh: the cached
-    parse may predate another process's save, and only the bytes on disk
-    say whether the token was already rotated.
-    """
+    """load_logins() that always re-reads the file."""
     return dict(_read_store().logins)
-
-
-def store_unreadable() -> bool:
-    """Whether the last parse found logins.toml present but unparseable."""
-    return _current_store().unreadable
 
 
 def load_logins() -> dict[str, Login]:
@@ -692,24 +509,12 @@ def save_login(login: Login) -> None:
     """Add or update a provider login and persist.
 
     Load-modify-write under the store lock, so two processes saving at once
-    (a Codex refresh and an xAI refresh, say) cannot drop each other's
-    change. Raises LoginsCorruptError instead of proceeding if the existing
-    file fails to parse (see _refuse_if_corrupt).
-
-    A save that keeps the refresh token an in-memory overlay was derived
-    from (a headers edit, say) carries the overlay's rotated tokens into
-    the file: the store is writable right now, so the memory-only state
-    heals instead of being discarded, which would re-post a burned token
-    on the next turn (ruhondo #1040, doc #1041). A save with any other
-    refresh token is a new login and drops the overlay.
+    cannot drop each other's change. Raises LoginsCorruptError instead of
+    proceeding if the existing file fails to parse (see _refuse_if_corrupt).
     """
     _ensure_config_dir()
     canonical_id = providers.normalize_provider_id(login.provider_id) or login.provider_id
     login = replace(login, provider_id=canonical_id)
-    with _overlay_guard:
-        entry = _overlay.get(_overlay_key(canonical_id))
-    if entry is not None and entry[0] is not None and _refresh_token_of(login) == entry[0]:
-        login = _with_overlay_tokens(login, entry[1])
     with hold_login_lock():
         _refuse_if_corrupt()
         store = _read_store(strict=True)
@@ -723,7 +528,6 @@ def save_login(login: Login) -> None:
         )
         loaded[canonical_id] = login
         _write_logins_toml(_serialize(store, loaded))
-    forget_memory_login(canonical_id)
 
 
 def update_login(provider_id: str, update: Callable[[Login], Login]) -> Login | None:
@@ -736,23 +540,6 @@ def update_login(provider_id: str, update: Callable[[Login], Login]) -> Login | 
         updated = update(current)
         save_login(updated)
         return updated
-
-
-def _with_overlay_tokens(stored: Login, memory: Login) -> Login:
-    """``stored`` with the token fields (access, refresh, expiry) of ``memory``."""
-    if memory.codex_refresh_token:
-        return replace(
-            stored,
-            provider_api_key=memory.provider_api_key,
-            codex_refresh_token=memory.codex_refresh_token,
-            codex_token_expires=memory.codex_token_expires,
-        )
-    return replace(
-        stored,
-        provider_api_key=memory.provider_api_key,
-        xai_refresh_token=memory.xai_refresh_token,
-        xai_token_expires=memory.xai_token_expires,
-    )
 
 
 def _normalize_provider_id(provider_id: str) -> str:
@@ -775,8 +562,6 @@ def rename_login(provider_id: str, new_provider_id: str) -> bool:
             return False
         if provider_id == new_provider_id:
             return True
-        if login.codex_refresh_token or login.xai_refresh_token:
-            raise ValueError("OAuth providers cannot be renamed: their names select the authentication flow.")
         with _cache_path().open("r", encoding="utf-8") if _cache_path().exists() else contextlib.nullcontext() as f:
             cache = json.load(f) if f is not None else {}
         if not isinstance(cache, dict):
@@ -804,7 +589,6 @@ def rename_login(provider_id: str, new_provider_id: str) -> bool:
         except BaseException:
             _write_logins_toml(original)
             raise
-    forget_memory_login(provider_id)
     return True
 
 
@@ -829,7 +613,6 @@ def remove_login(provider_id: str) -> bool:
         if provider_id in cache:
             del cache[provider_id]
             save_model_cache(cache)
-    forget_memory_login(provider_id)
     return existed
 
 
@@ -1100,11 +883,6 @@ async def _fetch_openai_model_metadata(
 
 
 async def _fetch_model_ids(login: Login) -> list[str]:
-    if _normalize_provider_id(login.provider_id) == "openai-codex":
-        from . import codex_provider
-
-        return await codex_provider.fetch_models_for_login(login)
-
     provider_def = providers.get_provider(login.provider_id)
     shape_provider_def = providers.get_provider(login.shape_provider_id) if login.shape_provider_id else None
     endpoint_provider_def = provider_def or shape_provider_def

@@ -258,8 +258,6 @@ fset LOGIN_BAD_HEADERS %C07%G%C Headers must use k=v,k=v. Nothing saved yet.
 fset LOGIN_MODELS_UNREACHABLE %C07%G%C Could not list models: $0-. Saving the server anyway.
 fset LOGIN_BAD_DEFAULTS %C07%G%C $0-. Nothing saved yet.
 fset LOGIN_TRY_V1 %C07%G%C $0 does not end in /v1. OpenAI-compatible servers usually serve at $1-
-fset OAUTH_BAD_CALLBACK %C07%G%C Callback URL invalid or its state does not match. Paste the URL from this login attempt.
-fset OAUTH_REFRESH_NOT_SAVED %C07%G%C Refreshed $0 login not saved: $1-
 fset INSTALL_KEYS_MISSING %C07%G%C Not set: $0. Run just install in a terminal to save them to $1-
 fset INSTALL_MODEL_UNROUTED %C07%G%C Default model $0- has no provider to run on
 fset INSTALL_MODEL_UNSET %C07%G%C No default model is set

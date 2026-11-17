@@ -409,9 +409,8 @@ def test_repl_set_subagent_lock_model_updates_turn_config_and_task_schema(monkey
 
 
 def test_repl_set_max_output_updates_turn_config(monkeypatch, tmp_path):
-    # RULING A: magic strings die -- there is no longer a magic value that
-    # forces a nullable int knob to None regardless of its baseline. `set -key`
-    # clears a *live session override* back to whatever the knob's baseline
+    # There is no magic value that forces a nullable int knob to None
+    # regardless of its baseline. `set -key` clears a *live session override* back to whatever the knob's baseline
     # already was (here: cfg's own None default, since nothing else set it).
     cfg = make_cfg(tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
@@ -783,9 +782,9 @@ def test_a_picked_model_reaches_the_jsrc_only_through_save(monkeypatch, tmp_path
     # on the invoking user's credentials.
     monkeypatch.setattr(logins, "_CONFIG_DIR_OVERRIDE", tmp_path / "login-store")
     logins.save_login(logins.Login(
-        provider_id="openai-codex",
-        provider_base_url="https://chatgpt.com/backend-api",
-        provider_api_key=None,
+        provider_id="openai",
+        provider_base_url="https://api.openai.com/v1",
+        provider_api_key="sk-test",
     ))
     cfg = make_cfg(tmp_path)
     config_path = tmp_path / "config" / "jsrc"
@@ -806,9 +805,9 @@ def test_a_picked_model_reaches_the_jsrc_only_through_save(monkeypatch, tmp_path
         cli.picker,
         "pick_model",
         lambda **kwargs: {
-            "provider_id": "openai-codex",
-            "provider_base_url": "https://chatgpt.com/backend-api",
-            "provider_api_key": None,
+            "provider_id": "openai",
+            "provider_base_url": "https://api.openai.com/v1",
+            "provider_api_key": "sk-test",
             "provider_headers": {},
             "model": "gpt-5.5",
         },
@@ -816,19 +815,19 @@ def test_a_picked_model_reaches_the_jsrc_only_through_save(monkeypatch, tmp_path
 
     assert cli._handle_command("/model", state, cfg) is True
 
-    assert state["provider_id"] == "openai-codex"
-    assert state["provider_base_url"] == "https://chatgpt.com/backend-api"
+    assert state["provider_id"] == "openai"
+    assert state["provider_base_url"] == "https://api.openai.com/v1"
     assert state["model"] == "gpt-5.5"
-    assert settings.get_dotted(state["settings"], ("MODEL",)) == "openai-codex/gpt-5.5"
+    assert settings.get_dotted(state["settings"], ("MODEL",)) == "openai/gpt-5.5"
     assert config_path.read_text(encoding="utf-8") == "set MODEL deepseek/deepseek-v4-flash\n"
 
     assert cli._handle_command("/save", state, cfg) is True
-    assert config_path.read_text(encoding="utf-8") == "set MODEL openai-codex/gpt-5.5\n"
+    assert config_path.read_text(encoding="utf-8") == "set MODEL openai/gpt-5.5\n"
 
     from js.config import from_env
 
     boot_cfg = from_env(save_session=False, cwd=tmp_path, ignore_local_config=True)
-    assert boot_cfg.provider_id == "openai-codex"
+    assert boot_cfg.provider_id == "openai"
     assert boot_cfg.model == "gpt-5.5"
 
 

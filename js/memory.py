@@ -269,7 +269,7 @@ def restart_thinking_turn(messages: list[dict], *, require_tool_calls: bool) -> 
 def drop_signed_reasoning(messages: list[dict], start: int = 0) -> int:
     """Remove the signed reasoning of every message from ``start`` on, in place.
 
-    A signature (an Anthropic thinking signature, a Codex encrypted item) is
+    A signature (an Anthropic thinking signature, an OpenAI Responses encrypted item) is
     bound to the history before it, so once js edits an earlier message the
     signed reasoning after that edit cannot be replayed. Each changed message
     is replaced by a copy that keeps ``reasoning_content``. Returns how many

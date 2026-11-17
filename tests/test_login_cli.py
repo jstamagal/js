@@ -56,7 +56,7 @@ def test_login_registry_includes_modelsdotdev_provider(tmp_path: Path):
     try:
         rows = {provider.id: provider.display_name for provider in providers.login_providers()}
         assert rows["alibaba"] == "Alibaba"
-        assert rows["openai-codex"].startswith("OpenAI Codex OAuth")
+        assert rows["openai"] == "OpenAI API"
     finally:
         _reset_logins()
 
@@ -385,7 +385,7 @@ def test_models_edit_removes_and_adds_models_without_login_fetch_or_catalog_refr
         "keep": logins.ModelCacheMetadata(context_window=32768),
         "remove": logins.ModelCacheMetadata(context_window=65536),
     }
-    logins.cache_models("openai-codex", ["keep", "remove"], metadata=metadata)
+    logins.cache_models("ollama", ["keep", "remove"], metadata=metadata)
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     monkeypatch.setattr(curses, "curs_set", lambda _n: None)
@@ -403,14 +403,13 @@ def test_models_edit_removes_and_adds_models_without_login_fetch_or_catalog_refr
         monkeypatch.setattr(curses, "wrapper", fake_wrapper)
         monkeypatch.setattr(login_cli, "_input", lambda *a, **k: "added")
         monkeypatch.setattr(login_cli, "_collect_api_login", forbidden)
-        monkeypatch.setattr(login_cli, "test_login", forbidden)
         monkeypatch.setattr(login_cli, "test_login_with_metadata", forbidden)
         monkeypatch.setattr(login_cli.model_client, "stream_model", forbidden)
         monkeypatch.setattr(login_cli, "_dialect_map", forbidden)
 
-        assert login_cli.main(["models-edit", "codex"]) == 0
-        assert logins.load_model_cache()["openai-codex"] == ["keep", "added"]
-        assert logins.load_model_cache_metadata()["openai-codex"] == {"keep": metadata["keep"]}
+        assert login_cli.main(["models-edit", "ollama-local"]) == 0
+        assert logins.load_model_cache()["ollama"] == ["keep", "added"]
+        assert logins.load_model_cache_metadata()["ollama"] == {"keep": metadata["keep"]}
     finally:
         _reset_logins()
 
@@ -476,7 +475,7 @@ def test_relogin_plain_enter_drops_cached_models_not_refetched(monkeypatch, tmp_
     import curses
 
     logins.set_config_dir(tmp_path)
-    logins.cache_models("openai-codex", ["old-model"])
+    logins.cache_models("openai", ["old-model"])
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     monkeypatch.setattr(curses, "curs_set", lambda _n: None)
@@ -489,25 +488,20 @@ def test_relogin_plain_enter_drops_cached_models_not_refetched(monkeypatch, tmp_
         captured["preselected"] = set(kwargs["preselected"])
         return fn(_FakeStdscr(keys), *args, **kwargs)
 
-    login = logins.Login(
-        provider_id="openai-codex",
-        sdk_provider_id="openai-codex",
-        provider_api_key="jwt",
-        codex_refresh_token="refresh",
-        codex_token_expires=1.0,
-        codex_account_id="acct",
-        codex_email="owner@example.com",
+    login = logins.Login(provider_id="openai", sdk_provider_id="openai", provider_api_key="sk")
+    assembly = login_cli.LoginAssembly(
+        collect=lambda *args, **kwargs: login,
+        fetch=lambda _login: (["new-model"], {}),
+        confirm=lambda *args: True,
     )
 
     try:
         monkeypatch.setattr(curses, "wrapper", fake_wrapper)
-        monkeypatch.setattr(login_cli.codex_auth, "login_browser", lambda: login)
-        monkeypatch.setattr(login_cli, "test_login", lambda _login: ["new-model"])
         monkeypatch.setattr(login_cli, "_dialect_map", lambda _provider_id: {})
         monkeypatch.setattr(login_cli, "_input", lambda *a, **k: "")
 
-        assert login_cli._run_codex_login("openai-codex") == 0
-        assert logins.load_model_cache()["openai-codex"] == ["new-model"]
+        assert login_cli._run_login("openai", assembly=assembly) == 0
+        assert logins.load_model_cache()["openai"] == ["new-model"]
         assert captured == {"rows": ["new-model", "old-model"], "preselected": {0}}
     finally:
         _reset_logins()
@@ -553,14 +547,14 @@ def test_select_models_typed_extras_dedupe_against_selected_fetched(monkeypatch,
     try:
         monkeypatch.setattr(curses, "wrapper", fake_wrapper)
         monkeypatch.setattr(login_cli, "_input", lambda *a, **k: "gpt-5.5,gpt-5.4,gpt-5.4-mini")
-        assert login_cli._select_models_to_cache("openai-codex", ["gpt-5.5"]) == [
+        assert login_cli._select_models_to_cache("openai", ["gpt-5.5"]) == [
             "gpt-5.5", "gpt-5.4", "gpt-5.4-mini",
         ]
     finally:
         _reset_logins()
 
 
-def test_codex_login_typed_extras_survive_cache_and_list_models(
+def test_login_typed_extras_survive_cache_and_list_models(
     monkeypatch, tmp_path: Path, capsys,
 ):
     import curses
@@ -574,36 +568,32 @@ def test_codex_login_typed_extras_survive_cache_and_list_models(
     def fake_wrapper(fn, *args, **kwargs):
         return fn(_FakeStdscr(keys), *args, **kwargs)
 
-    login = logins.Login(
-        provider_id="openai-codex",
-        sdk_provider_id="openai-codex",
-        provider_api_key="jwt",
-        codex_refresh_token="refresh",
-        codex_token_expires=1.0,
-        codex_account_id="acct",
-        codex_email="owner@example.com",
+    login = logins.Login(provider_id="openai", sdk_provider_id="openai", provider_api_key="sk")
+    assembly = login_cli.LoginAssembly(
+        collect=lambda *args, **kwargs: login,
+        fetch=lambda _login: (["gpt-5.5", "gpt-5.3-codex-spark"], {}),
+        confirm=lambda *args: True,
     )
     typed = "gpt-5.4,gpt-5.3-codex-spark,gpt-5.4-mini"
 
     try:
         monkeypatch.setattr(curses, "wrapper", fake_wrapper)
-        monkeypatch.setattr(login_cli.codex_auth, "login_browser", lambda: login)
-        monkeypatch.setattr(login_cli, "test_login", lambda _login: ["gpt-5.5", "gpt-5.3-codex-spark"])
+        monkeypatch.setattr(login_cli, "_dialect_map", lambda _provider_id: {})
         monkeypatch.setattr(login_cli, "_input", lambda *a, **k: typed)
 
-        assert login_cli._run_codex_login("openai-codex") == 0
-        assert logins.load_model_cache()["openai-codex"] == [
+        assert login_cli._run_login("openai", assembly=assembly) == 0
+        assert logins.load_model_cache()["openai"] == [
             "gpt-5.5", "gpt-5.3-codex-spark", "gpt-5.4", "gpt-5.4-mini",
         ]
 
         capsys.readouterr()
-        assert cli._print_model_list("openai-codex", None) == 0
+        assert cli._print_model_list("openai", None) == 0
         out = capsys.readouterr().out
         assert out == (
-            "openai-codex/gpt-5.5\n"
-            "openai-codex/gpt-5.3-codex-spark\n"
-            "openai-codex/gpt-5.4\n"
-            "openai-codex/gpt-5.4-mini\n"
+            "openai/gpt-5.5\n"
+            "openai/gpt-5.3-codex-spark\n"
+            "openai/gpt-5.4\n"
+            "openai/gpt-5.4-mini\n"
         )
     finally:
         _reset_logins()
@@ -763,7 +753,7 @@ def test_top_level_cli_dispatches_models_edit_from_console_argv(monkeypatch):
 
 def test_readd_with_new_shape_uses_the_new_sdk(monkeypatch, tmp_path: Path):
     """Re-adding a saved custom provider under a new shape: the freshly picked
-    sdk wins over the saved one, same order as the shape (ALL-CLAIMS :366)."""
+    sdk wins over the saved one, same order as the shape."""
     logins.set_config_dir(tmp_path)
     logins.save_login(logins.Login(
         provider_id="mybox", provider_api_key="sk", provider_base_url="http://box.test/v1",
