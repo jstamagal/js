@@ -145,8 +145,9 @@ The `/model` picker lists your saved logins, not every possible SDK provider.
 `js --logout <provider>` removes that provider and its cached models from the
 picker.
 
-Every command lives in one table in `js/repl_commands.py` (`COMMANDS`); `/help` and Tab
-completion read it, so a new entry there is a new command everywhere. The
+Every command is a row in one table, `COMMANDS` in `js/repl_commands.py`,
+assembled from the rows each `js/repl_*_commands.py` module declares; `/help`
+and Tab completion read it, so a new row there is a new command everywhere. The
 leading `/` is required at the input line and optional in files of commands.
 
 `/load <file>` runs each line of the file through that table, in order, so a

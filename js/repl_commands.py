@@ -1,4 +1,5 @@
-"""The REPL's slash commands: the command table, the dispatcher, aliases and
+"""The REPL's slash commands: the command table, assembled from the rows the
+`repl_*_commands` modules declare, the dispatcher, /help, /load, aliases and
 the startup run of the jsrc files."""
 
 from __future__ import annotations
@@ -167,7 +168,7 @@ _ROWS: dict[str, Command] = {
     **repl_workspace_commands.COMMANDS,
 }
 
-# /help lists the commands in this order.
+# /help lists the commands in this order; a row not named here comes last.
 COMMANDS: dict[str, Command] = {verb: _ROWS[verb] for verb in (
     "help", "set", "fset", "show", "save", *setcmd.LOAD_VERBS, "on", "alias",
     "model", "pick-model", "provider", "baseurl", "apikey", "login", "logout", "models",
@@ -176,7 +177,7 @@ COMMANDS: dict[str, Command] = {verb: _ROWS[verb] for verb in (
     "jobs", "cancel", "window", "flush",
     "compact", "compact-auto", "refresh-model-catalog", "quit",
     "cd", "add", "drop", "exec",
-)}
+)} | _ROWS
 
 
 def standalone(line: str) -> Command | None:

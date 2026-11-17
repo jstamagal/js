@@ -50,7 +50,7 @@ persists each completed turn.
 | `js/swarm.py` | the swarm bus: inboxes, the room log, claims, the work board, the bus tools |
 | `js/swarm_run.py` | every agent of a swarm in one process (`python -m js.swarm run SPEC.json`) |
 | `js/repl.py` | the interactive REPL: startup (`start_repl`), the input loop, the turn queue and steering, the status bar, the `/session` switch |
-| `js/repl_commands.py` | the REPL's slash commands: the command table (`COMMANDS`), dispatch, aliases, `/load` and the startup run of the jsrc files |
+| `js/repl_commands.py` | the REPL's slash commands: the command table (`COMMANDS`) assembled from the `repl_*_commands` rows, dispatch, `/help`, `/load`, aliases and the startup run of the jsrc files |
 | `js/repl_agent_commands.py` | `/persona`, `/tools`, `/skill`, `/skills`: the system prompt, tools and skills a turn carries |
 | `js/repl_hook_commands.py` | `/on` and `/exec`: a command run on an event, and the shell command whose stdout is queued for the next user message |
 | `js/repl_job_commands.py` | `/jobs`, `/cancel`, `/window`, `/flush`: the supervisor's jobs and the subagent windows |
