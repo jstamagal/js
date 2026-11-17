@@ -1,4 +1,4 @@
-"""One turn through `runtime.run_turn` with a scripted model, or one `js`
+"""One turn through `runtime.run_turn_async` with a scripted model, or one `js`
 command line through `cli.main`.
 
 The model makes each batch of tool calls in turn, one batch per model call,
@@ -16,7 +16,7 @@ import ai
 import ai.types.messages
 import ai.types.usage
 
-from js import cli, output, runtime
+from js import cli, model_client, output, runtime
 from js.config import Config
 from js.console import ConsoleSink
 from js.model_client import ModelStreamResult, ModelToolCall
@@ -173,22 +173,27 @@ def script(tmp_path: Path, monkeypatch, batches: list[list[Call]], *, answer: st
 def _turn_arguments(tmp_path: Path, turn: Turn, tool_registry: ToolRegistry, *, cfg: Config | None,
                     context: ToolContext | None, sink, trace: bool, suppress_output: bool,
                     options: dict) -> tuple[tuple, dict]:
-    """The arguments of `runtime.run_turn` for ``turn``."""
+    """The arguments of `runtime.run_turn_async` for ``turn``."""
     args = (cfg or config(tmp_path), "SYS", turn.messages, runtime.Telemetry(turn.flight, sink=sink))
     return args, dict(trace_override=trace, tool_registry=tool_registry,
                       tool_context=context or ToolContext(cwd=tmp_path), suppress_output=suppress_output,
                       **options)
 
 
+def one_turn(*args, **kwargs) -> None:
+    """One `runtime.run_turn_async` turn, run to its end on a loop of its own."""
+    model_client.run_owning_loop(runtime.run_turn_async(*args, **kwargs))
+
+
 def run(tmp_path: Path, monkeypatch, tool_registry: ToolRegistry, batches: list[list[Call]], *,
         cfg: Config | None = None, context: ToolContext | None = None, sink=None,
         trace: bool = False, suppress_output: bool = True, **options) -> Turn:
     """Run one turn whose model makes ``batches`` of calls, then answers.
-    ``options`` are further keyword arguments of `runtime.run_turn`."""
+    ``options`` are further keyword arguments of `runtime.run_turn_async`."""
     turn = script(tmp_path, monkeypatch, batches)
     args, kwargs = _turn_arguments(tmp_path, turn, tool_registry, cfg=cfg, context=context, sink=sink,
                                    trace=trace, suppress_output=suppress_output, options=options)
-    runtime.run_turn(*args, **kwargs)
+    one_turn(*args, **kwargs)
     return turn
 
 

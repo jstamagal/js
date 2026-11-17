@@ -53,8 +53,8 @@ Full async, not worker threads (fork B resolved — see below).
 - The REPL owns the ONE event loop. `prompt_async` keeps input live; turns and
   subagents are `asyncio.Task`s on that loop, tracked by `js/supervisor.py`.
 - `model_client.stream_model_async` / `runtime.run_turn_async` are the real
-  primitives; the sync `stream_model`/`run_turn` are thin `asyncio.run`
-  wrappers kept for one-shot `-p`, bench, and tests.
+  primitives; the sync `stream_model` is a thin wrapper kept for callers off
+  the loop.
 - Tools are sync (subprocess/file IO) → each turn's tool dispatch runs in
   `run_in_executor`, so the loop stays free while tools execute.
 - Subagents schedule onto the SAME loop from the tool-dispatch thread via

@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from repl_driver import output_of, record_turns, type_into_js
+from turn_driver import one_turn
 
 from js import cli, setcmd, settings
 from js.config import Config, from_env
@@ -248,7 +249,7 @@ def test_jsrc_tool_knobs_reach_the_turn_tool_context(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_kwargs: reply)
     context = ToolContext(cwd=tmp_path)
 
-    runtime.run_turn(
+    one_turn(
         cfg, "system", [{"role": "user", "content": "hi"}], runtime.Telemetry(None),
         trace_override=False, tool_registry=build_default_registry().select([]),
         tool_context=context, suppress_output=True,

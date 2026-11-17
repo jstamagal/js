@@ -14,6 +14,7 @@ import ai.types.messages
 import ai.types.tools
 import ai.types.usage
 import pytest
+from turn_driver import one_turn
 
 from js import history_record, model_client
 from js.sampling import Sampling
@@ -799,7 +800,7 @@ def test_a_turn_stores_the_reply_blocks_on_its_assistant_message(monkeypatch, tm
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", fake_stream)
     messages = [{"role": "user", "content": "go"}]
-    runtime.run_turn(_cfg(tmp_path), "sys", messages, runtime.Telemetry(None), suppress_output=True)
+    one_turn(_cfg(tmp_path), "sys", messages, runtime.Telemetry(None), suppress_output=True)
     assert messages[-1]["reasoning_blocks"] == blocks
 
 
@@ -864,7 +865,7 @@ def test_blocks_go_back_only_to_the_model_that_wrote_them(monkeypatch, tmp_path)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", fake_stream)
     cfg = _cfg(tmp_path)
     messages = [{"role": "user", "content": "go"}]
-    runtime.run_turn(cfg, "sys", messages, runtime.Telemetry(None), suppress_output=True)
+    one_turn(cfg, "sys", messages, runtime.Telemetry(None), suppress_output=True)
 
     same = history_record.history_to_ai_messages("", messages, provider_id=cfg.provider_id, model_id=cfg.model)
     other = history_record.history_to_ai_messages("", messages, provider_id=cfg.provider_id, model_id="other-model")

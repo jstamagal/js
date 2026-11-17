@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import ai
 import pytest
+from turn_driver import one_turn
 
 from js import history_record, model_client as MC, runtime, turn_call
 from js.config import Config
@@ -55,7 +56,7 @@ def _result(text="ok"):
 
 
 class _Recorder:
-    """Minimal event sink: run_turn only reads emission.results / .hooks."""
+    """Minimal event sink: run_turn_async only reads emission.results / .hooks."""
 
     def __init__(self):
         self.events: list[tuple[str, dict]] = []
@@ -76,7 +77,7 @@ def test_reused_context_clears_subagent_hooks_when_turn_has_none(tmp_path, monke
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
     for current_hooks in (hooks, None):
-        runtime.run_turn(
+        one_turn(
             _cfg(tmp_path), "SYS", [{"role": "user", "content": "hi"}],
             runtime.Telemetry(None), tool_registry=build_default_registry().select([]),
             tool_context=context, suppress_output=True, event_hooks=current_hooks,
@@ -194,7 +195,7 @@ def test_partial_text_closed_before_retry(tmp_path, monkeypatch, capsys):
     registry = build_default_registry(prompts_root=None)
     ctx = ToolContext(cwd=tmp_path)
 
-    runtime.run_turn(
+    one_turn(
         cfg, "SYS", [{"role": "user", "content": "hi"}],
         runtime.Telemetry(debug_log=None),
         tool_registry=registry, tool_context=ctx, suppress_output=False,
@@ -279,7 +280,7 @@ def test_incomplete_provider_metadata_reaches_history_events_and_finish(tmp_path
     cfg = _cfg(tmp_path)
     messages = [{"role": "user", "content": "hi"}]
     telemetry_log = tmp_path / "telemetry-incomplete.jsonl"
-    runtime.run_turn(
+    one_turn(
         cfg, "SYS", messages, runtime.Telemetry(debug_log=telemetry_log),
         tool_registry=build_default_registry(prompts_root=None), tool_context=ToolContext(cwd=tmp_path),
         suppress_output=True, event_hooks=rec, call_stats=calls,
@@ -319,7 +320,7 @@ def test_normal_stop_stays_normal_with_no_incomplete_metadata(tmp_path, monkeypa
     cfg = _cfg(tmp_path)
     messages = [{"role": "user", "content": "hi"}]
     telemetry_log = tmp_path / "telemetry-normal.jsonl"
-    runtime.run_turn(
+    one_turn(
         cfg, "SYS", messages, runtime.Telemetry(debug_log=telemetry_log),
         tool_registry=build_default_registry(prompts_root=None), tool_context=ToolContext(cwd=tmp_path),
         suppress_output=True, event_hooks=rec, call_stats=calls,

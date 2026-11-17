@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from test_lazy_tool_discovery import _cfg, _result
+from turn_driver import one_turn
 
 from js import memory, runtime
 from js.toolkit import ToolContext
@@ -30,7 +31,7 @@ def test_a_surface_saved_under_another_scope_is_not_restored(tmp_path, monkeypat
         return _result(text="ready")
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
-    runtime.run_turn(cfg, "system", [{"role": "user", "content": "hi"}], runtime.Telemetry(None),
+    one_turn(cfg, "system", [{"role": "user", "content": "hi"}], runtime.Telemetry(None),
                      tool_registry=build_default_registry().select(["shell:lazy"]),
                      tool_context=ToolContext(cwd=tmp_path))
     assert seen == [["tool_discovery"]]
@@ -48,7 +49,7 @@ def test_a_surface_saved_under_this_scope_is_restored(tmp_path, monkeypatch):
         return _result(text="ready")
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
-    runtime.run_turn(replace(cfg), "system", [{"role": "user", "content": "hi"}], runtime.Telemetry(None),
+    one_turn(replace(cfg), "system", [{"role": "user", "content": "hi"}], runtime.Telemetry(None),
                      tool_registry=build_default_registry().select(["shell:lazy"]),
                      tool_context=ToolContext(cwd=tmp_path))
     assert seen == [["shell", "tool_discovery"]]

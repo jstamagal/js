@@ -15,6 +15,7 @@ import ai
 import ai.types.usage
 from ai.providers import history_utils
 from repl_driver import run_async
+from turn_driver import one_turn
 
 from js import cli, runtime
 from js.config import Config, from_env
@@ -101,7 +102,7 @@ def test_steered_message_follows_the_tool_results_and_precedes_the_next_call(mon
     offered = [{"role": "user", "content": "turn left instead", "steered": True}]
     messages = [{"role": "user", "content": "go"}]
 
-    runtime.run_turn(
+    one_turn(
         _cfg(tmp_path), "SYS", messages, runtime.Telemetry(debug_log=None),
         tool_registry=registry, tool_context=ToolContext(cwd=tmp_path), suppress_output=True,
         steer=lambda: offered.pop() if offered else None,

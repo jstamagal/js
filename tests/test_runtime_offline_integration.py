@@ -15,6 +15,7 @@ from tool_loading import after_loading
 from turn_driver import (
     ExchangeConsole,
     config as turn_config,
+    one_turn,
     registry as scripted_registry,
     run as run_scripted_turn,
 )
@@ -212,7 +213,7 @@ def test_run_turn_emits_text_response_events(monkeypatch, tmp_path):
     cfg = offline_config(tmp_path)
     messages = [{"role": "user", "content": "Say OK."}]
 
-    runtime.run_turn(
+    one_turn(
         cfg,
         "system",
         messages,
@@ -327,7 +328,7 @@ def test_run_turn_surfaces_and_persists_incomplete_responses(monkeypatch, tmp_pa
     cfg = offline_config(tmp_path)
     messages = [{"role": "user", "content": "Say something long."}]
 
-    runtime.run_turn(
+    one_turn(
         cfg,
         "system",
         messages,
@@ -366,7 +367,7 @@ def test_incomplete_truncated_tool_call_is_not_persisted_or_dispatched(monkeypat
     cfg = offline_config(tmp_path, settings={"OUTPUT_TOKENS_RETRY_MAX": 0, "OUTPUT_RESUMES_MAX": 0})
     messages = [{"role": "user", "content": "write a synthetic file"}]
 
-    runtime.run_turn(
+    one_turn(
         cfg,
         "system",
         messages,
@@ -409,7 +410,7 @@ def test_preflight_compacts_before_dispatch_when_request_would_overflow(monkeypa
         {"role": "user", "content": "current user turn"},
     ]
 
-    runtime.run_turn(
+    one_turn(
         cfg,
         "system",
         messages,
@@ -463,7 +464,7 @@ def test_midturn_compacts_after_fat_tool_result_before_followup(monkeypatch, tmp
         {"role": "user", "content": "current tool turn"},
     ]
 
-    runtime.run_turn(
+    one_turn(
         cfg,
         "system",
         messages,
@@ -511,7 +512,7 @@ def test_context_overflow_error_forces_compaction_and_retries_once(monkeypatch, 
         {"role": "user", "content": "do not lose this request"},
     ]
 
-    runtime.run_turn(
+    one_turn(
         cfg,
         "system",
         messages,
@@ -551,7 +552,7 @@ def test_repaired_tool_call_replays_clean_after_execution(monkeypatch, tmp_path)
     cfg = offline_config(tmp_path)
     messages = [{"role": "user", "content": "write repaired"}]
 
-    runtime.run_turn(
+    one_turn(
         cfg,
         "system",
         messages,
@@ -573,7 +574,7 @@ def test_repaired_tool_call_replays_clean_after_execution(monkeypatch, tmp_path)
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", second_stream_stub)
     messages.append({"role": "user", "content": "continue"})
-    runtime.run_turn(
+    one_turn(
         cfg,
         "system",
         messages,
@@ -631,7 +632,7 @@ def test_persisted_truncated_tool_call_history_does_not_reerror_while_new_tool_r
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "write"))
     cfg = offline_config(tmp_path)
-    runtime.run_turn(
+    one_turn(
         cfg,
         "system",
         messages,
@@ -661,7 +662,7 @@ def test_run_turn_dispatches_registered_command_handler(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     messages = [{"role": "user", "content": "Say OK."}]
 
-    runtime.run_turn(
+    one_turn(
         cfg,
         "system",
         messages,
@@ -692,7 +693,7 @@ def test_run_turn_emits_tool_call_and_result_events(monkeypatch, tmp_path):
     cfg = offline_config(tmp_path)
     messages = [{"role": "user", "content": "Read note.txt."}]
 
-    runtime.run_turn(
+    one_turn(
         cfg,
         "system",
         messages,
@@ -734,7 +735,7 @@ def test_records_persisted_at_turn_end_carry_the_time_each_message_happened(monk
     cfg = offline_config(tmp_path)
     messages = [{"role": "user", "content": "Read note.txt."}]
 
-    runtime.run_turn(cfg, "system", messages, runtime.Telemetry(None), trace_override=False,
+    one_turn(cfg, "system", messages, runtime.Telemetry(None), trace_override=False,
                      tool_context=ToolContext(cwd=tmp_path), suppress_output=True)
     time.sleep(0.05)
     written_after = time.time()
@@ -762,7 +763,7 @@ def test_run_turn_emits_turn_end_after_fatal_error(monkeypatch, tmp_path):
     messages = [{"role": "user", "content": "Break."}]
 
     with pytest.raises(ValueError, match="bad request"):
-        runtime.run_turn(
+        one_turn(
             cfg,
             "system",
             messages,
@@ -793,7 +794,7 @@ def test_run_turn_applies_config_alias_profile_to_outgoing_tool_specs(monkeypatc
     messages = [{"role": "user", "content": "Use tools if needed."}]
     registry = build_default_registry().select(["read:lazy", "write:lazy", "task:lazy", "fs_search:lazy", "shell:lazy"])
 
-    runtime.run_turn(
+    one_turn(
         cfg,
         "system",
         messages,
@@ -825,7 +826,7 @@ def test_run_turn_without_alias_profile_keeps_default_tool_names(monkeypatch, tm
     messages = [{"role": "user", "content": "Use tools if needed."}]
     registry = build_default_registry().select(["read:lazy", "write:lazy", "task:lazy", "fs_search:lazy", "shell:lazy"])
 
-    runtime.run_turn(
+    one_turn(
         cfg,
         "system",
         messages,
@@ -872,7 +873,7 @@ def test_run_turn_streams_fs_search_tool_call_returns_content_before_final_text(
     cfg = offline_config(tmp_path)
     messages = [{"role": "user", "content": "Find the secret token."}]
 
-    runtime.run_turn(
+    one_turn(
         cfg,
         "system",
         messages,
@@ -910,7 +911,7 @@ def test_alias_profile_tool_call_dispatches_to_canonical_and_persists_lowercase(
     registry = build_default_registry().select(["read:lazy"])
     messages = [{"role": "user", "content": "read note"}]
 
-    runtime.run_turn(
+    one_turn(
         cfg,
         "system",
         messages,
@@ -980,7 +981,7 @@ def test_duplicate_invalid_tool_batch_is_retained_once_without_handler_side_effe
     monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(stream_stub, "patch"))
     debug_log = tmp_path / "debug.jsonl"
     messages = [{"role": "user", "content": "apply patch"}]
-    runtime.run_turn(
+    one_turn(
         offline_config(tmp_path),
         "system",
         messages,
@@ -1076,7 +1077,7 @@ def test_distinct_tool_batch_cap_executes_limit_and_reports_one_diagnostic(
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     cfg = replace(offline_config(tmp_path), max_tool_calls_per_message=2)
     messages = [{"role": "user", "content": "record numbers"}]
-    runtime.run_turn(
+    one_turn(
         cfg,
         "system",
         messages,
@@ -1112,7 +1113,7 @@ def test_tool_retry_limit_appends_assistant_error_instead_of_silent_no_response(
     cfg = offline_config(tmp_path)
     messages = [{"role": "user", "content": "call failing tool repeatedly"}]
 
-    runtime.run_turn(
+    one_turn(
         cfg,
         "system",
         messages,
@@ -1158,7 +1159,7 @@ def test_parallel_failing_calls_all_get_tool_messages_before_retry_limit_failure
     cfg = offline_config(tmp_path)
     messages = [{"role": "user", "content": "fire three bad calls at once"}]
 
-    runtime.run_turn(
+    one_turn(
         cfg,
         "system",
         messages,
@@ -1224,7 +1225,7 @@ def test_run_turn_streams_tool_call_dispatches_real_read_then_final_text(monkeyp
     )
     messages = [{"role": "user", "content": "Find task backend."}]
 
-    runtime.run_turn(cfg, "system", messages, runtime.Telemetry(None), trace_override=False)
+    one_turn(cfg, "system", messages, runtime.Telemetry(None), trace_override=False)
 
     assert len(calls) == 2
     exchange = [m for m in messages if m.get("name") == "read"
@@ -1262,7 +1263,7 @@ def test_assistant_turn_with_tool_calls_keeps_reasoning_in_next_convo(monkeypatc
     context = ToolContext(cwd=tmp_path)
     messages = [{"role": "user", "content": "find x"}]
 
-    runtime.run_turn(
+    one_turn(
         cfg, "system", messages, runtime.Telemetry(None),
         trace_override=False, tool_context=context, suppress_output=True,
     )
@@ -1322,7 +1323,7 @@ def test_assistant_turn_without_tool_calls_strips_reasoning_from_next_convo(monk
     assert reloaded[0]["content"] == "INTERIM"
     assert "reasoning_content" not in reloaded[0]
 
-    # End-to-end: feed the reloaded convo into a second run_turn and confirm
+    # End-to-end: feed the reloaded convo into a second turn and confirm
     # the outgoing provider call omits reasoning_content on the prior turn.
     calls: list[dict] = []
 
@@ -1333,7 +1334,7 @@ def test_assistant_turn_without_tool_calls_strips_reasoning_from_next_convo(monk
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     messages: list[dict] = list(reloaded)  # fresh list to avoid cross-test pollution
 
-    runtime.run_turn(
+    one_turn(
         cfg, "system", messages, runtime.Telemetry(None),
         trace_override=False, tool_context=ToolContext(cwd=tmp_path), suppress_output=True,
     )

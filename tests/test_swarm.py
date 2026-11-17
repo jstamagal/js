@@ -15,6 +15,7 @@ import ai
 import ai.types.usage
 import pytest
 from ai.providers import history_utils
+from turn_driver import one_turn
 
 from js import memory, runtime, swarm, swarm_run
 from js.config import Config
@@ -140,7 +141,7 @@ def test_inbox_messages_reach_the_model_at_the_tool_boundary(monkeypatch, tmp_pa
     registry = ToolRegistry(tools=(Tool("probe", "Probe.", probe, {}),), aliases={})
     messages = [{"role": "user", "content": "go"}]
 
-    runtime.run_turn(_cfg(tmp_path), "SYS", messages, runtime.Telemetry(debug_log=None),
+    one_turn(_cfg(tmp_path), "SYS", messages, runtime.Telemetry(debug_log=None),
                      tool_registry=registry, tool_context=ToolContext(cwd=tmp_path), suppress_output=True,
                      steer=agent.steer)
 

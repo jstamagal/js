@@ -5,7 +5,7 @@ from pathlib import Path
 import ai
 import ai.types.usage
 import pytest
-from turn_driver import run
+from turn_driver import one_turn, run
 
 from js import persona, runtime
 from js.config import Config
@@ -242,7 +242,7 @@ def test_runtime_omits_tools_when_agent_selection_is_empty(monkeypatch, tmp_path
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     messages = [{"role": "user", "content": "hi"}]
 
-    runtime.run_turn(
+    one_turn(
         cfg(tmp_path, prompts),
         persona.load_prompt(prompts),
         messages,

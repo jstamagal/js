@@ -9,7 +9,7 @@ import ai
 import ai.types.events as events
 import httpx2
 import pytest
-from turn_driver import js
+from turn_driver import js, one_turn
 
 from js import (
     cli,
@@ -80,7 +80,7 @@ def test_display_is_separate_from_answer_transcript_and_session(monkeypatch, tmp
 
     scripted(monkeypatch, before_answer=before_answer)
     messages = [{"role": "user", "content": "first"}]
-    runtime.run_turn(
+    one_turn(
         cfg, "system", messages, runtime.Telemetry(None, transcript_log=sink),
         trace_override=False, suppress_output=suppressed, tool_context=ToolContext(cwd=tmp_path),
     )
@@ -105,7 +105,7 @@ def test_cancel_during_reasoning_retains_partial_history(monkeypatch, tmp_path):
     scripted(monkeypatch, cancel=True)
     messages = [{"role": "user", "content": "first"}]
     with pytest.raises(asyncio.CancelledError):
-        runtime.run_turn(
+        one_turn(
             cfg, "system", messages, runtime.Telemetry(None), trace_override=False,
             suppress_output=True, tool_context=ToolContext(cwd=tmp_path),
         )

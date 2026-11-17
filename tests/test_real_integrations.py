@@ -7,10 +7,11 @@ import re
 from pathlib import Path
 
 import pytest
+from turn_driver import one_turn
 
 from js import history_record, toolkit as runtime_tools
 from js.config import from_env
-from js.runtime import Telemetry, run_turn
+from js.runtime import Telemetry
 from js.toolkit import ToolContext
 from js.toolkit.fs import fs_search, patch, read, write
 from js.toolkit.subagents import task
@@ -96,7 +97,7 @@ def test_real_model_turn_uses_fs_search_and_task_end_to_end(monkeypatch):
 
     capture = io.StringIO()
     with contextlib.redirect_stdout(capture):
-        run_turn(
+        one_turn(
             cfg,
             "You are a precise tool-using test agent. Use requested tools. Keep final answer exact.",
             messages,

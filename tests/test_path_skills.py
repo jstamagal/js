@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from test_lazy_tool_discovery import _cfg, _result
+from turn_driver import one_turn
 
 from js import memory, runtime, skills as skills_mod
 from js.toolkit import ToolContext, fs
@@ -38,7 +39,7 @@ def project(tmp_path, monkeypatch):
 def _run(project, monkeypatch, cfg, responses, context=None, *, prompt='work', selection=SELECTION):
     monkeypatch.setattr(runtime.model_client, 'stream_model_async', lambda **kw: next(responses))
     messages = [{'role': 'user', 'content': prompt}]
-    runtime.run_turn(cfg, 'system', messages, runtime.Telemetry(None),
+    one_turn(cfg, 'system', messages, runtime.Telemetry(None),
                      tool_registry=build_default_registry().select(selection),
                      tool_context=context or ToolContext(cwd=project))
     return [m['content'] for m in messages if m.get('role') == 'tool']

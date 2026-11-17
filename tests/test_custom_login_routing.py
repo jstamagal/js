@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 from repl_driver import turn_stub
-from turn_driver import js
+from turn_driver import js, one_turn
 
 from js import cli, login_defaults, logins, messages as msgs, providers, repl_commands, run_assembly
 from js.config import InvocationSources, from_env
@@ -546,7 +546,7 @@ def test_a_turn_on_another_model_sends_that_models_resolved_sampling(monkeypatch
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", fake_stream)
     with pytest.raises(Exception):
-        runtime.run_turn(cfg, "sys", [{"role": "user", "content": "hi"}], runtime.Telemetry(None),
+        one_turn(cfg, "sys", [{"role": "user", "content": "hi"}], runtime.Telemetry(None),
                          model_override="b", suppress_output=True)
     assert sent["sampling"].temperature == 0.9
 

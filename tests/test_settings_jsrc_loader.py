@@ -6,6 +6,7 @@ import copy
 from pathlib import Path
 
 import pytest
+from turn_driver import one_turn
 
 from js import messages as msgs, runtime, session_store, settings
 from js.config import Config, InvocationSources, from_env
@@ -317,7 +318,7 @@ def test_provider_config_reaches_stream_model(monkeypatch, tmp_path):
     )
     from js.toolkit import ToolContext
 
-    runtime.run_turn(
+    one_turn(
         cfg,
         "system",
         [{"role": "user", "content": "hi"}],

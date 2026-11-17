@@ -7,7 +7,7 @@ from pathlib import Path
 import ai
 import ai.types.messages
 import ai.types.usage
-from turn_driver import run
+from turn_driver import one_turn, run
 
 from js import context_budget, runtime, skills as skills_mod
 from js.config import Config
@@ -197,7 +197,7 @@ def test_turn_and_skill_tool_use_supplied_catalog(tmp_path, monkeypatch):
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
     messages = [{"role": "user", "content": "Inspect the assembly"}]
-    runtime.run_turn(
+    one_turn(
         _cfg(tmp_path), "system", messages, runtime.Telemetry(None),
         tool_registry=registry, tool_context=context, skill_catalog=catalog,
         suppress_output=True,
@@ -345,7 +345,7 @@ def test_discovery_cannot_authorize_another_call_from_same_response(monkeypatch,
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     messages = [{"role": "user", "content": "inspect"}]
-    runtime.run_turn(
+    one_turn(
         _cfg(tmp_path),
         "system",
         messages,
@@ -382,7 +382,7 @@ def test_runtime_ignores_configured_alias_that_uses_discovery_name(monkeypatch, 
         {"TOOL_ALIASES": [{"match": ["offline"], "aliases": {"read": "tool_discovery"}}]},
     )
     messages = [{"role": "user", "content": "find tools"}]
-    runtime.run_turn(
+    one_turn(
         cfg,
         "system",
         messages,
@@ -421,7 +421,7 @@ def test_runtime_regenerates_schemas_preserves_alias_history_and_keeps_next_turn
     messages = [{"role": "user", "content": "inspect"}]
     context = ToolContext(cwd=tmp_path)
 
-    runtime.run_turn(cfg, "system", messages, runtime.Telemetry(None), tool_registry=registry, tool_context=context)
+    one_turn(cfg, "system", messages, runtime.Telemetry(None), tool_registry=registry, tool_context=context)
 
     assert "Probe" not in [tool.name for tool in calls[0]]
     assert "Probe" in [tool.name for tool in calls[1]]
@@ -438,7 +438,7 @@ def test_runtime_regenerates_schemas_preserves_alias_history_and_keeps_next_turn
     ]
 
     later_messages = [{"role": "user", "content": "again"}]
-    runtime.run_turn(cfg, "system", later_messages, runtime.Telemetry(None), tool_registry=registry, tool_context=context)
+    one_turn(cfg, "system", later_messages, runtime.Telemetry(None), tool_registry=registry, tool_context=context)
     assert "Probe" in [tool.name for tool in calls[3]]
 
 
@@ -460,7 +460,7 @@ def test_context_budget_tool_tokens_track_each_emitted_schema_set(monkeypatch, t
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     context = ToolContext(cwd=tmp_path)
-    runtime.run_turn(
+    one_turn(
         _cfg(tmp_path),
         "system",
         [{"role": "user", "content": "inspect"}],

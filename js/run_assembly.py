@@ -66,7 +66,7 @@ class SettledRun:
     effort: str | None
 
     def turn_kwargs(self, **more: Any) -> dict[str, Any]:
-        """The `runtime.run_turn` arguments for this run, with ``more`` on top."""
+        """The `runtime.run_turn_async` arguments for this run, with ``more`` on top."""
         cfg = self.config
         kwargs: dict[str, Any] = {
             "model_override": cfg.model,

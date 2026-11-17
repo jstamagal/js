@@ -189,7 +189,7 @@ prompt directory whose name collides with an existing tool is skipped.
 - undo snapshots
 - search cache
 
-`run_turn()` hydrates the active context from `Config` each turn: the
+`run_turn_async()` hydrates the active context from `Config` each turn: the
 `on_context` rows of `js/turn_settings.py` (`turn_settings.install`), agent id,
 selected registry, and vision mode. In the REPL the Config itself is
 re-projected from the live settings store before each turn
@@ -201,7 +201,7 @@ search cache.
 
 ## Runtime Loop
 
-`run_turn()` mutates the caller's `messages` list. It builds a provider `convo`
+`run_turn_async()` mutates the caller's `messages` list. It builds a provider `convo`
 by prepending the system prompt to the current messages.
 
 `run_turn_async` in `js/runtime.py` is the loop itself: set the turn up, then

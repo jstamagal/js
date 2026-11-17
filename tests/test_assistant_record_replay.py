@@ -23,6 +23,7 @@ from pathlib import Path
 
 import httpx2
 import pytest
+from turn_driver import one_turn
 
 from js import history_record, memory, model_client, runtime
 from js.config import InvocationSources, from_env
@@ -344,7 +345,7 @@ def _observe(name: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Obse
     monkeypatch.setattr(runtime.T, "STOCK_CONTEXT", context)
 
     messages: list[dict] = [{"role": "user", "content": "go"}]
-    runtime.run_turn(cfg, SYSTEM, messages, runtime.Telemetry(None), tool_context=context,
+    one_turn(cfg, SYSTEM, messages, runtime.Telemetry(None), tool_context=context,
                      trace_override=False, suppress_output=True)
     [convo] = convos
     live_bodies = list(endpoint.bodies)
