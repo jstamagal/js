@@ -23,6 +23,7 @@ from pathlib import Path
 from .. import held
 from .. import imagefit
 from .. import jail
+from ..media import IMAGE_RESULT_PREFIX
 from .. import settings as _settings
 from . import policy
 from ..tool_binaries import resolve_binary
@@ -54,7 +55,6 @@ _IMAGE_MIME_BY_EXT = {
     ".webp": "image/webp",
     ".gif": "image/gif",
 }
-_IMAGE_RESULT_PREFIX = "IMAGE_RESULT\t"
 
 
 def _resolve_path_no_follow(context: ToolContext, raw: str | os.PathLike[str], *,
@@ -287,8 +287,8 @@ def _image_marker(path: Path, mime: str, size: int, data: bytes) -> str:
     stub = f"VISUAL_FILE {path} mime={mime} size={size} bytes"
     fitted = imagefit.fit(data, mime)
     if fitted is None or not fitted.changed:
-        return f"{_IMAGE_RESULT_PREFIX}{path}\t{mime}\t{stub}"
-    return f"{_IMAGE_RESULT_PREFIX}{imagefit.stored(fitted)}\t{fitted.mime}\t{stub} {fitted.note}"
+        return f"{IMAGE_RESULT_PREFIX}{path}\t{mime}\t{stub}"
+    return f"{IMAGE_RESULT_PREFIX}{imagefit.stored(fitted)}\t{fitted.mime}\t{stub} {fitted.note}"
 
 
 def _read_pdf_text(path: Path, context: ToolContext) -> tuple[str, bytes]:

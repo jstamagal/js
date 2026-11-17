@@ -834,7 +834,7 @@ def serialize_conversation(messages: list[dict], *, tool_result_chars: int) -> s
             if calls:
                 parts.append('[Assistant tool calls]: ' + "; ".join(calls))
         elif role == "tool":
-            if text.startswith("IMAGE_RESULT\t"):
+            if text.startswith(media.IMAGE_RESULT_PREFIX):
                 text = '[image result]'
             parts.append('[Tool result {message_get_name}]: {clip_text_tool_result_chars}'.format(message_get_name=message.get('name', ''), clip_text_tool_result_chars=_clip(text, tool_result_chars)))
         elif role == "system" and text:

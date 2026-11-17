@@ -7,8 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from js import media
 from js.toolkit import ToolContext
-from js.toolkit import fs, process_net
+from js.toolkit import process_net
 
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRtiny"
@@ -133,7 +134,7 @@ def test_file_url_image_uses_vision_marker_when_enabled_and_descriptor_when_disa
     marker = process_net.fetch(image.as_uri(), context=ToolContext(cwd=tmp_path, vision_enabled=True))
     descriptor = process_net.fetch(image.as_uri(), context=ToolContext(cwd=tmp_path))
 
-    assert marker.startswith(fs._IMAGE_RESULT_PREFIX)
+    assert marker.startswith(media.IMAGE_RESULT_PREFIX)
     assert marker.split("\t", 3) == [
         "IMAGE_RESULT",
         str(image),

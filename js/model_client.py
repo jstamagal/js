@@ -1171,8 +1171,7 @@ def history_to_ai_messages(
 
 
 def _image_result_payload(result: str) -> tuple[str, str, bytes] | str | None:
-    prefix = "IMAGE_RESULT\t"
-    if not isinstance(result, str) or not result.startswith(prefix):
+    if not isinstance(result, str) or not result.startswith(media.IMAGE_RESULT_PREFIX):
         return None
     parts = result.split("\t", 3)
     if len(parts) != 4:
@@ -1257,7 +1256,7 @@ def provider_text(result: Any) -> str:
     longest call id. A native read's image marker is its stub and the label,
     as `build_tool_result_messages` sends it."""
     widest = "x" * MEDIA_LABEL_ID_MAX
-    if isinstance(result, str) and result.startswith("IMAGE_RESULT\t"):
+    if isinstance(result, str) and result.startswith(media.IMAGE_RESULT_PREFIX):
         parts = result.split("\t", 3)
         if len(parts) != 4:
             return 'ERROR: malformed image result marker'

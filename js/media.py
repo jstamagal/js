@@ -18,6 +18,9 @@ from uuid import uuid4
 from . import paths
 
 MEDIA_PART = "media"
+# The start of a native read's image marker, `IMAGE_RESULT\t<path>\t<mime>\t<stub>`:
+# the provider gets the image at <path>, and the text is <stub>.
+IMAGE_RESULT_PREFIX = "IMAGE_RESULT\t"
 # The key of a history message's list of media parts.
 MEDIA_KEY = "media"
 _DIGEST = re.compile(r"[0-9a-f]{64}")

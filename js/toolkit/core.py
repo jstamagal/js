@@ -24,6 +24,7 @@ from collections.abc import Callable
 
 from .. import jail as _jail
 from .. import turn_settings as _turn_settings
+from ..media import IMAGE_RESULT_PREFIX
 from ..skills import SkillCatalog
 from . import reads as _reads
 from .reads import ReadLedger
@@ -37,7 +38,6 @@ if TYPE_CHECKING:
 
 Handler = Callable[..., Any]
 # A tool result that carries an image: prefix, host path, mime, text stub.
-_IMAGE_RESULT_PREFIX = "IMAGE_RESULT\t"
 
 
 # What the running call's tool hands the screen beside its result (`view`).
@@ -520,7 +520,7 @@ def _as_jail_shows(result: Any) -> Any:
     path: the model client reads the image from it. An `Output` stays one."""
     if _jail.active() is None or not isinstance(result, str) or isinstance(result, _jail.Refusal):
         return result
-    if result.startswith(_IMAGE_RESULT_PREFIX):
+    if result.startswith(IMAGE_RESULT_PREFIX):
         prefix, host, rest = (result.split("\t", 2) + ["", ""])[:3]
         shown = f"{prefix}\t{host}\t{_jail.shown(rest)}"
     else:

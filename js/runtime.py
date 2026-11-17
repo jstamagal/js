@@ -34,6 +34,7 @@ import ai
 from . import context_budget
 from . import held
 from . import jail as _jail
+from .media import IMAGE_RESULT_PREFIX
 from . import messages as msgs
 from . import output
 from .text_bytes import byte_size, byte_prefix, cap_text, well_formed
@@ -539,9 +540,6 @@ def _truncated_tool_call_notice(reason: str, pending_calls: list[_PendingToolCal
     )
 
 
-_IMAGE_RESULT_PREFIX = "IMAGE_RESULT\t"
-
-
 # --------------------------------------------------------------------------
 # Tool trace
 # --------------------------------------------------------------------------
@@ -951,7 +949,7 @@ def _cap_media(result: ToolResult, media_max: int | None) -> ToolResult:
 
 def _image_marker_stub(result: Any) -> str | None:
     """The text a native read's image marker becomes, or None for any other result."""
-    if not isinstance(result, str) or not result.startswith(_IMAGE_RESULT_PREFIX):
+    if not isinstance(result, str) or not result.startswith(IMAGE_RESULT_PREFIX):
         return None
     parts = result.split("\t", 3)
     return parts[3] if len(parts) == 4 else ""
@@ -970,7 +968,7 @@ def _cap_image_marker(result: str, cap_bytes: int | None, media_max: int | None)
     # The path stays as the filesystem names it (the file is read by it); the
     # text the model and the session see is made strictly UTF-8.
     mime, stub = well_formed(mime), well_formed(stub)
-    result = f"{_IMAGE_RESULT_PREFIX}{path}\t{mime}\t{stub}"
+    result = f"{IMAGE_RESULT_PREFIX}{path}\t{mime}\t{stub}"
     try:
         size = 4 * math.ceil(os.path.getsize(path) / 3)
     except OSError:
