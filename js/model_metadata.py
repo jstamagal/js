@@ -548,12 +548,18 @@ def refresh_catalog(*, force: bool = False) -> CatalogStatus:
     output.parent.mkdir(parents=True, exist_ok=True)
     _generate_database(output=output)
     _activate_database(output)
-    refreshed_at = datetime.now(tz=UTC)
-    status = _status_from_db(output, refreshed_at=refreshed_at)
-    if status is None:
-        raise RuntimeError(f"refreshed models.dev catalog missing metadata: {output}")
-    _write_status_file(status)
+    status = record_refreshed(output)
     reset_caches()
+    return status
+
+
+def record_refreshed(db_path: Path, *, refreshed_at: datetime | None = None) -> CatalogStatus:
+    """Write the status file that records the catalog at ``db_path`` as
+    refreshed at ``refreshed_at`` (now by default), and return that status."""
+    status = _status_from_db(db_path, refreshed_at=refreshed_at or datetime.now(tz=UTC))
+    if status is None:
+        raise RuntimeError(f"refreshed models.dev catalog missing metadata: {db_path}")
+    _write_status_file(status)
     return status
 
 
