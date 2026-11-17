@@ -693,9 +693,7 @@ OPT_SESSION = Message(
     "--session NAME: resume NAME, looking in this directory's sessions first, then in all of them."
     " Not found: start it. Bare, open the session picker.")
 OPT_SESSION_KEY = Message("Derive a stable session name from agent, cwd and caller key.")
-OPT_NO_SAVE = Message(
-    "Expensive throwaway prompt or pipe run. Nothing is saved, resume is unavailable, "
-    "and the next run must re-read context.")
+OPT_NO_SAVE = Message("Do not save this run: no session is written, so it cannot be resumed.")
 OPT_QUIET = Message("Suppress the resume hint after a one-shot prompt.")
 OPT_REASONING = Message(
     "Thinking effort word, sent as typed: off|minimal|low|medium|high|xhigh|max or any other word. "
