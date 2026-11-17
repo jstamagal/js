@@ -237,8 +237,6 @@ def test_a_write_to_a_non_utf8_name_succeeds_and_the_bridge_keeps_serving(ctx):
 
 
 @needs_kernel
-@pytest.mark.xfail(strict=True, reason="a turn's undo journal names a snapshot by the path's UTF-8 "
-                   "bytes, which a non-UTF-8 name does not have")
 def test_a_write_to_a_non_utf8_name_succeeds_and_the_bridge_keeps_serving_in_a_turn(ctx):
     import os
 

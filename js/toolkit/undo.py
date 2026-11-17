@@ -36,7 +36,7 @@ def session_directory(agent_id: str, session_file: Path, *, state_dir: Path | No
         return None
     safe_agent = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in agent_id) or _settings.default_value("DEFAULT_AGENT")
     safe_stem = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in session.stem) or "session"
-    session_hash = hashlib.sha256(str(session).encode("utf-8")).hexdigest()[:16]
+    session_hash = hashlib.sha256(str(session).encode("utf-8", "surrogateescape")).hexdigest()[:16]
     return (state_dir or state_root()) / safe_agent / "undo" / f"{safe_stem}-{session_hash}"
 
 
@@ -66,11 +66,11 @@ def _encode_snapshot(path: Path, snapshot: Snapshot) -> bytes:
         "path": str(path),
         "snapshot": payload,
     }
-    return json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode("utf-8", "surrogateescape")
 
 
 def _decode_snapshot(data: bytes, expected_path: Path) -> Snapshot:
-    envelope = json.loads(data.decode("utf-8"))
+    envelope = json.loads(data.decode("utf-8", "surrogateescape"))
     if not isinstance(envelope, dict) or envelope.get("version") != _SNAPSHOT_FORMAT_VERSION:
         raise ValueError("unsupported snapshot format")
     if envelope.get("path") != str(expected_path):
@@ -152,12 +152,12 @@ def _snapshot_raw_size(snapshot: Snapshot) -> int:
         return len(snapshot)
     if snapshot.get("kind") == "directory":
         return sum(
-            len(str(rel).encode("utf-8")) + _snapshot_raw_size(data)
+            len(str(rel).encode("utf-8", "surrogateescape")) + _snapshot_raw_size(data)
             for rel, data in snapshot.get("entries", {}).items()
         )
     if snapshot.get("kind") == "file":
         return len(snapshot["data"])
-    return len(str(snapshot.get("target", "")).encode("utf-8"))
+    return len(str(snapshot.get("target", "")).encode("utf-8", "surrogateescape"))
 
 
 class UndoStore:
@@ -191,7 +191,7 @@ class UndoStore:
 
     def _path_dir(self, path: Path) -> Path:
         assert self.directory is not None
-        digest = hashlib.sha256(str(path).encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(str(path).encode("utf-8", "surrogateescape")).hexdigest()
         return self.directory / digest
 
     def _notice(self, message: str) -> None:
@@ -218,7 +218,7 @@ class UndoStore:
             return
         for path_dir in path_dirs:
             try:
-                metadata = json.loads((path_dir / "path.json").read_text(encoding="utf-8"))
+                metadata = json.loads((path_dir / "path.json").read_text(encoding="utf-8", errors="surrogateescape"))
                 target = Path(metadata["path"])
                 if not target.is_absolute():
                     raise ValueError('snapshot target is not absolute')
@@ -246,7 +246,7 @@ class UndoStore:
                 {"version": _SNAPSHOT_FORMAT_VERSION, "path": str(path)},
                 ensure_ascii=False,
                 separators=(",", ":"),
-            ).encode("utf-8")
+            ).encode("utf-8", "surrogateescape")
             atomic_write(path_dir / "path.json", metadata)
             too_large = _snapshot_raw_size(snapshot) > _SNAPSHOT_MAX_DISK_BYTES
             encoded = b"" if too_large else _encode_snapshot(path, snapshot)
@@ -259,7 +259,7 @@ class UndoStore:
                         "snapshot": {"kind": "unavailable", "reason": reason},
                     },
                     separators=(",", ":"),
-                ).encode("utf-8")
+                ).encode("utf-8", "surrogateescape")
                 self._notice(f'{reason}; this undo is available only until the process exits')
             stamp = f"{time.time_ns():020d}-{secrets.token_hex(6)}.snapshot"
             entry = path_dir / stamp
