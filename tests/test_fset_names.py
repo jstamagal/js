@@ -4,52 +4,61 @@ once, never in a typed line and never again in what it put in."""
 from __future__ import annotations
 
 import contextlib
+import copy
 import io
+
+from repl_driver import record_turns, turn_stub, type_into_js
 
 from js import settings
 from js.repl_state import ReplState
 
 
-def _repl_state():
-    return ReplState(messages=[], system="sys", settings=settings.seed_defaults())
-
-
-def test_dollar_names_expand_once_in_aliases_handlers_and_scripts(tmp_path):
-    from types import SimpleNamespace
-
-    from js import cli, events
-
-    state = _repl_state()
-    cfg = SimpleNamespace(settings=None, project_dir=tmp_path)
-    cli._handle_command("/set PROVIDER openai", state, cfg)
-    cli._handle_command("/alias pin set MODEL $PROVIDER", state, cfg)
-    cli._handle_command("/pin", state, cfg)
-    assert settings.knob(state.settings, "MODEL") == "openai"
-
-    script = tmp_path / "boot.irc"
-    script.write_text("set BANNER [$MODEL]\n", encoding="utf-8")
-    cli._handle_command(f"/load {script}", state, cfg)
-    assert settings.knob(state.settings, "BANNER") == "[openai]"
-
-    state.events = events.EventHooks()
-    state.events.set_dispatcher(cli._event_dispatcher(state, cfg))
-    cli._handle_command("/on turn_start set BANNER $BANNER$BANNER", state, cfg)
-    state.events.emit("turn_start")
-    assert settings.knob(state.settings, "BANNER") == "[openai][openai]"
-
-
-def test_a_typed_line_and_an_expanded_value_are_not_expanded():
-    state = _repl_state()
-    from types import SimpleNamespace
-
+def test_dollar_names_expand_once_in_aliases_handlers_and_scripts(tmp_path, monkeypatch):
     from js import cli
 
-    cfg = SimpleNamespace(settings=None)
-    cli._handle_command("/set BANNER $MODEL", state, cfg)
-    assert settings.knob(state.settings, "BANNER") == "$MODEL"
-    cli._handle_command("/alias again set BANNER <$BANNER>", state, cfg)
-    cli._handle_command("/again", state, cfg)
-    assert settings.knob(state.settings, "BANNER") == "<$MODEL>"
+    monkeypatch.chdir(tmp_path)
+    seen: list[dict] = []
+
+    def turn(cfg, system, messages, *args, event_hooks, **kwargs):
+        # The live settings as the turn starts, then the turn's turn_start.
+        seen.append(copy.deepcopy(cfg.settings))
+        event_hooks.emit("turn_start")
+
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(turn))
+    script = tmp_path / "boot.irc"
+    script.write_text("set BANNER [$MODEL]\n", encoding="utf-8")
+
+    assert type_into_js(monkeypatch, [
+        "/set PROVIDER openai",
+        "/alias pin set MODEL $PROVIDER",
+        "/pin",
+        f"/load {script}",
+        "/on turn_start set BANNER $BANNER$BANNER",
+        "one",
+        "two",
+    ]) == 0
+
+    first, second = seen
+    assert settings.knob(first, "MODEL") == "openai"
+    assert settings.knob(first, "BANNER") == "[openai]"
+    assert settings.knob(second, "BANNER") == "[openai][openai]"
+
+
+def test_a_typed_line_and_an_expanded_value_are_not_expanded(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    turns = record_turns(monkeypatch)
+
+    assert type_into_js(monkeypatch, [
+        "/set BANNER $MODEL",
+        "one",
+        "/alias again set BANNER <$BANNER>",
+        "/again",
+        "two",
+    ]) == 0
+
+    first, second = turns
+    assert settings.knob(first.settings, "BANNER") == "$MODEL"
+    assert settings.knob(second.settings, "BANNER") == "<$MODEL>"
 
 
 def test_dollar_names_expand_in_a_user_jsrc(tmp_path):
