@@ -51,6 +51,7 @@ from . import (
 from .config import InvocationSources, from_env
 from .conversation import Conversation
 from .session_catalog import record_session_start
+from .toolkit import bus_tools
 from .toolkit.core import ToolContext
 from .toolkit.terminal import close_terminal_sessions
 
@@ -126,7 +127,7 @@ def _configure(spec: AgentSpec) -> run_assembly.SettledRun:
     system = settled.system
     if spec.seat_file:
         system = system.rstrip() + "\n\n" + Path(spec.seat_file).expanduser().read_text(encoding="utf-8")
-    return replace(settled, system=system, registry=swarm.with_bus_tools(settled.registry))
+    return replace(settled, system=system, registry=bus_tools.with_bus_tools(settled.registry))
 
 
 class Runner:

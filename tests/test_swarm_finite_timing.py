@@ -5,13 +5,13 @@ import math
 import pytest
 
 from js import swarm
-from js.toolkit import ToolContext
+from js.toolkit import ToolContext, bus_tools
 from js.toolkit.core import call_tool
 
 
 def _bus(name: str, context, **args):
     """What the bus tool ``name`` answers a call with ``args``."""
-    tool = {tool.name: tool for tool in swarm.tools()}[name]
+    tool = {tool.name: tool for tool in bus_tools.tools()}[name]
     return call_tool(tool, args, context)
 
 

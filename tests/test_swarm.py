@@ -21,7 +21,7 @@ from js import memory, runtime, swarm, swarm_run
 from js.config import Config
 from js.conversation import Conversation
 from js.model_client import ModelStreamResult, ModelToolCall
-from js.toolkit import ToolContext
+from js.toolkit import ToolContext, bus_tools
 from js.toolkit.core import Tool, call_tool
 from js.toolkit.registry import ToolRegistry
 
@@ -31,7 +31,7 @@ from js.toolkit.registry import ToolRegistry
 
 def _bus(name: str, context, **args):
     """What the bus tool ``name`` answers a call with ``args``."""
-    tool = {tool.name: tool for tool in swarm.tools()}[name]
+    tool = {tool.name: tool for tool in bus_tools.tools()}[name]
     return call_tool(tool, args, context)
 
 
@@ -163,7 +163,7 @@ def test_inbox_messages_reach_the_model_at_the_tool_boundary(monkeypatch, tmp_pa
 def test_send_tool_posts_from_the_agent_on_the_context(tmp_path):
     agent = swarm.Agent(tmp_path / "bus" / "a")
     agent.room.join("b")
-    registry = swarm.with_bus_tools(ToolRegistry(tools=(), aliases={}))
+    registry = bus_tools.with_bus_tools(ToolRegistry(tools=(), aliases={}))
     send, who = registry.resolve("send"), registry.resolve("who")
     on_bus = ToolContext(cwd=tmp_path, swarm=agent)
 
@@ -273,7 +273,7 @@ def test_quiet_means_every_member_asleep_with_an_empty_inbox(tmp_path):
 def test_retire_posts_the_handoff_and_leaves_the_bus(tmp_path):
     a = swarm.Agent(tmp_path / "bus" / "a")
     a.room.join("b")
-    retire = swarm.with_bus_tools(ToolRegistry(tools=(), aliases={})).resolve("retire")
+    retire = bus_tools.with_bus_tools(ToolRegistry(tools=(), aliases={})).resolve("retire")
     out = retire.handler(handoff="parser done; lexer left; branch feat/x", context=ToolContext(cwd=tmp_path, swarm=a))
     assert not out.startswith("ERROR")
     assert a.stop_seen is True
@@ -378,7 +378,7 @@ def test_finish_requires_live_holder_and_unfinished_task(tmp_path, monkeypatch, 
 
 def test_task_tools_work_the_board_from_the_agent_on_the_context(tmp_path):
     a = swarm.Agent(tmp_path / "bus" / "a")
-    registry = swarm.with_bus_tools(ToolRegistry(tools=(), aliases={}))
+    registry = bus_tools.with_bus_tools(ToolRegistry(tools=(), aliases={}))
     post, take, finish, tasks = (registry.resolve(n) for n in ("post_task", "take_task", "finish_task", "tasks"))
     on_bus = ToolContext(cwd=tmp_path, swarm=a)
     assert post.handler(title="write the parser", body="in src", context=on_bus).startswith("posted task #1")

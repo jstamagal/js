@@ -618,10 +618,11 @@ def registry_for_roots(
 
 def _swarm_tools() -> tuple[Tool, ...]:
     # The bus tools: on every swarm agent's surface (js.swarm_run), selectable by
-    # agent.yaml like any tool otherwise. js.swarm imports the toolkit lazily.
-    from .. import swarm
+    # agent.yaml like any tool otherwise. Imported here: js.swarm imports
+    # js.swarm_run, which reaches this registry again.
+    from . import bus_tools
 
-    return swarm.tools()
+    return bus_tools.tools()
 
 
 def build_default_registry(
