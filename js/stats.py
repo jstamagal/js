@@ -36,8 +36,8 @@ ROW_FIELDS = (
 )
 
 
-def _round(value: float | None, places: int = 4) -> float | None:
-    return round(value, places) if isinstance(value, (int, float)) else None
+def _round(value: float | None) -> float | None:
+    return round(value, 4) if isinstance(value, (int, float)) else None
 
 
 def summarize_calls(call_stats: list[dict], *, wall_s: float | None = None) -> dict[str, Any]:
