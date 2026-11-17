@@ -66,9 +66,11 @@ every other line is left alone. No backup is made. With nothing changed, no
 file is written.
 
 `PROVIDER`, `BASE_URL`, and `API_KEY` are unset in
-`defaults/jsrc`. When `PROVIDER` is set, the provider is constructed explicitly with
-the given base URL and API key; otherwise `ai-python` routes the model id
-natively through AI Gateway or via `provider:model` syntax for direct providers.
+`defaults/jsrc`. A model routes through a saved login (a `provider/model` prefix
+names it), through `PROVIDER`, built with the given base URL and API key, or,
+with no provider, through `BASE_URL` as an OpenAI-compatible endpoint. A model
+with none of these is refused with a not-logged-in message (`js/routing.py`,
+`js/model_client.py`).
 
 ## Setting Reference
 
@@ -78,8 +80,8 @@ help text is its entry in `defaults/help/set.txt` and its default is its line in
 `/set NAME` shows one, `/set compaction` one group and `/set *_FILE` the names
 a wildcard matches; `/help set NAME` prints a setting's help. Empty-state rendering uses `off` for false booleans, `<none>` for no-value
 settings, and `<unset>` for settings that explicitly defer to provider defaults. With
-`PARANOID_MODE` `on` or `extra`, a set secret setting (`API_KEY`, `EXTRA_HEADERS`,
-`EXTRA_PARAMS`, `MCP_SERVERS`) shows as `<set>`; with the default `off` it shows in full.
+`PARANOID_MODE` `on` or `extra`, a set secret setting (`API_KEY`, `ENDPOINT_DEFAULT_KEY`, `EXTRA_HEADERS`,
+`EXTRA_PARAMS`, `MCP_SERVERS`, and the tool keys such as `TAVILY_API_KEY`) shows as `<set>`; with the default `off` it shows in full.
 
 Under `js -C DIR`, `JAIL_HIDE` paths (by default `~/.js`, `~/.ssh`, `~/.gnupg`,
 `~/.netrc`, `~/.aws`, `~/.config/gh`) are empty in the jail. The `~/.js`
@@ -89,7 +91,7 @@ controls the hide rules. These paths stay hidden whatever DIR and
 command (kernel or terminal session) is already running can be visible to that
 command until it ends; file tools refuse it by name throughout.
 
-Tool alias profiles let a model see alternate tool names without changing the
+Tool alias profiles (`TOOL_ALIASES`, a JSON list) let a model see alternate tool names without changing the
 canonical tool handlers. Profiles are evaluated in order; each `match` value is
 case-insensitive substring-matched against the active model id and provider id.
 `match` may be a single string or a list of strings.
@@ -122,7 +124,7 @@ Disabled servers are omitted before runtime.
 Allow/deny entries are case-sensitive glob patterns and deny always wins:
 
 ```text
-set MCP_AGENT_POLICY {"autocoder":{"servers":{"allow":["Local *"],"deny":["*Prod*"]},"tools":{"allow":["local_files__*"],"deny":["*__delete*"]}}}
+set MCP_AGENT_POLICY {"defaultagent":{"servers":{"allow":["Local *"],"deny":["*Prod*"]},"tools":{"allow":["local_files__*"],"deny":["*__delete*"]}}}
 ```
 
 An absent `allow` permits everything not denied; an empty `allow` permits
@@ -161,19 +163,19 @@ new name wins when both are set:
 
 Default values are the lines in `defaults/jsrc`.
 
-Official `ai-python` SDK env vars (`AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`,
-`ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`) are read directly by the provider and
-do not need to be copied into `jsrc`.
+A provider's own env vars (`OPENAI_API_KEY`, `OPENAI_BASE_URL`,
+`ANTHROPIC_API_KEY`, ...) fill its key and base URL when the login and the
+settings leave them unset (`js/providers.py`). They do not stand in for a
+login, `PROVIDER` or `BASE_URL`: a model with none of them is refused.
 
 The agent a run uses is the `DEFAULT_AGENT` setting (`JS_DEFAULT_AGENT`, default
-`defaultagent` in `defaults/jsrc`). `set DEFAULT_AGENT autocoder` in a `jsrc` file picks it for
+`defaultagent` in `defaults/jsrc`). `set DEFAULT_AGENT slim` in a `jsrc` file picks it for
 every run under that file; `JS_DEFAULT_AGENT` beats the `jsrc` files, and `--agent` or
 `--commit` beats both. `--last` and `--session-key` resolve the agent the same
 way. The agent is read once at startup: `/set DEFAULT_AGENT` in the REPL does not switch
 the running session, and `/save` carries it to later runs. `JS_SESSION` is still
 read from the environment. CLI code threads the selected agent and session
-through `Config` instead of mutating `os.environ`. Artifact mode is threaded
-through `ToolContext`.
+through `Config` instead of mutating `os.environ`.
 
 Code-running inline prompt directives are on by default; `JS_INLINE_CODE=0`
 disables them (`--im-a-pussy` sets exactly that for one run). See
@@ -191,7 +193,8 @@ same.
 Files consulted, nearest first:
 
 1. `./.env`
-2. each parent directory's `.env`, up to the filesystem root
+2. each parent directory's `.env`, up to the filesystem root, while
+   `DOTENV_WALK_UP` is on (the default)
 3. `~/.js/.env`
 
 The real process environment always wins, and the nearest file wins over a
@@ -203,10 +206,10 @@ Format is the usual one: `KEY=value` per line, `#` comments, optional
 `export ` prefix, optional single or double quotes around the value. Malformed
 lines are skipped rather than raising.
 
-Provider credentials are a separate matter: `js` deliberately does **not**
-ride ambient provider keys in place of a login (`js/model_client.py`). A
-`.env` sets env vars, so it feeds the same settings env vars do — including
-`JS_API_KEY` — but it does not bypass the login gate.
+Provider credentials are a separate matter: a model with no saved login, no
+`PROVIDER` and no `BASE_URL` is refused, whatever SDK keys the environment holds
+(`js/model_client.py`). A `.env` sets env vars, so it feeds the same settings
+env vars do — including `JS_API_KEY` — but it does not bypass the login gate.
 
 ## CLI Overrides
 
@@ -214,7 +217,7 @@ Common flags:
 
 ```bash
 js -m "model/id"
-js --agent autocoder
+js --agent slim
 js --session existing-session
 js --no-save
 js --debug
@@ -265,8 +268,7 @@ through the model loop; recursive event dispatch from inside a handler is
 skipped.
 
 `--migrate-config` is a one-shot conversion for a legacy `config.toml`: it
-writes equivalent `set ...` lines to `jsrc` and exits. The migration path is
-temporary and is removed after 2 releases.
+writes equivalent `set ...` lines to `jsrc` and exits.
 
 js never rewrites a `jsrc` it loads. A line that still uses an old setting
 name (`model.id`, `limits.max_read_lines`) is an unknown setting at load,
@@ -309,6 +311,7 @@ project.
   JS.local.md
   tools.yaml
   agents/<agent_id>/     # global agent prompts
+  commands/              # markdown commands, /NAME
   skills/
   toolbox/
   logins/
@@ -422,8 +425,8 @@ blank-line separated:
 The assembled system prompt is run through inline-directive expansion
 ([inline-directives.md](inline-directives.md)) before it reaches the model.
 Agent manifests are an `agent.yaml` beside the prompt files: `tools:`
-entries in `noun:modifier` form, and optional `model:`, `reasoning:`,
-`sampling:`, `max_tokens:` and `skills:`. Tags used by `tools:` live in
+entries in `noun:modifier` form, and optional `model:`, `secondary_model:`,
+`models:`, `reasoning:`, `sampling:`, `max_tokens:` and `skills:`. Tags used by `tools:` live in
 `~/.js/tools.yaml`. See [tool-system.md](tool-system.md).
 
 ## Session Resolution
@@ -515,8 +518,8 @@ the current directory; branches sit under the session they came from. A
 session started with `--session NAME` shows NAME in the last column. Under
 the highlighted session two lines show the operator's last text (tool calls
 and js reminders left out) and the agent's last status line, the one that
-begins with 📌 (📌🔨🦍), else the last line of its last text. `js --list` prints every session file as a table, newest first,
-with local times.
+begins with 📌 (📌🔨🦍), else the last line of its last text.
+`js --list-sessions --json` lists the saved sessions as JSON.
 
 | key | does |
 |---|---|
@@ -730,7 +733,7 @@ the same offline. On load, the mark rebuilds in-memory context as:
 
 1. the unchanged system prompt,
 2. one user message containing `<compaction-summary>...`,
-3. a fixed tail (`tail_tokens`, default `16384`) whose boundary backs up so an
+3. a recent tail (`COMPACTION_KEEP_RECENT_TOKENS`, default `16384`) whose boundary backs up so an
 assistant `tool_calls` message is not separated from its tool results.
 
 The summary model is `COMPACTION_EXTERNAL_MODEL`; literal `same` uses the active session

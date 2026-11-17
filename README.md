@@ -67,8 +67,9 @@ Start here:
 ## Project Map
 
 ```text
-js/model_client.py                 single `ai` SDK import boundary
-js/runtime.py                      streaming loop and tool dispatch
+js/model_client.py                model I/O boundary over the `ai` SDK
+js/runtime.py                     streaming tool-use loop
+js/turn_dispatch.py               a turn's tool calls run and capped
 js/toolkit/core.py                Tool, ToolContext, call_tool
 js/toolkit/registry.py            registry assembly and selector filtering
 js/toolkit/fs_tools.py            the file tools' table
@@ -111,9 +112,10 @@ own: it exists once you write it or run `/save`, and holds only what you set.
 `defaults/jsrc` sets `MODEL` to `cpa/claude-opus-5-5` and `EFFORT` to `medium`;
 `JS_MODEL` overrides it. Explicit
 `set PROVIDER`, `BASE_URL` and `API_KEY` are opt-in only; `JS_PROVIDER`, `JS_BASE_URL`,
-and `JS_API_KEY` are env overrides. Official SDK env vars (`AI_GATEWAY_API_KEY`,
-`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`) are read directly by
-`ai-python` when no explicit provider config is set. Tune any setting live with
+and `JS_API_KEY` are env overrides. A model runs through a saved login, `PROVIDER`
+or `BASE_URL`; with none of them it is refused. A provider's own env vars
+(`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`, ...) fill its key and
+base URL when nothing else sets them. Tune any setting live with
 `/set <key> <value>` (and list them with `/show`); convert a legacy
 `config.toml` once with `js --migrate-config`. Files of commands run
 with `/load <file>`; any REPL command works there without the `/`, including
@@ -200,24 +202,14 @@ One-shot forms remain available: `js --login <id>`, `js --logout <id>`, and
 `js --compact <session>` append compaction marks to JSONL instead of rewriting
 history.
 
-## Provider Compatibility
-
-When the actual model string contains `claude`, only provider-facing tool schema
-names are adapted for Claude; session history stays canonical lowercase.
-
 ## Verification
 
 Offline suite:
 
 ```bash
-python -m pytest -m "not ai_provider and not vision and not e2e"
-```
-
-In this agent environment, the verified command was:
-
-```bash
-python -m pytest -m "not ai_provider and not vision and not e2e" -p no:cacheprovider
+just test
 ```
 
 Live tests marked `ai_provider`, `e2e`, or `vision` need configured provider
-credentials or a local OpenAI-compatible endpoint.
+credentials or a local OpenAI-compatible endpoint: `just test-live`,
+`just test-vision`.

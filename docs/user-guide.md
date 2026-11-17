@@ -73,7 +73,7 @@ Use another model for one run without editing config.
 Use another prompt-directory agent:
 
 ```bash
-js --agent autocoder -p "inspect the runtime and report risks"
+js --agent slim -p "inspect the runtime and report risks"
 ```
 
 ## Interactive REPL
@@ -161,7 +161,7 @@ error stops the file and names the file and line.
 `cancel`, the `mcp_*` events, and:
 
 - `session_start`: the REPL is up, after the jsrc replay and before the first
-  prompt. Both REPLs fire it on every start, a resume included; `-p` fires it
+  prompt. The REPL fires it on every start, a resume included; `-p` fires it
   before its turns.
 - `session_end`: the REPL is closing, after the last turn; `-p` fires it
   before the Continue line.
@@ -172,9 +172,8 @@ error stops the file and names the file and line.
 
 Handler text runs through the same table when the event fires. Handler errors
 are captured as event results and debug telemetry instead of aborting the
-turn. Nested event dispatch is skipped while a handler is already running. The
-`^` prefix is stored for future suppressive hooks; it does not yet suppress the
-default runtime action.
+turn. Nested event dispatch is skipped while a handler is already running. A
+`^` prefix on the event is kept with the hook and shown when hooks are listed.
 
 `exec CMD` runs `CMD` under `$SHELL -c` in the session's working directory and
 queues its stdout, if any, as one `<js-reminder>` on the next user message.
@@ -294,7 +293,7 @@ and `[Act: 3,5]` names the windows with output you have not seen.
 ### Windows
 
 The scrollback is window 1, the main conversation. Each subagent a turn
-launches from the async REPL opens the next free window, 2 to 9; its launch
+launches from the REPL opens the next free window, 2 to 9; its launch
 line in window 1 says which (`window 2`), or that windows 2 to 9 are all open,
 and that subagent then runs without one, as under `-p`. A subagent's window
 shows everything it streams: its launch and end lines, its answer, reasoning
@@ -427,13 +426,13 @@ the `*** Resumed` and `*** Model` notices.
 A paste of more than `PASTE_COLLAPSE_LINES` lines (10) or
 `PASTE_COLLAPSE_CHARS` characters (1000) shows in the input line as one
 marker, `[paste #N +X lines]` or `[paste #N X chars]`; the line sends the full
-text, in both REPLs. The scrollback echoes the line with the marker; the
+text. The scrollback echoes the line with the marker; the
 history file keeps the full text. A limit of 0 is no limit on that count.
 The terminal must send bracketed paste, which every common terminal does.
 
 ### Prompt history and keys
 
-Every line sent at a REPL prompt, in either REPL, is appended to one file
+Every line sent at the REPL prompt is appended to one file
 shared by every run: `~/.js/state/history.jsonl` (`HISTORY_FILE`), one JSON
 object per line with `ts`, `cwd`, `session`, `agent` and `text`. Up walks
 every prompt, newest first; `HISTORY_ORDER cwd` walks the prompts typed in the
@@ -443,7 +442,7 @@ older match, Enter or Esc to take it into the input line, Ctrl-G to give up.
 The newest `HISTORY_SIZE` prompts are loaded. A collapsed paste is
 written out whole.
 
-`~/.js/keys` (`KEYBINDS_FILE`) remaps the async screen's keys, in jsrc's grammar:
+`~/.js/keys` (`KEYBINDS_FILE`) remaps the REPL screen's keys, in jsrc's grammar:
 
 ```
 bind c-f history_search     # add a key to an action
@@ -455,7 +454,8 @@ A key bound to an action leaves every other action that fires in the same
 place. Key names are prompt_toolkit's (`c-r`, `escape`, `enter`, `tab`,
 `pageup`, `f5`, `space`, one character). The actions and their default keys:
 `submit` Enter, `history_search` Ctrl-R, `ex_open` `:` (vi normal mode),
-`ex_run` Enter and `ex_cancel` Esc (in the ex line), `interrupt` Ctrl-C, `eof`
+`ex_run` Enter and `ex_cancel` Esc (in the ex line), `interrupt` Ctrl-C,
+`cancel_turn` Esc (in the input line, while a turn runs), `eof`
 Ctrl-D, `suspend` Ctrl-Z, `reasoning_toggle` Ctrl-O, `redraw` Ctrl-L,
 `scroll_up` PageUp, `scroll_down` PageDown, `complete` Tab, and `window_1` to
 `window_9` Ctrl-W then the digit (`bind escape 2 window_2` adds ircII's
@@ -665,7 +665,8 @@ on the Linux console, the key prints one line and the input line stays as it
 was. Placeholders count up for the whole run, so a line recalled from history
 still carries its image.
 
-- Text files inline into the prompt (delimited, up to 64 KiB).
+- Text files inline into the prompt (delimited, up to `ATTACHMENT_MAX` bytes,
+  64 KiB by default).
 - Images attach as vision input when the active model supports vision; otherwise
   you get a note that vision is off and the bytes are not sent.
 - Other binaries attach as a short descriptor (path, type, size).
@@ -743,8 +744,8 @@ globs (`"*:ban"`, `wiki_*:lazy`) and `tag:NAME` pulls in a tag from
 entries means the model gets no tools. `/tools` shows the resolved table.
 Details: [tool-system.md](tool-system.md).
 
-A run without `--agent` uses the `DEFAULT_AGENT` setting: `set DEFAULT_AGENT autocoder` in
-`~/.js/jsrc` or a project `.js/jsrc`, or `JS_DEFAULT_AGENT=autocoder`. The built-in
+A run without `--agent` uses the `DEFAULT_AGENT` setting: `set DEFAULT_AGENT slim` in
+`~/.js/jsrc` or a project `.js/jsrc`, or `JS_DEFAULT_AGENT=slim`. The built-in
 value is `defaultagent`.
 
 Use `js --list-agents` to see the agents installed across your layers.
@@ -758,9 +759,9 @@ The `shell` tool runs commands with the `SHELL_PROGRAM` setting:
 pipefail. A name is looked up on PATH; a path is used as given.
 
 The Python harness does not itself require `fzf` or `bat`. `fs_search` invokes the
-pinned `tools/bin/rg` installed by `just install`, falling back to PATH only
-before that download has been run, and reports a plain ERROR when neither is
-present. Agents can still call `rg`, `fzf`, or `bat` through `shell` when those
+pinned `tools/bin/rg` installed by `just install`, falling back to `rg` on PATH
+when that binary is missing and `TOOL_BINARY_PATH_FALLBACK` is on (the default),
+and reports a plain ERROR when neither is present. Agents can still call `rg`, `fzf`, or `bat` through `shell` when those
 programs are installed and useful.
 
 Use the `cwd` argument to the `shell` tool instead of embedding `cd` in the
