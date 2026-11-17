@@ -239,11 +239,6 @@ def _widen_over_whitespace(
     return widened
 
 
-# An exact match this long is its own proof: the model reproduced the lines
-# byte for byte and they are in the file now, so no prior read is needed.
-# Shorter or fuzzy matches still need the lines shown by a read.
-
-
 def _apply_edit(
     text: str,
     old: str,
@@ -313,6 +308,9 @@ def _apply_edit(
         return (
             f'ERROR: {label}old_string matched only after normalising quotes, dashes and whitespace, and new_string differs from it only there, so this edit would not change the file'
         )
+    # An exact match of EDIT_READ_BYPASS_CHARACTERS or more is its own proof:
+    # the model reproduced those bytes and they are in the file now, so it needs
+    # no prior read. A shorter or fuzzy match needs the lines shown by a read.
     if fuzzy or len(old_norm) < context.edit_read_bypass_characters:
         if stale:
             return stale
