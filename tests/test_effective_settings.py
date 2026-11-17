@@ -11,9 +11,10 @@ from __future__ import annotations
 import copy
 from dataclasses import replace
 
+from repl_driver import record_turns, run_async
+
 from js import cli, messages as msgs, setcmd, settings
 from js.config import Config
-from js.repl_state import ReplState
 from js.sampling import Sampling
 
 # ---------------------------------------------------------------------------
@@ -32,21 +33,36 @@ def _repl_cfg(tmp_path) -> Config:
     )
 
 
-def test_set_display_forms_leave_the_store_alone_and_mutations_reach_live_state(tmp_path):
-    cfg = _repl_cfg(tmp_path)
-    state = ReplState(messages=[], system="sys", settings=settings.seed_defaults())
-    for line in ("/set", "/show", "/set MODEL", "/show PROVIDER"):
-        before = copy.deepcopy(state.settings)
-        assert cli._handle_command(line, state, cfg) is True
-        assert state.settings == before
+def _with_prompt(tmp_path, monkeypatch, cfg: Config) -> Config:
+    """`cfg` with its agent prompt in place, the working directory the test's own."""
+    monkeypatch.chdir(tmp_path)
+    cfg.prompts_dir.mkdir(parents=True)
+    (cfg.prompts_dir / "01-prompt.md").write_text("sys\n", encoding="utf-8")
+    return cfg
 
-    cli._handle_command("/set TEMPERATURE 0.3", state, cfg)
-    assert settings.get_dotted(state.settings, ("TEMPERATURE",)) == 0.3
-    assert state.live_set["TEMPERATURE"] == 0.3
 
-    cli._handle_command("/set -TEMPERATURE", state, cfg)
-    assert settings.get_dotted(state.settings, ("TEMPERATURE",)) is None
-    assert "TEMPERATURE" not in state.live_set
+def test_set_display_forms_leave_the_store_alone_and_mutations_reach_live_state(tmp_path, monkeypatch):
+    cfg = _with_prompt(tmp_path, monkeypatch, _repl_cfg(tmp_path))
+    turns = record_turns(monkeypatch)
+
+    run_async(monkeypatch, cfg, [
+        "before",
+        "/set", "/show", "/set MODEL", "/show PROVIDER",
+        "displayed",
+        "/set TEMPERATURE 0.3",
+        "set",
+        "/set -TEMPERATURE",
+        "cleared",
+    ], wait=True, live_settings=settings.seed_defaults())
+
+    before, displayed, set_, cleared = turns
+    assert displayed.settings == before.settings
+
+    assert settings.get_dotted(set_.settings, ("TEMPERATURE",)) == 0.3
+    assert set_.cfg.layer_set["TEMPERATURE"] == 0.3
+
+    assert settings.get_dotted(cleared.settings, ("TEMPERATURE",)) is None
+    assert "TEMPERATURE" not in cleared.cfg.layer_set
 
 
 # ---------------------------------------------------------------------------
@@ -161,15 +177,17 @@ def test_save_round_trip_reproduces_the_values_it_is_given(tmp_path):
         assert settings.get_dotted(reloaded, spec.path) == settings.get_dotted(store, spec.path)
 
 
-def test_save_after_logout_keeps_provider_settings_cleared(tmp_path):
+def test_save_after_logout_keeps_provider_settings_cleared(tmp_path, monkeypatch):
     store = settings.seed_defaults()
     store.update(PROVIDER="ollama", BASE_URL="http://offline.invalid/v1", API_KEY="old-key")
     cfg = replace(_repl_cfg(tmp_path), settings=store, provider_id="ollama",
                   provider_base_url=store["BASE_URL"], provider_api_key=store["API_KEY"])
-    state = ReplState(settings=copy.deepcopy(store), model=cfg.model, messages=[])
+    cfg = _with_prompt(tmp_path, monkeypatch, cfg)
+    turns = record_turns(monkeypatch)
 
-    assert cli._handle_command("/logout", state, cfg)
-    assert cli._cmd_save("", state, cfg) is None
+    run_async(monkeypatch, cfg, ["/logout", "/save"], live_settings=copy.deepcopy(store))
+
+    assert turns == []
     reloaded = settings.collect_settings(config_paths=[cli._paths.global_config_file()], env={})
 
     assert all(settings.knob(reloaded, key) is None for key in ("PROVIDER", "BASE_URL", "API_KEY"))
