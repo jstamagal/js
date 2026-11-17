@@ -495,7 +495,7 @@ def build_app(
 
     def _exit_hint():
         sequences = keymap.get(armed.get("action", ""), ())
-        key = keys.describe(sequences[0]) if sequences else ""
+        key = msgs.describe_keys(sequences[0]) if sequences else ""
         return ANSI(msgs.EXIT_ARMED.body(key=key))
 
     def _toggle_reasoning(event) -> None:
@@ -547,7 +547,7 @@ def build_app(
     }
     bind_actions(kb, keymap, handlers if handler_factory is None else handler_factory(handlers))
     toggle = keymap.get("reasoning_toggle", ())
-    scrollback.toggle_key = keys.describe(toggle[0]) if toggle else ""
+    scrollback.toggle_key = msgs.describe_keys(toggle[0]) if toggle else ""
 
     def _status_text():
         try:

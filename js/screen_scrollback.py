@@ -74,7 +74,7 @@ class Scrollback:
         self._spans: list[ReasoningBlock | AnswerSpan] = []
         self._answer: AnswerSpan | None = None
         # The reasoning_toggle key a collapsed block names; "" names none.
-        self.toggle_key = keys.describe(keys.ACTION_BY_NAME["reasoning_toggle"].keys[0])
+        self.toggle_key = msgs.describe_keys(keys.ACTION_BY_NAME["reasoning_toggle"].keys[0])
         # Called after each change to the buffer's text (`Windows` marks activity with it).
         self.changed: Callable[[], None] | None = None
 

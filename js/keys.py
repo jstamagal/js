@@ -188,16 +188,6 @@ def load(path: Path, *, actions: tuple[Action, ...] | None = None) -> tuple[Keym
     return parse(text, path, actions=actions)
 
 
-def describe(sequence: KeySequence) -> str:
-    """A key sequence as the screen names it: `c-o` is Ctrl-O."""
-    def one(key: str) -> str:
-        if key.startswith("c-") and len(key) == 3:
-            return msgs.KEY_CONTROL_PREFIX.words() + key[2:].upper()
-        return {"escape": msgs.KEY_ESCAPE.words()}.get(key, key)
-
-    return " ".join(one(key) for key in sequence)
-
-
 def history_search(event) -> None:
     """Open the reverse incremental search over the input's history; while it
     is open, move to the next older match."""

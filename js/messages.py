@@ -84,13 +84,11 @@ class Message:
         The shipped labels stay as written while bindings match the defaults.
         Operator /fset formats retain their own wording.
         """
-        from .keys import describe
-
         replacements = {}
         for label, actions in _HINT_ACTIONS.get(self.name, {}).items():
             if any(keymap.get(action, ()) != defaults.get(action, ()) for action in actions):
                 sequences = dict.fromkeys(seq for action in actions for seq in keymap.get(action, ()))
-                replacements[label] = "/".join(describe(seq) for seq in sequences) or KEY_UNBOUND
+                replacements[label] = "/".join(describe_keys(seq) for seq in sequences) or KEY_UNBOUND
         if not replacements:
             return self
         escaped = {label: text.replace("{", "{{").replace("}", "}}") for label, text in replacements.items()}
@@ -1646,6 +1644,16 @@ KEY_ACTION_WINDOW = Message("Show window {n}; window 1 is the main conversation.
 KEY_CONTROL_PREFIX = Message("Ctrl-", banner=False)
 
 KEY_ESCAPE = Message("Esc", banner=False)
+
+
+def describe_keys(sequence: tuple[str, ...]) -> str:
+    """A key sequence as the screen names it: `c-o` is Ctrl-O."""
+    def one(key: str) -> str:
+        if key.startswith("c-") and len(key) == 3:
+            return KEY_CONTROL_PREFIX.words() + key[2:].upper()
+        return {"escape": KEY_ESCAPE.words()}.get(key, key)
+
+    return " ".join(one(key) for key in sequence)
 
 PASTE_MARKER_LINES = "[paste #{n} +{lines} lines]"
 
