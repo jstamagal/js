@@ -4,12 +4,9 @@ but /save writes the user jsrc."""
 
 from __future__ import annotations
 
-import copy
 import os
 
-from js import cli
-from js.config import from_env
-from js.repl_state import ReplState
+from repl_driver import record_turns, type_into_js
 
 
 def _home(monkeypatch, tmp_path):
@@ -24,22 +21,20 @@ def _home(monkeypatch, tmp_path):
     return home / ".js" / "jsrc", project
 
 
-def _session(project):
-    cfg = from_env(save_session=False, cwd=project)
-    state = ReplState(messages=[], system="sys", settings=copy.deepcopy(cfg.settings),
-             model=cfg.model, provider_id=cfg.provider_id)
-    cli._mark_saved(state)
-    return cfg, state
+def _type(monkeypatch, project, lines) -> None:
+    """Type `lines` into js started in `project`; none of them is a turn."""
+    monkeypatch.chdir(project)
+    turns = record_turns(monkeypatch)
+    assert type_into_js(monkeypatch, lines) == 0
+    assert turns == []
 
 
 def test_save_writes_only_the_setting_changed_this_session(monkeypatch, tmp_path):
     jsrc, project = _home(monkeypatch, tmp_path)
     monkeypatch.setenv("JS_BASE_URL", "http://env.test/v1")
     monkeypatch.setenv("JS_API_KEY", "env-key")
-    cfg, state = _session(project)
 
-    assert cli._handle_command("/set FETCH_TIMEOUT 77", state, cfg) is True
-    assert cli._handle_command("/save", state, cfg) is True
+    _type(monkeypatch, project, ["/set FETCH_TIMEOUT 77", "/save"])
 
     assert jsrc.read_text(encoding="utf-8") == "set FETCH_TIMEOUT 77\n"
 
@@ -47,21 +42,16 @@ def test_save_writes_only_the_setting_changed_this_session(monkeypatch, tmp_path
 def test_save_with_nothing_changed_writes_no_jsrc(monkeypatch, tmp_path):
     jsrc, project = _home(monkeypatch, tmp_path)
     monkeypatch.setenv("JS_BASE_URL", "http://env.test/v1")
-    cfg, state = _session(project)
 
-    assert cli._handle_command("/save", state, cfg) is True
+    _type(monkeypatch, project, ["/save"])
 
     assert not jsrc.exists()
 
 
 def test_a_second_save_adds_only_what_changed_after_the_first(monkeypatch, tmp_path):
     jsrc, project = _home(monkeypatch, tmp_path)
-    cfg, state = _session(project)
 
-    assert cli._handle_command("/set FETCH_TIMEOUT 77", state, cfg) is True
-    assert cli._handle_command("/save", state, cfg) is True
-    assert cli._handle_command("/set READ_LINES_MAX 5", state, cfg) is True
-    assert cli._handle_command("/save", state, cfg) is True
+    _type(monkeypatch, project, ["/set FETCH_TIMEOUT 77", "/save", "/set READ_LINES_MAX 5", "/save"])
 
     assert jsrc.read_text(encoding="utf-8") == "set FETCH_TIMEOUT 77\nset READ_LINES_MAX 5\n"
 
@@ -70,10 +60,8 @@ def test_a_line_the_operator_wrote_is_left_as_it_is(monkeypatch, tmp_path):
     jsrc, project = _home(monkeypatch, tmp_path)
     jsrc.parent.mkdir(parents=True)
     jsrc.write_text("# mine\nset READ_LINES_MAX 33\n", encoding="utf-8")
-    cfg, state = _session(project)
 
-    assert cli._handle_command("/set FETCH_TIMEOUT 77", state, cfg) is True
-    assert cli._handle_command("/save", state, cfg) is True
+    _type(monkeypatch, project, ["/set FETCH_TIMEOUT 77", "/save"])
 
     assert jsrc.read_text(encoding="utf-8") == "# mine\nset READ_LINES_MAX 33\nset FETCH_TIMEOUT 77\n"
     assert [path.name for path in jsrc.parent.glob("jsrc*")] == ["jsrc"]
