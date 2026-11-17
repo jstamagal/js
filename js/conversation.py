@@ -12,7 +12,7 @@ a system prompt and a tool registry; everything else is optional.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -25,10 +25,14 @@ class Conversation:
     """One session's history and the state that persists between its turns.
 
     The history is ``cfg.session_file``; with the default Config that is
-    os.devnull, so nothing is kept. ``context`` holds the token counts and
+    os.devnull, so nothing is kept. ``context`` is the ToolContext every turn
+    runs with, a new one in ``cwd`` when None; it holds the token counts and
     file snapshots that compaction and undo read across turns, so one
-    Conversation keeps one. Extra keywords to `ask` go to
-    `runtime.run_turn_async` (``approve``, ``steer``, ``event_sink``...).
+    Conversation keeps one. ``run_turn`` runs a turn and takes
+    `runtime.run_turn_async`'s arguments; None is `runtime.run_turn_async`.
+    Extra keywords to `ask` and `turn` go to it (``approve``, ``steer``,
+    ``event_sink``...), over the Conversation's registry, context and
+    checkpoint.
     """
 
     def __init__(
@@ -38,39 +42,49 @@ class Conversation:
         *,
         registry: ToolRegistry | None = None,
         cwd: Path | None = None,
+        context: ToolContext | None = None,
         telemetry: runtime.Telemetry | None = None,
         on_notice: Callable[[str], None] = print,
+        run_turn: Callable[..., Awaitable[None]] | None = None,
     ) -> None:
         self.cfg = cfg
         self.system = system
         self.registry = registry
         self.telemetry = telemetry or runtime.Telemetry(None)
         self.on_notice = on_notice
-        self.context = ToolContext(cwd=cwd or Path.cwd())
+        self.run_turn = run_turn
+        self.context = context if context is not None else ToolContext(cwd=cwd or Path.cwd())
         self.auto = compaction.AutoCompactState()
         if Path(cfg.session_file) != Path("/dev/null"):
             Path(cfg.session_file).parent.mkdir(parents=True, exist_ok=True)
         self.messages = memory.load_replay_messages(cfg.session_file)
 
-    async def ask(self, text: str, **turn: Any) -> str:
-        """Run one turn on ``text``; returns the model's final answer.
+    @property
+    def stamp(self) -> dict:
+        """The stamp each assistant message this Conversation saves carries."""
+        return memory.stamp_for(self.cfg.model, self.cfg.provider_id, self.cfg.reasoning_effort)
 
-        The turn is saved after each batch of tool results, and when it
-        ends, fails or is cancelled. The runtime
-        compacts mid-turn when one turn outgrows the window; between turns,
-        COMPACTION_AUTO decides.
-        """
-        self.messages.append(memory.note_time({"role": "user", "content": text}))
-        turn.setdefault("checkpoint", self.save)
-        try:
-            await runtime.run_turn_async(
-                self.cfg, self.system, self.messages, self.telemetry,
-                tool_registry=self.registry, tool_context=self.context, **turn,
-            )
-        finally:
-            self.save()
+    async def ask(self, text: str, **kwargs: Any) -> str:
+        """Run one turn on ``text``, then the between-turn check; returns the
+        model's final answer."""
+        await self.turn({"role": "user", "content": text}, **kwargs)
         await self.maybe_compact()
         return self.answer()
+
+    async def turn(self, message: dict, **kwargs: Any) -> None:
+        """Append ``message`` and run one turn on it.
+
+        The turn is saved after each batch of tool results, and when it ends,
+        fails or is cancelled. The runtime compacts mid-turn when one turn
+        outgrows the window; between turns, `maybe_compact` decides.
+        """
+        self.messages.append(memory.note_time(message))
+        run = runtime.run_turn_async if self.run_turn is None else self.run_turn
+        try:
+            await run(self.cfg, self.system, self.messages, self.telemetry, **{
+                "tool_registry": self.registry, "tool_context": self.context, "checkpoint": self.save, **kwargs})
+        finally:
+            self.save()
 
     def answer(self) -> str:
         """The last assistant reply with text, or ""."""
@@ -79,14 +93,16 @@ class Conversation:
                 return str(message["content"])
         return ""
 
-    async def maybe_compact(self) -> bool:
-        """The between-turn check: compact when the history is full enough."""
+    async def maybe_compact(self, *, emit: Callable[..., Any] | None = None, log_dir: Path | None = None) -> bool:
+        """The between-turn check: compact when the history is full enough,
+        as COMPACTION_AUTO says. ``emit`` and ``log_dir`` go to
+        `compaction.compact_now`."""
         if not compaction.get_bool(self.cfg, "COMPACTION_AUTO"):
             return False
         window = lambda: runtime._resolve_context_window(  # noqa: E731
             self.cfg.model, self.cfg.provider_id, self.cfg.provider_base_url)
         outcome = await compaction.maybe_auto_compact_async(
-            self.cfg, self.auto, self.context, self.system, self.messages, window)
+            self.cfg, self.auto, self.context, self.system, self.messages, window, emit=emit, log_dir=log_dir)
         for notice in outcome.notices:
             self.on_notice(str(notice))
         if outcome.result is not None:
@@ -100,5 +116,4 @@ class Conversation:
 
     def save(self) -> None:
         """Append what the session file does not have yet."""
-        stamp = memory.stamp_for(self.cfg.model, self.cfg.provider_id, self.cfg.reasoning_effort)
-        memory.persist_messages(self.cfg.session_file, self.messages, stamp=stamp)
+        memory.persist_messages(self.cfg.session_file, self.messages, stamp=self.stamp)
