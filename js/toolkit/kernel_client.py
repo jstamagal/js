@@ -1,6 +1,6 @@
 """The `tools` object a kernel cell calls js tools through.
 
-This file runs inside the kernel process. kernel.py sends its source to the
+This file runs inside the kernel process. python_kernel.py sends its source to the
 kernel as a cell, which builds the `js_tools` module from it and binds
 `tools = js_tools.Tools(socket_path, token)` in the cell namespace. It imports
 only the standard library: the kernel under `js -C` runs in the jail, where

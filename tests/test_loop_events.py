@@ -126,12 +126,12 @@ def test_fetch_fallback_warning_is_an_event(monkeypatch, tmp_path, capsys):
 
 
 def test_kernel_note_is_an_event(capsys):
-    from js.toolkit import kernel
+    from js.toolkit import python_kernel
 
     events = []
     context = SimpleNamespace(kernel_render_max_lines=5)
     with output.using_sink(SimpleNamespace(emit=events.append)):
-        kernel.render_event(context, "normal", "saved")
+        python_kernel.render_event(context, "normal", "saved")
     assert [event.name for event in events] == ["kernel_note"]
     assert dict(events[0].fields)["content"] == "saved"
     assert capsys.readouterr() == ("", "")

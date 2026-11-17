@@ -139,12 +139,12 @@ def test_cancel_interrupts_a_kernel_cell_left_in_flight(tmp_path, monkeypatch):
     The worker thread cannot be cancelled, so without this the cell would keep
     executing in the kernel and the next `kernel` call would queue behind it.
     """
-    from js.toolkit import kernel as kernel_tool
+    from js.toolkit import python_kernel
 
     class StubSession:
         def __init__(self) -> None:
             self.interrupts = 0
-            handle = kernel_tool.CellHandle(id="1", msg_id="m1", code="slow()", started=0.0)
+            handle = python_kernel.CellHandle(id="1", msg_id="m1", code="slow()", started=0.0)
             self.handles = {handle.id: handle}
             self.current = handle.id
 

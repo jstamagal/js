@@ -148,19 +148,19 @@ retry failed children with backoff, stopping after five consecutive failures.
 `build_default_registry()` assembles tools in this order:
 
 ```text
-fs.py           file tools
-process_net.py  shell and fetch
-web_search.py   web search, docs search and browse
-jev.py          jev
-terminal.py     terminal sessions
-browser.py      browser probe
-subagents.py    task, plan and skill
-wiki/           wiki tools
-kernel.py       kernel
-toolbox.py      toolbox
-lsp.py          lsp
-notebook.py     notebook editing
-js/swarm.py     swarm tools
+fs.py             file tools
+process_net.py    shell and fetch
+web_search.py     web search, docs search and browse
+jev.py            jev
+terminal.py       terminal sessions
+browser.py        browser probe
+subagents.py      task, plan and skill
+wiki/             wiki tools
+python_kernel.py  kernel
+toolbox.py        toolbox
+lsp.py            lsp
+notebook.py       notebook editing
+js/swarm.py       swarm tools
 generated prompt-directory agent tools
 ```
 

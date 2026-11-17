@@ -18,7 +18,7 @@ import pytest
 from js import cli, setcmd, settings
 from js.config import Config, from_env
 from js.repl_state import ReplState
-from js.toolkit import ToolContext, kernel
+from js.toolkit import ToolContext, python_kernel
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -78,7 +78,7 @@ def test_a_number_changed_in_package_jsrc_changes_behaviour_and_show(monkeypatch
     project = _isolated_home(monkeypatch, tmp_path)
 
     context = ToolContext(cwd=tmp_path)
-    assert kernel.wait_seconds(context) == 9.0
+    assert python_kernel.wait_seconds(context) == 9.0
     assert context.max_read_lines == 17
 
     cfg = from_env(save_session=False, cwd=project)

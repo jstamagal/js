@@ -65,7 +65,7 @@ branch the audit was made on; they move as the code changes.
 | file:line | function | kind | what the part decides | bead |
 |---|---|---|---|---|
 | `js/runtime.py:597-802` | ToolTrace/_trace_call/_trace_result | presentation | The loop renders tool exchanges, quiet-call folds and live shell output (shell only, at line 680) itself instead of handing structured results to the screen. | js-2lg.28 |
-| `js/toolkit/kernel.py:1046,1057,1102,1106,1114,1116,1126,1164-1169,1178,1188-1194` | _died / _busy / kernel | presentation | The tool handler calls the stderr renderers directly instead of handing back structured results. | js-2lg.68 |
+| `js/toolkit/python_kernel.py:1046,1057,1102,1106,1114,1116,1126,1164-1169,1178,1188-1194` | _died / _busy / kernel | presentation | The tool handler calls the stderr renderers directly instead of handing back structured results. | js-2lg.68 |
 | `js/toolkit/toolbox.py:537,544,554-555,587,592-593,599,602-603,620-621` | toolbox | presentation | The tool handler draws its listing and results on stderr through kernel.render_event. | js-2lg.72 |
 | `js/headless.py:27-33,39` | _result_text, tool_result_summary | policy | A tool result counts as failed when its text starts with "ERROR". | js-2lg.87 |
 | `js/display.py:938,947,1125,1537` | _BODY_ARG / _UNLISTED_ARGS / _KEY_ARGS / _SAID_ARG | presentation | Tables keyed by tool name decide which argument is the body, the key, the hidden one and the "said" text of each built-in tool. | js-2lg.97 |
@@ -145,7 +145,7 @@ branch the audit was made on; they move as the code changes.
 | `js/toolkit/browser.py:24,202-210` | _launch_browser | policy | Falls back to a fixed Chrome-for-Testing path when the Playwright launch fails. | js-2lg.57 |
 | `js/toolkit/subagents.py:320-332` | _run_one_task_async | policy | Caps each child's reply to an equal share of TOOL_RESULT_MAX. | js-2lg.60 |
 | `js/toolkit/jev.py:17,106-107` | jev | default | The API key comes only from the TYPESAFE_API_KEY environment variable, not from a registered setting. | js-2lg.65 |
-| `js/toolkit/kernel.py:1081,1093,1173` | kernel | default | Interrupts a cell after a default of 120 s that exists only in code. | js-2lg.70 |
+| `js/toolkit/python_kernel.py:1081,1093,1173` | kernel | default | Interrupts a cell after a default of 120 s that exists only in code. | js-2lg.70 |
 | `js/toolkit/toolbox.py:180-202,530-533` | seed_examples / toolbox | policy | Copies the shipped example tools into the global toolbox on list and load. | js-2lg.71 |
 | `js/toolkit/toolbox.py:578-588` | toolbox | policy | Refuses to save a tool whose body has unbound names. | js-2lg.71 |
 | `js/toolkit/lsp.py:564-570` | _server_env | policy | Gives a language server the full environment when no jail is active. | js-2lg.74 |

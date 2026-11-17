@@ -19,11 +19,11 @@ from . import (
     discovery,
     fs,
     jev,
-    kernel,
     lsp,
     notebook,
     policy,
     process_net,
+    python_kernel,
     subagents,
     terminal,
     toolbox,
@@ -94,7 +94,7 @@ class ToolRegistry:
         left_out: dict[str, str] = {}
         for tool in self.tools:
             if tool.name == "kernel":
-                problem = kernel.missing_dependencies()
+                problem = python_kernel.missing_dependencies()
                 if problem:
                     left_out[tool.name] = problem
                 continue
@@ -640,7 +640,7 @@ def build_default_registry(
             ("browser", browser.tools()),
             ("meta", subagents.tools(flags)),
             ("wiki", wiki.tools()),
-            ("kernel", kernel.tools()),
+            ("kernel", python_kernel.tools()),
             ("toolbox", toolbox.tools()),
             ("lsp", lsp.tools()),
             ("notebook", notebook.tools()),

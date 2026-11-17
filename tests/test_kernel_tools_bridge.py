@@ -184,10 +184,10 @@ def test_tools_survive_a_restart(ctx):
 
 @needs_kernel
 def test_a_kernel_called_outside_dispatch_refuses_tool_calls(ctx):
-    from js.toolkit import kernel as kmod
+    from js.toolkit import python_kernel
 
     (ctx.cwd / "notes.txt").write_text("undispatched-7310\n")
-    result = kmod.kernel(
+    result = python_kernel.kernel(
         code="try:\n"
              "    print(tools.read('notes.txt'))\n"
              "except tools.ToolError:\n"

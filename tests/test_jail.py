@@ -20,7 +20,7 @@ from jail_probe import bwrap_starts, needs_bwrap
 from test_subagent_isolation import _fake_stream_result, make_cfg, prompt_dir
 
 from js import cli, jail, paths, persona, runtime, settings
-from js.toolkit import ToolContext, call_tool, fs, kernel as kmod, process_net, terminal
+from js.toolkit import ToolContext, call_tool, fs, process_net, python_kernel, terminal
 from js.toolkit.registry import build_default_registry
 
 needs_kernel = pytest.mark.skipif(
@@ -572,11 +572,11 @@ def test_kernel_runs_in_the_jail_and_survives_an_interrupt(jailed):
     jailed.kernel_verbosity = "quiet"
     jailed.kernel_wait_seconds = 0.5
     try:
-        listing = kmod.kernel(code="import os\nprint(sorted(os.listdir(os.path.expanduser('~'))))",
+        listing = python_kernel.kernel(code="import os\nprint(sorted(os.listdir(os.path.expanduser('~'))))",
                               context=jailed)
-        kmod.kernel(code="import time\ntime.sleep(60)", context=jailed)
-        stopped = kmod.kernel(action="interrupt", context=jailed)
-        after = kmod.kernel(code="print('still-here')", context=jailed)
+        python_kernel.kernel(code="import time\ntime.sleep(60)", context=jailed)
+        stopped = python_kernel.kernel(action="interrupt", context=jailed)
+        after = python_kernel.kernel(code="print('still-here')", context=jailed)
     finally:
         session = jailed.kernel_session
         if session is not None:

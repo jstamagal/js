@@ -44,7 +44,7 @@ guards, task parallelism, and provider-specific name handling at the boundary.
 4. jev, terminal session and browser probe tools (`jev.py`, `terminal.py`, `browser.py`)
 5. task, plan and skill (`subagents.py`)
 6. wiki tools (`wiki/`)
-7. kernel, toolbox, lsp and notebook tools (`kernel.py`, `toolbox.py`, `lsp.py`, `notebook.py`)
+7. kernel, toolbox, lsp and notebook tools (`python_kernel.py`, `toolbox.py`, `lsp.py`, `notebook.py`)
 8. swarm tools (`js/swarm.py`)
 9. generated agent tools from layered prompt roots
 

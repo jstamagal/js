@@ -20,8 +20,8 @@ from js.toolkit import (
     ToolRegistry,
     build_default_registry,
     fs,
-    kernel,
     process_net,
+    python_kernel,
     web_search,
 )
 
@@ -291,8 +291,8 @@ def test_shell_result_notes_grep_no_match(tmp_path):
 
 
 def test_kernel_is_left_out_when_its_dependencies_are_missing(monkeypatch, tmp_path):
-    monkeypatch.setattr(kernel, "missing_dependencies", lambda: "ERROR: kernel needs jupyter_client")
-    registry = build_default_registry(suites=(("kernel", kernel.tools()), ("test", (_tool("read"),))),
+    monkeypatch.setattr(python_kernel, "missing_dependencies", lambda: "ERROR: kernel needs jupyter_client")
+    registry = build_default_registry(suites=(("kernel", python_kernel.tools()), ("test", (_tool("read"),))),
                                       prompts_root=[])
     runnable, left_out = registry.runnable(ToolContext(cwd=tmp_path))
     assert set(left_out) == {"kernel"}
@@ -309,8 +309,8 @@ def test_kernel_is_left_out_when_its_dependencies_are_missing(monkeypatch, tmp_p
 
 
 def test_kernel_stays_when_its_dependencies_are_present(monkeypatch, tmp_path):
-    monkeypatch.setattr(kernel, "missing_dependencies", lambda: "")
-    registry = build_default_registry(suites=(("kernel", kernel.tools()),), prompts_root=[])
+    monkeypatch.setattr(python_kernel, "missing_dependencies", lambda: "")
+    registry = build_default_registry(suites=(("kernel", python_kernel.tools()),), prompts_root=[])
     runnable, left_out = registry.runnable(ToolContext(cwd=tmp_path))
     assert left_out == {}
     assert runnable.resolve("kernel") is not None

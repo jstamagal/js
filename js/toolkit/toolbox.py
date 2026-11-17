@@ -20,7 +20,7 @@ ISOLATION. Every tool file is exec'd on its own inside the kernel with its own
 try/except. A toolbox an agent writes to unsupervised will contain a broken file
 eventually; that must cost one tool, not the whole box.
 
-This module sits ON TOP of `kernel`. It imports the kernel to reach the live
+This module sits ON TOP of `python_kernel`. It imports it to reach the live
 session; the kernel never imports this. Remove `toolbox` from an agent's surface
 and the kernel is unaffected.
 """
@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import messages as msgs, paths as _paths
-from . import kernel as _kernel
+from . import python_kernel
 from .core import Tool, ToolContext
 from .descriptions import load_description
 from .presentation import Presentation
@@ -469,7 +469,7 @@ def unbound_names(source: str) -> list[str]:
 
 def source_from_kernel(session: Any, name: str) -> Extracted:
     probe = _SOURCE_PROBE % {"name": name}
-    result = _kernel.run_cell(session, probe, timeout=30,
+    result = python_kernel.run_cell(session, probe, timeout=30,
                               store_history=False, marker="__JS_SRC__")
     if not result.marker:
         return Extracted()
@@ -500,7 +500,7 @@ def load_into_kernel(session: Any, cwd: Path) -> tuple[list[str], list[str]]:
     if not payload:
         return [], problems
     probe = _LOAD_PROBE % {"payload": json.dumps(payload)}
-    result = _kernel.run_cell(session, probe, timeout=120,
+    result = python_kernel.run_cell(session, probe, timeout=120,
                               store_history=False, marker="__JS_LOAD__")
     if not result.marker:
         detail = (result.error or result.stderr).strip() or "no report from the kernel"
@@ -532,7 +532,7 @@ def toolbox(
     verb = text_or_default(action, "list").strip().lower()
     name = text_or_default(name).strip()
     scope = "project" if text_or_default(scope, "global").strip().lower() == "project" else "global"
-    level = _kernel.resolve_verbosity(context, verbosity)
+    level = python_kernel.resolve_verbosity(context, verbosity)
     cwd = Path(context.cwd)
     model = context.model or "unknown"
 
@@ -546,15 +546,15 @@ def toolbox(
 
     if verb == "list":
         listing = describe(cwd)
-        _kernel.render_event(context, level, listing)
-        return _kernel.cap_for_model(listing, context)
+        python_kernel.render_event(context, level, listing)
+        return python_kernel.cap_for_model(listing, context)
 
     if verb == "history":
         if not name:
             return "ERROR: history needs a tool name"
         report = history_of(cwd, name)
-        _kernel.render_event(context, level, report)
-        return _kernel.cap_for_model(report, context)
+        python_kernel.render_event(context, level, report)
+        return python_kernel.cap_for_model(report, context)
 
     if verb == "restore":
         if not name:
@@ -563,9 +563,9 @@ def toolbox(
         if target == 0:
             return "ERROR: restore needs revision=<n>; call history first to see what exists"
         report = restore(cwd, name, target, model=model)
-        _kernel.render_event(context, level, report,
+        python_kernel.render_event(context, level, report,
                              style="COLOR_ERROR" if report.startswith("ERROR") else "COLOR_OK")
-        return _kernel.cap_for_model(report, context)
+        return python_kernel.cap_for_model(report, context)
 
     if verb == "save":
         if not name:
@@ -573,7 +573,7 @@ def toolbox(
         body = text_or_default(source)
         warnings: list[str] = []
         if not body.strip():
-            session, problem, _started = _kernel.get_session(context)
+            session, problem, _started = python_kernel.get_session(context)
             if session is None:
                 return (f'{problem}\nWithout a kernel, save needs the definition passed explicitly in `source`.')
             extracted = source_from_kernel(session, name)
@@ -592,26 +592,26 @@ def toolbox(
                 f'ERROR: {name!r} uses ' + ", ".join(missing)
                 + ', which the file would not carry: a later session that loads it would NameError. Save them as their own tools, inline them into this definition, or pass the whole definition in `source`.'
             )
-            _kernel.render_event(context, level, message, style="COLOR_ERROR")
-            return _kernel.cap_for_model(message, context)
+            python_kernel.render_event(context, level, message, style="COLOR_ERROR")
+            return python_kernel.cap_for_model(message, context)
         report = "\n".join([write_revision(cwd, name, body, model=model,
                                            note=text_or_default(note), scope=scope),
                             *warnings])
-        _kernel.render_event(context, level, report,
+        python_kernel.render_event(context, level, report,
                              style="COLOR_ERROR" if report.startswith("ERROR") else "COLOR_OK")
-        return _kernel.cap_for_model(report, context)
+        return python_kernel.cap_for_model(report, context)
 
     # load
-    session, problem, started_now = _kernel.get_session(context)
+    session, problem, started_now = python_kernel.get_session(context)
     if session is None:
-        _kernel.render_event(context, level, problem, style="COLOR_ERROR")
+        python_kernel.render_event(context, level, problem, style="COLOR_ERROR")
         return problem
     if started_now:
-        _kernel.render_entry(context, level, msgs.KERNEL_STARTED.body_runs(cwd=session.cwd),
+        python_kernel.render_entry(context, level, msgs.KERNEL_STARTED.body_runs(cwd=session.cwd),
                              verbose_only=True)
     loaded, problems = load_into_kernel(session, cwd)
     if loaded:
-        _kernel.refresh_namespace(session)
+        python_kernel.refresh_namespace(session)
     records = discover(cwd)
     lines: list[str] = []
     if loaded:
@@ -625,9 +625,9 @@ def toolbox(
     if session.namespace:
         lines.append("NAMESPACE " + ", ".join(sorted(session.namespace)))
     for line in lines:
-        _kernel.render_event(context, level, line,
+        python_kernel.render_event(context, level, line,
                              style="COLOR_ERROR" if "BROKEN" in line else "COLOR_OK")
-    return _kernel.cap_for_model("\n".join(lines), context)
+    return python_kernel.cap_for_model("\n".join(lines), context)
 
 
 def tools() -> tuple[Tool, ...]:
@@ -643,7 +643,7 @@ def tools() -> tuple[Tool, ...]:
                 "scope": {"type": "string", "enum": ["global", "project"]},
                 "revision": {"type": "integer"},
                 "source": {"type": "string"},
-                "verbosity": {"type": "string", "enum": list(_kernel.VERBOSITY_LEVELS)},
+                "verbosity": {"type": "string", "enum": list(python_kernel.VERBOSITY_LEVELS)},
             },
             required=("action",),
             presentation=Presentation(key=("source",), body="source", lexer="python", kind="command"),
