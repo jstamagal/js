@@ -2,7 +2,7 @@
 
 import pytest
 
-from js.toolkit.web_search import _absolutize
+from js.toolkit.web_search import absolutize
 
 
 @pytest.mark.parametrize("source, expected", [
@@ -23,4 +23,4 @@ from js.toolkit.web_search import _absolutize
      '[plain](https://example.test/home "title") ![logo](https://example.test/img.png)'),
 ])
 def test_browse_rewrites_linked_images(source, expected):
-    assert _absolutize(source, "https://example.test/dir/page") == expected
+    assert absolutize(source, "https://example.test/dir/page") == expected

@@ -2,7 +2,7 @@
 
 import pytest
 
-from js.toolkit.web_search import _absolutize
+from js.toolkit.web_search import absolutize
 
 
 @pytest.mark.parametrize("target, expected", [
@@ -23,6 +23,6 @@ from js.toolkit.web_search import _absolutize
 ])
 def test_link_targets_resolve_structurally(target, expected):
     markdown = f'[link]({target} "title") ![image]({target})'
-    assert _absolutize(markdown, "https://example.test/dir/current") == (
+    assert absolutize(markdown, "https://example.test/dir/current") == (
         f'[link]({expected} "title") ![image]({expected})'
     )

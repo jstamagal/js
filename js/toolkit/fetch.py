@@ -28,11 +28,11 @@ from ..tool_binaries import (
 )
 from .core import Tool, ToolContext
 from .descriptions import load_description
-from .fs import _detect_visual_mime, _image_marker, _read_regular_bytes
+from .fs import _detect_visual_mime, _read_regular_bytes, image_marker
 from .presentation import Presentation
 from .results import spill_oversized_result
 from .sanitize import text_or_default
-from .web_search import _absolutize
+from .web_search import absolutize
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _ANCHOR_RE = re.compile(r"(?is)<a\b(?P<attrs>[^>]*)>(?P<label>.*?)</a\s*>")
@@ -66,7 +66,7 @@ def _html_to_text(raw: str, base_url: str) -> str:
     text = _BLOCK_CLOSE_RE.sub("\n", text)
     text = _TAG_RE.sub("", text)
     text = html.unescape(text)
-    text = _absolutize(text, base_url)
+    text = absolutize(text, base_url)
     lines = [line.strip() for line in text.splitlines()]
     compact: list[str] = []
     blank = False
@@ -376,7 +376,7 @@ def _format_payload(
         # image over imagefit's limits is fitted, not refused.
         if context.vision_enabled:
             marker_path = source_path or _temp_image_path(image_mime, data)
-            return _image_marker(marker_path, image_mime, size, data)
+            return image_marker(marker_path, image_mime, size, data)
         return _descriptor("IMAGE_RESPONSE", image_mime, size, truncated)
 
     if not _is_text_response(content_type, data):

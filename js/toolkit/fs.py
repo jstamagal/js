@@ -265,7 +265,7 @@ def _visual_fallback(path: Path, mime: str, size: int) -> str:
     return f"VISUAL_FILE {path} mime={mime} size={size} bytes (vision disabled; no image bytes returned)"
 
 
-def _image_marker(path: Path, mime: str, size: int, data: bytes) -> str:
+def image_marker(path: Path, mime: str, size: int, data: bytes) -> str:
     """The marker the model client sends ``path``'s image ``data`` by. An
     image over imagefit's limits is sent as its fitted copy, and the text
     says what changed."""
@@ -596,7 +596,7 @@ def fs_read(
         context.reads.remember(target, content_hash)
         if not context.vision_enabled:
             return _visual_fallback(target, mime, size)
-        return _image_marker(target, mime, size, data)
+        return image_marker(target, mime, size, data)
 
     if mime == "application/pdf":
         # A PDF is read whole — pdftotext extracts the entire document and has no

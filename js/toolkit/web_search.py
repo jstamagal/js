@@ -450,7 +450,7 @@ _MD_LINK = re.compile(r"(!?\[[^\]]*\])\(([^)\s]+)((?:\s+\"[^\"]*\")?)\)")
 _MD_LINKED_IMAGE = re.compile(r"(\[!\[[^\]]*\]\([^\n)]*\)\])\(([^)\s]+)((?:\s+\"[^\"]*\")?)\)")
 
 
-def _absolutize(markdown: str, base_url: str) -> str:
+def absolutize(markdown: str, base_url: str) -> str:
     def _fix(match: re.Match[str]) -> str:
         label, target, title = match.group(1), match.group(2), match.group(3)
         if target.startswith("#") or re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", target):
@@ -604,7 +604,7 @@ def browse(
     if dump != "original":
         stdout = stdout.strip()
     if dump == "markdown":
-        stdout = _absolutize(stdout, url)
+        stdout = absolutize(stdout, url)
     if out_truncated:
         stdout = truncate(stdout, context, cut=True)
     body = stdout or "(empty page)"

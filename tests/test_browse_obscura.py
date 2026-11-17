@@ -12,7 +12,7 @@ import shutil
 import pytest
 
 from js.toolkit import ToolContext
-from js.toolkit.web_search import _absolutize, browse
+from js.toolkit.web_search import absolutize, browse
 
 pytestmark = pytest.mark.live
 
@@ -25,18 +25,18 @@ PAGE = "https://quotes.toscrape.com/js/"
 
 
 def test_relative_hrefs_are_rewritten_against_the_page_url():
-    out = _absolutize("[Login](/login) [deep](a/b)", PAGE)
+    out = absolutize("[Login](/login) [deep](a/b)", PAGE)
     assert "(https://quotes.toscrape.com/login)" in out
     assert "(https://quotes.toscrape.com/js/a/b)" in out
 
 
 def test_in_page_anchors_and_absolute_targets_are_left_alone():
     raw = "[top](#top) [abs](https://x.test/c) [mail](mailto:a@b.c) [tel](tel:+1)"
-    assert _absolutize(raw, PAGE) == raw
+    assert absolutize(raw, PAGE) == raw
 
 
 def test_image_targets_are_rewritten_too():
-    assert _absolutize("![logo](/i.png)", PAGE) == "![logo](https://quotes.toscrape.com/i.png)"
+    assert absolutize("![logo](/i.png)", PAGE) == "![logo](https://quotes.toscrape.com/i.png)"
 
 
 @requires_obscura
