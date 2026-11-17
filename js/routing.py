@@ -47,8 +47,8 @@ class Wire:
 
     ``provider_name`` and ``sdk_provider_name`` are ``provider_id`` and
     ``sdk``, "" with no provider; ``explicit_provider`` is whether a provider id
-    was given at all. ``chat_completions`` reads ``sdk_provider_name``, so it is
-    False with no provider although ``name`` is openai.
+    was given at all. ``chat_completions`` is OpenAI chat completions: the
+    openai SDK off the Responses API, which is also every run with no provider.
     ``reasoning_content`` is whether an OpenAI chat-completions request goes
     through js's ``reasoning_content`` adapter: an operator-run endpoint, the
     custom_openai transport, or a base URL other than the provider's default.
@@ -99,7 +99,7 @@ def resolve_wire(provider_id: str | None, *, base_url: str | None = None, model_
         sdk_provider_name=sdk_provider_name,
         anthropic=sdk_provider_name == "anthropic" or provider_name == "anthropic",
         responses=responses,
-        chat_completions=sdk_provider_name == "openai" and not responses,
+        chat_completions=sdk == "openai" and not responses,
         reasoning_content=(operator_endpoint or transport == "custom_openai"
                            or providers.is_custom_base_url(provider, base_url)),
         # Whether the ENDPOINT takes DeepSeek's extras, which is not whether the

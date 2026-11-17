@@ -116,6 +116,7 @@ def _route(provider_id: str | None, base_url: str | None, model_id: str) -> dict
     return {"provider_name": wire.provider_name, "sdk_provider_name": wire.sdk_provider_name,
             "transport": wire.transport, "explicit_provider": wire.explicit_provider,
             "anthropic_wire": wire.anthropic, "responses_wire": wire.responses,
+            "chat_completions_wire": wire.chat_completions,
             "deepseek_wire": wire.deepseek, "minimax": wire.minimax}
 
 
@@ -151,7 +152,7 @@ def _kinds(observed: dict) -> dict[str, str]:
     route = observed["route"]
     kinds["route"] = ("anthropic" if route["anthropic_wire"]
                       else "responses" if route["responses_wire"]
-                      else "chat" if route["sdk_provider_name"] == "openai"
+                      else "chat" if route["chat_completions_wire"]
                       else route["sdk_provider_name"])
     kinds["decoder"] = "chat" if observed["decoder_keeps_reasoning"] else "not chat"
     return kinds
@@ -165,16 +166,7 @@ def _disagreement(kinds: dict[str, str]) -> dict[str, str] | None:
     return None
 
 
-# Routes where the derivations name different wires today, and why.
-_NO_PROVIDER = (
-    "With no provider, wire_name says openai and resolve_model sends chat completions, but the "
-    "route's SDK name is empty, so the send-time reasoning strip never applies, and the decoder "
-    "drops the reasoning of a reply without tool calls.")
-KNOWN_DISAGREEMENTS: dict[str, str] = {
-    "no provider, base URL": _NO_PROVIDER,
-    "no provider, base URL, deepseek model": _NO_PROVIDER,
-    "no provider, no base URL": _NO_PROVIDER,
-}
+KNOWN_DISAGREEMENTS: dict[str, str] = {}
 
 
 @pytest.fixture

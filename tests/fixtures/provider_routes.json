@@ -7,6 +7,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -26,6 +27,7 @@
   },
   "route": {
    "anthropic_wire": true,
+   "chat_completions_wire": false,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -45,6 +47,7 @@
   },
   "route": {
    "anthropic_wire": true,
+   "chat_completions_wire": false,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -63,6 +66,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": false,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -81,6 +85,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": false,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -99,6 +104,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": false,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -117,6 +123,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": false,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -136,6 +143,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -154,6 +162,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": false,
    "deepseek_wire": true,
    "explicit_provider": true,
    "minimax": false,
@@ -173,6 +182,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -192,6 +202,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -211,6 +222,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -230,6 +242,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -249,6 +262,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -268,6 +282,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -286,6 +301,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -304,6 +320,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -323,6 +340,7 @@
   },
   "route": {
    "anthropic_wire": true,
+   "chat_completions_wire": false,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": true,
@@ -334,7 +352,7 @@
   "wire_name": "anthropic"
  },
  "no provider, base URL": {
-  "decoder_keeps_reasoning": false,
+  "decoder_keeps_reasoning": true,
   "resolve_model": {
    "protocol": "_ReasoningContentProtocol",
    "reasoning_blocks": false,
@@ -342,6 +360,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": false,
    "minimax": false,
@@ -353,7 +372,7 @@
   "wire_name": "openai"
  },
  "no provider, base URL, deepseek model": {
-  "decoder_keeps_reasoning": false,
+  "decoder_keeps_reasoning": true,
   "resolve_model": {
    "protocol": "_ReasoningContentProtocol",
    "reasoning_blocks": false,
@@ -361,6 +380,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": true,
    "explicit_provider": false,
    "minimax": false,
@@ -372,10 +392,11 @@
   "wire_name": "openai"
  },
  "no provider, no base URL": {
-  "decoder_keeps_reasoning": false,
+  "decoder_keeps_reasoning": true,
   "resolve_model": "error: ProviderNotLoggedInError",
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": false,
    "minimax": false,
@@ -395,6 +416,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -413,6 +435,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -432,6 +455,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -450,6 +474,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -469,6 +494,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -488,6 +514,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -507,6 +534,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -525,6 +553,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": false,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -543,6 +572,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -562,6 +592,7 @@
   },
   "route": {
    "anthropic_wire": true,
+   "chat_completions_wire": false,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -580,6 +611,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": false,
    "deepseek_wire": true,
    "explicit_provider": true,
    "minimax": false,
@@ -598,6 +630,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": false,
    "deepseek_wire": true,
    "explicit_provider": true,
    "minimax": false,
@@ -617,6 +650,7 @@
   },
   "route": {
    "anthropic_wire": true,
+   "chat_completions_wire": false,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -635,6 +669,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -654,6 +689,7 @@
   },
   "route": {
    "anthropic_wire": true,
+   "chat_completions_wire": false,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -669,6 +705,7 @@
   "resolve_model": "error: ValueError",
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": false,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -688,6 +725,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -706,6 +744,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": false,
    "deepseek_wire": true,
    "explicit_provider": true,
    "minimax": false,
@@ -725,6 +764,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -743,6 +783,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": false,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -762,6 +803,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -781,6 +823,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -800,6 +843,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -819,6 +863,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -834,6 +879,7 @@
   "resolve_model": "error: ValueError",
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": false,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -849,6 +895,7 @@
   "resolve_model": "error: ValueError",
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": false,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -864,6 +911,7 @@
   "resolve_model": "error: ValueError",
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": false,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -883,6 +931,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -901,6 +950,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -920,6 +970,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,
@@ -939,6 +990,7 @@
   },
   "route": {
    "anthropic_wire": false,
+   "chat_completions_wire": true,
    "deepseek_wire": false,
    "explicit_provider": true,
    "minimax": false,

@@ -1331,8 +1331,7 @@ def build_request_params(
         output_max_tokens = max_output_tokens
         if reasoning_effort is not None:
             # The effort word as typed, snapped where js knows the model family
-            # (js/reasoning.py). With no provider the call goes to a gateway,
-            # which normalizes the word itself.
+            # (js/reasoning.py). With no provider the word goes out as typed.
             allowed: frozenset[str] | None
             if wire.explicit_provider:
                 allowed = reasoning.supported_efforts(model_name)

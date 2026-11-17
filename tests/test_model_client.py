@@ -293,7 +293,7 @@ def test_history_to_ai_messages_preserves_roles():
         },
         {"role": "tool", "tool_call_id": "tc1", "name": "fs_search", "content": "42"},
     ]
-    out = history_record.history_to_ai_messages("sys", msgs)
+    out = history_record.history_to_ai_messages("sys", msgs, provider_id="anthropic")
     assert [m.role for m in out] == [
         "system",
         "user",
@@ -301,7 +301,7 @@ def test_history_to_ai_messages_preserves_roles():
         "assistant",
         "tool",
     ]
-    # Tool-free assistant reasoning is archive-only and should not be replayed.
+    # Off chat completions, tool-free assistant reasoning is not replayed.
     assert [p.kind for p in out[2].parts] == ["text"]
     # Assistant reasoning is replayed when the same assistant turn carried tool calls.
     tc_parts = out[3].parts
