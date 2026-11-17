@@ -20,7 +20,7 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -2412,7 +2412,18 @@ def _json_run_requested(args: argparse.Namespace) -> bool:
     )
 
 
-def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
+@dataclass(frozen=True)
+class Setup:
+    """What the command line settles before a mode runs: the setting sources
+    the run reads, and the --agent it names once that is validated."""
+    sources: InvocationSources
+    agent: str | None = None
+
+
+def _setup(args: argparse.Namespace, dispatch_argv: list[str]) -> Setup | int:
+    """Before any mode: the setting sources with -u and the setting flags in
+    them, the session a bare --session picks, .env, and the -C jail. An exit
+    code when one of them stops the run."""
     _session_leases.start = {"mode": None, "command": ["js", *dispatch_argv]}
     sources = _invocation_sources(args)
     if args.url:
@@ -2487,11 +2498,14 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         # STOCK_CONTEXT is built at import (before this chdir), so its cwd is
         # stale; rebind it so -p/REPL turns (which fall back to it) run in DIR.
         runtime.T.STOCK_CONTEXT.cwd = Path.cwd()
-    if args.verify is not None:
-        from . import verify
-        return verify.run_verify(args)
-    if args.list_sessions:
-        return listings.run_list_sessions(args)
+    return Setup(sources)
+
+
+def _settle_session(args: argparse.Namespace, setup: Setup) -> int | None:
+    """--last and --session-key name the session; the run takes the chat mode
+    a session was saved with and warns about a --preset nothing matches. An
+    exit code when the session cannot be named."""
+    sources = setup.sources
     if args.last:
         if args.session is not None:
             msgs.warn(msgs.LAST_WITH_SESSION)
@@ -2519,23 +2533,14 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         # Resolve against the now-final cwd (after any -C). A name that matches no
         # file anywhere is almost certainly a typo — say so rather than no-op.
         _warn_unmatched_presets(sources)
-    if args.login is not None:
-        from . import login_cli
-        return login_cli.main([args.login] if args.login else [])
-    if args.logout:
-        from . import login_cli
-        return login_cli.main(["logout", args.logout])
-    if args.list_agents:
-        return listings.run_list_agents(args)
-    if args.list_providers:
-        return listings.print_json(listings.providers_json())
-    if args.list_logins:
-        return listings.print_json(listings.logins_json())
-    if args.list_models is not None:
-        return listings.run_list_models(args, lambda: _from_env(
-            args.session, save_session=False, sources=sources, agent_id=args.agent))
-    if args.refresh_model_catalog and (code := model_metadata.run_refresh_model_catalog(args)) is not None:
-        return code
+    return None
+
+
+def _prepare_run(args: argparse.Namespace, setup: Setup) -> Setup | int:
+    """Past the listings, for a run: the flags that cannot go together, the
+    environment the run's tools read, the missing helper binaries, --agent
+    validated into the setup, and --lock. An exit code when one refuses."""
+    sources = setup.sources
     if args.debug and args.debug_file:
         msgs.warn(msgs.DEBUG_FLAGS_EXCLUSIVE)
         return 2
@@ -2571,7 +2576,41 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     if args.files and selected_modes:
         msgs.warn(msgs.FILE_NEEDS_PROMPT_MODE)
         return 2
+    return replace(setup, agent=cli_agent)
 
+
+def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
+    setup = _setup(args, dispatch_argv)
+    if isinstance(setup, int):
+        return setup
+    if args.verify is not None:
+        from . import verify
+        return verify.run_verify(args)
+    if args.list_sessions:
+        return listings.run_list_sessions(args)
+    if (code := _settle_session(args, setup)) is not None:
+        return code
+    if args.login is not None:
+        from . import login_cli
+        return login_cli.main([args.login] if args.login else [])
+    if args.logout:
+        from . import login_cli
+        return login_cli.main(["logout", args.logout])
+    if args.list_agents:
+        return listings.run_list_agents(args)
+    if args.list_providers:
+        return listings.print_json(listings.providers_json())
+    if args.list_logins:
+        return listings.print_json(listings.logins_json())
+    if args.list_models is not None:
+        return listings.run_list_models(args, lambda: _from_env(
+            args.session, save_session=False, sources=setup.sources, agent_id=args.agent))
+    if args.refresh_model_catalog and (code := model_metadata.run_refresh_model_catalog(args)) is not None:
+        return code
+    setup = _prepare_run(args, setup)
+    if isinstance(setup, int):
+        return setup
+    sources, cli_agent = setup.sources, setup.agent
     if args.bench:
         return bench.run_bench_mode(args, sources)
     if args.compact:
