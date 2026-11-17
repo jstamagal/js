@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-from repl_driver import repl_state, stub_screen, turn_stub
+from repl_driver import record_turns, stub_screen, turn_stub, type_into_js
 from turn_driver import js
 
 from js import cli, messages as msgs, paths as _paths, runtime, session_store, snippets
@@ -163,8 +163,6 @@ def test_cli_help_exposes_options_and_exits_successfully(option, documented_opti
 
 
 def test_compact_command_summarizes_with_the_active_model(monkeypatch, tmp_path):
-    from js.config import from_env
-
     seen: list[str] = []
 
     def compact_stub(cfg, system, messages, *, focus="", forced=False, **kwargs):
@@ -172,10 +170,12 @@ def test_compact_command_summarizes_with_the_active_model(monkeypatch, tmp_path)
         return msgs.COMPACTED.said(keep_from=1, total=2, model="fixture")
 
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=compact_stub))
-    cfg = from_env()
-    state, _spec = repl_state(cfg, model="flag-model")
+    monkeypatch.chdir(tmp_path)
+    turns = record_turns(monkeypatch)
 
-    assert cli._handle_command("/compact", state, cfg) is True
+    assert type_into_js(monkeypatch, ["/compact"], "--model", "flag-model") == 0
+
+    assert turns == []
     assert seen == ["flag-model"]
 
 
