@@ -193,6 +193,29 @@ def test_child_terminal_sessions_close_when_turn_exits(monkeypatch, tmp_path, ou
             close_terminal_sessions(child)
 
 
+def test_child_turn_is_on_disk_before_it_ends(monkeypatch, tmp_path):
+    from js.toolkit.meta import _run_one_task_async
+
+    prompts = prompt_dir(tmp_path, "worker")
+    cfg = make_cfg(tmp_path, "parent", prompts.parent / "parent")
+    on_disk: list[list[str]] = []
+
+    async def turn(cfg, system, messages, telemetry, *, checkpoint, **kwargs):
+        messages.append({"role": "assistant", "content": "", "tool_calls": [{
+            "id": "read-1", "type": "function", "function": {"name": "read", "arguments": "{}"}}]})
+        messages.append({"role": "tool", "tool_call_id": "read-1", "name": "read", "content": "found"})
+        checkpoint()
+        # What a kill here would leave behind.
+        on_disk.append([m["role"] for m in load_messages(cfg.session_file)])
+        messages.append({"role": "assistant", "content": "done"})
+
+    monkeypatch.setattr(runtime, "run_turn_async", turn)
+    result = asyncio.run(_run_one_task_async(
+        1, 1, "work", ToolContext(cwd=tmp_path), cfg, build_default_registry(), "worker", None))
+    assert "done" in result
+    assert on_disk == [["user", "assistant", "tool"]]
+
+
 @pytest.mark.parametrize("parent_cap", [None, 777])
 def test_child_expands_configured_persona_once_and_applies_token_cap(monkeypatch, tmp_path, parent_cap):
     prompts = prompt_dir(tmp_path, "worker", "tools: []\nmax_tokens: 123\n",

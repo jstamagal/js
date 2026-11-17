@@ -55,11 +55,13 @@ class Conversation:
     async def ask(self, text: str, **turn: Any) -> str:
         """Run one turn on ``text``; returns the model's final answer.
 
-        The turn is saved even when it fails or is cancelled. The runtime
+        The turn is saved after each batch of tool results, and when it
+        ends, fails or is cancelled. The runtime
         compacts mid-turn when one turn outgrows the window; between turns,
         COMPACTION_AUTO decides.
         """
         self.messages.append(memory.note_time({"role": "user", "content": text}))
+        turn.setdefault("checkpoint", self.save)
         try:
             await runtime.run_turn_async(
                 self.cfg, self.system, self.messages, self.telemetry,

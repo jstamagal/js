@@ -600,6 +600,29 @@ def test_registered_swarm_spawn_limit_prevents_launch(tmp_path, monkeypatch):
         agent.spawn("child", "work")
 
 
+def test_swarm_agent_turn_is_on_disk_before_it_ends(tmp_path, monkeypatch):
+    from js.memory import load_messages
+
+    _agent_dir(tmp_path, monkeypatch)
+    room = swarm.Room(tmp_path / "bus")
+    on_disk: list[list[str]] = []
+
+    async def turn(cfg, system, messages, telemetry, *, checkpoint, **kwargs):
+        messages.append({"role": "assistant", "content": "", "tool_calls": [{
+            "id": "read-1", "type": "function", "function": {"name": "read", "arguments": "{}"}}]})
+        messages.append({"role": "tool", "tool_call_id": "read-1", "name": "read", "content": "found"})
+        checkpoint()
+        # What a kill here would leave behind.
+        on_disk.append([m["role"] for m in load_messages(cfg.session_file)])
+        messages.append({"role": "assistant", "content": "done"})
+        room.send("steer", "*", "enough", kind="stop")
+
+    monkeypatch.setattr(runtime, "run_turn_async", turn)
+    spec = _spec(tmp_path, [{"name": "a", "agent": "voice", "opener": "go", "session": "s-a", "cwd": str(tmp_path)}])
+    assert swarm_run.run(spec, out=io.StringIO()) == 0
+    assert on_disk == [["user", "assistant", "tool"]]
+
+
 def test_swarm_runner_accepts_agent_configuration_service(tmp_path):
     configured = []
     def configure(spec):

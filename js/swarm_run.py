@@ -199,6 +199,7 @@ class Runner:
             turn_kwargs = settled.turn_kwargs(tool_context=context, suppress_output=True, trace_override=False,
                                               steer=agent.steer, event_sink=events.runtime_event)
             stamp = M.stamp_for(cfg.model, cfg.provider_id, cfg.reasoning_effort)
+            turn_kwargs["checkpoint"] = lambda: M.persist_messages(cfg.session_file, messages, stamp=stamp)
             auto = compaction.AutoCompactState()
             events.emit("agent_start", model=cfg.model, provider=cfg.provider_id, session=str(cfg.session_file),
                         cwd=str(context.cwd))

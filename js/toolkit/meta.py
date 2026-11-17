@@ -506,6 +506,7 @@ async def _run_one_task_async(
         if window is not None:
             turn_kwargs["steer"] = window.steer
         stamp = M.stamp_for(cfg.model, cfg.provider_id, cfg.reasoning_effort)
+        turn_kwargs["checkpoint"] = lambda: M.persist_messages(cfg.session_file, messages, stamp=stamp)
         try:
             with window.writing() if window is not None else nullcontext():
                 await agent_messages.initialize(cfg, prompt_spec, messages, telemetry, **turn_kwargs)

@@ -74,3 +74,25 @@ def test_prompt_mode_sigterm_keeps_the_turn(monkeypatch, tmp_path):
     session = session_store.folder_for(Path.cwd()) / "termed.jsonl"
     assert load_messages(session)[:3] == [{"role": "user", "content": "look"}, *EXCHANGE]
     assert signal.getsignal(signal.SIGTERM) is not cli._raise_keyboard_interrupt
+
+
+def test_conversation_turn_is_on_disk_before_it_ends(monkeypatch, tmp_path):
+    import asyncio
+
+    from js.config import Config
+    from js.conversation import Conversation
+
+    cfg = Config(model="offline-test-model", trace=False, session_file=tmp_path / "sessions" / "chat.jsonl",
+                 settings={"COMPACTION_AUTO": False})
+    on_disk: list[list[str]] = []
+
+    async def turn(cfg, system, messages, telemetry, checkpoint=None, **kwargs):
+        messages.extend(EXCHANGE)
+        checkpoint()
+        on_disk.append([m["role"] for m in load_messages(cfg.session_file)])
+        messages.append({"role": "assistant", "content": "done"})
+
+    monkeypatch.setattr(runtime, "run_turn_async", turn)
+    chat = Conversation(cfg, "SYS")
+    assert asyncio.run(chat.ask("look")) == "done"
+    assert on_disk == [["user", "assistant", "tool"]]
