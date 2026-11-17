@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock
 
 from turn_driver import js
 
-from js import conversation, debug_trace, model_client, run_assembly, runtime
+from js import conversation, debug_trace, run_assembly, runtime
 from js.config import Config
 from js.model_client import ModelStreamResult
 
@@ -82,7 +82,7 @@ def test_emit_request_trace_writes_to_sink_not_stdout(capsys):
     sys_msg = SimpleNamespace(role="system", parts=[SimpleNamespace(text="SYSTEM-PROMPT-BODY")])
     user_msg = SimpleNamespace(role="user", parts=[SimpleNamespace(text="hello")])
 
-    model_client._emit_request_trace(
+    debug_trace.emit_request_trace(
         sink=sink,
         model_id="offline-test-model",
         provider_id=None,
@@ -110,7 +110,7 @@ def test_emit_request_trace_none_sink_is_noop():
         def __len__(self):
             raise Touched
 
-    model_client._emit_request_trace(
+    debug_trace.emit_request_trace(
         sink=None,
         model_id="m",
         provider_id=None,

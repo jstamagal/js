@@ -6,7 +6,7 @@ import json
 from test_lazy_tool_discovery import _cfg, _result
 from turn_driver import config, one_turn, run
 
-from js import memory, runtime
+from js import debug_trace, memory, runtime
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
 
@@ -223,7 +223,7 @@ def test_every_request_trace_lists_published_names():
     tools = model_client.tool_specs_to_ai_tools(build_default_registry().select(['shell:lazy']).openai_specs())
     for schemas in (True, False):
         sink = io.StringIO()
-        model_client._emit_request_trace(sink=sink, model_id='offline', provider_id=None,
+        debug_trace.emit_request_trace(sink=sink, model_id='offline', provider_id=None,
             provider_base_url=None, params=None, messages=[], tools=tools,
             dump_schemas=schemas, dump_from=0)
         output = sink.getvalue()

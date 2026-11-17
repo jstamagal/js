@@ -13,7 +13,7 @@ import ai
 import pytest
 from turn_driver import one_turn
 
-from js import history_record, model_client as MC, result_caps, runtime, turn_call
+from js import debug_trace, history_record, model_client as MC, result_caps, runtime, turn_call
 from js.config import Config
 from js.model_client import ModelStreamResult
 from js.toolkit import ToolContext
@@ -227,7 +227,7 @@ def test_request_trace_is_byte_honest(capsys):
     ])
 
     sink = io.StringIO()
-    MC._emit_request_trace(
+    debug_trace.emit_request_trace(
         sink=sink,
         model_id="m", provider_id="deepseek", provider_base_url="https://x",
         params=None, messages=messages, tools=tools, dump_schemas=True, dump_from=0,
@@ -244,7 +244,7 @@ def test_request_trace_is_byte_honest(capsys):
 def test_request_trace_skips_schemas_on_followup(capsys):
     messages = [ai.system_message("SYS"), ai.user_message("u"), ai.assistant_message("a")]
     sink = io.StringIO()
-    MC._emit_request_trace(
+    debug_trace.emit_request_trace(
         sink=sink,
         model_id="m", provider_id=None, provider_base_url=None,
         params=None, messages=messages, tools=[], dump_schemas=False, dump_from=2,
