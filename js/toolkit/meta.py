@@ -394,7 +394,7 @@ async def _run_one_task_async(
 
     cfg = _agent_cfg(parent_cfg, agent, task_session_id, write_latest=assembly.write_latest)
 
-    # Subagent model precedence (operator-locked order):
+    # Subagent model precedence:
     #   tool-call model (main agent wins, unless lock_subagent_model) >
     #   inherit parent (if prefer_inherit) > agent.yaml primary (`model:`) >
     #   parent model as fallback.
