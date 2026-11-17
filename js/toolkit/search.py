@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import paranoid, settings as _settings
-from ..capped_process import CappedProcessResult, _run_capped, truncation_marker
+from ..capped_process import CappedProcessResult, _run_capped
 from ..tool_binaries import resolve_binary
 from .core import Tool, ToolContext
 from .descriptions import load_description, load_parameter_description
@@ -439,19 +439,6 @@ def _redacted_url(url: str) -> str:
     return urllib.parse.urlunsplit(parsed._replace(netloc=host, query="", fragment=""))
 
 
-def _fit_truncation_marker(text: str, cap: int) -> str:
-    cap = max(0, cap)
-    if cap == 0:
-        return ""
-    marker = truncation_marker(cap, "TOOL_RESULT_MAX")
-    marker_bytes = marker.encode("utf-8")
-    if len(marker_bytes) >= cap:
-        return marker_bytes[:cap].decode("utf-8", errors="ignore")
-    content_cap = cap - len(marker_bytes) - 1
-    content = text.encode("utf-8")[:content_cap].decode("utf-8", errors="ignore")
-    return f"{content}\n{marker}" if content else marker
-
-
 _BROWSE_DUMPS = ("markdown", "text", "html", "links", "original", "assets", "cookies")
 _BROWSE_SETTLE_SECONDS = 5
 
@@ -619,7 +606,7 @@ def browse(
     if dump == "markdown":
         stdout = _absolutize(stdout, url)
     if out_truncated:
-        stdout = _fit_truncation_marker(stdout, context.max_tool_result_bytes)
+        stdout = truncate(stdout, context, cut=True)
     body = stdout or "(empty page)"
     if status is not None and status >= 400:
         # The body is kept: a 404 page sometimes IS what the caller wanted to
