@@ -142,7 +142,7 @@ def tools(*, result_wrapper=_offering_path_skills) -> tuple[Tool, ...]:
             input_schema={
                 # Flat, not oneOf: llama.cpp's schema-to-grammar path emits {} for a
                 # bare oneOf with no top-level properties (same lesson as the task schema in subagents._task_params).
-                # _apply_edit already rejects mixing the scalar and batch forms.
+                # patch() rejects mixing the scalar and batch forms.
                 "type": "object",
                 "properties": {
                     "file_path": {"type": "string", "description": load_parameter_description('patch', 'file_path')},
