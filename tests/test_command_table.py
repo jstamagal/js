@@ -41,8 +41,9 @@ def test_assembly_command_is_dispatched_and_completed(tmp_path, monkeypatch):
 
     [turn] = turns
     assert [message["content"] for message in turn.messages] == ["new"]
-    assert "clear" in repl._command_completions(state)
-    assert "reset" not in repl._command_completions(state)
+    completer = repl.Repl(cfg, state, repl_state(cfg)[1]).completer
+    assert "clear" in [verb.lstrip("/") for verb in completer.candidates("/cle")[0]]
+    assert "reset" not in [verb.lstrip("/") for verb in completer.candidates("/rese")[0]]
 
 
 def _launch(cwd):

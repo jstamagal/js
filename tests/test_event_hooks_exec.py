@@ -9,7 +9,7 @@ import json
 import time
 
 import pytest
-from repl_driver import run_async, stub_screen, turn_stub
+from repl_driver import record_turns, stub_screen, turn_stub
 from test_runtime_offline_integration import (
     _budget_config,
     model_text_result,
@@ -26,6 +26,8 @@ from js import (
     conversation,
     events,
     hookexec,
+    owning_loop,
+    persona,
     repl,
     repl_commands,
     repl_state,
@@ -46,13 +48,12 @@ def plain_shell(monkeypatch):
 
 
 def _state(tmp_path) -> tuple[ReplState, object]:
-    """The state a REPL on offline_config leaves, on the stock settings, and
-    that config."""
+    """The state a REPL on offline_config starts with, on the stock settings,
+    and that config."""
     cfg = offline_config(tmp_path)
     cfg.prompts_dir.mkdir(parents=True, exist_ok=True)
     (cfg.prompts_dir / "01-prompt.md").write_text("sys\n", encoding="utf-8")
-    with pytest.MonkeyPatch.context() as monkeypatch:
-        state = run_async(monkeypatch, cfg, [], live_settings=settings.seed_defaults())
+    state = repl.live_state(cfg, persona.load_configured_prompt_spec(cfg), live_settings=settings.seed_defaults())
     return state, cfg
 
 
@@ -60,8 +61,13 @@ def _on(state, cfg, line: str) -> None:
     assert repl_commands.run_command(f"on {line}", state, cfg) == (True, None)
 
 
-def _user_text(state, text: str) -> str:
-    return repl._with_notes({"role": "user", "content": text}, repl._take_pending_notes(state))["content"]
+def _sent(monkeypatch, state, cfg, *lines: str) -> list[str]:
+    """The user message each prompt among `lines` starts its turn with, typed
+    into a REPL session on `state`; the session opens with session_start."""
+    turns = record_turns(monkeypatch)
+    stub_screen(monkeypatch, list(lines), wait=True)
+    owning_loop.run_owning_loop(repl.Repl(cfg, state, persona.load_configured_prompt_spec(cfg)).run())
+    return [str(turn.messages[-1]["content"]) for turn in turns]
 
 
 # --- exec ----------------------------------------------------------------------
@@ -73,16 +79,15 @@ def test_new_events_take_handlers():
         assert hooks.add(name, "exec true").event == name
 
 
-def test_handler_stdout_rides_on_the_next_user_message_once(tmp_path):
+def test_handler_stdout_rides_on_the_next_user_message_once(monkeypatch, tmp_path):
     state, cfg = _state(tmp_path)
     _on(state, cfg, "session_start exec printf 'on branch main'")
 
-    repl_state.emit_session_event(state, runtime.Telemetry(None), cfg, "session_start")
+    first, again = _sent(monkeypatch, state, cfg, "hello", "again")
 
-    first = _user_text(state, "hello")
     assert "hello" in first
     assert "<js-reminder>on branch main</js-reminder>" in first
-    assert "on branch main" not in _user_text(state, "again")
+    assert "on branch main" not in again
 
 
 def test_handler_reads_the_event_as_json_on_stdin(tmp_path):
@@ -126,12 +131,12 @@ def test_a_failing_handler_queues_nothing_and_records_the_failure(tmp_path):
     assert emission.results[0].refusal is None
 
 
-def test_exec_typed_at_the_prompt_queues_its_stdout(tmp_path):
+def test_exec_typed_at_the_prompt_queues_its_stdout(monkeypatch, tmp_path):
     state, cfg = _state(tmp_path)
 
-    assert repl_commands.run_command("/exec printf 'git status: clean'", state, cfg) == (True, None)
+    [sent] = _sent(monkeypatch, state, cfg, "/exec printf 'git status: clean'", "go")
 
-    assert "<js-reminder>git status: clean</js-reminder>" in _user_text(state, "go")
+    assert "<js-reminder>git status: clean</js-reminder>" in sent
 
 
 def test_exit_2_outside_tool_call_is_a_failure_not_a_refusal(tmp_path):

@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
+from turn_driver import config, registry, run
 
-from js import cli, console, context_window, logins, run_assembly, runtime, setting_layers
+from js import cli, context_window, logins, run_assembly, setting_layers
 from js.config import from_env
 from js.endpoint_uri import DUMMY_KEY, EndpointSpecError, from_env as endpoint_from_env, parse
 from js.logins import Login
-from js.turn_call import ModelRequest
 
 LOGIN_BASE = "http://localhost:8050/v1"
 
@@ -176,16 +174,14 @@ def test_an_error_never_prints_the_key():
 # ---- banner --------------------------------------------------------------------
 
 
-def _banner(monkeypatch, *, provider_id, api_key, settings_=None):
-    seen = {}
-    monkeypatch.setattr(console, "emit_event", lambda _t, name, **f: seen.update(f))
-    monkeypatch.setattr(context_window, "configured_context_window", lambda *a: None)
-    request = ModelRequest(model="m", provider_id=provider_id, base_url="http://h/v1",
-                           api_key=api_key, effort=None, max_out=None, settings=settings_ or {})
-    registry = SimpleNamespace(openai_specs=lambda: [])
-    context = SimpleNamespace(config=None, vision_enabled=False)
-    runtime._trace_banner(None, request, context, registry, lambda: None)
-    return seen["fields"]
+def _banner(monkeypatch, tmp_path, capsys, *, provider_id, api_key) -> str:
+    """The run line a traced turn on model m at http://h/v1 shows."""
+    monkeypatch.setattr(context_window, "resolve_context_window", lambda *a, **k: None)
+    cfg = config(tmp_path, model="m", provider_id=provider_id, provider_base_url="http://h/v1",
+                 provider_api_key=api_key)
+    capsys.readouterr()
+    run(tmp_path, monkeypatch, registry(), [], cfg=cfg, trace=True, suppress_output=False)
+    return capsys.readouterr().out
 
 
 @pytest.mark.parametrize("provider_id, wire", [
@@ -194,17 +190,17 @@ def _banner(monkeypatch, *, provider_id, api_key, settings_=None):
     ("anthropic-custom", "anthropic"),
     (None, "openai"),
 ])
-def test_banner_names_model_key_and_wire(monkeypatch, provider_id, wire):
-    fields = _banner(monkeypatch, provider_id=provider_id, api_key="sk-secret-value")
-    assert "model=m" in fields
-    assert "key=set" in fields
-    assert f"wire={wire}" in fields
-    assert not any("sk-secret-value" in f for f in fields)
+def test_banner_names_model_key_and_wire(monkeypatch, tmp_path, capsys, provider_id, wire):
+    shown = _banner(monkeypatch, tmp_path, capsys, provider_id=provider_id, api_key="sk-secret-value")
+    assert "model=m" in shown
+    assert "key=set" in shown
+    assert f"wire={wire}" in shown
+    assert "sk-secret-value" not in shown
 
 
 @pytest.mark.parametrize("api_key", [None, "", DUMMY_KEY])
-def test_banner_says_key_none_without_a_real_key(monkeypatch, api_key):
-    assert "key=none" in _banner(monkeypatch, provider_id="openai-completions", api_key=api_key)
+def test_banner_says_key_none_without_a_real_key(monkeypatch, tmp_path, capsys, api_key):
+    assert "key=none" in _banner(monkeypatch, tmp_path, capsys, provider_id="openai-completions", api_key=api_key)
 
 
 # ---- JS_BASE_URL -------------------------------------------------------------------

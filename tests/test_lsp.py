@@ -303,12 +303,16 @@ def test_server_runs_in_the_jail(tmp_path, operator_home, monkeypatch):
 
 
 
-def test_server_configuration_comes_from_its_caller(monkeypatch, tmp_path):
-    from types import SimpleNamespace
+def test_server_configuration_comes_from_its_caller(project):
+    """The fake server asks for section "fake" once it is initialized."""
+    root, context, log = project
+    context.lsp_configuration = lambda item: {"enabled": item["section"] == "fake"}
+    source = root / "pkg" / "mod.fake"
+    source.write_text("x = 1\n")
 
-    replies = []
-    server = lsp_mod.LanguageServer(spec=None, root=tmp_path, process=SimpleNamespace(),
-                                   configuration=lambda item: {"enabled": item["section"] == "example"})
-    monkeypatch.setattr(server, "_send", replies.append)
-    server._answer(7, "workspace/configuration", {"items": [{"section": "example"}]})
-    assert replies == [{"id": 7, "result": [{"enabled": True}]}]
+    assert not run(context, operation="diagnostics", file_path=str(source)).startswith("ERROR")
+    # The server has read everything the client sent once it has shut down.
+    lsp_mod.shutdown_servers()
+
+    replies = [message for message in sent(log) if "method" not in message]
+    assert [reply["result"] for reply in replies] == [[{"enabled": True}]]

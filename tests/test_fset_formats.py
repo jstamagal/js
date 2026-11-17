@@ -35,6 +35,13 @@ def _sample(entry: msgs.Message) -> dict:
     return values
 
 
+def _drawn(entry: msgs.Message, fmt: str, values: dict) -> str:
+    """``entry`` drawn through format ``fmt`` with ``values``, as plain text."""
+    with fset.held():
+        assert fset.set_entry(entry.name, fmt) is None
+        return entry.plain(**values)
+
+
 def _shipped_formats() -> dict[str, str]:
     """Every format `js/fset` and the built-in themes set, by `file:NAME`."""
     found = {f"fset:{name}": value for name, value in fset.read_file(fset.PACKAGE_FSET).items()
@@ -69,7 +76,7 @@ def test_every_shipped_fset_format_draws_its_entry_s_own_words():
         if entry is None:
             continue
         values = _sample(entry)
-        drawn = fset.to_plain(fset.runs(fset.defaults()[name], fset.words(msgs._holes(entry, values))))
+        drawn = _drawn(entry, fset.defaults()[name], values)
         expected = msgs.banner(entry.text(**values)) if entry.banner else entry.text(**values)
         if drawn != expected.rstrip(" "):
             changed[name] = (drawn, expected)
@@ -80,7 +87,6 @@ def test_every_shipped_fset_format_draws_its_entry_s_own_words():
 def test_an_entry_drawn_through_its_default_format_reads_as_its_text(name):
     entry = msgs.ENTRIES[name]
     values = _sample(entry)
-    with fset.held():
-        drawn = fset.to_plain(fset.runs(entry.default_format(), fset.words(msgs._holes(entry, values))))
+    drawn = _drawn(entry, entry.default_format(), values)
     expected = msgs.banner(entry.text(**values)) if entry.banner else entry.text(**values)
     assert drawn == expected.rstrip(" ")

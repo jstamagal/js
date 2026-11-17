@@ -447,10 +447,12 @@ def test_open_reasoning_rewraps_only_its_last_row_as_it_streams(monkeypatch):
     def stream(words: int) -> int:
         measured[0] = 0
         line = " ".join(f"word{n}" for n in range(words))
-        block = screen_scrollback.Scrollback().reasoning(2)
+        scroll = screen_scrollback.Scrollback()
+        block = scroll.reasoning(2)
         for start in range(0, len(line), 4):
             block.append(line[start:start + 4])
-        assert block._body() == text_layout.wrap_words(line, text_layout.block_width())
+        wrapped = text_layout.wrap_words(line, text_layout.block_width())
+        assert "\n" + wrapped + "\n" in transcript.strip_ansi(scroll.buffer.text)
         return measured[0]
 
     assert stream(2000) < 3 * stream(1000)

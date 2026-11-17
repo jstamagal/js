@@ -12,15 +12,14 @@ import time
 import types
 
 import pytest
+from repl_driver import record_turns, run_async as run_repl
+from test_runtime_offline_integration import offline_config
 from turn_driver import run_async as run_turn_async
 
 from js import (
-    repl,
-    repl_session_commands,
     runtime,
     supervisor,
 )
-from js.repl_state import ReplState
 from js.toolkit import ToolContext, subagents, task_jobs
 from js.toolkit.registry import ToolRegistry
 
@@ -97,12 +96,15 @@ def _notes(ctx: ToolContext) -> list[str]:
     return task_jobs.completion_notes(ctx.task_owner)
 
 
-def _sent(state: ReplState, message: dict) -> dict:
-    return repl._with_notes(message, repl._take_pending_notes(state))
-
-
-def _bundle() -> dict:
-    return {"role": "user", "content": "next"}
+def _sent(monkeypatch, tmp_path, *lines: str) -> list[str]:
+    """The user message each prompt among `lines` starts its turn with, typed
+    into a REPL session."""
+    cfg = offline_config(tmp_path)
+    cfg.prompts_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.prompts_dir / "01-prompt.md").write_text("sys\n", encoding="utf-8")
+    turns = record_turns(monkeypatch)
+    run_repl(monkeypatch, cfg, list(lines), wait=True)
+    return [str(turn.messages[-1]["content"]) for turn in turns]
 
 
 def _subagent_ctx() -> ToolContext:
@@ -168,20 +170,18 @@ def test_handle_defaults_to_the_newest_running_task_and_unknown_is_an_error(work
     assert subagents.task(action="dance", context=ctx).startswith("ERROR")
 
 
-def test_a_finished_unread_task_is_named_in_the_next_user_message(workers, ctx):
+def test_a_finished_unread_task_is_named_in_the_next_user_message(workers, ctx, monkeypatch, tmp_path):
     started = subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx)
     job = _job(_handle(started), ctx)
     workers.release.set()
     job.future.result(timeout=5)
 
-    sent = _sent(ReplState(), _bundle())
-    text = sent["content"]
+    text, again = _sent(monkeypatch, tmp_path, "next", "again")
     assert text.startswith("next")
     note = re.search(r"<js-reminder>(.*?)</js-reminder>", text, re.S).group(1)
     assert job.id in note and str(job.result_path) in note
     # Only once.
-    again = _sent(ReplState(), _bundle())
-    assert "<js-reminder>" not in again["content"]
+    assert "<js-reminder>" not in again
 
 
 def test_a_result_already_read_gets_no_reminder(workers, ctx):
@@ -219,13 +219,12 @@ def test_each_context_sees_only_its_own_tasks(workers, ctx):
     assert len(notes) == 1 and handle in notes[0]
 
 
-def test_reset_drops_the_reminder_for_tasks_of_the_old_conversation(workers, ctx, tmp_path):
+def test_reset_drops_the_reminder_for_tasks_of_the_old_conversation(workers, ctx, monkeypatch, tmp_path):
     handle = _handle(subagents.task(tasks=["alpha"], agent_id="worker", background=True, context=ctx))
     workers.release.set()
     _job(handle, ctx).future.result(timeout=5)
-    cfg = types.SimpleNamespace(session_file=tmp_path / "session.jsonl")
-    repl_session_commands._cmd_reset("", ReplState(messages=[]), cfg)
-    assert "<js-reminder>" not in _sent(ReplState(), _bundle())["content"]
+    [sent] = _sent(monkeypatch, tmp_path, "/reset", "next")
+    assert "<js-reminder>" not in sent
 
 
 def test_finished_subagent_tasks_do_not_pile_up(workers, ctx):

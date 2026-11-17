@@ -17,7 +17,6 @@ def trashless_box(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
     monkeypatch.setenv("PATH", str(empty_bin))
-    assert fs._trash_command() is None
     assert not (home / ".local" / "share" / "Trash").exists()
     return tmp_path
 

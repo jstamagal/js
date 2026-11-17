@@ -817,11 +817,14 @@ def test_warn_missing_binaries_once_per_binary(monkeypatch, capsys):
     monkeypatch.setattr(cli, "resolve_binary", lambda name: None if name in {"rg", "fd"} else f"/bin/{name}")
     cli.reset_warnings()
 
-    cli._warn_missing_binaries()
-    cli._warn_missing_binaries()
+    def missing_named():
+        assert js(monkeypatch, "--commit", "--compact", "some-session") == 2
+        lines = capsys.readouterr().err.splitlines()
+        return sorted(name for name in ("rg", "fd", "bat", "fzf") for line in lines if name in line.split())
 
-    # One line per missing binary, across both calls.
-    assert len(capsys.readouterr().err.splitlines()) == 2
+    # One line per missing binary, across both runs.
+    assert missing_named() == ["fd", "rg"]
+    assert missing_named() == []
     cli.reset_warnings()
 
 

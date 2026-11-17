@@ -3,8 +3,8 @@
 It serves any file. A line holding ERROR gets an error diagnostic at that
 word. Definition finds `def NAME` in the open documents, references finds
 every NAME, and hover names the word at the position. Hovering `whoami`
-returns the entries of $HOME as the server sees them. Positions are UTF-16,
-as LSP counts them.
+returns the entries of $HOME as the server sees them, and hovering `environ`
+the names in its environment. Positions are UTF-16, as LSP counts them.
 
 Usage: fake_lsp_server.py LOG [--crash] [--no-diagnostics]
 LOG gets one JSON line per message the client sent.
@@ -132,6 +132,8 @@ def handle(message: dict) -> None:
         word = word_at(params["textDocument"]["uri"], params["position"])
         if word == "whoami":
             value = json.dumps(sorted(os.listdir(os.path.expanduser("~"))))
+        elif word == "environ":
+            value = json.dumps(sorted(os.environ))
         else:
             value = f"hover `{word}`" if word else ""
         send({"id": message["id"], "result": {"contents": {"kind": "markdown", "value": value}} if value else None})

@@ -10,13 +10,21 @@ from js.session_catalog import first_metadata
 
 
 @pytest.mark.parametrize("tool_calls", [1, True, "bad", {"function": "bad"}, None])
-def test_read_old_session_ignores_nonlist_calls(tmp_path, tool_calls):
-    source = tmp_path / "old.jsonl"
-    source.write_text(json.dumps({"role": "assistant", "tool_calls": tool_calls}) + "\n", encoding="utf-8")
+def test_migration_files_a_session_whose_calls_are_not_a_list(tmp_path, tool_calls):
+    folder = paths.legacy_homes()["data"] / "sessions" / "defaultagent"
+    folder.mkdir(parents=True)
+    source = folder / "old.jsonl"
+    records = [
+        {"role": "user", "content": "opener", "ts": 100},
+        {"role": "assistant", "content": "reply", "ts": 101, "tool_calls": tool_calls},
+    ]
+    source.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
 
-    session = home._read_old_session(tmp_path, source)
+    home.migrate_once(io.StringIO())
 
-    assert session.tasks == []
+    filed = session_store.folder_for(paths.user_home()) / source.name
+    assert filed.is_file()
+    assert not folder.exists()
 
 
 @pytest.mark.parametrize("function", ["bad", [], ["bad"], 1, True, None])
@@ -39,8 +47,6 @@ def test_migration_preserves_sessions_with_malformed_call_metadata(tmp_path, fun
     child = child_folder / "child.jsonl"
     child.write_text(json.dumps(child_records[0]) + "\n", encoding="utf-8")
 
-    parsed = home._read_old_session(folder, parent)
-    assert parsed.tasks == [(101, "valid neighbor task")]
     home.migrate_once(io.StringIO())
 
     filed = session_store.folder_for(paths.user_home()) / parent.name

@@ -280,20 +280,20 @@ def test_json_stream_preserves_snippet_exit_status(capsys):
     assert events[-1]["exit_code"] == 2
 
 
-def test_background_worker_preserves_snippet_error(monkeypatch, tmp_path):
-    from concurrent.futures import Future
+def test_background_worker_preserves_snippet_error(tmp_path):
+    import threading
 
     from js.toolkit import task_jobs
 
-    error = snippets.SnippetError("missing background instruction")
-    outcome = Future()
-    outcome.set_exception(error)
-    job = task_jobs.TaskJob("fixture", "worker", 1, 0, tmp_path / "result", "owner")
-    settled = []
-    task_jobs._settle(job, outcome, lambda: settled.append(True))
-    assert settled == [True]
+    async def worker(_index, _item):
+        raise snippets.SnippetError("missing background instruction")
+
+    settled = threading.Event()
+    owner = f"owner-{tmp_path.name}"
+    job = task_jobs.start([(1, "item")], worker, lambda results: "", agent_id="worker", depth=0,
+                          owner=owner, on_done=settled.set)
+    assert settled.wait(5)
     with pytest.raises(snippets.SnippetError, match="background instruction"):
         job.result()
-    monkeypatch.setattr(task_jobs, "_JOBS", {job.id: job})
     with pytest.raises(snippets.SnippetError, match="background instruction"):
-        task_jobs.completion_notes("owner")
+        task_jobs.completion_notes(owner)

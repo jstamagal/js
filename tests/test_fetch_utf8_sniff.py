@@ -62,7 +62,10 @@ def test_extensionless_file_fetch_preserves_text_classification(tmp_path, charac
     (b"a" * 4095 + b"\xc3", "application/octet-stream"),
 ], ids=["accent", "cjk", "emoji", "invalid-eof"])
 def test_saved_download_fallback_knows_if_sniff_window_is_truncated(tmp_path, monkeypatch, payload, expected):
-    target = tmp_path / "download"
-    target.write_bytes(payload)
+    """An aria2c download whose HEAD probe fails takes its type from its bytes."""
+    monkeypatch.setattr(fetch, "download_with_aria2",
+                        lambda _binary, _url, target, **_kwargs: target.write_bytes(payload))
     monkeypatch.setattr(fetch.urllib.request, "urlopen", Mock(side_effect=OSError("no HEAD response")))
-    assert fetch._saved_content_type("https://example.test/item", target, {}, 1) == expected
+    result = fetch.fetch("https://example.test/item", save="download", context=ToolContext(cwd=tmp_path),
+                         download_resolver=lambda _name: "/fake/aria2c")
+    assert f"content-type={expected}" in result
