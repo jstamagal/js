@@ -8,8 +8,7 @@ import pytest
 from jail_probe import needs_bwrap
 from repl_driver import stub_screen, turn_stub
 
-from js import cli, conversation, jail, messages as msgs, repl_workspace_commands, runtime, snippets
-from js.repl_state import ReplState
+from js import cli, conversation, jail, messages as msgs, runtime, snippets
 from js.toolkit import call_tool, shell
 from js.toolkit.registry import build_default_registry
 
@@ -136,13 +135,15 @@ def test_cd_without_a_jail_moves_the_session(monkeypatch, places, turns):
     assert f"\n{extra.resolve()}\n" in turns.results[0]["pwd"]
 
 
-def test_add_and_drop_need_a_jail(places):
+def test_add_and_drop_need_a_jail(monkeypatch, places, turns, capsys):
     _root, extra = places
-    state = ReplState()
 
-    assert repl_workspace_commands._cmd_add(str(extra), state, None).message is msgs.NO_JAIL
-    assert repl_workspace_commands._cmd_drop(str(extra), state, None).message is msgs.NO_JAIL
-    assert state.pending_notes == []
+    repl(monkeypatch, [], [f"/add {extra}", f"/drop {extra}", "where"])
+
+    out = capsys.readouterr().out
+    assert msgs.NO_JAIL.text(verb="add") in out
+    assert msgs.NO_JAIL.text(verb="drop") in out
+    assert turns.sent == ["where"]
 
 
 @needs_bwrap

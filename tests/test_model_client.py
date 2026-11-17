@@ -20,7 +20,6 @@ from js import (
     history_record,
     model_client,
     provider_errors,
-    request_params,
     setting_values,
     stream_protocols,
     tool_result_messages,
@@ -516,20 +515,27 @@ def test_stream_model_sampling_topk_merges_with_provider_extra_body(monkeypatch)
     }
 
 
-def test_openai_compatible_topk_reppen_never_become_structured_params():
+def test_openai_compatible_topk_reppen_never_become_structured_params(monkeypatch):
     """Regression: the openai-compatible family (ollama/llama.cpp/vLLM/deepseek)
     must forward top_k/repetition_penalty as raw extra_body, NEVER as
     TopK/RepetitionPenalty sampler classes — the OpenAIChatCompletionsProtocol
     those providers are pinned to raises ValueError the moment it sees them."""
     from ai.models.core import params as ap
 
-    params = request_params._build_inference_params(
-        Sampling(temperature=0.5, top_k=40, repetition_penalty=1.2, presence_penalty=0.3),
-        request_params._CHAT_SAMPLING,
-        reasoning=None,
-        output=None,
-        extra_body={},
+    factory = _use_fake_stream(monkeypatch, _text_events("ok"))
+    model_client.stream_model(
+        model_id="test",
+        provider_id="openai",
+        provider_base_url="http://localhost:11434/v1",
+        provider_api_key="x",
+        messages=[ai.user_message("hi")],
+        tools=None,
+        max_output_tokens=None,
+        reasoning_effort=None,
+        on_text=lambda _s: None,
+        sampling=Sampling(temperature=0.5, top_k=40, repetition_penalty=1.2, presence_penalty=0.3),
     )
+    params = factory.kwargs["params"]
     samp = params.sampling
     assert ap.TopKSamplerParams not in samp
     rep = samp.get(ap.RepetitionPenaltyParams)
@@ -609,7 +615,7 @@ def test_history_messages_can_be_roundtripped():
     assert rebuilt == out
 
 
-@pytest.mark.parametrize("target", ["reasoning.anthropic_thinking", "request_params._build_inference_params", "stream_transport.begin_call"])
+@pytest.mark.parametrize("target", ["reasoning.anthropic_thinking", "request_params.build_request_params", "stream_transport.begin_call"])
 def test_provider_is_closed_when_request_setup_fails(monkeypatch, target):
     """The provider owns an HTTP client from resolve_model on; a failure while
     the request is assembled must still close it."""
@@ -638,8 +644,28 @@ def test_provider_is_closed_when_request_setup_fails(monkeypatch, target):
     assert Provider.closed
 
 
-def test_extra_headers_go_on_the_turn_request_over_the_login_headers(tmp_path):
-    from js import runtime, turn_settings
+def _sent_headers(tmp_path, monkeypatch, cfg) -> dict | None:
+    """The headers a turn on ``cfg`` sends with its model request."""
+    from turn_driver import one_turn, registry, reply
+
+    from js import runtime
+    from js.toolkit import ToolContext
+
+    sent = []
+
+    async def model(**kwargs):
+        sent.append(kwargs["provider_headers"])
+        return reply(text="ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", model)
+    one_turn(cfg, "SYS", [{"role": "user", "content": "go"}], runtime.Telemetry(None), suppress_output=True,
+             tool_registry=registry(), tool_context=ToolContext(cwd=tmp_path))
+    [headers] = sent
+    return headers
+
+
+def test_extra_headers_go_on_the_turn_request_over_the_login_headers(tmp_path, monkeypatch):
+    from js import turn_settings
     from js.config import Config
 
     cfg = Config(
@@ -650,12 +676,7 @@ def test_extra_headers_go_on_the_turn_request_over_the_login_headers(tmp_path):
         provider_headers={"x-pool": "login", "X-Keep": "1"},
         **turn_settings.project({"EXTRA_HEADERS": "X-Pool: fofa; X-JS-Scrub: on"}),
     )
-    request = runtime._turn_request(
-        cfg, model_override=None, provider_id_override=None,
-        provider_base_url_override=None, provider_api_key_override=None,
-        reasoning_effort_override=runtime._UNSET, max_output_override=1, sampling=None,
-    )
-    assert request.headers == {"X-Keep": "1", "X-Pool": "fofa", "X-JS-Scrub": "on"}
+    assert _sent_headers(tmp_path, monkeypatch, cfg) == {"X-Keep": "1", "X-Pool": "fofa", "X-JS-Scrub": "on"}
 
 
 def test_set_refuses_extra_headers_without_a_colon():
@@ -665,8 +686,8 @@ def test_set_refuses_extra_headers_without_a_colon():
     assert value is None and error
 
 
-def test_paranoid_mode_extra_sends_the_scrub_header(tmp_path):
-    from js import runtime, turn_settings
+def test_paranoid_mode_extra_sends_the_scrub_header(tmp_path, monkeypatch):
+    from js import turn_settings
     from js.config import Config
 
     cfg = Config(
@@ -676,12 +697,7 @@ def test_paranoid_mode_extra_sends_the_scrub_header(tmp_path):
         session_file=tmp_path / "s.jsonl", prompts_dir=tmp_path,
         **turn_settings.project({"PARANOID_MODE": "extra"}),
     )
-    request = runtime._turn_request(
-        cfg, model_override=None, provider_id_override=None,
-        provider_base_url_override=None, provider_api_key_override=None,
-        reasoning_effort_override=runtime._UNSET, max_output_override=1, sampling=None,
-    )
-    assert request.headers == {"X-JS-Scrub": "on"}
+    assert _sent_headers(tmp_path, monkeypatch, cfg) == {"X-JS-Scrub": "on"}
 
 
 def _cpa_chunk(delta: dict, finish: str | None = None):

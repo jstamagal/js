@@ -9,7 +9,7 @@ import asyncio
 from dataclasses import replace
 
 import pytest
-from repl_driver import run_async
+from repl_driver import handled_while_a_turn_runs, run_async
 from test_mcp_client import SpecServer
 
 from js import cli, repl
@@ -144,15 +144,15 @@ def test_tui_flag_is_an_unknown_argument(monkeypatch, tmp_path):
     assert exc.value.code == 2
 
 
-def test_turn_state_commands_are_refused_while_a_turn_runs():
+def test_turn_state_commands_are_refused_while_a_turn_runs(monkeypatch, tmp_path):
     """Commands that clear/rotate/compact the live message list must be gated while a
     turn is active — running them off-loop races the turn's single-writer append."""
-    assert repl._is_turn_state_command("/reset")
-    assert repl._is_turn_state_command("/wipe")
-    assert repl._is_turn_state_command("/compact")
-    assert repl._is_turn_state_command("/compact up to here")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("JS_SESSION", raising=False)
+    monkeypatch.chdir(tmp_path)
+    refused = ["/reset", "/wipe", "/compact", "/compact up to here"]
     # non-mutating / unrelated commands stay live
-    assert not repl._is_turn_state_command("/compact-auto on")
-    assert not repl._is_turn_state_command("/turns")
-    assert not repl._is_turn_state_command("/model gpt")
-    assert not repl._is_turn_state_command("hello there")
+    live = ["/compact-auto on", "/turns", "/model gpt", "hello there"]
+
+    assert handled_while_a_turn_runs(monkeypatch, from_env(), refused + live) == live
+

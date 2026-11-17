@@ -12,15 +12,13 @@ import time
 import types
 
 import pytest
+from turn_driver import run_async as run_turn_async
 
 from js import (
     repl,
     repl_session_commands,
     runtime,
     supervisor,
-    tool_calls,
-    tool_errors,
-    turn_dispatch,
 )
 from js.repl_state import ReplState
 from js.toolkit import ToolContext, subagents, task_jobs
@@ -287,19 +285,13 @@ def test_kill_of_a_sync_started_task_under_the_supervisor_cancels_it(workers, ct
     assert _job(handle, ctx).cancelled()
 
 
-def test_the_runtime_dispatch_passes_background_and_handle_through(workers, ctx, loop_sup):
+def test_the_runtime_dispatch_passes_background_and_handle_through(workers, ctx, loop_sup, tmp_path, monkeypatch):
     loop, _sup = loop_sup
     registry = ToolRegistry(subagents.tools(), {})
 
     def dispatch(call_id: str, args: str) -> str:
-        pc = tool_calls.PendingToolCall(call_id, "task", [args])
-
-        async def go():
-            return await turn_dispatch._dispatch_fan_out_async(
-                pc, runtime.Telemetry(None), 256 * 1024, False,
-                tool_errors.ToolErrorTracker(), registry, ctx)
-
-        return asyncio.run_coroutine_threadsafe(go(), loop).result(timeout=10)[2]
+        turn = run_turn_async(tmp_path, monkeypatch, registry, [[(call_id, "task", args)]], context=ctx)
+        return asyncio.run_coroutine_threadsafe(turn, loop).result(timeout=10).results()[call_id]
 
     started = dispatch("c1", '{"tasks": ["alpha"], "agent_id": "worker", "background": true}')
     handle = _handle(started)

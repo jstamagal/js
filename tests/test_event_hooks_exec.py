@@ -9,7 +9,7 @@ import json
 import time
 
 import pytest
-from repl_driver import stub_screen, turn_stub
+from repl_driver import run_async, stub_screen, turn_stub
 from test_runtime_offline_integration import (
     _budget_config,
     model_text_result,
@@ -45,15 +45,13 @@ def plain_shell(monkeypatch):
 
 
 def _state(tmp_path) -> tuple[ReplState, object]:
+    """The state a REPL on offline_config leaves, on the stock settings, and
+    that config."""
     cfg = offline_config(tmp_path)
-    state = ReplState(
-        messages=[],
-        system="sys",
-        model=cfg.model,
-        settings=settings.seed_defaults(),
-        events=events.EventHooks(),
-    )
-    state.events.set_dispatcher(repl._event_dispatcher(state, cfg))
+    cfg.prompts_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.prompts_dir / "01-prompt.md").write_text("sys\n", encoding="utf-8")
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        state = run_async(monkeypatch, cfg, [], live_settings=settings.seed_defaults())
     return state, cfg
 
 

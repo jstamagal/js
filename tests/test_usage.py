@@ -12,6 +12,7 @@ from pathlib import Path
 import ai
 import ai.types.usage
 import pytest
+from repl_driver import run_async
 from test_lazy_tool_discovery import _cfg
 
 from js import (
@@ -20,11 +21,11 @@ from js import (
     repl,
     repl_session_commands,
     runtime,
+    screen,
     status_bar,
     usage,
 )
 from js.model_client import ModelStreamResult, ModelToolCall
-from js.repl_state import ReplState
 from js.toolkit.core import ToolContext
 from js.toolkit.registry import build_default_registry
 
@@ -196,12 +197,27 @@ def test_compaction_summary_calls_are_charged_to_the_session(tmp_path, monkeypat
 
 # --- /cost and the status bar -------------------------------------------------------
 
+def _repl(cfg, monkeypatch, lines, **kwargs) -> None:
+    """Run the REPL on ``cfg`` over ``lines``."""
+    cfg.prompts_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
+    run_async(monkeypatch, cfg, lines, **kwargs)
+
+
+def _status_bar(cfg, monkeypatch, width: int) -> str:
+    """The REPL's status bar at ``width`` for a session on ``cfg``."""
+    built: dict = {}
+    _repl(cfg, monkeypatch, [], screen_parts=built)
+    return built["status"](width)
+
+
 def test_cost_command_prints_the_totals(tmp_path, monkeypatch, capsys):
     cfg = _priced_cfg(tmp_path)
     _run(cfg, monkeypatch, [_reply(text="hi", use=_usage(12_345, 678, cache_read=2_000, cache_write=0))])
     live = usage.totals(cfg.session_file)
 
-    repl_session_commands._cmd_cost("", ReplState(), cfg)
+    capsys.readouterr()
+    _repl(cfg, monkeypatch, ["/cost"])
 
     out = capsys.readouterr().out
     for figure in ("12,345", "678", "2,000", usage.format_dollars(live.cost), "gpt-5"):
@@ -213,7 +229,8 @@ def test_cost_command_shows_tokens_only_for_an_unpriced_model(tmp_path, monkeypa
     cfg.session_file.parent.mkdir(parents=True, exist_ok=True)
     _run(cfg, monkeypatch, [_reply(text="hi", use=_usage(4_321, 99))])
 
-    repl_session_commands._cmd_cost("", ReplState(), cfg)
+    capsys.readouterr()
+    _repl(cfg, monkeypatch, ["/cost"])
 
     out = capsys.readouterr().out
     assert "4,321" in out and "99" in out
@@ -224,7 +241,7 @@ def test_status_bar_shows_the_session_cost(tmp_path, monkeypatch):
     cfg = _priced_cfg(tmp_path)
     _run(cfg, monkeypatch, [_reply(text="hi", use=_usage(1_000_000, 0))])
 
-    line = repl._status_bar_line(cfg, ReplState(settings={}), False, 120)
+    line = _status_bar(cfg, monkeypatch, 120)
 
     assert usage.format_dollars(1.25) in line
 
@@ -234,7 +251,7 @@ def test_status_bar_shows_tokens_when_no_call_was_priced(tmp_path, monkeypatch):
     cfg.session_file.parent.mkdir(parents=True, exist_ok=True)
     _run(cfg, monkeypatch, [_reply(text="hi", use=_usage(40_000, 2_000))])
 
-    line = repl._status_bar_line(cfg, ReplState(settings={}), False, 120)
+    line = _status_bar(cfg, monkeypatch, 120)
 
     assert "$" not in line
     assert usage.format_tokens(42_000) in line
@@ -260,7 +277,7 @@ def test_wipe_starts_the_totals_again(tmp_path, monkeypatch, capsys):
     cfg = _priced_cfg(tmp_path)
     _run(cfg, monkeypatch, [_reply(text="hi", use=_usage(100, 10))])
 
-    repl_session_commands._cmd_wipe("", ReplState(messages=[]), cfg)
+    _repl(cfg, monkeypatch, ["/wipe"])
 
     assert usage.totals(Path(cfg.session_file)).calls == 0
 
@@ -324,7 +341,13 @@ def test_the_running_session_stays_first_when_an_ancestor_repeats(tmp_path):
     assert usage.totals(a).calls == 1 and usage.totals(b).calls == 1
 
 
-def test_a_real_file_named_like_an_unsaved_key_is_still_a_file(tmp_path):
+def test_a_real_file_named_like_an_unsaved_key_is_still_a_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     real = tmp_path / "unsaved:x.jsonl"
-    assert usage._persisted(real)
-    assert not usage._persisted(usage.UnsavedKey("unsaved:x"))
+    call = usage.CallUsage(model="m", provider=None, cost=None, input_tokens=1)
+
+    usage.charge(real, call)
+    usage.charge(usage.UnsavedKey("unsaved:x"), call)
+
+    assert usage.load(real).input_tokens == 1
+    assert not (tmp_path / "unsaved:x").exists()

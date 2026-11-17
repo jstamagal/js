@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from repl_driver import type_into_js
 
 from js import repl, repl_commands, repl_state
 from js.repl_state import ReplState
@@ -40,16 +41,25 @@ def test_bare_quit_words_complete():
         assert word in completer.candidates(word)[0]
 
 
-def test_a_new_table_entry_completes_with_no_completer_change(monkeypatch):
+def _repl_completer(monkeypatch, tmp_path, lines=()) -> JsCompleter:
+    """The completer of js started at a terminal in ``tmp_path``, after
+    ``lines`` were typed into it."""
+    monkeypatch.chdir(tmp_path)
+    built: dict = {}
+    assert type_into_js(monkeypatch, list(lines), screen_parts=built) == 0
+    return built["completer"]
+
+
+def test_a_new_table_entry_completes_with_no_completer_change(monkeypatch, tmp_path):
     command = repl_state.Command(lambda arg, state, cfg: None, "frobnicate", "test entry")
     monkeypatch.setitem(repl_commands.COMMANDS, "frobnicate", command)
-    completer = JsCompleter(commands=lambda: repl._command_completions(ReplState()))
+    completer = _repl_completer(monkeypatch, tmp_path)
 
     assert completer.candidates("/frob")[0] == ["/frobnicate"]
 
 
-def test_aliases_complete_as_commands():
-    completer = JsCompleter(commands=lambda: repl._command_completions(ReplState(aliases={"ship": "save"})))
+def test_aliases_complete_as_commands(monkeypatch, tmp_path):
+    completer = _repl_completer(monkeypatch, tmp_path, ["/alias ship save"])
 
     assert completer.candidates("/sh")[0] == ["/ship", "/show"]
 

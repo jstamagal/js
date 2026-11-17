@@ -17,7 +17,7 @@ from ai.providers import history_utils
 from repl_driver import run_async
 from turn_driver import one_turn
 
-from js import cli, repl_state, runtime
+from js import cli, repl_state, runtime, turn_budget
 from js.config import Config, from_env
 from js.memory import load_messages
 from js.model_client import ModelStreamResult, ModelToolCall
@@ -121,7 +121,7 @@ def test_a_steered_message_does_not_start_a_new_turn_for_compaction():
         {"role": "assistant", "content": "", "tool_calls": []},
         {"role": "user", "content": "also this", "steered": True},
     ]
-    assert runtime._last_user_message_index(messages) == 0
+    assert turn_budget.last_user_message_index(messages) == 0
 
 
 # --------------------------------------------------------------------------

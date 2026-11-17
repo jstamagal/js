@@ -881,7 +881,7 @@ def test_offline_compact_model_flag_overrides_same_model(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cli.compaction, "compact_now", AsyncMock(side_effect=compact_stub))
 
-    actual = cli._run_compact_offline("compact-session", model="compact-model")
+    actual = cli.main(["--compact", "compact-session", "--model", "compact-model"])
 
     assert actual == 0
     assert seen == ["compact-model"]

@@ -6,6 +6,13 @@ import pytest
 
 from js import swarm
 from js.toolkit import ToolContext
+from js.toolkit.core import call_tool
+
+
+def _bus(name: str, context, **args):
+    """What the bus tool ``name`` answers a call with ``args``."""
+    tool = {tool.name: tool for tool in swarm.tools()}[name]
+    return call_tool(tool, args, context)
 
 
 @pytest.mark.parametrize("ttl", [math.nan, math.inf, -math.inf, 1e300])
@@ -29,7 +36,7 @@ def test_claim_tool_rejects_bad_expiry_without_mutation(tmp_path):
     context = ToolContext(cwd=tmp_path)
     context.swarm = agent
     before = agent.room.claims()
-    result = swarm._claim("key", ttl=1e300, context=context)
+    result = _bus("claim", context, key="key", ttl=1e300)
     assert result.startswith("ERROR")
     assert agent.room.claims() == before
 
@@ -60,7 +67,7 @@ def test_alarm_tool_rejects_invalid_duration_before_pending_check(tmp_path, seco
     if pending:
         agent.wake_me(60)
     before = agent.alarm
-    assert swarm._wake_me(seconds, context=context).startswith("ERROR")
+    assert _bus("wake_me", context, seconds=seconds).startswith("ERROR")
     assert agent.alarm == before
 
 

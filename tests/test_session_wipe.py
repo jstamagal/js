@@ -1,19 +1,20 @@
-from types import SimpleNamespace
-
 import pytest
+from repl_driver import run_async
+from turn_driver import config
 
-from js import memory, repl_session_commands, session_store
-from js.repl_state import ReplState
+from js import memory, session_store
 
 
 @pytest.mark.parametrize("append_mark", [False, True])
-def test_wipe_allows_first_new_turn_to_save(tmp_path, append_mark):
+def test_wipe_allows_first_new_turn_to_save(monkeypatch, tmp_path, append_mark):
     session = tmp_path / "active.jsonl"
     old_messages = [{"role": "user", "content": "old turn"}]
     memory.persist_messages(session, old_messages)
-    state = ReplState(messages=memory.load_replay_messages(session))
+    cfg = config(tmp_path, session_file=session)
+    cfg.prompts_dir.mkdir()
+    (cfg.prompts_dir / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
 
-    repl_session_commands._cmd_wipe("", state, SimpleNamespace(session_file=session))
+    state = run_async(monkeypatch, cfg, ["/wipe"])
 
     assert state.messages == []
     if append_mark:

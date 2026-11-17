@@ -7,7 +7,14 @@ import os
 from dataclasses import replace
 from pathlib import Path
 
-from repl_driver import output_of, record_turns, repl_state, run_async, type_into_js
+from repl_driver import (
+    handled_while_a_turn_runs,
+    output_of,
+    record_turns,
+    repl_state,
+    run_async,
+    type_into_js,
+)
 
 from js import cli, paths, repl, repl_commands, setting_layers, settings
 from js.config import from_env, jsrc_paths
@@ -220,12 +227,12 @@ def test_skill_with_a_name_is_a_turn_and_bare_skill_is_a_command(tmp_path, monke
     assert "tools" in repl_commands.COMMANDS
 
 
-def test_turn_state_commands_come_from_the_table(monkeypatch):
+def test_turn_state_commands_come_from_the_table(tmp_path, monkeypatch):
     command = Command(lambda arg, state, cfg: None, "scrub", "test entry", turn_state=True)
     monkeypatch.setitem(repl_commands.COMMANDS, "scrub", command)
 
-    assert repl._is_turn_state_command("/scrub now")
-    assert not repl._is_turn_state_command("/turns")
+    assert handled_while_a_turn_runs(monkeypatch, _repl_cfg(tmp_path, monkeypatch), ["/scrub now", "/turns"]) == [
+        "/turns"]
 
 
 def test_registering_the_same_handler_twice_keeps_one(tmp_path, monkeypatch):

@@ -14,9 +14,9 @@ from dataclasses import replace
 from repl_driver import record_turns, run_async
 
 from js import (
-    cli,
     jsrc_save,
     messages as msgs,
+    paths,
     repl_settings_commands,
     setcmd,
     setting_layers,
@@ -196,6 +196,6 @@ def test_save_after_logout_keeps_provider_settings_cleared(tmp_path, monkeypatch
     run_async(monkeypatch, cfg, ["/logout", "/save"], live_settings=copy.deepcopy(store))
 
     assert turns == []
-    reloaded = setting_layers.collect_settings(config_paths=[cli._paths.global_config_file()], env={})
+    reloaded = setting_layers.collect_settings(config_paths=[paths.global_config_file()], env={})
 
     assert all(settings.knob(reloaded, key) is None for key in ("PROVIDER", "BASE_URL", "API_KEY"))

@@ -1,6 +1,6 @@
 import pytest
 
-from js import tool_args
+from js import settings, tool_args
 
 
 @pytest.mark.parametrize("kind", ["integer", "number", "boolean", "object", "array"])
@@ -37,5 +37,5 @@ def test_nullable_nested_arguments_and_union_branches():
 
 
 def test_strict_mode_preserves_stringified_null(monkeypatch):
-    monkeypatch.setattr(tool_args._settings, "live_value", lambda key: True)
+    monkeypatch.setattr(settings, "live_value", lambda key: True)
     assert tool_args.coerce_to_schema("null", {"type": ["integer", "null"]}) == "null"

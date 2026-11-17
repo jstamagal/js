@@ -22,42 +22,44 @@ from js.toolkit.registry import build_default_registry, select
 # Item 2 — session_id + multiple tasks
 # --------------------------------------------------------------------------
 
-def _ctx() -> ToolContext:
+async def _echo(idx, total, item, *args, **kwargs):
+    return f"ran {item}"
+
+
+def _ctx(worker=_echo) -> ToolContext:
+    """A context whose subagents are ``worker``, called as the task tool calls
+    a subagent turn."""
     ctx = ToolContext()
     ctx.config = types.SimpleNamespace(lock_subagent_model=False, prompt_roots=None)
+    ctx.subagent_assembly = subagents.SubagentAssembly(worker=worker)
     return ctx
 
 
+def _task(context: ToolContext, tasks: list[str], session_id: str | None = None) -> str:
+    """What the task tool returns for ``tasks`` run as `worker` agents."""
+    return asyncio.run(subagents.task_async(tasks=tasks, agent_id="worker", session_id=session_id, context=context))
+
+
 def test_session_id_with_multiple_tasks_is_rejected():
-    error, prepared = subagents._prepare_fan_out(
-        ["one", "two"], agent_id="worker", session_id="s1", model="", context=_ctx()
-    )
-    assert prepared is None
-    assert error is not None
+    error = _task(_ctx(), ["one", "two"], session_id="s1")
     assert error.startswith("ERROR: session_id runs one task per session")
 
 
 def test_session_id_with_single_task_is_allowed():
-    error, prepared = subagents._prepare_fan_out(
-        ["only"], agent_id="worker", session_id="s1", model="", context=_ctx()
-    )
-    assert error is None
-    assert prepared is not None
+    assert _task(_ctx(), ["only"], session_id="s1") == "ran only"
 
 
 def test_multiple_tasks_without_session_id_is_allowed():
-    error, prepared = subagents._prepare_fan_out(
-        ["one", "two", "three"], agent_id="worker", session_id=None, model="", context=_ctx()
-    )
-    assert error is None
-    assert prepared is not None
+    result = _task(_ctx(), ["one", "two", "three"])
+    assert not result.startswith("ERROR")
+    assert all(f"ran {item}" in result for item in ("one", "two", "three"))
 
 
 # --------------------------------------------------------------------------
 # Item 3 — width cap on the fan-out
 # --------------------------------------------------------------------------
 
-def test_worker_cap_never_exceeds_configured_width(monkeypatch):
+def test_worker_cap_never_exceeds_configured_width():
     peak = 0
     live = 0
 
@@ -71,9 +73,7 @@ def test_worker_cap_never_exceeds_configured_width(monkeypatch):
             live -= 1
         return f"{idx}. done"
 
-    monkeypatch.setattr(subagents, "_run_one_task_async", probe)
-
-    ctx = _ctx()
+    ctx = _ctx(probe)
     ctx.subagent_max_workers = 3
     results = asyncio.run(
         subagents.task_async(tasks=[f"t{n}" for n in range(10)], agent_id="worker", context=ctx)
@@ -84,7 +84,7 @@ def test_worker_cap_never_exceeds_configured_width(monkeypatch):
     assert results.count(". done") == 10
 
 
-def test_worker_cap_defaults_below_the_dispatch_pool(monkeypatch):
+def test_worker_cap_defaults_below_the_dispatch_pool():
     peak = 0
     live = 0
 
@@ -98,9 +98,7 @@ def test_worker_cap_defaults_below_the_dispatch_pool(monkeypatch):
             live -= 1
         return f"{idx}. done"
 
-    monkeypatch.setattr(subagents, "_run_one_task_async", probe)
-
-    ctx = _ctx()  # no override -> the js/jsrc SUBAGENT_WORKERS_MAX
+    ctx = _ctx(probe)  # no override -> the js/jsrc SUBAGENT_WORKERS_MAX
     asyncio.run(subagents.task_async(tasks=[f"t{n}" for n in range(20)], agent_id="worker", context=ctx))
 
     assert peak <= settings.default_value("SUBAGENT_WORKERS_MAX")
@@ -113,6 +111,7 @@ def _nested_probe(cap: int, depth_max: int, width: int, seen: list[int]):
     async def probe(idx, total, item, context, parent_cfg, full_registry, agent_id, session_id, model=""):
         child = ToolContext()
         child.config = context.config
+        child.subagent_assembly = context.subagent_assembly
         child.subagent_max_workers = cap
         child.task_max_depth = depth_max
         child.task_depth = getattr(context, "task_depth", 0) + 1
@@ -126,18 +125,18 @@ def _nested_probe(cap: int, depth_max: int, width: int, seen: list[int]):
     return probe
 
 
-def _tree_ctx(cap: int, depth_max: int) -> ToolContext:
-    ctx = _ctx()
+def _tree_ctx(cap: int, depth_max: int, worker=_echo) -> ToolContext:
+    ctx = _ctx(worker)
     ctx.subagent_max_workers = cap
     ctx.task_max_depth = depth_max
     return ctx
 
 
-def test_worker_cap_holds_across_the_whole_tree(monkeypatch):
+def test_worker_cap_holds_across_the_whole_tree():
     seen: list[int] = []
-    monkeypatch.setattr(subagents, "_run_one_task_async", _nested_probe(4, 4, 4, seen))
+    context = _tree_ctx(4, 4, _nested_probe(4, 4, 4, seen))
 
-    asyncio.run(subagents.task_async(tasks=[f"t{n}" for n in range(4)], agent_id="worker", context=_tree_ctx(4, 4)))
+    asyncio.run(subagents.task_async(tasks=[f"t{n}" for n in range(4)], agent_id="worker", context=context))
 
     # 4 + 16 + 64 + 256 subagents ran, two samples each.
     assert len(seen) == 2 * (4 + 16 + 64 + 256)
@@ -145,15 +144,15 @@ def test_worker_cap_holds_across_the_whole_tree(monkeypatch):
     assert subagents._GATE.running == 0
 
 
-def test_parent_waiting_on_children_lends_its_slot(monkeypatch):
+def test_parent_waiting_on_children_lends_its_slot():
     # One slot, three levels: a parent that kept its slot while waiting would
     # leave its child no slot to run in.
     seen: list[int] = []
-    monkeypatch.setattr(subagents, "_run_one_task_async", _nested_probe(1, 3, 2, seen))
+    context = _tree_ctx(1, 3, _nested_probe(1, 3, 2, seen))
 
     async def run():
         return await asyncio.wait_for(
-            subagents.task_async(tasks=["a", "b"], agent_id="worker", context=_tree_ctx(1, 3)), 10)
+            subagents.task_async(tasks=["a", "b"], agent_id="worker", context=context), 10)
 
     assert asyncio.run(run()).count("done") == 2
     assert max(seen) <= 1
@@ -200,7 +199,7 @@ def test_a_waiter_on_a_closed_loop_is_not_counted_twice():
     assert gate.running == 0
 
 
-def test_a_background_job_that_fails_hands_back_every_slot(monkeypatch):
+def test_a_background_job_that_fails_hands_back_every_slot():
     from js import snippets
 
     async def probe(idx, total, item, context, parent_cfg, full_registry, agent_id, session_id, model=""):
@@ -210,9 +209,7 @@ def test_a_background_job_that_fails_hands_back_every_slot(monkeypatch):
         await asyncio.sleep(30)
         return "slow"
 
-    monkeypatch.setattr(subagents, "_run_one_task_async", probe)
-
-    ctx = _tree_ctx(2, 3)
+    ctx = _tree_ctx(2, 3, probe)
     started = subagents.task(tasks=["boom", "slow", "slower"], agent_id="worker", background=True, context=ctx)
     handle = started.rsplit("HANDLE ", 1)[1].split()[0]
     job = subagents.task_jobs.find(handle, ctx.task_owner)
@@ -225,7 +222,7 @@ def test_a_background_job_that_fails_hands_back_every_slot(monkeypatch):
     assert subagents._GATE.running == 0
 
 
-def test_a_timed_wait_returns_on_time_while_its_job_is_queued(monkeypatch):
+def test_a_timed_wait_returns_on_time_while_its_job_is_queued():
     waited: list[float] = []
 
     async def probe(idx, total, item, context, parent_cfg, full_registry, agent_id, session_id, model=""):
@@ -234,6 +231,7 @@ def test_a_timed_wait_returns_on_time_while_its_job_is_queued(monkeypatch):
             return "child done"
         child = ToolContext()
         child.config = context.config
+        child.subagent_assembly = context.subagent_assembly
         child.subagent_max_workers = 1
         child.task_max_depth = 3
         child.task_depth = 1
@@ -246,10 +244,8 @@ def test_a_timed_wait_returns_on_time_while_its_job_is_queued(monkeypatch):
         await subagents.task_async(action="wait", handle=handle, context=child)
         return "parent done"
 
-    monkeypatch.setattr(subagents, "_run_one_task_async", probe)
-
     result = asyncio.run(asyncio.wait_for(
-        subagents.task_async(tasks=["parent"], agent_id="worker", context=_tree_ctx(1, 3)), 10))
+        subagents.task_async(tasks=["parent"], agent_id="worker", context=_tree_ctx(1, 3, probe)), 10))
 
     assert result == "parent done"
     assert waited and waited[0] < 0.3
@@ -274,22 +270,16 @@ def _capture_flags(monkeypatch) -> list[tuple[str, ...]]:
 
 def test_locked_subagent_model_strips_override_flag(monkeypatch):
     seen = _capture_flags(monkeypatch)
-    ctx = ToolContext()
+    ctx = _ctx()
     ctx.config = types.SimpleNamespace(lock_subagent_model=True, prompt_roots=None)
 
-    error, prepared = subagents._prepare_fan_out(
-        ["do it"], agent_id="worker", session_id=None, model="", context=ctx
-    )
-    assert error is None and prepared is not None
+    assert _task(ctx, ["do it"]) == "ran do it"
     assert seen == [()]
 
 
 def test_unlocked_subagent_model_keeps_override_flag(monkeypatch):
     seen = _capture_flags(monkeypatch)
-    error, prepared = subagents._prepare_fan_out(
-        ["do it"], agent_id="worker", session_id=None, model="", context=_ctx()
-    )
-    assert error is None and prepared is not None
+    assert _task(_ctx(), ["do it"]) == "ran do it"
     assert seen == [("model_override",)]
 
 
@@ -356,8 +346,5 @@ def test_fan_out_accepts_assembly_services():
         registry_factory=lambda *args, **kwargs: registry,
         worker=worker,
     )
-    error, prepared = subagents._prepare_fan_out(["work"], "worker", None, "", context)
-    assert error is None
-    items, factory = prepared
-    assert asyncio.run(factory(*items[0])) == "WORK"
+    assert _task(context, ["work"]) == "WORK"
     assert seen == [(context, cfg, registry)]

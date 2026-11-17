@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import ai
 import pytest
 
-from js import network_display
+from js import network_display, output
 
 
 def failure(message, *, status=503, code=None, provider=None, body=None):
@@ -70,8 +70,8 @@ def test_retries_collapse_but_keep_final_action(monkeypatch):
     sink = ConsoleSink(SimpleNamespace())
     error = failure("busy", status=529, provider="anthropic")
     for n in range(1, 5):
-        sink._on_retry_wait(n=n, attempts=4, delay=8, error=error, label="")
-    sink._on_retry_gave_up(n=4, error=error, label="")
+        sink.emit(output.event("retry_wait", n=n, attempts=4, delay=8, error=error, label=""))
+    sink.emit(output.event("retry_gave_up", n=4, error=error, label=""))
     assert len(lines) == 2
     assert "Retrying" in lines[0]
     assert "repeated 5 times" in lines[-1]
@@ -89,9 +89,9 @@ def test_retry_sequences_are_task_local_and_reset(monkeypatch):
 
     async def sequence():
         for n in (1, 2):
-            sink._on_retry_wait(n=n, attempts=2, delay=0, error=error, label="")
+            sink.emit(output.event("retry_wait", n=n, attempts=2, delay=0, error=error, label=""))
             await asyncio.sleep(0)
-        sink._on_retry_gave_up(n=2, error=error, label="")
+        sink.emit(output.event("retry_gave_up", n=2, error=error, label=""))
 
     async def run():
         await asyncio.gather(sequence(), sequence())
@@ -115,8 +115,8 @@ def test_raw_errors_stay_in_debug_log_even_when_screen_collapses(monkeypatch, tm
     raw = '{"error":{"code":"server_is_overloaded","message":"busy"}}'
     error = failure(raw, status=502, provider="codex")
     for n in (1, 2):
-        sink._on_retry_wait(n=n, attempts=2, delay=0, error=error, label="")
-    sink._on_retry_gave_up(n=2, error=error, label="")
+        sink.emit(output.event("retry_wait", n=n, attempts=2, delay=0, error=error, label=""))
+    sink.emit(output.event("retry_gave_up", n=2, error=error, label=""))
     records = [json.loads(line) for line in log.read_text().splitlines()]
     assert [record["error"] for record in records] == [raw, raw, raw]
     assert all(raw not in line for line in lines)
@@ -141,10 +141,12 @@ def test_success_reports_repeat_count_and_clears_state(monkeypatch):
     sink = ConsoleSink(SimpleNamespace())
     error = failure("busy", status=529)
     for n in (1, 2, 3):
-        sink._on_retry_wait(n=n, attempts=3, delay=0, error=error, label="")
-    sink._on_call_stats(label="", elapsed_s=1, finish="stop", tool_calls=0,
-                        tokens=1, first_token_s=0, prompt_tokens=1, cached_tokens=0,
-                        trace=False)
+        sink.emit(output.event("retry_wait", n=n, attempts=3, delay=0, error=error, label=""))
+    sink.emit(output.event("call_stats", label="", elapsed_s=1, finish="stop", tool_calls=0,
+                           tokens=1, first_token_s=0, prompt_tokens=1, cached_tokens=0,
+                           trace=False))
     assert len(lines) == 2
     assert "3" in lines[-1]
-    assert sink._retry_repeat.get() is None
+    sink.emit(output.event("retry_wait", n=2, attempts=3, delay=0, error=error, label=""))
+    assert len(lines) == 3
+    assert "Retrying" in lines[-1]

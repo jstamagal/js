@@ -31,7 +31,8 @@ def test_notification_server_and_kind_fields_are_delivered(callback, event):
         host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=FakeClient,
                        telemetry=runtime.Telemetry(None, trace_sink=stream),
                        event_sink=sink)
-        client = await host._ensure_server(server)
+        await host.discover(source=server.name)
+        client = host.clients[server.name]
         client.kwargs[callback]({"server": "remote override", "kind": "remote-kind", "data": "payload"})
         assert emitted[-1] == (event, {"server": server.name, "kind": "remote-kind", "data": "payload"})
         record = json.loads(stream.getvalue().splitlines()[-1].removeprefix("FLIGHT "))
@@ -100,12 +101,14 @@ def test_paranoid_reindex_retains_last_remote_refresh_error_until_success():
 
 def test_telemetry_reserved_field_aliases_preserve_original_payload():
     stream = io.StringIO()
-    host = MCPHost(MCPConfiguration((), MCPPolicy()),
+    server = MCPServer(name="server", normalized_name="server", transport="stdio", command=("unused",))
+    host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=FakeClient,
                    telemetry=runtime.Telemetry(None, trace_sink=stream))
+    asyncio.run(host.discover(source=server.name))
     payload = {"kind": "remote-kind", "self": "remote-self", "notification_kind": "remote-alias"}
-    host._event("mcp_log", **payload)
-    record = json.loads(stream.getvalue().removeprefix("FLIGHT "))
+    host.clients[server.name].kwargs["log_sink"](payload)
+    record = json.loads(stream.getvalue().splitlines()[-1].removeprefix("FLIGHT "))
     assert record["kind"] == "mcp_log"
     assert record["notification_kind"] == "remote-kind"
     assert record["notification_self"] == "remote-self"
-    assert record["notification_fields"] == payload
+    assert record["notification_fields"] == {**payload, "server": server.name}

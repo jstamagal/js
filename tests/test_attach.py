@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import ai
@@ -15,14 +16,12 @@ from js import (
     history_record,
     media,
     prompt_run,
-    repl_session_commands,
     run_assembly,
     runtime,
 )
 from js.config import Config
-from js.memory import load_messages
+from js.memory import append_message, load_messages
 from js.model_client import ModelStreamResult
-from js.repl_state import ReplState
 
 _TINY_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
@@ -333,13 +332,22 @@ def test_split_repl_attachments_quoted_path_with_spaces_still_works():
     assert "my file.png" not in prompt
 
 
-def test_looks_text_accepts_utf8_split_at_read_boundary():
+def _inlined(tmp_path, data: bytes, cap: int, marker: str) -> bool:
+    """Whether ``marker`` is inlined when a file of ``data`` is attached under
+    a text cap of ``cap`` bytes."""
+    path = tmp_path / "sample.dat"
+    path.write_bytes(data)
+    cfg = replace(_cfg(tmp_path), max_tool_result_bytes=cap)
+    return marker in attach.build_user_message("read", [str(path)], cfg)["content"]
+
+
+def test_looks_text_accepts_utf8_split_at_read_boundary(tmp_path):
     """A valid-UTF8 sample whose trailing multibyte char is cut by the byte cap must
     still classify as text; only genuinely invalid bytes should read as binary."""
     full = ("x" * 8 + "€").encode("utf-8")   # € is 3 bytes: \xe2\x82\xac
-    assert attach._looks_text(full[:-1]) is True   # last byte of € dropped
-    assert attach._looks_text(full[:-2]) is True   # two bytes of € dropped
-    assert attach._looks_text(b"ab\xffcd") is False  # invalid byte mid-content
+    assert _inlined(tmp_path, full, 9, "xxxxxxxx") is True   # the sample drops the last byte of €
+    assert _inlined(tmp_path, full, 8, "xxxxxxxx") is True   # the sample drops two bytes of €
+    assert _inlined(tmp_path, b"qq\xffzz", 100, "qq") is False  # invalid byte mid-content
 
 
 def test_split_repl_attachments_bare_at_signs_are_prose():
@@ -374,9 +382,9 @@ def test_split_repl_attachments_open_quote_in_at_token_is_literal():
     assert prompt == "see  here"
 
 
-def test_looks_text_rejects_nul_past_first_4k():
+def test_looks_text_rejects_nul_past_first_4k(tmp_path):
     """The NUL check must cover the whole sample, not only its first 4096 bytes."""
-    assert attach._looks_text(b"a" * 5000 + b"\x00") is False
+    assert _inlined(tmp_path, b"a" * 5000 + b"\x00", 65536, "aaaa") is False
 
 
 def test_split_repl_attachments_same_path_twice_attaches_once():
@@ -448,12 +456,15 @@ def test_repl_missing_attachment_becomes_note(tmp_path):
     assert "gone.png" in message["content"]
 
 
-def test_copy_puts_the_answer_n_back_on_the_clipboard(monkeypatch):
-    runs = []
-    monkeypatch.setattr(repl_session_commands, "_copy_command", lambda: ["clip"])
-    monkeypatch.setattr(repl_session_commands.subprocess, "run", lambda command, input, **kw: runs.append((command, input)))
-    state = ReplState(messages=[{"role": "user", "content": "q"}, {"role": "assistant", "content": "first answer"},
-                               {"role": "assistant", "content": [{"type": "text", "text": "a long line\nsecond"}]}])
-    repl_session_commands._cmd_copy("", state, None)
-    repl_session_commands._cmd_copy("2", state, None)
-    assert runs == [(["clip"], b"a long line\nsecond\n"), (["clip"], b"first answer\n")]
+def test_copy_puts_the_answer_n_back_on_the_clipboard(monkeypatch, tmp_path):
+    cfg = _cfg(tmp_path)
+    for message in ({"role": "user", "content": "q"}, {"role": "assistant", "content": "first answer"},
+                    {"role": "assistant", "content": [{"type": "text", "text": "a long line\nsecond"}]}):
+        append_message(cfg.session_file, message)
+    clipboard = tmp_path / "clipboard"
+    copy = tmp_path / "copy.sh"
+    copy.write_text(f"cat >> {clipboard}\nprintf '<end>' >> {clipboard}\n", encoding="utf-8")
+
+    run_async(monkeypatch, cfg, [f"/set COPY_COMMAND sh {copy}", "/copy", "/copy 2"])
+
+    assert clipboard.read_bytes() == b"a long line\nsecond\n<end>first answer\n<end>"

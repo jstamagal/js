@@ -4,18 +4,14 @@ $1 / $@ / ${N:-default} filled from its arguments, and Tab completes the name.""
 from __future__ import annotations
 
 import pytest
-from repl_driver import stub_screen, turn_stub
+from repl_driver import output_of, record_turns, stub_screen, turn_stub, type_into_js
 
 from js import (
     cli,
     conversation,
     prompt_commands as pc,
-    repl as repl_mod,
-    repl_commands,
     text_layout,
 )
-from js.repl_state import ReplState
-from js.replcomplete import JsCompleter
 
 SESSION = "cmds"
 
@@ -99,31 +95,29 @@ def test_expand_names_only_known_commands(dirs, tmp_path):
     assert pc.expand("review x", found) is None
 
 
-def test_a_file_is_parsed_again_only_when_it_changes(dirs, tmp_path, monkeypatch):
+def test_a_file_is_parsed_again_only_when_it_changes(dirs, tmp_path):
     global_dir, _ = dirs
     command = global_dir / "review.md"
     command.write_text("Review $1\n", encoding="utf-8")
-    loads: list[str] = []
-    real_load = pc._load
-    monkeypatch.setattr(pc, "_load", lambda path: loads.append(path.name) or real_load(path))
 
-    pc.discover(tmp_path / "project")
-    pc.discover(tmp_path / "project")
-    assert loads == ["review.md"]
+    first = pc.discover(tmp_path / "project")["review"]
+    assert pc.discover(tmp_path / "project")["review"] is first
 
     command.write_text("Review $1 closely\n", encoding="utf-8")
     found = pc.discover(tmp_path / "project")
     assert found["review"].body.strip() == "Review $1 closely"
-    assert loads == ["review.md", "review.md"]
+    assert found["review"] is not first
 
 
 # --- completion and help -----------------------------------------------------------
 
 
-def test_tab_completes_a_command_file_name(dirs):
+def test_tab_completes_a_command_file_name(dirs, monkeypatch):
     global_dir, _ = dirs
     (global_dir / "review.md").write_text("Review $1", encoding="utf-8")
-    completer = JsCompleter(commands=lambda: repl_mod._command_completions(ReplState()))
+    built: dict = {}
+    assert type_into_js(monkeypatch, [], screen_parts=built) == 0
+    completer = built["completer"]
 
     assert "/review" in completer.candidates("/rev")[0]
     assert "/review" in completer.candidates("rev")[0]
@@ -133,10 +127,15 @@ def test_help_lists_command_files(dirs, capsys, monkeypatch):
     monkeypatch.setattr(text_layout, "terminal_width", lambda: 500)
     global_dir, _ = dirs
     (global_dir / "review.md").write_text("---\ndescription: Review a file\n---\nReview $1", encoding="utf-8")
+    record_turns(monkeypatch)
+    shown: list[str] = []
 
-    repl_commands._cmd_help("", ReplState(), None)
+    async def lines(enter):
+        shown.append(await output_of(enter, capsys, "/help"))
 
-    assert any("/review" in line and "Review a file" in line for line in capsys.readouterr().out.splitlines())
+    assert type_into_js(monkeypatch, lines) == 0
+
+    assert any("/review" in line and "Review a file" in line for line in shown[0].splitlines())
 
 
 # --- the REPL sends the expanded text -------------------------------------------------

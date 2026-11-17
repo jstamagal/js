@@ -8,24 +8,33 @@ from js.toolkit import fetch
 from js.toolkit.core import ToolContext
 
 
+def _fetched_as_binary(tmp_path, payload: bytes) -> bool:
+    """Whether fetching an extensionless file of ``payload``, which carries no
+    content type, answers that the response is binary."""
+    source = tmp_path / "payload"
+    source.write_bytes(payload)
+    result = fetch.fetch(source.as_uri(), context=ToolContext(cwd=tmp_path))
+    assert not result.startswith("ERROR:")
+    return result.startswith("BINARY_RESPONSE")
+
+
 @pytest.mark.parametrize("character", ["é", "界", "😀"])
-def test_utf8_character_crossing_sniff_boundary_is_text(character):
+def test_utf8_character_crossing_sniff_boundary_is_text(tmp_path, character):
     payload = ("a" * 4095 + character + "tail").encode()
-    assert not fetch._looks_binary(payload)
-    assert fetch._is_text_response("", payload)
+    assert not _fetched_as_binary(tmp_path, payload)
 
 
 @pytest.mark.parametrize("payload", [
     b"a" * 4095 + b"\xc3", b"a" * 4094 + b"\xe7\x95", b"short\xf0\x9f",
     b"a" * 100 + b"\xff" + b"a" * 5000, b"a" * 100 + b"\x00" + b"a" * 5000,
 ])
-def test_invalid_eof_and_interior_binary_bytes_are_not_ignored(payload):
-    assert fetch._looks_binary(payload)
+def test_invalid_eof_and_interior_binary_bytes_are_not_ignored(tmp_path, payload):
+    assert _fetched_as_binary(tmp_path, payload)
 
 
 @pytest.mark.parametrize("payload", [b"", b"plain ASCII", b"a" * 4094 + "é".encode()])
-def test_complete_utf8_still_text(payload):
-    assert not fetch._looks_binary(payload)
+def test_complete_utf8_still_text(tmp_path, payload):
+    assert not _fetched_as_binary(tmp_path, payload)
 
 
 @pytest.mark.parametrize("character", ["é", "界", "😀"])

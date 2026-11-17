@@ -34,7 +34,7 @@ def ctx(tmp_path, monkeypatch):
     """A ToolContext whose toolbox writes into tmp_path, never the real config dir."""
     work = tmp_path / "work"
     work.mkdir()
-    monkeypatch.setattr(tbmod._paths, "global_toolbox_dir", lambda: tmp_path / "config" / "toolbox")
+    monkeypatch.setattr(paths, "global_toolbox_dir", lambda: tmp_path / "config" / "toolbox")
     context = ToolContext(cwd=work)
     context.model = "test-model"
     context.kernel_verbosity = "quiet"

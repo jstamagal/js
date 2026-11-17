@@ -16,19 +16,28 @@ from js.repl_state import ReplState
     (["-p", "explicit focus"], "ignored pipe", "explicit focus"),
     ([], "ignored pipe", ""),
 ])
-def test_compact_cli_reads_stdin_focus_only_when_requested(monkeypatch, arguments, stdin, expected):
-    calls = []
+def test_compact_cli_reads_stdin_focus_only_when_requested(monkeypatch, tmp_path, arguments, stdin, expected):
+    cfg = _compact_test_cfg(tmp_path, {})
+    cfg.session_file.parent.mkdir(parents=True, exist_ok=True)
+    cfg.session_file.touch()
+    sessions, calls = [], []
 
-    def compact(session, **kwargs):
-        calls.append((session, kwargs))
-        return 0
+    def from_env(session, *args, **kwargs):
+        sessions.append(session)
+        return cfg
 
-    monkeypatch.setattr(cli, "_run_compact_offline", compact)
+    def compact(*args, **kwargs):
+        calls.append(kwargs)
+        return "summary complete"
+
+    monkeypatch.setattr(run_assembly, "from_env", from_env)
+    monkeypatch.setattr(cli.P, "load_configured_prompt_spec", lambda cfg: SimpleNamespace(system=""))
+    monkeypatch.setattr(cli.compaction, "compact_now_sync", compact)
     monkeypatch.setattr(cli.sys, "stdin", io.StringIO(stdin))
     assert cli.main(["--compact", "test-session", *arguments]) == 0
     assert len(calls) == 1
-    assert calls[0][0] == "test-session"
-    assert calls[0][1]["focus"] == expected
+    assert sessions == ["test-session"]
+    assert calls[0]["focus"] == expected
 
 
 @pytest.mark.parametrize("route", ["manual", "offline"])
@@ -70,7 +79,7 @@ def _run_compact_route(monkeypatch, cfg, route):
         monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
         monkeypatch.setattr(cli.P, "load_configured_prompt_spec", lambda cfg: SimpleNamespace(system=""))
         monkeypatch.setattr(cli.M, "load_replay_messages", lambda path: [])
-        assert cli._run_compact_offline("test-session") == 0
+        assert cli.main(["--compact", "test-session"]) == 0
 
 
 @pytest.mark.parametrize("route", ["manual", "offline"])
@@ -102,7 +111,7 @@ def test_missing_compact_session_does_not_create_file_or_run_work(monkeypatch, t
     monkeypatch.setattr(cli.compaction, "compact_now_sync", lambda *a, **k: pytest.fail("compacted missing session"))
     monkeypatch.setattr(cli.compaction, "flight_log_dir", lambda cfg: pytest.fail("opened flight for missing session"))
 
-    assert cli._run_compact_offline("never-existed") != 0
+    assert cli.main(["--compact", "never-existed"]) != 0
     captured = capsys.readouterr()
     assert "never-existed" in captured.err
     assert not list(paths.sessions_root().rglob("never-existed.jsonl"))
@@ -115,7 +124,7 @@ def test_compact_session_removed_after_resolution_fails_before_prompt(monkeypatc
     assert not cfg.session_file.exists()
     monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(cli.P, "load_configured_prompt_spec", lambda cfg: pytest.fail("loaded prompt after session vanished"))
-    assert cli._run_compact_offline("vanished") != 0
+    assert cli.main(["--compact", "vanished"]) != 0
     captured = capsys.readouterr()
     assert "vanished" in captured.err or str(cfg.session_file) in captured.err
     assert not cfg.session_file.exists()
@@ -136,7 +145,7 @@ def test_offline_compaction_explicit_model_wins_without_rewriting_config(monkeyp
     monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(cli.P, "load_configured_prompt_spec", lambda cfg: SimpleNamespace(system=""))
     monkeypatch.setattr(cli.compaction, "compact_now_sync", compact)
-    assert cli._run_compact_offline("existing", model=explicit) == 0
+    assert cli.main(["--compact", "existing", *(["--model", explicit] if explicit else [])]) == 0
     expected = explicit or (external if external not in {"", "same"} else cfg.model)
     assert observed == [(cfg.model, expected)]
 

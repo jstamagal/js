@@ -73,7 +73,7 @@ def test_provider_rows_include_saved_logins_only(tmp_path: Path):
     logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="sk-test"))
 
     try:
-        rows = {row.id: row for row in picker._provider_rows()}
+        rows = {row.id: row for row in picker.ModelPicker().provider_rows}
         assert rows["deepseek"].source == "login"
         assert "ollama" not in rows
         assert "openai" not in rows
@@ -83,9 +83,10 @@ def test_provider_rows_include_saved_logins_only(tmp_path: Path):
 
 def test_model_rows_use_cache_before_provider_default(tmp_path: Path):
     logins.set_config_dir(tmp_path)
+    logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="sk-test"))
     logins.cache_models("deepseek", ["cached-model"])
     try:
-        rows = picker._model_rows("deepseek")
+        rows = picker.ModelPicker(provider_id="deepseek").model_rows
         assert [row.id for row in rows] == ["cached-model"]
     finally:
         _reset_logins()
@@ -93,8 +94,9 @@ def test_model_rows_use_cache_before_provider_default(tmp_path: Path):
 
 def test_model_rows_require_cached_models(tmp_path: Path):
     logins.set_config_dir(tmp_path)
+    logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="sk-test"))
     try:
-        rows = picker._model_rows("deepseek")
+        rows = picker.ModelPicker(provider_id="deepseek").model_rows
         assert rows == []
     finally:
         _reset_logins()
@@ -104,9 +106,10 @@ def test_model_rows_are_exactly_the_cache(tmp_path: Path):
     # the picker used to splice in a hardcoded model id to paper over a stale
     # listing; the listing is fixed at the source now, so it shows the cache
     logins.set_config_dir(tmp_path)
+    logins.save_login(logins.Login(provider_id="openai", provider_api_key="sk-test"))
     logins.cache_models("openai", ["codex-auto-review", "gpt-5.4", "gpt-5.6-sol"])
     try:
-        rows = picker._model_rows("openai")
+        rows = picker.ModelPicker(provider_id="openai").model_rows
         assert [row.id for row in rows] == ["codex-auto-review", "gpt-5.4", "gpt-5.6-sol"]
     finally:
         _reset_logins()

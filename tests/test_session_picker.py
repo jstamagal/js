@@ -18,6 +18,7 @@ from test_repl_info_cmds import make_cfg
 
 from js import (
     cli,
+    jail,
     memory as M,
     messages as msgs,
     repl,
@@ -61,6 +62,11 @@ class _Row:
 def _picker(sessions, **kwargs) -> session_picker.SessionPicker:
     kwargs.setdefault("rows", lambda path: [_Row(n, "you", f"{path} {n}") for n in (1, 2, 3)])
     return session_picker.SessionPicker(sessions, cwd=CWD, home=HOME, now=NOW, **kwargs)
+
+
+def _retained(path: str) -> list[dict]:
+    """The messages a session file keeps, as the picker's preview reads them."""
+    return M.retained_messages(Path(path))
 
 
 def _listed(picker) -> list[str]:
@@ -468,9 +474,9 @@ def test_bare_session_enters_the_jail_of_a_session_started_under_c(tmp_path, mon
 
     def enter(root, **_settings):
         entered["root"] = root
-        raise cli._jail.JailError("no bwrap here")
+        raise jail.JailError("no bwrap here")
 
-    monkeypatch.setattr(cli._jail, "enter", enter)
+    monkeypatch.setattr(jail, "enter", enter)
     assert cli.main(["--session"]) == 2
     assert entered["root"] == session_dir.resolve()
 
@@ -524,7 +530,7 @@ def test_a_compacted_session_previews_what_its_transcript_still_holds(tmp_path):
     append_compaction_mark(path, summary="the operator fixed a mount", keep_from=2,
                              rehydrated={"role": "user", "content": "REATTACHED FILE BODY"})
     M.append_message(path, {"role": "assistant", "content": "anything else?"})
-    picker = _picker([_session(str(path))], messages=session_picker._messages)
+    picker = _picker([_session(str(path))], messages=_retained)
 
     body = "\n".join(_body_lines(picker))
 
@@ -544,7 +550,7 @@ def test_a_signed_reply_kept_by_compaction_then_rolled_back_is_not_previewed(tmp
     append_compaction_mark(path, summary="asked why it is slow", keep_from=0)
     M.append_mark(path, "rollback_to:2")
     M.append_message(path, {"role": "assistant", "content": "current reply"})
-    picker = _picker([_session(str(path))], messages=session_picker._messages)
+    picker = _picker([_session(str(path))], messages=_retained)
 
     body = "\n".join(_body_lines(picker))
 
@@ -556,7 +562,7 @@ def test_a_session_from_before_the_record_envelope_is_previewed(tmp_path):
     path = tmp_path / "s.jsonl"
     path.write_text(json.dumps({"role": "user", "content": "old question"}) + "\n"
                     + json.dumps({"role": "assistant", "content": "📌 old answer"}) + "\n", encoding="utf-8")
-    picker = _picker([_session(str(path))], messages=session_picker._messages)
+    picker = _picker([_session(str(path))], messages=_retained)
 
     body = "\n".join(_body_lines(picker))
 
@@ -567,7 +573,7 @@ def test_a_session_from_before_the_record_envelope_is_previewed(tmp_path):
 def test_an_open_picker_previews_a_session_file_that_changed(tmp_path):
     path = tmp_path / "s.jsonl"
     M.append_message(path, {"role": "user", "content": "first"})
-    picker = _picker([_session(str(path))], messages=session_picker._messages)
+    picker = _picker([_session(str(path))], messages=_retained)
     _body_lines(picker)
     M.append_message(path, {"role": "user", "content": "second"})
 

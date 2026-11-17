@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import pytest
 
+from js.tool_binaries import resolve_binary
 from js.toolkit import ToolContext, file_search
 from js.toolkit.file_search import ast_search
 from js.toolkit.fs import undo
 
 requires_ast_grep = pytest.mark.skipif(
-    file_search._ast_grep_binary() is None, reason="ast-grep 0.45.1 not installed"
+    resolve_binary("ast-grep") is None, reason="ast-grep 0.45.1 not installed"
 )
 
 

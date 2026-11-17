@@ -44,10 +44,10 @@ def _done(text: str = "done", *, input_tokens: int = 10, output_tokens: int = 5)
     )
 
 
-def _cut(text: str, calls: list[ModelToolCall] | None = None) -> ModelStreamResult:
+def _cut(text: str, calls: list[ModelToolCall] | None = None, *, input_tokens: int = 10) -> ModelStreamResult:
     return ModelStreamResult(
         text=text, tool_calls=calls or [], reasoning="",
-        usage=ai.types.usage.Usage(input_tokens=10, output_tokens=1000),
+        usage=ai.types.usage.Usage(input_tokens=input_tokens, output_tokens=1000),
         finish_reason="length", assistant_message=ai.assistant_message(text),
         incomplete_reason="max_output_tokens",
     )
@@ -107,7 +107,7 @@ class _Turn:
 
     def __init__(self, tmp_path, monkeypatch, replies, *, budget=None, attempts=2, max_wait=0.0,
                  escalation=64000, max_out=1000, provider_id="openai",
-                 messages=None, vision=False):
+                 messages=None, vision=False, limits=None):
         self.calls: list[dict] = []
 
         def stream(**kwargs):
@@ -134,8 +134,9 @@ class _Turn:
         self.caller = ModelCaller(
             ModelRequest(model="m", provider_id=provider_id, base_url=None, api_key=None,
                          effort=None, max_out=max_out),
-            CallLimits(retry=retry.Budget(attempts=attempts, max_wait=max_wait), stream=retry.StreamLimits(),
-                       max_output_escalation=escalation, max_output_resumes=0),
+            limits or CallLimits(retry=retry.Budget(attempts=attempts, max_wait=max_wait),
+                                 stream=retry.StreamLimits(), max_output_escalation=escalation,
+                                 max_output_resumes=0),
             convo=self.convo, budget=self.budget,
             sink=StreamSink(self.telemetry, status, events, settings={}, suppress_output=True),
             events=events, telemetry=self.telemetry, context=self.context, turn_status=status,
@@ -336,45 +337,34 @@ def test_call_limits_read_the_resilience_settings():
                                 max_output_escalation=32000, max_output_resumes=2)
 
 
-def test_escalation_respects_window_when_usage_has_no_prompt_tokens():
+@pytest.mark.parametrize(("window", "escalated"), [
+    # window 9000, prompt unknown -> room = 9000, escalation 8000 fits under it
+    (9000, 8000),
+    # window smaller than the escalation: room binds it
+    (5000, 5000),
+])
+def test_escalation_respects_window_when_usage_has_no_prompt_tokens(tmp_path, monkeypatch, window, escalated):
     """Room must come from the window even when the usage carries no prompt
     count."""
-    from js.turn_call import CallLimits, ModelRequest
+    turn = _Turn(tmp_path, monkeypatch, [_cut("half", input_tokens=0), _done()], escalation=8000,
+                 budget=_Budget(window=window))
 
-    request = ModelRequest(
-        model="m", provider_id="openai", base_url=None, api_key=None,
-        effort=None, max_out=1000, thinking_budget=None, headers=None,
-        extra=None, sampling=None, cache_key=None,
-    )
-    caller = ModelCaller.__new__(ModelCaller)
-    caller._request = request
-    caller._limits = CallLimits(
-        retry=retry.Budget(attempts=1, max_wait=0), stream=retry.StreamLimits(),
-        max_output_escalation=8000, max_output_resumes=0,
-    )
-    caller._context = SimpleNamespace(last_output_tokens=500)
+    turn.call()
 
-    class _Usage:
-        prompt_tokens = 0
-        output_tokens = 0
-
-    # window 9000, prompt unknown -> room = 9000, escalation 8000 fits under it
-    assert caller._escalation(_Usage(), 1000, 9000) == 8000
-    # window smaller than the escalation: room binds it
-    assert caller._escalation(_Usage(), 1000, 5000) == 5000
+    assert [c["max_output_tokens"] for c in turn.calls] == [1000, escalated]
 
 
 def test_silent_overflow_recovery_can_be_disabled(tmp_path, monkeypatch):
     turn = _Turn(tmp_path, monkeypatch, [_done("kept", input_tokens=5000), _done("resent")],
-                 budget=_Budget(window=4000))
-    turn.caller._limits = CallLimits.from_settings({"SILENT_OVERFLOW_RECOVERY": False})
+                 budget=_Budget(window=4000),
+                 limits=CallLimits.from_settings({"SILENT_OVERFLOW_RECOVERY": False}))
     assert turn.call().result.text == "kept"
     assert turn.budget.recoveries == []
 
 
 def test_overflow_recovery_uses_registered_round_limit(tmp_path, monkeypatch):
-    turn = _Turn(tmp_path, monkeypatch, [_overflow(), _overflow(), _done()])
-    turn.caller._limits = CallLimits.from_settings({"COMPACTION_OVERFLOW_ROUNDS_MAX": 1})
+    turn = _Turn(tmp_path, monkeypatch, [_overflow(), _overflow(), _done()],
+                 limits=CallLimits.from_settings({"COMPACTION_OVERFLOW_ROUNDS_MAX": 1}))
     with pytest.raises(ai.ProviderAPIError):
         turn.call()
     assert len(turn.budget.recoveries) == 1

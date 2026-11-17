@@ -4,7 +4,7 @@ from pathlib import Path
 
 from repl_driver import record_turns, run_async
 
-from js import events, repl, repl_commands, setcmd, settings
+from js import events, repl_commands, setcmd, settings
 from js.config import Config
 from js.repl_state import ReplState
 
@@ -184,10 +184,15 @@ def test_on_rejects_unknown_event_without_registering():
     assert hooks.all() == events.EventHooks().all()
 
 
-def test_event_hook_dispatches_handler_through_the_command_table(tmp_path):
-    state = make_state()
+def _repl_made_state(monkeypatch, tmp_path) -> ReplState:
+    """The state the REPL on make_cfg leaves, on the stock settings."""
+    state, _turn = _type(monkeypatch, tmp_path, [])
+    return state
+
+
+def test_event_hook_dispatches_handler_through_the_command_table(tmp_path, monkeypatch):
+    state = _repl_made_state(monkeypatch, tmp_path)
     hooks = state.events
-    hooks.set_dispatcher(repl._event_dispatcher(state, make_cfg(tmp_path)))
     hooks.add("turn_start", "set COMPACTION_AUTO off")
     hooks.add("turn_start", "alias hi turns")
 
@@ -198,10 +203,9 @@ def test_event_hook_dispatches_handler_through_the_command_table(tmp_path):
     assert [result.error for result in emission.results] == [None, None]
 
 
-def test_event_hook_handler_errors_are_captured_without_raising(tmp_path):
-    state = make_state()
+def test_event_hook_handler_errors_are_captured_without_raising(tmp_path, monkeypatch):
+    state = _repl_made_state(monkeypatch, tmp_path)
     hooks = state.events
-    hooks.set_dispatcher(repl._event_dispatcher(state, make_cfg(tmp_path)))
     hooks.add("turn_start", "echo nope")
     hooks.add("turn_start", "set nope.nope.nope x")
 

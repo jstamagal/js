@@ -149,7 +149,7 @@ def _load_effects(root):
     state = ReplState(messages=[], system="s", settings=live, aliases={})
     cfg = SimpleNamespace(settings=live, project_dir=root)
     with contextlib.redirect_stdout(io.StringIO()):
-        repl_commands._cmd_load(str(root / "f0"), state, cfg)
+        assert repl_commands.run_command(f"/load {root / 'f0'}", state, cfg) == (True, None)
     return (settings.knob(live, "HISTORY_SIZE"), settings.knob(live, "EDITING_MODE"), state.aliases)
 
 

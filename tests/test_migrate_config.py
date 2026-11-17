@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from js import cli, migrate_config, setting_layers
+from js import migrate_config, paths, setting_layers
 
 
 def test_migrate_no_legacy_returns_1(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli._paths, "legacy_global_config_file", lambda: tmp_path / "missing.toml")
-    monkeypatch.setattr(cli._paths, "global_config_file", lambda: tmp_path / "jsrc")
+    monkeypatch.setattr(paths, "legacy_global_config_file", lambda: tmp_path / "missing.toml")
+    monkeypatch.setattr(paths, "global_config_file", lambda: tmp_path / "jsrc")
     assert migrate_config.run_migrate_config() == 1
 
 

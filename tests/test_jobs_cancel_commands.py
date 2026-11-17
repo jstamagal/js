@@ -8,7 +8,7 @@ import asyncio
 
 from repl_driver import output_of, settled, type_into_js
 
-from js import cli, repl, repl_commands, supervisor
+from js import cli, messages as msgs, repl_commands, supervisor
 from js.repl_state import ReplState
 
 
@@ -134,19 +134,35 @@ def test_cancel_unknown_id_is_noop(monkeypatch, tmp_path, capsys):
     assert printed[0]
 
 
-def test_drain_queue_drops_all_pending_and_balances_task_done():
+def test_drain_queue_drops_all_pending_and_balances_task_done(monkeypatch, tmp_path, capsys):
     """/flush and ^C drain drop every queued prompt and balance task_done() so a
     later queue.join() still completes (no orphaned unfinished tasks)."""
-    async def drive():
-        queue: asyncio.Queue = asyncio.Queue()
-        for line in ("one", "two", "three"):
-            queue.put_nowait(line)
-        dropped = repl._drain_queue(queue)
-        # Every item gone, count returned, and join() unblocks immediately.
-        assert dropped == 3
-        assert queue.qsize() == 0
-        await asyncio.wait_for(queue.join(), timeout=1.0)
-        # Draining an empty queue is a clean no-op.
-        assert repl._drain_queue(queue) == 0
+    monkeypatch.chdir(tmp_path)
+    started, release = asyncio.Event(), asyncio.Event()
+    turns: list[str] = []
+    flushed: list[str] = []
 
-    asyncio.run(drive())
+    async def run_turn_async(cfg, system, messages, *args, **kwargs):
+        turns.append(messages[-1]["content"])
+        started.set()
+        await release.wait()
+
+    async def typing(enter):
+        await enter("/set STEER_MODE batch")
+        await enter("first")
+        await asyncio.wait_for(started.wait(), timeout=10)
+        for line in ("one", "two", "three"):
+            await enter(line)
+        flushed.append(await output_of(enter, capsys, "/flush"))
+        # Draining an empty queue is a clean no-op.
+        flushed.append(await output_of(enter, capsys, "/flush"))
+        release.set()
+
+    monkeypatch.setattr(cli.runtime, "run_turn_async", run_turn_async)
+    # The REPL ends once the queue's join() completes.
+    assert type_into_js(monkeypatch, typing) == 0
+
+    # Every item gone and counted; no queued prompt ran.
+    assert msgs.plural(3, "queued prompt") in flushed[0]
+    assert msgs.plural(0, "queued prompt") in flushed[1]
+    assert turns == ["first"]

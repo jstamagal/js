@@ -22,12 +22,18 @@ from js.config import Config
 from js.conversation import Conversation
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
-from js.toolkit.core import Tool
+from js.toolkit.core import Tool, call_tool
 from js.toolkit.registry import ToolRegistry
 
 # --------------------------------------------------------------------------
 # the bus
 # --------------------------------------------------------------------------
+
+def _bus(name: str, context, **args):
+    """What the bus tool ``name`` answers a call with ``args``."""
+    tool = {tool.name: tool for tool in swarm.tools()}[name]
+    return call_tool(tool, args, context)
+
 
 def test_send_lands_in_each_target_inbox_and_the_log(tmp_path):
     room = swarm.Room(tmp_path / "bus")
@@ -228,9 +234,9 @@ def test_a_second_wake_me_leaves_the_pending_alarm_where_it_was(tmp_path):
     agent = swarm.Agent(tmp_path / "bus" / "a")
     context = ToolContext(cwd=tmp_path)
     context.swarm = agent
-    swarm._wake_me(300, context=context)
+    _bus("wake_me", context, seconds=300)
     alarm = agent.alarm
-    swarm._wake_me(600, context=context)
+    _bus("wake_me", context, seconds=600)
     assert agent.alarm == alarm
 
 
@@ -363,7 +369,7 @@ def test_finish_requires_live_holder_and_unfinished_task(tmp_path, monkeypatch, 
     before_cells = (room.root / "cells.json").read_bytes()
     before_claims = room.claims()
     before_log = room.log.read_bytes()
-    response = swarm._finish_task(cell.id, "replacement", ToolContext(cwd=tmp_path, swarm=agent))
+    response = _bus("finish_task", ToolContext(cwd=tmp_path, swarm=agent), id=cell.id, result="replacement")
     assert response.startswith("ERROR")
     assert (room.root / "cells.json").read_bytes() == before_cells
     assert room.claims() == before_claims
@@ -629,7 +635,7 @@ def test_bus_send_hands_its_message_to_the_result_event(tmp_path, capsys):
     agent = swarm.Agent(tmp_path / "bus" / "a")
     context = ToolContext(cwd=tmp_path, swarm=agent)
     with call_scope("send-1"):
-        swarm._send(to="b", text="inspect the parser", context=context)
+        _bus("send", context, to="b", text="inspect the parser")
         message = call_view()["message"]
 
     assert message["from"] == "a"

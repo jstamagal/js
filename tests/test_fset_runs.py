@@ -89,16 +89,25 @@ def test_save_puts_a_changed_line_after_a_load_that_would_override_it(tmp_path):
 
 
 def test_every_fallback_printer_writes_plain_text_to_a_stream_that_is_not_a_terminal(monkeypatch, capsys):
-    from js import display, runtime, stream_transport, tool_display
+    from types import SimpleNamespace
+
+    from js import console, display, output, runtime, stream_transport
+    from js.console import ConsoleSink
     from js.reasoning_display import StderrReasoning
+    from js.toolkit import ToolContext
 
     out, err = io.StringIO(), io.StringIO()
     monkeypatch.setattr(sys, "stdout", out)
     monkeypatch.setattr(sys, "stderr", err)
     fset.set_entry("RUN_LINE", "%C04run $0-")
     stream_transport.say_or_print(3, msgs.CATALOG_UPDATING.said())
-    runtime._print_run_line(["model=m", "ctx=1"])
-    runtime._print_trace(runtime.Telemetry(None), tool_display.render_exchange("shell", {"command": "x"}, None, level=1))
+    telemetry = runtime.Telemetry(None)
+    ConsoleSink(telemetry).emit(output.event("run_line", fields=["model=m", "ctx=1"]))
+    context = ToolContext()
+    context.config = SimpleNamespace(settings={"TOOLS_DISPLAY": 1})
+    console.trace_result(telemetry, context, "shell", "ok", args={"command": "x"})
+    console.settle_tool_trace(telemetry)
+    traced = out.getvalue()
     msgs.say(msgs.SAVE_FAILED, error="disk full")
     msgs.warn(msgs.SAVE_FAILED, error="disk full")
     answer = display.Display.for_stream(out)
@@ -110,5 +119,6 @@ def test_every_fallback_printer_writes_plain_text_to_a_stream_that_is_not_a_term
     reasoning = StderrReasoning(2, err)
     reasoning.append("thinking\n")
     reasoning.finish(12)
+    assert "shell" in traced
     assert out.getvalue() and err.getvalue()
     assert "\x1b" not in out.getvalue() + err.getvalue(), (out.getvalue(), err.getvalue())

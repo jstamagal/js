@@ -28,11 +28,8 @@ from js import (
     repl,
     runtime,
     settings,
-    tool_calls,
     tool_display,
-    tool_errors,
     toolkit as runtime_tools,
-    turn_dispatch,
 )
 from js.config import Config
 from js.model_client import ModelStreamResult, ModelToolCall
@@ -1525,16 +1522,8 @@ def test_trace_result_line_covers_the_unknown_tool_and_invalid_argument_paths(ca
     assert any("unknown tool" in line and "nope" in line for line in lines)
 
 
-def test_trace_result_line_is_printed_by_the_async_dispatch_path_too(capsys):
-    import asyncio
-
-    registry = _trace_registry()
-
-    asyncio.run(turn_dispatch._dispatch_async_tool(
-        tool_calls.PendingToolCall("c1", "slow", ["{}"]),
-        runtime.Telemetry(None), 256 * 1024, True,
-        tool_errors.ToolErrorTracker(), registry, _tools_context(3),
-    ))
+def test_trace_result_line_is_printed_by_the_async_dispatch_path_too(capsys, monkeypatch, tmp_path):
+    _traced_turn(tmp_path, monkeypatch, _trace_registry(), [("c1", "slow", "{}")], 3)
 
     lines = _trace_lines(capsys)
     markers = _marker_lines(lines)
@@ -1609,7 +1598,7 @@ def test_only_none_is_an_approval(monkeypatch, tmp_path, decision):
 @pytest.mark.parametrize("options", [
     {"you_are": ""}, {"you_are": "be brief"}, {"no_tools": True}, {"chat": True},
 ])
-def test_a_tool_call_under_zero_tools_runs_nothing_and_returns_the_unknown_tool_error(tmp_path, options):
+def test_a_tool_call_under_zero_tools_runs_nothing_and_returns_the_unknown_tool_error(tmp_path, monkeypatch, options):
     from js.cli_options import RunOptions
 
     ran = []
@@ -1619,15 +1608,12 @@ def test_a_tool_call_under_zero_tools_runs_nothing_and_returns_the_unknown_tool_
     surface = stock.select(entries, warn=False).lazy_surface(tmp_path)
     assert surface.openai_specs() == []
 
-    calls = [tool_calls.PendingToolCall("c1", "nope", ['{"cmd": "id"}']),
-             tool_calls.PendingToolCall("c2", "shell", ['{"cmd": "id"}'])]
-    results = turn_dispatch._dispatch_tool_calls(
-        calls, runtime.Telemetry(None), 256 * 1024, False,
-        tool_errors.ToolErrorTracker(), surface.dispatch_registry(), _tools_context(0),
-    )
+    calls = [("c1", "nope", '{"cmd": "id"}'), ("c2", "shell", '{"cmd": "id"}')]
+    turn = run_scripted_turn(tmp_path, monkeypatch, stock.select(entries, warn=False), [calls],
+                             context=_tools_context(0))
 
     assert ran == []
-    outputs = [output for _call, _message, output in results]
+    outputs = [turn.results()[call_id] for call_id in ("c1", "c2")]
     assert "unknown tool" in outputs[0] and "nope" in outputs[0]
     assert outputs[1].startswith("ERROR") and "shell" in outputs[1]
 

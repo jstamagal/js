@@ -9,7 +9,7 @@ import ai
 import pytest
 from repl_driver import record_turns, run_async, turn_stub
 
-from js import cli, events, logins, model_metadata, picker, settings
+from js import cli, events, logins, model_metadata, paths, picker, settings
 from js.config import Config
 from js.memory import append_message, load_messages
 from js.repl_state import ReplState
@@ -211,7 +211,7 @@ def test_repl_set_runtime_debug_enables_later_event_telemetry(monkeypatch, tmp_p
     def run_turn_stub(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(cli._paths, "state_root", lambda: state_root)
+    monkeypatch.setattr(paths, "state_root", lambda: state_root)
     monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
 
     run_async(monkeypatch, cfg, ["/set DEBUG_LOG on", "/on input echo nope", "hello", "exit"], wait=True)
@@ -731,7 +731,7 @@ def test_provider_command_shows_current_value_when_bare(tmp_path, monkeypatch, c
 def test_model_command_opens_picker_and_updates_state(monkeypatch, tmp_path, capsys):
     cfg = repl_cfg(tmp_path, monkeypatch)
     config_path = tmp_path / "config" / "jsrc"
-    monkeypatch.setattr(cli._paths, "global_config_file", lambda: config_path)
+    monkeypatch.setattr(paths, "global_config_file", lambda: config_path)
     turns = record_turns(monkeypatch)
 
     monkeypatch.setattr(
@@ -771,7 +771,7 @@ def test_a_picked_model_reaches_the_jsrc_only_through_save(monkeypatch, tmp_path
     config_path = tmp_path / "config" / "jsrc"
     config_path.parent.mkdir(parents=True)
     config_path.write_text("set MODEL deepseek/deepseek-v4-flash\n", encoding="utf-8")
-    monkeypatch.setattr(cli._paths, "global_config_file", lambda: config_path)
+    monkeypatch.setattr(paths, "global_config_file", lambda: config_path)
     turns = record_turns(monkeypatch)
     jsrc_after_pick: list[str] = []
 

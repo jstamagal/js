@@ -19,7 +19,6 @@ from js import (
     cli,
     context_window,
     memory as M,
-    repl,
     run_assembly,
     runtime,
     session_store,
@@ -295,40 +294,27 @@ def test_a_generated_session_name_that_matches_nothing_is_an_error(monkeypatch, 
     assert _all_sessions() == []
 
 
-def _capture_repl_state(monkeypatch) -> list[dict]:
-    states: list[dict] = []
-    build = repl._repl_state
-
-    def capturing(*args, **kwargs):
-        states.append(build(*args, **kwargs))
-        return states[-1]
-
-    monkeypatch.setattr(repl, "_repl_state", capturing)
-    return states
-
-
 def test_the_status_bar_shows_the_running_model_and_follows_model(monkeypatch, tmp_path):
     from repl_driver import run_async
 
     monkeypatch.chdir(_dir(tmp_path, "work"))
-    states = _capture_repl_state(monkeypatch)
+    built: dict = {}
     bars: list[str] = []
 
     async def turn(cfg, system, messages, telemetry, **kwargs):
         messages.append({"role": "assistant", "content": f"on {cfg.model}"})
 
     async def script(on_line):
-        [state] = states
-        bars.append(repl._status_bar_line(cfg, state, False, 200))
+        bars.append(built["status"](200))
         await on_line("/model model-y")
-        bars.append(repl._status_bar_line(cfg, state, False, 200))
+        bars.append(built["status"](200))
 
     monkeypatch.setattr(cli.runtime, "run_turn_async", turn)
     cfg = from_env()
     configured = cfg.model
     assert configured not in ("model-x", "model-y")
 
-    run_async(monkeypatch, cfg, script, model="model-x")
+    run_async(monkeypatch, cfg, script, model="model-x", screen_parts=built)
 
     assert "model-x" in bars[0] and configured not in bars[0]
     assert "model-y" in bars[1] and "model-x" not in bars[1]

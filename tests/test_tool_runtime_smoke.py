@@ -15,14 +15,12 @@ from js import (
     history_record,
     model_client,
     result_caps,
-    runtime,
     setcmd,
     settings,
     tool_calls,
     tool_errors,
     tool_result_messages,
     toolkit as runtime_tools,
-    turn_dispatch,
 )
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import (
@@ -666,47 +664,25 @@ def test_retry_metadata_is_appended_and_resets_after_success():
 
 def test_dispatch_uses_canonical_name_repairs_args_and_adds_retry_metadata(tmp_path, monkeypatch):
     context = ToolContext(cwd=tmp_path)
-    monkeypatch.setattr(runtime_tools, "STOCK_CONTEXT", context)
-    telemetry_events: list[tuple[str, dict]] = []
 
-    class TelemetryStub:
-        def event(self, kind: str, **payload):
-            telemetry_events.append((kind, payload))
+    turn = run_turn(tmp_path, monkeypatch, build_default_registry().select(["read:eager", "write:eager"]), [
+        [("write", "write", '{"file_path":"created.txt","content":"ok",}')],
+        [("missing", "missing_tool", "{}")],
+        [("read", "read", '{"file_path":"does-not-exist.txt"}')],
+    ], cfg=turn_config(tmp_path, settings={"TOOL_ERRORS_MAX": 2}), context=context)
 
-    args, result = turn_dispatch._dispatch(
-        "write",
-        '{"file_path":"created.txt","content":"ok",}',
-        TelemetryStub(),
-        cap_bytes=4096,
-        error_tracker=tool_errors.ToolErrorTracker(limit=2),
-    )
-
-    assert args == {"file_path": "created.txt", "content": "ok"}
-    assert result.startswith(f"wrote 2 bytes to {tmp_path / 'created.txt'}")
+    results = turn.results()
+    assert json.loads(turn.calls()[0][2]) == {"file_path": "created.txt", "content": "ok"}
+    assert results["write"].startswith(f"wrote 2 bytes to {tmp_path / 'created.txt'}")
     assert (tmp_path / "created.txt").read_text(encoding="utf-8") == "ok"
-    assert len(telemetry_events) == 1
-    kind, payload = telemetry_events[0]
-    assert kind == "tool_ok"
-    assert payload["tool"] == "write"
+    assert [event["tool"] for event in turn.events("tool_ok") if event["call_id"] == "write"] == ["write"]
 
-    tracker = tool_errors.ToolErrorTracker(limit=2)
-    _, error = turn_dispatch._dispatch(
-        "missing_tool",
-        "{}",
-        TelemetryStub(),
-        cap_bytes=4096,
-        error_tracker=tracker,
-    )
+    error = results["missing"]
     assert "unknown tool" in error and "missing_tool" in error
     assert "tool_discovery" not in error
     assert "<retry>" not in error
-    assert not tracker.limit_reached()
 
-    _, handler_error = turn_dispatch._dispatch(
-        "read", '{"file_path":"does-not-exist.txt"}', TelemetryStub(),
-        cap_bytes=4096, error_tracker=tracker, tool_context=context,
-    )
-    assert handler_error.endswith("<retry>attempts_left=1, allowed_max_attempts=2</retry>")
+    assert results["read"].endswith("<retry>attempts_left=1, allowed_max_attempts=2</retry>")
 
 
 def _spill_to(tmp_path, monkeypatch) -> None:
@@ -1073,7 +1049,7 @@ def test_long_lines_are_returned_whole_for_every_suffix(tmp_path):
     assert long_value in py_out
 
 
-def test_task_tool_calls_from_one_assistant_batch_run_in_parallel_and_restore_order():
+def test_task_tool_calls_from_one_assistant_batch_run_in_parallel_and_restore_order(tmp_path, monkeypatch):
     events: list[str] = []
 
     def sleeper(label: str, context: ToolContext | None = None) -> str:
@@ -1087,24 +1063,15 @@ def test_task_tool_calls_from_one_assistant_batch_run_in_parallel_and_restore_or
         tools=(Tool("task", "test task", sleeper, {"label": {"type": "string"}}, required=("label",)),),
         aliases={"task": "task"},
     )
-    calls = [
-        tool_calls.PendingToolCall(id="slow", name="task", arg_chunks=['{"label":"slow"}']),
-        tool_calls.PendingToolCall(id="fast", name="Task", arg_chunks=['{"label":"fast"}']),
-    ]
 
     started = __import__("time").perf_counter()
-    actual = turn_dispatch._dispatch_tool_calls(
-        calls,
-        runtime.Telemetry(None),
-        cap_bytes=4096,
-        trace=False,
-        error_tracker=tool_errors.ToolErrorTracker(limit=2),
-        registry=registry,
-        tool_context=ToolContext(),
-    )
+    turn = run_turn(tmp_path, monkeypatch, registry, [
+        [("slow", "task", '{"label":"slow"}'), ("fast", "Task", '{"label":"fast"}')],
+    ])
     elapsed = __import__("time").perf_counter() - started
 
-    assert [(pc.id, result) for pc, _, result in actual] == [("slow", "SLOW"), ("fast", "FAST")]
+    assert [(message["tool_call_id"], message["content"]) for message in turn.messages
+            if message.get("role") == "tool"] == [("slow", "SLOW"), ("fast", "FAST")]
     assert events == ["fast", "slow"]
     assert elapsed < 0.25
 

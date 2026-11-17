@@ -214,27 +214,32 @@ def test_tool_dispatch_propagates_snippet_configuration_failure(monkeypatch, tmp
 @pytest.mark.parametrize("mode", ["sync", "async", "supervised"])
 def test_worker_snippet_failures_are_not_tool_results(mode):
     import asyncio
+    import types
 
     from js import supervisor
-    from js.toolkit import subagents
+    from js.toolkit import ToolContext, subagents
 
     error = snippets.SnippetError("missing worker instruction")
 
-    async def worker(index, item):
+    async def worker(*args, **kwargs):
         raise error
+
+    context = ToolContext()
+    context.config = types.SimpleNamespace(lock_subagent_model=False, prompt_roots=None)
+    context.subagent_assembly = subagents.SubagentAssembly(worker=worker)
 
     async def drive():
         previous = supervisor.get_current()
         if mode == "supervised":
             supervisor.set_current(supervisor.Supervisor(asyncio.get_running_loop()))
         try:
-            await subagents._fan_out_async([(1, "work")], worker)
+            await subagents.task_async(tasks=["work"], agent_id="worker", context=context)
         finally:
             supervisor.set_current(previous)
 
     with pytest.raises(snippets.SnippetError, match="worker instruction"):
         if mode == "sync":
-            subagents._fan_out([(1, "work")], worker)
+            subagents.task(tasks=["work"], agent_id="worker", context=context)
         else:
             asyncio.run(drive())
 

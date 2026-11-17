@@ -14,7 +14,8 @@ import shutil
 
 import pytest
 
-from js.toolkit import ToolContext, file_search
+from js.tool_binaries import resolve_binary
+from js.toolkit import ToolContext
 from js.toolkit.file_search import ast_search, fs_search
 from js.toolkit.fs import fs_read, undo
 from js.toolkit.patch import patch
@@ -22,7 +23,7 @@ from js.toolkit.shell import shell
 
 requires_rg = pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep not installed")
 requires_ast_grep = pytest.mark.skipif(
-    file_search._ast_grep_binary() is None, reason="ast-grep 0.45.1 not installed"
+    resolve_binary("ast-grep") is None, reason="ast-grep 0.45.1 not installed"
 )
 
 

@@ -9,13 +9,13 @@ import asyncio
 
 import ai
 import pytest
+from repl_driver import run_async
 
 from js import (
     fset,
     jsrc_save,
     messages as msgs,
     model_client,
-    repl,
     runtime,
     setcmd,
     setting_layers,
@@ -24,7 +24,6 @@ from js import (
 )
 from js.config import Config
 from js.model_client import ModelStreamResult
-from js.repl_state import ReplState
 from js.toolkit.core import ToolContext, TurnStatus
 
 BAR = dict(
@@ -162,15 +161,8 @@ def test_turn_status_climbs_during_a_turn_and_ends_zeroed(monkeypatch, tmp_path)
     context = ToolContext(cwd=tmp_path)
     seen: list[int] = []
 
-    class _FakeProvider:
-        async def aclose(self) -> None:
-            pass
-
-    class _FakeModel:
-        provider = _FakeProvider()
-
-    async def fake_stream_async(*, on_text, **_kwargs):
-        model_client._reasoning_sink.get()("thinking hard " * 10)
+    async def fake_stream_model_async(*, on_text, on_reasoning, **_kwargs):
+        on_reasoning("thinking hard " * 10)
         on_text("the answer is here")
         seen.append(context.turn_status.output_tokens)
         return ModelStreamResult(
@@ -179,8 +171,7 @@ def test_turn_status_climbs_during_a_turn_and_ends_zeroed(monkeypatch, tmp_path)
             finish_reason="stop", assistant_message=ai.assistant_message("the answer is here"),
         )
 
-    monkeypatch.setattr(model_client, "resolve_model", lambda *a, **k: _FakeModel())
-    monkeypatch.setattr(model_client, "_stream_async", fake_stream_async)
+    monkeypatch.setattr(model_client, "stream_model_async", fake_stream_model_async)
     cfg = _cfg(tmp_path)
     messages = [{"role": "user", "content": "go"}]
     asyncio.run(runtime.run_turn_async(
@@ -193,10 +184,30 @@ def test_turn_status_climbs_during_a_turn_and_ends_zeroed(monkeypatch, tmp_path)
 
 
 @pytest.mark.parametrize("turn_active", [False, True])
-def test_status_bar_line_never_raises_on_sparse_state(tmp_path, turn_active):
+def test_status_bar_line_never_raises_on_sparse_state(tmp_path, monkeypatch, turn_active):
 
     cfg = _cfg(tmp_path, session_name="20260918T101010000000Z-0123456789abcdef.jsonl")
-    line = repl._status_bar_line(cfg, ReplState(settings={}), turn_active, 60)
+    (tmp_path / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
+    built: dict = {}
+    lines: list[str] = []
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def turn(*args, **kwargs):
+        started.set()
+        await release.wait()
+
+    async def typing(enter):
+        if turn_active:
+            await enter("go")
+            await asyncio.wait_for(started.wait(), timeout=10)
+        lines.append(built["status"](60))
+        release.set()
+
+    monkeypatch.setattr(runtime, "run_turn_async", turn)
+    state = run_async(monkeypatch, cfg, typing, screen_parts=built)
+
+    assert state.settings == {}
+    [line] = lines
     assert len(line) == 60
     assert "01234567" in line
 

@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 from jail_probe import bwrap_starts, needs_bwrap
 from test_subagent_isolation import _fake_stream_result, make_cfg, prompt_dir
+from turn_driver import run as run_turn
 
 from js import (
     cli,
@@ -28,11 +29,10 @@ from js import (
     runtime,
     setting_values,
     settings,
-    tool_calls,
+    tool_binaries,
     tool_errors,
-    turn_dispatch,
 )
-from js.toolkit import ToolContext, call_tool, file_search, python_kernel, shell, terminal
+from js.toolkit import ToolContext, call_tool, python_kernel, shell, terminal
 from js.toolkit.registry import build_default_registry
 
 needs_kernel = pytest.mark.skipif(
@@ -169,22 +169,18 @@ def test_fs_search_refuses_the_home(jailed):
 
 
 @needs_bwrap
-def test_parallel_read_only_calls_stay_in_the_jail(jailed):
+def test_parallel_read_only_calls_stay_in_the_jail(jailed, tmp_path, monkeypatch):
     """One batch of read-only calls runs at once; each is still confined."""
     calls = [
-        tool_calls.PendingToolCall("in", "read", ['{"file_path": "inside.txt"}']),
-        tool_calls.PendingToolCall("home", "read", ['{"file_path": "~/.zshrc"}']),
-        tool_calls.PendingToolCall("grep", "fs_search", ['{"pattern": "inside", "output_mode": "content"}']),
-        tool_calls.PendingToolCall("grep_home", "fs_search", [f'{{"pattern": "{SECRET}", "path": "~"}}']),
+        ("in", "read", '{"file_path": "inside.txt"}'),
+        ("home", "read", '{"file_path": "~/.zshrc"}'),
+        ("grep", "fs_search", '{"pattern": "inside", "output_mode": "content"}'),
+        ("grep_home", "fs_search", f'{{"pattern": "{SECRET}", "path": "~"}}'),
     ]
     jailed.max_parallel_tools = 8
 
-    records = turn_dispatch._dispatch_tool_calls(
-        calls, runtime.Telemetry(None), 65536, False, tool_errors.ToolErrorTracker(),
-        build_default_registry(), jailed,
-    )
+    results = run_turn(tmp_path, monkeypatch, build_default_registry(), [calls], context=jailed).results()
 
-    results = {pc.id: result for pc, _args, result in records}
     assert "inside" in results["in"] and not results["in"].startswith("ERROR")
     assert "inside" in results["grep"] and not results["grep"].startswith("ERROR")
     for refused in ("home", "grep_home"):
@@ -229,7 +225,7 @@ def test_a_path_directory_inside_the_jail_dir_stays_writable(jailed, monkeypatch
     bin_dir.mkdir(parents=True)
     (bin_dir / "tool").write_text("#!/bin/sh\n")
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}/usr/bin")
-    if not any(jail._under(bin_dir.resolve(), h) for h in jail.hidden_roots()):
+    if not any(bin_dir.resolve().is_relative_to(h) for h in jail.hidden_roots()):
         pytest.skip("the jail dir is not inside a hidden tree here")
 
     argv = active.argv(["true"], env_path=os.environ["PATH"])
@@ -241,7 +237,7 @@ def test_a_path_directory_inside_the_jail_dir_stays_writable(jailed, monkeypatch
 def test_a_path_directory_under_the_host_tmp_is_bound_back_read_only(jailed, tmp_path_factory, monkeypatch):
     # tmp_path is the test HOME, a hidden tree; the venv sits outside it.
     venv = tmp_path_factory.mktemp("venv").resolve()
-    if Path("/tmp") not in venv.parents or any(jail._under(venv, h) for h in jail.hidden_roots()):
+    if Path("/tmp") not in venv.parents or any(venv.is_relative_to(h) for h in jail.hidden_roots()):
         pytest.skip("pytest's temporary tree is not plainly under /tmp")
     bin_dir = venv / "bin"
     bin_dir.mkdir()
@@ -358,20 +354,16 @@ def test_symlinks_into_private_tmp_use_the_jail_namespace(jailed, source, suffix
 
 
 @needs_bwrap
-def test_a_host_tmp_path_the_jail_does_not_show_is_refused_without_the_jail_dir(jailed):
+def test_a_host_tmp_path_the_jail_does_not_show_is_refused_without_the_jail_dir(jailed, tmp_path, monkeypatch):
     """A /tmp path absent from the jail's private /tmp is outside the jail; the
     refusal names the path the model gave and carries no retry count."""
     host_dir = Path(tempfile.mkdtemp(prefix="js-jail-other-", dir="/tmp"))
     try:
         (host_dir / "x.txt").write_text("host-only\n")
-        calls = [tool_calls.PendingToolCall("r", "read", [f'{{"file_path": "{host_dir}/x.txt"}}'])]
+        call = ("r", "read", f'{{"file_path": "{host_dir}/x.txt"}}')
 
-        records = turn_dispatch._dispatch_tool_calls(
-            calls, runtime.Telemetry(None), 65536, False, tool_errors.ToolErrorTracker(),
-            build_default_registry(), jailed,
-        )
+        result = run_turn(tmp_path, monkeypatch, build_default_registry(), [[call]], context=jailed).results()["r"]
 
-        result = records[0][2]
         assert result.startswith("ERROR:")
         assert "outside the jail" in result
         assert str(jail.active().private) not in result
@@ -413,7 +405,7 @@ def test_file_tool_results_name_the_jail_tmp_not_the_host_dir(jailed):
         assert private not in result
     assert f"/tmp/{name}/a.txt" in results[0]
     assert "gamma" in results[5] + results[6] and f"/tmp/{name}/a.txt" in results[6]
-    if file_search._ast_grep_binary() is not None:
+    if tool_binaries.resolve_binary("ast-grep") is not None:
         assert f"/tmp/{name}/b.py" in results[8]
     assert str(Path.home() / ".js" / "tmp" / f"{name}.txt") in results[9]
     for error in (results[1], results[4], results[14]):
@@ -601,7 +593,7 @@ def test_kernel_runs_in_the_jail_and_survives_an_interrupt(jailed):
 
 @needs_bwrap
 @needs_kernel
-def test_a_kernel_cell_calls_tools_under_the_jail(jailed):
+def test_a_kernel_cell_calls_tools_under_the_jail(jailed, tmp_path, monkeypatch):
     jailed.kernel_verbosity = "quiet"
     jailed.kernel_wait_seconds = 30
     code = ("print('INSIDE', tools.read('inside.txt', show_line_numbers=False).strip())\n"
@@ -610,9 +602,8 @@ def test_a_kernel_cell_calls_tools_under_the_jail(jailed):
             "except tools.ToolError as exc:\n"
             "    print('REFUSED')\n")
     try:
-        _, result = turn_dispatch._dispatch("kernel", json.dumps({"code": code}), runtime.Telemetry(None),
-                                      cap_bytes=65536, registry=build_default_registry(),
-                                      tool_context=jailed)
+        result = run_turn(tmp_path, monkeypatch, build_default_registry(),
+                          [[("cell", "kernel", json.dumps({"code": code}))]], context=jailed).results()["cell"]
     finally:
         session = jailed.kernel_session
         if session is not None:

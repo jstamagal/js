@@ -13,8 +13,9 @@ from pathlib import Path
 
 import pytest
 from test_lazy_tool_discovery import _cfg, _result
+from turn_driver import config as turn_config, run as run_turn
 
-from js import console, paths, result_caps, runtime, tool_calls, tool_errors, turn_dispatch
+from js import paths, result_caps, runtime
 from js.toolkit import core as tool_core, fs, patch as patch_tool
 from js.toolkit.core import Tool, ToolContext, call_is_read_only
 from js.toolkit.registry import ToolRegistry, build_default_registry
@@ -51,18 +52,19 @@ def _sleeper_registry(probe: Probe, seconds: float, *, read_only: bool = True) -
                               required=("label",), read_only=read_only),), {})
 
 
-def _calls(*labels: str, name: str = "sleeper") -> list[tool_calls.PendingToolCall]:
-    return [tool_calls.PendingToolCall(label, name, [json.dumps({"label": label})]) for label in labels]
+def _calls(*labels: str, name: str = "sleeper") -> list[tuple[str, str, str]]:
+    return [(label, name, json.dumps({"label": label})) for label in labels]
 
 
-def _dispatch(calls, registry, context, *, trace: bool = False, progress=None, telemetry=None):
-    telemetry = telemetry if telemetry is not None else runtime.Telemetry(None)
-    records = turn_dispatch._dispatch_tool_calls(
-        calls, telemetry, 256 * 1024, trace, tool_errors.ToolErrorTracker(),
-        registry, context, progress,
-    )
-    console.settle_tool_trace(telemetry)
-    return records
+def _dispatch(calls, registry, context) -> list[tuple[str, str]]:
+    """The (call id, result) of each of ``calls``, made as one batch by the
+    model in a turn on PARALLEL_TOOLS_MAX ``context.max_parallel_tools``, in
+    the order the turn records them."""
+    cfg = turn_config(context.cwd, max_parallel_tools=context.max_parallel_tools)
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        turn = run_turn(context.cwd, monkeypatch, registry, [calls], cfg=cfg, context=context)
+    return [(message["tool_call_id"], message["content"]) for message in turn.messages
+            if message.get("role") == "tool"]
 
 
 def test_three_read_only_calls_that_each_sleep_half_a_second_run_at_once(tmp_path):
@@ -75,7 +77,7 @@ def test_three_read_only_calls_that_each_sleep_half_a_second_run_at_once(tmp_pat
 
     assert elapsed < 1.0
     assert probe.most == 3
-    assert [result for _pc, _args, result in records] == ["slept a", "slept b", "slept c"]
+    assert [result for _id, result in records] == ["slept a", "slept b", "slept c"]
 
 
 def test_results_come_back_in_the_model_order_not_the_finish_order(tmp_path):
@@ -97,7 +99,7 @@ def test_results_come_back_in_the_model_order_not_the_finish_order(tmp_path):
     records = _dispatch(_calls("slow", "fast"), registry, ToolContext(cwd=tmp_path, max_parallel_tools=8))
 
     assert probe.finished == ["fast", "slow"]
-    assert [(pc.id, result) for pc, _args, result in records] == [("slow", "SLOW"), ("fast", "FAST")]
+    assert records == [("slow", "SLOW"), ("fast", "FAST")]
 
 
 def test_the_cap_bounds_how_many_read_only_calls_run_at_once(tmp_path):
@@ -139,19 +141,21 @@ def test_read_read_patch_read_runs_the_reads_together_and_the_patch_alone(tmp_pa
         dataclasses.replace(stock.resolve("read"), handler=read),
         dataclasses.replace(stock.resolve("patch"), handler=patch),
     ), {})
-    read_args = json.dumps({"file_path": str(target)})
+    # Three different reads: a turn runs one call of identical repeats.
+    def read_args(**window):
+        return json.dumps({"file_path": str(target), **window})
+
     calls = [
-        tool_calls.PendingToolCall("r1", "read", [read_args]),
-        tool_calls.PendingToolCall("r2", "read", [read_args]),
-        tool_calls.PendingToolCall("p1", "patch", [json.dumps(
-            {"file_path": str(target), "old_string": "beta", "new_string": "BETA"})]),
-        tool_calls.PendingToolCall("r3", "read", [read_args]),
+        ("r1", "read", read_args()),
+        ("r2", "read", read_args(range={"start_line": 1, "end_line": 3})),
+        ("p1", "patch", json.dumps({"file_path": str(target), "old_string": "beta", "new_string": "BETA"})),
+        ("r3", "read", read_args(range={"start_line": 2, "end_line": 2})),
     ]
 
     records = _dispatch(calls, registry, ToolContext(cwd=tmp_path, max_parallel_tools=8))
 
-    results = {pc.id: result for pc, _args, result in records}
-    assert [pc.id for pc, _args, _result in records] == ["r1", "r2", "p1", "r3"]
+    results = dict(records)
+    assert [call_id for call_id, _result in records] == ["r1", "r2", "p1", "r3"]
     assert most_reads == 2
     assert patch_saw == [0, 0]
     assert "BETA" not in results["r1"] and "BETA" not in results["r2"]
@@ -166,8 +170,8 @@ def test_concurrent_reads_of_one_file_leave_consistent_coverage(tmp_path):
     for _round in range(5):
         context = ToolContext(cwd=tmp_path, max_parallel_tools=8)
         calls = [
-            tool_calls.PendingToolCall(f"r{start}", "read", [json.dumps(
-                {"file_path": str(target), "range": {"start_line": start, "end_line": start + 9}})])
+            (f"r{start}", "read", json.dumps(
+                {"file_path": str(target), "range": {"start_line": start, "end_line": start + 9}}))
             for start in range(1, 81, 10)
         ]
 

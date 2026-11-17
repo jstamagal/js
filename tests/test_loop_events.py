@@ -189,13 +189,23 @@ def test_invalid_environment_setting_emits_a_warning(capsys):
     assert capsys.readouterr() == ("", "")
 
 
-def test_invalid_login_section_emits_a_warning(capsys):
-    from js import logins
+def test_invalid_login_section_emits_a_warning(tmp_path, capsys):
+    import tomllib
 
+    from js import logins, paths
+
+    (tmp_path / "logins.toml").write_text("broken = 1\n", encoding="utf-8")
+    logins.set_config_dir(tmp_path)
     events = []
-    with output.using_sink(SimpleNamespace(emit=events.append)):
-        store = logins._parse_store(None, {"broken": 1})
-    assert store.quarantined == {"broken": 1}
+    try:
+        with output.using_sink(SimpleNamespace(emit=events.append)):
+            assert logins.load_logins() == {}
+        with output.using_sink(SimpleNamespace(emit=lambda _event: None)):
+            logins.save_login(logins.Login(provider_id="mine", provider_api_key="k"))
+    finally:
+        logins.set_config_dir(paths.login_store_dir())
+    # Quarantined: a later save writes the bad section back unchanged.
+    assert tomllib.loads((tmp_path / "logins.toml").read_text(encoding="utf-8"))["broken"] == 1
     assert len(events) == 1
     assert dict(events[0].fields)["fields"]["name"] == "logins.toml [broken]"
     assert capsys.readouterr() == ("", "")
@@ -231,11 +241,16 @@ def test_skipped_session_records_emit_a_warning(tmp_path, capsys):
 
 
 def test_a_bad_agent_sampling_value_is_an_error_naming_it(tmp_path):
+    from turn_driver import config
+
     from js import persona
 
-    path = tmp_path / "agent.yaml"
+    agent = tmp_path / "worker"
+    agent.mkdir()
+    (agent / "agent.yaml").write_text("sampling:\n  temperature: -1\ntools: []\n", encoding="utf-8")
+    (agent / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     with pytest.raises(ValueError, match="sampling.temperature"):
-        persona._coerce_sampling(path, {"temperature": -1})
+        persona.load_configured_prompt_spec(config(tmp_path, agent_id="worker", prompts_dir=agent), expand=False)
 
 
 def test_skill_discovery_warning_is_an_event(monkeypatch, capsys):

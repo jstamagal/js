@@ -4,10 +4,11 @@ wipe it — except when the turn produced nothing, where the bare prompt is drop
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 from repl_driver import run_async, turn_stub
 
-from js import cli, repl
+from js import cli
 from js.config import from_env
 from js.memory import append_message, load_messages
 
@@ -47,25 +48,26 @@ def test_interrupt_keeps_partial_work_across_reload(monkeypatch, tmp_path):
     assert "interrupted" in reloaded[2]["content"].lower()
 
 
-def test_turn_persistence_journals_mutated_history_without_overwriting(tmp_path):
+def test_turn_persistence_journals_mutated_history_without_overwriting(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
     session_file = tmp_path / "session.jsonl"
+    append_message(session_file, {"role": "user", "content": "old work"})
     append_message(session_file, {"role": "assistant", "content": "before normalization"})
-    user_message = {"role": "user", "content": "new work"}
-    append_message(session_file, user_message)
-    archived = session_file.read_bytes()
-    messages = [
-        {"role": "assistant", "content": "after normalization"},
-        user_message,
-        {"role": "assistant", "content": "partial work"},
-    ]
+    seen: dict = {}
 
-    repl._persist_turn_messages(
-        type("Cfg", (), {"session_file": session_file})(),
-        messages,
-    )
+    def run_turn_stub(cfg, system, messages, telemetry, **kwargs):
+        seen["archived"] = session_file.read_bytes()
+        index = next(i for i, m in enumerate(messages) if m.get("content") == "before normalization")
+        messages[index] = {"role": "assistant", "content": "after normalization"}
+        messages.append({"role": "assistant", "content": "partial work"})
+        seen["messages"] = list(messages)
 
-    assert load_messages(session_file) == messages
-    assert session_file.read_bytes().startswith(archived)
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
+    run_async(monkeypatch, replace(from_env(), session_file=session_file), ["new work"], wait=True)
+
+    assert [m["content"] for m in seen["messages"]][-3:] == ["after normalization", "new work", "partial work"]
+    assert load_messages(session_file) == seen["messages"]
+    assert session_file.read_bytes().startswith(seen["archived"])
 
 
 def test_interrupt_with_no_work_drops_the_bare_prompt(monkeypatch, tmp_path):

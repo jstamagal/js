@@ -132,31 +132,38 @@ def _init_repo(repo):
 
 
 def test_commit_snapshot_retention_is_per_repository(tmp_path, monkeypatch):
-    from types import SimpleNamespace
-
-    from js import commit_helper
-
-    backups = tmp_path / "backups"
-    monkeypatch.setattr(commit_cli, "_commit_backup_root", lambda: backups)
-    monkeypatch.setattr(commit_cli, "_worktree_patch", lambda *args: "diff --git a/a b/a\n")
-    monkeypatch.setattr(commit_helper, "_git", lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=""))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setattr(prompt_run, "run", lambda prompt, **kwargs: 0)
+    backups = paths.commit_backups_dir()
     legacy = backups / "20200101T000000000000Z"
     legacy.mkdir(parents=True)
     (legacy / "tracked.patch").write_text("legacy recovery data")
     repo_a = tmp_path / "one" / "same-name"
     repo_b = tmp_path / "two" / "same-name"
-    first_a = commit_cli._snapshot_worktree(repo_a)
-    first_b = commit_cli._snapshot_worktree(repo_b)
+    for repo in (repo_a, repo_b):
+        repo.parent.mkdir()
+        _init_repo(repo)
+        (repo / "new.txt").write_text("uncommitted\n")
+
+    def buckets() -> set:
+        return {path for path in backups.iterdir() if path != legacy}
+
+    assert commit_cli.run_commit(str(repo_a), save=False) == 0
+    [bucket_a] = buckets()
+    [first_a] = bucket_a.iterdir()
+    assert commit_cli.run_commit(str(repo_b), save=False) == 0
+    [bucket_b] = buckets() - {bucket_a}
+    [first_b] = bucket_b.iterdir()
     for _ in range(10):
-        commit_cli._snapshot_worktree(repo_b)
+        assert commit_cli.run_commit(str(repo_b), save=False) == 0
     assert first_a.exists()
     assert (legacy / "tracked.patch").read_text() == "legacy recovery data"
-    assert first_a.parent != first_b.parent
+    assert bucket_a != bucket_b
     assert not first_b.exists()
-    assert len(list(first_b.parent.iterdir())) == 10
+    assert len(list(bucket_b.iterdir())) == 10
     # Resolving an equivalent path must not create another retention bucket.
-    another_a = commit_cli._snapshot_worktree(repo_a / ".." / "same-name")
-    assert another_a.parent == first_a.parent
+    assert commit_cli.run_commit(str(repo_a / ".." / "same-name"), save=False) == 0
+    assert buckets() == {bucket_a, bucket_b}
 
 
 def test_run_commit_snapshots_tracked_patch_and_untracked_file(tmp_path, monkeypatch):
@@ -200,13 +207,13 @@ def test_run_commit_snapshot_prune_keeps_ten(tmp_path, monkeypatch):
     repo = tmp_path / "messy"
     _init_repo(repo)
     (repo / "new.txt").write_text("fresh\n")
-    first = commit_cli._snapshot_worktree(repo)
-    backups = first.parent
+    monkeypatch.setattr(prompt_run, "run", lambda prompt, **kwargs: 0)
+    assert commit_cli.run_commit(str(repo), save=False) == 0
+    [backups] = paths.commit_backups_dir().iterdir()
     # Twelve old snapshots belong to this repository's retention bucket.
     for i in range(12):
         (backups / f"20200101T0000{i:02d}000000Z").mkdir()
 
-    monkeypatch.setattr(prompt_run, "run", lambda prompt, **kwargs: 0)
     assert commit_cli.run_commit(str(repo), save=False) == 0
 
     remaining = sorted(p.name for p in backups.iterdir())

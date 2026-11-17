@@ -323,7 +323,7 @@ def test_lazy_discovery_policy_collision_schema_call_and_shutdown(config):
 
         client = FakeClient.instances[0]
         client.tools = [client.tools[0]]
-        host._dirty.setdefault("Alpha Server", set()).add("tools")
+        client.kwargs["on_tools_changed"]({})
         await host.before_model_call()
         found = await host.discover()
         assert any(entry.name == "alpha_server__read_file" for entry in found)
@@ -338,7 +338,7 @@ def test_lazy_discovery_policy_collision_schema_call_and_shutdown(config):
         ]
         assert client.calls == [("Read File", {"path": "a"})]
         client.tools[0]["inputSchema"]["properties"]["path"]["description"] = "refreshed"
-        host._dirty.setdefault("Alpha Server", set()).add("tools")
+        client.kwargs["on_tools_changed"]({})
         await host.before_model_call()
         refreshed = next(tool for tool in host.tools(loaded) if tool.name == "alpha_server__read_file")
         assert refreshed.params["path"]["description"] == "refreshed"
@@ -678,7 +678,7 @@ def test_mcp_loaded_tools_are_scoped_to_one_turn(config, tmp_path):
         await host.discover(query="mcp")
         client = FakeClient.instances[-1]
         client.tools = [client.tools[0]]
-        host._dirty.setdefault("Alpha Server", set()).add("tools")
+        client.kwargs["on_tools_changed"]({})
         await host.before_model_call()
 
         from js.toolkit.registry import build_default_registry
@@ -690,7 +690,7 @@ def test_mcp_loaded_tools_are_scoped_to_one_turn(config, tmp_path):
         assert first.by_name["alpha_server__read_file"].params["path"]["type"] == "string"
 
         client.tools[0]["inputSchema"]["properties"]["path"]["description"] = "new schema"
-        host._dirty.setdefault("Alpha Server", set()).add("tools")
+        client.kwargs["on_tools_changed"]({})
         await host.before_model_call()
         assert first.by_name["alpha_server__read_file"].params["path"]["description"] == "new schema"
 
@@ -717,7 +717,7 @@ def test_successful_server_data_is_redacted_everywhere(config):
             "description": "metadata SENTINEL",
             "inputSchema": {"type": "object", "properties": {"value": {"description": "SENTINEL"}}},
         }]
-        host._dirty.setdefault("Alpha Server", set()).add("tools")
+        client.kwargs["on_tools_changed"]({})
         await host.before_model_call()
         catalog = await host.discover(query="mcp")
 
@@ -1394,7 +1394,7 @@ def test_a_connected_servers_redaction_follows_paranoid_mode_changes():
     host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=FakeClient, paranoid_mode="off",
                    event_sink=lambda *a, **k: events.append(k))
     FakeClient.instances.clear()
-    asyncio.run(host._ensure_server(server))
+    asyncio.run(host.discover())
     client = FakeClient.instances[-1]
 
     assert "abc123" in client.kwargs["redactor"]("rejected abc123")
