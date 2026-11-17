@@ -517,6 +517,49 @@ def _compaction_keep_from(data: dict) -> int | None:
     return keep_from
 
 
+def rewrite_history(history: list[dict], marker: object) -> list[tuple[dict, dict]] | None:
+    """Rewrite ``history`` in place as the mark ``marker`` rewrites a session's history.
+
+    A session_reset empties it. ``rollback_to:N`` keeps its first N messages
+    and a compaction replaces it with the summary, the reattached files when
+    the mark carries them, and the tail from ``keep_from`` on with its signed
+    reasoning dropped: that reasoning was produced with the summarized prefix
+    in front of it. Both indexes count in the healed history
+    (`balance_orphaned_tool_calls`), the list the writer held, so the history
+    is healed before it is cut. Only the cut is a deletion (``del``); healing,
+    emptying and replacing assign.
+
+    Returns None when ``marker`` leaves the history as it is: not one of these
+    marks, or one whose payload no writer produces. Otherwise the
+    ``(original, copy)`` pairs of the kept messages a compaction copied."""
+    if not isinstance(marker, str):
+        return None
+    if marker == "session_reset":
+        history.clear()
+        return []
+    if marker.startswith("rollback_to:"):
+        try:
+            keep = max(0, int(marker.split(":", 1)[1]))
+        except ValueError:
+            return None
+        history[:] = _heal_orphaned_tool_calls(history)
+        del history[keep:]
+        return []
+    data = _parse_compaction_marker(marker)
+    keep_from = _compaction_keep_from(data) if data is not None else None
+    if keep_from is None:
+        return None
+    history[:] = _heal_orphaned_tool_calls(history)
+    keep_from = max(0, min(keep_from, len(history)))
+    rehydrated = data.get("rehydrated")
+    rehydrated = rehydrated if isinstance(rehydrated, dict) else None
+    tail = history[keep_from:]
+    originals = list(tail)
+    drop_signed_reasoning(tail)
+    history[:] = [compaction_summary_message(data["summary"]), *([rehydrated] if rehydrated else []), *tail]
+    return [(original, copy) for original, copy in zip(originals, tail, strict=True) if copy is not original]
+
+
 _ROLES = frozenset({"user", "assistant", "tool", "system"})
 
 
@@ -544,12 +587,11 @@ class _RetainedLog:
             if index is not None:
                 self._removed.add(index)
 
-    def copied(self, originals: list[dict], copies: list[dict]) -> None:
-        for original, copy in zip(originals, copies, strict=True):
-            index = self._index.get(id(original))
-            if copy is not original and index is not None:
-                self._index[id(copy)] = index
-                self._copies.append(copy)
+    def copied(self, original: dict, copy: dict) -> None:
+        index = self._index.get(id(original))
+        if index is not None:
+            self._index[id(copy)] = index
+            self._copies.append(copy)
 
     def kept(self) -> list[dict]:
         return [message for index, message in enumerate(self._read) if index not in self._removed]
@@ -633,45 +675,16 @@ def _replay_records(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | No
             if rec.kind == "mark":
                 if undoing:
                     undo.finish()
-                marker = rec.marker if isinstance(rec.marker, str) else None
-                if marker == "session_reset":
-                    messages.clear()
-                    next_epoch()
-                elif marker and marker.startswith("rollback_to:"):
-                    try:
-                        keep = max(0, int(marker.split(":", 1)[1]))
-                    except ValueError:
-                        keep = None
-                    if keep is not None:
-                        # The index rides in POST-heal (live) space — the caller cut
-                        # `state["messages"][:keep]` against a healed list — so heal
-                        # first, else a synthetic tool result inserted on reload shifts
-                        # every later offset and the mark truncates the wrong message.
-                        messages[:] = _heal_orphaned_tool_calls(messages)
-                        del messages[keep:]
-                        next_epoch()
-                elif marker:
-                    data = _parse_compaction_marker(marker)
-                    keep_from = _compaction_keep_from(data) if data is not None else None
-                    if keep_from is not None:
-                        # keep_from counts in post-heal space, like rollback_to.
-                        messages[:] = _heal_orphaned_tool_calls(messages)
-                        keep_from = max(0, min(keep_from, len(messages)))
-                        rehydrated = data.get("rehydrated")
-                        rehydrated = rehydrated if isinstance(rehydrated, dict) else None
-                        tail = messages[keep_from:]
-                        originals = list(tail)
-                        drop_signed_reasoning(tail)
+                copies = rewrite_history(messages, rec.marker)
+                if copies is not None:
+                    for original, copy in copies:
                         if stamps is not None:
-                            for original, copy in zip(originals, tail, strict=True):
-                                entry = stamps.get(id(original))
-                                if copy is not original and entry is not None and entry[0] is original:
-                                    stamps[id(copy)] = (copy, entry[1])
+                            entry = stamps.get(id(original))
+                            if entry is not None and entry[0] is original:
+                                stamps[id(copy)] = (copy, entry[1])
                         if log is not None:
-                            log.copied(originals, tail)
-                        messages[:] = [compaction_summary_message(data["summary"]),
-                                       *([rehydrated] if rehydrated else []), *tail]
-                        next_epoch()
+                            log.copied(original, copy)
+                    next_epoch()
                 undo.reset()
                 continue
             if rec.kind != "message" or rec.message is None:
@@ -1003,14 +1016,32 @@ def last_workspace(memory_file: Path) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
-def append_compaction_mark(memory_file: Path, *, summary: str, keep_from: int, forced: bool = False,
-                           trigger: dict | None = None, rehydrated: dict | None = None) -> None:
+def _compaction_marker(*, summary: str, keep_from: int, forced: bool, trigger: dict | None,
+                       rehydrated: dict | None) -> str:
     payload = {"summary": summary, "keep_from": int(keep_from), "forced": bool(forced)}
     if rehydrated is not None:
         payload["rehydrated"] = rehydrated
     if trigger is not None:
         payload["trigger"] = trigger
-    append_mark(memory_file, "compaction:" + json.dumps(payload, separators=(",", ":")))
+    return "compaction:" + json.dumps(payload, separators=(",", ":"))
+
+
+def compaction_mark(live: list[dict], keep_from: int, *, summary: str, forced: bool = False,
+                    trigger: dict | None = None, rehydrated: dict | None = None) -> tuple[str, list[dict]]:
+    """The mark that compacts ``live`` down to ``summary``, ``rehydrated`` and
+    the tail from ``keep_from`` on, and the history that mark leaves
+    (`rewrite_history`). ``live`` is left as it is."""
+    marker = _compaction_marker(summary=summary, keep_from=keep_from, forced=forced,
+                                trigger=trigger, rehydrated=rehydrated)
+    after = list(live)
+    rewrite_history(after, marker)
+    return marker, after
+
+
+def append_compaction_mark(memory_file: Path, *, summary: str, keep_from: int, forced: bool = False,
+                           trigger: dict | None = None, rehydrated: dict | None = None) -> None:
+    append_mark(memory_file, _compaction_marker(summary=summary, keep_from=keep_from, forced=forced,
+                                                trigger=trigger, rehydrated=rehydrated))
 
 
 def wipe(memory_file: Path) -> Path | None:

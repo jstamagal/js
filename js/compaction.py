@@ -1060,15 +1060,13 @@ async def compact_now(
             token_budget=get_nonnegative_int(cfg, "COMPACTION_REATTACH_TOKENS_MAX"),
             per_file_tokens=get_nonnegative_int(cfg, "COMPACTION_REATTACH_FILE_TOKENS_MAX"),
         )
-        # The kept tail's signed reasoning was produced with the summarized
-        # prefix in front of it.
-        tail = messages[keep_from:]
-        M.drop_signed_reasoning(tail)
-        after = [M.compaction_summary_message(summary), *([rehydrated] if rehydrated else []), *tail]
+        marker, after = M.compaction_mark(messages, keep_from, summary=summary, forced=forced,
+                                          trigger=recorded_trigger, rehydrated=rehydrated)
         required_savings = 1 if forced else min_savings
         if original_est - _estimate_tokens(after, chars_per_token) < required_savings and rehydrated:
             rehydrated = None
-            after = [M.compaction_summary_message(summary), *tail]
+            marker, after = M.compaction_mark(messages, keep_from, summary=summary, forced=forced,
+                                              trigger=recorded_trigger)
         savings = original_est - _estimate_tokens(after, chars_per_token)
         if savings < required_savings:
             result = msgs.COMPACT_SKIPPED_SAVINGS.said(savings=savings, required=required_savings)
@@ -1083,8 +1081,7 @@ async def compact_now(
             return result
         flight.record("commit_pending", summary=summary, keep_from=keep_from, rehydrated=rehydrated)
         M.persist_messages(cfg.session_file, messages, stamp=_stamp(cfg))
-        M.append_compaction_mark(cfg.session_file, summary=summary, keep_from=keep_from,
-                                 forced=forced, trigger=recorded_trigger, rehydrated=rehydrated)
+        M.append_mark(cfg.session_file, marker)
         messages[:] = after
         owner = context or T.STOCK_CONTEXT
         tracker = getattr(owner, "context_budget_state", None)

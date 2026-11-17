@@ -194,3 +194,23 @@ def test_compaction_keeps_the_stamp_of_a_retained_signed_reply(tmp_path):
 
     assert M.load_replay_messages(path)[-1] == {"role": "assistant", "content": "answer"}
     assert M.last_reply_stamp(path) == stamp
+
+
+def test_the_history_a_compaction_mark_leaves_is_the_history_replay_rebuilds(tmp_path: Path):
+    f = tmp_path / "s.jsonl"
+    live = [
+        {"role": "user", "content": "u1"},
+        _assistant_toolcall("tc1"),                      # no result: replay heals it
+        {"role": "tool", "tool_call_id": "stray", "content": "no call"},
+        {"role": "user", "content": "u2"},
+        {"role": "assistant", "content": "a2", "reasoning_parts": [{"signature": "s"}]},
+    ]
+    M.persist_messages(f, live)
+
+    marker, after = M.compaction_mark(live, 3, summary="S", rehydrated={"role": "user", "content": "files"})
+    M.append_mark(f, marker)
+
+    assert list(M.load_replay_messages(f)) == after
+    assert [m.get("content") for m in after] == [
+        "<compaction-summary>\nS\n</compaction-summary>", "files", "u2", "a2"]
+    assert "reasoning_parts" not in after[-1] and "reasoning_parts" in live[-1]
