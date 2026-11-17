@@ -762,3 +762,55 @@ def test_an_ended_swarm_agent_shuts_its_kernel_down(tmp_path, monkeypatch):
 
     assert swarm_run.run(spec, out=io.StringIO()) == 0
     assert kernel.shut == 1
+
+
+def _project_jsrc(tmp_path, text: str) -> None:
+    (tmp_path / ".js").mkdir(exist_ok=True)
+    (tmp_path / ".js" / "jsrc").write_text(text, encoding="utf-8")
+
+
+def test_a_jsrc_tool_call_guard_vets_a_swarm_agents_calls(tmp_path, monkeypatch):
+    _agent_dir(tmp_path, monkeypatch)
+    monkeypatch.setenv("SHELL", "/bin/sh")
+    _project_jsrc(tmp_path, "on tool_call exec sh -c 'echo off limits >&2; exit 2'\n")
+    room = swarm.Room(tmp_path / "bus")
+    calls = iter([_call("who", "c1")])
+
+    def stream(**kwargs):
+        reply = next(calls, None)
+        if reply is not None:
+            return reply
+        room.send("steer", "a", "done", kind=swarm.STOP)
+        kwargs["on_text"]("ok")
+        return _text("ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    out = io.StringIO()
+    spec = _spec(tmp_path, [{"name": "a", "agent": "voice", "opener": "go", "session": "s-a", "cwd": str(tmp_path)}])
+
+    assert swarm_run.run(spec, out=out) == 0
+
+    session = next(e["session"] for e in _events(out) if e["type"] == "agent_start")
+    results = [m for m in memory.load_replay_messages(Path(session)) if m.get("role") == "tool"]
+    assert results and str(results[0]["content"]).startswith("ERROR: off limits")
+
+
+def test_a_jsrc_handler_that_needs_the_repl_is_reported_once_and_not_run(tmp_path, monkeypatch, capsys):
+    _agent_dir(tmp_path, monkeypatch)
+    _project_jsrc(tmp_path, "on turn_start set READ_LINES_MAX 5\n")
+    room = swarm.Room(tmp_path / "bus")
+
+    def stream(**kwargs):
+        room.send("steer", "*", "done", kind=swarm.STOP)
+        kwargs["on_text"]("ok")
+        return _text("ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    out = io.StringIO()
+    spec = _spec(tmp_path, [{"name": n, "agent": "voice", "opener": "go", "session": f"s-{n}", "cwd": str(tmp_path)}
+                            for n in ("a", "b")])
+
+    assert swarm_run.run(spec, out=out) == 0
+
+    assert capsys.readouterr().err.count(f"{tmp_path / '.js' / 'jsrc'}:1") == 1
+    assert all(json.loads(line) for line in out.getvalue().splitlines())

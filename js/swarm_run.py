@@ -46,9 +46,10 @@ from . import (
     run_assembly,
     runtime,
     settings as _settings,
+    standalone_hooks,
     swarm,
 )
-from .config import InvocationSources, from_env
+from .config import InvocationSources, from_env, jsrc_paths
 from .conversation import Conversation
 from .session_catalog import record_session_start
 from .toolkit import bus_tools, subagents
@@ -146,6 +147,9 @@ class Runner:
         # `restart` runs: the same, on the session it used.
         self.originals: dict[str, AgentSpec] = {}
         self.ended: dict[str, AgentSpec] = {}
+        # The jsrc lines whose `on` handler could not register, reported once
+        # for the run however many agents read them.
+        self.reported_hooks: set = set()
         self.gate: Any = None
         self.code = 0
 
@@ -273,8 +277,14 @@ class Runner:
             if not chat.messages and Path(cfg.session_file) != Path(os.devnull):
                 record_session_start(cfg.session_file, cwd=context.cwd, agent=cfg.agent_id, model=cfg.model,
                                      provider=cfg.provider_id, mode="swarm")
+            # The jsrc `on` handlers whose command stands alone, as `-p` runs
+            # them: an `on tool_call` guard vets this agent's calls, and what
+            # a handler prints goes to stderr, never to the event stream.
+            hooks = standalone_hooks.table(
+                cfg, jsrc_paths(Path(getattr(cfg, "project_dir", None) or context.cwd)),
+                reported=self.reported_hooks)
             turn_kwargs = settled.turn_kwargs(suppress_output=True, trace_override=False, steer=agent.steer,
-                                              event_sink=events.runtime_event)
+                                              event_sink=events.runtime_event, event_hooks=hooks)
             events.emit("agent_start", model=cfg.model, provider=cfg.provider_id, session=str(cfg.session_file),
                         cwd=str(context.cwd))
             await agent_messages.initialize(cfg, settled.prompt_spec, chat.messages, telemetry, system=system,
