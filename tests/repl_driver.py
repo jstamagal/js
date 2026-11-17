@@ -2,16 +2,18 @@
 
 `stub_screen` replaces the screen with one that hands each line to the REPL's
 Enter handler and then sends EOF. `run_async` drives `cli._repl_main` over it
-and returns the session's state; a test that starts js through `cli.main`
-calls `stub_screen` itself. `turn_stub` stands a plain function in for the
-turn the REPL awaits.
+and returns the session's state; `type_into_js` starts js through `cli.main`
+over it. `turn_stub` stands a plain function in for the turn the REPL awaits;
+`record_turns` stands in one that records each turn.
 """
 
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 
 from js import cli, model_client, persona as P, runtime
+from js.config import Config
 
 
 def turn_stub(turn):
@@ -21,6 +23,28 @@ def turn_stub(turn):
         return turn(*args, **kwargs)
 
     return run_turn_async
+
+
+@dataclass
+class TurnCall:
+    """One turn the REPL started: the Config it ran on, a copy of the messages
+    it was given (its own user message last), and its keyword arguments."""
+
+    cfg: Config
+    messages: list[dict]
+    kwargs: dict
+
+
+def record_turns(monkeypatch) -> list[TurnCall]:
+    """Each turn the REPL starts is recorded in the returned list and answers
+    nothing."""
+    turns: list[TurnCall] = []
+
+    def turn(cfg, system, messages, *args, **kwargs):
+        turns.append(TurnCall(cfg, list(messages), kwargs))
+
+    monkeypatch.setattr(runtime, "run_turn_async", turn_stub(turn))
+    return turns
 
 
 def repl_state(cfg, **state_kwargs):
@@ -108,3 +132,11 @@ def run_async(monkeypatch, cfg, lines, *, wait: bool = False, **state_kwargs) ->
         cli._repl_main(cfg, state, _telemetry(cfg, state), None, None, prompt_spec)
     ) == 0
     return state
+
+
+def type_into_js(monkeypatch, lines, *argv: str, wait: bool = True) -> int:
+    """The exit code of `js ARGV` started at a terminal, its REPL fed `lines`
+    (see `stub_screen`), each once the turns before it have ended."""
+    stub_screen(monkeypatch, lines, wait=wait)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    return cli.main(list(argv))
