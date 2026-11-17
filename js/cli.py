@@ -498,17 +498,17 @@ def _read_stdin_attachment_if_piped() -> bytes:
     return sys.stdin.read().encode("utf-8")
 
 
-def _cfg_for_active_model(cfg: Config, state: dict) -> Config:
-    model = state.get("model")
+def _cfg_for_active_model(cfg: Config, state: ReplState) -> Config:
+    model = state.model
     if not (isinstance(model, str) and model):
         model = cfg.model
     try:
         route = routing.resolve_model_route(
             model,
-            configured_provider_id=state.get("provider_id", cfg.provider_id),
-            configured_base_url=state.get("provider_base_url", cfg.provider_base_url),
-            configured_api_key=state.get("provider_api_key", cfg.provider_api_key),
-            configured_headers=state.get("provider_headers", getattr(cfg, "provider_headers", {})),
+            configured_provider_id=state.provider_id,
+            configured_base_url=state.provider_base_url,
+            configured_api_key=state.provider_api_key,
+            configured_headers=state.provider_headers,
             env=os.environ,
             explicit_model=True,
             use_saved_login=False,
@@ -520,7 +520,7 @@ def _cfg_for_active_model(cfg: Config, state: dict) -> Config:
         # no provider so the turn surfaces the friendly not-logged-in error at the
         # model boundary instead.
         route = routing.ModelRoute(model=model, provider_id=None, base_url=None, api_key=None)
-    route_vision = vision_enabled_for_model(route.model, state.get("settings", cfg.settings))
+    route_vision = vision_enabled_for_model(route.model, state.settings)
     if (
         route.model != cfg.model
         or route.provider_id != cfg.provider_id
@@ -529,7 +529,7 @@ def _cfg_for_active_model(cfg: Config, state: dict) -> Config:
         or route.headers != getattr(cfg, "provider_headers", {})
         or route_vision != cfg.vision_enabled
     ):
-        return routing.apply_route(cfg, route, settings=state.get("settings", cfg.settings))
+        return routing.apply_route(cfg, route, settings=state.settings)
     return cfg
 
 
@@ -567,16 +567,16 @@ def _debug_log_from_live_settings(cfg: Config, live_settings: dict) -> Path | No
     return cfg.debug_log or (_paths.state_root() / cfg.agent_id / "debug.log")
 
 
-def _sync_telemetry_from_live_settings(cfg: Config, state: dict, telemetry: runtime.Telemetry) -> None:
-    debug_log = _debug_log_from_live_settings(cfg, state["settings"])
+def _sync_telemetry_from_live_settings(cfg: Config, state: ReplState, telemetry: runtime.Telemetry) -> None:
+    debug_log = _debug_log_from_live_settings(cfg, state.settings)
     if debug_log is not None:
         try:
             debug_log.parent.mkdir(parents=True, exist_ok=True)
         except OSError:
             pass
     telemetry.debug_log = debug_log
-    _sync_trace_sink(cfg, state["settings"], telemetry)
-    _sync_transcript_sink(cfg, state["settings"], telemetry)
+    _sync_trace_sink(cfg, state.settings, telemetry)
+    _sync_transcript_sink(cfg, state.settings, telemetry)
 
 
 # ---------------------------------------------------------------------------
@@ -791,12 +791,12 @@ def _sync_trace_sink(
         old.close()
 
 
-def _cfg_for_live_state(cfg: Config, state: dict) -> Config:
+def _cfg_for_live_state(cfg: Config, state: ReplState) -> Config:
     """The Config a turn started now runs with: the live settings, and the
     login-default settings resolved over every layer (login_defaults)."""
     active = _cfg_for_active_model(cfg, state)
-    live_settings = state["settings"]
-    agent_default, agent = login_defaults.agent_layers(state.get("prompt_spec"))
+    live_settings = state.settings
+    agent_default, agent = login_defaults.agent_layers(state.prompt_spec)
     return login_defaults.for_turn(replace(
         active,
         **turn_settings.project(live_settings, fallback=active),
@@ -804,23 +804,20 @@ def _cfg_for_live_state(cfg: Config, state: dict) -> Config:
         reasoning_effort=_live_reasoning_effort_setting(live_settings, active.reasoning_effort),
         layer_agent_default=agent_default,
         layer_agent=agent,
-        layer_set=dict(state.get("live_set") or {}),
-        layer_resume=dict(state.get("live_resume") or {}),
+        layer_set=dict(state.live_set or {}),
+        layer_resume=dict(state.live_resume or {}),
     ))
 
-def _sync_tool_registry_from_live_settings(cfg: Config, state: dict) -> None:
+def _sync_tool_registry_from_live_settings(cfg: Config, state: ReplState) -> None:
     """Rebuild the live registry. The agent load already printed the
     unmatched-entry notices; a tools.yaml that no longer resolves keeps the
     current registry and prints one line."""
-    selectors = state.get("tool_selectors", ())
+    selectors = state.tool_selectors
     try:
-        state["tool_registry"] = run_assembly.registry_for(_cfg_for_live_state(cfg, state)).select(selectors, warn=False)
+        state.tool_registry = run_assembly.registry_for(_cfg_for_live_state(cfg, state)).select(selectors, warn=False)
     except tool_policy.ToolPolicyError as exc:
         msgs.say(msgs.TOOL_SURFACE_KEPT, error=exc)
 
-
-def _state_value(state: dict, key: str, default):
-    return state[key] if key in state else default
 
 # ---------------------------------------------------------------------------
 # Effective /set view — annotate knobs whose live value bypasses the store
@@ -922,7 +919,7 @@ def _same_number(a, b) -> bool:
         return a == b
 
 
-def _live_settings_overlay_for_state(cfg: Config, state: dict) -> dict[str, setcmd.LiveValue]:
+def _live_settings_overlay_for_state(cfg: Config, state: ReplState) -> dict[str, setcmd.LiveValue]:
     """Resolve the same route the next turn uses and diff it against the store."""
     turn_cfg = _cfg_for_live_state(cfg, state)
     provider_id = turn_cfg.provider_id
@@ -934,9 +931,9 @@ def _live_settings_overlay_for_state(cfg: Config, state: dict) -> dict[str, setc
     eff_sampling = login_defaults.sampling(turn_cfg)
     manifest_sampling = login_defaults.layer_sampling(turn_cfg.layer_agent)
     overlay = _live_settings_overlay(
-        state["settings"],
+        state.settings,
         live_model=turn_cfg.model,
-        model_source=state.get("model_source"),
+        model_source=state.model_source,
         provider_id=provider_id,
         provider_base_url=turn_cfg.provider_base_url,
         provider_api_key=turn_cfg.provider_api_key,
@@ -949,13 +946,13 @@ def _live_settings_overlay_for_state(cfg: Config, state: dict) -> dict[str, setc
     )
     # The login-default settings show their resolved value and its layer.
     login = login_defaults.login_for(turn_cfg.provider_id, turn_cfg.provider_base_url)
-    masked = setcmd.masks_secrets(state["settings"])
+    masked = setcmd.masks_secrets(state.settings)
     values, sources = login_defaults.resolve(login_defaults.layers_of(turn_cfg))
     for key in login_defaults.KEYS:
         source = sources.get(key)
         if key in overlay and source in (None, "env", "flag"):
             continue  # the overlay already names the env var or flag
-        if source in (None, "jsrc") and values.get(key) == settings.get_dotted(state["settings"], (key,)):
+        if source in (None, "jsrc") and values.get(key) == settings.get_dotted(state.settings, (key,)):
             continue
         label = (msgs.SETTING_SOURCE_LOGIN_LAYER.words(provider_id=login.provider_id, source=source) if source in ("server", "model") and login is not None
                  else source or msgs.SETTING_SOURCE_UNSET.words())
@@ -966,22 +963,22 @@ def _live_settings_overlay_for_state(cfg: Config, state: dict) -> dict[str, setc
     return overlay
 
 
-def _rc_lines(state: dict) -> list[str]:
+def _rc_lines(state: ReplState) -> list[str]:
     """The session's `on` and `alias` lines, as a jsrc writes them."""
-    hooks = state.get("events")
+    hooks = state.events
     lines = setcmd.event_lines(hooks) if hooks is not None else []
-    return lines + [f"alias {name} {body}" for name, body in (state.get("aliases") or {}).items()]
+    return lines + [f"alias {name} {body}" for name, body in (state.aliases or {}).items()]
 
 
-def _mark_saved(state: dict) -> None:
+def _mark_saved(state: ReplState) -> None:
     """Record the settings, /fset entries, `on` and `alias` lines and model as
     they stand now: what `/save` compares against, so it writes only what
     the operator changed after this."""
-    state["saved"] = {
-        "settings": copy.deepcopy(state.get("settings") or {}),
+    state.saved = {
+        "settings": copy.deepcopy(state.settings or {}),
         "fset": fset.overrides(),
         "lines": _rc_lines(state),
-        "model": (state.get("provider_id"), state.get("model")),
+        "model": (state.provider_id, state.model),
     }
 
 
@@ -990,12 +987,12 @@ def _model_from_live_settings(live_settings: dict) -> str | None:
     return raw if isinstance(raw, str) and raw else None
 
 
-def _sync_model_from_live_settings(state: dict) -> None:
-    model = _model_from_live_settings(state["settings"])
+def _sync_model_from_live_settings(state: ReplState) -> None:
+    model = _model_from_live_settings(state.settings)
     if model is not None:
-        state["model"] = model
+        state.model = model
         # The store now drives the model, so it is no longer a flag/command override.
-        state["model_source"] = None
+        state.model_source = None
 
 
 def _provider_from_live_settings(live_settings: dict) -> tuple[str | None, str | None, str | None]:
@@ -1010,25 +1007,25 @@ def _provider_from_live_settings(live_settings: dict) -> tuple[str | None, str |
     )
 
 
-def _sync_provider_from_live_settings(state: dict, changed_keys: list[str]) -> None:
-    provider_id, base_url, api_key = _provider_from_live_settings(state["settings"])
+def _sync_provider_from_live_settings(state: ReplState, changed_keys: list[str]) -> None:
+    provider_id, base_url, api_key = _provider_from_live_settings(state.settings)
     changed = set(changed_keys)
     if "PROVIDER" in changed:
         if provider_id is None:
-            state["provider_id"] = None
-            state["provider_base_url"] = None
-            state["provider_api_key"] = None
-            state["provider_headers"] = {}
+            state.provider_id = None
+            state.provider_base_url = None
+            state.provider_api_key = None
+            state.provider_headers = {}
         else:
             _set_provider_state(state, provider_id)
     if "BASE_URL" in changed:
-        state["provider_base_url"] = base_url
+        state.provider_base_url = base_url
     if "API_KEY" in changed:
-        state["provider_api_key"] = api_key
+        state.provider_api_key = api_key
 
 
 def _sync_provider_delta_from_live_settings(
-    state: dict,
+    state: ReplState,
     before: tuple[str | None, str | None, str | None],
     after: tuple[str | None, str | None, str | None],
 ) -> None:
@@ -1109,34 +1106,34 @@ def _emit_session_event(state: dict, telemetry: runtime.Telemetry, cfg: Config, 
     )
 
 
-def _apply_saved_login_to_state(state: dict, provider_name: str) -> bool:
+def _apply_saved_login_to_state(state: ReplState, provider_name: str) -> bool:
     provider_id = providers.normalize_provider_id(provider_name) or provider_name
     login = logins.load_logins().get(provider_id)
     if not login:
         return False
-    state["provider_id"] = login.provider_id
-    state["provider_headers"] = dict(login.provider_headers)
-    state["provider_base_url"] = login.provider_base_url
-    state["provider_api_key"] = login.provider_api_key
+    state.provider_id = login.provider_id
+    state.provider_headers = dict(login.provider_headers)
+    state.provider_base_url = login.provider_base_url
+    state.provider_api_key = login.provider_api_key
     return True
 
 
-async def _maybe_auto_compact_async(cfg: Config, state: dict) -> None:
+async def _maybe_auto_compact_async(cfg: Config, state: ReplState) -> None:
     """The REPL's between-turn trigger: the policy lives in compaction, the
     printing lives here."""
     if not compaction.get_bool(cfg, "COMPACTION_AUTO"):
         return
-    active_cfg = _cfg_for_live_state(cfg, {**state, "settings": state.get("settings", cfg.settings)})
+    active_cfg = _cfg_for_live_state(cfg, state)
     turn_status = runtime.T.STOCK_CONTEXT.turn_status
     turn_status.compacting = True
     try:
         with stream_transport.net_role(msgs.COMPACTING_ROLE.words()):
             outcome = await compaction.maybe_auto_compact_async(
                 active_cfg,
-                state.setdefault("auto_compact", compaction.AutoCompactState()),
+                state.auto_compact,
                 runtime.T.STOCK_CONTEXT,
-                state.get("system") or "",
-                state.get("messages") or [],
+                state.system,
+                state.messages,
                 lambda: runtime._resolve_context_window(
                     active_cfg.model, active_cfg.provider_id, active_cfg.provider_base_url
                 ),
@@ -1150,8 +1147,23 @@ async def _maybe_auto_compact_async(cfg: Config, state: dict) -> None:
         msgs.say(msgs.COMPACTION_DONE, result=outcome.result)
 
 
-def _maybe_auto_compact(cfg: Config, state: dict) -> None:
+def _maybe_auto_compact(cfg: Config, state: ReplState) -> None:
     asyncio.run(_maybe_auto_compact_async(cfg, state))
+
+
+def _run_state(cfg: Config, system: str, messages: list[dict]) -> ReplState:
+    """The live state a run outside the REPL compacts between turns with: its
+    own system prompt, messages, route and settings."""
+    return ReplState(
+        system=system,
+        messages=messages,
+        model=cfg.model,
+        provider_id=cfg.provider_id,
+        provider_base_url=cfg.provider_base_url,
+        provider_api_key=cfg.provider_api_key,
+        provider_headers=dict(getattr(cfg, "provider_headers", {}) or {}),
+        settings=cfg.settings,
+    )
 
 
 def _login_for_provider(provider_id: str | None, base_url: str | None, api_key: str | None) -> logins.Login:
@@ -1177,31 +1189,31 @@ def _models_for_provider(provider_id: str | None, base_url: str | None, api_key:
     return logins.test_login(_login_for_provider(provider_id, base_url, api_key))
 
 
-def _set_provider_state(state: dict, provider_id: str) -> None:
+def _set_provider_state(state: ReplState, provider_id: str) -> None:
     canonical_id = providers.normalize_provider_id(provider_id) or provider_id
     if _apply_saved_login_to_state(state, canonical_id):
         return
     provider_def = providers.provider_for_login(canonical_id)
-    state["provider_id"] = canonical_id
-    state["provider_headers"] = {}
-    state["provider_base_url"] = providers.provider_base_url(provider_def, None, os.environ)
-    state["provider_api_key"] = providers.provider_api_key(provider_def, None, os.environ)
+    state.provider_id = canonical_id
+    state.provider_headers = {}
+    state.provider_base_url = providers.provider_base_url(provider_def, None, os.environ)
+    state.provider_api_key = providers.provider_api_key(provider_def, None, os.environ)
 
 
-def _set_model_via_route(state: dict, cfg: Config, model_value: str) -> None:
+def _set_model_via_route(state: ReplState, cfg: Config, model_value: str) -> None:
     """Apply `/model <id>` through the SAME saved-login gate startup routing
     uses for authoritative prefix switches. A `vendor/model` prefix may switch
     the direct endpoint only when `vendor` is a saved login; otherwise the
     current endpoint stays and the full id rides it."""
-    configured_provider_id = _state_value(state, "provider_id", cfg.provider_id)
-    configured_base_url = _state_value(state, "provider_base_url", cfg.provider_base_url)
-    configured_api_key = _state_value(state, "provider_api_key", cfg.provider_api_key)
-    configured_headers = _state_value(state, "provider_headers", getattr(cfg, "provider_headers", {}))
+    configured_provider_id = state.provider_id
+    configured_base_url = state.provider_base_url
+    configured_api_key = state.provider_api_key
+    configured_headers = state.provider_headers
     parsed_provider_id, _parsed_model = providers.parse_model_prefix(model_value)
     prefix_login = routing._saved_login(parsed_provider_id) if parsed_provider_id is not None else None
-    state["model_source"] = "/model command"
+    state.model_source = "/model command"
     if parsed_provider_id is not None and prefix_login is None:
-        state["model"] = model_value
+        state.model = model_value
         msgs.say(msgs.MODEL_SET, model=providers.qualified_model_id(configured_provider_id, model_value))
         return
 
@@ -1216,45 +1228,45 @@ def _set_model_via_route(state: dict, cfg: Config, model_value: str) -> None:
         prefix_overrides_provider=parsed_provider_id is not None,
         use_saved_login=parsed_provider_id is not None,
     )
-    state["model"] = route.model
-    state["provider_id"] = route.provider_id
-    state["provider_base_url"] = route.base_url
-    state["provider_api_key"] = route.api_key
-    state["provider_headers"] = dict(route.headers)
+    state.model = route.model
+    state.provider_id = route.provider_id
+    state.provider_base_url = route.base_url
+    state.provider_api_key = route.api_key
+    state.provider_headers = dict(route.headers)
     msgs.say(msgs.MODEL_SET, model=providers.qualified_model_id(route.provider_id, route.model))
 
 
-def _pick_model_into_state(state: dict, cfg: Config) -> None:
+def _pick_model_into_state(state: ReplState, cfg: Config) -> None:
     selected = picker.pick_model(
-        provider_id=_state_value(state, "provider_id", cfg.provider_id),
-        provider_base_url=_state_value(state, "provider_base_url", cfg.provider_base_url),
-        provider_api_key=_state_value(state, "provider_api_key", cfg.provider_api_key),
-        model=_state_value(state, "model", cfg.model),
+        provider_id=state.provider_id,
+        provider_base_url=state.provider_base_url,
+        provider_api_key=state.provider_api_key,
+        model=state.model,
     )
     if not selected:
         return
-    state["provider_id"] = selected["provider_id"]
-    state["provider_base_url"] = selected.get("provider_base_url")
-    state["provider_api_key"] = selected.get("provider_api_key")
-    state["provider_headers"] = dict(selected.get("provider_headers") or {})
-    state["model"] = selected["model"]
+    state.provider_id = selected["provider_id"]
+    state.provider_base_url = selected.get("provider_base_url")
+    state.provider_api_key = selected.get("provider_api_key")
+    state.provider_headers = dict(selected.get("provider_headers") or {})
+    state.model = selected["model"]
     chosen = providers.qualified_model_id(selected.get("provider_id"), selected["model"])
-    if isinstance(state.get("settings"), dict):
-        settings.set_dotted(state["settings"], ("MODEL",), chosen)
-    state["model_source"] = None  # the store now holds the pick; /save writes it
+    if isinstance(state.settings, dict):
+        settings.set_dotted(state.settings, ("MODEL",), chosen)
+    state.model_source = None  # the store now holds the pick; /save writes it
     msgs.say(msgs.MODEL_SET, model=chosen)
 
 
-def _cmd_models(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_models(arg: str, state: ReplState, cfg: Config) -> str | None:
     max_models = 50
     if arg:
         try:
             max_models = int(arg.split()[0])
         except ValueError:
             return msgs.MODELS_LIMIT_NOT_A_NUMBER.said(value=arg.split()[0])
-    provider_id = _state_value(state, "provider_id", cfg.provider_id)
-    provider_base_url = _state_value(state, "provider_base_url", cfg.provider_base_url)
-    provider_api_key = _state_value(state, "provider_api_key", cfg.provider_api_key)
+    provider_id = state.provider_id
+    provider_base_url = state.provider_base_url
+    provider_api_key = state.provider_api_key
     if not provider_id:
         return msgs.NO_PROVIDER.said()
     try:
@@ -1268,9 +1280,9 @@ def _cmd_models(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
-def _cmd_provider(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_provider(arg: str, state: ReplState, cfg: Config) -> str | None:
     if not arg:
-        cur = _state_value(state, "provider_id", cfg.provider_id)
+        cur = state.provider_id
         if cur:
             msgs.say(msgs.PROVIDER_IS, provider=cur)
         else:
@@ -1282,14 +1294,14 @@ def _cmd_provider(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
-def _cmd_baseurl(arg: str, state: dict, cfg: Config) -> str | None:
-    state["provider_base_url"] = arg.split()[0] if arg else None
+def _cmd_baseurl(arg: str, state: ReplState, cfg: Config) -> str | None:
+    state.provider_base_url = arg.split()[0] if arg else None
     msgs.say(msgs.BASE_URL_SET if arg else msgs.BASE_URL_CLEARED)
     return None
 
 
-def _cmd_apikey(arg: str, state: dict, cfg: Config) -> str | None:
-    state["provider_api_key"] = arg.split()[0] if arg else None
+def _cmd_apikey(arg: str, state: ReplState, cfg: Config) -> str | None:
+    state.provider_api_key = arg.split()[0] if arg else None
     msgs.say(msgs.API_KEY_SET if arg else msgs.API_KEY_CLEARED)
     return None
 
@@ -1326,11 +1338,11 @@ def _cmd_login(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
-def _cmd_logout(arg: str, state: dict, cfg: Config) -> str | None:
-    state["provider_id"] = None
-    state["provider_base_url"] = None
-    state["provider_api_key"] = None
-    state["provider_headers"] = {}
+def _cmd_logout(arg: str, state: ReplState, cfg: Config) -> str | None:
+    state.provider_id = None
+    state.provider_base_url = None
+    state.provider_api_key = None
+    state.provider_headers = {}
     msgs.say(msgs.PROVIDER_CLEARED)
     return None
 
@@ -1688,10 +1700,10 @@ def _save_server(cfg: Config, state: dict) -> str | None:
     return None
 
 
-def _live_stamp(cfg: Config, state: dict) -> dict:
+def _live_stamp(cfg: Config, state: ReplState) -> dict:
     """The stamp a turn started now would write: its model and the effort that
     model resolves to."""
-    if not isinstance(state.get("settings"), dict):
+    if not isinstance(state.settings, dict):
         active = _cfg_for_active_model(cfg, state)
         return M.stamp_for(active.model, active.provider_id, active.reasoning_effort)
     turn = _cfg_for_live_state(cfg, state)
@@ -2839,7 +2851,7 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
         # whatever landed. A `stop` message ends it after the turn it lands in.
         # The between-turn compaction trigger runs before each sleep, as it
         # does between REPL turns, so a long-lived agent stays inside its window.
-        auto_state = {"system": system, "messages": messages, "model": cfg.model}
+        auto_state = _run_state(cfg, system, messages)
         while not bus.stop_seen:
             if save:
                 _persist_turn_messages(cfg, messages, reasoning_override)
@@ -2962,11 +2974,7 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
                         markdown=display_mod.markdown_enabled(getattr(cfg, "settings", None)),
                     )
         if save:
-            _maybe_auto_compact(cfg, {
-                "system": system,
-                "messages": messages,
-                "model": cfg.model,
-            })
+            _maybe_auto_compact(cfg, _run_state(cfg, system, messages))
     return 0 if stats_ok else 1
 
 
