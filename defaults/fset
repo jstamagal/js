@@ -156,7 +156,6 @@ fset SAVE_NO_SERVER %C04%G%C Not saved: no saved login for $0-. js --login adds 
 fset LOAD_UNREADABLE %C04%G%C load: $0 not read: $1-
 fset ARGUMENTS_REFUSED %C04%G%C $0-
 fset UNKNOWN_OPTION %C04%G%C unknown option $0-
-fset UNKNOWN_OPTION_DID_YOU_MEAN %C04%G%C unknown option $0 (did you mean $1-?)
 fset BAD_REASONING %C04%G%C --reasoning $0: $1-
 fset BAD_FLAG_VALUE %C04%G%C $0 $1: $2-
 fset PROMPT_EMPTY %C04%G%C Prompt is empty.
@@ -169,7 +168,6 @@ fset GIT_INIT_FAILED %C04%G%C git init failed in $0: $1-
 fset SURVEY_FAILED %C04%G%C Commit survey failed for $0: $1-
 fset BAD_URL_SPEC %C04%G%C -u: $0-
 fset JAIL_REFUSED %C04%G%C $0-
-fset JSON_NEEDS_LIST %C04%G%C --json requires -p, pipe mode or --list.
 fset LIST_EXCLUSIVE %C04%G%C --list does not combine with run or session options.
 fset LAST_WITH_SESSION %C04%G%C --last and --session are mutually exclusive.
 fset NO_PREVIOUS_SESSION %C04%G%C No previous session for agent: $0-

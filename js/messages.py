@@ -746,7 +746,6 @@ OPT_NO_LOCAL_CONFIG = Message("Ignore project .js/jsrc and .js/jsrc.local.")
 OPT_HOME = Message("Use DIR as the complete js profile; overrides JS_HOME.")
 OPT_NO_GLOBAL_CONFIG = Message("Ignore the platform jsrc.")
 OPT_MIGRATE_CONFIG = Message("One-shot: convert a legacy config.toml to jsrc, then exit.")
-OPT_LIST = Message("List saved sessions without loading config or contacting a provider.")
 OPT_LAST = Message("Resume the most recently used session for this agent.")
 OPT_LAST_PROMPT = Message("--last -p: run one prompt in the most recently used session for this agent.")
 LAST_PROMPT_WITH_PROMPT = Message("-lp already takes the prompt; drop -p")
@@ -772,9 +771,6 @@ SWARM_QUIET = Message("Exit 0 when every agent on the bus is asleep with an empt
 SWARM_CELLS = Message("The work board: open and taken tasks first, done ones last.")
 SWARM_POST = Message("Put a task on the work board. A body of - reads stdin.")
 SWARM_RUN = Message("Run every agent in a JSON spec in this one process; events go to stdout.")
-OPT_PROVIDERS_JSON = Message("Print the provider registry as JSON for external pickers.")
-OPT_LOGINS_JSON = Message("Print saved logins as JSON for external pickers.")
-OPT_MODELS_JSON = Message("Print cached or live models for PROVIDER as JSON.")
 OPT_LIST_MODELS = Message("Print human-readable models for PROVIDER and the exact --model values to pass.")
 OPT_REFRESH_MODEL_CATALOG = Message("Force-refresh js's local models.dev catalog now.")
 OPT_COMMIT = Message(
@@ -866,7 +862,6 @@ QUEUED = Message("Queued. {ahead} ahead.")
 BAD_URL_SPEC = Message("-u: {error}")
 BAD_BASE_URL = Message("JS_BASE_URL: {error}")
 JAIL_REFUSED = Message("{error}")
-JSON_NEEDS_LIST = Message("--json requires -p, pipe mode or --list.")
 LIST_EXCLUSIVE = Message("--list does not combine with run or session options.")
 LAST_WITH_SESSION = Message("--last and --session are mutually exclusive.")
 NO_PREVIOUS_SESSION = Message("No previous session for agent: {agent}")
@@ -1404,7 +1399,6 @@ SESSIONS_MESSAGES_KEYS = Message("enter=branch here  r=resume at end  esc=back",
 SESSIONS_MESSAGES_NONE = Message("This session has no messages.", banner=False)
 SESSIONS_INFO_TITLE = Message(" INFO  {when} · {agent} · {dir}", banner=False)
 SESSIONS_INFO_KEYS = Message("enter=resume  esc=back", banner=False)
-SESSIONS_INFO_ROW = Message("  {label:<12} {value}", banner=False)
 SESSIONS_INFO_FILE = Message("file", banner=False)
 SESSIONS_INFO_TITLE_ROW = Message("title", banner=False)
 SESSIONS_INFO_AGENT = Message("agent", banner=False)
@@ -1493,7 +1487,6 @@ FSET_UNKNOWN = Message("Unknown /fset entry: {name}")
 FSET_REFUSED = Message("{name}: {error}")
 FSET_NO_CODE_STYLE = Message("no Pygments style {value!r}")
 FSET_MARK_MODIFIER = Message("a mark takes no variation selector or skin-tone modifier")
-FSET_NO_THEME = Message("no theme {name} in {user} or the built-ins; the themes are {themes}")
 FSET_THEME_NOT_PALETTE = Message("{path}: {name} is not a palette slot's #rrggbb; a theme sets PALETTE_00 to PALETTE_98")
 FSET_BAD_CODE = Message("{code!r} is not a format code: a format takes %Cnn, %C, %G, %%, $N, $N-, $* and $$")
 FSET_BAD_SLOT = Message("{code} names no palette slot: slots are 00 to 98")
@@ -1694,8 +1687,6 @@ CONFIG_SESSION_MUST_IDENTIFY_AN_EXISTING_JSONL_FILE = "no session matches {sessi
 CONFIG_SESSION_PARENT_MUST_BE_A_DIRECTORY = "session parent must be a directory: {session}"
 
 CONFIG_SESSION_PATH_MUST_BE_A_JSONL_FILE_307 = "session path must be a .jsonl file inside {sessions_dir}: {session}"
-
-CONFIG_AGENT_AT_IS_UNREADABLE = "agent {agent_id!r} at {candidate} is unreadable: {strerror}"
 
 EXPECTED_SHELL_QUOTED_COMMAND = Message("expected a shell-quoted command: {exc}", banner=False)
 
@@ -1970,8 +1961,6 @@ MODEL_PROFILE_CORE = "core in {where} must be true or false"
 MODEL_PROFILE_PROMPT = "prompt in {where}: {error}"
 
 AGENT_MANIFEST_UNKNOWN_KEY_S_IN_ALLOWED = "unknown key(s) {value} in {manifest_path}; allowed: {value2}"
-
-AGENT_MANIFEST_PROMPTS_DIRECTORY_MISSING_AT_DROP_MD_PROMPT = "prompts directory missing at {prompts_dir}. Drop .md prompt files and an optional {AGENT_MANIFEST} manifest in there."
 
 AGENT_MANIFEST_PROMPTS_DIRECTORY_HAS_NO_MD_PROMPT_FILES = "prompts directory {prompts_dir} has no .md prompt files or {AGENT_MANIFEST}."
 
