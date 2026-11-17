@@ -563,7 +563,7 @@ def test_each_media_message_of_a_batch_names_its_own_tool_call(tmp_path):
 
 
 def test_plain_tool_result_message():
-    msg = model_client.build_tool_result_message("tc1", "fs_search", "42")
+    msg = model_client.build_tool_result_messages("tc1", "fs_search", "42")[0]
     assert msg.role == "tool"
     assert msg.parts[0].kind == "tool_result"
     assert msg.parts[0].tool_call_id == "tc1"
@@ -573,7 +573,7 @@ def test_plain_tool_result_message():
 
 
 def test_error_tool_result_message():
-    msg = model_client.build_tool_result_message("tc1", "fs_search", "ERROR: disk full")
+    msg = model_client.build_tool_result_messages("tc1", "fs_search", "ERROR: disk full")[0]
     assert msg.parts[0].is_error
     assert msg.parts[0].result == "ERROR: disk full"
 

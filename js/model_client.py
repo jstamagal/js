@@ -1205,47 +1205,6 @@ def _visual_read_error(raw_path: str, exc: OSError) -> str:
     return f'ERROR: could not read visual result {raw_path}: {exc}'
 
 
-def _build_tool_result_part(
-    tool_call_id: str, tool_name: str, result: str
-) -> ai.types.messages.ToolResultPart:
-    """Create the text/stub ``ToolResultPart`` for a tool result."""
-    payload = _image_result_payload(result)
-    if payload is None:
-        return ai.tool_result_part(
-            tool_call_id,
-            result=result,
-            tool_name=tool_name,
-            is_error=isinstance(result, str) and result.startswith("ERROR"),
-        )
-    if isinstance(payload, str):
-        return ai.tool_result_part(
-            tool_call_id,
-            result=payload,
-            tool_name=tool_name,
-            is_error=True,
-        )
-    stub, _mime, _data = payload
-    return ai.tool_result_part(
-        tool_call_id,
-        result=stub,
-        tool_name=tool_name,
-        is_error=False,
-    )
-
-
-def build_tool_result_message(
-    tool_call_id: str, tool_name: str, result: Any
-) -> ai.messages.Message:
-    """Provider-facing tool result message for a single completed tool call."""
-    if isinstance(result, ai.messages.Message):
-        return result
-    if hasattr(result, "kind"):
-        part = result
-    else:
-        part = _build_tool_result_part(tool_call_id, tool_name, str(result))
-    return ai.tool_message(part)
-
-
 def _mixed_result_parts(result: Any) -> tuple[str, list[Any], bool]:
     from .toolkit.core import ToolResult
 

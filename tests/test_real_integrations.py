@@ -129,7 +129,7 @@ def test_real_model_turn_is_available_only_when_local_proxy_is_configured():
 def test_live_vision_model_reads_image_through_real_message_path(tmp_path):
     """End-to-end proof that image bytes reach a model that actually reads them.
 
-    Real fs_read -> real model_client.build_tool_result_message -> a LIVE
+    Real fs_read -> real model_client.build_tool_result_messages -> a LIVE
     vision model via model_client.stream_model. Skips unless Pillow and a
     reachable local vision model are present, so it never fails spuriously
     where the local model is absent."""
