@@ -11,9 +11,17 @@ every tool boundary, the turn persisted and the compaction trigger run before
 every sleep, and the sleep an await on the inbox. ``slots`` caps how many agents
 are mid-turn at once; 0 is no cap. ``recruit`` adds an agent to this loop.
 
+Two message kinds are the runner's, not the agent's (``swarm.RUNNER_KINDS``):
+``cancel`` sent to an agent cancels its current turn, saved as it stands, and
+the agent goes on as after any turn (it ends there when it has seen a
+``stop``); ``restart`` sent to an agent that has ended starts it again from its
+spec, continuing its session, with the message's body as its first message (its
+opener when the body is empty). Sent to an agent that is not in that state,
+either is dropped.
+
 Events go to stdout as JSON lines, every one carrying ``agent``; ``agent_start``,
-``agent_end`` and ``run_end`` are the runner's own. The process ends when every
-agent has stopped or retired. SIGTERM and SIGINT end it like ^C: every session
+``agent_end``, ``turn_cancelled``, ``restart``, ``dropped`` and ``run_end`` are
+the runner's own. The process ends when every agent has stopped or retired. SIGTERM and SIGINT end it like ^C: every session
 is persisted and the exit code is 130.
 """
 
@@ -130,6 +138,12 @@ class Runner:
         self.out = out
         self.lock = threading.Lock()
         self.tasks: dict[str, asyncio.Task] = {}
+        # Each agent's turn in flight, which `cancel` cancels.
+        self.turns: dict[str, asyncio.Task] = {}
+        # Each agent's spec as first given, and, once it has ended, the spec a
+        # `restart` runs: the same, on the session it used.
+        self.originals: dict[str, AgentSpec] = {}
+        self.ended: dict[str, AgentSpec] = {}
         self.gate: Any = None
         self.code = 0
 
@@ -140,18 +154,65 @@ class Runner:
                 loop.add_signal_handler(sig, self.cancel_all)
         for spec in self.specs:
             self.add(spec)
-        while self.tasks:
-            await asyncio.gather(*list(self.tasks.values()), return_exceptions=True)
-            for name in [n for n, t in self.tasks.items() if t.done()]:
-                self.tasks.pop(name, None)
+        watcher = loop.create_task(self.watch(), name="swarm:runner")
+        try:
+            while self.tasks:
+                await asyncio.gather(*list(self.tasks.values()), return_exceptions=True)
+                for name in [n for n, t in self.tasks.items() if t.done()]:
+                    self.tasks.pop(name, None)
+        finally:
+            watcher.cancel()
         AgentEvents(self.out, self.lock, "").emit("run_end", agents=[s.name for s in self.specs],
                                                    exit_code=self.code)
         return self.code
 
     def add(self, spec: AgentSpec) -> asyncio.Task:
+        self.originals.setdefault(spec.name, spec)
+        self.ended.pop(spec.name, None)
         task = asyncio.get_running_loop().create_task(self.run_agent(spec), name=f"swarm:{spec.name}")
         self.tasks[spec.name] = task
         return task
+
+    async def watch(self) -> None:
+        """Act on the runner's message kinds as they land, every poll."""
+        room = swarm.Room(self.root)
+        while True:
+            for name in list(self.originals):
+                landed = swarm.Inbox(room, name).take(swarm.RUNNER_KINDS)
+                for msg in landed:
+                    try:
+                        self.act(name, msg)
+                    except Exception as exc:  # noqa: BLE001 - one bad message does not stop the watch
+                        AgentEvents(self.out, self.lock, name).emit(
+                            "error", message=f"{type(exc).__name__}: {exc}", retryable=False)
+            await asyncio.sleep(swarm.POLL_S)
+
+    def act(self, name: str, msg: swarm.Msg) -> None:
+        events = AgentEvents(self.out, self.lock, name)
+        turn = self.turns.get(name)
+        if msg.kind == swarm.CANCEL and turn is not None and not turn.done():
+            turn.cancel()
+            return
+        if msg.kind == swarm.RESTART and name in self.ended:
+            spec = self.ended[name]
+            events.emit("restart", seq=msg.seq, sender=msg.sender)
+            self.add(replace(spec, opener=msg.body or spec.opener))
+            return
+        events.emit("dropped", seq=msg.seq, message_kind=msg.kind, sender=msg.sender)
+
+    async def turn(self, name: str, events: AgentEvents, turn: Any) -> None:
+        """Run one turn as a task of its own, which `cancel` can end alone."""
+        task = asyncio.ensure_future(turn)
+        self.turns[name] = task
+        try:
+            await task
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if not task.cancelled() or (current is not None and current.cancelling()):
+                raise
+            events.emit("turn_cancelled")
+        finally:
+            self.turns.pop(name, None)
 
     def cancel_all(self) -> None:
         self.code = 130
@@ -214,7 +275,7 @@ class Runner:
                         cwd=str(context.cwd))
             await agent_messages.initialize(cfg, settled.prompt_spec, chat.messages, telemetry, system=system,
                                             tool_context=context, checkpoint=chat.save, **turn_kwargs)
-            await chat.turn({"role": "user", "content": spec.opener}, **turn_kwargs)
+            await self.turn(spec.name, events, chat.turn({"role": "user", "content": spec.opener}, **turn_kwargs))
             while not agent.stop_seen:
                 with contextlib.suppress(Exception):
                     await chat.maybe_compact(emit=compaction.printing(), log_dir=compaction.flight_log_dir(cfg))
@@ -224,7 +285,7 @@ class Runner:
                             kinds=sorted({m.kind for m in landed}))
                 if all(m.kind == swarm.STOP for m in landed):
                     break
-                await chat.turn(agent.wake_message(landed), **turn_kwargs)
+                await self.turn(spec.name, events, chat.turn(agent.wake_message(landed), **turn_kwargs))
             reason = "retired" if agent.retired else "stopped"
         except asyncio.CancelledError:
             reason = "cancelled"
@@ -234,6 +295,10 @@ class Runner:
                 self.code = 1
             events.emit("error", message=f"{type(exc).__name__}: {exc}", retryable=False)
         finally:
+            original = self.originals.get(spec.name, spec)
+            session = chat.cfg.session_file if chat is not None else None
+            self.ended[spec.name] = replace(original, session=str(session)) if (
+                session is not None and Path(session) != Path(os.devnull)) else original
             if chat is not None:
                 with contextlib.suppress(Exception):
                     chat.save()

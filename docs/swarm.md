@@ -15,6 +15,8 @@ python -m js.swarm cells $ROOT                   # the work board
 python -m js.swarm post $ROOT steer "check the writer" "src/writer.py; done when the test passes"
 python -m js.swarm quiet $ROOT && echo "nothing left to do"
 python -m js.swarm send $ROOT steer kivu --kind stop
+python -m js.swarm send $ROOT steer kivu --kind cancel             # end kivu's turn now
+python -m js.swarm send $ROOT steer kivu "pick up where you left off" --kind restart
 ```
 
 ## What an agent on the bus gets
@@ -60,6 +62,16 @@ python -m js.swarm send $ROOT steer kivu --kind stop
   so a long-lived agent compacts the way a REPL session does.
 - **Stop.** A message of kind `stop` ends the agent after the turn it lands in
   (or at once, if it arrives while asleep).
+- **Cancel and restart.** These two kinds are for the runner, not the agent:
+  the model never sees them. `cancel` ends the agent's current turn at once,
+  saved as it stands; the agent then goes on as after any turn, so one that
+  has seen a `stop` ends there. It is how to end a turn that never reaches a
+  tool boundary and so never reads its `stop`. `restart` sent to an agent
+  that has ended starts it again from its spec, on the same session, with the
+  message's body as its first message, or its opener when the body is empty.
+  The runner checks for them every poll while it runs. One sent to an agent
+  not in that state (a `cancel` while it sleeps, a `restart` while it runs)
+  is dropped, with a `dropped` event.
 
 ## Files
 
@@ -150,8 +162,11 @@ recruiter's agent, model and settings and a session named
 `<parent session>-<name>`.
 
 Events go to stdout as JSON lines, every one carrying `agent`. The runner adds
-`agent_start`, `agent_end` and `run_end`; see
+`agent_start`, `agent_end`, `turn_cancelled`, `restart` (with the message's
+`seq` and `sender`), `dropped` (with `seq`, `message_kind` and `sender`) and
+`run_end`; see
 [headless-json.md](headless-json.md). An agent whose turn raises ends with
 `agent_end reason=error` and the others go on. The process ends when every
-agent has stopped or retired. `SIGTERM` and `SIGINT` cancel every agent,
+agent has stopped or retired, so a `restart` has to land while another agent
+is still running. `SIGTERM` and `SIGINT` cancel every agent,
 persist every session and exit 130.

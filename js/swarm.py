@@ -3,6 +3,8 @@
   python -m js.swarm run SPEC.json                   # every agent in the spec, one process (js.swarm_run)
   python -m js.swarm send ROOT FROM TO "text"       # from the runner or the operator; TO is a name or *
   python -m js.swarm send ROOT steer kivu --kind stop   # end an agent after its current turn
+  python -m js.swarm send ROOT steer kivu --kind cancel # end its current turn now
+  python -m js.swarm send ROOT steer kivu "go on" --kind restart  # run an ended agent again
   python -m js.swarm members ROOT                    # who is on the bus, asleep or working, what each holds
   python -m js.swarm quiet ROOT                      # exit 0 when every agent is asleep with an empty inbox
   python -m js.swarm cells ROOT                      # the work board
@@ -33,6 +35,11 @@ An agent on the bus never spends a model call waiting:
 A message of kind ``stop`` ends the agent after the turn it lands in. ``retire``
 is the agent ending itself: it posts a handoff and leaves the bus. A message
 sent to a name that has not joined yet waits in that name's inbox.
+
+``cancel`` and ``restart`` (``RUNNER_KINDS``) are for the runner: the agent's
+own inbox reads leave them, and `js.swarm_run` takes them. ``cancel`` ends the
+agent's current turn at once; ``restart`` runs an agent that has ended again
+from its spec, on its session, the body as its first message.
 
 A rollcall is a ping file in every member's directory. The agent's process
 answers it from a thread of its own; the model is not called and nothing lands
@@ -66,6 +73,10 @@ CLAIM_TTL_S = 600.0
 STOP = "stop"
 TICK = "tick"
 RETIRE = "retire"
+RESTART = "restart"
+CANCEL = "cancel"
+# Kinds the runner acts on; the agent's own inbox reads leave them for it.
+RUNNER_KINDS = frozenset({RESTART, CANCEL})
 TASK = "task"
 DONE = "done"
 CLOCK = "clock"
@@ -431,15 +442,20 @@ class Inbox:
         except FileNotFoundError:
             return False
 
-    def drain(self) -> list[Msg]:
-        """Every waiting message in seq order, each handed over once."""
-        return self._read(take=True)
+    def drain(self, *, skip: frozenset[str] = frozenset()) -> list[Msg]:
+        """Every waiting message in seq order, each handed over once; those of
+        a kind in ``skip`` stay in the inbox."""
+        return self._read(take=True, keep=lambda m: m.kind not in skip)
 
-    def peek(self) -> list[Msg]:
+    def peek(self, *, skip: frozenset[str] = frozenset()) -> list[Msg]:
         """Every waiting message in seq order, left in the inbox."""
-        return self._read(take=False)
+        return self._read(take=False, keep=lambda m: m.kind not in skip)
 
-    def _read(self, take: bool) -> list[Msg]:
+    def take(self, kinds: frozenset[str]) -> list[Msg]:
+        """The waiting messages of ``kinds``, in seq order, each handed over once."""
+        return self._read(take=True, keep=lambda m: m.kind in kinds)
+
+    def _read(self, take: bool, keep=lambda _m: True) -> list[Msg]:
         try:
             names = sorted(n for n in os.listdir(self.path) if n.endswith(".json") and not n.startswith("."))
         except FileNotFoundError:
@@ -448,9 +464,12 @@ class Inbox:
         for n in names:
             p = self.path / n
             try:
-                out.append(Msg.loads(p.read_text(encoding="utf-8")))
+                msg = Msg.loads(p.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
+            if not keep(msg):
+                continue
+            out.append(msg)
             if take:
                 p.unlink(missing_ok=True)
         return out
@@ -578,7 +597,7 @@ class Agent:
 
     def steer(self) -> dict | None:
         """``run_turn_async``'s steer: the inbox as a user message at a tool boundary."""
-        msgs = self._take(self.inbox.drain())
+        msgs = self._take(self.inbox.drain(skip=RUNNER_KINDS))
         if not msgs:
             return None
         return {"role": "user", "content": render(msgs, self.name), "steered": True}
@@ -603,7 +622,7 @@ class Agent:
         """One look at the inbox while asleep. `first` is when the oldest waiting message was
         first seen. Returns it, and what to wake with: nothing while the wait goes on."""
         now = time.monotonic()
-        waiting = self.inbox.peek()
+        waiting = self.inbox.peek(skip=RUNNER_KINDS)
         if not waiting:
             if self.alarm is not None and now >= self.alarm:
                 return None, [self._tick()]
@@ -611,7 +630,7 @@ class Agent:
         first = now if first is None else first
         for_me = any(m.to == self.name or m.kind == STOP for m in waiting)
         if now - first >= (COALESCE_S if for_me else max(COALESCE_S, self.room.hold_s())):
-            return first, self._take(self.inbox.drain())
+            return first, self._take(self.inbox.drain(skip=RUNNER_KINDS))
         return first, []
 
     def _asleep(self) -> Path:

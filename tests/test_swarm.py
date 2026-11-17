@@ -637,3 +637,91 @@ def test_bus_send_hands_its_message_to_the_result_event(tmp_path, capsys):
     assert message["body"] == "inspect the parser"
     assert message["seq"] == 1
     assert capsys.readouterr() == ("", "")
+
+
+def test_cancel_ends_the_turn_of_an_agent_that_ignores_stop(tmp_path, monkeypatch):
+    _agent_dir(tmp_path, monkeypatch)
+    room = swarm.Room(tmp_path / "bus")
+    calls: list[str] = []
+
+    async def stream(**kwargs):
+        calls.append(_user_texts(kwargs)[-1])
+        # A turn that never reaches a tool boundary never reads the stop.
+        room.send("steer", "a", "wrap up", kind=swarm.STOP)
+        room.send("steer", "a", "", kind=swarm.CANCEL)
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    out = io.StringIO()
+    spec = _spec(tmp_path, [{"name": "a", "agent": "voice", "opener": "a-opener", "session": "s-a", "cwd": str(tmp_path)}])
+
+    assert swarm_run.run(spec, out=out) == 0
+
+    events = _events(out)
+    assert len(calls) == 1
+    assert [e["type"] for e in events if e["type"] in ("turn_cancelled", "agent_end")] == ["turn_cancelled", "agent_end"]
+    assert [e["reason"] for e in events if e["type"] == "agent_end"] == ["stopped"]
+    session = next(e["session"] for e in events if e["type"] == "agent_start")
+    assert "a-opener" in _user_texts_of(memory.load_replay_messages(Path(session)))[0]
+
+
+def test_restart_runs_an_ended_agent_again_on_its_session(tmp_path, monkeypatch):
+    _agent_dir(tmp_path, monkeypatch)
+    room = swarm.Room(tmp_path / "bus")
+    out = io.StringIO()
+    seen: list[str] = []
+
+    def ended(name: str) -> bool:
+        return any(e["type"] == "agent_end" and e["agent"] == name for e in _events(out))
+
+    async def stream(**kwargs):
+        texts = _user_texts(kwargs)
+        seen.append(texts[-1])
+        if "a-opener" in texts[-1]:
+            room.send("steer", "a", "done", kind=swarm.STOP)
+        elif "b-opener" in texts[-1]:
+            # b stays on the bus until a has ended, then brings it back.
+            while not ended("a"):
+                await asyncio.sleep(0.05)
+            room.send("steer", "a", "come back", kind=swarm.RESTART)
+        elif "come back" in texts[-1]:
+            room.send("steer", "*", "enough", kind=swarm.STOP)
+        kwargs["on_text"]("ok")
+        return _text("ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    spec = _spec(tmp_path, [{"name": "a", "agent": "voice", "opener": "a-opener", "cwd": str(tmp_path)},
+                            {"name": "b", "agent": "voice", "opener": "b-opener", "session": "s-b", "cwd": str(tmp_path)}])
+
+    assert swarm_run.run(spec, out=out) == 0
+
+    events = _events(out)
+    starts = [e for e in events if e["type"] == "agent_start" and e["agent"] == "a"]
+    assert len(starts) == 2
+    assert starts[0]["session"] == starts[1]["session"]
+    assert any(e["type"] == "restart" and e["agent"] == "a" for e in events)
+    texts = _user_texts_of(memory.load_replay_messages(Path(starts[1]["session"])))
+    assert "a-opener" in texts[0] and "come back" in texts[-1]
+
+
+def test_a_runner_message_for_an_agent_not_in_that_state_is_dropped(tmp_path, monkeypatch):
+    _agent_dir(tmp_path, monkeypatch)
+    room = swarm.Room(tmp_path / "bus")
+    out = io.StringIO()
+
+    async def stream(**kwargs):
+        room.send("steer", "a", "", kind=swarm.RESTART)   # a is running, not ended
+        while not any(e["type"] == "dropped" for e in _events(out)):
+            await asyncio.sleep(0.05)
+        room.send("steer", "a", "enough", kind=swarm.STOP)
+        kwargs["on_text"]("ok")
+        return _text("ok")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    spec = _spec(tmp_path, [{"name": "a", "agent": "voice", "opener": "a-opener", "session": "s-a", "cwd": str(tmp_path)}])
+
+    assert swarm_run.run(spec, out=out) == 0
+
+    events = _events(out)
+    assert [(e["agent"], e["message_kind"]) for e in events if e["type"] == "dropped"] == [("a", "restart")]
+    assert len([e for e in events if e["type"] == "agent_start"]) == 1
