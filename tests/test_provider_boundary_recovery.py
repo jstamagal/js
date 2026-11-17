@@ -12,6 +12,7 @@ from js import (
     compaction,
     context_window,
     model_client,
+    request_params,
     runtime,
     settings as _settings,
     turn_call,
@@ -364,7 +365,7 @@ def test_run_line_shows_the_effort_the_request_carries(monkeypatch, tmp_path, ca
     sent = []
 
     async def sdk(**kwargs):
-        sent.append(model_client.wire_fields(kwargs["params"]))
+        sent.append(request_params.wire_fields(kwargs["params"]))
         return _result(text="ok")
 
     monkeypatch.setattr(model_client, "_stream_async", sdk)

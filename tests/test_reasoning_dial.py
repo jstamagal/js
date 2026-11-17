@@ -12,7 +12,7 @@ from typing import Any
 import ai
 import pytest
 
-from js import history_record, model_client, reasoning
+from js import history_record, model_client, reasoning, request_params
 from js.model_client import ModelStreamResult
 
 # ---- the dial (pure) ----
@@ -133,10 +133,10 @@ def test_anthropic_adaptive_display_uses_registered_setting():
 # ---- the word that goes out ----
 
 def _effort_sent(provider_id, model, effort):
-    params = model_client.build_request_params(
+    params = request_params.build_request_params(
         model_id=model, provider_id=provider_id, provider_base_url=None,
         max_output_tokens=None, reasoning_effort=effort)
-    return model_client.wire_fields(params).get("effort")
+    return request_params.wire_fields(params).get("effort")
 
 
 @pytest.mark.parametrize(

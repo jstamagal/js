@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from js import model_client, persona
+from js import persona, request_params
 from js.sampling import Sampling
 
 _JS_SAMPLING_ENV = ("JS_TEMPERATURE", "JS_TOP_P", "JS_TOP_K", "JS_REPETITION_PENALTY", "JS_PRESENCE_PENALTY")
@@ -60,7 +60,7 @@ _EVERY = Sampling(
 
 def _sent(provider_id, sampling, model="some-model"):
     """(the wire's own sampling fields, extra_body) a request carries."""
-    params = model_client.build_request_params(
+    params = request_params.build_request_params(
         model_id=model, provider_id=provider_id, provider_base_url=None,
         max_output_tokens=None, reasoning_effort=None, sampling=sampling)
     if params is None:

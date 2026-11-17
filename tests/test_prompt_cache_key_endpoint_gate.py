@@ -12,7 +12,7 @@ been pointed somewhere else.
 from __future__ import annotations
 
 from js import providers
-from js.model_client import accepts_prompt_cache_key
+from js.request_params import accepts_prompt_cache_key
 
 
 def _accepts(provider_id: str, base_url: str | None) -> bool:

@@ -16,7 +16,14 @@ import ai.types.usage
 import pytest
 from turn_driver import one_turn
 
-from js import history_record, model_client, provider_errors, stream_protocols, tool_result_messages
+from js import (
+    history_record,
+    model_client,
+    provider_errors,
+    request_params,
+    stream_protocols,
+    tool_result_messages,
+)
 from js.sampling import Sampling
 
 
@@ -515,9 +522,9 @@ def test_openai_compatible_topk_reppen_never_become_structured_params():
     those providers are pinned to raises ValueError the moment it sees them."""
     from ai.models.core import params as ap
 
-    params = model_client._build_inference_params(
+    params = request_params._build_inference_params(
         Sampling(temperature=0.5, top_k=40, repetition_penalty=1.2, presence_penalty=0.3),
-        model_client._CHAT_SAMPLING,
+        request_params._CHAT_SAMPLING,
         reasoning=None,
         output=None,
         extra_body={},
@@ -601,7 +608,7 @@ def test_history_messages_can_be_roundtripped():
     assert rebuilt == out
 
 
-@pytest.mark.parametrize("target", ["reasoning.anthropic_thinking", "_build_inference_params", "stream_transport.begin_call"])
+@pytest.mark.parametrize("target", ["reasoning.anthropic_thinking", "request_params._build_inference_params", "stream_transport.begin_call"])
 def test_provider_is_closed_when_request_setup_fails(monkeypatch, target):
     """The provider owns an HTTP client from resolve_model on; a failure while
     the request is assembled must still close it."""

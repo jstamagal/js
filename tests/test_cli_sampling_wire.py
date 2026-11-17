@@ -5,7 +5,7 @@ import json
 import ai
 import pytest
 
-from js import cli, model_client, runtime, sampling
+from js import cli, model_client, request_params, runtime, sampling
 
 VALUES = {
     "temperature": 0.7, "top_p": 0.9, "top_k": 50, "min_p": 0.05,
@@ -19,7 +19,7 @@ VALUES = {
 def _capture(monkeypatch):
     requests = []
     def stream(**kw):
-        request = model_client.build_request_params(
+        request = request_params.build_request_params(
             model_id=kw["model_id"], provider_id=kw["provider_id"],
             provider_base_url=kw["provider_base_url"], max_output_tokens=kw["max_output_tokens"],
             reasoning_effort=kw["reasoning_effort"], sampling=kw["sampling"], settings=kw["settings"],

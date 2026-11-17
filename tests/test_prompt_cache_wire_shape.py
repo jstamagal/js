@@ -17,7 +17,7 @@ from ai.models.core import params as ai_params
 from ai.providers.anthropic.protocol import _apply_anthropic_params
 from ai.providers.openai.protocol import _apply_common_openai_params
 
-from js.model_client import _build_inference_params
+from js.request_params import _build_inference_params
 from js.sampling import Sampling
 
 

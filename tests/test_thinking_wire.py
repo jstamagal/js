@@ -17,7 +17,7 @@ import httpx2
 import pytest
 from turn_driver import one_turn
 
-from js import history_record, logins, memory, model_client, runtime, tool_calls
+from js import history_record, logins, memory, model_client, request_params, runtime, tool_calls
 from js.config import InvocationSources, from_env
 from js.logins import Login
 from js.sampling import Sampling
@@ -232,8 +232,8 @@ def test_off_on_an_unrecognized_model_is_sent_as_typed(monkeypatch):
 
 @pytest.mark.parametrize("model", ["claude-opus-5-5-high", "claude-sonnet-5-5", "claude-fable-5-2"])
 def test_an_unset_output_cap_sends_the_models_known_limit(monkeypatch, model):
-    monkeypatch.setattr(model_client.model_metadata, "resolve_max_output", lambda _m, _p=None: 128000)
-    monkeypatch.setattr(model_client.model_metadata, "context_window", lambda _m, _p=None: 1_000_000)
+    monkeypatch.setattr(request_params.model_metadata, "resolve_max_output", lambda _m, _p=None: 128000)
+    monkeypatch.setattr(request_params.model_metadata, "context_window", lambda _m, _p=None: 1_000_000)
 
     body = _send(monkeypatch, provider="anthropic", model=model, effort="max", max_out=None)
 
@@ -243,8 +243,8 @@ def test_an_unset_output_cap_sends_the_models_known_limit(monkeypatch, model):
 def test_an_output_limit_as_large_as_the_window_sends_the_anthropic_output_setting(monkeypatch):
     from js import settings
 
-    monkeypatch.setattr(model_client.model_metadata, "resolve_max_output", lambda _m, _p=None: 1_048_576)
-    monkeypatch.setattr(model_client.model_metadata, "context_window", lambda _m, _p=None: 1_048_576)
+    monkeypatch.setattr(request_params.model_metadata, "resolve_max_output", lambda _m, _p=None: 1_048_576)
+    monkeypatch.setattr(request_params.model_metadata, "context_window", lambda _m, _p=None: 1_048_576)
 
     body = _send(monkeypatch, provider="opencode-go-anthropic", base="https://opencode.ai/zen/go",
                  model="kimi-k3", effort="high", max_out=None)
@@ -255,7 +255,7 @@ def test_an_output_limit_as_large_as_the_window_sends_the_anthropic_output_setti
 def test_an_unset_output_cap_on_an_unknown_model_sends_the_anthropic_output_setting(monkeypatch):
     from js import settings
 
-    monkeypatch.setattr(model_client.model_metadata, "resolve_max_output", lambda _m, _p=None: None)
+    monkeypatch.setattr(request_params.model_metadata, "resolve_max_output", lambda _m, _p=None: None)
 
     body = _send(monkeypatch, provider="opencode-go-anthropic", base="https://opencode.ai/zen/go",
                  model="qwen3.7-plus", effort="medium", max_out=None)

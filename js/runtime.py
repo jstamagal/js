@@ -32,6 +32,7 @@ from . import (
     model_client,
     model_metadata,
     output,
+    request_params,
     result_caps,
     retry,
     routing,
@@ -284,7 +285,7 @@ def _trace_banner(telemetry: Telemetry, request: ModelRequest, context: ToolCont
     dummy_key = _settings.knob(request.settings, "ENDPOINT_DEFAULT_KEY")
     key_state = "set" if request.api_key and request.api_key != dummy_key else "none"
     # The output cap and effort fields show what the built request carries.
-    sent = model_client.wire_fields(model_client.build_request_params(
+    sent = request_params.wire_fields(request_params.build_request_params(
         model_id=model, provider_id=provider_id, provider_base_url=request.base_url,
         max_output_tokens=request.max_out, reasoning_effort=request.effort,
         thinking_budget=request.thinking_budget, provider_extra=request.extra,
