@@ -103,24 +103,28 @@ def test_options_argv_reproduces_the_options(options):
      ["-a", "a", "--swarm", "/r/b", "-s", "name-b", "-p", "-"]),
     (["--swarm=/r/a", "--session=name"], ["--swarm=/r/b", "--session=name-b", "-p", "-"]),
     (["-s", "--model", "m"], ["-s", "--model", "m", "--swarm", "/r/b", "-p", "-"]),
-    (["--session", "-", "--last"], ["--session", "--b", "--swarm", "/r/b", "-p", "-"]),
+    (["--session", "-", "--last"], ["--session=--b", "--swarm", "/r/b", "-p", "-"]),
     (["--last", "-a", "agent", "--extra", "k=v", "--extra", "x=y"],
      ["-a", "agent", "--extra", "k=v", "--extra", "x=y", "--swarm", "/r/b", "-p", "-"]),
     (["-qn", "-p", "hi"], ["-qn", "-p", "-", "--swarm", "/r/b"]),
-    (["--commit", "--", "--last"], ["--commit", "--", "--swarm", "/r/b", "-p", "-"]),
-    (["-s=name", "-p", "x"], ["-s=name", "-p", "-", "--swarm", "/r/b"]),
-    (["-p=hello"], ["-p=hello", "--swarm", "/r/b", "-p", "-"]),
-    (["--session", "-5"], ["--session", "-5", "--swarm", "/r/b", "-p", "-"]),
-    (["--swarm", "-x y"], ["--swarm", "-x y", "-p", "-"]),
-    (["-p", "-a b"], ["-p", "-", "--swarm", "/r/b"]),
+    (["--commit", "--", "--last"], ["--commit", "--swarm", "/r/b", "-p", "-", "--", "--last"]),
+    (["-s=name", "-p", "x"], ["-s=name-b", "-p", "-", "--swarm", "/r/b"]),
+    (["-p=hello"], ["--prompt=-", "--swarm", "/r/b"]),
+    (["--session", "-5"], ["--session=-5-b", "--swarm", "/r/b", "-p", "-"]),
+    (["--swarm", "-x y"], ["--swarm", "/r/b", "-p", "-"]),
+    (["-p", "-a b"], ["-p", "-", "-a b", "--swarm", "/r/b"]),
     (["--home", "/h", "-p", "x", "--you-are"], ["--home", "/h", "-p", "-", "--you-are", "--swarm", "/r/b"]),
     (["--you-are", "--chat", "--loop", "3"], ["--you-are", "--chat", "--loop", "3", "--swarm", "/r/b", "-p", "-"]),
     (["--system-prompt", "--last x", "--prompt", "--last"],
      ["--system-prompt", "--last x", "--prompt", "-", "--swarm", "/r/b"]),
 ])
 def test_sibling_command(argv, sibling):
-    _parse(argv)
+    parent = _parse(argv)
     assert swarm.sibling_argv(["js", *argv], "/r/b", "b")[3:] == sibling
+    parsed = _parse(sibling)
+    assert (parsed.swarm, parsed.prompt) == ("/r/b", "-")
+    if parent.session:
+        assert parsed.session == f"{parent.session}-b"
 
 
 @pytest.mark.parametrize(("argv", "child"), [
@@ -131,16 +135,18 @@ def test_sibling_command(argv, sibling):
     (["-p", "--loop", "3"], ["-p"]),
     (["-lp", "--loop", "3"], ["-lp"]),
     (["-lp=x", "--loop", "3"], ["-lp=x"]),
-    (["--loop", "3", "--loop", "5"], ["--loop", "3"]),
-    (["--loop", "3", "-p", "--loop", "3"], ["-p", "--loop", "3"]),
-    (["--loop", "3", "--prompt", "--loop", "3"], ["--prompt", "--loop", "3"]),
-    (["--loop", "3", "-lp", "--loop", "3"], ["--loop", "3", "-lp"]),
+    (["--loop", "3", "--loop", "5"], []),
+    (["--loop", "3", "-p", "--loop", "3"], ["-p"]),
+    (["--loop", "3", "--prompt", "--loop", "3"], ["--prompt"]),
+    (["--loop", "3", "-lp", "--loop", "3"], ["-lp"]),
     (["--extra", "x=--loop", "--loop", "2"], ["--extra", "x=--loop"]),
-    (["-p", "hi", "--loop=2", "--loop", "2"], ["-p", "hi", "--loop=2"]),
+    (["-p", "hi", "--loop=2", "--loop", "2"], ["-p", "hi"]),
     (["--loop", "2h", "-p", "two words"], ["-p", "two words"]),
 ])
 def test_loop_child_command(argv, child):
-    assert loop_controller.child_argv(argv, _parse(argv).loop) == child
+    _parse(argv)
+    assert loop_controller.child_argv(argv) == child
+    assert _parse(child).loop is None
 
 
 @pytest.mark.parametrize(("argv", "home", "rest"), [

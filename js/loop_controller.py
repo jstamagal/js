@@ -31,30 +31,9 @@ def parse_limit(value: str) -> tuple[int | None, float | None]:
     raise ValueError(msgs.LOOP_LOOP_EXPECTS_A_POSITIVE_TURN_COUNT_MINUTES.format())
 
 
-def child_argv(argv: list[str], limit: str | None = None) -> list[str]:
-    """Remove the parsed loop option, preserving prompt text and literal args."""
-    args: list[command_line.Arg] = []
-    for arg in command_line.read(argv):
-        if arg.dest == "loop" and arg.sep is None and arg.value is not None and not _count_or_duration(arg.value):
-            # Only a count or a duration is a --loop value here.
-            args += [command_line.Arg(arg.words[:1], arg.option, arg.dest),
-                     command_line.Arg(arg.words[1:], value=arg.value)]
-        else:
-            args.append(arg)
-    candidates = [index for index, arg in enumerate(args)
-                  if arg.dest == "loop" and (limit is None or (arg.value or "") == limit)]
-    if not candidates:
-        return list(argv)
-
-    def after_prompt(index: int) -> bool:
-        return index > 0 and args[index - 1].words[-1] in {"-p", "--prompt"}
-
-    index = next((index for index in reversed(candidates) if not after_prompt(index)), candidates[-1])
-    return command_line.words(args[:index] + args[index + 1:])
-
-
-def _count_or_duration(value: str) -> bool:
-    return value.isdecimal() or _DURATION.fullmatch(value) is not None
+def child_argv(argv: list[str]) -> list[str]:
+    """`argv` without its --loop options: the command of one run of the loop."""
+    return command_line.words([arg for arg in command_line.read(argv) if arg.dest != "loop"])
 
 
 def _detached_descendant_groups(root_pid: int) -> set[int]:
@@ -115,7 +94,7 @@ def run(argv: list[str], limit: str, *, bench: str | None, prompt: str | None,
         child_command: list[str] | None = None, settings: dict | None = None) -> int:
     count, seconds = parse_limit(limit)
     command = list(child_command or [sys.executable, "-m", "js"])
-    args = child_argv(argv, limit)
+    args = child_argv(argv)
     stdin_data = sys.stdin.buffer.read() if not sys.stdin.isatty() else None
     if (prompt is None and bench is None and not stdin_data
             and "--commit" not in args):

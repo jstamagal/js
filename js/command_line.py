@@ -142,9 +142,13 @@ class Arg:
     sep: str | None = None
 
     def given(self, value: str) -> tuple[str, ...]:
-        """This option taking `value`, written the way this argument is."""
+        """This option taking `value`, written the way this argument is. A
+        value the parser would read as an option when it is a word of its own
+        is joined to the option with `=`."""
         if self.sep is not None:
             return (f"{self.option}{self.sep}{value}",)
+        if _option(_options(), value) is not None:
+            return (f"{self.option}={value}",)
         return (self.option, value)
 
 

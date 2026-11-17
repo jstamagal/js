@@ -21,10 +21,10 @@ def test_limit_and_argv_contract():
         "-C", "/tmp", "-m", "sol", "--extra", "x=y",
     ]
     assert child_argv(["--loop=45M", "--bench", "any-agent"]) == ["--bench", "any-agent"]
-    assert child_argv(["--loop", "10", "-p", "--loop"], "10") == ["-p", "--loop"]
-    assert child_argv(["-p", "--loop", "--loop", "10"], "10") == ["-p", "--loop"]
-    assert child_argv(["--loop", "10", "--", "--loop", "45M"], "10") == ["--", "--loop", "45M"]
-    assert child_argv(["-p", "--loop"], "") == ["-p"]
+    assert child_argv(["--loop", "10", "-p", "--loop"]) == ["-p"]
+    assert child_argv(["-p", "--loop", "--loop", "10"]) == ["-p"]
+    assert child_argv(["--loop", "10", "--", "--loop", "45M"]) == ["--", "--loop", "45M"]
+    assert child_argv(["-p", "--loop"]) == ["-p"]
 
 
 def test_count_runs_real_fresh_children(tmp_path: Path):

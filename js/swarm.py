@@ -550,38 +550,28 @@ def sibling_argv(argv: list[str], swarm: str, name: str) -> list[str]:
     """The command of a sibling of this process: `argv` run again as `python -m js`
     with the --swarm path, the session name and the prompt replaced. The sibling
     reads its opener from stdin."""
-    words = argv[1:]
-    end = words.index("--") if "--" in words else len(words)
-    args = command_line.read(words[:end])
-    if end < len(words):
-        # The words after `--` are read as options too.
-        args += [command_line.Arg(("--",), value="--"), *command_line.read(words[end + 1:])]
     out: list[str] = [sys.executable, "-m", "js"]
-    has_prompt = False
-    skip = False
-    for index, arg in enumerate(args):
-        if skip:
-            skip = False
-            continue
-        dashed = arg.sep is None and arg.value is not None and arg.value.startswith("-") and arg.value != "-"
-        if arg.dest == "swarm" and arg.value is not None and not dashed:
+    literal: list[str] = []
+    has_prompt = has_swarm = False
+    for arg in command_line.read(argv[1:]):
+        if literal or arg.words == ("--",):
+            literal += arg.words
+        elif arg.dest == "swarm":
+            has_swarm = True
             out += arg.given(swarm)
-        elif arg.dest == "session" and arg.value is not None and not dashed and arg.option + (arg.sep or "") != "-s=":
+        elif arg.dest == "session" and arg.value is not None:
             out += arg.given(f"{arg.value}-{name}")
-        elif arg.dest in ("prompt", "last_prompt") and arg.option + (arg.sep or "") != "-p=":
+        elif arg.dest in ("prompt", "last_prompt"):
             # A swarm seat keeps its own session, so -lp is a plain prompt.
             has_prompt = True
             out += ["--prompt=-"] if arg.sep is not None else ["-p" if arg.option == "-lp" else arg.option, "-"]
-            following = args[index + 1] if index + 1 < len(args) else None
-            skip = (arg.value is None and following is not None and following.option is not None
-                    and " " in following.words[0])
         elif arg.dest != "last":
             out += arg.words
-    if "--swarm" not in out and not any(t.startswith("--swarm=") for t in out):
+    if not has_swarm:
         out += ["--swarm", swarm]
     if not has_prompt:
         out += ["-p", "-"]
-    return out
+    return out + literal
 
 
 class Agent:
