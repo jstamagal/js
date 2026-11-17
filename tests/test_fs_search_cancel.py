@@ -83,10 +83,24 @@ def test_search_interrupt_is_scoped_and_reaps_descendants(tmp_path):
     assert code == -9
     assert not timed_out
     assert fs.interrupt_inflight(context) == 0
-    # A killed descendant may briefly remain as an init-owned zombie, but cannot
-    # compute or retain any pipe descriptors.
-    status = Path(f"/proc/{ready.read_text()}/stat")
-    assert not status.exists() or status.read_text().split()[2] == "Z"
+    # SIGKILL lands asynchronously: the killed descendant is briefly still
+    # exiting, then an init-owned zombie until init reaps it, then gone.
+    # Either end state means it can no longer compute or hold a pipe open.
+    assert _dies(int(ready.read_text()))
+
+
+def _dies(pid: int, timeout: float = 5.0) -> bool:
+    """Whether ``pid`` is gone or a zombie within ``timeout`` seconds."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+        except FileNotFoundError:
+            return True
+        if stat.rsplit(")", 1)[1].split()[0] in ("Z", "X"):
+            return True
+        time.sleep(0.01)
+    return False
 
 
 def test_search_keyboard_interrupt_reaps_child(monkeypatch, tmp_path):
