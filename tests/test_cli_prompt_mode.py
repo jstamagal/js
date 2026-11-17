@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-from js import snippets
-
-from unittest.mock import AsyncMock
-
 import json
 import os
 import shlex
@@ -12,16 +8,16 @@ import sys
 import time
 from dataclasses import replace
 from pathlib import Path
-import pytest
+from unittest.mock import AsyncMock
 
-from js import cli, runtime
-from js import paths as _paths
-from js import session_store
-from js import messages as msgs
+import pytest
+from repl_driver import repl_state, stub_screen, turn_stub
+
+from js import cli, messages as msgs, paths as _paths, runtime, session_store, snippets
 from js.config import Config, InvocationSources
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
-from repl_driver import repl_state, stub_screen, turn_stub
+
 
 @pytest.fixture(autouse=True)
 def fresh_tool_context(monkeypatch, tmp_path):

@@ -29,8 +29,7 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
-from . import messages as msgs
-from . import session_store, settings as _settings
+from . import messages as msgs, session_store, settings as _settings
 from .memory import HARNESS_USER_TAGS
 
 # Kinds. Every kind but SHOWN is hidden until `a`.

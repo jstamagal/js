@@ -8,9 +8,7 @@ from pathlib import Path
 import pytest
 
 from js import media
-from js.toolkit import ToolContext
-from js.toolkit import process_net
-
+from js.toolkit import ToolContext, process_net
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRtiny"
 
@@ -148,6 +146,7 @@ def test_fetched_image_over_the_result_cap_is_sent_fitted(monkeypatch, tmp_path)
     """A fetched image larger than TOOL_RESULT_MAX, by file:// or HTTP, is
     sent as its copy fitted to 2000 x 2000, not described as truncated."""
     import io
+
     from PIL import Image
 
     buffer = io.BytesIO()

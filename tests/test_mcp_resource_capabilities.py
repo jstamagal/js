@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from test_mcp_client import SpecServer
 
 from js.mcp.client import CapabilityError, MCPClient
-from test_mcp_client import SpecServer
 
 
 @pytest.mark.parametrize("resources", [True, False, None, 1, "yes", [], ["subscribe"]])

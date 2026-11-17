@@ -5,11 +5,10 @@ and test_prompt_cache_key_per_session."""
 
 from __future__ import annotations
 
-from js import snippets
-
-from js import cli, memory
-from js.memory import append_system_prompt, load_messages, load_system_prompt
 from repl_driver import stub_screen, turn_stub
+
+from js import cli, memory, snippets
+from js.memory import append_system_prompt, load_messages, load_system_prompt
 
 
 def test_recorded_system_prompt_round_trips(tmp_path):

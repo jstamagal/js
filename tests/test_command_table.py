@@ -6,9 +6,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from repl_driver import repl_state
+
 from js import cli, paths, settings
 from js.config import from_env, jsrc_paths
-from repl_driver import repl_state
 
 
 def test_assembly_command_is_dispatched_and_completed():

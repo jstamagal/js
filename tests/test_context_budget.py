@@ -65,6 +65,7 @@ def test_tokens_until_compaction_uses_output_and_buffer_reserve():
 
 def test_calibration_uses_recorded_prompt_tokens():
     from types import SimpleNamespace
+
     from js.context_budget import TokenState
 
     state = TokenState()
@@ -103,13 +104,13 @@ def test_concurrent_turns_keep_their_own_overflow_window(tmp_path, monkeypatch):
 
     import ai
     from ai.types.usage import Usage
+    from test_config_compaction_layers import _compact_test_cfg
 
     from js import model_client, runtime
     from js.model_client import ModelStreamResult
     from js.toolkit import ToolContext
     from js.toolkit.registry import ToolRegistry
     from js.turn_budget import TurnBudget
-    from test_config_compaction_layers import _compact_test_cfg
 
     recovered = []
 

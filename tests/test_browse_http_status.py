@@ -13,8 +13,7 @@ import threading
 
 import pytest
 
-from js.toolkit import ToolContext
-from js.toolkit import search as search_mod
+from js.toolkit import ToolContext, search as search_mod
 from js.toolkit.search import browse
 
 pytestmark = pytest.mark.live

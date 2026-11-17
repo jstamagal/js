@@ -11,23 +11,21 @@ recalled from history in the same process still carries its image.
 from __future__ import annotations
 
 import asyncio
-from contextlib import contextmanager
-from contextvars import ContextVar
 import os
 import re
 import shlex
 import shutil
 import subprocess
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 
 from prompt_toolkit.application import run_in_terminal
 from prompt_toolkit.filters import emacs_insert_mode, vi_insert_mode
 from prompt_toolkit.key_binding import DynamicKeyBindings, KeyBindings, KeyBindingsBase
 
-from . import messages as msgs
-from . import output
-from . import settings as _settings
+from . import messages as msgs, output, settings as _settings
 from .toolkit.fs import _detect_visual_mime
 
 WAYLAND_COMMAND = ("wl-paste", "--type", "image/png")

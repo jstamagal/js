@@ -16,13 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from js import config as jsconfig
-from js import paths
-from js import settings as jssettings
-from js import messages as msgs
-from js.toolkit import ToolContext
-from js.toolkit import kernel as kmod
-from js.toolkit import toolbox as tbmod
+from js import config as jsconfig, messages as msgs, paths, settings as jssettings
+from js.toolkit import ToolContext, kernel as kmod, toolbox as tbmod
 from js.toolkit.descriptions import render_tool_name_sections
 from js.toolkit.registry import build_default_registry
 

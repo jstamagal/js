@@ -276,6 +276,7 @@ def test_get_bool_always_returns_a_bool(tmp_path):
 
 def test_config_assembly_supplies_roots_and_display_services(tmp_path):
     import copy
+
     from js.config import ConfigAssembly
 
     root = tmp_path / "agents"

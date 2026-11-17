@@ -7,13 +7,11 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from test_lazy_tool_discovery import _cfg, _result
 
-from js import memory, runtime
-from js import skills as skills_mod
+from js import memory, runtime, skills as skills_mod
 from js.toolkit import ToolContext, fs
 from js.toolkit.registry import build_default_registry
-
-from test_lazy_tool_discovery import _cfg, _result
 
 SELECTION = ['read:eager', 'write:eager', 'patch:eager', 'skill:lazy']
 

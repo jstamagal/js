@@ -37,11 +37,8 @@ from typing import Any
 
 import yaml
 
-from .. import output, paths
-from .. import settings as _settings
-from .. import messages as msgs
+from .. import messages as msgs, output, paths, settings as _settings
 from .core import Tool
-
 
 MODIFIERS = ("eager", "lazy", "ban")
 _GLOB_CHARS = "*?["

@@ -19,8 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
-from . import messages as msgs
-from . import fset, output, pastes, paths
+from . import fset, messages as msgs, output, pastes, paths
 
 NOTES_FILE = "notes.txt"
 BUFFER_FILE = "buffer.txt"

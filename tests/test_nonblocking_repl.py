@@ -5,21 +5,19 @@ is neutralized (prompt_toolkit's terminal machinery is its own concern)."""
 
 from __future__ import annotations
 
-
 import asyncio
 from dataclasses import replace
 
 import pytest
-
-from js.mcp.client import MCPClient
-from js.mcp.host import MCPHost
-from js.mcp_config import MCPConfiguration, MCPPolicy, MCPServer
+from repl_driver import run_async
 from test_mcp_client import SpecServer
 
 from js import cli
 from js.config import from_env
+from js.mcp.client import MCPClient
+from js.mcp.host import MCPHost
+from js.mcp_config import MCPConfiguration, MCPPolicy, MCPServer
 from js.memory import load_messages
-from repl_driver import run_async
 
 
 def _session_file(tmp_path):

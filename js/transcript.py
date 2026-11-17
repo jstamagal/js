@@ -17,12 +17,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import display as _display
-from . import fset
-from . import output
-from . import settings as _settings
-from . import messages as msgs
-from . import toolkit as _toolkit
+from . import (
+    display as _display,
+    fset,
+    messages as msgs,
+    output,
+    settings as _settings,
+    toolkit as _toolkit,
+)
+
 
 def strip_ansi(text: str) -> str:
     """``text`` without terminal escapes, the ones `display.clean` removes,

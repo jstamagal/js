@@ -1,8 +1,8 @@
 """The prompt derivation consumes the relocated stock agent and selected add-ins."""
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 
 def test_derive_forge_uses_stock_prompt_and_selected_profile(tmp_path):

@@ -28,12 +28,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit
 
-from .. import jail as _jail
-from .. import paths
+from .. import jail as _jail, paths
 from .core import Tool, ToolContext
 from .descriptions import load_description, load_parameter_description
 from .sanitize import int_or_default
-
 
 OPERATIONS = ("diagnostics", "definition", "references", "hover")
 

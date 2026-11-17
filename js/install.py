@@ -20,9 +20,16 @@ from getpass import getpass
 from pathlib import Path
 from typing import Any
 
-from . import dotenv, home, logins, paranoid, paths, routing
-from . import messages as msgs
-from . import settings as settings_mod
+from . import (
+    dotenv,
+    home,
+    logins,
+    messages as msgs,
+    paranoid,
+    paths,
+    routing,
+    settings as settings_mod,
+)
 
 # The keys js reads from the environment, and what each one is for.
 KEYS: tuple[tuple[str, str], ...] = (

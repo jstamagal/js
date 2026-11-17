@@ -35,7 +35,6 @@ from prompt_toolkit.history import History
 from . import pastes
 
 
-
 @dataclass(frozen=True)
 class Entry:
     ts: float

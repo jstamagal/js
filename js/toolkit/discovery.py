@@ -10,9 +10,8 @@ from collections.abc import Iterable
 from typing import Any
 
 from .core import CatalogEntry, Tool, ToolContext
-from .presentation import Presentation
 from .descriptions import load_description, load_parameter_description
-
+from .presentation import Presentation
 
 DISCOVERY_TOOL_NAME = "tool_discovery"
 

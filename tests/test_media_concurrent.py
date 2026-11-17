@@ -1,7 +1,7 @@
-from concurrent.futures import ThreadPoolExecutor
 import hashlib
-from pathlib import Path
 import threading
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 

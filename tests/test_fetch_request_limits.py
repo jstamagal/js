@@ -11,8 +11,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from js.toolkit import ToolContext
-from js.toolkit import process_net
+from js.toolkit import ToolContext, process_net
 
 
 class _LimitHandler(http.server.BaseHTTPRequestHandler):

@@ -3,20 +3,27 @@
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Callable, Mapping
 import curses
 import os
 import re
 import sys
-from getpass import getpass
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
+from getpass import getpass
 from types import SimpleNamespace
 
 import ai
 
-from . import login_defaults, model_client, paranoid, providers, retry
-from . import config, turn_settings
-from . import messages as msgs
+from . import (
+    config,
+    login_defaults,
+    messages as msgs,
+    model_client,
+    paranoid,
+    providers,
+    retry,
+    turn_settings,
+)
 from .logins import (
     Login,
     LoginsCorruptError,
@@ -29,7 +36,6 @@ from .logins import (
     test_login_with_metadata,
     update_login,
 )
-
 
 _API_SHAPES: list[tuple[str, str, str]] = [
     ("openai-completions", "openai", msgs.LOGIN_SHAPE_CHAT_COMPLETIONS.format()),
@@ -263,8 +269,9 @@ def _dialect_map(provider_id: str) -> dict[str, str]:
     *this* login's wire. Best-effort: an empty/failed lookup just yields no tags.
     """
     try:
-        from . import model_metadata
         import modelsdotdev
+
+        from . import model_metadata
 
         model_metadata.ensure_fresh_catalog()
     except Exception:  # noqa: BLE001 - annotation is cosmetic; never block login

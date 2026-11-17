@@ -24,13 +24,17 @@ from typing import Any
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
-
 import modelsdotdev
-from modelsdotdev._internal import data as modelsdotdev_data
-from modelsdotdev._internal import sync as modelsdotdev_sync
+from modelsdotdev._internal import data as modelsdotdev_data, sync as modelsdotdev_sync
 
-from . import model_matching, paths, providers, settings as _settings, stream_transport
-from . import messages as msgs
+from . import (
+    messages as msgs,
+    model_matching,
+    paths,
+    providers,
+    settings as _settings,
+    stream_transport,
+)
 
 _policy_settings: ContextVar[dict | None] = ContextVar("js_metadata_settings", default=None)
 

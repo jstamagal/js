@@ -6,8 +6,7 @@ import io
 import re
 from types import SimpleNamespace
 
-from js import display, runtime
-from js import messages as msgs
+from js import display, messages as msgs, runtime
 from js.toolkit import Tool, ToolContext, ToolRegistry
 from js.transcript import TranscriptLogSink
 

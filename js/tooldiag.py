@@ -14,9 +14,7 @@ each description carries before conditional sections resolve.
 """
 from __future__ import annotations
 
-
 from . import messages as msgs
-
 from .toolkit.core import compact_json
 from .toolkit.descriptions import render_tool_name_sections
 from .toolkit.policy import ToolPolicyError

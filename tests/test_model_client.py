@@ -8,11 +8,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import ai
+import ai.models
 import ai.types.events
 import ai.types.messages
 import ai.types.tools
 import ai.types.usage
-import ai.models
 import pytest
 
 from js import history_record, model_client
@@ -783,9 +783,9 @@ def test_the_reply_blocks_reach_the_stream_result(monkeypatch):
 
 def test_a_turn_stores_the_reply_blocks_on_its_assistant_message(monkeypatch, tmp_path):
     import ai.types.usage
+    from test_lazy_tool_discovery import _cfg
 
     from js import runtime
-    from test_lazy_tool_discovery import _cfg
 
     blocks = [{"type": "thinking", "thinking": "x", "signature": "s"}]
 
@@ -847,9 +847,9 @@ def test_reasoning_blocks_count_in_both_token_estimates():
 
 def test_blocks_go_back_only_to_the_model_that_wrote_them(monkeypatch, tmp_path):
     import ai.types.usage
+    from test_lazy_tool_discovery import _cfg
 
     from js import runtime
-    from test_lazy_tool_discovery import _cfg
 
     blocks = [{"type": "thinking", "thinking": "x", "signature": "s"}]
 

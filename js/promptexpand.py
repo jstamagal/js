@@ -42,17 +42,16 @@ directive without the loader running it. Two ways:
 from __future__ import annotations
 
 import os
-from contextvars import ContextVar
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
 from collections.abc import Mapping
+from contextvars import ContextVar
+from pathlib import Path
 
-from . import paths, settings
-from . import messages as msgs
+from . import messages as msgs, paths, settings
 from .capped_process import CappedProcessResult, _run_capped, truncation_marker
 
 __all__ = ["expand_prompt", "session_variables", "PromptExpansionError"]

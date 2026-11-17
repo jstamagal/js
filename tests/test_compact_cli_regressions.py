@@ -4,9 +4,9 @@ import io
 from types import SimpleNamespace
 
 import pytest
+from test_config_compaction_layers import _compact_test_cfg
 
 from js import cli, paths
-from test_config_compaction_layers import _compact_test_cfg
 
 
 @pytest.mark.parametrize("arguments, stdin, expected", [

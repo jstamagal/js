@@ -10,8 +10,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from .. import paths
-from .. import settings as _settings
+from .. import paths, settings as _settings
 from ..capped_process import truncation_marker
 from ..text_bytes import byte_prefix, byte_size, cap_text
 from .core import Output, ToolResult

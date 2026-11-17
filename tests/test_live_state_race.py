@@ -11,9 +11,10 @@ from __future__ import annotations
 import asyncio
 import threading
 
+from repl_driver import run_async
+
 from js import cli
 from js.config import from_env
-from repl_driver import run_async
 
 
 def _setup(monkeypatch, tmp_path, pairs: int) -> list[tuple[str, str | None]]:

@@ -7,8 +7,7 @@ from pathlib import Path
 
 import yaml
 
-from js import persona
-from js import agent_migration
+from js import agent_migration, persona
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "migrate_agents.py"
 _spec = importlib.util.spec_from_file_location("migrate_agents", _SCRIPT)

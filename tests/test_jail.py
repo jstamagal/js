@@ -16,13 +16,12 @@ import time
 from pathlib import Path
 
 import pytest
+from jail_probe import bwrap_starts, needs_bwrap
+from test_subagent_isolation import _fake_stream_result, make_cfg, prompt_dir
 
 from js import cli, jail, paths, persona, runtime, settings
 from js.toolkit import ToolContext, call_tool, fs, kernel as kmod, process_net, terminal
 from js.toolkit.registry import build_default_registry
-from jail_probe import bwrap_starts, needs_bwrap
-
-from test_subagent_isolation import _fake_stream_result, make_cfg, prompt_dir
 
 needs_kernel = pytest.mark.skipif(
     not all(importlib.util.find_spec(name) for name in ("jupyter_client", "ipykernel")),

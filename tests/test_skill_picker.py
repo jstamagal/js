@@ -5,12 +5,9 @@ conftest installs."""
 
 from __future__ import annotations
 
-
-
+from test_command_table import _launch, _run
 
 from js import cli, settings, skill_picker
-
-from test_command_table import _launch, _run
 
 
 def test_skill_picker_accepts_context_keymaps(tmp_path):
@@ -39,6 +36,7 @@ def test_skills_command_writes_the_picked_names_into_the_setting(monkeypatch, tm
 
 def test_skill_picker_accepts_its_view_and_streams(monkeypatch, tmp_path):
     from types import SimpleNamespace
+
     from js import picker, skills
 
     source, target = object(), object()

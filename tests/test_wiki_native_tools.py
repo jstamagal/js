@@ -12,13 +12,10 @@ from types import SimpleNamespace
 import pytest
 
 from js.capped_process import truncation_marker
-from js.toolkit import ToolContext
-from js.toolkit import fs
-from js.toolkit import wiki as wiki_module
+from js.toolkit import ToolContext, fs, wiki as wiki_module
 from js.toolkit.core import call_tool
 from js.toolkit.descriptions import load_description
-from js.toolkit.wiki import convert as wiki_convert_module
-from js.toolkit.wiki import helpers as wiki_helpers_module
+from js.toolkit.wiki import convert as wiki_convert_module, helpers as wiki_helpers_module
 from js.toolkit.wiki.convert import wiki_convert
 from js.toolkit.wiki.ops import wiki_finish_ingest
 from js.toolkit.wiki.pages import wiki_write

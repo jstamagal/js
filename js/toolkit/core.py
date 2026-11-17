@@ -16,18 +16,17 @@ import math
 import os
 import secrets
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from collections.abc import Callable
 
-from .. import jail as _jail
-from .. import turn_settings as _turn_settings
+from .. import jail as _jail, turn_settings as _turn_settings
 from ..media import IMAGE_RESULT_PREFIX
 from ..skills import SkillCatalog
-from .presentation import Presentation
 from . import reads as _reads
+from .presentation import Presentation
 from .reads import ReadLedger
 from .undo import UndoStore, session_directory
 

@@ -2,11 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 from js import paths
 from js.skills import ToolActivationResult
-from js.toolkit import ToolContext
-from js.toolkit import fs, meta
+from js.toolkit import ToolContext, fs, meta
 from js.toolkit.registry import select
 
 

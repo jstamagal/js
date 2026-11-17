@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
-from js.mcp.protocol import INVALID_REQUEST, JSONRPCPeer, REQUEST_CANCELLED
 from test_mcp_protocol import FakeTransport
+
+from js.mcp.protocol import INVALID_REQUEST, REQUEST_CANCELLED, JSONRPCPeer
 
 
 @pytest.mark.parametrize("request_id", [1, "same-id"])

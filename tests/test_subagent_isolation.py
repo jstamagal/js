@@ -1,23 +1,22 @@
 from __future__ import annotations
 
-from dataclasses import replace
-from pathlib import Path
 import asyncio
 import time
+from dataclasses import replace
+from pathlib import Path
+
+import ai
+import pytest
+from tool_loading import after_loading
 
 from js import runtime
 from js.config import Config
-from js.memory import load_messages
 from js.mcp_config import resolve as resolve_mcp
-from js.toolkit import ToolContext, call_tool
-from js.toolkit import fs
+from js.memory import load_messages
+from js.model_client import ModelStreamResult, ModelToolCall
+from js.toolkit import ToolContext, call_tool, fs
 from js.toolkit.meta import task
 from js.toolkit.registry import build_default_registry, select
-from js.model_client import ModelStreamResult, ModelToolCall
-import ai
-import pytest
-
-from tool_loading import after_loading
 
 
 @pytest.fixture(autouse=True)
@@ -154,7 +153,7 @@ def test_task_requires_named_agent_id(tmp_path):
 @pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
 def test_child_terminal_sessions_close_when_turn_exits(monkeypatch, tmp_path, outcome):
     from js.toolkit.meta import _run_one_task_async
-    from js.toolkit.terminal import terminal_session, close_terminal_sessions
+    from js.toolkit.terminal import close_terminal_sessions, terminal_session
 
     prompts = prompt_dir(tmp_path, "worker")
     cfg = make_cfg(tmp_path, "parent", prompts.parent / "parent")
@@ -724,6 +723,7 @@ def test_one_task_returns_the_worker_text_verbatim(monkeypatch, tmp_path):
 
 def test_registered_setting_can_disable_child_reply_share(monkeypatch, tmp_path):
     from types import SimpleNamespace
+
     from js import turn_settings
 
     prompts = prompt_dir(tmp_path, "worker", "tools:\n  - plan:lazy\n")

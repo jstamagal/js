@@ -8,15 +8,13 @@ import ai
 import ai.types.messages
 import ai.types.usage
 
-from js import context_budget, runtime
-from js import skills as skills_mod
+from js import context_budget, runtime, skills as skills_mod
 from js.config import Config
 from js.mcp.host import MCPHost
 from js.mcp_config import MCPConfiguration, MCPPolicy
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
-
 
 
 def _without_builtin_skills(monkeypatch, tmp_path):

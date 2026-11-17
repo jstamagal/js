@@ -9,13 +9,12 @@ compact?".
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import math
 import re
+from dataclasses import dataclass
 from typing import Any
-
 
 # A word run (any script) or one punctuation/symbol character. The old first
 # branch was ASCII-only and the second excluded \w, so CJK and accented letters

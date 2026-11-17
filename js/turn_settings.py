@@ -18,8 +18,8 @@ by a subagent from its parent's context.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, make_dataclass
 from collections.abc import Callable
+from dataclasses import dataclass, field, make_dataclass
 from typing import Any
 
 from . import settings as _settings

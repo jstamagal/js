@@ -16,15 +16,14 @@ from dataclasses import replace
 import ai
 import ai.types.usage
 import pytest
+from repl_driver import run_async
 
 from js import cli, runtime
 from js.config import Config, from_env
 from js.model_client import ModelStreamResult, ModelToolCall
-from js.toolkit import ToolContext
-from js.toolkit import process_net
+from js.toolkit import ToolContext, process_net
 from js.toolkit.core import Tool
 from js.toolkit.registry import ToolRegistry
-from repl_driver import run_async
 
 
 def _cfg(tmp_path):

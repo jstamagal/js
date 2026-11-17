@@ -7,19 +7,18 @@ prefix parsing.
 
 from __future__ import annotations
 
-from . import messages as msgs
-
 import os
 import re
+import time
+from collections.abc import Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-import time
 from dataclasses import dataclass, field
-from collections.abc import Mapping
 
 import modelsdotdev
 from ai.providers.base import _PROVIDER_REGISTRY
 
+from . import messages as msgs
 
 Transport = str
 

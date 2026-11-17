@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import copy
-
 from pathlib import Path
 
 import pytest
 
-from js import runtime, session_store, settings
+from js import messages as msgs, runtime, session_store, settings
 from js.config import Config, InvocationSources, from_env
-from js import messages as msgs
 
 
 def _env_dirs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path]:
@@ -287,9 +285,10 @@ def test_js_provider_base_and_key_env_names(monkeypatch, tmp_path):
 
 
 def _fake_stream_result(text: str = "ok"):
-    from js.model_client import ModelStreamResult
     import ai
     import ai.types.usage
+
+    from js.model_client import ModelStreamResult
 
     return ModelStreamResult(
         text=text,

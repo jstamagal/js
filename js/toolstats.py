@@ -21,8 +21,7 @@ import re
 from collections import Counter
 from pathlib import Path
 
-from . import paths as _paths
-from . import messages as msgs
+from . import messages as msgs, paths as _paths
 
 _SEGMENT_SPLIT = re.compile(r"\s*(?:\|\||&&|\||;)\s*")
 _READ_CMDS = {"cat", "head", "tail", "less", "more", "bat"}

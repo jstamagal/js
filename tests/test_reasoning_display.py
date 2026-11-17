@@ -7,12 +7,21 @@ from types import SimpleNamespace
 
 import ai
 import ai.types.events as events
-import pytest
 import httpx2
+import pytest
 
-from js import cli, config, display, history_record, memory, model_client, runtime, screen, transcript
+from js import (
+    cli,
+    config,
+    display,
+    history_record,
+    memory,
+    model_client,
+    runtime,
+    screen,
+    transcript,
+)
 from js.toolkit import ToolContext
-
 
 THOUGHT = " first thought\n  next thought: λ\n"
 

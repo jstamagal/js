@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from PIL import Image
+from test_lazy_tool_discovery import _cfg, _result
 
 from js import paths, runtime
 from js.toolkit import browser as browser_module
@@ -16,7 +17,6 @@ from js.toolkit.browser import browser_probe
 from js.toolkit.core import ToolContext
 from js.toolkit.registry import build_default_registry
 from js.toolkit.terminal import close_terminal_sessions, terminal_session, terminal_snapshot
-from test_lazy_tool_discovery import _cfg, _result
 
 pytestmark = pytest.mark.usefixtures("chromium_cache")
 

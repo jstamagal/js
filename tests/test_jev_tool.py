@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from js.toolkit import ToolContext
-from js.toolkit import jev
+from js.toolkit import ToolContext, jev
 
 
 class _Client:
@@ -60,6 +59,7 @@ def test_jev_without_an_api_key_is_an_error(tmp_path, monkeypatch):
 
 def test_registered_typesafe_key_reaches_client(tmp_path, monkeypatch):
     import typesafe_sdk
+
     from js import turn_settings
 
     seen = {}

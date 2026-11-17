@@ -12,7 +12,6 @@ from typing import Any
 
 from . import messages as msgs
 
-
 CANONICAL_EVENT_NAMES: tuple[str, ...] = (
     "input",
     "prompt",

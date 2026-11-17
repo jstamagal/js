@@ -3,6 +3,7 @@ from pathlib import Path
 import ai
 import ai.types.usage
 import pytest
+from repl_driver import run_async
 
 from js import cli, memory, persona, runtime, session_store
 from js.config import from_env
@@ -10,7 +11,6 @@ from js.model_client import ModelStreamResult
 from js.session_catalog import last_stamp
 from js.toolkit import ToolContext
 from js.toolkit.meta import task
-from repl_driver import run_async
 
 
 def _agent(tmp_path, monkeypatch, files):

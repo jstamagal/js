@@ -21,14 +21,14 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import ai
+from tool_loading import after_loading
+
 from js import runtime, supervisor
 from js.config import Config
+from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
-from js.model_client import ModelStreamResult, ModelToolCall
-import ai
-
-from tool_loading import after_loading
 
 
 def _stop(text: str) -> ModelStreamResult:

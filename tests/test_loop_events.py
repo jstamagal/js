@@ -51,8 +51,9 @@ def test_compaction_flight_failure_goes_to_the_callback(monkeypatch, capsys):
 
 
 def test_flight_autolog_failure_goes_to_its_event_callback(tmp_path, capsys):
-    from js.compaction_flight import CompactionFlight
     from test_config_compaction_layers import _compact_test_cfg
+
+    from js.compaction_flight import CompactionFlight
 
     blocked = tmp_path / "blocked"
     blocked.write_text("file")

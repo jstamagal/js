@@ -10,7 +10,6 @@ import pytest
 
 from js.toolkit import ToolContext, process_net
 
-
 needs_bash = pytest.mark.skipif(shutil.which("bash") is None, reason="bash is not installed")
 needs_zsh = pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 
@@ -126,6 +125,7 @@ def test_shell_own_variables_are_not_reported_as_unset(tmp_path, monkeypatch):
 @needs_bash
 def test_registered_setting_can_disable_pipefail(tmp_path):
     from types import SimpleNamespace
+
     from js import turn_settings
 
     context = ToolContext(cwd=tmp_path, shell_program="bash")

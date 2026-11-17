@@ -16,10 +16,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
-from js import cli, compaction
-from js import memory as M
 from test_config_compaction_layers import _compact_test_cfg
+
+from js import cli, compaction, memory as M
 
 FIXTURES = Path(__file__).parent / "fixtures" / "session_journal"
 EXPECTED = json.loads((FIXTURES / "expected.json").read_text(encoding="utf-8"))

@@ -33,9 +33,7 @@ from collections.abc import Callable, Iterable, Mapping
 
 from prompt_toolkit.completion import Completer, Completion
 
-from . import fset
-from . import events
-from . import settings as _settings
+from . import events, fset, settings as _settings
 
 _TRAILING_TOKEN = re.compile(r"\S*$")  # run of non-space chars before the cursor
 

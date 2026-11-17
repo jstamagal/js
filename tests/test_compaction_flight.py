@@ -1,18 +1,17 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
-
 import asyncio
-from dataclasses import replace
 import io
 import json
+from dataclasses import replace
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
+from test_cli_prompt_mode import _auto_state
+from test_config_compaction_layers import _compact_test_cfg
 
 from js import cli, compaction, runtime
-from test_config_compaction_layers import _compact_test_cfg
-from test_cli_prompt_mode import _auto_state
 
 
 def read_flight(cfg):
@@ -85,10 +84,12 @@ def test_between_turn_uses_changed_live_window(monkeypatch, tmp_path):
 
 def test_same_repl_set_override_updates_anchor_then_request_budget(monkeypatch, tmp_path, capsys):
     from dataclasses import replace
+
+    from test_lazy_tool_discovery import _result
+
     from js import settings
     from js.toolkit import ToolContext
     from js.toolkit.registry import build_default_registry
-    from test_lazy_tool_discovery import _result
 
     cfg = _compact_test_cfg(tmp_path, {})
     cfg = replace(cfg, trace=True, max_output_tokens=128, provider_id="openai",

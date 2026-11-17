@@ -23,11 +23,9 @@ from typing import Any
 import ai
 import ai.types.messages
 
-from . import media, providers, snippets, tool_args
 # reasoning imports only after settings, which tool_args loads.
-from . import reasoning
+from . import media, providers, reasoning, snippets, tool_args
 from .text_bytes import byte_prefix, cap_text
-
 
 # Where js keeps an assistant message's `reasoning_blocks` on the SDK message.
 JS_METADATA_KEY = "js"

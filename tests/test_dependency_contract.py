@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from importlib import metadata
-from pathlib import Path
 import re
 import tomllib
+from importlib import metadata
+from pathlib import Path
 
 
 def _release(version: str) -> tuple[int, ...]:

@@ -23,9 +23,7 @@ from pathlib import Path
 from prompt_toolkit.keys import KEY_ALIASES, Keys
 from prompt_toolkit.search import SearchDirection
 
-from . import messages as msgs
-from . import paths
-from . import setcmd
+from . import messages as msgs, paths, setcmd
 
 KeySequence = tuple[str, ...]
 Keymap = dict[str, tuple[KeySequence, ...]]

@@ -15,7 +15,6 @@ import pytest
 from js import history_record, model_client, reasoning
 from js.model_client import ModelStreamResult
 
-
 # ---- the dial (pure) ----
 
 @pytest.mark.parametrize(

@@ -5,7 +5,6 @@ import socket
 from js.output import OutputEvent
 
 
-
 def test_output_event_is_genuinely_hashable():
     """frozen=True advertises hashability; a dict `fields` field used to make
     hash() raise despite that. `fields` is now a tuple of (key, value) pairs,
@@ -82,9 +81,9 @@ def _offline_config(tmp_path, *, trace: bool, settings: dict):
 
 def _reply(text="", tool_calls=(), reasoning=""):
     import ai.types.usage
+    from test_runtime_offline_integration import _make_assistant_msg
 
     from js.model_client import ModelStreamResult
-    from test_runtime_offline_integration import _make_assistant_msg
 
     return ModelStreamResult(text=text, tool_calls=list(tool_calls), reasoning=reasoning,
                              usage=ai.types.usage.Usage(input_tokens=5, output_tokens=7),

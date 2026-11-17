@@ -5,14 +5,13 @@ import json
 import re
 
 import pytest
+from test_lazy_tool_discovery import _cfg, _result
 
 from js import runtime
 from js.toolkit import ToolContext
 from js.toolkit.core import CatalogEntry, Tool
 from js.toolkit.discovery import ranked_entries
 from js.toolkit.registry import ToolRegistry, build_default_registry
-
-from test_lazy_tool_discovery import _cfg, _result
 
 
 def _entry(name, description='', *, search_text='', kind='mcp', source='fixture'):

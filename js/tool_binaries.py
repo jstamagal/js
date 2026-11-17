@@ -10,8 +10,8 @@ through PATH (notably, ``sg`` on this box is not ast-grep).
 
 from __future__ import annotations
 
-import hashlib
 import fcntl
+import hashlib
 import json
 import math
 import os
@@ -29,9 +29,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import messages as msgs
-from . import output, paths, settings as _settings
-
+from . import messages as msgs, output, paths, settings as _settings
 
 TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools" / "bin"
 class InstallError(RuntimeError):

@@ -5,10 +5,10 @@ import subprocess
 import sys
 
 import pytest
+from jail_probe import needs_bwrap
 
 from js import jail, paths
 from js.toolkit import ToolContext, process_net
-from jail_probe import needs_bwrap
 
 
 @pytest.mark.parametrize('source', ['environment', 'default'])

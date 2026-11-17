@@ -15,11 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import display
-from . import fset
-from . import messages as msgs
-from . import output
-from . import toolkit as T
+from . import display, fset, messages as msgs, output, toolkit as T
 from .reasoning_display import ReasoningDisplay, StderrReasoning
 from .toolkit.core import ToolContext
 

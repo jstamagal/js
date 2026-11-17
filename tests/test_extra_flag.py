@@ -15,7 +15,6 @@ These exercise the real load path: the focused ``settings.collect_settings`` /
 from __future__ import annotations
 
 import re
-
 from pathlib import Path
 
 import pytest

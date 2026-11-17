@@ -36,14 +36,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .. import messages as msgs
-from .. import paths as _paths
+from .. import messages as msgs, paths as _paths
 from . import kernel as _kernel
 from .core import Tool, ToolContext
-from .presentation import Presentation
 from .descriptions import load_description
+from .presentation import Presentation
 from .sanitize import int_or_default, text_or_default
-
 
 _HEADER = re.compile(r"^#\s*js-toolbox:\s*(\{.*?\})\s*$", re.MULTILINE)
 _SAFE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")

@@ -27,9 +27,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-from . import messages as msgs
-from . import secret_patterns
-from . import settings as _settings
+from . import messages as msgs, secret_patterns, settings as _settings
 
 # An endpoint reached this way is usually a local box that ignores the key, but
 # most OpenAI-shaped servers still require the header to exist.

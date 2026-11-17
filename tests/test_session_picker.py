@@ -12,15 +12,20 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from test_repl_info_cmds import make_cfg
 
-from js import cli, runtime, session_picker, session_store, session_text
-from js import memory as M
-from js import messages as msgs
-from js import session_query as Q
+from js import (
+    cli,
+    memory as M,
+    messages as msgs,
+    runtime,
+    session_picker,
+    session_query as Q,
+    session_store,
+    session_text,
+)
 from js.session_catalog import first_metadata, record_session_start
 from js.session_index import Hit
-
-from test_repl_info_cmds import make_cfg
 
 HOME = "/home/op"
 CWD = "/home/op/js"
@@ -556,6 +561,7 @@ def test_an_open_picker_previews_a_session_file_that_changed(tmp_path):
 
 def test_session_picker_accepts_its_view_and_streams(monkeypatch):
     from types import SimpleNamespace
+
     from js import picker
 
     source, target = object(), object()

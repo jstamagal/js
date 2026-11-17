@@ -10,7 +10,6 @@ from js.toolkit import descriptions, fs
 from js.toolkit.core import Tool
 from js.toolkit.registry import ToolRegistry, build_default_registry
 
-
 CORE_TOOL_NAMES = {
     "read",
     "write",

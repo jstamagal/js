@@ -1,21 +1,15 @@
 """Repeat complete CLI invocations as fresh, isolated processes."""
 from __future__ import annotations
 
-from . import command_line
-from . import snippets
-
-from . import messages as msgs
-
-from . import settings as _settings
-
 import os
-from pathlib import Path
 import re
 import signal
 import subprocess
 import sys
 import time
+from pathlib import Path
 
+from . import command_line, messages as msgs, settings as _settings, snippets
 
 _DURATION = re.compile(r"([1-9][0-9]*)([mMhH])\Z")
 

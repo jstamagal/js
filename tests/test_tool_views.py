@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from test_output import _Sink
 
+
 def test_kernel_calls_preserve_their_structured_view(monkeypatch, tmp_path):
     from js import runtime
     from js.toolkit import kernel_bridge

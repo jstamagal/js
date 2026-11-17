@@ -15,8 +15,7 @@ from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
-from js import attach, clipimage, history_record, screen, settings
-from js import messages as msgs
+from js import attach, clipimage, history_record, messages as msgs, screen, settings
 from js.config import Config
 
 _PNG = base64.b64decode(

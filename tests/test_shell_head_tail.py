@@ -10,8 +10,7 @@ from pathlib import Path
 
 from js import paths
 from js.capped_process import _StreamCapture
-from js.toolkit import ToolContext
-from js.toolkit import fs
+from js.toolkit import ToolContext, fs
 from js.toolkit.core import for_model
 from js.toolkit.process_net import shell as _shell
 

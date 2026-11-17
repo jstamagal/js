@@ -9,11 +9,11 @@ import stat
 from pathlib import Path
 
 import pytest
+from jail_probe import bwrap_starts
 
 from js import held, jail, runtime
 from js.toolkit import ToolContext, call_tool
 from js.toolkit.registry import build_default_registry
-from jail_probe import bwrap_starts
 
 CONTENT = "".join(f"line {n}: {'x' * 40}\n" for n in range(40))
 

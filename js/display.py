@@ -28,21 +28,22 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from prompt_toolkit.utils import get_cwidth
-from rich.console import Console
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
+from prompt_toolkit.utils import get_cwidth
+from rich.console import Console
 from rich.markdown import Markdown, TableElement
 from rich.syntax import Syntax
 from rich.text import Text
 from rich.theme import Theme as _RichTheme
 
-from . import fset
-from . import messages as msgs
-from . import output
-from . import settings as _settings
+from . import fset, messages as msgs, output, settings as _settings
 from .toolkit.presentation import (
-    PATH_ARGS, ScreenResult, call_kind, declared, tool_output,
+    PATH_ARGS,
+    ScreenResult,
+    call_kind,
+    declared,
+    tool_output,
 )
 
 _SGR_ONLY = re.compile(r"\x1b\[[0-9;]*m")

@@ -42,11 +42,6 @@ in an inbox or the log. A member whose process is gone stays silent.
 
 from __future__ import annotations
 
-from . import command_line
-from . import messages as msgs
-
-from . import settings as _settings
-
 import contextlib
 import fcntl
 import json
@@ -63,6 +58,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from . import command_line, messages as msgs, settings as _settings
 
 POLL_S = 0.25
 COALESCE_S = 0.3
@@ -933,8 +929,8 @@ def _tasks(context: Any = None) -> str:
 
 def tools() -> tuple:
     from .toolkit.core import Tool
-    from .toolkit.presentation import Presentation
     from .toolkit.descriptions import load_description, load_parameter_description
+    from .toolkit.presentation import Presentation
 
     return (
         Tool("send", load_description("send"), _send, {

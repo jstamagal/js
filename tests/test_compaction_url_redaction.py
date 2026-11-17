@@ -1,12 +1,12 @@
 """Diagnostic URL copies omit credentials without changing provider configuration."""
 
-from copy import deepcopy
 import json
+from copy import deepcopy
 
 import pytest
+from test_compaction_flight import _flight_cfg
 
 from js.compaction_flight import CompactionFlight
-from test_compaction_flight import _flight_cfg
 
 
 @pytest.mark.parametrize("mode", ["off", "on"])

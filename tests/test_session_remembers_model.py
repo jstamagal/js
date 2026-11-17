@@ -6,10 +6,10 @@ from __future__ import annotations
 import json
 
 import pytest
+from repl_driver import stub_screen, turn_stub
 
 from js import cli
 from js.session_catalog import last_session_model, record_session_start
-from repl_driver import stub_screen, turn_stub
 
 
 def _metadata(session_file):

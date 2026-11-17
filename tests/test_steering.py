@@ -14,6 +14,7 @@ import threading
 import ai
 import ai.types.usage
 from ai.providers import history_utils
+from repl_driver import run_async
 
 from js import cli, runtime
 from js.config import Config, from_env
@@ -22,7 +23,6 @@ from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
 from js.toolkit.core import Tool
 from js.toolkit.registry import ToolRegistry
-from repl_driver import run_async
 
 
 def _text(text: str) -> ModelStreamResult:

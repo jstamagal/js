@@ -41,8 +41,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import messages as msgs
-from . import paths
+from . import messages as msgs, paths
 
 SUFFIX = ".jsonl"
 TEXT_SUFFIX = ".txt"

@@ -11,9 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from js import messages as msgs, tool_binaries
-from js.toolkit import ToolContext
-from js.toolkit import process_net
-
+from js.toolkit import ToolContext, process_net
 
 _PAYLOAD = (b"aria2-real-transfer\x00" * (12 * 1024 * 1024 // 20 + 1))[: 12 * 1024 * 1024]
 _TEXT_PAYLOAD = (b"aria2 large text response\n" * (6 * 1024 * 1024 // 26 + 1))[

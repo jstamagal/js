@@ -4,11 +4,11 @@ import threading
 from dataclasses import replace
 
 import pytest
+from test_lazy_tool_discovery import _cfg, _result
 
 from js import memory, runtime, supervisor
 from js.toolkit.core import Tool, ToolContext
 from js.toolkit.registry import ToolRegistry
-from test_lazy_tool_discovery import _cfg, _result
 
 
 @pytest.mark.parametrize("mode", ["sync", "async", "mixed_sync", "mixed_async"])

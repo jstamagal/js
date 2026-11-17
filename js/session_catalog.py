@@ -23,10 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import messages as msgs
-from . import paths, session_store
-from . import session_text
-from . import usage as usage_mod
+from . import messages as msgs, paths, session_store, session_text, usage as usage_mod
 
 _METADATA_KIND = "session_metadata"
 _METADATA_VERSION = 3

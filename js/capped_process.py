@@ -13,7 +13,6 @@ import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
-
 # After the process exits, how long its reader threads get to drain the pipes
 # before a reader still blocked (a grandchild holding the pipe) is stopped.
 READER_GRACE_S = 2.0
@@ -274,8 +273,7 @@ def _session_members(sid: int) -> list[int]:
 def _log_kill(proc: subprocess.Popen, members: list[int]) -> None:
     """Append one line to KILL_LOG_FILE (unset = ~/.js/state/kill.log): when,
     which command, the pids hit, and the js calls that led to the kill."""
-    from . import paths
-    from . import settings as _settings
+    from . import paths, settings as _settings
 
     path = Path(_settings.live_value("KILL_LOG_FILE") or paths.state_root() / "kill.log").expanduser()
     args = proc.args if isinstance(proc.args, (list, tuple)) else [str(proc.args)]

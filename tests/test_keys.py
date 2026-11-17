@@ -8,7 +8,6 @@ from prompt_toolkit.key_binding.key_bindings import _parse_key
 
 from js import keys, screen
 
-
 # The keys the screen answered to before the keys file existed, with
 # Ctrl-R moved to history_search, reasoning_toggle on Ctrl-O, and Ctrl-W then
 # a digit showing that window.

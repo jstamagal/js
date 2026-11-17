@@ -13,15 +13,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .. import jail
-from .. import paths
+from .. import jail, paths
 from . import fs
 from .core import Tool, ToolContext
-from .presentation import Presentation
 from .descriptions import load_description
+from .presentation import Presentation
 from .results import truncate
 from .sanitize import int_or_default, text_or_default
-
 
 _KEY_SEQUENCES = {
     "enter": "\r",

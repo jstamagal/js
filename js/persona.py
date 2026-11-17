@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from . import snippets
-
 import json
 import os
 import re
@@ -14,13 +12,10 @@ from typing import Any
 
 import yaml
 
+from . import messages as msgs, model_profiles, paths, secret_patterns, settings, snippets
 from .promptexpand import expand_prompt, session_variables
-from .toolkit import policy
-from . import paths, model_profiles
-from . import messages as msgs
-from . import settings
-from . import secret_patterns
 from .sampling import SAMPLING_FIELDS
+from .toolkit import policy
 
 
 @dataclass(frozen=True)

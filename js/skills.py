@@ -2,22 +2,17 @@
 
 from __future__ import annotations
 
-from . import snippets
-
+import json
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
-import json
 from pathlib import Path, PurePosixPath
-import re
 from typing import Any
 
 import yaml
 
-from . import paths
-from . import messages as msgs
-from . import output
-
+from . import messages as msgs, output, paths, snippets
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,78}[A-Za-z0-9])?$")
 _TOOL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:-]*$")

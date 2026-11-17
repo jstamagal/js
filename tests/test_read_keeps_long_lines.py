@@ -6,8 +6,7 @@ what bound the output."""
 
 from __future__ import annotations
 
-from js.toolkit import ToolContext
-from js.toolkit import fs
+from js.toolkit import ToolContext, fs
 
 
 def test_a_long_line_is_returned_whole(tmp_path):

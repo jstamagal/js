@@ -7,11 +7,11 @@ from pathlib import Path
 
 import ai
 import pytest
+from repl_driver import stub_screen
 
 from js import cli, runtime, session_catalog, session_picker, session_query, session_store
 from js.cli_options import RunOptions, current, invocation
 from js.model_client import ModelStreamResult
-from repl_driver import stub_screen
 
 
 class Terminal(io.StringIO):

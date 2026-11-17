@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import ai
 import pytest
+from repl_driver import run_async, turn_stub
 
 from js import cli, events, settings
 from js.config import Config
 from js.memory import append_message, load_messages
-from repl_driver import run_async, turn_stub
 
 
 def _debug_records(path: Path) -> list[dict]:

@@ -11,7 +11,6 @@ from typing import Any
 
 from .. import settings as _settings
 
-
 PATH_ARGS = ("file_path", "path")
 _PYTHON_FIRST_LINE = re.compile(r"^\s*(?:\S*/)?python[0-9.]*\b")
 

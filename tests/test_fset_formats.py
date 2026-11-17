@@ -8,8 +8,7 @@ from string import Formatter
 
 import pytest
 
-from js import fset
-from js import messages as msgs
+from js import fset, messages as msgs
 
 _FORMATTER = Formatter()
 

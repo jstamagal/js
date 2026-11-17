@@ -59,9 +59,9 @@ to draw the exchange whole when it finishes. Every call still reaches the sink.
 
 from __future__ import annotations
 
+import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
-import threading
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 

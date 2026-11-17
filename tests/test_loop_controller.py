@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import shlex
 import signal
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from js.loop_controller import _stop_child, child_argv, parse_limit
 
@@ -187,6 +187,7 @@ def test_interrupt_kills_detached_group_when_js_ignores_signals(tmp_path: Path):
 
 def test_registered_loop_failure_limit_stops_without_another_child(monkeypatch):
     from types import SimpleNamespace
+
     from js import loop_controller
 
     calls = []

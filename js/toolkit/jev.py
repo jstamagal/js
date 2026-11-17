@@ -14,7 +14,6 @@ from typing import Any
 from .core import Tool, ToolContext
 from .descriptions import load_description, load_parameter_description
 
-
 API_KEY_ENV = "TYPESAFE_API_KEY"
 KINDS = ("noul", "choice", "score")
 

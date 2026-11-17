@@ -11,11 +11,9 @@ from __future__ import annotations
 import copy
 from dataclasses import replace
 
-from js import cli, setcmd, settings
+from js import cli, messages as msgs, setcmd, settings
 from js.config import Config
 from js.sampling import Sampling
-from js import messages as msgs
-
 
 # ---------------------------------------------------------------------------
 # /set and /show: display forms vs mutations

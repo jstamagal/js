@@ -1,8 +1,8 @@
 """Modular tool layer for js."""
 
+from .. import paths
 from .core import Tool, ToolContext, call_tool
 from .registry import ToolRegistry, build_default_registry, registry_for_roots
-from .. import paths
 
 # The context a turn uses when its caller passes none.
 STOCK_CONTEXT = ToolContext()

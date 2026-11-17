@@ -2,22 +2,21 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from contextvars import ContextVar
-from dataclasses import asdict, is_dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import time
 import traceback
+from collections.abc import Callable
+from contextvars import ContextVar
+from dataclasses import asdict, is_dataclass
+from pathlib import Path
 from typing import Any
-from uuid import uuid4
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from uuid import uuid4
 
-from . import output, paranoid, paths
-from . import messages as msgs
+from . import messages as msgs, output, paranoid, paths
 
 ACTIVE_FLIGHT: ContextVar[CompactionFlight | None] = ContextVar("compaction_flight", default=None)
 

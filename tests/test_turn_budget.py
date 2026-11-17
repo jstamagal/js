@@ -11,14 +11,13 @@ from types import SimpleNamespace
 
 import ai
 import pytest
+from test_lazy_tool_discovery import _cfg, _result
 
-from js import compaction, context_budget, model_client, runtime
-from js import messages as msgs
+from js import compaction, context_budget, messages as msgs, model_client, runtime
 from js.toolkit import ToolContext
 from js.toolkit.core import TurnStatus
 from js.toolkit.registry import build_default_registry
 from js.turn_budget import TurnBudget, TurnConvo
-from test_lazy_tool_discovery import _cfg, _result
 
 
 @pytest.fixture(autouse=True)

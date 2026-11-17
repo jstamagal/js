@@ -2,33 +2,34 @@
 
 from __future__ import annotations
 
-from .. import snippets
-
-from collections import deque
-from dataclasses import dataclass, replace
-from contextlib import asynccontextmanager, contextmanager, nullcontext
-from contextvars import ContextVar
-from pathlib import Path
 import asyncio
 import fcntl
 import os
 import threading
 import time
+from collections import deque
+from contextlib import asynccontextmanager, contextmanager, nullcontext
+from contextvars import ContextVar
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
-from .. import login_defaults
-from .. import output
-from .. import paths
-from .. import session_store
-from .. import settings as _settings
-from .. import turn_settings as _turn_settings
+from .. import (
+    login_defaults,
+    output,
+    paths,
+    session_store,
+    settings as _settings,
+    snippets,
+    turn_settings as _turn_settings,
+)
 from ..events import RefusableOnly
-from ..text_bytes import cap_text
 from ..skills import discover_skills, load_skill
-from .core import Tool, ToolContext
-from .presentation import Presentation
+from ..text_bytes import cap_text
 from . import task_jobs
+from .core import Tool, ToolContext
 from .descriptions import load_description, load_parameter_description
+from .presentation import Presentation
 from .sanitize import int_or_default, text_or_default
 
 
@@ -371,11 +372,8 @@ async def _run_one_task_async(
     model: str = "",
     reasoning: str = "",
 ) -> str:
-    from .. import memory as M
-    from .. import persona as P
-    from .. import agent_messages
+    from .. import agent_messages, memory as M, persona as P, routing
     from ..runtime import Telemetry, run_turn_async
-    from .. import routing
 
     assembly = parent_context.subagent_assembly or SubagentAssembly()
     turn = run_turn_async if assembly.turn is None else assembly.turn

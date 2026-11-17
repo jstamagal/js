@@ -3,24 +3,22 @@ cut off by its output cap, and an input the provider cut to fit its window."""
 
 from __future__ import annotations
 
-from js import history_record, snippets
-
 import asyncio
 import json
 import time
 from dataclasses import replace
-from email.utils import format_datetime
 from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 
 import ai
 import httpx
 import pytest
+from test_lazy_tool_discovery import _cfg
 
-from js import compaction, model_client, retry, runtime, turn_call
+from js import compaction, history_record, model_client, retry, runtime, snippets, turn_call
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
-from test_lazy_tool_discovery import _cfg
 
 
 @pytest.fixture(autouse=True)

@@ -11,8 +11,7 @@ from pathlib import Path
 from ..core import ToolContext, coerce_value
 from ..reads import require_read
 from ..sanitize import int_or_default, text_or_default
-from .helpers import resolve_vault, slugify, today, KIND_FOLDER, KIND_TYPE, KIND_TAG, vault_lock
-
+from .helpers import KIND_FOLDER, KIND_TAG, KIND_TYPE, resolve_vault, slugify, today, vault_lock
 
 # Words that don't carry identity — strip before comparing slugs, so
 # "chain-of-draft" and "chain-of-draft-prompting" collapse to {chain, draft}.

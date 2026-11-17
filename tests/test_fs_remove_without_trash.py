@@ -3,8 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from js.toolkit import ToolContext, build_default_registry, call_tool
-from js.toolkit import fs
+from js.toolkit import ToolContext, build_default_registry, call_tool, fs
 
 
 @pytest.fixture

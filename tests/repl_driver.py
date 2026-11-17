@@ -11,8 +11,7 @@ from __future__ import annotations
 
 import sys
 
-from js import cli, model_client, runtime
-from js import persona as P
+from js import cli, model_client, persona as P, runtime
 
 
 def turn_stub(turn):

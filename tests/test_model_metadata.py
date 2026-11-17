@@ -9,7 +9,6 @@ from types import SimpleNamespace
 
 import pytest
 
-
 from js import model_metadata
 
 

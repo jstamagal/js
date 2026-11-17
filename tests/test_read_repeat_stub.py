@@ -8,11 +8,12 @@ import asyncio
 import json
 from dataclasses import replace
 
+from test_lazy_tool_discovery import _cfg, _result
+
 from js import compaction, runtime
 from js.toolkit import ToolContext, fs
 from js.toolkit.core import call_scope
 from js.toolkit.registry import build_default_registry
-from test_lazy_tool_discovery import _cfg, _result
 
 
 def _read_call(call_id: str, target, **rng) -> tuple[str, str, str]:

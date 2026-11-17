@@ -31,7 +31,11 @@ from pathlib import Path
 from typing import Any
 
 from . import session_store
-from .usage_display import format_dollars as format_dollars, format_tokens as format_tokens, status_text as status_text
+from .usage_display import (
+    format_dollars as format_dollars,
+    format_tokens as format_tokens,
+    status_text as status_text,
+)
 
 RECORD_KIND = "usage"
 RECORD_VERSION = 1

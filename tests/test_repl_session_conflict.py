@@ -2,11 +2,11 @@ import errno
 import json
 
 import pytest
+from repl_driver import run_async, turn_stub
 
 from js import memory, runtime
 from js.config import from_env
 from js.toolkit import ToolContext
-from repl_driver import run_async, turn_stub
 
 
 def _config(tmp_path, monkeypatch):

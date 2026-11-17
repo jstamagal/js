@@ -4,8 +4,7 @@ import copy
 
 import pytest
 
-from js import setcmd, settings
-from js import messages as msgs
+from js import messages as msgs, setcmd, settings
 
 
 def _is(key: str, value: str) -> str:

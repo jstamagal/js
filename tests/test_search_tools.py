@@ -493,6 +493,7 @@ def test_browse_screenshot_overwrite_can_be_undone(monkeypatch, tmp_path):
 
 def test_registered_serper_key_reaches_request(monkeypatch, tmp_path):
     from types import SimpleNamespace
+
     from js import turn_settings
 
     monkeypatch.setenv("SERPER_API_KEY", "legacy-key")

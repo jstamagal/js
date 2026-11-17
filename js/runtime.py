@@ -3,69 +3,90 @@ Uses ``js.model_client`` for model I/O via the Vercel AI Python SDK (``ai``)."""
 
 from __future__ import annotations
 
-from . import snippets
-
-from concurrent.futures import ThreadPoolExecutor
-from collections.abc import Awaitable, Callable, Coroutine, Iterator
-from contextvars import ContextVar
 import asyncio
 import base64
 import contextlib
 import functools
 import inspect
+import itertools
 import json
 import math
-import itertools
 import os
 import re
 import socket
 import sys  # noqa: F401 - tests patch sys.stdout through runtime.sys
 import threading
-from pathlib import Path
 import time
+from collections.abc import Awaitable, Callable, Coroutine, Iterator
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any
 
-from . import events as event_mod
-from . import login_defaults, model_client, memory
 import ai
 
-from . import context_budget
-from . import held
-from . import history_record
-from . import jail as _jail
-from .media import IMAGE_RESULT_PREFIX
-from . import messages as msgs
-from . import output
-from .text_bytes import byte_size, cap_text, well_formed
-from . import imagefit
-from . import model_metadata
-from . import providers
-from . import settings as _settings
-from . import turn_settings as _turn_settings
-from . import toolkit as T
-from . import tool_args
-from . import routing
-from . import skills
-from . import compaction
-from . import retry
-from . import stream_transport
-from . import usage as usage_mod
+from . import (
+    compaction,
+    context_budget,
+    events as event_mod,
+    held,
+    history_record,
+    imagefit,
+    jail as _jail,
+    login_defaults,
+    memory,
+    messages as msgs,
+    model_client,
+    model_metadata,
+    output,
+    providers,
+    retry,
+    routing,
+    settings as _settings,
+    skills,
+    snippets,
+    stream_transport,
+    tool_args,
+    toolkit as T,
+    turn_settings as _turn_settings,
+    usage as usage_mod,
+)
 from .config import Config, vision_enabled_for_model
-from .sampling import Sampling
+
+# The console's printers, reached through runtime by tests of what they print.
+from .console import _print_run_line, _print_trace  # noqa: F401
+from .media import IMAGE_RESULT_PREFIX
 from .reasoning_display import ReasoningDisplay
-from .toolkit.core import (Output, ToolContext, ToolOutput, ToolResult, as_output, call_is_read_only, call_scope, call_view,
-                           call_tool, call_tool_async, compact_json, registry_scope)
+from .sampling import Sampling
+from .text_bytes import byte_size, cap_text, well_formed
+from .toolkit.core import (
+    Output,
+    ToolContext,
+    ToolOutput,
+    ToolResult,
+    as_output,
+    call_is_read_only,
+    call_scope,
+    call_tool,
+    call_tool_async,
+    call_view,
+    compact_json,
+    registry_scope,
+)
 from .toolkit.registry import ToolRegistry
 from .toolkit.results import cap_result_text, spill_oversized_result
 from .turn_budget import TurnBudget, TurnConvo, last_user_message_index as _last_user_message_index
-from .turn_surface import SurfaceJournal
+from .turn_call import (
+    CallLimits,
+    ModelCaller,
+    ModelReply,
+    ModelRequest,
+    cut_off_by_cap,
+    dangling_arguments,
+)
 from .turn_stream import StreamSink, TurnEvents
-# The console's printers, reached through runtime by tests of what they print.
-from .console import _print_run_line, _print_trace  # noqa: F401
-from .turn_call import (CallLimits, ModelCaller, ModelReply, ModelRequest, cut_off_by_cap,
-                        dangling_arguments)
-
+from .turn_surface import SurfaceJournal
 
 _UNSET = object()
 
@@ -1524,9 +1545,7 @@ def _interrupt_inflight(tool_context: ToolContext) -> None:
     shell call blocked on its command gets that command's process tree killed,
     so ^C ends the turn now rather than when the shell wait runs out.
     """
-    from .toolkit import fs
-    from .toolkit import kernel as kernel_tool
-    from .toolkit import process_net
+    from .toolkit import fs, kernel as kernel_tool, process_net
 
     if tool_context.tool_approval is not None:
         tool_context.tool_approval.cancel()

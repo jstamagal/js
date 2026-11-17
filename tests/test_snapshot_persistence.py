@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
 import os
 import stat
+from pathlib import Path
 
 import pytest
 
-from js.toolkit import ToolContext, build_default_registry, call_tool
-from js.toolkit import fs, undo
+from js.toolkit import ToolContext, build_default_registry, call_tool, fs, undo
 
 
 def _persistent_context(tmp_path, session_name: str) -> ToolContext:
@@ -21,8 +20,9 @@ def _persistent_context(tmp_path, session_name: str) -> ToolContext:
 
 
 def test_turn_persists_undo_under_supplied_state_directory(tmp_path, monkeypatch):
-    from js import runtime
     from test_lazy_tool_discovery import _cfg, _result
+
+    from js import runtime
 
     cfg = _cfg(tmp_path)
     state_dir = tmp_path / "assembly-state"

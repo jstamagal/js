@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import asyncio
 
+from repl_driver import run_async, turn_stub
+
 from js import cli
 from js.config import from_env
 from js.memory import append_message, load_messages
-from repl_driver import run_async, turn_stub
 
 
 def _session_file(tmp_path):

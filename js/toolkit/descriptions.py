@@ -36,13 +36,11 @@ Two independent conditional axes flip parts of a description on and off:
 from __future__ import annotations
 
 import re
-
-from .. import messages as msgs
-from .. import output, paths, snippets
 from collections.abc import Iterable
 from functools import cache
 from pathlib import Path
 
+from .. import messages as msgs, output, paths, snippets
 
 _IF_BLOCK = re.compile(r"[ \t]*<!--if:([A-Za-z0-9_]+)-->\n?(.*?)\n?[ \t]*<!--endif-->\n?", re.DOTALL)
 

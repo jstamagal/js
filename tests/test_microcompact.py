@@ -170,6 +170,7 @@ def test_overflow_classification_ignores_non_provider_exceptions():
 
 def test_recovery_records_failure_with_original_tool_bodies(monkeypatch, tmp_path, capsys):
     import json
+
     import pytest
     from test_config_compaction_layers import _compact_test_cfg
 
@@ -194,6 +195,7 @@ def test_recovery_records_failure_with_original_tool_bodies(monkeypatch, tmp_pat
 
 def test_recovery_records_no_eligible_results(tmp_path, capsys):
     import json
+
     from test_config_compaction_layers import _compact_test_cfg
 
     cfg = _compact_test_cfg(tmp_path, {"COMPACTION_LOG_DIR": str(tmp_path / "flights")})

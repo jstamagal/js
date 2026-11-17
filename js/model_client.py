@@ -7,38 +7,54 @@ This is the canonical provider boundary for the migration.
 
 from __future__ import annotations
 
-
 import asyncio
 import base64
 import contextvars
 import json
 import time
 import uuid
-from dataclasses import dataclass, replace
-from pathlib import Path
-from urllib.parse import urlsplit
-from typing import Any, Literal
-from types import SimpleNamespace
 from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from contextlib import AsyncExitStack, aclosing, asynccontextmanager, contextmanager
+from dataclasses import dataclass, replace
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import ai
-import httpx
-import httpx2
-
-from . import history_record, media, messages as msgs, model_metadata, paranoid, providers, reasoning, retry, routing, stream_transport
-from . import settings as _settings
-from . import sampling as sampling_mod
-from .history_record import JS_METADATA_KEY, MEDIA_LABEL_ID_MAX, media_label, valid_reasoning_blocks, with_reasoning_blocks
-from .sampling import Sampling
+import ai.models
 import ai.types.messages
 import ai.types.tools
 import ai.types.usage
-import ai.models
+import httpx
+import httpx2
 from ai.models.core import params as ai_params
 from ai.providers import history_utils
 from ai.providers.anthropic.protocol import AnthropicMessagesProtocol
 from ai.providers.openai.protocol import OpenAIChatCompletionsProtocol, OpenAIResponsesProtocol
+
+from . import (
+    history_record,
+    media,
+    messages as msgs,
+    model_metadata,
+    paranoid,
+    providers,
+    reasoning,
+    retry,
+    routing,
+    sampling as sampling_mod,
+    settings as _settings,
+    stream_transport,
+)
+from .history_record import (
+    JS_METADATA_KEY,
+    MEDIA_LABEL_ID_MAX,
+    media_label,
+    valid_reasoning_blocks,
+    with_reasoning_blocks,
+)
+from .sampling import Sampling
 
 
 @dataclass(frozen=True)

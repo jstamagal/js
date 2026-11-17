@@ -19,8 +19,6 @@ is persisted and the exit code is 130.
 
 from __future__ import annotations
 
-from . import messages as msgs
-
 import asyncio
 import contextlib
 import json
@@ -32,9 +30,17 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, TextIO
 
-from . import agent_messages, compaction, headless, run_assembly, runtime
-from . import memory as M
-from . import swarm, settings as _settings
+from . import (
+    agent_messages,
+    compaction,
+    headless,
+    memory as M,
+    messages as msgs,
+    run_assembly,
+    runtime,
+    settings as _settings,
+    swarm,
+)
 from .config import InvocationSources, from_env
 from .session_catalog import record_session_start
 from .toolkit.core import ToolContext

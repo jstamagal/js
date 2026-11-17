@@ -9,12 +9,17 @@ import json
 import time
 
 import pytest
+from repl_driver import stub_screen, turn_stub
+from test_runtime_offline_integration import (
+    _budget_config,
+    model_text_result,
+    model_tool_call_result,
+    offline_config,
+)
 
 from js import cli, compaction, events, hookexec, runtime, settings
 from js.memory import load_messages
 from js.toolkit import Tool, ToolContext, ToolRegistry
-from repl_driver import stub_screen, turn_stub
-from test_runtime_offline_integration import _budget_config, model_text_result, model_tool_call_result, offline_config
 
 SESSION = "hooks"
 
@@ -312,9 +317,10 @@ def test_tool_call_handler_exit_0_lets_the_call_run(tmp_path):
 
 
 def test_a_tool_call_guard_vets_a_subagents_calls(monkeypatch, tmp_path):
-    from js.toolkit.registry import build_default_registry
     from test_subagent_isolation import _fake_stream_result, _fake_tool_result, make_cfg
     from tool_loading import after_loading
+
+    from js.toolkit.registry import build_default_registry
 
     monkeypatch.setattr(runtime.model_metadata, "accepts_image_input", lambda *a, **k: False)
     monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)

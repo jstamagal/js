@@ -12,12 +12,12 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from test_lazy_tool_discovery import _cfg, _result
 
 from js import paths, runtime
 from js.toolkit import core as tool_core, fs
 from js.toolkit.core import Tool, ToolContext, call_is_read_only
 from js.toolkit.registry import ToolRegistry, build_default_registry
-from test_lazy_tool_discovery import _cfg, _result
 
 
 class Probe:

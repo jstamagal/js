@@ -5,8 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from js import cli, login_cli, logins, paths, providers
-from js import messages as msgs
+from js import cli, login_cli, logins, messages as msgs, paths, providers
 
 BASE_URL_PROMPT = msgs.LOGIN_ASK_BASE_URL.text()
 KEY_PROMPTS = {msgs.LOGIN_ASK_KEY.text(), msgs.LOGIN_ASK_KEY_OPTIONAL.text(), msgs.LOGIN_ASK_KEY_KEEP.text()}

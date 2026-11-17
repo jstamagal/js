@@ -15,11 +15,8 @@ import types
 import pytest
 
 from js import settings
-from js.toolkit import ToolContext
-from js.toolkit import meta
-from js.toolkit import registry as registry_mod
+from js.toolkit import ToolContext, meta, registry as registry_mod
 from js.toolkit.registry import build_default_registry, select
-
 
 # --------------------------------------------------------------------------
 # Item 2 — session_id + multiple tasks

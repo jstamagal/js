@@ -4,11 +4,10 @@ $1 / $@ / ${N:-default} filled from its arguments, and Tab completes the name.""
 from __future__ import annotations
 
 import pytest
-
-from js import cli
-from js import prompt_commands as pc
-from js.replcomplete import JsCompleter
 from repl_driver import stub_screen, turn_stub
+
+from js import cli, prompt_commands as pc
+from js.replcomplete import JsCompleter
 
 SESSION = "cmds"
 

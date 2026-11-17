@@ -26,13 +26,11 @@ the resolved values.
 
 from __future__ import annotations
 
-from . import messages as msgs
-
 import json
 from dataclasses import replace
 from typing import Any
 
-from . import settings as _settings
+from . import messages as msgs, settings as _settings
 from .sampling import SAMPLING_FIELDS, Sampling
 
 KEYS: tuple[str, ...] = (

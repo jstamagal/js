@@ -81,5 +81,10 @@ exclude = [".scratch"]
 
 [tool.ruff.lint]
 # The rule set is named here, not left to ruff's defaults, so a ruff upgrade
-# does not change what the gate checks: errors, pyflakes, pyupgrade.
-select = ["E4", "E7", "E9", "F", "UP"]
+# does not change what the gate checks: errors, pyflakes, pyupgrade, import
+# order.
+select = ["E4", "E7", "E9", "F", "UP", "I"]
+
+[tool.ruff.lint.isort]
+# `from js import cli, memory as M` stays one statement.
+combine-as-imports = true

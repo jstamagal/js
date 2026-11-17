@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 import re
 import time
+from dataclasses import replace
 from types import SimpleNamespace
 
 import ai
@@ -11,10 +11,18 @@ import ai.models
 import ai.types.messages
 import ai.types.usage
 import pytest
-
 from tool_loading import after_loading
 
-from js import cli, compaction, display, events, history_record, runtime, settings, toolkit as runtime_tools
+from js import (
+    cli,
+    compaction,
+    display,
+    events,
+    history_record,
+    runtime,
+    settings,
+    toolkit as runtime_tools,
+)
 from js.config import Config
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry
@@ -222,6 +230,7 @@ def test_run_turn_emits_text_response_events(monkeypatch, tmp_path):
 
 def test_scoped_model_factory_runs_tools_and_summary_compaction(tmp_path):
     import asyncio
+
     from js import model_client, routing
 
     replies = iter([

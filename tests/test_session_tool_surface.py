@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import json
 
+from test_lazy_tool_discovery import _cfg, _result
+
 from js import memory, runtime
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
-from test_lazy_tool_discovery import _cfg, _result
 
 
 def test_loaded_tools_survive_next_turn_and_fresh_context(tmp_path, monkeypatch):
@@ -155,6 +156,7 @@ def test_restored_native_tools_obey_new_alias_profile(tmp_path, monkeypatch):
 def test_cancelled_mcp_restore_closes_owned_host(tmp_path, monkeypatch):
     import asyncio
     from dataclasses import replace
+
     from js.mcp import host as host_module
     from js.mcp_config import MCPConfiguration, MCPPolicy, MCPServer
     server = MCPServer('example', 'example', 'stdio', command='unused')
@@ -184,9 +186,11 @@ def test_cancelled_mcp_restore_closes_owned_host(tmp_path, monkeypatch):
 
 def test_mcp_restore_reconnects_loaded_sources_and_obeys_policy(tmp_path):
     import asyncio
+
+    from test_mcp_runtime import FakeClient
+
     from js.mcp.host import MCPHost
     from js.mcp_config import MCPConfiguration, MCPPolicy, MCPServer
-    from test_mcp_runtime import FakeClient
     servers = (MCPServer('Alpha', 'alpha', 'stdio', command='fake'),
                MCPServer('Unused', 'unused', 'stdio', command='fake'))
     async def run():
@@ -214,6 +218,7 @@ def test_mcp_restore_reconnects_loaded_sources_and_obeys_policy(tmp_path):
 
 def test_every_request_trace_lists_published_names():
     import io
+
     from js import model_client
     tools = model_client.tool_specs_to_ai_tools(build_default_registry().select(['shell:lazy']).openai_specs())
     for schemas in (True, False):
@@ -228,6 +233,7 @@ def test_every_request_trace_lists_published_names():
 
 def test_skill_restore_retains_activated_native_tools_without_rereading_body(tmp_path):
     import asyncio
+
     from test_lazy_tool_discovery import _skill_file
     path = _skill_file(tmp_path / '.agents' / 'skills', 'inspect')
     path.write_text('---\ndescription: Inspect\ntools:\n  - shell\n---\nDo inspection.\n')

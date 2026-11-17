@@ -14,6 +14,7 @@ import os
 import tempfile
 import threading
 import time
+import tomllib
 from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
@@ -22,11 +23,8 @@ from typing import Any
 import ai
 import httpx
 import tomli_w
-import tomllib
 
-from . import messages as msgs
-from . import output
-from . import paths, providers
+from . import messages as msgs, output, paths, providers
 
 _CONFIG_DIR_OVERRIDE: Path | None = None
 _LOGINS_FILE = "logins.toml"

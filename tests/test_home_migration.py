@@ -14,8 +14,7 @@ import string
 import time
 from pathlib import Path
 
-from js import cli, config, home, paths, session_store
-from js import messages as msgs
+from js import cli, config, home, messages as msgs, paths, session_store
 from js.memory import append_message, load_replay_messages
 
 

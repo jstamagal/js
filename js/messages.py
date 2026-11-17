@@ -25,15 +25,14 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
 from contextlib import contextmanager
 from contextvars import ContextVar
-import sys
 from dataclasses import dataclass, field, replace
 from string import Formatter
 from typing import Any
 
 from . import fset
-
 
 # The banner slot: what starts every line the client says about its own
 # state, and what $BANNER in a /fset format reads. The BANNER setting sets it

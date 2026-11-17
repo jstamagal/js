@@ -6,13 +6,12 @@ import json
 from pathlib import Path
 
 import ai
+from repl_driver import run_async, turn_stub
 
 from js import attach, cli, history_record, media, runtime
 from js.config import Config
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
-from repl_driver import run_async, turn_stub
-
 
 _TINY_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="

@@ -15,8 +15,8 @@ from pathlib import Path
 
 from prompt_toolkit.application import Application, get_app
 from prompt_toolkit.data_structures import Point
-from prompt_toolkit.formatted_text import StyleAndTextTuples
 from prompt_toolkit.filters import Condition
+from prompt_toolkit.formatted_text import StyleAndTextTuples
 from prompt_toolkit.input import Input, create_input
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.keys import Keys
@@ -26,8 +26,7 @@ from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.output import Output, create_output
 from prompt_toolkit.styles import Style
 
-from . import fset, keys
-from . import messages as msgs
+from . import fset, keys, messages as msgs
 from .skills import SkillMetadata
 
 _PAGE = 10

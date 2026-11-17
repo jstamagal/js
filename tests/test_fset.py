@@ -5,8 +5,7 @@ from __future__ import annotations
 
 import copy
 
-from js import fset, setcmd, settings
-from js import messages as msgs
+from js import fset, messages as msgs, setcmd, settings
 
 
 def test_holes_name_words_of_the_line_in_any_order():

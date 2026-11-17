@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from js.toolkit import ToolContext
-from js.toolkit import fs
+from js.toolkit import ToolContext, fs
 from js.toolkit.fs import ast_search, undo
-
 
 requires_ast_grep = pytest.mark.skipif(
     fs._ast_grep_binary() is None, reason="ast-grep 0.45.1 not installed"

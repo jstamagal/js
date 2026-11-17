@@ -2,16 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import ai
+import ai.types.usage
 import pytest
 
-from js import persona
-from js import runtime
+from js import persona, runtime
 from js.config import Config
 from js.model_client import ModelStreamResult
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry, select
-import ai
-import ai.types.usage
 
 
 def _fake_stream_result(text: str = "ok") -> ModelStreamResult:

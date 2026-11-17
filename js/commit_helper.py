@@ -26,15 +26,14 @@ Commands emit `commit_output` events. The stock renderer prints their plain text
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
-import subprocess
-import sys
 
-from . import messages as msgs
-from . import output
+from . import messages as msgs, output
 
 
 @dataclass(slots=True)

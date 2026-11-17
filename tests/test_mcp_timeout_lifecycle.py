@@ -10,7 +10,6 @@ from js.mcp.client import MCPClient, MCPClientError, TransportError
 from js.mcp.protocol import PeerClosedError
 from js.mcp.transports import StdioTransport
 
-
 SERVER = textwrap.dedent("""
     import json
     import sys

@@ -47,18 +47,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .. import output
-from .. import jail
-from .. import messages as msgs
-from .. import paths
-from .. import settings as _settings
+from .. import jail, messages as msgs, output, paths, settings as _settings
 from . import kernel_bridge
 from .core import Tool, ToolContext, ToolOutput, current_observer, current_registry
-from .presentation import Presentation
 from .descriptions import load_description
+from .presentation import Presentation
 from .results import truncate
 from .sanitize import text_or_default
-
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 

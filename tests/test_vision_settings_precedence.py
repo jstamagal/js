@@ -2,7 +2,6 @@
 
 from copy import deepcopy
 
-
 from js import cli, config, model_metadata
 
 

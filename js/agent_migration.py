@@ -19,8 +19,8 @@ runs it over any agent root.
 
 from __future__ import annotations
 
-import json
 import fcntl
+import json
 import os
 import re
 import tempfile
@@ -31,8 +31,7 @@ from typing import Any
 
 import yaml
 
-from . import messages as msgs
-from . import paths, persona
+from . import messages as msgs, paths, persona
 from .toolkit import policy
 from .toolkit.registry import registry_for_roots
 

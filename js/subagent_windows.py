@@ -23,8 +23,7 @@ import sys
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from . import display, screen
-from . import messages as msgs
+from . import display, messages as msgs, screen
 
 
 class SubagentWindow:

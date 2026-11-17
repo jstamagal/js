@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from js.mcp.client import MCPClient, MCPClientError, NotInitializedError, ProtocolVersionError
-from js.mcp.protocol import JSONRPCError, JSONRPCPeer, PeerClosedError, REQUEST_CANCELLED
+from js.mcp.protocol import REQUEST_CANCELLED, JSONRPCError, JSONRPCPeer, PeerClosedError
 from js.mcp.types import LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS
 
 

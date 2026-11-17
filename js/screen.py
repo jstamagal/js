@@ -21,12 +21,27 @@ from prompt_toolkit.application import Application, get_app, run_in_terminal
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.document import Document
 from prompt_toolkit.enums import DEFAULT_BUFFER, EditingMode
-from prompt_toolkit.filters import Condition, FilterOrBool, has_focus, is_searching, vi_insert_mode, vi_mode, vi_navigation_mode
+from prompt_toolkit.filters import (
+    Condition,
+    FilterOrBool,
+    has_focus,
+    is_searching,
+    vi_insert_mode,
+    vi_mode,
+    vi_navigation_mode,
+)
 from prompt_toolkit.formatted_text import ANSI, to_formatted_text
 from prompt_toolkit.key_binding import KeyBindings, KeyBindingsBase, merge_key_bindings
 from prompt_toolkit.key_binding.vi_state import InputMode
-from prompt_toolkit.layout import (ConditionalContainer, DynamicContainer, Float, FloatContainer, HSplit, Layout,
-                                   Window)
+from prompt_toolkit.layout import (
+    ConditionalContainer,
+    DynamicContainer,
+    Float,
+    FloatContainer,
+    HSplit,
+    Layout,
+    Window,
+)
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout.menus import MultiColumnCompletionsMenu
@@ -36,9 +51,7 @@ from prompt_toolkit.output import ColorDepth
 from prompt_toolkit.styles import DynamicStyle, Style
 from prompt_toolkit.widgets import SearchToolbar
 
-from . import display, fset, keys, pastes
-from . import messages as msgs
-from . import session_store
+from . import display, fset, keys, messages as msgs, pastes, session_store
 from .reasoning_display import grey, settled_rows
 
 TICK_BUSY_S = 0.1

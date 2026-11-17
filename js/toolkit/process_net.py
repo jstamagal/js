@@ -22,9 +22,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from .. import jail
-from .. import output, paths
-from .. import settings as _settings
+from .. import jail, output, paths, settings as _settings
 from ..capped_process import (
     CappedProcess,
     CappedProcessResult,
@@ -32,20 +30,19 @@ from ..capped_process import (
 )
 from ..tool_binaries import (
     ARIA2_EXECUTABLE,
+    TOOLS_DIR,
     DownloadError,
     download_with_aria2,
-    TOOLS_DIR,
     resolve_binary,
     warn_urllib_fallback,
 )
 from .core import Tool, ToolContext, ToolOutput, view as _view
-from .presentation import Presentation, looks_around
 from .descriptions import load_description, load_parameter_description
 from .fs import _detect_visual_mime, _image_marker, _read_regular_bytes
+from .presentation import Presentation, looks_around
 from .results import spill_oversized_result
 from .sanitize import int_or_default, text_or_default
 from .search import _absolutize
-
 
 # The js/jsrc SHELL_ENV_KEEP, for a context whose own value is not a list.
 _ENV_ALLOW = tuple(_settings.default_value("SHELL_ENV_KEEP"))

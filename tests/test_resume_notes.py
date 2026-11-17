@@ -6,19 +6,16 @@ next request; a resumed session whose last turn was cut off gets one note."""
 
 from __future__ import annotations
 
-from js import snippets
-
 import asyncio
 from pathlib import Path
 
 import pytest
+from repl_driver import stub_screen, turn_stub
 
-from js import cli, run_assembly, runtime, session_store
-from js import memory as M
+from js import cli, memory as M, run_assembly, runtime, session_store, snippets
 from js.config import from_env
 from js.memory import load_messages
 from js.session_catalog import last_stamp
-from repl_driver import stub_screen, turn_stub
 
 
 @pytest.fixture(autouse=True)
@@ -146,8 +143,9 @@ def test_a_repl_switch_back_before_the_next_request_adds_no_note(monkeypatch):
 def test_an_async_repl_model_switch_puts_one_note_on_the_next_request(monkeypatch):
     import asyncio
 
-    from js import supervisor
     from repl_driver import run_async
+
+    from js import supervisor
 
     users: list = []
     first_turn_started = asyncio.Event()
@@ -316,8 +314,9 @@ def test_a_reset_session_has_no_reply_stamp(tmp_path):
 def test_an_async_repl_note_survives_a_turn_that_was_discarded(monkeypatch, tmp_path):
     import asyncio
 
-    from js import supervisor
     from repl_driver import run_async
+
+    from js import supervisor
 
     target = tmp_path / "work" / "sub"
     target.mkdir()

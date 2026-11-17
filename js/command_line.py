@@ -10,8 +10,7 @@ import sys
 from dataclasses import dataclass, fields
 from typing import Any
 
-from . import messages as msgs
-from . import sampling as sampling_mod
+from . import messages as msgs, sampling as sampling_mod
 
 
 class _ShortHelpAction(argparse.Action):

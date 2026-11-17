@@ -9,15 +9,14 @@ import io
 import json
 from types import SimpleNamespace
 
-import pytest
 import ai
+import pytest
 
-from js import history_record, runtime, turn_call
-from js import model_client as MC
+from js import history_record, model_client as MC, runtime, turn_call
 from js.config import Config
+from js.model_client import ModelStreamResult
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
-from js.model_client import ModelStreamResult
 
 
 def _cfg(tmp_path, agent="a"):

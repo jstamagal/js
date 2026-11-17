@@ -25,8 +25,6 @@ the endpoints js targets, not vendor docs:
 
 from __future__ import annotations
 
-from . import settings as _settings
-
 import re
 from dataclasses import dataclass
 
@@ -157,6 +155,10 @@ def anthropic_thinking(model_name: str, effort: str | None, budget: int | None =
     """The thinking fields for ``effort`` on this model, or None when no
     effort is set. ``budget`` (`THINKING_BUDGET`) makes ``thinking`` a
     budget of that many tokens."""
+    # settings reads EFFORT_LADDER from this module as it loads, so this
+    # module reads settings only when called.
+    from . import settings as _settings
+
     if effort is None:
         return None
     name = model_name.lower()

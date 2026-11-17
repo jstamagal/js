@@ -7,8 +7,8 @@ chooses from saved provider logins and their cached model lists.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, replace
 import sys
+from dataclasses import dataclass, replace
 from typing import Any
 
 from prompt_toolkit.application import Application, in_terminal
@@ -24,9 +24,7 @@ from prompt_toolkit.output import Output, create_output
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame
 
-from . import fset, keys, logins, providers
-from . import messages as msgs
-
+from . import fset, keys, logins, messages as msgs, providers
 
 MODEL_KEYMAP: keys.Keymap = {
     "up": (("up",), ("k",)), "down": (("down",), ("j",)),

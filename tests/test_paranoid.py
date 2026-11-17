@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import json
-
-import pytest
-
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from js import login_cli, logins, providers
 
@@ -54,8 +53,9 @@ SECRET_SAMPLES = {
 def test_every_secret_setting_is_masked_everywhere_settings_are_shown(tmp_path):
     from dataclasses import replace
 
-    from js import compaction_flight, settings, setcmd
     from test_config_compaction_layers import _compact_test_cfg
+
+    from js import compaction_flight, setcmd, settings
 
     secret_keys = {spec.key for spec in settings.REGISTRY if spec.secret}
     assert set(SECRET_SAMPLES) == secret_keys  # a new secret setting needs a sample here
@@ -109,7 +109,7 @@ BAD_SECRET_VALUES = {
 
 
 def test_an_invalid_value_for_a_secret_setting_is_never_echoed(monkeypatch, capsys):
-    from js import settings, setcmd
+    from js import setcmd, settings
 
     secret_keys = {spec.key for spec in settings.REGISTRY if spec.secret}
     assert {name.split()[0] for name in BAD_SECRET_VALUES} == secret_keys  # a new secret setting needs one here

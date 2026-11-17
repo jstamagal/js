@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from test_agent_model_selection import _fake_stream_result, _make_cfg, _write_agent_dir
 
 from js import model_metadata, model_profiles, persona, run_assembly, runtime, settings
 from js.cli_options import RunOptions, invocation
@@ -13,8 +14,6 @@ from js.config import Config
 from js.toolkit import ToolContext
 from js.toolkit.meta import task
 from js.toolkit.registry import TurnToolSurface, build_default_registry
-
-from test_agent_model_selection import _fake_stream_result, _make_cfg, _write_agent_dir
 
 FOURTEEN = ("read", "write", "fs_search", "remove", "patch", "undo", "shell", "fetch",
             "plan", "skill", "task", "lsp", "notebook_edit", "jev")

@@ -26,7 +26,6 @@ from js.toolkit import ToolContext
 from js.toolkit.core import Tool
 from js.toolkit.registry import ToolRegistry
 
-
 # --------------------------------------------------------------------------
 # the bus
 # --------------------------------------------------------------------------

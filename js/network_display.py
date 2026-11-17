@@ -10,8 +10,7 @@ from dataclasses import dataclass
 import httpx
 import httpx2
 
-from . import fset
-from . import messages as msgs
+from . import fset, messages as msgs
 
 
 @dataclass(frozen=True)

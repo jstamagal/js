@@ -9,8 +9,7 @@ import io
 
 import pytest
 
-from js.toolkit import ToolContext
-from js.toolkit import process_net
+from js.toolkit import ToolContext, process_net
 from js.toolkit.process_net import fetch
 
 

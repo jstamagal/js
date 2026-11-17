@@ -7,13 +7,13 @@ from __future__ import annotations
 import io
 import sys
 
-from js import cli, fset, settings
-from js import messages as msgs
+from js import cli, fset, messages as msgs, settings
 
 
 def test_the_startup_run_of_the_jsrc_leaves_a_model_flag_in_charge(monkeypatch, tmp_path):
-    from js.config import from_env, jsrc_paths
     from repl_driver import repl_state
+
+    from js.config import from_env, jsrc_paths
 
     (tmp_path / ".js").mkdir()
     (tmp_path / ".js" / "jsrc").write_text("set MODEL from-jsrc\n", encoding="utf-8")
@@ -25,8 +25,9 @@ def test_the_startup_run_of_the_jsrc_leaves_a_model_flag_in_charge(monkeypatch, 
 
 
 def test_the_startup_run_of_the_jsrc_leaves_a_resumed_session_s_effort_in_charge(monkeypatch, tmp_path):
-    from js.config import from_env, jsrc_paths
     from repl_driver import repl_state
+
+    from js.config import from_env, jsrc_paths
 
     (tmp_path / ".js").mkdir()
     (tmp_path / ".js" / "jsrc").write_text("set EFFORT high\n", encoding="utf-8")

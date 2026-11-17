@@ -10,15 +10,16 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import fset as _fset
-from . import messages as msgs
-from . import paths as _paths
-from . import session_store as _session_store
-from . import providers as _providers
-from . import settings as _settings
-from . import turn_settings as _turn_settings
-from . import routing as _routing
-
+from . import (
+    fset as _fset,
+    messages as msgs,
+    paths as _paths,
+    providers as _providers,
+    routing as _routing,
+    session_store as _session_store,
+    settings as _settings,
+    turn_settings as _turn_settings,
+)
 
 _AGENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -541,7 +542,6 @@ def from_env(
     runtime_debug = bool(_settings.knob(js_root_settings, "DEBUG_LOG"))
 
     from . import mcp_config
-
     from .cli_options import current
     options = current()
     mcp = None if options.skips_mcp else mcp_config.resolve(js_root_settings, agent_id)

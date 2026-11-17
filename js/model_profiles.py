@@ -30,9 +30,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import messages as msgs
-from . import output
-from . import settings as _settings
+from . import messages as msgs, output, settings as _settings
 from .toolkit import policy
 
 MODES = ("replace", "prepend")

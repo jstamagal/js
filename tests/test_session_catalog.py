@@ -206,8 +206,7 @@ def test_context_manager_releases_liveness(tmp_path):
 
 import pytest  # noqa: E402
 
-from js import home  # noqa: E402
-from js import session_catalog as C  # noqa: E402
+from js import home, session_catalog as C  # noqa: E402
 
 
 def _sidecars(session: Path) -> tuple[Path, Path]:

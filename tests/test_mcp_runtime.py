@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-from pathlib import Path
 import sys
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -1402,8 +1402,9 @@ def test_a_connected_servers_redaction_follows_paranoid_mode_changes():
 def test_run_turn_gives_a_reused_host_the_turns_paranoid_mode(tmp_path, monkeypatch):
     from dataclasses import replace
 
-    from js import runtime
     from test_lazy_tool_discovery import _cfg
+
+    from js import runtime
 
     host = MCPHost(MCPConfiguration((), MCPPolicy()), client_factory=FakeClient, paranoid_mode="off")
     cfg = replace(_cfg(tmp_path), paranoid_mode="on")

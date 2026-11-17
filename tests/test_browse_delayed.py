@@ -9,8 +9,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from js.toolkit import ToolContext
-from js.toolkit import search
+from js.toolkit import ToolContext, search
 
 pytestmark = pytest.mark.live
 

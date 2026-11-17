@@ -2,12 +2,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from js import persona
 import pytest
 
-from js import model_client
+from js import model_client, persona
 from js.sampling import Sampling
-
 
 _JS_SAMPLING_ENV = ("JS_TEMPERATURE", "JS_TOP_P", "JS_TOP_K", "JS_REPETITION_PENALTY", "JS_PRESENCE_PENALTY")
 

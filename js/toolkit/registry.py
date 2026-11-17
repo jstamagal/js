@@ -2,25 +2,36 @@
 
 from __future__ import annotations
 
-from .. import snippets
-
 import difflib
 import os
 import re
 import threading
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import cache
-from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from .. import messages as msgs, output, snippets
 from ..skills import SkillCatalog, ToolActivationResult, discover_skills, load_skill
-from .. import messages as msgs
-from .. import output
+from . import (
+    browser,
+    discovery,
+    fs,
+    jev,
+    kernel,
+    lsp,
+    meta,
+    notebook,
+    policy,
+    process_net,
+    search,
+    terminal,
+    toolbox,
+    wiki,
+)
 from .core import CatalogEntry, Tool
 from .descriptions import render_tool_name_sections
-from . import browser, discovery, fs, kernel, meta, policy, process_net, search, terminal, toolbox, wiki
-from . import jev, lsp, notebook
 
 
 def _closest_tool_name(name: str, names: Iterable[str]) -> str:

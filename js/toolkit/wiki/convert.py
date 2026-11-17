@@ -6,12 +6,11 @@ import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from ... import jail
-from ... import paths
+from ... import jail, paths
 from ...capped_process import truncation_marker
 from ...text_bytes import cap_text
 from ..core import ToolContext
-from .helpers import run, read_text, resolve_vault, find_vault, copy_to_assets
+from .helpers import copy_to_assets, find_vault, read_text, resolve_vault, run
 
 TEXT_EXT = {".md", ".markdown", ".txt", ".rst", ".org", ".tex", ".srt", ".vtt", ".log", ".toml", ".ini", ".cfg"}
 CODE_EXT = {".py", ".js", ".ts", ".tsx", ".jsx", ".rs", ".go", ".sh", ".bash", ".c", ".h", ".cpp", ".hpp", ".java", ".rb", ".php", ".lua", ".sql", ".css"}

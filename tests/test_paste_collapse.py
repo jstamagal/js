@@ -11,8 +11,7 @@ from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
-from js import pastes, screen, settings
-from js import prompt_history as ph
+from js import pastes, prompt_history as ph, screen, settings
 
 START, END = "\x1b[200~", "\x1b[201~"
 

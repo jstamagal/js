@@ -128,9 +128,10 @@ def test_missing_commit_snippet_exits_two_before_model_request(monkeypatch, tmp_
 def test_missing_runtime_snippet_exits_two(monkeypatch, tmp_path, capsys, mode):
     from dataclasses import replace
 
+    from test_cli_prompt_mode import _fake_stream_result, _prompt_cfg
+
     from js import cli, runtime
     from js.toolkit import ToolContext
-    from test_cli_prompt_mode import _fake_stream_result, _prompt_cfg
 
     monkeypatch.setenv("HOME", str(tmp_path))
     prompt_dir = tmp_path / "prompts"
@@ -184,9 +185,10 @@ def test_missing_rehydration_snippet_is_not_a_file_read_failure(monkeypatch, tmp
 
 
 def test_tool_dispatch_propagates_snippet_configuration_failure(monkeypatch, tmp_path):
+    from test_runtime_offline_integration import model_tool_call_result, offline_config
+
     from js import runtime
     from js.toolkit import Tool, ToolContext, ToolRegistry
-    from test_runtime_offline_integration import model_tool_call_result, offline_config
 
     real_find = paths.find
     monkeypatch.setattr(paths, "find", lambda relative: (

@@ -6,8 +6,6 @@ separate runtime concern.
 
 from __future__ import annotations
 
-from . import messages as msgs
-
 import fnmatch
 import json
 import math
@@ -17,6 +15,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit
+
+from . import messages as msgs
 
 _NAME_PART_RE = re.compile(r"[^a-z0-9_-]+")
 _AGENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")

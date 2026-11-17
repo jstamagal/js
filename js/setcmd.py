@@ -17,10 +17,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import events as _events
-from . import fset as _fset
-from . import messages as msgs
-from . import settings as _s
+from . import events as _events, fset as _fset, messages as msgs, settings as _s
 
 
 @dataclass

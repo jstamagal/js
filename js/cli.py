@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from . import snippets
-
 import argparse
 import asyncio
 import contextlib
@@ -17,76 +15,83 @@ import os
 import re
 import shlex
 import shutil
-import sys
 import signal
 import subprocess
-import threading
+import sys
 import textwrap
+import threading
 import time
 from collections.abc import Callable, Mapping
-from typing import Any
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import ai
 from prompt_toolkit.application.current import get_app_session
 from prompt_toolkit.key_binding import merge_key_bindings
 
-from . import command_line
-from . import supervisor
-from . import subagent_windows
-from . import swarm as swarm_mod
-
-from . import attach, clipimage
-from . import agent_messages
-from . import compaction
-from . import rename
-from . import motd
-from . import display as display_mod
-from . import dotenv
-from . import endpoint_uri
-from . import events
-from . import fset
-from . import exline
-from . import hookexec
-from . import login_defaults, logins
-from . import memory as M
-from . import messages as msgs
-from . import model_client
-from . import model_metadata
-from . import persona as P
-from . import pastes
-from . import paranoid
-from . import picker
-from . import providers
-from . import replcomplete
-from . import run_assembly
-from . import runtime
-from . import stats
-from . import home as _home
-from . import jail as _jail
-from . import keys as keys_mod
-from . import paths as _paths
-from . import prompt_commands
-from . import prompt_history
-from . import output
-from . import transcript as transcript_mod
-from . import screen
-from . import session_query
-from . import setcmd
-from . import skills
-from . import settings
-from . import stream_transport
-from . import turn_settings
-from . import headless
-from . import usage as usage_mod
-from . import usage_display
-from . import routing
-from . import sampling as sampling_mod
-from .sampling import Sampling
+from . import (
+    agent_lock,
+    agent_messages,
+    attach,
+    clipimage,
+    command_line,
+    compaction,
+    display as display_mod,
+    dotenv,
+    endpoint_uri,
+    events,
+    exline,
+    fset,
+    headless,
+    home as _home,
+    hookexec,
+    jail as _jail,
+    keys as keys_mod,
+    login_defaults,
+    logins,
+    memory as M,
+    messages as msgs,
+    model_client,
+    model_metadata,
+    motd,
+    output,
+    paranoid,
+    pastes,
+    paths as _paths,
+    persona as P,
+    picker,
+    prompt_commands,
+    prompt_history,
+    providers,
+    rename,
+    replcomplete,
+    routing,
+    run_assembly,
+    runtime,
+    sampling as sampling_mod,
+    screen,
+    session_picker,
+    session_query,
+    session_store,
+    setcmd,
+    settings,
+    skill_picker,
+    skills,
+    snippets,
+    stats,
+    stream_transport,
+    subagent_windows,
+    supervisor,
+    swarm as swarm_mod,
+    transcript as transcript_mod,
+    turn_settings,
+    usage as usage_mod,
+    usage_display,
+)
 from .config import (
     Config,
     InvocationSources,
@@ -101,10 +106,7 @@ from .config import (
     validate_agent_id,
     vision_enabled_for_model,
 )
-from . import session_store
-from . import session_picker
-from . import skill_picker
-from . import agent_lock
+from .sampling import Sampling
 from .session_catalog import (
     acquire_session,
     append_title,
@@ -116,9 +118,7 @@ from .session_catalog import (
     session_title,
 )
 from .tool_binaries import resolve_binary
-from .toolkit import policy as tool_policy
-from .toolkit import meta, task_jobs
-from .toolkit import ToolContext
+from .toolkit import ToolContext, meta, policy as tool_policy, task_jobs
 
 
 def _error_text(e: BaseException) -> str:

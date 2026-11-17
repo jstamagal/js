@@ -12,10 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import memory
-from . import output
-from . import settings as _settings
-from . import usage as usage_mod
+from . import memory, output, settings as _settings, usage as usage_mod
 
 
 class TurnEvents:

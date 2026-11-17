@@ -21,9 +21,9 @@ from pathlib import Path
 from typing import Any
 
 from .core import Tool, ToolContext
-from .presentation import Presentation
 from .descriptions import load_description, load_parameter_description
 from .fs import _detect_line_ending, _hash_bytes, _normalize_line_endings, _read_regular_bytes
+from .presentation import Presentation
 from .reads import require_read
 from .sanitize import int_or_default
 

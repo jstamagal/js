@@ -9,8 +9,8 @@ current shell cannot use without breaking registry assembly.
 
 from __future__ import annotations
 
-import json
 import ipaddress
+import json
 import os
 import re
 import subprocess
@@ -23,8 +23,8 @@ from .. import paranoid, settings as _settings
 from ..capped_process import CappedProcessResult, _run_capped
 from ..tool_binaries import resolve_binary
 from .core import Tool, ToolContext
-from .presentation import Presentation
 from .descriptions import load_description, load_parameter_description
+from .presentation import Presentation
 from .results import truncate
 from .sanitize import int_or_default, text_or_default
 

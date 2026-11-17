@@ -11,12 +11,12 @@ from prompt_toolkit.application import create_app_session
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
+from repl_driver import run_async
 
 from js import cli, screen
 from js.config import from_env
 from js.memory import load_messages
 from js.toolkit import ToolContext, meta
-from repl_driver import run_async
 
 SGR = re.compile(r"\x1b\[[0-9;]*m")
 

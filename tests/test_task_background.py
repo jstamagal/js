@@ -14,8 +14,7 @@ import types
 import pytest
 
 from js import cli, runtime, supervisor
-from js.toolkit import ToolContext
-from js.toolkit import meta, task_jobs
+from js.toolkit import ToolContext, meta, task_jobs
 from js.toolkit.registry import ToolRegistry
 
 

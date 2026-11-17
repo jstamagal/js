@@ -7,19 +7,18 @@ import base64
 import fnmatch
 import hashlib
 import inspect
-import urllib.parse
 import re
+import urllib.parse
 from collections.abc import Callable, Iterable
 from typing import Any
 
 from .. import settings as _settings, snippets
-from ..toolkit.descriptions import load_description
 from ..mcp_config import MCPConfiguration, MCPServer
 from ..toolkit.core import CatalogEntry, Tool, ToolResult, compact_json
+from ..toolkit.descriptions import load_description
 from ..toolkit.discovery import ranked_entries, schema_search_text, search_tokens
 from .client import MCPClient
 from .transports import StdioTransport, StreamableHTTPTransport
-
 
 _NAME_RE = re.compile(r"[^a-z0-9_]+")
 

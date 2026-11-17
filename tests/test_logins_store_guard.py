@@ -3,10 +3,10 @@ must never be silently dropped by the next write."""
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 import pytest
-import tomllib
 
 from js import logins, paths
 

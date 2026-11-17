@@ -12,9 +12,9 @@ from pathlib import Path
 
 import ai
 import pytest
+from repl_driver import stub_screen, turn_stub
 
-from js import cli, run_assembly, runtime, session_store, supervisor, usage
-from js import memory as M
+from js import cli, memory as M, run_assembly, runtime, session_store, supervisor, usage
 from js.config import from_env
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
@@ -28,7 +28,6 @@ from js.session_catalog import (
 )
 from js.toolkit import ToolContext
 from js.toolkit.meta import task
-from repl_driver import stub_screen, turn_stub
 
 
 @pytest.fixture(autouse=True)

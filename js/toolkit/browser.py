@@ -22,7 +22,6 @@ from .core import Tool, ToolContext
 from .descriptions import load_description
 from .sanitize import int_or_default, text_or_default
 
-
 GL_ARGS = (
     "--use-angle=vulkan",
     "--hide-scrollbars",

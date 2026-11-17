@@ -8,11 +8,10 @@ drive `stream_model_async` through the actual SDK and transport.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import re
 import socket
-
-import dataclasses
 
 import ai
 import httpx2

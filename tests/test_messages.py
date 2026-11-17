@@ -11,9 +11,16 @@ from pathlib import Path
 
 import pytest
 
-from js import cli, commit_helper, home, settings, tool_binaries
-from js import tooldiag, toolstats
-from js import messages as msgs
+from js import (
+    cli,
+    commit_helper,
+    home,
+    messages as msgs,
+    settings,
+    tool_binaries,
+    tooldiag,
+    toolstats,
+)
 from js.promptexpand import expand_prompt
 from js.toolkit import policy
 from js.toolkit.registry import build_default_registry

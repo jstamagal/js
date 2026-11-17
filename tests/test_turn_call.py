@@ -12,8 +12,7 @@ import ai.types.usage
 import httpx
 import pytest
 
-from js import compaction, config, media, model_client, retry, turn_call
-from js import messages as msgs
+from js import compaction, config, media, messages as msgs, model_client, retry, turn_call
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
 from js.toolkit.core import TurnStatus

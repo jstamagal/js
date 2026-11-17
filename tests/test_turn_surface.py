@@ -9,12 +9,12 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from test_lazy_tool_discovery import _cfg, _result
 
 from js import memory, runtime
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
 from js.turn_surface import SurfaceJournal
-from test_lazy_tool_discovery import _cfg, _result
 
 
 @pytest.mark.parametrize("field", ["agent_id", "cwd"])

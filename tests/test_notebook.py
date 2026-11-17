@@ -351,6 +351,7 @@ def test_insert_needs_a_cell_type(nb):
 
 def test_registered_setting_can_preserve_cell_outputs(nb):
     from types import SimpleNamespace
+
     from js import turn_settings
 
     path, context = nb

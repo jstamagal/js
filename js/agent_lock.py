@@ -8,11 +8,9 @@ look at it.
 
 from __future__ import annotations
 
-from . import messages as msgs
-
 import fcntl
 
-from . import paths
+from . import messages as msgs, paths
 
 
 class Busy(Exception):

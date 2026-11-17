@@ -12,9 +12,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from js import cli, runtime
+from js import cli, model_client, runtime
 from js.config import Config
-from js import model_client
 from js.model_client import ModelStreamResult
 
 REQUEST_MARKER = "━━ REQUEST (model_client) ━━"

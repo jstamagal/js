@@ -5,18 +5,13 @@ from __future__ import annotations
 import mimetypes
 import os
 import shlex
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Iterable
 
-from . import clipimage
-from . import imagefit
-from . import media
-from . import messages as msgs
-from . import settings as _settings
+from . import clipimage, imagefit, media, messages as msgs, settings as _settings
 from .config import Config
 from .toolkit.fs import _detect_visual_mime
-
 
 STDIN_ATTACHMENT_NAME = "<stdin>"
 # A name without a suffix, so image detection goes by the magic bytes alone and

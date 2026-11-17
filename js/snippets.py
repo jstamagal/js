@@ -7,6 +7,7 @@ from typing import Any
 
 from . import paths
 
+
 class SnippetError(ValueError):
     """Required model instruction configuration could not be loaded."""
 

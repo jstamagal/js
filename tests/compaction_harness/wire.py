@@ -3,6 +3,9 @@
 import asyncio
 import json
 import sys
+import threading
+from dataclasses import replace
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -19,9 +22,6 @@ from harness import (
     observed,
     persist_turn,
 )
-from dataclasses import replace
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import threading
 
 
 class Server(BaseHTTPRequestHandler):

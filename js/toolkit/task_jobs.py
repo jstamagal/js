@@ -13,8 +13,6 @@ the main agent and each subagent see only their own jobs.
 
 from __future__ import annotations
 
-from .. import snippets
-
 import asyncio
 import concurrent.futures
 import contextlib
@@ -26,8 +24,7 @@ from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import Any
 
-from .. import paths
-
+from .. import paths, snippets
 
 # Finished jobs kept for a later poll once their result was delivered or noted.
 KEEP_FINISHED_JOBS = 5

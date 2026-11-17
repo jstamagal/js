@@ -5,7 +5,6 @@ day a new generation ships."""
 
 from __future__ import annotations
 
-
 from js import model_metadata
 from js.config import vision_enabled_for_model
 

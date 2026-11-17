@@ -10,12 +10,11 @@ from unittest.mock import AsyncMock
 import ai
 import pytest
 from ai.types.usage import Usage
+from test_lazy_tool_discovery import _cfg, _result
 
-from js import compaction, memory, model_client, runtime, stream_transport
-from js import messages as msgs
+from js import compaction, memory, messages as msgs, model_client, runtime, stream_transport
 from js.toolkit import ToolContext
 from js.toolkit.registry import build_default_registry
-from test_lazy_tool_discovery import _cfg, _result
 
 
 @pytest.fixture(autouse=True)
@@ -408,9 +407,10 @@ def test_a_response_without_usage_keeps_the_baseline(tmp_path):
 
 @pytest.mark.parametrize("command", ["/reset", "/wipe"])
 def test_clearing_the_history_is_not_a_cache_break(monkeypatch, tmp_path, command):
+    from repl_driver import repl_state
+
     from js import cli
     from js.config import from_env
-    from repl_driver import repl_state
 
     context = ToolContext(cwd=tmp_path)
     monkeypatch.setattr(runtime.T, "STOCK_CONTEXT", context)

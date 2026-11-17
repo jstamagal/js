@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 
-from .toolkit.core import compact_json
 from . import settings as _settings
+from .toolkit.core import compact_json
 
 
 def _strip_commas_outside_strings(text: str) -> str:
@@ -266,8 +266,7 @@ def schema_error(arguments: object, schema: object) -> str | None:
     or there is no schema."""
     if not isinstance(schema, dict):
         return None
-    from jsonschema import exceptions as jsonschema_exceptions
-    from jsonschema import validators as jsonschema_validators
+    from jsonschema import exceptions as jsonschema_exceptions, validators as jsonschema_validators
 
     try:
         validator_type = jsonschema_validators.validator_for(schema)

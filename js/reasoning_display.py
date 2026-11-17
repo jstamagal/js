@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from . import fset
-from . import messages as msgs
+from . import fset, messages as msgs
 from .display import TAB, StreamCleaner, clean, cut_points, terminal_width
 
 

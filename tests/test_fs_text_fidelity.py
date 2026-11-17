@@ -224,6 +224,7 @@ def test_patch_miss_names_the_closest_line(tmp_path):
 
 def test_registered_setting_can_disable_fuzzy_edits(tmp_path):
     from types import SimpleNamespace
+
     from js import turn_settings
     from js.toolkit import fs
     from js.toolkit.core import ToolContext

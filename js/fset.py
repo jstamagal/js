@@ -103,8 +103,10 @@ def parse_line(line: str) -> tuple[str, str] | None:
     """``(NAME, value)`` of an `fset NAME value` line, else None, read the way
     a jsrc line is: words split at any whitespace (`setcmd.first_word`), a
     JSON string literal the string it spells (`settings.from_line_literal`)."""
-    from . import setcmd  # lazy: setcmd imports this module
-    from . import settings as _s
+    from . import (
+        setcmd,  # lazy: setcmd imports this module
+        settings as _s,
+    )
 
     parsed = setcmd.split_command(line)
     if parsed is None or parsed[0] != "fset":

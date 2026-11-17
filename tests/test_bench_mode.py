@@ -220,6 +220,7 @@ def test_plain_bench_json_and_json_stream_share_payload(tmp_path, monkeypatch, c
 
 def test_bench_parallel_calls_keep_model_order_and_full_output(tmp_path, monkeypatch, capsys):
     import threading
+
     from js import runtime
     from js.model_client import ModelToolCall
     from js.toolkit.core import Tool, ToolContext

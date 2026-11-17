@@ -19,7 +19,6 @@ from uuid import uuid4
 
 from . import paths
 
-
 MAX_EDGE = 2000
 MAX_BYTES = 5 * 1024 * 1024 * 3 // 4
 _LAST_RESORT_WIDTH = 1000

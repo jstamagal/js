@@ -3,14 +3,12 @@ the REPL) tells the model once, on the next user message."""
 
 from __future__ import annotations
 
-from js import snippets
-
 import pytest
-
-from js import cli, memory
-from js.memory import load_messages
 from repl_driver import run_async, stub_screen, turn_stub
 from test_repl_harness import make_cfg
+
+from js import cli, memory, snippets
+from js.memory import load_messages
 
 SESSION = "modeswitch"
 

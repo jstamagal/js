@@ -6,11 +6,10 @@ import os
 from pathlib import Path
 
 import pytest
-
-from js import cli, compaction, settings
-from js import messages as msgs
-from js.config import from_env, jsrc_paths
 from repl_driver import repl_state
+
+from js import cli, compaction, messages as msgs, settings
+from js.config import from_env, jsrc_paths
 
 
 @pytest.fixture

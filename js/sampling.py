@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from . import messages as msgs
-
 import json
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from typing import Any
+
+from . import messages as msgs
 
 
 @dataclass(frozen=True)

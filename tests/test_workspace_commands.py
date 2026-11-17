@@ -4,17 +4,13 @@ on the next user message, and a resumed session is put back where it was."""
 
 from __future__ import annotations
 
-from js import snippets
-
-
 import pytest
-
-from js import cli, jail, runtime
-from js import messages as msgs
-from js.toolkit import call_tool, process_net
-from js.toolkit.registry import build_default_registry
 from jail_probe import needs_bwrap
 from repl_driver import stub_screen, turn_stub
+
+from js import cli, jail, messages as msgs, runtime, snippets
+from js.toolkit import call_tool, process_net
+from js.toolkit.registry import build_default_registry
 
 SESSION = "workspace"
 

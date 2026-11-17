@@ -9,11 +9,11 @@ import json
 import re
 
 import pytest
+from repl_driver import _telemetry, repl_state, stub_screen, turn_stub
 
 from js import cli, runtime
 from js.config import from_env
 from js.memory import load_messages, load_replay_messages
-from repl_driver import _telemetry, repl_state, stub_screen, turn_stub
 
 SGR = re.compile(r"\x1b\[[0-9;]*m")
 

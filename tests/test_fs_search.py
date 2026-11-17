@@ -14,10 +14,8 @@ import threading
 
 import pytest
 
-from js.toolkit import ToolContext
-from js.toolkit import fs
+from js.toolkit import ToolContext, fs
 from js.toolkit.fs import fs_read, fs_search
-
 
 requires_rg = pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep not installed")
 

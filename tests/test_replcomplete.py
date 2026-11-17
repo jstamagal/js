@@ -164,6 +164,7 @@ def test_path_completion_treats_filename_metacharacters_as_literal_prefixes(tmp_
 
 def test_registered_spellcheck_language_reaches_hunspell(monkeypatch):
     from types import SimpleNamespace
+
     from js import fset, replcomplete
 
     calls = []

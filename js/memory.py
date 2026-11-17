@@ -21,17 +21,12 @@ import os
 import threading
 import time
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Callable
 from typing import Any, Literal
 
-from . import history_record
-from . import messages as msgs
-from . import output
-from . import session_store
-from . import session_text
-
+from . import history_record, messages as msgs, output, session_store, session_text
 
 SCHEMA_VERSION = 1
 

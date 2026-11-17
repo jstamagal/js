@@ -6,12 +6,13 @@ import os
 import signal
 from pathlib import Path
 
+from test_steering import _call, _cfg, _text
+
 from js import cli, runtime, session_store
 from js.memory import load_messages
 from js.toolkit import ToolContext
 from js.toolkit.core import Tool
 from js.toolkit.registry import ToolRegistry
-from test_steering import _call, _cfg, _text
 
 EXCHANGE = [
     {"role": "assistant", "content": "", "tool_calls": [{

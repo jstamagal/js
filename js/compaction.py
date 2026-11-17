@@ -11,8 +11,6 @@ there is exactly one implementation. This module also owns every read of the
 
 from __future__ import annotations
 
-from . import snippets
-
 import asyncio
 import json
 import math
@@ -28,25 +26,32 @@ from typing import Any
 
 import ai
 
-from . import context_budget
-from . import history_record
-from . import jail
-from . import media
-from .compaction_flight import ACTIVE_FLIGHT, CompactionFlight
-from .compaction_flight import NOTICE as NOTICE, flight_log_dir as flight_log_dir, printing as printing
-from . import memory as M
-from . import messages as msgs
-from . import output
-from . import model_client
-from . import model_metadata
-from . import retry
-from . import routing
-from . import settings as _settings
-from . import toolkit as T
-from . import usage as usage_mod
+from . import (
+    context_budget,
+    history_record,
+    jail,
+    media,
+    memory as M,
+    messages as msgs,
+    model_client,
+    model_metadata,
+    output,
+    retry,
+    routing,
+    settings as _settings,
+    snippets,
+    toolkit as T,
+    usage as usage_mod,
+)
 from .capped_process import CappedProcessResult, _run_capped, truncation_marker
+from .compaction_flight import (
+    ACTIVE_FLIGHT,
+    NOTICE as NOTICE,
+    CompactionFlight,
+    flight_log_dir as flight_log_dir,
+    printing as printing,
+)
 from .config import Config
-
 
 # --------------------------------------------------------------------------
 # compact.* settings readers — the one family

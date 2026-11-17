@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import subprocess
 
-
 from js import cli, messages as msgs, paths
 from js.config import InvocationSources
 
@@ -134,6 +133,7 @@ def _init_repo(repo):
 
 def test_commit_snapshot_retention_is_per_repository(tmp_path, monkeypatch):
     from types import SimpleNamespace
+
     from js import commit_helper
 
     backups = tmp_path / "backups"

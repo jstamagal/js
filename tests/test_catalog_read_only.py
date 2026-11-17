@@ -1,13 +1,12 @@
 """Catalog inspections never create a missing SQLite database."""
 
+import sqlite3
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
-import sqlite3
 
 import pytest
 
 from js import model_metadata
-
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 

@@ -3,13 +3,12 @@ filters and order, and the list's views with branches nested."""
 
 from __future__ import annotations
 
-from datetime import datetime
 import time
+from datetime import datetime
 
 import pytest
 
-from js import paths
-from js import session_query as Q
+from js import paths, session_query as Q
 
 HOME = "/home/op"
 CWD = "/home/op/js"

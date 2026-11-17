@@ -5,8 +5,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from js import messages as msgs
-from js import mcp_config, setcmd, settings
+from js import mcp_config, messages as msgs, setcmd, settings
 from js.config import InvocationSources, from_env
 
 ENV_SECRET = "MCP_ENV_SENTINEL_DO_NOT_PRINT"

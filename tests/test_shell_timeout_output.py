@@ -8,9 +8,7 @@ from __future__ import annotations
 
 import time
 
-
-from js.toolkit import ToolContext
-from js.toolkit import process_net
+from js.toolkit import ToolContext, process_net
 from js.toolkit.core import for_model
 from js.toolkit.process_net import shell as _shell
 

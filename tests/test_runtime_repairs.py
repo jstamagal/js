@@ -13,8 +13,16 @@ import ai.types.usage
 from js import runtime, tool_args
 from js.config import Config
 from js.model_client import ModelStreamResult, ModelToolCall
-from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry
-from js.toolkit import fs, kernel, process_net, search
+from js.toolkit import (
+    Tool,
+    ToolContext,
+    ToolRegistry,
+    build_default_registry,
+    fs,
+    kernel,
+    process_net,
+    search,
+)
 from js.toolkit.core import call_tool
 
 

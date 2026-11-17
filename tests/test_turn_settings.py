@@ -3,7 +3,6 @@ from __future__ import annotations
 import threading
 from types import SimpleNamespace
 
-
 from js import settings, turn_settings
 from js.turn_settings import INVALID, TURN_SETTINGS, inherit, install, project
 

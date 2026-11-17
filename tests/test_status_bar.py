@@ -10,8 +10,7 @@ import asyncio
 import ai
 import pytest
 
-from js import fset, model_client, runtime, screen, setcmd, settings
-from js import messages as msgs
+from js import fset, messages as msgs, model_client, runtime, screen, setcmd, settings
 from js.config import Config
 from js.model_client import ModelStreamResult
 from js.toolkit.core import ToolContext, TurnStatus

@@ -29,9 +29,8 @@ from httpx._transports.default import AsyncResponseStream as HttpxAsyncResponseS
 from httpx2._client import BoundAsyncStream
 from httpx2._transports.default import AsyncResponseStream
 
-from . import output
+from . import messages as msgs, output
 from .network_display import Failure, LabelledLine, describe_failure  # noqa: F401 — public failure formatter
-from . import messages as msgs
 
 
 @dataclass(frozen=True)

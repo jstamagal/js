@@ -5,9 +5,8 @@ _index_skill; a dangling symlink, a mode-000 file or a SKILL.md that is a
 directory raises OSError and stops the whole session from starting.
 """
 
-from pathlib import Path
 import os
-
+from pathlib import Path
 
 from js.skills import discover_skills
 

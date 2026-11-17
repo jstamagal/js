@@ -6,8 +6,8 @@ import json
 import threading
 from typing import Any, TextIO
 
-from .toolkit.results import result_text
 from . import usage as usage_mod
+from .toolkit.results import result_text
 
 SCHEMA_VERSION = 2
 SUMMARY_CHARS = 200

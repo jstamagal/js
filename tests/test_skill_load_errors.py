@@ -8,7 +8,6 @@ from js import skills
 from js.toolkit import ToolContext, meta
 from js.toolkit.registry import build_default_registry
 
-
 VALID = "---\ndescription: inspect files\ntools: [read]\n---\nRead carefully.\n"
 
 

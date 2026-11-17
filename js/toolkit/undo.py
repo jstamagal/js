@@ -20,7 +20,6 @@ from .. import settings as _settings
 from ..paths import state_root
 from .reads import Coverage, atomic_write
 
-
 Snapshot = bytes | None | dict[str, Any]
 
 _SNAPSHOT_FORMAT_VERSION = 1

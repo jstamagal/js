@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
-from js.mcp.protocol import INVALID_REQUEST, JSONRPCPeer, REQUEST_CANCELLED
 from test_mcp_protocol import FakeTransport
+
+from js.mcp.protocol import INVALID_REQUEST, REQUEST_CANCELLED, JSONRPCPeer
 
 INVALID_IDS = [None, 1.5, 1.0, True, False, [], {}, [1], {"value": 1}]
 

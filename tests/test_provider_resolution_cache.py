@@ -139,6 +139,7 @@ def test_catalog_alias_rows_are_not_listed_twice(monkeypatch):
 
 def test_provider_definitions_can_belong_to_an_assembly():
     from dataclasses import replace
+
     from js import providers
 
     before = providers.all_providers()

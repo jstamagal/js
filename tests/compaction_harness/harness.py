@@ -4,12 +4,12 @@ Usage: uv run python harness.py REPOSITORY OUTPUT_DIR
 
 import asyncio
 import copy
-from dataclasses import asdict
 import json
 import os
-from pathlib import Path
 import re
 import sys
+from dataclasses import asdict
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 

@@ -15,7 +15,6 @@ from js.toolkit import ToolContext
 from js.toolkit.fs import fs_search, patch, read, write
 from js.toolkit.meta import task
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 

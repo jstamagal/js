@@ -11,13 +11,13 @@ import re
 from dataclasses import replace
 
 import pytest
+from test_lazy_tool_discovery import _cfg, _result
 
 from js import runtime
 from js.text_bytes import byte_size
 from js.toolkit import meta
 from js.toolkit.core import Tool, ToolContext
 from js.toolkit.registry import ToolRegistry
-from test_lazy_tool_discovery import _cfg, _result
 
 KINDS = ("sync", "async", "fan_out")
 RETRY = re.compile(r"<retry>attempts_left=(\d+), allowed_max_attempts=(\d+)</retry>$")

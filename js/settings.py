@@ -27,18 +27,14 @@ import re
 import shlex
 import sys
 import tempfile
-from dataclasses import dataclass
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Iterable, Iterator, Mapping
 from typing import Any
 
-from . import reasoning as _reasoning
-from . import sampling as _sampling
-from . import messages as msgs
-from . import paths
-from . import output
+from . import messages as msgs, output, paths, reasoning as _reasoning, sampling as _sampling
 
 # What a line typed while a turn runs does: now = join the running turn at its
 # next tool boundary, batch = one message after the turn, one = one turn per line.

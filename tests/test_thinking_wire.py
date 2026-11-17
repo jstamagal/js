@@ -22,7 +22,6 @@ from js.logins import Login
 from js.sampling import Sampling
 from js.toolkit import ToolContext
 
-
 _THOUGHT = "weigh the two options"
 _SIGNATURE = "SIG-opaque-1"
 
@@ -585,8 +584,9 @@ def test_signed_thinking_after_a_cleared_tool_result_is_not_replayed(monkeypatch
 
 
 def test_a_keep_tail_compaction_drops_the_signed_thinking_it_keeps(monkeypatch, tmp_path):
-    from js import compaction
     from test_config_compaction_layers import _compact_test_cfg
+
+    from js import compaction
 
     cfg = _compact_test_cfg(tmp_path, {"COMPACTION_LOG_DIR": str(tmp_path / "flights"), "COMPACTION_KEEP_RECENT_TOKENS": 1})
 

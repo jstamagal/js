@@ -10,9 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from js import memory as M
-from js import session_index, session_store, session_text
-from js import session_query as Q
+from js import memory as M, session_index, session_query as Q, session_store, session_text
 from js.session_catalog import append_title, record_model_switch, record_session_start
 
 STAMP = M.stamp_for("deepseek-v4-flash", "deepseek", "high")

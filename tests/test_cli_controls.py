@@ -1,10 +1,10 @@
+from types import SimpleNamespace
+
 import pytest
 
-from js import persona, skills
-from js import cli, run_assembly, verify
-from types import SimpleNamespace
-from js.config import Config, InvocationSources
+from js import cli, persona, run_assembly, skills, verify
 from js.cli_options import RunOptions, invocation
+from js.config import Config, InvocationSources
 
 
 def test_prompt_file_bypasses_agent_and_instructions(tmp_path, monkeypatch):

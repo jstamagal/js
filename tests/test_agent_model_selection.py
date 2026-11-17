@@ -4,15 +4,14 @@ from dataclasses import replace
 from pathlib import Path
 
 import ai
-import pytest
 import ai.types.usage
+import pytest
 
 from js import cli, logins, model_metadata, persona, run_assembly, runtime
 from js.config import Config, InvocationSources
 from js.model_client import ModelStreamResult
 from js.toolkit import ToolContext
 from js.toolkit.meta import task
-
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 OLLAMA_BASE_URL = "http://parent-ollama.test/v1"

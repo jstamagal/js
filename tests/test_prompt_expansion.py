@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
 from js import messages as msgs, promptexpand
-from unittest import mock
-
-from js.promptexpand import expand_prompt, PromptExpansionError
-
+from js.promptexpand import PromptExpansionError, expand_prompt
 
 # ---- {{VAR}} env shorthand (always on) ----
 

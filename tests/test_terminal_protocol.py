@@ -30,6 +30,7 @@ def test_private_csi_preserves_following_output(tmp_path, sequence):
 
 def test_fragmented_private_csi():
     import pyte
+
     from js.toolkit.terminal import _make_screen
 
     screen = _make_screen(80, 24)
@@ -44,6 +45,7 @@ def test_fragmented_private_csi():
 @pytest.mark.parametrize("application", [False, True])
 def test_cursor_keys_follow_drained_mode(tmp_path, monkeypatch, key, final, application):
     import pyte
+
     from js import jail
     from js.toolkit import terminal
 

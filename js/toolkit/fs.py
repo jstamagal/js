@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import difflib
+import functools
 import hashlib
 import json
 import os
@@ -14,29 +15,22 @@ import stat
 import subprocess
 import textwrap
 import threading
-import functools
 from collections import deque
 from functools import lru_cache
 from itertools import islice
 from pathlib import Path
 
-from .. import held
-from .. import imagefit
-from .. import jail
+from .. import held, imagefit, jail, settings as _settings, tool_args as _tool_args
 from ..media import IMAGE_RESULT_PREFIX
-from .. import settings as _settings
-from . import policy
 from ..tool_binaries import resolve_binary
+from . import policy
 from .core import Output, Tool, ToolContext, view as _view
+from .descriptions import load_description, load_parameter_description
 from .presentation import Presentation
 from .reads import require_read
 from .results import truncate
 from .sanitize import int_or_default
 from .wiki.helpers import run
-from .descriptions import load_description, load_parameter_description
-
-from .. import tool_args as _tool_args
-
 
 _TEXT_EXTS = {
     ".txt", ".md", ".rst", ".py", ".js", ".ts", ".tsx", ".jsx", ".rs", ".toml",

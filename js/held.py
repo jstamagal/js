@@ -13,8 +13,6 @@ seconds is deleted when content is next held or loaded.
 
 from __future__ import annotations
 
-from . import snippets
-
 import atexit
 import json
 import os
@@ -26,8 +24,7 @@ from json.decoder import JSONDecoder, scanstring
 from pathlib import Path
 from typing import Any
 
-from . import jail, paths, settings as _settings
-
+from . import jail, paths, settings as _settings, snippets
 
 _LOCK = threading.Lock()
 _MADE: set[Path] = set()

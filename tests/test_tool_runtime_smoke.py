@@ -5,17 +5,22 @@ import json
 import re
 import shutil
 
+import ai
 import pytest
-
 from tool_loading import after_loading
 
-from js import capped_process, history_record, model_client, runtime, setcmd, settings, toolkit as runtime_tools
+from js import (
+    capped_process,
+    history_record,
+    model_client,
+    runtime,
+    setcmd,
+    settings,
+    toolkit as runtime_tools,
+)
 from js.model_client import ModelStreamResult, ModelToolCall
-from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry
-from js.toolkit import fs, process_net
+from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry, fs, process_net
 from js.toolkit.core import ToolResult, call_tool
-import ai
-
 
 NUMBERED_RE = re.compile(r"^1\|alpha$", re.MULTILINE)
 
@@ -1134,6 +1139,7 @@ def test_vision_enabled_for_model_detects_families(monkeypatch):
 
 def test_run_turn_sends_image_once_and_persists_dehydrated_stub(tmp_path, monkeypatch):
     import json
+
     from js import config as js_config
 
     monkeypatch.delenv("JS_VISION", raising=False)

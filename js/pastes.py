@@ -10,18 +10,16 @@ for the life of the process, so a marker recalled from history still expands.
 
 from __future__ import annotations
 
-from . import messages as msgs
-
 import re
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from collections.abc import Callable, Mapping
 
 from prompt_toolkit.enums import DEFAULT_BUFFER
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 
-from . import settings as _settings
+from . import messages as msgs, settings as _settings
 
 _MARKER = re.compile(r"\[paste #(\d+)(?: \+\d+ lines| \d+ chars)\]")
 _pastes: dict[int, str] = {}

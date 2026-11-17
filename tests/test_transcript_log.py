@@ -3,13 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import ai
-
 from prompt_toolkit.application import Application, create_app_session
+from repl_driver import stub_screen
 
 from js import cli, runtime, transcript
 from js.config import Config
 from js.model_client import ModelStreamResult
-from repl_driver import stub_screen
 
 
 async def _no_compaction(*_args, **_kwargs):
@@ -263,12 +262,12 @@ def test_the_transcript_records_the_same_bytes_whatever_console_draws_the_turn(m
     import asyncio
     import re
 
+    from test_output import _offline_config, _reply
     from tool_loading import after_loading
 
     from js import output
     from js.model_client import ModelToolCall
     from js.toolkit import ToolContext
-    from test_output import _offline_config, _reply
 
     (tmp_path / "notes.txt").write_text("alpha\nbeta\n", encoding="utf-8")
 

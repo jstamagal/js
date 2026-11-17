@@ -8,12 +8,11 @@ from dataclasses import replace
 import ai
 import pytest
 from ai.providers.openai.protocol import _messages_to_openai
+from repl_driver import run_async
 
 from js import cli, history_record, memory, model_client, runtime
 from js.config import InvocationSources, from_env
 from js.toolkit import ToolContext
-from repl_driver import run_async
-
 
 _THOUGHT = " first thought\n  keep spacing and Unicode: λ\n"
 

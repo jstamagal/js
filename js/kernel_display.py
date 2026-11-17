@@ -8,9 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from . import fset as _fset
-from . import messages as msgs
-from . import settings as _settings
+from . import fset as _fset, messages as msgs, settings as _settings
 from .toolkit.sanitize import int_or_default
 
 

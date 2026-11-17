@@ -6,11 +6,11 @@ import json
 from pathlib import Path
 
 import pytest
-
-from js import compaction, compaction_flight
 from test_compaction_flight import _flight_cfg
 from test_config_compaction_layers import _compact_test_cfg
 from test_turn_budget import _Setup, _tool_history
+
+from js import compaction, compaction_flight
 
 
 def no_space(*args, **kwargs):

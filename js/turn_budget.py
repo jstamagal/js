@@ -13,19 +13,20 @@ prompt cache as broken.
 
 from __future__ import annotations
 
-from . import snippets
-
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from . import compaction
-from . import history_record
-from . import messages as msgs
-from . import model_client
-from . import output
-from . import stream_transport
+from . import (
+    compaction,
+    history_record,
+    messages as msgs,
+    model_client,
+    output,
+    snippets,
+    stream_transport,
+)
 
 
 def last_user_message_index(messages: list[dict]) -> int | None:

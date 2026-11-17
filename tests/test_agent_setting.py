@@ -11,14 +11,13 @@ from pathlib import Path
 
 import ai.types.usage
 import pytest
+from repl_driver import stub_screen, turn_stub
 
-from js import cli, runtime, settings
+from js import cli, runtime, session_store, settings
 from js.config import InvocationSources, derive_session_name, from_env
-from js import session_store
-from js.session_catalog import first_metadata
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
-from repl_driver import stub_screen, turn_stub
+from js.session_catalog import first_metadata
 
 AGENTS = ("fromjsrc", "fromenv", "fromflag")
 

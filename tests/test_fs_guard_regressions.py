@@ -97,6 +97,7 @@ def test_a_written_file_counts_as_fully_read_so_patch_needs_no_read_first(tmp_pa
 
 def test_registered_read_gate_can_allow_an_unread_edit(tmp_path):
     from types import SimpleNamespace
+
     from js import turn_settings
 
     target = tmp_path / "unread.txt"

@@ -5,11 +5,11 @@ import io
 import json
 
 import pytest
+from test_mcp_runtime import FakeClient
 
 from js import events, runtime
 from js.mcp.host import MCPHost
 from js.mcp_config import MCPConfiguration, MCPPolicy, MCPServer
-from test_mcp_runtime import FakeClient
 
 
 @pytest.mark.parametrize("callback,event", [

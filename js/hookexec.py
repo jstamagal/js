@@ -19,7 +19,6 @@ from dataclasses import dataclass
 
 from . import events, settings as _settings
 
-
 # The exit status that refuses a refusable event (Claude Code's blocking status).
 REFUSE_STATUS = 2
 

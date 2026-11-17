@@ -1,7 +1,7 @@
 """Repair must not edit string VALUES: trailing-comma stripping is
 structure-only (ALL-CLAIMS tool_args.py HIGH)."""
 
-from js.tool_args import repair_jsonish, canonical_tool_args, sdk_safe_tool_args
+from js.tool_args import canonical_tool_args, repair_jsonish, sdk_safe_tool_args
 
 
 def test_inner_comma_brace_inside_string_survives():
@@ -63,7 +63,7 @@ def test_oneof_scalar_union_and_non_json_unchanged():
 def test_recursion_depth_spam_is_safe():
     """A model spamming brackets must not kill the stream handler
     (ALL-CLAIMS tool_args MED: RecursionError escaped every guard)."""
-    from js.tool_args import is_json_object, canonical_tool_args
+    from js.tool_args import canonical_tool_args, is_json_object
 
     raw = "[" * 200000
     assert is_json_object(raw) is False
@@ -115,6 +115,7 @@ def test_nested_union_coerces_object_properties():
 
 def test_registered_strict_mode_disables_repair_and_coercion():
     import pytest
+
     from js import settings
     from js.tool_args import coerce_to_schema
 

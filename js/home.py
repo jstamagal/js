@@ -53,12 +53,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TextIO
 
-from . import agent_migration
-from . import messages as msgs
-from . import paths, settings as _settings
-from . import session_catalog
-from . import session_store
-from . import session_text
+from . import (
+    agent_migration,
+    messages as msgs,
+    paths,
+    session_catalog,
+    session_store,
+    session_text,
+    settings as _settings,
+)
 
 # The entries of the old config and data directories js reads, each with the
 # place it reads it from now. Every other entry is left where it is.

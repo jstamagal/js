@@ -6,10 +6,11 @@ from __future__ import annotations
 import json
 import shlex
 
+from repl_driver import run_async, stub_screen, turn_stub
+
 from js import cli
 from js.config import from_env
 from js.memory import load_messages
-from repl_driver import run_async, stub_screen, turn_stub
 
 
 def _reply(cfg, system, messages, *a, **k):

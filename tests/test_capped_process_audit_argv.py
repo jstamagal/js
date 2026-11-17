@@ -6,7 +6,6 @@ import pytest
 
 from js import capped_process, jail, settings
 
-
 _WRAPPER = ["/usr/bin/bwrap", "--die-with-parent", "--unshare-ipc", "--unshare-uts",
             "--unshare-cgroup-try", "--ro-bind", "/", "/", "--"]
 
