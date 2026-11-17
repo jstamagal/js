@@ -41,6 +41,7 @@ from . import (
     stream_transport,
     tool_calls,
     tool_errors,
+    tool_result_messages,
     toolkit as T,
     turn_dispatch,
     turn_settings as _turn_settings,
@@ -453,7 +454,7 @@ async def _record_tool_results(pending_calls: list[tool_calls.PendingToolCall], 
     """Run the batch and append its results to the history and the convo.
     Returns the (call, arguments, result) records of the calls that ran.
 
-    Each result becomes one history record (`model_client.tool_result_record`)
+    Each result becomes one history record (`tool_result_messages.tool_result_record`)
     and the convo is built from those records, so later turns and a resumed
     session send the same messages this turn does."""
     for pc in pending_calls:
@@ -526,7 +527,7 @@ async def _record_tool_results(pending_calls: list[tool_calls.PendingToolCall], 
                 name=canonical_pc.name,
                 result=result_value,
             )
-            record = model_client.tool_result_record(pc.id, canonical_pc.name, result_value)
+            record = tool_result_messages.tool_result_record(pc.id, canonical_pc.name, result_value)
             records.append(memory.note_time(record, progress.finished.get(pc.id)))
         # One append for the batch: its media follow all of its tool messages.
         convo.append(*records)

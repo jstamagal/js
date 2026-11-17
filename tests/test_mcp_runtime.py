@@ -19,6 +19,7 @@ from js import (
     runtime,
     tool_calls,
     tool_errors,
+    tool_result_messages,
     turn_dispatch,
 )
 from js.mcp.client import CapabilityError, MCPClient, MCPClientError
@@ -773,8 +774,8 @@ def test_successful_server_data_is_redacted_everywhere(config):
         provider_messages = []
         history = []
         for index, (_spec, value) in enumerate(outputs):
-            provider_messages.extend(model_client.build_tool_result_messages(str(index), "mcp", value))
-            history.append(model_client.tool_result_record(str(index), "mcp", value))
+            provider_messages.extend(tool_result_messages.build_tool_result_messages(str(index), "mcp", value))
+            history.append(tool_result_messages.tool_result_record(str(index), "mcp", value))
         exposed = repr((catalog, outputs, provider_messages, history, events))
         assert "SENTINEL" not in exposed
         assert "[REDACTED]" in exposed
@@ -846,10 +847,10 @@ def test_structured_result_provider_media_and_history_media_ref():
         {"type": "resource", "resource": {"uri": "file:///x", "text": "embedded"}},
         {"type": "structured", "value": {"b": 2, "a": 1}},
     ])
-    messages = model_client.build_tool_result_messages("tc", "remote", result)
+    messages = tool_result_messages.build_tool_result_messages("tc", "remote", result)
     assert [message.role for message in messages] == ["tool", "user"]
     assert messages[1].parts[-1].data == b"image-bytes"
-    record = model_client.tool_result_record("tc", "remote", result)
+    record = tool_result_messages.tool_result_record("tc", "remote", result)
     assert "image-bytes" not in repr(record)
     assert [part["mime"] for part in record["media"]] == ["image/png"]
     # The record alone rebuilds the same provider messages.
@@ -875,7 +876,7 @@ def test_mcp_safe_media_is_preserved_and_invalid_media_is_suppressed():
     ]
 
     result = mcp_tool_result(CallToolResult(content=safe_blocks), ("SENTINEL",))
-    messages = model_client.build_tool_result_messages("tc", "remote", result)
+    messages = tool_result_messages.build_tool_result_messages("tc", "remote", result)
     media = [
         part.data for message in messages for part in message.parts
         if isinstance(part, model_client.ai.types.messages.FilePart)
@@ -919,8 +920,8 @@ def test_mcp_credential_media_is_suppressed_from_provider_and_history(kind, resu
             ("SENTINEL",),
         )
 
-    messages = model_client.build_tool_result_messages("tc", "remote", result)
-    history = [model_client.tool_result_record("tc", "remote", result)]
+    messages = tool_result_messages.build_tool_result_messages("tc", "remote", result)
+    history = [tool_result_messages.tool_result_record("tc", "remote", result)]
 
     assert all(
         not isinstance(part, model_client.ai.types.messages.FilePart)

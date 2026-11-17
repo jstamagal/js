@@ -20,6 +20,7 @@ from js import (
     settings,
     tool_calls,
     tool_errors,
+    tool_result_messages,
     toolkit as runtime_tools,
     turn_dispatch,
 )
@@ -847,7 +848,7 @@ def test_build_tool_result_messages_expands_image_marker_with_user_file_part(tmp
     image = tmp_path / "pixel.png"
     image.write_bytes(_TINY_PNG)
     marker = f"IMAGE_RESULT\t{image}\timage/png\tvisual stub"
-    messages = model_client.build_tool_result_messages("call_1", "read", marker)
+    messages = tool_result_messages.build_tool_result_messages("call_1", "read", marker)
 
     assert [msg.role for msg in messages] == ["tool", "user"]
     trp = messages[0].parts[0]
@@ -977,7 +978,7 @@ def test_tool_result_record_keeps_image_as_media_ref(tmp_path):
     marker = f"IMAGE_RESULT\t{image}\timage/png\tVISUAL_FILE stub"
     b64 = base64.b64encode(_TINY_PNG).decode("ascii")
 
-    record = model_client.tool_result_record("c1", "read", marker)
+    record = tool_result_messages.tool_result_record("c1", "read", marker)
 
     assert record["content"] == "VISUAL_FILE stub"
     [part] = record["media"]
@@ -988,7 +989,7 @@ def test_tool_result_record_keeps_image_as_media_ref(tmp_path):
     wire = history_record.history_to_ai_messages("", [record], vision=True)
     assert [m.role for m in wire] == ["tool", "user"]
     assert wire[1].parts[-1].data == _TINY_PNG
-    assert model_client.tool_result_record("c1", "read", "plain done") == {
+    assert tool_result_messages.tool_result_record("c1", "read", "plain done") == {
         "role": "tool", "tool_call_id": "c1", "name": "read", "content": "plain done"}
 
 

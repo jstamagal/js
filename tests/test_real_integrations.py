@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from turn_driver import one_turn
 
-from js import history_record, toolkit as runtime_tools
+from js import history_record, tool_result_messages, toolkit as runtime_tools
 from js.config import from_env
 from js.runtime import Telemetry
 from js.toolkit import ToolContext
@@ -131,7 +131,7 @@ def test_real_model_turn_is_available_only_when_local_proxy_is_configured():
 def test_live_vision_model_reads_image_through_real_message_path(tmp_path):
     """End-to-end proof that image bytes reach a model that actually reads them.
 
-    Real fs_read -> real model_client.build_tool_result_messages -> a LIVE
+    Real fs_read -> real tool_result_messages.build_tool_result_messages -> a LIVE
     vision model via model_client.stream_model. Skips unless Pillow and a
     reachable local vision model are present, so it never fails spuriously
     where the local model is absent."""
@@ -175,7 +175,7 @@ def test_live_vision_model_reads_image_through_real_message_path(tmp_path):
              "function": {"name": "read", "arguments": '{"file_path":"swatch.png"}'}}
         ]},
     ])
-    convo.extend(model_client.build_tool_result_messages("c1", "read", marker))
+    convo.extend(tool_result_messages.build_tool_result_messages("c1", "read", marker))
 
     reply = ""
     for _ in range(4):

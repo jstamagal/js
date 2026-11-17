@@ -8,7 +8,7 @@ import os
 from dataclasses import replace
 from typing import Any
 
-from . import imagefit, model_client, toolkit as T
+from . import imagefit, tool_result_messages, toolkit as T
 from .media import IMAGE_RESULT_PREFIX
 from .text_bytes import byte_size, cap_text, well_formed
 from .toolkit.core import Output, ToolContext, ToolResult
@@ -59,7 +59,7 @@ def _media_payload(block: dict) -> str | None:
 def _final_texts(result: ToolResult) -> tuple[str, str]:
     """The text ``result`` becomes: what the provider gets (media rendered
     as their metadata lines) and what the session keeps."""
-    return model_client.provider_text(result), result.dehydrated()
+    return tool_result_messages.provider_text(result), result.dehydrated()
 
 
 def _tool_result_content_size(result: ToolResult) -> int:
@@ -73,7 +73,7 @@ def _result_size(result: Any) -> int:
     if isinstance(result, ToolResult):
         return _tool_result_content_size(result)
     if _image_marker_stub(result) is not None:
-        return byte_size(model_client.provider_text(result))
+        return byte_size(tool_result_messages.provider_text(result))
     return byte_size(result)
 
 
@@ -271,7 +271,7 @@ def _cap_image_marker(result: str, cap_bytes: int | None, media_max: int | None)
     notice = None
     if media_max is not None and size > media_max:
         notice = _media_notice("image", mime, f'{size} bytes is over TOOL_MEDIA_MAX ({media_max}); capture a smaller region or a lower resolution')
-    elif cap_bytes is not None and byte_size(model_client.provider_text(result)) > cap_bytes:
+    elif cap_bytes is not None and byte_size(tool_result_messages.provider_text(result)) > cap_bytes:
         notice = _media_notice("image", mime, f'no room in a {cap_bytes}-byte result')
     if notice is None:
         return result

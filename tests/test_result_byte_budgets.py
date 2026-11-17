@@ -7,7 +7,7 @@ import ai.types.messages
 import pytest
 from turn_driver import config, registry, run
 
-from js import media, model_client, result_caps, runtime, settings
+from js import media, result_caps, runtime, settings, tool_result_messages
 from js.text_bytes import byte_size, cap_text
 from js.toolkit.core import Tool, ToolResult
 
@@ -89,7 +89,7 @@ def test_screenshots_reach_the_provider_under_the_stock_caps(raw_bytes, count):
     per_batch = settings.default_value("PARALLEL_RESULTS_MAX")
     results = [result_caps.cap_result(_screenshot(raw_bytes), per_result) for _ in range(count)]
     for result in result_caps.cap_batch_results(results, per_batch):
-        messages = model_client.build_tool_result_messages("call-1", "screenshot", result)
+        messages = tool_result_messages.build_tool_result_messages("call-1", "screenshot", result)
         parts = [part for message in messages for part in message.parts]
         assert any(isinstance(part, ai.types.messages.FilePart) for part in parts)
 
@@ -119,7 +119,7 @@ def _resource_png(raw_bytes: int) -> ToolResult:
 def test_an_embedded_resource_image_reaches_the_provider_under_the_stock_caps():
     result = result_caps.cap_result(_resource_png(160_000), settings.default_value("TOOL_RESULT_MAX"))
     result = result_caps.cap_batch_results([result], settings.default_value("PARALLEL_RESULTS_MAX"))[0]
-    messages = model_client.build_tool_result_messages("call-1", "screenshot", result)
+    messages = tool_result_messages.build_tool_result_messages("call-1", "screenshot", result)
     parts = [part for message in messages for part in message.parts]
     assert any(isinstance(part, ai.types.messages.FilePart) for part in parts)
 
@@ -137,7 +137,7 @@ def _sent(result) -> tuple[list[str], bool]:
     """The texts a result becomes on the wire and in the session, and whether
     any media part reaches the provider. The first is every text the provider
     gets for it, joined: what one request carries."""
-    messages = model_client.build_tool_result_messages("c1", "t", result)
+    messages = tool_result_messages.build_tool_result_messages("c1", "t", result)
     texts: list[str] = []
     media = False
     for message in messages:
@@ -173,7 +173,7 @@ def test_an_image_with_an_awkward_file_name_reaches_the_model_and_the_session(tm
 
     capped = result_caps.cap_result(marker, cap)
     texts, _media = _sent(capped)
-    record = model_client.tool_result_record("c1", "read", capped)
+    record = tool_result_messages.tool_result_record("c1", "read", capped)
 
     for text in [*texts, json.dumps(record, ensure_ascii=False)]:
         text.encode("utf-8")

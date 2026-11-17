@@ -3,7 +3,7 @@ read) must not crash the byte budgets: text_bytes and the spill path count and
 write it as the `?` that errors="replace" gives."""
 from __future__ import annotations
 
-from js import result_caps
+from js import result_caps, tool_result_messages
 from js.text_bytes import byte_prefix, byte_size, cap_text
 
 LONE = "x\udcff"
@@ -42,7 +42,6 @@ def test_cap_result_over_the_spill_size_spills_and_notice_offsets_match(tmp_path
 
 
 def test_typed_result_under_budget_reaches_the_model_strictly_encodable():
-    from js import model_client
     from js.toolkit.core import ToolResult
 
     result = ToolResult([
@@ -54,7 +53,7 @@ def test_typed_result_under_budget_reaches_the_model_strictly_encodable():
     assert out.is_error
     assert out.blocks[0]["text"] == "x?"
     assert out.blocks[1]["value"] == {"x": "?", "n": [1, "?"]}
-    text, _media, _err = model_client._mixed_result_parts(out)
+    text, _media, _err = tool_result_messages._mixed_result_parts(out)
     text.encode("utf-8")
 
 

@@ -2,7 +2,7 @@ import copy
 
 import ai
 
-from js import model_client
+from js import tool_result_messages
 
 
 def test_strip_reasoning_preserves_sdk_message_metadata_and_parts():
@@ -15,7 +15,7 @@ def test_strip_reasoning_preserves_sdk_message_metadata_and_parts():
         provider_metadata={"provider": {"nested": [1, 2]}, "js": {"reasoning_blocks": [{"text": "kept metadata"}]}},
     )
     before = copy.deepcopy(message.model_dump())
-    result = model_client._strip_reasoning_parts([message])
+    result = tool_result_messages.strip_reasoning_parts([message])
     assert len(result) == 1
     stripped = result[0]
     assert stripped is not message
@@ -35,7 +35,7 @@ def test_strip_reasoning_only_messages_and_untouched_messages():
     only_reasoning = ai.assistant_message(ai.types.messages.ReasoningPart(text="reason"))
     assistant = ai.assistant_message("answer")
     user = ai.user_message("question")
-    assert model_client._strip_reasoning_parts([user, only_reasoning, assistant]) == [user, assistant]
-    result = model_client._strip_reasoning_parts([user, assistant])
+    assert tool_result_messages.strip_reasoning_parts([user, only_reasoning, assistant]) == [user, assistant]
+    result = tool_result_messages.strip_reasoning_parts([user, assistant])
     assert result[0] is user
     assert result[1] is assistant

@@ -16,7 +16,7 @@ import ai.types.usage
 import pytest
 from turn_driver import one_turn
 
-from js import history_record, model_client, provider_errors, stream_protocols
+from js import history_record, model_client, provider_errors, stream_protocols, tool_result_messages
 from js.sampling import Sampling
 
 
@@ -535,7 +535,7 @@ def test_image_tool_result_becomes_user_file_message_without_persisting_base64(t
     image = tmp_path / "img.png"
     image.write_bytes(b"\x89PNGfake")
     result = f"IMAGE_RESULT\t{image}\timage/png\tvisual stub"
-    messages = model_client.build_tool_result_messages("tc1", "read_visual", result)
+    messages = tool_result_messages.build_tool_result_messages("tc1", "read_visual", result)
     assert [m.role for m in messages] == ["tool", "user"]
     tool_part = messages[0].parts[0]
     assert tool_part.kind == "tool_result"
@@ -557,14 +557,14 @@ def test_each_media_message_of_a_batch_names_its_own_tool_call(tmp_path):
         image = tmp_path / name
         image.write_bytes(b"\x89PNGfake")
         marker = f"IMAGE_RESULT\t{image}\timage/png\tVISUAL_FILE {image} mime=image/png"
-        user = model_client.build_tool_result_messages(call_id, "read", marker)[1]
+        user = tool_result_messages.build_tool_result_messages(call_id, "read", marker)[1]
         labels.append(user.parts[0].text)
     assert "call_a" in labels[0] and "a.png" in labels[0]
     assert "call_b" in labels[1] and "b.png" in labels[1]
 
 
 def test_plain_tool_result_message():
-    msg = model_client.build_tool_result_messages("tc1", "fs_search", "42")[0]
+    msg = tool_result_messages.build_tool_result_messages("tc1", "fs_search", "42")[0]
     assert msg.role == "tool"
     assert msg.parts[0].kind == "tool_result"
     assert msg.parts[0].tool_call_id == "tc1"
@@ -574,7 +574,7 @@ def test_plain_tool_result_message():
 
 
 def test_error_tool_result_message():
-    msg = model_client.build_tool_result_messages("tc1", "fs_search", "ERROR: disk full")[0]
+    msg = tool_result_messages.build_tool_result_messages("tc1", "fs_search", "ERROR: disk full")[0]
     assert msg.parts[0].is_error
     assert msg.parts[0].result == "ERROR: disk full"
 
