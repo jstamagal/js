@@ -13,20 +13,22 @@ from .toolkit import policy
 
 @dataclass(frozen=True)
 class RunOptions:
-    system_prompt_file: str | None = None
-    system_prompt: str | None = None
-    append_system_prompt: tuple[str, ...] = ()
-    # --you-are: None when absent, the TEXT after it (or '') when given.
-    you_are: str | None = None
-    no_env: bool = False
+    # Each field is the command-line option of the same name; the Continue
+    # line passes them in this order (`command_line.options_argv`).
     chat: bool = False
-    # The agent named on the command line with --agent; --chat takes its persona from it.
-    agent: str | None = None
+    no_tools: bool = False
+    no_env: bool = False
     no_agents_md: bool = False
     no_skills: bool = False
     no_mcp: bool = False
-    no_tools: bool = False
     tools: str | None = None
+    # --you-are: None when absent, the TEXT after it (or '') when given.
+    you_are: str | None = None
+    system_prompt: str | None = None
+    system_prompt_file: str | None = None
+    append_system_prompt: tuple[str, ...] = ()
+    # The agent named on the command line with --agent; --chat takes its persona from it.
+    agent: str | None = None
 
     @property
     def replaces_prompt(self) -> bool:

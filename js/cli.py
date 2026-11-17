@@ -3003,19 +3003,11 @@ def _say_continue(telemetry: runtime.Telemetry, hint: str, *, resume_prefix: str
         effort = reasoning if reasoning is not None else cfg.reasoning_effort
         words += ["-r", effort or "off"]
         for field, value in login_defaults.sampling(cfg).as_dict_nonnull().items():
-            words += ["--" + field.replace("_", "-"),
+            words += [command_line.flag(field),
                       json.dumps(list(value)) if isinstance(value, tuple) else str(value)]
     elif model:
         words += ["--model", model]
-    options = current()
-    for attr in ("chat", "no_tools", "no_env", "no_agents_md", "no_skills", "no_mcp"):
-        if getattr(options, attr):
-            words.append("--" + attr.replace("_", "-"))
-    for attr in ("tools", "you_are", "system_prompt", "system_prompt_file"):
-        if (value := getattr(options, attr)) is not None:
-            words += ["--" + attr.replace("_", "-"), value]
-    for text in options.append_system_prompt:
-        words += ["--append-system-prompt", text]
+    words += command_line.options_argv(current())
     if _paths.custom_home():
         words += ["--home", str(_paths.home())]
     words += ["--session", hint]
