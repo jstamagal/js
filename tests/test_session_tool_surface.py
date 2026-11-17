@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 
 from test_lazy_tool_discovery import _cfg, _result
+from turn_driver import config, run
 
 from js import memory, runtime
 from js.toolkit import ToolContext
@@ -94,18 +95,17 @@ def test_surface_marks_survive_compaction_but_not_reset(tmp_path):
     assert memory.load_tool_surface(path) is None
 
 
-def test_unavailable_errors_distinguish_denied_unknown_and_alias(tmp_path):
-    surface = build_default_registry().select(['shell:lazy']).aliased({'shell': 'Run'}).lazy_surface(tmp_path)
-    frozen = surface.dispatch_registry()
-    for registry in (surface, frozen):
-        for name, expected in [('Run', 'native:shell'), ('read', 'not allowed'), ('imaginary', 'unknown tool')]:
-            tracker = runtime.ToolErrorTracker()
-            _, error = runtime._dispatch(name, '{}', runtime.Telemetry(None), 4096,
-                                         registry=registry, tool_context=ToolContext(cwd=tmp_path),
-                                         error_tracker=tracker)
-            assert expected in error
-            assert '<retry>' not in error
-            assert not tracker.limit_reached()
+def test_unavailable_errors_distinguish_denied_unknown_and_alias(tmp_path, monkeypatch):
+    cfg = config(tmp_path, {'TOOL_ALIASES': [{'match': ['offline'], 'aliases': {'shell': 'Run'}}]})
+    expected = {'Run': 'native:shell', 'read': 'not allowed', 'imaginary': 'unknown tool'}
+    turn = run(tmp_path, monkeypatch, build_default_registry().select(['shell:lazy']),
+               [[(name, name, '{}') for name in expected]], cfg=cfg)
+    results = turn.results()
+    for name, wanted in expected.items():
+        assert wanted in results[name]
+        assert '<retry>' not in results[name]
+    assert not any(m.get('steered') for m in turn.messages)
+    assert turn.messages[-1]['content'] == 'done'
 
 
 def test_unknown_tool_error_names_only_tools_the_agent_has(tmp_path):
