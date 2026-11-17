@@ -8,6 +8,7 @@ import shutil
 import ai
 import pytest
 from tool_loading import after_loading
+from turn_driver import config as turn_config, registry as turn_registry, run as run_turn
 
 from js import (
     capped_process,
@@ -20,7 +21,7 @@ from js import (
 )
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry, fs, process_net
-from js.toolkit.core import ToolResult, call_tool
+from js.toolkit.core import ToolResult
 
 NUMBERED_RE = re.compile(r"^1\|alpha$", re.MULTILINE)
 
@@ -94,13 +95,12 @@ def test_patch_edits_list_applies_in_order_so_later_edits_see_earlier_results(tm
     assert target.read_text(encoding="utf-8") == "three\n"
 
 
-def test_patch_edits_arriving_as_a_json_string_are_parsed_before_dispatch(tmp_path):
+def test_patch_edits_arriving_as_a_json_string_are_parsed_before_dispatch(tmp_path, monkeypatch):
     """Grammar-constrained backends hand back a nested array as an escaped JSON
     string. The batch form was then rejected by schema validation before `patch`
     ever ran, so only the scalar form worked."""
     target, context = _read_file(tmp_path, "serialized.txt", "one\ntwo\n")
     tool = next(item for item in fs.tools() if item.name == "patch")
-    registry = ToolRegistry(tools=(tool,), aliases={"patch": "patch"})
     arguments = json.dumps({
         "file_path": "serialized.txt",
         "edits": json.dumps([
@@ -109,14 +109,11 @@ def test_patch_edits_arriving_as_a_json_string_are_parsed_before_dispatch(tmp_pa
         ]),
     })
 
-    normalized, stats = runtime._normalize_tool_call_batch(
-        [runtime._PendingToolCall("call_1", "patch", [arguments])], registry, limit=10
-    )
+    turn = run_turn(tmp_path, monkeypatch, turn_registry(tool), [[("call_1", "patch", arguments)]],
+                    context=context)
 
-    assert stats.invalid == 0
-    assert normalized[0].validation_error is None
-    result = call_tool(tool, json.loads(normalized[0].arguments()), context)
-    assert str(result).startswith(f"patched {target} (2 edits, hash ")
+    assert [event["invalid"] for event in turn.events("tool_call_batch_normalized")] == [0]
+    assert turn.results()["call_1"].startswith(f"patched {target} (2 edits, hash ")
     assert target.read_text(encoding="utf-8") == "ONE\nTWO\n"
 
 
@@ -697,40 +694,40 @@ def test_dispatch_uses_canonical_name_repairs_args_and_adds_retry_metadata(tmp_p
     assert handler_error.endswith("<retry>attempts_left=1, allowed_max_attempts=2</retry>")
 
 
-def test_a_read_clipped_by_the_inline_cap_does_not_authorize_unseen_edits(tmp_path, monkeypatch):
-    """The read handler records coverage for its full text, but the runtime
-    clips the result before the model sees it. Only the delivered preview may
-    count as read."""
-    context = ToolContext(cwd=tmp_path)
-    context.max_read_lines = 5000
-    context.max_read_bytes = 0
-    context.max_tool_result_inline_bytes = 2000
-    monkeypatch.setattr(runtime_tools, "STOCK_CONTEXT", context)
+def _spill_to(tmp_path, monkeypatch) -> None:
     real_spill = runtime.spill_oversized_result
     monkeypatch.setattr(
         runtime,
         "spill_oversized_result",
         lambda text, cap, **kwargs: real_spill(text, cap, spill_dir=tmp_path, **kwargs),
     )
+
+
+def _clipping_config(tmp_path, read_lines: int):
+    """Reads of up to ``read_lines`` lines whose results spill past 2000 bytes."""
+    return turn_config(tmp_path, max_read_lines=read_lines, max_read_bytes=0,
+                       max_tool_result_inline_bytes=2000, max_tool_result_bytes=0)
+
+
+def test_a_read_clipped_by_the_inline_cap_does_not_authorize_unseen_edits(tmp_path, monkeypatch):
+    """The read handler records coverage for its full text, but the runtime
+    clips the result before the model sees it. Only the delivered preview may
+    count as read."""
+    _spill_to(tmp_path, monkeypatch)
+    context = ToolContext(cwd=tmp_path)
     target = tmp_path / "big.txt"
     target.write_text("".join(f"L{index:05d} filler\n" for index in range(3000)), encoding="utf-8")
+    patch = {"file_path": str(target), "old_string": "L02000 filler\n", "new_string": "changed\n"}
 
-    _args, delivered = runtime._dispatch(
-        "read",
-        json.dumps({"file_path": str(target)}),
-        runtime.Telemetry(None),
-        cap_bytes=0,
-        tool_context=context,
-    )
+    turn = run_turn(tmp_path, monkeypatch, build_default_registry().select(["read:eager", "patch:eager"]), [
+        [("read", "read", json.dumps({"file_path": str(target)}))],
+        [("late_line", "patch", json.dumps(patch))],
+    ], cfg=_clipping_config(tmp_path, 5000), context=context)
 
-    assert len(delivered.encode("utf-8")) < target.stat().st_size
+    results = turn.results()
+    assert len(results["read"].encode("utf-8")) < target.stat().st_size
     assert not context.reads.coverage(target.resolve()).whole
-
-    late_line = fs.patch(
-        file_path=str(target), old_string="L02000 filler\n", new_string="changed\n", context=context
-    )
-
-    assert late_line.startswith("ERROR:")
+    assert results["late_line"].startswith("ERROR:")
     assert target.read_text(encoding="utf-8").startswith("L00000")
     assert target.read_text(encoding="utf-8").endswith("L02999 filler\n")
 
@@ -738,48 +735,27 @@ def test_a_read_clipped_by_the_inline_cap_does_not_authorize_unseen_edits(tmp_pa
 def test_a_clipped_read_does_not_revoke_an_earlier_read(tmp_path, monkeypatch):
     """A later clip narrows that read's coverage without erasing lines an
     earlier read already delivered in full."""
+    _spill_to(tmp_path, monkeypatch)
     context = ToolContext(cwd=tmp_path)
-    context.max_read_lines = 50_000
-    context.max_read_bytes = 0
-    context.max_tool_result_inline_bytes = 2000
-    monkeypatch.setattr(runtime_tools, "STOCK_CONTEXT", context)
-    real_spill = runtime.spill_oversized_result
-    monkeypatch.setattr(
-        runtime,
-        "spill_oversized_result",
-        lambda text, cap, **kwargs: real_spill(text, cap, spill_dir=tmp_path, **kwargs),
-    )
     target = tmp_path / "big.txt"
     target.write_text("".join(f"L{index:05d} filler\n" for index in range(30000)), encoding="utf-8")
 
-    _args, page = runtime._dispatch(
-        "read",
-        json.dumps({"file_path": str(target), "start_line": 2500, "end_line": 2510}),
-        runtime.Telemetry(None),
-        cap_bytes=0,
-        tool_context=context,
-    )
-    assert "L02505 filler" in page
+    def patch(line: str) -> str:
+        return json.dumps({"file_path": str(target), "old_string": f"{line} filler\n", "new_string": "changed\n"})
 
-    _args, delivered = runtime._dispatch(
-        "read",
-        json.dumps({"file_path": str(target)}),
-        runtime.Telemetry(None),
-        cap_bytes=0,
-        tool_context=context,
-    )
-    assert len(delivered.encode("utf-8")) < target.stat().st_size
+    turn = run_turn(tmp_path, monkeypatch, build_default_registry().select(["read:eager", "patch:eager"]), [
+        [("page", "read", json.dumps({"file_path": str(target), "start_line": 2500, "end_line": 2510}))],
+        [("whole", "read", json.dumps({"file_path": str(target)}))],
+        [("earlier", "patch", patch("L02505"))],
+        [("unseen", "patch", patch("L20000"))],
+    ], cfg=_clipping_config(tmp_path, 50_000), context=context)
+
+    results = turn.results()
+    assert "L02505 filler" in results["page"]
+    assert len(results["whole"].encode("utf-8")) < target.stat().st_size
     assert not context.reads.coverage(target.resolve()).whole
-
-    earlier = fs.patch(
-        file_path=str(target), old_string="L02505 filler\n", new_string="changed\n", context=context
-    )
-    unseen = fs.patch(
-        file_path=str(target), old_string="L20000 filler\n", new_string="changed\n", context=context
-    )
-
-    assert earlier.startswith("patched ")
-    assert unseen.startswith("ERROR:")
+    assert results["earlier"].startswith("patched ")
+    assert results["unseen"].startswith("ERROR:")
 
 
 _TINY_PNG = base64.b64decode(
