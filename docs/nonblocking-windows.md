@@ -90,8 +90,7 @@ Today it is a near-complete REPL. Turn it into an embeddable lib:
 
 ## Build order (step 1 shipped)
 
-0. **Event schema + OutputSink** — DONE. `js/output.py`: `OutputEvent`, `Sink`,
-   `StdoutSink`, `agent_identity`.
+0. **Event schema + OutputSink** — DONE. `js/output.py`: `OutputEvent`, `Sink`.
 1. **Async runtime + supervisor** — DONE. `stream_model_async` /
    `run_turn_async` primitives; `js/supervisor.py` job registry; `--nonblocking`
    REPL (`_repl_main`/`_turn_consumer`/`_do_turn`) with `prompt_async` +

@@ -59,7 +59,6 @@ to draw the exchange whole when it finishes. Every call still reaches the sink.
 
 from __future__ import annotations
 
-import sys
 from contextlib import contextmanager
 from contextvars import ContextVar
 import threading
@@ -68,18 +67,6 @@ from typing import Any, Protocol
 
 # Serializes output from the threads of one dispatch batch.
 LOCK = threading.RLock()
-
-
-def agent_identity(model: str, provider: str | None, base_url: str | None) -> str:
-    """IRC-style `nick!user@host` for an agent: `model!provider@baseurl`.
-
-    This is the `source` on every event the agent emits, so a window can bind
-    to it by glob (`opus*!anthropic@*`). Subagent N is just another identity.
-    """
-    nick = model or "?"
-    user = provider or "openai-compatible"
-    host = (base_url or "default").removeprefix("https://").removeprefix("http://").rstrip("/")
-    return f"{nick}!{user}@{host}"
 
 
 @dataclass(frozen=True)
@@ -187,41 +174,3 @@ def sink_of(telemetry: Any) -> Sink:
             except AttributeError:
                 pass
     return own
-
-
-class StdoutSink:
-    """Default sink: print the event's `text` exactly as code prints today.
-
-    Streaming text (name == "stream") is written without a trailing newline so a
-    chunk stream reads identically to `StreamSink.text` (js/turn_stream.py); everything
-    else prints as a line. This is the byte-for-byte fallback for flag-off mode.
-    """
-
-    def __init__(self, transcript_log: object | None = None) -> None:
-        self.transcript_log = transcript_log
-
-    def emit(self, event: OutputEvent) -> None:
-        if event.text is None:
-            return
-        if event.name == "stream":
-            if self.transcript_log is not None:
-                write_chunk = getattr(self.transcript_log, "write_assistant_chunk", None)
-                if callable(write_chunk):
-                    write_chunk(event.text)
-                mute = getattr(self.transcript_log, "mute_tee", None)
-            else:
-                mute = None
-            ctx = mute() if callable(mute) else _NullContext()
-            with ctx:
-                sys.stdout.write(event.text)
-                sys.stdout.flush()
-        else:
-            print(event.text)
-
-
-class _NullContext:
-    def __enter__(self):
-        return None
-
-    def __exit__(self, *_args):
-        return False
