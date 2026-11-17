@@ -792,10 +792,9 @@ def test_the_reply_blocks_reach_the_stream_result(monkeypatch):
                 yield chunk
         return gen()
 
-    real_client = model_client._sdk_client
     model = model_client.resolve_model("claude", provider_id="cliproxyapi",
                                        provider_base_url="http://vader:8999/v1", provider_api_key="k")
-    sdk = real_client(model)
+    sdk = model.provider.sdk_client
     monkeypatch.setattr(sdk.chat.completions, "create", create)
     monkeypatch.setattr(model_client, "resolve_model", lambda *a, **k: model)
     result = model_client.stream_model(

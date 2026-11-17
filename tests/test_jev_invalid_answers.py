@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import typesafe_sdk
 
 from js.toolkit import jev
 from js.toolkit.core import ToolContext
@@ -36,7 +37,7 @@ def test_malformed_answer_does_not_hide_valid_neighbor(tmp_path, monkeypatch):
     response = SimpleNamespace(answers={"q1": {"type": "noul"}, "q2": {"type": "noul", "noul": 0.75}})
     client = MagicMock()
     client.__enter__.return_value.system_one.return_value = response
-    monkeypatch.setattr(jev, "_client", lambda *_args, **_kwargs: client)
+    monkeypatch.setattr(typesafe_sdk, "TypeSafeClient", lambda **_kwargs: client)
 
     result = jev.jev("state", [{"question": "first?"}, {"question": "second?"}], context=ToolContext(cwd=tmp_path, typesafe_api_key="fixture-key"))
 
@@ -50,7 +51,7 @@ def test_malformed_reversed_answer_does_not_abort_order_check(tmp_path, monkeypa
     response = SimpleNamespace(answers={"q1": answer, "q1_reversed": dict(answer, confidence="invalid")})
     client = MagicMock()
     client.__enter__.return_value.system_one.return_value = response
-    monkeypatch.setattr(jev, "_client", lambda *_args, **_kwargs: client)
+    monkeypatch.setattr(typesafe_sdk, "TypeSafeClient", lambda **_kwargs: client)
 
     result = jev.jev("state", [{"question": "first?", "kind": "choice", "options": ["yes", "no"]}],
                      check_order=True, context=ToolContext(cwd=tmp_path, typesafe_api_key="fixture-key"))

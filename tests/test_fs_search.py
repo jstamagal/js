@@ -6,6 +6,7 @@ real `rg` binary, which the box provides and `just install` provisions.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -549,16 +550,21 @@ def test_glob_asks_for_hidden_reads_only_dot_prefixed_components():
 
 
 def test_fs_search_stays_on_one_file_system_in_every_mode(tmp_path, monkeypatch):
-    seen: list[list[str]] = []
-
-    def fake_stream(argv, *args, **kwargs):
-        seen.append(list(argv))
-        return [], 1, "", False
-
-    monkeypatch.setattr(file_search, "_rg_stream", fake_stream)
+    calls = tmp_path / "calls"
+    rg = tmp_path / "fake-rg"
+    rg.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        f"with open({str(calls)!r}, 'a') as out:\n"
+        "    out.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        "sys.exit(1)\n"
+    )
+    rg.chmod(0o755)
+    monkeypatch.setattr(file_search, "resolve_binary", lambda _name: str(rg))
     context = ToolContext(cwd=tmp_path)
     for mode in ("files", "files_with_matches", "content", "count"):
         file_search.fs_search("needle", path=str(tmp_path), output_mode=mode, context=context)
 
+    seen = [json.loads(line) for line in calls.read_text().splitlines()]
     assert len(seen) == 4
     assert all("--one-file-system" in argv for argv in seen)

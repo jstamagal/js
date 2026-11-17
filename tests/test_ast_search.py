@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from js.tool_binaries import resolve_binary
@@ -18,20 +20,25 @@ def test_ast_search_resolves_the_managed_binary_and_reports_a_missing_one(tmp_pa
     """No absolute path may be baked in: tools/bin first, PATH as the fallback."""
     (tmp_path / "a.py").write_text("f(1)\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
-    monkeypatch.setattr(file_search, "_ast_grep_binary", lambda: None)
+    monkeypatch.setattr(file_search, "resolve_binary", lambda _name: None)
 
     assert ast_search("f($A)", path=".", lang="Python", context=context) == file_search._AST_GREP_MISSING
 
-    seen: list[str] = []
-    monkeypatch.setattr(file_search, "_ast_grep_binary", lambda: "/managed/ast-grep")
-    monkeypatch.setattr(
-        file_search,
-        "_rg_stream",
-        lambda argv, *a, **k: (seen.append(argv[0]), ([], 1, "", False))[1],
+    calls = tmp_path / "calls"
+    binary = tmp_path / "managed-ast-grep"
+    binary.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        f"with open({str(calls)!r}, 'a') as out:\n"
+        "    out.write(sys.argv[0] + '\\n')\n"
+        "sys.exit(1)\n"
     )
+    binary.chmod(0o755)
+    monkeypatch.setattr(file_search, "resolve_binary",
+                        lambda name: str(binary) if name == "ast-grep" else None)
     ast_search("f($A)", path=".", lang="Python", context=context)
 
-    assert seen == ["/managed/ast-grep"]
+    assert calls.read_text().splitlines() == [str(binary)]
 
 
 def test_ast_argv_attaches_hyphen_leading_pattern_and_rewrite(tmp_path):
@@ -148,7 +155,7 @@ def test_ast_search_surfaces_a_parse_warning_instead_of_a_clean_no_match(tmp_pat
 def test_a_failed_bodyless_def_retry_is_an_error_not_a_cached_no_match(tmp_path, monkeypatch):
     (tmp_path / "code.py").write_text("def f(x):\n    return x\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
-    monkeypatch.setattr(file_search, "_ast_grep_binary", lambda: "/managed/ast-grep")
+    monkeypatch.setattr(file_search, "resolve_binary", lambda _name: "/managed/ast-grep")
     attempts = iter([([], 1, "", False, None, False), ([], 2, "boom", False, None, False)] * 2)
     monkeypatch.setattr(file_search, "_ast_records", lambda *a, **k: next(attempts))
 

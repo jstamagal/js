@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import typesafe_sdk
+
 from js.toolkit import ToolContext, jev
 
 
@@ -29,7 +31,7 @@ def test_jev_sends_state_and_questions_and_reports_each_answer(tmp_path, monkeyp
         "q2": SimpleNamespace(type="choice", choice="oom", confidence=0.9,
                               probabilities={"oom": 0.9, "segv": 0.1}),
     }
-    monkeypatch.setattr(jev, "_client", lambda model, api_key=None: _Client(answers, seen))
+    monkeypatch.setattr(typesafe_sdk, "TypeSafeClient", lambda **_kwargs: _Client(answers, seen))
     context = ToolContext(cwd=tmp_path, typesafe_api_key="k")
 
     out = jev.jev(
@@ -48,7 +50,8 @@ def test_jev_sends_state_and_questions_and_reports_each_answer(tmp_path, monkeyp
 
 
 def test_jev_without_an_api_key_is_an_error(tmp_path, monkeypatch):
-    monkeypatch.setattr(jev, "_client", lambda model: (_ for _ in ()).throw(AssertionError("called")))
+    monkeypatch.setattr(typesafe_sdk, "TypeSafeClient",
+                        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("called")))
 
     out = jev.jev("text", [{"question": "x?"}], context=ToolContext(cwd=tmp_path))
 
@@ -56,8 +59,6 @@ def test_jev_without_an_api_key_is_an_error(tmp_path, monkeypatch):
 
 
 def test_registered_typesafe_key_reaches_client(tmp_path, monkeypatch):
-    import typesafe_sdk
-
     from js import turn_settings
 
     seen = {}
