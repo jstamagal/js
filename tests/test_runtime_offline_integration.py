@@ -1635,9 +1635,9 @@ def test_tool_batch_keeps_the_models_argument_text_for_replay(monkeypatch, tmp_p
     """A server's prompt cache holds the tokens the model wrote. Arguments
     replayed with their keys sorted re-render a different prefix, and a
     hybrid-attention server then recomputes the whole prompt."""
-    from js.toolkit import fs
+    from js.toolkit import fs_tools
 
-    tool = next(item for item in fs.tools() if item.name == "write")
+    tool = next(item for item in fs_tools.tools() if item.name == "write")
     raw = '{"file_path":"hello.txt","content":"hi\\n"}'
 
     turn = run_scripted_turn(tmp_path, monkeypatch, scripted_registry(tool), [[("call_1", "write", raw)]])
@@ -1681,8 +1681,8 @@ def test_duplicate_tool_calls_still_match_across_key_order(monkeypatch, tmp_path
 def _recording_patch() -> tuple[Tool, list[dict]]:
     """fs's patch tool, schema and all, with a handler that records the
     arguments it receives and changes nothing."""
-    from js.toolkit import fs
+    from js.toolkit import fs_tools
 
     received: list[dict] = []
-    tool = next(item for item in fs.tools() if item.name == "patch")
+    tool = next(item for item in fs_tools.tools() if item.name == "patch")
     return replace(tool, handler=lambda **kwargs: received.append(kwargs) or "patched"), received

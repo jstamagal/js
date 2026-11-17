@@ -11,7 +11,7 @@ from test_lazy_tool_discovery import _cfg, _result
 from turn_driver import one_turn
 
 from js import memory, runtime, skills as skills_mod
-from js.toolkit import ToolContext, fs
+from js.toolkit import ToolContext, fs, fs_tools
 from js.toolkit.registry import build_default_registry
 
 SELECTION = ['read:eager', 'write:eager', 'patch:eager', 'skill:lazy']
@@ -239,7 +239,7 @@ def test_file_suite_can_leave_results_unwrapped(tmp_path):
     context = ToolContext(cwd=tmp_path)
     offers = []
     context.tool_registry = SimpleNamespace(offer_path_skills=lambda *args: offers.append(args))
-    tool = next(tool for tool in fs.tools(result_wrapper=lambda handler: handler) if tool.name == "read")
+    tool = next(tool for tool in fs_tools.tools(result_wrapper=lambda handler: handler) if tool.name == "read")
     result = tool.handler(file_path=str(path), context=context)
     assert "content" in result
     assert offers == []

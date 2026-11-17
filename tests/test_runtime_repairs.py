@@ -20,6 +20,7 @@ from js.toolkit import (
     ToolRegistry,
     build_default_registry,
     fs,
+    fs_tools,
     python_kernel,
     shell_fetch,
     web_search,
@@ -109,7 +110,7 @@ def test_stringified_edits_with_raw_newlines_reach_patch(monkeypatch, tmp_path):
     target.write_text("one\ntwo\n", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
     fs.read("f.txt", context=context)
-    patch = next(tool for tool in fs.tools() if tool.name == "patch")
+    patch = next(tool for tool in fs_tools.tools() if tool.name == "patch")
     # The inner JSON carries literal newlines inside its string values.
     edits = '[{"old_string": "one\ntwo", "new_string": "ONE\nTWO"}]'
     arguments = json.dumps({"file_path": "f.txt", "edits": edits})

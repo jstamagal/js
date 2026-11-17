@@ -24,7 +24,15 @@ from js import (
     turn_dispatch,
 )
 from js.model_client import ModelStreamResult, ModelToolCall
-from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry, fs, shell_fetch
+from js.toolkit import (
+    Tool,
+    ToolContext,
+    ToolRegistry,
+    build_default_registry,
+    fs,
+    fs_tools,
+    shell_fetch,
+)
 from js.toolkit.core import ToolResult
 
 NUMBERED_RE = re.compile(r"^1\|alpha$", re.MULTILINE)
@@ -104,7 +112,7 @@ def test_patch_edits_arriving_as_a_json_string_are_parsed_before_dispatch(tmp_pa
     string. The batch form was then rejected by schema validation before `patch`
     ever ran, so only the scalar form worked."""
     target, context = _read_file(tmp_path, "serialized.txt", "one\ntwo\n")
-    tool = next(item for item in fs.tools() if item.name == "patch")
+    tool = next(item for item in fs_tools.tools() if item.name == "patch")
     arguments = json.dumps({
         "file_path": "serialized.txt",
         "edits": json.dumps([

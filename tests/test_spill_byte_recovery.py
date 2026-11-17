@@ -9,7 +9,7 @@ import pytest
 from turn_driver import config, registry, run
 
 from js import result_caps
-from js.toolkit import fs
+from js.toolkit import fs, fs_tools
 from js.toolkit.core import Tool, ToolContext
 
 _POINTER = re.compile(r"the full text is at (.+) — read it")
@@ -47,7 +47,7 @@ def in_turn(context, tmp_path, monkeypatch):
 @pytest.fixture
 def model_read(in_turn):
     """The result of the model's read call with ``args``."""
-    read = next(tool for tool in fs.tools() if tool.name == "read")
+    read = next(tool for tool in fs_tools.tools() if tool.name == "read")
     return lambda args: in_turn(read, args)
 
 

@@ -17,7 +17,7 @@ from ..skills import SkillCatalog, ToolActivationResult, discover_skills, load_s
 from . import (
     browser,
     discovery,
-    fs,
+    fs_tools,
     jev,
     lsp,
     notebook,
@@ -634,7 +634,7 @@ def build_default_registry(
     """Assemble the supplied suites and agent roots, using the stock surface by default."""
     if suites is None:
         suites = (
-            ("fs", fs.tools()),
+            ("fs", fs_tools.tools()),
             ("shell", shell_fetch.tools()),
             ("search", web_search.tools()),
             ("jev", jev.tools()),
