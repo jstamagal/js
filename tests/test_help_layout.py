@@ -44,7 +44,7 @@ def test_help_keeps_long_prompt_path_and_description_when_wrapped(monkeypatch, c
     path = "/" + "a" * 200 + "/review.md"
     command = SimpleNamespace(path=path, description="Review a file")
     monkeypatch.setattr(cli.prompt_commands, "discover", lambda _cwd: {"review": command})
-    cli._cmd_help("", {}, None)
+    cli._cmd_help("", ReplState(), None)
     lines = capsys.readouterr().out.splitlines()
     assert all(display.cells(line) < 60 for line in lines)
     start = next(index for index, line in enumerate(lines) if "/review " in line)

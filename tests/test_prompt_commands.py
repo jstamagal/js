@@ -127,7 +127,7 @@ def test_help_lists_command_files(dirs, capsys, monkeypatch):
     global_dir, _ = dirs
     (global_dir / "review.md").write_text("---\ndescription: Review a file\n---\nReview $1", encoding="utf-8")
 
-    cli._cmd_help("", {}, None)
+    cli._cmd_help("", ReplState(), None)
 
     assert any("/review" in line and "Review a file" in line for line in capsys.readouterr().out.splitlines())
 

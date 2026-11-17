@@ -1053,12 +1053,12 @@ def _changed_lock_subagent_model_key(keys: list[str]) -> bool:
 
 
 def _emit_repl_event(
-    state: dict,
+    state: ReplState,
     telemetry: runtime.Telemetry,
     event: str,
     **payload,
 ) -> events.EventEmission:
-    hook_table = state.get("events")
+    hook_table = state.events
     if hook_table is None:
         return events.EventEmission(event=event, payload=dict(payload), hooks=[])
     emission = hook_table.emit(event, **payload)
@@ -1073,11 +1073,11 @@ def _emit_repl_event(
     return emission
 
 
-def _compact_hooks(state: dict, cfg: Config) -> dict:
+def _compact_hooks(state: ReplState, cfg: Config) -> dict:
     """The ``emit`` and ``log_dir`` keywords a compaction call takes: notices
     print, other events go to the state's `on` handler table when it has one,
     and the flight log goes to js's flight log directory."""
-    hook_table = state.get("events")
+    hook_table = state.events
     return {"emit": compaction.printing(None if hook_table is None else hook_table.emit),
             "log_dir": compaction.flight_log_dir(cfg)}
 
@@ -1094,15 +1094,15 @@ def _track_compact_skips(emit: Callable[..., Any]) -> tuple[Callable[..., Any], 
     return tracked, skipped
 
 
-def _emit_session_event(state: dict, telemetry: runtime.Telemetry, cfg: Config, event: str) -> None:
+def _emit_session_event(state: ReplState, telemetry: runtime.Telemetry, cfg: Config, event: str) -> None:
     """session_start or session_end for the REPL session ``state`` runs."""
     _emit_repl_event(
         state, telemetry, event,
         session=str(cfg.session_file),
         agent=cfg.agent_id,
-        model=state.get("model"),
+        model=state.model,
         cwd=str(runtime.T.STOCK_CONTEXT.cwd),
-        messages=len(state.get("messages") or []),
+        messages=len(state.messages or []),
     )
 
 
@@ -1306,7 +1306,7 @@ def _cmd_apikey(arg: str, state: ReplState, cfg: Config) -> str | None:
     return None
 
 
-def _cmd_login(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_login(arg: str, state: ReplState, cfg: Config) -> str | None:
     parts = arg.split()
     if not parts:
         return msgs.USAGE.said(usage="/login <name> [apikey] [baseurl] [provider]")
@@ -1410,14 +1410,14 @@ def _run_migrate_config() -> int:
     return 1 if deleted else 0
 
 
-def _append_closing_note(cfg: Config, state: dict, reminder: str) -> None:
+def _append_closing_note(cfg: Config, state: ReplState, reminder: str) -> None:
     """Fold a closing note into the conversation without breaking role alternation.
 
     After a completed turn the note is simply the next user message. When the last
     message is already a user turn it is rewritten to carry the note instead, since
     two user messages in a row are rejected outright by some providers and silently
     mangled by chat templates that assume alternation."""
-    messages = state["messages"]
+    messages = state.messages
     if not messages or messages[-1].get("role") != "user":
         message = {"role": "user", "content": reminder}
         messages.append(message)
@@ -1449,12 +1449,12 @@ def _split_compact_model(arg: str) -> tuple[str | None, str, bool]:
     return None, arg.strip(), True
 
 
-def _print_tool_chain(state: dict, cfg: Config) -> None:
+def _print_tool_chain(state: ReplState, cfg: Config) -> None:
     """Every tool with its resolved state and the chain entry that decided it."""
     full = run_assembly.registry_for(_cfg_for_live_state(cfg, state))
     try:
         config = tool_policy.load_tools_config()
-        rules = tool_policy.expand(state.get("tool_selectors", ()), config, f"agent {cfg.agent_id!r}")
+        rules = tool_policy.expand(state.tool_selectors, config, f"agent {cfg.agent_id!r}")
     except tool_policy.ToolPolicyError as exc:
         msgs.say(msgs.FAILED, error=exc)
         return
@@ -1471,7 +1471,7 @@ def _print_tool_chain(state: dict, cfg: Config) -> None:
 class Command:
     """One command: ``run(arg, state, cfg)`` returns an error string or None."""
 
-    run: Callable[[str, dict, Config], str | None]
+    run: Callable[[str, ReplState, Config], str | None]
     usage: str
     doc: msgs.Message
     complete: str | None = None  # argument completion source (see replcomplete)
@@ -1481,7 +1481,7 @@ class Command:
 _MAX_ALIAS_DEPTH = 16
 
 
-def _apply_settings_result(result: setcmd.CommandResult, state: dict, cfg: Config) -> str | None:
+def _apply_settings_result(result: setcmd.CommandResult, state: ReplState, cfg: Config) -> str | None:
     """Print a settings verb's output and carry changed keys into live state."""
     keys = result.changed_keys
     if _changed_model_key(keys):
@@ -1498,7 +1498,7 @@ def _apply_settings_result(result: setcmd.CommandResult, state: dict, cfg: Confi
     if _changed_lock_subagent_model_key(keys):
         _sync_tool_registry_from_live_settings(cfg, state)
     if "BANNER" in keys:
-        msgs.set_banner(str(settings.knob(state["settings"], "BANNER")))
+        msgs.set_banner(str(settings.knob(state.settings, "BANNER")))
     for out in result.lines:
         print(out)
     if result.error:
@@ -1508,25 +1508,25 @@ def _apply_settings_result(result: setcmd.CommandResult, state: dict, cfg: Confi
     return None
 
 
-def _show_settings(state: dict, cfg: Config, key: str | None) -> str | None:
+def _show_settings(state: ReplState, cfg: Config, key: str | None) -> str | None:
     """Render the values the NEXT turn uses, annotating knobs whose live source
     bypasses the store."""
     overlay = _live_settings_overlay_for_state(cfg, state)
-    result = setcmd.show_lines_effective(state["settings"], overlay, key, columns=display_mod.block_width())
+    result = setcmd.show_lines_effective(state.settings, overlay, key, columns=display_mod.block_width())
     for out in result.lines:
         print(out)
     return result.error
 
 
-def _cmd_set(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_set(arg: str, state: ReplState, cfg: Config) -> str | None:
     parts = arg.split(maxsplit=1)
     if len(parts) < 2 and not (parts and parts[0].startswith("-") and len(parts[0]) > 1):
         return _show_settings(state, cfg, parts[0] if parts else None)
     # `set -key` goes back to the value the session started with.
     baseline = cfg.settings if isinstance(getattr(cfg, "settings", None), dict) else None
-    columns = None if state.get("rc_replay") else display_mod.block_width()
-    result = setcmd.set_command(state["settings"], arg, baseline, columns=columns)
-    if state.get("rc_replay"):
+    columns = None if state.rc_replay else display_mod.block_width()
+    result = setcmd.set_command(state.settings, arg, baseline, columns=columns)
+    if state.rc_replay:
         return _replayed(result)
     if result.error is None:
         unset = parts[0].startswith("-")
@@ -1534,7 +1534,7 @@ def _cmd_set(arg: str, state: dict, cfg: Config) -> str | None:
     return _apply_settings_result(result, state, cfg)
 
 
-def _note_live_set(state: dict, name: str, *, unset: bool) -> None:
+def _note_live_set(state: ReplState, name: str, *, unset: bool) -> None:
     """Record one `set` (a typed `/set`, a script or `on` handler line) in the
     `/set` layer of the login-default settings, as it runs: a new dict per
     change. `set -KEY` takes the key out of the layer; any value, even one
@@ -1542,16 +1542,16 @@ def _note_live_set(state: dict, name: str, *, unset: bool) -> None:
     spec = settings.spec_for(name)
     if spec is None or spec.key not in login_defaults.KEYS:
         return
-    live = dict(state.get("live_set") or {})
-    value = None if unset else settings.get_dotted(state["settings"], spec.path)
+    live = dict(state.live_set or {})
+    value = None if unset else settings.get_dotted(state.settings, spec.path)
     if value is None:
         live.pop(spec.key, None)
     else:
         live[spec.key] = value
-    state["live_set"] = live
+    state.live_set = live
     # A set or unset of the key ends a resumed session's value for it.
-    if spec.key in (state.get("live_resume") or {}):
-        state["live_resume"] = {k: v for k, v in state["live_resume"].items() if k != spec.key}
+    if spec.key in (state.live_resume or {}):
+        state.live_resume = {k: v for k, v in state.live_resume.items() if k != spec.key}
 
 
 def _replayed(result: setcmd.CommandResult) -> str | None:
@@ -1563,28 +1563,30 @@ def _replayed(result: setcmd.CommandResult) -> str | None:
     return result.error
 
 
-def _cmd_fset(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_fset(arg: str, state: ReplState, cfg: Config) -> str | None:
     baseline = cfg.settings if isinstance(getattr(cfg, "settings", None), dict) else None
-    result = setcmd.fset_command(state["settings"], arg, baseline)
-    return _replayed(result) if state.get("rc_replay") else _apply_settings_result(result, state, cfg)
+    result = setcmd.fset_command(state.settings, arg, baseline)
+    return _replayed(result) if state.rc_replay else _apply_settings_result(result, state, cfg)
 
 
-def _cmd_show(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_show(arg: str, state: ReplState, cfg: Config) -> str | None:
     return _show_settings(state, cfg, arg.split()[0] if arg else None)
 
 
-def _cmd_on(arg: str, state: dict, cfg: Config) -> str | None:
-    result = setcmd.on_command(state.setdefault("events", events.EventHooks()), arg)
+def _cmd_on(arg: str, state: ReplState, cfg: Config) -> str | None:
+    if state.events is None:
+        state.events = events.EventHooks()
+    result = setcmd.on_command(state.events, arg)
     for out in result.lines:
         print(out)
     return result.error
 
 
-def _cmd_alias(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_alias(arg: str, state: ReplState, cfg: Config) -> str | None:
     """`alias` lists, `alias name` shows, `alias name command` defines,
     `alias -name` removes. `$*` in the body is the alias's arguments; a body
     without `$*` gets them appended."""
-    aliases = state.setdefault("aliases", {})
+    aliases = state.aliases
     parts = arg.split(maxsplit=1)
     if not parts:
         for name, body in aliases.items():
@@ -1609,10 +1611,10 @@ def _cmd_alias(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
-def _cmd_load(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_load(arg: str, state: ReplState, cfg: Config) -> str | None:
     """Run each line of a file through the command table, in order. The first
     error stops the file and names the line."""
-    stack = state.setdefault("load_stack", [])
+    stack = state.load_stack
     base = stack[-1].parent if stack else Path(getattr(cfg, "project_dir", None) or Path.cwd())
     path, error = setcmd.load_path(arg, base)
     if error:
@@ -1639,7 +1641,7 @@ def _cmd_load(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
-def _cmd_save(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_save(arg: str, state: ReplState, cfg: Config) -> str | None:
     """Write what the operator changed this session into the global jsrc,
     editing it in place: the settings `/set` changed, the model `/model`
     picked, the /fset entries changed, and new `on` and `alias` lines.
@@ -1647,13 +1649,13 @@ def _cmd_save(arg: str, state: dict, cfg: Config) -> str | None:
     settings into the saved login as the active model's defaults."""
     if arg.strip().lower() == "server":
         return _save_server(cfg, state)
-    saved = state.get("saved") or {
+    saved = state.saved or {
         "settings": cfg.settings if isinstance(cfg.settings, dict) else {},
         "fset": {}, "lines": [], "model": (cfg.provider_id, cfg.model),
     }
-    live = copy.deepcopy(state.get("settings") or {})
+    live = copy.deepcopy(state.settings or {})
     keys = settings.changed_keys(saved["settings"], live)
-    provider_id, model = state.get("provider_id"), state.get("model")
+    provider_id, model = state.provider_id, state.model
     if (provider_id, model) != saved["model"] and "MODEL" not in keys and isinstance(model, str) and model:
         settings.set_dotted(live, ("MODEL",), providers.qualified_model_id(provider_id, model))
         keys.append("MODEL")
@@ -1673,7 +1675,7 @@ def _cmd_save(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
-def _save_server(cfg: Config, state: dict) -> str | None:
+def _save_server(cfg: Config, state: ReplState) -> str | None:
     """Write the session's server and model layer values for the active
     model into the login the session routes to."""
     turn = _cfg_for_live_state(cfg, state)
@@ -1710,7 +1712,7 @@ def _live_stamp(cfg: Config, state: ReplState) -> dict:
     return M.stamp_for(turn.model, turn.provider_id, turn.reasoning_effort)
 
 
-def _cmd_model(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_model(arg: str, state: ReplState, cfg: Config) -> str | None:
     previous = _live_stamp(cfg, state)
     if arg:
         _set_model_via_route(state, cfg, arg)
@@ -1723,7 +1725,7 @@ def _cmd_model(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
-def _cmd_name(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_name(arg: str, state: ReplState, cfg: Config) -> str | None:
     if cfg.session_file == Path(os.devnull):
         msgs.say(msgs.SESSION_NOT_SAVED_TITLE)
         return None
@@ -1777,7 +1779,7 @@ def _enter_session_dir(target: _SessionTarget) -> None:
     runtime.T.STOCK_CONTEXT.cwd = Path.cwd()
 
 
-def _cmd_session(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_session(arg: str, state: ReplState, cfg: Config) -> str | None:
     """Open the session picker. A chosen session other than this one ends the
     REPL, and js starts again in that session's directory, agent and model."""
     try:
@@ -1791,8 +1793,8 @@ def _cmd_session(arg: str, state: dict, cfg: Config) -> str | None:
         msgs.say(msgs.SESSIONS_ALREADY_HERE)
         return None
     target = _session_target(choice)
-    state["switch_session"] = target
-    state["running"] = False
+    state.switch_session = target
+    state.running = False
     msgs.say(msgs.SESSIONS_SWITCHING, name=session_store.display_name(target.path), dir=target.cwd or Path.cwd())
     return None
 
@@ -1821,8 +1823,8 @@ def _exec_session(target: _SessionTarget) -> None:
     os.execv(sys.executable, argv)
 
 
-def _cmd_reset(arg: str, state: dict, cfg: Config) -> str | None:
-    state["messages"].clear()
+def _cmd_reset(arg: str, state: ReplState, cfg: Config) -> str | None:
+    state.messages.clear()
     task_jobs.forget(runtime.T.STOCK_CONTEXT.task_owner)
     compaction.history_rewritten(runtime.T.STOCK_CONTEXT)
     M.append_mark(cfg.session_file, "session_reset")
@@ -1839,7 +1841,7 @@ def _cost_text(tally: usage_mod.Tally) -> str:
     return dollars
 
 
-def _cmd_cost(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_cost(arg: str, state: ReplState, cfg: Config) -> str | None:
     live = usage_mod.totals(cfg.session_file)
     if live.calls == 0:
         msgs.say(msgs.COST_NONE)
@@ -1866,7 +1868,7 @@ def _copy_command() -> list[str] | None:
     return None
 
 
-def _cmd_copy(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_copy(arg: str, state: ReplState, cfg: Config) -> str | None:
     """The answer ``arg`` back (1, the last, by default) onto the clipboard,
     as the model wrote it: no wrapping, no marks, no padding."""
     arg = arg.strip() or "1"
@@ -1874,7 +1876,7 @@ def _cmd_copy(arg: str, state: dict, cfg: Config) -> str | None:
         msgs.say(msgs.COPY_USAGE)
         return None
     n = int(arg)
-    answers = [text for m in state["messages"] if m.get("role") == "assistant"
+    answers = [text for m in state.messages if m.get("role") == "assistant"
                if (text := display_mod._content_text(m.get("content"))).strip()]
     if len(answers) < n:
         msgs.say(msgs.COPY_NOTHING, n=n)
@@ -1895,10 +1897,10 @@ def _cmd_copy(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
-def _cmd_wipe(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_wipe(arg: str, state: ReplState, cfg: Config) -> str | None:
     bak = M.wipe(cfg.session_file)
     usage_mod.forget(cfg.session_file)
-    state["messages"] = M.load_replay_messages(cfg.session_file)
+    state.messages = M.load_replay_messages(cfg.session_file)
     task_jobs.forget(runtime.T.STOCK_CONTEXT.task_owner)
     compaction.history_rewritten(runtime.T.STOCK_CONTEXT)
     if bak:
@@ -1908,15 +1910,15 @@ def _cmd_wipe(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
-def _cmd_persona(arg: str, state: dict, cfg: Config) -> str | None:
-    text = state["system"]
+def _cmd_persona(arg: str, state: ReplState, cfg: Config) -> str | None:
+    text = state.system
     print(text[:2048])
     if len(text) > 2048:
         msgs.say(msgs.PERSONA_TRUNCATED, size=len(text))
     return None
 
 
-def _cmd_jobs(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_jobs(arg: str, state: ReplState, cfg: Config) -> str | None:
     sup = supervisor.get_current()
     if sup is None:
         msgs.say(msgs.REPL_ONLY, command="/jobs")
@@ -1929,7 +1931,7 @@ def _cmd_jobs(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
-def _cmd_cancel(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_cancel(arg: str, state: ReplState, cfg: Config) -> str | None:
     sup = supervisor.get_current()
     if sup is None:
         msgs.say(msgs.REPL_ONLY, command="/cancel")
@@ -1951,10 +1953,10 @@ def _cmd_cancel(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
-def _cmd_window(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_window(arg: str, state: ReplState, cfg: Config) -> str | None:
     """`/window` lists the windows, `/window N` shows window N, `/window close
     [N]` closes N or the window on screen."""
-    windows = state.get("windows")
+    windows = state.windows
     if windows is None:
         msgs.say(msgs.REPL_ONLY, command="/window")
         return None
@@ -1998,14 +2000,14 @@ def _on_loop(call: Callable[[], object]) -> object:
     return asyncio.run_coroutine_threadsafe(run(), sup.loop).result()
 
 
-def _cmd_compact_auto(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_compact_auto(arg: str, state: ReplState, cfg: Config) -> str | None:
     value = arg.strip().lower()
     if value not in ("on", "off"):
         return msgs.USAGE.said(usage="/compact-auto on|off")
-    return _apply_settings_result(setcmd.apply_set(state["settings"], "COMPACTION_AUTO", value), state, cfg)
+    return _apply_settings_result(setcmd.apply_set(state.settings, "COMPACTION_AUTO", value), state, cfg)
 
 
-def _cmd_compact(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_compact(arg: str, state: ReplState, cfg: Config) -> str | None:
     model, focus, ok = _split_compact_model(arg)
     if not ok:
         return msgs.USAGE.said(usage="/compact [-m model] [focus]")
@@ -2017,7 +2019,7 @@ def _cmd_compact(arg: str, state: dict, cfg: Config) -> str | None:
         hooks = _compact_hooks(state, compact_cfg)
         hooks["emit"], skipped = _track_compact_skips(hooks["emit"])
         with stream_transport.net_role(msgs.COMPACTING_ROLE.words()):
-            result = compaction.compact_now_sync(compact_cfg, state["system"], state["messages"], model=model,
+            result = compaction.compact_now_sync(compact_cfg, state.system, state.messages, model=model,
                                                  focus=focus, forced=forced, **hooks)
     except snippets.SnippetError:
         raise
@@ -2028,12 +2030,12 @@ def _cmd_compact(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
-def _cmd_refresh_model_catalog(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_refresh_model_catalog(arg: str, state: ReplState, cfg: Config) -> str | None:
     _force_refresh_model_catalog()
     return None
 
 
-def _cmd_quit(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_quit(arg: str, state: ReplState, cfg: Config) -> str | None:
     if arg:
         # Recorded as a user message so the next turn actually sees it. It is
         # appended to the previous user message rather than added as a second
@@ -2041,16 +2043,16 @@ def _cmd_quit(arg: str, state: dict, cfg: Config) -> str | None:
         # turns, and chat templates that tolerate it silently degrade.
         reminder = f'<js-reminder>User closed the client with the message: {arg}</js-reminder>'
         _append_closing_note(cfg, state, reminder)
-    state["running"] = False
+    state.running = False
     return None
 
 
-def _cmd_tools(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_tools(arg: str, state: ReplState, cfg: Config) -> str | None:
     _print_tool_chain(state, cfg)
     return None
 
 
-def _cmd_skill(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_skill(arg: str, state: ReplState, cfg: Config) -> str | None:
     """Bare `/skill` lists the skills. `/skill <name> [request]` typed at the
     input line never reaches the table: it is a turn (see _handle_command)."""
     if arg:
@@ -2059,7 +2061,7 @@ def _cmd_skill(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
-def _cmd_skills(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_skills(arg: str, state: ReplState, cfg: Config) -> str | None:
     """Open the skill picker. Enter there sets SKILLS_DISABLED to the skills
     left switched off."""
     current = _disabled_skills(state)
@@ -2099,17 +2101,17 @@ def _help_fset(name: str) -> str | None:
     return None
 
 
-def _cmd_help(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_help(arg: str, state: ReplState, cfg: Config) -> str | None:
     topic, _, rest = arg.strip().partition(" ")
     if topic.lower() == "set":
         return _help_set(rest.strip())
     if topic.lower() == "fset":
         return _help_fset(rest.strip())
     rows = [(f"/{c.usage}", c.doc.said()) for c in dict.fromkeys(_commands(state).values())]
-    rows += [(f"/{name}", msgs.HELP_ALIAS.said(body=body)) for name, body in (state.get("aliases") or {}).items()]
+    rows += [(f"/{name}", msgs.HELP_ALIAS.said(body=body)) for name, body in (state.aliases or {}).items()]
     rows += [(f"/{name}", msgs.HELP_PROMPT_COMMAND.said(path=command.path, description=command.description))
              for name, command in prompt_commands.discover(Path.cwd()).items()
-             if name not in _commands(state) and name not in (state.get("aliases") or {})]
+             if name not in _commands(state) and name not in (state.aliases or {})]
     rows += [("@path/to/file", msgs.HELP_ATTACH.said()), ("exit", msgs.HELP_EXIT.said())]
     columns = max(7, display_mod.terminal_width() - 1)
     width = min(max(display_mod.cells(usage) for usage, _doc in rows), (columns - 3) // 2)
@@ -2124,7 +2126,7 @@ def _cmd_help(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
-def _cmd_exec(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_exec(arg: str, state: ReplState, cfg: Config) -> str | None:
     """Run ``arg`` in the shell and queue its stdout for the next user message.
     Run by an `on` handler, the command reads the event as JSON on stdin with
     JS_EVENT naming it. Exit status 2 or a timeout under tool_call refuses the call."""
@@ -2132,7 +2134,7 @@ def _cmd_exec(arg: str, state: dict, cfg: Config) -> str | None:
     if not command:
         return msgs.USAGE.said(usage="/exec <command>")
     call = events.current_call()
-    live = state.get("settings")
+    live = state.settings
     timeout = int(settings.knob(live, "EXEC_TIMEOUT"))
     env = dict(os.environ)
     stdin_text = ""
@@ -2188,14 +2190,14 @@ def _access(bind: _jail.Bind) -> str:
     return "read-write" if bind.rw else "read-only"
 
 
-def _queue_note(state: dict, note: str) -> None:
-    state.setdefault("pending_notes", []).append(note)
+def _queue_note(state: ReplState, note: str) -> None:
+    state.pending_notes.append(note)
 
 
-def _take_pending_notes(state: dict) -> list[str]:
+def _take_pending_notes(state: ReplState) -> list[str]:
     """The reminders queued since the last user message, and one for each
     background task that finished unread since then, removed from the queue."""
-    queued = list(state.pop("pending_notes", None) or ())
+    queued, state.pending_notes = state.pending_notes, []
     return [*queued, *task_jobs.completion_notes(runtime.T.STOCK_CONTEXT.task_owner)]
 
 
@@ -2205,10 +2207,10 @@ def _with_notes(message: dict, notes: list[str]) -> dict:
     return message
 
 
-def _requeue_notes(state: dict, notes) -> None:
+def _requeue_notes(state: ReplState, notes) -> None:
     """Put ``notes`` back in front of the queue: the turn that carried them was discarded."""
     if notes:
-        state["pending_notes"] = [*notes, *(state.get("pending_notes") or ())]
+        state.pending_notes = [*notes, *(state.pending_notes or ())]
 
 
 def _set_working_dir(path: Path) -> None:
@@ -2250,7 +2252,7 @@ def _restore_workspace(cfg: Config) -> None:
         _set_working_dir(cwd)
 
 
-def _cmd_cd(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_cd(arg: str, state: ReplState, cfg: Config) -> str | None:
     context = runtime.T.STOCK_CONTEXT
     raw = arg.strip()
     if not raw:
@@ -2261,7 +2263,7 @@ def _cmd_cd(arg: str, state: dict, cfg: Config) -> str | None:
     if not target.is_dir():
         return msgs.CD_NOT_A_DIR.said(path=target)
     jail = _jail.active()
-    if jail is not None and not jail.bound(target, settings.knob(state.get("settings"), "JAIL_BIND")):
+    if jail is not None and not jail.bound(target, settings.knob(state.settings, "JAIL_BIND")):
         return msgs.CD_OUTSIDE_JAIL.said(path=target, root=jail.root)
     _set_working_dir(target)
     _queue_note(state, snippets.render("working-directory", PATH=target))
@@ -2270,7 +2272,7 @@ def _cmd_cd(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
-def _cmd_add(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_add(arg: str, state: ReplState, cfg: Config) -> str | None:
     jail = _jail.active()
     if jail is None:
         return msgs.NO_JAIL.said(verb="add")
@@ -2290,7 +2292,7 @@ def _cmd_add(arg: str, state: dict, cfg: Config) -> str | None:
     return None
 
 
-def _cmd_drop(arg: str, state: dict, cfg: Config) -> str | None:
+def _cmd_drop(arg: str, state: ReplState, cfg: Config) -> str | None:
     jail = _jail.active()
     if jail is None:
         return msgs.NO_JAIL.said(verb="drop")
@@ -2302,7 +2304,7 @@ def _cmd_drop(arg: str, state: dict, cfg: Config) -> str | None:
     if dropped is None:
         return msgs.DROP_UNKNOWN.said(path=path)
     jail.drop(path)
-    if not jail.bound(runtime.T.STOCK_CONTEXT.cwd, settings.knob(state.get("settings"), "JAIL_BIND")):
+    if not jail.bound(runtime.T.STOCK_CONTEXT.cwd, settings.knob(state.settings, "JAIL_BIND")):
         jail.add(dropped)
         return msgs.DROP_CWD.said(path=path)
     _queue_note(state, snippets.render("jail-path-removed", PATH=path))
@@ -2340,7 +2342,7 @@ COMMANDS: dict[str, Command] = {
     "skill": Command(_cmd_skill, "skill [name [request]]",
                      msgs.CMD_SKILL),
     "skills": Command(_cmd_skills, "skills", msgs.CMD_SKILLS),
-    "turns": Command(lambda arg, state, cfg: msgs.say(msgs.TURNS_COUNT, messages=msgs.plural(len(state["messages"]), "message")),
+    "turns": Command(lambda arg, state, cfg: msgs.say(msgs.TURNS_COUNT, messages=msgs.plural(len(state.messages), "message")),
                      "turns", msgs.CMD_TURNS),
     "cost": Command(_cmd_cost, "cost", msgs.CMD_COST),
     "copy": Command(_cmd_copy, "copy [N]", msgs.CMD_COPY),
@@ -2366,7 +2368,7 @@ COMMANDS: dict[str, Command] = {
 }
 
 
-def _run_command(line: str, state: dict, cfg: Config, depth: int = 0) -> tuple[bool, str | None]:
+def _run_command(line: str, state: ReplState, cfg: Config, depth: int = 0) -> tuple[bool, str | None]:
     """Dispatch one command line (leading `/` optional) through COMMANDS and
     aliases. Returns ``(handled, error)``; ``handled`` is False for a verb that
     is neither."""
@@ -2376,13 +2378,13 @@ def _run_command(line: str, state: dict, cfg: Config, depth: int = 0) -> tuple[b
     verb, arg = parsed
     command = _commands(state).get(verb)
     if command is None:
-        body = (state.get("aliases") or {}).get(verb)
+        body = (state.aliases or {}).get(verb)
         if body is None:
             return False, None
         if depth >= _MAX_ALIAS_DEPTH:
             return True, msgs.ALIAS_TOO_DEEP.said(name=verb)
         # The body's $NAMEs expand once; the typed arguments never do.
-        body = setcmd.expand_line(body, state.get("settings"))
+        body = setcmd.expand_line(body, state.settings)
         expanded = body.replace("$*", arg) if "$*" in body else f"{body} {arg}".strip()
         handled, error = _run_command(expanded, state, cfg, depth + 1)
         return True, error if handled else msgs.ALIAS_UNKNOWN_COMMAND.said(name=verb, verb=expanded.split()[0])
@@ -2391,14 +2393,14 @@ def _run_command(line: str, state: dict, cfg: Config, depth: int = 0) -> tuple[b
     return True, command.run(arg, state, cfg)
 
 
-def _run_script_line(line: str, state: dict, cfg: Config) -> str | None:
+def _run_script_line(line: str, state: ReplState, cfg: Config) -> str | None:
     """One line from a file of commands, its $NAMEs expanded once: an
     unknown verb is an error. In the startup run of the jsrc files a
     setting's short name is that setting, as config load read it: `model X`
     is `set MODEL X`, not the /model command."""
-    line = setcmd.expand_line(line, state.get("settings"))
+    line = setcmd.expand_line(line, state.settings)
     parsed = setcmd.split_command(line)
-    if state.get("rc_replay") and parsed is not None and parsed[0] in settings.SPEC_BY_ALIAS:
+    if state.rc_replay and parsed is not None and parsed[0] in settings.SPEC_BY_ALIAS:
         line = f"set {parsed[0]} {parsed[1]}"
     handled, error = _run_command(line, state, cfg)
     if not handled:
@@ -2438,19 +2440,20 @@ class ReplAssembly:
     flush_lines: tuple[str, ...] = ("/flush", "/cancel queued")
     interrupt: Callable | None = None
     banner: Callable | None = None
-    hint_renderer: Callable[[msgs.Message, dict], msgs.Message] | None = None
+    hint_renderer: Callable[[msgs.Message, ReplState], msgs.Message] | None = None
     input_bindings: Callable | None = None
 
 
 DEFAULT_REPL_ASSEMBLY = ReplAssembly()
 
 
-def _repl_assembly(state: dict | None) -> ReplAssembly:
-    assembly = (state or {}).get("repl_assembly")
-    return DEFAULT_REPL_ASSEMBLY if assembly is None else assembly
+def _repl_assembly(state: ReplState | None) -> ReplAssembly:
+    if state is None or state.repl_assembly is None:
+        return DEFAULT_REPL_ASSEMBLY
+    return state.repl_assembly
 
 
-def _commands(state: dict | None) -> Mapping[str, Command]:
+def _commands(state: ReplState | None) -> Mapping[str, Command]:
     supplied = _repl_assembly(state).commands
     return COMMANDS if supplied is None else supplied
 
@@ -2462,16 +2465,16 @@ def _commands(state: dict | None) -> Mapping[str, Command]:
 _LIVE_STATE_LOCK = threading.Lock()
 
 
-def _live_cfg_snapshot(cfg: Config, state: dict) -> Config:
+def _live_cfg_snapshot(cfg: Config, state: ReplState) -> Config:
     """The turn cfg from live state, never from a half-applied command."""
     with _LIVE_STATE_LOCK:
         return _cfg_for_live_state(cfg, state)
 
 
-def _handle_command(line: str, state: dict, cfg: Config) -> bool:
+def _handle_command(line: str, state: ReplState, cfg: Config) -> bool:
     """Return True if `line` was a command (already handled), False otherwise."""
     if line in _repl_assembly(state).quit_words:
-        state["running"] = False
+        state.running = False
         return True
     if not line.startswith("/") or _is_skill_invocation(line, state):
         return False
@@ -2499,19 +2502,19 @@ def _is_unknown_command(line: str) -> bool:
             and prompt_commands.expand(line, prompt_commands.discover(Path.cwd())) is None)
 
 
-def _command_completions(state: dict) -> dict[str, str | None]:
+def _command_completions(state: ReplState) -> dict[str, str | None]:
     """Verb -> argument completion source, for every command and alias."""
     table: dict[str, str | None] = {name: None for name in prompt_commands.discover(Path.cwd())}
     table.update({verb: command.complete for verb, command in _commands(state).items()})
-    table.update({name: None for name in state.get("aliases") or {}})
+    table.update({name: None for name in state.aliases or {}})
     return table
 
 
-def _event_dispatcher(state: dict, cfg: Config):
+def _event_dispatcher(state: ReplState, cfg: Config):
     """Run `on` handler text through the command table."""
 
     def dispatch(hook: events.EventHook, emission: events.EventEmission) -> events.EventHandlerResult:
-        handled, error = _run_command(setcmd.expand_line(hook.handler, state.get("settings")), state, cfg)
+        handled, error = _run_command(setcmd.expand_line(hook.handler, state.settings), state, cfg)
         if not handled:
             parsed = setcmd.split_command(hook.handler)
             error = msgs.EVENT_HANDLER_COMMAND_UNSUPPORTED.words(value=parsed[0] if parsed else '<blank>')
@@ -2520,7 +2523,7 @@ def _event_dispatcher(state: dict, cfg: Config):
     return dispatch
 
 
-def _run_rc_commands(state: dict, cfg: Config, paths: list[Path]) -> list[str]:
+def _run_rc_commands(state: ReplState, cfg: Config, paths: list[Path]) -> list[str]:
     """Run each jsrc file a line at a time, in order, through the same line
     runner `/load` uses (`_run_script_line`), its settings and its commands
     together: a `load` in it is `/load`, so a loaded file stops at its first
@@ -2534,13 +2537,13 @@ def _run_rc_commands(state: dict, cfg: Config, paths: list[Path]) -> list[str]:
     from . import fset as _fset
 
     errors: list[str] = []
-    stack = state.setdefault("load_stack", [])
-    live = state.get("settings")
+    stack = state.load_stack
+    live = state.settings
     found = settings.collect_again(paths)
     layer = settings.seed_defaults()
     _fset.reset()
-    state["settings"] = layer
-    state["rc_replay"] = True
+    state.settings = layer
+    state.rc_replay = True
     try:
         for path in paths:
             if not path.exists():
@@ -2559,8 +2562,8 @@ def _run_rc_commands(state: dict, cfg: Config, paths: list[Path]) -> list[str]:
             finally:
                 stack.pop()
     finally:
-        state["settings"] = live
-        state.pop("rc_replay", None)
+        state.settings = live
+        state.rc_replay = False
     if isinstance(live, dict):
         ran = settings.over_jsrc_layer(paths, layer)
         changed: list[str] = []
