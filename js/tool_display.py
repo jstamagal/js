@@ -21,13 +21,8 @@ from . import fset, messages as msgs, settings as _settings
 from .control_sequences import SGR, clean
 from .display import Theme, render_console, setting, theme
 from .text_layout import TAB, block_width, cells, cut_points
-from .toolkit.presentation import (
-    PATH_ARGS,
-    ScreenResult,
-    call_kind,
-    declared,
-    tool_output,
-)
+from .toolkit.presentation import PATH_ARGS
+from .toolkit.tool_screen import ScreenResult, call_kind, declared, tool_output
 
 # Transcript marker for a tool exchange: typeable ASCII, one per exchange, so a
 # grep of a saved transcript finds every exchange the screen showed.

@@ -32,7 +32,7 @@ from .reasoning_display import ReasoningDisplay, StderrReasoning
 from .screen import Windows
 from .toolkit import shell
 from .toolkit.core import ToolContext
-from .toolkit.presentation import call_kind, declared, tool_output
+from .toolkit.tool_screen import call_kind, declared, tool_output
 
 if TYPE_CHECKING:
     from .runtime import Telemetry

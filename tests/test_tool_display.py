@@ -17,7 +17,7 @@ from js import (
     tool_display,
     tool_errors,
 )
-from js.toolkit import Tool, ToolContext, presentation
+from js.toolkit import Tool, ToolContext, tool_screen
 from js.toolkit.registry import ToolRegistry
 from js.transcript import TranscriptLogSink
 
@@ -223,8 +223,8 @@ def test_a_shell_command_is_quiet_only_when_all_of_it_looks_around():
     quiet = ("ls -la", "cd /tmp && git status | head -3", "cat a.txt; wc -l a.txt")
     loud = ("just test", "ls > listing.txt", "git status && git commit -m x", "ls\nrm -rf build")
 
-    assert [presentation.call_kind("shell", {"command": command}) for command in quiet] == ["quiet"] * len(quiet)
-    assert [presentation.call_kind("shell", {"command": command}) for command in loud] == ["command"] * len(loud)
+    assert [tool_screen.call_kind("shell", {"command": command}) for command in quiet] == ["quiet"] * len(quiet)
+    assert [tool_screen.call_kind("shell", {"command": command}) for command in loud] == ["command"] * len(loud)
 
 
 def test_the_output_of_a_command_still_running_can_be_read():
