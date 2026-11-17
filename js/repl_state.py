@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from .toolkit.registry import ToolRegistry
 
 
-@dataclass
+@dataclass(slots=True)
 class ReplState:
     """What one REPL session holds between turns and commands."""
 
