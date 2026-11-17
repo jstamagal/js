@@ -16,7 +16,7 @@ import ai
 import ai.types.messages
 import ai.types.usage
 
-from js import cli, model_client, output, runtime
+from js import cli, output, owning_loop, runtime
 from js.config import Config
 from js.console import ConsoleSink
 from js.model_client import ModelStreamResult, ModelToolCall
@@ -182,7 +182,7 @@ def _turn_arguments(tmp_path: Path, turn: Turn, tool_registry: ToolRegistry, *, 
 
 def one_turn(*args, **kwargs) -> None:
     """One `runtime.run_turn_async` turn, run to its end on a loop of its own."""
-    model_client.run_owning_loop(runtime.run_turn_async(*args, **kwargs))
+    owning_loop.run_owning_loop(runtime.run_turn_async(*args, **kwargs))
 
 
 def run(tmp_path: Path, monkeypatch, tool_registry: ToolRegistry, batches: list[list[Call]], *,

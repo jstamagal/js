@@ -22,8 +22,8 @@ from js import (
     conversation,
     listings,
     messages as msgs,
-    model_client,
     model_metadata,
+    owning_loop,
     paths as _paths,
     prompt_run,
     run_assembly,
@@ -1051,7 +1051,7 @@ def _auto_compact_cfg(tmp_path, *, compact: dict | None = None) -> Config:
 
 def _auto_compact(cfg: Config, state: ReplState) -> None:
     """The check a run makes between turns: compact when the context is full enough."""
-    model_client.run_owning_loop(conversation.maybe_auto_compact_async(cfg, state))
+    owning_loop.run_owning_loop(conversation.maybe_auto_compact_async(cfg, state))
 
 
 def _auto_state(cfg: Config) -> ReplState:

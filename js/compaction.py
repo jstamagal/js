@@ -36,6 +36,7 @@ from . import (
     model_client,
     model_metadata,
     output,
+    owning_loop,
     provider_errors,
     retry,
     routing,
@@ -1132,7 +1133,7 @@ def compact_now_sync(
         preserve_from=preserve_from, trigger=trigger, flight_data=flight_data,
         context=context, emit=emit, log_dir=log_dir,
     )
-    return model_client.run_owning_loop(coro)
+    return owning_loop.run_owning_loop(coro)
 
 
 # --------------------------------------------------------------------------

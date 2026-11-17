@@ -11,7 +11,7 @@ import re
 import pytest
 from repl_driver import _telemetry, repl_state, stub_screen, turn_stub
 
-from js import cli, repl, runtime, screen
+from js import cli, owning_loop, repl, runtime, screen
 from js.config import from_env
 from js.memory import load_messages, load_replay_messages
 
@@ -178,7 +178,7 @@ def test_quitting_mid_turn_interrupts_it_and_writes_nothing_after_the_screen_clo
     screens = _install_screen(monkeypatch, script, terminal)
     cfg = from_env()
     state, prompt_spec = repl_state(cfg)
-    assert runtime.model_client.run_owning_loop(
+    assert owning_loop.run_owning_loop(
         repl._repl_main(cfg, state, _telemetry(cfg, state), None, None, prompt_spec)
     ) == 0
 

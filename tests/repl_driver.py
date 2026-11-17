@@ -15,7 +15,7 @@ import inspect
 import sys
 from dataclasses import dataclass
 
-from js import cli, model_client, persona as P, repl, runtime, screen
+from js import cli, owning_loop, persona as P, repl, runtime, screen
 from js.config import Config
 
 
@@ -146,7 +146,7 @@ def run_async(monkeypatch, cfg, lines, *, wait: bool = False, **state_kwargs) ->
     """Run the REPL over `lines` (see `stub_screen`) and return its state."""
     stub_screen(monkeypatch, lines, wait=wait)
     state, prompt_spec = repl_state(cfg, **state_kwargs)
-    assert model_client.run_owning_loop(
+    assert owning_loop.run_owning_loop(
         repl._repl_main(cfg, state, _telemetry(cfg, state), None, None, prompt_spec)
     ) == 0
     return state

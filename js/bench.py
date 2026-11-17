@@ -17,8 +17,8 @@ from . import (
     debug_trace,
     headless,
     messages as msgs,
-    model_client,
     output,
+    owning_loop,
     persona as P,
     run_assembly,
     runtime,
@@ -191,7 +191,7 @@ def run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
                         cfg, system, messages, telemetry, trace_override=True, **turn_kwargs,
                     )
 
-                model_client.run_owning_loop(run_benchmark())
+                owning_loop.run_owning_loop(run_benchmark())
         except KeyboardInterrupt:
             interrupted, ok, err = True, False, "interrupted"
         except snippets.SnippetError:

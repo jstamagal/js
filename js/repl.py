@@ -42,10 +42,10 @@ from . import (
     logins,
     memory as M,
     messages as msgs,
-    model_client,
     motd,
     network_display,
     output,
+    owning_loop,
     pastes,
     paths as _paths,
     persona as P,
@@ -1112,7 +1112,7 @@ def start_repl(args: argparse.Namespace, setup: Setup) -> int:
     get_app_session().output
     transcript_mod.enter_transcript_stdio(transcript_stack, telemetry)
     try:
-        code = model_client.run_owning_loop(
+        code = owning_loop.run_owning_loop(
             _repl_main(cfg, state, telemetry, history, completer, prompt_spec, banner)
         )
     finally:

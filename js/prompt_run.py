@@ -30,9 +30,9 @@ from . import (
     login_defaults,
     memory as M,
     messages as msgs,
-    model_client,
     network_display,
     output,
+    owning_loop,
     paths as _paths,
     persona as P,
     repl_commands,
@@ -455,7 +455,7 @@ def _turns(prepared: _PreparedRun, chat: Conversation, transcript, turn_kwargs: 
     trace_override = inputs.debug or bool(inputs.debug_file) or cfg.trace
     prompt_spec = prepared.settled.prompt_spec
     if prompt_spec.exchanges and not prepared.messages:
-        model_client.run_owning_loop(agent_messages.initialize(
+        owning_loop.run_owning_loop(agent_messages.initialize(
             cfg, prompt_spec, prepared.messages, replace(telemetry, transcript_log=transcript),
             system=prepared.settled.system, save=inputs.save, trace_override=trace_override,
             tool_context=inputs.tool_context, echo_user=echo_user, **turn_kwargs,
@@ -477,7 +477,7 @@ def _turns(prepared: _PreparedRun, chat: Conversation, transcript, turn_kwargs: 
     # In this context as well as the turn's, so the check after the
     # turn reads the same window.
     context_window.install_context_window_overrides(cfg)
-    model_client.run_owning_loop(chat.turn(
+    owning_loop.run_owning_loop(chat.turn(
         prepared.user_message, started=started, trace_override=trace_override, **turn_kwargs))
 
 
@@ -550,7 +550,7 @@ def _finish(prepared: _PreparedRun) -> int:
                         markdown=display_mod.markdown_enabled(getattr(cfg, "settings", None)),
                     )
         if inputs.save:
-            model_client.run_owning_loop(conversation.maybe_auto_compact_async(cfg, prepared.state))
+            owning_loop.run_owning_loop(conversation.maybe_auto_compact_async(cfg, prepared.state))
     return 0 if stats_ok else 1
 
 
