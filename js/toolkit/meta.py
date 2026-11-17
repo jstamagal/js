@@ -427,7 +427,7 @@ async def _run_one_task_async(
             explicit_model=True,
             prefix_overrides_provider=not getattr(cfg, "explicit_provider", False),
         )
-        cfg = routing.apply_route(cfg, route, vision=False)
+        cfg = routing.apply_route(cfg, route)
     try:
         # The child's tools and persona follow its own model, not the parent's.
         prompt_spec = P.for_model(prompt_spec, cfg)

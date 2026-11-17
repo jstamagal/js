@@ -846,5 +846,3 @@ def test_apply_route_puts_every_route_field_and_vision_on_the_config(monkeypatch
     assert (seeing.model, seeing.provider_id, seeing.provider_base_url, seeing.provider_api_key,
             seeing.provider_headers) == ("other-model", "testes", BASE_URL, "k", {"X-A": "1"})
     assert seeing.vision_enabled is True
-    kept = apply_route(replace(cfg, vision_enabled=False), route, vision=False)
-    assert kept.model == "other-model" and kept.vision_enabled is False

@@ -218,22 +218,20 @@ def resolve_model_route(
 _CFG_SETTINGS = object()
 
 
-def apply_route(cfg, route: ModelRoute, *, vision: bool = True, settings=_CFG_SETTINGS):
+def apply_route(cfg, route: ModelRoute, *, settings=_CFG_SETTINGS):
     """``cfg`` on ``route``: its model, provider id, base URL, API key and
     headers, and ``vision_enabled`` for the route's model under ``settings``
-    (``cfg.settings`` when not given). ``vision`` False leaves
-    ``vision_enabled`` as ``cfg`` has it."""
-    changes = {
-        "model": route.model,
-        "provider_id": route.provider_id,
-        "provider_base_url": route.base_url,
-        "provider_api_key": route.api_key,
-        "provider_headers": route.headers,
-    }
-    if vision:
-        from .config import vision_enabled_for_model
+    (``cfg.settings`` when not given)."""
+    from .config import vision_enabled_for_model
 
-        if settings is _CFG_SETTINGS:
-            settings = getattr(cfg, "settings", None)
-        changes["vision_enabled"] = vision_enabled_for_model(route.model, settings)
-    return replace(cfg, **changes)
+    if settings is _CFG_SETTINGS:
+        settings = getattr(cfg, "settings", None)
+    return replace(
+        cfg,
+        model=route.model,
+        provider_id=route.provider_id,
+        provider_base_url=route.base_url,
+        provider_api_key=route.api_key,
+        provider_headers=route.headers,
+        vision_enabled=vision_enabled_for_model(route.model, settings),
+    )
