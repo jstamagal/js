@@ -417,12 +417,6 @@ async def _run_one_task_async(
         chosen = prompt_spec.model
     else:
         chosen = parent_cfg.model
-    # FUTURE (stub): a non-config runtime flag — not yet built — will select the
-    # agent's secondary model here via prompt_spec.secondary_model. No flag wired
-    # yet, so this stays a no-op.
-    use_secondary = False
-    if use_secondary and getattr(prompt_spec, "secondary_model", ""):
-        chosen = prompt_spec.secondary_model
     if chosen and chosen != cfg.model:
         route = routing.resolve_model_route(
             chosen,
