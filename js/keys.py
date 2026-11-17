@@ -23,7 +23,7 @@ from pathlib import Path
 from prompt_toolkit.keys import KEY_ALIASES, Keys
 from prompt_toolkit.search import SearchDirection
 
-from . import messages as msgs, paths, setcmd, settings as _settings
+from . import jsrc_line, messages as msgs, paths, settings as _settings
 
 KeySequence = tuple[str, ...]
 Keymap = dict[str, tuple[KeySequence, ...]]
@@ -133,7 +133,7 @@ def apply_line(keymap: Keymap, line: str, *, actions: tuple[Action, ...] | None 
     """One keys-file line applied to ``keymap``: ``(keymap, error)``. A line
     with an error leaves the keymap as it was."""
     registry = ACTION_BY_NAME if actions is None else {item.name: item for item in actions}
-    parsed = setcmd.split_command(line)
+    parsed = jsrc_line.split_command(line)
     if parsed is None:
         return keymap, None
     verb, arg = parsed

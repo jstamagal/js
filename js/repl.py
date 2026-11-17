@@ -37,6 +37,7 @@ from . import (
     events,
     exline,
     fset,
+    jsrc_line,
     keys as keys_mod,
     login_defaults,
     logins,
@@ -196,7 +197,7 @@ def _event_dispatcher(state: ReplState, cfg: Config):
     def dispatch(hook: events.EventHook, emission: events.EventEmission) -> events.EventHandlerResult:
         handled, error = repl_commands.run_command(setcmd.expand_line(hook.handler, state.settings), state, cfg)
         if not handled:
-            parsed = setcmd.split_command(hook.handler)
+            parsed = jsrc_line.split_command(hook.handler)
             error = msgs.EVENT_HANDLER_COMMAND_UNSUPPORTED.words(value=parsed[0] if parsed else '<blank>')
         return events.EventHandlerResult(hook=hook, error=error)
 
@@ -642,7 +643,7 @@ def _is_turn_state_command(line: str, state: ReplState | None = None) -> bool:
     a turn appends to state.messages races the single-writer discipline the turn
     queue enforces (empty the list mid-turn -> IndexError, dropped output, spurious
     rollback marks) — refuse until the active turn ends."""
-    parsed = setcmd.split_command(line) if line.startswith("/") else None
+    parsed = jsrc_line.split_command(line) if line.startswith("/") else None
     table = repl_commands.commands(state)
     return (repl_state.repl_assembly(state).guard_turn_state and parsed is not None
             and parsed[0] in table and table[parsed[0]].turn_state)

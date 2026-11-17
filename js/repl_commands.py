@@ -14,6 +14,7 @@ from pathlib import Path
 
 from . import (
     fset as _fset,
+    jsrc_line,
     messages as msgs,
     prompt_commands,
     repl_agent_commands,
@@ -184,7 +185,7 @@ COMMANDS: dict[str, Command] = {verb: _ROWS[verb] for verb in (
 def standalone(line: str) -> Command | None:
     """The command ``line`` runs when it stands alone (`Command.stands_alone`);
     None for any other line."""
-    parsed = setcmd.split_command(line)
+    parsed = jsrc_line.split_command(line)
     command = COMMANDS.get(parsed[0]) if parsed is not None else None
     return command if command is not None and command.stands_alone else None
 
@@ -193,7 +194,7 @@ def run_command(line: str, state: ReplState, cfg: Config, depth: int = 0) -> tup
     """Dispatch one command line (leading `/` optional) through COMMANDS and
     aliases. Returns ``(handled, error)``; ``handled`` is False for a verb that
     is neither."""
-    parsed = setcmd.split_command(line)
+    parsed = jsrc_line.split_command(line)
     if parsed is None:
         return True, None
     verb, arg = parsed
@@ -220,12 +221,12 @@ def _run_script_line(line: str, state: ReplState, cfg: Config) -> str | None:
     setting's short name is that setting, as config load read it: `model X`
     is `set MODEL X`, not the /model command."""
     line = setcmd.expand_line(line, state.settings)
-    parsed = setcmd.split_command(line)
+    parsed = jsrc_line.split_command(line)
     if state.rc_replay and parsed is not None and parsed[0] in settings.SPEC_BY_ALIAS:
         line = f"set {parsed[0]} {parsed[1]}"
     handled, error = run_command(line, state, cfg)
     if not handled:
-        return msgs.UNKNOWN_COMMAND.said(verb=setcmd.split_command(line)[0])
+        return msgs.UNKNOWN_COMMAND.said(verb=jsrc_line.split_command(line)[0])
     return error
 
 

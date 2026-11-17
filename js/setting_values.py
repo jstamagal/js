@@ -11,8 +11,9 @@ import shlex
 from typing import Any
 
 from . import (
-    fset,  # lazy: fset reads settings
+    fset,
     jail,
+    jsrc_line,
     mcp_config,
     messages as msgs,
     reasoning as _reasoning,
@@ -132,8 +133,8 @@ _SAMPLING_RANGES: dict[str, tuple[float | None, float | None]] = {
 def _unquoted(spec: SettingSpec, text: str) -> str:
     """A value that is not JSON as a jsrc line gives it: a JSON string
     literal, the form `/save` writes one a line cannot hold as it is, is the
-    string it spells (`from_line_literal`); any other text as it is."""
-    return text if spec.type in ("json", "map") else from_line_literal(text)
+    string it spells (`jsrc_line.from_line_literal`); any other text as it is."""
+    return text if spec.type in ("json", "map") else jsrc_line.from_line_literal(text)
 
 
 def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
@@ -370,45 +371,13 @@ def config_value_text(value: Any) -> str:
     return str(value)
 
 
-# What a jsrc line cannot hold as it is: a break `str.splitlines` splits a
-# file at, or space at either end, which a command strips; nor an empty
-# value, which a command reads as none. A value that starts with a quote is
-# quoted too, so it never reads as a literal.
-_UNHELD = re.compile("[\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029]|^\\s|\\s$|^\"")
-
-
-def line_literal(text: str) -> str:
-    """``text`` as one jsrc line holds it: as it is, or, when a line cannot
-    hold it as it is, a JSON string literal, every break in it escaped."""
-    if text and not _UNHELD.search(text):
-        return text
-    quoted = json.dumps(text, ensure_ascii=False)
-    for char in "\x85\u2028\u2029":
-        quoted = quoted.replace(char, f"\\u{ord(char):04x}")
-    return quoted
-
-
-def from_line_literal(text: str) -> str:
-    """A string value as a jsrc line or a typed command gives it: a JSON
-    string literal is the string it spells (`line_literal`), anything else
-    is itself."""
-    if len(text) >= 2 and text.startswith('"') and text.endswith('"'):
-        try:
-            value = json.loads(text)
-        except ValueError:
-            return text
-        if isinstance(value, str):
-            return value
-    return text
-
-
 def jsrc_text(name: str, text: str) -> str:
     """``text`` as the value on a jsrc line for setting or /fset entry
-    ``name``, so the line loads back to ``text`` (`line_literal`): a `$` is
+    ``name``, so the line loads back to ``text`` (`jsrc_line.line_literal`): a `$` is
     written `$$`, since a jsrc line's `$NAME`s expand when it loads, except
     in a format or colour, which keeps its `$NAME`s for when it is drawn."""
 
-    text = line_literal(text)
+    text = jsrc_line.line_literal(text)
     return text if fset.read_when_drawn(name) else text.replace("$", "$$")
 
 

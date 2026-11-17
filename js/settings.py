@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import messages as msgs, paths
+from . import jsrc_line, messages as msgs, paths
 
 # The built-in default layer: one `set` line per registered setting.
 PACKAGE_JSRC = paths.defaults_dir() / "jsrc"
@@ -506,9 +506,9 @@ def package_settings() -> dict:
         if result.error or not result.handled:
             problem = result.error or msgs.DEFAULTS_NOT_A_SET_LINE.said()
             raise _defaults_error(msgs.DEFAULTS_BAD_LINE, location=f"{path}:{lineno}", error=problem)
-        parsed = setcmd.split_command(raw)
+        parsed = jsrc_line.split_command(raw)
         if parsed is not None:
-            name = setcmd.first_word(parsed[1])[0] if parsed[0] in ("set", "fset") else parsed[0]
+            name = jsrc_line.first_word(parsed[1])[0] if parsed[0] in ("set", "fset") else parsed[0]
             spec = spec_for(name.removeprefix("-"))
             if spec is not None:
                 listed.add(spec.key)

@@ -22,12 +22,13 @@ from typing import Any
 from . import (
     endpoint_uri,
     fset,
+    jsrc_line,
     messages as msgs,
     output,
     paths as _paths,
     setcmd,
 )
-from .setting_values import coerce_extra_value, coerce_value, from_line_literal
+from .setting_values import coerce_extra_value, coerce_value
 from .settings import (
     REGISTRY,
     SettingSpec,
@@ -169,13 +170,11 @@ def apply_jsrc(path: Path, settings: dict, stack: list[Path], warnings: list[str
         for lineno, raw in enumerate(lines, 1):
             # $NAMEs expand once, before the line is read as any command.
             raw = setcmd.expand_line(raw, settings)
-            parsed = setcmd.split_command(raw)
+            parsed = jsrc_line.split_command(raw)
             if parsed is not None and parsed[0] == "fset":
-                name, value = setcmd.first_word(parsed[1])
+                name, value = jsrc_line.first_word(parsed[1])
                 if name.upper() == "THEME" and value:
-                    from . import fset
-
-                    theme = from_line_literal(value)
+                    theme = jsrc_line.from_line_literal(value)
                     if theme and fset.theme_path(theme) is None:
                         raise FileNotFoundError(f"{path}:{lineno}: {fset.theme_error(theme)}")
             error = None

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import fnmatch
+import re
 import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -20,6 +21,7 @@ from pathlib import Path
 from . import (
     events as _events,
     fset as _fset,
+    jsrc_line,
     messages as msgs,
     paranoid,
     setting_values,
@@ -238,7 +240,7 @@ def apply_set(settings: dict, key: str, raw: str, *, banner_changed=None, column
         # A JSON string literal is the string it spells, as for any string
         # setting (`from_line_literal`); anything else is read loosely.
         text = raw.strip()
-        decoded = setting_values.from_line_literal(text)
+        decoded = jsrc_line.from_line_literal(text)
         value = decoded if decoded != text else setting_values.coerce_extra_value(raw)
         _s.set_dotted(settings, path, value)
         return CommandResult(
@@ -323,7 +325,7 @@ def set_command(settings: dict, arg: str, baseline: dict | None = None, *, banne
     """`set` shows every value, `set NAME` shows what NAME selects
     (`select`), `set -NAME` clears one (back to its ``baseline`` value, see
     `apply_unset`), `set NAME value` sets one."""
-    key, value = first_word(arg)
+    key, value = jsrc_line.first_word(arg)
     if not key:
         return show_lines(settings, columns=columns)
     if key.startswith("-") and len(key) > 1:
@@ -354,7 +356,7 @@ def fset_rows(settings: dict, pattern: str | None = None) -> list[str]:
 def fset_command(settings: dict, arg: str, baseline: dict | None = None) -> CommandResult:
     """`fset` lists every entry, `fset NAME` (or a `*` pattern) shows them,
     `fset -NAME` clears one, `fset NAME value` sets one."""
-    name, value = first_word(arg)
+    name, value = jsrc_line.first_word(arg)
     name = name.upper()
     if not name:
         return CommandResult(handled=True, lines=fset_rows(settings))
@@ -370,7 +372,7 @@ def fset_command(settings: dict, arg: str, baseline: dict | None = None) -> Comm
         return CommandResult(handled=True, lines=rows)
     if not _fset.is_name(name):
         return CommandResult(handled=True, error=msgs.FSET_UNKNOWN.said(name=name))
-    error = _fset.set_entry(name, setting_values.from_line_literal(value))
+    error = _fset.set_entry(name, jsrc_line.from_line_literal(value))
     if error is not None:
         return CommandResult(handled=True, error=msgs.FSET_REFUSED.said(name=name, error=error))
     return CommandResult(handled=True, changed=True, lines=fset_rows(settings, name))
@@ -393,7 +395,7 @@ def event_lines(hooks: _events.EventHooks) -> list[str]:
 
 def on_command(hooks: _events.EventHooks, arg: str) -> CommandResult:
     """`on` lists handlers; `on [^]event handler` registers one."""
-    event, handler = first_word(arg)
+    event, handler = jsrc_line.first_word(arg)
     if not event:
         return CommandResult(handled=True, lines=event_lines(hooks) or [msgs.line_for(msgs.NO_EVENT_HANDLERS)])
     if not handler:
@@ -475,47 +477,48 @@ def load_path(arg: str, base: Path) -> tuple[Path | None, str | None]:
 # Line splitting and the config layer
 # ---------------------------------------------------------------------------
 
-def first_word(text: str) -> tuple[str, str]:
-    """The first word of ``text`` and the rest after it, stripped, split at
-    any run of whitespace: how `set`, `fset`, `on` and every command line,
-    typed or in a jsrc, are read."""
-    parts = text.strip().split(maxsplit=1)
-    if not parts:
-        return "", ""
-    return parts[0], parts[1].strip() if len(parts) > 1 else ""
-
-
-def split_command(line: str) -> tuple[str, str] | None:
-    """``(verb, arg)`` for a command line, or None for a blank/comment line.
-    One leading ``/`` is stripped: it is required at the input line and
-    optional everywhere else."""
-    body = line.strip()
-    if body.startswith("/"):
-        body = body[1:].lstrip()
-    if not body or body.startswith("#"):
-        return None
-    verb, arg = first_word(body)
-    return verb.lower(), arg
-
-
 # Verbs whose text keeps its `$NAME`s for later: an alias or handler body is
 # expanded when it runs.
 _EXPANDED_LATER = ("alias", "on")
 
 
+_NAME = re.compile(r"\$(\$|[A-Z][A-Z0-9_]*)")
+
+
+def expand_names(text: str, settings: dict | None = None) -> str:
+    """``text`` with each `$NAME` of a setting or /fset entry replaced by its
+    value, from ``settings`` (else the live settings /fset is bound to); `$$`
+    is a `$`. One pass: a value put in is never read again. Any other `$` stays."""
+
+    def value(match: re.Match) -> str:
+        name = match.group(1)
+        if name == "$":
+            return "$"
+        spec = _s.spec_for(name)
+        if spec is not None:
+            found = _s.knob(settings, spec.key) if settings is not None else _fset.setting_value(spec.key)
+            return match.group(0) if found is None else setting_values.config_value_text(found)
+        if _fset.is_name(name):
+            found = _fset.entry_value(name)
+            return match.group(0) if found is None else found
+        return match.group(0)
+
+    return _NAME.sub(value, text)
+
+
 def expand_line(line: str, settings: dict | None = None) -> str:
     """A script, jsrc, alias or handler line with its `$NAME`s expanded once
-    (`js.fset.expand_names`). An `alias` or `on` line, and an `fset` line for
+    (`expand_names`). An `alias` or `on` line, and an `fset` line for
     a format or a colour, keep theirs: they are read when the text runs or is
     drawn (`js.fset.read_when_drawn`)."""
-    parsed = split_command(line)
+    parsed = jsrc_line.split_command(line)
     if parsed is None or parsed[0] in _EXPANDED_LATER:
         return line
     verb, arg = parsed
-    name = first_word(arg)[0].lstrip("-").upper()
+    name = jsrc_line.first_word(arg)[0].lstrip("-").upper()
     if verb == "fset" and _fset.read_when_drawn(name):
         return line
-    return _fset.expand_names(line, settings)
+    return expand_names(line, settings)
 
 
 def config_owns(verb: str) -> bool:
@@ -531,19 +534,19 @@ def apply_config_line(settings: dict, line: str, baseline: dict | None = None) -
     `set -key` puts that setting back to its ``baseline`` value (see
     `apply_unset`). A bad `set` returns an ``error`` so the loader can surface
     it without aborting."""
-    parsed = split_command(line)
+    parsed = jsrc_line.split_command(line)
     if parsed is None:
         return CommandResult(handled=True)
     verb, arg = parsed
     if not config_owns(verb):
         return CommandResult(handled=False)
     if verb == "fset":
-        if not first_word(arg)[1] and not arg.startswith("-"):
+        if not jsrc_line.first_word(arg)[1] and not arg.startswith("-"):
             return CommandResult(handled=True, error=msgs.SET_NEEDS_TWO.said(line=line.strip()))
         return fset_command(settings, arg, baseline)
     if verb != "set":
         arg = f"{verb} {arg}"
-    key, value = first_word(arg)
+    key, value = jsrc_line.first_word(arg)
     if not value and key.startswith("-") and len(key) > 1:
         return apply_unset(settings, key[1:], baseline)
     if not value:

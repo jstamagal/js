@@ -50,7 +50,8 @@ from pathlib import Path
 from typing import Any
 
 from . import (
-    messages as _msgs,  # lazy: messages imports this
+    jsrc_line,
+    messages as _msgs,
     paths,
     settings as _s,
 )
@@ -105,18 +106,13 @@ _settings: dict | None = None
 
 def parse_line(line: str) -> tuple[str, str] | None:
     """``(NAME, value)`` of an `fset NAME value` line, else None, read the way
-    a jsrc line is: words split at any whitespace (`setcmd.first_word`), a
-    JSON string literal the string it spells (`setting_values.from_line_literal`)."""
-    from . import (
-        setcmd,  # lazy: setcmd imports this module
-        setting_values,
-    )
-
-    parsed = setcmd.split_command(line)
+    a jsrc line is: words split at any whitespace (`jsrc_line.first_word`), a
+    JSON string literal the string it spells (`jsrc_line.from_line_literal`)."""
+    parsed = jsrc_line.split_command(line)
     if parsed is None or parsed[0] != "fset":
         return None
-    name, value = setcmd.first_word(parsed[1])
-    return (name, setting_values.from_line_literal(value)) if name else None
+    name, value = jsrc_line.first_word(parsed[1])
+    return (name, jsrc_line.from_line_literal(value)) if name else None
 
 
 def read_file(path: Path) -> dict[str, str]:
@@ -250,34 +246,6 @@ def bind_settings(settings: dict | None) -> None:
     _settings = settings
 
     _s.bind_live_settings(settings)
-
-
-_NAME = re.compile(r"\$(\$|[A-Z][A-Z0-9_]*)")
-
-
-def expand_names(text: str, settings: dict | None = None) -> str:
-    """``text`` with each `$NAME` of a setting or /fset entry replaced by its
-    value, from ``settings`` (else the bound live settings); `$$` is a `$`.
-    One pass: a value put in is never read again. Any other `$` stays."""
-    from . import (  # lazy: settings imports messages, which imports this
-        setting_values,
-        settings as _s,
-    )
-
-    def value(match: re.Match) -> str:
-        name = match.group(1)
-        if name == "$":
-            return "$"
-        spec = _s.spec_for(name)
-        if spec is not None:
-            found = _s.knob(settings if settings is not None else _settings, spec.key)
-            return match.group(0) if found is None else setting_values.config_value_text(found)
-        if is_name(name):
-            found = entry_value(name)
-            return match.group(0) if found is None else found
-        return match.group(0)
-
-    return _NAME.sub(value, text)
 
 
 def read_when_drawn(name: str) -> bool:

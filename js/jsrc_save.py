@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from . import fset, messages as msgs, setcmd
+from . import fset, jsrc_line, messages as msgs, setcmd
 from .setting_layers import apply_jsrc
 from .setting_values import config_value_text, jsrc_text
 from .settings import (
@@ -51,11 +51,11 @@ def _jsrc_key(line: str) -> tuple[str | None, bool]:
     live = not body.startswith("#")
     if not live and not body.startswith(("#set ", "#fset ")):
         return None, False
-    parsed = setcmd.split_command(body if live else body[1:])
+    parsed = jsrc_line.split_command(body if live else body[1:])
     if parsed is None or not setcmd.config_owns(parsed[0]):
         return None, False
     verb, arg = parsed
-    name = setcmd.first_word(arg)[0] if verb in ("set", "fset") and arg else verb
+    name = jsrc_line.first_word(arg)[0] if verb in ("set", "fset") and arg else verb
     spec = spec_for(name.lstrip("-"))
     if spec is None and verb == "fset" and name:
         return FSET_KEY + name.lstrip("-"), live
@@ -78,7 +78,7 @@ def _edited_jsrc_lines(lines: list[str], wanted: dict[str, str | None], extra_li
     lines = list(lines)
     keyed = [_jsrc_key(line) for line in lines]
     loads = [i for i, line in enumerate(lines)
-             if (parsed := setcmd.split_command(line)) is not None and parsed[0] in setcmd.LOAD_VERBS]
+             if (parsed := jsrc_line.split_command(line)) is not None and parsed[0] in setcmd.LOAD_VERBS]
 
     def before_a_load(index: int) -> bool:
         return bool(loads) and loads[-1] > index
