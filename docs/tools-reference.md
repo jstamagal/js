@@ -13,11 +13,17 @@ Reads one file.
 Parameters:
 
 - `file_path`: required path.
-- `range`: optional `{start_line, end_line}` for text files, or a byte range
-  `{start_byte, end_byte}`: `start_byte` is a 0-based offset and `end_byte`
-  the offset one past the last byte. Passing both kinds is an error, and so
-  is a negative or non-integer offset.
+- `start_line`, `end_line`: optional inclusive 1-based line range for text
+  files.
+- `start_byte`, `end_byte`: optional byte range: `start_byte` is a 0-based
+  offset and `end_byte` the offset one past the last byte. A negative or
+  non-integer offset is an error. Given a line range too, the line range is
+  read and the result says the byte range was not.
 - `show_line_numbers`: default true.
+
+A nested `range` object with the same fields, `offset`/`limit` (first line,
+line count) and `line_start`/`line_end` are read as line ranges too
+(`prepare_read_arguments` in `js/toolkit/fs.py`).
 
 A byte-range read returns raw text, no line prefixes, at most half the tighter
 of `TOOL_RESULT_INLINE_MAX` and `TOOL_RESULT_MAX`
@@ -241,8 +247,9 @@ more matches exist than `head_limit`, the result ends with a continuation note.
 ### `ast_search`
 
 Structural search and optional rewrite over parsed source code, backed by
-ast-grep 0.45.1 — the managed `tools/bin/ast-grep` installed by `just install`,
-falling back to `ast-grep` on PATH before that.
+ast-grep 0.45.3 — the managed `tools/bin/ast-grep` installed by `just install`,
+falling back to `ast-grep` on PATH before that while
+`TOOL_BINARY_PATH_FALLBACK` is on.
 
 Parameters:
 
@@ -281,7 +288,8 @@ are all missing, returns one ERROR line naming them.
 The workspace root is the nearest directory holding one of the entry's
 `roots` files, else the nearest holding `.git`, else the working directory
 when it holds the file, else the file's directory. The operator's home, any
-directory above it, and `/` are never a root; the search stops at home. One server runs per entry, root and jail for the life of the
+directory above it, and `/` are never a root unless `LSP_ALLOW_HOME_ROOT` is
+on; the search stops at home. One server runs per entry, root and jail for the life of the
 process.
 
 Each call sends the file's content from disk: `didOpen` the first time, then
@@ -328,7 +336,8 @@ The command's stdin is `/dev/null` and it has no controlling terminal, so it
 never reads the keystrokes meant for js's input line.
 
 `shell` runs `SHELL_PROGRAM` (default `bash`) with `-c`. bash and zsh also get
-`-o pipefail`, so a pipeline reports the failure of any stage.
+`-o pipefail` while `SHELL_PIPEFAIL` is on (the default), so a pipeline reports
+the failure of any stage.
 
 The command's environment always includes the resolved `JS_HOME`, plus the names in `SHELL_ENV_KEEP` and
 the `env` parameter. When the command text references (`$NAME`, `${NAME}`) a
@@ -363,12 +372,13 @@ Parameters:
 - `save`: path to write the response body to instead of returning it inline
 
 HTML is converted to text unless `raw=true`. Inline output is capped by
-`max_tool_result_bytes`. A download streams to disk and returns
+`TOOL_RESULT_MAX`. A download streams to disk and returns
 `SAVED_RESPONSE path=... size=...`; it is bounded by
 `DOWNLOAD_MAX`, which defaults to `0`, meaning unlimited.
 
 Saved GET responses, binary responses, and bodies over the inline result budget
-are transferred through the system aria2c with segmentation, retry, resume,
+are transferred through the managed aria2c (`tools/bin/aria2c`, see
+[managed-toolkit.md](managed-toolkit.md)) with segmentation, retry, resume,
 and atomic destination replacement. Missing aria2c prints a `URLLIB_FALLBACK`
 line on stderr, once per purpose per process, before urllib handles the
 transfer.
@@ -440,10 +450,14 @@ static HTTP fetch returns an empty shell or when a page is a single-page app.
 Parameters:
 
 - `url`: required page URL.
-- `dump`: `markdown`, `text`, `html`, or `links`; default `markdown`.
+- `dump`: `markdown`, `text`, `html`, `links`, `original`, `assets` or
+  `cookies`; default `markdown`.
+- `screenshot`: optional `.png` path; the call then saves a picture of the
+  settled page and returns only a `SCREENSHOT path=... size=...` line, with no
+  dump.
 
-Private and localhost URLs are allowed automatically. This tool cannot render
-WebGL or take screenshots. `just install` downloads the pinned `obscura`
+Private and localhost IP literals are allowed automatically. This tool cannot
+render WebGL. `just install` downloads the pinned `obscura`
 release asset into `tools/bin` — the stealth build, which carries TLS
 impersonation alongside the browser fingerprint — together with the
 `obscura-worker` binary it spawns. Before that install, the tool falls back to
@@ -526,6 +540,8 @@ Parameters:
 - `plan_name`
 - `version`
 - `content`
+- `overwrite`: replace an existing plan of that name and version; without it
+  the call is refused.
 
 ### `skill`
 
@@ -561,9 +577,15 @@ Runs one or more subagent tasks.
 
 Parameters:
 
-- `tasks`: required list of strings
-- `agent_id`: required worker agent id
+- `tasks`: list of strings; required to start workers
+- `agent_id`: worker agent id; required to start workers
 - `session_id`: optional child session id
+- `model`: optional model override (absent when `SUBAGENT_MODEL_LOCK` is on)
+- `background`: return a handle at once while the workers keep running
+- `action`: `run` (default), `poll`, `wait` or `kill`
+- `handle`: the background task for `poll`/`wait`/`kill`; defaults to the
+  latest running one
+- `timeout`: seconds `wait` blocks
 
 Tasks inside one call run concurrently. Results are returned in input order.
 Workers inherit the parent turn's effective configuration and shared instruction
@@ -635,7 +657,8 @@ truncation marker.
 Ctrl-C on a turn that has a kernel cell in flight interrupts that cell before the
 runtime abandons the worker running the tool call, so the next call does not
 queue behind a cell nobody is watching. The interrupt-on-cancel hook is
-`kernel.interrupt_inflight(context)`, called from the runtime's cancel path.
+`interrupt_inflight(context)` in `js/toolkit/python_kernel.py`, called from the
+runtime's cancel path (`js/turn_dispatch.py`).
 
 Cells run in the interpreter running js, never in a venv of their own: the
 `python3` kernelspec's `python` argv is replaced with `sys.executable`, so the
@@ -766,7 +789,7 @@ rich — code, output, elapsed, the namespace, save/load activity. stderr so
 - `verbose` — stdout/stderr/display split apart, plus kernel lifecycle events.
 
 Set the baseline with `set KERNEL_VERBOSITY <level>` (or `JS_KERNEL_VERBOSITY`);
-override one call with the tool's `verbosity` parameter. `fset
+override one call with the tool's `verbosity` parameter. `set
 KERNEL_LINES_MAX <n>` (default 24) caps each rendered section so a
 4000-line cell cannot scroll the screen away; the hidden count is shown. The
 cap is a fold on the screen, which Ctrl-O unfolds to the whole render; off the
@@ -849,15 +872,16 @@ trace headers and prompt events include `tool_names` for the published schema se
 
 ## Generated Agent Tools
 
-Prompt directories under stock `defaults/agents/`, global `~/.js/agents/`, and
-project `.js/agents/` become tools named after the directory. Files layer per relative name: project > home > defaults. Current generated tool names include:
+Agent directories under stock `defaults/agents/`, global `~/.js/agents/`, and
+project `.js/agents/` become tools named after the directory. Files layer per relative name: project > home > defaults. The stock generated tools are:
 
-- `defaultagent`
-- `autocoder`
 - `commit`
+- `defaultagent`
+- `slim`
 - `twotool`
 
-Direct agent tools take:
+Direct agent tools take `tasks` (required), and optional `model` and
+`reasoning`:
 
 ```json
 {"tasks":["one or more task strings"]}

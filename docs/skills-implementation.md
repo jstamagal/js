@@ -203,9 +203,10 @@ Everything below is disclosure; discovery and activation already exist.
    skills, emit nothing and do not register `skill`.
 
 2. **Place it in the system prompt** where `JS.md`/agent prompts are assembled
-   (`js/cli.py` → `js/memory.py`), after the operator context. Compute it
-   once when the session's `LazyToolRegistry` is built; the string is stored,
-   not recomputed per turn.
+   (`js/persona.py`, which puts the instruction files ahead of the agent
+   prompt), after the operator context. Compute it once when the session's
+   `TurnToolSurface` is built (`ToolRegistry.lazy_surface` in
+   `js/toolkit/registry.py`); the string is stored, not recomputed per turn.
 
 3. **Move the behavioural rules into `skill.md`'s tool description** and
    reference the block: "Available skills are listed under *Skills available* in

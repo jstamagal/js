@@ -20,7 +20,7 @@ Found while using `ast_search` for a real read-only job: comparing four C++/CUDA
    - `std::getenv($A)`, `std::getenv($$$A)`, `std::getenv($A);` on a `.hpp`: expected 2 calls, got nothing three times. The pattern parses as a `declaration`. The description documents this trap for `lang="C"` only, and its semicolon fix does not help here.
    The description says ast-grep's warnings are shown above the matches; none appeared.
 
-5. **Mixed-language directory, no `lang`:** `pattern="def _ast_argv"`, `path="/home/ronald_rump/js/js"` returned three prose paragraphs from `skills/wayfinder/SKILL.md`. With `lang="Python"` it found `toolkit/fs.py:1674`.
+5. **Mixed-language directory, no `lang`:** `pattern="def _ast_argv"`, `path="/home/ronald_rump/js/js"` returned three prose paragraphs from `skills/wayfinder/SKILL.md`. With `lang="Python"` it found the definition, then in `toolkit/fs.py` (now `js/toolkit/file_search.py`).
 
 ## Output
 

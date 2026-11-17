@@ -1,8 +1,10 @@
 # Managed toolkit provisioning
 
 Toolkit executables belong to the checkout's `tools/bin` directory. Runtime
-resolution prefers these files to PATH; PATH availability must not substitute
-for provisioning. Archives and extracted executables are independently SHA-256
+resolution (`resolve_binary` in `js/tool_binaries.py`) prefers these files to
+PATH, and falls back to PATH only while the managed file is missing and
+`TOOL_BINARY_PATH_FALLBACK` is on (the default). PATH availability does not
+substitute for provisioning: the installer never accepts a PATH copy. Archives and extracted executables are independently SHA-256
 pinned. Initial downloads can use Python's urllib without an installed aria2.
 
 ## Verified aria2 assets
@@ -22,31 +24,35 @@ tests have been run on Linux x86_64 only. ARM64 compatibility is inspected and
 fixture-tested, not natively executed. amd64/x86_64 and arm64/aarch64 aliases
 select the same respective assets.
 
-No Darwin aria2 asset is pinned. Unsupported targets fail explicitly; Android
-assets are not substitutes for Linux releases. No system packages, compatibility
-layers, or source builds are part of this contract.
+No Darwin aria2 asset is pinned; on macOS the installer takes aria2 from
+Homebrew and links it into `tools/bin`. Other unsupported targets fail
+explicitly; Android assets are not substitutes for Linux releases. No
+compatibility layers or source builds are part of this contract.
 
 ## Release selection and incomplete targets
 
-`just install-tool-binaries` and `just ensure-tools` use the same managed
-installer. `just install` and `just sync` invoke it. Off Termux, none invokes a
-system package manager.
-System copies never satisfy provisioning. Python urllib bootstraps aria2,
-then the managed aria2 performs subsequent downloads. Runtime resolution and
-startup checks prefer managed executables over PATH.
+`just install-tool-binaries` and `just ensure-tools` run the same managed
+installer (`python -m js.tool_binaries`). `just install` and `just sync` invoke
+it. The only system package managers it calls are Homebrew for aria2 on macOS
+and `pkg` on Termux, which installs aria2, bat, fd, fzf and ripgrep and links
+them into `tools/bin`; on Termux, ast-grep and obscura builds the owner put in
+`tools/bin` or `$PREFIX/bin` are adopted. Python urllib bootstraps aria2, then
+the managed aria2 performs subsequent downloads. Runtime resolution and startup
+checks prefer managed executables over PATH.
 
 `js/tool_releases.json` pins archive and executable SHA-256 digests for ripgrep
-15.2.0, fd 10.3.0, bat 0.25.0, fzf 0.65.2, and ast-grep 0.45.1. Linux x86_64
+15.2.0, fd 10.5.0, bat 0.26.1, fzf 0.74.4, and ast-grep 0.45.3. Linux x86_64
 and aarch64 musl binaries for the first four were inspected using readelf:
 no PT_INTERP or NEEDED entries. They work without a libc compatibility layer.
 Darwin ARM64 archives are pinned but not executed on Linux. Digests were
 compared to GitHub release API digests where published; bat's digests were
 computed from the release downloads.
 
-Ast-grep publishes no musl release in 0.45.1. Its GNU binaries require glibc
-2.34 (x86_64) or 2.18 (aarch64). They are not selected for musl or an unknown
-libc. The pinned Obscura 0.2.0 x86_64 stealth launcher requires glibc 2.35;
-the worker requires 2.34, and both require libgcc_s. Neither is static.
+The pinned ast-grep assets for Linux are GNU builds. They require glibc
+2.34 (x86_64) or 2.18 (aarch64) and are not selected for musl or an unknown
+libc. The pinned Obscura 0.2.2 x86_64 stealth launcher (pinned in
+`js/tool_binaries.py`) is selected only on x86_64 Linux with glibc 2.35 or
+newer; the worker requires 2.34, and both require libgcc_s. Neither is static.
 Obscura ARM64 Linux and ARM64 macOS stealth assets exist, but their executable
 hashes and dependency requirements are not verified here. Darwin aria2 is not
 available from the pinned aria2 release. Unsupported/missing components are

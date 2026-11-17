@@ -45,7 +45,7 @@ guards, task parallelism, and provider-specific name handling at the boundary.
 5. plan, skill and task (`plan.py`, `skill.py`, `subagents.py`)
 6. wiki tools (`wiki/`)
 7. kernel, toolbox, lsp and notebook tools (`python_kernel.py`, `toolbox.py`, `lsp.py`, `notebook.py`)
-8. swarm tools (`js/swarm.py`)
+8. swarm bus tools (`bus_tools.py`)
 9. generated agent tools from layered prompt roots
 
 The registry stores canonical names and lowercased aliases. Current aliases are
@@ -262,12 +262,14 @@ Dispatch rules:
 - tool result content is capped, per result and then per batch
   (`PARALLEL_RESULTS_MAX` covers the whole batch)
 - ^C starts no queued call; calls already running finish and their results
-  are kept
+  are kept (the shell command, kernel cell or search process a running call
+  waits on is interrupted first)
 - repeated tool errors get retry metadata
 - a repeated-error limit appends a final assistant error
 
 A call is read-only when its tool sets `read_only` (`read`, `fs_search`,
-`lsp`, `skill`, `docs_search`, `exa_search`, `serper_search`, `tavily_search`), or
+`lsp`, `skill`, `jev`, `docs_search`, `exa_search`, `serper_search`,
+`tavily_search`, and the swarm `who` and `tasks`), or
 when its tool's `read_only_when` accepts its arguments: `ast_search` without
 `apply`, `fetch` as a GET or HEAD without `save`, `browse` without
 `screenshot`. A call that cannot be resolved or parsed is not read-only.
@@ -328,8 +330,10 @@ discovered and loaded by catalog id.
 ## File Safety
 
 `read` records that a file was read and remembers its hash. `write` and `patch`
-require a prior read before changing existing files. New file creation does not
-require a prior read. `patch` matches `old_string` exactly first, then in a
+require a prior read before changing existing files (`FILE_REQUIRE_READ`); an
+exact `patch` whose `old_string` is at least `EDIT_READ_BYPASS_CHARACTERS` long
+applies to an unread file. New file creation does not require a prior read.
+`patch` matches `old_string` exactly first, then (with `EDIT_FUZZY` on) in a
 view that drops trailing whitespace and reads smart quotes, Unicode dashes and
 no-break spaces as ASCII; a match found that way is replaced over the original
 text, keeping the file's bytes wherever the edit kept `old_string`.
@@ -340,22 +344,25 @@ Edit operations snapshot prior state for `undo`:
 - nonexistence before creating a file
 - directory trees before removing a directory
 
-`undo` is in-process only. Snapshots are not persisted across process restarts.
+Snapshots are kept in memory and, for a saved session, in a bounded store on
+disk (`<state>/<agent>/undo/`, in `js/toolkit/undo.py`), so js restarted on
+the session can still `undo`.
 
 ## Search
 
-`fs_search` is regex search implemented in Python. It supports:
+`fs_search` is regex search over ripgrep (`js/toolkit/file_search.py`). It
+supports:
 
 - `pattern`
 - `path`
 - `glob`
-- output modes: `files_with_matches`, `content`, `count`
-- context line options: `-A`, `-B`, `-C`
-- line numbers: `-n`
-- case-insensitive: `-i`
-- file type/extension
-- head limit and offset
-- multiline matching
+- `output_mode`: `files_with_matches` (default), `files`, `content`, `count`
+- context lines: `before_context`, `after_context`, `context_lines`
+- `show_line_numbers`
+- `case_insensitive`
+- `file_type`
+- `head_limit` and `offset`
+- `multiline`
 
 `ast_search` is structural source search backed by ast-grep. It accepts parsed
 patterns with `$NAME` and `$$$ARGS` metavariables, emits read-compatible line
@@ -366,9 +373,9 @@ anchors, and supports snapshot-backed structural rewrite previews and applies.
 `shell` runs the `SHELL_PROGRAM` setting:
 
 - `bash -o pipefail -c` by default; zsh also gets `-o pipefail`, other
-  shells run with `-c` alone
+  shells run with `-c` alone; `SHELL_PIPEFAIL off` drops `-o pipefail`
 
-It passes a small allowlist of environment variables by default. Extra env var
+It passes the `SHELL_ENV_KEEP` allowlist of environment variables. Extra env var
 names can be requested through the `env` parameter if the parent process has
 them. A result names the filtered variables only when the command references
 one of them.
@@ -394,8 +401,8 @@ them naming the byte range left out, the total, and the file holding the
 whole stream.
 
 The file is written by the reader thread, not from the clipped text. Each
-stream keeps its first and last `max_bash_output_bytes / 2` bytes in memory;
-once it passes `max_bash_output_bytes`, every byte from the first goes to
+stream keeps its first and last `SHELL_OUTPUT_MAX / 2` bytes in memory;
+once it passes `SHELL_OUTPUT_MAX`, every byte from the first goes to
 `<state>/tool-results/shell-<handle>-<random>-stdout.log` (or `-stderr.log`)
 as it arrives, ANSI and all. A stream cut only by the inline limit has its
 file written when the result is cut. `read` with a `start_byte` range reaches
@@ -408,26 +415,28 @@ byte offsets that count from the start of the stream.
 ## Wiki Tools
 
 Wiki tools live in the default registry even when the active prompt does not
-select them. Built-in modes select the full registry and rely on their mode
-prompts to steer behavior.
+select them.
 
 Defaultagent does not select `wiki_*` by default. To let a normal prompt or
 subagent use those tools, add entries to that agent's `agent.yaml`.
 
 ## Generated Agent Tools
 
-Every prompt directory with markdown files or an `agent.yaml` under stock `defaults/agents/`, global
+Every agent directory under stock `defaults/agents/`, global
 `~/.js/agents/`, and project `.js/agents/` becomes a direct agent tool unless
-its name collides with a base tool. Each filename resolves independently: project over home over defaults.
+its name collides with a base tool (a notice names it). Each filename resolves independently: project over home over defaults.
 An empty file shadows its lower copy.
 
-Direct generated tools take:
+Direct generated tools take `tasks` (required), and optional `model` and
+`reasoning`:
 
 ```json
 {"tasks":["task text"]}
 ```
 
-They call the same underlying `task` implementation with the agent id fixed.
+They call the same underlying `task` implementation with the agent id fixed
+(`named_agent_tool` in `js/toolkit/subagents.py`; the description is
+`defaults/tool_descriptions/named_agent.md`).
 
 ## Porting Rules
 
@@ -439,7 +448,7 @@ For another Python project, the behavior to preserve is:
 - `Tool` plus `ToolContext` separation
 - read-before-write state in context
 - patch/multi-patch behavior: exact match first, then the normalised fallback
-- in-process undo snapshots
+- undo snapshots
 - `SHELL_PROGRAM` shell execution
 - task parallelism and child context isolation
 - Claude provider-facing name transform based on model string only
