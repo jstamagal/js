@@ -7,7 +7,7 @@ import asyncio
 import io
 import re
 
-from js import cli, display, screen, transcript
+from js import debug_trace, display, screen, transcript
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
@@ -176,7 +176,7 @@ class _Log:
 
 def test_debug_log_keeps_the_committed_answer_but_not_the_redraws():
     terminal, log = _Tty(), _Log()
-    sink = display.Display.for_stream(cli._StdoutTee(terminal, log))
+    sink = display.Display.for_stream(debug_trace.StdoutTee(terminal, log))
     sink.refresh_s = 0
     assert sink.pretty
 

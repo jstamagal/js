@@ -1392,3 +1392,25 @@ def run_rc_commands(state: ReplState, cfg: Config, paths: list[Path]) -> list[st
                                                     changed_keys=changed), state, cfg)
         msgs.set_banner(str(settings.knob(live, "BANNER")))
     return errors
+
+
+def restore_workspace(cfg: Config) -> None:
+    """Put a resumed session back where its last /cd, /add or /drop left it.
+    The /add binds come back only under a jail with the same -C root; the
+    working directory only where the jail shows it."""
+    mark = M.last_workspace(cfg.session_file)
+    if mark is None:
+        return
+    jail = _jail.active()
+    if jail is not None and mark.get("root") == str(jail.root):
+        for spec in mark.get("binds") or ():
+            try:
+                bind = _jail.parse_bind(spec)
+            except ValueError:
+                continue
+            if bind.path.exists():
+                jail.add(bind)
+    cwd = Path(str(mark.get("cwd") or ""))
+    setting = settings.knob(getattr(cfg, "settings", None), "JAIL_BIND")
+    if cwd.is_absolute() and cwd.is_dir() and (jail is None or jail.bound(cwd, setting)):
+        set_working_dir(cwd)

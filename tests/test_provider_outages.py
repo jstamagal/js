@@ -124,9 +124,9 @@ def test_raw_errors_stay_in_debug_log_even_when_screen_collapses(monkeypatch, tm
 
 
 def test_final_cli_error_has_no_raw_body():
-    from js.cli import _error_text
+    from js.network_display import error_text
 
-    text = str(_error_text(failure('{"error":{"code":"server_is_overloaded"}}',
+    text = str(error_text(failure('{"error":{"code":"server_is_overloaded"}}',
                                   status=502, provider="codex")))
     assert "OpenAI" in text
     assert "Try again" in text

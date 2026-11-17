@@ -18,10 +18,12 @@ from js import (
     bench,
     cli,
     commit_cli,
+    conversation,
     listings,
     messages as msgs,
     model_metadata,
     paths as _paths,
+    run_assembly,
     runtime,
     session_store,
     snippets,
@@ -234,7 +236,7 @@ def test_prompt_model_flag_with_provider_prefix_routes_provider_override(monkeyp
 
     monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(fake_run_turn))
     monkeypatch.setattr(cli.M, "load_messages", lambda _path: [])
-    monkeypatch.setattr(cli, "_append_turn", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(conversation, "append_turn", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
 
     actual = js(monkeypatch, "--model", "openai/gpt-5.5", "-p", "foo")
@@ -274,8 +276,8 @@ def test_interactive_model_flag_with_provider_prefix_routes_provider_override(mo
 
     stub_screen(monkeypatch, ["hi", "exit"], wait=True)
     monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(fake_run_turn))
-    monkeypatch.setattr(cli, "_append_turn", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_maybe_auto_compact_async", no_compaction)
+    monkeypatch.setattr(conversation, "append_turn", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", no_compaction)
 
     actual = cli.main(["--model", "openai/gpt-5.5"])
 
@@ -447,7 +449,7 @@ def test_js_prompt_mode_persists_turn_for_repl_continuity(monkeypatch, tmp_path,
         calls.append(kwargs)
         return _fake_stream_result("I can write that scraper.")
 
-    monkeypatch.setattr(cli, "_from_env", lambda *_args, **_kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *_args, **_kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = js(monkeypatch, "-p", "Can you write a recipe scraper?")
@@ -796,7 +798,7 @@ def test_prompt_mode_reasoning_off_and_maxout_forward_explicit_overrides(monkeyp
         seen["max_output_tokens"] = kwargs["max_output_tokens"]
         return _fake_stream_result("KNOBS_OK")
 
-    monkeypatch.setattr(cli, "_from_env", lambda *_args, **_kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *_args, **_kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
 
     actual = js(monkeypatch, "--reasoning", "off", "--max-out", "321", "-p", "hi")
@@ -1381,7 +1383,7 @@ def test_list_table_and_json_cover_same_nested_records_without_config(monkeypatc
     cli.M.append_message(nested, {"role": "user", "content": "new"})
     from js.session_catalog import record_session_start
     record_session_start(nested, cwd=tmp_path, caller_key="job-key", job_id=9, agent="agent")
-    monkeypatch.setattr(cli, "_from_env", lambda *_args, **_kwargs: pytest.fail("list loaded config"))
+    monkeypatch.setattr(run_assembly, "from_env", lambda *_args, **_kwargs: pytest.fail("list loaded config"))
 
     assert listings.print_session_list(as_json=False) == 0
     table = capsys.readouterr().out
@@ -1566,7 +1568,7 @@ def test_one_shot_model_override_sends_that_models_saved_sampling(monkeypatch, t
 
     monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(fake_run_turn))
     monkeypatch.setattr(cli.M, "load_messages", lambda _path: [])
-    monkeypatch.setattr(cli, "_append_turn", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(conversation, "append_turn", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
 
     assert js(monkeypatch, "--model", "testes/b", "-p", "foo") == 0

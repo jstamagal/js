@@ -14,6 +14,7 @@ from pathlib import Path
 
 from . import (
     agent_messages,
+    debug_trace,
     headless,
     messages as msgs,
     model_client,
@@ -21,6 +22,7 @@ from . import (
     persona as P,
     run_assembly,
     runtime,
+    settings,
     snippets,
     stats,
 )
@@ -101,12 +103,12 @@ def run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         return 2
     reasoning_override = None
     if reasoning is not None:
-        reasoning_override, effort_error = _cli._validate_cli_reasoning(reasoning)
+        reasoning_override, effort_error = settings.validate_cli_reasoning(reasoning)
         if effort_error is not None:
             msgs.warn(msgs.BAD_REASONING, value=reasoning, error=effort_error)
             return 2
     try:
-        cfg = _cli._from_env(None, save_session=False, sources=sources, agent_id=agent_id)
+        cfg = run_assembly.from_env(None, save_session=False, sources=sources, agent_id=agent_id)
         cfg = replace(cfg, session_file=Path(os.devnull))
     except ValueError as e:
         msgs.warn(msgs.FAILED, error=e)
@@ -114,7 +116,7 @@ def run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
     try:
         settled = run_assembly.settle(cfg, model=model, reasoning=reasoning_override, config_pins=True)
     except run_assembly.RunNotSettled as e:
-        msgs.warn(msgs.FAILED, error=_cli._format_prompt_load_error(cfg, e.cause) if e.loading else e.cause)
+        msgs.warn(msgs.FAILED, error=P.format_prompt_load_error(cfg, e.cause) if e.loading else e.cause)
         return 2
     except (FileNotFoundError, ValueError) as e:
         msgs.warn(msgs.FAILED, error=e)
@@ -122,7 +124,7 @@ def run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
     try:
         benchmarks = P.load_benchmarks(cfg.prompts_dir)
     except (FileNotFoundError, ValueError) as e:
-        msgs.warn(msgs.FAILED, error=_cli._format_prompt_load_error(cfg, e))
+        msgs.warn(msgs.FAILED, error=P.format_prompt_load_error(cfg, e))
         return 2
 
     if not benchmarks:
@@ -144,8 +146,8 @@ def run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
     # The request trace (system prompt, tools, messages, FLIGHT lines) goes to
     # logs/<agent>/<agent>-<pid>.log like every other run. A bench keeps no session,
     # so without this nothing records what the model was sent.
-    autolog = _cli._debug_autolog_path(cfg, getattr(cfg, "settings", {}) or {})
-    trace_sink = _cli._open_debug_trace_sink([autolog] if autolog is not None else [])
+    autolog = debug_trace.debug_autolog_path(cfg, getattr(cfg, "settings", {}) or {})
+    trace_sink = debug_trace.open_debug_trace_sink([autolog] if autolog is not None else [])
 
     rows: list[dict] = []
     interrupted = False
@@ -169,7 +171,7 @@ def run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         t_wall = time.time()
         try:
             sink = io.StringIO() if quiet else None
-            out = sink if sink is not None else (_cli._StdoutTee(sys.stdout, trace_sink) if trace_sink is not None else None)
+            out = sink if sink is not None else (debug_trace.StdoutTee(sys.stdout, trace_sink) if trace_sink is not None else None)
             with contextlib.redirect_stdout(out) if out is not None else contextlib.nullcontext():
                 async def run_benchmark():
                     nonlocal prompt_text

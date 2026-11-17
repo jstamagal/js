@@ -10,17 +10,25 @@ their turns through `Conversation.turn`.
     chat = Conversation(cfg, system, registry=tools)
     await chat.ask("what is in this directory?")
     await chat.compact("keep the API decisions")
+
+The functions after the class are the turn bookkeeping `-p` and the REPL
+share: the mode- and model-switch notes a user message carries, appending a
+message to the session file, and the REPL's between-turn compaction trigger.
 """
 
 from __future__ import annotations
 
+import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from . import compaction, memory, runtime
+from . import attach, compaction, memory, messages as msgs, runtime, snippets, stream_transport
 from .config import Config
 from .toolkit import ToolContext, ToolRegistry
+
+if TYPE_CHECKING:
+    from .repl_state import ReplState
 
 
 class Conversation:
@@ -125,3 +133,88 @@ class Conversation:
     def save(self) -> None:
         """Append what the session file does not have yet."""
         memory.persist_messages(self.cfg.session_file, self.messages, stamp=self.stamp)
+
+
+_MODE_PLACES = {"repl": 'in interactive chat', "-p": 'as a one-shot run'}
+
+
+def _mode_switch_notice(started: str, previous: str, now: str) -> str:
+    """The reminder for a turn in mode ``now`` after a turn in ``previous``, in
+    a session whose first turn ran in ``started``."""
+    if started == now:
+        course = (f'started {_MODE_PLACES[started]}, moved {_MODE_PLACES[previous]}, and now continues {_MODE_PLACES[now]} again')
+    else:
+        course = f'started {_MODE_PLACES[started]} and now continues {_MODE_PLACES[now]}'
+    return snippets.render("mode-switch", COURSE=course, PRESENCE=snippets.render(
+        "mode-presence-chat" if now == "repl" else "mode-presence-prompt"))
+
+
+def note_mode_switch(cfg: Config, message: dict, mode: str) -> dict:
+    """Record that this turn runs in ``mode`` ("repl" or "-p"). When the last
+    turn ran in the other mode, this turn's user message carries the
+    mode-switch reminder, which names the mode of the session's first turn."""
+    if cfg.session_file == Path(os.devnull):
+        return message
+    previous = memory.record_turn_mode(cfg.session_file, mode)
+    if previous is None:
+        return message
+    started = memory.first_turn_mode(cfg.session_file)
+    if started not in _MODE_PLACES:
+        started = previous
+    return attach.with_note(message, _mode_switch_notice(started, previous, mode))
+
+
+def stamp_label(model: str | None, provider: str | None) -> str:
+    return f"{provider}/{model}" if provider else str(model)
+
+
+def note_model_switch(cfg: Config, message: dict) -> dict:
+    """When the session's newest reply came from a model other than the one
+    ``cfg`` runs this turn on, this turn's user message carries the
+    model-switch reminder. A stamp without a provider compares on the model id."""
+    if cfg.session_file == Path(os.devnull):
+        return message
+    stamp = memory.last_reply_stamp(cfg.session_file)
+    if stamp is None:
+        return message
+    provider = stamp.get("provider") if isinstance(stamp.get("provider"), str) else None
+    if stamp["model"] == cfg.model and (provider is None or provider == cfg.provider_id):
+        return message
+    return attach.with_note(message, snippets.render("model-changed",
+        PREVIOUS=stamp_label(stamp["model"], provider),
+        CURRENT=stamp_label(cfg.model, cfg.provider_id),
+    ))
+
+
+def append_turn(cfg: Config, message: dict) -> None:
+    memory.append_message(cfg.session_file, message)
+
+
+async def maybe_auto_compact_async(cfg: Config, state: ReplState) -> None:
+    """The REPL's between-turn trigger: the policy lives in compaction, the
+    printing lives here. The gate reads the live settings, so a /set made
+    during the turn decides whether the turn's end compacts."""
+    active_cfg = state.config_for_turn(cfg)
+    if not compaction.get_bool(active_cfg, "COMPACTION_AUTO"):
+        return
+    turn_status = runtime.T.STOCK_CONTEXT.turn_status
+    turn_status.compacting = True
+    try:
+        with stream_transport.net_role(msgs.COMPACTING_ROLE.words()):
+            outcome = await compaction.maybe_auto_compact_async(
+                active_cfg,
+                state.auto_compact,
+                runtime.T.STOCK_CONTEXT,
+                state.system,
+                state.messages,
+                lambda: runtime._resolve_context_window(
+                    active_cfg.model, active_cfg.provider_id, active_cfg.provider_base_url
+                ),
+                **compaction.compact_hooks(state, active_cfg),
+            )
+    finally:
+        turn_status.compacting = False
+    for notice in outcome.notices:
+        msgs.say_said(notice)
+    if outcome.result is not None:
+        msgs.say(msgs.COMPACTION_DONE, result=outcome.result)

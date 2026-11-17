@@ -9,7 +9,7 @@ import ai
 from repl_driver import run_async, turn_stub
 from turn_driver import js
 
-from js import attach, cli, history_record, media, repl_commands, runtime
+from js import attach, cli, history_record, media, repl_commands, run_assembly, runtime
 from js.config import Config
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
@@ -72,7 +72,7 @@ def test_prompt_file_text_attachment_inlines_content(monkeypatch, tmp_path, caps
         seen.append(kwargs["messages"][-1].parts[0].text)
         return _fake_stream_result("TEXT_OK")
 
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
 
     actual = js(monkeypatch, "--file", str(note), "-p", "summarize")
@@ -96,7 +96,7 @@ def test_prompt_at_path_attaches_the_file(monkeypatch, tmp_path, capsys):
         seen.append(kwargs["messages"][-1].parts[0].text)
         return _fake_stream_result("AT_OK")
 
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
 
     assert js(monkeypatch, "-p", f"@{note}") == 0
@@ -137,7 +137,7 @@ def test_prompt_stdin_attachment_reaches_the_model(monkeypatch, tmp_path, capsys
         def isatty(self):
             return False
 
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
     monkeypatch.setattr(cli.sys, "stdin", PipedStdin())
 
@@ -175,7 +175,7 @@ def test_prompt_file_image_attachment_sends_file_part_and_persists_stub(monkeypa
         seen.append(kwargs["messages"][-1])
         return _fake_stream_result("IMAGE_OK")
 
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
 
     actual = js(monkeypatch, "--file", str(image), "-p", "what is this?")
@@ -209,7 +209,7 @@ def test_prompt_file_image_vision_off_falls_back_to_text(monkeypatch, tmp_path, 
         seen.append(kwargs["messages"][-1])
         return _fake_stream_result("NO_VISION_OK")
 
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
 
     actual = js(monkeypatch, "--file", str(image), "-p", "what is this?")
@@ -253,7 +253,7 @@ def test_prompt_file_binary_attachment_uses_descriptor(monkeypatch, tmp_path, ca
         seen.append(kwargs["messages"][-1].parts[0].text)
         return _fake_stream_result("BINARY_OK")
 
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
 
     actual = js(monkeypatch, "--file", str(binary), "-p", "inspect")
@@ -272,7 +272,7 @@ def test_missing_attachment_fails_without_model_call(monkeypatch, tmp_path):
     def stream_model_stub(**kwargs):  # pragma: no cover - must not be called
         raise AssertionError("model should not be called for a missing attachment")
 
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_model_stub)
 
     actual = js(monkeypatch, "--file", str(tmp_path / "missing.txt"), "-p", "summarize")

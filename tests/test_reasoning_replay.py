@@ -11,7 +11,7 @@ from ai.providers.openai.protocol import _messages_to_openai
 from repl_driver import run_async
 from turn_driver import js, one_turn
 
-from js import cli, history_record, memory, model_client, runtime
+from js import history_record, memory, model_client, run_assembly, runtime
 from js.config import InvocationSources, from_env
 from js.toolkit import ToolContext
 
@@ -41,7 +41,7 @@ def replay(monkeypatch, tmp_path):
     cfg = replace(cfg, prompts_dir=prompts, project_dir=tmp_path)
     context = ToolContext(cwd=tmp_path)
     monkeypatch.setattr(runtime.T, "STOCK_CONTEXT", context)
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     wire = []
 
     async def capture(**kwargs):

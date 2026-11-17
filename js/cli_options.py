@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from . import messages as msgs
+from .config import InvocationSources
 from .toolkit import policy
 
 
@@ -130,3 +131,11 @@ def invocation(options: RunOptions):
             os.environ.pop('JS_NOENV', None)
         else:
             os.environ['JS_NOENV'] = previous
+
+
+@dataclass(frozen=True)
+class Setup:
+    """What the command line settles before a mode runs: the setting sources
+    the run reads, and the --agent it names once that is validated."""
+    sources: InvocationSources
+    agent: str | None = None

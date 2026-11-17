@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from js import cli, output, transcript
+from js import debug_trace, output, transcript
 
 
 class _Broken:
@@ -59,7 +59,7 @@ def test_transcript_log_drops_failed_file_and_reports_once(notices, tmp_path):
 
 def test_debug_trace_drops_failed_file_and_reports_once(notices, tmp_path):
     good = open(tmp_path / "good.log", "a", encoding="utf-8")
-    sink = cli._DebugTraceSink([_Broken(), good], [])
+    sink = debug_trace.DebugTraceSink([_Broken(), good], [])
     sink.write("one\n")
     sink.write("two\n")
     sink.close()

@@ -1486,3 +1486,26 @@ def _save_settings_to_jsrc(path: Path, settings: dict, keys: list[str], fset_nam
     if changed or tail:
         _write_lines(path, lines + tail)
     return changed + len(tail)
+
+
+def live_optional_str_setting(live_settings: dict, path: tuple[str, str], default: str | None) -> str | None:
+    missing = object()
+    raw = get_dotted(live_settings, path, missing)
+    if raw is missing:
+        return default
+    if raw is None or isinstance(raw, str):
+        return raw
+    return default
+
+
+def live_bool_setting(live_settings: dict, path: tuple[str, ...], default: bool) -> bool:
+    raw = get_dotted(live_settings, path, default)
+    return raw if isinstance(raw, bool) else default
+
+
+def validate_cli_reasoning(reasoning: str) -> tuple[str | None, str | None]:
+    """Check a raw ``--reasoning`` value through the same registry validation as
+    ``set EFFORT`` and ``JS_REASONING``: any one word, kept as typed.
+    Returns (value, error)."""
+    spec = SPEC_BY_KEY["EFFORT"]
+    return coerce_value(spec, reasoning)

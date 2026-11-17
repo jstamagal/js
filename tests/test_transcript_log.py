@@ -7,7 +7,7 @@ from prompt_toolkit.application import Application, create_app_session
 from repl_driver import stub_screen, turn_stub
 from turn_driver import js
 
-from js import cli, runtime, transcript
+from js import cli, conversation, run_assembly, runtime, transcript
 from js.config import Config
 from js.model_client import ModelStreamResult
 
@@ -67,7 +67,7 @@ def test_transcript_log_knob_defaults_on(monkeypatch, tmp_path):
     from js.config import from_env
 
     cfg = from_env()
-    path = cli._transcript_log_path(cfg, cfg.settings)
+    path = transcript._transcript_log_path(cfg, cfg.settings)
     assert cfg.transcript_log is True
     assert path is not None
     assert path.parent.parent.name == "transcript"
@@ -83,7 +83,7 @@ def test_prompt_mode_transcript_logs_final_answer_with_ape(monkeypatch, tmp_path
         return _fake_stream_result("FINAL_OK")
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
 
@@ -105,10 +105,10 @@ def test_repl_transcript_logs_user_then_streamed_assistant(monkeypatch, tmp_path
         return _fake_stream_result("REPL_OK")
 
     monkeypatch.setattr(cli, "_warn_missing_binaries", lambda: None)
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
-    monkeypatch.setattr(cli, "_maybe_auto_compact_async", _no_compaction)
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", _no_compaction)
     stub_screen(monkeypatch, ["hello", "exit"], wait=True)
 
     assert cli.main([]) == 0
@@ -121,7 +121,7 @@ def test_repl_transcript_logs_user_then_streamed_assistant(monkeypatch, tmp_path
 def test_the_screen_draws_on_the_terminal_not_on_the_transcript_tee(monkeypatch, tmp_path):
     cfg = _cfg(tmp_path, tmp_path / "transcripts", session_name="repl.jsonl")
     monkeypatch.setattr(cli, "_warn_missing_binaries", lambda: None)
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
     stub_screen(monkeypatch, [])
@@ -250,7 +250,7 @@ def test_prompt_mode_transcript_records_each_tool_call_whole(monkeypatch, tmp_pa
         messages.append({"role": "assistant", "content": "FINAL_OK"})
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime, "run_turn_async", turn_stub(run_turn))
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
 
@@ -336,10 +336,10 @@ def test_transcript_failure_setting_keeps_healthy_files_writable(tmp_path, monke
     cfg = _cfg(tmp_path, tmp_path / "transcripts")
     cfg.settings["TRANSCRIPT_DISABLE_ALL_ON_ERROR"] = False
     healthy = io.StringIO()
-    monkeypatch.setattr(cli, "_open_transcript_log_sink",
+    monkeypatch.setattr(transcript, "_open_transcript_log_sink",
                         lambda paths: transcript.TranscriptLogSink([BadFile(), healthy], paths))
     telemetry = runtime.Telemetry(None)
-    cli._sync_transcript_sink(cfg, cfg.settings, telemetry)
+    transcript.sync_transcript_sink(cfg, cfg.settings, telemetry)
     sink = telemetry.transcript_log
     sink.write_plain("first\n")
     sink.write_plain("second\n")
@@ -363,7 +363,7 @@ def test_repl_transcript_records_the_lines_the_screen_shows(monkeypatch, tmp_pat
         return _fake_stream_result("ANSWER_SEEN")
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
-    monkeypatch.setattr(cli, "_maybe_auto_compact_async", _no_compaction)
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", _no_compaction)
 
     run_async(monkeypatch, cfg, ["hello"])
 

@@ -17,7 +17,7 @@ from ai.providers import history_utils
 from repl_driver import run_async
 from turn_driver import one_turn
 
-from js import cli, runtime
+from js import cli, repl_state, runtime
 from js.config import Config, from_env
 from js.memory import load_messages
 from js.model_client import ModelStreamResult, ModelToolCall
@@ -256,14 +256,14 @@ def test_flush_drops_lines_waiting_to_steer(monkeypatch, tmp_path):
 def test_steered_line_goes_through_the_input_event(monkeypatch, tmp_path):
     h = _Harness(monkeypatch, tmp_path)
     inputs: list[str] = []
-    real_emit = cli._emit_repl_event
+    real_emit = repl_state.emit_repl_event
 
     def recording_emit(state, telemetry, event, **payload):
         if event == "input":
             inputs.append(payload["text"])
         return real_emit(state, telemetry, event, **payload)
 
-    monkeypatch.setattr(cli, "_emit_repl_event", recording_emit)
+    monkeypatch.setattr(repl_state, "emit_repl_event", recording_emit)
 
     async def script(on_line, h):
         await on_line("first")

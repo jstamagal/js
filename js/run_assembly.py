@@ -23,8 +23,9 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from . import login_defaults, memory as M, persona as P, routing, settings
-from .session_catalog import last_stamp
+from . import config, login_defaults, memory as M, persona as P, routing, session_store, settings
+from .config import Config, InvocationSources, resolve_session_file
+from .session_catalog import first_metadata, last_stamp
 from .toolkit import policy
 from .toolkit.registry import registry_for_roots
 
@@ -247,3 +248,43 @@ def settle(cfg: Any, *, model: str | None = None, reasoning: str | None = None,
     system = prompt_spec.system if sends_agent_prompt else recorded
     return SettledRun(config=cfg, system=system, prompt_spec=prompt_spec, registry=registry,
                       resume=resumed, recorded_system=recorded, effort=effort)
+
+
+def inherit_session_chat(session: str | None) -> bool:
+    from .cli_options import current, restore_chat
+
+    session = session or os.environ.get("JS_SESSION")
+    if not session:
+        return False
+    try:
+        path = resolve_session_file(session_store.folder_for(Path.cwd()), session)
+        metadata = first_metadata(path)
+    except (ValueError, OSError):
+        return False
+    if not metadata or not metadata.get("chat"):
+        return False
+    agent = current().agent
+    if agent in (None, "none"):
+        agent = metadata.get("agent")
+        if agent == "none":
+            agent = None
+    restore_chat(agent)
+    return True
+
+
+def from_env(
+    session: str | None = None,
+    *,
+    save_session: bool = True,
+    sources: InvocationSources = InvocationSources(),
+    agent_id: str | None = None,
+) -> Config:
+    if inherit_session_chat(session):
+        from .cli_options import current
+        agent_id = current().agent or (None if agent_id == "none" else agent_id)
+    return config.from_env(
+        save_session=save_session,
+        sources=sources,
+        session=session,
+        agent_id=agent_id,
+    )

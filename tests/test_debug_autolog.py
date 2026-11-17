@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 from turn_driver import js
 
-from js import cli, model_client, runtime
+from js import cli, conversation, debug_trace, model_client, run_assembly, runtime
 from js.config import Config
 from js.model_client import ModelStreamResult
 
@@ -68,7 +68,7 @@ def test_debug_autolog_off_disables_path(tmp_path):
     off = dict(cfg.settings)
     off.setdefault("runtime", {})
     off["REQUEST_LOG"] = False
-    assert cli._debug_autolog_path(cfg, off) is None
+    assert debug_trace.debug_autolog_path(cfg, off) is None
 
 
 # --- the full request trace goes to the sink, never to stdout --------------
@@ -138,9 +138,9 @@ def test_plain_prompt_run_keeps_trace_off_stdout(monkeypatch, tmp_path, capsys):
         return _fake_stream_result("final answer")
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli, "_from_env", lambda *_args, **_kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *_args, **_kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stub)
-    monkeypatch.setattr(cli, "_append_turn", lambda *_a, **_k: None)
+    monkeypatch.setattr(conversation, "append_turn", lambda *_a, **_k: None)
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_a, **_k: None)
 
     rc = js(monkeypatch, "-p", "hi")
@@ -170,9 +170,9 @@ def test_debug_flag_prints_concise_form(monkeypatch, tmp_path, capsys):
         return _fake_stream_result("hello")
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli, "_from_env", lambda *_args, **_kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *_args, **_kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stub)
-    monkeypatch.setattr(cli, "_append_turn", lambda *_a, **_k: None)
+    monkeypatch.setattr(conversation, "append_turn", lambda *_a, **_k: None)
     monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_a, **_k: None)
 
     rc = js(monkeypatch, "--debug", "-p", "hi")

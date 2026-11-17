@@ -7,7 +7,7 @@ import pytest
 from repl_driver import run_async, stub_screen, turn_stub
 from test_repl_harness import make_cfg
 
-from js import cli, memory, snippets
+from js import cli, conversation, memory, snippets
 from js.memory import load_messages
 
 SESSION = "modeswitch"
@@ -25,7 +25,7 @@ def home(monkeypatch, tmp_path):
     async def no_compaction(*_a, **_k):
         return None
 
-    monkeypatch.setattr(cli, "_maybe_auto_compact_async", no_compaction)
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", no_compaction)
     sent: list[str] = []
 
     def run_turn_stub(cfg, system, messages, *_a, **_k):
@@ -60,16 +60,16 @@ def test_one_shot_then_repl_carries_the_interactive_reminder_once(monkeypatch, t
     _repl(monkeypatch, ["second", "third"])
 
     assert home[0] == "first"
-    assert home[1] == f"second\n\n{cli._mode_switch_notice('-p', '-p', 'repl')}"
+    assert home[1] == f"second\n\n{conversation._mode_switch_notice('-p', '-p', 'repl')}"
     assert home[2] == "third"
-    assert len(_reminders(tmp_path, cli._mode_switch_notice('-p', '-p', 'repl'))) == 1
+    assert len(_reminders(tmp_path, conversation._mode_switch_notice('-p', '-p', 'repl'))) == 1
 
 
 def test_repl_then_one_shot_carries_the_one_shot_reminder(monkeypatch, tmp_path, home):
     _repl(monkeypatch, ["first"])
     _one_shot("second")
 
-    assert home == ["first", f"second\n\n{cli._mode_switch_notice('repl', 'repl', '-p')}"]
+    assert home == ["first", f"second\n\n{conversation._mode_switch_notice('repl', 'repl', '-p')}"]
 
 
 def test_a_one_shot_after_chat_after_a_one_shot_says_the_session_began_as_a_one_shot(monkeypatch, tmp_path, home):
@@ -77,9 +77,9 @@ def test_a_one_shot_after_chat_after_a_one_shot_says_the_session_began_as_a_one_
     _repl(monkeypatch, ["second"])
     _one_shot("third")
 
-    note = cli._mode_switch_notice("-p", "repl", "-p")
+    note = conversation._mode_switch_notice("-p", "repl", "-p")
     assert home[2] == f"third\n\n{note}"
-    assert note != cli._mode_switch_notice("repl", "repl", "-p")
+    assert note != conversation._mode_switch_notice("repl", "repl", "-p")
     assert memory.first_turn_mode(_session_file(tmp_path)) == "-p"
 
 
@@ -117,7 +117,7 @@ def test_async_repl_after_one_shot_carries_the_reminder(monkeypatch, tmp_path):
 
     run_async(monkeypatch, cfg, ["hello", "again"])
 
-    assert sent == [f"hello\n\n{cli._mode_switch_notice('-p', '-p', 'repl')}", "again"]
+    assert sent == [f"hello\n\n{conversation._mode_switch_notice('-p', '-p', 'repl')}", "again"]
 
 
 def test_record_turn_mode_reports_only_a_change(tmp_path):

@@ -574,3 +574,15 @@ def _expand_spec(spec: PromptSpec, cfg) -> PromptSpec:
 
 def load_prompt(prompts_dir: Path) -> str:
     return load_prompt_spec(prompts_dir).system
+
+
+def format_prompt_load_error(cfg, exc: Exception) -> str:
+    """Turn a persona-load failure into an operator-legible line. A missing prompt
+    directory means the named agent doesn't exist anywhere on the search path —
+    say so plainly and point at the global agents dir where one is created,
+    instead of leaking the raw 'prompts directory missing at <path>'."""
+    if isinstance(exc, FileNotFoundError) and isinstance(cfg.prompts_dir, Path) and not cfg.prompts_dir.is_dir():
+        agents_dir = paths.global_agents_dir()
+        agent_id = getattr(cfg, "agent_id", "?")
+        return msgs.NO_SUCH_AGENT.said(agent=agent_id, agents_dir=agents_dir, new_dir=agents_dir / agent_id)
+    return msgs.of_error(exc)

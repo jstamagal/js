@@ -20,6 +20,7 @@ from js import (
     cli,
     memory as M,
     messages as msgs,
+    run_assembly,
     runtime,
     session_picker,
     session_query as Q,
@@ -447,7 +448,7 @@ def test_bare_session_resumes_the_choice_with_its_own_agent_and_dir(tmp_path, mo
         seen.update(session=session, agent=kwargs.get("agent_id"), cwd=os.getcwd())
         raise ValueError("stop here")
 
-    monkeypatch.setattr(cli, "_from_env", config)
+    monkeypatch.setattr(run_assembly, "from_env", config)
     monkeypatch.setattr(cli, "_warn_missing_binaries", lambda: None)
     assert cli.main(["--session"]) == 2
     assert seen == {"session": str(path.resolve()), "agent": "research", "cwd": str(session_dir.resolve())}

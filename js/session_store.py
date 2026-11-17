@@ -39,9 +39,12 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import messages as msgs, paths
+
+if TYPE_CHECKING:
+    from .config import Config
 
 SUFFIX = ".jsonl"
 TEXT_SUFFIX = ".txt"
@@ -436,3 +439,10 @@ def link_file(session_file: Path) -> int:
         os.utime(staging, ns=(info.st_atime_ns, info.st_mtime_ns))
         os.replace(staging, session_file)
     return given
+
+
+def session_hint_arg(cfg: Config) -> str:
+    try:
+        return cfg.session_file.relative_to(cfg.sessions_dir).with_suffix("").as_posix()
+    except ValueError:
+        return display_name(cfg.session_file)

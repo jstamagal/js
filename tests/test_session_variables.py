@@ -5,7 +5,7 @@ import ai.types.usage
 import pytest
 from turn_driver import js
 
-from js import cli, logins, persona, runtime
+from js import logins, persona, run_assembly, runtime
 from js.config import from_env
 from js.model_client import ModelStreamResult
 from js.promptexpand import expand_prompt
@@ -75,7 +75,7 @@ def test_system_variable_uses_the_model_selected_for_the_run(tmp_path, monkeypat
     (agent / "agent.yaml").write_text("model: ollama/agent-model\n", encoding="utf-8")
     (agent / "01-prompt.md").write_text("model=%%CURRENT_SESSION_MODEL%%", encoding="utf-8")
     cfg = replace(from_env(save_session=False, agent_id="voice"), explicit_model=False)
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     seen = []
 
     def stream(**kwargs):

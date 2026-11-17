@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from test_config_compaction_layers import _compact_test_cfg
 
-from js import cli, paths, repl_commands, repl_state
+from js import cli, paths, repl_commands, repl_state, run_assembly
 from js.repl_state import ReplState
 
 
@@ -67,7 +67,7 @@ def _run_compact_route(monkeypatch, cfg, route):
     else:
         cfg.session_file.parent.mkdir(parents=True, exist_ok=True)
         cfg.session_file.touch()
-        monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+        monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
         monkeypatch.setattr(cli.P, "load_configured_prompt_spec", lambda cfg: SimpleNamespace(system=""))
         monkeypatch.setattr(cli.M, "load_replay_messages", lambda path: [])
         assert cli._run_compact_offline("test-session") == 0
@@ -113,7 +113,7 @@ def test_missing_compact_session_does_not_create_file_or_run_work(monkeypatch, t
 def test_compact_session_removed_after_resolution_fails_before_prompt(monkeypatch, tmp_path, capsys):
     cfg = _compact_test_cfg(tmp_path, {})
     assert not cfg.session_file.exists()
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(cli.P, "load_configured_prompt_spec", lambda cfg: pytest.fail("loaded prompt after session vanished"))
     assert cli._run_compact_offline("vanished") != 0
     captured = capsys.readouterr()
@@ -133,7 +133,7 @@ def test_offline_compaction_explicit_model_wins_without_rewriting_config(monkeyp
         observed.append((actual_cfg.model, model or cli.compaction.get_model(actual_cfg)))
         return "summary complete"
 
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(cli.P, "load_configured_prompt_spec", lambda cfg: SimpleNamespace(system=""))
     monkeypatch.setattr(cli.compaction, "compact_now_sync", compact)
     assert cli._run_compact_offline("existing", model=explicit) == 0

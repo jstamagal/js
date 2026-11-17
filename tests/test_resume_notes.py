@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from repl_driver import stub_screen, turn_stub
 
-from js import cli, memory as M, run_assembly, runtime, session_store, snippets
+from js import cli, conversation, memory as M, run_assembly, runtime, session_store, snippets
 from js.config import from_env
 from js.memory import load_messages
 from js.session_catalog import last_stamp
@@ -67,8 +67,8 @@ def _session(name: str, messages: list[dict], stamp: dict | None = None) -> Path
 
 def _switch_note(previous: str, current: str) -> str:
     provider = from_env().provider_id
-    return snippets.render("model-changed", PREVIOUS=cli._stamp_label(previous, provider),
-                                           CURRENT=cli._stamp_label(current, provider))
+    return snippets.render("model-changed", PREVIOUS=conversation.stamp_label(previous, provider),
+                                           CURRENT=conversation.stamp_label(current, provider))
 
 
 # --- -m beats the stamp ----------------------------------------------------------

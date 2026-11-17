@@ -10,12 +10,14 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from . import (
+    events,
     login_defaults,
     logins,
     messages as msgs,
     providers,
     routing,
     run_assembly,
+    runtime,
     settings as _settings,
     turn_settings,
 )
@@ -26,7 +28,6 @@ from .toolkit import policy as tool_policy
 if TYPE_CHECKING:
     import re
 
-    from .events import EventHooks
     from .keys import Keymap
     from .mcp.host import MCPHost
     from .persona import PromptSpec
@@ -62,7 +63,7 @@ class ReplState:
     prompt_spec: PromptSpec | None = None
     tool_selectors: tuple[str, ...] = ()
     tool_registry: ToolRegistry | None = None
-    events: EventHooks | None = None
+    events: events.EventHooks | None = None
     aliases: dict[str, str] = field(default_factory=dict)
     # Reminders queued for the next user message.
     pending_notes: list[str] = field(default_factory=list)
@@ -266,3 +267,36 @@ def set_provider_state(state: ReplState, provider_id: str) -> None:
     state.provider_headers = {}
     state.provider_base_url = providers.provider_base_url(provider_def, None, os.environ)
     state.provider_api_key = providers.provider_api_key(provider_def, None, os.environ)
+
+
+def emit_repl_event(
+    state: ReplState,
+    telemetry: runtime.Telemetry,
+    event: str,
+    **payload,
+) -> events.EventEmission:
+    hook_table = state.events
+    if hook_table is None:
+        return events.EventEmission(event=event, payload=dict(payload), hooks=[])
+    emission = hook_table.emit(event, **payload)
+    for result in emission.results:
+        if result.error:
+            telemetry.event(
+                "event_handler_error",
+                event=emission.event,
+                handler=result.hook.handler,
+                error=result.error,
+            )
+    return emission
+
+
+def emit_session_event(state: ReplState, telemetry: runtime.Telemetry, cfg: Config, event: str) -> None:
+    """session_start or session_end for the REPL session ``state`` runs."""
+    emit_repl_event(
+        state, telemetry, event,
+        session=str(cfg.session_file),
+        agent=cfg.agent_id,
+        model=state.model,
+        cwd=str(runtime.T.STOCK_CONTEXT.cwd),
+        messages=len(state.messages),
+    )

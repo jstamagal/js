@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 from repl_driver import stub_screen, turn_stub
 
-from js import cli, prompt_commands as pc, repl_commands
+from js import cli, conversation, prompt_commands as pc, repl_commands
 from js.repl_state import ReplState
 from js.replcomplete import JsCompleter
 
@@ -146,7 +146,7 @@ def repl(monkeypatch, tmp_path):
     async def no_compaction(*_a, **_k):
         return None
 
-    monkeypatch.setattr(cli, "_maybe_auto_compact_async", no_compaction)
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", no_compaction)
     sent: list[str] = []
 
     def run_turn_stub(cfg, system, messages, *_a, **_k):

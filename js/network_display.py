@@ -7,10 +7,11 @@ import socket
 import sys
 from dataclasses import dataclass
 
+import ai
 import httpx
 import httpx2
 
-from . import fset, messages as msgs
+from . import fset, messages as msgs, routing
 
 
 @dataclass(frozen=True)
@@ -223,3 +224,21 @@ def _request_host(err: BaseException) -> str:
     except Exception:  # noqa: BLE001
         return ""
     return getattr(getattr(request, "url", None), "host", "") or ""
+
+
+def error_text(e: BaseException) -> str:
+    """``e`` for a failure line: a provider's own one-line message as it is,
+    a provider's status failure as its status and message, any other error
+    after its kind; a `said()` entry inside either keeps its format
+    (`msgs.of_error`)."""
+    from . import model_client
+
+    failure = describe_failure(e)
+    if is_outage(failure):
+        return msgs.NET_OUTAGE_ACTION.said(failure=failure)
+    said = msgs.of_error(e)
+    if isinstance(e, routing.ProviderNotLoggedInError):
+        return said
+    if isinstance(e, ai.ProviderStatusError) and (status := model_client.error_status(e)) is not None:
+        return msgs.ERROR_OF_STATUS.said(status=status, error=model_client.error_message(e))
+    return msgs.ERROR_OF_KIND.said(kind=type(e).__name__, error=said)

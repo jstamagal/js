@@ -18,7 +18,17 @@ from test_runtime_offline_integration import (
 )
 from turn_driver import one_turn
 
-from js import cli, compaction, events, hookexec, repl_commands, runtime, settings
+from js import (
+    cli,
+    compaction,
+    conversation,
+    events,
+    hookexec,
+    repl_commands,
+    repl_state,
+    runtime,
+    settings,
+)
 from js.memory import load_messages
 from js.repl_state import ReplState
 from js.toolkit import Tool, ToolContext, ToolRegistry
@@ -65,7 +75,7 @@ def test_handler_stdout_rides_on_the_next_user_message_once(tmp_path):
     state, cfg = _state(tmp_path)
     _on(state, cfg, "session_start exec printf 'on branch main'")
 
-    cli._emit_session_event(state, runtime.Telemetry(None), cfg, "session_start")
+    repl_state.emit_session_event(state, runtime.Telemetry(None), cfg, "session_start")
 
     first = _user_text(state, "hello")
     assert "hello" in first
@@ -77,7 +87,7 @@ def test_handler_reads_the_event_as_json_on_stdin(tmp_path):
     state, cfg = _state(tmp_path)
     _on(state, cfg, "session_start exec cat")
 
-    cli._emit_session_event(state, runtime.Telemetry(None), cfg, "session_start")
+    repl_state.emit_session_event(state, runtime.Telemetry(None), cfg, "session_start")
 
     [note] = state.pending_notes
     payload = json.loads(note.removeprefix("<js-reminder>").removesuffix("</js-reminder>"))
@@ -98,7 +108,7 @@ def test_blank_stdout_queues_nothing(tmp_path):
     state, cfg = _state(tmp_path)
     _on(state, cfg, "session_start exec true")
 
-    cli._emit_session_event(state, runtime.Telemetry(None), cfg, "session_start")
+    repl_state.emit_session_event(state, runtime.Telemetry(None), cfg, "session_start")
 
     assert not state.pending_notes
 
@@ -498,7 +508,7 @@ def home(monkeypatch, tmp_path):
     async def no_compaction(*_a, **_k):
         return None
 
-    monkeypatch.setattr(cli, "_maybe_auto_compact_async", no_compaction)
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", no_compaction)
     sent: list[str] = []
 
     def run_turn_stub(cfg, system, messages, *_a, **_k):

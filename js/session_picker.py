@@ -12,6 +12,7 @@ to resume a session or branch one at a message, or None when closed.
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from collections.abc import Callable
@@ -32,7 +33,7 @@ from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.output import Output, create_output
 from prompt_toolkit.styles import Style
 
-from . import fset, keys, messages as msgs, session_query as Q, session_store
+from . import fset, keys, messages as msgs, runtime, session_query as Q, session_store
 from .session_catalog import branch_session
 
 RESUME = "resume"
@@ -609,3 +610,14 @@ def session_target(choice: Choice) -> SessionTarget:
                  name=session_store.display_name(branch))
         path = branch
     return SessionTarget(path, session.cwd, session.agent, session.jailed)
+
+
+def enter_session_dir(target: SessionTarget) -> None:
+    """Move to the directory the session started in, when it still exists."""
+    if not target.cwd:
+        return
+    if not Path(target.cwd).is_dir():
+        msgs.warn(msgs.SESSIONS_DIR_GONE, dir=target.cwd, cwd=Path.cwd())
+        return
+    os.chdir(target.cwd)
+    runtime.T.STOCK_CONTEXT.cwd = Path.cwd()

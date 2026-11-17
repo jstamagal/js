@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from turn_driver import one_turn
 
-from js import paths, snippets
+from js import paths, run_assembly, snippets
 from js.toolkit import descriptions
 
 
@@ -140,7 +140,7 @@ def test_missing_runtime_snippet_exits_two(monkeypatch, tmp_path, capsys, mode):
     prompt_dir.mkdir()
     (prompt_dir / "01-prompt.md").write_text("SYSTEM\n")
     cfg = replace(_prompt_cfg(tmp_path, prompt_dir, "runtime"), max_output_tokens=4096)
-    monkeypatch.setattr(cli, "_from_env", lambda *a, **k: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *a, **k: cfg)
     monkeypatch.setattr(runtime.T, "STOCK_CONTEXT", ToolContext(cwd=tmp_path))
     monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)

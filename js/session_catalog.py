@@ -15,15 +15,21 @@ conversation history.
 from __future__ import annotations
 
 import fcntl
+import functools
 import json
 import os
 import secrets
+import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from . import messages as msgs, paths, session_store, session_text, usage as usage_mod
+from . import messages as msgs, paths, providers, session_store, session_text, usage as usage_mod
+
+if TYPE_CHECKING:
+    from .config import Config
 
 _METADATA_KIND = "session_metadata"
 _METADATA_VERSION = 3
@@ -445,3 +451,88 @@ def catalog_sessions(sessions_root: Path) -> list[dict[str, Any]]:
 acquire_session_liveness = acquire_session
 release_session_liveness = release_session
 list_sessions = catalog_sessions
+
+
+session_leases = threading.local()
+
+
+def session_scope(func):
+    """Release every saved session activated during one CLI entry point."""
+
+    @functools.wraps(func)
+    def wrapped(*args, **kwargs):
+        leases = getattr(session_leases, "items", None)
+        if leases is None:
+            leases = []
+            session_leases.items = leases
+        start = len(leases)
+        old_caller_key = getattr(session_leases, "caller_key", None)
+        old_start = getattr(session_leases, "start", None)
+        from .cli_options import current, invocation
+        try:
+            with invocation(current()):
+                return func(*args, **kwargs)
+        finally:
+            while len(leases) > start:
+                leases.pop().release()
+            session_leases.caller_key = old_caller_key
+            session_leases.start = old_start
+
+    return wrapped
+
+
+def activate_saved_session(
+    cfg: Config,
+    *,
+    caller_key: str | None = None,
+    announce_generated: bool = False,
+    model: str | None = None,
+) -> None:
+    if cfg.session_file == Path(os.devnull):
+        return
+    effective_key = caller_key if caller_key is not None else getattr(session_leases, "caller_key", None)
+    start = getattr(session_leases, "start", None) or {}
+    provider, bare = _recorded_model(model, cfg)
+    from .cli_options import current
+    options = current()
+    record_session_start(
+        cfg.session_file,
+        cwd=Path.cwd(),
+        caller_key=effective_key,
+        # A --chat run with no --agent has no persona: its agent is "none".
+        agent="none" if options.chat and options.agent is None else cfg.agent_id,
+        model=bare,
+        provider=provider,
+        mode=start.get("mode"),
+        command=start.get("command"),
+        chat=options.chat,
+    )
+    lease = acquire_session(cfg.session_file)
+    session_leases.items.append(lease)
+    if announce_generated:
+        _announce_generated_session(cfg)
+
+
+def _announce_generated_session(cfg: Config) -> None:
+    payload = {
+        "js_session": {
+            "agent": cfg.agent_id,
+            "session_id": session_store.session_hint_arg(cfg),
+            "path": str(cfg.session_file.resolve(strict=False)),
+        }
+    }
+    print(json.dumps(payload, separators=(",", ":"), ensure_ascii=False), file=sys.stderr)
+
+
+def _recorded_model(model: str | None, cfg: Config) -> tuple[str | None, str | None]:
+    """(provider, model id) a session start records for the --model value
+    `model`, or for the configured model when there is none. A value without a
+    known provider prefix records no provider: which one it lands on is
+    resolved later."""
+    if not model:
+        return cfg.provider_id, cfg.model
+    try:
+        provider, bare = providers.parse_model_prefix(model)
+    except ValueError:
+        return None, model
+    return provider, bare

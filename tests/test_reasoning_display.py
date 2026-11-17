@@ -12,12 +12,12 @@ import pytest
 from turn_driver import js, one_turn
 
 from js import (
-    cli,
     config,
     display,
     history_record,
     memory,
     model_client,
+    run_assembly,
     runtime,
     screen,
     transcript,
@@ -343,7 +343,7 @@ def test_prompt_mode_displays_reasoning_separately_and_persists_it(monkeypatch, 
         "VISION=off", "REQUEST_LOG=off", f"REASONING_DISPLAY={level}",
     )))
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli, "_from_env", lambda *a, **kw: cfg)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *a, **kw: cfg)
     scripted(monkeypatch, cancel=cancel)
     assert js(monkeypatch, "-p", "first") == (130 if cancel else 0)
     displayed = capsys.readouterr()
@@ -356,7 +356,7 @@ def test_prompt_mode_displays_reasoning_separately_and_persists_it(monkeypatch, 
     else:
         assert messages[-1]["content"] == "answer"
         assert "answer" in displayed.out
-    log_path = cli._transcript_log_path(cfg, cfg.settings)
+    log_path = transcript._transcript_log_path(cfg, cfg.settings)
     assert log_path is not None
     assert THOUGHT not in log_path.read_text()
 

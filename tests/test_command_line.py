@@ -223,7 +223,7 @@ def test_resume_hint_command(monkeypatch, printed, agent, settings, model, custo
 ])
 def test_session_switch_command(monkeypatch, target, argv):
     ran = []
-    monkeypatch.setattr(cli, "_enter_session_dir", lambda _target: None)
+    monkeypatch.setattr(session_picker, "enter_session_dir", lambda _target: None)
     monkeypatch.setattr(cli.os, "execv", lambda program, words: ran.append(words))
     cli._exec_session(target)
     assert [words[3:] for words in ran] == [argv]

@@ -9,22 +9,28 @@ original text lives in the session JSONL.
 from __future__ import annotations
 
 import contextlib
+import os
 import sys
 import threading
 import weakref
 from collections.abc import Callable, Iterator
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import (
     display as _display,
     fset,
     messages as msgs,
     output,
+    paths as _paths,
     settings as _settings,
     toolkit as _toolkit,
 )
+
+if TYPE_CHECKING:
+    from . import runtime
+    from .config import Config
 
 
 def strip_ansi(text: str) -> str:
@@ -423,3 +429,62 @@ def open_transcript_sink(paths: list[Path]) -> TranscriptLogSink | None:
     if not files:
         return None
     return TranscriptLogSink(files, opened)
+
+
+def _transcript_log_path(cfg: Config, live_settings: dict) -> Path | None:
+    """Resolve the per-session visible transcript path, or None when disabled."""
+    if not _settings.live_bool_setting(
+        live_settings, ("TRANSCRIPT_LOG",), getattr(cfg, "transcript_log", True)
+    ):
+        return None
+    session = cfg.session_file
+    if not session or session == Path(os.devnull):
+        stem = f"{cfg.agent_id}-{os.getpid()}"
+    else:
+        stem = session.stem
+    override = _settings.live_optional_str_setting(
+        live_settings, ("TRANSCRIPT_LOG_DIR",), getattr(cfg, "transcript_log_dir", None)
+    )
+    root = Path(override).expanduser() if override else (_paths.transcript_root() / cfg.agent_id)
+    return root / f"{stem}.log"
+
+
+def _open_transcript_log_sink(paths: list[Path]):
+    return open_transcript_sink(paths)
+
+
+def sync_transcript_sink(cfg: Config, live_settings: dict, telemetry: runtime.Telemetry) -> None:
+    desired: list[Path] = []
+    transcript_path = _transcript_log_path(cfg, live_settings)
+    if transcript_path is not None:
+        desired.append(transcript_path)
+    old = getattr(telemetry, "transcript_log", None)
+    if isinstance(old, TranscriptLogSink) and old.paths == desired:
+        old.settings = live_settings
+        return
+    telemetry.transcript_log = _open_transcript_log_sink(desired) if desired else None
+    if isinstance(telemetry.transcript_log, TranscriptLogSink):
+        telemetry.transcript_log.settings = live_settings
+    if isinstance(old, TranscriptLogSink) and old is not telemetry.transcript_log:
+        old.close()
+
+
+def transcript_sink(telemetry: runtime.Telemetry):
+    sink = getattr(telemetry, "transcript_log", None)
+    return sink if isinstance(sink, TranscriptLogSink) else None
+
+
+def enter_transcript_stdio(stack: contextlib.ExitStack, telemetry: runtime.Telemetry) -> None:
+    stack.enter_context(contextlib.redirect_stdout(
+        TranscriptTee(sys.stdout, lambda: transcript_sink(telemetry))
+    ))
+    stack.enter_context(contextlib.redirect_stderr(
+        TranscriptTee(sys.stderr, lambda: transcript_sink(telemetry))
+    ))
+
+
+@contextlib.contextmanager
+def transcript_stdio(telemetry: runtime.Telemetry):
+    with contextlib.ExitStack() as stack:
+        enter_transcript_stdio(stack, telemetry)
+        yield
