@@ -1,5 +1,6 @@
-"""The REPL's live state for one session (`cli._repl_state` builds it), the
-assembly a session runs with, and what carries live settings into the state."""
+"""The REPL's live state for one session (`repl._repl_state` builds it), the
+assembly a session runs with, what carries live settings into the state, and
+the `on` events a state emits."""
 
 from __future__ import annotations
 

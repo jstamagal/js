@@ -15,7 +15,7 @@ import pytest
 from repl_driver import stub_screen, turn_stub
 from session_marks import append_compaction_mark
 
-from js import cli, memory as M, run_assembly, runtime, session_store, supervisor, usage
+from js import cli, memory as M, repl, run_assembly, runtime, session_store, supervisor, usage
 from js.config import from_env
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
@@ -287,13 +287,13 @@ def test_a_generated_session_name_that_matches_nothing_is_an_error(monkeypatch, 
 
 def _capture_repl_state(monkeypatch) -> list[dict]:
     states: list[dict] = []
-    build = cli._repl_state
+    build = repl._repl_state
 
     def capturing(*args, **kwargs):
         states.append(build(*args, **kwargs))
         return states[-1]
 
-    monkeypatch.setattr(cli, "_repl_state", capturing)
+    monkeypatch.setattr(repl, "_repl_state", capturing)
     return states
 
 

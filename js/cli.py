@@ -55,15 +55,14 @@ from . import (
     migrate_config,
     model_client,
     model_metadata,
-    motd,
     network_display,
     output,
     pastes,
     paths as _paths,
     persona as P,
     prompt_commands,
-    prompt_history,
     providers,
+    repl,
     repl_commands,
     repl_state,
     replcomplete,
@@ -160,26 +159,6 @@ def _latest_session_name(agent_id: str) -> str | None:
     return str(latest) if latest is not None else None
 
 
-def _print_resume_hint(cfg: Config, state: ReplState) -> None:
-    """Print the command that reopens this session.
-
-    Without it the name is only recoverable by hunting through the sessions
-    directory, and the session is effectively lost the moment the screen scrolls.
-    The model is folded in so the resume comes back on the one in use."""
-    if cfg.session_file == Path(os.devnull) or not state.messages:
-        return
-    # A bare `js --session` runs the `DEFAULT_AGENT` setting, so the hint names the
-    # agent unless both this run and that setting are on the js/jsrc default.
-    stock = settings.default_value("DEFAULT_AGENT")
-    named = cfg.agent_id != stock or settings.knob(cfg.settings, "DEFAULT_AGENT") != stock
-    model = state.model
-    resume = command_line.argv(("--agent", cfg.agent_id if named else None),
-                               ("--model", model if isinstance(model, str) and model else None),
-                               ("--home", str(_paths.home()) if _paths.custom_home() else None),
-                               ("--session", session_store.session_hint_arg(cfg)))
-    msgs.say(msgs.RESUME_HINT, command=shlex.join(["js", *resume]))
-
-
 def _exchanges_are_the_prompt(args: argparse.Namespace, agent: str | None,
                               sources: InvocationSources) -> bool:
     """Whether a run with no -p runs the agent's NN-user.md / NN-agent.md
@@ -239,63 +218,9 @@ def _read_stdin_attachment_if_piped() -> bytes:
     return sys.stdin.read().encode("utf-8")
 
 
-def _debug_log_from_live_settings(cfg: Config, live_settings: dict) -> Path | None:
-    enabled = settings.live_bool_setting(live_settings, ("DEBUG_LOG",), cfg.debug_log is not None)
-    if not enabled:
-        return None
-    return cfg.debug_log or (_paths.state_root() / cfg.agent_id / "debug.log")
-
-
-def _sync_telemetry_from_live_settings(cfg: Config, state: ReplState, telemetry: runtime.Telemetry) -> None:
-    debug_log = _debug_log_from_live_settings(cfg, state.settings)
-    if debug_log is not None:
-        try:
-            debug_log.parent.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            pass
-    telemetry.debug_log = debug_log
-    _sync_trace_sink(cfg, state.settings, telemetry)
-    transcript_mod.sync_transcript_sink(cfg, state.settings, telemetry)
-
-
 def _mute_transcript_tee(sink):
     mute = getattr(sink, "mute_tee", None)
     return mute() if callable(mute) else contextlib.nullcontext()
-
-
-def _sync_trace_sink(
-    cfg: Config, live_settings: dict, telemetry: runtime.Telemetry, extra_paths: tuple[Path, ...] = ()
-) -> None:
-    """Attach/refresh ``telemetry.trace_sink`` for the always-on autolog. Reopens
-    only when the target path set changes, so a long REPL session keeps one open
-    handle; toggling ``REQUEST_LOG`` off closes it."""
-    desired: list[Path] = []
-    autolog = debug_trace.debug_autolog_path(cfg, live_settings)
-    if autolog is not None:
-        desired.append(autolog)
-    desired.extend(extra_paths)
-    old = telemetry.trace_sink
-    if isinstance(old, debug_trace.DebugTraceSink) and old.paths == desired:
-        return  # already open on exactly these targets
-    telemetry.trace_sink = debug_trace.open_debug_trace_sink(desired) if desired else None
-    if isinstance(old, debug_trace.DebugTraceSink) and old is not telemetry.trace_sink:
-        old.close()
-
-
-def _sync_provider_delta_from_live_settings(
-    state: ReplState,
-    before: tuple[str | None, str | None, str | None],
-    after: tuple[str | None, str | None, str | None],
-) -> None:
-    changed_keys: list[str] = []
-    if before[0] != after[0]:
-        changed_keys.append("PROVIDER")
-    if before[1] != after[1]:
-        changed_keys.append("BASE_URL")
-    if before[2] != after[2]:
-        changed_keys.append("API_KEY")
-    if changed_keys:
-        repl_state.sync_provider_from_live_settings(state, changed_keys)
 
 
 def _maybe_auto_compact(cfg: Config, state: ReplState) -> None:
@@ -317,30 +242,6 @@ def _run_state(cfg: Config, system: str, messages: list[dict],
         settings=cfg.settings,
         events=hooks,
     )
-
-
-# The session `/session` chose, run once the REPL has closed: {"target"}.
-_pending_switch: dict[str, object] = {}
-
-
-def _queue_switch(state: ReplState) -> None:
-    target = state.switch_session
-    if isinstance(target, session_picker.SessionTarget):
-        _pending_switch.update(target=target)
-
-
-def _exec_session(target: session_picker.SessionTarget) -> None:
-    """Replace this process with js resuming `target` in its own directory
-    and agent. Resume puts it back on its last-stamped model."""
-    session_picker.enter_session_dir(target)
-    argv = [sys.executable, "-m", "js", *command_line.argv(
-        ("--session", str(target.path)),
-        ("-a", target.agent or None),
-        ("-C", target.cwd if target.jailed and target.cwd else None),
-    )]
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os.execv(sys.executable, argv)
 
 
 def _take_pending_notes(state: ReplState) -> list[str]:
@@ -381,27 +282,6 @@ def _live_cfg_snapshot(cfg: Config, state: ReplState) -> Config:
     """The turn cfg from live state, never from a half-applied command."""
     with repl_state.LIVE_STATE_LOCK:
         return state.config_for_turn(cfg)
-
-
-def _command_completions(state: ReplState) -> dict[str, str | None]:
-    """Verb -> argument completion source, for every command and alias."""
-    table: dict[str, str | None] = {name: None for name in prompt_commands.discover(Path.cwd())}
-    table.update({verb: command.complete for verb, command in repl_commands.commands(state).items()})
-    table.update({name: None for name in state.aliases})
-    return table
-
-
-def _event_dispatcher(state: ReplState, cfg: Config):
-    """Run `on` handler text through the command table."""
-
-    def dispatch(hook: events.EventHook, emission: events.EventEmission) -> events.EventHandlerResult:
-        handled, error = repl_commands.run_command(setcmd.expand_line(hook.handler, state.settings), state, cfg)
-        if not handled:
-            parsed = setcmd.split_command(hook.handler)
-            error = msgs.EVENT_HANDLER_COMMAND_UNSUPPORTED.words(value=parsed[0] if parsed else '<blank>')
-        return events.EventHandlerResult(hook=hook, error=error)
-
-    return dispatch
 
 
 def _standalone_dispatcher(cfg: Config):
@@ -1014,20 +894,6 @@ def _warn_missing_binaries() -> None:
             msgs.warn(msgs.BINARY_MISSING, name=name, user=why)
 
 
-def _session_mcp_host(cfg, telemetry):
-    if getattr(cfg, "mcp", None) is None or not getattr(cfg.mcp, "servers", ()):
-        return None
-    from .mcp.host import MCPHost
-
-    return MCPHost(cfg.mcp, telemetry=telemetry, paranoid_mode=getattr(cfg, "paranoid_mode", "off"))
-
-
-async def _close_session_mcp_host(state: ReplState) -> None:
-    host = state.mcp_host
-    if host is not None:
-        await host.close()
-
-
 async def _do_turn(cfg, state, telemetry, prompt_spec, user_message, turn_cfg, loop,
                    steer=None, notes=()) -> None:
     """One main turn on the async loop. Runs the turn, syncs live-settings
@@ -1067,18 +933,18 @@ async def _do_turn(cfg, state, telemetry, prompt_spec, user_message, turn_cfg, l
         if after_turn_model != before_turn_model:
             repl_state.sync_model_from_live_settings(state)
         after_turn_provider = repl_state.provider_from_live_settings(state.settings)
-        _sync_provider_delta_from_live_settings(state, before_turn_provider, after_turn_provider)
+        repl._sync_provider_delta_from_live_settings(state, before_turn_provider, after_turn_provider)
         after_turn_lock = settings.live_bool_setting(
             state.settings, ("SUBAGENT_MODEL_LOCK",), cfg.lock_subagent_model
         )
         if after_turn_lock != before_turn_lock:
             repl_state.sync_tool_registry_from_live_settings(cfg, state)
-        _sync_telemetry_from_live_settings(cfg, state, telemetry)
+        repl._sync_telemetry_from_live_settings(cfg, state, telemetry)
         _persist_turn_messages(turn_cfg, state.messages)
         await conversation.maybe_auto_compact_async(turn_cfg, state)
     except asyncio.CancelledError:
         repl_state.emit_repl_event(state, telemetry, "cancel", reason="cancelled")
-        _sync_telemetry_from_live_settings(cfg, state, telemetry)
+        repl._sync_telemetry_from_live_settings(cfg, state, telemetry)
         if _turn_has_progress(state.messages, user_message):
             print()
             msgs.say(msgs.TURN_INTERRUPTED_KEPT)
@@ -1183,7 +1049,7 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
     repl_state.emit_repl_event(
         state, telemetry, "input", text=prompt_text, attachments=line_attachments
     )
-    _sync_telemetry_from_live_settings(cfg, state, telemetry)
+    repl._sync_telemetry_from_live_settings(cfg, state, telemetry)
     try:
         if external_message is None:
             prompt_text = _expand_skill_line(prompt_text, state)
@@ -1247,30 +1113,6 @@ async def _run_repl_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, st
     with contextlib.suppress(asyncio.CancelledError):
         await job.task  # _do_turn persists partial work on cancel; keep looping
 
-
-def _default_startup_banner(cfg: Config, state: ReplState, notices: list[str], errors: list[str]) -> str:
-    """What the REPL prints into its scrollback when it is up: the MOTD
-    (`js.motd`) raw with its colours reset after, then the startup line,
-    notices and errors."""
-    text = motd.pick(settings.knob(state.settings, "MOTD_FILE"), settings.knob(state.settings, "MOTD_DIR"))
-    return "\n".join([
-        *([motd.lines_for_scrollback(text.rstrip("\r\n")) + motd.RESET] if text else []),
-        msgs.STARTUP_TITLE.line(),
-        msgs.STARTUP_AGENT.line(agent=cfg.agent_id),
-        msgs.STARTUP_MODEL.line(model=state.model),
-        msgs.STARTUP_PROMPT.line(prompt=", ".join(map(str, cfg.prompts_dir)) if isinstance(cfg.prompts_dir, tuple) else cfg.prompts_dir),
-        msgs.STARTUP_MEMORY.line(memory=cfg.session_file),
-        "",
-        repl_state.repl_hint(msgs.STARTUP_HINT, state).line(),
-        "",
-        *notices,
-        *(msgs.failure_line(error) for error in errors),
-    ])
-
-
-def _startup_banner(cfg: Config, state: ReplState, notices: list[str], errors: list[str]) -> str:
-    render = repl_state.repl_assembly(state).banner or _default_startup_banner
-    return render(cfg, state, notices, errors)
 
 def _echoes(line: str, state: ReplState) -> bool:
     """Whether a typed line shows in the scrollback: not when dispatch
@@ -1493,7 +1335,7 @@ async def _repl_main(cfg, state, telemetry, history, completer, prompt_spec, ban
             command.run(screen.writing_to.set, shown.scrollback)
             handled = await loop.run_in_executor(None, command.run, repl_commands.handle_command, line, state, cfg)
             if handled:
-                _sync_telemetry_from_live_settings(cfg, state, telemetry)
+                repl._sync_telemetry_from_live_settings(cfg, state, telemetry)
                 if not state.running:
                     await close()
                 return
@@ -1511,7 +1353,7 @@ async def _repl_main(cfg, state, telemetry, history, completer, prompt_spec, ban
             return
         handled = await loop.run_in_executor(None, repl_commands.handle_command, line, state, cfg)
         if handled:
-            _sync_telemetry_from_live_settings(cfg, state, telemetry)
+            repl._sync_telemetry_from_live_settings(cfg, state, telemetry)
             if not state.running:
                 await close()
             return
@@ -1654,73 +1496,10 @@ async def _repl_main(cfg, state, telemetry, history, completer, prompt_spec, ban
         for job in sup.jobs():  # backstop: cancel any straggler
             job.task.cancel()
         repl_state.emit_session_event(state, telemetry, cfg, "session_end")
-        await _close_session_mcp_host(state)
+        await repl._close_session_mcp_host(state)
     if snippet_failures:
         raise snippet_failures[0]
     return 0
-
-
-def _prompt_origin(cfg: Config) -> prompt_history.Origin:
-    """Where a prompt typed now is recorded as typed: the working directory,
-    the session's `--session` name, the agent."""
-    session = "" if cfg.session_file == Path(os.devnull) else session_store.display_name(cfg.session_file)
-    return prompt_history.Origin(cwd=os.getcwd(), session=session, agent=cfg.agent_id)
-
-
-def _repl_state(cfg, prompt_spec, *, messages: list[dict] | None = None,
-                system: str | None = None, model: str | None = None,
-                live_settings: dict | None = None, tool_registry=None,
-                assembly: repl_state.ReplAssembly | None = None) -> ReplState:
-    """The REPL's live state for one session.
-
-    ``model`` is a --model flag value; without one the session runs on
-    ``cfg.model``. Unset arguments come from ``cfg`` and ``prompt_spec``: the
-    session file's replayed messages, the agent's system prompt, a copy of the
-    configured settings, and the configured registry narrowed to the agent's
-    tool selectors. The state's event hooks dispatch into this state."""
-    if messages is None:
-        messages = M.load_replay_messages(cfg.session_file)
-    if system is None:
-        system = prompt_spec.system
-    if live_settings is None:
-        live_settings = copy.deepcopy(cfg.settings) if isinstance(cfg.settings, dict) else {}
-    fset.bind_settings(live_settings)
-    if tool_registry is None:
-        tool_registry = run_assembly.registry_for(cfg).select(prompt_spec.tool_selectors)
-    event_hooks = events.EventHooks()
-    state = ReplState(
-        messages=messages,
-        system=system,
-        model=model if model is not None else cfg.model,
-        # A --model flag never lands in the settings store, so /set annotates
-        # `MODEL = ... (live: --model flag)` from here; agent.yaml's `model:`
-        # is recorded the same way.
-        model_source="--model flag" if model is not None else (
-            f"agent {cfg.agent_id}" if P.agent_model_applies(cfg, prompt_spec, None) else None),
-        provider_id=cfg.provider_id,
-        provider_base_url=cfg.provider_base_url,
-        provider_api_key=cfg.provider_api_key,
-        provider_headers=dict(getattr(cfg, "provider_headers", {}) or {}),
-        settings=live_settings,
-        prompt_spec=prompt_spec,
-        events=event_hooks,
-        tool_registry=tool_registry,
-        tool_selectors=prompt_spec.tool_selectors,
-        repl_assembly=assembly,
-    )
-    event_hooks.set_dispatcher(_event_dispatcher(state, cfg))
-    return state
-
-
-def _repl_history(cfg: Config) -> prompt_history.PromptHistory:
-    """The input history of the REPL."""
-    return prompt_history.PromptHistory(
-        cfg.history_file,
-        lambda: _prompt_origin(cfg),
-        cwd_first=settings.knob(cfg.settings, "HISTORY_ORDER") == "cwd",
-        limit=settings.knob(cfg.settings, "HISTORY_SIZE"),
-        state_root=_paths.state_root(),
-    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1729,10 +1508,10 @@ def main(argv: list[str] | None = None) -> int:
     except snippets.SnippetError as exc:
         msgs.warn(msgs.FAILED, error=exc)
         code = 2
-    pending = dict(_pending_switch)
-    _pending_switch.clear()
+    pending = dict(repl.pending_switch)
+    repl.pending_switch.clear()
     if pending:
-        _exec_session(pending["target"])
+        repl.exec_session(pending["target"])
     return code
 
 
@@ -2193,14 +1972,14 @@ def start_repl(args: argparse.Namespace, setup: Setup) -> int:
 
     keymap, key_errors = keys_mod.load(keys_mod.keys_file(cfg.settings))
     completer = replcomplete.JsCompleter(
-        commands=lambda: _command_completions(state),
+        commands=lambda: repl._command_completions(state),
         setting_keys=[spec.key for spec in settings.REGISTRY],
         fset_names=fset.names(),
         names=lambda: sorted(set(providers.known_provider_ids()) | set(logins.load_logins())),
         spell=replcomplete.hunspell_suggest,
         bare_words=repl_state.QUIT_WORDS,
     )
-    history = _repl_history(cfg)
+    history = repl._repl_history(cfg)
 
     messages = M.load_replay_messages(cfg.session_file)
     cut_off = M.turn_cut_off(messages)
@@ -2244,7 +2023,7 @@ def start_repl(args: argparse.Namespace, setup: Setup) -> int:
         # Agent default from agent.yaml — seed the per-turn source of truth so
         # it survives the per-turn rebuild (ReplState.config_for_turn). Config/env/--max-out win.
         settings.set_dotted(live_settings, ("OUTPUT_TOKENS_MAX",), prompt_spec.max_output_tokens)
-    state = _repl_state(
+    state = repl._repl_state(
         cfg, prompt_spec,
         messages=messages,
         system=system,
@@ -2261,11 +2040,11 @@ def start_repl(args: argparse.Namespace, setup: Setup) -> int:
         Path(getattr(cfg, "project_dir", None) or Path.cwd()), setup.sources))
     repl_commands.mark_saved(state)
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
-    state.mcp_host = _session_mcp_host(cfg, telemetry)
+    state.mcp_host = repl._session_mcp_host(cfg, telemetry)
     # Attach the debug autolog sink before the first turn.
-    _sync_telemetry_from_live_settings(cfg, state, telemetry)
+    repl._sync_telemetry_from_live_settings(cfg, state, telemetry)
 
-    banner = _startup_banner(cfg, state, notices, [*rc_errors, *key_errors])
+    banner = repl._startup_banner(cfg, state, notices, [*rc_errors, *key_errors])
     transcript_stack = contextlib.ExitStack()
     # prompt_toolkit creates its output from sys.stdout on first use. The
     # screen and the pickers draw on the terminal, so that first use is here,
@@ -2278,8 +2057,8 @@ def start_repl(args: argparse.Namespace, setup: Setup) -> int:
         )
     finally:
         transcript_stack.close()
-    _print_resume_hint(cfg, state)
-    _queue_switch(state)
+    repl._print_resume_hint(cfg, state)
+    repl._queue_switch(state)
     return code
 
 

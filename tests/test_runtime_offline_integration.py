@@ -21,11 +21,11 @@ from turn_driver import (
 )
 
 from js import (
-    cli,
     compaction,
     display,
     events,
     history_record,
+    repl,
     runtime,
     settings,
     toolkit as runtime_tools,
@@ -652,7 +652,7 @@ def test_run_turn_dispatches_registered_command_handler(monkeypatch, tmp_path):
     live_settings = settings.seed_defaults()
     cfg = offline_config(tmp_path)
     state = ReplState(messages=[], system="system", settings=live_settings, events=hooks)
-    hooks.set_dispatcher(cli._event_dispatcher(state, cfg))
+    hooks.set_dispatcher(repl._event_dispatcher(state, cfg))
     hooks.add("turn_start", "set COMPACTION_AUTO off")
 
     def stream_stub(**kwargs):

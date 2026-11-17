@@ -24,6 +24,7 @@ from js import (
     conversation,
     events,
     hookexec,
+    repl,
     repl_commands,
     repl_state,
     runtime,
@@ -50,7 +51,7 @@ def _state(tmp_path) -> tuple[ReplState, object]:
         settings=settings.seed_defaults(),
         events=events.EventHooks(),
     )
-    state.events.set_dispatcher(cli._event_dispatcher(state, cfg))
+    state.events.set_dispatcher(repl._event_dispatcher(state, cfg))
     return state, cfg
 
 

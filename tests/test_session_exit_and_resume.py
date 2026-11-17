@@ -8,7 +8,7 @@ import shlex
 
 from repl_driver import run_async, stub_screen, turn_stub
 
-from js import cli
+from js import cli, repl
 from js.config import from_env
 from js.memory import load_messages
 
@@ -53,7 +53,7 @@ def test_exit_prints_a_runnable_resume_command(monkeypatch, tmp_path, capsys):
     state, cfg = _session(monkeypatch, tmp_path, ["hello"], model="cliapiproxy/claude-opus-5")
     capsys.readouterr()
 
-    cli._print_resume_hint(cfg, state)
+    repl._print_resume_hint(cfg, state)
 
     args = _resume_args(capsys.readouterr().out)
     assert args == ["js", "--model", "cliapiproxy/claude-opus-5", "--session", cfg.session_file.stem]
@@ -69,7 +69,7 @@ def test_no_resume_hint_for_a_session_with_nothing_in_it(monkeypatch, tmp_path, 
     state, cfg = _session(monkeypatch, tmp_path, [])
     capsys.readouterr()
 
-    cli._print_resume_hint(cfg, state)
+    repl._print_resume_hint(cfg, state)
 
     assert capsys.readouterr().out == ""
 

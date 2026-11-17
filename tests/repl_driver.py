@@ -15,7 +15,7 @@ import inspect
 import sys
 from dataclasses import dataclass
 
-from js import cli, model_client, persona as P, runtime
+from js import cli, model_client, persona as P, repl, runtime
 from js.config import Config
 
 
@@ -55,12 +55,12 @@ def record_turns(monkeypatch) -> list[TurnCall]:
 def repl_state(cfg, **state_kwargs):
     """The state `main` would start the REPL with, and the agent's prompt spec."""
     prompt_spec = P.load_configured_prompt_spec(cfg)
-    return cli._repl_state(cfg, prompt_spec, **state_kwargs), prompt_spec
+    return repl._repl_state(cfg, prompt_spec, **state_kwargs), prompt_spec
 
 
 def _telemetry(cfg, state):
     telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
-    cli._sync_telemetry_from_live_settings(cfg, state, telemetry)
+    repl._sync_telemetry_from_live_settings(cfg, state, telemetry)
     return telemetry
 
 

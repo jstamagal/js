@@ -9,7 +9,7 @@ from pathlib import Path
 
 from repl_driver import output_of, record_turns, repl_state, run_async, type_into_js
 
-from js import cli, paths, repl_commands, settings
+from js import cli, paths, repl, repl_commands, settings
 from js.config import from_env, jsrc_paths
 from js.memory import append_message
 from js.repl_state import ReplAssembly
@@ -34,8 +34,8 @@ def test_assembly_command_is_dispatched_and_completed(tmp_path, monkeypatch):
 
     [turn] = turns
     assert [message["content"] for message in turn.messages] == ["new"]
-    assert "clear" in cli._command_completions(state)
-    assert "reset" not in cli._command_completions(state)
+    assert "clear" in repl._command_completions(state)
+    assert "reset" not in repl._command_completions(state)
 
 
 def _launch(cwd):

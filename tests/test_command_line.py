@@ -14,6 +14,7 @@ from js import (
     home_cli,
     loop_controller,
     paths,
+    repl,
     runtime,
     sampling,
     session_picker,
@@ -211,7 +212,7 @@ def test_resume_hint_command(monkeypatch, printed, agent, settings, model, custo
     monkeypatch.setattr(paths, "custom_home", lambda: custom_home)
     cfg = SimpleNamespace(session_file=Path("/s/dir/sub/name.jsonl"), sessions_dir=Path("/s/dir"),
                           agent_id=agent, settings=settings)
-    cli._print_resume_hint(cfg, ReplState(messages=["one"], model=model))
+    repl._print_resume_hint(cfg, ReplState(messages=["one"], model=model))
     assert printed == [line]
 
 
@@ -225,5 +226,5 @@ def test_session_switch_command(monkeypatch, target, argv):
     ran = []
     monkeypatch.setattr(session_picker, "enter_session_dir", lambda _target: None)
     monkeypatch.setattr(cli.os, "execv", lambda program, words: ran.append(words))
-    cli._exec_session(target)
+    repl.exec_session(target)
     assert [words[3:] for words in ran] == [argv]
