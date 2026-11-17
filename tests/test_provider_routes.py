@@ -3,10 +3,9 @@
 Four answers say which wire a route speaks: ``wire_name``, the `-u` wire name
 the CLI and the trace banner show (`routing.resolve_wire(...).name`),
 `model_client.resolve_model` (the SDK provider and protocol a request is sent
-with), `model_client._route`
-(what `build_request_params` and `_stream_with_model` gate on) and
-`history_record.history_to_ai_messages` (whether a replayed reply keeps its
-reasoning). `fixtures/provider_routes.json` pins their answers for every
+with), ``route``, what `build_request_params` and `_stream_with_model` gate
+on, and `history_record.history_to_ai_messages` (whether a replayed reply
+keeps its reasoning). `fixtures/provider_routes.json` pins their answers for every
 registered provider and for the routes no provider registers.
 UPDATE_SNAPSHOTS=1 writes it from the current code.
 
@@ -17,7 +16,6 @@ lists the routes where two derivations name different kinds.
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import os
 from pathlib import Path
@@ -112,8 +110,13 @@ def _resolved(provider_id: str | None, base_url: str | None, model_id: str) -> d
     return out
 
 
-def _route(provider_id: str | None, model_id: str) -> dict:
-    return dataclasses.asdict(model_client._route(provider_id, model_id))
+def _route(provider_id: str | None, base_url: str | None, model_id: str) -> dict:
+    """What a request's parameters and messages are built on."""
+    wire = routing.resolve_wire(provider_id, base_url=base_url, model_id=model_id)
+    return {"provider_name": wire.provider_name, "sdk_provider_name": wire.sdk_provider_name,
+            "transport": wire.transport, "explicit_provider": wire.explicit_provider,
+            "anthropic_wire": wire.anthropic, "responses_wire": wire.responses,
+            "deepseek_wire": wire.deepseek, "minimax": wire.minimax}
 
 
 def _keeps_reasoning(provider_id: str | None, model_id: str) -> bool:
@@ -126,7 +129,7 @@ def _observe(provider_id: str | None, base_url: str | None, model_id: str) -> di
     return {
         "wire_name": _wire_name(provider_id),
         "resolve_model": _resolved(provider_id, base_url, model_id),
-        "route": _route(provider_id, model_id),
+        "route": _route(provider_id, base_url, model_id),
         "decoder_keeps_reasoning": _keeps_reasoning(provider_id, model_id),
     }
 
