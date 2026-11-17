@@ -456,7 +456,7 @@ async def _run_one_task_async(
                 output_tokens=sum(int(stat.get("output_tokens") or 0) for stat in call_stats),
                 calls=len(call_stats))
             output.emit(end)
-            _close_child_tools(child_context)
+            close_child_tools(child_context)
             if window is not None:
                 with window.writing():
                     output.sink_of(telemetry).emit(end)
@@ -467,7 +467,7 @@ async def _run_one_task_async(
                         try:
                             await chat.turn({"role": "user", "content": text}, **turn_kwargs)
                         finally:
-                            _close_child_tools(child_context)
+                            close_child_tools(child_context)
 
                 # Called before the session lock is let go; a turn it starts
                 # runs as its own job, after this one has returned.
@@ -493,9 +493,9 @@ async def _run_one_task_async(
     return final
 
 
-def _close_child_tools(child_context: ToolContext) -> None:
-    """Close a child's terminal sessions and its private kernel."""
-
+def close_child_tools(child_context: ToolContext) -> None:
+    """Close an agent's terminal sessions and its private kernel: a subagent's
+    when its turn ends, a swarm agent's when it ends."""
     close_terminal_sessions(child_context)
     if child_context.kernel_session is not None:
         child_context.kernel_session.shutdown()

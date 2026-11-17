@@ -51,9 +51,8 @@ from . import (
 from .config import InvocationSources, from_env
 from .conversation import Conversation
 from .session_catalog import record_session_start
-from .toolkit import bus_tools
+from .toolkit import bus_tools, subagents
 from .toolkit.core import ToolContext
-from .toolkit.terminal import close_terminal_sessions
 
 
 @dataclass
@@ -307,7 +306,7 @@ class Runner:
             if chat is not None:
                 with contextlib.suppress(Exception):
                     chat.save()
-            close_terminal_sessions(context)
+            subagents.close_child_tools(context)
             events.emit("agent_end", reason=reason)
 
 

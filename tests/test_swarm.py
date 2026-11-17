@@ -731,3 +731,34 @@ def test_a_runner_message_for_an_agent_not_in_that_state_is_dropped(tmp_path, mo
     events = _events(out)
     assert [(e["agent"], e["message_kind"]) for e in events if e["type"] == "dropped"] == [("a", "restart")]
     assert len([e for e in events if e["type"] == "agent_start"]) == 1
+
+
+class _Kernel:
+    def __init__(self):
+        self.shut = 0
+
+    def shutdown(self):
+        self.shut += 1
+
+
+def test_an_ended_swarm_agent_shuts_its_kernel_down(tmp_path, monkeypatch):
+    _agent_dir(tmp_path, monkeypatch)
+    room = swarm.Room(tmp_path / "bus")
+    kernel = _Kernel()
+    real_turn = runtime.run_turn_async
+
+    async def turn_with_kernel(*args, **kwargs):
+        kwargs["tool_context"].kernel_session = kernel
+        return await real_turn(*args, **kwargs)
+
+    def stream(**kwargs):
+        room.send("steer", "a", "done", kind=swarm.STOP)
+        kwargs["on_text"]("ok")
+        return _text("ok")
+
+    monkeypatch.setattr(runtime, "run_turn_async", turn_with_kernel)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    spec = _spec(tmp_path, [{"name": "a", "agent": "voice", "opener": "go", "session": "s-a", "cwd": str(tmp_path)}])
+
+    assert swarm_run.run(spec, out=io.StringIO()) == 0
+    assert kernel.shut == 1
