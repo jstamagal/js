@@ -49,6 +49,7 @@ from . import (
     usage as usage_mod,
 )
 from .config import Config, vision_enabled_for_model
+from .mcp import host as mcp_hosts
 from .reasoning_display import ReasoningDisplay
 from .sampling import Sampling
 from .toolkit.core import (
@@ -652,9 +653,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context = tool_context or T.STOCK_CONTEXT
     owns_mcp_host = mcp_host is None
     if owns_mcp_host and getattr(cfg, "mcp", None) is not None and getattr(cfg.mcp, "servers", ()):
-        from .mcp.host import MCPHost
-
-        mcp_host = MCPHost(cfg.mcp, telemetry=telemetry, paranoid_mode=getattr(cfg, "paranoid_mode", "off"))
+        mcp_host = mcp_hosts.MCPHost(cfg.mcp, telemetry=telemetry, paranoid_mode=getattr(cfg, "paranoid_mode", "off"))
     # A fresh registry rechecks current policy and aliases while restoring the
     # session's visibility. Marks survive compaction and process restarts.
     # A tool that cannot run here is left off the surface the model sees.

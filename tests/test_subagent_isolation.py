@@ -92,11 +92,8 @@ def patch_from_env(monkeypatch, tmp_path: Path, prompt_root: Path):
 
     import js.config as config
 
-    # subagents.py does `from ..config import from_env` inside the task function
-    # (a local import), so it can't be monkeypatched through the subagents module
-    # namespace. Patching js.config.from_env is enough because by the time
-    # the local import runs, it re-reads from the same module object —
-    # which monkeypatch has already updated.
+    # subagents looks up config.from_env when the task runs, so patching it on
+    # js.config reaches the task tool.
     monkeypatch.setattr(config, "from_env", from_env_stub)
 
 

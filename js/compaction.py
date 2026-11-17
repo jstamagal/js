@@ -41,6 +41,8 @@ from .compaction_flight import (
     printing as printing,
 )
 from .config import Config
+from .toolkit import file_bytes
+from .toolkit.fs import detect_visual_mime
 
 if TYPE_CHECKING:
     from .repl_state import ReplState
@@ -161,9 +163,6 @@ def _post_compact_rehydration(
             return 0.0
     paths.sort(key=_mtime, reverse=True)
 
-    from .toolkit.file_bytes import read_regular_bytes
-    from .toolkit.fs import detect_visual_mime
-
     sections: list[str] = []
     spent = 0
     ratio = max(1.0, chars_per_token)
@@ -172,14 +171,14 @@ def _post_compact_rehydration(
     byte_limit = character_limit * 4
     for path in paths[:max_files]:
         try:
-            header = read_regular_bytes(path, 4096)
+            header = file_bytes.read_regular_bytes(path, 4096)
             if detect_visual_mime(path, header) or b"\x00" in header:
                 sections.append(snippets.render('compaction-file-nontext', PATH=path))
                 continue
             if path.stat().st_size > byte_limit:
                 sections.append(snippets.render('compaction-file-too-large', PATH=path))
                 continue
-            data = read_regular_bytes(path, byte_limit + 1)
+            data = file_bytes.read_regular_bytes(path, byte_limit + 1)
             if len(data) > byte_limit:
                 sections.append(snippets.render('compaction-file-too-large', PATH=path))
                 continue

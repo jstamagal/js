@@ -13,12 +13,14 @@ from pathlib import Path
 from typing import Any
 
 from .. import (
+    config,
     login_defaults,
     output,
     paths,
     session_store,
     settings as _settings,
     snippets,
+    supervisor,
     turn_settings as _turn_settings,
 )
 from ..events import RefusableOnly
@@ -386,10 +388,8 @@ def _fan_out(indexed_items: list[tuple[int, Any]], coro_factory) -> list[str | N
     - No supervisor (`js -p`, bench, tests): spin one throwaway loop and gather
       the turns here.
     """
-    from ..supervisor import get_current
-
     results: list[str | None] = [None] * len(indexed_items)
-    sup = get_current()
+    sup = supervisor.get_current()
     if sup is not None:
         futures = {
             sup.spawn_from_thread(coro_factory(idx, item), kind="subagent", label=f"task#{idx}"): idx
@@ -431,10 +431,8 @@ async def _fan_out_async(indexed_items: list[tuple[int, Any]], coro_factory) -> 
     bounded js-dispatch executor: a blocked parent no longer parks a worker
     thread that its own descendants need for their leaf tool dispatch. Falls back
     to a plain on-loop gather when no supervisor is live (kept for symmetry)."""
-    from ..supervisor import get_current
-
     results: list[str | None] = [None] * len(indexed_items)
-    sup = get_current()
+    sup = supervisor.get_current()
     if sup is not None:
         jobs = [
             (idx, sup.spawn(coro_factory(idx, item), kind="subagent", label=f"task#{idx}"))
@@ -514,16 +512,15 @@ def _prepare_fan_out(
     if context.task_depth >= max_depth:
         return f"ERROR: task recursion depth limit reached ({max_depth})", None
 
-    from ..config import from_env, validate_agent_id
     from .registry import build_default_registry
 
     try:
-        validate_agent_id(agent_id)
+        config.validate_agent_id(agent_id)
     except ValueError as exc:
         return f"ERROR: {exc}", None
 
     assembly = context.subagent_assembly or SubagentAssembly()
-    config_factory = from_env if assembly.config_factory is None else assembly.config_factory
+    config_factory = config.from_env if assembly.config_factory is None else assembly.config_factory
     registry_factory = build_default_registry if assembly.registry_factory is None else assembly.registry_factory
     worker = _run_one_task_async if assembly.worker is None else assembly.worker
     parent_cfg = context.config or config_factory(save_session=True)

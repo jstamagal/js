@@ -24,7 +24,7 @@ from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import Any
 
-from .. import paths, snippets
+from .. import paths, snippets, supervisor
 
 # Finished jobs kept for a later poll once their result was delivered or noted.
 KEEP_FINISHED_JOBS = 5
@@ -174,8 +174,6 @@ def start(
     ``on_loop`` means the caller is a coroutine on the supervisor's loop;
     otherwise the caller is a thread off any loop.
     """
-    from ..supervisor import get_current
-
     job_id = _next_id()
     result_path = paths.tool_results_dir() / f"task-{job_id}-{secrets.token_hex(4)}.txt"
     job = TaskJob(job_id, agent_id, len(indexed_items), depth, result_path, owner)
@@ -204,7 +202,7 @@ def start(
         cancel = schedule(run_all(), label, lambda done: _settle(job, done, on_done))
         job.set_cancel(cancel)
         return job
-    sup = get_current()
+    sup = supervisor.get_current()
     if sup is not None and on_loop:
         tracked = sup.spawn(run_all(), kind="subagent", label=label)
         tracked.task.add_done_callback(lambda done: _settle(job, done, on_done))
