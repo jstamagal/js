@@ -6,6 +6,8 @@ import io
 import re
 from types import SimpleNamespace
 
+from turn_driver import ExchangeConsole, config, run
+
 from js import display, messages as msgs, runtime
 from js.repl_state import ReplState
 from js.toolkit import Tool, ToolContext, ToolRegistry
@@ -130,16 +132,15 @@ def _registry() -> ToolRegistry:
     return ToolRegistry(tools=tools, aliases={"lines": "lines", "fail": "fail"})
 
 
-def test_ui_tools_zero_prints_nothing_for_an_exchange(capsys):
-    context = ToolContext(cwd="/tmp")
-    context.config = SimpleNamespace(settings={"TOOLS_DISPLAY": 0})
+def test_ui_tools_zero_prints_nothing_for_an_exchange(capsys, tmp_path, monkeypatch):
+    def shown(level: int) -> str:
+        turn = run(tmp_path, monkeypatch, _registry(), [[("c1", "lines", "{}")]],
+                   cfg=config(tmp_path, {"TOOLS_DISPLAY": level}), sink=ExchangeConsole(), trace=True)
+        assert turn.results() == {"c1": "a\nb\nc"}
+        return capsys.readouterr().out
 
-    runtime._dispatch_tool_calls(
-        [runtime._PendingToolCall("c1", "lines", ["{}"])], runtime.Telemetry(None), 256 * 1024, True,
-        runtime.ToolErrorTracker(), _registry(), context,
-    )
-
-    assert capsys.readouterr().out == ""
+    assert shown(1) != ""
+    assert shown(0) == ""
 
 
 def test_level_three_read_highlights_the_file_text_and_keeps_it_all():
