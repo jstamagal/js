@@ -77,12 +77,12 @@ def _provider_label(provider_id: str | None, exc: BaseException | None = None) -
     return provider_id or "default"
 
 
-def _detail(exc: BaseException, *, max_len: int = 220) -> str:
+def _detail(exc: BaseException) -> str:
     text = " ".join(str(exc).split())
     if not text:
         return exc.__class__.__name__
-    if len(text) > max_len:
-        return text[: max_len - 1].rstrip() + "…"
+    if len(text) > 220:
+        return text[:219].rstrip() + "…"
     return text
 
 
