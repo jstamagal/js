@@ -8,15 +8,13 @@ loop. Each case below runs once per way.
 from __future__ import annotations
 
 import re
-from dataclasses import replace
 
 import pytest
-from test_lazy_tool_discovery import _cfg, _result
+from turn_driver import config, run
 
-from js import runtime
 from js.text_bytes import byte_size
 from js.toolkit import meta
-from js.toolkit.core import Tool, ToolContext
+from js.toolkit.core import Tool
 from js.toolkit.registry import ToolRegistry
 
 KINDS = ("sync", "async", "fan_out")
@@ -63,23 +61,8 @@ def _run(tmp_path, monkeypatch, registry: ToolRegistry, batches: list[list[tuple
     """Run one turn whose model makes ``batches`` of calls, then answers.
     Returns, per batch, the results the next model call received by call id,
     and the turn's history."""
-    seen: list[list] = []
-
-    async def model(**kwargs):
-        seen.append(list(kwargs["messages"]))
-        index = len(seen) - 1
-        return _result(*batches[index]) if index < len(batches) else _result(text="done")
-
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", model)
-    messages = [{"role": "user", "content": "go"}]
-    runtime.run_turn(cfg or _cfg(tmp_path), "SYS", messages, runtime.Telemetry(debug_log=None),
-                     tool_registry=registry, tool_context=ToolContext(cwd=tmp_path), suppress_output=True)
-    received = [
-        {part.tool_call_id: part.result
-         for message in convo for part in message.parts if part.kind == "tool_result"}
-        for convo in seen[1:]
-    ]
-    return received, messages
+    turn = run(tmp_path, monkeypatch, registry, batches, cfg=cfg)
+    return turn.received_results(), turn.messages
 
 
 def _one(tmp_path, monkeypatch, kind: str, args: str, cfg=None) -> tuple[str, list[str]]:
@@ -138,7 +121,7 @@ def test_an_unknown_tool_is_an_error_the_tracker_does_not_count(tmp_path, monkey
 
 @pytest.mark.parametrize("kind", KINDS)
 def test_an_oversized_result_is_cut_to_the_result_cap(tmp_path, monkeypatch, kind):
-    cfg = replace(_cfg(tmp_path), max_tool_result_bytes=CAP)
+    cfg = config(tmp_path, max_tool_result_bytes=CAP)
     result, _ = _one(tmp_path, monkeypatch, kind, '{"mode":"big"}', cfg)
     assert result.startswith("x" * 100)
     assert byte_size(result) <= CAP
@@ -146,7 +129,7 @@ def test_an_oversized_result_is_cut_to_the_result_cap(tmp_path, monkeypatch, kin
 
 @pytest.mark.parametrize("kind", KINDS)
 def test_an_oversized_error_is_counted_whole_then_cut_to_the_result_cap(tmp_path, monkeypatch, kind):
-    cfg = replace(_cfg(tmp_path), max_tool_result_bytes=CAP)
+    cfg = config(tmp_path, max_tool_result_bytes=CAP)
     result, _ = _one(tmp_path, monkeypatch, kind, '{"mode":"big_error"}', cfg)
     assert result.startswith("ERROR: " + "y" * 100)
     # The retry note is cut off with the tail.
