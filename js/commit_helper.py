@@ -487,14 +487,12 @@ def _extract_repo(argv: list[str]) -> tuple[Path | None, list[str], str | None]:
     return repo, rest, None
 
 
-def cmd_survey(repo: str | Path | None = None, *, emit=None) -> int:
-    with _output_to(emit):
-        return _cmd_survey(repo)
+def cmd_survey(repo: str | Path | None = None) -> int:
+    return _cmd_survey(repo)
 
 
-def cmd_stage(path: str, spec: str, repo: str | Path | None = None, *, emit=None) -> int:
-    with _output_to(emit):
-        return _cmd_stage(path, spec, repo)
+def cmd_stage(path: str, spec: str, repo: str | Path | None = None) -> int:
+    return _cmd_stage(path, spec, repo)
 
 
 def cmd_commit(message_file: str, repo: str | Path | None = None, *, amend: bool = False, emit=None) -> int:
