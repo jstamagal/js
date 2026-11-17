@@ -28,12 +28,12 @@ def test_duplicate_active_request_id_preserves_original_task_and_cancellation(re
         try:
             await transport.server_send({"jsonrpc": "2.0", "id": request_id, "method": "hold"})
             await asyncio.wait_for(started.wait(), 1)
-            original = peer._incoming[request_id]
+            original = workers[0]
             await transport.server_send({"jsonrpc": "2.0", "id": request_id, "method": duplicate_method})
             response = await transport.next_sent()
             assert response["id"] == request_id
             assert response["error"]["code"] == INVALID_REQUEST
-            assert peer._incoming[request_id] is original
+            assert not original.done()
             assert len(workers) == 1
             await transport.server_send({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": request_id}})
             cancelled = await transport.next_sent()
@@ -43,7 +43,9 @@ def test_duplicate_active_request_id_preserves_original_task_and_cancellation(re
             assert await transport.next_sent() == {"jsonrpc": "2.0", "id": "next", "result": {}}
             assert not peer.closed
             assert original.done()
-            assert request_id not in peer._incoming
+            # The finished request frees its id for a new request.
+            await transport.server_send({"jsonrpc": "2.0", "id": request_id, "method": "ping"})
+            assert await transport.next_sent() == {"jsonrpc": "2.0", "id": request_id, "result": {}}
         finally:
             release.set()
             await peer.close()

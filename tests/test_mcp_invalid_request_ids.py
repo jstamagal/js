@@ -57,7 +57,10 @@ def test_invalid_cancel_id_cannot_cancel_valid_integer_request(cancel_id):
         started = asyncio.Event()
         release = asyncio.Event()
 
+        workers = []
+
         async def hold(_params):
+            workers.append(asyncio.current_task())
             started.set()
             await release.wait()
             return "finished"
@@ -66,11 +69,11 @@ def test_invalid_cancel_id_cannot_cancel_valid_integer_request(cancel_id):
         try:
             await transport.server_send({"jsonrpc": "2.0", "id": 1, "method": "hold"})
             await asyncio.wait_for(started.wait(), 1)
-            original = peer._incoming[1]
+            original = workers[0]
             await transport.server_send({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": cancel_id}})
             await transport.server_send({"jsonrpc": "2.0", "id": "barrier", "method": "ping"})
             assert await transport.next_sent() == {"jsonrpc": "2.0", "id": "barrier", "result": {}}
-            assert peer._incoming[1] is original and not original.done()
+            assert not original.done()
             await transport.server_send({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 1}})
             result = await transport.next_sent()
             assert result["id"] == 1

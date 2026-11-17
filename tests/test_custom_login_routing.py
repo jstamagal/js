@@ -13,7 +13,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from repl_driver import turn_stub
+from repl_driver import record_turns, run_async, turn_stub
 from turn_driver import js, one_turn
 
 from js import (
@@ -27,7 +27,7 @@ from js import (
     run_assembly,
     setting_values,
 )
-from js.config import InvocationSources, from_env
+from js.config import from_env
 from js.logins import Login
 from js.repl_state import ReplState
 from js.routing import ProviderNotLoggedInError, resolve_model_route
@@ -350,12 +350,8 @@ def test_save_server_writes_the_session_model_settings_into_the_login(monkeypatc
     _save_custom_login("testes")
     monkeypatch.setenv("JS_MODEL", "testes/served")
     cfg = from_env(cwd=tmp_path, save_session=False)
-    state = ReplState(settings=dict(cfg.settings, TEMPERATURE=0.7, CONTEXT_SIZE=65536),
-                      live_set={"TEMPERATURE": 0.7, "CONTEXT_SIZE": 65536},
-                      provider_id=cfg.provider_id, provider_base_url=cfg.provider_base_url,
-                      provider_api_key=cfg.provider_api_key)
 
-    assert repl_settings_commands._cmd_save("server", state, cfg) is None
+    run_async(monkeypatch, cfg, ["/set TEMPERATURE 0.7", "/set CONTEXT_SIZE 65536", "/save server"])
 
     saved = logins.load_logins_fresh()["testes"].model_defaults["served"]
     assert saved["TEMPERATURE"] == 0.7
@@ -408,7 +404,7 @@ def test_save_server_after_a_switch_writes_the_switched_models_values(monkeypatc
     monkeypatch.setenv("JS_MODEL", "testes/a")
     cfg = from_env(cwd=tmp_path, save_session=False)
 
-    assert repl_settings_commands._cmd_save("server", ReplState(settings=dict(cfg.settings), model="testes/b"), cfg) is None
+    run_async(monkeypatch, cfg, ["/save server"], model="testes/b")
 
     assert logins.load_logins_fresh()["testes"].model_defaults["b"] == {"CONTEXT_SIZE": 32768}
 
@@ -444,8 +440,6 @@ def test_an_env_value_equal_to_a_default_still_beats_the_next_models_default(mon
 
 @pytest.mark.parametrize("attr, key", cli.SETTING_FLAGS)
 def test_a_setting_flag_beats_the_saved_login_defaults(monkeypatch, tmp_path, attr, key):
-    import argparse
-
     from js import login_defaults, settings
 
     values = {"EFFORT": "max", "OUTPUT_TOKENS_MAX": 42, "TURN_ROUNDS_MAX": 7,
@@ -455,13 +449,18 @@ def test_a_setting_flag_beats_the_saved_login_defaults(monkeypatch, tmp_path, at
     _isolate_config(monkeypatch, tmp_path)
     _two_model_login(a=login_values, b=login_values)
     monkeypatch.setenv("JS_MODEL", "testes/a")
-    args = argparse.Namespace(**{name: None for name, _key in cli.SETTING_FLAGS})
     value = str(values.get(key, "0.5" if settings.SPEC_BY_KEY[key].type == "float" else 3))
-    setattr(args, attr, value)
-    extras, error = cli._setting_flag_extras(args)
-    assert error is None
+    started = []
 
-    cfg = from_env(cwd=tmp_path, save_session=False, sources=InvocationSources(extras=tuple(extras)))
+    def turn(cfg, system, messages, *_args, **_kwargs):
+        started.append(cfg)
+        messages.append({"role": "assistant", "content": "ok"})
+
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(turn))
+    monkeypatch.chdir(tmp_path)
+    assert js(monkeypatch, "--" + attr.replace("_", "-"), value, "-p", "hi") == 0
+
+    [cfg] = started
     turn = login_defaults.for_turn(replace_model(cfg, "b"))
 
     if key in login_defaults.KEYS:
@@ -476,19 +475,27 @@ def replace_model(cfg, model):
     return replace(cfg, model=model)
 
 
-def test_after_a_model_switch_set_and_save_see_the_values_the_turn_uses(monkeypatch, tmp_path):
+def _shown(monkeypatch, capsys, cfg, key, before=(), **state_kwargs):
+    """What `/set KEY` prints in a REPL on ``state_kwargs`` after the lines
+    ``before``, each typed once the turns before it have ended, and the turns
+    the REPL started, the last one after `/set KEY`."""
+    turns = record_turns(monkeypatch)
+    capsys.readouterr()
+    run_async(monkeypatch, cfg, [*before, f"/set {key}", "go"], wait=True, **state_kwargs)
+    return [line for line in capsys.readouterr().out.splitlines() if key in line][-1], turns
+
+
+def test_after_a_model_switch_set_and_save_see_the_values_the_turn_uses(monkeypatch, capsys, tmp_path):
     _isolate_config(monkeypatch, tmp_path)
     _two_model_login(a={"CONTEXT_SIZE": 4096}, b={"CONTEXT_SIZE": 32768})
     monkeypatch.setenv("JS_MODEL", "testes/a")
     cfg = from_env(cwd=tmp_path, save_session=False)
-    state = ReplState(settings=dict(cfg.settings), model="testes/b")
 
-    turn = state.config_for_turn(cfg)
-    shown = repl_settings_commands._live_settings_overlay_for_state(cfg, state)
+    shown, turns = _shown(monkeypatch, capsys, cfg, "CONTEXT_SIZE", model="testes/b")
 
-    assert turn.model_context_window == 32768
-    assert shown["CONTEXT_SIZE"].display == "32768"
-    assert "model" in shown["CONTEXT_SIZE"].source
+    assert turns[-1].cfg.model_context_window == 32768
+    assert "32768" in shown
+    assert "model" in shown
 
 
 def test_save_leaves_a_models_login_defaults_out_of_jsrc(monkeypatch, tmp_path):
@@ -498,10 +505,10 @@ def test_save_leaves_a_models_login_defaults_out_of_jsrc(monkeypatch, tmp_path):
     _two_model_login(a={"CONTEXT_SIZE": 4096}, b={"CONTEXT_SIZE": 32768})
     monkeypatch.setenv("JS_MODEL", "testes/a")
     cfg = from_env(cwd=tmp_path, save_session=False)
-    state = ReplState(settings=dict(cfg.settings), model="testes/b")
-    state.config_for_turn(cfg)
+    turns = record_turns(monkeypatch)
 
-    assert repl_settings_commands._cmd_save("", state, cfg) is None
+    run_async(monkeypatch, cfg, ["go", "/save"], wait=True, model="testes/b")
+    assert turns[0].cfg.model_context_window == 32768
     assert "32768" not in paths.global_config_file().read_text()
 
     monkeypatch.setenv("JS_MODEL", "testes/c")
@@ -524,21 +531,17 @@ def test_resolving_twice_after_a_switch_gives_the_same_sampling(monkeypatch, tmp
     assert login_defaults.sampling(second).temperature == 0.9
 
 
-def test_set_shows_the_agent_sampling_the_turn_sends(monkeypatch, tmp_path):
-    from types import SimpleNamespace
-
+def test_set_shows_the_agent_sampling_the_turn_sends(monkeypatch, capsys, tmp_path):
     _isolate_config(monkeypatch, tmp_path)
     _two_model_login(a={"TEMPERATURE": 0.2})
     monkeypatch.setenv("JS_MODEL", "testes/a")
-    cfg = from_env(cwd=tmp_path, save_session=False)
-    spec = SimpleNamespace(sampling={"temperature": 0.7}, max_output_tokens=None, reasoning_effort=None)
-    state = ReplState(settings=dict(cfg.settings), prompt_spec=spec)
+    agent = _agent_dir(tmp_path, "sampler", "sampling:\n  temperature: 0.7\ntools: []\n")
+    cfg = replace(from_env(cwd=tmp_path, save_session=False), agent_id="sampler", prompts_dir=agent)
 
-    turn = state.config_for_turn(cfg)
-    shown = repl_settings_commands._live_settings_overlay_for_state(cfg, state)
+    shown, turns = _shown(monkeypatch, capsys, cfg, "TEMPERATURE")
 
-    assert login_defaults.sampling(turn).temperature == 0.7
-    assert shown["TEMPERATURE"].display == "0.7"
+    assert login_defaults.sampling(turns[-1].cfg).temperature == 0.7
+    assert "0.7" in shown
 
 
 def test_a_turn_on_another_model_sends_that_models_resolved_sampling(monkeypatch, tmp_path):
@@ -561,21 +564,18 @@ def test_a_turn_on_another_model_sends_that_models_resolved_sampling(monkeypatch
     assert sent["sampling"].temperature == 0.9
 
 
-def test_after_switch_set_and_unset_the_shown_and_sent_sampling_agree(monkeypatch, tmp_path):
+def test_after_switch_set_and_unset_the_shown_and_sent_sampling_agree(monkeypatch, capsys, tmp_path):
     _isolate_config(monkeypatch, tmp_path)
     _two_model_login(a={"TEMPERATURE": 0.2}, b={"TEMPERATURE": 0.9})
     monkeypatch.setenv("JS_MODEL", "testes/a")
     cfg = from_env(cwd=tmp_path, save_session=False)
-    state = ReplState(settings=dict(cfg.settings), model="testes/b", messages=[], system="s")
 
-    assert repl_settings_commands.cmd_set("TEMPERATURE 0.5", state, cfg) is None
-    assert login_defaults.sampling(state.config_for_turn(cfg)).temperature == 0.5
-    assert repl_settings_commands.cmd_set("-TEMPERATURE", state, cfg) is None
+    shown, turns = _shown(monkeypatch, capsys, cfg, "TEMPERATURE",
+                          ["/set TEMPERATURE 0.5", "set", "/set -TEMPERATURE"], model="testes/b")
 
-    turn = state.config_for_turn(cfg)
-    shown = repl_settings_commands._live_settings_overlay_for_state(cfg, state)
-    assert login_defaults.sampling(turn).temperature == 0.9
-    assert shown["TEMPERATURE"].display == "0.9"
+    assert login_defaults.sampling(turns[0].cfg).temperature == 0.5
+    assert login_defaults.sampling(turns[1].cfg).temperature == 0.9
+    assert "0.9" in shown
 
 
 def _agent_dir(tmp_path, name: str, yaml: str):
@@ -587,16 +587,31 @@ def _agent_dir(tmp_path, name: str, yaml: str):
 
 
 def test_a_swarm_agent_keeps_its_configured_effort_and_agent_cap(monkeypatch, tmp_path):
-    from js import runtime, swarm_run
+    import io
+    import json
+
+    from js import runtime, swarm, swarm_run
 
     _isolate_config(monkeypatch, tmp_path)
     _two_model_login(m={"EFFORT": "xhigh"})
     _agent_dir(tmp_path / "home", "seat", "max_tokens: 1777\ntools: []\n")
     monkeypatch.chdir(tmp_path)
-    spec = swarm_run.AgentSpec(name="one", opener="hi", agent="seat", model="testes/m", effort="high",
-                               cwd=str(tmp_path))
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps({"root": str(tmp_path / "bus"), "agents": [
+        {"name": "one", "opener": "hi", "agent": "seat", "model": "testes/m", "effort": "high",
+         "cwd": str(tmp_path)},
+    ]}))
+    started = []
 
-    cfg = swarm_run._configure(spec).config
+    async def one_turn_then_stop(cfg, system, messages, *_args, **_kwargs):
+        started.append(cfg)
+        messages.append({"role": "assistant", "content": "done"})
+        swarm.Room(tmp_path / "bus").send("steer", "*", "enough", kind="stop")
+
+    monkeypatch.setattr(runtime, "run_turn_async", one_turn_then_stop)
+    assert swarm_run.run(spec, out=io.StringIO()) == 0
+
+    [cfg] = started
     turn = runtime.with_login_defaults(cfg, cfg.model, cfg.provider_id, cfg.provider_base_url)
 
     assert turn.reasoning_effort == "high"
@@ -702,13 +717,20 @@ def test_a_resumed_session_pins_its_effort_even_when_it_is_the_default(monkeypat
     assert run_assembly.resume(cfg, None, "high").layer == {}
 
 
+def _delegate(parent, tmp_path, **options):
+    """The task tool, called in a turn of ``parent``, giving one task to the
+    worker agent."""
+    from js.toolkit import ToolContext, subagents
+
+    context = ToolContext(cwd=tmp_path)
+    context.config = parent
+    return subagents.task(tasks=["work"], agent_id="worker", context=context, **options)
+
+
 def test_a_child_session_stamps_the_effort_its_turn_resolves(monkeypatch, tmp_path):
-    import asyncio
     from dataclasses import replace
 
     from js import agent_messages, memory, runtime
-    from js.toolkit import ToolContext, subagents
-    from js.toolkit.registry import build_default_registry
 
     _isolate_config(monkeypatch, tmp_path)
     _two_model_login(a={})
@@ -735,8 +757,7 @@ def test_a_child_session_stamps_the_effort_its_turn_resolves(monkeypatch, tmp_pa
     monkeypatch.setattr(memory, "persist_messages",
                         lambda path, messages, stamp=None: seen.setdefault("stamp", stamp))
 
-    result = asyncio.run(subagents._run_one_task_async(
-        0, 1, "work", ToolContext(cwd=tmp_path), cfg, build_default_registry(), "worker", None))
+    result = _delegate(cfg, tmp_path)
 
     assert result == "done"
     assert seen["turn"] == "low"
@@ -759,12 +780,9 @@ def test_an_out_of_range_agent_sampling_value_is_a_load_error_naming_it(monkeypa
 
 
 def test_a_child_whose_manifest_omits_reasoning_keeps_the_parent_agents(monkeypatch, tmp_path):
-    import asyncio
     from dataclasses import replace
 
     from js import agent_messages, memory, persona, runtime
-    from js.toolkit import ToolContext, subagents
-    from js.toolkit.registry import build_default_registry
 
     _isolate_config(monkeypatch, tmp_path)
     _two_model_login(a={})
@@ -791,8 +809,7 @@ def test_a_child_whose_manifest_omits_reasoning_keeps_the_parent_agents(monkeypa
     monkeypatch.setattr(agent_messages, "initialize", no_init)
     monkeypatch.setattr(memory, "persist_messages", lambda *a, **k: None)
 
-    asyncio.run(subagents._run_one_task_async(
-        0, 1, "work", ToolContext(cwd=tmp_path), cfg, build_default_registry(), "worker", None))
+    _delegate(cfg, tmp_path)
 
     assert cfg.reasoning_effort == "high"
     assert seen["turn"] == "high"
@@ -800,12 +817,9 @@ def test_a_child_whose_manifest_omits_reasoning_keeps_the_parent_agents(monkeypa
 
 @pytest.mark.parametrize(("worker", "expected"), [("tools: []\n", "low"), ("reasoning: medium\ntools: []\n", "medium")])
 def test_a_child_takes_the_effort_its_parents_turn_ran_with(monkeypatch, tmp_path, worker, expected):
-    import asyncio
     from dataclasses import replace
 
     from js import agent_messages, memory, runtime
-    from js.toolkit import ToolContext, subagents
-    from js.toolkit.registry import build_default_registry
 
     _isolate_config(monkeypatch, tmp_path)
     _two_model_login(a={"EFFORT": "high"})
@@ -833,20 +847,16 @@ def test_a_child_takes_the_effort_its_parents_turn_ran_with(monkeypatch, tmp_pat
     monkeypatch.setattr(agent_messages, "initialize", no_init)
     monkeypatch.setattr(memory, "persist_messages", lambda *a, **k: None)
 
-    asyncio.run(subagents._run_one_task_async(
-        0, 1, "work", ToolContext(cwd=tmp_path), parent, build_default_registry(), "worker", None))
+    _delegate(parent, tmp_path)
 
     assert seen["turn"] == expected
 
 
 @pytest.mark.parametrize(("worker", "expected"), [("tools: []\n", "low"), ("reasoning: medium\ntools: []\n", "medium")])
 def test_a_parents_resumed_effort_sits_below_the_childs_agent_yaml(monkeypatch, tmp_path, worker, expected):
-    import asyncio
     from dataclasses import replace
 
     from js import agent_messages, memory, runtime
-    from js.toolkit import ToolContext, subagents
-    from js.toolkit.registry import build_default_registry
 
     _isolate_config(monkeypatch, tmp_path)
     _two_model_login(a={"EFFORT": "high"})
@@ -872,20 +882,16 @@ def test_a_parents_resumed_effort_sits_below_the_childs_agent_yaml(monkeypatch, 
     monkeypatch.setattr(agent_messages, "initialize", no_init)
     monkeypatch.setattr(memory, "persist_messages", lambda *a, **k: None)
 
-    asyncio.run(subagents._run_one_task_async(
-        0, 1, "work", ToolContext(cwd=tmp_path), parent, build_default_registry(), "worker", None))
+    _delegate(parent, tmp_path)
 
     assert parent.reasoning_effort == "low"
     assert seen["turn"] == expected
 
 
 def test_a_task_calls_reasoning_is_the_effort_the_childs_requests_send(monkeypatch, tmp_path):
-    import asyncio
     from dataclasses import replace
 
     from js import agent_messages, memory, runtime
-    from js.toolkit import ToolContext, subagents
-    from js.toolkit.registry import build_default_registry
 
     _isolate_config(monkeypatch, tmp_path)
     _two_model_login(a={"EFFORT": "high"})
@@ -911,9 +917,7 @@ def test_a_task_calls_reasoning_is_the_effort_the_childs_requests_send(monkeypat
     monkeypatch.setattr(agent_messages, "initialize", no_init)
     monkeypatch.setattr(memory, "persist_messages", lambda *a, **k: None)
 
-    asyncio.run(subagents._run_one_task_async(
-        0, 1, "work", ToolContext(cwd=tmp_path), parent, build_default_registry(), "worker", None,
-        reasoning="low"))
+    _delegate(parent, tmp_path, reasoning="low")
 
     assert seen["sent"] == "low"
 

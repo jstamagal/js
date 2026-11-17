@@ -15,6 +15,13 @@ def status(path, when=NOW):
     return model_metadata.CatalogStatus(path, when, None, None, None, None)
 
 
+def read_status(monkeypatch, tmp_path, path):
+    """current_catalog_status with path as the catalog and no status file."""
+    monkeypatch.setattr(model_metadata, "_custom_db_path", lambda: path)
+    monkeypatch.setattr(model_metadata, "_status_file_path", lambda: tmp_path / "absent.json")
+    return model_metadata.current_catalog_status()
+
+
 def make_db(path, release_table=True):
     with closing(sqlite3.connect(path)) as connection:
         connection.execute("CREATE TABLE metadata(key TEXT, value TEXT)")
@@ -42,18 +49,19 @@ def test_disappearing_database_is_never_recreated(tmp_path, monkeypatch, metadat
 
     monkeypatch.setattr(model_metadata.sqlite3, "connect", connect)
     if metadata:
-        assert model_metadata._read_db_metadata(path) is None
+        assert read_status(monkeypatch, tmp_path, path) is None
     else:
         assert model_metadata.catalog_is_stale(status(path), now=NOW)
     assert not path.exists()
 
 
 @pytest.mark.parametrize("name", ["ordinary.db", "special?#% space.db"])
-def test_read_only_catalog_retains_valid_and_stale_behavior(tmp_path, name):
+def test_read_only_catalog_retains_valid_and_stale_behavior(tmp_path, monkeypatch, name):
     path = tmp_path / name
     make_db(path)
     assert not model_metadata.catalog_is_stale(status(path), now=NOW)
-    assert model_metadata._read_db_metadata(path) == {"source": "test"}
+    current = read_status(monkeypatch, tmp_path, path)
+    assert current is not None and current.source == "test"
     assert model_metadata.catalog_is_stale(status(path, NOW - timedelta(days=365)), now=NOW)
     with closing(sqlite3.connect(path)) as connection:
         connection.execute("DROP TABLE model_release_dates")
@@ -78,5 +86,5 @@ def test_failed_metadata_query_closes_connection(tmp_path, monkeypatch):
             closed.append(True)
 
     monkeypatch.setattr(model_metadata.sqlite3, "connect", Connection)
-    assert model_metadata._read_db_metadata(path) is None
+    assert read_status(monkeypatch, tmp_path, path) is None
     assert closed == [True]

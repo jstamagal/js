@@ -460,7 +460,10 @@ def test_failed_result_send_is_retrieved_and_logged_without_exception_text(caplo
         transport.send = send
         peer = await JSONRPCPeer.connect(lambda: transport)
 
+        handled = asyncio.Event()
+
         async def handler(params):
+            handled.set()
             return {"ok": True}
 
         peer.add_request_handler("sampling/createMessage", handler)
@@ -472,13 +475,16 @@ def test_failed_result_send_is_retrieved_and_logged_without_exception_text(caplo
         await transport.server_send(
             {"jsonrpc": "2.0", "id": "srv-1", "method": "sampling/createMessage", "params": {}}
         )
-        for _ in range(100):
-            if peer._incoming:
+        await asyncio.wait_for(handled.wait(), 1)
+
+        def failure_logged():
+            return any("ConnectionError" in record.getMessage() for record in caplog.records)
+
+        for _ in range(1000):
+            if failure_logged():
                 break
             await asyncio.sleep(0)
-        assert peer._incoming, "request task never started"
-        while peer._incoming:
-            await asyncio.sleep(0)
+        assert failure_logged(), "the failed request task was never settled"
         await peer.close()
         # Force any pending unretrieved-task diagnostics to surface now.
         import gc

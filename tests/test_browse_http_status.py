@@ -13,7 +13,7 @@ import threading
 
 import pytest
 
-from js.toolkit import ToolContext, web_search as web_search_mod
+from js.toolkit import ToolContext
 from js.toolkit.web_search import browse
 
 pytestmark = pytest.mark.live
@@ -106,8 +106,9 @@ def test_neither_request_ever_names_js_to_the_site(server, tmp_path):
 
 @requires_obscura
 def test_the_status_comes_from_obscura_not_a_second_client(server, tmp_path):
-    status = web_search_mod._obscura_status(
-        shutil.which("obscura"), f"{server}/503", timeout=20
-    )
+    result = browse(f"{server}/503", context=ToolContext(cwd=tmp_path))
 
-    assert status == 503
+    assert result.startswith("ERROR:")
+    assert "503" in result.splitlines()[0]
+    # Every request, the status probe included, was obscura's browser.
+    assert SEEN_AGENTS and all("Chrome/" in agent for agent in SEEN_AGENTS)

@@ -5,6 +5,7 @@ import base64
 import json
 import sys
 import time
+import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -28,6 +29,7 @@ from js.mcp.types import CallToolResult, GetPromptResult, ReadResourceResult, Se
 from js.mcp_config import MCPConfiguration, MCPPolicy, MCPServer
 from js.toolkit.core import Tool, ToolContext, ToolResult
 from js.toolkit.registry import ToolRegistry, build_default_registry
+from js.toolkit.subagents import named_agent_tool
 
 
 class FakeClient:
@@ -110,34 +112,45 @@ def test_control_tools_obey_mcp_tool_policy_in_catalog_load_and_surface():
 
 
 def test_http_transport_uses_configured_request_timeout(monkeypatch):
-    from urllib.request import Request
-
     server = MCPServer("HTTP", "http", "http", url="http://127.0.0.1:1/mcp")
-    host = MCPHost(MCPConfiguration((server,), MCPPolicy()), request_timeout=45, client_factory=FakeClient)
-
-    class Response:
-        status = 200
-
-    async def drive():
-        client = await host._ensure_server(server)
-        transport = client._factory()
-
-        def open_request(request, *, timeout):
-            if timeout < 30:
-                raise TimeoutError
-            return Response()
-
-        monkeypatch.setattr(transport._opener, "open", open_request)
-        response = transport._open(Request(server.url))
-        assert response.status == 200
 
     class FactoryClient(FakeClient):
         def __init__(self, factory, **kwargs):
             super().__init__(factory, **kwargs)
-            self._factory = factory
+            self.factory = factory
 
-    host._client_factory = FactoryClient
+    host = MCPHost(MCPConfiguration((server,), MCPPolicy()), request_timeout=45, client_factory=FactoryClient)
+    timeouts = []
+
+    class Response:
+        headers = {}
+
+        def __init__(self, status):
+            self.status = status
+
+        def read(self, *_args):
+            return b""
+
+        def close(self):
+            pass
+
+    def open_request(_opener, request, *, timeout):
+        timeouts.append(timeout)
+        if timeout < 30:
+            raise TimeoutError
+        # A notification is accepted; the notification stream is unsupported.
+        return Response(202 if request.get_method() == "POST" else 405)
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", open_request)
+
+    async def drive():
+        await host.discover(source=server.name)
+        transport = host.clients[server.name].factory()
+        await transport.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        await transport.close()
+
     asyncio.run(drive())
+    assert timeouts and all(timeout == 45 for timeout in timeouts)
 
 
 @pytest.mark.parametrize("failure_stage", ("initialize", "list_tools"))
@@ -645,11 +658,11 @@ def test_runtime_reuses_borrowed_host_across_turns_and_closes_owned_host(monkeyp
                 tool_registry=registry, tool_context=ToolContext(cwd=tmp_path), mcp_host=host,
                 suppress_output=True,
             )
-            assert not host._closed
+            assert not client.closed
             assert host.clients["Alpha Server"] is client
         assert calls == 2
         await host.close()
-        assert host._closed and client.closed
+        assert client.closed
 
         owned_hosts: list[MCPHost] = []
 
@@ -807,7 +820,7 @@ def test_runtime_delivers_all_mcp_events_through_strict_hooks(monkeypatch, confi
             client.kwargs["log_sink"]({"level": "info", "data": "safe"})
             client.kwargs["progress_sink"]({"progressToken": 1, "progress": 0.5})
             client.kwargs["on_resource_updated"]({"uri": "file:///x"})
-            host._event("mcp_catalog_collision", tool="catalog_only__duplicate")
+            host.reserve_public_names({next(iter(host.remote_tools))})
             return SimpleNamespace(
                 text="done", tool_calls=[], reasoning="",
                 usage=SimpleNamespace(input_tokens=1, output_tokens=1),
@@ -949,9 +962,11 @@ def test_short_authorization_credentials_are_redacted_from_results_events_and_er
 
     response = _redact_value({"description": "Bearer echoes xyz789"}, secrets)
     event = _redact_value({"data": {"token": "abc123"}}, secrets)
-    client = MCPClient(lambda: None, secrets=secrets)
+    def rejected():
+        raise RuntimeError("server rejected abc123")
+
     with pytest.raises(MCPClientError) as caught:
-        client._raise_redacted(RuntimeError("server rejected abc123"))
+        asyncio.run(MCPClient(rejected, secrets=secrets).initialize())
     exposed = repr((response, event, caught.value))
     assert "abc123" not in exposed
     assert "Bearer" in exposed
@@ -1016,11 +1031,7 @@ def test_turn_surface_withholds_mcp_name_claimed_by_generated_native_tool(tmp_pa
             client_factory=FakeClient,
             event_sink=lambda kind, **payload: events.append((kind, payload)),
         )
-        def generated_handler():
-            return "native"
-
-        generated_handler._js_agent_id = "alpha_server__read_file"
-        native = Tool("alpha_server__read_file", "generated agent", generated_handler, {})
+        native = named_agent_tool("alpha_server__read_file", "generated agent")
         allowed = ToolRegistry(
             tools=(native,),
             aliases={native.name.casefold(): native.name},
@@ -1377,10 +1388,12 @@ def test_client_errors_are_encoding_redacted_and_long_names_dispatch():
 
     redactor = captured.get("redactor")
     assert redactor is not None, "client must receive the host redactor"
-    client = MCPClient(lambda: None, redactor=redactor)
     for variant in ("a:b", "a%3Ab", "a%253Ab"):
+        def echoing(variant=variant):
+            raise MCPClientError(f"remote error echoed {variant}")
+
         with pytest.raises(MCPClientError) as raised:
-            client._raise_redacted(MCPClientError(f"remote error echoed {variant}"))
+            asyncio.run(MCPClient(echoing, redactor=redactor).initialize())
         assert variant not in str(raised.value)
         assert "[REDACTED]" in str(raised.value)
 

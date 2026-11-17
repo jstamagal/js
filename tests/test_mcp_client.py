@@ -393,7 +393,10 @@ def test_reconnect_retries_factory_failures_with_bounded_backoff():
         server = SpecServer()
         delays = []
         attempts = 0
-        client = await initialized_client(server, reconnect_attempts=2)
+        client = MCPClient(
+            server.factory, reconnect_attempts=2, reconnect_backoff=0.25, reconnect_backoff_max=0.4
+        )
+        await client.initialize()
         await server.connections[0].incoming.put(None)
         await asyncio.sleep(0)
         original_factory = server.factory
@@ -409,8 +412,6 @@ def test_reconnect_retries_factory_failures_with_bounded_backoff():
             delays.append(delay)
 
         client.transport_factory = flaky_factory
-        client._reconnect_backoff = 0.25
-        client._reconnect_backoff_max = 0.4
         original_sleep = asyncio.sleep
         asyncio.sleep = record_sleep
         try:
@@ -445,7 +446,7 @@ def test_secrets_are_redacted_from_all_client_exception_paths():
     async def drive():
         secret = "environment-secret-9988"
         server = SpecServer()
-        client = await initialized_client(server, secrets=[secret])
+        client = await initialized_client(server, secrets=[secret], reconnect_attempts=3)
         server.die_on = (0, "resources/read")
         original_factory = server.factory
 
@@ -459,7 +460,7 @@ def test_secrets_are_redacted_from_all_client_exception_paths():
         client.transport_factory = failing_factory
         with pytest.raises(MCPClientError) as caught:
             await client.read_resource("file:///secret")
-        assert attempts == client._reconnect_attempts
+        assert attempts == 3
         assert secret not in str(caught.value)
         assert "[REDACTED]" in str(caught.value)
 

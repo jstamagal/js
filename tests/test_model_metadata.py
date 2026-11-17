@@ -24,8 +24,13 @@ def _no_prior_refresh_failure(monkeypatch):
     ("gpt-5:cloud", True),
     ("gpt-5", True),
 ])
-def test_model_version_is_not_a_wrapper_suffix(model_name, expected):
-    assert model_metadata._is_wrapper_request("gpt-5", model_name) is expected
+def test_model_version_is_not_a_wrapper_suffix(monkeypatch, model_name, expected):
+    rows = (model_metadata._ModelRow("openai", "gpt-5", 400_000, 128_000, None),)
+    monkeypatch.setattr(model_metadata, "_all_models", lambda: rows)
+    monkeypatch.setattr(model_metadata.modelsdotdev, "get_model_by_id", lambda _model_id: None)
+    model_metadata.lookup_limits.cache_clear()
+    limits = model_metadata.lookup_limits(model_name, "omp")
+    assert (limits is not None and limits.model_id == "gpt-5") is expected
 
 
 class _FakeModel:
@@ -124,7 +129,6 @@ def test_ensure_fresh_catalog_refreshes_stale_bundle_and_writes_status(monkeypat
 
     monkeypatch.setattr(model_metadata, "_generate_database", fake_generate_database)
     model_metadata.lookup_limits.cache_clear()
-    model_metadata._all_models.cache_clear()
 
     status = model_metadata.ensure_fresh_catalog()
 
@@ -258,9 +262,12 @@ def test_catalog_refresh_retains_release_dates(monkeypatch, tmp_path):
     path = tmp_path / "catalog.sqlite"
     monkeypatch.setattr(model_metadata.modelsdotdev_sync, "_load_providers", lambda source: payload)
     monkeypatch.setattr(model_metadata, "_custom_db_path", lambda: path)
-    model_metadata._generate_database(output=path)
-    assert model_metadata._release_dates() == {"maker:model-v2": "2026-05-01"}
+    monkeypatch.setattr(model_metadata, "_status_file_path", lambda: tmp_path / "status.json")
+    model_metadata.refresh_catalog(force=True)
     with sqlite3.connect(path) as connection:
+        assert dict(connection.execute("SELECT full_id, release_date FROM model_release_dates")) == {
+            "maker:model-v2": "2026-05-01"
+        }
         assert connection.execute("SELECT limit_context FROM models").fetchone() == (1000000,)
 
 

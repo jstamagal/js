@@ -538,15 +538,33 @@ def test_fs_search_explicit_hidden_path_still_searches_it(tmp_path):
     assert str(tmp_path / ".hidden.txt") in matched
 
 
-def test_glob_asks_for_hidden_reads_only_dot_prefixed_components():
-    assert file_search._glob_asks_for_hidden(".env")
-    assert file_search._glob_asks_for_hidden("**/.github/*")
-    assert not file_search._glob_asks_for_hidden("!.env")
-    assert not file_search._glob_asks_for_hidden("!.git/**")
-    assert not file_search._glob_asks_for_hidden("*.py")
-    assert not file_search._glob_asks_for_hidden("./src/*.py")
-    assert not file_search._glob_asks_for_hidden("../lib/**")
-    assert not file_search._glob_asks_for_hidden(None)
+@pytest.mark.parametrize("glob,asks", [
+    (".env", True),
+    ("**/.github/*", True),
+    ("!.env", False),
+    ("!.git/**", False),
+    ("*.py", False),
+    ("./src/*.py", False),
+    ("../lib/**", False),
+    (None, False),
+])
+def test_glob_asks_for_hidden_reads_only_dot_prefixed_components(tmp_path, monkeypatch, glob, asks):
+    calls = tmp_path / "calls"
+    rg = tmp_path / "fake-rg"
+    rg.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        f"with open({str(calls)!r}, 'a') as out:\n"
+        "    out.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        "sys.exit(1)\n"
+    )
+    rg.chmod(0o755)
+    monkeypatch.setattr(file_search, "resolve_binary", lambda _name: str(rg))
+    file_search.fs_search("needle", path=str(tmp_path), glob=glob, output_mode="content",
+                          context=ToolContext(cwd=tmp_path))
+
+    [argv] = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert ("--hidden" in argv) is asks
 
 
 def test_fs_search_stays_on_one_file_system_in_every_mode(tmp_path, monkeypatch):

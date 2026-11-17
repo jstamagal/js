@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import io
+import random
 import re
+import tarfile
 import threading
 import time
 from collections.abc import Iterator
@@ -47,7 +51,7 @@ class _TransferHandler(BaseHTTPRequestHandler):
             return
         self.send_response(200)
         self.send_header("Accept-Ranges", "bytes")
-        payload = _TEXT_PAYLOAD if self.path == "/text" else _PAYLOAD
+        payload = self._payload()
         length = len(payload) + 65536 if self.path == "/truncated" else len(payload)
         content_type = "text/plain" if self.path == "/text" else "application/octet-stream"
         self.send_header("Content-Type", content_type)
@@ -73,7 +77,7 @@ class _TransferHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
-        payload = _TEXT_PAYLOAD if self.path == "/text" else _PAYLOAD
+        payload = self._payload()
         advertised_length = len(payload) + 65536 if self.path == "/truncated" else None
         match = re.fullmatch(r"bytes=(\d+)-(\d*)", requested_range)
         if match is None:
@@ -106,10 +110,15 @@ class _TransferHandler(BaseHTTPRequestHandler):
         if self.path == "/truncated":
             self.close_connection = True
 
+    def _payload(self) -> bytes:
+        if self.path in self.state.payloads:
+            return self.state.payloads[self.path]
+        return _TEXT_PAYLOAD if self.path == "/text" else _PAYLOAD
+
 
 @pytest.fixture(scope="module")
 def transfer_server() -> Iterator[tuple[str, SimpleNamespace]]:
-    state = SimpleNamespace(requests=[], headers=[], bytes_sent=0, slow=True, lock=threading.Lock())
+    state = SimpleNamespace(requests=[], headers=[], bytes_sent=0, slow=True, lock=threading.Lock(), payloads={})
     server = _TransferServer(("127.0.0.1", 0), _TransferHandler)
     server.state = state  # type: ignore[attr-defined]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -207,12 +216,26 @@ def test_tool_installer_download_uses_segmented_aria2_transfer(
 ) -> None:
     base_url, state = transfer_server
     _clear_server_state(state)
-    target = tmp_path / "release-asset.tar.gz"
+    # Random bytes do not compress, so the release asset is as large as the
+    # segmented transfer needs.
+    executable = random.Random(0).randbytes(12 * 1024 * 1024)
+    archive = io.BytesIO()
+    with tarfile.open(fileobj=archive, mode="w:gz") as bundle:
+        member = tarfile.TarInfo("release/tool")
+        member.size = len(executable)
+        bundle.addfile(member, io.BytesIO(executable))
+    state.payloads["/release-asset.tar.gz"] = archive.getvalue()
+    spec = tool_binaries.DownloadTool(
+        name="tool", executable="tool", version="1", asset="release-asset.tar.gz",
+        url=f"{base_url}/release-asset.tar.gz",
+        asset_sha256=hashlib.sha256(archive.getvalue()).hexdigest(),
+        archive_member="release/tool", executable_sha256=hashlib.sha256(executable).hexdigest(),
+    )
 
-    tool_binaries._download(f"{base_url}/file", target)
+    assert tool_binaries.install_download(spec, tools_dir=tmp_path / "tools") == "installed"
 
-    assert target.read_bytes() == _PAYLOAD
-    assert len(_ranges(state, "/file")) >= 2
+    assert (tmp_path / "tools" / "tool").read_bytes() == executable
+    assert len(_ranges(state, "/release-asset.tar.gz")) >= 2
 
 
 def test_interrupted_transfer_resumes_hidden_partial(
@@ -230,8 +253,8 @@ def test_interrupted_transfer_resumes_hidden_partial(
             target,
             timeout_s=0.25,
         )
-    partial = tool_binaries._partial_download_path(target)
-    assert partial.stat().st_size > 0
+    # The bytes so far wait in a hidden file beside the target.
+    assert any(partial.stat().st_size > 0 for partial in tmp_path.glob(f".{target.name}*"))
     first_bytes = state.bytes_sent
 
     _clear_server_state(state)

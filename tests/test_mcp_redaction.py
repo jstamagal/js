@@ -1,17 +1,28 @@
 """Credential redaction must not depend on configured-secret ordering."""
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from js.mcp import host
-from js.mcp.client import MCPClient
+from js.mcp.client import MCPClient, MCPClientError
+from js.mcp.types import CallToolResult
+
+
+def failing_initialize(message, **options):
+    """The MCPClientError an initialize raises when its transport fails with message."""
+    def factory():
+        raise RuntimeError(message)
+
+    with pytest.raises(MCPClientError) as caught:
+        asyncio.run(MCPClient(factory, **options).initialize())
+    return str(caught.value)
 
 
 @pytest.mark.parametrize("secrets", [("abc", "abcdef"), ("abcdef", "abc")])
 def test_client_redacts_containing_secret_before_its_prefix(secrets):
-    client = MCPClient(lambda: None, secrets=secrets)
-
-    assert client._redact_text("key=abcdef prefix=abc") == (
+    assert failing_initialize("key=abcdef prefix=abc", secrets=secrets) == (
         "key=[REDACTED] prefix=[REDACTED]"
     )
 
@@ -22,7 +33,8 @@ def test_host_without_secrets_does_not_build_per_character_candidates(monkeypatc
 
     monkeypatch.setattr(host, "_normalized_candidates", unnecessary_normalization)
     value = "%25" * 100_000
-    assert host._redact_text(value, ()) is value
+    result = host.mcp_tool_result(CallToolResult(content=[{"type": "text", "text": value}]), ())
+    assert result.blocks[0]["text"] is value
 
 
 def test_custom_redactor_receives_fully_scrubbed_containing_secret():
@@ -32,7 +44,5 @@ def test_custom_redactor_receives_fully_scrubbed_containing_secret():
         seen.append(value)
         return value
 
-    client = MCPClient(lambda: None, secrets=("abc", "abcdef"), redactor=custom)
-
-    assert client._redact_text("key=abcdef") == "key=[REDACTED]"
+    assert failing_initialize("key=abcdef", secrets=("abc", "abcdef"), redactor=custom) == "key=[REDACTED]"
     assert seen == ["key=[REDACTED]"]

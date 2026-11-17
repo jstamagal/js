@@ -164,17 +164,23 @@ def test_ex_write_reports_through_an_event(tmp_path, capsys):
     assert capsys.readouterr() == ("", "")
 
 
-def test_clipboard_failure_is_an_event(capsys):
-    import asyncio
+def test_clipboard_failure_is_an_event(capsys, monkeypatch, tmp_path):
+    from test_clipimage import CTRL_V, _drive
 
-    from js import clipimage, messages
+    from js import clipimage
 
+    # A display whose clipboard tool is not on PATH.
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    with pytest.raises(clipimage.ClipboardError) as error:
+        clipimage.read_image({})
+    assert error.value.fields
+    capsys.readouterr()
     events = []
-    error = clipimage.ClipboardError(messages.FAILED, error="clipboard unavailable")
     with output.using_sink(SimpleNamespace(emit=events.append)):
-        asyncio.run(clipimage._say(SimpleNamespace(full_screen=True), error))
+        _drive([CTRL_V], {})
     assert len(events) == 1
-    assert dict(events[0].fields)["fields"] == error.fields
+    assert dict(events[0].fields)["fields"] == error.value.fields
     assert capsys.readouterr() == ("", "")
 
 

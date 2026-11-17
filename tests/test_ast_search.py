@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 
 import pytest
@@ -41,16 +42,32 @@ def test_ast_search_resolves_the_managed_binary_and_reports_a_missing_one(tmp_pa
     assert calls.read_text().splitlines() == [str(binary)]
 
 
-def test_ast_argv_attaches_hyphen_leading_pattern_and_rewrite(tmp_path):
+def test_ast_argv_attaches_hyphen_leading_pattern_and_rewrite(tmp_path, monkeypatch):
     """A `- $A` pattern is a YAML sequence item or Markdown bullet; ast-grep's
     clap parser reads a separated hyphen-leading token as another option, so the
     value must ride the same argv token as its flag."""
-    argv = file_search._ast_argv("/managed/ast-grep", "- $A", tmp_path, "Yaml", "- $B")
+    (tmp_path / "tools.yaml").write_text("tools:\n  - read\n", encoding="utf-8")
+    calls = tmp_path / "calls"
+    binary = tmp_path / "fake-ast-grep"
+    binary.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        f"with open({str(calls)!r}, 'a') as out:\n"
+        "    out.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        "sys.exit(1)\n"
+    )
+    binary.chmod(0o755)
+    monkeypatch.setattr(file_search, "resolve_binary", lambda _name: str(binary))
 
-    assert "--pattern=- $A" in argv
-    assert "--rewrite=- $B" in argv
-    assert "- $A" not in argv
-    assert "- $B" not in argv
+    ast_search("- $A", path="tools.yaml", lang="Yaml", rewrite="- $B", context=ToolContext(cwd=tmp_path))
+
+    runs = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert runs
+    for argv in runs:
+        assert "--pattern=- $A" in argv
+        assert "--rewrite=- $B" in argv
+        assert "- $A" not in argv
+        assert "- $B" not in argv
 
 
 @requires_ast_grep

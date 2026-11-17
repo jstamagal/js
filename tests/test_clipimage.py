@@ -114,11 +114,12 @@ def test_missing_clipboard_tool_is_one_error(tmp_path, monkeypatch):
 
 def test_no_clipboard_prints_one_line_and_leaves_the_line_alone(no_display, capsys):
     capsys.readouterr()
-    lines, left = _drive(["hello", CTRL_V], {})
+    with clipimage.using_store({}) as kept:
+        lines, left = _drive(["hello", CTRL_V], {})
 
     assert left == "hello"
     assert lines == []
-    assert clipimage._images == {}
+    assert kept == {}
     assert len(capsys.readouterr().out.strip().splitlines()) == 1
 
 

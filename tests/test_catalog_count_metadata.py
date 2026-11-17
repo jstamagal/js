@@ -38,10 +38,12 @@ def test_corrupt_catalog_counts_are_stale(tmp_path, monkeypatch, key, value, cus
     ({"provider_count": "", "model_count": ""}, (None, None)),
     ({}, (None, None)),
 ])
-def test_valid_or_optional_counts_keep_catalog_status(tmp_path, counts, expected):
+def test_valid_or_optional_counts_keep_catalog_status(tmp_path, monkeypatch, counts, expected):
     path = tmp_path / "catalog.db"
     catalog(path, counts)
-    status = model_metadata._status_from_db(path)
+    monkeypatch.setattr(model_metadata, "_custom_db_path", lambda: path)
+    monkeypatch.setattr(model_metadata, "_status_file_path", lambda: tmp_path / "absent.json")
+    status = model_metadata.current_catalog_status()
     assert status is not None
     assert (status.provider_count, status.model_count) == expected
     assert status.db_path == path
