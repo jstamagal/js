@@ -33,6 +33,83 @@ class ModelRoute:
     transport: str | None = None
 
 
+@dataclass(frozen=True)
+class Wire:
+    """Which wire requests on one provider route go out on.
+
+    ``provider_id`` is the id as ``providers.normalize_provider_id`` leaves it
+    (None with no provider) and ``provider`` its definition, None when nothing
+    registers it. ``sdk`` is the SDK provider id requests are built with: the
+    provider's, else ``provider_id``, and openai with no provider. ``name`` is
+    the wire in the ``-u`` wire names: openai (chat completions), responses,
+    anthropic, or the SDK id.
+
+    ``provider_name`` and ``sdk_provider_name`` are the ids lowercased as
+    given, "" with no provider; ``explicit_provider`` is whether a provider id
+    was given at all. ``chat_completions`` reads ``sdk_provider_name``, so it is
+    False with no provider although ``name`` is openai.
+    ``reasoning_content`` is whether an OpenAI chat-completions request goes
+    through js's ``reasoning_content`` adapter: an operator-run endpoint, the
+    custom_openai transport, or a base URL other than the provider's default.
+    ``deepseek`` is whether the endpoint takes DeepSeek's extras, and
+    ``minimax`` whether it is MiniMax's."""
+
+    provider: providers.ProviderDef | None
+    provider_id: str | None
+    sdk: str
+    transport: str | None
+    name: str
+    explicit_provider: bool
+    provider_name: str
+    sdk_provider_name: str
+    anthropic: bool
+    responses: bool
+    chat_completions: bool
+    reasoning_content: bool
+    deepseek: bool
+    minimax: bool
+
+
+def resolve_wire(provider_id: str | None, *, base_url: str | None = None, model_id: str = "") -> Wire:
+    """The `Wire` requests to ``model_id`` on ``provider_id`` at ``base_url``
+    go out on. Only ``reasoning_content`` reads ``base_url``, and only
+    ``deepseek`` reads ``model_id``."""
+    provider = providers.get_provider(provider_id)
+    canonical_id = None if provider_id is None else providers.normalize_provider_id(provider_id) or provider_id
+    transport = provider.transport if provider is not None else None
+    if provider_id is None:
+        sdk = "openai"
+    else:
+        sdk = (provider.effective_sdk_provider_id if provider is not None else None) or canonical_id
+    name = ("responses" if transport == "custom_responses" else "openai") if sdk == "openai" else sdk
+    provider_name = (provider.id if provider is not None else (provider_id or "")).lower()
+    sdk_provider_name = (provider.effective_sdk_provider_id if provider is not None else (provider_id or "")).lower()
+    explicit_provider = provider_id is not None
+    operator_endpoint = provider is not None and (provider.local or not provider.established)
+    return Wire(
+        provider=provider,
+        provider_id=canonical_id,
+        sdk=sdk,
+        transport=transport,
+        name=name,
+        explicit_provider=explicit_provider,
+        provider_name=provider_name,
+        sdk_provider_name=sdk_provider_name,
+        anthropic=sdk_provider_name == "anthropic" or provider_name == "anthropic",
+        responses=transport == "custom_responses",
+        chat_completions=sdk_provider_name == "openai" and transport != "custom_responses",
+        reasoning_content=(operator_endpoint or transport == "custom_openai"
+                           or providers.is_custom_base_url(provider, base_url)),
+        # Whether the ENDPOINT takes DeepSeek's extras, which is not whether the
+        # model is a DeepSeek model: `nvidia/deepseek-ai/deepseek-v4-pro-0813`
+        # is one hosted elsewhere, and DeepSeek's private extras there are a 400.
+        # With no provider the model id is the only signal there is.
+        deepseek=provider_name == "deepseek" or sdk_provider_name == "deepseek" or (
+            not explicit_provider and "deepseek" in model_id.lower()),
+        minimax=provider_name == "minimax",
+    )
+
+
 class ProviderNotLoggedInError(ValueError):
     """A model id names a known provider the operator has not logged into.
 
