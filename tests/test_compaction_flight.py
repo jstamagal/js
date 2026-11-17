@@ -119,7 +119,7 @@ def test_same_repl_set_override_updates_anchor_then_request_budget(monkeypatch, 
 
     async def conversation():
         state.messages.append({"role": "user", "content": "first"})
-        await runtime.run_turn_async(cli._cfg_for_live_state(cfg, state), "SYSTEM", state.messages,
+        await runtime.run_turn_async(state.config_for_turn(cfg), "SYSTEM", state.messages,
                                      Events(), tool_context=context, tool_registry=registry)
         assert captured[-1] == 128000
         capsys.readouterr()
@@ -128,7 +128,7 @@ def test_same_repl_set_override_updates_anchor_then_request_budget(monkeypatch, 
         assert "1000000" in immediate
         assert state.settings["CONTEXT_SIZE"] == 1000000
         state.messages.append({"role": "user", "content": "second"})
-        await runtime.run_turn_async(cli._cfg_for_live_state(cfg, state), "SYSTEM", state.messages,
+        await runtime.run_turn_async(state.config_for_turn(cfg), "SYSTEM", state.messages,
                                      Events(), tool_context=context, tool_registry=registry)
         assert captured[-1] == 1000000
         assert "1000000" in capsys.readouterr().out

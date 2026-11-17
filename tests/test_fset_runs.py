@@ -36,7 +36,7 @@ def test_the_startup_run_of_the_jsrc_leaves_a_resumed_session_s_effort_in_charge
     state, _spec = repl_state(cfg)
     state.live_resume = {"EFFORT": "low"}
     cli._run_rc_commands(state, cfg, jsrc_paths(tmp_path))
-    assert cli._cfg_for_live_state(cfg, state).reasoning_effort == "low"
+    assert state.config_for_turn(cfg).reasoning_effort == "low"
 
 
 def test_collecting_the_config_twice_does_not_compound_fset_entries(tmp_path):

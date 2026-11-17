@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from test_command_table import _launch, _run
 
-from js import cli, settings, skill_picker
+from js import settings, skill_picker
 
 
 def test_skill_picker_accepts_context_keymaps(tmp_path):
@@ -31,7 +31,7 @@ def test_skills_command_writes_the_picked_names_into_the_setting(monkeypatch, tm
     _run(["/skills"], state, cfg)
 
     assert settings.knob(state.settings, "SKILLS_DISABLED") == ["alpha"]
-    assert cli._cfg_for_live_state(cfg, state).skills_disabled == ("alpha",)
+    assert state.config_for_turn(cfg).skills_disabled == ("alpha",)
 
 
 def test_skill_picker_accepts_its_view_and_streams(monkeypatch, tmp_path):

@@ -281,7 +281,7 @@ def test_pinned_gateway_unknown_prefix_passes_through_whole_model_id():
 
 @pytest.mark.parametrize("pin", [None, "deepseek"])
 def test_login_routed_prefix_carries_login_even_when_caller_opts_out(pin):
-    # cli._cfg_for_active_model passes use_saved_login=False; a builtin-provider
+    # ReplState.config_for_turn routes with use_saved_login=False; a builtin-provider
     # prefix that routes because of its login must still go to the login's
     # endpoint, not the provider default with an env key. ALL-CLAIMS.md:437.
     logins.save_login(Login(provider_id="deepseek", provider_base_url="https://private.test/v1",
@@ -471,7 +471,7 @@ def test_after_a_model_switch_set_and_save_see_the_values_the_turn_uses(monkeypa
     cfg = from_env(cwd=tmp_path, save_session=False)
     state = ReplState(settings=dict(cfg.settings), model="testes/b")
 
-    turn = cli._cfg_for_live_state(cfg, state)
+    turn = state.config_for_turn(cfg)
     shown = cli._live_settings_overlay_for_state(cfg, state)
 
     assert turn.model_context_window == 32768
@@ -487,7 +487,7 @@ def test_save_leaves_a_models_login_defaults_out_of_jsrc(monkeypatch, tmp_path):
     monkeypatch.setenv("JS_MODEL", "testes/a")
     cfg = from_env(cwd=tmp_path, save_session=False)
     state = ReplState(settings=dict(cfg.settings), model="testes/b")
-    cli._cfg_for_live_state(cfg, state)
+    state.config_for_turn(cfg)
 
     assert cli._cmd_save("", state, cfg) is None
     assert "32768" not in paths.global_config_file().read_text()
@@ -505,8 +505,8 @@ def test_resolving_twice_after_a_switch_gives_the_same_sampling(monkeypatch, tmp
     cfg = from_env(cwd=tmp_path, save_session=False)
     state = ReplState(settings=dict(cfg.settings), model="testes/b")
 
-    first = cli._cfg_for_live_state(cfg, state)
-    second = cli._cfg_for_live_state(cfg, state)
+    first = state.config_for_turn(cfg)
+    second = state.config_for_turn(cfg)
 
     assert login_defaults.sampling(first).temperature == 0.9
     assert login_defaults.sampling(second).temperature == 0.9
@@ -522,7 +522,7 @@ def test_set_shows_the_agent_sampling_the_turn_sends(monkeypatch, tmp_path):
     spec = SimpleNamespace(sampling={"temperature": 0.7}, max_output_tokens=None, reasoning_effort=None)
     state = ReplState(settings=dict(cfg.settings), prompt_spec=spec)
 
-    turn = cli._cfg_for_live_state(cfg, state)
+    turn = state.config_for_turn(cfg)
     shown = cli._live_settings_overlay_for_state(cfg, state)
 
     assert login_defaults.sampling(turn).temperature == 0.7
@@ -557,10 +557,10 @@ def test_after_switch_set_and_unset_the_shown_and_sent_sampling_agree(monkeypatc
     state = ReplState(settings=dict(cfg.settings), model="testes/b", messages=[], system="s")
 
     assert cli._cmd_set("TEMPERATURE 0.5", state, cfg) is None
-    assert login_defaults.sampling(cli._cfg_for_live_state(cfg, state)).temperature == 0.5
+    assert login_defaults.sampling(state.config_for_turn(cfg)).temperature == 0.5
     assert cli._cmd_set("-TEMPERATURE", state, cfg) is None
 
-    turn = cli._cfg_for_live_state(cfg, state)
+    turn = state.config_for_turn(cfg)
     shown = cli._live_settings_overlay_for_state(cfg, state)
     assert login_defaults.sampling(turn).temperature == 0.9
     assert shown["TEMPERATURE"].display == "0.9"
@@ -673,7 +673,7 @@ def test_an_explicit_set_equal_to_the_current_value_still_pins_it(monkeypatch, t
     assert cli._cmd_set("TEMPERATURE 0.2", state, cfg) is None
     state.model = "testes/b"
 
-    assert login_defaults.sampling(cli._cfg_for_live_state(cfg, state)).temperature == 0.2
+    assert login_defaults.sampling(state.config_for_turn(cfg)).temperature == 0.2
 
 
 def test_a_resumed_session_pins_its_effort_even_when_it_is_the_default(monkeypatch, tmp_path):

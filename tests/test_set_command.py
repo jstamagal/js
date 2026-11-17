@@ -45,7 +45,7 @@ def test_set_wildcard_lists_names_that_match(repl, capsys):
 def test_set_context_size_is_the_window_of_the_next_request(repl, capsys):
     cfg, state = repl
     _out("/set CONTEXT_SIZE 123456", repl, capsys)
-    active = cli._cfg_for_live_state(cfg, state)
+    active = state.config_for_turn(cfg)
     assert compaction.configured_context_window(active, lambda: None) == 123456
 
 

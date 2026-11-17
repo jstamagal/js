@@ -61,7 +61,7 @@ def test_compact_only_deduplicates_already_published_skip(monkeypatch, tmp_path,
 
 def _run_compact_route(monkeypatch, cfg, route):
     if route == "manual":
-        monkeypatch.setattr(cli, "_cfg_for_live_state", lambda cfg, state: cfg)
+        monkeypatch.setattr(ReplState, "config_for_turn", lambda state, cfg: cfg)
         monkeypatch.setattr(cli, "_repl_assembly", lambda state: SimpleNamespace(compact_force_focus="forced"))
         assert cli._cmd_compact("", ReplState(system="", messages=[]), cfg) is None
     else:

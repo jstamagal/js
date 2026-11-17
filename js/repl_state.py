@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import os
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
+from . import login_defaults, routing, settings as _settings, turn_settings
 from .compaction import AutoCompactState
+from .config import Config, _norm_effort, vision_enabled_for_model
 
 if TYPE_CHECKING:
     from .cli import ReplAssembly, _SessionTarget
@@ -60,3 +63,63 @@ class ReplState:
     running: bool = True
     # The session `/session` chose to continue in.
     switch_session: _SessionTarget | None = None
+
+    def config_for_turn(self, cfg: Config) -> Config:
+        """The Config a turn started now runs with: ``cfg`` on the live route
+        and settings, and the login-default settings resolved over every layer
+        (login_defaults)."""
+        active = self._config_for_route(cfg)
+        agent_default, agent = login_defaults.agent_layers(self.prompt_spec)
+        return login_defaults.for_turn(replace(
+            active,
+            **turn_settings.project(self.settings, fallback=active),
+            settings=self.settings,
+            reasoning_effort=_live_reasoning_effort(self.settings, active.reasoning_effort),
+            layer_agent_default=agent_default,
+            layer_agent=agent,
+            layer_set=dict(self.live_set),
+            layer_resume=dict(self.live_resume),
+        ))
+
+    def _config_for_route(self, cfg: Config) -> Config:
+        """``cfg`` on the live model and provider fields, routed."""
+        model = self.model
+        if not (isinstance(model, str) and model):
+            model = cfg.model
+        try:
+            route = routing.resolve_model_route(
+                model,
+                configured_provider_id=self.provider_id,
+                configured_base_url=self.provider_base_url,
+                configured_api_key=self.provider_api_key,
+                configured_headers=self.provider_headers,
+                env=os.environ,
+                explicit_model=True,
+                use_saved_login=False,
+            )
+        except routing.ProviderNotLoggedInError:
+            # A live `/model vendor/x` naming an un-logged-in provider with nothing
+            # pinned can't resolve. This runs on every /set display and tool-registry
+            # sync, not just turns, so it must never crash: carry the raw request with
+            # no provider so the turn surfaces the friendly not-logged-in error at the
+            # model boundary instead.
+            route = routing.ModelRoute(model=model, provider_id=None, base_url=None, api_key=None)
+        route_vision = vision_enabled_for_model(route.model, self.settings)
+        if (
+            route.model != cfg.model
+            or route.provider_id != cfg.provider_id
+            or route.base_url != cfg.provider_base_url
+            or route.api_key != cfg.provider_api_key
+            or route.headers != getattr(cfg, "provider_headers", {})
+            or route_vision != cfg.vision_enabled
+        ):
+            return routing.apply_route(cfg, route, settings=self.settings)
+        return cfg
+
+
+def _live_reasoning_effort(live_settings: dict, default: str | None) -> str | None:
+    """The live EFFORT setting, normalized; ``default`` when it is unset or not a string."""
+    raw = _settings.get_dotted(live_settings, ("EFFORT",), None)
+    if isinstance(raw, str):
+        return _norm_effort(raw)
+    return default

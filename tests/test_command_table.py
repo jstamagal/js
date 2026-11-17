@@ -79,7 +79,7 @@ def test_jsrc_model_and_provider_lines_take_effect(monkeypatch, tmp_path):
     jsrc.write_text("/provider deepseek\n/model deepseek-chat\n", encoding="utf-8")
 
     cfg, state, _errors = _launch(tmp_path)
-    turn_cfg = cli._cfg_for_live_state(cfg, state)
+    turn_cfg = state.config_for_turn(cfg)
 
     assert (turn_cfg.model, turn_cfg.provider_id) == ("deepseek-chat", "deepseek")
 
@@ -213,4 +213,4 @@ def test_disabled_skills_survive_save_and_restart(monkeypatch, tmp_path):
     cfg, state, errors = _launch(tmp_path)
 
     assert errors == []
-    assert cli._cfg_for_live_state(cfg, state).skills_disabled == ("grilling", "handoff")
+    assert state.config_for_turn(cfg).skills_disabled == ("grilling", "handoff")

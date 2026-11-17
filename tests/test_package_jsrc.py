@@ -186,7 +186,7 @@ def test_live_set_dash_returns_to_the_session_start_value_in_show_turn_and_save(
     assert cli._handle_command("/set -READ_LINES_MAX", state, cfg) is True
 
     assert _show_value(cfg, state, "READ_LINES_MAX", capsys) == "33"
-    assert cli._cfg_for_live_state(cfg, state).max_read_lines == 33
+    assert state.config_for_turn(cfg).max_read_lines == 33
     assert cli._handle_command("/save", state, cfg) is True
     reloaded = from_env(save_session=False, cwd=project)
     assert reloaded.max_read_lines == 33

@@ -95,7 +95,6 @@ from . import (
 from .config import (
     Config,
     InvocationSources,
-    _norm_effort,
     derive_session_name,
     from_env,
     jsrc_paths,
@@ -498,41 +497,6 @@ def _read_stdin_attachment_if_piped() -> bytes:
     return sys.stdin.read().encode("utf-8")
 
 
-def _cfg_for_active_model(cfg: Config, state: ReplState) -> Config:
-    model = state.model
-    if not (isinstance(model, str) and model):
-        model = cfg.model
-    try:
-        route = routing.resolve_model_route(
-            model,
-            configured_provider_id=state.provider_id,
-            configured_base_url=state.provider_base_url,
-            configured_api_key=state.provider_api_key,
-            configured_headers=state.provider_headers,
-            env=os.environ,
-            explicit_model=True,
-            use_saved_login=False,
-        )
-    except routing.ProviderNotLoggedInError:
-        # A live `/model vendor/x` naming an un-logged-in provider with nothing
-        # pinned can't resolve. This runs on every /set display and tool-registry
-        # sync, not just turns, so it must never crash: carry the raw request with
-        # no provider so the turn surfaces the friendly not-logged-in error at the
-        # model boundary instead.
-        route = routing.ModelRoute(model=model, provider_id=None, base_url=None, api_key=None)
-    route_vision = vision_enabled_for_model(route.model, state.settings)
-    if (
-        route.model != cfg.model
-        or route.provider_id != cfg.provider_id
-        or route.base_url != cfg.provider_base_url
-        or route.api_key != cfg.provider_api_key
-        or route.headers != getattr(cfg, "provider_headers", {})
-        or route_vision != cfg.vision_enabled
-    ):
-        return routing.apply_route(cfg, route, settings=state.settings)
-    return cfg
-
-
 def _live_optional_str_setting(live_settings: dict, path: tuple[str, str], default: str | None) -> str | None:
     missing = object()
     raw = settings.get_dotted(live_settings, path, missing)
@@ -540,18 +504,6 @@ def _live_optional_str_setting(live_settings: dict, path: tuple[str, str], defau
         return default
     if raw is None or isinstance(raw, str):
         return raw
-    return default
-
-
-def _live_reasoning_effort_setting(live_settings: dict, default: str | None) -> str | None:
-    missing = object()
-    raw = settings.get_dotted(live_settings, ("EFFORT",), missing)
-    if raw is missing:
-        return default
-    if raw is None:
-        return default
-    if isinstance(raw, str):
-        return _norm_effort(raw)
     return default
 
 
@@ -791,30 +743,13 @@ def _sync_trace_sink(
         old.close()
 
 
-def _cfg_for_live_state(cfg: Config, state: ReplState) -> Config:
-    """The Config a turn started now runs with: the live settings, and the
-    login-default settings resolved over every layer (login_defaults)."""
-    active = _cfg_for_active_model(cfg, state)
-    live_settings = state.settings
-    agent_default, agent = login_defaults.agent_layers(state.prompt_spec)
-    return login_defaults.for_turn(replace(
-        active,
-        **turn_settings.project(live_settings, fallback=active),
-        settings=live_settings,
-        reasoning_effort=_live_reasoning_effort_setting(live_settings, active.reasoning_effort),
-        layer_agent_default=agent_default,
-        layer_agent=agent,
-        layer_set=dict(state.live_set),
-        layer_resume=dict(state.live_resume),
-    ))
-
 def _sync_tool_registry_from_live_settings(cfg: Config, state: ReplState) -> None:
     """Rebuild the live registry. The agent load already printed the
     unmatched-entry notices; a tools.yaml that no longer resolves keeps the
     current registry and prints one line."""
     selectors = state.tool_selectors
     try:
-        state.tool_registry = run_assembly.registry_for(_cfg_for_live_state(cfg, state)).select(selectors, warn=False)
+        state.tool_registry = run_assembly.registry_for(state.config_for_turn(cfg)).select(selectors, warn=False)
     except tool_policy.ToolPolicyError as exc:
         msgs.say(msgs.TOOL_SURFACE_KEPT, error=exc)
 
@@ -921,7 +856,7 @@ def _same_number(a, b) -> bool:
 
 def _live_settings_overlay_for_state(cfg: Config, state: ReplState) -> dict[str, setcmd.LiveValue]:
     """Resolve the same route the next turn uses and diff it against the store."""
-    turn_cfg = _cfg_for_live_state(cfg, state)
+    turn_cfg = state.config_for_turn(cfg)
     provider_id = turn_cfg.provider_id
     saved_login = routing._saved_login(provider_id) if provider_id else None
     provider_def = providers.get_provider(provider_id) if provider_id else None
@@ -1123,7 +1058,7 @@ async def _maybe_auto_compact_async(cfg: Config, state: ReplState) -> None:
     printing lives here."""
     if not compaction.get_bool(cfg, "COMPACTION_AUTO"):
         return
-    active_cfg = _cfg_for_live_state(cfg, state)
+    active_cfg = state.config_for_turn(cfg)
     turn_status = runtime.T.STOCK_CONTEXT.turn_status
     turn_status.compacting = True
     try:
@@ -1450,7 +1385,7 @@ def _split_compact_model(arg: str) -> tuple[str | None, str, bool]:
 
 def _print_tool_chain(state: ReplState, cfg: Config) -> None:
     """Every tool with its resolved state and the chain entry that decided it."""
-    full = run_assembly.registry_for(_cfg_for_live_state(cfg, state))
+    full = run_assembly.registry_for(state.config_for_turn(cfg))
     try:
         config = tool_policy.load_tools_config()
         rules = tool_policy.expand(state.tool_selectors, config, f"agent {cfg.agent_id!r}")
@@ -1503,7 +1438,7 @@ def _apply_settings_result(result: setcmd.CommandResult, state: ReplState, cfg: 
     if result.error:
         return result.error
     if any(key.startswith("CONTEXT_SIZE") for key in keys):
-        runtime.install_context_window_overrides(_cfg_for_live_state(cfg, state))
+        runtime.install_context_window_overrides(state.config_for_turn(cfg))
     return None
 
 
@@ -1677,7 +1612,7 @@ def _cmd_save(arg: str, state: ReplState, cfg: Config) -> str | None:
 def _save_server(cfg: Config, state: ReplState) -> str | None:
     """Write the session's server and model layer values for the active
     model into the login the session routes to."""
-    turn = _cfg_for_live_state(cfg, state)
+    turn = state.config_for_turn(cfg)
     login = login_defaults.login_for(turn.provider_id, turn.provider_base_url)
     if login is None:
         return msgs.SAVE_NO_SERVER.said(provider=turn.provider_id or turn.provider_base_url or turn.model)
@@ -1704,7 +1639,7 @@ def _save_server(cfg: Config, state: ReplState) -> str | None:
 def _live_stamp(cfg: Config, state: ReplState) -> dict:
     """The stamp a turn started now would write: its model and the effort that
     model resolves to."""
-    turn = _cfg_for_live_state(cfg, state)
+    turn = state.config_for_turn(cfg)
     return M.stamp_for(turn.model, turn.provider_id, turn.reasoning_effort)
 
 
@@ -2011,7 +1946,7 @@ def _cmd_compact(arg: str, state: ReplState, cfg: Config) -> str | None:
     if forced:
         focus = ""
     try:
-        compact_cfg = _cfg_for_live_state(cfg, state)
+        compact_cfg = state.config_for_turn(cfg)
         hooks = _compact_hooks(state, compact_cfg)
         hooks["emit"], skipped = _track_compact_skips(hooks["emit"])
         with stream_transport.net_role(msgs.COMPACTING_ROLE.words()):
@@ -2464,7 +2399,7 @@ _LIVE_STATE_LOCK = threading.Lock()
 def _live_cfg_snapshot(cfg: Config, state: ReplState) -> Config:
     """The turn cfg from live state, never from a half-applied command."""
     with _LIVE_STATE_LOCK:
-        return _cfg_for_live_state(cfg, state)
+        return state.config_for_turn(cfg)
 
 
 def _handle_command(line: str, state: ReplState, cfg: Config) -> bool:
@@ -3984,7 +3919,7 @@ async def _initialize_repl_agent(cfg, state, telemetry, prompt_spec) -> None:
     user line, then its reply as it streams."""
     if not prompt_spec.exchanges or state.messages:
         return
-    turn_cfg = _cfg_for_live_state(cfg, state)
+    turn_cfg = state.config_for_turn(cfg)
     try:
         await agent_messages.initialize(
             turn_cfg, prompt_spec, state.messages, telemetry, system=state.system,
@@ -4857,7 +4792,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     elif (prompt_spec.max_output_tokens is not None
           and settings.get_dotted(live_settings, ("OUTPUT_TOKENS_MAX",), None) is None):
         # Agent default from agent.yaml — seed the per-turn source of truth so
-        # it survives the _cfg_for_live_state rebuild. Config/env/--max-out win.
+        # it survives the per-turn rebuild (ReplState.config_for_turn). Config/env/--max-out win.
         settings.set_dotted(live_settings, ("OUTPUT_TOKENS_MAX",), prompt_spec.max_output_tokens)
     state = _repl_state(
         cfg, prompt_spec,

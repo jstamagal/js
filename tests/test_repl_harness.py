@@ -987,7 +987,7 @@ def test_picker_open_preserves_explicit_logout_over_config(monkeypatch, tmp_path
     assert captured["provider_base_url"] is None
     assert captured["provider_api_key"] is None
 
-def test_cfg_for_active_model_carries_provider_overrides(tmp_path):
+def test_config_for_turn_carries_provider_overrides(tmp_path):
     cfg = make_cfg(tmp_path)
     state = ReplState(
         model="other-model",
@@ -996,14 +996,14 @@ def test_cfg_for_active_model_carries_provider_overrides(tmp_path):
         provider_api_key="sk-proxy",
     )
 
-    active = cli._cfg_for_active_model(cfg, state)
+    active = state.config_for_turn(cfg)
     assert active.model == "other-model"
     assert active.provider_id is None
     assert active.provider_base_url == "http://proxy.test/v1"
     assert active.provider_api_key == "sk-proxy"
 
 
-def test_cfg_for_active_model_keeps_pinned_provider_for_prefixed_model(tmp_path):
+def test_config_for_turn_keeps_pinned_provider_for_prefixed_model(tmp_path):
     # A gateway/openrouter model id like "anthropic/claude-..." selected under an
     # explicitly pinned provider must NOT let the prefix hijack the provider or
     # inherit the gateway's base/api/headers onto a native provider transport.
@@ -1016,7 +1016,7 @@ def test_cfg_for_active_model_keeps_pinned_provider_for_prefixed_model(tmp_path)
         provider_headers={"x-omp": "1"},
     )
 
-    active = cli._cfg_for_active_model(cfg, state)
+    active = state.config_for_turn(cfg)
     assert active.provider_id == "omp"
     assert active.model == "anthropic/claude-sonnet-4"
     assert active.provider_base_url == "https://gateway.test/v1"
@@ -1024,7 +1024,7 @@ def test_cfg_for_active_model_keeps_pinned_provider_for_prefixed_model(tmp_path)
     assert active.provider_headers == {"x-omp": "1"}
 
 
-def test_cfg_for_active_model_strips_same_provider_prefix(tmp_path):
+def test_config_for_turn_strips_same_provider_prefix(tmp_path):
     # When the prefix names the pinned provider, the prefix is stripped without
     # disturbing the pinned credentials.
     cfg = make_cfg(tmp_path)
@@ -1035,14 +1035,14 @@ def test_cfg_for_active_model_strips_same_provider_prefix(tmp_path):
         provider_api_key="sk-deepseek",
     )
 
-    active = cli._cfg_for_active_model(cfg, state)
+    active = state.config_for_turn(cfg)
     assert active.provider_id == "deepseek"
     assert active.model == "deepseek-v4-flash"
     assert active.provider_base_url == "https://api.deepseek.com"
     assert active.provider_api_key == "sk-deepseek"
 
 
-def test_cfg_for_active_model_routes_prefix_when_provider_unset(monkeypatch, tmp_path):
+def test_config_for_turn_routes_prefix_when_provider_unset(monkeypatch, tmp_path):
     # With no explicit provider, a `provider/model` prefix routes ONLY when the
     # operator logged into that provider (an env key never creates a route).
     from js import logins
@@ -1057,7 +1057,7 @@ def test_cfg_for_active_model_routes_prefix_when_provider_unset(monkeypatch, tmp
         provider_api_key=None,
     )
 
-    active = cli._cfg_for_active_model(cfg, state)
+    active = state.config_for_turn(cfg)
     assert active.provider_id == "deepseek"
     assert active.model == "deepseek-v4-flash"
 

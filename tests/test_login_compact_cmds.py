@@ -56,7 +56,7 @@ def test_compact_auto_does_not_swallow_plain_compact(tmp_path, monkeypatch):
     cfg = make_cfg(tmp_path)
     state = ReplState(messages=[], system="sys", settings=settings.seed_defaults())
     seen_focus: list[str] = []
-    monkeypatch.setattr(cli, "_cfg_for_active_model", lambda cfg, state: cfg)
+    monkeypatch.setattr(ReplState, "config_for_turn", lambda state, cfg: cfg)
     monkeypatch.setattr(
         cli.compaction, "compact_now_sync",
         lambda cfg, system, messages, *, model=None, focus="", forced=False, **_: seen_focus.append(focus) or "ok",
@@ -75,7 +75,7 @@ def test_compact_command_model_flag_picks_the_summarizer(tmp_path, monkeypatch):
         seen.append((model, focus, forced))
         return "ok"
 
-    monkeypatch.setattr(cli, "_cfg_for_live_state", lambda cfg, state: cfg)
+    monkeypatch.setattr(ReplState, "config_for_turn", lambda state, cfg: cfg)
     monkeypatch.setattr(cli.compaction, "compact_now_sync", compact_stub)
 
     assert cli._handle_command("/compact -m fast-summarizer keep the API decisions", state, cfg) is True
