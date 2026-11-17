@@ -544,6 +544,8 @@ _LONG_REPLIES: dict[str, tuple[str | None, tuple[bytes, ...]]] = {
         {"results": [{"title": "t", "url": "https://x.test", "content": _LONG}]}).encode(),)),
     "exa_search": ("EXA_API_KEY", (json.dumps(
         {"results": [{"title": "t", "url": "https://x.test", "text": _LONG}]}).encode(),)),
+    "docs_search": (None, (json.dumps(
+        {"results": [{"id": "/tardy-org/zzz", "title": "Zzz"}]}).encode(), _LONG.encode())),
 }
 
 

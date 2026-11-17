@@ -159,14 +159,6 @@ def _hidden(context: ToolContext, *keys: str | None) -> tuple[str, ...]:
     return tuple(key for key in keys if key)
 
 
-def _cap(text: str, context: ToolContext) -> str:
-    limit = context.max_tool_result_bytes
-    encoded = text.encode("utf-8")
-    if len(encoded) <= limit:
-        return text
-    return encoded[:limit].decode("utf-8", errors="ignore") + "\n[truncated]"
-
-
 def _bounded_int(raw: Any, default: int, *, minimum: int, maximum: int | None = None) -> int:
     if isinstance(raw, float) and not raw.is_integer():
         value = default
@@ -419,7 +411,7 @@ def docs_search(
         suffix = f", topic: {topic}" if topic else ""
         return f"ERROR: context7 returned empty docs for {library_id}{suffix}"
     header = f"[context7 {library_id}" + (f", topic: {topic}" if topic else "") + "]\n"
-    return _cap(header + text, context)
+    return truncate(header + text, context)
 
 
 def _is_private_ip_literal(url: str) -> bool:
