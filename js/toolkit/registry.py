@@ -618,7 +618,7 @@ def registry_for_roots(
 
 
 def _swarm_tools() -> tuple[Tool, ...]:
-    # send and who: on every agent's surface under --swarm, selectable by
+    # The bus tools: on every swarm agent's surface (js.swarm_run), selectable by
     # agent.yaml like any tool otherwise. js.swarm imports the toolkit lazily.
     from .. import swarm
 

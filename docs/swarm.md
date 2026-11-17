@@ -1,25 +1,25 @@
 # Swarm bus
 
-`js -p "opener" --json-stream --swarm ROOT/NAME` runs this process as agent `NAME` on
-a bus rooted at `ROOT`. Many such processes, one per agent, talk to each other
-through the bus while they work. The code is `js/swarm.py`.
+`python -m js.swarm run SPEC.json` runs every agent of a swarm on one asyncio
+loop in one process, each agent on a bus rooted at `ROOT`; the agents talk to
+each other through the bus while they work. The bus is `js/swarm.py`, the
+runner `js/swarm_run.py` (see [Every agent in one process](#every-agent-in-one-process)).
+A program outside js reads and posts on the bus through `js.swarm.Room`.
 
 ```bash
 ROOT=/tmp/troop-42
-js -a troop -p "You are kivu. ..." --json-stream --swarm $ROOT/kivu &
-js -a troop -p "You are twig. ..." --json-stream --swarm $ROOT/twig &
+python -m js.swarm run spec.json &               # kivu and twig, every agent in one process
 python -m js.swarm send $ROOT steer '*' "new evidence: the leak is in the writer"
 python -m js.swarm members $ROOT                 # kivu asleep holds parser / twig working
 python -m js.swarm cells $ROOT                   # the work board
 python -m js.swarm post $ROOT steer "check the writer" "src/writer.py; done when the test passes"
 python -m js.swarm quiet $ROOT && echo "nothing left to do"
 python -m js.swarm send $ROOT steer kivu --kind stop
-python -m js.swarm run spec.json                 # the same swarm, every agent in one process
 ```
 
 ## What an agent on the bus gets
 
-- **The bus tools**, added to the agent's surface by the flag; `agent.yaml`
+- **The bus tools**, added to the agent's surface by the runner; `agent.yaml`
   does not name them.
   - `send(to, text, kind)` posts to one agent or, with `*`, to everyone else.
     `kind` is a free word the troop agrees on; it is what `subscribe` matches.
@@ -37,9 +37,8 @@ python -m js.swarm run spec.json                 # the same swarm, every agent i
     this turn.
   - `recruit(name, opener)`: start a sibling under a new name with this
     agent's own agent, model and settings and a session named after the
-    parent's; the opener is its first prompt. One process per agent: a new
-    process whose events go to `ROOT/<name>/events.jsonl`. In an in-process
-    swarm: a new agent on the same loop. A bus takes at most eight recruits.
+    parent's; the opener is its first prompt. The new agent runs on the same
+    loop. A bus takes at most `SWARM_SPAWN_MAX` recruits.
   - `post_task(title, body)`, `take_task(id)`, `finish_task(id, result)`,
     `tasks()`: the **work board**. A posted task tells everyone with a `task`
     message and sits open on the board; taking it is a claim on `task:<id>`
@@ -53,18 +52,14 @@ python -m js.swarm run spec.json                 # the same swarm, every agent i
   seam the REPL uses for lines typed during a turn (`steer` in
   `runtime.run_turn_async`).
 - **Turn end is sleep, not exit.** When the model stops calling tools, the
-  process sleeps on its inbox. Nothing is sent to the model while it waits.
+  agent sleeps on its inbox. Nothing is sent to the model while it waits.
   When messages land it wakes into a new turn with them as the user message;
   a burst that lands within a third of a second of the first message is one
   wake. The session grows across turns like a REPL session: it is persisted
   before every sleep, and the between-turn compaction trigger runs then too,
   so a long-lived agent compacts the way a REPL session does.
 - **Stop.** A message of kind `stop` ends the agent after the turn it lands in
-  (or at once, if it arrives while asleep). `SIGTERM` ends it like `^C`.
-
-The headless stream uses the standard `--json-stream` events throughout the run
-and ends when the agent stops. Bus files record sleep and wake state; see
-[headless-json.md](headless-json.md).
+  (or at once, if it arrives while asleep).
 
 ## Files
 
@@ -75,7 +70,7 @@ ROOT/cells.json           the work board: id, title, body, by, status, holder, r
 ROOT/<name>/inbox/        one file per message not yet delivered to <name>
 ROOT/<name>/subs          the kinds <name> subscribed to, one per line
 ROOT/<name>/asleep        present while <name> waits on its inbox
-ROOT/<name>/spawned       who recruited <name>, its pid and command
+ROOT/<name>/spawned       who recruited <name> and the runner's pid
 ROOT/hold                 seconds an asleep agent lets messages not addressed to it pile up
 ROOT/<name>/ping          the stamp of the last rollcall
 ROOT/<name>/pong          the answer: ping (that stamp), ts, pid, state (asleep or working), step
@@ -86,7 +81,7 @@ The log is the blackboard: a runner or a UI tails it for the whole
 conversation. An inbox file is written to a temp name and renamed, so a
 reader never sees a partial message. A message sent to a name that has not
 joined yet waits in that name's inbox, so a runner can post the opener before
-it starts the process.
+it starts the agent.
 
 The wait is a harness-side poll every quarter second. It costs no model call
 and no tool call. `python -m js.swarm quiet ROOT` exits 0 when every member
@@ -106,16 +101,16 @@ With no `hold` file the hold is zero.
 ## Rollcall
 
 `Room.ping()` stamps a `ping` file in every member's directory. Each agent
-process runs a thread that looks at its own `ping` once a second and writes
+runs a thread that looks at its own `ping` once a second and writes
 `pong` with the stamp it answers, its pid, whether it is asleep or working,
 and `step`: when the agent last joined, crossed a tool boundary, went to sleep
 or woke. The model is not called, nothing lands in an inbox, nothing is added
 to the log. `Room.rollcall(wait)` pings and collects: an answer per member,
 `None` for one that stayed silent.
 
-Silent means the process is gone, since the thread answers while the agent
-waits on a model or a tool. An answer whose `state` is working and whose
-`step` is old is a process that is alive and stuck inside one call. `who` and
+Silent means the agent's process is gone, since the thread answers while the
+agent waits on a model or a tool. An answer whose `state` is working and whose
+`step` is old is an agent that is alive and stuck inside one call. `who` and
 `python -m js.swarm members` show a silent member as `no answer at rollcall
 since <time>`. A retired agent has left the bus and is not called.
 
@@ -132,9 +127,6 @@ the troop changes shape without a runner's say-so.
 
 ## Every agent in one process
 
-`python -m js.swarm run SPEC.json` runs every agent of a swarm on one asyncio
-loop in one process. The code is `js/swarm_run.py`.
-
 ```json
 {"root": "/tmp/troop-42", "slots": 0,
  "agents": [{"name": "kivu", "agent": "troop", "model": "cpa/deepseek-v4.1-flash", "effort": "low",
@@ -142,8 +134,7 @@ loop in one process. The code is `js/swarm_run.py`.
              "seat_file": "/tmp/troop-42/kivu.seat.md", "opts": {"SHELL_ENV_KEEP": "[\"PATH\"]"}}]}
 ```
 
-Each agent gets what a `--swarm` process gets, built the way the task tool
-builds a child turn: its own config from the layered settings plus `opts`
+Each agent is built the way the task tool builds a child turn: its own config from the layered settings plus `opts`
 (the same form as `--extra key=value`), its agent's prompt directory with the
 contents of `seat_file` appended to the system prompt, `model` and `effort`
 resolved like `-m` and `-r`, a session under its own `cwd`'s session folder
@@ -154,9 +145,9 @@ inbox, so a hundred idle agents cost one process and no model calls.
 
 `slots` caps how many agents may be mid-turn at once; the rest wait for a
 slot before starting their next turn. Unset, it is the registered setting
-`SWARM_ACTIVE_MAX`; 0 is no cap. `recruit` inside this runner adds an agent to the
-loop with the recruiter's agent, model and settings and a session named
-`<parent session>-<name>`; its `spawned` marker says `"inproc": true`.
+`SWARM_ACTIVE_MAX`; 0 is no cap. `recruit` adds an agent to the loop with the
+recruiter's agent, model and settings and a session named
+`<parent session>-<name>`.
 
 Events go to stdout as JSON lines, every one carrying `agent`. The runner adds
 `agent_start`, `agent_end` and `run_end`; see

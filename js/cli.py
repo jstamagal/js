@@ -81,7 +81,6 @@ from . import (
     stream_transport,
     subagent_windows,
     supervisor,
-    swarm as swarm_mod,
     transcript as transcript_mod,
     usage as usage_mod,
     usage_display,
@@ -1016,7 +1015,7 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
                 stats_json: str | None = None, stats_csv: str | None = None,
                 caller_key: str | None = None, announce_generated: bool | None = None,
                 events: headless.JsonEvents | None = None,
-                config_pins: bool = False, swarm: str | None = None,
+                config_pins: bool = False,
                 call_stats: list[dict] | None = None, opened: dict | None = None) -> int:
     """A ``prompt`` of None runs the agent's startup exchanges as the whole
     run: the last one is the turn whose answer is printed."""
@@ -1075,18 +1074,11 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
     # they start run on it.
     cfg, reasoning_override = settled.config, settled.effort
     prompt_spec, system, recorded_system = settled.prompt_spec, settled.system, settled.recorded_system
-    active_registry = settled.registry
     if resumed.unreachable is not None:
         with _transcript_stdio(telemetry):
             msgs.warn(msgs.RESUME_MODEL_FALLBACK, stamped=resumed.unreachable,
                       model=_stamp_label(cfg.model, cfg.provider_id))
 
-    bus = swarm_mod.Agent(swarm) if swarm else None
-    if bus is not None:
-        # On a bus the agent gets send/who, reads its inbox at every tool
-        # boundary, and sleeps on the inbox instead of exiting after the turn.
-        active_registry = swarm_mod.with_bus_tools(active_registry)
-        (tool_context or runtime.T.STOCK_CONTEXT).swarm = bus
     attachment_cfg = (
         replace(cfg, model=model, vision_enabled=vision_enabled_for_model(model, getattr(cfg, "settings", None)))
         if model is not None
@@ -1139,12 +1131,10 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
         M.record_turn_mode(cfg.session_file, "-p")
     if call_stats is None:
         call_stats = []
-    turn_kwargs = settled.turn_kwargs(tool_registry=active_registry, call_stats=call_stats)
+    turn_kwargs = settled.turn_kwargs(call_stats=call_stats)
     if events is not None:
         turn_kwargs["event_sink"] = events.runtime_event
         telemetry.sink = output.Fanout(output.sink_of(telemetry), headless.OutputEvents(events))
-    if bus is not None:
-        turn_kwargs["steer"] = bus.steer
     if maxout is not None:
         turn_kwargs["max_output_override"] = maxout
     _t_wall = time.time()
@@ -1160,24 +1150,18 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
     # fired from the agent's files, ahead of the answer it got.
     echo_user = display_mod.echo_user if debug else None
     trace_override = debug or bool(debug_file) or cfg.trace
-    chat = Conversation(cfg, system, registry=active_registry, context=tool_context or runtime.T.STOCK_CONTEXT,
+    chat = Conversation(cfg, system, registry=settled.registry, context=tool_context or runtime.T.STOCK_CONTEXT,
                         telemetry=telemetry, messages=messages)
 
-    def turn(message: dict, shown: str) -> None:
-        """One turn on ``message``, which is on disk before the model is
-        called. ``shown`` is its line in the transcript and the -d echo."""
-        def started() -> None:
-            if save:
-                _append_turn(cfg, message)
-            if turn_transcript is not None:
-                turn_transcript.emit(output.event("transcript_user", text=shown))
-            if echo_user is not None:
-                echo_user(shown)
-
-        # In this context as well as the turn's, so the check after the turn
-        # reads the same window.
-        runtime.install_context_window_overrides(cfg)
-        model_client.run_owning_loop(chat.turn(message, started=started, trace_override=trace_override, **turn_kwargs))
+    def started() -> None:
+        """The prompt is on disk, in the transcript and echoed before the
+        model is called."""
+        if save:
+            _append_turn(cfg, user_message)
+        if turn_transcript is not None:
+            turn_transcript.emit(output.event("transcript_user", text=prompt))
+        if echo_user is not None:
+            echo_user(prompt)
 
     def turns() -> None:
         if prompt_spec.exchanges and not messages:
@@ -1187,27 +1171,13 @@ def _prompt_run(prompt: str | None, model: str | None = None, debug: bool = Fals
                 tool_context=tool_context, echo_user=echo_user, **turn_kwargs,
             ))
         if user_message is not None:
-            turn(user_message, prompt)
-        if bus is None:
-            return
-        # On a bus, a turn ending is the agent going idle, not the run ending.
-        # Sleep on the inbox (no model call) and wake into the next turn with
-        # whatever landed. A `stop` message ends it after the turn it lands in.
-        # The between-turn compaction trigger runs before each sleep, as it
-        # does between REPL turns, so a long-lived agent stays inside its window.
-        auto_state = _run_state(cfg, system, messages)
-        while not bus.stop_seen:
-            if save:
-                chat.save()
-                with _transcript_stdio(telemetry):
-                    _maybe_auto_compact(cfg, auto_state)
-            landed = bus.sleep()
-            if all(m.kind == swarm_mod.STOP for m in landed):
-                return
-            wake = bus.wake_message(landed)
-            turn(wake, wake["content"])
+            # In this context as well as the turn's, so the check after the
+            # turn reads the same window.
+            runtime.install_context_window_overrides(cfg)
+            model_client.run_owning_loop(chat.turn(
+                user_message, started=started, trace_override=trace_override, **turn_kwargs))
 
-    # SIGTERM (a runner, `timeout`, a swarm stopping) ends the run like ^C:
+    # SIGTERM (a runner, `timeout`) ends the run like ^C:
     # the session is persisted and the exit code says interrupted. The
     # handler this run replaces is put back when it ends.
     previous_sigterm = None
@@ -2643,8 +2613,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
                      sources=sources,
                      files=args.files,
                      stdin_attachment=stdin_attachment,
-                     stats_json=args.stats_json, stats_csv=args.stats_csv,
-                     swarm=args.swarm)
+                     stats_json=args.stats_json, stats_csv=args.stats_csv)
         if args.no_save:
             msgs.warn(msgs.NOT_SAVED_NO_RESUME)
         return result

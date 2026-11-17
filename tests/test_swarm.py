@@ -1,7 +1,5 @@
-"""The swarm bus (js.swarm): inboxes, delivery at tool boundaries, sleep and wake.
-
-  js -p --json --swarm ROOT/NAME "opener"
-"""
+"""The swarm bus (js.swarm): inboxes, delivery at tool boundaries, sleep and
+wake; and the runner (js.swarm_run) that runs every agent in one process."""
 
 from __future__ import annotations
 
@@ -9,7 +7,6 @@ import asyncio
 import io
 import json
 import os
-import sys
 import threading
 import time
 from pathlib import Path
@@ -18,10 +15,10 @@ import ai
 import ai.types.usage
 import pytest
 from ai.providers import history_utils
-from turn_driver import js
 
-from js import cli, memory, runtime, swarm, swarm_run
+from js import memory, runtime, swarm, swarm_run
 from js.config import Config
+from js.conversation import Conversation
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import ToolContext
 from js.toolkit.core import Tool
@@ -208,7 +205,7 @@ def test_a_burst_is_one_wake(tmp_path):
         agent.room.send("b", "a", "two")
 
     threading.Timer(0.1, burst).start()
-    assert [m.body for m in agent.sleep()] == ["one", "two"]
+    assert [m.body for m in asyncio.run(agent.sleep_async())] == ["one", "two"]
 
 
 def test_on_a_bus_with_a_hold_broadcasts_pile_up_into_one_wake_and_a_message_by_name_wakes_at_once(tmp_path):
@@ -217,12 +214,12 @@ def test_on_a_bus_with_a_hold_broadcasts_pile_up_into_one_wake_and_a_message_by_
     agent.room.send("b", "*", "one")
     threading.Timer(0.4, agent.room.send, ("b", "*", "two")).start()
     started = time.monotonic()
-    assert [m.body for m in agent.sleep()] == ["one", "two"]
+    assert [m.body for m in asyncio.run(agent.sleep_async())] == ["one", "two"]
     assert time.monotonic() - started >= 1.0
     agent.room.send("b", "*", "three")
     agent.room.send("b", "a", "for you")
     started = time.monotonic()
-    assert [m.body for m in agent.sleep()] == ["three", "for you"]
+    assert [m.body for m in asyncio.run(agent.sleep_async())] == ["three", "for you"]
     assert time.monotonic() - started < 0.9
 
 
@@ -240,7 +237,7 @@ def test_wake_me_wakes_the_agent_with_a_tick_when_nothing_lands(tmp_path):
     agent = swarm.Agent(tmp_path / "bus" / "a")
     agent.wake_me(0.3)
     started = time.monotonic()
-    landed = agent.sleep()
+    landed = asyncio.run(agent.sleep_async())
     assert [(m.sender, m.kind) for m in landed] == [(swarm.CLOCK, swarm.TICK)]
     assert 0.2 < time.monotonic() - started < 3
     assert agent.alarm is None
@@ -251,7 +248,7 @@ def test_quiet_means_every_member_asleep_with_an_empty_inbox(tmp_path):
     assert room.quiet() is False  # nobody on the bus
     a, b = swarm.Agent(tmp_path / "bus" / "a"), swarm.Agent(tmp_path / "bus" / "b")
     assert room.quiet() is False  # both working
-    sleepers = [threading.Thread(target=x.sleep, daemon=True) for x in (a, b)]
+    sleepers = [threading.Thread(target=lambda x=x: asyncio.run(x.sleep_async()), daemon=True) for x in (a, b)]
     for t in sleepers:
         t.start()
     deadline = time.monotonic() + 3
@@ -382,31 +379,6 @@ def test_task_tools_work_the_board_from_the_agent_on_the_context(tmp_path):
     assert take.handler(id=7, context=on_bus).startswith("no task #7")
     assert finish.handler(id=1, result="done on feat/parser", context=on_bus).startswith("task #1 done")
     assert "done by a" in tasks.handler(context=on_bus)
-
-
-def test_spawn_runs_the_parents_command_under_a_new_name(tmp_path, monkeypatch):
-    a = swarm.Agent(tmp_path / "bus" / "a")
-
-    class FakeProc:
-        def __init__(self, cmd, **_kw):
-            self.cmd, self.pid, self.stdin = cmd, 4242, io.BytesIO()
-            self.stdin.close = lambda: None  # keep the opener readable
-
-    monkeypatch.setattr(swarm.subprocess, "Popen", FakeProc)
-    monkeypatch.setattr(swarm.sys, "argv", ["/x/bin/js", "-a", "troop", "-q", "--json", "-s", "troop-1-a",
-                                            "--swarm", str(tmp_path / "bus" / "a"), "--extra", "k=v", "-p", "-"])
-    proc = a.spawn("twig", "You are twig.")
-    assert proc.cmd == [sys.executable, "-m", "js", "-a", "troop", "-q", "--json", "-s", "troop-1-a-twig",
-                        "--swarm", str(tmp_path / "bus" / "twig"), "--extra", "k=v", "-p", "-"]
-    assert proc.stdin.getvalue() == b"You are twig."
-    assert json.loads((tmp_path / "bus" / "twig" / "spawned").read_text())["by"] == "a"
-    assert swarm.sibling_argv(["js", "-p", "hello"], "/r/twig", "twig") == [sys.executable, "-m", "js", "-p", "-",
-                                                                            "--swarm", "/r/twig"]
-    with pytest.raises(ValueError):
-        a.spawn("twig", "again")  # already on the bus
-    swarm._settings.bind_live_settings({"SWARM_SPAWN_MAX": 1})
-    with pytest.raises(ValueError):
-        a.spawn("moss", "one over the cap")
 
 
 # --------------------------------------------------------------------------
@@ -575,28 +547,46 @@ def test_compaction_runs_before_a_swarm_agent_sleeps(tmp_path, monkeypatch):
         kwargs["on_text"]("ok")
         return _text("ok")
 
+    async def compact(self, **_kwargs):
+        timeline.append("compact")
+        return False
+
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
-    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda cfg, state: timeline.append("compact"))
+    monkeypatch.setattr(Conversation, "maybe_compact", compact)
+    spec = _spec(tmp_path, [{"name": "a", "agent": "voice", "opener": "go", "session": "s-a", "cwd": str(tmp_path)}])
 
-    code = js(monkeypatch, "--json", "--session", "s1", "--swarm", str(tmp_path / "bus" / "a"), "-p", "go")
-
-    assert code == 0
-    assert timeline.count("turn") == 2
-    assert timeline[:4] == ["turn", "compact", "turn", "compact"]  # the trigger ran before each sleep
+    assert swarm_run.run(spec, out=io.StringIO()) == 0
+    assert timeline == ["turn", "compact", "turn", "compact"]  # the trigger ran before each sleep
 
 
-def test_registered_swarm_spawn_limit_prevents_launch(tmp_path, monkeypatch):
-    from js import settings
+def test_recruit_past_the_spawn_cap_starts_no_agent(tmp_path, monkeypatch):
+    _agent_dir(tmp_path, monkeypatch)
+    monkeypatch.setenv("JS_SWARM_SPAWN_MAX", "0")
+    room = swarm.Room(tmp_path / "bus")
+    calls = 0
 
-    agent = swarm.Agent(tmp_path / "bus" / "parent")
-    settings.bind_live_settings({"SWARM_SPAWN_MAX": 0})
+    def stream(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            args = json.dumps({"name": "twig", "opener": "twig-opener"})
+            message = ai.types.messages.Message(role="assistant", parts=[
+                ai.types.messages.ToolCallPart(tool_call_id="c1", tool_name="recruit", tool_args=args)])
+            return ModelStreamResult(text="", tool_calls=[ModelToolCall(id="c1", name="recruit", arguments=args)],
+                                     reasoning="", usage=ai.types.usage.Usage(input_tokens=1, output_tokens=1),
+                                     finish_reason="tool_calls", assistant_message=message)
+        room.send("steer", "*", "enough", kind="stop")
+        kwargs["on_text"]("ok")
+        return _text("ok")
 
-    def forbidden(*args, **kwargs):
-        raise AssertionError("child must not start")
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
+    out = io.StringIO()
+    spec = _spec(tmp_path, [{"name": "a", "agent": "voice", "opener": "a-opener", "session": "s-a", "cwd": str(tmp_path)}])
 
-    monkeypatch.setattr(swarm.subprocess, "Popen", forbidden)
-    with pytest.raises(ValueError):
-        agent.spawn("child", "work")
+    assert swarm_run.run(spec, out=out) == 0
+    assert calls == 2
+    assert {e["agent"] for e in _events(out) if e["type"] == "agent_start"} == {"a"}
+    assert not (tmp_path / "bus" / "twig").exists()
 
 
 def test_swarm_agent_turn_is_on_disk_before_it_ends(tmp_path, monkeypatch):

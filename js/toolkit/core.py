@@ -330,7 +330,7 @@ class ToolContext(_turn_settings.ContextSettings):
     lsp_configuration: Any = field(default=None, repr=False)
     subagent_assembly: Any = field(default=None, repr=False)
     skill_catalog: SkillCatalog | None = field(default=None, repr=False)
-    swarm: Any = None                     # js.swarm.Agent when this process runs with --swarm
+    swarm: Any = None                     # js.swarm.Agent of a swarm agent (js.swarm_run)
     # The `on` table whose tool_call handlers vet the calls of subagents started
     # through this context; set by the turn that runs with it.
     tool_call_hooks: Any = field(default=None, repr=False)

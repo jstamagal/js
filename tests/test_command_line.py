@@ -17,7 +17,6 @@ from js import (
     runtime,
     sampling,
     session_picker,
-    swarm,
 )
 from js.cli_options import RunOptions, invocation
 from js.repl_state import ReplState
@@ -33,7 +32,7 @@ def _parse(argv: list[str]):
 @pytest.mark.parametrize("argv", [
     ["-p", "hello", "--model", "m"], ["-lp", "x"], ["-lp=x"], ["-lp"], ["--prompt=x y"], ["-p=x"], ["-pfoo"],
     ["-p", "-"], ["-p", "-4.5"], ["-p", "-v is broken"], ["-p", "-a b"], ["-p", "--model", "m"], ["-p", ""],
-    ["-s", "--model", "m"], ["-s=name"], ["--session", "-5"], ["--session", "-"], ["--swarm", "-x y"],
+    ["-s", "--model", "m"], ["-s=name"], ["--session", "-5"], ["--session", "-"],
     ["-C", "-"], ["--max-out", "5"], ["--extra", "a=1", "--extra", "b=2", "-f", "x", "-f", "y"],
     ["-qn", "--last", "-d"], ["--commit", "--", "--last"], ["--commit", "msg"], ["--you-are"],
     ["--you-are", "--chat"], ["--you-are", "voice"], ["--loop", "2h", "-p", "two words"], ["--loop"],
@@ -97,45 +96,6 @@ def test_options_argv_reproduces_the_options(options):
         if field.name != "agent":
             value = getattr(parsed, field.name)
             assert (tuple(value) if isinstance(value, list) else value) == getattr(options, field.name)
-
-
-@pytest.mark.parametrize(("argv", "sibling"), [
-    (["-p", "hello"], ["-p", "-", "--swarm", "/r/b"]),
-    (["--prompt", "hello", "--model", "m"], ["--prompt", "-", "--model", "m", "--swarm", "/r/b"]),
-    (["-lp", "hello"], ["-p", "-", "--swarm", "/r/b"]),
-    (["-lp=hello"], ["--prompt=-", "--swarm", "/r/b"]),
-    (["--prompt=hello"], ["--prompt=-", "--swarm", "/r/b"]),
-    (["-p"], ["-p", "-", "--swarm", "/r/b"]),
-    (["-p", "-", "-m", "m"], ["-p", "-", "-m", "m", "--swarm", "/r/b"]),
-    (["-p", "-4.5"], ["-p", "-", "--swarm", "/r/b"]),
-    (["-p", "-v is broken"], ["-p", "-", "--swarm", "/r/b"]),
-    (["-p", "--model", "m"], ["-p", "-", "--model", "m", "--swarm", "/r/b"]),
-    (["-a", "a", "--swarm", "/r/a", "-s", "name", "-p", "x"],
-     ["-a", "a", "--swarm", "/r/b", "-s", "name-b", "-p", "-"]),
-    (["--swarm=/r/a", "--session=name"], ["--swarm=/r/b", "--session=name-b", "-p", "-"]),
-    (["-s", "--model", "m"], ["-s", "--model", "m", "--swarm", "/r/b", "-p", "-"]),
-    (["--session", "-", "--last"], ["--session=--b", "--swarm", "/r/b", "-p", "-"]),
-    (["--last", "-a", "agent", "--extra", "k=v", "--extra", "x=y"],
-     ["-a", "agent", "--extra", "k=v", "--extra", "x=y", "--swarm", "/r/b", "-p", "-"]),
-    (["-qn", "-p", "hi"], ["-qn", "-p", "-", "--swarm", "/r/b"]),
-    (["--commit", "--", "--last"], ["--commit", "--swarm", "/r/b", "-p", "-", "--", "--last"]),
-    (["-s=name", "-p", "x"], ["-s=name-b", "-p", "-", "--swarm", "/r/b"]),
-    (["-p=hello"], ["--prompt=-", "--swarm", "/r/b"]),
-    (["--session", "-5"], ["--session=-5-b", "--swarm", "/r/b", "-p", "-"]),
-    (["--swarm", "-x y"], ["--swarm", "/r/b", "-p", "-"]),
-    (["-p", "-a b"], ["-p", "-", "-a b", "--swarm", "/r/b"]),
-    (["--home", "/h", "-p", "x", "--you-are"], ["--home", "/h", "-p", "-", "--you-are", "--swarm", "/r/b"]),
-    (["--you-are", "--chat", "--loop", "3"], ["--you-are", "--chat", "--loop", "3", "--swarm", "/r/b", "-p", "-"]),
-    (["--system-prompt", "--last x", "--prompt", "--last"],
-     ["--system-prompt", "--last x", "--prompt", "-", "--swarm", "/r/b"]),
-])
-def test_sibling_command(argv, sibling):
-    parent = _parse(argv)
-    assert swarm.sibling_argv(["js", *argv], "/r/b", "b")[3:] == sibling
-    parsed = _parse(sibling)
-    assert (parsed.swarm, parsed.prompt) == ("/r/b", "-")
-    if parent.session:
-        assert parsed.session == f"{parent.session}-b"
 
 
 @pytest.mark.parametrize(("argv", "child"), [

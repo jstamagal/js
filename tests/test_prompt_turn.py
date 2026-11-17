@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import threading
 from unittest.mock import AsyncMock
 
 import ai
@@ -11,7 +10,7 @@ from repl_driver import turn_stub
 from test_agent_messages import _agent, _model
 from turn_driver import js
 
-from js import cli, memory, messages as msgs, runtime, session_store, swarm
+from js import cli, memory, messages as msgs, runtime, session_store
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
 
@@ -41,28 +40,6 @@ def test_the_prompt_is_in_the_session_before_the_model_is_called(tmp_path, monke
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
     assert js(monkeypatch, "--session", "kept", "-p", "look") == 0
     assert on_disk == [[{"role": "user", "content": "look"}]]
-
-
-def test_a_wake_on_the_bus_is_in_the_session_before_its_turn_calls_the_model(tmp_path, monkeypatch):
-    _agent(tmp_path, monkeypatch, {})
-    room = swarm.Room(tmp_path / "bus")
-    session = _session(tmp_path, "s1")
-    on_disk: list[list[dict]] = []
-
-    def stream(**kwargs):
-        on_disk.append(load_messages(session))
-        if len(on_disk) == 1:
-            threading.Timer(0.3, lambda: room.send("b", "a", "ping")).start()
-        else:
-            room.send("steer", "a", "enough", kind="stop")
-        return _answer(kwargs, "ok")
-
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", stream)
-    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda cfg, state: None)
-    assert js(monkeypatch, "--json", "--session", "s1", "--swarm", str(tmp_path / "bus" / "a"), "-p", "go") == 0
-    assert len(on_disk) == 2
-    assert [m["role"] for m in on_disk[1]] == ["user", "assistant", "user"]
-    assert "ping" in on_disk[1][-1]["content"]
 
 
 def test_no_save_continues_a_session_without_writing_to_it(tmp_path, monkeypatch):

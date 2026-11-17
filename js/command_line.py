@@ -97,7 +97,6 @@ def parser() -> argparse.ArgumentParser:
     groups['RUNNING'].add_argument("--list-agents", action="store_true", help=msgs.OPT_LIST_AGENTS.words())
     groups['SESSIONS'].add_argument("--last", action="store_true", help=msgs.OPT_LAST.words())
     groups['OUTPUT & DEBUG'].add_argument("--json", action="store_true", help=msgs.OPT_JSON.words())
-    groups['MODES'].add_argument("--swarm", metavar="ROOT/NAME", help=msgs.OPT_SWARM.words())
     groups['OUTPUT & DEBUG'].add_argument("--json-stream", action="store_true", help=msgs.OPT_JSON_STREAM.words())
     groups['MODELS & LOGINS'].add_argument("--list-providers", action="store_true", help=msgs.OPT_LIST_PROVIDERS.words())
     groups['MODELS & LOGINS'].add_argument("--list-logins", action="store_true", help=msgs.OPT_LIST_LOGINS.words())

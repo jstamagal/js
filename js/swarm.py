@@ -1,13 +1,12 @@
 """The swarm bus: one inbox per agent, a message is a file, the room log is the blackboard.
 
-  js -p --json --swarm ROOT/NAME "opener"          # this process is agent NAME on the bus at ROOT
+  python -m js.swarm run SPEC.json                   # every agent in the spec, one process (js.swarm_run)
   python -m js.swarm send ROOT FROM TO "text"       # from the runner or the operator; TO is a name or *
   python -m js.swarm send ROOT steer kivu --kind stop   # end an agent after its current turn
   python -m js.swarm members ROOT                    # who is on the bus, asleep or working, what each holds
   python -m js.swarm quiet ROOT                      # exit 0 when every agent is asleep with an empty inbox
   python -m js.swarm cells ROOT                      # the work board
   python -m js.swarm post ROOT steer "title" "body"  # the operator puts work on the board
-  python -m js.swarm run SPEC.json                   # every agent in the spec, one process (js.swarm_run)
 
 ROOT/log.jsonl         every message ever sent, one JSON object per line, seq-numbered
 ROOT/claims.json       what is claimed, by whom, until when
@@ -24,7 +23,7 @@ An agent on the bus never spends a model call waiting:
 
 - while a turn runs, its inbox is drained at every tool boundary and the messages
   ride in as a user message (``runtime.run_turn_async``'s ``steer``);
-- when the model stops calling tools, the process sleeps on the inbox and wakes
+- when the model stops calling tools, the agent sleeps on the inbox and wakes
   into a new turn with whatever landed. The sleep is a harness-side poll every
   ``POLL_S`` seconds; the model is not called. A burst that lands within
   ``COALESCE_S`` of the first message is one wake. On a bus with a hold, a
@@ -49,7 +48,6 @@ import math
 import os
 import re
 import shutil
-import subprocess
 import sys
 import threading
 import time
@@ -58,7 +56,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from . import command_line, messages as msgs, settings as _settings
+from . import messages as msgs
 
 POLL_S = 0.25
 COALESCE_S = 0.3
@@ -542,36 +540,8 @@ def board(room: Room) -> str:
     return "\n".join(lines) or msgs.SWARM_BOARD_EMPTY.format()
 
 
-def sibling_argv(argv: list[str], swarm: str, name: str) -> list[str]:
-    """The command of a sibling of this process: `argv` run again as `python -m js`
-    with the --swarm path, the session name and the prompt replaced. The sibling
-    reads its opener from stdin."""
-    out: list[str] = [sys.executable, "-m", "js"]
-    literal: list[str] = []
-    has_prompt = has_swarm = False
-    for arg in command_line.read(argv[1:]):
-        if literal or arg.words == ("--",):
-            literal += arg.words
-        elif arg.dest == "swarm":
-            has_swarm = True
-            out += arg.given(swarm)
-        elif arg.dest == "session" and arg.value is not None:
-            out += arg.given(f"{arg.value}-{name}")
-        elif arg.dest in ("prompt", "last_prompt"):
-            # A swarm seat keeps its own session, so -lp is a plain prompt.
-            has_prompt = True
-            out += ["--prompt=-"] if arg.sep is not None else ["-p" if arg.option == "-lp" else arg.option, "-"]
-        elif arg.dest != "last":
-            out += arg.words
-    if not has_swarm:
-        out += ["--swarm", swarm]
-    if not has_prompt:
-        out += ["-p", "-"]
-    return out + literal
-
-
 class Agent:
-    """This process as one agent on a bus: ``--swarm ROOT/NAME``."""
+    """One agent on the bus at ROOT/NAME, as `js.swarm_run` runs it."""
 
     def __init__(self, path: str | os.PathLike[str]) -> None:
         p = Path(path).expanduser()
@@ -581,7 +551,7 @@ class Agent:
         self.stop_seen = False
         self.retired = False
         self.alarm: float | None = None
-        # Set by the in-process runner: recruit adds a coroutine there, not a process.
+        # Set by the runner: what `recruit` calls to add an agent to its loop.
         self.recruiter: Any = None
         # When the agent last stepped: joined, crossed a tool boundary, went to sleep or woke.
         self.step = time.time()
@@ -613,22 +583,9 @@ class Agent:
             return None
         return {"role": "user", "content": render(msgs, self.name), "steered": True}
 
-    def sleep(self) -> list[Msg]:
-        """Block until something lands, or the alarm set by `wake_me` goes off.
-        No model call is made while waiting. A burst is handed over as one wake."""
-        marker = self._asleep()
-        try:
-            first = None
-            while True:
-                first, landed = self._wake(first)
-                if landed:
-                    return landed
-                time.sleep(POLL_S)
-        finally:
-            marker.unlink(missing_ok=True)
-
     async def sleep_async(self) -> list[Msg]:
-        """`sleep` for an agent on an event loop: the same wait as an await."""
+        """Wait until something lands, or the alarm set by `wake_me` goes off.
+        No model call is made while waiting. A burst is handed over as one wake."""
         import asyncio
 
         marker = self._asleep()
@@ -687,33 +644,10 @@ class Agent:
         self.retired = True
         return msg
 
-    def spawn(self, name: str, opener: str, argv: list[str] | None = None) -> subprocess.Popen:
-        """Start a sibling agent NAME on this bus: this process's own command with
-        a new name and session, the opener as its first prompt. Its events land in
-        ROOT/NAME/events.jsonl. SWARM_SPAWN_MAX bounds spawned agents per bus."""
-        check_name(name)
-        root = self.room.root
-        home = root / name
-        if name in self.room.members() or (home / "spawned").is_file():
-            raise ValueError(msgs.SWARM_IS_ALREADY_ON_THE_BUS.format(name=name))
-        spawned = sum(1 for p in root.iterdir() if (p / "spawned").is_file()) if root.is_dir() else 0
-        maximum = int(_settings.live_value("SWARM_SPAWN_MAX"))
-        if spawned >= maximum:
-            raise ValueError(msgs.SWARM_THIS_BUS_ALREADY_HAS_SPAWNED_AGENTS_THE.format(spawned=spawned, maximum=maximum))
-        home.mkdir(parents=True, exist_ok=True)
-        cmd = sibling_argv(sys.argv if argv is None else argv, str(home), name)
-        with open(home / "events.jsonl", "ab") as out, open(home / "stderr", "ab") as err:
-            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=out, stderr=err, start_new_session=True)
-        proc.stdin.write(opener.encode("utf-8"))
-        proc.stdin.close()
-        (home / "spawned").write_text(json.dumps({"by": self.name, "pid": proc.pid, "ts": time.time(), "cmd": cmd}),
-                                      encoding="utf-8")
-        return proc
 
+# ---------------------------------------------------------------- the bus tools
 
-# ---------------------------------------------------------------- the tools --swarm puts on the surface
-
-_OFF_BUS = 'ERROR: this agent is not on a swarm bus (run js with --swarm ROOT/NAME)'
+_OFF_BUS = 'ERROR: this agent is not on a swarm bus (run it with python -m js.swarm run SPEC.json)'
 
 
 def _view(**fields: Any) -> None:
@@ -854,10 +788,7 @@ def _recruit(name: str = "", opener: str = "", context: Any = None) -> str:
     if not opener.strip():
         return 'ERROR: opener is empty: the new agent needs to be told who it is and what to do'
     try:
-        if agent.recruiter is not None:
-            agent.recruiter(name, opener)
-        else:
-            agent.spawn(name, opener)
+        agent.recruiter(name, opener)
     except (ValueError, OSError) as exc:
         return f'ERROR: {exc}'
     _view(recruited=name, opener=opener)
@@ -977,7 +908,7 @@ def tools() -> tuple:
 
 
 def with_bus_tools(registry):
-    """`registry` plus the bus tools: what --swarm puts on every agent's surface."""
+    """`registry` plus the bus tools: what the runner puts on every agent's surface."""
     extra = tuple(t for t in tools() if t.name not in registry.by_name)
     aliases = {**registry.aliases, **{t.name.lower(): t.name for t in extra}}
     return replace(registry, tools=registry.tools + extra, aliases=aliases)

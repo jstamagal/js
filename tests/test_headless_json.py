@@ -272,27 +272,6 @@ def test_prompt_load_failure_starts_then_errors_before_continue_hint(monkeypatch
     assert "Continue:" not in events[1]["message"]
 
 
-def test_swarm_run_uses_only_the_declared_stream_event_types(monkeypatch, capsys):
-    from types import SimpleNamespace
-    class Bus:
-        name = "agent"
-        stop_seen = False
-        def __init__(self, name):
-            pass
-        def sleep(self):
-            self.stop_seen = True
-            return [SimpleNamespace(kind=cli.swarm_mod.STOP)]
-        def steer(self):
-            return []
-    monkeypatch.setattr(cli.swarm_mod, "Agent", Bus)
-    monkeypatch.setattr(cli.swarm_mod, "with_bus_tools", lambda registry: registry)
-    code, events, _ = _run(monkeypatch, capsys, [_reply("idle")],
-                           ["-p", "hi", "--no-save", "--json-stream", "--swarm", "bus/agent"])
-    assert code == 0
-    assert events[0]["type"] == "start" and events[-1]["type"] == "end"
-    assert {event["type"] for event in events} <= {"start", "reasoning", "text", "tool_call", "tool_result", "retry", "error", "end"}
-
-
 @pytest.mark.parametrize('flag', ['--json', '--json-stream'])
 def test_final_usage_includes_tail_compaction(monkeypatch, capsys, flag):
     def compact(cfg, state):

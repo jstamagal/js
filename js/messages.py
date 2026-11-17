@@ -754,9 +754,6 @@ OPT_LIST_LOGINS = Message("List saved logins; requires --json.")
 JSON_FLAGS_EXCLUSIVE = Message("--json and --json-stream cannot be used together")
 JSON_UNSUPPORTED = Message("{mode} is not supported with {command}")
 LIST_REQUIRES_JSON = Message("{command} requires --json")
-OPT_SWARM = Message("With -p: be agent NAME on the swarm bus at ROOT. Adds the bus tools, "
-                    "delivers inbox messages at every tool boundary, and sleeps on the inbox instead of "
-                    "exiting when a turn ends. A message of kind stop ends it.")
 SWARM_CLI = Message("Post on a swarm bus, list who is on it, ask whether it is quiet, see or post work, "
                     "or run a spec of agents in one process.")
 SWARM_SEND = Message("Post a message. A text of - or no text reads stdin.")
@@ -1878,10 +1875,6 @@ SKILL_FRONTMATTER_UNSAFE_SKILL_NAME = "unsafe skill name {name!r}"
 SWARM_SWARM_NAME_MUST_BE_ONE_WORD_OF = "swarm name must be one word of [A-Za-z0-9_.-]: {name!r}"
 
 SWARM_A_MESSAGE_KIND_IS_ONE_WORD_OF = "a message kind is one word of [A-Za-z0-9_.-]: {kind!r}"
-
-SWARM_IS_ALREADY_ON_THE_BUS = "{name} is already on the bus"
-
-SWARM_THIS_BUS_ALREADY_HAS_SPAWNED_AGENTS_THE = "this bus already has {spawned} spawned agents; the cap is {maximum}"
 
 SWARM_SENT = Message("sent #{seq}", banner=False)
 
