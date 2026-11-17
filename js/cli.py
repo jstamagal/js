@@ -62,6 +62,7 @@ from . import paranoid
 from . import picker
 from . import providers
 from . import replcomplete
+from . import run_assembly
 from . import runtime
 from . import stats
 from . import home as _home
@@ -3303,7 +3304,14 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         msgs.warn(msgs.FAILED, error=e)
         return 2
     try:
-        prompt_spec = P.load_configured_prompt_spec(cfg, expand=False)
+        settled = run_assembly.settle(cfg, model=model, reasoning=reasoning_override, config_pins=True)
+    except run_assembly.RunNotSettled as e:
+        msgs.warn(msgs.FAILED, error=_format_prompt_load_error(cfg, e.cause) if e.loading else e.cause)
+        return 2
+    except (FileNotFoundError, ValueError) as e:
+        msgs.warn(msgs.FAILED, error=e)
+        return 2
+    try:
         benchmarks = P.load_benchmarks(P.resolve_agent_prompt_dir(cfg))
     except (FileNotFoundError, ValueError) as e:
         msgs.warn(msgs.FAILED, error=_format_prompt_load_error(cfg, e))
@@ -3313,25 +3321,17 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         msgs.warn(msgs.NO_BENCHMARKS, agent=agent_id)
         return 2
 
-    try:
-        cfg = P.apply_agent_model(cfg, prompt_spec, model)
-        cfg = _resolve_cli_model_override(cfg, model)
-        prompt_spec = P.for_model(prompt_spec, cfg)
-        cfg = login_defaults.for_turn(login_defaults.with_agent(cfg, prompt_spec))
-    except (FileNotFoundError, ValueError) as e:
-        msgs.warn(msgs.FAILED, error=e)
-        return 2
-    cfg = replace(cfg, settings={**cfg.settings, "REASONING_DISPLAY": 3,
-                                 "TOOLS_DISPLAY": 3, "TOOLS_QUIET": [], "SHELL_QUIET": [], "MARKDOWN": False})
-    active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
+    cfg = replace(settled.config, settings={**settled.config.settings, "REASONING_DISPLAY": 3,
+                                            "TOOLS_DISPLAY": 3, "TOOLS_QUIET": [], "SHELL_QUIET": [],
+                                            "MARKDOWN": False})
+    prompt_spec = settled.prompt_spec
     events = _json_events
     if events is not None:
         events.emit("start", version=headless.SCHEMA_VERSION, agent=agent_id,
                     model=cfg.model, provider=cfg.provider_id)
     # The resolved OUTPUT_TOKENS_MAX: agent.yaml's max_tokens is one of its layers.
     agent_default_max = cfg.max_output_tokens
-    prompt_spec = P._expand_spec(prompt_spec, cfg)
-    system = prompt_spec.system
+    system = settled.system
 
     # The request trace (system prompt, tools, messages, FLIGHT lines) goes to
     # logs/<agent>/<agent>-<pid>.log like every other run. A bench keeps no session,
@@ -3354,20 +3354,9 @@ def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         messages = []
         call_stats: list[dict] = []
         tool_names = _BenchTools()
-        turn_kwargs = {
-            "model_override": cfg.model,
-            "provider_id_override": cfg.provider_id,
-            "provider_base_url_override": cfg.provider_base_url,
-            "provider_api_key_override": cfg.provider_api_key,
-            "tool_registry": active_registry,
-            "sampling": login_defaults.sampling(cfg),
-            "max_output_override": eff_max,
-            "call_stats": call_stats,
-        }
+        turn_kwargs = settled.turn_kwargs(max_output_override=eff_max, call_stats=call_stats)
         if events is not None:
             turn_kwargs["event_sink"] = events.runtime_event
-        if reasoning is not None:
-            turn_kwargs["reasoning_effort_override"] = reasoning_override
         ok, err = True, None
         t_wall = time.time()
         try:

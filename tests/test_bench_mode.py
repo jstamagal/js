@@ -8,7 +8,7 @@ from pathlib import Path
 import ai
 import ai.types.usage
 
-from js import cli, persona
+from js import cli, persona, run_assembly
 from js.model_client import ModelStreamResult
 
 
@@ -242,7 +242,7 @@ def test_bench_parallel_calls_keep_model_order_and_full_output(tmp_path, monkeyp
         return "fast output"
     registry = ToolRegistry((Tool("slow", "slow", slow, {}, aliases=("slow_alias",), read_only=True),
                              Tool("fast", "fast", fast, {}, read_only=True)), {"slow_alias": "slow"})
-    monkeypatch.setattr(cli, "_registry_for", lambda cfg: registry)
+    monkeypatch.setattr(run_assembly, "registry_for", lambda cfg: registry)
     monkeypatch.setattr(runtime.T, "STOCK_CONTEXT", ToolContext(cwd=tmp_path))
     calls = 0
     def stream(**kw):
