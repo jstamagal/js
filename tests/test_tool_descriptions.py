@@ -219,7 +219,7 @@ def test_multiple_names_if_emits_when_any_present():
 
 
 def test_nested_block_is_rejected_and_left_literal(capsys):
-    descriptions._WARNED.clear()
+    descriptions.reset_warnings()
     text = "{{#unless a}}outer {{#if b}}inner{{/if}}{{/unless}}"
     # Degrade to literal, never resolve a nested block.
     assert R(text, set()) == text
@@ -227,14 +227,14 @@ def test_nested_block_is_rejected_and_left_literal(capsys):
 
 
 def test_malformed_unbalanced_block_degrades_to_literal(capsys):
-    descriptions._WARNED.clear()
+    descriptions.reset_warnings()
     text = "{{#unless a}}no close tag here"
     assert R(text, set()) == text
     assert capsys.readouterr().err
 
 
 def test_block_with_no_tool_name_degrades_to_literal(capsys):
-    descriptions._WARNED.clear()
+    descriptions.reset_warnings()
     text = "{{#if   }}body{{/if}}"  # opener present but names its zero tools
     assert R(text, set()) == text
     assert capsys.readouterr().err
@@ -262,7 +262,7 @@ def test_kept_body_is_not_rescanned_for_directives():
     # is spliced in verbatim, not evaluated as another block.
     text = "{{#unless fs_search}}see {{#if evil}}x{{/if}} literally{{/unless}}"
     # The inner opener trips the nested guard -> whole outer block left literal.
-    descriptions._WARNED.clear()
+    descriptions.reset_warnings()
     assert R(text, {"shell"}) == text
 
 

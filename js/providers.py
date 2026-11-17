@@ -526,6 +526,12 @@ _CATALOG_RECHECK_S = 60.0
 _dynamic: tuple[tuple, float, tuple[ProviderDef, ...]] | None = None
 
 
+def reset_catalog_cache() -> None:
+    """Drop the providers read from the catalog; the next lookup reads it again."""
+    global _dynamic
+    _dynamic = None
+
+
 def _catalog_identity() -> tuple:
     """What a change to the catalog or its status file changes."""
     from . import model_metadata

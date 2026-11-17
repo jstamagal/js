@@ -89,7 +89,7 @@ def test_picker_rebuilds_model_state_cached_before_switches_were_parsed(tmp_path
                         size=info.st_size, mtime_ns=info.st_mtime_ns)
     with sqlite3.connect(session_index.db_path()) as connection:
         connection.execute("PRAGMA user_version = 1")
-    session_index._drop_current()
+    session_index.close()
 
     entry = _by_path(session_index.catalog())[_key(path)]
     assert entry["last_stamp"] == switched
@@ -325,7 +325,7 @@ def test_corrupt_mid_walk_after_a_cached_connection_recovers_once(tmp_path):
             patch.object(session_index, "_catalog", side_effect=fail_once):
         session_index._connection()
         assert session_index.catalog(tmp_path) == []
-        session_index._drop_current()
+        session_index.close()
     assert len(calls) == 2
 
 

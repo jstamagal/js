@@ -485,6 +485,11 @@ def _yaml_problem(exc: yaml.YAMLError) -> str:
     return f"{problem} (line {mark.line + 2})" if mark is not None else problem
 
 
+def reset_warnings() -> None:
+    """Forget which discovery warnings were shown; each shows again once."""
+    _WARNED.clear()
+
+
 def _warn_once(message: str) -> None:
     """Emit a discovery warning once per process."""
     line = " ".join(message.split())

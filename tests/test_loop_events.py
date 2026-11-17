@@ -96,7 +96,7 @@ def test_unmatched_policy_entry_is_an_event(capsys):
 def test_description_warning_is_an_event(monkeypatch, capsys):
     from js.toolkit import descriptions
 
-    monkeypatch.setattr(descriptions, "_WARNED", set())
+    descriptions.reset_warnings()
     events = []
     with output.using_sink(SimpleNamespace(emit=events.append)):
         descriptions._warn_once("invalid marker")
@@ -256,7 +256,7 @@ def test_a_bad_agent_sampling_value_is_an_error_naming_it(tmp_path):
 def test_skill_discovery_warning_is_an_event(monkeypatch, capsys):
     from js import skills
 
-    monkeypatch.setattr(skills, "_WARNED", set())
+    skills.reset_warnings()
     events = []
     with output.using_sink(SimpleNamespace(emit=events.append)):
         skills._warn_once("invalid skill")

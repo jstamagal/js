@@ -69,6 +69,11 @@ _PARAMETER_HEADING = re.compile(r"^### ([A-Za-z0-9_.-]+)\n", re.MULTILINE)
 _WARNED: set[str] = set()
 
 
+def reset_warnings() -> None:
+    """Forget which warnings were shown; each shows again once."""
+    _WARNED.clear()
+
+
 def _warn_once(message: str) -> None:
     if message in _WARNED:
         return

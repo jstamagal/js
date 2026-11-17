@@ -248,6 +248,11 @@ _EXPECTED_BINARIES: tuple[tuple[str, str], ...] = (
 _warned_binaries: set[str] = set()
 
 
+def reset_warnings() -> None:
+    """Forget which missing binaries were reported; each is reported again once."""
+    _warned_binaries.clear()
+
+
 def _warn_missing_binaries() -> None:
     for name, why in _EXPECTED_BINARIES:
         if name in _warned_binaries:

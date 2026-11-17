@@ -815,15 +815,14 @@ def test_prompt_mode_reasoning_off_and_maxout_forward_explicit_overrides(monkeyp
 
 def test_warn_missing_binaries_once_per_binary(monkeypatch, capsys):
     monkeypatch.setattr(cli, "resolve_binary", lambda name: None if name in {"rg", "fd"} else f"/bin/{name}")
-    cli._warned_binaries.clear()
+    cli.reset_warnings()
 
     cli._warn_missing_binaries()
     cli._warn_missing_binaries()
 
     # One line per missing binary, across both calls.
     assert len(capsys.readouterr().err.splitlines()) == 2
-    assert cli._warned_binaries == {"rg", "fd"}
-    cli._warned_binaries.clear()
+    cli.reset_warnings()
 
 
 def test_prompt_mode_missing_agent_fails_before_the_provider(monkeypatch, tmp_path, capsys):

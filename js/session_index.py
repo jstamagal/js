@@ -175,11 +175,14 @@ def _recover(path: Path, seen: tuple[int, int] | None = None) -> sqlite3.Connect
         return _open(path)
 
 
-def _drop_current() -> None:
+def close() -> None:
+    """Close this process's connection to the index; the next use opens it
+    again."""
     global _current
-    if _current is not None and _current[0] == os.getpid():
-        _current[2].close()
-    _current = None
+    with _lock:
+        if _current is not None and _current[0] == os.getpid():
+            _current[2].close()
+        _current = None
 
 
 def _connection() -> sqlite3.Connection:
@@ -193,7 +196,7 @@ def _connection() -> sqlite3.Connection:
         opened = _current[3]
         if opened is not None and _identity(path) == opened:
             return _current[2]
-    _drop_current()
+    close()
     seen = _identity(path)
     try:
         connection = _open(path)
@@ -209,7 +212,7 @@ def _connection() -> sqlite3.Connection:
 def reset() -> None:
     """Close and delete the index; the next use builds it again."""
     with _lock:
-        _drop_current()
+        close()
         path = db_path()
         with _RebuildLock(path):
             _remove(path)
@@ -298,7 +301,7 @@ def catalog(root: Path | None = None) -> list[dict[str, Any]]:
             raise
         with _lock:
             seen = _current[3] if _current is not None else None
-            _drop_current()
+            close()
             _recover(db_path(), seen).close()
         return _catalog(root)
 
