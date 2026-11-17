@@ -6,8 +6,8 @@ from __future__ import annotations
 import json
 
 import pytest
+from turn_driver import config, run
 
-from js import runtime
 from js.toolkit import build_default_registry, fs
 from js.toolkit.core import ToolContext
 
@@ -77,20 +77,14 @@ def numbered(tmp_path):
     return target, ToolContext(cwd=tmp_path)
 
 
-def _model_read(context: ToolContext, args: dict) -> str:
-    """One `read` call the way the model's arrives: validated against the
-    published schema, then dispatched."""
-    registry = build_default_registry()
-    retained, _stats = runtime._normalize_tool_call_batch(
-        [runtime._PendingToolCall("1", "read", [json.dumps(args)])], registry, 8,
-    )
-    (call,) = retained
-    assert call.validation_error is None, call.validation_error
-    _args, result = runtime._dispatch(
-        "read", call.arguments(), runtime.Telemetry(None), cap_bytes=0,
-        registry=registry, tool_context=context,
-    )
-    return result
+def _model_read(tmp_path, monkeypatch, context: ToolContext, args: dict) -> str:
+    """One `read` call the way the model's arrives: in a turn, validated
+    against the published schema, then dispatched."""
+    turn = run(tmp_path, monkeypatch, build_default_registry().select(["read:eager"]),
+               [[("1", "read", json.dumps(args))]], cfg=config(tmp_path, max_tool_result_bytes=0),
+               context=context)
+    assert [event["invalid"] for event in turn.events("tool_call_batch_normalized")] == [0], turn.results()
+    return turn.results()["1"]
 
 
 def _shown_lines(result: str) -> list[int]:
@@ -108,10 +102,10 @@ def _shown_lines(result: str) -> list[int]:
     ({"line_start": 170, "line_end": 185}, 170, 185),
     ({"start_line": 170, "end_line": 185}, 170, 185),
 ])
-def test_read_takes_each_range_shape_models_send(numbered, extra, first, last):
+def test_read_takes_each_range_shape_models_send(numbered, extra, first, last, tmp_path, monkeypatch):
     target, context = numbered
 
-    result = _model_read(context, {"file_path": str(target), **extra})
+    result = _model_read(tmp_path, monkeypatch, context, {"file_path": str(target), **extra})
 
     shown = _shown_lines(result)
     assert shown[0] == first
@@ -119,10 +113,10 @@ def test_read_takes_each_range_shape_models_send(numbered, extra, first, last):
         assert shown[-1] == last
 
 
-def test_a_line_range_wins_over_a_byte_range_with_a_note(numbered):
+def test_a_line_range_wins_over_a_byte_range_with_a_note(numbered, tmp_path, monkeypatch):
     target, context = numbered
 
-    result = _model_read(context, {"file_path": str(target), "start_line": 3, "end_line": 4,
+    result = _model_read(tmp_path, monkeypatch, context, {"file_path": str(target), "start_line": 3, "end_line": 4,
                                    "start_byte": 0, "end_byte": 10})
 
     plain = fs.read(str(target), start_line=3, end_line=4, context=ToolContext(cwd=target.parent))
