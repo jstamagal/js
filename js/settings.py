@@ -485,7 +485,23 @@ def parse_bool(raw: str) -> bool | None:
 _NONNEGATIVE_KNOBS = frozenset({
     "RETRY_COUNT_MAX", "RETRY_WAIT_MAX", "CONNECT_TIMEOUT", "FIRST_BYTE_TIMEOUT", "STREAM_IDLE_TIMEOUT",
     "OUTPUT_TOKENS_RETRY_MAX", "OUTPUT_RESUMES_MAX",
+    "COMPACTION_HEADROOM_TOKENS", "COMPACTION_REPLY_RESERVE_TOKENS", "COMPACTION_KEEP_TOOL_RESULTS",
+    "COMPACTION_OVERFLOW_KEEP_TOOL_RESULTS", "COMPACTION_REATTACH_FILES_MAX",
+    "COMPACTION_REATTACH_TOKENS_MAX", "COMPACTION_REATTACH_FILE_TOKENS_MAX",
+    "COMPACTION_SUMMARY_RESULT_CHARS_MAX", "COMPACTION_CACHE_TTL",
 })
+
+# Integer settings whose readers take only 1 and up.
+_POSITIVE_INTEGERS = frozenset({
+    "REPLY_TOOL_CALLS_MAX", "SUBAGENT_WORKERS_MAX", "TOOLS_PREVIEW_LINES", "KERNEL_LINES_MAX",
+    "TERMINAL_COLUMNS", "TERMINAL_ROWS", "PARALLEL_TOOLS_MAX", "HISTORY_SIZE", "LSP_TIMEOUT",
+    "CONTEXT_SIZE_UNKNOWN", "COMPACTION_KEEP_RECENT_TOKENS", "COMPACTION_MIN_SAVINGS_TOKENS",
+    "COMPACTION_FAILURES_MAX", "COMPACTION_HINT_TIMEOUT", "COMPACTION_SUMMARY_TOKENS_MAX",
+    "COMPACTION_SUMMARY_REQUEST_TOKENS_MAX", "COMPACTION_CONSECUTIVE_MAX",
+})
+
+# Fractions of the context window: above 0, at most 1.
+_WINDOW_FRACTIONS = frozenset({"COMPACTION_WARN_AT", "COMPACTION_START_AT", "COMPACTION_FORCE_AT"})
 
 
 # The values a sampling setting can take: (lowest, highest), None = open.
@@ -607,11 +623,7 @@ def _coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
             return None, msgs.EXPECTED_NONNEGATIVE_INTEGER.said()
         if spec.key in {"REASONING_DISPLAY", "NET_DISPLAY", "TOOLS_DISPLAY"} and value not in range(4):
             return None, msgs.EXPECTED_LEVEL.said()
-        if spec.key in {
-            "REPLY_TOOL_CALLS_MAX", "SUBAGENT_WORKERS_MAX", "TOOLS_PREVIEW_LINES", "KERNEL_LINES_MAX",
-            "TERMINAL_COLUMNS", "TERMINAL_ROWS", "PARALLEL_TOOLS_MAX",
-            "HISTORY_SIZE", "LSP_TIMEOUT",
-        } and value < 1:
+        if spec.key in _POSITIVE_INTEGERS and value < 1:
             return None, msgs.EXPECTED_POSITIVE_INTEGER.said()
         return value, None
     if kind == "float":
@@ -627,8 +639,10 @@ def _coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
                           else msgs.EXPECTED_RANGE.said(low=low, high=high))
         if spec.key in _NONNEGATIVE_KNOBS and number < 0:
             return None, msgs.EXPECTED_NONNEGATIVE_NUMBER.said()
-        if spec.key == "MCP_TIMEOUT" and not (math.isfinite(number) and number > 0):
+        if spec.key in {"MCP_TIMEOUT", "COMPACTION_CHARS_PER_TOKEN", *_WINDOW_FRACTIONS} and number <= 0:
             return None, msgs.EXPECTED_POSITIVE_NUMBER.said()
+        if spec.key in _WINDOW_FRACTIONS and number > 1:
+            return None, msgs.EXPECTED_RANGE.said(low=0, high=1)
         return number, None
     if kind in ("json", "map"):
         if spec.key in {"MCP_SERVERS", "MCP_AGENT_POLICY"}:
