@@ -4,7 +4,7 @@ import re
 
 import pytest
 
-from js import listings, login_cli, logins
+from js import curses_menu, listings, login_cli, logins
 
 
 class Screen:
@@ -158,19 +158,19 @@ def test_manager_rename_and_delete_shortcuts(monkeypatch):
 
 def test_provider_search_returns_original_index():
     screen = Screen(map(ord, "/BETA\n\n"))
-    assert login_cli._curses_menu(screen, ["alpha", "beta", "gamma"], "providers") == 1
+    assert curses_menu.menu(screen, ["alpha", "beta", "gamma"], "providers") == 1
 
 
 def test_model_search_toggles_only_matching_models():
     screen = Screen(map(ord, "/beta\nn\n"))
-    assert login_cli._curses_multiselect(
+    assert curses_menu.multiselect(
         screen, [("alpha", ""), ("beta", ""), ("gamma", "")], "models", preselected={0, 1, 2},
     ) == [0, 2]
 
 
 def test_search_no_matches_does_not_select_wrong_provider():
     screen = Screen([*map(ord, "/missing\n\n"), 27])
-    assert login_cli._curses_menu(screen, ["alpha"], "providers") is None
+    assert curses_menu.menu(screen, ["alpha"], "providers") is None
 
 
 def test_add_custom_is_first_and_selectable(monkeypatch):
@@ -273,7 +273,7 @@ def test_manager_model_edit_search_persists_choices(monkeypatch):
 
 def test_search_ignores_navigation_keys_while_typing():
     screen = Screen([ord("/"), curses.KEY_DOWN, *map(ord, "beta\n\n")])
-    assert login_cli._curses_menu(screen, ["alpha", "beta"], "providers") == 1
+    assert curses_menu.menu(screen, ["alpha", "beta"], "providers") == 1
 
 
 def test_update_enter_keeps_secrets_and_dash_clears(monkeypatch):

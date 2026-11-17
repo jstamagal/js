@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from js import cli, listings, login_cli, logins, messages as msgs, paths, providers
+from js import cli, curses_menu, listings, login_cli, logins, messages as msgs, paths, providers
 
 BASE_URL_PROMPT = msgs.LOGIN_ASK_BASE_URL.text()
 KEY_PROMPTS = {msgs.LOGIN_ASK_KEY.text(), msgs.LOGIN_ASK_KEY_OPTIONAL.text(), msgs.LOGIN_ASK_KEY_KEEP.text()}
@@ -76,7 +76,7 @@ def test_login_provider_rows_show_saved_env_and_registry(monkeypatch, tmp_path: 
 def test_login_picker_accepts_action_keymaps(monkeypatch):
     monkeypatch.setattr(login_cli.curses, "curs_set", lambda value: None)
     screen = _FakeStdscr([ord("z")])
-    chosen = login_cli._curses_picker(screen, [("first", "")], "choose",
+    chosen = curses_menu._curses_picker(screen, [("first", "")], "choose",
                                       keymaps={"list": {"choose": (ord("z"),)}})
     assert chosen == [0]
 
@@ -343,7 +343,7 @@ def _run_multiselect(monkeypatch, keys, rows, preselected):
     import curses
 
     monkeypatch.setattr(curses, "curs_set", lambda _n: None)
-    return login_cli._curses_multiselect(
+    return curses_menu.multiselect(
         _FakeStdscr(keys), rows, "pick", preselected=set(preselected)
     )
 
@@ -863,7 +863,7 @@ def test_e_on_a_kept_model_saves_its_defaults(monkeypatch, tmp_path: Path):
         monkeypatch.setattr(curses, "curs_set", lambda _n: None)
         typed = [ord(ch) for ch in "temperature=0.6"]
         keys = [curses.KEY_DOWN, ord("e"), *typed, ord("\n"), ord("\n")]
-        chosen = login_cli._curses_multiselect(
+        chosen = curses_menu.multiselect(
             _Screen(keys), [("model-a", ""), ("model-b", "")], "pick", preselected={0, 1},
             on_edit=login_cli._model_defaults_editor("vllm"),
         )
