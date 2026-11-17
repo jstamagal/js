@@ -220,16 +220,29 @@ class _Transcript:
     count: int = 0
     # Message number -> row, for the messages the conversation still holds.
     entries: dict[int, Row] = field(default_factory=dict)
-    # The replayed history as `js.memory` rebuilds it, one light dict per
-    # message; `_entry` is its message number. Rollbacks cut it the way they
-    # cut the replay, and the entries they cut are superseded.
-    replay: list[dict] = field(default_factory=list)
+    # The replayed history as `js.memory` rebuilds it, with one light dict per
+    # message record replay reads; `_entry` is its message number. Marks
+    # rewrite it through `memory.rewrite_history`, and the entries a rollback
+    # deletes from it are superseded. Runs the old writer appended twice stay
+    # in it: replay undoes those (`memory._Reappends`) over the whole file.
+    replay: list[dict] = field(init=False)
     calls: dict[str, _Call] = field(default_factory=dict)
     # Record id -> message number, for naming a branch point by its number.
     numbers: dict[str, int] = field(default_factory=dict)
     style: TranscriptStyle = field(default_factory=TranscriptStyle)
 
+    def __post_init__(self) -> None:
+        from . import memory
+
+        self.replay = memory.History(self._superseded)
+
+    def _superseded(self, lights: list[dict]) -> None:
+        for light in lights:
+            self.entries.pop(light.get("_entry"), None)
+
     def feed(self, record: Any) -> None:
+        from . import memory
+
         if not isinstance(record, dict):
             return
         if record.get("kind") == "tags":
@@ -248,11 +261,11 @@ class _Transcript:
             if isinstance(stamp, dict) and isinstance(stamp.get("model"), str) and stamp["model"]:
                 self.last_stamp = dict(stamp)
         elif kind == "message" and isinstance(record.get("message"), dict):
-            self._message(record["message"], ts, record.get("stamp"), replayed=True)
+            self._message(record["message"], ts, record.get("stamp"), replayed=memory.replayed(record) is not None)
             self._number(record)
             self._identify(record)
-        elif kind == "mark" and isinstance(record.get("marker"), str):
-            self._mark(record["marker"])
+        elif kind == "mark" and (mark := memory.replayed(record)) is not None:
+            memory.rewrite_history(self.replay, mark.marker)
         elif kind == "title" and isinstance(record.get("title"), str):
             self.title = record["title"]
         elif kind is None and record.get("role") in {"user", "assistant", "tool", "system"}:
@@ -311,35 +324,6 @@ class _Transcript:
         row = self.entries.get(self.count)
         if row is not None and isinstance(record.get("id"), str):
             row.id = record["id"]
-
-    def _mark(self, marker: str) -> None:
-        from . import memory
-
-        if marker == "session_reset":
-            self.replay.clear()
-            return
-        if marker.startswith("rollback_to:"):
-            try:
-                keep = max(0, int(marker.split(":", 1)[1]))
-            except ValueError:
-                return
-            self.replay[:] = memory.balance_orphaned_tool_calls(self.replay)
-            for light in self.replay[keep:]:
-                self.entries.pop(light.get("_entry"), None)
-            del self.replay[keep:]
-            return
-        compaction = memory._parse_compaction_marker(marker)
-        if compaction is not None:
-            keep_from = compaction.get("keep_from", len(self.replay))
-            if isinstance(keep_from, bool) or not isinstance(keep_from, int):
-                # A destructive mark with a payload no writer produces (null, a
-                # string, a float) is inert: guessing would cut real history.
-                return
-            self.replay[:] = memory.balance_orphaned_tool_calls(self.replay)
-            keep_from = max(0, min(keep_from, len(self.replay)))
-            rehydrated = compaction.get("rehydrated")
-            synthetic = [{"role": "user"}] * (2 if isinstance(rehydrated, dict) and rehydrated else 1)
-            self.replay[:] = [*synthetic, *self.replay[keep_from:]]
 
     def _message(self, message: Any, ts: float | None, stamp: Any, *, replayed: bool) -> None:
         if not isinstance(message, dict):

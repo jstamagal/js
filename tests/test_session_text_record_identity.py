@@ -49,3 +49,45 @@ def test_unreadable_message_id_does_not_replace_previous_row_id(tmp_path, bad_me
     assert [row.first() for row in transcript.rows()] == ["first valid", "next valid"]
     assert len(transcript.replay) == len(replay) == 2
     assert path.read_bytes() == original
+
+
+def _record(kind: str, body: dict, version: int | None = 1) -> dict:
+    record = {"kind": kind, "ts": 1, **body}
+    if version is not None:
+        record["version"] = version
+    return record
+
+
+def _message(role: str, text: str, version: int | None = 1) -> dict:
+    return _record("message", {"message": {"role": role, "content": text}}, version)
+
+
+def _mark(marker: str, version: int | None = 1) -> dict:
+    return _record("mark", {"marker": marker}, version)
+
+
+@pytest.mark.parametrize("skipped", [
+    _message("narrator", "a role no history holds"),
+    _message("user", "a record without a schema version", version=None),
+    _message("user", "a record from another schema version", version=999),
+])
+def test_rollback_hides_the_rows_replay_drops_past_a_record_replay_skips(tmp_path, skipped):
+    path = tmp_path / "session.jsonl"
+    records = [_message("user", "one"), skipped, _message("assistant", "two"),
+               _message("user", "aborted"), _mark("rollback_to:2"), _message("user", "retry")]
+    path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+
+    shown = [row.first() for row in session_text.parse(path).rows()]
+
+    assert [m["content"] for m in memory.load_replay_messages(path)] == ["one", "two", "retry"]
+    assert "two" in shown and "retry" in shown and "aborted" not in shown
+
+
+def test_a_mark_replay_skips_hides_no_rows(tmp_path):
+    path = tmp_path / "session.jsonl"
+    records = [_message("user", "one"), _message("assistant", "two"),
+               _mark("rollback_to:0", version=2), _message("user", "three")]
+    path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+
+    assert [row.first() for row in session_text.parse(path).rows()] == ["one", "two", "three"]
+    assert len(memory.load_replay_messages(path)) == 3

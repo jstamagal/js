@@ -76,10 +76,11 @@ def test_a_timestamp_no_clock_can_show_renders_as_a_placeholder(ts):
 def test_a_compaction_mark_with_a_bad_keep_from_is_inert(keep_from):
     transcript = session_text._Transcript()
     for n in range(3):
-        transcript.feed({"kind": "message", "ts": 0, "message": {"role": "user", "content": f"m{n}"}})
+        transcript.feed({"kind": "message", "version": 1, "ts": 0, "message": {"role": "user", "content": f"m{n}"}})
     before = list(transcript.replay)
+    assert len(before) == 3
     marker = "compaction:" + json.dumps({"summary": "s", "keep_from": keep_from})
-    transcript.feed({"kind": "mark", "ts": 0, "marker": marker})
+    transcript.feed({"kind": "mark", "version": 1, "ts": 0, "marker": marker})
     assert transcript.replay == before
     transcript.text()
 
@@ -87,8 +88,8 @@ def test_a_compaction_mark_with_a_bad_keep_from_is_inert(keep_from):
 def test_a_valid_compaction_mark_still_cuts():
     transcript = session_text._Transcript()
     for n in range(3):
-        transcript.feed({"kind": "message", "ts": 0, "message": {"role": "user", "content": f"m{n}"}})
-    transcript.feed({"kind": "mark", "ts": 0, "marker": 'compaction:{"summary":"s","keep_from":2}'})
+        transcript.feed({"kind": "message", "version": 1, "ts": 0, "message": {"role": "user", "content": f"m{n}"}})
+    transcript.feed({"kind": "mark", "version": 1, "ts": 0, "marker": 'compaction:{"summary":"s","keep_from":2}'})
     assert len(transcript.replay) == 2  # summary + the one kept
 
 

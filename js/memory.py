@@ -25,6 +25,7 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Literal
 
 from . import messages as msgs
@@ -597,19 +598,31 @@ class _RetainedLog:
         return [message for index, message in enumerate(self._read) if index not in self._removed]
 
 
-class _History(list):
-    """The replayed history of a replay that keeps a `_RetainedLog`: every
-    deletion, a rollback's or an undone run's, tells the log what it took out.
-    A session_reset clears it and a compaction replaces it; neither is a
-    deletion."""
+class History(list):
+    """A replayed history that reports each deletion, a rollback's or an
+    undone run's, to ``took_out`` with the messages it took out. A
+    session_reset clears it and a compaction replaces it; neither is a
+    deletion (`rewrite_history`)."""
 
-    def __init__(self, log: _RetainedLog) -> None:
+    def __init__(self, took_out: Callable[[list[dict]], None]) -> None:
         super().__init__()
-        self._log = log
+        self._took_out = took_out
 
     def __delitem__(self, key: Any) -> None:
-        self._log.took_out(self[key] if isinstance(key, slice) else [self[key]])
+        self._took_out(self[key] if isinstance(key, slice) else [self[key]])
         super().__delitem__(key)
+
+
+def replayed(raw: object) -> Record | None:
+    """The record replay reads from the parsed line ``raw``: a mark, or a
+    message whose role a history holds. None for anything replay skips: a
+    record of another kind or schema version, or a message without such a role."""
+    migrated = _migrate_record(raw)
+    rec = Record.from_dict(migrated) if migrated is not None else None
+    if rec is None or rec.kind == "mark":
+        return rec
+    role = rec.message.get("role") if rec.message is not None else None
+    return rec if isinstance(role, str) and role in _ROLES else None
 
 
 def _replay_records(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | None, *,
@@ -628,7 +641,7 @@ def _replay_records(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | No
     if not memory_file.exists():
         return [], 0, frozenset()
     log = _RetainedLog() if retained is not None else None
-    messages: list[dict] = _History(log) if log is not None else []
+    messages: list[dict] = History(log.took_out) if log is not None else []
     undo = _Reappends(messages)
     epoch = 0
     undoing = epoch in undo_epochs
@@ -660,17 +673,15 @@ def _replay_records(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | No
                 # which the transcript shows and replay does not send.
                 log.read(raw)
                 continue
-            migrated = _migrate_record(raw)
-            if migrated is None:
+            rec = replayed(raw)
+            if rec is None:
                 if (
                     isinstance(raw, dict)
                     and isinstance(raw.get("kind"), str)
                     and raw["kind"] in {"message", "mark"}
+                    and _migrate_record(raw) is None
                 ):
                     skipped_versions += 1
-                continue
-            rec = Record.from_dict(migrated)
-            if rec is None:
                 continue
             if rec.kind == "mark":
                 if undoing:
@@ -687,23 +698,20 @@ def _replay_records(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | No
                     next_epoch()
                 undo.reset()
                 continue
-            if rec.kind != "message" or rec.message is None:
-                continue
-            role = rec.message.get("role")
-            if isinstance(role, str) and role in _ROLES:
-                for call_id in _tool_call_ids(rec.message):
-                    if call_id in call_ids:
-                        repeated.add(epoch)
-                    call_ids.add(call_id)
-                if log is not None:
-                    log.read(rec.message)
-                if undoing:
-                    undo.append(rec.message)
-                else:
-                    messages.append(rec.message)
-                stamp = _reply_stamp(rec.message, rec.stamp)
-                if stamps is not None and stamp is not None:
-                    stamps[id(rec.message)] = (rec.message, stamp)
+            message = rec.message
+            for call_id in _tool_call_ids(message):
+                if call_id in call_ids:
+                    repeated.add(epoch)
+                call_ids.add(call_id)
+            if log is not None:
+                log.read(message)
+            if undoing:
+                undo.append(message)
+            else:
+                messages.append(message)
+            stamp = _reply_stamp(message, rec.stamp)
+            if stamps is not None and stamp is not None:
+                stamps[id(message)] = (message, stamp)
     if undoing:
         undo.finish()
     if retained is not None and log is not None:
