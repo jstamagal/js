@@ -162,14 +162,34 @@ def script(tmp_path: Path, monkeypatch, batches: list[list[Call]], *, answer: st
     return turn
 
 
+def _turn_arguments(tmp_path: Path, turn: Turn, tool_registry: ToolRegistry, *, cfg: Config | None,
+                    context: ToolContext | None, sink, trace: bool, suppress_output: bool,
+                    options: dict) -> tuple[tuple, dict]:
+    """The arguments of `runtime.run_turn` for ``turn``."""
+    args = (cfg or config(tmp_path), "SYS", turn.messages, runtime.Telemetry(turn.flight, sink=sink))
+    return args, dict(trace_override=trace, tool_registry=tool_registry,
+                      tool_context=context or ToolContext(cwd=tmp_path), suppress_output=suppress_output,
+                      **options)
+
+
 def run(tmp_path: Path, monkeypatch, tool_registry: ToolRegistry, batches: list[list[Call]], *,
         cfg: Config | None = None, context: ToolContext | None = None, sink=None,
         trace: bool = False, suppress_output: bool = True, **options) -> Turn:
-    """Run one turn whose model makes ``batches`` of calls, then answers."""
+    """Run one turn whose model makes ``batches`` of calls, then answers.
+    ``options`` are further keyword arguments of `runtime.run_turn`."""
     turn = script(tmp_path, monkeypatch, batches)
-    runtime.run_turn(
-        cfg or config(tmp_path), "SYS", turn.messages, runtime.Telemetry(turn.flight, sink=sink),
-        trace_override=trace, tool_registry=tool_registry,
-        tool_context=context or ToolContext(cwd=tmp_path), suppress_output=suppress_output, **options,
-    )
+    args, kwargs = _turn_arguments(tmp_path, turn, tool_registry, cfg=cfg, context=context, sink=sink,
+                                   trace=trace, suppress_output=suppress_output, options=options)
+    runtime.run_turn(*args, **kwargs)
+    return turn
+
+
+async def run_async(tmp_path: Path, monkeypatch, tool_registry: ToolRegistry, batches: list[list[Call]], *,
+                    cfg: Config | None = None, context: ToolContext | None = None, sink=None,
+                    trace: bool = False, suppress_output: bool = True, **options) -> Turn:
+    """`run` on the running event loop, through `runtime.run_turn_async`."""
+    turn = script(tmp_path, monkeypatch, batches)
+    args, kwargs = _turn_arguments(tmp_path, turn, tool_registry, cfg=cfg, context=context, sink=sink,
+                                   trace=trace, suppress_output=suppress_output, options=options)
+    await runtime.run_turn_async(*args, **kwargs)
     return turn

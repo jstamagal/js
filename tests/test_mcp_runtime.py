@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from turn_driver import run_async as run_turn_async
 
 from js import events as event_mod, history_record, model_client, runtime
 from js.mcp.client import CapabilityError, MCPClient, MCPClientError
@@ -1104,9 +1105,7 @@ def test_malformed_remote_input_schemas_fall_back_to_valid_object_schemas():
     asyncio.run(drive())
 
 
-def test_patterned_context_argument_reaches_remote_server(config, tmp_path):
-    from js.toolkit.core import call_tool_async
-
+def test_patterned_context_argument_reaches_remote_server(config, tmp_path, monkeypatch):
     schema = {
         "type": "object",
         "patternProperties": {"^context$": {"type": "string"}},
@@ -1125,13 +1124,10 @@ def test_patterned_context_argument_reaches_remote_server(config, tmp_path):
         registry = ToolRegistry((tool,), {})
         specs = model_client.tool_specs_to_ai_tools(registry.openai_specs())
         assert specs[0].spec.params == schema
-        calls, stats = runtime._normalize_tool_call_batch([
-            runtime._PendingToolCall(
-                "tc", tool.name, [json.dumps({"context": "remote-value"})],
-            ),
-        ], registry, 1)
-        assert stats.invalid == 0
-        await call_tool_async(tool, json.loads(calls[0].arguments()), ToolContext(cwd=tmp_path))
+        turn = await run_turn_async(tmp_path, monkeypatch, registry, [
+            [("tc", tool.name, json.dumps({"context": "remote-value"}))],
+        ])
+        assert [event["invalid"] for event in turn.events("tool_call_batch_normalized")] == [0]
         assert client.calls == [("patterned", {"context": "remote-value"})]
 
     asyncio.run(drive())
