@@ -868,6 +868,45 @@ def test_a_parents_resumed_effort_sits_below_the_childs_agent_yaml(monkeypatch, 
     assert seen["turn"] == expected
 
 
+def test_a_task_calls_reasoning_is_the_effort_the_childs_requests_send(monkeypatch, tmp_path):
+    import asyncio
+    from dataclasses import replace
+
+    from js import agent_messages, memory, runtime
+    from js.toolkit import ToolContext, meta
+    from js.toolkit.registry import build_default_registry
+
+    _isolate_config(monkeypatch, tmp_path)
+    _two_model_login(a={"EFFORT": "high"})
+    monkeypatch.setenv("JS_MODEL", "testes/a")
+    root = tmp_path / "agents"
+    for name in ("parent", "worker"):
+        (root / name).mkdir(parents=True)
+        (root / name / "agent.yaml").write_text("tools: []\n", encoding="utf-8")
+        (root / name / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
+    parent = replace(from_env(cwd=tmp_path, save_session=False), prompts_dir=root / "parent",
+                     prompt_roots=(root,), session_file=tmp_path / "parent.jsonl")
+    seen = {}
+
+    async def child_turn(child_cfg, system, messages, telemetry, **kwargs):
+        resolved = runtime._with_login_defaults(child_cfg, None, None, None).reasoning_effort
+        seen["sent"] = kwargs.get("reasoning_effort_override") or resolved
+        messages.append({"role": "assistant", "content": "done"})
+
+    async def no_init(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(runtime, "run_turn_async", child_turn)
+    monkeypatch.setattr(agent_messages, "initialize", no_init)
+    monkeypatch.setattr(memory, "persist_messages", lambda *a, **k: None)
+
+    asyncio.run(meta._run_one_task_async(
+        0, 1, "work", ToolContext(cwd=tmp_path), parent, build_default_registry(), "worker", None,
+        reasoning="low"))
+
+    assert seen["sent"] == "low"
+
+
 def test_route_prefix_policy_and_login_lookup_are_injectable():
     looked_up = []
     def lookup(provider):

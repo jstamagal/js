@@ -487,6 +487,10 @@ async def _run_one_task_async(
         }
         if window is not None:
             turn_kwargs["steer"] = window.steer
+        if reasoning:
+            # Every request resolves the effort from the layers again; the
+            # tool call's reasoning is told to the turn so it is what is sent.
+            turn_kwargs["reasoning_effort_override"] = reasoning
         try:
             with window.writing() if window is not None else nullcontext():
                 await agent_messages.initialize(cfg, prompt_spec, chat.messages, telemetry, tool_registry=registry,
