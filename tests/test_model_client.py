@@ -15,7 +15,7 @@ import ai.types.usage
 import ai.models
 import pytest
 
-from js import model_client
+from js import history_record, model_client
 from js.sampling import Sampling
 
 
@@ -293,7 +293,7 @@ def test_history_to_ai_messages_preserves_roles():
         },
         {"role": "tool", "tool_call_id": "tc1", "name": "fs_search", "content": "42"},
     ]
-    out = model_client.history_to_ai_messages("sys", msgs)
+    out = history_record.history_to_ai_messages("sys", msgs)
     assert [m.role for m in out] == [
         "system",
         "user",
@@ -543,7 +543,7 @@ def test_image_tool_result_becomes_user_file_message_without_persisting_base64(t
     user_parts = messages[1].parts
     assert isinstance(user_parts[0], ai.types.messages.TextPart)
     # The stub goes once, in the tool message; the media message has the label.
-    assert user_parts[0].text == model_client.media_label("tc1", "visual stub")
+    assert user_parts[0].text == history_record.media_label("tc1", "visual stub")
     assert isinstance(user_parts[1], ai.types.messages.FilePart)
     assert user_parts[1].media_type == "image/png"
     assert isinstance(user_parts[1].data, bytes)
@@ -584,7 +584,7 @@ def test_history_messages_can_be_roundtripped():
         {"role": "assistant", "content": "hello", "reasoning_content": "hmm"},
         {"role": "tool", "tool_call_id": "tc1", "name": "fs_search", "content": "42"},
     ]
-    out = model_client.history_to_ai_messages("sys", msgs)
+    out = history_record.history_to_ai_messages("sys", msgs)
 
     # Pin the conversion itself first. A pure round-trip proves only that every
     # element is serializable, which an empty list satisfies perfectly.
@@ -720,7 +720,7 @@ async def _wire_messages(protocol, history: list[dict], chunks=()):
 
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
     model = ai.Model(id="claude", provider=ai.get_provider("openai", base_url="http://x/v1", api_key="k"))
-    messages = model_client.history_to_ai_messages("sys", history, provider_id=None, model_id="claude")
+    messages = history_record.history_to_ai_messages("sys", history, provider_id=None, model_id="claude")
     async for _event in protocol.stream(client, model, messages, provider="openai"):
         pass
     return sent["messages"]
@@ -793,7 +793,7 @@ def test_a_turn_stores_the_reply_blocks_on_its_assistant_message(monkeypatch, tm
         return model_client.ModelStreamResult(
             text="done", tool_calls=[], reasoning="x",
             usage=ai.types.usage.Usage(input_tokens=1, output_tokens=1), finish_reason="stop",
-            assistant_message=model_client.with_reasoning_blocks(ai.assistant_message("done"), blocks),
+            assistant_message=history_record.with_reasoning_blocks(ai.assistant_message("done"), blocks),
             reasoning_blocks=blocks,
         )
 
@@ -804,11 +804,10 @@ def test_a_turn_stores_the_reply_blocks_on_its_assistant_message(monkeypatch, tm
 
 
 def test_compaction_drops_reasoning_blocks_with_the_signed_reasoning():
-    from js import memory
 
     messages = [{"role": "assistant", "content": "a", "reasoning_content": "x",
                  "reasoning_blocks": [{"type": "thinking", "thinking": "x", "signature": "s"}]}]
-    assert memory.drop_signed_reasoning(messages) == 1
+    assert history_record.drop_signed_reasoning(messages) == 1
     assert messages == [{"role": "assistant", "content": "a", "reasoning_content": "x"}]
 
 
@@ -838,8 +837,8 @@ def test_reasoning_blocks_count_in_both_token_estimates():
 
     history_plain = context_budget.estimate_message_tokens(plain)
     history_signed = context_budget.estimate_message_tokens(signed)
-    sdk_plain, = model_client.history_to_ai_messages("", [plain])
-    sdk_signed = model_client.with_reasoning_blocks(sdk_plain, blocks)
+    sdk_plain, = history_record.history_to_ai_messages("", [plain])
+    sdk_signed = history_record.with_reasoning_blocks(sdk_plain, blocks)
 
     assert history_signed >= history_plain + 10000
     assert (context_budget.estimate_message_tokens(sdk_signed)
@@ -858,7 +857,7 @@ def test_blocks_go_back_only_to_the_model_that_wrote_them(monkeypatch, tmp_path)
         return model_client.ModelStreamResult(
             text="done", tool_calls=[], reasoning="x",
             usage=ai.types.usage.Usage(input_tokens=1, output_tokens=1), finish_reason="stop",
-            assistant_message=model_client.with_reasoning_blocks(ai.assistant_message("done"), blocks),
+            assistant_message=history_record.with_reasoning_blocks(ai.assistant_message("done"), blocks),
             reasoning_blocks=blocks,
         )
 
@@ -867,8 +866,8 @@ def test_blocks_go_back_only_to_the_model_that_wrote_them(monkeypatch, tmp_path)
     messages = [{"role": "user", "content": "go"}]
     runtime.run_turn(cfg, "sys", messages, runtime.Telemetry(None), suppress_output=True)
 
-    same = model_client.history_to_ai_messages("", messages, provider_id=cfg.provider_id, model_id=cfg.model)
-    other = model_client.history_to_ai_messages("", messages, provider_id=cfg.provider_id, model_id="other-model")
+    same = history_record.history_to_ai_messages("", messages, provider_id=cfg.provider_id, model_id=cfg.model)
+    other = history_record.history_to_ai_messages("", messages, provider_id=cfg.provider_id, model_id="other-model")
     assert model_client._stored_reasoning_blocks(same[-1]) == blocks
     assert model_client._stored_reasoning_blocks(other[-1]) is None
 
@@ -889,9 +888,9 @@ def test_a_tool_image_left_out_for_a_text_only_model_is_named_to_it():
     record = {"role": "tool", "tool_call_id": "c1", "name": "read",
               "content": "VISUAL_FILE red.png mime=image/png size=3 bytes",
               media.MEDIA_KEY: [media.store(b"png", "image/png")]}
-    without = model_client.history_to_ai_messages("", [record], vision=False)
+    without = history_record.history_to_ai_messages("", [record], vision=False)
     assert len(without) == 1
     assert "accepts text only" in str(without[0].parts[0])
-    with_vision = model_client.history_to_ai_messages("", [record], vision=True)
+    with_vision = history_record.history_to_ai_messages("", [record], vision=True)
     assert "accepts text only" not in str(with_vision[0].parts[0])
     assert any(isinstance(p, ai.types.messages.FilePart) for m in with_vision for p in m.parts)

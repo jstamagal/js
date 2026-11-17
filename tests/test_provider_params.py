@@ -5,7 +5,7 @@ from typing import Any
 import ai
 import pytest
 
-from js import model_client, providers
+from js import history_record, model_client, providers
 from js.model_client import ModelStreamResult
 from js.sampling import Sampling
 
@@ -215,7 +215,7 @@ def test_append_only_providers_replay_history_without_rewriting_messages(
     expected_params: dict[str, Any],
 ):
     assert providers.provider_for_login(provider_id).append_only is True
-    messages = model_client.history_to_ai_messages(
+    messages = history_record.history_to_ai_messages(
         "system",
         [
             {

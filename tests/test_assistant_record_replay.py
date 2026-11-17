@@ -24,7 +24,7 @@ from pathlib import Path
 import httpx2
 import pytest
 
-from js import memory, model_client, runtime
+from js import history_record, memory, model_client, runtime
 from js.config import from_env
 from js.toolkit import ToolContext
 
@@ -353,7 +353,7 @@ def _observe(name: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Obse
     loaded = memory.load_replay_messages(cfg.session_file)
     assert list(loaded) == messages
     first_reply = loaded[:2]
-    rebuilt = model_client.history_to_ai_messages(
+    rebuilt = history_record.history_to_ai_messages(
         SYSTEM, first_reply, provider_id=case.provider, model_id=case.model, vision=convo.vision)
 
     live_body = resumed_body = None
@@ -366,7 +366,7 @@ def _observe(name: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Obse
             await model_client.stream_model_async(
                 model_id=case.model, provider_id=case.provider, provider_base_url=case.base,
                 provider_api_key="fixture",
-                messages=model_client.history_to_ai_messages(
+                messages=history_record.history_to_ai_messages(
                     SYSTEM, prefix, provider_id=case.provider, model_id=case.model, vision=convo.vision),
                 tools=None, max_output_tokens=32000, reasoning_effort="high", on_text=lambda _c: None,
             )

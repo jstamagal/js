@@ -3,7 +3,7 @@ cut off by its output cap, and an input the provider cut to fit its window."""
 
 from __future__ import annotations
 
-from js import snippets
+from js import history_record, snippets
 
 import asyncio
 import json
@@ -501,7 +501,7 @@ def test_a_cut_off_tool_call_keeps_no_thinking_blocks(monkeypatch, tmp_path):
     dangling = [ModelToolCall(id="c1", name="write", arguments='{"file_path": "a.txt", "content": "unfin')]
     cut = _cut("", dangling)
     cut = replace(cut, reasoning_blocks=blocks,
-                  assistant_message=model_client.with_reasoning_blocks(cut.assistant_message, blocks))
+                  assistant_message=history_record.with_reasoning_blocks(cut.assistant_message, blocks))
     _scripted_model(monkeypatch, [cut, _done("smaller pieces")])
     messages = [{"role": "user", "content": "go"}]
 

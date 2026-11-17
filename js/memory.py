@@ -12,8 +12,6 @@ transcript up to date (`js.session_text`)."""
 
 from __future__ import annotations
 
-from . import snippets
-
 import contextlib
 import errno
 import fcntl
@@ -28,6 +26,7 @@ from pathlib import Path
 from collections.abc import Callable
 from typing import Any, Literal
 
+from . import history_record
 from . import messages as msgs
 from . import output
 from . import session_store
@@ -215,73 +214,8 @@ def balance_orphaned_tool_calls(messages: list[dict]) -> list[dict]:
     return _heal_orphaned_tool_calls(messages)
 
 
-# An assistant message's reasoning: the text, and the signed parts with the
-# provider and model they came from (`model_client.signed_reasoning_parts`).
-_REASONING_KEYS = frozenset({"reasoning_content", "reasoning_parts", "reasoning_from", "reasoning_blocks", "reasoning_layout"})
-SIGNED_REASONING_KEYS = ("reasoning_parts", "reasoning_from", "reasoning_blocks", "reasoning_layout")
-
-
-def restart_thinking_turn(messages: list[dict], *, require_tool_calls: bool) -> int:
-    """Recast an unrestorable assistant turn as user context with completed results.
-
-    Earlier turns keep their signed blocks. The new user context contains the
-    visible replies, calls and results so the next reply can use work already done.
-    """
-    latest = next((i for i in range(len(messages) - 1, -1, -1)
-                   if messages[i].get("role") == "assistant"), None)
-    if latest is None or (require_tool_calls and not messages[latest].get("tool_calls")):
-        return 0
-
-    def opens_turn(msg: dict) -> bool:
-        return msg.get("role") == "user" and not msg.get("steered") and not msg.get("resume_nudge")
-
-    start = 0
-    for index in range(latest - 1, -1, -1):
-        msg = messages[index]
-        if opens_turn(msg):
-            start = index + 1
-            break
-    end = next((i for i in range(latest + 1, len(messages)) if opens_turn(messages[i])), len(messages))
-    tail = messages[start:end]
-    rewritten: list[dict] = []
-    context: list[dict] = []
-
-    def flush_context() -> None:
-        if context:
-            rewritten.append(note_time({"role": "user", "content": (
-                snippets.render('flush-context')
-                + json.dumps(context, ensure_ascii=False)
-            )}))
-            context.clear()
-
-    for msg in tail:
-        if msg.get("role") == "user":
-            flush_context()
-            rewritten.append(msg)
-        else:
-            context.append({key: value for key, value in msg.items()
-                            if key in {"role", "content", "tool_calls", "tool_call_id", "name"}})
-    flush_context()
-    messages[start:end] = rewritten
-    return len(tail)
-
-
-def drop_signed_reasoning(messages: list[dict], start: int = 0) -> int:
-    """Remove the signed reasoning of every message from ``start`` on, in place.
-
-    A signature (an Anthropic thinking signature, an OpenAI Responses encrypted item) is
-    bound to the history before it, so once js edits an earlier message the
-    signed reasoning after that edit cannot be replayed. Each changed message
-    is replaced by a copy that keeps ``reasoning_content``. Returns how many
-    messages changed.
-    """
-    changed = 0
-    for index in range(max(0, start), len(messages)):
-        msg = messages[index]
-        if isinstance(msg, dict) and any(key in msg for key in SIGNED_REASONING_KEYS):
-            messages[index] = {k: v for k, v in msg.items() if k not in SIGNED_REASONING_KEYS}
-            changed += 1
-    return changed
+# An assistant message's reasoning: the text, and its signed reasoning.
+_REASONING_KEYS = frozenset({"reasoning_content", *history_record.SIGNED_REASONING_KEYS})
 
 
 def _strip_orphan_reasoning(messages: list[dict]) -> list[dict]:
@@ -358,7 +292,7 @@ def load_replay_messages(memory_file: Path) -> list[dict]:
     """Return the OpenAI-shape message list from disk, honoring control marks.
 
     This is the history a turn replays to the model: every assistant keeps its
-    reasoning, and `model_client.history_to_ai_messages` applies the transport's
+    reasoning, and `history_record.history_to_ai_messages` applies the transport's
     replay policy.
     """
     memory_file = Path(memory_file)
@@ -556,7 +490,7 @@ def rewrite_history(history: list[dict], marker: object) -> list[tuple[dict, dic
     rehydrated = rehydrated if isinstance(rehydrated, dict) else None
     tail = history[keep_from:]
     originals = list(tail)
-    drop_signed_reasoning(tail)
+    history_record.drop_signed_reasoning(tail)
     history[:] = [compaction_summary_message(data["summary"]), *([rehydrated] if rehydrated else []), *tail]
     return [(original, copy) for original, copy in zip(originals, tail, strict=True) if copy is not original]
 

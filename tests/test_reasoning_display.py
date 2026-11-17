@@ -10,7 +10,7 @@ import ai.types.events as events
 import pytest
 import httpx2
 
-from js import cli, config, display, memory, model_client, runtime, screen, transcript
+from js import cli, config, display, history_record, memory, model_client, runtime, screen, transcript
 from js.toolkit import ToolContext
 
 
@@ -81,7 +81,7 @@ def test_display_is_separate_from_answer_transcript_and_session(monkeypatch, tmp
     saved = cfg.session_file.read_bytes()
     reloaded = memory.load_messages(cfg.session_file, preserve_reasoning=True)
     assert reloaded[-1]["reasoning_content"] == THOUGHT
-    assert model_client.history_to_ai_messages("system", reloaded, provider_id="openai")[-1].reasoning == THOUGHT
+    assert history_record.history_to_ai_messages("system", reloaded, provider_id="openai")[-1].reasoning == THOUGHT
     memory.persist_messages(cfg.session_file, reloaded)
     assert cfg.session_file.read_bytes() == saved
 

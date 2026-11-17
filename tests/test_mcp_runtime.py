@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from js import events as event_mod, model_client, runtime
+from js import events as event_mod, history_record, model_client, runtime
 from js.mcp.client import CapabilityError, MCPClient, MCPClientError
 from js.mcp.host import MCPHost, mcp_tool_result, prompt_result, resource_result
 from js.mcp.types import CallToolResult, GetPromptResult, ReadResourceResult, ServerCapabilities
@@ -847,7 +847,7 @@ def test_structured_result_provider_media_and_history_media_ref():
     def wire(msgs):
         return [(m.role, [(p.kind, getattr(p, "result", None), getattr(p, "text", None), getattr(p, "data", None))
                           for p in m.parts]) for m in msgs]
-    assert wire(model_client.history_to_ai_messages("", [record], vision=True)) == wire(messages)
+    assert wire(history_record.history_to_ai_messages("", [record], vision=True)) == wire(messages)
 
 
 def test_mcp_safe_media_is_preserved_and_invalid_media_is_suppressed():

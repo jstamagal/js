@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from js import toolkit as runtime_tools
+from js import history_record, toolkit as runtime_tools
 from js.config import from_env
 from js.runtime import Telemetry, run_turn
 from js.toolkit import ToolContext
@@ -166,7 +166,7 @@ def test_live_vision_model_reads_image_through_real_message_path(tmp_path):
     marker = fs.fs_read("swatch.png", context=context)
     assert marker.startswith("IMAGE_RESULT\t")
 
-    convo = model_client.history_to_ai_messages("You can see images.", [
+    convo = history_record.history_to_ai_messages("You can see images.", [
         {"role": "user", "content": "Read swatch.png and name its color in one word."},
         {"role": "assistant", "content": "", "tool_calls": [
             {"id": "c1", "type": "function",

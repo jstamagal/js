@@ -21,6 +21,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from . import compaction
+from . import history_record
 from . import messages as msgs
 from . import model_client
 from . import output
@@ -55,7 +56,7 @@ class TurnConvo:
     def rebuild(self) -> None:
         """Build ``ai`` again from the history, and trace the next request
         from its first message with the tool schemas."""
-        self.ai = model_client.history_to_ai_messages(
+        self.ai = history_record.history_to_ai_messages(
             self.system, self.messages, provider_id=self._provider_id, model_id=self._model,
             vision=self._vision,
         )
@@ -73,7 +74,7 @@ class TurnConvo:
 
     def add(self, records: list[dict]) -> None:
         """Append history records already appended to ``messages``."""
-        self.ai.extend(model_client.history_to_ai_messages(
+        self.ai.extend(history_record.history_to_ai_messages(
             "", records, provider_id=self._provider_id, model_id=self._model, vision=self._vision,
         ))
 

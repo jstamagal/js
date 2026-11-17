@@ -32,6 +32,7 @@ import ai
 
 from . import context_budget
 from . import held
+from . import history_record
 from . import jail as _jail
 from .media import IMAGE_RESULT_PREFIX
 from . import messages as msgs
@@ -53,7 +54,6 @@ from . import usage as usage_mod
 from .config import Config, vision_enabled_for_model
 from .sampling import Sampling
 from .reasoning_display import ReasoningDisplay
-from . import reasoning as reasoning_rules
 from .toolkit.core import (Output, ToolContext, ToolOutput, ToolResult, as_output, call_is_read_only, call_scope, call_view,
                            call_tool, call_tool_async, compact_json, registry_scope)
 from .toolkit.registry import ToolRegistry
@@ -1876,29 +1876,6 @@ def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, 
             batch_diagnostic_suffix = ("\n\n" if text else "") + diagnostic
             text += batch_diagnostic_suffix
 
-    record: dict = {"role": "assistant", "content": text}
-    if pending_calls:
-        record["tool_calls"] = [
-            {"id": pc.id, "type": "function",
-             "function": {"name": pc.name, "arguments": pc.arguments()}}
-            for pc in pending_calls
-        ]
-    if result.reasoning:
-        record["reasoning_content"] = result.reasoning
-    # A rewritten reply keeps no signed reasoning, so no thinking blocks.
-    if getattr(result, "reasoning_blocks", None) and assistant_message_override is None:
-        record["reasoning_blocks"] = result.reasoning_blocks
-    if isinstance(provider_metadata, dict):
-        # reasoning_blocks are recorded once, at the top level above.
-        provider_metadata = {k: v for k, v in provider_metadata.items()
-                             if k != model_client.JS_METADATA_KEY} or None
-    else:
-        provider_metadata = None
-    incomplete_reason = incomplete_reason or model_client.incomplete_reason_from_metadata(provider_metadata)
-    if provider_metadata:
-        record["provider_metadata"] = provider_metadata
-    if incomplete_reason:
-        record["incomplete_reason"] = incomplete_reason
     assistant_message = assistant_message_override or result.assistant_message
     if result.tool_calls:
         assistant_message = _assistant_message_with_tool_calls(
@@ -1907,30 +1884,19 @@ def _record_assistant(reply: ModelReply, *, cfg: Config, request: ModelRequest, 
             diagnostic_suffix=batch_diagnostic_suffix,
         )
         text = assistant_message.text
-        record["content"] = text
-    # The signed parts as this turn replays them, after batch normalization.
-    signed_reasoning = (
-        model_client.signed_reasoning_parts(assistant_message)
-        if assistant_message_override is None else None
+    record, assistant_message = history_record.assistant_record(
+        assistant_message,
+        text=text,
+        tool_calls=[(pc.id, pc.name, pc.arguments()) for pc in pending_calls],
+        reasoning_content=result.reasoning,
+        # A rewritten reply keeps no signed reasoning, so no thinking blocks.
+        reasoning_blocks=(getattr(result, "reasoning_blocks", None)
+                          if assistant_message_override is None else None),
+        provider_metadata=provider_metadata,
+        incomplete_reason=incomplete_reason,
+        provider_id=request.provider_id,
+        model_id=request.model,
     )
-    if signed_reasoning:
-        record["reasoning_parts"] = signed_reasoning
-        record["reasoning_layout"] = [
-            len(part.text) if isinstance(part, ai.types.messages.TextPart) else part.kind
-            for part in assistant_message.parts
-        ]
-        # A signature covers the reply's blocks in their order, so replay puts
-        # each call back before the answer text that followed it.
-        offsets = model_client.tool_call_text_before(assistant_message)
-        for call in record.get("tool_calls", []):
-            if call["id"] in offsets:
-                call["text_before"] = offsets[call["id"]]
-    if signed_reasoning or record.get("reasoning_blocks"):
-        record["reasoning_from"] = reasoning_rules.reasoning_origin(request.provider_id, request.model)
-    existing_metadata = getattr(assistant_message, "provider_metadata", None) or {}
-    if provider_metadata and not set(existing_metadata) - {model_client.JS_METADATA_KEY}:
-        assistant_message = assistant_message.model_copy(
-            update={"provider_metadata": {**provider_metadata, **existing_metadata}})
     convo.ai.append(_sanitize_assistant_message(assistant_message))
     messages.append(memory.note_time(record))
     # Recorded in full now; a later ^C in this turn must not re-append it.

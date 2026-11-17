@@ -4,7 +4,7 @@ import json
 import re
 from pathlib import Path
 
-from js import memory as M
+from js import history_record, memory as M
 
 
 def _assistant_toolcall(cid: str = "tc1") -> dict:
@@ -132,7 +132,6 @@ def test_compaction_keep_from_is_applied_in_post_heal_space(tmp_path: Path):
 def test_heal_drops_duplicate_and_orphaned_tool_results():
     from ai.providers import history_utils
 
-    from js import model_client
 
     messages = [
         {"role": "user", "content": "go"},
@@ -152,13 +151,12 @@ def test_heal_drops_duplicate_and_orphaned_tool_results():
 
     assert [m.get("tool_call_id") for m in healed if m["role"] == "tool"] == ["c1", "c2"]
     assert healed[-1] == {"role": "user", "content": "again"}
-    assert history_utils.check_tool_ids(model_client.history_to_ai_messages("", healed)) == []
+    assert history_utils.check_tool_ids(history_record.history_to_ai_messages("", healed)) == []
 
 
 def test_restarting_thinking_keeps_steered_attachments_between_completed_rounds():
     import ai
 
-    from js import model_client
 
     earlier = {"role": "assistant", "content": "earlier", "reasoning_parts": [
         {"text": "thought", "provider_metadata": {"anthropic": {"signature": "S0"}}}],
@@ -172,14 +170,14 @@ def test_restarting_thinking_keeps_steered_attachments_between_completed_rounds(
     nudge = {"role": "user", "resume_nudge": True, "content": "continue"}
     messages = [*prefix, *first, steered, *second, nudge]
 
-    assert M.restart_thinking_turn(messages, require_tool_calls=True) == 6
+    assert history_record.restart_thinking_turn(messages, require_tool_calls=True) == 6
 
     assert messages[:3] == prefix
     assert messages[4] is steered
     assert messages[6] is nudge
     assert json.loads(messages[3]["content"].split("\n", 1)[1]) == first
     assert json.loads(messages[5]["content"].split("\n", 1)[1]) == second
-    projected = model_client.history_to_ai_messages("", messages, provider_id="anthropic", model_id="m")
+    projected = history_record.history_to_ai_messages("", messages, provider_id="anthropic", model_id="m")
     assert projected[4].parts[-1] is attachment
 
 

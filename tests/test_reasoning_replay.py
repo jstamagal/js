@@ -11,6 +11,8 @@ from ai.providers.openai.protocol import _messages_to_openai
 
 from js import cli, memory, model_client, runtime
 from js.config import InvocationSources, from_env
+from js import cli, history_record, memory, model_client, runtime
+from js.config import from_env
 from js.toolkit import ToolContext
 from repl_driver import run_async
 
@@ -107,7 +109,7 @@ def test_resume_retains_reasoning_without_rewriting_the_journal(replay, mode, mo
     ("deepseek", False), ("anthropic", False), ("openai-responses", False),
 ])
 def test_reasoning_replay_policy_is_transport_specific(provider_id, full_replay):
-    messages = model_client.history_to_ai_messages("SYSTEM", [
+    messages = history_record.history_to_ai_messages("SYSTEM", [
         {"role": "assistant", "content": "answer", "reasoning_content": _THOUGHT},
         {"role": "assistant", "content": "", "reasoning_content": _THOUGHT,
          "tool_calls": [{"id": "call_1", "type": "function",

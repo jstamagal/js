@@ -12,7 +12,7 @@ from typing import Any
 import ai
 import pytest
 
-from js import model_client, reasoning
+from js import history_record, model_client, reasoning
 from js.model_client import ModelStreamResult
 
 
@@ -81,7 +81,7 @@ def _capture(monkeypatch, *, model_id, provider_id, messages, reasoning_effort=N
 
 
 def _reasoning_history():
-    return model_client.history_to_ai_messages(
+    return history_record.history_to_ai_messages(
         "sys",
         [
             {"role": "user", "content": "go"},

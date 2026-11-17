@@ -14,7 +14,7 @@ import pytest
 
 from tool_loading import after_loading
 
-from js import cli, compaction, display, events, runtime, settings, toolkit as runtime_tools
+from js import cli, compaction, display, events, history_record, runtime, settings, toolkit as runtime_tools
 from js.config import Config
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry
@@ -334,7 +334,7 @@ def test_run_turn_surfaces_and_persists_incomplete_responses(monkeypatch, tmp_pa
     assert assistant_record["provider_metadata"] == provider_metadata
     assert assistant_record["incomplete_reason"] == "max_output_tokens"
 
-    replay = runtime.model_client.history_to_ai_messages("system", messages)
+    replay = history_record.history_to_ai_messages("system", messages)
     assert getattr(replay[-1], "provider_metadata", None) == provider_metadata
 
 
@@ -1299,7 +1299,7 @@ def test_assistant_turn_without_tool_calls_strips_reasoning_from_next_convo(monk
 
     # Reload through load_messages, the tool-call-only reasoning projection.
     # cli.py replays through M.load_replay_messages, and
-    # model_client.history_to_ai_messages applies the transport's replay policy.
+    # history_record.history_to_ai_messages applies the transport's replay policy.
     reloaded = _mem.load_messages(cfg.session_file)
     # (1) the JSONL line on disk has reasoning_content
     raw = cfg.session_file.read_text(encoding="utf-8").splitlines()

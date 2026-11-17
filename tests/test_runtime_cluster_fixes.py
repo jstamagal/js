@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 import ai
 
-from js import runtime, turn_call
+from js import history_record, runtime, turn_call
 from js import model_client as MC
 from js.config import Config
 from js.toolkit import ToolContext
@@ -305,7 +305,7 @@ def test_incomplete_provider_metadata_reaches_history_events_and_finish(tmp_path
     assert end["reason"] == "incomplete"
     assert end["finish_reason"] == "incomplete:max_output_tokens"
 
-    replay = MC.history_to_ai_messages("SYS", [assistant])[-1]
+    replay = history_record.history_to_ai_messages("SYS", [assistant])[-1]
     assert replay.provider_metadata == meta
 
 

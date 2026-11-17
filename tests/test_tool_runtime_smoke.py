@@ -9,7 +9,7 @@ import pytest
 
 from tool_loading import after_loading
 
-from js import capped_process, model_client, runtime, setcmd, settings, toolkit as runtime_tools
+from js import capped_process, history_record, model_client, runtime, setcmd, settings, toolkit as runtime_tools
 from js.model_client import ModelStreamResult, ModelToolCall
 from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry
 from js.toolkit import fs, process_net
@@ -863,7 +863,7 @@ def test_build_tool_result_messages_expands_image_marker_with_user_file_part(tmp
     assert trp.result == "visual stub"
     assert isinstance(messages[1].parts[0], ai.types.messages.TextPart)
     # The stub goes once, in the tool message; the media message has the label.
-    assert messages[1].parts[0].text == model_client.media_label("call_1", "visual stub")
+    assert messages[1].parts[0].text == history_record.media_label("call_1", "visual stub")
     assert isinstance(messages[1].parts[1], ai.types.messages.FilePart)
     assert messages[1].parts[1].data == _TINY_PNG
     assert messages[1].parts[1].media_type == "image/png"
@@ -990,7 +990,7 @@ def test_tool_result_record_keeps_image_as_media_ref(tmp_path):
     assert b64 not in json.dumps(record)
     # The image outlives its file: replay reads the store, not the path.
     image.unlink()
-    wire = model_client.history_to_ai_messages("", [record], vision=True)
+    wire = history_record.history_to_ai_messages("", [record], vision=True)
     assert [m.role for m in wire] == ["tool", "user"]
     assert wire[1].parts[-1].data == _TINY_PNG
     assert model_client.tool_result_record("c1", "read", "plain done") == {

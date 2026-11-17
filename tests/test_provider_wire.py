@@ -7,7 +7,7 @@ import ai
 import httpx2
 import pytest
 
-from js import model_client, providers
+from js import history_record, model_client, providers
 
 
 def _anthropic_reply():
@@ -116,7 +116,7 @@ def test_anthropic_tool_continuation_omits_empty_text_blocks(monkeypatch):
 
 
 def test_anthropic_retains_all_system_instructions(monkeypatch):
-    messages = model_client.history_to_ai_messages("primary system", [
+    messages = history_record.history_to_ai_messages("primary system", [
         {"role": "system", "content": "history system"},
         {"role": "user", "content": "ping"},
     ], provider_id="anthropic")

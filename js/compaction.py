@@ -29,6 +29,7 @@ from typing import Any
 import ai
 
 from . import context_budget
+from . import history_record
 from . import jail
 from . import media
 from .compaction_flight import ACTIVE_FLIGHT, CompactionFlight
@@ -274,7 +275,7 @@ def microcompact(
     usually still working with those) and ignores results already small enough
     that clearing them buys nothing; a result carrying media (`js.media`) is
     always worth clearing, and loses its media too. Signed reasoning after the
-    first cleared result is dropped (`memory.drop_signed_reasoning`). Returns
+    first cleared result is dropped (`history_record.drop_signed_reasoning`). Returns
     (results_cleared, chars_reclaimed).
     """
     indexes = [
@@ -301,7 +302,7 @@ def microcompact(
         reclaimed += max(0, len(body) - len(MICROCOMPACT_CLEARED_MESSAGE))
         first = i if first is None else first
     if first is not None:
-        M.drop_signed_reasoning(messages, first + 1)
+        history_record.drop_signed_reasoning(messages, first + 1)
     return cleared, reclaimed
 
 

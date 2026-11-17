@@ -18,6 +18,8 @@ import pytest
 
 from js import logins, memory, model_client, runtime
 from js.config import InvocationSources, from_env
+from js import history_record, logins, memory, model_client, runtime
+from js.config import from_env
 from js.logins import Login
 from js.sampling import Sampling
 from js.toolkit import ToolContext
@@ -509,7 +511,7 @@ def test_replay_puts_each_signed_part_back_between_its_tool_calls():
         ],
         "reasoning_from": {"provider": "anthropic", "model": "claude-opus-5-5"},
     }
-    message = model_client.history_to_ai_messages(
+    message = history_record.history_to_ai_messages(
         "", [record], provider_id="anthropic", model_id="claude-opus-5-5",
     )[0]
 
@@ -564,7 +566,7 @@ def _wire_signatures(monkeypatch, messages: list[dict]) -> list[list[str]]:
         return await model_client.stream_model_async(
             model_id="claude-opus-5-5", provider_id="anthropic", provider_base_url=None,
             provider_api_key="fixture",
-            messages=model_client.history_to_ai_messages(
+            messages=history_record.history_to_ai_messages(
                 "SYSTEM", messages, provider_id="anthropic", model_id="claude-opus-5-5"),
             tools=None, max_output_tokens=4096, reasoning_effort="high", on_text=lambda _c: None,
         )
@@ -745,7 +747,7 @@ def test_a_normalized_batch_keeps_each_signed_part_between_its_calls():
     shape = [p.provider_metadata["anthropic"]["signature"] if p.kind == "reasoning" else p.tool_call_id
              for p in normalized.parts]
     assert shape == ["S1", "c1", "S2", "c2"]
-    assert [p.get("after_calls") for p in model_client.signed_reasoning_parts(normalized)] == [None, 1]
+    assert [p.get("after_calls") for p in history_record.signed_reasoning_parts(normalized)] == [None, 1]
 
 
 def test_a_signed_part_after_a_dropped_call_is_left_out():
@@ -766,13 +768,13 @@ def test_text_between_signed_thinking_blocks_replays_in_the_order_it_came(monkey
         ai.thinking("b", provider_metadata={"anthropic": {"signature": "S2"}}),
         ai.types.messages.ToolCallPart(tool_call_id="call_1", tool_name="read", tool_args="{}"),
     )
-    record = {**_signed_call(1), "content": "checking", "reasoning_parts": model_client.signed_reasoning_parts(live)}
+    record = {**_signed_call(1), "content": "checking", "reasoning_parts": history_record.signed_reasoning_parts(live)}
     wire = _Wire("claude-opus-5-5")
     wire.install(monkeypatch)
     asyncio.run(model_client.stream_model_async(
         model_id="claude-opus-5-5", provider_id="anthropic", provider_base_url=None,
         provider_api_key="fixture",
-        messages=model_client.history_to_ai_messages(
+        messages=history_record.history_to_ai_messages(
             "SYSTEM", [{"role": "user", "content": "go"}, record, _result(1)],
             provider_id="anthropic", model_id="claude-opus-5-5"),
         tools=None, max_output_tokens=4096, reasoning_effort="high", on_text=lambda _c: None,
@@ -832,7 +834,7 @@ def test_a_drop_of_signed_reasoning_on_a_final_answer_survives_resume(tmp_path):
                 _signed_call(2), _result(2)]
     memory.persist_messages(session, messages)
 
-    assert memory.drop_signed_reasoning(messages) == 2
+    assert history_record.drop_signed_reasoning(messages) == 2
     memory.persist_messages(session, messages)
 
     assert memory.load_replay_messages(session) == messages

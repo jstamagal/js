@@ -6,7 +6,7 @@ import json
 import httpx2
 import pytest
 
-from js import model_client
+from js import history_record, model_client
 
 
 @pytest.mark.parametrize(("provider", "base", "model", "field", "tool_free"), [
@@ -23,7 +23,7 @@ from js import model_client
 ])
 def test_reasoning_reaches_http_in_the_endpoint_field(monkeypatch, provider, base, model, field, tool_free):
     thought = " first thought\n  preserve whitespace: λ\n"
-    messages = model_client.history_to_ai_messages("system", [
+    messages = history_record.history_to_ai_messages("system", [
         {"role": "user", "content": "first"},
         {"role": "assistant", "content": "answer", "reasoning_content": thought},
         {"role": "user", "content": "read"},
@@ -81,7 +81,7 @@ def test_reasoning_reaches_http_in_the_endpoint_field(monkeypatch, provider, bas
 def test_reply_cancelled_while_thinking_is_not_sent(provider):
     # ^C during reasoning leaves an assistant record with reasoning only.
     # llama.cpp 400s on an assistant message with no content and no tool_calls.
-    messages = model_client.history_to_ai_messages("system", [
+    messages = history_record.history_to_ai_messages("system", [
         {"role": "user", "content": "first"},
         {"role": "assistant", "content": "", "reasoning_content": "There are several",
          "incomplete_reason": "cancelled"},

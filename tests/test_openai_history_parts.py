@@ -3,14 +3,14 @@
 import ai
 import pytest
 
-from js import model_client
+from js import history_record
 
 
 @pytest.mark.parametrize("role", ["user", "assistant"])
 def test_openai_text_mappings_mix_with_strings_and_sdk_parts(role):
     sdk_text = ai.types.messages.TextPart(text="sdk")
     content = ["plain", {"type": "text", "text": "mapped"}, sdk_text]
-    [message] = model_client.history_to_ai_messages("", [{"role": role, "content": content}])
+    [message] = history_record.history_to_ai_messages("", [{"role": role, "content": content}])
     assert message.role == role
     assert [part.text for part in message.parts] == ["plain", "mapped", "sdk"]
 
@@ -24,19 +24,19 @@ def test_openai_text_mappings_mix_with_strings_and_sdk_parts(role):
 ])
 def test_malformed_or_unsupported_part_mappings_still_fail(role, item):
     with pytest.raises(ValueError):
-        model_client.history_to_ai_messages("", [{"role": role, "content": [item]}])
+        history_record.history_to_ai_messages("", [{"role": role, "content": [item]}])
 
 
 def test_sdk_parts_are_preserved_by_identity():
     text = ai.types.messages.TextPart(text="text")
     reasoning = ai.thinking("reasoning")
-    parts = model_client._coerce_parts([text, reasoning])
+    parts = history_record._coerce_parts([text, reasoning])
     assert parts[0] is text
     assert parts[1] is reasoning
 
 
 def test_empty_mapped_text_preserves_existing_empty_reply_behavior():
     content = [{"type": "text", "text": ""}]
-    [user] = model_client.history_to_ai_messages("", [{"role": "user", "content": content}])
+    [user] = history_record.history_to_ai_messages("", [{"role": "user", "content": content}])
     assert user.parts[0].text == ""
-    assert model_client.history_to_ai_messages("", [{"role": "assistant", "content": content}]) == []
+    assert history_record.history_to_ai_messages("", [{"role": "assistant", "content": content}]) == []

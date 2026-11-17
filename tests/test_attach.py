@@ -7,7 +7,7 @@ from pathlib import Path
 
 import ai
 
-from js import attach, cli, media, model_client, runtime
+from js import attach, cli, history_record, media, runtime
 from js.config import Config
 from js.memory import load_messages
 from js.model_client import ModelStreamResult
@@ -147,7 +147,7 @@ def test_history_to_ai_messages_preserves_user_file_part():
         ai.types.messages.FilePart(data=_TINY_PNG, media_type="image/png"),
     ]
 
-    messages = model_client.history_to_ai_messages("", [{"role": "user", "content": content}])
+    messages = history_record.history_to_ai_messages("", [{"role": "user", "content": content}])
 
     assert len(messages) == 1
     assert messages[0].role == "user"
@@ -386,7 +386,7 @@ def test_real_png_still_attaches_as_image(tmp_path):
     assert part["mime"] == "image/png"
     assert media.load(part) == _TINY_PNG
     # The session keeps the reference; the model gets the bytes, every turn.
-    [user] = model_client.history_to_ai_messages("", [message], vision=True)
+    [user] = history_record.history_to_ai_messages("", [message], vision=True)
     assert user.parts[-1].media_type == "image/png"
     assert user.parts[-1].data == _TINY_PNG
     assert _TINY_PNG not in json.dumps(message).encode()
