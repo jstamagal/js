@@ -54,8 +54,6 @@ FAIL = "✗"
 RAIL = "▌"
 _RAIL = 2
 _SGR = re.compile(r"\x1b\[[0-9;]*m")
-_RAILED = re.compile(rf"^{RAIL} ?", re.M)
-_HEADER_MARK = re.compile(rf"^[{MARK}{OK}{FAIL}] +", re.M)  # the mark and the chip's padding
 # Columns a body sits in from the rail, and a panel's inner padding.
 _INDENT = 1
 _PAD = 1
