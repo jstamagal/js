@@ -9,7 +9,7 @@ import contextlib
 import os
 import re
 import sys
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from . import (
@@ -46,7 +46,7 @@ from . import (
     snippets,
     verify,
 )
-from .cli_options import RunOptions, Setup, current, invocation
+from .cli_options import RunOptions, current, invocation
 from .config import (
     InvocationSources,
     _preset_config_paths,
@@ -418,6 +418,14 @@ def _json_run_requested(args: argparse.Namespace) -> bool:
     )
 
 
+@dataclass(frozen=True)
+class Setup:
+    """What the command line settles before a mode runs: the setting sources
+    the run reads, and the --agent it names once that is validated."""
+    sources: InvocationSources
+    agent: str | None = None
+
+
 def _setup(args: argparse.Namespace, dispatch_argv: list[str]) -> Setup | int:
     """Before any mode: the setting sources with -u and the setting flags in
     them, the session a bare --session picks, .env, and the -C jail. An exit
@@ -629,7 +637,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
     if args.json or args.json_stream:
         msgs.warn(msgs.FAILED, error="--json/--json-stream requires -p, a pipe, an agent run, or --bench")
         return 2
-    return repl.start_repl(args, setup)
+    return repl.start_repl(args, setup.sources, setup.agent)
 
 
 def _run_headless(args: argparse.Namespace, setup: Setup, *, exchanges_only: bool) -> int:

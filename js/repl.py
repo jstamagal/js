@@ -79,8 +79,7 @@ from . import (
     usage as usage_mod,
     usage_display,
 )
-from .cli_options import Setup
-from .config import Config, jsrc_paths
+from .config import Config, InvocationSources, jsrc_paths
 from .repl_state import ReplState
 from .toolkit import subagents, task_jobs
 
@@ -1046,15 +1045,15 @@ class Repl:
         return state
 
 
-def start_repl(args: argparse.Namespace, setup: Setup) -> int:
+def start_repl(args: argparse.Namespace, sources: InvocationSources, agent: str | None) -> int:
     """The REPL: resume the session on its stamped model and its recorded
     system prompt, seed the live settings from the flags, run the jsrc, then
     the loop. Its exit code."""
     os.environ["JS_MODE"] = "repl"
     session_catalog.session_leases.start["mode"] = "repl"
     try:
-        cfg = run_assembly.from_env(args.session, save_session=not args.no_save, sources=setup.sources,
-                        agent_id=setup.agent)
+        cfg = run_assembly.from_env(args.session, save_session=not args.no_save, sources=sources,
+                        agent_id=agent)
     except ValueError as e:
         msgs.warn(msgs.FAILED, error=e)
         return 2
@@ -1156,7 +1155,7 @@ def start_repl(args: argparse.Namespace, setup: Setup) -> int:
     if cut_off:
         repl_state.queue_note(state, snippets.render('turn-cut-off'))
     rc_errors = repl_commands.run_rc_commands(state, cfg, jsrc_paths(
-        Path(getattr(cfg, "project_dir", None) or Path.cwd()), setup.sources))
+        Path(getattr(cfg, "project_dir", None) or Path.cwd()), sources))
     repl_settings_commands.mark_saved(state)
     session = Repl(cfg, state, prompt_spec, history,
                    _startup_banner(cfg, state, notices, [*rc_errors, *key_errors]))

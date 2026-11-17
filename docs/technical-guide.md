@@ -38,7 +38,7 @@ persists each completed turn.
 | `js/cli.py` | `main`: the run's setup, the mode picker, reading stdin into the prompt, `--compact` and `--commit` dispatch |
 | `js/prompt_run.py` | the `-p` run (`run`): its steps from the prompt to the printed answer, its `on` handlers, its stats, the Continue line (`say_continue`) |
 | `js/command_line.py` | the argument parser, and argv read the way it reads it |
-| `js/cli_options.py` | invocation-local prompt and tool overrides the modes share (`Setup`) |
+| `js/cli_options.py` | invocation-local prompt and tool overrides the modes share |
 | `js/bench.py` | `--bench AGENT`: an agent over its benchmark cases, one row per case |
 | `js/commit_cli.py` | `--commit`: snapshot the worktree, then run the commit agent over it |
 | `js/listings.py` | the `--list-*` printers, as text or JSON |

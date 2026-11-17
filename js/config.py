@@ -24,6 +24,7 @@ from . import (
     settings as _settings,
     turn_settings as _turn_settings,
 )
+from .cli_options import current
 
 _AGENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -542,7 +543,6 @@ def from_env(
 
     runtime_debug = bool(_settings.knob(js_root_settings, "DEBUG_LOG"))
 
-    from .cli_options import current
     options = current()
     mcp = None if options.skips_mcp else mcp_config.resolve(js_root_settings, agent_id)
 
