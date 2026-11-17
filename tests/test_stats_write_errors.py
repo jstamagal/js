@@ -2,6 +2,7 @@
 
 import ai
 import pytest
+from turn_driver import js
 
 from js import cli, messages, runtime, stats
 from js.config import InvocationSources
@@ -23,7 +24,7 @@ def test_prompt_stats_directory_reports_error_and_preserves_turn_result(tmp_path
     sentinel = target / "keep.txt"
     sentinel.write_text("keep")
 
-    assert cli._run_prompt("question", save=False, **{f"stats_{kind}": str(target)}) == 1
+    assert js(monkeypatch, "--no-save", f"--stats-{kind}", str(target), "-p", "question") == 1
 
     captured = capsys.readouterr()
     assert str(target) in captured.err
@@ -46,7 +47,7 @@ def test_prompt_stats_write_failure_does_not_replace_existing_file(tmp_path, mon
         raise PermissionError("injected output failure")
 
     monkeypatch.setattr(stats.os, "replace", fail)
-    assert cli._run_prompt("question", save=False, stats_json=str(target)) == 1
+    assert js(monkeypatch, "--no-save", "--stats-json", str(target), "-p", "question") == 1
     captured = capsys.readouterr()
     assert "injected output failure" in captured.err
     assert "answer" in captured.out
@@ -61,7 +62,7 @@ def test_original_turn_failure_is_not_hidden_by_requested_stats(tmp_path, monkey
         raise RuntimeError("original turn failure")
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", fail)
-    assert cli._run_prompt("question", save=False, stats_json=str(tmp_path)) == 1
+    assert js(monkeypatch, "--no-save", "--stats-json", str(tmp_path), "-p", "question") == 1
     assert "original turn failure" in capsys.readouterr().err
 
 
