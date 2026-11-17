@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import copy
 
-from js import fset, jsrc_save, messages as msgs, setcmd, settings
+from js import fset, jsrc_save, messages as msgs, setcmd, setting_layers, settings
 
 
 def test_holes_name_words_of_the_line_in_any_order():
@@ -52,7 +52,7 @@ def test_fset_lines_survive_save_and_load(tmp_path):
     fset.reset()
 
     reloaded = settings.seed_defaults()
-    assert settings.load_jsrc_files([path], reloaded) == []
+    assert setting_layers.load_jsrc_files([path], reloaded) == []
     assert fset.theme_name() == "paper"
     assert msgs.MODEL_SET.line(colour=False, model="m") == "now on m"
     assert settings.knob(reloaded, "TOOLS_DISPLAY") == 2
@@ -70,13 +70,13 @@ def _saved_then_reloaded(path, change):
     """Load the jsrc at ``path``, run ``change`` on the live settings, /save,
     and load the saved file again from scratch."""
     live = settings.seed_defaults()
-    settings.load_jsrc_files([path], live)
+    setting_layers.load_jsrc_files([path], live)
     before, fset_before = copy.deepcopy(live), fset.overrides()
     change(live)
     jsrc_save.save_changes(path, before, live, fset_before=fset_before)
     fset.reset()
     reloaded = settings.seed_defaults()
-    settings.load_jsrc_files([path], reloaded)
+    setting_layers.load_jsrc_files([path], reloaded)
     return reloaded
 
 
@@ -102,7 +102,7 @@ def test_save_leaves_the_live_banner_as_it_is(tmp_path):
     path = tmp_path / "jsrc"
     path.write_text("load child\n", encoding="utf-8")
     live = settings.seed_defaults()
-    settings.load_jsrc_files([path], live)
+    setting_layers.load_jsrc_files([path], live)
     before, fset_before = copy.deepcopy(live), fset.overrides()
     setcmd.set_command(live, "-BANNER")
     stock = msgs.BANNER
@@ -116,7 +116,7 @@ def test_a_format_on_two_lines_survives_save_and_a_fresh_load(tmp_path):
     assert fset.set_entry("MODEL_SET", "first $0\nsecond") is None
     jsrc_save.save_changes(path, settings.seed_defaults(), live, fset_before={})
     fset.reset()
-    settings.load_jsrc_files([path], settings.seed_defaults())
+    setting_layers.load_jsrc_files([path], settings.seed_defaults())
     assert fset.lookup("MODEL_SET") == "first $0\nsecond"
 
 
@@ -126,7 +126,7 @@ def test_an_entry_set_to_nothing_stays_set_to_nothing_after_save(tmp_path):
     assert setcmd.fset_command(live, 'MODEL_SET ""').error is None
     jsrc_save.save_changes(path, settings.seed_defaults(), live, fset_before={})
     fset.reset()
-    settings.load_jsrc_files([path], settings.seed_defaults())
+    setting_layers.load_jsrc_files([path], settings.seed_defaults())
     assert fset.lookup("MODEL_SET") == ""
 
 

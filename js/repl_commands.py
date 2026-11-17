@@ -43,6 +43,7 @@ from . import (
     session_picker,
     session_store,
     setcmd,
+    setting_layers,
     settings,
     skill_picker,
     skills,
@@ -1356,7 +1357,7 @@ def run_rc_commands(state: ReplState, cfg: Config, paths: list[Path]) -> list[st
     errors: list[str] = []
     stack = state.load_stack
     live = state.settings
-    found = settings.collect_again(paths)
+    found = setting_layers.collect_again(paths)
     layer = settings.seed_defaults()
     _fset.reset()
     state.settings = layer
@@ -1382,7 +1383,7 @@ def run_rc_commands(state: ReplState, cfg: Config, paths: list[Path]) -> list[st
         state.settings = live
         state.rc_replay = False
     if isinstance(live, dict):
-        ran = settings.over_jsrc_layer(paths, layer)
+        ran = setting_layers.over_jsrc_layer(paths, layer)
         changed: list[str] = []
         for spec in settings.REGISTRY:
             value = settings.get_dotted(ran, spec.path)

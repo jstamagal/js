@@ -9,7 +9,7 @@ import io
 
 from repl_driver import record_turns, turn_stub, type_into_js
 
-from js import jsrc_save, repl_commands, settings
+from js import jsrc_save, repl_commands, setting_layers, settings
 from js.repl_state import ReplState
 
 
@@ -65,7 +65,7 @@ def test_dollar_names_expand_in_a_user_jsrc(tmp_path):
     path = tmp_path / "jsrc"
     path.write_text("set PROVIDER openai\nset BANNER $PROVIDER:\n", encoding="utf-8")
     loaded = settings.seed_defaults()
-    assert settings.load_jsrc_files([path], loaded) == []
+    assert setting_layers.load_jsrc_files([path], loaded) == []
     assert settings.knob(loaded, "BANNER") == "openai:"
 
 
@@ -75,7 +75,7 @@ def test_a_literal_dollar_survives_save_and_reload(tmp_path):
     path = tmp_path / "jsrc"
     jsrc_save.save_settings_to_jsrc(path, live, keys=["BANNER"])
     loaded = settings.seed_defaults()
-    assert settings.load_jsrc_files([path], loaded) == []
+    assert setting_layers.load_jsrc_files([path], loaded) == []
     assert settings.knob(loaded, "BANNER") == "$MODEL costs $$5"
 
 
@@ -83,7 +83,7 @@ def test_a_display_setting_line_expands_like_set_and_a_saved_dollar_reloads(tmp_
     path = tmp_path / "jsrc"
     path.write_text("set REASONING_DISPLAY 3\nset TOOLS_DISPLAY $REASONING_DISPLAY\n", encoding="utf-8")
     loaded = settings.seed_defaults()
-    assert settings.load_jsrc_files([path], loaded) == []
+    assert setting_layers.load_jsrc_files([path], loaded) == []
     assert settings.knob(loaded, "TOOLS_DISPLAY") == 3
 
     live = settings.seed_defaults()
@@ -91,7 +91,7 @@ def test_a_display_setting_line_expands_like_set_and_a_saved_dollar_reloads(tmp_
     saved = tmp_path / "saved"
     jsrc_save.save_settings_to_jsrc(saved, live, keys=["SHELL_QUIET"])
     again = settings.seed_defaults()
-    assert settings.load_jsrc_files([saved], again) == []
+    assert setting_layers.load_jsrc_files([saved], again) == []
     assert settings.knob(again, "SHELL_QUIET") == ["echo $HOME"]
 
 
@@ -100,7 +100,7 @@ def test_a_format_line_keeps_its_dollar_names_for_when_it_is_drawn(tmp_path):
 
     path = tmp_path / "jsrc"
     path.write_text("fset MODEL_SET %G now $$0 $0\n", encoding="utf-8")
-    assert settings.load_jsrc_files([path], settings.seed_defaults()) == []
+    assert setting_layers.load_jsrc_files([path], settings.seed_defaults()) == []
     assert fset.lookup("MODEL_SET") == "%G now $$0 $0"
 
 
@@ -109,7 +109,7 @@ def _replay(tmp_path, jsrc):
 
 
     loaded = settings.seed_defaults()
-    assert settings.load_jsrc_files([jsrc], loaded) == []
+    assert setting_layers.load_jsrc_files([jsrc], loaded) == []
     state = ReplState(messages=[], system="s", settings=loaded, aliases={})
     assert repl_commands.run_rc_commands(state, SimpleNamespace(settings=loaded, project_dir=tmp_path), [jsrc]) == []
     return state
@@ -134,7 +134,7 @@ def _startup_effects(root):
     jsrc = root / "jsrc"
     jsrc.write_text("load f0\n", encoding="utf-8")
     loaded = settings.seed_defaults()
-    settings.load_jsrc_files([jsrc], loaded)
+    setting_layers.load_jsrc_files([jsrc], loaded)
     state = ReplState(messages=[], system="s", settings=loaded, aliases={})
     repl_commands.run_rc_commands(state, SimpleNamespace(settings=loaded, project_dir=root), [jsrc])
     live = state.settings

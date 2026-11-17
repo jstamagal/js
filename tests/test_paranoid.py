@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from js import login_cli, logins, providers
+from js import login_cli, logins, providers, setting_layers
 
 
 def test_login_test_request_carries_extra_headers_and_the_scrub_header(monkeypatch):
@@ -123,9 +123,9 @@ def test_an_invalid_value_for_a_secret_setting_is_never_echoed(monkeypatch, caps
             result = setcmd.set_command(store, f"{key} {bad}")
             assert result.error and SENTINEL not in result.error, (key, mode, result.error)
         with pytest.raises(ValueError) as caught:
-            settings.parse_extra_arg(f"{key}={bad}")
+            setting_layers.parse_extra_arg(f"{key}={bad}")
         assert SENTINEL not in str(caught.value), key
         capsys.readouterr()
-        settings.apply_env_overrides({}, {f"JS_{key}": bad})
+        setting_layers.apply_env_overrides({}, {f"JS_{key}": bad})
         warned = capsys.readouterr().err
         assert warned and SENTINEL not in warned, key

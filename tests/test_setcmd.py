@@ -4,7 +4,7 @@ import copy
 
 import pytest
 
-from js import messages as msgs, setcmd, settings
+from js import messages as msgs, setcmd, setting_layers, settings
 
 
 def _is(key: str, value: str) -> str:
@@ -215,7 +215,7 @@ def test_registry_defaults_seed_and_env_overrides_roundtrip():
         if not spec.env:
             continue
         raw, expected = _env_case(spec)
-        overlaid = settings.apply_env_overrides(settings.seed_defaults(), {spec.env: raw})
+        overlaid = setting_layers.apply_env_overrides(settings.seed_defaults(), {spec.env: raw})
         assert settings.get_dotted(overlaid, spec.path) == expected
 
 
@@ -278,7 +278,7 @@ def test_set_dash_unknown_knob_errors():
 # --------------------------------------------------------------------------
 
 def test_env_js_name_sets_the_setting():
-    overlaid = settings.apply_env_overrides(settings.seed_defaults(), {"JS_READ_LINES_MAX": "42"})
+    overlaid = setting_layers.apply_env_overrides(settings.seed_defaults(), {"JS_READ_LINES_MAX": "42"})
     assert overlaid["READ_LINES_MAX"] == 42
 
 

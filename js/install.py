@@ -28,6 +28,7 @@ from . import (
     paranoid,
     paths,
     routing,
+    setting_layers,
     settings as settings_mod,
 )
 
@@ -102,7 +103,7 @@ def ask_keys(environ: Mapping[str, str], env_file: Path, ask: Ask, *, keys=None,
 def default_model(environ: Mapping[str, str]) -> tuple[str | None, bool]:
     """The `MODEL` js starts with outside a project (~/.js/jsrc under the
     environment), and whether it routes to a provider."""
-    settings = settings_mod.collect_settings([paths.global_config_file()], env=dict(environ))
+    settings = setting_layers.collect_settings([paths.global_config_file()], env=dict(environ))
 
     def knob(key: str) -> Any:
         return settings_mod.knob(settings, key)

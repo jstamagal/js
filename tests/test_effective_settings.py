@@ -13,7 +13,7 @@ from dataclasses import replace
 
 from repl_driver import record_turns, run_async
 
-from js import cli, jsrc_save, messages as msgs, repl_commands, setcmd, settings
+from js import cli, jsrc_save, messages as msgs, repl_commands, setcmd, setting_layers, settings
 from js.config import Config
 from js.sampling import Sampling
 
@@ -165,7 +165,7 @@ def test_save_round_trip_reproduces_the_values_it_is_given(tmp_path):
 
     jsrc_save.save_settings_to_jsrc(path, store, keys=["MODEL", "PROVIDER", "BASE_URL", "API_KEY", "TEMPERATURE"])
 
-    reloaded = settings.collect_settings(config_paths=[path], env={})
+    reloaded = setting_layers.collect_settings(config_paths=[path], env={})
     for key in (
         "MODEL",
         "PROVIDER",
@@ -188,6 +188,6 @@ def test_save_after_logout_keeps_provider_settings_cleared(tmp_path, monkeypatch
     run_async(monkeypatch, cfg, ["/logout", "/save"], live_settings=copy.deepcopy(store))
 
     assert turns == []
-    reloaded = settings.collect_settings(config_paths=[cli._paths.global_config_file()], env={})
+    reloaded = setting_layers.collect_settings(config_paths=[cli._paths.global_config_file()], env={})
 
     assert all(settings.knob(reloaded, key) is None for key in ("PROVIDER", "BASE_URL", "API_KEY"))

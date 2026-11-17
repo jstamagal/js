@@ -5,7 +5,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import listings, paths, persona, settings, skills
+from . import listings, paths, persona, setting_layers, settings, skills
 from .toolkit import policy
 
 
@@ -53,7 +53,7 @@ def verify(agent: str | None = None) -> list[str]:
         for path in sorted(configs):
             if path.is_file():
                 def validate_config(path=path):
-                    errors.extend(settings.load_jsrc_files([path], settings.seed_defaults()))
+                    errors.extend(setting_layers.load_jsrc_files([path], settings.seed_defaults()))
                 check(path, validate_config)
         agent_ids = paths.agent_names(roots)
 

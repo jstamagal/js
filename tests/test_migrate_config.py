@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from js import cli, migrate_config
+from js import cli, migrate_config, setting_layers
 
 
 def test_migrate_no_legacy_returns_1(tmp_path, monkeypatch):
@@ -54,7 +54,7 @@ def test_no_old_env_name_is_an_env_name_js_reads_now():
     from js import settings
     from js.rename import RENAMED_ENV
 
-    current = {settings.canonical_env_name(spec.key) for spec in settings.REGISTRY}
+    current = {setting_layers.canonical_env_name(spec.key) for spec in settings.REGISTRY}
     assert sorted(current & set(RENAMED_ENV)) == []
 
 
@@ -66,7 +66,7 @@ def _load(path):
     from js import settings
 
     loaded = settings.seed_defaults()
-    return loaded, settings.load_jsrc_files([path], loaded)
+    return loaded, setting_layers.load_jsrc_files([path], loaded)
 
 
 def test_a_new_names_jsrc_that_mentions_an_old_name_is_left_as_it_is(tmp_path):

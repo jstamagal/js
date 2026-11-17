@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from js import output, stream_transport
+from js import output, setting_layers, stream_transport
 
 
 def test_network_fallback_emits_an_event_before_rendering(capsys):
@@ -183,8 +183,8 @@ def test_invalid_environment_setting_emits_a_warning(capsys):
 
     events = []
     with output.using_sink(SimpleNamespace(emit=events.append)):
-        assert settings.env_value(settings.SPEC_BY_KEY["RETRY_COUNT_MAX"],
-                                  {"JS_RETRY_COUNT_MAX": "invalid"}, warn=True) is None
+        assert setting_layers.env_value(settings.SPEC_BY_KEY["RETRY_COUNT_MAX"],
+                                        {"JS_RETRY_COUNT_MAX": "invalid"}, warn=True) is None
     assert len(events) == 1
     assert dict(events[0].fields)["fields"]["name"] == "JS_RETRY_COUNT_MAX"
     assert capsys.readouterr() == ("", "")

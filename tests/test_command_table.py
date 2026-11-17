@@ -9,7 +9,7 @@ from pathlib import Path
 
 from repl_driver import output_of, record_turns, repl_state, run_async, type_into_js
 
-from js import cli, paths, repl, repl_commands, settings
+from js import cli, paths, repl, repl_commands, setting_layers, settings
 from js.config import from_env, jsrc_paths
 from js.memory import append_message
 from js.repl_state import ReplAssembly
@@ -134,7 +134,7 @@ def test_settings_in_a_jsrc_loaded_file_apply_at_config_load(tmp_path):
     (tmp_path / "sub" / "extra.irc").write_text("load ../more.irc\n", encoding="utf-8")
     (tmp_path / "more.irc").write_text("set COMPACTION_AUTO off\n", encoding="utf-8")
 
-    live = settings.collect_settings(config_paths=[jsrc], env={})
+    live = setting_layers.collect_settings(config_paths=[jsrc], env={})
 
     assert settings.get_dotted(live, ("COMPACTION_AUTO",)) is False
 

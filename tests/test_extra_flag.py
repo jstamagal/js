@@ -2,13 +2,13 @@
 
 ``--extra`` sets a dotted config key for one run. It sits at the TOP of the
 precedence stack (built-in defaults < jsrc files < env vars < --extra; see
-``js/settings.py:15`` and ``js/settings.py:57``), so it wins over both env and
+the ``js/setting_layers.py`` docstring), so it wins over both env and
 the jsrc files. Most right-hand sides are coerced int -> float -> bool/null ->
-str by ``js.settings.coerce_extra_value``; exact registered keys use shared
+str by ``js.setting_layers.coerce_extra_value``; exact registered keys use shared
 setting coercion so ``--extra`` matches ``set`` and env/default loading.
 
-These exercise the real load path: the focused ``settings.collect_settings`` /
-``settings.parse_extra_arg`` unit and the integrated ``js.config.from_env``
+These exercise the real load path: the focused ``setting_layers.collect_settings`` /
+``setting_layers.parse_extra_arg`` unit and the integrated ``js.config.from_env``
 (the same call ``js/cli.py`` makes with the command line's ``InvocationSources``).
 """
 
@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from js import settings
+from js import setting_layers, settings
 from js.config import InvocationSources, from_env
 
 
@@ -37,11 +37,11 @@ def _env_dirs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Pa
 
 
 # ---------------------------------------------------------------------------
-# parse_extra_arg: dotted key + type coercion (js/settings.py:342)
+# parse_extra_arg: dotted key + type coercion (js/setting_layers.py)
 # ---------------------------------------------------------------------------
 
 def test_parse_extra_arg_splits_dotted_key_and_coerces_int():
-    path, value = settings.parse_extra_arg("SUBAGENT_DEPTH_MAX=3")
+    path, value = setting_layers.parse_extra_arg("SUBAGENT_DEPTH_MAX=3")
 
     assert path == ("SUBAGENT_DEPTH_MAX",)
     assert value == 3
@@ -50,11 +50,11 @@ def test_parse_extra_arg_splits_dotted_key_and_coerces_int():
 
 def test_parse_extra_arg_coerces_registered_values():
     # Exact registered keys use registry coercion, including string/null semantics.
-    assert settings.parse_extra_arg("COMPACTION_CHARS_PER_TOKEN=4.5")[1] == 4.5
-    assert settings.parse_extra_arg("TRACE=off")[1] is False
-    assert settings.parse_extra_arg("DEBUG_LOG=on")[1] is True
-    assert settings.parse_extra_arg("COMPACTION_HINT_COMMAND=null")[1] == "null"
-    assert settings.parse_extra_arg("MODEL=some-model")[1] == "some-model"
+    assert setting_layers.parse_extra_arg("COMPACTION_CHARS_PER_TOKEN=4.5")[1] == 4.5
+    assert setting_layers.parse_extra_arg("TRACE=off")[1] is False
+    assert setting_layers.parse_extra_arg("DEBUG_LOG=on")[1] is True
+    assert setting_layers.parse_extra_arg("COMPACTION_HINT_COMMAND=null")[1] == "null"
+    assert setting_layers.parse_extra_arg("MODEL=some-model")[1] == "some-model"
 
 
 @pytest.mark.parametrize(
@@ -64,14 +64,14 @@ def test_parse_extra_arg_coerces_registered_values():
 def test_extra_registered_scalar_keys_use_registry_validation(raw):
     key = raw.split("=", 1)[0]
     with pytest.raises(ValueError, match=re.escape(key)):
-        settings.parse_extra_arg(raw)
+        setting_layers.parse_extra_arg(raw)
 
 
 @pytest.mark.parametrize("word", ["off", "spoon", "High"])
 def test_extra_reasoning_effort_keeps_the_word_as_typed(monkeypatch, tmp_path, word):
     _env_dirs(monkeypatch, tmp_path)
 
-    path, value = settings.parse_extra_arg(f"EFFORT={word}")
+    path, value = setting_layers.parse_extra_arg(f"EFFORT={word}")
     cfg = from_env(save_session=False, sources=InvocationSources(extras=(f"EFFORT={word}",)))
 
     assert path == ("EFFORT",)
@@ -84,7 +84,7 @@ def test_extra_provider_extra_json_uses_registry_map_coercion(monkeypatch, tmp_p
     raw = 'EXTRA_PARAMS={"extra_body":{"probe":true},"mode":"fast"}'
     expected = {"extra_body": {"probe": True}, "mode": "fast"}
 
-    path, value = settings.parse_extra_arg(raw)
+    path, value = setting_layers.parse_extra_arg(raw)
     cfg = from_env(save_session=False, sources=InvocationSources(extras=(raw,)))
 
     assert path == ("EXTRA_PARAMS",)
@@ -96,14 +96,14 @@ def test_extra_provider_extra_rejects_non_object_json():
     raw = 'EXTRA_PARAMS=["extra_body"]'
 
     with pytest.raises(ValueError, match=r"EXTRA_PARAMS"):
-        settings.parse_extra_arg(raw)
+        setting_layers.parse_extra_arg(raw)
 
 
 def test_extra_provider_extra_subkeys_use_generic_coercion(monkeypatch, tmp_path):
     _env_dirs(monkeypatch, tmp_path)
     raw = "EXTRA_PARAMS.live_flag=true"
 
-    path, value = settings.parse_extra_arg(raw)
+    path, value = setting_layers.parse_extra_arg(raw)
     cfg = from_env(save_session=False, sources=InvocationSources(extras=(raw,)))
 
     assert path == ("EXTRA_PARAMS", "live_flag")
@@ -116,7 +116,7 @@ def test_extra_tools_alias_profiles_json_uses_registry_coercion(monkeypatch, tmp
     raw = 'TOOL_ALIASES=[{"match":["offline-test-model"],"aliases":{"read":"r"}}]'
     expected = [{"match": ["offline-test-model"], "aliases": {"read": "r"}}]
 
-    path, value = settings.parse_extra_arg(raw)
+    path, value = setting_layers.parse_extra_arg(raw)
     cfg = from_env(save_session=False, sources=InvocationSources(extras=(raw,)))
 
     assert path == ("TOOL_ALIASES",)
@@ -129,7 +129,7 @@ def test_extra_tools_alias_profiles_accepts_string_match(monkeypatch, tmp_path):
     raw = 'TOOL_ALIASES=[{"match":"offline-test-model","aliases":{"read":"r"}}]'
     expected = [{"match": "offline-test-model", "aliases": {"read": "r"}}]
 
-    path, value = settings.parse_extra_arg(raw)
+    path, value = setting_layers.parse_extra_arg(raw)
     cfg = from_env(save_session=False, sources=InvocationSources(extras=(raw,)))
 
     assert path == ("TOOL_ALIASES",)
@@ -141,7 +141,7 @@ def test_extra_tools_alias_profiles_rejects_non_list_json():
     raw = 'TOOL_ALIASES={"match":["offline-test-model"],"aliases":{"read":"r"}}'
 
     with pytest.raises(ValueError, match=r"TOOL_ALIASES"):
-        settings.parse_extra_arg(raw)
+        setting_layers.parse_extra_arg(raw)
 
 
 def test_extra_tools_alias_profiles_rejects_duplicate_alias_names():
@@ -151,7 +151,7 @@ def test_extra_tools_alias_profiles_rejects_duplicate_alias_names():
         ValueError,
         match=r"TOOL_ALIASES",
     ):
-        settings.parse_extra_arg(raw)
+        setting_layers.parse_extra_arg(raw)
 
 
 def test_extra_tools_alias_profiles_rejects_invalid_alias_names():
@@ -161,7 +161,7 @@ def test_extra_tools_alias_profiles_rejects_invalid_alias_names():
         ValueError,
         match=r"TOOL_ALIASES",
     ):
-        settings.parse_extra_arg(raw)
+        setting_layers.parse_extra_arg(raw)
 
 
 def test_extra_tools_alias_profiles_rejects_invalid_canonical_names():
@@ -171,22 +171,22 @@ def test_extra_tools_alias_profiles_rejects_invalid_canonical_names():
         ValueError,
         match=r"TOOL_ALIASES",
     ):
-        settings.parse_extra_arg(raw)
+        setting_layers.parse_extra_arg(raw)
 
 
 @pytest.mark.parametrize("raw", ["TOOL_ALIASES.foo=bar", "MODEL.foo=bar"])
 def test_extra_rejects_registered_non_map_subkeys(raw):
     with pytest.raises(ValueError, match=re.escape(raw.split("=", 1)[0])):
-        settings.parse_extra_arg(raw)
+        setting_layers.parse_extra_arg(raw)
 
 
 def test_parse_extra_arg_rejects_missing_eq_and_empty_sides():
     with pytest.raises(ValueError):
-        settings.parse_extra_arg("SUBAGENT_DEPTH_MAX")  # no '='
+        setting_layers.parse_extra_arg("SUBAGENT_DEPTH_MAX")  # no '='
     with pytest.raises(ValueError):
-        settings.parse_extra_arg("=3")  # empty key
+        setting_layers.parse_extra_arg("=3")  # empty key
     with pytest.raises(ValueError):
-        settings.parse_extra_arg("SUBAGENT_DEPTH_MAX=")  # empty value
+        setting_layers.parse_extra_arg("SUBAGENT_DEPTH_MAX=")  # empty value
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +197,7 @@ def test_collect_settings_extra_beats_env_and_jsrc_with_int_coercion(tmp_path):
     cfg = tmp_path / "jsrc"
     cfg.write_text("set SUBAGENT_DEPTH_MAX 1\n", encoding="utf-8")
 
-    out = settings.collect_settings(
+    out = setting_layers.collect_settings(
         config_paths=[cfg],
         env={"JS_TURN_ROUNDS_MAX": "9"},  # unrelated env, just present
         extras=["SUBAGENT_DEPTH_MAX=3"],
@@ -212,7 +212,7 @@ def test_collect_settings_extra_registered_keys_use_registry_coercion(tmp_path):
     cfg = tmp_path / "jsrc"
     cfg.write_text("set MODEL file-model\nset PROVIDER anthropic\n", encoding="utf-8")
 
-    out = settings.collect_settings(
+    out = setting_layers.collect_settings(
         config_paths=[cfg],
         env={"JS_MODEL": "env-model", "JS_PROVIDER": "deepseek"},
         extras=["MODEL=123", "PROVIDER=openai"],

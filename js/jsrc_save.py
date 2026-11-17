@@ -12,11 +12,11 @@ from pathlib import Path
 from typing import Any
 
 from . import fset, messages as msgs, setcmd
+from .setting_layers import apply_jsrc
 from .settings import (
     REGISTRY,
     SPEC_BY_KEY,
     SettingSpec,
-    apply_jsrc,
     config_value_text,
     jsrc_text,
     knob,

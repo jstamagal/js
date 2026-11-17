@@ -30,7 +30,7 @@ import json
 from dataclasses import replace
 from typing import Any
 
-from . import messages as msgs, settings as _settings
+from . import messages as msgs, setting_layers, settings as _settings
 from .sampling import SAMPLING_FIELDS, Sampling
 
 KEYS: tuple[str, ...] = (
@@ -160,7 +160,7 @@ def env_layer(env: Any) -> dict[str, Any]:
     out: dict[str, Any] = {}
     missing = object()
     for key in KEYS:
-        value = _settings.env_value(_settings.SPEC_BY_KEY[key], env, missing)
+        value = setting_layers.env_value(_settings.SPEC_BY_KEY[key], env, missing)
         if value is not missing:
             out[key] = value
     return out
@@ -172,7 +172,7 @@ def flag_layer(extras: tuple[str, ...]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for arg in extras:
         try:
-            path, value = _settings.parse_extra_arg(arg)
+            path, value = setting_layers.parse_extra_arg(arg)
         except ValueError:
             continue
         if len(path) == 1 and path[0] in KEYS:

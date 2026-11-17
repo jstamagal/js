@@ -54,6 +54,7 @@ persists each completed turn.
 | `js/repl_state.py` | the REPL's live state (`ReplState`), its assembly, and carrying live settings into the route and tool registry |
 | `js/config.py` | environment parsing, session reservation, model/provider caps, vision heuristic |
 | `js/settings.py` | the setting registry (`REGISTRY`, `SettingSpec`), the defaults/jsrc layer (`default_value`, `knob`), the live settings store (`live_value`) |
+| `js/setting_layers.py` | the config layers over defaults/jsrc (jsrc files, env vars, `--extra`) and their collection (`collect_settings`) |
 | `js/jsrc_save.py` | `/save`: the changed settings and /fset entries written into the user jsrc, in place (`save_settings_to_jsrc`) |
 | `js/turn_settings.py` | the settings a turn reads: one row each, projected from the settings store onto `Config` and `ToolContext` |
 | `js/model_client.py` | single import boundary for the Vercel AI Python SDK |

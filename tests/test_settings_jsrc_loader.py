@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from turn_driver import one_turn
 
-from js import jsrc_save, messages as msgs, runtime, session_store, settings
+from js import jsrc_save, messages as msgs, runtime, session_store, setting_layers, settings
 from js.config import Config, InvocationSources, from_env
 
 
@@ -60,7 +60,7 @@ def _build_config(
 
 
 def test_collect_settings_uses_built_in_default_when_no_file_or_env():
-    out = settings.collect_settings(config_paths=[], env={})
+    out = setting_layers.collect_settings(config_paths=[], env={})
     assert out["MODEL"] == settings.default_value("MODEL")
     assert out["TURN_ROUNDS_MAX"] == settings.default_value("TURN_ROUNDS_MAX")
     assert out["REPLY_TOOL_CALLS_MAX"] == settings.default_value("REPLY_TOOL_CALLS_MAX")
@@ -70,7 +70,7 @@ def test_collect_settings_reads_jsrc_set_lines(tmp_path):
     cfg = tmp_path / "jsrc"
     cfg.write_text("set MODEL file-model\n", encoding="utf-8")
 
-    out = settings.collect_settings(config_paths=[cfg], env={})
+    out = setting_layers.collect_settings(config_paths=[cfg], env={})
 
     assert out["MODEL"] == "file-model"
 
@@ -85,7 +85,7 @@ def test_save_preserves_disabled_reasoning(tmp_path):
 
     jsrc_save.save_settings_to_jsrc(path, store, keys=["EFFORT"])
 
-    loaded = settings.collect_settings([path], env={})
+    loaded = setting_layers.collect_settings([path], env={})
     assert loaded["EFFORT"] == store["EFFORT"] == "off"
 
 
@@ -99,7 +99,7 @@ def test_jsrc_rejects_registered_non_map_subkeys_without_mutating(tmp_path):
     live_settings = settings.seed_defaults()
     aliases_before = copy.deepcopy(live_settings.get("TOOL_ALIASES"))
 
-    warnings = settings.load_jsrc_files([cfg], live_settings)
+    warnings = setting_layers.load_jsrc_files([cfg], live_settings)
 
     assert warnings == [msgs.SCRIPT_LINE_FAILED.text(
         path=cfg, lineno=1, error=msgs.UNKNOWN_SETTING.text(key="TOOL_ALIASES.foo"))]
@@ -111,7 +111,7 @@ def test_collect_settings_applies_env_after_file(tmp_path):
     cfg = tmp_path / "jsrc"
     cfg.write_text("set MODEL file-model\n", encoding="utf-8")
 
-    out = settings.collect_settings(config_paths=[cfg], env={"JS_MODEL": "env-model"})
+    out = setting_layers.collect_settings(config_paths=[cfg], env={"JS_MODEL": "env-model"})
 
     assert out["MODEL"] == "env-model"
 
@@ -120,7 +120,7 @@ def test_collect_settings_cli_extras_win_over_env(tmp_path):
     cfg = tmp_path / "jsrc"
     cfg.write_text("set MODEL file-model\n", encoding="utf-8")
 
-    out = settings.collect_settings(
+    out = setting_layers.collect_settings(
         config_paths=[cfg],
         env={"JS_MODEL": "env-model"},
         extras=["MODEL=cli-model"],
@@ -139,7 +139,7 @@ def test_collect_settings_layers_global_project_and_local_jsrc(tmp_path):
     project_cfg.write_text("set MODEL project-model\nset TURN_ROUNDS_MAX 7\n", encoding="utf-8")
     local_cfg.write_text("set MODEL local-model\n", encoding="utf-8")
 
-    out = settings.collect_settings(config_paths=[global_cfg, project_cfg, local_cfg], env={})
+    out = setting_layers.collect_settings(config_paths=[global_cfg, project_cfg, local_cfg], env={})
 
     assert out["MODEL"] == "local-model"
     assert out["FETCH_TIMEOUT"] == 20
@@ -338,6 +338,6 @@ def test_loading_a_jsrc_with_old_names_leaves_it_as_written(tmp_path):
     path = tmp_path / "jsrc"
     original = "set model.id old-model\n"
     path.write_text(original)
-    settings.collect_settings(config_paths=[path], env={})
+    setting_layers.collect_settings(config_paths=[path], env={})
     assert path.read_text() == original
     assert list(tmp_path.glob("jsrc.*")) == []

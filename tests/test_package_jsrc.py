@@ -16,7 +16,7 @@ import pytest
 from repl_driver import output_of, record_turns, type_into_js
 from turn_driver import one_turn
 
-from js import cli, jsrc_save, setcmd, settings
+from js import cli, jsrc_save, setcmd, setting_layers, settings
 from js.config import Config, from_env
 from js.toolkit import ToolContext, python_kernel
 
@@ -50,7 +50,7 @@ def _isolated_home(monkeypatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     for spec in settings.REGISTRY:
-        for name in settings.env_names_for(spec):
+        for name in setting_layers.env_names_for(spec):
             monkeypatch.delenv(name, raising=False)
     return project
 
@@ -220,7 +220,7 @@ def test_save_uncomments_changed_settings_in_place_and_leaves_the_rest(tmp_path)
         f"#set FETCH_TIMEOUT {settings.default_value('FETCH_TIMEOUT')}": "set FETCH_TIMEOUT 77",
         "#set -PROVIDER": "set PROVIDER deepseek",
     }
-    assert settings.collect_settings(config_paths=[target], env={}) == live
+    assert setting_layers.collect_settings(config_paths=[target], env={}) == live
     assert [path.name for path in tmp_path.glob("jsrc*")] == ["jsrc"]
 
 
@@ -374,5 +374,5 @@ def test_collect_settings_can_preserve_operator_formats():
     settings.seed_defaults()
     fset.set_entry("MODEL_SET", "custom")
     before = dict(fset.overrides())
-    settings.collect_settings(config_paths=[], env={}, reset_formats=lambda: None)
+    setting_layers.collect_settings(config_paths=[], env={}, reset_formats=lambda: None)
     assert dict(fset.overrides()) == before

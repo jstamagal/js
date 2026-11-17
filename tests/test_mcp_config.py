@@ -5,7 +5,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from js import jsrc_save, mcp_config, messages as msgs, setcmd, settings
+from js import jsrc_save, mcp_config, messages as msgs, setcmd, setting_layers, settings
 from js.config import InvocationSources, from_env
 
 ENV_SECRET = "MCP_ENV_SENTINEL_DO_NOT_PRINT"
@@ -127,7 +127,7 @@ def test_save_round_trips_actual_secret_server_configuration(tmp_path):
 
     jsrc_save.save_settings_to_jsrc(path, live, keys=["MCP_SERVERS"])
     saved = path.read_text(encoding="utf-8")
-    reloaded = settings.collect_settings(config_paths=[path], env={})
+    reloaded = setting_layers.collect_settings(config_paths=[path], env={})
 
     assert ENV_SECRET in saved and HEADER_SECRET in saved
     assert reloaded["MCP_SERVERS"] == _servers()

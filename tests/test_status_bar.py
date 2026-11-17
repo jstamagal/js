@@ -19,6 +19,7 @@ from js import (
     runtime,
     screen,
     setcmd,
+    setting_layers,
     settings,
 )
 from js.config import Config
@@ -208,5 +209,5 @@ def test_status_colour_survives_save_and_load(tmp_path):
     fset.reset()
 
     reloaded = settings.seed_defaults()
-    assert settings.load_jsrc_files([path], reloaded) == []
+    assert setting_layers.load_jsrc_files([path], reloaded) == []
     assert fset.hex_for("COLOR_STATUS_BACKGROUND") == "#000000"

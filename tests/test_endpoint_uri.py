@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from js import cli, console, logins, run_assembly, runtime, settings
+from js import cli, console, logins, run_assembly, runtime, setting_layers
 from js.config import from_env
 from js.endpoint_uri import DUMMY_KEY, EndpointSpecError, from_env as endpoint_from_env, parse
 from js.logins import Login
@@ -274,8 +274,8 @@ def test_js_base_url_contradictions_name_both_and_exit_2(monkeypatch, capsys, en
 
 
 def test_an_unreadable_js_base_url_is_skipped_by_the_env_layer(monkeypatch):
-    collected = settings.apply_env_overrides({"BASE_URL": "http://jsrc/v1"},
-                                             env={"JS_BASE_URL": "bogus+http://m@h/v1"})
+    collected = setting_layers.apply_env_overrides({"BASE_URL": "http://jsrc/v1"},
+                                                   env={"JS_BASE_URL": "bogus+http://m@h/v1"})
     assert collected["BASE_URL"] == "http://jsrc/v1"
 
 

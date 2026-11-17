@@ -43,6 +43,7 @@ from . import (
     session_catalog,
     session_store,
     setcmd,
+    setting_layers,
     settings,
     snippets,
     stats,
@@ -107,7 +108,7 @@ def _prompt_hooks(cfg: Config, paths: list[Path]) -> events.EventHooks:
     `on` line that registers no handler, one whose command needs the REPL
     among them, is reported on stderr."""
     hooks = events.EventHooks(_standalone_dispatcher(cfg), admit=_admit_standalone)
-    for path, lineno, line in settings.jsrc_commands(paths):
+    for path, lineno, line in setting_layers.jsrc_commands(paths):
         parsed = setcmd.split_command(line)
         if parsed is not None and parsed[0] == "on" and (error := setcmd.on_command(hooks, parsed[1]).error):
             msgs.warn(msgs.SCRIPT_LINE_FAILED, path=path, lineno=lineno, error=error)

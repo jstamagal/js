@@ -17,7 +17,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import events as _events, fset as _fset, messages as msgs, settings as _s
+from . import events as _events, fset as _fset, messages as msgs, setting_layers, settings as _s
 
 
 @dataclass
@@ -234,7 +234,7 @@ def apply_set(settings: dict, key: str, raw: str, *, banner_changed=None, column
         # setting (`from_line_literal`); anything else is read loosely.
         text = raw.strip()
         decoded = _s.from_line_literal(text)
-        value = decoded if decoded != text else _s.coerce_extra_value(raw)
+        value = decoded if decoded != text else setting_layers.coerce_extra_value(raw)
         _s.set_dotted(settings, path, value)
         return CommandResult(
             handled=True,

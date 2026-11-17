@@ -7,7 +7,7 @@ from __future__ import annotations
 import io
 import sys
 
-from js import fset, jsrc_save, messages as msgs, repl_commands, settings
+from js import fset, jsrc_save, messages as msgs, repl_commands, setting_layers, settings
 
 
 def test_the_startup_run_of_the_jsrc_leaves_a_model_flag_in_charge(monkeypatch, tmp_path):
@@ -42,8 +42,8 @@ def test_the_startup_run_of_the_jsrc_leaves_a_resumed_session_s_effort_in_charge
 def test_collecting_the_config_twice_does_not_compound_fset_entries(tmp_path):
     path = tmp_path / "jsrc"
     path.write_text("fset MARK_AGENT $MARK_AGENT>\n", encoding="utf-8")
-    settings.collect_settings(config_paths=[path], env={})
-    settings.collect_settings(config_paths=[path], env={})
+    setting_layers.collect_settings(config_paths=[path], env={})
+    setting_layers.collect_settings(config_paths=[path], env={})
     assert fset.lookup("MARK_AGENT") == "●>"
 
 
@@ -84,7 +84,7 @@ def test_save_puts_a_changed_line_after_a_load_that_would_override_it(tmp_path):
     jsrc_save.save_settings_to_jsrc(path, live, keys=["BANNER"], fset_names=["THEME"])
     fset.reset()
     loaded = settings.seed_defaults()
-    settings.load_jsrc_files([path], loaded)
+    setting_layers.load_jsrc_files([path], loaded)
     assert fset.theme_name() == "paper" and settings.knob(loaded, "BANNER") == "-!-"
 
 

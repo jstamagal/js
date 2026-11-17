@@ -17,6 +17,7 @@ from . import (
     providers as _providers,
     routing as _routing,
     session_store as _session_store,
+    setting_layers,
     settings as _settings,
     turn_settings as _turn_settings,
 )
@@ -379,8 +380,8 @@ def run_settings(cwd: Path | None = None, *, sources: InvocationSources | None =
     paths = jsrc_paths((cwd or Path.cwd()).resolve(strict=False), sources)
     if held:
         with _fset.held():
-            return _settings.collect_settings(config_paths=paths, extras=sources.extras)
-    return _settings.collect_settings(config_paths=paths, extras=sources.extras)
+            return setting_layers.collect_settings(config_paths=paths, extras=sources.extras)
+    return setting_layers.collect_settings(config_paths=paths, extras=sources.extras)
 
 
 def jsrc_paths(project_dir: Path, sources: InvocationSources = InvocationSources()) -> list[Path]:
@@ -423,9 +424,9 @@ def resolve_agent_id(
 def _set_by_invocation(key: str, env: Mapping[str, str], extras: tuple[str, ...]) -> bool:
     """True when a JS_* env var or a --extra argument sets ``key`` for this run."""
     spec = _settings.SPEC_BY_KEY[key]
-    if any(name in env for name in _settings.env_names_for(spec)):
+    if any(name in env for name in setting_layers.env_names_for(spec)):
         return True
-    return any(tuple(_settings.parse_extra_arg(arg)[0]) == tuple(spec.path) for arg in extras)
+    return any(tuple(setting_layers.parse_extra_arg(arg)[0]) == tuple(spec.path) for arg in extras)
 
 
 @dataclass(frozen=True)
@@ -462,7 +463,7 @@ def from_env(
       `DEEPSEEK_API_KEY` works without `js --login`.
     """
     assembly = assembly or ConfigAssembly()
-    collect = _settings.collect_settings if assembly.collect is None else assembly.collect
+    collect = setting_layers.collect_settings if assembly.collect is None else assembly.collect
     set_banner = msgs.set_banner if assembly.set_banner is None else assembly.set_banner
     bind_formats = _fset.bind_settings if assembly.bind_formats is None else assembly.bind_formats
     resolve_route = _routing.resolve_model_route if assembly.resolve_route is None else assembly.resolve_route
@@ -488,7 +489,7 @@ def from_env(
     raw_model = _settings.get_dotted(js_root_settings, ("MODEL",)) or default_model
     # Any env name that feeds MODEL makes the model invocation-explicit.
     invocation_explicit_model = any(
-        env.get(name) for name in _settings.env_names_for(_settings.SPEC_BY_KEY["MODEL"]))
+        env.get(name) for name in setting_layers.env_names_for(_settings.SPEC_BY_KEY["MODEL"]))
     explicit_model = _set_by_invocation("MODEL", env, sources.extras) or raw_model != default_model
     _cfg_provider_id = _settings.get_dotted(js_root_settings, ("PROVIDER",))
     explicit_provider = _cfg_provider_id is not None
