@@ -5,6 +5,7 @@ from pathlib import Path
 import ai
 import ai.types.usage
 import pytest
+from turn_driver import run
 
 from js import persona, runtime
 from js.config import Config
@@ -254,20 +255,14 @@ def test_runtime_omits_tools_when_agent_selection_is_empty(monkeypatch, tmp_path
     assert messages[-1] == {"role": "assistant", "content": "NO_TOOLS_OK"}
 
 
-def test_runtime_dispatch_rejects_unselected_tool_cleanly(tmp_path):
+def test_runtime_dispatch_rejects_unselected_tool_cleanly(tmp_path, monkeypatch):
     registry = select(["plan:lazy"])
     (tmp_path / "note.txt").write_text("unselected tool must not read this", encoding="utf-8")
     context = ToolContext(cwd=tmp_path)
 
-    _, result = runtime._dispatch(
-        "read",
-        '{"file_path":"note.txt"}',
-        runtime.Telemetry(None),
-        cap_bytes=4096,
-        registry=registry,
-        tool_context=context,
-    )
+    turn = run(tmp_path, monkeypatch, registry, [[("c1", "read", '{"file_path":"note.txt"}')]], context=context)
 
+    result = turn.results()["c1"]
     assert result.startswith("ERROR:")
     assert "read" in result
     assert "unselected tool must not read this" not in result
