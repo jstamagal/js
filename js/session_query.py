@@ -47,7 +47,6 @@ _VIEW_NAMES = {"flat": msgs.SESSIONS_VIEW_FLAT, "dir": msgs.SESSIONS_VIEW_DIR, "
 _GLOB = re.compile(r"[*?\[]")
 _COUNT = re.compile(r"(>=|<=|>|<|=)(\d+)")
 _DAY = re.compile(r"(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?")
-_DATE_WORDS = ("today", "yesterday", "week")
 _FILTERS = ("agent", "dir", "mode", "model")
 _TOKEN = re.compile(r'"([^"]*)"?|(\S+)')
 
