@@ -284,7 +284,10 @@ def test_http_reasoning_streams_on_screen_before_answer_and_survives_collapse(mo
             yield sse({"role": "assistant", "reasoning_content": THOUGHT})
             await asyncio.sleep(0)
             visible = transcript.strip_ansi(scroll.buffer.text)
-            received_before_answer.append(THOUGHT in visible and "answer" not in visible)
+            # A mock transport may iterate the body again after the response
+            # ends; only the pass the turn streamed from counts.
+            if not received_before_answer:
+                received_before_answer.append(THOUGHT in visible and "answer" not in visible)
             yield sse({"content": "answer"})
             yield sse({}, "stop") + b"data: [DONE]\n\n"
 

@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "js"
-version = "0.2.3"
+version = "0.2.4"
 description = "Personal terminal LLM harness with hacking tools"
 requires-python = ">=3.12"
 dependencies = [
-    "ai[openai,anthropic]>=0.5.2",
-    "openai>=3.13.0",
-    "anthropic>=1.5.0",
+    "ai[openai,anthropic]>=0.9.0",
+    "openai>=3.52.0",
+    "anthropic>=1.17.0",
     "httpx>=0.28.1",
     "pexpect>=4.9.0",
     "prompt_toolkit>=3.0",
@@ -19,10 +19,10 @@ dependencies = [
     "rich>=13.0",
     "tomli_w>=1.0",
     # Core tool argument validation; referencing brings native rpds-py.
-    "jsonschema>=4.25.1",
-    "httpx2>=2.12.0",
+    "jsonschema>=4.26.0",
+    "httpx2>=2.16.2",
     # The jev tool.
-    "typesafe-sdk>=0.7.2",
+    "typesafe-sdk>=0.7.5",
     "markdown-it-py>=3.0",
 ]
 
@@ -36,7 +36,7 @@ vision = [
 ]
 browser = [
     "js[vision]",
-    "playwright>=1.61.0",
+    "playwright>=1.65.2",
 ]
 test = [
     "js[kernel,vision,browser]",
@@ -70,11 +70,7 @@ markers = [
 # venv PATH and js agents can call it through the shell tool directly.
 [dependency-groups]
 dev = [
-    # 0.16 turned on opinion rules by default (BLE001 blind-except, TRY004,
-    # S110 try-except-pass, PLW1510 subprocess check) plus I001 import sorting:
-    # 282 hits on unchanged code, none of them defects. This repo's gate is
-    # defaults + UP. Raise the bound deliberately, with the cleanup.
-    "ruff>=0.15,<0.16",
+    "ruff>=0.16",
 ]
 
 [tool.ruff]
@@ -84,5 +80,6 @@ line-length = 100
 exclude = [".scratch"]
 
 [tool.ruff.lint]
-# defaults already cover E (errors) + F (pyflakes); add pyupgrade.
-extend-select = ["UP"]
+# The rule set is named here, not left to ruff's defaults, so a ruff upgrade
+# does not change what the gate checks: errors, pyflakes, pyupgrade.
+select = ["E4", "E7", "E9", "F", "UP"]

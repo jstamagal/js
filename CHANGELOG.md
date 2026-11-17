@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Dependencies bumped; ruff is no longer held back.**
+  - The lock moves to current releases, including:
+    - ai 0.5.2 → 0.9.0
+    - openai 3.13 → 3.52
+    - anthropic 1.5 → 1.17
+    - httpx2 2.12 → 2.16
+    - pydantic 2.13 → 2.14
+    - Pillow 12 → 13
+    - playwright 1.62 → 1.65
+  - The declared floors follow the locked versions.
+  - The `ruff<0.16` cap is gone. The lint rule set is now named in
+    `[tool.ruff.lint] select` (E4, E7, E9, F, UP), so a ruff upgrade does not
+    change what the gate checks.
+  - `test_dependency_contract` compared versions as strings
+    (`"1.17.0" >= "1.5.0"` is false); it now compares release numbers.
+
 - **Codex and xAI OAuth logins are removed.** js no longer has an OAuth login
   of any kind. Gone:
   - the `openai-codex` provider (with its `openai-codex-device` and `codex`
