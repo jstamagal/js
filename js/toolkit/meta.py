@@ -372,7 +372,7 @@ async def _run_one_task_async(
     model: str = "",
     reasoning: str = "",
 ) -> str:
-    from .. import agent_messages, persona as P, routing
+    from .. import agent_messages, persona as P, run_assembly
     from ..conversation import Conversation
     from ..runtime import Telemetry
 
@@ -385,11 +385,11 @@ async def _run_one_task_async(
     task_session_id = global_session_id
     # Validate before reserving a session or changing its latest pointer.
     try:
-        prompt_spec = P.load_configured_prompt_spec(replace(
+        prompt_spec = run_assembly.load_spec(replace(
             parent_cfg, agent_id=agent,
             prompts_dir=paths.agent_dirs(agent, P.config_roots(parent_cfg)),
-        ), expand=False)
-    except (FileNotFoundError, ValueError) as exc:
+        ))
+    except run_assembly.RunNotSettled as exc:
         return f"ERROR could not load agent {agent!r}: {exc}"
 
     cfg = _agent_cfg(parent_cfg, agent, task_session_id, write_latest=assembly.write_latest)
@@ -408,20 +408,11 @@ async def _run_one_task_async(
     else:
         chosen = parent_cfg.model
     if chosen and chosen != cfg.model:
-        route = routing.resolve_model_route(
-            chosen,
-            configured_provider_id=cfg.provider_id,
-            configured_base_url=cfg.provider_base_url,
-            configured_api_key=cfg.provider_api_key,
-            configured_headers=getattr(cfg, "provider_headers", {}),
-            explicit_model=True,
-            prefix_overrides_provider=not getattr(cfg, "explicit_provider", False),
-        )
-        cfg = routing.apply_route(cfg, route)
+        cfg = run_assembly.route(cfg, chosen)
     try:
         # The child's tools and persona follow its own model, not the parent's.
-        prompt_spec = P.for_model(prompt_spec, cfg)
-    except (FileNotFoundError, ValueError) as exc:
+        prompt_spec = run_assembly.for_model(prompt_spec, cfg)
+    except run_assembly.RunNotSettled as exc:
         return f"ERROR could not load agent {agent!r}: {exc}"
     # The child's own model and agent.yaml settle its login-default settings;
     # what its agent.yaml leaves out it takes from the parent's agent. An
@@ -448,7 +439,7 @@ async def _run_one_task_async(
         # The tool call's reasoning wins, as its model does.
         cfg = replace(cfg, reasoning_effort=reasoning)
     with _worker_session(Path(cfg.session_file)):
-        prompt_spec = P._expand_spec(prompt_spec, cfg)
+        prompt_spec = run_assembly.expand(prompt_spec, cfg)
 
         registry = full_registry.select(prompt_spec.tool_selectors, agent_id=agent)
         system = prompt_spec.system
