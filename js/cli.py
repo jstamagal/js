@@ -4570,10 +4570,8 @@ def _json_run_requested(args: argparse.Namespace) -> bool:
 
 
 def _agents_listing() -> list[str]:
-    roots = _paths.layers()
     names = set()
-    for root in roots:
-        directory = root / "agents"
+    for directory in _paths.agent_roots():
         if directory.is_dir():
             names.update(path.name for path in directory.iterdir() if path.is_dir())
     return sorted(names)
@@ -4820,10 +4818,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
 
     try:
         automatic_agent = _invocation_agent(args, sources)
-        automatic_dir = P._most_specific_prompt_dir(
-            automatic_agent, _paths.defaults_dir() / "agents",
-            _paths.global_agents_dir(), _paths.project_home() / "agents",
-        )
+        automatic_dir = P._most_specific_prompt_dir(automatic_agent, *_paths.agent_roots())
     except (ValueError, OSError) as exc:
         msgs.warn(msgs.FAILED, error=exc)
         return 2

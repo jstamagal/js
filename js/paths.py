@@ -92,6 +92,13 @@ def layers() -> tuple[Path, ...]:
     return tuple(dict.fromkeys((defaults_dir(), home(), project_home())))
 
 
+def agent_roots(cwd: Path | None = None) -> tuple[Path, ...]:
+    """Each layer's agents directory, lowest first: stock, home, project.
+    The home and project entries are one directory when js runs in the
+    directory that holds the home."""
+    return defaults_dir() / "agents", global_agents_dir(), project_home(cwd) / "agents"
+
+
 def _file_layers(rel: str | Path) -> tuple[Path, ...]:
     path = Path(rel)
     if path.is_absolute() or ".." in path.parts:

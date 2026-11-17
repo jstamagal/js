@@ -45,18 +45,14 @@ _PLAIN_ENTRY = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_*?:.\-]*$")
 Keep = Callable[[str], bool]
 
 
-def repo_prompts_dir() -> Path:
-    return paths.defaults_dir() / "agents"
-
-
 def default_roots(*roots: Path) -> tuple[Path, ...]:
-    """The repo prompts, the global agents dir, the project agents dir of the
-    working directory, then `roots`, each once (by resolved path). These are the
+    """Every layer's agents directory for the working directory
+    (`paths.agent_roots`), then `roots`, each once (by resolved path). These are the
     roots `Config.prompt_roots` loads agents from, so an entry naming a
     project-local agent is not pruned as dead."""
     ordered: list[Path] = []
     seen: set[Path] = set()
-    for root in (repo_prompts_dir(), paths.global_agents_dir(), paths.project_home() / "agents", *roots):
+    for root in (*paths.agent_roots(), *roots):
         key = root.resolve(strict=False)
         if key not in seen:
             seen.add(key)

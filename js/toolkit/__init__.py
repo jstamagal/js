@@ -10,7 +10,7 @@ STOCK_CONTEXT = ToolContext()
 
 def stock_registry() -> ToolRegistry:
     """Resolve the fallback tool surface after the invocation selects its home."""
-    return registry_for_roots(tuple(root / "agents" for root in paths.layers()))
+    return registry_for_roots(paths.agent_roots())
 
 __all__ = [
     "STOCK_CONTEXT",

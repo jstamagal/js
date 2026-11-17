@@ -582,8 +582,7 @@ def from_env(
     project_instruction_files = tuple(project_dir / name for name in _settings.knob(js_root_settings, "PROJECT_INSTRUCTION_FILES"))
     bind_formats(js_root_settings)
 
-    prompt_roots = assembly.prompt_roots if assembly.prompt_roots is not None else (
-        _paths.defaults_dir() / "agents", _paths.global_agents_dir(), _paths.project_home(project_dir) / "agents")
+    prompt_roots = assembly.prompt_roots if assembly.prompt_roots is not None else _paths.agent_roots(project_dir)
 
     return _login_defaults.for_turn(Config(
         agent_id=agent_id,

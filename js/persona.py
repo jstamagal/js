@@ -441,9 +441,7 @@ def load_configured_prompt_spec(cfg, *, expand: bool = True) -> PromptSpec:
         spec = PromptSpec(system=system, tool_selectors=())
         return _finish_configured_spec(replace(spec, model_profile=_profile_for(spec, cfg)), cfg, expand)
     if options.system_prompt_file is not None:
-        repo = roots[0] if roots else paths.defaults_dir() / 'agents'
-        global_root = roots[1] if len(roots) > 1 else paths.global_agents_dir()
-        manifest_roots = roots or (repo, global_root)
+        manifest_roots = roots or paths.agent_roots()[:2]
         files = _prompt_files(_agent_directories('defaultagent', manifest_roots))
         manifest = next((path for path in files if path.name == AGENT_MANIFEST), None)
         base = load_agent_manifest(manifest) if manifest else PromptSpec(system="", tool_selectors=())

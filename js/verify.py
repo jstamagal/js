@@ -11,7 +11,7 @@ def verify(agent: str | None = None) -> list[str]:
     errors: list[str] = []
     home = paths.home()
     project = Path.cwd()
-    roots = (paths.defaults_dir() / 'agents', paths.global_agents_dir(), paths.project_home(project) / 'agents')
+    roots = paths.agent_roots(project)
 
     def check(path, action):
         try:
