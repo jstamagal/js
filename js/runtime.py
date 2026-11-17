@@ -2138,8 +2138,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     results, so the caller can save it and a killed process keeps the turn.
 
     Provider overrides let the REPL /prompt mode switch endpoint without
-    reloading config; unset values fall back to the Config values. The sync
-    ``run_turn`` below wraps this for callers not yet on the async runtime.
+    reloading config; unset values fall back to the Config values.
     """
     if sampling is None:
         # The sampling of the model this turn runs, resolved like every other.
@@ -2309,14 +2308,3 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         turn_status.reset()
         if owns_mcp_host and mcp_host is not None:
             await mcp_host.close()
-
-
-def run_turn(*args, **kwargs) -> None:
-    """Sync wrapper over :func:`run_turn_async`: one turn on a loop of its own,
-    for a caller off the event loop. `messages` is mutated in place, so ^C
-    mid-turn leaves the partial work in it.
-    """
-    # The sync caller also resolves this window between turns, outside the
-    # task context the runner copies for the turn itself.
-    install_context_window_overrides(args[0] if args else kwargs["cfg"])
-    return model_client.run_owning_loop(run_turn_async(*args, **kwargs))

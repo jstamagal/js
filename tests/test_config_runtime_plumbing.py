@@ -6,6 +6,7 @@ from pathlib import Path
 import ai
 import ai.types.messages
 import ai.types.usage
+from turn_driver import one_turn
 
 from js import runtime, settings
 from js.config import Config, InvocationSources, from_env
@@ -118,7 +119,7 @@ def test_shell_env_allow_is_live_and_installed_on_the_tool_context(monkeypatch, 
     live_cfg = ReplState(settings=live_settings).config_for_turn(cfg)
     context = ToolContext(cwd=tmp_path)
 
-    runtime.run_turn(
+    one_turn(
         live_cfg,
         "system",
         [{"role": "user", "content": "hi"}],
@@ -138,7 +139,7 @@ def test_run_turn_copies_subagent_worker_limit_to_tool_context(monkeypatch, tmp_
     cfg = replace(_config(tmp_path), subagent_max_workers=3)
     context = ToolContext(cwd=tmp_path)
 
-    runtime.run_turn(
+    one_turn(
         cfg,
         "system",
         [{"role": "user", "content": "hi"}],

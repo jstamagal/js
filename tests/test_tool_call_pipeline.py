@@ -1,4 +1,4 @@
-"""What the model receives as a tool call's result, through `runtime.run_turn`.
+"""What the model receives as a tool call's result, through `runtime.run_turn_async`.
 
 A tool runs one of three ways: a sync handler on a worker thread, an async
 handler on the loop, or a fan-out handler (task / named agent) awaited on the

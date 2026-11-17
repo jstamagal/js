@@ -5,6 +5,7 @@ import stat
 from pathlib import Path
 
 import pytest
+from turn_driver import one_turn
 
 from js.toolkit import ToolContext, build_default_registry, call_tool, fs, undo
 
@@ -37,7 +38,7 @@ def test_turn_persists_undo_under_supplied_state_directory(tmp_path, monkeypatch
     ])
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kwargs: next(replies))
 
-    runtime.run_turn(
+    one_turn(
         cfg, "system", [{"role": "user", "content": "Remove note.txt"}], runtime.Telemetry(None),
         tool_registry=build_default_registry().select(["remove:eager"]),
         tool_context=context, state_dir=state_dir, suppress_output=True,

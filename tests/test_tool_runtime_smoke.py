@@ -8,7 +8,7 @@ import shutil
 import ai
 import pytest
 from tool_loading import after_loading
-from turn_driver import config as turn_config, registry as turn_registry, run as run_turn
+from turn_driver import config as turn_config, one_turn, registry as turn_registry, run as run_turn
 
 from js import (
     capped_process,
@@ -1189,7 +1189,7 @@ def test_run_turn_sends_image_once_and_persists_dehydrated_stub(tmp_path, monkey
             pass
 
     messages: list[dict] = [{"role": "user", "content": "what's in pixel.png?"}]
-    runtime.run_turn(cfg, "system", messages, _Tel())
+    one_turn(cfg, "system", messages, _Tel())
 
     # After discovery, image bytes appear only in the follow-up to the read.
     assert len(call_messages) == 2
@@ -1291,7 +1291,7 @@ def test_parallel_image_reads_keep_tool_results_contiguous(tmp_path, monkeypatch
     messages: list[dict] = [{"role": "user", "content": "what is in these images?"}]
     # after_loading runs the SDK's history check before the follow-up request:
     # a user FilePart between two tool results orphans the later ones.
-    runtime.run_turn(cfg, "system", messages, _Tel())
+    one_turn(cfg, "system", messages, _Tel())
 
     assert len(call_messages) == 2
     followup = call_messages[1]

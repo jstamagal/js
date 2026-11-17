@@ -15,6 +15,7 @@ from dataclasses import replace
 import ai
 import httpx2
 import pytest
+from turn_driver import one_turn
 
 from js import history_record, logins, memory, model_client, runtime
 from js.config import InvocationSources, from_env
@@ -426,7 +427,7 @@ def claude(monkeypatch, tmp_path):
 
 
 def _turn(cfg, messages, context, **kwargs):
-    runtime.run_turn(cfg, "SYSTEM", messages, runtime.Telemetry(None),
+    one_turn(cfg, "SYSTEM", messages, runtime.Telemetry(None),
                      tool_context=context, trace_override=False, suppress_output=True, **kwargs)
 
 

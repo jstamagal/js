@@ -8,7 +8,7 @@ from pathlib import Path
 
 from repl_driver import turn_stub
 from test_steering import _call, _cfg, _text
-from turn_driver import js
+from turn_driver import js, one_turn
 
 from js import cli, runtime, session_store
 from js.memory import load_messages
@@ -37,7 +37,7 @@ def test_checkpoint_runs_after_each_tool_batch_with_its_results(monkeypatch, tmp
     messages = [{"role": "user", "content": "go"}]
     seen: list[list[str]] = []
 
-    runtime.run_turn(
+    one_turn(
         _cfg(tmp_path), "SYS", messages, runtime.Telemetry(debug_log=None),
         tool_registry=registry, tool_context=ToolContext(cwd=tmp_path), suppress_output=True,
         checkpoint=lambda: seen.append([m["role"] for m in messages]),

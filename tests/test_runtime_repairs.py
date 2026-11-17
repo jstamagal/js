@@ -9,7 +9,7 @@ import json
 import ai
 import ai.types.messages
 import ai.types.usage
-from turn_driver import recording, registry as turn_registry, run
+from turn_driver import one_turn, recording, registry as turn_registry, run
 
 from js import runtime, tool_args
 from js.config import Config
@@ -85,7 +85,7 @@ def _run(monkeypatch, tmp_path, registry, replies, *, telemetry=None, seen=None,
 
     monkeypatch.setattr(runtime.model_client, "stream_model_async", stream_stub)
     messages = [{"role": "user", "content": "go"}]
-    runtime.run_turn(
+    one_turn(
         _config(tmp_path, settings), "system", messages, telemetry or runtime.Telemetry(None),
         trace_override=False, tool_context=ToolContext(cwd=tmp_path), suppress_output=True,
         tool_registry=registry,

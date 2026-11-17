@@ -6,6 +6,7 @@ import re
 
 import pytest
 from test_lazy_tool_discovery import _cfg, _result
+from turn_driver import one_turn
 
 from js import runtime
 from js.toolkit import ToolContext
@@ -149,7 +150,7 @@ def test_unloaded_tool_error_names_the_load_call_that_fixes_it(tmp_path, monkeyp
     registry = build_default_registry().select(['shell:lazy'])
     if called == 'Run':
         registry = registry.aliased({'shell': 'Run'})
-    runtime.run_turn(_cfg(tmp_path), 'system', messages, runtime.Telemetry(None),
+    one_turn(_cfg(tmp_path), 'system', messages, runtime.Telemetry(None),
                      tool_registry=registry, tool_context=ToolContext(cwd=tmp_path))
     results = {m['tool_call_id']: m['content'] for m in messages if m.get('role') == 'tool'}
     assert json.loads(results['load'])['id'] == 'native:shell'

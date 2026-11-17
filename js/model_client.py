@@ -1852,8 +1852,8 @@ def run_owning_loop(coro: Any) -> Any:
 def stream_model(*, retry_budget: retry.Budget | None = None, **kwargs: Any) -> ModelStreamResult:
     """Sync wrapper over :func:`stream_model_async` — spins a throwaway loop per
     call. This is the OLD blocking path; the non-blocking runtime calls
-    ``stream_model_async`` directly on its shared loop. Kept so un-migrated
-    callers (and the current sync run_turn) keep working during the transition.
+    ``stream_model_async`` directly on its shared loop. Kept for callers
+    off the loop.
 
     With ``retry_budget`` a retryable failure sends the request again under it;
     without one the first failure raises.

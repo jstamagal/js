@@ -9,7 +9,7 @@ import ai
 import pytest
 from ai.providers.openai.protocol import _messages_to_openai
 from repl_driver import run_async
-from turn_driver import js
+from turn_driver import js, one_turn
 
 from js import cli, history_record, memory, model_client, runtime
 from js.config import InvocationSources, from_env
@@ -64,7 +64,7 @@ def test_live_next_turn_retains_tool_free_reasoning(replay):
     for prompt in (None, "next"):
         if prompt is not None:
             messages.append({"role": "user", "content": prompt})
-        runtime.run_turn(
+        one_turn(
             cfg, "SYSTEM", messages, runtime.Telemetry(None),
             tool_context=context, trace_override=False, suppress_output=True,
         )

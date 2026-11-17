@@ -16,6 +16,7 @@ from test_runtime_offline_integration import (
     model_tool_call_result,
     offline_config,
 )
+from turn_driver import one_turn
 
 from js import cli, compaction, events, hookexec, repl_commands, runtime, settings
 from js.memory import load_messages
@@ -229,7 +230,7 @@ def _run_one_tool_call(tmp_path, state) -> tuple[list[str], list[dict]]:
     messages = [{"role": "user", "content": "echo hi"}]
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(runtime.model_client, "stream_model_async", lambda **_kw: next(replies))
-        runtime.run_turn(
+        one_turn(
             offline_config(tmp_path), "system", messages, runtime.Telemetry(None),
             trace_override=False, tool_registry=registry, tool_context=ToolContext(cwd=tmp_path),
             suppress_output=True, event_hooks=state.events,
@@ -381,7 +382,7 @@ def test_a_tool_call_guard_vets_a_subagents_calls(monkeypatch, tmp_path):
     messages = [{"role": "user", "content": "root"}]
     state.pending_notes = []
 
-    runtime.run_turn(parent_cfg, "SYS", messages, runtime.Telemetry(None), trace_override=False,
+    one_turn(parent_cfg, "SYS", messages, runtime.Telemetry(None), trace_override=False,
                      tool_registry=registry, tool_context=ToolContext(cwd=tmp_path),
                      suppress_output=True, event_hooks=state.events)
 
@@ -476,7 +477,7 @@ def test_mid_turn_compaction_runs_the_compact_handlers(monkeypatch, tmp_path):
         {"role": "user", "content": "current tool turn"},
     ]
 
-    runtime.run_turn(_budget_config(tmp_path, context_window=800), "system", messages, runtime.Telemetry(None),
+    one_turn(_budget_config(tmp_path, context_window=800), "system", messages, runtime.Telemetry(None),
                      trace_override=False, tool_registry=registry, tool_context=ToolContext(cwd=tmp_path),
                      suppress_output=True, event_hooks=hooks)
 

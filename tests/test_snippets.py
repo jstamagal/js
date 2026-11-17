@@ -2,6 +2,7 @@
 from pathlib import Path
 
 import pytest
+from turn_driver import one_turn
 
 from js import paths, snippets
 from js.toolkit import descriptions
@@ -203,7 +204,7 @@ def test_tool_dispatch_propagates_snippet_configuration_failure(monkeypatch, tmp
     monkeypatch.setattr(runtime, "_resolve_context_window", lambda *a, **k: 1_000_000)
     monkeypatch.setattr(runtime.model_metadata, "resolve_max_output", lambda *a, **k: 4096)
     with pytest.raises(snippets.SnippetError, match="absent"):
-        runtime.run_turn(
+        one_turn(
             offline_config(tmp_path), "SYSTEM", [{"role": "user", "content": "go"}],
             runtime.Telemetry(None), tool_registry=registry,
             tool_context=ToolContext(cwd=tmp_path), suppress_output=True,

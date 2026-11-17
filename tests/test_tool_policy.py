@@ -8,6 +8,7 @@ import ai
 import ai.types.usage
 import pytest
 from repl_driver import output_of, record_turns, run_async
+from turn_driver import one_turn
 
 from js import persona, repl_state, runtime
 from js.config import Config
@@ -240,7 +241,7 @@ def test_an_eager_tool_is_published_on_the_first_call_and_runs(monkeypatch, tmp_
     messages = [{"role": "user", "content": "read it"}]
     registry = build_default_registry().select(["read:eager"], config=policy.ToolsConfig())
 
-    runtime.run_turn(_cfg(tmp_path), "system", messages, runtime.Telemetry(None),
+    one_turn(_cfg(tmp_path), "system", messages, runtime.Telemetry(None),
                      tool_registry=registry, tool_context=ToolContext(cwd=tmp_path),
                      trace_override=False)
 
@@ -279,7 +280,7 @@ def _run_shell_rm(monkeypatch, tmp_path, registry) -> tuple[Path, list[str]]:
     replies = iter([_tool_call("shell", {"command": f"rm -rf {victim}"}), _stop("done")])
     monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kwargs: next(replies))
     messages = [{"role": "user", "content": "clean up"}]
-    runtime.run_turn(_cfg(tmp_path), "system", messages, runtime.Telemetry(None),
+    one_turn(_cfg(tmp_path), "system", messages, runtime.Telemetry(None),
                      tool_registry=registry, tool_context=ToolContext(cwd=tmp_path),
                      trace_override=False)
     return victim, _tool_results(messages)
