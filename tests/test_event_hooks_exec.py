@@ -562,3 +562,18 @@ def test_registered_hook_shell_program_is_used(tmp_path):
     settings.bind_live_settings({"HOOK_SHELL_PROGRAM": "bash"})
     result = hookexec.run('printf "%s" "${BASH_VERSION:+bash}"', cwd=str(tmp_path), timeout=5, cap=100)
     assert result.stdout == "bash"
+
+
+def test_set_in_a_handler_is_quiet_when_nothing_changes(tmp_path, capsys):
+    state, cfg = _state(tmp_path)
+    state.settings["COMPACTION_AUTO"] = False
+    _on(state, cfg, "turn_start set COMPACTION_AUTO off")
+    capsys.readouterr()
+
+    state.events.emit("turn_start")
+    assert "COMPACTION_AUTO" not in capsys.readouterr().out
+
+    state.settings["COMPACTION_AUTO"] = True
+    state.events.emit("turn_start")
+    assert "COMPACTION_AUTO" in capsys.readouterr().out
+    assert state.settings["COMPACTION_AUTO"] is False

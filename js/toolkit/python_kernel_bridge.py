@@ -42,7 +42,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .. import jail as _jail
+from .. import jail as _jail, messages as msgs, output
 from .core import Output, ToolContext, ToolResult, as_output, call_scope, call_tool, registry_scope
 
 # How long the server waits for one request's bytes after a connection opens.
@@ -320,12 +320,14 @@ class ToolBridge:
 
 def _emit(hooks: Any, event: str, **payload: Any) -> Any:
     """``event`` raised to ``hooks``, the `on` table of the turn whose kernel
-    call runs the cell; None when there is none or its handlers failed to run."""
+    call runs the cell; None when there is none or its handlers failed to run.
+    A failure is reported and never breaks the call."""
     if hooks is None:
         return None
     try:
         return hooks.emit(event, **payload)
-    except Exception:  # noqa: BLE001 - a handler failure never breaks the call
+    except Exception as exc:  # noqa: BLE001 - a handler failure never breaks the call
+        output.notice(msgs.FAILED_WARN, error=f"on {event} handler: {type(exc).__name__}: {exc}")
         return None
 
 

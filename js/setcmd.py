@@ -191,6 +191,9 @@ def show_lines_effective(
     return CommandResult(handled=True, lines=lines)
 
 
+_UNSET = object()
+
+
 # ---------------------------------------------------------------------------
 # set
 # ---------------------------------------------------------------------------
@@ -204,6 +207,9 @@ def apply_set(settings: dict, key: str, raw: str, *, banner_changed=None, column
         value, error = _s.coerce_value(spec, raw)
         if error is not None:
             return CommandResult(handled=True, error=msgs.FSET_REFUSED.said(name=spec.key, error=error))
+        if _events.current_call() is not None and _s.get_dotted(settings, spec.path, _UNSET) == value:
+            # An `on` handler that sets what is already set says nothing.
+            return CommandResult(handled=True)
         _s.set_dotted(settings, spec.path, value)
         if spec.key == "BANNER":
             # The confirmation already speaks under the new banner.
