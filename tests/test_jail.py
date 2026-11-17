@@ -20,7 +20,7 @@ from jail_probe import bwrap_starts, needs_bwrap
 from test_subagent_isolation import _fake_stream_result, make_cfg, prompt_dir
 
 from js import cli, jail, paths, persona, runtime, settings
-from js.toolkit import ToolContext, call_tool, fs, process_net, python_kernel, terminal
+from js.toolkit import ToolContext, call_tool, fs, python_kernel, shell_fetch, terminal
 from js.toolkit.registry import build_default_registry
 
 needs_kernel = pytest.mark.skipif(
@@ -56,7 +56,7 @@ def jailed(operator_home, tmp_path, monkeypatch):
 
 
 def run_shell(command: str, context: ToolContext) -> tuple[int, str]:
-    result = process_net.shell(command, context=context)
+    result = shell_fetch.shell(command, context=context)
     lines = result.splitlines()
     code = int(next(line for line in lines if line.startswith("exit=")).split("=", 1)[1])
     return code, result

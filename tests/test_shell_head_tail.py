@@ -12,7 +12,7 @@ from js import paths
 from js.capped_process import _StreamCapture
 from js.toolkit import ToolContext, fs
 from js.toolkit.core import for_model
-from js.toolkit.process_net import shell as _shell
+from js.toolkit.shell_fetch import shell as _shell
 
 
 def shell(*args, **kwargs):

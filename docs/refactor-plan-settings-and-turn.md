@@ -62,7 +62,7 @@ Every setting a merged bead added shows up in this diff. Each one becomes one ro
 | Turn copy | js/runtime.py:1362–1388 | 19 `active_context.X = getattr(cfg, "X", active_context.X)` lines and 5 `_settings.knob(live_settings, ...)` lines (user_agent, shell_program, jail_bind, terminal_cols/rows). Two sourcing rules exist: some fields come from cfg, some from the store. |
 | ToolContext fields | js/toolkit/core.py:360–391 | 26 `_knob(...)` fields |
 | Subagent inheritance | js/toolkit/subagents.py:24–50 (`_INHERITED_FIELDS`, 25 names), used by `_child_context`:107 | |
-| Readers | process_net.py:826/847/907, web_search.py ×5, fetch.md, model_metadata.py:274 | These read `context.fetch_timeout_s` and are the real consumers. |
+| Readers | shell_fetch.py:826/847/907, web_search.py ×5, fetch.md, model_metadata.py:274 | These read `context.fetch_timeout_s` and are the real consumers. |
 
 The interface here is shallow. To add a per-turn setting you have to know six lists and keep them in step, and nothing fails when one is missed except the behaviour.
 
@@ -136,7 +136,7 @@ Tests:
 
 **K7: Docs.** Add one AGENTS.md sentence next to "Anything settable is a registered setting": *a setting a turn reads is also one `Knob` row in js/knobs.py*. Add a row for `js/knobs.py` to the module table in docs/technical-guide.md (~line 44). Size XS.
 
-Total: about 7 commits, roughly −290 / +330 including ~130 lines of new tests. `fetch_timeout_s` drops from 9 js files to 7 (settings.py, jsrc, knobs.py, process_net.py, web_search.py, fetch.md, model_metadata.py). It disappears from config.py, cli.py, runtime.py and subagents.py, and core.py's fields become generated.
+Total: about 7 commits, roughly −290 / +330 including ~130 lines of new tests. `fetch_timeout_s` drops from 9 js files to 7 (settings.py, jsrc, knobs.py, shell_fetch.py, web_search.py, fetch.md, model_metadata.py). It disappears from config.py, cli.py, runtime.py and subagents.py, and core.py's fields become generated.
 
 ### Tests that move or change
 None are edited for Part 1. The `Config(...)` and `ToolContext(...)` keyword constructors, attribute reads, and `replace()` calls all keep working through the generated kw_only bases. One new file is added: `tests/test_knobs.py`.

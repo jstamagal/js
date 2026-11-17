@@ -397,12 +397,12 @@ def test_install_all_bootstraps_without_system_tools_and_reuses_managed_aria2(
 
 def test_shell_puts_the_managed_binary_directory_first_on_path(tmp_path, monkeypatch):
     """fd, bat and fzf are downloaded for a command to call by name."""
-    from js.toolkit import process_net
+    from js.toolkit import shell_fetch
 
-    monkeypatch.setattr(process_net, "TOOLS_DIR", tmp_path / "bin")
+    monkeypatch.setattr(shell_fetch, "TOOLS_DIR", tmp_path / "bin")
     context = ToolContext(cwd=tmp_path)
 
-    result = process_net.shell(command="printf %s \"$PATH\"", context=context)
+    result = shell_fetch.shell(command="printf %s \"$PATH\"", context=context)
 
     assert str(tmp_path / "bin") in result
     assert result.split("--- stdout ---")[-1].strip().startswith(str(tmp_path / "bin"))

@@ -8,7 +8,7 @@ import pytest
 from jail_probe import needs_bwrap
 
 from js import jail, paths
-from js.toolkit import ToolContext, process_net
+from js.toolkit import ToolContext, shell_fetch
 
 
 @pytest.mark.parametrize('source', ['environment', 'default'])
@@ -93,7 +93,7 @@ def test_shell_and_file_tools_share_selected_private_tmp(tmp_path, monkeypatch, 
     jail.enter(project, setting=())
     context = ToolContext(cwd=project)
     context.jail_bind = ()
-    result = process_net.shell('printf roundtrip > "$JS_HOME/tmp/check"; '
+    result = shell_fetch.shell('printf roundtrip > "$JS_HOME/tmp/check"; '
                                'cat "$JS_HOME/tmp/check"; test ! -e "$JS_HOME/logins/sentinel"',
                                context=context)
     assert 'exit=0' in result, result

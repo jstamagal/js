@@ -9,8 +9,8 @@ import io
 
 import pytest
 
-from js.toolkit import ToolContext, process_net
-from js.toolkit.process_net import fetch
+from js.toolkit import ToolContext, shell_fetch
+from js.toolkit.shell_fetch import fetch
 
 
 class _FakeResponse:
@@ -38,8 +38,8 @@ def seen(monkeypatch):
         box["timeout"] = timeout
         return _FakeResponse()
 
-    monkeypatch.setattr(process_net.urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr(process_net, "resolve_binary", lambda _name: None)
+    monkeypatch.setattr(shell_fetch.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(shell_fetch, "resolve_binary", lambda _name: None)
     return box
 
 

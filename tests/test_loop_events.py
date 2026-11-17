@@ -109,17 +109,17 @@ def test_description_warning_is_an_event(monkeypatch, capsys):
 
 def test_fetch_fallback_warning_is_an_event(monkeypatch, tmp_path, capsys):
     from js import tool_binaries
-    from js.toolkit import ToolContext, process_net
+    from js.toolkit import ToolContext, shell_fetch
 
     monkeypatch.setattr(tool_binaries, "_URLLIB_FALLBACK_REPORTED", set())
-    monkeypatch.setattr(process_net, "resolve_binary", lambda name: None)
+    monkeypatch.setattr(shell_fetch, "resolve_binary", lambda name: None)
     def unavailable(*args, **kwargs):
         raise OSError("offline")
 
-    monkeypatch.setattr(process_net.urllib.request, "urlopen", unavailable)
+    monkeypatch.setattr(shell_fetch.urllib.request, "urlopen", unavailable)
     events = []
     with output.using_sink(SimpleNamespace(emit=events.append)):
-        process_net.fetch("https://example.invalid/file", save="file", context=ToolContext(cwd=tmp_path))
+        shell_fetch.fetch("https://example.invalid/file", save="file", context=ToolContext(cwd=tmp_path))
     assert len(events) == 1
     assert dict(events[0].fields)["fields"]["purpose"] == "fetch(save=...)"
     assert capsys.readouterr() == ("", "")
@@ -254,7 +254,7 @@ def test_skill_discovery_warning_is_an_event(monkeypatch, capsys):
 
 def test_running_shell_follows_its_output_tail(monkeypatch):
     from js import console
-    from js.toolkit import process_net
+    from js.toolkit import shell_fetch
     asked = []
     opened = console._OpenCall("shell", {"command": "sleep 9"})
 
@@ -263,7 +263,7 @@ def test_running_shell_follows_its_output_tail(monkeypatch):
         opened.done.set()
         return None
 
-    monkeypatch.setattr(process_net, "live_tail", live_tail)
+    monkeypatch.setattr(shell_fetch, "live_tail", live_tail)
     monkeypatch.setattr(console, "_LIVE_AFTER_S", 0)
     monkeypatch.setattr(console, "_LIVE_TICK_S", 0)
     console.ToolTrace._follow(None, opened, None, 1)

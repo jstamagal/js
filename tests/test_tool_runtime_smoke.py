@@ -20,7 +20,7 @@ from js import (
     toolkit as runtime_tools,
 )
 from js.model_client import ModelStreamResult, ModelToolCall
-from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry, fs, process_net
+from js.toolkit import Tool, ToolContext, ToolRegistry, build_default_registry, fs, shell_fetch
 from js.toolkit.core import ToolResult
 
 NUMBERED_RE = re.compile(r"^1\|alpha$", re.MULTILINE)
@@ -919,14 +919,14 @@ def test_shell_sanitizes_bool_command_and_invalid_timeouts(tmp_path, monkeypatch
         def stream(self, name): return capped_process._StreamCapture(0)
         def wait(self, timeout):
             waits.append(timeout)
-            return process_net.CappedProcessResult(returncode=0, stdout=b"", stderr=b"")
+            return shell_fetch.CappedProcessResult(returncode=0, stdout=b"", stderr=b"")
 
-    monkeypatch.setattr(process_net, "start_capped", lambda argv, **kw: FakeProcess())
+    monkeypatch.setattr(shell_fetch, "start_capped", lambda argv, **kw: FakeProcess())
     context = ToolContext(cwd=tmp_path, shell_wait_seconds=42, shell_program="/bin/sh")
 
-    assert process_net.shell(True, timeout=True, context=context).startswith("ERROR: command is required")
-    process_net.shell("echo ok", timeout=-1, context=context)
-    process_net.shell("echo ok", timeout="bad", context=context)
+    assert shell_fetch.shell(True, timeout=True, context=context).startswith("ERROR: command is required")
+    shell_fetch.shell("echo ok", timeout=-1, context=context)
+    shell_fetch.shell("echo ok", timeout="bad", context=context)
 
     assert waits == [42, 42]
 
@@ -942,7 +942,7 @@ def test_shell_runs_shell_program_with_dash_c_and_reports_shell(tmp_path, monkey
     fake_shell.chmod(0o700)
     context = ToolContext(cwd=tmp_path, shell_program=str(fake_shell))
 
-    actual = process_net.shell("printf should-not-need-real-shell", context=context)
+    actual = shell_fetch.shell("printf should-not-need-real-shell", context=context)
 
     expected = (
         f"shell={fake_shell}\n"
@@ -1323,7 +1323,7 @@ def test_shell_returns_output_when_grandchild_holds_pipe(tmp_path, monkeypatch):
     # reader parked waiting for EOF.
     monkeypatch.setattr(capped_process, "READER_GRACE_S", 0.1)
     context = ToolContext(cwd=tmp_path)
-    out = process_net.shell("sleep 30 & printf done", context=context, timeout=20)
+    out = shell_fetch.shell("sleep 30 & printf done", context=context, timeout=20)
     assert "exit=0" in out
     assert "done" in out
 

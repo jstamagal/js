@@ -59,7 +59,7 @@ persists each completed turn.
 | `js/toolkit/registry.py` | default registry assembly, per-agent surfaces, lazy catalog |
 | `js/toolkit/policy.py` | `noun:modifier` chains, `tools.yaml` tags and argument bans, `/tools` table |
 | `js/toolkit/fs.py` | file read/write/search/edit/delete/undo tools |
-| `js/toolkit/process_net.py` | shell and fetch tools |
+| `js/toolkit/shell_fetch.py` | shell and fetch tools |
 | `js/toolkit/subagents.py` | plan/skill/task and generated agent tools |
 | `js/toolkit/wiki/` | deterministic tools for installed wiki agents |
 
@@ -149,7 +149,7 @@ retry failed children with backoff, stopping after five consecutive failures.
 
 ```text
 fs.py             file tools
-process_net.py    shell and fetch
+shell_fetch.py    shell and fetch
 web_search.py     web search, docs search and browse
 jev.py            jev
 terminal.py       terminal sessions

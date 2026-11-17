@@ -20,8 +20,8 @@ from js.toolkit import (
     ToolRegistry,
     build_default_registry,
     fs,
-    process_net,
     python_kernel,
+    shell_fetch,
     web_search,
 )
 
@@ -259,32 +259,32 @@ def test_a_repeated_error_steers_once_then_the_loop_continues(monkeypatch, tmp_p
 def test_sigpipe_from_an_early_reader_is_noted():
     for command in ["yes | head -n 1", "cat big | tail -5", "yes | grep -m1 y", "yes | grep -q y",
                     "yes | sed q", "seq 100 | sed -n '1,5p;5q'", "yes | /usr/bin/head -c 10 2>&1"]:
-        assert process_net._exit_note(command, 141, 10), command
-    assert process_net._exit_note("yes | sort", 141, 10) == ""
-    assert process_net._exit_note("yes | grep y", 141, 10) == ""
-    assert process_net._exit_note("yes | head -n 1", 1, 10) == ""
+        assert shell_fetch._exit_note(command, 141, 10), command
+    assert shell_fetch._exit_note("yes | sort", 141, 10) == ""
+    assert shell_fetch._exit_note("yes | grep y", 141, 10) == ""
+    assert shell_fetch._exit_note("yes | head -n 1", 1, 10) == ""
 
 
 def test_shell_result_notes_sigpipe_and_keeps_the_exit(tmp_path):
     command = "yes | head -n 1"
-    result = str(process_net.shell(command, context=ToolContext(cwd=tmp_path)))
+    result = str(shell_fetch.shell(command, context=ToolContext(cwd=tmp_path)))
     assert "\nexit=141\n" in result
-    assert process_net._exit_note(command, 141, 2) in result
+    assert shell_fetch._exit_note(command, 141, 2) in result
 
 
 def test_grep_with_no_match_is_noted():
-    assert process_net._exit_note("cat f | grep zzz", 1, 0)
-    assert process_net._exit_note("rg zzz src", 1, 0)
-    assert process_net._exit_note("grep zzz f", 1, 4) == ""
-    assert process_net._exit_note("grep zzz f", 2, 0) == ""
-    assert process_net._exit_note("false", 1, 0) == ""
+    assert shell_fetch._exit_note("cat f | grep zzz", 1, 0)
+    assert shell_fetch._exit_note("rg zzz src", 1, 0)
+    assert shell_fetch._exit_note("grep zzz f", 1, 4) == ""
+    assert shell_fetch._exit_note("grep zzz f", 2, 0) == ""
+    assert shell_fetch._exit_note("false", 1, 0) == ""
 
 
 def test_shell_result_notes_grep_no_match(tmp_path):
     command = "printf 'a\\n' | grep zzz"
-    result = str(process_net.shell(command, context=ToolContext(cwd=tmp_path)))
+    result = str(shell_fetch.shell(command, context=ToolContext(cwd=tmp_path)))
     assert "\nexit=1\n" in result
-    assert process_net._exit_note(command, 1, 0) in result
+    assert shell_fetch._exit_note(command, 1, 0) in result
 
 
 # --- tools that cannot run -----------------------------------------------------

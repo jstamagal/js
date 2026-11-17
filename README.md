@@ -72,7 +72,7 @@ js/runtime.py                      streaming loop and tool dispatch
 js/toolkit/core.py                Tool, ToolContext, call_tool
 js/toolkit/registry.py            registry assembly and selector filtering
 js/toolkit/fs.py                  read/write/search/patch/remove/undo
-js/toolkit/process_net.py         shell and fetch
+js/toolkit/shell_fetch.py         shell and fetch
 js/toolkit/subagents.py           plan/skill/task/subagents
 js/toolkit/wiki/                  deterministic tools for installed wiki agents
 defaults/tool_descriptions/     model-facing tool contracts

@@ -11,7 +11,7 @@ import pytest
 
 from js import cli, home, paths, persona, promptexpand, runtime, session_catalog, skills
 from js.model_client import ModelStreamResult
-from js.toolkit import ToolContext, process_net
+from js.toolkit import ToolContext, shell_fetch
 
 
 def _tree(root):
@@ -108,7 +108,7 @@ def test_home_is_exported_in_all_prompt_forms_and_shell_tool(tmp_path, monkeypat
     assert persona.expand_agent_text(text, cfg) == '|'.join([str(selected)] * 3)
     assert promptexpand.session_variables(cfg)['JS_HOME'] == str(selected)
     context = ToolContext(cwd=tmp_path, shell_env_allow=[])
-    result = process_net.shell('printf %s "$JS_HOME"', context=context)
+    result = shell_fetch.shell('printf %s "$JS_HOME"', context=context)
     assert str(selected) in str(result)
 
 

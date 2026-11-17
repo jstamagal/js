@@ -10,7 +10,7 @@ from repl_driver import stub_screen, turn_stub
 
 from js import cli, jail, messages as msgs, runtime, snippets
 from js.repl_state import ReplState
-from js.toolkit import call_tool, process_net
+from js.toolkit import call_tool, shell_fetch
 from js.toolkit.registry import build_default_registry
 
 SESSION = "workspace"
@@ -56,7 +56,7 @@ def repl(monkeypatch, args, lines):
 
 def shell_out(command):
     def probe(context):
-        return process_net.shell(command, context=context)
+        return shell_fetch.shell(command, context=context)
     return probe
 
 

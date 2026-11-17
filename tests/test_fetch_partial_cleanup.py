@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from js.toolkit import process_net
+from js.toolkit import shell_fetch
 from js.toolkit.core import ToolContext
 
 
@@ -25,7 +25,7 @@ def test_interrupted_download_removes_partial_and_preserves_destination(tmp_path
         return result
 
     with pytest.raises(type(error)) as caught:
-        process_net._stream_download(read_chunk, target, "application/octet-stream", context, None)
+        shell_fetch._stream_download(read_chunk, target, "application/octet-stream", context, None)
 
     assert caught.value is error
     assert target.read_bytes() == b"original"
@@ -40,7 +40,7 @@ def test_cut_chunked_http_response_removes_partial(tmp_path):
     context = ToolContext(cwd=tmp_path)
 
     with response, pytest.raises(IncompleteRead):
-        process_net._stream_download(response.read, target, "", context, None)
+        shell_fetch._stream_download(response.read, target, "", context, None)
 
     assert not target.exists()
     assert list(tmp_path.glob(".*.js-partial-*")) == []
@@ -55,11 +55,11 @@ def test_download_publish_failure_removes_partial(tmp_path, monkeypatch, failure
     if failure_stage == "snapshot":
         monkeypatch.setattr(context, "snapshot", Mock(side_effect=error))
     else:
-        monkeypatch.setattr(process_net.os, "replace", Mock(side_effect=error))
+        monkeypatch.setattr(shell_fetch.os, "replace", Mock(side_effect=error))
     chunks = iter([b"complete", b""])
 
     with pytest.raises(OSError) as caught:
-        process_net._stream_download(lambda _size: next(chunks), target, "", context, None)
+        shell_fetch._stream_download(lambda _size: next(chunks), target, "", context, None)
 
     assert caught.value is error
     assert target.read_bytes() == b"original"

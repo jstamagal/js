@@ -11,13 +11,13 @@ from collections.abc import Iterator
 
 import pytest
 
-from js.toolkit import ToolContext, process_net
+from js.toolkit import ToolContext, shell_fetch
 
 
 class _LimitHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 -- BaseHTTPRequestHandler API
         if self.path == "/large.txt":
-            size = process_net._DOWNLOAD_MAX_BYTES + 1
+            size = shell_fetch._DOWNLOAD_MAX_BYTES + 1
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
             self.send_header("Content-Length", str(size))
@@ -68,18 +68,18 @@ def _server() -> Iterator[str]:
 
 @pytest.fixture(autouse=True)
 def _use_urllib_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(process_net, "resolve_binary", lambda _name: None)
+    monkeypatch.setattr(shell_fetch, "resolve_binary", lambda _name: None)
 
 
 def test_large_unsaved_text_names_inline_ceiling_and_save_workaround(tmp_path) -> None:
     with _server() as base_url:
-        actual = process_net.fetch(
+        actual = shell_fetch.fetch(
             f"{base_url}/large.txt",
             context=ToolContext(cwd=tmp_path, fetch_timeout_s=10),
         )
 
     assert actual == (
-        f"ERROR: response exceeds {process_net._DOWNLOAD_MAX_BYTES} byte inline read limit; "
+        f"ERROR: response exceeds {shell_fetch._DOWNLOAD_MAX_BYTES} byte inline read limit; "
         "use save= to stream the full response to disk"
     )
 
@@ -87,7 +87,7 @@ def test_large_unsaved_text_names_inline_ceiling_and_save_workaround(tmp_path) -
 def test_drip_feed_is_bounded_by_the_whole_request_budget(tmp_path) -> None:
     with _server() as base_url:
         started = time.monotonic()
-        actual = process_net.fetch(
+        actual = shell_fetch.fetch(
             f"{base_url}/drip",
             context=ToolContext(cwd=tmp_path, fetch_timeout_s=1),
         )

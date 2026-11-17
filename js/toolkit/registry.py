@@ -22,8 +22,8 @@ from . import (
     lsp,
     notebook,
     policy,
-    process_net,
     python_kernel,
+    shell_fetch,
     subagents,
     terminal,
     toolbox,
@@ -633,7 +633,7 @@ def build_default_registry(
     if suites is None:
         suites = (
             ("fs", fs.tools()),
-            ("shell", process_net.tools()),
+            ("shell", shell_fetch.tools()),
             ("search", web_search.tools()),
             ("jev", jev.tools()),
             ("terminal", terminal.tools()),

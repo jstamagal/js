@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from js import messages as msgs, tool_binaries
-from js.toolkit import ToolContext, process_net
+from js.toolkit import ToolContext, shell_fetch
 
 _PAYLOAD = (b"aria2-real-transfer\x00" * (12 * 1024 * 1024 // 20 + 1))[: 12 * 1024 * 1024]
 _TEXT_PAYLOAD = (b"aria2 large text response\n" * (6 * 1024 * 1024 // 26 + 1))[
@@ -148,7 +148,7 @@ def test_fetch_saved_response_uses_segmented_aria2_transfer(
     _clear_server_state(state)
     target = tmp_path / "saved.bin"
 
-    result = process_net.fetch(
+    result = shell_fetch.fetch(
         f"{base_url}/file",
         save=target.name,
         context=ToolContext(cwd=tmp_path, download_timeout_s=10),
@@ -168,7 +168,7 @@ def test_unsaved_binary_response_uses_aria2_and_keeps_descriptor_contract(
     base_url, state = transfer_server
     _clear_server_state(state)
 
-    result = process_net.fetch(
+    result = shell_fetch.fetch(
         f"{base_url}/file",
         context=ToolContext(cwd=Path.cwd(), download_timeout_s=10),
     )
@@ -187,7 +187,7 @@ def test_unsaved_large_text_uses_aria2_and_keeps_spill_contract(
     _clear_server_state(state)
     monkeypatch.setenv("HOME", str(tmp_path))
 
-    result = process_net.fetch(
+    result = shell_fetch.fetch(
         f"{base_url}/text",
         context=ToolContext(
             cwd=tmp_path,
@@ -297,7 +297,7 @@ def test_http_404_returns_plain_error_and_preserves_complete_destination(
     target = tmp_path / "missing.bin"
     target.write_bytes(b"known-complete-file")
 
-    result = process_net.fetch(
+    result = shell_fetch.fetch(
         f"{base_url}/missing",
         save=target.name,
         context=ToolContext(cwd=tmp_path, download_timeout_s=5),
@@ -316,7 +316,7 @@ def test_slow_fetch_obeys_download_timeout_and_preserves_complete_destination(
     target.write_bytes(b"known-complete-file")
     started = time.monotonic()
 
-    result = process_net.fetch(
+    result = shell_fetch.fetch(
         f"{base_url}/slow",
         save=target.name,
         context=ToolContext(cwd=tmp_path, download_timeout_s=0.25),
@@ -334,7 +334,7 @@ def test_fetch_download_cap_stops_transfer_before_publishing(
     target = tmp_path / "capped.bin"
     target.write_bytes(b"known-complete-file")
 
-    result = process_net.fetch(
+    result = shell_fetch.fetch(
         f"{base_url}/file",
         save=target.name,
         context=ToolContext(
@@ -462,10 +462,10 @@ def test_missing_aria2_fallback_is_visible_and_preserves_binary_result(
     transfer_server, monkeypatch, tmp_path: Path, capsys
 ) -> None:
     base_url, _state = transfer_server
-    monkeypatch.setattr(process_net, "resolve_binary", lambda _name: None)
+    monkeypatch.setattr(shell_fetch, "resolve_binary", lambda _name: None)
     monkeypatch.setattr(tool_binaries, "_URLLIB_FALLBACK_REPORTED", set())
 
-    result = process_net.fetch(
+    result = shell_fetch.fetch(
         f"{base_url}/file",
         context=ToolContext(cwd=tmp_path),
     )
