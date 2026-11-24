@@ -20,7 +20,6 @@ class ToolSuite:
     name: str
     members: tuple[SuiteTool, ...]
     build: Callable[[], tuple[Tool, ...]]
-    incompatible: tuple[str, ...] = ()
 
     def tools(self) -> tuple[Tool, ...]:
         by_name = {tool.name: tool for tool in self.build()}
@@ -36,8 +35,7 @@ class ToolSuite:
 
     @property
     def exclusions(self) -> tuple[str, ...]:
-        names = (*(member.replaces for member in self.members), *self.incompatible)
-        return tuple(f"{name}:ban" for name in names)
+        return tuple(f"{member.replaces}:ban" for member in self.members)
 
 
 def _pi_tools() -> tuple[Tool, ...]:
@@ -55,7 +53,6 @@ PI = ToolSuite(
         SuiteTool("pi_write", "write", "write"),
     ),
     _pi_tools,
-    incompatible=("undo",),
 )
 COMPATIBILITY_SUITES = (PI,)
 ARGUMENT_BAN_FALLBACKS = {

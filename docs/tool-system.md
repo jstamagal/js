@@ -80,13 +80,15 @@ aliases:
 
 `js --pi` publishes `pi_read`, `pi_bash`, `pi_edit` and `pi_write` as
 `read`, `bash`, `edit` and `write`. It replaces the native read, shell, patch
-and write tools and drops undo, since Pi edits and writes do not take js undo
-snapshots. The agent keeps its other selected tools, including lazy tools.
+and write tools. Pi edits and writes take js undo snapshots, so an agent that
+selects undo can reverse them. The agent keeps its other selected tools,
+including lazy tools.
 `js --pi-strict` publishes just the four Pi tools. Without either flag an agent
 can select the `pi_*` names and choose its own aliases.
 
 Pi read takes a 1-based line `offset` and a line count, `limit`. Pi edit takes `path` and an
-`edits` array of `{oldText, newText}` replacements against the original file.
+`edits` array of `{oldText, newText}` replacements against the original UTF-8 file. An invalid UTF-8 sequence makes
+the edit fail before writing.
 Pi write takes `path` and `content` and can overwrite a file directly.
 Pi bash takes `command` and an optional numeric `timeout` in seconds. It waits
 for completion, combines stdout and stderr, and returns the tail plus the

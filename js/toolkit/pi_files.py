@@ -365,7 +365,7 @@ def pi_edit(path: str, edits: list[dict[str, str]], *, context: ToolContext) -> 
                 if not os.access(target, os.R_OK | os.W_OK):
                     code = "EACCES" if target.exists() else "ENOENT"
                     return f"ERROR: Could not edit file: {path}. Error code: {code}."
-                original = file_bytes.read_regular_bytes(target).decode("utf-8", errors="replace")
+                original = file_bytes.read_regular_bytes(target).decode("utf-8")
             except OSError as exc:
                 code = errno.errorcode.get(exc.errno)
                 if code:
@@ -382,8 +382,9 @@ def pi_edit(path: str, edits: list[dict[str, str]], *, context: ToolContext) -> 
                               "The replacements produced identical content.")
                 return f"ERROR: No changes made to {path}. {detail}"
             final = updated if original == normalized else _preserve_endings(original, changes)
-            context.invalidate_search_cache()
-            target.write_bytes((bom + final).encode())
+            data = (bom + final).encode()
+            context.snapshot(target)
+            target.write_bytes(data)
     except (OSError, ValueError) as exc:
         return f"ERROR: {exc}"
     return f"Successfully replaced {len(edits)} block(s) in {path}."
@@ -396,8 +397,8 @@ def pi_write(path: str, content: str, *, context: ToolContext) -> str:
         with _MUTATION_LOCKS[hash(target) % len(_MUTATION_LOCKS)]:
             if target.exists() and not target.is_file():
                 raise OSError(f"not a regular file: {target}")
-            context.invalidate_search_cache()
             target.parent.mkdir(parents=True, exist_ok=True)
+            context.snapshot(target)
             target.write_bytes(data)
     except (OSError, ValueError) as exc:
         return f"ERROR: {exc}"

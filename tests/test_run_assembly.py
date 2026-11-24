@@ -145,7 +145,7 @@ def test_a_resumed_session_comes_back_on_its_stamp_not_agent_yaml(tmp_path, conf
 
 @pytest.mark.parametrize(("options", "eager", "lazy"), [
     (RunOptions(), {"read", "shell", "write", "patch", "undo", "fs_search"}, {"lsp"}),
-    (RunOptions(pi=True), {"read", "bash", "write", "edit", "fs_search"}, {"lsp"}),
+    (RunOptions(pi=True), {"read", "bash", "write", "edit", "fs_search", "undo"}, {"lsp"}),
     (RunOptions(pi=True, tools="fs_search"), {"read", "bash", "write", "edit", "fs_search"}, set()),
     (RunOptions(pi_strict=True), {"read", "bash", "write", "edit"}, set()),
     (RunOptions(pi=True, no_tools=True), set(), set()),

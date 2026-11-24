@@ -102,3 +102,29 @@ def test_pi_edit_rejects_overlap_and_replacement_dependent_matches(tmp_path):
     edits[1]["oldText"] = "first next"
     assert "overlap" in pi_edit("sample", edits, context=context)
     assert target.read_text() == "first next"
+
+
+def test_pi_edit_preserves_bytes_on_invalid_utf8(tmp_path):
+    context = ToolContext(cwd=tmp_path)
+    path = tmp_path / "sample"
+    original = b"caf\xe9 one\nTARGET\n"
+    path.write_bytes(original)
+    result = pi_edit("sample", [{"oldText": "TARGET", "newText": "changed"}], context=context)
+    assert result.startswith("ERROR")
+    assert path.read_bytes() == original
+    assert context.undo.count(path) == 0
+
+
+def test_undo_restores_each_pi_mutation_individually(tmp_path):
+    from js.toolkit.fs import undo
+
+    context = ToolContext(cwd=tmp_path)
+    path = tmp_path / "sample"
+    pi_write("sample", "first", context=context)
+    pi_edit("sample", [{"oldText": "first", "newText": "second"}], context=context)
+    pi_write("sample", "third", context=context)
+    for expected in ("second", "first"):
+        undo("sample", context=context)
+        assert path.read_text() == expected
+    undo("sample", context=context)
+    assert not path.exists()
