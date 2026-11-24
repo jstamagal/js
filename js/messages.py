@@ -867,6 +867,7 @@ STDIN_TWICE = Message("stdin cannot be both the prompt and an attachment.")
 STDIN_ATTACHMENT_NOT_PIPED = Message("-f - requires piped stdin bytes.")
 # Raised as exception text and shown through FAILED.
 ATTACHMENT_NOT_FOUND = Message("Attachment not found: {path}")
+ATTACHMENT_TRUNCATED = Message("Attachment {path} cut to {cap} of {size} bytes; raise ATTACHMENT_MAX to send it whole.")
 ATTACHMENT_NOT_A_FILE = Message("Attachment is not a regular file: {path}")
 ATTACHMENT_UNREADABLE = Message("Attachment {path} not read: {error}")
 # The paste-image key (js.clipimage): one line, and the input line is unchanged.

@@ -281,6 +281,8 @@ def _prepare_bytes(
         truncated = len(sample) > cap or (total_size is not None and total_size > cap)
         kept = _strip_incomplete_utf8_tail(sample[:cap]) if truncated else sample[:cap]
         text = kept.decode("utf-8", errors="replace")
+        if truncated:
+            msgs.warn(msgs.ATTACHMENT_TRUNCATED, path=display_path, size=size, cap=cap)
         return _PreparedAttachment(_format_text_attachment(display_path, text, size, truncated, cap))
 
     guessed, _ = mimetypes.guess_type(str(path))
@@ -308,9 +310,7 @@ def _resolve_path(raw_path: str, cwd: Path) -> Path:
 
 
 def _text_cap(cfg: Config) -> int:
-    attachment_cap = int(_settings.knob_attr(cfg, "max_text_attachment_bytes", "ATTACHMENT_MAX"))
-    configured = int(getattr(cfg, "max_tool_result_bytes", attachment_cap) or attachment_cap)
-    return max(1, min(attachment_cap, configured))
+    return max(1, int(_settings.knob_attr(cfg, "max_text_attachment_bytes", "ATTACHMENT_MAX")))
 
 
 def _strip_incomplete_utf8_tail(data: bytes) -> bytes:

@@ -388,7 +388,7 @@
 #set FILE_BYTES_MAX 2000000
 
 # A text file you attach to a message is cut at this many bytes.
-#set ATTACHMENT_MAX 65536
+#set ATTACHMENT_MAX 2000000
 
 # How many lines of each cell output read() shows for a notebook (.ipynb).
 # The rest are counted, not shown. 0: just what kind of output each one is.

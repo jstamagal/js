@@ -337,7 +337,7 @@ def _inlined(tmp_path, data: bytes, cap: int, marker: str) -> bool:
     a text cap of ``cap`` bytes."""
     path = tmp_path / "sample.dat"
     path.write_bytes(data)
-    cfg = replace(_cfg(tmp_path), max_tool_result_bytes=cap)
+    cfg = replace(_cfg(tmp_path), max_text_attachment_bytes=cap)
     return marker in attach.build_user_message("read", [str(path)], cfg)["content"]
 
 
@@ -436,7 +436,7 @@ def test_oversized_image_is_sent_fitted_and_says_so(tmp_path):
 def test_truncated_text_attachment_does_not_end_in_a_replacement_char(tmp_path):
     note = tmp_path / "long.txt"
     note.write_bytes(b"x" + ("é" * 50000).encode("utf-8"))  # odd offset: the cap lands mid-character
-    cfg = _cfg(tmp_path)
+    cfg = replace(_cfg(tmp_path), max_text_attachment_bytes=65536)
     text = attach.build_user_message("read", [str(note)], cfg)["content"]
     assert "[truncated to" in text
     assert "\ufffd" not in text
@@ -468,3 +468,16 @@ def test_copy_puts_the_answer_n_back_on_the_clipboard(monkeypatch, tmp_path):
     run_async(monkeypatch, cfg, [f"/set COPY_COMMAND sh {copy}", "/copy", "/copy 2"])
 
     assert clipboard.read_bytes() == b"a long line\nsecond\n<end>first answer\n<end>"
+
+def test_the_attachment_cap_is_attachment_max_alone(tmp_path):
+    """A text attachment is cut at ATTACHMENT_MAX, not at the tool-result cap."""
+    data = b"a" * 300_000 + b"TAIL"
+    assert _inlined(tmp_path, data, 400_000, "TAIL") is True
+    assert _inlined(tmp_path, data, 1_000, "TAIL") is False
+
+
+def test_a_cut_attachment_is_named_to_the_operator(tmp_path, monkeypatch):
+    warned = []
+    monkeypatch.setattr(attach.msgs, "warn", lambda message, **fields: warned.append((message, fields)))
+    _inlined(tmp_path, b"a" * 50, 10, "a")
+    assert warned == [(attach.msgs.ATTACHMENT_TRUNCATED, {"path": str(tmp_path / "sample.dat"), "size": 50, "cap": 10})]

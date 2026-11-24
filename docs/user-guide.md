@@ -666,7 +666,7 @@ was. Placeholders count up for the whole run, so a line recalled from history
 still carries its image.
 
 - Text files inline into the prompt (delimited, up to `ATTACHMENT_MAX` bytes,
-  64 KiB by default).
+  2 MB by default). A file cut at the cap is named on stderr.
 - Images attach as vision input when the active model supports vision; otherwise
   you get a note that vision is off and the bytes are not sent.
 - Other binaries attach as a short descriptor (path, type, size).
