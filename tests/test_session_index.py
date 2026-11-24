@@ -287,6 +287,25 @@ def test_recover_rebuilds_a_file_whose_search_index_is_damaged(tmp_path):
         recovered.close()
 
 
+def test_a_catalog_walk_that_hits_a_damaged_search_index_rebuilds_it(tmp_path):
+    # A write into damaged FTS5 pages can fail at COMMIT, after SQLite has
+    # already rolled the transaction back itself.
+    first = _session(tmp_path / "a")
+    _say(first, "alpha", "beta")
+    session_index.catalog()
+    connection = sqlite3.connect(session_index.db_path())
+    connection.execute("UPDATE docs_data SET block = zeroblob(length(block)) WHERE id > 10")
+    connection.commit()
+    connection.close()
+    session_index.close()
+    second = _session(tmp_path / "b")
+    _say(second, "gamma", "delta")
+    for number in range(40):
+        _say(second, f"line{number} words", f"reply{number} words")
+    assert set(_by_path(session_index.catalog())) == {_key(first), _key(second)}
+    assert set(_search("gamma")) == {_key(second)}
+
+
 def test_a_failed_rebuild_lock_closes_its_stream(tmp_path):
     lock = session_index._RebuildLock(tmp_path / "index.sqlite")
     opened = []

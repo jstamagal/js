@@ -58,6 +58,14 @@ def _identity(path: Path) -> tuple[int, int] | None:
     return info.st_dev, info.st_ino
 
 
+def _rollback(connection: sqlite3.Connection) -> None:
+    # SQLite rolls a transaction back by itself on some errors (a corrupt
+    # page met at COMMIT among them); a ROLLBACK then would raise over the
+    # error that ended it.
+    if connection.in_transaction:
+        connection.execute("ROLLBACK")
+
+
 def _create(connection: sqlite3.Connection) -> None:
     # Processes that open a missing index together all read user_version 0.
     # The first to take the write lock builds the tables; the others read the
@@ -75,7 +83,7 @@ def _create(connection: sqlite3.Connection) -> None:
             connection.execute(f"PRAGMA user_version = {_SCHEMA}")
         connection.execute("COMMIT")
     except BaseException:
-        connection.execute("ROLLBACK")
+        _rollback(connection)
         raise
 
 
@@ -246,7 +254,7 @@ def store(session_file: Path, summary: dict[str, Any], lines: list[tuple[int, st
             connection.execute("INSERT INTO docs (rowid, text, lines) VALUES (?, ?, ?)", (session_id, text, meta))
             connection.execute("COMMIT")
         except BaseException:
-            connection.execute("ROLLBACK")
+            _rollback(connection)
             raise
 
 
@@ -264,7 +272,7 @@ def forget(session_file: Path) -> None:
             connection.execute("DELETE FROM sessions WHERE id = ?", (row[0],))
             connection.execute("COMMIT")
         except BaseException:
-            connection.execute("ROLLBACK")
+            _rollback(connection)
             raise
 
 

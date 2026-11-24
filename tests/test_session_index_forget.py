@@ -18,6 +18,10 @@ def test_failed_forget_rolls_back_on_same_connection(tmp_path, monkeypatch, stat
     failure = error_type("injected forget failure")
 
     class FailingConnection:
+        @property
+        def in_transaction(self):
+            return connection.in_transaction
+
         def execute(self, sql, *args):
             if sql.startswith(statement):
                 raise failure
