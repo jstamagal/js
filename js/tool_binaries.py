@@ -5,7 +5,7 @@ to cover, and ``shell`` puts it on PATH so a command can reach fd, bat and fzf
 by name. Runtime callers prefer ``tools/bin/<name>`` and consult PATH only when
 the installer has not populated that file. Keeping that fallback here makes the
 degraded behavior explicit while ensuring an installed tool is never resolved
-through PATH (notably, ``sg`` on this box is not ast-grep).
+through PATH.
 """
 
 from __future__ import annotations
@@ -56,8 +56,7 @@ class DownloadTool:
 
 # Versions and asset names were read from each project's GitHub release page
 # and releases API on 2026-08-10. ripgrep's asset hash is from its published
-# .sha256 file. ast-grep does not publish checksum files, so its archive and
-# extracted executable hashes were computed from the pinned release asset.
+# .sha256 file.
 DOWNLOAD_TOOLS = (
     DownloadTool(
         name="ripgrep",
@@ -71,19 +70,6 @@ DOWNLOAD_TOOLS = (
         asset_sha256="33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c",
         archive_member="ripgrep-15.2.0-x86_64-unknown-linux-musl/rg",
         executable_sha256="e62198eb19b136b88c330af83647b5a962cb99b6b1f066758568f12de1974849",
-    ),
-    DownloadTool(
-        name="ast-grep",
-        executable="ast-grep",
-        version="0.45.1",
-        asset="app-x86_64-unknown-linux-gnu.zip",
-        url=(
-            "https://github.com/ast-grep/ast-grep/releases/download/0.45.1/"
-            "app-x86_64-unknown-linux-gnu.zip"
-        ),
-        asset_sha256="76fb6555be6734fb5057dba8d2fb756430f374bb9e1af694cf1ce00e13238d63",
-        archive_member="ast-grep",
-        executable_sha256="6a66162e0a2447af4b7524ee04195239eb1911d07f4868f918909e7d4f453eea",
     ),
     # The `stealth` asset, not the plain one: that build carries TLS
     # impersonation on top of the browser fingerprint, which is what browse
@@ -545,7 +531,6 @@ def release_plan() -> tuple[list[DownloadTool], list[str]]:
     """Select verified native assets; never substitute a compatibility layer."""
     if is_termux():
         return [], [
-            msgs.TOOL_TERMUX_AST_GREP_MISSING.format(),
             msgs.TOOL_TERMUX_OBSCURA_MISSING.format(),
         ]
     system = platform.system()
@@ -563,7 +548,7 @@ def release_plan() -> tuple[list[DownloadTool], list[str]]:
     except InstallError as exc:
         missing.append(str(exc))
     rows = json.loads(Path(__file__).with_name("tool_releases.json").read_text())
-    for name in ("rg", "fd", "bat", "fzf", "ast-grep"):
+    for name in ("rg", "fd", "bat", "fzf"):
         row = next((r for r in rows if r["executable"] == name
                     and r["system"] == system and r["machine"] == machine), None)
         if row is None:
@@ -644,7 +629,7 @@ def _provision_termux_tools(tools_dir: Path, *, run=None) -> Path:
 # Termux tools with no verified release, keyed by the prefix of their
 # release_plan() message. All executables of a group must be present: obscura
 # spawns obscura-worker from its own directory.
-TERMUX_NATIVE_BUILDS = {"ast-grep": ("ast-grep",), "obscura/obscura-worker": ("obscura", "obscura-worker")}
+TERMUX_NATIVE_BUILDS = {"obscura/obscura-worker": ("obscura", "obscura-worker")}
 
 
 def _adopt_termux_native_builds(tools_dir: Path, package_bin: Path, missing: list[str]) -> list[str]:

@@ -169,7 +169,7 @@ def test_fetch_and_browse_show_the_url_and_fold_by_host():
 
 def test_a_search_shows_what_it_looks_for_on_the_header():
     searches = {
-        "fs_search": ("pattern", "needle.*"), "ast_search": ("pattern", "def $F"),
+        "fs_search": ("pattern", "needle.*"),
         "exa_search": ("query", "the query"), "serper_search": ("query", "the query"),
         "tavily_search": ("query", "the query"), "docs_search": ("topic", "the topic"),
         "tool_discovery": ("query", "the query"),

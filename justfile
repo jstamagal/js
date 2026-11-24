@@ -121,7 +121,7 @@ install:
     chmod 755 "$tmp"
     mv -f "$tmp" "$launcher"
     ln -sf "$repo/tools/wiki" "$wiki"
-    # Termux has no verified ast-grep or obscura release: there the installer
+    # Termux has no verified obscura release: there the installer
     # names what it could not provide and the install goes on.
     if ! just install-tool-binaries; then
         [ "{{ termux }}" = true ] || exit 1

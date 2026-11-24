@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .core import Tool
 from .descriptions import load_description, load_parameter_description
-from .file_search import AST_GREP_LANGUAGES, ast_search, fs_search
+from .file_search import fs_search
 from .fs import fs_read, prepare_read_arguments, remove, undo, write
 from .patch import patch
 from .presentation import Presentation
@@ -96,22 +96,6 @@ def tools(*, result_wrapper=_offering_path_skills) -> tuple[Tool, ...]:
             },
             required=("pattern",),
             read_only=True,
-            presentation=Presentation(key=("pattern",), fold_noun="search"),
-        ),
-        Tool(
-            "ast_search",
-            load_description("ast_search"),
-            ast_search,
-            {
-                "pattern": {"type": "string", "description": load_parameter_description('ast_search', 'pattern')},
-                "path": {"type": "string", "description": load_parameter_description('ast_search', 'path')},
-                "lang": {"type": "string", "enum": list(AST_GREP_LANGUAGES), "description": load_parameter_description('ast_search', 'lang')},
-                "rewrite": {"type": "string", "description": load_parameter_description('ast_search', 'rewrite')},
-                "apply": {"type": "boolean", "default": False, "description": load_parameter_description('ast_search', 'apply')},
-                "max_results": {"type": "integer", "default": 100, "description": load_parameter_description('ast_search', 'max_results')},
-            },
-            required=("pattern",),
-            read_only_when=lambda args: not args.get("apply"),
             presentation=Presentation(key=("pattern",), fold_noun="search"),
         ),
         Tool("remove", load_description("remove"), remove, {"path": {"type": "string", "description": load_parameter_description('remove', 'path')}, "permanent": {"type": "boolean", "default": False, "description": load_parameter_description('remove', 'permanent')}}, required=("path",)),

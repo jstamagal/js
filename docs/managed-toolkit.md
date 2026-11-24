@@ -35,22 +35,20 @@ compatibility layers or source builds are part of this contract.
 installer (`python -m js.tool_binaries`). `just install` and `just sync` invoke
 it. The only system package managers it calls are Homebrew for aria2 on macOS
 and `pkg` on Termux, which installs aria2, bat, fd, fzf and ripgrep and links
-them into `tools/bin`; on Termux, ast-grep and obscura builds the owner put in
+them into `tools/bin`; on Termux, obscura builds the owner put in
 `tools/bin` or `$PREFIX/bin` are adopted. Python urllib bootstraps aria2, then
 the managed aria2 performs subsequent downloads. Runtime resolution and startup
 checks prefer managed executables over PATH.
 
 `js/tool_releases.json` pins archive and executable SHA-256 digests for ripgrep
-15.2.0, fd 10.5.0, bat 0.26.1, fzf 0.74.4, and ast-grep 0.45.3. Linux x86_64
-and aarch64 musl binaries for the first four were inspected using readelf:
+15.2.0, fd 10.5.0, bat 0.26.1 and fzf 0.74.4. Linux x86_64
+and aarch64 musl binaries for all four were inspected using readelf:
 no PT_INTERP or NEEDED entries. They work without a libc compatibility layer.
 Darwin ARM64 archives are pinned but not executed on Linux. Digests were
 compared to GitHub release API digests where published; bat's digests were
 computed from the release downloads.
 
-The pinned ast-grep assets for Linux are GNU builds. They require glibc
-2.34 (x86_64) or 2.18 (aarch64) and are not selected for musl or an unknown
-libc. The pinned Obscura 0.2.2 x86_64 stealth launcher (pinned in
+The pinned Obscura 0.2.2 x86_64 stealth launcher (pinned in
 `js/tool_binaries.py`) is selected only on x86_64 Linux with glibc 2.35 or
 newer; the worker requires 2.34, and both require libgcc_s. Neither is static.
 Obscura ARM64 Linux and ARM64 macOS stealth assets exist, but their executable

@@ -129,7 +129,7 @@ ban:                  # argument patterns, refused before dispatch
 `tag:read_only` is intrinsic: it matches every tool whose `read_only` property
 is true (tools that write nothing). It takes an optional modifier,
 `tag:read_only:lazy`; without one it means eager. A tool that writes only under
-some arguments (`ast_search` with `apply`, `fetch` with `save` or a POST,
+some arguments (`fetch` with `save` or a POST,
 `browse` with `screenshot`) declares `read_only_when` instead; the tag does not
 match it, but dispatch runs its read-only calls in parallel (see Dispatch
 Semantics).
@@ -244,7 +244,6 @@ surface.
 read
 write
 fs_search
-ast_search
 remove
 patch
 undo
@@ -304,8 +303,7 @@ Dispatch rules:
 A call is read-only when its tool sets `read_only` (`read`, `fs_search`,
 `lsp`, `skill`, `jev`, `docs_search`, `exa_search`, `serper_search`,
 `tavily_search`, and the swarm `who` and `tasks`), or
-when its tool's `read_only_when` accepts its arguments: `ast_search` without
-`apply`, `fetch` as a GET or HEAD without `save`, `browse` without
+when its tool's `read_only_when` accepts its arguments: `fetch` as a GET or HEAD without `save`, `browse` without
 `screenshot`. A call that cannot be resolved or parsed is not read-only.
 
 Parallel read-only calls share one `ToolContext`. Its read ledger
@@ -397,10 +395,6 @@ supports:
 - `file_type`
 - `head_limit` and `offset`
 - `multiline`
-
-`ast_search` is structural source search backed by ast-grep. It accepts parsed
-patterns with `$NAME` and `$$$ARGS` metavariables, emits read-compatible line
-anchors, and supports snapshot-backed structural rewrite previews and applies.
 
 ## Shell
 

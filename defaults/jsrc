@@ -25,7 +25,7 @@ set REASONING_DISPLAY 1
 set NET_DISPLAY 2
 set TOOLS_DISPLAY 1
 set TOOLS_PREVIEW_LINES 12
-set TOOLS_QUIET ["read", "fs_search", "ast_search", "lsp", "fetch", "browse", "browser_probe", "exa_search", "serper_search", "tavily_search", "docs_search", "claim", "release", "subscribe", "wake_me", "who", "tasks", "take_task", "tool_discovery", "skill", "undo", "terminal_snapshot"]
+set TOOLS_QUIET ["read", "fs_search", "lsp", "fetch", "browse", "browser_probe", "exa_search", "serper_search", "tavily_search", "docs_search", "claim", "release", "subscribe", "wake_me", "who", "tasks", "take_task", "tool_discovery", "skill", "undo", "terminal_snapshot"]
 set SHELL_QUIET ["cd", "ls", "cat", "head", "tail", "wc", "pwd", "tree", "stat", "file", "which", "find", "fd", "grep", "rg", "du", "df", "ps", "echo", "sort", "uniq", "git status", "git log", "git diff", "git show", "git branch"]
 set MARKDOWN on
 set RESUME_EXCHANGES 3

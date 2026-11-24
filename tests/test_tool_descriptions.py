@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from js import paths
-from js.toolkit import descriptions, file_search
+from js.toolkit import descriptions
 from js.toolkit.core import Tool
 from js.toolkit.registry import ToolRegistry, build_default_registry
 
@@ -14,7 +14,6 @@ CORE_TOOL_NAMES = {
     "read",
     "write",
     "fs_search",
-    "ast_search",
     "remove",
     "patch",
     "undo",
@@ -81,21 +80,6 @@ def test_browse_description_discloses_settle_window_and_original_decoding():
     assert "`fetch(save=...)` when exact bytes matter" in description
 
 
-def test_ast_search_description_says_the_walk_crosses_mount_points():
-    description = " ".join(descriptions.load_description("ast_search").split())
-
-    assert "mount" in description
-    assert "--one-file-system" in description
-
-
-def test_ast_search_description_discloses_the_c_bare_call_pattern_limit():
-    description = " ".join(descriptions.load_description("ast_search").split())
-
-    assert "call($A);" in description
-    assert "Cpp" in description
-
-
-
 def test_file_tool_rename_and_alias_resolution():
     registry = build_default_registry()
 
@@ -107,7 +91,6 @@ def test_file_tool_rename_and_alias_resolution():
     assert registry.resolve("task").name == "task"
     assert registry.resolve("Task").name == "task"
     assert registry.resolve("fs_search").name == "fs_search"
-    assert registry.resolve("ast_search").name == "ast_search"
     assert registry.resolve("remove").name == "remove"
     assert registry.resolve("patch").name == "patch"
     assert registry.resolve("undo").name == "undo"
@@ -122,7 +105,6 @@ def test_core_tool_schemas_match_canonical_surface_names():
     read = registry.resolve("read")
     write = registry.resolve("write")
     search = registry.resolve("fs_search")
-    ast_search = registry.resolve("ast_search")
     plan = registry.resolve("plan")
     task = registry.resolve("task")
 
@@ -137,9 +119,6 @@ def test_core_tool_schemas_match_canonical_surface_names():
     # rg-style spellings still reach the handler through **rg_flags but are not
     # declared: the schema is what the model reads, and declaring both doubled it.
     assert not {"-A", "-B", "-C", "-i", "-n", "type"} & set(search.params)
-    assert ast_search.required == ("pattern",)
-    assert set(ast_search.params) == {"pattern", "path", "lang", "rewrite", "apply", "max_results"}
-    assert set(ast_search.params["lang"]["enum"]) == set(file_search.AST_GREP_LANGUAGES)
     assert plan.required == ("plan_name", "version", "content")
     assert set(plan.params) == {"plan_name", "version", "content", "overwrite"}
     # poll, wait and kill of a background handle take neither tasks nor agent_id.
