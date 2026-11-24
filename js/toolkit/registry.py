@@ -529,12 +529,12 @@ class TurnToolSurface:
             and self.mcp_host.is_server_source(source)
         )
         if self.mcp_host is not None and not load and not folded_kind and not folded_source:
-            remote = await self.mcp_host.discover(query=query)
+            remote = await self.mcp_host.discover(query=query, rank=False)
             entries = {item.id: item for item in (*self.catalog(), *self._alias_mcp_catalog(remote))}
             return discovery.catalog_result(entries.values(), query, self._loaded_ids, offset)
         if self.mcp_host is not None and not load and (folded_kind == "mcp" or (not folded_kind and mcp_source)):
             entries = await self.mcp_host.discover(
-                query=query,
+                query=query, rank=False,
                 source="" if folded_source == "mcp" else source,
             )
             # The host has already applied source aliases and MCP query scoping.

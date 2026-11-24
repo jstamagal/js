@@ -424,7 +424,7 @@ class MCPHost:
             for server in self.config.servers
         )
 
-    async def discover(self, query: str = "", source: str = "") -> tuple[CatalogEntry, ...]:
+    async def discover(self, query: str = "", source: str = "", *, rank: bool = True) -> tuple[CatalogEntry, ...]:
         terms = search_tokens(query) - {"mcp"}
         servers = [
             server for server in self.config.servers
@@ -506,7 +506,7 @@ class MCPHost:
                 if server is None or server.normalized_name.casefold() != source_scope:
                     continue
             result.append(entry)
-        return tuple(ranked_entries(result, " ".join(sorted(terms))))
+        return tuple(ranked_entries(result, " ".join(sorted(terms))) if rank else result)
 
     def _record_server_error(self, server: MCPServer, exc: Exception) -> None:
         raw = str(exc).strip() or type(exc).__name__

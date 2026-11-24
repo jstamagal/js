@@ -505,6 +505,28 @@ def test_unscoped_search_discovers_remote_tools(tmp_path, query):
     asyncio.run(drive())
 
 
+def test_agent_alias_can_find_load_and_call_a_remote_tool(tmp_path):
+    class RemoteClient(FakeClient):
+        async def list_tools(self, *, timeout=None):
+            return [{"name": "send", "inputSchema": {"type": "object"}}]
+
+    async def drive():
+        server = MCPServer("agentbus", "agentbus", "stdio", command="fake")
+        host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=RemoteClient)
+        registry = build_default_registry().select([], tool_aliases={"agentbus__send": "relay"})
+        surface = registry.lazy_surface(tmp_path, mcp_host=host)
+        found = json.loads(await surface.discover_async(query="relay", kind="mcp"))["results"]
+        entry, = found
+        assert entry["name"] == "relay"
+        assert json.loads(surface.discover(load=entry["id"]))["loaded"] == ["relay"]
+        tool = surface.dispatch_registry().resolve("relay")
+        await tool.handler()
+        assert host.clients["agentbus"].calls == [("send", {})]
+        await host.close()
+
+    asyncio.run(drive())
+
+
 def test_loading_remote_tool_returns_server_instructions(tmp_path):
     class IRCClient(FakeClient):
         initialize_result = SimpleNamespace(instructions="Silence is the default.")
