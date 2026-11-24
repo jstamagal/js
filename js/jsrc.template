@@ -208,7 +208,7 @@
 # Tools TOOLS_DISPLAY 1 counts as quick: each folds into one row instead of
 # showing its result. A JSON list of tool names.
 #   example:  set TOOLS_QUIET ["read", "fs_search"]
-#set TOOLS_QUIET ["read", "fs_search", "ast_search", "lsp", "fetch", "browse", "browser_probe", "exa_search", "serper_search", "tavily_search", "docs_search", "claim", "release", "subscribe", "wake_me", "who", "tasks", "take_task", "tool_discovery", "skill", "undo", "terminal_snapshot"]
+#set TOOLS_QUIET ["read", "fs_search", "lsp", "fetch", "browse", "browser_probe", "exa_search", "serper_search", "tavily_search", "docs_search", "claim", "release", "subscribe", "wake_me", "who", "tasks", "take_task", "tool_discovery", "skill", "undo", "terminal_snapshot"]
 
 # Shell commands TOOLS_DISPLAY 1 counts as quick, matched by the command's first
 # word or first two words. A JSON list.

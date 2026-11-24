@@ -275,9 +275,6 @@ def test_which_calls_are_read_only():
 
     for name in ("read", "fs_search", "skill", "docs_search", "exa_search", "serper_search", "tavily_search"):
         assert ro(name), name
-    assert ro("ast_search", pattern="f($A)")
-    assert ro("ast_search", pattern="f($A)", rewrite="g($A)")
-    assert not ro("ast_search", pattern="f($A)", rewrite="g($A)", apply=True)
     assert ro("fetch", url="https://example.com")
     assert ro("fetch", url="https://example.com", method="head")
     assert not ro("fetch", url="https://example.com", method="POST")

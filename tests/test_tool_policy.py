@@ -31,7 +31,7 @@ tags:
     - tag:code_editor
   code_warrior:
     - tag:code_hacker
-    - ast_search:eager
+    - fs_search:eager
     - docs_search:eager
 
 ban:
@@ -81,7 +81,7 @@ def test_code_editor_bans_shell(tmp_path):
 def test_a_name_allows_past_a_glob_drop_and_names_resolve_by_position(tmp_path):
     states = _states(build_default_registry(), ["tag:code_warrior"], _config(tmp_path))
 
-    assert states["ast_search"] == "eager"
+    assert states["fs_search"] == "eager"
     assert states["shell"] == "eager"
     # code_editor's docs_search:lazy names it before code_warrior's eager does.
     assert states["docs_search"] == "lazy"

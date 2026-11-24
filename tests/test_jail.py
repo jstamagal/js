@@ -29,7 +29,6 @@ from js import (
     runtime,
     setting_values,
     settings,
-    tool_binaries,
     tool_errors,
 )
 from js.toolkit import ToolContext, call_tool, python_kernel, shell, terminal
@@ -391,8 +390,6 @@ def test_file_tool_results_name_the_jail_tmp_not_the_host_dir(jailed):
         tool("patch", jailed, path=tmp_file, old_string="absent", new_string="x"),
         tool("fs_search", jailed, pattern="gamma", path=f"/tmp/{name}"),
         tool("fs_search", jailed, pattern="gamma", path="/tmp", output_mode="content"),
-        tool("write", jailed, path=f"/tmp/{name}/b.py", content="f(1)\n"),
-        tool("ast_search", jailed, pattern="f($A)", path=f"/tmp/{name}", lang="python"),
         tool("write", jailed, path=js_tmp_file, content="delta\n"),
         tool("read", jailed, path=js_tmp_file),
         tool("remove", jailed, path=tmp_file, permanent=True),
@@ -405,10 +402,8 @@ def test_file_tool_results_name_the_jail_tmp_not_the_host_dir(jailed):
         assert private not in result
     assert f"/tmp/{name}/a.txt" in results[0]
     assert "gamma" in results[5] + results[6] and f"/tmp/{name}/a.txt" in results[6]
-    if tool_binaries.resolve_binary("ast-grep") is not None:
-        assert f"/tmp/{name}/b.py" in results[8]
-    assert str(Path.home() / ".js" / "tmp" / f"{name}.txt") in results[9]
-    for error in (results[1], results[4], results[14]):
+    assert str(Path.home() / ".js" / "tmp" / f"{name}.txt") in results[7]
+    for error in (results[1], results[4], results[12]):
         assert error.startswith("ERROR")
 
 

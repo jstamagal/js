@@ -115,7 +115,7 @@ persists each completed turn.
 | `js/toolkit/fs_tools.py` | the fs suite's tool table, and the path-skill offer on read, write and patch results |
 | `js/toolkit/fs.py` | read, write, remove and undo tools; the file byte and text helpers and the stale-read guard patch and the searches share |
 | `js/toolkit/patch.py` | patch tool: exact and fuzzy string replacement behind the read guard |
-| `js/toolkit/file_search.py` | fs_search (ripgrep) and ast_search (ast-grep), their child processes, and stopping them on cancel |
+| `js/toolkit/file_search.py` | fs_search (ripgrep), its child processes, and stopping them on cancel |
 | `js/toolkit/path_hints.py` | the hint for a path that does not exist: nearest directory, close names, same-tail paths |
 | `js/toolkit/shell.py` | shell tool: commands, their background jobs and the output it reports |
 | `js/toolkit/fetch.py` | fetch tool: http, https and file:// requests, read inline or saved with `save=` |

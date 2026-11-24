@@ -244,29 +244,6 @@ files are skipped in content modes. Results are absolute paths, `content` lines
 are `path:line:text`, and bytes that are not valid UTF-8 render as `\xNN`. When
 more matches exist than `head_limit`, the result ends with a continuation note.
 
-### `ast_search`
-
-Structural search and optional rewrite over parsed source code, backed by
-ast-grep 0.45.3 — the managed `tools/bin/ast-grep` installed by `just install`,
-falling back to `ast-grep` on PATH before that while
-`TOOL_BINARY_PATH_FALLBACK` is on.
-
-Parameters:
-
-- `pattern`: required ast-grep pattern; `$NAME` captures one node and
-  `$$$ARGS` captures zero or more nodes.
-- `path`: file or directory, default current working directory.
-- `lang`: optional parser override from ast-grep's supported language enum.
-- `rewrite`: optional structural replacement; dry-run diff by default.
-- `apply`: set true to apply a supplied rewrite, default false.
-- `max_results`: maximum matches returned or rewritten, default `100`.
-
-Search output uses absolute path headings and the same numbered source lines as
-`read`. Applying a rewrite snapshots every affected file for `undo`, clears the
-shared search cache, and refuses match sets larger than `max_results`. Search
-results mark the matches omitted past `max_results`, and an ast-grep parse
-warning about the pattern is reported above the result.
-
 ### `lsp`
 
 Asks a language server about one file. Lazy in the default agent.

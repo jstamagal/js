@@ -33,14 +33,14 @@ wiki flow ~/wiki "ingest all inbox units"
 
 `just install` puts `js` and `wiki` on PATH and installs everything js's tools
 need: the kernel, vision and browser packages, js's pinned CLI binaries in
-`tools/bin` (`rg`, `fd`, `bat`, `fzf`, `ast-grep`, `obscura`, `aria2c`) and the
+`tools/bin` (`rg`, `fd`, `bat`, `fzf`, `obscura`, `aria2c`) and the
 Chromium build `browser_probe` drives. `just sync` does the same for the
 development env and adds the test packages.
 
 Two systems get less. Playwright publishes no musllinux wheels, so a musl
 system goes without the `browser` extra and Chromium. A Termux install carries
-the base packages and the CLI binaries `pkg` provides; `ast-grep` and `obscura`
-have no verified Termux release, so the install names them and carries on.
+the base packages and the CLI binaries `pkg` provides; `obscura` has no
+verified Termux release, so the install names it and carries on.
 
 An agent has `kernel` and `toolbox` when its agent.yaml lists them, like any
 other tool. The `jev` tool needs `TYPESAFE_API_KEY`.
@@ -75,7 +75,7 @@ js/toolkit/registry.py            registry assembly and selector filtering
 js/toolkit/fs_tools.py            the file tools' table
 js/toolkit/fs.py                  read/write/remove/undo
 js/toolkit/patch.py               patch
-js/toolkit/file_search.py         fs_search and ast_search
+js/toolkit/file_search.py         fs_search
 js/toolkit/shell.py               shell
 js/toolkit/fetch.py               fetch
 js/toolkit/plan.py                plan

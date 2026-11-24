@@ -91,13 +91,13 @@ def test_install_download_rejects_corrupted_checksum(tmp_path: Path) -> None:
 
 
 def test_install_download_extracts_pinned_zip_member(tmp_path: Path) -> None:
-    executable = b"ast-grep fixture"
-    archive = _zip("ast-grep", executable)
+    executable = b"zip fixture"
+    archive = _zip("tool", executable)
     spec = replace(
         _spec(archive, executable),
-        executable="ast-grep",
-        asset="app-x86_64-unknown-linux-gnu.zip",
-        archive_member="ast-grep",
+        executable="tool",
+        asset="tool-x86_64.zip",
+        archive_member="tool",
     )
 
     def download(_url: str, destination: Path) -> None:
@@ -106,7 +106,7 @@ def test_install_download_extracts_pinned_zip_member(tmp_path: Path) -> None:
     state = tool_binaries.install_download(spec, tools_dir=tmp_path, downloader=download)
 
     assert state == "installed"
-    assert (tmp_path / "ast-grep").read_bytes() == executable
+    assert (tmp_path / "tool").read_bytes() == executable
 
 
 def test_install_download_is_idempotent_without_second_download(tmp_path: Path) -> None:
@@ -160,7 +160,6 @@ def test_termux_plan_never_selects_desktop_artifacts(monkeypatch, environment):
     specs, missing = tool_binaries.release_plan()
 
     assert specs == []
-    assert any("ast-grep" in item for item in missing)
     assert any("obscura" in item and "obscura-worker" in item for item in missing)
 
 
@@ -179,11 +178,6 @@ def test_release_plan_handles_libc_versions(monkeypatch, version):
     else:
         assert "obscura" not in names
         assert any("obscura" in notice for notice in missing)
-    if version in {"2.39+r1", "unknown", "2..39", ""}:
-        assert "ast-grep" not in names
-        assert any("ast-grep" in notice for notice in missing)
-    else:
-        assert "ast-grep" in names
 
 
 @pytest.mark.parametrize("failure", [None, "pkg", "timeout", "unavailable", "missing"])
@@ -200,7 +194,7 @@ def test_termux_install_uses_pkg_and_preserves_native_builds(monkeypatch, tmp_pa
         binary.write_text("native package")
         binary.chmod(0o755)
         (tools / name).write_text("stale desktop binary")
-    for name in ("ast-grep", "obscura", "obscura-worker"):
+    for name in ("obscura", "obscura-worker"):
         (tools / name).write_text("owner's native build")
     monkeypatch.setattr(tool_binaries.shutil, "which", lambda name: str(pkg) if name == "pkg" and failure != "unavailable" else None)
     monkeypatch.setattr(tool_binaries.urllib.request, "urlopen",
@@ -231,7 +225,7 @@ def test_termux_install_uses_pkg_and_preserves_native_builds(monkeypatch, tmp_pa
     else:
         for name in ("aria2c", "bat", "fd", "fzf", "rg"):
             assert (tools / name).read_text() == "stale desktop binary"
-    for name in ("ast-grep", "obscura", "obscura-worker"):
+    for name in ("obscura", "obscura-worker"):
         assert (tools / name).read_text() == "owner's native build"
 
 
@@ -241,7 +235,7 @@ def test_termux_install_adopts_native_builds_in_prefix(monkeypatch, tmp_path):
     prefix_bin.mkdir(parents=True)
     pkg = prefix_bin / "pkg"
     pkg.touch()
-    for name in ("aria2c", "bat", "fd", "fzf", "rg", "ast-grep", "obscura", "obscura-worker"):
+    for name in ("aria2c", "bat", "fd", "fzf", "rg", "obscura", "obscura-worker"):
         binary = prefix_bin / name
         binary.write_text("native")
         binary.chmod(0o755)
@@ -251,7 +245,7 @@ def test_termux_install_adopts_native_builds_in_prefix(monkeypatch, tmp_path):
 
     tool_binaries.install_all(tools_dir=tools)
 
-    for name in ("ast-grep", "obscura", "obscura-worker"):
+    for name in ("obscura", "obscura-worker"):
         assert (tools / name).resolve() == prefix_bin / name
 
 
@@ -259,7 +253,7 @@ def test_platform_error_names_missing_assets(monkeypatch) -> None:
     monkeypatch.setattr(tool_binaries.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(tool_binaries.platform, "machine", lambda: "arm64")
     specs, missing = tool_binaries.release_plan()
-    assert {s.executable for s in specs} == {"rg", "fd", "bat", "fzf", "ast-grep"}
+    assert {s.executable for s in specs} == {"rg", "fd", "bat", "fzf"}
     assert any("aria2" in m and "Darwin aarch64" in m for m in missing)
     assert any("obscura" in m and "verification" in m for m in missing)
 
@@ -342,7 +336,6 @@ def test_musl_plan_never_selects_glibc_binaries(monkeypatch, machine):
     monkeypatch.setattr(tool_binaries.platform, "libc_ver", lambda: ("musl", "1.2.5"))
     specs, missing = tool_binaries.release_plan()
     assert {s.executable for s in specs} == {"aria2c", "rg", "fd", "bat", "fzf"}
-    assert any("ast-grep" in m for m in missing)
     assert any("obscura" in m for m in missing)
 
 

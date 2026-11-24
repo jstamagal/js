@@ -56,7 +56,6 @@ _NATIVE_INTENTS = {
     "patch": "edit file modify replace patch",
     "write": "write file create save overwrite",
     "fs_search": "find files filename glob search directory",
-    "ast_search": "find code syntax structural search",
     "task": "spawn agent delegate worker subagent",
     "terminal_session": "terminal shell interactive process kill stop terminate",
 }

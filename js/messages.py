@@ -1781,7 +1781,6 @@ TOOL_RELEASE_TERMUX_PKG_DID_NOT_PROVIDE_EXECUTABLE_NO = "Termux: pkg did not pro
 
 TOOL_RELEASE_TERMUX_PACKAGE_EXECUTABLE_RESOLVES_TO_MANAGED_TOOLS = "Termux: package executable {candidate} resolves to managed tools"
 
-TOOL_TERMUX_AST_GREP_MISSING = "ast-grep: no verified Termux release; install a native build separately"
 
 TOOL_TERMUX_OBSCURA_MISSING = "obscura/obscura-worker: no verified Termux release; install native builds separately"
 
