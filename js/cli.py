@@ -345,6 +345,7 @@ def _main(argv: list[str] | None = None) -> int:
         no_env=args.no_env or args.bare, chat=args.chat, agent=args.agent,
         no_agents_md=args.no_agents_md, no_skills=args.no_skills or args.bare,
         no_mcp=args.no_mcp or args.bare, no_tools=args.no_tools, tools=args.tools,
+        pi=args.pi, pi_strict=args.pi_strict,
     )
     try:
         options.selectors(())

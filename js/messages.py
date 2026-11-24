@@ -715,6 +715,8 @@ OPT_CHAT = Message(
     "persona; without it, no persona. --tools still adds tools.")
 OPT_TOOLS = Message("Exactly these comma-separated tools, globs or tags, each optionally :eager or :lazy.")
 OPT_NO_TOOLS = Message("Run with zero tools.")
+OPT_PI = Message("Use Pi read, bash, edit and write alongside compatible js tools.")
+OPT_PI_STRICT = Message("Use only Pi read, bash, edit and write.")
 OPT_NO_AGENTS_MD = Message("Do not load JS.md or AGENTS.md instruction files.")
 OPT_NO_SKILLS = Message("Disable skill discovery and the skill tool.")
 OPT_NO_MCP = Message("Disable MCP servers.")

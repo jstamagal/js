@@ -401,7 +401,8 @@ def _format_payload(
             if spill_cap == inline_cap and inline_cap
             else "TOOL_RESULT_MAX"
         )
-        return spill_oversized_result(text, spill_cap, limit_name=limit_name, force=True)
+        return spill_oversized_result(text, spill_cap, limit_name=limit_name, force=True,
+                                      registry=context.tool_registry)
     return text
 
 

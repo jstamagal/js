@@ -48,9 +48,7 @@ guards, task parallelism, and provider-specific name handling at the boundary.
 8. swarm bus tools (`bus_tools.py`)
 9. generated agent tools from layered prompt roots
 
-The registry stores canonical names and lowercased aliases. Current aliases are
-only used for provider-facing name transforms; old user-facing aliases are not
-kept.
+The registry stores canonical names and resolves model-facing aliases case-insensitively.
 
 ## Tool Selection: `agent.yaml` and `tools.yaml`
 
@@ -65,6 +63,40 @@ tools:
 skills:
   - engineering:*
 ```
+
+An agent can rename a selected tool with an `aliases:` mapping. The key is its
+registered name and the value is the name the model sees and calls. Select
+tools by their registered names. This agent exposes three tools.
+
+```yaml
+tools: [pi_read:eager, pi_edit:eager, shell:eager]
+aliases:
+  pi_read: read
+  pi_edit: edit
+  shell: run_command
+```
+
+### Pi tool surface
+
+`js --pi` publishes `pi_read`, `pi_bash`, `pi_edit` and `pi_write` as
+`read`, `bash`, `edit` and `write`. It replaces the native read, shell, patch
+and write tools and drops undo, since Pi edits and writes do not take js undo
+snapshots. The agent keeps its other selected tools, including lazy tools.
+`js --pi-strict` publishes just the four Pi tools. Without either flag an agent
+can select the `pi_*` names and choose its own aliases.
+
+Pi read takes a 1-based line `offset` and a line count, `limit`. Pi edit takes `path` and an
+`edits` array of `{oldText, newText}` replacements against the original file.
+Pi write takes `path` and `content` and can overwrite a file directly.
+Pi bash takes `command` and an optional numeric `timeout` in seconds. It waits
+for completion, combines stdout and stderr, and returns the tail plus the
+full output path when a command exceeds 2,000 lines or 50 KiB. An explicit
+timeout kills the command. The js jail and shell environment policy apply.
+
+The native Python tools track the upstream Pi coding agent at
+[8209929](https://github.com/earendil-works/pi/tree/8209929fb553e7a8c91dc0894569f9ec43dd201f/packages/coding-agent/src/core/tools).
+
+### Selection rules
 
 Every `tools:` entry is `noun:modifier`. The noun is a tool name or a glob
 over tool names (quote a glob that starts with `*`: `"*:ban"`). The modifier
@@ -237,7 +269,7 @@ grep
 
 Tool names remain canonical by default. There is no automatic Claude-specific capitalization.
 
-Optional `TOOL_ALIASES` settings map canonical names to model-facing aliases. Each profile contains a `match` string or list of strings and an `aliases` table. Matching is case-insensitive substring matching against the model ID and provider ID. The first matching profile with usable aliases wins; without a matching profile, names remain unchanged.
+Optional `TOOL_ALIASES` settings map canonical names to model-facing aliases. Each profile contains a `match` string or list of strings and an `aliases` table. Matching is case-insensitive substring matching against the model ID and provider ID. The first matching profile with usable aliases supplies defaults. The agent’s aliases take precedence, and the Pi flags set the four Pi names.
 
 The runtime rewrites outgoing tool schema names and backtick-wrapped tool-name references in descriptions. The active registry resolves aliases back to canonical handlers, and tool-call history records canonical names.
 
@@ -451,6 +483,6 @@ For another Python project, the behavior to preserve is:
 - undo snapshots
 - `SHELL_PROGRAM` shell execution
 - task parallelism and child context isolation
-- Claude provider-facing name transform based on model string only
+- model-facing aliases from the agent, tool mode and model profile
 - canonical persisted history
 - capped tool results and shell output

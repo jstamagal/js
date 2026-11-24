@@ -7,6 +7,7 @@ from dataclasses import replace
 from typing import Any
 
 from ..swarm import BROADCAST, CLAIM_TTL_S, Agent, board, bus_view, clock, expiry, roster
+from . import policy
 from .core import Tool
 from .descriptions import load_description, load_parameter_description
 from .presentation import Presentation
@@ -246,4 +247,8 @@ def with_bus_tools(registry):
     """`registry` plus the bus tools: what the runner puts on every agent's surface."""
     extra = tuple(t for t in tools() if t.name not in registry.by_name)
     aliases = {**registry.aliases, **{t.name.lower(): t.name for t in extra}}
+    for canonical, public in registry.public_aliases.items():
+        owner = aliases.get(public.lower())
+        if owner is not None and owner != canonical:
+            raise policy.ToolPolicyError(f"tool alias {public!r} for {canonical!r} conflicts with {owner!r}")
     return replace(registry, tools=registry.tools + extra, aliases=aliases)

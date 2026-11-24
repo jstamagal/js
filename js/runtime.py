@@ -646,10 +646,13 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
         sampling=sampling,
     )
     model, provider_id = request.model, request.provider_id
-    convo = TurnConvo(system, messages, provider_id=provider_id, model=model,
-                      vision=vision_enabled_for_model(model, getattr(cfg, "settings", None)))
     base_registry = tool_registry or stock_registry()
-    alias_map = tool_calls.resolve_alias_profile(getattr(cfg, "settings", {}) or {}, model, provider_id, base_registry)
+    profile = tool_calls.resolve_alias_profile(getattr(cfg, "settings", {}) or {}, model, provider_id, base_registry)
+    base_registry = base_registry.with_public_aliases(profile)
+    alias_map = base_registry.public_aliases
+    convo = TurnConvo(system, messages, provider_id=provider_id, model=model,
+                      vision=vision_enabled_for_model(model, getattr(cfg, "settings", None)),
+                      tool_aliases=alias_map)
     active_context = tool_context or T.STOCK_CONTEXT
     owns_mcp_host = mcp_host is None
     if owns_mcp_host and getattr(cfg, "mcp", None) is not None and getattr(cfg.mcp, "servers", ()):
@@ -660,7 +663,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     runnable_registry, left_out = base_registry.runnable(active_context)
     for name, reason in left_out.items():
         telemetry.event("tool_unpublished", tool=name, reason=reason)
-    active_registry = runnable_registry.aliased(alias_map).lazy_surface(
+    active_registry = runnable_registry.lazy_surface(
         active_context.cwd, mcp_host=mcp_host, disabled_skills=cfg.skills_disabled,
         skill_catalog=skill_catalog)
     active_context.skill_catalog = skill_catalog

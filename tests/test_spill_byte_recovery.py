@@ -9,6 +9,7 @@ import pytest
 from turn_driver import config, registry, run
 
 from js import result_caps
+from js.tool_result_messages import provider_text
 from js.toolkit import fs, fs_tools, patch
 from js.toolkit.core import Tool, ToolContext
 
@@ -174,3 +175,16 @@ def test_an_invalid_byte_offset_is_refused_not_read_as_the_whole_file(tmp_path, 
 
     assert result.startswith("ERROR")
     assert target not in context.reads.paths()
+
+
+def test_mixed_pi_surface_can_follow_a_spilled_result(tmp_path):
+    from js.toolkit.registry import build_default_registry
+    from js.toolkit.results import spill_oversized_result
+
+    registry = build_default_registry().select(["pi_read:eager"], tool_aliases={"pi_read": "read"})
+    content = "\n".join(str(i) for i in range(1000))
+    preview = spill_oversized_result(content, 1024, spill_dir=tmp_path, registry=registry)
+    offset = int(re.search(r"offset=(\d+)", preview)[1])
+    saved, = tmp_path.glob("result-*.txt")
+    result = registry.resolve("read").handler(str(saved), offset=offset, context=ToolContext(cwd=tmp_path))
+    assert provider_text(result).splitlines() == content.splitlines()[offset - 1:]

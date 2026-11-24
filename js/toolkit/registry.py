@@ -30,6 +30,7 @@ from . import (
     skill,
     subagents,
     terminal,
+    tool_suites,
     toolbox,
     web_search,
     wiki,
@@ -68,6 +69,7 @@ class ToolRegistry:
     lazy: frozenset[str] = frozenset()
     # tools.yaml `ban:` argument patterns, by lowercased tool name.
     arg_bans: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    public_aliases: dict[str, str] = field(default_factory=dict)
 
     def resolve(self, name: str) -> Tool | None:
         trimmed = str(name).strip()
@@ -118,16 +120,18 @@ class ToolRegistry:
         if canonical in self.unavailable_errors:
             return self.unavailable_errors[canonical]
         names = self.by_name
-        has_discovery = discovery.DISCOVERY_TOOL_NAME in names
+        discovery_name = discovery.DISCOVERY_TOOL_NAME
+        has_discovery = discovery_name in names
+        public_discovery_name = self.public_aliases.get(discovery_name, discovery_name)
         if canonical in (self.known_names or ()):
             error = f"ERROR: {canonical} is not allowed by this agent's tool policy."
-            return f'{error} tool_discovery cannot load it here.' if has_discovery else error
+            return f'{error} {public_discovery_name} cannot load it here.' if has_discovery else error
         error = f'ERROR: unknown tool {canonical}.'
         closest = _closest_tool_name(canonical, names)
         if closest:
             error += f' Did you mean {closest}?'
         if has_discovery:
-            return (f'{error} Use tool_discovery to find an allowed tool and load its exact catalog id before calling it.')
+            return (f'{error} Use {public_discovery_name} to find an allowed tool and load its exact catalog id before calling it.')
         return "{error} This agent's tools: {join_names}.".format(error=error, join_names=', '.join(names))
 
     @property
@@ -160,6 +164,7 @@ class ToolRegistry:
         config: policy.ToolsConfig | None = None,
         *,
         warn: bool = True,
+        tool_aliases: Mapping[str, str] | None = None,
     ) -> ToolRegistry:
         """The agent's surface: the tools its `noun:modifier` chain makes
         eager or lazy, with tools.yaml's tags and argument bans applied.
@@ -173,7 +178,31 @@ class ToolRegistry:
             lazy=chosen.lazy,
             unavailable_errors=dict(self.unavailable_errors),
             arg_bans=dict(config.bans),
-        )
+        ).with_public_aliases(tool_aliases or {}, strict=True)
+
+    def with_public_aliases(self, profile: Mapping[str, str], *, strict: bool = False) -> ToolRegistry:
+        """Add public names to the selected surface, keeping canonical policy keys."""
+        if not profile:
+            return self
+        names = self.by_name
+        known = self.known_names or frozenset(names)
+        candidates = {
+            canonical: public for canonical, public in profile.items()
+            if canonical not in self.public_aliases
+            and (canonical in names or (strict and canonical not in known))
+        }
+        reserved = set(names) | set(candidates) | {discovery.DISCOVERY_TOOL_NAME}
+        owners = {**self.aliases, **{name.lower(): name for name in reserved}}
+        aliases = dict(self.public_aliases)
+        for canonical, public in candidates.items():
+            owner = owners.get(public.lower())
+            if owner is not None and owner != canonical:
+                if strict:
+                    raise policy.ToolPolicyError(f"tool alias {public!r} for {canonical!r} conflicts with {owner!r}")
+                continue
+            owners[public.lower()] = canonical
+            aliases[canonical] = public
+        return replace(self.aliased(aliases), public_aliases=aliases)
 
     def argument_refusal(self, name: str, args: Any) -> str | None:
         return policy.argument_refusal(name, args, self.arg_bans)
@@ -248,9 +277,12 @@ class TurnToolSurface:
             for alias, canonical in allowed.aliases.items()
             if alias != discovery.DISCOVERY_TOOL_NAME
         }
+        self.public_aliases = allowed.public_aliases
         if self.mcp_host is not None:
             reserved = {tool.name for tool in allowed.tools}
             reserved.update(self.aliases)
+            reserved.update(public for canonical, public in self.public_aliases.items()
+                            if canonical.lower() != public.lower())
             reserved.add(discovery.DISCOVERY_TOOL_NAME)
             self.mcp_host.reserve_public_names(reserved)
         self._skill_catalog = (
@@ -287,12 +319,18 @@ class TurnToolSurface:
 
     def dispatch_registry(self) -> ToolRegistry:
         """Freeze the tools available for one model response's dispatch batch."""
+        tools = self.tools
+        unavailable = self._unavailable_errors()
+        candidates = {tool.name for tool in tools} | set(unavailable)
         return ToolRegistry(
-            tools=self.tools,
-            aliases=self.aliases,
+            tools=tools,
+            aliases={**self.aliases, **{public.lower(): canonical
+                                     for canonical, public in self.public_aliases.items()
+                                     if canonical in candidates}},
             known_names=self.allowed.known_names,
-            unavailable_errors=self._unavailable_errors(),
+            unavailable_errors=unavailable,
             arg_bans=self.allowed.arg_bans,
+            public_aliases=self.public_aliases,
         )
 
     @property
@@ -304,7 +342,12 @@ class TurnToolSurface:
         if trimmed in self.by_name:
             return self.by_name[trimmed]
         canonical = self.aliases.get(trimmed.lower(), trimmed)
-        return self.by_name.get(canonical)
+        return self.by_name.get(canonical) or next(
+            (tool for tool in self.tools if self.public_name(tool.name).lower() == trimmed.lower()), None,
+        )
+
+    def public_name(self, canonical: str) -> str:
+        return self.public_aliases.get(canonical, canonical)
 
     def openai_specs(self) -> list[dict]:
         return _registry_from_tools(self.tools).openai_specs()
@@ -313,20 +356,27 @@ class TurnToolSurface:
         return "/".join(tool.name for tool in self.tools)
 
     def _unavailable_errors(self) -> dict[str, str]:
-        entries = {item.name: item for item in self.catalog() if item.kind != "skill"}
         errors = dict(self.allowed.unavailable_errors)
-        for item in entries.values():
+        discover = self.public_name(discovery.DISCOVERY_TOOL_NAME)
+        for item in self.catalog():
+            if item.kind == "skill":
+                continue
+            canonical = (
+                self._lazy[item.id].name if item.id in self._lazy
+                else item.id.removeprefix("mcp:") if item.loadable
+                else item.name
+            )
             if item.loadable:
-                errors[item.name] = (
-                    f'ERROR: {item.name} is not in the published tool set for this call. Fix: tool_discovery {{"load":"{item.id}"}} then re-issue on the next model call. Retrying unchanged will fail again.'
+                errors[canonical] = (
+                    f'ERROR: {item.name} is not in the published tool set for this call. Fix: {discover} {{"load":"{item.id}"}} then re-issue on the next model call. Retrying unchanged will fail again.'
                 )
             else:
-                errors[item.name] = f'ERROR: {item.name} is a catalog status entry, not a loadable tool.'
+                errors[canonical] = f'ERROR: {item.name} is a catalog status entry, not a loadable tool.'
         if self.mcp_host is not None:
             for name in self.mcp_host.remote_tools:
                 if self.mcp_host.load(f"mcp:{name}") is not None:
                     errors[name] = (
-                        f'ERROR: {name} is not in the published tool set for this call. Fix: tool_discovery {{"load":"mcp:{name}"}} then re-issue on the next model call. Retrying unchanged will fail again.'
+                        f'ERROR: {self.public_name(name)} is not in the published tool set for this call. Fix: {discover} {{"load":"mcp:{name}"}} then re-issue on the next model call. Retrying unchanged will fail again.'
                     )
         return errors
 
@@ -447,7 +497,7 @@ class TurnToolSurface:
         native = (
             CatalogEntry(
                 item_id,
-                tool.name,
+                self.public_name(tool.name),
                 _catalog_summary(tool.description, present, tool.name),
                 "native",
                 tool.source,
@@ -459,8 +509,14 @@ class TurnToolSurface:
             CatalogEntry(item_id, skill.name, skill.description, "skill", skill.source)
             for item_id, skill in self._skills.items()
         )
-        mcp = self.mcp_host.initial_catalog() if self.mcp_host is not None else ()
+        mcp = self._alias_mcp_catalog(self.mcp_host.initial_catalog()) if self.mcp_host is not None else ()
         return tuple(sorted((*native, *skills, *mcp), key=lambda item: item.id))
+
+    def _alias_mcp_catalog(self, entries: Iterable[CatalogEntry]) -> tuple[CatalogEntry, ...]:
+        return tuple(
+            replace(item, name=self.public_name(item.name)) if item.loadable else item
+            for item in entries
+        )
 
     async def discover_async(self, *, query: str = "", kind: str = "", source: str = "", load: str = "", offset: int = 0) -> str:
         folded_kind = str(kind).strip().lower()
@@ -474,7 +530,7 @@ class TurnToolSurface:
         )
         if self.mcp_host is not None and not load and not folded_kind and not folded_source:
             remote = await self.mcp_host.discover(query=query)
-            entries = {item.id: item for item in (*self.catalog(), *remote)}
+            entries = {item.id: item for item in (*self.catalog(), *self._alias_mcp_catalog(remote))}
             return discovery.catalog_result(entries.values(), query, self._loaded_ids, offset)
         if self.mcp_host is not None and not load and (folded_kind == "mcp" or (not folded_kind and mcp_source)):
             entries = await self.mcp_host.discover(
@@ -482,7 +538,7 @@ class TurnToolSurface:
                 source="" if folded_source == "mcp" else source,
             )
             # The host has already applied source aliases and MCP query scoping.
-            return discovery.catalog_result(entries, query, self._loaded_ids, offset)
+            return discovery.catalog_result(self._alias_mcp_catalog(entries), query, self._loaded_ids, offset)
         return self.discover(query=query, kind=kind, source=source, load=load, offset=offset)
 
     def discover(self, *, query: str = "", kind: str = "", source: str = "", load: str = "", offset: int = 0) -> str:
@@ -507,7 +563,7 @@ class TurnToolSurface:
                 self._mcp_loaded.update(loaded)
                 self._loaded_ids.add(item_id)
                 self._state_changed()
-                result: dict[str, object] = {"loaded": loaded, "id": item_id}
+                result: dict[str, object] = {"loaded": [self.public_name(name) for name in loaded], "id": item_id}
                 instructions = self.mcp_host.server_instructions(loaded)
                 if instructions:
                     result["server_instructions"] = instructions
@@ -517,7 +573,9 @@ class TurnToolSurface:
             self._loaded.add(tool.name)
             self._loaded_ids.add(item_id)
             self._state_changed()
-            return discovery.compact_result({"loaded": [tool.name], "id": item_id})
+            return discovery.compact_result({
+                "loaded": [self.public_name(tool.name)], "id": item_id,
+            })
         skill = self._skills.get(item_id)
         if skill is None:
             return f'ERROR: no allowed catalog entry with id {item_id!r}'
@@ -532,7 +590,7 @@ class TurnToolSurface:
         result: dict[str, object] = {
             "id": item_id,
             "instructions": loaded.instructions,
-            "loaded": list(loaded.activation.activated),
+            "loaded": [self.public_name(name) for name in loaded.activation.activated],
         }
         if loaded.activation.denied:
             result["denied_tools"] = list(loaded.activation.denied)
@@ -632,6 +690,7 @@ def build_default_registry(
     """Assemble the supplied suites and agent roots, using the stock surface by default."""
     if suites is None:
         suites = (
+            *((suite.name, suite.tools()) for suite in tool_suites.COMPATIBILITY_SUITES),
             ("fs", fs_tools.tools()),
             ("shell", shell.tools() + fetch.tools()),
             ("search", web_search.tools()),
@@ -660,4 +719,6 @@ def select(entries: Iterable[str] | None, prompts_root: Path | Sequence[Path] | 
 
 def stock_registry() -> ToolRegistry:
     """Resolve the fallback tool surface after the invocation selects its home."""
-    return registry_for_roots(paths.agent_roots())
+    registry = registry_for_roots(paths.agent_roots())
+    tools = tuple(tool for tool in registry.tools if tool.name not in tool_suites.COMPATIBILITY_TOOL_NAMES)
+    return _registry_from_tools(tools)

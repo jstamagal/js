@@ -83,6 +83,7 @@ def spill_oversized_result(
     spill_dir: Path | None = None,
     limit_name: str = "TOOL_RESULT_INLINE_MAX",
     force: bool = False,
+    registry: Any = None,
 ) -> str:
     """Write an oversized result to disk and return a preview plus the path.
 
@@ -113,9 +114,14 @@ def spill_oversized_result(
     line_count = len(result.splitlines())
     multiline = line_count > 1
 
+    available = registry.by_name if registry is not None else {}
+    pi_reader = "pi_read" in available and "read" not in available
+
     def spill_notice(next_byte: int, next_line: int) -> str:
         by_byte = json.dumps({"start_byte": next_byte})
-        if multiline:
+        if pi_reader:
+            how = f"continue with offset={next_line}" if multiline else f"one line; continue at byte {next_byte}"
+        elif multiline:
             by_line = json.dumps({"start_line": next_line})
             how = f'read it on with range {by_byte}, or by line with range {by_line}'
         else:

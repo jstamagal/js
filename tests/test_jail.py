@@ -725,3 +725,17 @@ def test_jail_state_can_belong_to_each_assembly():
         jail.leave()
     assert first.jail is None and first.environ == {} and cleaned == [True]
     assert jail.ACTIVE is before and os.environ.get("JS_JAIL") == marker
+
+
+@needs_bwrap
+def test_pi_tools_respect_the_same_jail(jailed, operator_home):
+    outside = operator_home / "notes.txt"
+    for name, args in (
+        ("pi_read", {}),
+        ("pi_edit", {"edits": [{"oldText": SECRET, "newText": "changed"}]}),
+        ("pi_write", {"content": "changed"}),
+    ):
+        assert isinstance(tool(name, jailed, path=str(outside), **args), jail.Refusal)
+    result = tool("pi_bash", jailed, command='test ! -e "$HOME/notes.txt" && cat inside.txt')
+    assert not result.is_error and result.dehydrated() == "inside\n"
+    assert outside.read_text() == SECRET

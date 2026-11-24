@@ -91,6 +91,8 @@ def test_argv_gives_each_option_its_value():
     RunOptions(system_prompt="S", append_system_prompt=("a", "b c"), no_env=True, chat=True, tools="read"),
     RunOptions(you_are="", no_agents_md=True, no_skills=True, no_mcp=True, no_tools=True),
     RunOptions(system_prompt_file="/p f"),
+    RunOptions(pi=True),
+    RunOptions(pi_strict=True),
     RunOptions(),
 ])
 def test_options_argv_reproduces_the_options(options):

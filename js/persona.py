@@ -45,6 +45,7 @@ class PromptSpec:
     # The profile matched for the model and provider the spec was built for,
     # whether or not it was applied; `for_model` compares against it.
     model_profile: model_profiles.ModelProfile | None = None
+    tool_aliases: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.source:
@@ -130,7 +131,7 @@ def _system_kind(path: Path) -> str | None:
 
 
 AGENT_MANIFEST = "agent.yaml"
-_MANIFEST_KEYS = ("model", "secondary_model", "reasoning", "max_tokens", "sampling", "tools", "skills", "models")
+_MANIFEST_KEYS = ("model", "secondary_model", "reasoning", "max_tokens", "sampling", "tools", "skills", "models", "aliases")
 _MIGRATE_HINT = msgs.AGENT_MANIFEST_MIGRATION_HINT.format()
 
 
@@ -206,6 +207,19 @@ def split_frontmatter(path: Path, text: str) -> tuple[dict[str, Any] | None, str
 
 def _coerce_tool_selectors(path: Path, raw: Any) -> tuple[str, ...]:
     return policy.parse_entries(raw, str(path))
+
+
+def _coerce_tool_aliases(path: Path, raw: Any) -> dict[str, str]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path}: aliases must be a mapping of tool names to public names")
+    for canonical, public in raw.items():
+        if not isinstance(canonical, str) or not canonical.strip() or canonical.strip() != canonical:
+            raise ValueError(f"{path}: invalid canonical tool name in aliases: {canonical!r}")
+        if not isinstance(public, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", public):
+            raise ValueError(f"{path}: invalid public name for tool {canonical!r}: {public!r}")
+    return raw
 
 
 def _coerce_model(raw: Any) -> str:
@@ -291,6 +305,7 @@ def load_agent_manifest(manifest_path: Path) -> PromptSpec:
     return PromptSpec(
         system="",
         tool_selectors=_coerce_tool_selectors(manifest_path, manifest.get("tools")),
+        tool_aliases=_coerce_tool_aliases(manifest_path, manifest.get("aliases")),
         sampling=model_profiles.coerce_sampling(manifest_path, manifest.get("sampling")),
         model=_coerce_model(manifest.get("model")),
         secondary_model=str(manifest.get("secondary_model") or "").strip(),
@@ -383,7 +398,8 @@ def load_configured_prompt_spec(cfg, *, expand: bool = True) -> PromptSpec:
         return _finish_configured_spec(replace(spec, model_profile=_profile_for(spec, cfg)), cfg, expand)
     if options.system_prompt_file is not None:
         base = load_agent_prompt_spec('defaultagent', getattr(cfg, "prompt_roots", ()) or paths.agent_roots()[:2], env=False)
-        spec = PromptSpec(system=options.prompt_text(), tool_selectors=base.tool_selectors, models=base.models)
+        spec = PromptSpec(system=options.prompt_text(), tool_selectors=base.tool_selectors, models=base.models,
+                          tool_aliases=base.tool_aliases)
         return _finish_configured_spec(_with_model_profile(spec, cfg, None), cfg, expand)
     env = not options.skips_env
     agents_files = () if options.skips_agents_md else tuple(getattr(cfg, "agents_files", ()))
@@ -443,7 +459,8 @@ def _finish_configured_spec(spec: PromptSpec, cfg, expand: bool) -> PromptSpec:
     options = current()
     if options.append_system_prompt:
         spec = _with_system(spec, '\n\n'.join((spec.system.rstrip(), *options.append_system_prompt)))
-    spec = replace(spec, tool_selectors=options.selectors(spec.tool_selectors))
+    spec = replace(spec, tool_selectors=options.selectors(spec.tool_selectors),
+                   tool_aliases=options.aliases(spec.tool_aliases))
     # Tag references resolve against tools.yaml here, so a bad tag or a tag
     # cycle fails the prompt load with one line instead of a later traceback.
     policy.expand(spec.tool_selectors, policy.load_tools_config(), f"agent {getattr(cfg, 'agent_id', '')!r}")

@@ -38,6 +38,7 @@ from typing import Any
 import yaml
 
 from .. import messages as msgs, output, paths, settings as _settings
+from . import tool_suites
 from .core import Tool
 
 MODIFIERS = ("eager", "lazy", "ban")
@@ -279,7 +280,10 @@ def argument_refusal(tool_name: str, args: Any, bans: Mapping[str, Sequence[str]
     A pattern with glob characters must match a whole string argument; any
     other pattern matches as a substring. Matching ignores case.
     """
-    patterns = bans.get(tool_name.lower())
+    canonical = tool_name.lower()
+    patterns = bans.get(canonical, ())
+    if legacy := tool_suites.ARGUMENT_BAN_FALLBACKS.get(canonical):
+        patterns = (*patterns, *bans.get(legacy, ()))
     if not patterns:
         return None
     values = [value.casefold() for value in _string_values(args)]

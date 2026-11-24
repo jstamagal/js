@@ -241,7 +241,10 @@ def settle(cfg: Any, *, model: str | None = None, reasoning: str | None = None,
     except ValueError as exc:
         raise RunNotSettled(exc, loading=False) from exc
     prompt_spec = for_model(prompt_spec, cfg)
-    registry = registry_for(cfg).select(prompt_spec.tool_selectors)
+    try:
+        registry = registry_for(cfg).select(prompt_spec.tool_selectors, tool_aliases=prompt_spec.tool_aliases)
+    except policy.ToolPolicyError as exc:
+        raise RunNotSettled(exc, loading=True) from exc
     effort = reasoning
     if layered:
         cfg = login_defaults.for_turn(login_defaults.with_agent(cfg, prompt_spec, reasoning=agent_reasoning))

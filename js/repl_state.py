@@ -254,8 +254,11 @@ def sync_tool_registry_from_live_settings(cfg: Config, state: ReplState) -> None
     unmatched-entry notices; a tools.yaml that no longer resolves keeps the
     current registry and prints one line."""
     selectors = state.tool_selectors
+    aliases = state.prompt_spec.tool_aliases if state.prompt_spec is not None else {}
     try:
-        state.tool_registry = run_assembly.registry_for(state.config_for_turn(cfg)).select(selectors, warn=False)
+        state.tool_registry = run_assembly.registry_for(state.config_for_turn(cfg)).select(
+            selectors, warn=False, tool_aliases=aliases,
+        )
     except tool_policy.ToolPolicyError as exc:
         msgs.say(msgs.TOOL_SURFACE_KEPT, error=exc)
 

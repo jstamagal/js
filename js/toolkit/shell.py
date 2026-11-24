@@ -85,7 +85,7 @@ _DROPPED: dict[str, str] = {}
 # Jobs a shell call is blocked waiting on right now, keyed by id() of the
 # ToolContext that made the call. A cancelled turn kills these (see
 # interrupt_inflight); a job whose call already returned a handle is not here.
-_BLOCKING: dict[int, list[_ShellJob]] = {}
+_BLOCKING: dict[int, list[tuple[str, CappedProcess]]] = {}
 
 
 class _ShellJob:
@@ -138,7 +138,8 @@ def _find_job(handle: str | None, owner: str) -> _ShellJob | None:
 
 
 @contextlib.contextmanager
-def _blocking_on(context: ToolContext | None, job: _ShellJob):
+def blocking_command(context: ToolContext | None, command: str, process: CappedProcess):
+    job = (command, process)
     key = id(context)
     with _JOBS_LOCK:
         _BLOCKING.setdefault(key, []).append(job)
@@ -158,10 +159,10 @@ def live_tail(context: Any, command: Any, lines: int) -> tuple[list[str], float]
     and how long it has run; None when no call running ``command`` is blocked
     there or it has printed nothing."""
     with _JOBS_LOCK:
-        jobs = [job for job in _BLOCKING.get(id(context), ()) if job.command == command]
+        jobs = [process for cmd, process in _BLOCKING.get(id(context), ()) if cmd == command]
     if not jobs:
         return None
-    process = jobs[-1].process
+    process = jobs[-1]
     text = b"".join(process.stream(name).snapshot()[0][-8192:] for name in ("stdout", "stderr"))
     shown = [line for line in text.decode("utf-8", errors="replace").splitlines() if line.strip()]
     return (shown[-lines:], process.elapsed()) if shown else None
@@ -178,8 +179,8 @@ def interrupt_inflight(context: Any) -> int:
     """
     with _JOBS_LOCK:
         jobs = list(_BLOCKING.get(id(context), ()))
-    for job in jobs:
-        job.process.send_kill()
+    for _, process in jobs:
+        process.send_kill()
     return len(jobs)
 
 
@@ -427,6 +428,24 @@ def _render_running(job: _ShellJob, waited: float, context: Any) -> str | ToolOu
     return text(stdout, stderr) if whole is None else ToolOutput(text(stdout, stderr), text(*whole))
 
 
+def shell_environment(context: ToolContext, env: list[str] | None = None) -> tuple[set[str], dict[str, str]]:
+    """Build the command environment shared by shell tools."""
+    configured_allow = context.shell_env_allow
+    if not isinstance(configured_allow, (list, tuple, set, frozenset)):
+        configured_allow = _ENV_ALLOW
+    allowed = {str(key) for key in configured_allow if str(key)} | set(env or [])
+    safe_env = {key: os.environ[key] for key in (*allowed, *_TOOLCHAIN_ENV) if key in os.environ}
+    safe_env["JS_HOME"] = str(paths.home())
+    # The managed binaries are downloaded for a command to call by name, so the
+    # directory holding them leads PATH. Without this fd, bat and fzf are
+    # installed and unreachable.
+    if context.shell_managed_path and "PATH" in allowed:
+        managed_bin = str(TOOLS_DIR)
+        inherited = safe_env.get("PATH", "")
+        safe_env["PATH"] = f"{managed_bin}{os.pathsep}{inherited}" if inherited else managed_bin
+    return allowed, safe_env
+
+
 def shell(
     command: str = "",
     cwd: str | None = None,
@@ -449,19 +468,7 @@ def shell(
         return "ERROR: command is required for action=\"run\""
     wait_s = int_or_default(timeout, int(context.shell_wait_seconds), minimum=1)
     workdir = context.resolve_path(cwd) if cwd else context.cwd
-    configured_allow = context.shell_env_allow
-    if not isinstance(configured_allow, (list, tuple, set, frozenset)):
-        configured_allow = _ENV_ALLOW
-    allowed = {str(key) for key in configured_allow if str(key)} | set(env or [])
-    safe_env = {key: os.environ[key] for key in (*allowed, *_TOOLCHAIN_ENV) if key in os.environ}
-    safe_env["JS_HOME"] = str(paths.home())
-    # The managed binaries are downloaded for a command to call by name, so the
-    # directory holding them leads PATH. Without this fd, bat and fzf are
-    # installed and unreachable.
-    if context.shell_managed_path and "PATH" in allowed:
-        managed_bin = str(TOOLS_DIR)
-        inherited = safe_env.get("PATH", "")
-        safe_env["PATH"] = f"{managed_bin}{os.pathsep}{inherited}" if inherited else managed_bin
+    allowed, safe_env = shell_environment(context, env)
     program = str(getattr(context, "shell_program", "") or _settings.default_value("SHELL_PROGRAM"))
     shell_path = _resolve_shell(program)
     if shell_path is None:
@@ -486,7 +493,7 @@ def shell(
     job = _ShellJob(job_id, command, process, shell_path, keep_ansi, cap, context.task_owner)
     job.allowed, job.safe_env = allowed, safe_env
     _register_job(job)
-    with _blocking_on(context, job):
+    with blocking_command(context, job.command, job.process):
         result = process.wait(wait_s)
     if result is None and context.shell_kill_unfinished:
         result = process.kill()
@@ -517,7 +524,7 @@ def _shell_job_action(action: str, handle: str | None, timeout: int | None, desc
         return _render_finished(job, result, description, job.allowed, job.safe_env, context,
                                 since_last=True, preface=preface)
     wait_s = 0 if action == "poll" else int_or_default(timeout, int(context.shell_wait_seconds), minimum=1)
-    with _blocking_on(context, job):
+    with blocking_command(context, job.command, job.process):
         result = job.process.wait(wait_s)
     if result is None and action == "wait" and context.shell_kill_unfinished:
         result = job.process.kill()

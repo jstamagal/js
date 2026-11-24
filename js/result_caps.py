@@ -354,7 +354,7 @@ def cap_result(result: Any, cap_bytes: int, inline_cap: int | None = None,
         active_context = context if context is not None else T.STOCK_CONTEXT
         inline_cap = int(getattr(active_context, "max_tool_result_inline_bytes", 0) or 0)
     if inline_cap > 0:
-        result = spill_oversized_result(result, inline_cap)
+        result = spill_oversized_result(result, inline_cap, registry=getattr(context, "tool_registry", None))
     if cap_bytes > 0:
         result = cap_result_text(result, cap_bytes, f'\n[truncated: TOOL_RESULT_MAX ({cap_bytes}) reached]')
     return Output(result) if is_content and not isinstance(result, Output) else result

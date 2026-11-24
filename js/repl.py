@@ -264,7 +264,7 @@ def live_state(cfg, prompt_spec, *, messages: list[dict] | None = None,
         live_settings = copy.deepcopy(cfg.settings) if isinstance(cfg.settings, dict) else {}
     fset.bind_settings(live_settings)
     if tool_registry is None:
-        tool_registry = run_assembly.registry_for(cfg).select(prompt_spec.tool_selectors)
+        tool_registry = run_assembly.registry_for(cfg).select(prompt_spec.tool_selectors, tool_aliases=prompt_spec.tool_aliases)
     event_hooks = events.EventHooks()
     state = ReplState(
         messages=messages,

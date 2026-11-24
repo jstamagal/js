@@ -111,6 +111,7 @@ class _StreamCapture:
         self._tail_cap = 0 if spill_path is None else self.cap - self._head_cap
         self._head = bytearray()
         self._tail = bytearray()
+        self.newlines = 0
         self._total = 0
         self._file = None
         self._spilled = False
@@ -153,6 +154,7 @@ class _StreamCapture:
                     with contextlib.suppress(OSError):
                         self._file.close()
                     self._file = None
+            self.newlines += chunk.count(b"\n")
             self._total += len(chunk)
             rest = chunk
             room = self._head_cap - len(self._head)
@@ -379,13 +381,29 @@ class CappedProcess:
                 )
             return self._result
 
-    def wait(self, timeout: float | None) -> CappedProcessResult | None:
+    def wait(self, timeout: float | None, *, pipe_idle: float | None = None) -> CappedProcessResult | None:
+        """Wait for exit. With pipe_idle, drain active descendants until EOF or
+        that many seconds of silence, within the same overall timeout."""
         if self._result is not None:
             return self._result
+        deadline = None if timeout is None else time.monotonic() + timeout
         try:
             rc = self.proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             return None
+        if pipe_idle is not None:
+            for thread in self._threads:
+                while thread.is_alive():
+                    before = sum(stream.total for stream in self._captures.values())
+                    wait = pipe_idle if deadline is None else min(pipe_idle, deadline - time.monotonic())
+                    thread.join(max(0, wait))
+                    if not thread.is_alive():
+                        break
+                    if deadline is not None and time.monotonic() >= deadline:
+                        return None
+                    if before == sum(stream.total for stream in self._captures.values()):
+                        self._stop_readers.set()
+                        break
         return self._collect(rc)
 
     def send_kill(self) -> None:
@@ -408,6 +426,7 @@ def start_capped(
     env: dict[str, str] | None = None,
     cap: int,
     spill_prefix: Path | None = None,
+    merge_stderr: bool = False,
 ) -> CappedProcess:
     """Start ``argv`` with both streams captured to at most ``cap`` bytes each.
 
@@ -430,7 +449,7 @@ def start_capped(
         argv,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
         cwd=cwd,
         env=env,
         start_new_session=True,
@@ -464,18 +483,10 @@ def start_capped(
                 stream.close()
 
     threads = [
-        threading.Thread(
-            target=_reader,
-            args=("stdout", proc.stdout),
-            daemon=True,
-            name="capped-process-stdout",
-        ),
-        threading.Thread(
-            target=_reader,
-            args=("stderr", proc.stderr),
-            daemon=True,
-            name="capped-process-stderr",
-        ),
+        threading.Thread(target=_reader, args=(name, stream), daemon=True,
+                         name=f"capped-process-{name}")
+        for name, stream in (("stdout", proc.stdout), ("stderr", proc.stderr))
+        if stream is not None
     ]
 
     for thread in threads:

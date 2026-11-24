@@ -14,9 +14,11 @@ prompt cache as broken.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from typing import Any
+
+from ai.types.messages import ToolCallPart, ToolResultPart
 
 from . import (
     compaction,
@@ -48,22 +50,20 @@ class TurnConvo:
     old list keeps what was sent before the rewrite."""
 
     def __init__(self, system: str, messages: list[dict], *, provider_id: str | None, model: str,
-                 vision: bool = False):
+                 vision: bool = False, tool_aliases: Mapping[str, str] | None = None):
         self.system = system
         self.messages = messages
         self._provider_id = provider_id
         self._model = model
         self._vision = vision
+        self._tool_aliases = tool_aliases or {}
         self.ai: list[Any] = []
         self.rebuild()
 
     def rebuild(self) -> None:
         """Build ``ai`` again from the history, and trace the next request
         from its first message with the tool schemas."""
-        self.ai = history_record.history_to_ai_messages(
-            self.system, self.messages, provider_id=self._provider_id, model_id=self._model,
-            vision=self._vision,
-        )
+        self.ai = self._render_history(self.system, self.messages)
         self.sent = 0
         self.schemas = True
 
@@ -84,11 +84,31 @@ class TurnConvo:
         the batch's tool messages."""
         self.messages.extend(records)
         if message is not None:
-            self.ai.append(message)
+            self.ai.append(self._public_tool_names(message))
             return
-        self.ai.extend(history_record.history_to_ai_messages(
-            "", list(records), provider_id=self._provider_id, model_id=self._model, vision=self._vision,
-        ))
+        self.ai.extend(self._render_history("", list(records)))
+
+    def _render_history(self, system: str, records: list[dict]) -> list[Any]:
+        messages = history_record.history_to_ai_messages(
+            system, records, provider_id=self._provider_id, model_id=self._model, vision=self._vision,
+        )
+        if not self._tool_aliases:
+            return messages
+        return [self._public_tool_names(message) for message in messages]
+
+    def _public_tool_names(self, message: Any) -> Any:
+        if not self._tool_aliases or message.role not in {"assistant", "tool"}:
+            return message
+        parts = []
+        changed = False
+        for part in message.parts:
+            if isinstance(part, (ToolCallPart, ToolResultPart)):
+                public = self._tool_aliases.get(part.tool_name, part.tool_name)
+                if public != part.tool_name:
+                    part = part.model_copy(update={"tool_name": public})
+                    changed = True
+            parts.append(part)
+        return message.model_copy(update={"parts": parts}) if changed else message
 
     def traced(self) -> None:
         """The request trace has now shown every message and the schemas."""

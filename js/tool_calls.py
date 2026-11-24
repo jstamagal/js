@@ -21,7 +21,7 @@ def _usable_tool_aliases(alias_map: dict[str, str], tool_names: set[str]) -> dic
         canon: alias
         for canon, alias in alias_map.items()
         if canon in tool_names
-        and alias.lower() not in reserved_names
+        and (alias.lower() not in reserved_names or canon == alias.lower())
         and (original_name_owners.get(alias.lower()) in (None, canon))
     }
 

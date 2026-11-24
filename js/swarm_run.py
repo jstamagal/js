@@ -183,7 +183,9 @@ def _configure(spec: AgentSpec) -> run_assembly.SettledRun:
     system = settled.system
     if spec.seat_file:
         system = system.rstrip() + "\n\n" + Path(spec.seat_file).expanduser().read_text(encoding="utf-8")
-    return replace(settled, system=system, registry=bus_tools.with_bus_tools(settled.registry))
+    return replace(settled, system=system, registry=bus_tools.with_bus_tools(settled.registry).with_public_aliases(
+        settled.prompt_spec.tool_aliases, strict=True,
+    ))
 
 
 class Runner:

@@ -263,7 +263,8 @@ async def _run_one_task_async(
     with worker_session(Path(cfg.session_file)):
         prompt_spec = run_assembly.expand(prompt_spec, cfg)
 
-        registry = full_registry.select(prompt_spec.tool_selectors, agent_id=agent)
+        registry = full_registry.select(prompt_spec.tool_selectors, agent_id=agent,
+                                        tool_aliases=prompt_spec.tool_aliases)
         system = prompt_spec.system
         sampling = login_defaults.sampling(cfg)
 

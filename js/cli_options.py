@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from . import messages as msgs
-from .toolkit import policy
+from .toolkit import policy, tool_suites
 
 
 @dataclass(frozen=True)
@@ -22,6 +22,8 @@ class RunOptions:
     no_skills: bool = False
     no_mcp: bool = False
     tools: str | None = None
+    pi: bool = False
+    pi_strict: bool = False
     # --you-are: None when absent, the TEXT after it (or '') when given.
     you_are: str | None = None
     system_prompt: str | None = None
@@ -55,11 +57,11 @@ class RunOptions:
 
     @property
     def skips_skills(self) -> bool:
-        return self.no_skills or self.zero_tools
+        return self.no_skills or self.zero_tools or self.pi_strict
 
     @property
     def skips_mcp(self) -> bool:
-        return self.no_mcp or self.zero_tools
+        return self.no_mcp or self.zero_tools or self.pi_strict
 
     def selectors(self, original: tuple[str, ...]) -> tuple[str, ...]:
         if self.tools is not None:
@@ -70,7 +72,18 @@ class RunOptions:
             entries = original
         if self.no_skills:
             entries = ('skill:ban', *entries)
-        return entries
+        if self.zero_tools or not (self.pi or self.pi_strict):
+            return entries
+        if self.pi_strict:
+            return tool_suites.PI.selectors
+        return (*tool_suites.PI.selectors, *tool_suites.PI.exclusions, *entries)
+
+    def aliases(self, original: dict[str, str]) -> dict[str, str]:
+        if self.zero_tools or not (self.pi or self.pi_strict):
+            return original
+        if self.pi_strict:
+            return tool_suites.PI.aliases
+        return {**original, **tool_suites.PI.aliases}
 
     def unmatched_tools(self, tools) -> tuple[str, ...]:
         """The --tools entries, other than tags, that name no tool in `tools`."""
