@@ -9,7 +9,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import clipimage, imagefit, media, messages as msgs, settings as _settings
+from . import clipimage, context_window, imagefit, media, messages as msgs
 from .config import Config
 from .toolkit.fs import detect_visual_mime
 
@@ -169,6 +169,7 @@ def build_user_message(
     cwd: Path | None = None,
     stdin_attachment: bytes | None = None,
     missing_ok: bool = False,
+    room_bytes: int | None = None,
 ) -> dict:
     """Build one user message with optional file attachments.
 
@@ -176,10 +177,13 @@ def build_user_message(
     ``media``; the model gets it after the text. The same message is what the
     model gets on every turn and what the session keeps. With
     ``missing_ok`` a file that does not exist becomes a note in the text, not
-    an error.
+    an error. The text attachments share ``room_bytes``, by default the room
+    `context_window.attachment_room_bytes` gives a fresh context; one past it
+    is cut there.
     """
 
     paths = list(attachments or [])
+    room = context_window.attachment_room_bytes(cfg) if room_bytes is None else max(0, room_bytes)
     text_blocks: list[str] = []
     file_parts: list[dict] = []
     if prompt:
@@ -192,7 +196,9 @@ def build_user_message(
             cwd=cwd,
             stdin_attachment=stdin_attachment if raw_path == "-" else None,
             missing_ok=missing_ok,
+            cap=room,
         )
+        room = max(0, room - prepared.text_bytes)
         text_blocks.append(prepared.text)
         if prepared.file_part is not None:
             file_parts.append(prepared.file_part)
@@ -210,6 +216,8 @@ def build_user_message(
 class _PreparedAttachment:
     text: str
     file_part: dict | None = None
+    # Bytes of file text inlined, which the message's room pays for.
+    text_bytes: int = 0
 
 
 def _prepare_attachment(
@@ -219,14 +227,15 @@ def _prepare_attachment(
     cwd: Path | None,
     stdin_attachment: bytes | None,
     missing_ok: bool = False,
+    cap: int,
 ) -> _PreparedAttachment:
     if raw_path == "-":
         if stdin_attachment is None:
             raise AttachmentError(msgs.STDIN_ATTACHMENT_NOT_PIPED.said())
-        return _prepare_bytes(STDIN_ATTACHMENT_NAME, Path(STDIN_ATTACHMENT_NAME), stdin_attachment, cfg)
+        return _prepare_bytes(STDIN_ATTACHMENT_NAME, Path(STDIN_ATTACHMENT_NAME), stdin_attachment, cfg, cap=cap)
     pasted = clipimage.lookup(raw_path)
     if pasted is not None:
-        return _prepare_bytes(raw_path, Path(raw_path), pasted, cfg)
+        return _prepare_bytes(raw_path, Path(raw_path), pasted, cfg, cap=cap)
 
     path = _resolve_path(raw_path, cwd or Path.cwd())
     try:
@@ -253,13 +262,13 @@ def _prepare_attachment(
             raise AttachmentError(msgs.ATTACHMENT_UNREADABLE.said(path=path, error=exc)) from exc
         return _prepare_image(str(path), mime, len(data), data, cfg)
 
-    cap = _text_cap(cfg)
     try:
         with path.open("rb") as fh:
-            data = fh.read(cap + 1)
+            # Past the cap, enough of the head to tell text from binary.
+            data = fh.read(max(cap, 16) + 1)
     except OSError as exc:
         raise AttachmentError(msgs.ATTACHMENT_UNREADABLE.said(path=path, error=exc)) from exc
-    return _prepare_bytes(str(path), path, data, cfg, total_size=stat.st_size)
+    return _prepare_bytes(str(path), path, data, cfg, total_size=stat.st_size, cap=cap)
 
 
 def _prepare_bytes(
@@ -269,21 +278,22 @@ def _prepare_bytes(
     cfg: Config,
     *,
     total_size: int | None = None,
+    cap: int,
 ) -> _PreparedAttachment:
     size = len(data) if total_size is None else total_size
     mime = _image_mime(data[:16])
     if mime:
         return _prepare_image(display_path, mime, size, data, cfg)
 
-    cap = _text_cap(cfg)
-    sample = data[: cap + 1]
+    sample = data[: max(cap, 16) + 1]
     if _looks_text(sample):
         truncated = len(sample) > cap or (total_size is not None and total_size > cap)
         kept = _strip_incomplete_utf8_tail(sample[:cap]) if truncated else sample[:cap]
         text = kept.decode("utf-8", errors="replace")
         if truncated:
-            msgs.warn(msgs.ATTACHMENT_TRUNCATED, path=display_path, size=size, cap=cap)
-        return _PreparedAttachment(_format_text_attachment(display_path, text, size, truncated, cap))
+            msgs.warn(msgs.ATTACHMENT_TRUNCATED, path=display_path, size=size, cap=len(kept))
+        return _PreparedAttachment(_format_text_attachment(display_path, text, size, truncated, len(kept)),
+                                   text_bytes=len(kept))
 
     guessed, _ = mimetypes.guess_type(str(path))
     file_type = guessed or "application/octet-stream"
@@ -307,10 +317,6 @@ def _resolve_path(raw_path: str, cwd: Path) -> Path:
     if not path.is_absolute():
         path = cwd / path
     return path.resolve()
-
-
-def _text_cap(cfg: Config) -> int:
-    return max(1, int(_settings.knob_attr(cfg, "max_text_attachment_bytes", "ATTACHMENT_MAX")))
 
 
 def _strip_incomplete_utf8_tail(data: bytes) -> bytes:

@@ -316,6 +316,8 @@ def _build_user_message(prepared: _PreparedRun, cut_off: bool) -> int | None:
             prepared.attachments,
             attachment_cfg,
             stdin_attachment=inputs.stdin_attachment,
+            room_bytes=context_window.attachment_room_bytes(
+                attachment_cfg, prepared.settled.system, prepared.messages),
         )
     except attach.AttachmentError as e:
         with transcript_mod.transcript_stdio(prepared.telemetry):

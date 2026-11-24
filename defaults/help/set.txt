@@ -187,10 +187,6 @@ READ_LINES_MAX
 FILE_BYTES_MAX
     Maximum file bytes read by fs tools.
 
-ATTACHMENT_MAX
-    Most bytes of a text file attached to a prompt; a larger file is
-    truncated. TOOL_RESULT_MAX also caps it.
-
 READ_BYTES_MAX
     Maximum file bytes for a whole-file read(); ignored when the call passes
     a line or byte range, so ranged reads work on any size file.
@@ -383,6 +379,11 @@ COMPACTION_REATTACH_FILE_TOKENS_MAX
 
 COMPACTION_CHARS_PER_TOKEN
     Fallback/self-calibrating character-to-token estimate.
+
+ATTACHMENT_CONTEXT_MAX
+    Share, 0 to 1, of the context left before compaction starts that the files
+    attached to one message may fill together; the rest is left for the
+    turn's tool calls. A file past it is cut and named on stderr.
 
 COMPACTION_EXTERNAL_MODEL
     Model used to write the compaction summary; 'same' = active model.

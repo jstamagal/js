@@ -317,13 +317,17 @@ def test_fetch_sends_the_configured_user_agent(monkeypatch, tmp_path):
     assert seen["agent"] == "knob-agent/2"
 
 
-def test_text_attachment_cap_follows_its_knob(monkeypatch, tmp_path):
+def test_text_attachment_room_follows_its_setting(monkeypatch, tmp_path):
     from js import attach
 
     project = _isolated_home(monkeypatch, tmp_path)
     user = tmp_path / "home" / ".js" / "jsrc"
     user.parent.mkdir(parents=True)
-    user.write_text("set ATTACHMENT_MAX 10\n", encoding="utf-8")
+    # 1000 tokens, all of it before compaction, a share of 1/400: 10 bytes.
+    user.write_text("set CONTEXT_SIZE 1000\nset COMPACTION_START_AT 1.0\nset COMPACTION_WARN_AT 0.5\n"
+                    "set COMPACTION_FORCE_AT 1.0\nset COMPACTION_HEADROOM_TOKENS 0\n"
+                    "set COMPACTION_REPLY_RESERVE_TOKENS 0\nset COMPACTION_CHARS_PER_TOKEN 4.0\n"
+                    "set ATTACHMENT_CONTEXT_MAX 0.0025\n", encoding="utf-8")
     cfg = from_env(save_session=False, cwd=project)
     (project / "a.txt").write_text("q" * 100, encoding="utf-8")
 

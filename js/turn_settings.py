@@ -225,7 +225,6 @@ TURN_SETTINGS: tuple[TurnSetting, ...] = (
     TurnSetting("max_tool_calls_per_message", "REPLY_TOOL_CALLS_MAX", integer),
     TurnSetting("max_tool_results_per_turn_bytes", "PARALLEL_RESULTS_MAX", integer),
     TurnSetting("inline_code_timeout_s", "INLINE_CODE_TIMEOUT", integer),
-    TurnSetting("max_text_attachment_bytes", "ATTACHMENT_MAX", integer),
     TurnSetting("max_output_tokens", "OUTPUT_TOKENS_MAX", optional_integer),
     TurnSetting("model_context_window", "CONTEXT_SIZE", optional_integer),
     TurnSetting("thinking_budget", "THINKING_BUDGET", optional_integer),

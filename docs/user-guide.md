@@ -665,8 +665,9 @@ on the Linux console, the key prints one line and the input line stays as it
 was. Placeholders count up for the whole run, so a line recalled from history
 still carries its image.
 
-- Text files inline into the prompt (delimited, up to `ATTACHMENT_MAX` bytes,
-  2 MB by default). A file cut at the cap is named on stderr.
+- Text files inline into the prompt, delimited. The files of one message share
+  `ATTACHMENT_CONTEXT_MAX` (half by default) of the context left before
+  compaction starts; the rest is the turn's. A file cut there is named on stderr.
 - Images attach as vision input when the active model supports vision; otherwise
   you get a note that vision is off and the bytes are not sent.
 - Other binaries attach as a short descriptor (path, type, size).

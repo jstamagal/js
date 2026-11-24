@@ -387,9 +387,6 @@
 # Biggest file the other file tools (search and friends) will open.
 #set FILE_BYTES_MAX 2000000
 
-# A text file you attach to a message is cut at this many bytes.
-#set ATTACHMENT_MAX 2000000
-
 # How many lines of each cell output read() shows for a notebook (.ipynb).
 # The rest are counted, not shown. 0: just what kind of output each one is.
 #set NOTEBOOK_OUTPUT_LINES_MAX 10
@@ -674,6 +671,10 @@
 # Characters per token js assumes until it learns the real ratio from the
 # provider.
 #set COMPACTION_CHARS_PER_TOKEN 4.0
+
+# Share of the room left before compaction starts that the files attached to
+# one message may fill together; the rest is the turn's, for its tool calls.
+#set ATTACHMENT_CONTEXT_MAX 0.5
 
 
 ################################################################################

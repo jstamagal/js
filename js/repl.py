@@ -31,6 +31,7 @@ from . import (
     clipimage,
     command_line,
     console,
+    context_window,
     conversation,
     debug_trace,
     display as display_mod,
@@ -530,7 +531,8 @@ async def _supervised_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, 
             prompt_text = _expand_skill_line(prompt_text, state)
         turn_cfg = await loop.run_in_executor(None, _live_cfg_snapshot, cfg, state)
         user_message = external_message or attach.build_user_message(
-            prompt_text, line_attachments, turn_cfg, missing_ok=True)
+            prompt_text, line_attachments, turn_cfg, missing_ok=True,
+            room_bytes=context_window.attachment_room_bytes(turn_cfg, state.system, state.messages))
     except snippets.SnippetError:
         raise
     except ValueError as e:
@@ -568,6 +570,7 @@ async def _supervised_turn(line, sup, cfg, state, telemetry, prompt_spec, loop, 
                 lambda: attach.build_user_message(
                     _expand_skill_line(steer_text, state), steer_attachments, turn_cfg,
                     missing_ok=True,
+                    room_bytes=context_window.attachment_room_bytes(turn_cfg, state.system, state.messages),
                 ),
             )
         except snippets.SnippetError:

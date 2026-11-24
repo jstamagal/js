@@ -337,16 +337,15 @@ def _inlined(tmp_path, data: bytes, cap: int, marker: str) -> bool:
     a text cap of ``cap`` bytes."""
     path = tmp_path / "sample.dat"
     path.write_bytes(data)
-    cfg = replace(_cfg(tmp_path), max_text_attachment_bytes=cap)
-    return marker in attach.build_user_message("read", [str(path)], cfg)["content"]
+    return marker in attach.build_user_message("read", [str(path)], _cfg(tmp_path), room_bytes=cap)["content"]
 
 
 def test_looks_text_accepts_utf8_split_at_read_boundary(tmp_path):
     """A valid-UTF8 sample whose trailing multibyte char is cut by the byte cap must
     still classify as text; only genuinely invalid bytes should read as binary."""
-    full = ("x" * 8 + "€").encode("utf-8")   # € is 3 bytes: \xe2\x82\xac
-    assert _inlined(tmp_path, full, 9, "xxxxxxxx") is True   # the sample drops the last byte of €
-    assert _inlined(tmp_path, full, 8, "xxxxxxxx") is True   # the sample drops two bytes of €
+    full = ("x" * 16 + "€").encode("utf-8")   # € is 3 bytes: \xe2\x82\xac
+    assert _inlined(tmp_path, full, 17, "x" * 16) is True   # the sample drops the last byte of €
+    assert _inlined(tmp_path, full, 16, "x" * 16) is True   # the sample drops two bytes of €
     assert _inlined(tmp_path, b"qq\xffzz", 100, "qq") is False  # invalid byte mid-content
 
 
@@ -436,8 +435,7 @@ def test_oversized_image_is_sent_fitted_and_says_so(tmp_path):
 def test_truncated_text_attachment_does_not_end_in_a_replacement_char(tmp_path):
     note = tmp_path / "long.txt"
     note.write_bytes(b"x" + ("é" * 50000).encode("utf-8"))  # odd offset: the cap lands mid-character
-    cfg = replace(_cfg(tmp_path), max_text_attachment_bytes=65536)
-    text = attach.build_user_message("read", [str(note)], cfg)["content"]
+    text = attach.build_user_message("read", [str(note)], _cfg(tmp_path), room_bytes=65536)["content"]
     assert "[truncated to" in text
     assert "\ufffd" not in text
 
@@ -469,11 +467,29 @@ def test_copy_puts_the_answer_n_back_on_the_clipboard(monkeypatch, tmp_path):
 
     assert clipboard.read_bytes() == b"a long line\nsecond\n<end>first answer\n<end>"
 
-def test_the_attachment_cap_is_attachment_max_alone(tmp_path):
-    """A text attachment is cut at ATTACHMENT_MAX, not at the tool-result cap."""
-    data = b"a" * 300_000 + b"TAIL"
-    assert _inlined(tmp_path, data, 400_000, "TAIL") is True
-    assert _inlined(tmp_path, data, 1_000, "TAIL") is False
+def test_the_files_of_one_message_share_its_room(tmp_path):
+    (tmp_path / "a.txt").write_text("A" * 60)
+    (tmp_path / "b.txt").write_text("B" * 60)
+    content = attach.build_user_message(
+        "read", ["a.txt", "b.txt"], _cfg(tmp_path), cwd=tmp_path, room_bytes=100)["content"]
+    assert "A" * 60 in content
+    assert "B" * 40 in content
+    assert "B" * 41 not in content
+
+
+def test_the_room_is_a_share_of_the_context_left_before_compaction(tmp_path):
+    from js import context_window
+
+    cfg = replace(_cfg(tmp_path), max_output_tokens=0, settings={
+        "CONTEXT_SIZE": 100_000, "COMPACTION_START_AT": 0.8, "COMPACTION_HEADROOM_TOKENS": 0,
+        "ATTACHMENT_CONTEXT_MAX": 0.5, "COMPACTION_CHARS_PER_TOKEN": 4.0,
+    })
+    fresh = context_window.attachment_room_bytes(cfg)
+    assert fresh == 40_000 * 4
+    history = [{"role": "user", "content": "h" * 100_000}]
+    assert context_window.attachment_room_bytes(cfg, "", history) < fresh
+    full = [{"role": "user", "content": "h" * 400_000}]
+    assert context_window.attachment_room_bytes(cfg, "", full) == 0
 
 
 def test_a_cut_attachment_is_named_to_the_operator(tmp_path, monkeypatch):

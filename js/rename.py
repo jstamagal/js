@@ -102,7 +102,6 @@ RENAMED_SETTINGS: dict[str, str] = {
     "limits.max_read_lines": "READ_LINES_MAX",
     "limits.max_read_bytes": "READ_BYTES_MAX",
     "limits.max_file_bytes": "FILE_BYTES_MAX",
-    "limits.max_text_attachment_bytes": "ATTACHMENT_MAX",
     "limits.task_max_depth": "SUBAGENT_DEPTH_MAX",
     "limits.subagent_max_workers": "SUBAGENT_WORKERS_MAX",
     "shell.program": "SHELL_PROGRAM",
@@ -167,7 +166,7 @@ RENAMED_SETTINGS: dict[str, str] = {
 }
 
 # Settings that were removed, not renamed.
-DELETED_SETTINGS: tuple[str, ...] = ("compact.context_window", "limits.max_bash_output_ceiling")
+DELETED_SETTINGS: tuple[str, ...] = ("compact.context_window", "limits.max_bash_output_ceiling", "limits.max_text_attachment_bytes")
 
 # Old env var names and the ones that replaced them. js itself still reads
 # the three that `SettingSpec.env` names.

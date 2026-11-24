@@ -167,6 +167,21 @@ def effective_context_window(cfg: Config, context_window: int) -> int:
     return max(context_window // 2, context_window - reserve - buffer_tokens)
 
 
+def attachment_room_bytes(cfg: Config, system: str = "", messages: list[dict] | None = None) -> int:
+    """Bytes of file text one message's attachments may take together:
+    ATTACHMENT_CONTEXT_MAX of the room left before compaction starts, after
+    ``system`` and ``messages``, at COMPACTION_CHARS_PER_TOKEN. The rest of
+    that room is the turn's own, for its tool calls and their results."""
+    window = configured_context_window(
+        cfg, lambda: resolve_context_window(cfg.model, cfg.provider_id, getattr(cfg, "provider_base_url", None)))
+    _, start_at, _ = thresholds(cfg)
+    used = estimated_prompt_tokens(cfg, system, messages) if system or messages else 0
+    room_tokens = int(effective_context_window(cfg, window) * start_at) - used
+    share = compaction_settings.get_float(cfg, "ATTACHMENT_CONTEXT_MAX", max_value=1.0)
+    chars_per_token = compaction_settings.get_float(cfg, "COMPACTION_CHARS_PER_TOKEN")
+    return max(0, int(room_tokens * share * chars_per_token))
+
+
 def message_text_for_estimate(message: dict) -> str:
     return json.dumps(message, ensure_ascii=False, separators=(",", ":"), default=str)
 
