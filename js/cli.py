@@ -628,23 +628,20 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
         return _commit(args, setup)
     if (code := _agent_bench(args, setup)) is not None:
         return code
-    if args.files and args.prompt is None and sys.stdin.isatty():
-        msgs.warn(msgs.FILE_NEEDS_PROMPT)
-        return 2
-    exchanges_only = (args.prompt is None and sys.stdin.isatty()
+    exchanges_only = (args.prompt is None and not args.files and sys.stdin.isatty()
                       and _exchanges_are_the_prompt(args, setup.agent, setup.sources))
-    if args.prompt is not None or not sys.stdin.isatty() or exchanges_only:
+    if args.prompt is not None or args.files or not sys.stdin.isatty() or exchanges_only:
         return _run_headless(args, setup, exchanges_only=exchanges_only)
     if args.json or args.json_stream:
-        msgs.warn(msgs.FAILED, error="--json/--json-stream requires -p, a pipe, an agent run, or --bench")
+        msgs.warn(msgs.FAILED, error="--json/--json-stream requires -p, -f, a pipe, an agent run, or --bench")
         return 2
     return repl.start_repl(args, setup.sources, setup.agent)
 
 
 def _run_headless(args: argparse.Namespace, setup: Setup, *, exchanges_only: bool) -> int:
     """One turn with no REPL: -p PROMPT, piped stdin as the prompt or beside it,
-    `-f -` attaching stdin, or the agent's own exchanges when they are the
-    prompt."""
+    `-f -` attaching stdin, -f files alone as the prompt, or the agent's own
+    exchanges when they are the prompt."""
     os.environ["JS_MODE"] = "headless"
     stdin_attachment = None
     if "-" in args.files:

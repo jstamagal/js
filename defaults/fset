@@ -174,7 +174,6 @@ fset NO_PREVIOUS_SESSION %C04%G%C No previous session for agent: $0-
 fset DEBUG_FLAGS_EXCLUSIVE %C04%G%C --debug and --debug-file are mutually exclusive.
 fset MODES_EXCLUSIVE %C04%G%C --commit and --compact are mutually exclusive.
 fset FILE_NEEDS_PROMPT_MODE %C04%G%C -f/--file works only with a prompt or a pipe. Use @path in the REPL.
-fset FILE_NEEDS_PROMPT %C04%G%C -f/--file requires -p/--prompt or piped input. Use @path in the REPL.
 fset BENCH_EXCLUSIVE %C04%G%C --bench is its own mode. Name the agent as --bench AGENT, without --agent or a built-in mode.
 fset COMMIT_WITH_AGENT %C04%G%C --commit always uses the built-in commit agent. Omit --agent.
 fset STDIN_TWICE %C04%G%C stdin cannot be both the prompt and an attachment.

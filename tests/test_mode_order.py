@@ -76,7 +76,7 @@ def ran(monkeypatch, tmp_path):
     (["--migrate-config", "--commit"], "migrate-config", 0),
     (["--commit", "--agent", "other"], msgs.COMMIT_WITH_AGENT, 2),
     (["--commit", "-p", "hi"], "commit", 0),
-    (["-f", "x"], msgs.FILE_NEEDS_PROMPT, 2),
+    (["-f", "x"], "prompt", 0),
     (["-p", "hi"], "prompt", 0),
 ])
 def test_the_first_mode_on_the_command_line_wins(ran, argv, first, code):
@@ -109,3 +109,12 @@ def test_lock_is_taken_after_the_listings_and_before_a_run(ran, monkeypatch):
 def test_json_with_nothing_to_run_headless_exits_two(ran):
     assert cli.main(["--json"]) == 2
     assert "prompt" not in ran
+
+
+def test_files_with_no_prompt_are_the_prompt(ran, monkeypatch):
+    sent = {}
+    monkeypatch.setattr(prompt_run, "run", lambda prompt, **kwargs: sent.update(prompt=prompt, **kwargs) or 0)
+    monkeypatch.setattr(cli, "_exchanges_are_the_prompt", lambda *args: True)
+    assert cli.main(["-f", "notes.jsonl"]) == 0
+    assert sent["prompt"] == ""
+    assert sent["files"] == ["notes.jsonl"]
