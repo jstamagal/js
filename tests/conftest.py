@@ -104,6 +104,18 @@ def fresh_model_catalog(tmp_path_factory):
     return db, status, datetime.now(tz=UTC)
 
 
+@pytest.fixture(scope="session")
+def _worker_envctx_bin(tmp_path_factory):
+    """Where one worker's envctx binary lives. Each test's fresh HOME would
+    otherwise make every prompt expansion compile envctx.c again (~0.25s)."""
+    return tmp_path_factory.mktemp("envctx") / "envctx.bin"
+
+
+@pytest.fixture(autouse=True)
+def shared_envctx_bin(monkeypatch, _worker_envctx_bin):
+    monkeypatch.setenv("ENVCTX_BIN", str(_worker_envctx_bin))
+
+
 @pytest.fixture(autouse=True)
 def stop_signals_stay_as_they_were():
     """A test that leaves its own SIGINT or SIGTERM handler behind changes

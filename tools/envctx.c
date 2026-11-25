@@ -17,7 +17,7 @@
   it expands the prompt.
 
   Rebuilds automatically when this file is newer than the cached binary.
-  Set CC to pick a compiler.  ENVCTX_HIST=n changes the shell-history count;
+  Set CC to pick a compiler, ENVCTX_BIN to keep the binary elsewhere.  ENVCTX_HIST=n changes the shell-history count;
   ENVCTX_HIST=0 leaves shell history out entirely.
 
   The scrubber reads its key prefixes and entropy rules from the file named
@@ -39,9 +39,9 @@ if [ -z "$JS_SECRET_PATTERNS" ]; then
   export JS_SECRET_PATTERNS
 fi
 _cache=$JS_HOME/cache
-_bin=$_cache/envctx.bin
+_bin=${ENVCTX_BIN:-$_cache/envctx.bin}
 if [ ! -x "$_bin" ] || [ "$_src" -nt "$_bin" ]; then
-  mkdir -p "$_cache"
+  mkdir -p "${_bin%/*}"
   ${CC:-cc} -O2 -o "$_bin.$$" -x c "$_src" 2>/dev/null && mv -f "$_bin.$$" "$_bin" || {
     rm -f "$_bin.$$"; echo "envctx: build failed" >&2; exit 1; }
 fi
