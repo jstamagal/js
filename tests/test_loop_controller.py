@@ -201,3 +201,39 @@ def test_registered_loop_failure_limit_stops_without_another_child(monkeypatch):
     monkeypatch.setattr(loop_controller.time, "sleep", lambda _delay: None)
     assert loop_controller.run([], "", bench=None, prompt="work", settings={"LOOP_FAILURES_MAX": 1}) == 7
     assert len(calls) == 1
+
+
+def _children(monkeypatch, codes):
+    from types import SimpleNamespace
+
+    from js import loop_controller
+
+    codes = iter(codes)
+    calls = []
+
+    def start(command, **kwargs):
+        calls.append((command, kwargs["env"].get("JS_LOOP_CHILD")))
+        return SimpleNamespace(communicate=lambda **kw: None, returncode=next(codes))
+
+    monkeypatch.setattr(loop_controller.subprocess, "Popen", start)
+    monkeypatch.setattr(loop_controller.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    return loop_controller, calls
+
+
+def test_halt_exit_ends_a_loop_with_success(monkeypatch):
+    loop_controller, calls = _children(monkeypatch, [0, loop_controller_codes()[0], loop_controller_codes()[1], 0])
+    assert loop_controller.run([], "", bench=None, prompt="work", settings={}) == 0
+    assert len(calls) == 3
+    assert {marker for _command, marker in calls} == {"1"}
+
+
+def test_a_loop_started_by_the_word_ends_with_the_run_that_does_not_ask_again(monkeypatch):
+    loop_exit = loop_controller_codes()[0]
+    loop_controller, calls = _children(monkeypatch, [loop_exit, loop_exit, 0, loop_exit])
+    assert loop_controller.run(["-a", "ralph"], "", bench=None, prompt=None, settings={}, while_looping=True) == 0
+    assert [command[-2:] for command, _marker in calls] == [["-a", "ralph"]] * 3
+
+
+def loop_controller_codes():
+    from js import loop_controller
+    return loop_controller.LOOP_EXIT, loop_controller.HALT_EXIT

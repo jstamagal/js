@@ -858,7 +858,9 @@ and project `.js/agents/`. The nearest matching agent supplies all its files.
 `js --list-agents` lists the names available across those layers.
 
 Within an agent, `*-prompt.md` and `*-env.md` files concatenate in filename
-order. `NN-user.md` and `NN-agent.md` seed exchanges. `agent.yaml` selects
+order. `NN-user.md` and `NN-agent.md` seed exchanges; a user file whose last
+line is `%%PASS%%`, `%%LOOP%%` or `%%HALT%%` is a control step
+(technical-guide, "Control words"). `agent.yaml` selects
 tools, model, effort and sampling.
 
 ```yaml

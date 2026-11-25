@@ -12,7 +12,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TextIO
 
-from . import messages as msgs, network_display, provider_errors, snippets, usage as usage_mod
+from . import (
+    loop_controller,
+    messages as msgs,
+    network_display,
+    provider_errors,
+    snippets,
+    usage as usage_mod,
+)
 from .toolkit.results import result_text
 
 SCHEMA_VERSION = 2
@@ -176,10 +183,11 @@ def json_run(run: Callable[[], int], *, stream: bool = True) -> int:
     opened = events.session
     if opened is None:
         events.emit("start", version=SCHEMA_VERSION)
-    if code != 0 and not events.errored:
+    ended = code in (0, *loop_controller.CONTROL_EXITS)
+    if not ended and not events.errored:
         emit_failure(events, err.last_line, code)
     payload = events.result or {
-        "answer": events.final_text if code == 0 else "",
+        "answer": events.final_text if ended else "",
         "session": None if opened is None else opened.get("id"),
         "provider": None if opened is None else opened.get("provider"),
         "model": None if opened is None else opened.get("model"),

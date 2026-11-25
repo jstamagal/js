@@ -167,6 +167,33 @@ without a user file records an assistant message on its own. Bare `user.md`
 and `agent.md` are exchange 0. Two files defining the same numeric role are an
 error.
 
+#### Control words
+
+A user file is expanded when it is reached, so its inline code reads what the
+turns before it left: the saved session at `%%CURRENT_SESSION_FULLPATH%%`,
+files the model wrote. When the last line of the expanded text is a control
+word, the file is a control step: nothing of it is sent, and its agent file is
+not recorded. The word is written in the file or printed by its inline code.
+
+| Word | Effect |
+|---|---|
+| `%%PASS%%` | go on to the next exchange |
+| `%%LOOP%%` | end the run and start the same command line again as a fresh process and session |
+| `%%HALT%%` | end the run, and the loop it is in |
+
+A run that ends on `%%LOOP%%` or `%%HALT%%` does not send its `-p` prompt. A
+loop started by `%%LOOP%%` goes on for as long as each run ends on `%%LOOP%%`;
+`--loop N` and `--loop NM` cap it. In the REPL, `--bench` setup and subagents,
+`%%LOOP%%` and `%%HALT%%` end the remaining exchanges and nothing else. A run
+the loop started exits 75 on `%%LOOP%%` and 76 on `%%HALT%%`.
+
+```
+01-user.md   !{sh cat /tmp/prompt}
+02-user.md   !{sh check-done && echo '%%HALT%%' || echo '%%PASS%%'}
+03-user.md   !{sh write-next-prompt '%%CURRENT_SESSION_FULLPATH%%' > /tmp/prompt}
+             %%LOOP%%
+```
+
 A fresh session of an agent with message files never opens the REPL. With no
 `-p` the exchanges are the whole run: the last one's answer is printed as a
 `-p` answer is, and js exits. With `-p` the prompt is sent after the last
@@ -209,7 +236,8 @@ are checked between invocations, so an active turn finishes. Each child receives
 the original options and working directory, excluding `--loop`. Piped input is
 replayed for every child. Without a prompt or benchmark, the loop supplies a
 one-shot instruction to carry out the agent's assigned task, so it does not open
-an idle REPL. A counted loop stops on a failed child. Continuous and timed loops
+an idle REPL. A child whose user files end it on `%%HALT%%` ends the loop. A
+counted loop stops on a failed child. Continuous and timed loops
 retry failed children with backoff, stopping after five consecutive failures.
 
 ## Default Registry

@@ -284,6 +284,7 @@ def _main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         msgs.warn(msgs.FAILED, error=exc)
         return 2
+    loop_controller.claim_child()
     generate = dispatch_argv[:1] == ["generate"]
     options_end = dispatch_argv.index("--") if "--" in dispatch_argv else len(dispatch_argv)
     if not generate and "--acp" in dispatch_argv[:options_end]:
@@ -351,8 +352,13 @@ def _main(argv: list[str] | None = None) -> int:
         options.selectors(())
         with invocation(options):
             if _json_run_requested(args):
-                return headless.json_run(lambda: _run_args(args, dispatch_argv), stream=args.json_stream)
-            return _run_args(args, dispatch_argv)
+                code = headless.json_run(lambda: _run_args(args, dispatch_argv), stream=args.json_stream)
+            else:
+                code = _run_args(args, dispatch_argv)
+        return loop_controller.after_run(
+            code, dispatch_argv, bench=args.bench, prompt=args.prompt,
+            settings=lambda: run_settings(Path(args.cd).expanduser() if args.cd else None,
+                                          sources=_invocation_sources(args)))
     except (ValueError, OSError) as exc:
         msgs.warn(msgs.FAILED, error=exc)
         return 2
@@ -694,7 +700,7 @@ def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
 def _run_headless(args: argparse.Namespace, setup: Setup, *, exchanges_only: bool) -> int:
     """One turn with no REPL: -p PROMPT, piped stdin as the prompt or beside it,
     `-f -` attaching stdin, -f files alone as the prompt, or the agent's own
-    exchanges when they are the prompt."""
+    exchanges when they are the prompt: no -p and nothing piped."""
     os.environ["JS_MODE"] = "headless"
     stdin_attachment = None
     if "-" in args.files:
@@ -710,6 +716,10 @@ def _run_headless(args: argparse.Namespace, setup: Setup, *, exchanges_only: boo
         prompt = None
     elif args.prompt in {None, "-"}:
         prompt = _read_stdin_if_piped()
+        if (args.prompt is None and not prompt.strip() and not args.files
+                and _exchanges_are_the_prompt(args, setup.agent, setup.sources)):
+            # Nothing was piped (cron, nohup, </dev/null): the exchanges are the prompt.
+            exchanges_only, prompt = True, None
     elif sys.stdin.isatty():
         prompt = args.prompt
     else:

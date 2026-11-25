@@ -1608,6 +1608,8 @@ LOOP_CHILD_STOPPED = Message("STOP: child exited {code}; {completed} turns compl
 
 LOOP_CHILD_RETRY = "Child exited {code}; retrying in {delay}s ({failures}/{failure_limit} consecutive failures)."
 
+EXCHANGE_CONTROL_WORD = Message("user file {number}: {word}", banner=False)
+
 LOOP_STOPPED = Message("Stopped by operator; owned child has exited.", banner=False)
 
 DIRECTIVE_FENCED_DIRECTIVE_BODY_CARRIES_A_LINE_THE = Message("fenced directive body carries a ``` line; the closing fence is ambiguous, so the directive is not run - indent the nested fence four spaces or split the directives", banner=False)

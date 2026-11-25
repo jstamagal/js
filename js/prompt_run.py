@@ -29,6 +29,7 @@ from . import (
     events,
     headless,
     login_defaults,
+    loop_controller,
     mcp_config,
     memory as M,
     messages as msgs,
@@ -146,6 +147,8 @@ class _PreparedRun:
     state: ReplState | None = None
     call_stats: list[dict] = field(default_factory=list)
     started_at: float = 0.0
+    # LOOP or HALT when the agent's user files ended the run on that word.
+    control: str | None = None
 
 
 @session_catalog.session_scope
@@ -158,7 +161,7 @@ def run(prompt: str | None, **kwargs) -> int:
     try:
         code = _prompt_run(inputs, opened)
         events = inputs.events
-        if events is not None and code != 0 and not events.errored:
+        if events is not None and code not in (0, *loop_controller.CONTROL_EXITS) and not events.errored:
             headless.emit_failure(events, getattr(sys.stderr, "last_line", ""), code)
         return code
     finally:
@@ -437,7 +440,8 @@ def _open_trace_sink(prepared: _PreparedRun) -> debug_trace.DebugTraceSink | Non
 
 def _turns(prepared: _PreparedRun, chat: Conversation, transcript, turn_kwargs: dict) -> None:
     """The agent's startup exchanges when the session has no messages, then
-    the prompt's turn."""
+    the prompt's turn. Exchanges that end on LOOP or HALT end the run: the
+    prompt is not sent."""
     inputs, cfg, telemetry = prepared.inputs, prepared.cfg, prepared.telemetry
     # -d shows the conversation as the REPL draws it: each user line, typed or
     # fired from the agent's files, ahead of the answer it got.
@@ -445,12 +449,12 @@ def _turns(prepared: _PreparedRun, chat: Conversation, transcript, turn_kwargs: 
     trace_override = inputs.debug or bool(inputs.debug_file) or cfg.trace
     prompt_spec = prepared.settled.prompt_spec
     if prompt_spec.exchanges and not prepared.messages:
-        owning_loop.run_owning_loop(agent_messages.initialize(
+        prepared.control = owning_loop.run_owning_loop(agent_messages.initialize(
             cfg, prompt_spec, prepared.messages, replace(telemetry, transcript_log=transcript),
             system=prepared.settled.system, save=inputs.save, trace_override=trace_override,
             tool_context=inputs.tool_context, echo_user=echo_user, **turn_kwargs,
         ))
-    if prepared.user_message is None:
+    if prepared.user_message is None or prepared.control is not None:
         return
 
     def started() -> None:
@@ -517,11 +521,12 @@ def _turns_captured(prepared: _PreparedRun, trace_sink, turns: Callable[[], None
 def _finish(prepared: _PreparedRun) -> int:
     """The stats files and the JSON result, then the answer printed and the
     saved session compacted when it is due. 1 when there is no answer or a
-    stats file was not written."""
+    stats file was not written. A run its user files ended on a control word
+    needs no answer and exits with that word's code."""
     inputs, cfg, telemetry = prepared.inputs, prepared.cfg, prepared.telemetry
     answer = _turn_answer(prepared.messages)
     stats_ok = _record_stats(prepared, answer)
-    if not answer:
+    if not answer and prepared.control is None:
         if inputs.client and inputs.events and inputs.events.stop_reason and stats_ok:
             return 0
         with transcript_mod.transcript_stdio(telemetry):
@@ -531,7 +536,7 @@ def _finish(prepared: _PreparedRun) -> int:
     # second print here is the double-print bug. Only print when the
     # stream was suppressed (non-debug one-shot/pipe).
     with transcript_mod.transcript_stdio(telemetry):
-        if not inputs.debug:
+        if answer and not inputs.debug:
             if (sink := transcript_mod.transcript_sink(telemetry)) is not None:
                 sink.emit(output.event("transcript_assistant", text=answer))
             if inputs.events is None:
@@ -543,7 +548,10 @@ def _finish(prepared: _PreparedRun) -> int:
                     )
         if inputs.save:
             owning_loop.run_owning_loop(conversation.maybe_auto_compact_async(cfg, prepared.state))
-    return 0 if stats_ok else 1
+    if not stats_ok:
+        return 1
+    return {agent_messages.LOOP: loop_controller.LOOP_EXIT,
+            agent_messages.HALT: loop_controller.HALT_EXIT}.get(prepared.control, 0)
 
 
 def _record_stats(prepared: _PreparedRun, answer: str) -> bool:
@@ -552,10 +560,11 @@ def _record_stats(prepared: _PreparedRun, answer: str) -> bool:
     inputs, cfg, events = prepared.inputs, prepared.cfg, prepared.inputs.events
     if not (inputs.stats_json or inputs.stats_csv or events is not None):
         return True
-    error = None if answer else msgs.NO_ANSWER.words()
+    ended = bool(answer) or prepared.control is not None
+    error = None if ended else msgs.NO_ANSWER.words()
     row = {"name": "prompt", "prompt": prepared.prompt or "",
            "max_tokens": cfg.max_output_tokens if inputs.maxout is None else inputs.maxout,
-           "ok": bool(answer), "error": error,
+           "ok": ended, "error": error,
            **stats.summarize_calls(prepared.call_stats, wall_s=time.time() - prepared.started_at)}
     payload = {"agent": cfg.agent_id, "model": cfg.model, "provider": cfg.provider_id, "turns": [row]}
     stats_ok = stats.write_requested(inputs.stats_json, inputs.stats_csv, payload, [row])

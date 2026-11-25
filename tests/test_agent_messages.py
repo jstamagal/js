@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import ai
@@ -7,7 +8,7 @@ import pytest
 from repl_driver import run_async
 from turn_driver import js
 
-from js import cli, memory, persona, runtime, screen, session_store
+from js import cli, loop_controller, memory, persona, runtime, screen, session_store
 from js.config import from_env
 from js.model_client import ModelStreamResult
 from js.session_catalog import last_stamp
@@ -477,3 +478,78 @@ def test_benchmark_stats_count_only_the_benchmark_turn(tmp_path, monkeypatch):
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert [row["calls"] for row in payload["benchmarks"]] == [1, 1]
     assert payload["setup"]["calls"] == 1
+
+
+def test_pass_sends_nothing_and_the_next_user_file_runs(tmp_path, monkeypatch):
+    _agent(tmp_path, monkeypatch, {
+        "1-user.md": "one",
+        "2-user.md": "!{sh echo checked; echo '%%PASS%%'}",
+        "2-agent.md": "never recorded",
+        "3-user.md": "three",
+    })
+    requests = _model(monkeypatch, ["first", "third", "done"])
+    assert js(monkeypatch, "--session", "seeded", "-p", "now") == 0
+    assert [request[-1] for request in requests] == [("user", "one"), ("user", "three"), ("user", "now")]
+    assert [message["content"] for message in memory.load_replay_messages(_saved(tmp_path))] == [
+        "one", "first", "three", "third", "now", "done",
+    ]
+
+
+def test_halt_ends_the_run_before_later_files_and_the_prompt(tmp_path, monkeypatch):
+    _agent(tmp_path, monkeypatch, {"1-user.md": "one", "2-user.md": "why\n%%HALT%%\n", "3-user.md": "three"})
+    requests = _model(monkeypatch, ["first"])
+    assert js(monkeypatch, "--session", "seeded", "-p", "now") == 0
+    assert [request[-1] for request in requests] == [("user", "one")]
+
+
+def test_halt_as_the_first_step_needs_no_answer(tmp_path, monkeypatch):
+    _agent(tmp_path, monkeypatch, {"1-user.md": "%%HALT%%"})
+    requests = _model(monkeypatch, [])
+    assert js(monkeypatch, "--session", "seeded") == 0
+    assert requests == []
+
+
+def test_a_control_word_above_the_last_line_is_text(tmp_path, monkeypatch):
+    _agent(tmp_path, monkeypatch, {"1-user.md": "%%HALT%%\nis a word"})
+    requests = _model(monkeypatch, ["first"])
+    assert js(monkeypatch, "--session", "seeded") == 0
+    assert requests[0][-1] == ("user", "%%HALT%%\nis a word")
+
+
+def test_loop_reads_the_saved_turn_then_repeats_the_command_line(tmp_path, monkeypatch):
+    seen = tmp_path / "seen"
+    _agent(tmp_path, monkeypatch, {
+        "1-user.md": "build",
+        "2-user.md": f"!{{sh grep -c built '%%CURRENT_SESSION_FULLPATH%%' > '{seen}'}}\n%%LOOP%%",
+    })
+    requests = _model(monkeypatch, ["built"])
+    repeated = []
+
+    def repeat(argv, limit, **kwargs):
+        repeated.append((argv, limit, kwargs["while_looping"]))
+        return 0
+
+    monkeypatch.setattr(loop_controller, "run", repeat)
+    assert js(monkeypatch, "--session", "seeded") == 0
+    assert [request[-1] for request in requests] == [("user", "build")]
+    assert seen.read_text().strip() == "1"
+    assert repeated == [(["--session", "seeded"], "", True)]
+
+
+@pytest.mark.parametrize(("word", "code"), [("LOOP", loop_controller.LOOP_EXIT), ("HALT", loop_controller.HALT_EXIT)])
+def test_a_run_the_loop_started_exits_with_the_word_and_drops_its_marker(tmp_path, monkeypatch, word, code):
+    _agent(tmp_path, monkeypatch, {"1-user.md": "!{sh printenv JS_LOOP_CHILD}\n%%" + word + "%%"})
+    _model(monkeypatch, [])
+    monkeypatch.setenv("JS_LOOP_CHILD", "1")
+    assert js(monkeypatch, "--session", "seeded") == code
+    assert "JS_LOOP_CHILD" not in os.environ
+
+
+def test_exchanges_are_the_prompt_when_stdin_is_not_a_terminal_and_empty(tmp_path, monkeypatch):
+    import io
+
+    _agent(tmp_path, monkeypatch, {"1-user.md": "one"})
+    requests = _model(monkeypatch, ["first"])
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO(""))
+    assert cli.main(["--session", "seeded"]) == 0
+    assert [request[-1] for request in requests] == [("user", "one")]

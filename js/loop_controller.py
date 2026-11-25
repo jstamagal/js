@@ -7,11 +7,41 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 
 from . import command_line, messages as msgs, settings as _settings, snippets
 from .capped_process import descendants
 
 _DURATION = re.compile(r"([1-9][0-9]*)([mMhH])\Z")
+
+# What a run exits with when its agent's user files end it on a control word:
+# LOOP asks for another fresh run, HALT for no more of them.
+LOOP_EXIT = 75
+HALT_EXIT = 76
+CONTROL_EXITS = (LOOP_EXIT, HALT_EXIT)
+# Set in the environment of a run the controller starts. That run takes it out
+# of its environment as it starts, so the commands it runs do not inherit it.
+_CHILD_ENV = "JS_LOOP_CHILD"
+_is_child = False
+
+
+def claim_child() -> None:
+    """Note whether a loop controller started this process."""
+    global _is_child
+    _is_child = os.environ.pop(_CHILD_ENV, None) is not None
+
+
+def after_run(code: int, argv: list[str], *, bench: str | None, prompt: str | None,
+              settings: Callable[[], dict]) -> int:
+    """The exit code of a run that ended with ``code``. A run a controller
+    started hands its control exit to that controller. A run started by hand
+    is its own controller: HALT ends it, and LOOP repeats ``argv`` as fresh
+    runs for as long as each one ends on LOOP."""
+    if code not in CONTROL_EXITS or _is_child:
+        return code
+    if code == HALT_EXIT:
+        return 0
+    return run(argv, "", bench=bench, prompt=prompt, settings=settings(), while_looping=True)
 
 
 def parse_limit(value: str) -> tuple[int | None, float | None]:
@@ -62,12 +92,16 @@ def _stop_child(child: subprocess.Popen) -> None:
 
 
 def run(argv: list[str], limit: str, *, bench: str | None, prompt: str | None,
-        child_command: list[str] | None = None, settings: dict | None = None) -> int:
+        child_command: list[str] | None = None, settings: dict | None = None,
+        while_looping: bool = False) -> int:
+    """Repeat ``argv`` as fresh runs up to ``limit``. A run that ends on HALT
+    ends the loop. ``while_looping`` also ends it after a run that did not end
+    on LOOP, and sends each run as it was typed, with no instruction added."""
     count, seconds = parse_limit(limit)
     command = list(child_command or [sys.executable, "-m", "js"])
     args = child_argv(argv)
     stdin_data = sys.stdin.buffer.read() if not sys.stdin.isatty() else None
-    if (prompt is None and bench is None and not stdin_data
+    if (prompt is None and bench is None and not stdin_data and not while_looping
             and "--commit" not in args):
         args += ["-p", snippets.render("fresh-session")]
     deadline = time.monotonic() + seconds if seconds is not None else None
@@ -83,14 +117,17 @@ def run(argv: list[str], limit: str, *, bench: str | None, prompt: str | None,
             attempts += 1
             print(msgs.LOOP_ATTEMPT.words(attempts=attempts, completed=completed, value=count or msgs.LOOP_UNLIMITED), flush=True)
             child = subprocess.Popen(command + args, start_new_session=True,
-                                     stdin=subprocess.PIPE if stdin_data is not None else None)
+                                     stdin=subprocess.PIPE if stdin_data is not None else None,
+                                     env={**os.environ, _CHILD_ENV: "1"})
             try:
                 child.communicate(input=stdin_data)
                 code = child.returncode
             except BaseException:
                 _stop_child(child)
                 raise
-            if code == 0:
+            if code == HALT_EXIT or (while_looping and code == 0):
+                return 0
+            if code in (0, LOOP_EXIT):
                 completed += 1
                 failures = 0
                 continue

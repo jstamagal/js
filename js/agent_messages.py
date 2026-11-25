@@ -2,23 +2,41 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 
-from . import memory, persona, runtime
+from . import memory, messages as msgs, persona, runtime
+
+# The control words of a user file. One of them as the last line of the file's
+# expanded text makes the file a control step: nothing of it is sent.
+PASS, LOOP, HALT = "PASS", "LOOP", "HALT"
+_CONTROL_LINE = re.compile(rf"%%({PASS}|{LOOP}|{HALT})%%")
+
+
+def control_word(text: str) -> str | None:
+    """The control word that is the last line of ``text``, else None."""
+    lines = text.rstrip().rsplit("\n", 1)
+    match = _CONTROL_LINE.fullmatch(lines[-1].strip())
+    return match[1] if match else None
 
 
 async def initialize(cfg, spec, messages: list[dict], telemetry, *,
                      system: str | None = None, save: bool = True,
-                     echo_user: Callable[[str], None] | None = None, **turn_kwargs) -> None:
+                     echo_user: Callable[[str], None] | None = None, **turn_kwargs) -> str | None:
     """Append startup exchanges to a fresh conversation, persisting each step.
 
     Paired exchanges and assistant-only entries are synthetic. An unpaired user
     entry runs a normal model turn, shown through `echo_user` ahead of the
     reply the turn streams. Expansion happens when each entry is reached.
     Existing conversation history already contains its initialization.
+
+    A user entry whose expanded text ends in a control word sends nothing, and
+    its agent entry is not recorded. PASS goes on to the next exchange. LOOP
+    and HALT end the exchanges there and are returned; the caller decides what
+    ends with them.
     """
     if messages:
-        return
+        return None
     # Stamp what the turn runs with: the same override-or-cfg rule as
     # runtime._turn_request.
     model = turn_kwargs.get("model_override") or cfg.model
@@ -32,6 +50,12 @@ async def initialize(cfg, spec, messages: list[dict], telemetry, *,
         user_text = None
         if exchange.user is not None:
             user_text = persona.expand_agent_text(exchange.user, cfg)
+            word = control_word(user_text)
+            if word is not None:
+                msgs.warn(msgs.EXCHANGE_CONTROL_WORD, number=exchange.number, word=word)
+                if word == PASS:
+                    continue
+                return word
             message = {"role": "user", "content": user_text}
             messages.append(message)
             if save:
@@ -56,3 +80,4 @@ async def initialize(cfg, spec, messages: list[dict], telemetry, *,
             finally:
                 if save:
                     memory.persist_messages(cfg.session_file, messages, stamp=stamp)
+    return None
