@@ -1,13 +1,17 @@
 import base64
+import io
 import json
 import os
 
 import ai
 import ai.types.messages
 import pytest
+from PIL import Image
 from turn_driver import config, registry, run
 
 from js import media, result_caps, runtime, settings, tool_result_messages
+from js.mcp.host import mcp_tool_result
+from js.mcp.types import CallToolResult
 from js.text_bytes import byte_size, cap_text
 from js.toolkit.core import Tool, ToolResult
 
@@ -75,23 +79,38 @@ def test_media_over_tool_media_max_is_replaced_by_a_line_naming_the_cap(monkeypa
     assert "TOOL_MEDIA_MAX" in capped.blocks[0]["text"]
 
 
-def _screenshot(raw_bytes: int) -> ToolResult:
-    png = b"\x89PNG\r\n\x1a\n" + os.urandom(raw_bytes)
-    return ToolResult([
-        {"type": "text", "text": "screenshot taken"},
-        {"type": "image", "data": base64.b64encode(png).decode(), "mimeType": "image/png"},
-    ])
+def _png(side: int, shade: int = 0) -> bytes:
+    out = io.BytesIO()
+    # Uncompressed grayscale makes the PNG just over side * side bytes.
+    Image.new("L", (side, side), color=shade).save(out, format="PNG", compress_level=0)
+    return out.getvalue()
 
 
-@pytest.mark.parametrize("raw_bytes, count", [(160_000, 1), (600_000, 1), (160_000, 3)])
-def test_screenshots_reach_the_provider_under_the_stock_caps(raw_bytes, count):
-    per_result = settings.default_value("TOOL_RESULT_MAX")
-    per_batch = settings.default_value("PARALLEL_RESULTS_MAX")
-    results = [result_caps.cap_result(_screenshot(raw_bytes), per_result) for _ in range(count)]
-    for result in result_caps.cap_batch_results(results, per_batch):
-        messages = tool_result_messages.build_tool_result_messages("call-1", "screenshot", result)
-        parts = [part for message in messages for part in message.parts]
-        assert any(isinstance(part, ai.types.messages.FilePart) for part in parts)
+@pytest.mark.parametrize("side, count", [(400, 1), (800, 1), (400, 3)])
+def test_screenshots_reach_the_provider_under_the_stock_caps(side, count, tmp_path, monkeypatch):
+    def screenshot(index):
+        return mcp_tool_result(CallToolResult.from_wire({"content": [
+            {"type": "text", "text": f"Screen {index}"},
+            {"type": "image", "data": base64.b64encode(_png(side, index)).decode(), "mimeType": "image/png"},
+        ]}))
+
+    tool = Tool("screenshot", "test", screenshot, {"index": {"type": "integer"}})
+    calls = [(f"shot-{i}", "screenshot", json.dumps({"index": i})) for i in range(count)]
+    cfg = config(tmp_path, settings={"VISION": True},
+                 max_tool_result_bytes=settings.default_value("TOOL_RESULT_MAX"),
+                 max_tool_results_per_turn_bytes=settings.default_value("PARALLEL_RESULTS_MAX"),
+                 max_tool_media_bytes=settings.default_value("TOOL_MEDIA_MAX"))
+    turn = run(tmp_path, monkeypatch, registry(tool), [calls], cfg=cfg)
+
+    images = [part for message in turn.received[1] for part in message.parts
+              if isinstance(part, ai.types.messages.FilePart)]
+    assert len(images) == count
+    for i, part in enumerate(images):
+        assert f"Screen {i}" in turn.received_results()[0][f"shot-{i}"]
+        with Image.open(io.BytesIO(part.data)) as image:
+            assert image.size == (side, side)
+            assert image.getextrema() == (i, i)
+
 
 def test_dispatch_caps_media_by_the_context_running_the_call(tmp_path, monkeypatch):
     def snap(context=None):
@@ -107,17 +126,10 @@ def test_dispatch_caps_media_by_the_context_running_the_call(tmp_path, monkeypat
     assert not any(isinstance(part, ai.types.messages.FilePart) for part in sent)
 
 
-def _resource_png(raw_bytes: int) -> ToolResult:
-    png = b"\x89PNG\r\n\x1a\n" + os.urandom(raw_bytes)
-    return ToolResult([
-        {"type": "text", "text": "page captured"},
-        {"type": "resource", "resource": {"uri": "screen://1", "mimeType": "image/png",
-                                          "blob": base64.b64encode(png).decode()}},
-    ])
-
-
 def test_an_embedded_resource_image_reaches_the_provider_under_the_stock_caps():
-    result = result_caps.cap_result(_resource_png(160_000), settings.default_value("TOOL_RESULT_MAX"))
+    resource = {"uri": "screen://1", "mimeType": "image/png", "blob": base64.b64encode(_png(400)).decode()}
+    result = ToolResult([{"type": "text", "text": "page captured"}, {"type": "resource", "resource": resource}])
+    result = result_caps.cap_result(result, settings.default_value("TOOL_RESULT_MAX"))
     result = result_caps.cap_batch_results([result], settings.default_value("PARALLEL_RESULTS_MAX"))[0]
     messages = tool_result_messages.build_tool_result_messages("call-1", "screenshot", result)
     parts = [part for message in messages for part in message.parts]
