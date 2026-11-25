@@ -8,6 +8,7 @@ dies with the turn when ^C cancels it.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import threading
 import time
@@ -151,9 +152,22 @@ def test_shell_command_does_not_read_the_operators_terminal(tmp_path):
         os.close(write_end)
 
 
-def test_cancelling_a_turn_kills_the_running_shell_command(monkeypatch, tmp_path):
+@pytest.mark.parametrize("late_register", [False, True])
+def test_cancelling_a_turn_kills_the_running_shell_command(monkeypatch, tmp_path, late_register):
     marker = tmp_path / "pid"
     command = f"echo $$ > {marker}; exec sleep 60"
+    if late_register:
+        # The cancel lands after the command started but before its call
+        # registered it as killable: under load that gap is real.
+        registered = shell.blocking_command
+
+        @contextlib.contextmanager
+        def late(context, command, process):
+            time.sleep(0.5)
+            with registered(context, command, process):
+                yield
+
+        monkeypatch.setattr(shell, "blocking_command", late)
 
     async def model(**kwargs):
         return _call("run", f'{{"command": "{command}", "timeout": 60}}', "call_sleep")

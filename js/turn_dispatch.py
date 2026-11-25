@@ -503,7 +503,12 @@ async def dispatch_batch(
                 _interrupt_inflight(tool_context)
                 while not future.done():
                     try:
-                        await asyncio.shield(future)
+                        await asyncio.wait_for(asyncio.shield(future), 0.05)
+                    except TimeoutError:
+                        # A shell command started just before the cancel
+                        # registers as killable only once its call reaches
+                        # the wait; signal again until the call returns.
+                        shell.interrupt_inflight(tool_context)
                     except asyncio.CancelledError:
                         continue
                 future.result()
