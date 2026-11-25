@@ -173,7 +173,7 @@ class _RedactedThinkingStream:
 
 
 class AnthropicThinkingProtocol(AnthropicMessagesProtocol):
-    """Round-trip opaque redacted blocks through ai 0.5.2's reasoning parts."""
+    """Round-trip redacted thinking blocks and expose reported thinking tokens."""
 
     protocol_class_id: Literal["js_anthropic_thinking"] = "js_anthropic_thinking"
     explicit_prompt_cache: bool = False
@@ -233,6 +233,13 @@ class AnthropicThinkingProtocol(AnthropicMessagesProtocol):
                 for redacted_event in pending:
                     yield redacted_event
                 pending.clear()
+                if isinstance(event, ai.events.StreamEnd) and event.usage is not None:
+                    usage = event.usage
+                    details = (usage.raw or {}).get("output_tokens_details")
+                    thinking = _field(details, "thinking_tokens")
+                    if usage.reasoning_tokens is None and type(thinking) is int and thinking >= 0:
+                        usage = usage.model_copy(update={"reasoning_tokens": thinking})
+                        event = event.model_copy(update={"usage": usage})
                 yield event
 
 
