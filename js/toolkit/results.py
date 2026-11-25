@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -84,6 +85,7 @@ def spill_oversized_result(
     limit_name: str = "TOOL_RESULT_INLINE_MAX",
     force: bool = False,
     registry: Any = None,
+    preview: Callable[[int], str] | None = None,
 ) -> str:
     """Write an oversized result to disk and return a preview plus the path.
 
@@ -92,7 +94,8 @@ def spill_oversized_result(
     names the `read` call that continues at the byte where the preview stops,
     and, when the text has more than one line, the line-range call too. A
     single-line payload (JSON, say) is reachable only by byte range. 0 or
-    less disables.
+    less disables. A custom preview gets the remaining inline byte budget
+    and uses a recovery notice that points to the start of the full text.
     """
     if inline_cap <= 0 or (not force and byte_size(result) <= inline_cap):
         return result
@@ -130,6 +133,12 @@ def spill_oversized_result(
             f'[result was {total_bytes} bytes, over {limit_name} ({inline_cap}); the full text is at {path} — {how}]'
         )
 
+    cls = _SpilledOutput if isinstance(result, Output) else _SpilledResult
+    if preview is not None:
+        notice = spill_notice(0, 1)
+        text = preview(max(0, inline_cap - byte_size(notice) - 2))
+        return cls(f"{notice}\n\n{text}" if text else notice, notice)
+
     # Keep a usable pointer even when the notice alone exceeds the text budget.
     # The budget is sized with the widest offsets the notice can name.
     widest = spill_notice(total_bytes, line_count + 1)
@@ -139,5 +148,4 @@ def spill_oversized_result(
     next_line = len(head_lines) + (1 if head_lines and head_lines[-1] != head_lines[-1].rstrip("\r\n") else 0)
     notice = spill_notice(byte_size(head), max(1, next_line))
     text = f"{head}\n\n{notice}" if head else notice
-    cls = _SpilledOutput if isinstance(result, Output) else _SpilledResult
     return cls(text, spill_notice(0, 1))

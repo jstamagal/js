@@ -29,6 +29,11 @@ def byte_prefix(text: str, budget: int) -> str:
     return _utf8(text)[:max(0, budget)].decode("utf-8", errors="ignore")
 
 
+def byte_suffix(text: str, budget: int) -> str:
+    data = _utf8(text)
+    return data[len(data) - max(0, min(budget, len(data))):].decode("utf-8", errors="ignore")
+
+
 def cap_text(text: str, budget: int, marker: str) -> str:
     """Hard cap including disclosure; use a compact marker for tiny budgets."""
     if byte_size(text) <= budget:
