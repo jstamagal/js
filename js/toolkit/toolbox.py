@@ -58,16 +58,16 @@ _BUILTIN_NAMES = frozenset(dir(builtins))
 # NameErrors on load: `summarise` used `statistics.fmean`, `statistics` was
 # imported in a different cell, the saved file had no import, and the tool was
 # broken the moment the session that wrote it ended. So the probe resolves every
-# free name against the live namespace: modules become import lines prepended to
+# free name against the live namespace: importable objects become lines prepended to
 # the saved body. Whatever stays unbound in that body is what `save` refuses on
 # (see `unbound_names`), because a name the file does not carry is a NameError
 # waiting for the next session that loads it.
 #
 # `inspect.getsource` covers cells IPython registered with linecache and files a
-# previous `load` exec'd; the `In` scan is the fallback for anything it misses.
+# previous `load` exec'd. A live function's code object identifies its origin.
 _SOURCE_PROBE = """
 def __js_src(target_name):
-    import ast, builtins, inspect, json, textwrap
+    import ast, builtins, inspect, json, sys, textwrap
 
     def _body():
         target = globals().get(target_name)
@@ -75,7 +75,9 @@ def __js_src(target_name):
             try:
                 return textwrap.dedent(inspect.getsource(target))
             except (OSError, TypeError):
-                pass
+                if inspect.isfunction(target):
+                    # Raw exec strings can redefine a name from an earlier cell.
+                    return ''
         history = globals().get('In')
         if isinstance(history, list):
             wanted = ('def ' + target_name, 'class ' + target_name)
@@ -115,7 +117,7 @@ def __js_src(target_name):
                 bound.update(node.names)
         seen, out = set(), []
         for name in used:
-            if name in bound or name in dir(builtins) or name in seen:
+            if name in bound or name in seen:
                 continue
             seen.add(name)
             out.append(name)
@@ -124,11 +126,24 @@ def __js_src(target_name):
     source = _body()
     imports = []
     for name in _free(source):
-        value = globals().get(name)
-        module = getattr(value, '__name__', None) if inspect.ismodule(value) else None
-        if module:
-            imports.append('import ' + module
-                           + ('' if module == name else ' as ' + name))
+        if name not in globals():
+            continue
+        value = globals()[name]
+        if value is getattr(builtins, name, None):
+            continue
+        if inspect.ismodule(value):
+            exported = value.__name__
+            statement = 'import ' + exported
+        elif inspect.isclass(value) or inspect.isroutine(value):
+            module = getattr(value, '__module__', None)
+            exported = getattr(value, '__name__', '')
+            owner = sys.modules.get(module)
+            if module == '__main__' or owner is None or vars(owner).get(exported) is not value:
+                continue
+            statement = 'from ' + module + ' import ' + exported
+        else:
+            continue
+        imports.append(statement + ('' if exported == name else ' as ' + name))
     return json.dumps({'source': source, 'imports': imports})
 print('__JS_SRC__' + __js_src(%(name)r))
 del __js_src

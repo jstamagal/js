@@ -18,8 +18,8 @@ Parameters:
   under `.js/toolbox/` and only visible here). A project tool shadows a global
   tool of the same name.
 - `revision`: for `restore` — the revision number to roll back to.
-- `source`: for `save` — the definition text, only needed when the function is
-  not in the kernel namespace.
+- `source`: for `save` — the definition text. Pass it when the kernel lacks
+  the source, such as a function created with `exec(src)`.
 - `verbosity`: `quiet`, `normal`, or `verbose` for the operator's terminal view.
 
 `list` shows every saved tool with its current revision, its scope, and the
@@ -47,8 +47,8 @@ stays restorable forever. A first save is `r1`; a save over an existing tool is
 What is worth saving: a parser, a fetcher, a report formatter — a function
 that would otherwise be rewritten next session.
 
-Before writing, `save` hoists the definition's module imports into the file so
-it stands alone, and refuses the save if the definition still reads a name the
+Before writing, `save` hoists modules and importable functions and classes
+into the file, preserving their local aliases. It refuses the save if the definition still reads a name the
 file would not carry: a session constant, a client built in an earlier cell, a
 helper you defined but never saved. Calling another saved tool is fine — every
 tool file execs into one namespace at load — so only names that would be absent

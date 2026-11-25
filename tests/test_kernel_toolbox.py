@@ -909,6 +909,43 @@ def test_a_tool_saved_from_the_kernel_loads_into_a_fresh_one_with_its_imports(ct
 
 
 @needs_kernel
+def test_saved_function_carries_aliased_imported_classes_and_functions(ctx):
+    python_kernel.kernel(code=(
+        "from pathlib import Path as FilePath\n"
+        "from dataclasses import replace as copy_with\n"
+        "def revised(record, path):\n"
+        "    return copy_with(record, name=FilePath(path).name)\n"
+    ), context=ctx)
+
+    tbmod.toolbox(action="save", name="revised", context=ctx)
+    directory = tbmod.toolbox_dirs(Path(ctx.cwd))[0]
+    restored = {}
+    exec((directory / "revised.py").read_text(), restored)
+
+    from dataclasses import dataclass
+
+    @dataclass
+    class Record:
+        name: str
+
+    assert restored["revised"](Record("old"), "/tmp/new") == Record("new")
+
+
+@needs_kernel
+def test_dynamic_redefinition_never_saves_the_earlier_cell(ctx):
+    python_kernel.kernel(code="def current(): return 1", context=ctx)
+    tbmod.toolbox(action="save", name="current", context=ctx)
+    python_kernel.kernel(code="src = 'def current(): return 2'\nexec(src)", context=ctx)
+
+    report = tbmod.toolbox(action="save", name="current", context=ctx)
+
+    record = tbmod.discover(Path(ctx.cwd))["current"]
+    assert report.startswith("ERROR") and "source" in report
+    assert record.revision == 1
+    assert archived_revisions(record) == []
+
+
+@needs_kernel
 def test_load_reports_a_broken_tool_by_name_and_still_loads_the_healthy_ones(ctx):
     directory = tbmod.toolbox_dirs(Path(ctx.cwd))[0]
     directory.mkdir(parents=True)
