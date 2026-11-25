@@ -353,8 +353,6 @@ def run_capture(
     )
     if proc.returncode != 0:
         if not strict and stdout:
-            # grep with no match or a script ending on a false test exits
-            # nonzero after printing what the prompt wants.
             (_WARNING.get() or msgs.warn)(msgs.DIRECTIVE_EXITED_OUTPUT_USED, label=label, code=proc.returncode)
             return stdout.rstrip("\n")
         err = stderr.strip()

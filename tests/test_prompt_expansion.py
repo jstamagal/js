@@ -157,11 +157,13 @@ def test_failed_code_run_expands_to_nothing(capsys):
     assert capsys.readouterr().err  # a warning, and the load goes on
 
 
-def test_silent_failure_after_good_directives_leaves_no_directive_text(capsys):
-    text = "!{sh echo The cake}\n!{sh rm /nonexistent/js-test-file 2>/dev/null}\n!{sh exit 127}"
+def test_nonzero_directives_use_available_stdout_and_warn(capsys):
+    text = "!{sh echo 'no GPU found'; exit 23}\n```!sh\nexit 17\n```"
     out = expand_prompt(text, allow_code=True)
-    assert out == "The cake\n\n"
-    assert "!{" not in out
+    assert out == "no GPU found\n"
+    warnings = capsys.readouterr().err.splitlines()
+    assert len(warnings) == 2
+    assert "23" in warnings[0] and "17" in warnings[1]
 
 
 def test_sh_nonzero_exit_errors():
