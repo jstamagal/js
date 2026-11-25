@@ -1,18 +1,92 @@
-"""JSONL conversation persistence. Lock-protected, fsync-after-write,
-version-tagged. Loader ignores records it doesn't understand."""
+"""JSONL conversation persistence, version-tagged. The loader skips records
+it cannot read (not JSON, not a dict, a message that is not a dict, bytes
+that are not UTF-8) and treats a history-rewriting mark whose payload no
+writer produces as inert; the file itself is never rewritten. Locking and
+fsync live in `js.session_store.append`.
+
+Every record carries an `id` and a `parent` (`js.session_store.append`); replay
+reads the file in order and does not use them. An assistant message record
+carries a `stamp`: the model, provider and reasoning level it was written
+under. Every write brings the session's `.txt`
+transcript up to date (`js.session_text`)."""
 
 from __future__ import annotations
 
+import contextlib
+import errno
 import fcntl
+import hashlib
 import json
 import os
-import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
+
+from . import history_record, message_times, messages as msgs, output, session_store, session_text
 
 SCHEMA_VERSION = 1
+
+_owned_records: dict[tuple[int, str], set[str]] = {}
+
+
+def _file_key(path: Path) -> str:
+    return str(path.resolve(strict=False))
+
+
+class _Snapshot(list):
+    """Live history with the journal position it was read or saved from."""
+
+    def __init__(self, messages: list[dict], path: Path, revision: tuple[int, int, int] | None) -> None:
+        super().__init__(messages)
+        self.path = _file_key(path)
+        self.revision = revision
+
+    def copy(self) -> _Snapshot:
+        return _Snapshot(self, Path(self.path), self.revision)
+
+
+@contextlib.contextmanager
+def _save_lock(path: Path):
+    """Serialize history-changing transactions across processes."""
+    if path == Path(os.devnull):
+        yield
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(f"{_file_key(path)}.save.lock", "a+b") as guard:
+        fcntl.flock(guard.fileno(), fcntl.LOCK_EX)
+        yield
+
+
+def _revision(stream) -> tuple[int, int, int]:
+    info = os.fstat(stream.fileno())
+    return info.st_dev, info.st_ino, info.st_size
+
+
+def _check_snapshot(path: Path, messages: list[dict]) -> None:
+    if not isinstance(messages, _Snapshot) or messages.path != _file_key(path):
+        return
+    owned = _owned_records.get((os.getpid(), messages.path), set())
+    with _open_locked(path, "r") as stream:
+        current = _revision(stream)
+        previous = messages.revision
+        if previous is not None and (current[:2] != previous[:2] or current[2] < previous[2]):
+            raise OSError(errno.ESTALE, "session changed; reload before saving", str(path))
+        # Text streams seek by byte offsets at record boundaries.
+        stream.seek(previous[2] if previous is not None else 0)
+        for line in stream:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            changes_history = record.get("kind") == "message" or (
+                record.get("kind") == "mark" and _rewrites_history(record.get("marker")))
+            record_id = record.get("id")
+            if changes_history and (not isinstance(record_id, str) or record_id not in owned):
+                raise OSError(errno.ESTALE, "session changed; reload before saving", str(path))
 
 
 @dataclass
@@ -22,24 +96,29 @@ class Record:
     version: int = SCHEMA_VERSION
     message: dict | None = None     # set when kind == "message"
     marker: str | None = None       # set when kind == "mark"
+    stamp: dict | None = None       # set on an assistant message: model, provider, reasoning
 
-    def to_jsonline(self) -> str:
-        return json.dumps(
-            {k: v for k, v in self.__dict__.items() if v is not None},
-            default=str,
-        )
+    def as_dict(self) -> dict:
+        return {k: v for k, v in self.__dict__.items() if v is not None}
 
     @classmethod
     def from_dict(cls, d: dict) -> Record | None:
         kind = d.get("kind")
-        if kind not in {"message", "mark"}:
+        if not isinstance(kind, str) or kind not in {"message", "mark"}:
             return None
+        try:
+            ts = float(d["ts"]) if isinstance(d.get("ts"), (int, float)) and not isinstance(d["ts"], bool) else None
+        except OverflowError:
+            ts = None
+        if ts is None or ts != ts or ts in (float("inf"), float("-inf")):
+            ts = time.time()
         return cls(
             kind=kind,
-            ts=float(d.get("ts", time.time())),
+            ts=ts,
             version=SCHEMA_VERSION,
-            message=d.get("message"),
+            message=d.get("message") if isinstance(d.get("message"), dict) else None,
             marker=d.get("marker"),
+            stamp=d.get("stamp") if isinstance(d.get("stamp"), dict) else None,
         )
 
 
@@ -55,20 +134,29 @@ def _migrate_record(d: dict) -> dict | None:
     records from other writers, each versioning itself independently, and their
     counters are not comparable to this one.
     """
-    if d.get("kind") not in {"message", "mark"}:
+    if not isinstance(d, dict) or not isinstance(d.get("kind"), str) or d["kind"] not in {"message", "mark"}:
         return None
-    if d.get("version") == SCHEMA_VERSION:
+    if type(d.get("version")) is int and d["version"] == SCHEMA_VERSION:
         return d
     return None
 
 
 def _open_locked(path: Path, mode: str):
     """Open with appropriate fcntl lock for the mode. Caller must close."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    f = open(path, mode)
+    if any(flag in mode for flag in "wax"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    # Text reads replace bytes that are not UTF-8 (a torn multibyte char from
+    # a crashed writer) instead of raising on every later read of the file.
+    f = open(path, mode) if "b" in mode else open(path, mode, encoding="utf-8", errors="replace")
     lock = fcntl.LOCK_EX if "a" in mode or "w" in mode else fcntl.LOCK_SH
     fcntl.flock(f.fileno(), lock)
     return f
+
+
+def _call_id(call: object) -> str | None:
+    """A tool call's id when it is a usable one (a non-empty string)."""
+    cid = call.get("id") if isinstance(call, dict) else None
+    return cid if isinstance(cid, str) and cid else None
 
 
 def _heal_orphaned_tool_calls(messages: list[dict]) -> list[dict]:
@@ -89,24 +177,25 @@ def _heal_orphaned_tool_calls(messages: list[dict]) -> list[dict]:
         healed.append(msg)
         i += 1
         calls = msg.get("tool_calls") if msg.get("role") == "assistant" else None
-        if not calls:
+        if not calls or not isinstance(calls, list):
             continue
-        expected = {call.get("id") for call in calls}
+        expected = {_call_id(call) for call in calls}
         answered: set[str] = set()
         while i < len(messages) and messages[i].get("role") == "tool":
             cid = messages[i].get("tool_call_id")
-            if cid in expected and cid not in answered:
+            if isinstance(cid, str) and cid in expected and cid not in answered:
                 answered.add(cid)
                 healed.append(messages[i])
             i += 1
         for call in calls:
-            cid = call.get("id")
+            cid = _call_id(call)
             if cid and cid not in answered:
+                function = call.get("function")
                 healed.append({
                     "role": "tool",
                     "tool_call_id": cid,
-                    "name": (call.get("function") or {}).get("name", ""),
-                    "content": "ERROR: tool result was not recorded (session interrupted)",
+                    "name": function.get("name", "") if isinstance(function, dict) else "",
+                    "content": 'ERROR: tool result was not recorded (session interrupted)',
                 })
     return healed
 
@@ -118,28 +207,67 @@ def balance_orphaned_tool_calls(messages: list[dict]) -> list[dict]:
     return _heal_orphaned_tool_calls(messages)
 
 
+# An assistant message's reasoning: the text, and its signed reasoning.
+_REASONING_KEYS = frozenset({"reasoning_content", *history_record.SIGNED_REASONING_KEYS})
+
+
 def _strip_orphan_reasoning(messages: list[dict]) -> list[dict]:
-    """Drop ``reasoning_content`` from assistant messages that have NO ``tool_calls``
-    when rebuilding the in-memory conversation. The on-disk JSONL keeps the field
-    (archive value, costs nothing on disk); only the live conversation that gets
-    sent back to the provider is trimmed. DeepSeek IGNORES AND BILLS the field on
-    tool-free assistant turns — roughly 500 wasted prompt tokens each — but still
-    REQUIRES it on the assistant turn that carried tool_calls. Mirrors the
-    write-side rule in ``js/runtime.py``.
-    """
+    """Project history to the tool-call-only reasoning view (`load_messages`)."""
     out: list[dict] = []
     for msg in messages:
-        if msg.get("role") == "assistant" and "reasoning_content" in msg and not msg.get("tool_calls"):
-            cleaned = {k: v for k, v in msg.items() if k != "reasoning_content"}
+        if msg.get("role") == "assistant" and not msg.get("tool_calls") and _REASONING_KEYS & msg.keys():
+            cleaned = {k: v for k, v in msg.items() if k not in _REASONING_KEYS}
             out.append(cleaned)
         else:
             out.append(msg)
     return out
 
 
+def _without_answer_reasoning_text(messages: list[dict]) -> list[dict]:
+    """The history as persistence compares it: final answers without
+    ``reasoning_content``, so a history whose answers lack the reasoning text
+    appends without replacing the journal's. Signed reasoning is compared, so
+    a drop of it is written as a rollback."""
+    return [
+        {k: v for k, v in msg.items() if k != "reasoning_content"}
+        if msg.get("role") == "assistant" and not msg.get("tool_calls") and "reasoning_content" in msg
+        else msg
+        for msg in messages
+    ]
 
-def _compaction_summary_message(summary: str) -> dict:
+
+def compaction_summary_message(summary: str) -> dict:
+    """The user message replay and compaction put in place of the summarized history."""
     return {"role": "user", "content": f"<compaction-summary>\n{summary}\n</compaction-summary>"}
+
+
+# The tags js wraps its own text in when it writes a user message: reminders,
+# compaction summaries and the files reattached after a compaction.
+HARNESS_USER_TAGS = ("js-reminder", "compaction-summary", "post-compaction-files")
+_HARNESS_USER_PREFIXES = tuple(f"<{tag}>" for tag in HARNESS_USER_TAGS)
+
+
+def turn_cut_off(messages: list[dict]) -> bool:
+    """Whether the last turn in `messages` ended without a finished reply.
+
+    Trailing user messages js wrote on its own are passed over. The turn was
+    cut off when what is left ends on a user or tool message, or on an
+    assistant message that carries tool calls or an `incomplete_reason`."""
+    index = len(messages) - 1
+    while index >= 0:
+        message = messages[index]
+        content = message.get("content")
+        if message.get("role") == "user" and isinstance(content, str) and content.startswith(_HARNESS_USER_PREFIXES):
+            index -= 1
+            continue
+        break
+    if index < 0:
+        return False
+    last = messages[index]
+    role = last.get("role")
+    if role == "assistant":
+        return bool(last.get("tool_calls") or last.get("incomplete_reason"))
+    return role in ("user", "tool")
 
 
 def _parse_compaction_marker(marker: str) -> dict | None:
@@ -153,12 +281,311 @@ def _parse_compaction_marker(marker: str) -> dict | None:
         return None
     return data
 
-def load_messages(memory_file: Path) -> list[dict]:
-    """Return the OpenAI-shape message list from disk, honoring control marks."""
-    if not memory_file.exists():
+def load_replay_messages(memory_file: Path) -> list[dict]:
+    """Return the OpenAI-shape message list from disk, honoring control marks.
+
+    This is the history a turn replays to the model: every assistant keeps its
+    reasoning, and `history_record.history_to_ai_messages` applies the transport's
+    replay policy.
+    """
+    memory_file = Path(memory_file)
+    try:
+        with _open_locked(memory_file, "r") as stream:
+            messages, skipped_versions = _replay(memory_file)
+            revision = _revision(stream)
+    except FileNotFoundError:
+        messages, skipped_versions, revision = [], 0, None
+    if skipped_versions:
+        output.notice(msgs.SESSION_RECORDS_SKIPPED, path=memory_file,
+                  records=f"{skipped_versions} record{'' if skipped_versions == 1 else 's'}", version=SCHEMA_VERSION)
+    return _Snapshot(messages, memory_file, revision)
+
+
+def _compared(message: dict) -> dict:
+    """``message`` as persistence compares it (`_without_answer_reasoning_text`)."""
+    return _without_answer_reasoning_text([message])[0]
+
+
+def _message_key(message: dict) -> str:
+    return json.dumps(_compared(message), sort_keys=True, default=str)
+
+
+def _carries_tool_ids(message: dict) -> bool:
+    return bool(_tool_call_ids(message)) or (message.get("role") == "tool" and bool(message.get("tool_call_id")))
+
+
+class _Reappends:
+    """Undoes the runs the session writer appended again before 2026-08-14.
+
+    When the history on disk and the one in memory differed at some message,
+    that writer appended the in-memory history from that message on once more,
+    without the rollback mark that cuts the disk copy back. Such a file repeats
+    its own history: a run of records each equal to the next message of a
+    stretch already replayed, then the new turn. A run is dropped, keeping the
+    stretch it copies, once it has copied the whole tail of the history, or
+    when it stops short of that but copied a tool call or result, whose ids
+    are unique. That leaves the history the writer held in memory, so a later
+    mark counts in the list it was written against. Replay uses this only for
+    a file that repeats a tool-call id, which no provider takes."""
+
+    def __init__(self, messages: list[dict]) -> None:
+        self.messages = messages
+        self.reset()
+
+    def reset(self) -> None:
+        """Index the history as it stands, after a mark rewrote it."""
+        self.at: dict[str, list[int]] = {}
+        self._index(range(len(self.messages)))
+        # A run in progress: it began at `base`, copying from each of `starts`;
+        # `length` of its records have matched so far, `tools` says whether
+        # one of them carried a tool id.
+        self.base = 0
+        self.starts: list[int] = []
+        self.length = 0
+        self.tools = False
+
+    def _index(self, positions: range) -> None:
+        for position in positions:
+            self.at.setdefault(_message_key(self.messages[position]), []).append(position)
+
+    def finish(self) -> None:
+        """End a run in progress: before a mark, and at the end of the file."""
+        if not self.starts:
+            return
+        if self.tools:
+            del self.messages[self.base:]
+        else:
+            self._index(range(self.base, len(self.messages)))
+        self.starts = []
+
+    def append(self, message: dict) -> None:
+        messages = self.messages
+        if self.starts:
+            compared = _compared(message)
+            alive = [start for start in self.starts if _compared(messages[start + self.length]) == compared]
+            if alive:
+                messages.append(message)
+                self.length += 1
+                self.tools = self.tools or _carries_tool_ids(message)
+                if any(start + self.length == self.base for start in alive):
+                    del messages[self.base:]
+                    self.starts = []
+                else:
+                    self.starts = alive
+                return
+            self.finish()
+        starts = list(self.at.get(_message_key(message), ()))
+        self.base = len(messages)
+        messages.append(message)
+        if not starts:
+            self._index(range(self.base, self.base + 1))
+        elif self.base - 1 in starts:
+            del messages[self.base:]
+        else:
+            self.starts, self.length, self.tools = starts, 1, _carries_tool_ids(message)
+
+
+def _tool_call_ids(message: dict) -> list[str]:
+    if message.get("role") != "assistant":
         return []
-    messages: list[dict] = []
+    calls = message.get("tool_calls")
+    if not isinstance(calls, list):
+        return []
+    return [cid for cid in (_call_id(call) for call in calls) if cid]
+
+
+def _replay(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | None = None,
+            retained: list[dict] | None = None) -> tuple[list[dict], int]:
+    """The replayed history and the number of records skipped for their version.
+    ``stamps`` collects ``id(message) -> (message, stamp)`` for every stamped reply read.
+
+    An epoch is the stretch of records between two marks that rewrite the
+    history (session_reset, rollback_to:, compaction:). An epoch whose message
+    records repeat a tool-call id (one already in the history the epoch started
+    from, or one earlier in the epoch) was written by the old writer that
+    appended runs twice; only such epochs are read again undoing those runs
+    (`_Reappends`). A clean epoch, before or after one, replays as written.
+    ``retained`` collects the history as `retained_messages` returns it."""
+    flagged: frozenset[int] = frozenset()
+    tried: set[frozenset[int]] = set()
+    while True:
+        if stamps is not None:
+            stamps.clear()
+        messages, skipped_versions, found = _replay_records(memory_file, stamps, undo_epochs=flagged,
+                                                            retained=retained)
+        # Repairing an epoch changes what the next one starts from (a
+        # compaction keeps a different tail), so an epoch flagged against the
+        # unrepaired history may be clean against the repaired one. Read again
+        # with exactly the epochs found until the set is stable; on a cycle,
+        # repair every epoch any reading flagged.
+        if found == flagged:
+            break
+        tried.add(flagged)
+        if found in tried:
+            flagged = frozenset().union(*tried, found)
+            if stamps is not None:
+                stamps.clear()
+            messages, skipped_versions, _found = _replay_records(memory_file, stamps, undo_epochs=flagged,
+                                                                 retained=retained)
+            break
+        flagged = found
+    return messages, skipped_versions
+
+
+def _compaction_keep_from(data: dict) -> int | None:
+    """Where a compaction mark's kept tail starts, before clamping to the
+    healed history; a mark without `keep_from` keeps no tail. None when it is
+    not a whole number (null, a string, a float): such a mark is inert, so no
+    guess ever cuts real history."""
+    if "keep_from" not in data:
+        return 1 << 62
+    keep_from = data["keep_from"]
+    if isinstance(keep_from, bool) or not isinstance(keep_from, int):
+        return None
+    return keep_from
+
+
+def rewrite_history(history: list[dict], marker: object) -> list[tuple[dict, dict]] | None:
+    """Rewrite ``history`` in place as the mark ``marker`` rewrites a session's history.
+
+    A session_reset empties it. ``rollback_to:N`` keeps its first N messages
+    and a compaction replaces it with the summary, the reattached files when
+    the mark carries them, and the tail from ``keep_from`` on with its signed
+    reasoning dropped: that reasoning was produced with the summarized prefix
+    in front of it. Both indexes count in the healed history
+    (`balance_orphaned_tool_calls`), the list the writer held, so the history
+    is healed before it is cut. Only the cut is a deletion (``del``); healing,
+    emptying and replacing assign.
+
+    Returns None when ``marker`` leaves the history as it is: not one of these
+    marks, or one whose payload no writer produces. Otherwise the
+    ``(original, copy)`` pairs of the kept messages a compaction copied."""
+    if not isinstance(marker, str):
+        return None
+    if marker == "session_reset":
+        history.clear()
+        return []
+    if marker.startswith("rollback_to:"):
+        try:
+            keep = max(0, int(marker.split(":", 1)[1]))
+        except ValueError:
+            return None
+        history[:] = _heal_orphaned_tool_calls(history)
+        del history[keep:]
+        return []
+    data = _parse_compaction_marker(marker)
+    keep_from = _compaction_keep_from(data) if data is not None else None
+    if keep_from is None:
+        return None
+    history[:] = _heal_orphaned_tool_calls(history)
+    keep_from = max(0, min(keep_from, len(history)))
+    rehydrated = data.get("rehydrated")
+    rehydrated = rehydrated if isinstance(rehydrated, dict) else None
+    tail = history[keep_from:]
+    originals = list(tail)
+    history_record.drop_signed_reasoning(tail)
+    history[:] = [compaction_summary_message(data["summary"]), *([rehydrated] if rehydrated else []), *tail]
+    return [(original, copy) for original, copy in zip(originals, tail, strict=True) if copy is not original]
+
+
+_ROLES = frozenset({"user", "assistant", "tool", "system"})
+
+
+class _RetainedLog:
+    """The message records a replay read, and which of them the history lost
+    to a rollback or to the undoing of a repeated run, by record index.
+
+    A message object in the history maps to its record index; a copy
+    compaction makes maps to its original's. Every object mapped is held here
+    until the replay ends, so no other object takes its id."""
+
+    def __init__(self) -> None:
+        self._read: list[dict] = []
+        self._copies: list[dict] = []
+        self._index: dict[int, int] = {}
+        self._removed: set[int] = set()
+
+    def read(self, message: dict) -> None:
+        self._index[id(message)] = len(self._read)
+        self._read.append(message)
+
+    def took_out(self, messages: list[dict]) -> None:
+        for message in messages:
+            index = self._index.get(id(message))
+            if index is not None:
+                self._removed.add(index)
+
+    def copied(self, original: dict, copy: dict) -> None:
+        index = self._index.get(id(original))
+        if index is not None:
+            self._index[id(copy)] = index
+            self._copies.append(copy)
+
+    def kept(self) -> list[dict]:
+        return [message for index, message in enumerate(self._read) if index not in self._removed]
+
+
+class History(list):
+    """A replayed history that reports each deletion, a rollback's or an
+    undone run's, to ``took_out`` with the messages it took out. A
+    session_reset clears it and a compaction replaces it; neither is a
+    deletion (`rewrite_history`)."""
+
+    def __init__(self, took_out: Callable[[list[dict]], None]) -> None:
+        super().__init__()
+        self._took_out = took_out
+
+    def __delitem__(self, key: Any) -> None:
+        self._took_out(self[key] if isinstance(key, slice) else [self[key]])
+        super().__delitem__(key)
+
+
+def replayed(raw: object) -> Record | None:
+    """The record replay reads from the parsed line ``raw``: a mark, or a
+    message whose role a history holds. None for anything replay skips: a
+    record of another kind or schema version, or a message without such a role."""
+    migrated = _migrate_record(raw)
+    rec = Record.from_dict(migrated) if migrated is not None else None
+    if rec is None or rec.kind == "mark":
+        return rec
+    role = rec.message.get("role") if rec.message is not None else None
+    return rec if isinstance(role, str) and role in _ROLES else None
+
+
+def _replay_records(memory_file: Path, stamps: dict[int, tuple[dict, dict]] | None, *,
+                    undo_epochs: frozenset[int],
+                    retained: list[dict] | None = None) -> tuple[list[dict], int, frozenset[int]]:
+    """The replayed history, the records skipped for their version, and the
+    epochs whose message records repeat a tool-call id. Runs the old writer
+    appended twice are undone in ``undo_epochs`` only.
+
+    ``retained``, when given, is filled with every message record in file
+    order that neither a rollback nor the undoing of a repeated run took
+    out: compaction and session_reset take nothing out of it. Bare message
+    records from before the record envelope count too."""
+    if retained is not None:
+        retained.clear()
+    if not memory_file.exists():
+        return [], 0, frozenset()
+    log = _RetainedLog() if retained is not None else None
+    messages: list[dict] = History(log.took_out) if log is not None else []
+    undo = _Reappends(messages)
+    epoch = 0
+    undoing = epoch in undo_epochs
+    call_ids: set[str] = set()
+    repeated: set[int] = set()
     skipped_versions = 0
+
+    def next_epoch() -> None:
+        nonlocal epoch, undoing
+        epoch += 1
+        undoing = epoch in undo_epochs
+        # Seed from the history that survived the mark: a tool call kept by
+        # a compaction and appended again is still a repeat.
+        call_ids.clear()
+        for message in messages:
+            call_ids.update(_tool_call_ids(message))
+
     with _open_locked(memory_file, "r") as f:
         for line in f:
             line = line.strip()
@@ -168,84 +595,147 @@ def load_messages(memory_file: Path) -> list[dict]:
                 raw = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            migrated = _migrate_record(raw)
-            if migrated is None:
+            if log is not None and isinstance(raw, dict) and "kind" not in raw and raw.get("role") in _ROLES:
+                # A session from before the record envelope: bare messages,
+                # which the transcript shows and replay does not send.
+                log.read(raw)
+                continue
+            rec = replayed(raw)
+            if rec is None:
                 if (
                     isinstance(raw, dict)
-                    and "version" in raw
-                    and raw.get("kind") in {"message", "mark"}
+                    and isinstance(raw.get("kind"), str)
+                    and raw["kind"] in {"message", "mark"}
+                    and _migrate_record(raw) is None
                 ):
                     skipped_versions += 1
                 continue
-            rec = Record.from_dict(migrated)
-            if rec is None:
-                continue
             if rec.kind == "mark":
-                if rec.marker == "session_reset":
-                    messages.clear()
-                elif rec.marker and rec.marker.startswith("rollback_to:"):
-                    try:
-                        keep = max(0, int(rec.marker.split(":", 1)[1]))
-                    except ValueError:
-                        continue
-                    # The index rides in POST-heal (live) space — the caller cut
-                    # `state["messages"][:keep]` against a healed list — so heal
-                    # first, else a synthetic tool result inserted on reload shifts
-                    # every later offset and the mark truncates the wrong message.
-                    messages[:] = _heal_orphaned_tool_calls(messages)
-                    del messages[keep:]
-                elif rec.marker:
-                    data = _parse_compaction_marker(rec.marker)
-                    if data is not None:
-                        messages[:] = _heal_orphaned_tool_calls(messages)
-                        keep_from = int(data.get("keep_from", len(messages)))
-                        keep_from = max(0, min(keep_from, len(messages)))
-                        rehydrated = data.get("rehydrated")
-                        messages[:] = [_compaction_summary_message(data["summary"]),
-                                       *([rehydrated] if rehydrated else []), *messages[keep_from:]]
+                if undoing:
+                    undo.finish()
+                copies = rewrite_history(messages, rec.marker)
+                if copies is not None:
+                    for original, copy in copies:
+                        if stamps is not None:
+                            entry = stamps.get(id(original))
+                            if entry is not None and entry[0] is original:
+                                stamps[id(copy)] = (copy, entry[1])
+                        if log is not None:
+                            log.copied(original, copy)
+                    next_epoch()
+                undo.reset()
                 continue
-            if rec.kind != "message" or rec.message is None:
-                continue
-            if rec.message.get("role") in {"user", "assistant", "tool", "system"}:
-                messages.append(rec.message)
-    if skipped_versions:
-        print(
-            f"warning: {memory_file}: skipped {skipped_versions} record(s) from an "
-            f"incompatible schema version (no migration to {SCHEMA_VERSION} yet) — "
-            "history may be incomplete",
-            file=sys.stderr,
-        )
-    return _strip_orphan_reasoning(_heal_orphaned_tool_calls(messages))
+            message = rec.message
+            for call_id in _tool_call_ids(message):
+                if call_id in call_ids:
+                    repeated.add(epoch)
+                call_ids.add(call_id)
+            if log is not None:
+                log.read(message)
+            if undoing:
+                undo.append(message)
+            else:
+                messages.append(message)
+            stamp = _reply_stamp(message, rec.stamp)
+            if stamps is not None and stamp is not None:
+                stamps[id(message)] = (message, stamp)
+    if undoing:
+        undo.finish()
+    if retained is not None and log is not None:
+        retained.extend(log.kept())
+    return _heal_orphaned_tool_calls(messages), skipped_versions, frozenset(repeated)
 
 
-def _append(memory_file: Path, rec: Record) -> None:
-    with _open_locked(memory_file, "a") as f:
-        f.write(rec.to_jsonline() + "\n")
-        f.flush()
-        os.fsync(f.fileno())
+def retained_messages(memory_file: Path) -> list[dict]:
+    """Every message of the session in file order, as its transcript keeps
+    it: rollbacks and the undoing of runs the old writer appended twice take
+    messages out, as they do from replay, while compaction keeps the history
+    it summarized. The compaction summary and reattached files replay sends
+    in its place are not among them."""
+    retained: list[dict] = []
+    _replay(memory_file, retained=retained)
+    return retained
 
 
-def append_message(memory_file: Path, message: dict) -> None:
-    _append(memory_file, Record(kind="message", ts=time.time(), message=message))
+def load_messages(memory_file: Path, *, preserve_reasoning: bool = False) -> list[dict]:
+    """The `load_replay_messages` history. ``preserve_reasoning=True`` returns it
+    unchanged; the default projects it to tool-call reasoning only."""
+    messages = load_replay_messages(memory_file)
+    if not preserve_reasoning:
+        messages[:] = _strip_orphan_reasoning(messages)
+    return messages
 
 
-def persist_messages(memory_file: Path, messages: list[dict]) -> None:
-    """Append the live suffix, retaining replaced records in the journal."""
-    persisted = load_messages(memory_file)
-    comparable = _strip_orphan_reasoning(messages)
-    common = 0
-    for old, new in zip(persisted, comparable):
-        if old != new:
-            break
-        common += 1
-    if common < len(persisted):
-        append_mark(memory_file, f"rollback_to:{common}")
-    for message in messages[common:]:
-        append_message(memory_file, message)
+def _append(memory_file: Path, rec: Record, *, refresh: bool = True) -> None:
+    with _save_lock(memory_file):
+        _append_owned(memory_file, rec)
+    if refresh:
+        session_text.refresh(memory_file)
+
+
+def _append_owned(memory_file: Path, rec: Record) -> None:
+    linked = session_store.append(memory_file, rec.as_dict())
+    if "id" in linked:
+        _owned_records.setdefault((os.getpid(), _file_key(memory_file)), set()).add(linked["id"])
+
+
+def stamp_for(model: str | None, provider: str | None, reasoning: str | None) -> dict:
+    """The stamp an assistant message is written under."""
+    return {"model": model, "provider": provider, "reasoning": reasoning}
+
+
+def _message_record(message: dict, stamp: dict | None) -> Record:
+    return Record(kind="message", ts=message_times.take_time(message), message=message,
+                  stamp=stamp if stamp is not None and message.get("role") == "assistant" else None)
+
+
+def append_message(memory_file: Path, message: dict, stamp: dict | None = None) -> None:
+    _append(memory_file, _message_record(message, stamp))
+
+
+def persist_messages(memory_file: Path, messages: list[dict], stamp: dict | None = None) -> None:
+    """Append the live suffix, retaining replaced records in the journal.
+    Each appended assistant message carries `stamp`. A loaded snapshot with
+    unseen history changes raises ESTALE before any replacement is written."""
+    with _save_lock(memory_file):
+        if memory_file.exists():
+            _check_snapshot(memory_file, messages)
+        elif isinstance(messages, _Snapshot) and messages.revision is not None:
+            raise OSError(errno.ESTALE, "session removed; reload before saving", str(memory_file))
+        persisted = _without_answer_reasoning_text(load_replay_messages(memory_file))
+        comparable = _without_answer_reasoning_text(messages)
+        common = 0
+        for old, new in zip(persisted, comparable):
+            if old != new:
+                break
+            common += 1
+        changed = common < len(persisted) or bool(messages[common:])
+        if common < len(persisted):
+            _append_owned(memory_file, Record(kind="mark", ts=time.time(), marker=_rollback_marker(common)))
+        for message in messages[common:]:
+            _append_owned(memory_file, _message_record(message, stamp))
+        if isinstance(messages, _Snapshot) and memory_file.exists():
+            with _open_locked(memory_file, "r") as stream:
+                messages.revision = _revision(stream)
+    if changed:
+        session_text.refresh(memory_file)
 
 
 def append_mark(memory_file: Path, marker: str) -> None:
     _append(memory_file, Record(kind="mark", ts=time.time(), marker=marker))
+
+
+def _rollback_marker(keep: int) -> str:
+    """The mark that cuts the history back to its first ``keep`` messages."""
+    return f"rollback_to:{keep}"
+
+
+def replace_last_message(memory_file: Path, messages: list[dict]) -> None:
+    """Record that the last message of the live history ``messages`` changed
+    in place: a rollback to the history before it, then the message as it is
+    now, so a reload sees what ``messages`` holds."""
+    append_mark(memory_file, _rollback_marker(len(messages) - 1))
+    append_message(memory_file, messages[-1])
 
 
 _SYSTEM_MARK = "system:"
@@ -256,13 +746,8 @@ def append_system_prompt(memory_file: Path, system: str) -> None:
     append_mark(memory_file, _SYSTEM_MARK + json.dumps({"system": system}, separators=(",", ":")))
 
 
-def load_system_prompt(memory_file: Path) -> str | None:
-    """The system prompt a session was started with, or None when unrecorded.
-
-    A resumed session has to send the bytes it sent before. Rebuilding the prompt
-    puts a fresh clock, uptime and load average in front of an append-only
-    history, so the request no longer shares a prefix with the one that built the
-    conversation and every previously cached token is re-read at full price."""
+def _last_mark_payload(memory_file: Path, prefix: str) -> str | None:
+    """The text after `prefix` in the newest mark that starts with it, or None."""
     try:
         with _open_locked(memory_file, "r") as stream:
             lines = stream.readlines()
@@ -273,43 +758,220 @@ def load_system_prompt(memory_file: Path) -> str | None:
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        marker = record.get("marker") if isinstance(record, dict) else None
-        if not isinstance(marker, str) or not marker.startswith(_SYSTEM_MARK):
+        if _migrate_record(record) is None or record["kind"] != "mark":
             continue
-        try:
-            payload = json.loads(marker[len(_SYSTEM_MARK):])
-        except json.JSONDecodeError:
-            return None
-        system = payload.get("system") if isinstance(payload, dict) else None
-        return system if isinstance(system, str) and system else None
+        marker = record.get("marker")
+        if isinstance(marker, str) and marker.startswith(prefix):
+            return marker[len(prefix):]
     return None
 
 
-def append_compaction_mark(memory_file: Path, *, summary: str, keep_from: int, forced: bool = False,
-                           trigger: dict | None = None, rehydrated: dict | None = None) -> None:
+def _reply_stamp(message: object, stamp: object) -> dict | None:
+    """``stamp`` when it is a usable stamp on an assistant message, else None."""
+    if (isinstance(stamp, dict) and isinstance(message, dict) and message.get("role") == "assistant"
+            and isinstance(stamp.get("model"), str) and stamp["model"]):
+        return stamp
+    return None
+
+
+def _rewrites_history(marker: object) -> bool:
+    """Whether a mark can drop messages written before it from the replayed history."""
+    return isinstance(marker, str) and (
+        marker == "session_reset" or marker.startswith("rollback_to:") or marker.startswith("compaction:"))
+
+
+def _lines_newest_first(stream):
+    """The lines of a binary ``stream``, last line first, read back from the end in blocks."""
+    stream.seek(0, 2)
+    position = stream.tell()
+    rest = b""
+    while position > 0:
+        step = min(1 << 16, position)
+        position -= step
+        stream.seek(position)
+        lines = (stream.read(step) + rest).split(b"\n")
+        rest = lines.pop(0)
+        yield from reversed(lines)
+    if rest:
+        yield rest
+
+
+def last_reply_stamp(memory_file: Path) -> dict | None:
+    """The stamp of the newest assistant message in the replayed history that has one, or None.
+
+    The file is read back from its end. Reaching a mark that rewrites history
+    before a stamped reply sends the lookup through a full replay, so a reply
+    that a rollback, reset or compaction dropped does not count."""
+    try:
+        with _open_locked(memory_file, "rb") as stream:
+            for line in _lines_newest_first(stream):
+                try:
+                    record = json.loads(line)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if not isinstance(record, dict) or _migrate_record(record) is None:
+                    continue
+                if record["kind"] == "mark":
+                    if _rewrites_history(record.get("marker")):
+                        break
+                    continue
+                stamp = _reply_stamp(record.get("message"), record.get("stamp"))
+                if stamp is not None:
+                    return stamp
+            else:
+                return None
+    except OSError:
+        return None
+    stamps: dict[int, tuple[dict, dict]] = {}
+    messages, _skipped = _replay(memory_file, stamps)
+    for message in reversed(messages):
+        entry = stamps.get(id(message))
+        if entry is not None and entry[0] is message:
+            return entry[1]
+    return None
+
+
+def load_system_prompt(memory_file: Path) -> str | None:
+    """The system prompt a session was started with, or None when unrecorded.
+
+    A resumed session has to send the bytes it sent before. Rebuilding the prompt
+    puts a fresh clock, uptime and load average in front of an append-only
+    history, so the request no longer shares a prefix with the one that built the
+    conversation and every previously cached token is re-read at full price."""
+    raw = _last_mark_payload(memory_file, _SYSTEM_MARK)
+    if raw is None:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    system = payload.get("system") if isinstance(payload, dict) else None
+    return system if isinstance(system, str) and system else None
+
+
+_PROMPT_SEEN_MARK = "prompt_seen:"
+
+
+def prompt_fingerprint(system: str) -> str:
+    return hashlib.sha256(system.encode("utf-8")).hexdigest()[:16]
+
+
+def last_prompt_seen(memory_file: Path) -> str | None:
+    """Fingerprint of the on-disk prompt at the newest launch, or None when no
+    launch recorded one."""
+    seen = _last_mark_payload(memory_file, _PROMPT_SEEN_MARK)
+    return seen or None
+
+
+def record_prompt_seen(memory_file: Path, prompt: str) -> bool:
+    """Append this launch's `prompt_seen:` mark and report whether the on-disk
+    prompt differs from the one the previous launch saw.
+
+    A launch with no earlier mark reports no change: at birth the recorded
+    prompt is the on-disk prompt."""
+    previous = last_prompt_seen(memory_file)
+    current = prompt_fingerprint(prompt)
+    append_mark(memory_file, _PROMPT_SEEN_MARK + current)
+    return previous is not None and previous != current
+
+
+_TURN_MODE_MARK = "turn_mode:"
+
+
+def record_turn_mode(memory_file: Path, mode: str) -> str | None:
+    """Note that a turn runs in ``mode`` and return the mode the previous turn
+    ran in when it was a different one, else None.
+
+    A `turn_mode:` mark is appended only when the mode changes, so the newest
+    one is always the mode of the last turn. A session with no mark yet reports
+    no change."""
+    previous = _last_mark_payload(memory_file, _TURN_MODE_MARK) or None
+    if previous == mode:
+        return None
+    append_mark(memory_file, _TURN_MODE_MARK + mode)
+    return previous
+
+
+def first_turn_mode(memory_file: Path) -> str | None:
+    """The mode the session's first turn ran in: the oldest `turn_mode:` mark,
+    or None when no turn has recorded one."""
+    try:
+        with _open_locked(memory_file, "r") as stream:
+            for line in stream:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if _migrate_record(record) is None or record["kind"] != "mark":
+                    continue
+                marker = record.get("marker")
+                if isinstance(marker, str) and marker.startswith(_TURN_MODE_MARK):
+                    return marker[len(_TURN_MODE_MARK):] or None
+    except OSError:
+        return None
+    return None
+
+
+_WORKSPACE_MARK = "workspace:"
+
+
+def append_workspace_mark(memory_file: Path, *, root: str | None, cwd: str, binds: list[str]) -> None:
+    """Record where the session works after a /cd, /add or /drop: the -C root
+    it ran under (None without one), its working directory, and the /add binds."""
+    payload = {"root": root, "cwd": cwd, "binds": binds}
+    append_mark(memory_file, _WORKSPACE_MARK + json.dumps(payload, separators=(",", ":")))
+
+
+def last_workspace(memory_file: Path) -> dict | None:
+    """The newest `workspace:` mark's payload, or None."""
+    raw = _last_mark_payload(memory_file, _WORKSPACE_MARK)
+    if raw is None:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _compaction_marker(*, summary: str, keep_from: int, forced: bool, trigger: dict | None,
+                       rehydrated: dict | None) -> str:
     payload = {"summary": summary, "keep_from": int(keep_from), "forced": bool(forced)}
     if rehydrated is not None:
         payload["rehydrated"] = rehydrated
     if trigger is not None:
         payload["trigger"] = trigger
-    append_mark(memory_file, "compaction:" + json.dumps(payload, separators=(",", ":")))
+    return "compaction:" + json.dumps(payload, separators=(",", ":"))
+
+
+def compaction_mark(live: list[dict], keep_from: int, *, summary: str, forced: bool = False,
+                    trigger: dict | None = None, rehydrated: dict | None = None) -> tuple[str, list[dict]]:
+    """The mark that compacts ``live`` down to ``summary``, ``rehydrated`` and
+    the tail from ``keep_from`` on, and the history that mark leaves
+    (`rewrite_history`). ``live`` is left as it is."""
+    marker = _compaction_marker(summary=summary, keep_from=keep_from, forced=forced,
+                                trigger=trigger, rehydrated=rehydrated)
+    after = list(live)
+    rewrite_history(after, marker)
+    return marker, after
 
 
 def wipe(memory_file: Path) -> Path | None:
-    """Rotate the memory file to a .bak suffix. Returns the .bak path or None."""
-    if not memory_file.exists():
+    """Move the memory file, its transcript, and subagent runs to a new session
+    under a fresh name in the same directory, leaving ``memory_file`` gone. Returns
+    the new session's path, or None when there was nothing to move."""
+    if memory_file == Path(os.devnull) or not memory_file.exists():
         return None
-    bak = memory_file.with_suffix(memory_file.suffix + ".bak")
-    if bak.exists():
-        idx = 1
-        while True:
-            candidate = memory_file.with_suffix(memory_file.suffix + f".bak.{idx}")
-            if not candidate.exists():
-                bak = candidate
-                break
-            idx += 1
-    memory_file.rename(bak)
-    return bak
+    moved = session_store.reserve(memory_file.parent)
+    os.replace(memory_file, moved)
+    text = session_store.text_path(memory_file)
+    if text.exists():
+        os.replace(text, session_store.text_path(moved))
+    runs = session_store.subagent_folder(memory_file)
+    if runs.exists():
+        os.replace(runs, session_store.subagent_folder(moved))
+    session_text.forget(memory_file)
+    return moved
 
 
 def append_tool_surface(memory_file: Path, state: dict) -> None:
@@ -317,8 +979,8 @@ def append_tool_surface(memory_file: Path, state: dict) -> None:
     append_mark(memory_file, 'tool_surface:' + json.dumps(state, separators=(',', ':')))
 
 
-def load_tool_surface(memory_file: Path) -> dict | None:
-    """Read the latest surface snapshot after the last session reset."""
+def load_tool_surface(memory_file: Path, *, scope: dict | None = None) -> dict | None:
+    """Read the latest matching surface snapshot after the last session reset."""
     try:
         with _open_locked(memory_file, 'r') as stream:
             lines = stream.readlines()
@@ -329,7 +991,7 @@ def load_tool_surface(memory_file: Path) -> dict | None:
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if not isinstance(record, dict) or record.get('kind') != 'mark' or record.get('version') != SCHEMA_VERSION:
+        if _migrate_record(record) is None or record['kind'] != 'mark':
             continue
         marker = record.get('marker')
         if marker == 'session_reset':
@@ -341,5 +1003,6 @@ def load_tool_surface(memory_file: Path) -> dict | None:
         except json.JSONDecodeError:
             continue
         if isinstance(state, dict) and state.get('version') == 1:
-            return state
+            if scope is None or all(state.get(key) == value for key, value in scope.items()):
+                return state
     return None

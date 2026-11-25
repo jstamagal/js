@@ -9,20 +9,24 @@ compact?".
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import math
 import re
+from dataclasses import dataclass
 from typing import Any
 
-
-_TOKENISH_RE = re.compile(r"[A-Za-z0-9_]+|[^\w\s]", re.UNICODE)
+# A word run (any script) or one punctuation/symbol character. The old first
+# branch was ASCII-only and the second excluded \w, so CJK and accented letters
+# matched neither and were never counted: 800 chars of Japanese estimated at the
+# chars/4 floor (200). An all-ASCII run still takes the len/6 branch below, so
+# English estimates do not move; a run with any non-ASCII letter takes len/2.
+_TOKENISH_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)
 
 
 @dataclass(frozen=True)
 class TokenUsage:
-    """SDK-normalized counts; cache fields are breakdowns of input_tokens."""
+    """Normalized counts; cache fields are breakdowns of total input_tokens."""
 
     input_tokens: int = 0
     cache_read_tokens: int = 0
@@ -83,19 +87,25 @@ def usage_from_provider(usage: Any) -> TokenUsage:
     """Normalize provider/SDK usage objects without depending on their classes."""
     if usage is None:
         return TokenUsage()
+    input_tokens = _as_nonnegative_int(
+        getattr(usage, "input_tokens", None)
+        or getattr(usage, "prompt_tokens", None)
+    )
+    cache_write_tokens = _as_nonnegative_int(
+        getattr(usage, "cache_write_tokens", None)
+        or getattr(usage, "cache_creation_input_tokens", None)
+    )
+    raw = getattr(usage, "raw", None)
+    # Anthropic's SDK input includes cache reads but excludes cache writes.
+    if isinstance(raw, dict) and "cache_creation_input_tokens" in raw:
+        input_tokens += cache_write_tokens
     return TokenUsage(
-        input_tokens=_as_nonnegative_int(
-            getattr(usage, "input_tokens", None)
-            or getattr(usage, "prompt_tokens", None)
-        ),
+        input_tokens=input_tokens,
         cache_read_tokens=_as_nonnegative_int(
             getattr(usage, "cache_read_tokens", None)
             or getattr(usage, "cache_read_input_tokens", None)
         ),
-        cache_write_tokens=_as_nonnegative_int(
-            getattr(usage, "cache_write_tokens", None)
-            or getattr(usage, "cache_creation_input_tokens", None)
-        ),
+        cache_write_tokens=cache_write_tokens,
         output_tokens=_as_nonnegative_int(
             getattr(usage, "output_tokens", None)
             or getattr(usage, "completion_tokens", None)
@@ -183,9 +193,24 @@ def estimate_message_tokens(message: Any, *, chars_per_token: float = 4.0) -> in
             total += sum(_part_tokens(part, chars_per_token=chars_per_token) for part in content)
         else:
             total += estimate_text_tokens(content, chars_per_token=chars_per_token)
+        # Media parts (`js.media`) go to the model as file parts.
+        for part in message.get("media") or []:
+            if isinstance(part, dict):
+                total += estimate_text_tokens(f"{part.get('mime', '')} {part.get('size', 0)} bytes",
+                                              chars_per_token=chars_per_token)
+        blocks = message.get("reasoning_blocks")
         reasoning = message.get("reasoning_content")
-        if reasoning:
+        if blocks:
+            # Claude's thinking blocks go back whole (text and signature) in
+            # place of the reasoning text.
+            total += estimate_text_tokens(_jsonish(blocks), chars_per_token=chars_per_token)
+        elif reasoning:
             total += estimate_text_tokens(reasoning, chars_per_token=chars_per_token)
+        # Signed reasoning replays its provider payload too: a signature, or an
+        # OpenAI Responses item's encrypted content, which runs to kilobytes.
+        for part in message.get("reasoning_parts") or []:
+            if isinstance(part, dict) and part.get("provider_metadata"):
+                total += estimate_text_tokens(_jsonish(part["provider_metadata"]), chars_per_token=chars_per_token)
         if role == "tool":
             total += estimate_text_tokens(message.get("tool_call_id", ""), chars_per_token=chars_per_token)
             total += estimate_text_tokens(message.get("name", ""), chars_per_token=chars_per_token)
@@ -199,7 +224,12 @@ def estimate_message_tokens(message: Any, *, chars_per_token: float = 4.0) -> in
 
     role = str(getattr(message, "role", ""))
     total = 4 + estimate_text_tokens(role, chars_per_token=chars_per_token)
+    blocks = ((getattr(message, "provider_metadata", None) or {}).get("js") or {}).get("reasoning_blocks")
+    if blocks:
+        total += estimate_text_tokens(_jsonish(blocks), chars_per_token=chars_per_token)
     for part in getattr(message, "parts", None) or []:
+        if blocks and getattr(part, "kind", None) == "reasoning":
+            continue  # sent as the blocks above
         total += _part_tokens(part, chars_per_token=chars_per_token)
     if not getattr(message, "parts", None):
         total += estimate_text_tokens(_jsonish(message), chars_per_token=chars_per_token)
@@ -282,6 +312,12 @@ class TokenState:
                 else None
             ),
         )
+
+    @property
+    def anchor(self) -> _UsageAnchor | None:
+        """The last provider usage and the request it measured; None before
+        any, or after a reply that reported no prompt tokens."""
+        return self._anchor
 
     @property
     def last_usage(self) -> TokenUsage | None:

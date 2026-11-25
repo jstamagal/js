@@ -9,14 +9,16 @@ from pathlib import Path
 
 import pytest
 from PIL import Image
+from test_lazy_tool_discovery import _cfg, _result
 
-from js import runtime
+from js import paths, runtime
 from js.toolkit import browser as browser_module
 from js.toolkit.browser import browser_probe
 from js.toolkit.core import ToolContext
 from js.toolkit.registry import build_default_registry
 from js.toolkit.terminal import close_terminal_sessions, terminal_session, terminal_snapshot
-from test_lazy_tool_discovery import _cfg, _result
+
+pytestmark = pytest.mark.usefixtures("chromium_cache")
 
 
 def _chromium_is_installed() -> bool:
@@ -79,7 +81,7 @@ def test_registry_exposes_only_canonical_interactive_tool_names():
     browser = registry.resolve("browser_probe")
     assert terminal.required == ("action",)
     assert set(terminal.params) == {
-        "action", "session", "command", "keys", "cwd", "wait_ms", "cols", "rows"
+        "action", "session", "command", "keys", "text", "cwd", "wait_ms", "cols", "rows"
     }
     assert snapshot.required == ()
     assert set(snapshot.params) == {"session", "output_path", "wait_ms"}
@@ -128,6 +130,18 @@ def test_terminal_sessions_are_real_persistent_ptys_and_accept_keys(tmp_path):
         assert stopped == {"session": "demo", "stopped": True}
     finally:
         close_terminal_sessions(context)
+
+
+def test_a_terminal_report_over_the_result_cap_is_cut_to_it(tmp_path):
+    context = ToolContext(cwd=tmp_path, max_tool_result_bytes=300)
+    try:
+        report = terminal_session(action="start", session="long", command="seq 1 500; sleep 5",
+                                  wait_ms=300, context=context)
+    finally:
+        close_terminal_sessions(context)
+
+    assert len(report.encode("utf-8")) <= 300
+    assert "TOOL_RESULT_MAX" in report
 
 
 def test_terminal_session_state_is_isolated_by_tool_context(tmp_path):
@@ -411,7 +425,8 @@ def test_terminal_snapshot_validates_path_before_drain_or_numbering(tmp_path):
         assert list(state["screen"].display) == screen_before_errors
 
         terminal_snapshot(session="shot", wait_ms=500, context=context)
-        assert (tmp_path / "terminal-snapshots" / "shot-01.png").is_file()
+        assert (paths.terminal_snapshots_dir() / "shot-01.png").is_file()
+        assert not (tmp_path / "terminal-snapshots").exists()
         assert any("PENDING_OUTPUT" in line for line in state["screen"].display)
     finally:
         close_terminal_sessions(context)
@@ -500,6 +515,31 @@ def test_local_probe_server_returns_empty_favicon(tmp_path):
         server.server_close()
 
 
+def test_local_probe_directory_listing_respects_jail_hide(tmp_path, monkeypatch):
+    from js import jail
+
+    root = tmp_path / "web"
+    root.mkdir()
+    private = tmp_path / "private"
+    private.mkdir()
+    (root / "public.txt").write_text("public")
+    hidden = root / "private-name.txt"
+    hidden.write_text("secret")
+    monkeypatch.setattr(jail, "ACTIVE", jail.Jail(root=root, private=private, bwrap="bwrap"))
+    context = ToolContext(cwd=root)
+    context.jail_hide = (str(hidden),)
+
+    server, url, _ = browser_module._start_local_server(root, context=context)
+    try:
+        with urllib.request.urlopen(url) as response:
+            listing = response.read().decode()
+        assert "public.txt" in listing
+        assert hidden.name not in listing
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_browser_probe_closes_local_server_when_output_setup_fails(
     tmp_path, monkeypatch
 ):
@@ -517,7 +557,7 @@ def test_browser_probe_closes_local_server_when_output_setup_fails(
     monkeypatch.setattr(
         browser_module,
         "_start_local_server",
-        lambda path: (FakeServer(), "http://127.0.0.1:12345/index.html", path.parent),
+        lambda path, *, context: (FakeServer(), "http://127.0.0.1:12345/index.html", path.parent),
     )
     context = ToolContext(cwd=tmp_path)
 
@@ -590,6 +630,8 @@ def test_browser_probe_opens_local_html_clicks_and_reports_visual_state(tmp_path
         assert path.is_file()
         with Image.open(path) as image:
             assert list(image.size) == frame["dimensions"]
+    assert Path(report["output_dir"]).parent == paths.browser_probes_dir()
+    assert not (tmp_path / "browser-probes").exists()
 
 
 @_needs_chromium

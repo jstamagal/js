@@ -1,0 +1,21 @@
+# bitchx: Hard BitchX: classic VGA colours in the palette's first sixteen slots.
+# A theme is a palette: fset PALETTE_nn lines, each slot's #rrggbb.
+
+fset PALETTE_00 #ffffff
+fset PALETTE_01 #000000
+fset PALETTE_02 #00007f
+fset PALETTE_03 #55ff55
+fset PALETTE_04 #ff5555
+fset PALETTE_05 #AA0000
+fset PALETTE_06 #55ffff
+fset PALETTE_07 #ffff55
+fset PALETTE_08 #FFFF55
+fset PALETTE_09 #55FF55
+fset PALETTE_10 #55ffff
+fset PALETTE_11 #55FFFF
+fset PALETTE_12 #55ffff
+fset PALETTE_13 #ff55ff
+fset PALETTE_14 #555555
+fset PALETTE_15 #AAAAAA
+fset PALETTE_93 #555555
+fset PALETTE_94 #555555

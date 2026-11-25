@@ -1,370 +1,115 @@
-"""Interactive REPL. prompt_toolkit for proper readline behavior."""
+"""The `js` command line: parse it, settle the run's setup, and run the mode
+it names: a listing, --bench, --compact, --commit, a -p run
+(`js.prompt_run`), or the REPL (`js.repl`)."""
 
 from __future__ import annotations
 
 import argparse
-import asyncio
 import contextlib
-import copy
-import functools
-import inspect
-import io
-import json
 import os
-import shlex
-import shutil
+import re
 import sys
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, replace
-from datetime import UTC, datetime
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-from prompt_toolkit import PromptSession
-from prompt_toolkit.formatted_text import ANSI
-from prompt_toolkit.history import FileHistory
-from prompt_toolkit.shortcuts import CompleteStyle
-
-from . import supervisor
-
-from . import attach, codex_auth, colors as C
-from . import compaction
-from . import dotenv
-from . import endpoint_uri
-from . import events
-from . import logins
-from . import memory as M
-from . import model_client
-from . import model_metadata
-from . import persona as P
-from . import picker
-from . import providers
-from . import replcomplete
-from . import runtime
-from . import stats
-from . import paths as _paths
-from . import transcript as transcript_mod
-from . import tui
-from .promptexpand import expand_prompt
-from . import screen
-from . import setcmd
-from . import settings
-from . import routing
-from . import sampling as sampling_mod
-from .sampling import Sampling
-from .config import (
-    Config,
-    _norm_effort,
-    derive_session_name,
-    from_env,
-    validate_agent_id,
-    vision_enabled_for_model,
+from . import (
+    agent_lock,
+    bench,
+    command_line,
+    commit_cli,
+    compaction,
+    display as display_mod,
+    dotenv,
+    endpoint_uri,
+    headless,
+    home as _home,
+    jail as _jail,
+    listings,
+    loop_controller,
+    memory as M,
+    messages as msgs,
+    migrate_config,
+    model_metadata,
+    network_display,
+    paths as _paths,
+    persona as P,
+    prompt_run,
+    repl,
+    run_assembly,
+    runtime,
+    sampling as sampling_mod,
+    session_catalog,
+    session_picker,
+    session_store,
+    setting_values,
+    settings,
+    snippets,
+    verify,
 )
-from .session_catalog import acquire_session, catalog_sessions, last_session_model, record_session_start
+from .cli_options import RunOptions, current, invocation
+from .config import (
+    InvocationSources,
+    _preset_config_paths,
+    derive_session_name,
+    resolve_agent_id,
+    resolve_session_file,
+    run_settings,
+    set_invocation,
+    validate_agent_id,
+)
+from .home_cli import configure_home
 from .tool_binaries import resolve_binary
-from .toolkit.registry import registry_for_roots
-from .toolkit import ToolContext
-
-
-_SHORT_HELP = """js — one agent, one terminal.
-
-RUN
-  js                          interactive REPL in this directory
-  js -p "task"                one prompt, print the answer
-  echo task | js -p           same, from stdin
-  js -C DIR ...               run as if launched from DIR
-
-PICK
-  -a NAME     agent profile (~/.config/js/agents/NAME)
-  -m MODEL    provider/model, e.g. openai-codex/gpt-5.6-sol
-  -r EFFORT   off|minimal|low|medium|high|xhigh|max
-
-STATE (sessions are saved by default — this is what a driven agent normally wants)
-  -s NAME     create or resume a named session
-  --session-key KEY   derive a stable session from agent + cwd + key
-  --list [--json]     list every saved session
-  -n, --no-save
-              expensive throwaway choice: resume is unavailable, so the next
-              run must re-read context. Use only for throwaway one-liners.
-  --debug-file PATH   full request trace, for debugging js
-
-SCRIPTING
-  -q          no resume hint after the answer (the session is still saved)
-  -f PATH     attach a file or image (repeatable)
-  --max-out N max output tokens
-  --extra K=V one-off config, e.g. --extra limits.task_max_depth=3
-
-MORE
-  js --login [PROVIDER]   sign in      js --list-models
-  js --commit             commit agent js --help-full
-"""
-
-
-class _ShortHelpAction(argparse.Action):
-    def __call__(self, parser, namespace, values, option_string=None):
-        parser._print_message(_SHORT_HELP, sys.stdout)
-        parser.exit()
-
-
-def _error_text(e: BaseException) -> str:
-    if isinstance(e, routing.ProviderNotLoggedInError):
-        return str(e)
-    return f"{type(e).__name__}: {e}"
-
-
-def _registry_for(cfg) -> object:
-    # Always build from THIS cfg's prompt roots. The old code returned a module-level
-    # registry built with no roots on the normal path, and only passed cfg.prompt_roots
-    # on the locked branch — so every agent in ~/.config/js/agents and .js/agents was
-    # invisible as a tool unless the operator happened to lock subagent models.
-    #
-    # The `model_override` flag exposes the subagent `model` param on the task tool;
-    # when the operator has locked subagent model selection it is dropped from both the
-    # schema and the description rather than merely ignored.
-    flags = () if getattr(cfg, "lock_subagent_model", False) else ("model_override",)
-    return registry_for_roots(getattr(cfg, "prompt_roots", ()) or (), flags=flags)
-
-# --------------------------------------------------------------------------
-# Runtime knobs: name -> (type, label, description)
-# --------------------------------------------------------------------------
-
-_BOOL_WORDS_ON = {"on", "true", "yes", "1"}
-_BOOL_WORDS_OFF = {"off", "false", "no", "0"}
-
-
-def _parse_bool(raw: str) -> bool | None:
-    r = raw.lower().strip()
-    if r in _BOOL_WORDS_ON:
-        return True
-    if r in _BOOL_WORDS_OFF:
-        return False
-    return None
-
-
-def _from_env(
-    session: str | None = None,
-    *,
-    save_session: bool = True,
-    extras: list[str] | None = None,
-    agent_id: str | None = None,
-    ignore_local_config: bool = False,
-    ignore_global_config: bool = False,
-    presets: list[str] | None = None,
-) -> Config:
-    return from_env(
-        save_session=save_session,
-        extras=extras,
-        session=session,
-        agent_id=agent_id,
-        ignore_local_config=ignore_local_config,
-        ignore_global_config=ignore_global_config,
-        presets=presets,
-    )
-
-
-def _cfg_from_env_compat(
-    session: str | None,
-    *,
-    save_session: bool,
-    extras: list[str] | None,
-    agent_id: str | None = None,
-    ignore_local_config: bool = False,
-    ignore_global_config: bool = False,
-    presets: list[str] | None = None,
-) -> Config:
-    try:
-        return _from_env(
-            session,
-            save_session=save_session,
-            extras=extras,
-            agent_id=agent_id,
-            ignore_local_config=ignore_local_config,
-            ignore_global_config=ignore_global_config,
-            presets=presets,
-        )
-    except TypeError:
-        # Tests and external callers may monkeypatch the old helper signature.
-        if agent_id is None:
-            return _from_env(session, save_session=save_session, extras=extras)
-        return _from_env(session, save_session=save_session, extras=extras, agent_id=agent_id)
-
-def _append_turn(cfg: Config, message: dict) -> None:
-    M.append_message(cfg.session_file, message)
-
-
-def _replace_runtime_user_message(
-    messages: list[dict],
-    runtime_message: dict,
-    history_message: dict,
-    fallback_index: int,
-) -> None:
-    if 0 <= fallback_index < len(messages) and messages[fallback_index] == runtime_message:
-        messages[fallback_index] = history_message
-        return
-    for idx in range(len(messages) - 1, -1, -1):
-        if messages[idx] == runtime_message:
-            messages[idx] = history_message
-            return
-
-
-def _persist_turn_messages(cfg: Config, messages: list[dict]) -> None:
-    M.persist_messages(cfg.session_file, messages)
-
-
-def _turn_user_index(messages: list[dict], user_message: dict) -> int | None:
-    for index in range(len(messages) - 1, -1, -1):
-        if messages[index] is user_message or messages[index] == user_message:
-            return index
-    return None
-
-
-def _turn_has_progress(messages: list[dict], user_message: dict) -> bool:
-    index = _turn_user_index(messages, user_message)
-    return bool(messages) if index is None else index < len(messages) - 1
-
-
-def _discard_unstarted_turn(cfg: Config, messages: list[dict], user_message: dict) -> None:
-    index = _turn_user_index(messages, user_message)
-    if index is not None:
-        del messages[index:]
-    _persist_turn_messages(cfg, messages)
-
-
-def _session_hint_arg(cfg: Config) -> str:
-    try:
-        return cfg.session_file.relative_to(cfg.sessions_dir).with_suffix("").as_posix()
-    except ValueError:
-        return str(cfg.session_file)
-
-
-_session_leases = threading.local()
-
-
-def _session_scope(func):
-    """Release every saved session activated during one CLI entry point."""
-
-    @functools.wraps(func)
-    def wrapped(*args, **kwargs):
-        leases = getattr(_session_leases, "items", None)
-        if leases is None:
-            leases = []
-            _session_leases.items = leases
-        start = len(leases)
-        old_caller_key = getattr(_session_leases, "caller_key", None)
-        try:
-            return func(*args, **kwargs)
-        finally:
-            while len(leases) > start:
-                leases.pop().release()
-            _session_leases.caller_key = old_caller_key
-
-    return wrapped
-
-
-def _activate_saved_session(
-    cfg: Config,
-    *,
-    caller_key: str | None = None,
-    announce_generated: bool = False,
-    model: str | None = None,
-) -> None:
-    if cfg.session_file == Path(os.devnull):
-        return
-    effective_key = caller_key if caller_key is not None else getattr(_session_leases, "caller_key", None)
-    record_session_start(
-        cfg.session_file,
-        cwd=Path.cwd(),
-        caller_key=effective_key,
-        agent=cfg.agent_id,
-        model=model or cfg.model,
-    )
-    lease = acquire_session(cfg.session_file)
-    _session_leases.items.append(lease)
-    if announce_generated:
-        _announce_generated_session(cfg)
-
-
-def _announce_generated_session(cfg: Config) -> None:
-    payload = {
-        "js_session": {
-            "agent": cfg.agent_id,
-            "session_id": _session_hint_arg(cfg),
-            "path": str(cfg.session_file.resolve(strict=False)),
-        }
-    }
-    print(json.dumps(payload, separators=(",", ":"), ensure_ascii=False), file=sys.stderr)
 
 
 def _latest_session_name(agent_id: str) -> str | None:
-    """The most recently started session for *agent_id*, or None when there is none.
+    """The most recently started session file for *agent_id*, or None when there is none.
 
-    A recorded name that no longer resolves to a file is treated as absent rather
+    A recorded session that no longer exists is treated as absent rather
     than resurrected, so --last never creates an empty session."""
-    latest_file = _paths.sessions_root() / agent_id / "latest.json"
+    latest = session_store.read_latest(_paths.state_root() / agent_id)
+    return str(latest) if latest is not None else None
+
+
+def _exchanges_are_the_prompt(args: argparse.Namespace, agent: str | None,
+                              sources: InvocationSources) -> bool:
+    """Whether a run with no -p runs the agent's NN-user.md / NN-agent.md
+    exchanges as a one-shot: the agent has them and the session is fresh,
+    so they are what the run sends."""
     try:
-        payload = json.loads(latest_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    session_file = payload.get("session_file")
-    if not isinstance(session_file, str) or not Path(session_file).is_file():
-        return None
-    name = payload.get("session_name")
-    return name if isinstance(name, str) and name else None
+        cfg = run_assembly.from_env(None, save_session=False, sources=sources, agent_id=agent)
+        spec = P.load_configured_prompt_spec(cfg, expand=False)
+    except (FileNotFoundError, ValueError):
+        # The REPL path reports the error.
+        return False
+    if not spec.exchanges:
+        return False
+    name = args.session if args.session is not None else os.environ.get("JS_SESSION")
+    if name is None:
+        return True
+    try:
+        session_file = resolve_session_file(cfg.sessions_dir, name)
+    except ValueError:
+        # No such session yet: the run starts it.
+        return True
+    return not M.load_replay_messages(session_file)
 
 
-def _print_resume_hint(cfg: Config, state: dict) -> None:
-    """Print the command that reopens this session.
-
-    Without it the name is only recoverable by hunting through the sessions
-    directory, and the session is effectively lost the moment the screen scrolls.
-    The model is folded in so the resume comes back on the one in use."""
-    if cfg.session_file == Path(os.devnull) or not state.get("messages"):
-        return
-    resume = "js"
-    if cfg.agent_id != "defaultagent":
-        resume += f" --agent {shlex.quote(cfg.agent_id)}"
-    model = state.get("model")
-    if isinstance(model, str) and model:
-        resume += f" --model {shlex.quote(model)}"
-    resume += f" --session {shlex.quote(_session_hint_arg(cfg))}"
-    print(f"{C.GREY}Resume: {C.RESET}{resume}")
+def _invocation_agent(args: argparse.Namespace, sources: InvocationSources) -> str:
+    """The agent this invocation runs: --agent, --commit, then the `DEFAULT_AGENT`
+    setting, resolved as `from_env` resolves it."""
+    return resolve_agent_id(
+        args.agent or ("commit" if args.commit else None), sources=sources)
 
 
-def _print_session_list(*, json_lines: bool) -> int:
-    records = catalog_sessions(_paths.sessions_root())
-    if json_lines:
-        for record in records:
-            print(json.dumps(record, separators=(",", ":"), ensure_ascii=False))
-        return 0
-
-    headings = ("AGENT", "NAME", "MTIME", "SIZE", "TURNS", "IN-FLIGHT", "CWD", "JOB")
-    rows = []
-    for record in records:
-        identity = record["caller_key"]
-        if record["job_id"] is not None:
-            identity = str(record["job_id"]) if identity is None else f"{identity}/{record['job_id']}"
-        rows.append(
-            (
-                record["agent"],
-                record["name"],
-                datetime.fromtimestamp(record["mtime"], UTC).isoformat(timespec="seconds"),
-                str(record["size"]),
-                str(record["user_turns"]),
-                "yes" if record["in_flight"] else "no",
-                record["cwd"] or "-",
-                identity or "-",
-            )
-        )
-    widths = [len(value) for value in headings]
-    for row in rows:
-        widths = [max(width, len(value)) for width, value in zip(widths, row, strict=True)]
-    print("  ".join(value.ljust(width) for value, width in zip(headings, widths, strict=True)))
-    for row in rows:
-        print("  ".join(value.ljust(width) for value, width in zip(row, widths, strict=True)))
-    return 0
+def _invocation_sources(args: argparse.Namespace) -> InvocationSources:
+    """What the parsed command line adds to settings: its --extra values, its
+    --preset names split at commas, and its --no-*-config switches."""
+    return InvocationSources(
+        extras=tuple(args.extras),
+        presets=tuple(name for spec in args.presets for name in spec.split(",") if name.strip()),
+        ignore_local_config=args.no_local_config,
+        ignore_global_config=args.no_global_config,
+    )
 
 
 def _read_stdin_if_piped() -> str:
@@ -384,2052 +129,129 @@ def _read_stdin_attachment_if_piped() -> bytes:
     return sys.stdin.read().encode("utf-8")
 
 
-def _cfg_for_active_model(cfg: Config, state: dict) -> Config:
-    model = state.get("model")
-    if not (isinstance(model, str) and model):
-        model = cfg.model
-    try:
-        route = routing.resolve_model_route(
-            model,
-            configured_provider_id=state.get("provider_id", cfg.provider_id),
-            configured_base_url=state.get("provider_base_url", cfg.provider_base_url),
-            configured_api_key=state.get("provider_api_key", cfg.provider_api_key),
-            configured_headers=state.get("provider_headers", getattr(cfg, "provider_headers", {})),
-            env=os.environ,
-            explicit_model=True,
-            use_saved_login=False,
-        )
-    except routing.ProviderNotLoggedInError:
-        # A live `/model vendor/x` naming an un-logged-in provider with nothing
-        # pinned can't resolve. This runs on every /set display and tool-registry
-        # sync, not just turns, so it must never crash: carry the raw request with
-        # no provider so the turn surfaces the friendly not-logged-in error at the
-        # model boundary instead.
-        route = routing.ModelRoute(model=model, provider_id=None, base_url=None, api_key=None)
-    route_vision = vision_enabled_for_model(route.model)
-    if (
-        route.model != cfg.model
-        or route.provider_id != cfg.provider_id
-        or route.base_url != cfg.provider_base_url
-        or route.api_key != cfg.provider_api_key
-        or route.headers != getattr(cfg, "provider_headers", {})
-        or route_vision != cfg.vision_enabled
-    ):
-        return replace(
-            cfg,
-            model=route.model,
-            provider_id=route.provider_id,
-            provider_base_url=route.base_url,
-            provider_api_key=route.api_key,
-            provider_headers=route.headers,
-            vision_enabled=route_vision,
-        )
-    return cfg
-
-
-_LIVE_LIMIT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
-    ("max_tool_iterations", ("limits", "max_tool_iterations")),
-    ("max_bash_output_bytes", ("limits", "max_bash_output_bytes")),
-    ("max_tool_result_bytes", ("limits", "max_tool_result_bytes")),
-    ("fetch_timeout_s", ("limits", "fetch_timeout_s")),
-    ("browse_timeout_s", ("limits", "browse_timeout_s")),
-    ("download_timeout_s", ("limits", "download_timeout_s")),
-    ("inline_code_timeout_s", ("limits", "inline_code_timeout_s")),
-    ("max_read_lines", ("limits", "max_read_lines")),
-    ("max_file_bytes", ("limits", "max_file_bytes")),
-    ("max_read_bytes", ("limits", "max_read_bytes")),
-    ("max_bash_output_ceiling", ("limits", "max_bash_output_ceiling")),
-    ("max_tool_result_inline_bytes", ("limits", "max_tool_result_inline_bytes")),
-    ("max_tool_results_per_turn_bytes", ("limits", "max_tool_results_per_turn_bytes")),
-    ("max_tool_calls_per_message", ("limits", "max_tool_calls_per_message")),
-    ("task_max_depth", ("limits", "task_max_depth")),
-    ("subagent_max_workers", ("limits", "subagent_max_workers")),
-    ("kernel_render_max_lines", ("kernel", "render_max_lines")),
-    ("kernel_wait_seconds", ("kernel", "wait_seconds")),
-    ("shell_wait_seconds", ("shell", "wait_seconds")),
+# The command-line flags that set a setting: (args attribute, setting). Each
+# reaches every run path as an --extra, which also records it as a flag value
+# that a saved login's defaults never replace (js.login_defaults).
+SETTING_FLAGS: tuple[tuple[str, str], ...] = (
+    ("reasoning", "EFFORT"),
+    ("max_out", "OUTPUT_TOKENS_MAX"),
+    ("max_turns", "TURN_ROUNDS_MAX"),
+    ("template_kwargs", "TEMPLATE_KWARGS"),
+    *((field, field.upper()) for field in sampling_mod.SAMPLING_FIELDS),
 )
 
 
-# `set kernel.verbosity verbose` mid-session has to take effect on the next
-# kernel call, so it rides the same live-settings path as the numeric knobs.
-_LIVE_STR_FIELDS: tuple[tuple[str, tuple[str, str], tuple[str, ...]], ...] = (
-    ("kernel_verbosity", ("kernel", "verbosity"), ("quiet", "normal", "verbose")),
-)
-
-_LIVE_STR_LIST_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
-    ("shell_env_allow", ("limits", "shell_env_allow")),
-)
-
-
-_LIVE_OPTIONAL_INT_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
-    ("max_output_tokens", ("model", "max_output_tokens")),
-    ("model_context_window", ("model", "context_window")),
-)
-
-
-_LIVE_BOOL_FIELDS: tuple[tuple[str, tuple[str, str]], ...] = (
-    ("trace", ("runtime", "trace")),
-    ("prefer_inherit", ("subagents", "prefer_inherit")),
-    ("lock_subagent_model", ("subagents", "lock_model")),
-)
-
-
-def _live_int_setting(live_settings: dict, path: tuple[str, str], default: int) -> int:
-    raw = settings.get_dotted(live_settings, path, default)
-    if isinstance(raw, bool):
-        return default
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return default
-
-
-def _live_optional_int_setting(live_settings: dict, path: tuple[str, str], default: int | None) -> int | None:
-    missing = object()
-    raw = settings.get_dotted(live_settings, path, missing)
-    if raw is missing:
-        return default
-    if raw is None:
-        return None
-    if isinstance(raw, bool):
-        return default
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return default
-
-
-def _live_optional_str_setting(live_settings: dict, path: tuple[str, str], default: str | None) -> str | None:
-    missing = object()
-    raw = settings.get_dotted(live_settings, path, missing)
-    if raw is missing:
-        return default
-    if raw is None or isinstance(raw, str):
-        return raw
-    return default
-
-
-def _live_reasoning_effort_setting(live_settings: dict, default: str | None) -> str | None:
-    missing = object()
-    raw = settings.get_dotted(live_settings, ("model", "reasoning_effort"), missing)
-    if raw is missing:
-        return default
-    if raw is None:
-        return default
-    if isinstance(raw, str):
-        return _norm_effort(raw)
-    return default
-
-
-def _live_bool_setting(live_settings: dict, path: tuple[str, str], default: bool) -> bool:
-    raw = settings.get_dotted(live_settings, path, default)
-    return raw if isinstance(raw, bool) else default
-
-
-def _debug_log_from_live_settings(cfg: Config, live_settings: dict) -> Path | None:
-    enabled = _live_bool_setting(live_settings, ("runtime", "debug"), cfg.debug_log is not None)
-    if not enabled:
-        return None
-    return cfg.debug_log or (_paths.state_root() / cfg.agent_id / "debug.log")
-
-
-def _sync_telemetry_from_live_settings(cfg: Config, state: dict, telemetry: runtime.Telemetry) -> None:
-    debug_log = _debug_log_from_live_settings(cfg, state["settings"])
-    if debug_log is not None:
-        try:
-            debug_log.parent.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            pass
-    telemetry.debug_log = debug_log
-    _sync_trace_sink(cfg, state["settings"], telemetry)
-    _sync_transcript_sink(cfg, state["settings"], telemetry)
-
-
-# ---------------------------------------------------------------------------
-# Debug trace autolog. The full request trace (unclipped system prompt + full
-# tool-schema JSON + the messages sent each call) is far too large for the
-# terminal, so it is written ONLY to a file: always-on by default under
-# logs/<agent>/<session>.log, plus any explicit --debug-file. Every IO error
-# degrades to no logging — the log must never crash a turn.
-# ---------------------------------------------------------------------------
-
-
-class _DebugTraceSink:
-    """Append-only tee that fans one text stream to N open files (the autolog and
-    any --debug-file). Thread-safe; swallows IO errors so logging never breaks a
-    turn. Stands in for a stdout-like stream (write/flush/isatty) so it can also
-    receive the redirected turn output."""
-
-    def __init__(self, files: list, paths: list[Path]) -> None:
-        self._files = files
-        self.paths = paths
-        self._lock = threading.Lock()
-
-    def write(self, text: str) -> None:
-        if not text:
-            return
-        with self._lock:
-            for f in self._files:
-                try:
-                    f.write(text)
-                    f.flush()
-                except Exception:
-                    pass
-
-    def flush(self) -> None:
-        with self._lock:
-            for f in self._files:
-                try:
-                    f.flush()
-                except Exception:
-                    pass
-
-    def isatty(self) -> bool:
-        return False
-
-    def close(self) -> None:
-        with self._lock:
-            for f in self._files:
-                try:
-                    f.close()
-                except Exception:
-                    pass
-            self._files = []
-
-
-class _StdoutTee:
-    """Write to the real stdout AND a sink — used by `-d` so the concise trace
-    lines and the streamed answer show live on the terminal and also land in the
-    log. The oversized request trace bypasses this and goes to the sink only."""
-
-    def __init__(self, primary, sink: _DebugTraceSink) -> None:
-        self._primary = primary
-        self._sink = sink
-
-    def write(self, text: str) -> None:
-        try:
-            self._primary.write(text)
-        except Exception:
-            pass
-        self._sink.write(text)
-
-    def flush(self) -> None:
-        try:
-            self._primary.flush()
-        except Exception:
-            pass
-        self._sink.flush()
-
-    def isatty(self) -> bool:
-        try:
-            return bool(self._primary.isatty())
-        except Exception:
-            return False
-
-
-def _transcript_log_path(cfg: Config, live_settings: dict) -> Path | None:
-    """Resolve the per-session visible transcript path, or None when disabled."""
-    if not _live_bool_setting(
-        live_settings, ("runtime", "transcript_log"), getattr(cfg, "transcript_log", True)
-    ):
-        return None
-    session = cfg.session_file
-    if not session or session == Path(os.devnull):
-        stem = f"{cfg.agent_id}-{os.getpid()}"
-    else:
-        stem = session.stem
-    override = _live_optional_str_setting(
-        live_settings, ("runtime", "transcript_log_dir"), getattr(cfg, "transcript_log_dir", None)
-    )
-    root = Path(override).expanduser() if override else (_paths.transcript_root() / cfg.agent_id)
-    return root / f"{stem}.log"
-
-
-def _open_transcript_log_sink(paths: list[Path]):
-    return transcript_mod.open_transcript_sink(paths)
-
-
-def _sync_transcript_sink(cfg: Config, live_settings: dict, telemetry: runtime.Telemetry) -> None:
-    desired: list[Path] = []
-    transcript_path = _transcript_log_path(cfg, live_settings)
-    if transcript_path is not None:
-        desired.append(transcript_path)
-    old = getattr(telemetry, "transcript_log", None)
-    if isinstance(old, transcript_mod.TranscriptLogSink) and old.paths == desired:
-        return
-    telemetry.transcript_log = _open_transcript_log_sink(desired) if desired else None
-    if isinstance(old, transcript_mod.TranscriptLogSink) and old is not telemetry.transcript_log:
-        old.close()
-
-
-def _transcript_sink(telemetry: runtime.Telemetry):
-    sink = getattr(telemetry, "transcript_log", None)
-    return sink if isinstance(sink, transcript_mod.TranscriptLogSink) else None
-
-
-def _enter_transcript_stdio(stack: contextlib.ExitStack, telemetry: runtime.Telemetry) -> None:
-    stack.enter_context(contextlib.redirect_stdout(
-        transcript_mod.TranscriptTee(sys.stdout, lambda: _transcript_sink(telemetry))
-    ))
-    stack.enter_context(contextlib.redirect_stderr(
-        transcript_mod.TranscriptTee(sys.stderr, lambda: _transcript_sink(telemetry))
-    ))
-
-
-@contextlib.contextmanager
-def _transcript_stdio(telemetry: runtime.Telemetry):
-    with contextlib.ExitStack() as stack:
-        _enter_transcript_stdio(stack, telemetry)
-        yield
-
-
-def _mute_transcript_tee(sink):
-    mute = getattr(sink, "mute_tee", None)
-    return mute() if callable(mute) else contextlib.nullcontext()
-
-
-def _debug_autolog_path(cfg: Config, live_settings: dict) -> Path | None:
-    """Resolve the per-session autolog path, or None when autolog is off. Mirrors
-    how sessions/<agent>/<session>.jsonl is built, one directory over in logs/."""
-    if not _live_bool_setting(
-        live_settings, ("runtime", "debug_autolog"), getattr(cfg, "debug_autolog", True)
-    ):
-        return None
-    session = cfg.session_file
-    if not session or session == Path(os.devnull):
-        stem = f"{cfg.agent_id}-{os.getpid()}"  # one-shot with no persisted session
-    else:
-        stem = session.stem
-    override = _live_optional_str_setting(
-        live_settings, ("runtime", "debug_autolog_dir"), getattr(cfg, "debug_autolog_dir", None)
-    )
-    root = Path(override).expanduser() if override else (_paths.logs_root() / cfg.agent_id)
-    return root / f"{stem}.log"
-
-
-def _open_debug_trace_sink(paths: list[Path]) -> _DebugTraceSink | None:
-    """Open each path for append and return a tee sink, or None if none opened."""
-    files: list = []
-    opened: list[Path] = []
-    for p in paths:
-        try:
-            p.parent.mkdir(parents=True, exist_ok=True)
-            files.append(open(p, "a", encoding="utf-8"))  # noqa: SIM115 — sink owns the lifetime
-            opened.append(p)
-        except OSError:
-            pass  # a bad log path degrades to no logging, never a crash
-    if not files:
-        return None
-    return _DebugTraceSink(files, opened)
-
-
-def _sync_trace_sink(
-    cfg: Config, live_settings: dict, telemetry: runtime.Telemetry, extra_paths: tuple[Path, ...] = ()
-) -> None:
-    """Attach/refresh ``telemetry.trace_sink`` for the always-on autolog. Reopens
-    only when the target path set changes, so a long REPL session keeps one open
-    handle; toggling ``runtime.debug_autolog`` off closes it."""
-    desired: list[Path] = []
-    autolog = _debug_autolog_path(cfg, live_settings)
-    if autolog is not None:
-        desired.append(autolog)
-    desired.extend(extra_paths)
-    old = telemetry.trace_sink
-    if isinstance(old, _DebugTraceSink) and old.paths == desired:
-        return  # already open on exactly these targets
-    telemetry.trace_sink = _open_debug_trace_sink(desired) if desired else None
-    if isinstance(old, _DebugTraceSink) and old is not telemetry.trace_sink:
-        old.close()
-
-
-def _cfg_for_live_state(cfg: Config, state: dict) -> Config:
-    active = _cfg_for_active_model(cfg, state)
-    live_settings = state["settings"]
-    updates = {"settings": live_settings}
-    for attr, path in _LIVE_LIMIT_FIELDS:
-        updates[attr] = _live_int_setting(live_settings, path, getattr(active, attr))
-    for attr, path in _LIVE_OPTIONAL_INT_FIELDS:
-        updates[attr] = _live_optional_int_setting(live_settings, path, getattr(active, attr))
-    updates["reasoning_effort"] = _live_reasoning_effort_setting(
-        live_settings,
-        active.reasoning_effort,
-    )
-    for attr, path in _LIVE_BOOL_FIELDS:
-        updates[attr] = _live_bool_setting(live_settings, path, getattr(active, attr))
-    for attr, path, allowed in _LIVE_STR_FIELDS:
-        raw = str(settings.get_dotted(live_settings, path, getattr(active, attr)) or "").strip().lower()
-        updates[attr] = raw if raw in allowed else getattr(active, attr)
-    for attr, path in _LIVE_STR_LIST_FIELDS:
-        raw = settings.get_dotted(live_settings, path, getattr(active, attr))
-        updates[attr] = (
-            tuple(raw)
-            if isinstance(raw, (list, tuple))
-            and all(isinstance(item, str) and item.strip() for item in raw)
-            else getattr(active, attr)
-        )
-    return replace(active, **updates)
-
-
-def _sync_tool_registry_from_live_settings(cfg: Config, state: dict) -> None:
-    selectors = state.get("tool_selectors", ())
-    state["tool_registry"] = _registry_for(_cfg_for_live_state(cfg, state)).select(selectors)
-
-
-def _state_value(state: dict, key: str, default):
-    return state[key] if key in state else default
-
-def _sampling_for_turn(
-    cfg: Config,
-    prompt_spec,
-    cli_override: Sampling | None = None,
-) -> Sampling:
-    raw_manifest = getattr(prompt_spec, "sampling", {}) if prompt_spec else {}
-    manifest_sampling = Sampling.from_mapping(raw_manifest)
-    return (
-        cfg.sampling_setscript
-        .merge(manifest_sampling)
-        .merge(cfg.sampling_env)
-        .merge(cli_override or Sampling())
-    )
-
-
-# ---------------------------------------------------------------------------
-# Effective /set view — annotate knobs whose live value bypasses the store
-# ---------------------------------------------------------------------------
-
-_SAMPLING_FIELDS: tuple[str, ...] = (
-    "temperature",
-    "top_p",
-    "top_k",
-    "repetition_penalty",
-    "presence_penalty",
-)
-
-
-def _sampling_env_var(field: str, environ) -> str:
-    """The env var actually setting ``field`` (short alias preferred), or ''."""
-    for name in sampling_mod._ENV_KEYS.get(field, ()):
-        if environ.get(name):
-            return name
-    return ""
-
-
-def _live_settings_overlay(
-    settings_store: dict,
-    *,
-    live_model: str | None,
-    model_source: str | None,
-    provider_id: str | None,
-    provider_base_url: str | None,
-    provider_api_key: str | None,
-    saved_login,
-    provider_default_base_url: str | None,
-    eff_sampling: Sampling,
-    env_sampling: Sampling,
-    manifest_sampling: Sampling,
-    environ,
-) -> dict[str, setcmd.LiveValue]:
-    """Build the per-knob live overlay for `show_lines_effective`.
-
-    Pure: every effective value and its source is passed in, so the display and
-    source-detection logic is testable without a Config/login store. Only knobs
-    whose effective value differs from the settings store get an entry."""
-    overlay: dict[str, setcmd.LiveValue] = {}
-
-    def _mark(key: str, value, source: str) -> None:
-        spec = settings.SPEC_BY_KEY[key]
-        overlay[key] = setcmd.LiveValue(display=setcmd.render_value(spec, value), source=source)
-
-    # model.id — the --model flag / `/model` command never lands in the store.
-    store_model = settings.get_dotted(settings_store, ("model", "id"))
-    if live_model and model_source and live_model != store_model:
-        _mark("model.id", live_model, model_source)
-
-    # provider.* — a saved login / provider default fills these outside the store.
-    store_pid = settings.get_dotted(settings_store, ("provider", "id"))
-    if provider_id and provider_id != store_pid:
-        _mark("provider.id", provider_id, f"login {provider_id}" if saved_login is not None else "session")
-
-    store_base = settings.get_dotted(settings_store, ("provider", "base_url"))
-    if provider_base_url and provider_base_url != store_base:
-        if saved_login is not None and saved_login.provider_base_url == provider_base_url:
-            source = f"login {provider_id}"
-        elif provider_default_base_url and provider_default_base_url == provider_base_url:
-            source = "provider default"
-        else:
-            source = "session"
-        _mark("provider.base_url", provider_base_url, source)
-
-    store_key = settings.get_dotted(settings_store, ("provider", "api_key"))
-    if provider_api_key and provider_api_key != store_key:
-        if saved_login is not None and saved_login.provider_api_key == provider_api_key:
-            source = f"login {provider_id}"
-        else:
-            source = "session"
-        _mark("provider.api_key", provider_api_key, source)  # render masks it to <set>
-
-    # sampling.* — js/sampling.py reads JS_TEMP/JS_TOPK/... directly, so the short
-    # env aliases never reach the store; the agent manifest is off-store too.
-    for field in _SAMPLING_FIELDS:
-        eff = getattr(eff_sampling, field)
-        if eff is None:
+def _setting_flag_extras(args: argparse.Namespace) -> tuple[list[str], int | None]:
+    """The --extra entries for the `SETTING_FLAGS` ``args`` sets, and an exit
+    code when one of them is not a value its setting takes."""
+    extras: list[str] = []
+    for attr, key in SETTING_FLAGS:
+        value = getattr(args, attr, None)
+        if value is None:
             continue
-        store_val = settings.get_dotted(settings_store, ("sampling", field))
-        if store_val is not None and _same_number(store_val, eff):
-            continue
-        if getattr(env_sampling, field) is not None and _same_number(getattr(env_sampling, field), eff):
-            env_var = _sampling_env_var(field, environ)
-            source = f"env {env_var}" if env_var else "env"
-        elif getattr(manifest_sampling, field) is not None and _same_number(getattr(manifest_sampling, field), eff):
-            source = "agent sampling"
+        if key == "EFFORT":
+            _seed, effort_error = setting_values.validate_cli_reasoning(str(value))
+            if effort_error is not None:
+                msgs.warn(msgs.BAD_REASONING, value=value, error=effort_error)
+                return [], 2
         else:
-            source = "session"
-        _mark(f"sampling.{field}", eff, source)
+            _value, error = setting_values.coerce_value(settings.SPEC_BY_KEY[key], str(value))
+            if error is not None:
+                msgs.warn(msgs.BAD_FLAG_VALUE, flag="--" + attr.replace("_", "-"), value=value, error=error)
+                return [], 2
+        extras.append(f"{key}={value}")
+    return extras, None
 
-    return overlay
 
-
-def _same_number(a, b) -> bool:
+def _run_compact_offline(session: str, *, agent: str | None = None, focus: str = "",
+                         sources: InvocationSources = InvocationSources(),
+                         model: str | None = None) -> int:
     try:
-        return float(a) == float(b)
-    except (TypeError, ValueError):
-        return a == b
-
-
-def _live_settings_overlay_for_state(cfg: Config, state: dict) -> dict[str, setcmd.LiveValue]:
-    """Resolve the same route the next turn uses and diff it against the store."""
-    turn_cfg = _cfg_for_live_state(cfg, state)
-    provider_id = turn_cfg.provider_id
-    saved_login = routing._saved_login(provider_id) if provider_id else None
-    provider_def = providers.get_provider(provider_id) if provider_id else None
-    provider_default_base_url = (
-        providers.provider_base_url(provider_def, None, os.environ) if provider_def is not None else None
-    )
-    prompt_spec = state.get("prompt_spec")
-    manifest_sampling = Sampling.from_mapping(getattr(prompt_spec, "sampling", {}) if prompt_spec else {})
-    eff_sampling = _sampling_for_turn(turn_cfg, prompt_spec, state.get("sampling_cli", Sampling()))
-    return _live_settings_overlay(
-        state["settings"],
-        live_model=state.get("model"),
-        model_source=state.get("model_source"),
-        provider_id=provider_id,
-        provider_base_url=turn_cfg.provider_base_url,
-        provider_api_key=turn_cfg.provider_api_key,
-        saved_login=saved_login,
-        provider_default_base_url=provider_default_base_url,
-        eff_sampling=eff_sampling,
-        env_sampling=turn_cfg.sampling_env,
-        manifest_sampling=manifest_sampling,
-        environ=os.environ,
-    )
-
-
-def _effective_settings_snapshot(cfg: Config, state: dict) -> dict:
-    """A copy of the live settings store with the off-store live values (flag
-    model, login provider, env/manifest sampling) folded in — what `/save` writes
-    so a reload reproduces the running configuration."""
-    eff = copy.deepcopy(state["settings"]) if isinstance(state.get("settings"), dict) else {}
-    turn_cfg = _cfg_for_live_state(cfg, state)
-    live_model = state.get("model")
-    if isinstance(live_model, str) and live_model:
-        settings.set_dotted(eff, ("model", "id"), live_model)
-    if turn_cfg.provider_id:
-        settings.set_dotted(eff, ("provider", "id"), turn_cfg.provider_id)
-    if turn_cfg.provider_base_url:
-        settings.set_dotted(eff, ("provider", "base_url"), turn_cfg.provider_base_url)
-    if turn_cfg.provider_api_key:
-        settings.set_dotted(eff, ("provider", "api_key"), turn_cfg.provider_api_key)
-    eff_sampling = _sampling_for_turn(turn_cfg, state.get("prompt_spec"), state.get("sampling_cli", Sampling()))
-    for field, value in eff_sampling.as_dict_nonnull().items():
-        settings.set_dotted(eff, ("sampling", field), value)
-    return eff
-
-
-def _handle_save(state: dict, cfg: Config) -> None:
-    eff = _effective_settings_snapshot(cfg, state)
-    path = _paths.global_config_file()
-    try:
-        count, backup = settings.save_settings_to_jsrc(path, eff)
-    except OSError as exc:
-        print(f"{C.ORANGE}save failed: {type(exc).__name__}: {exc}{C.RESET}")
-        return
-    note = f"  (backed up prior file to {backup.name})" if backup is not None else ""
-    print(f"{C.GREEN}saved {count} knob{'' if count == 1 else 's'} to {path}{C.RESET}{C.GREY}{note}{C.RESET}")
-
-
-def _sampling_override_after_set(line: str, current: Sampling) -> Sampling:
-    body = line.strip()
-    if body.startswith("/"):
-        body = body[1:].lstrip()
-    parts = body.split(maxsplit=2)
-    if len(parts) < 2 or parts[0].lower() != "set":
-        return current
-    key = parts[1]
-    unset = key.startswith("-") and len(key) > 1
-    if unset:
-        key = key[1:]
-    if not key.startswith("sampling."):
-        return current
-    field = key.split(".", 1)[1]
-    if field not in Sampling.__dataclass_fields__:
-        return current
-    if unset:
-        # `/set -sampling.x` drops the live override so the field reverts to its
-        # jsrc/provider default instead of lingering at its last value.
-        return replace(current, **{field: None})
-    if len(parts) != 3:
-        return current
-    spec = settings.SPEC_BY_KEY.get(key)
-    if spec is None:
-        return current
-    value, error = settings.coerce_value(spec, parts[2])
-    if error is not None:
-        return current
-    return replace(current, **{field: value})
-
-
-def _sampling_override_from_live_settings(live_settings: dict) -> Sampling:
-    raw = settings.get_dotted(live_settings, ("sampling",), {})
-    return Sampling.from_mapping(raw if isinstance(raw, dict) else {})
-
-
-def _model_from_live_settings(live_settings: dict) -> str | None:
-    raw = settings.get_dotted(live_settings, ("model", "id"), None)
-    return raw if isinstance(raw, str) and raw else None
-
-
-def _sync_model_from_live_settings(state: dict) -> None:
-    model = _model_from_live_settings(state["settings"])
-    if model is not None:
-        state["model"] = model
-        # The store now drives the model, so it is no longer a flag/command override.
-        state["model_source"] = None
-
-
-def _provider_from_live_settings(live_settings: dict) -> tuple[str | None, str | None, str | None]:
-    def _value(path: tuple[str, str]) -> str | None:
-        raw = settings.get_dotted(live_settings, path, None)
-        return raw if isinstance(raw, str) and raw else None
-
-    return (
-        _value(("provider", "id")),
-        _value(("provider", "base_url")),
-        _value(("provider", "api_key")),
-    )
-
-
-def _sync_provider_from_live_settings(state: dict, changed_keys: list[str]) -> None:
-    provider_id, base_url, api_key = _provider_from_live_settings(state["settings"])
-    changed = set(changed_keys)
-    if "provider.id" in changed:
-        if provider_id is None:
-            state["provider_id"] = None
-            state["provider_base_url"] = None
-            state["provider_api_key"] = None
-            state["provider_headers"] = {}
-        else:
-            _set_provider_state(state, provider_id)
-    if "provider.base_url" in changed:
-        state["provider_base_url"] = base_url
-    if "provider.api_key" in changed:
-        state["provider_api_key"] = api_key
-
-
-def _sync_provider_delta_from_live_settings(
-    state: dict,
-    before: tuple[str | None, str | None, str | None],
-    after: tuple[str | None, str | None, str | None],
-) -> None:
-    changed_keys: list[str] = []
-    if before[0] != after[0]:
-        changed_keys.append("provider.id")
-    if before[1] != after[1]:
-        changed_keys.append("provider.base_url")
-    if before[2] != after[2]:
-        changed_keys.append("provider.api_key")
-    if changed_keys:
-        _sync_provider_from_live_settings(state, changed_keys)
-
-
-def _changed_model_key(keys: list[str]) -> bool:
-    return "model.id" in keys
-
-
-def _changed_provider_key(keys: list[str]) -> bool:
-    return any(key in {"provider.id", "provider.base_url", "provider.api_key"} for key in keys)
-
-
-def _changed_sampling_key(keys: list[str]) -> bool:
-    return any(key.startswith("sampling.") for key in keys)
-
-
-def _changed_lock_subagent_model_key(keys: list[str]) -> bool:
-    return "subagents.lock_model" in keys
-
-
-def _event_result_changed_keys(results: list[events.EventHandlerResult]) -> list[str]:
-    return [key for result in results for key in result.changed_keys]
-
-
-def _event_results_changed_sampling(results: list[events.EventHandlerResult]) -> bool:
-    return any(_changed_sampling_key(result.changed_keys) for result in results)
-
-
-def _event_results_changed_model(results: list[events.EventHandlerResult]) -> bool:
-    return any(_changed_model_key(result.changed_keys) for result in results)
-
-
-def _emit_repl_event(
-    state: dict,
-    telemetry: runtime.Telemetry,
-    event: str,
-    **payload,
-) -> events.EventEmission:
-    hook_table = state.get("events")
-    if hook_table is None:
-        return events.EventEmission(event=event, payload=dict(payload), hooks=[])
-    emission = hook_table.emit(event, **payload)
-    for result in emission.results:
-        if result.error:
-            telemetry.event(
-                "event_handler_error",
-                event=emission.event,
-                handler=result.hook.handler,
-                error=result.error,
-            )
-    return emission
-
-
-def _apply_saved_login_to_state(state: dict, provider_name: str) -> bool:
-    provider_id = providers.normalize_provider_id(provider_name) or provider_name
-    login = logins.load_logins().get(provider_id)
-    if not login:
-        return False
-    state["provider_id"] = login.provider_id
-    state["provider_headers"] = dict(login.provider_headers)
-    state["provider_base_url"] = login.provider_base_url
-    state["provider_api_key"] = login.provider_api_key
-    return True
-
-
-async def _maybe_auto_compact_async(cfg: Config, state: dict) -> None:
-    """The REPL's between-turn trigger: the policy lives in compaction, the
-    printing lives here."""
-    if not compaction.get_bool(cfg, "auto", True):
-        return
-    active_cfg = _cfg_for_live_state(cfg, {**state, "settings": state.get("settings", cfg.settings)})
-    outcome = await compaction.maybe_auto_compact_async(
-        active_cfg,
-        state.setdefault("auto_compact", compaction.AutoCompactState()),
-        runtime.T.DEFAULT_CONTEXT,
-        state.get("system") or "",
-        state.get("messages") or [],
-        lambda: runtime._resolve_context_window(
-            active_cfg.model, active_cfg.provider_id, active_cfg.provider_base_url
-        ),
-    )
-    for notice in outcome.notices:
-        print(f"{C.ORANGE}{notice}{C.RESET}")
-    if outcome.result is not None:
-        print(f"{C.GREY}({outcome.result}){C.RESET}")
-
-
-def _maybe_auto_compact(cfg: Config, state: dict) -> None:
-    asyncio.run(_maybe_auto_compact_async(cfg, state))
-
-
-def _login_for_provider(provider_id: str | None, base_url: str | None, api_key: str | None) -> logins.Login:
-    canonical_id = providers.normalize_provider_id(provider_id) or provider_id
-    if not canonical_id:
-        raise ValueError("no provider set")
-    saved = logins.load_logins().get(canonical_id)
-    if saved is not None:
-        return saved
-    provider_def = providers.provider_for_login(canonical_id)
-    resolved_api_key = providers.provider_api_key(provider_def, api_key, os.environ)
-    if provider_def.requires_api_key and not resolved_api_key:
-        raise ValueError(
-            f"provider {canonical_id!r} needs an API key; run `js --login {canonical_id}` "
-            "or `set provider.api_key <value>`"
-        )
-    return logins.Login(
-        provider_id=canonical_id,
-        sdk_provider_id=provider_def.effective_sdk_provider_id,
-        provider_base_url=providers.provider_base_url(provider_def, base_url, os.environ),
-        provider_api_key=resolved_api_key,
-    )
-
-
-def _models_for_provider(provider_id: str | None, base_url: str | None, api_key: str | None) -> list[str]:
-    return logins.test_login(_login_for_provider(provider_id, base_url, api_key))
-
-
-def _provider_qualified_model_id(provider_id: str | None, model: str) -> str:
-    if not provider_id:
-        return model
-    parsed_provider_id, parsed_model = providers.parse_model_prefix(model)
-    if parsed_provider_id == provider_id and parsed_model:
-        return model
-    return f"{provider_id}/{model}"
-
-
-def _is_active_model_id_line(line: str) -> bool:
-    body = line.strip()
-    if not body or body.startswith("#"):
-        return False
-    parts = body.split(maxsplit=2)
-    return len(parts) >= 2 and parts[0].lower() == "set" and parts[1] == "model.id"
-
-
-def _persist_default_model_id(model_id: str) -> tuple[Path | None, str | None]:
-    config_path = _paths.global_config_file()
-    try:
-        settings.write_default_template(config_path)
-        if config_path.exists():
-            lines = config_path.read_text(encoding="utf-8").splitlines(keepends=True)
-        else:
-            config_path.parent.mkdir(parents=True, exist_ok=True)
-            lines = []
-        replacement = f"set model.id {model_id}\n"
-        changed = False
-        saw_model_line = False
-        new_lines: list[str] = []
-        for line in lines:
-            if _is_active_model_id_line(line):
-                saw_model_line = True
-                if line != replacement:
-                    changed = True
-                new_lines.append(replacement)
-            else:
-                new_lines.append(line)
-        if not saw_model_line:
-            if new_lines and not new_lines[-1].endswith("\n"):
-                new_lines[-1] = new_lines[-1] + "\n"
-            new_lines.append(replacement)
-            changed = True
-        if changed:
-            config_path.write_text("".join(new_lines), encoding="utf-8")
-        return config_path, None
-    except OSError as exc:
-        return None, f"{type(exc).__name__}: {exc}"
-
-
-def _set_provider_state(state: dict, provider_id: str) -> None:
-    canonical_id = providers.normalize_provider_id(provider_id) or provider_id
-    if _apply_saved_login_to_state(state, canonical_id):
-        return
-    provider_def = providers.provider_for_login(canonical_id)
-    state["provider_id"] = canonical_id
-    state["provider_headers"] = {}
-    state["provider_base_url"] = providers.provider_base_url(provider_def, None, os.environ)
-    state["provider_api_key"] = providers.provider_api_key(provider_def, None, os.environ)
-
-
-def _set_model_via_route(state: dict, cfg: Config, model_value: str) -> None:
-    """Apply `/model <id>` through the SAME saved-login gate startup routing
-    uses for authoritative prefix switches. A `vendor/model` prefix may switch
-    the direct endpoint only when `vendor` is a saved login; otherwise the
-    current endpoint stays and the full id rides it."""
-    configured_provider_id = _state_value(state, "provider_id", cfg.provider_id)
-    configured_base_url = _state_value(state, "provider_base_url", cfg.provider_base_url)
-    configured_api_key = _state_value(state, "provider_api_key", cfg.provider_api_key)
-    configured_headers = _state_value(state, "provider_headers", getattr(cfg, "provider_headers", {}))
-    parsed_provider_id, _parsed_model = providers.parse_model_prefix(model_value)
-    prefix_login = routing._saved_login(parsed_provider_id) if parsed_provider_id is not None else None
-    state["model_source"] = "/model command"
-    if parsed_provider_id is not None and prefix_login is None:
-        state["model"] = model_value
-        if configured_provider_id:
-            print(f"{C.GREEN}model set to {configured_provider_id}:{model_value}{C.RESET}")
-        else:
-            print(f"{C.GREEN}model set to {model_value}{C.RESET}")
-        return
-
-    route = routing.resolve_model_route(
-        model_value,
-        configured_provider_id=parsed_provider_id or configured_provider_id,
-        configured_base_url=None if parsed_provider_id else configured_base_url,
-        configured_api_key=None if parsed_provider_id else configured_api_key,
-        configured_headers={} if parsed_provider_id else configured_headers,
-        env=os.environ,
-        explicit_model=True,
-        prefix_overrides_provider=parsed_provider_id is not None,
-        use_saved_login=parsed_provider_id is not None,
-    )
-    state["model"] = route.model
-    state["provider_id"] = route.provider_id
-    state["provider_base_url"] = route.base_url
-    state["provider_api_key"] = route.api_key
-    state["provider_headers"] = dict(route.headers)
-    if route.provider_id:
-        print(f"{C.GREEN}model set to {route.provider_id}:{route.model}{C.RESET}")
-    else:
-        print(f"{C.GREEN}model set to {route.model}{C.RESET}")
-
-
-# --------------------------------------------------------------------------
-# Banner / help
-# --------------------------------------------------------------------------
-
-BANNER = f"""\
-{C.CYAN}me — js agent{C.RESET}
-{C.MAGENTA}agent:{C.RESET}  {{agent}}
-{C.MAGENTA}model:{C.RESET}  {{model}}
-{C.MAGENTA}prompt:{C.RESET} {{prompt}}
-{C.MAGENTA}memory:{C.RESET} {{memory}}
-
-{C.GREEN}type 'exit' or Ctrl-D to quit. /help for commands.{C.RESET}
-"""
-
-
-HELP_TEXT = f"""\
-{C.MAGENTA}commands:{C.RESET}
-  {C.YELLOW}/help{C.RESET}            show this message
-  {C.YELLOW}/set [key [val]]{C.RESET} list knobs, show one, or change one (e.g. /set model.reasoning_effort high)
-  {C.YELLOW}/set -key{C.RESET}        clear a knob back to its default (e.g. /set -sampling.temperature)
-  {C.YELLOW}/show [key]{C.RESET}      list every knob and its effective value (annotates live overrides)
-  {C.YELLOW}/save{C.RESET}            write the current in-memory settings to the global jsrc
-  {C.YELLOW}/load <file>{C.RESET}     load a slashless ircII-style script file
-  {C.YELLOW}/on [event handler]{C.RESET} list or register an event hook
-  {C.YELLOW}/model <name>{C.RESET}    switch model for this session
-  {C.YELLOW}/model{C.RESET}             open interactive provider/model picker
-  {C.YELLOW}/pick-model{C.RESET}       open interactive provider/model picker
-  {C.YELLOW}/provider <id>{C.RESET}  switch provider for this session (e.g. deepseek, ollama, openai-codex)
-  {C.YELLOW}/baseurl <url>{C.RESET}  set provider base URL for this session (omit to clear)
-  {C.YELLOW}/apikey <key>{C.RESET}   set provider API key for this session (omit to clear)
-  {C.YELLOW}/jobs{C.RESET}            list running turns/subagents
-  {C.YELLOW}/cancel [id]{C.RESET}     cancel a job by id, or the active turn
-  {C.YELLOW}/flush{C.RESET}           drop all prompts queued behind the active turn
-  {C.YELLOW}/compact [focus]{C.RESET} append a compaction summary mark (-m model picks the summarizer)
-  {C.YELLOW}/compact-auto on|off{C.RESET} toggle auto-compaction for this process
-  {C.YELLOW}/refresh-model-catalog{C.RESET} force-refresh the local models.dev catalog now
-  {C.YELLOW}@path/to/file{C.RESET}     attach a file/image to that turn (quote paths with spaces)
-  {C.YELLOW}exit{C.RESET}             quit
-"""
-
-
-def _pick_model_into_state(state: dict, cfg: Config) -> None:
-    selected = picker.pick_model(
-        provider_id=_state_value(state, "provider_id", cfg.provider_id),
-        provider_base_url=_state_value(state, "provider_base_url", cfg.provider_base_url),
-        provider_api_key=_state_value(state, "provider_api_key", cfg.provider_api_key),
-        model=_state_value(state, "model", cfg.model),
-    )
-    if not selected:
-        return
-    state["provider_id"] = selected["provider_id"]
-    state["provider_base_url"] = selected.get("provider_base_url")
-    state["provider_api_key"] = selected.get("provider_api_key")
-    state["provider_headers"] = dict(selected.get("provider_headers") or {})
-    state["model"] = selected["model"]
-    default_model_id = _provider_qualified_model_id(selected.get("provider_id"), selected["model"])
-    if isinstance(state.get("settings"), dict):
-        settings.set_dotted(state["settings"], ("model", "id"), default_model_id)
-    state["model_source"] = None  # the pick was persisted into the store
-
-    _saved_path, save_error = _persist_default_model_id(default_model_id)
-    if save_error:
-        print(f"{C.ORANGE}selected {selected['provider_id']}:{selected['model']} but default save failed: {save_error}{C.RESET}")
-    else:
-        print(f"{C.GREEN}selected {selected['provider_id']}:{selected['model']} and saved as default{C.RESET}")
-
-
-def _handle_provider_command(line: str, state: dict, cfg: Config) -> bool:
-    """Handle /provider, /baseurl, /apikey, /login, /logout, /models."""
-    parts = line.split()
-    cmd = parts[0]
-
-    if cmd == "/models":
-        max_models = 50
-        if len(parts) >= 2:
-            try:
-                max_models = int(parts[1])
-            except ValueError:
-                print(f"{C.ORANGE}/models expects an integer limit, got: {parts[1]!r}{C.RESET}")
-                return True
-        provider_id = _state_value(state, "provider_id", cfg.provider_id)
-        provider_base_url = _state_value(state, "provider_base_url", cfg.provider_base_url)
-        provider_api_key = _state_value(state, "provider_api_key", cfg.provider_api_key)
-        if not provider_id:
-            print(f"{C.ORANGE}no provider set; use /provider <id> first{C.RESET}")
-            return True
-        try:
-            model_ids = _models_for_provider(provider_id, provider_base_url, provider_api_key)
-        except Exception as e:  # noqa: BLE001
-            print(f"{C.ORANGE}could not list models: {type(e).__name__}: {e}{C.RESET}")
-        else:
-            shown = model_ids[:max_models]
-            for mid in shown:
-                print(f"  {C.CYAN}{mid}{C.RESET}")
-            if len(model_ids) > max_models:
-                print(f"{C.GREY}...and {len(model_ids) - max_models} more{C.RESET}")
-        return True
-
-    if cmd == "/provider":
-        if len(parts) == 1:
-            cur = _state_value(state, "provider_id", cfg.provider_id)
-            print(f"{C.MAGENTA}current provider:{C.RESET} {cur or '(unset — uses AI Gateway / model prefix)'}")
-            return True
-        _set_provider_state(state, parts[1])
-        print(f"{C.GREEN}provider set to {providers.normalize_provider_id(parts[1]) or parts[1]}{C.RESET}")
-        return True
-
-    if cmd == "/baseurl":
-        if len(parts) == 1:
-            state["provider_base_url"] = None
-            print(f"{C.GREEN}base URL cleared{C.RESET}")
-            return True
-        state["provider_base_url"] = parts[1]
-        print(f"{C.GREEN}base URL set{C.RESET}")
-        return True
-
-    if cmd == "/apikey":
-        if len(parts) == 1:
-            state["provider_api_key"] = None
-            print(f"{C.GREEN}API key cleared{C.RESET}")
-            return True
-        state["provider_api_key"] = parts[1]
-        print(f"{C.GREEN}API key set{C.RESET}")
-        return True
-
-    if cmd == "/login":
-        if len(parts) == 1:
-            print(f"{C.ORANGE}usage: /login <name> [apikey] [baseurl] [provider]{C.RESET}")
-            return True
-        name = parts[1]
-        key = parts[2] if len(parts) > 2 else None
-        url = parts[3] if len(parts) > 3 else None
-        ptype = parts[4] if len(parts) > 4 else None
-        if key is None and url is None and ptype is None:
-            # bare `/login <name>`: load a saved login (or fall back to provider defaults)
-            _set_provider_state(state, name)
-            print(f"{C.GREEN}active provider loaded: {providers.normalize_provider_id(name) or name}{C.RESET}")
-            return True
-        # explicit creds: build + persist a login under <name>, then activate it.
-        # provider type = explicit 4th arg, else inferred when <name> is itself a known provider.
-        prov = providers.get_provider(ptype or name)
-        if ptype is None and prov is None:
-            print(f"{C.ORANGE}/login: '{name}' is not a known provider — name the provider type: "
-                  f"/login {name} <apikey> <baseurl> <provider>{C.RESET}")
-            return True
-        sdk = prov.effective_sdk_provider_id if prov is not None else ptype
-        canonical = providers.normalize_provider_id(name) or name
-        logins.save_login(logins.Login(
-            provider_id=canonical,
-            sdk_provider_id=sdk,
-            provider_base_url=url,
-            provider_api_key=key,
-        ))
-        _apply_saved_login_to_state(state, canonical)
-        print(f"{C.GREEN}login saved + active: {canonical}{C.RESET}")
-        return True
-
-    if cmd == "/logout":
-        state["provider_id"] = None
-        state["provider_base_url"] = None
-        state["provider_api_key"] = None
-        state["provider_headers"] = {}
-        print(f"{C.GREY}provider credentials cleared for this session{C.RESET}")
-        return True
-    if cmd == "/pick-model":
-        _pick_model_into_state(state, cfg)
-        return True
-
-    return False
-
-
-def _force_refresh_model_catalog() -> bool:
-    try:
-        status = model_metadata.ensure_fresh_catalog(force=True)
+        cfg = run_assembly.from_env(session, save_session=False, sources=sources, agent_id=agent)
+        if not cfg.session_file.is_file():
+            raise ValueError(msgs.CONFIG_SESSION_MUST_IDENTIFY_AN_EXISTING_JSONL_FILE.format(session=session))
+        prompt_spec = P.load_configured_prompt_spec(cfg)
+        messages = M.load_replay_messages(cfg.session_file)
+        emit, skipped = compaction.track_compact_skips(compaction.printing())
+        result = compaction.compact_now_sync(cfg, prompt_spec.system, messages, focus=focus, forced=True,
+                                             model=model, emit=emit,
+                                             log_dir=compaction.flight_log_dir(cfg))
+    except snippets.SnippetError:
+        raise
     except Exception as e:  # noqa: BLE001
-        print(f"{C.ORANGE}model catalog refresh failed: {type(e).__name__}: {e}{C.RESET}")
-        return False
-    checked_at = status.refreshed_at or status.generated_at
-    stamp = checked_at.isoformat(timespec="seconds") if checked_at else "unknown"
-    models = "?" if status.model_count is None else str(status.model_count)
-    providers_count = "?" if status.provider_count is None else str(status.provider_count)
-    print(f"{C.GREEN}models.dev catalog refreshed{C.RESET} at {stamp} ({providers_count} providers, {models} models)")
-    print(f"{C.GREY}{status.db_path}{C.RESET}")
-    return True
-
-
-def _flatten_toml(data: dict, prefix: str = "") -> list[tuple[str, str]]:
-    """Flatten a nested TOML dict into (dotted_key, scalar_str) set-line pairs.
-    Tables recurse; lists / arrays-of-tables become a JSON value."""
-    out: list[tuple[str, str]] = []
-    for key, value in data.items():
-        dotted = f"{prefix}{key}"
-        if isinstance(value, dict):
-            out.extend(_flatten_toml(value, prefix=f"{dotted}."))
-        elif isinstance(value, bool):
-            out.append((dotted, "on" if value else "off"))
-        elif isinstance(value, (list, tuple)):
-            out.append((dotted, json.dumps(value)))
-        else:
-            out.append((dotted, str(value)))
-    return out
-
-
-def _run_migrate_config() -> int:
-    """One-shot: convert a legacy config.toml into a jsrc set-script, then exit."""
-    import tomllib
-
-    legacy = _paths.legacy_global_config_file()
-    target = _paths.global_config_file()
-    if not legacy.exists():
-        print(f"{C.ORANGE}no legacy config at {legacy}{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.FAILED, error=network_display.error_text(e))
         return 1
-    if target.exists():
-        print(f"{C.ORANGE}{target} already exists; remove it first to re-migrate{C.RESET}", file=sys.stderr)
-        return 1
-    with legacy.open("rb") as fp:
-        data = tomllib.load(fp)
-    lines = ["# migrated from config.toml by `js --migrate-config`", ""]
-    lines.extend(f"set {key} {value}" for key, value in _flatten_toml(data))
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print(f"{C.GREEN}wrote {target}{C.RESET} from {legacy}")
-    print(f"{C.GREY}review it, then delete {legacy} when satisfied (this flag is removed after 2 releases){C.RESET}")
+    if result not in skipped:
+        msgs.say(msgs.COMPACTION_DONE, result=result)
     return 0
 
-
-def _append_closing_note(cfg: Config, state: dict, reminder: str) -> None:
-    """Fold a closing note into the conversation without breaking role alternation.
-
-    After a completed turn the note is simply the next user message. When the last
-    message is already a user turn it is rewritten to carry the note instead, since
-    two user messages in a row are rejected outright by some providers and silently
-    mangled by chat templates that assume alternation."""
-    messages = state["messages"]
-    if not messages or messages[-1].get("role") != "user":
-        message = {"role": "user", "content": reminder}
-        messages.append(message)
-        _append_turn(cfg, message)
-        return
-
-    last_user = messages[-1]
-    content = last_user.get("content")
-    if isinstance(content, str):
-        last_user["content"] = f"{content}\n\n{reminder}"
-    elif isinstance(content, list):
-        last_user["content"] = [*content, {"type": "text", "text": reminder}]
-    else:
-        last_user["content"] = reminder
-    # Append-only history cannot edit in place: drop the stale copy, write the
-    # rewritten one, so a reload sees exactly what memory holds.
-    M.append_mark(cfg.session_file, f"rollback_to:{len(messages) - 1}")
-    _append_turn(cfg, last_user)
+def _compact(args: argparse.Namespace, setup: Setup) -> int:
+    """`js --compact SESSION`: -p TEXT is the focus, `-p -` reads it from stdin."""
+    focus = _read_stdin_if_piped() if args.prompt == "-" else args.prompt or ""
+    return _run_compact_offline(args.compact, agent=setup.agent, focus=focus, sources=setup.sources,
+                                model=args.model)
 
 
-def _split_compact_model(arg: str) -> tuple[str | None, str, bool]:
-    """Pull a leading ``-m <model>`` (or ``--model``) off a /compact argument.
-
-    Returns ``(model, focus, ok)``; ``ok`` is False when the flag carries no
-    value. The flag is leading-only because focus is free text.
-    """
-    tokens = arg.split(maxsplit=2)
-    if tokens and tokens[0] in ("-m", "--model"):
-        if len(tokens) < 2:
-            return None, "", False
-        return tokens[1], tokens[2].strip() if len(tokens) > 2 else "", True
-    return None, arg.strip(), True
-
-
-def _handle_command(line: str, state: dict, cfg: Config) -> bool:
-    """Return True if `line` was a command (already handled), False otherwise."""
-    if line in {"exit", "quit", ":q"}:
-        state["running"] = False
-        return True
-    if line == "/quit" or line.startswith("/quit "):
-        note = line[len("/quit "):].strip() if line.startswith("/quit ") else ""
-        if note:
-            # Recorded as a user message so the next turn actually sees it. It is
-            # appended to the previous user message rather than added as a second
-            # one: providers with strict role alternation reject back-to-back user
-            # turns, and chat templates that tolerate it silently degrade.
-            reminder = f"<js-reminder>User closed the client with the message: {note}</js-reminder>"
-            _append_closing_note(cfg, state, reminder)
-        state["running"] = False
-        return True
-    if line == "/help":
-        print(HELP_TEXT)
-        return True
-    if line == "/refresh-model-catalog":
-        _force_refresh_model_catalog()
-        return True
-    if line == "/save":
-        _handle_save(state, cfg)
-        return True
-    if setcmd.is_repl_command(line, "/set", "/show", "/load", "/on"):
-        is_display, display_key = setcmd.settings_display_target(line)
-        if is_display:
-            # No-arg / single-key /set and /show render the values the NEXT turn
-            # uses, annotating knobs whose live source bypasses the store.
-            overlay = _live_settings_overlay_for_state(cfg, state)
-            result = setcmd.show_lines_effective(state["settings"], overlay, display_key)
-            for out in result.lines:
-                print(out)
-            if result.error:
-                print(f"{C.ORANGE}{result.error}{C.RESET}")
-            return True
-        context = setcmd.CommandContext(
-            cwd=getattr(cfg, "project_dir", Path.cwd()),
-            events=state.setdefault("events", events.EventHooks()),
-        )
-        result = setcmd.run_repl_command(state["settings"], line, context=context)
-        if result.changed:
-            if setcmd.is_repl_command(line, "/set"):
-                state["sampling_cli"] = _sampling_override_after_set(
-                    line,
-                    state.get("sampling_cli", Sampling()),
-                )
-            elif _changed_sampling_key(result.changed_keys):
-                state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
-            if _changed_model_key(result.changed_keys):
-                _sync_model_from_live_settings(state)
-            if _changed_provider_key(result.changed_keys):
-                _sync_provider_from_live_settings(state, result.changed_keys)
-            if _changed_lock_subagent_model_key(result.changed_keys):
-                _sync_tool_registry_from_live_settings(cfg, state)
-        for out in result.lines:
-            print(out)
-        if result.error:
-            print(f"{C.ORANGE}{result.error}{C.RESET}")
-        elif any(key.startswith(("compact.context_window", "model.context_window")) for key in result.changed_keys):
-            active = _cfg_for_live_state(cfg, state)
-            runtime.install_context_window_overrides(active)
-            window = compaction.configured_context_window(
-                active, lambda: runtime._resolve_context_window(active.model, active.provider_id, active.provider_base_url),
-            )
-            print(f"ctx={window} model={active.model} (effective for next request)")
-        return True
-    if line.startswith("/model "):
-        model_value = line[len("/model "):].strip()
-        _set_model_via_route(state, cfg, model_value)
-        return True
-    if line == "/model":
-        _pick_model_into_state(state, cfg)
-        return True
-    if line == "/reset":
-        state["messages"].clear()
-        M.append_mark(cfg.session_file, "session_reset")
-        print(f"{C.GREY}(conversation cleared in-process; jsonl preserved){C.RESET}")
-        return True
-    if line == "/wipe":
-        bak = M.wipe(cfg.session_file)
-        state["messages"].clear()
-        if bak:
-            print(f"{C.ORANGE}(memory rotated to {bak.name}){C.RESET}")
+def _commit(args: argparse.Namespace, setup: Setup) -> int:
+    """`js --commit [TARGET]`. It runs the commit agent, so --agent beside it
+    exits 2. -p TEXT and piped stdin are extra context for the agent."""
+    if args.agent:
+        msgs.warn(msgs.COMMIT_WITH_AGENT)
+        return 2
+    extra_context = None
+    if args.prompt is not None:
+        if args.prompt == "-":
+            extra_context = _read_stdin_if_piped()
         else:
-            print(f"{C.GREY}(no memory file to rotate){C.RESET}")
-        return True
-    if line == "/persona":
-        text = state["system"]
-        print(text[:2048])
-        if len(text) > 2048:
-            print(f"{C.GREY}...[truncated, {len(text)} bytes total]{C.RESET}")
-        return True
-    if line == "/turns":
-        print(f"{C.CYAN}{len(state['messages'])} messages in context{C.RESET}")
-        return True
-    if line == "/session":
-        print(f"{C.CYAN}{cfg.session_file}{C.RESET}")
-        return True
-    if line == "/jobs":
-        sup = supervisor.get_current()
-        if sup is None:
-            print(f"{C.GREY}(jobs are unavailable under --blocking){C.RESET}")
-            return True
-        jobs = sup.jobs()
-        if not jobs:
-            print(f"{C.GREY}(no running jobs){C.RESET}")
-            return True
-        for j in jobs:
-            label = f"  {j.label}" if j.label else ""
-            print(f"{C.CYAN}[{j.id}] {j.kind}{C.RESET}{label}")
-        return True
-    if line == "/cancel" or line.startswith("/cancel "):
-        sup = supervisor.get_current()
-        if sup is None:
-            print(f"{C.GREY}(cancel is unavailable under --blocking){C.RESET}")
-            return True
-        arg = line[len("/cancel"):].strip()
-        if arg:
-            if not arg.isdigit():
-                print(f"{C.ORANGE}usage: /cancel [id]  (bare = active turn){C.RESET}")
-                return True
-            targets = [j for j in sup.jobs() if j.id == int(arg)]
-        else:
-            targets = sup.jobs("turn")
-        if not targets:
-            print(f"{C.GREY}(no matching job to cancel){C.RESET}")
-            return True
-        # Task.cancel() is not thread-safe; hop to the loop thread to fire it.
-        for j in targets:
-            sup.loop.call_soon_threadsafe(sup.cancel, j.id)
-        ids = ", ".join(f"[{j.id}] {j.kind}" for j in targets)
-        print(f"{C.ORANGE}(cancelling {ids}){C.RESET}")
-        return True
-    if setcmd.is_repl_command(line, "/compact-auto"):
-        arg = line[len("/compact-auto"):].strip().lower()
-        if arg not in ("on", "off"):
-            print(f"{C.ORANGE}usage: /compact-auto on|off{C.RESET}")
-            return True
-        result = setcmd.run_repl_command(state["settings"], f"/set compact.auto {arg}")
-        if result.error:
-            print(f"{C.ORANGE}{result.error}{C.RESET}")
-        else:
-            for out in result.lines:
-                print(out)
-        return True
-    if line == "/compact" or line.startswith("/compact "):
-        model, focus, ok = _split_compact_model(line[len("/compact"):])
-        if not ok:
-            print(f"{C.ORANGE}usage: /compact [-m model] [focus]{C.RESET}")
-            return True
-        forced = focus == "up to here"
-        if forced:
-            focus = ""
-        try:
-            compact_cfg = _cfg_for_live_state(cfg, state)
-            result = compaction.compact_now_sync(compact_cfg, state["system"], state["messages"], model=model, focus=focus, forced=forced)
-        except Exception as e:  # noqa: BLE001
-            print(f"{C.ORANGE}compact failed: {type(e).__name__}: {e}{C.RESET}")
-        else:
-            print(f"{C.GREY}({result}){C.RESET}")
-        return True
-
-    # Provider commands
-    if setcmd.is_repl_command(
-        line,
-        "/provider",
-        "/baseurl",
-        "/apikey",
-        "/login",
-        "/logout",
-        "/models",
-        "/pick-model",
-    ):
-        return _handle_provider_command(line, state, cfg)
-    return False
+            stdin_text = _read_stdin_if_piped()
+            extra_context = args.prompt if not stdin_text.strip() else f"{args.prompt.rstrip()}\n\n{stdin_text.strip()}"
+    session_catalog.session_leases.start["mode"] = "commit"
+    return commit_cli.run_commit(args.target, model=args.model, debug=args.debug, debug_file=args.debug_file,
+                       session=args.session, save=not args.no_save,
+                       reasoning=args.reasoning, maxout=args.max_out,
+                       extra_context=extra_context, sources=setup.sources)
 
 
-def _apply_agent_model(cfg: Config, prompt_spec, model: str | None) -> Config:
-    """Apply the active agent's frontmatter `model:` through the resolver, unless
-    the operator pinned a model with -m / JS_MODEL / config."""
-    agent_model = getattr(prompt_spec, "model", "") if prompt_spec is not None else ""
-    if not agent_model or model is not None or getattr(cfg, "explicit_model", False):
-        return cfg
-    route = routing.resolve_model_route(
-        agent_model,
-        configured_provider_id=cfg.provider_id,
-        configured_base_url=cfg.provider_base_url,
-        configured_api_key=cfg.provider_api_key,
-        configured_headers=getattr(cfg, "provider_headers", {}),
-        explicit_model=True,
-        prefix_overrides_provider=not getattr(cfg, "explicit_provider", False),
-    )
-    return replace(
-        cfg,
-        model=route.model,
-        provider_id=route.provider_id,
-        provider_base_url=route.base_url,
-        provider_api_key=route.api_key,
-        provider_headers=route.headers,
-        vision_enabled=vision_enabled_for_model(route.model),
-    )
-
-
-def _apply_agent_max_tokens(cfg: Config, prompt_spec) -> Config:
-    return P.apply_agent_max_tokens(cfg, prompt_spec)
-
-
-def _format_prompt_load_error(cfg, exc: Exception) -> str:
-    """Turn a persona-load failure into an operator-legible line. A missing prompt
-    directory means the named agent doesn't exist anywhere on the search path —
-    say so plainly and point at the global agents dir where one is created,
-    instead of leaking the raw 'prompts directory missing at <path>'."""
-    if isinstance(exc, FileNotFoundError):
-        try:
-            resolved = P.resolve_agent_prompt_dir(cfg)
-        except Exception:  # noqa: BLE001
-            resolved = None
-        if resolved is None or not Path(resolved).is_dir():
-            agents_dir = _paths.global_agents_dir()
-            agent_id = getattr(cfg, "agent_id", "?")
-            return (
-                f"no such agent: {agent_id}; looked in project .js/agents, "
-                f"$XDG_CONFIG_HOME/js/agents = {agents_dir}, and repo prompts. "
-                f"Create {agents_dir / agent_id}/ with NN-*.md prompt files "
-                f"and an optional 00-tools.yaml manifest."
-            )
-    return str(exc)
-
-
-def _validate_cli_reasoning(reasoning: str) -> tuple[str | None, str | None]:
-    """Coerce a raw ``--reasoning`` value through the SAME registry validation as
-    ``set model.reasoning_effort`` and ``JS_REASONING`` (ruling B): ``off``
-    disables (stored as ``none``); every other value must be a ladder stop. Any
-    other token yields a clean local error instead of shipping garbage to the
-    provider. Returns (value, error)."""
-    spec = settings.SPEC_BY_KEY["model.reasoning_effort"]
-    return settings.coerce_value(spec, reasoning)
-
-
-@_session_scope
-def _run_prompt(prompt: str, model: str | None = None, debug: bool = False,
-                debug_file: str | None = None,
-                agent: str | None = None, session: str | None = None, save: bool = True,
-                system_override: str | None = None, resume_prefix: str | None = None,
-                reasoning: str | None = None, maxout: int | None = None,
-                show_continue: bool = True, tool_registry=None,
-                extras: list[str] | None = None, tool_context=None,
-                ignore_local_config: bool = False, ignore_global_config: bool = False,
-                files: list[str] | None = None, stdin_attachment: bytes | None = None,
-                presets: list[str] | None = None,
-                stats_json: str | None = None, stats_csv: str | None = None,
-                caller_key: str | None = None, announce_generated: bool | None = None) -> int:
-    attachments = list(files or [])
-    if not prompt.strip() and not attachments:
-        print(f"{C.ORANGE}error: prompt is empty{C.RESET}", file=sys.stderr)
-        return 2
-    reasoning_override = None
-    if reasoning is not None:
-        reasoning_override, effort_error = _validate_cli_reasoning(reasoning)
-        if effort_error is not None:
-            print(f"{C.ORANGE}error: --reasoning {reasoning}: {effort_error}{C.RESET}", file=sys.stderr)
-            return 2
+def _agent_bench(args: argparse.Namespace, setup: Setup) -> int | None:
+    """The run's agent runs its NN-benchmark.md cases when it has some and no
+    system prompt flag or chat mode replaces its prompt; None otherwise."""
     try:
-        cfg = _cfg_from_env_compat(
-            session,
-            save_session=save,
-            extras=extras,
-            agent_id=agent,
-            ignore_local_config=ignore_local_config,
-            ignore_global_config=ignore_global_config,
-            presets=presets,
-        )
-    except ValueError as e:
-        print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+        agent = _invocation_agent(args, setup.sources)
+        agent_dir = _paths.agent_dirs(agent)
+    except (ValueError, OSError) as exc:
+        msgs.warn(msgs.FAILED, error=exc)
         return 2
-    if announce_generated is None:
-        announce_generated = save and session is None and os.environ.get("JS_SESSION") is None
-    _activate_saved_session(
-        cfg,
-        caller_key=caller_key,
-        announce_generated=announce_generated and save,
-    )
-    telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
-    _sync_transcript_sink(cfg, getattr(cfg, "settings", {}) or {}, telemetry)
-
-    prompt_spec = None
-    if system_override is not None:
-        system = system_override
-        active_registry = tool_registry or _registry_for(cfg)
-    else:
-        try:
-            prompt_spec = P.load_configured_prompt_spec(cfg)
-        except (FileNotFoundError, ValueError) as e:
-            with _transcript_stdio(telemetry):
-                print(f"{C.ORANGE}{_format_prompt_load_error(cfg, e)}{C.RESET}", file=sys.stderr)
-            return 2
-        system = prompt_spec.system
-        active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
-        try:
-            cfg = _apply_agent_model(cfg, prompt_spec, model)
-        except ValueError as e:
-            with _transcript_stdio(telemetry):
-                print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
-            return 2
-        cfg = _apply_agent_max_tokens(cfg, prompt_spec)
-
-    try:
-        cfg = _resolve_cli_model_override(cfg, model)
-    except ValueError as e:
-        with _transcript_stdio(telemetry):
-            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
-        return 2
-
-    attachment_cfg = (
-        replace(cfg, model=model, vision_enabled=vision_enabled_for_model(model))
-        if model is not None
-        else cfg
-    )
-    messages = M.load_messages(cfg.session_file)
-    before_len = len(messages)
-    try:
-        user_bundle = attach.build_user_message(
-            prompt,
-            attachments,
-            attachment_cfg,
-            stdin_attachment=stdin_attachment,
-        )
-    except attach.AttachmentError as e:
-        with _transcript_stdio(telemetry):
-            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
-        return 2
-    messages.append(user_bundle.runtime_message)
-    if save:
-        _append_turn(cfg, user_bundle.history_message)
-    if (sink := _transcript_sink(telemetry)) is not None:
-        sink.write_user(prompt)
-    call_stats: list[dict] = []
-    turn_kwargs = {
-        "model_override": cfg.model,
-        "provider_id_override": cfg.provider_id,
-        "provider_base_url_override": cfg.provider_base_url,
-        "provider_api_key_override": cfg.provider_api_key,
-        "tool_registry": active_registry,
-        "sampling": _sampling_for_turn(cfg, prompt_spec, cfg.sampling_cli),
-        "call_stats": call_stats,
-    }
-    if reasoning is not None:
-        turn_kwargs["reasoning_effort_override"] = reasoning_override
-    if maxout is not None:
-        turn_kwargs["max_output_override"] = maxout
-    _t_wall = time.time()
-    autolog = _debug_autolog_path(cfg, getattr(cfg, "settings", {}) or {})
-    sink_paths: list[Path] = [p for p in (autolog,) if p is not None]
-    if debug_file:
-        sink_paths.append(Path(debug_file))
-    trace_sink = _open_debug_trace_sink(sink_paths)
-    telemetry.trace_sink = trace_sink
-    try:
-        try:
-            if debug:
-                # Concise trace + streamed answer live on the terminal; the giant
-                # request trace goes to the log only. Tee stdout so the log also
-                # keeps the concise lines and the answer.
-                with _transcript_stdio(telemetry):
-                    _real_stdout = sys.stdout
-                    stdout_ctx = (
-                        contextlib.redirect_stdout(_StdoutTee(_real_stdout, trace_sink))
-                        if trace_sink is not None
-                        else contextlib.nullcontext()
-                    )
-                    with stdout_ctx:
-                        runtime.run_turn(cfg, system, messages, telemetry, trace_override=True, tool_context=tool_context, **turn_kwargs)
-            else:
-                # Plain and --debug-file: the terminal stays clean during the turn
-                # (only the final answer is reprinted below). The log captures the
-                # streamed answer plus, for --debug-file, the concise trace lines;
-                # the full request trace lands there via telemetry.trace_sink.
-                capture = trace_sink if trace_sink is not None else io.StringIO()
-                visible_transcript = telemetry.transcript_log
-                telemetry.transcript_log = None
-                try:
-                    with contextlib.redirect_stdout(capture):
-                        runtime.run_turn(cfg, system, messages, telemetry, trace_override=bool(debug_file), tool_context=tool_context, **turn_kwargs)
-                finally:
-                    telemetry.transcript_log = visible_transcript
-        except (KeyboardInterrupt, asyncio.CancelledError):
-            with _transcript_stdio(telemetry):
-                print(f"{C.ORANGE}(turn interrupted){C.RESET}", file=sys.stderr)
-            return 130
-        except Exception as e:  # noqa: BLE001
-            with _transcript_stdio(telemetry):
-                print(f"{C.ORANGE}error: {_error_text(e)}{C.RESET}", file=sys.stderr)
-            return 1
-    finally:
-        try:
-            _replace_runtime_user_message(
-                messages, user_bundle.runtime_message, user_bundle.history_message, before_len,
-            )
-            if save:
-                _persist_turn_messages(cfg, messages)
-        finally:
-            if trace_sink is not None:
-                trace_sink.close()
-            telemetry.trace_sink = None
-
-    if stats_json or stats_csv:
-        row = {"name": "prompt", "prompt": prompt, "max_tokens": cfg.max_output_tokens if maxout is None else maxout,
-               "ok": True, "error": None, **stats.summarize_calls(call_stats, wall_s=time.time() - _t_wall)}
-        payload = {"agent": cfg.agent_id, "model": cfg.model, "provider": cfg.provider_id, "turns": [row]}
-        if stats_json:
-            stats.write_json(stats_json, payload)
-        if stats_csv:
-            stats.write_csv(stats_csv, [row])
-
-    for message in reversed(messages):
-        if message.get("role") == "assistant" and message.get("content"):
-            # In debug, run_turn already streamed the answer live to stdout — a
-            # second print here is the double-print bug. Only print when the
-            # stream was suppressed (non-debug one-shot/pipe).
-            with _transcript_stdio(telemetry):
-                if not debug:
-                    content = message["content"].strip()
-                    if (sink := _transcript_sink(telemetry)) is not None:
-                        sink.write_assistant(content)
-                    with _mute_transcript_tee(_transcript_sink(telemetry)):
-                        print(content)
-                if save:
-                    _maybe_auto_compact(cfg, {
-                        "system": system,
-                        "messages": messages,
-                        "model": cfg.model,
-                    })
-                    if show_continue:
-                        hint = _session_hint_arg(cfg)
-                        cont = resume_prefix or "js"
-                        # Plain -p has no resume_prefix; the session lives under
-                        # sessions/<agent>, so a non-default agent MUST be echoed or
-                        # the resume looks in the wrong dir and 404s the .jsonl.
-                        # (wiki/commit already fold the agent into resume_prefix.)
-                        if resume_prefix is None and agent:
-                            cont += f" --agent {shlex.quote(agent)}"
-                        if model:
-                            cont += f" --model {shlex.quote(model)}"
-                        cont += f" --session {hint}"
-                        print(f"Continue: {cont}")
-            return 0
-
-    with _transcript_stdio(telemetry):
-        print(f"{C.ORANGE}error: no assistant response{C.RESET}", file=sys.stderr)
-    return 1
+    if not current().replaces_prompt and not current().chat and P.has_benchmarks(agent_dir):
+        return bench.run_agent_bench(agent, args, setup.sources)
+    return None
 
 
-
-def _accepts_kwarg(func, name: str) -> bool:
-    """Whether ``func`` can take keyword ``name`` — a named parameter or ``**kwargs``.
-    Falls back to True when the signature can't be read, so the real call decides."""
-    try:
-        params = inspect.signature(func).parameters.values()
-    except (TypeError, ValueError):
-        return True
-    for param in params:
-        if param.kind is inspect.Parameter.VAR_KEYWORD:
-            return True
-        if param.name == name and param.kind in (
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            inspect.Parameter.KEYWORD_ONLY,
-        ):
-            return True
-    return False
-
-
-def _run_prompt_compat(*args, tool_context=None, **kwargs) -> int:
-    # Decide whether the (possibly monkeypatched) _run_prompt takes tool_context
-    # by INSPECTING its signature, not by catching TypeError around the whole
-    # turn — a stray TypeError raised deep inside a commit/wiki run must surface
-    # as an error, never trigger a silent second full execution of the turn.
-    if tool_context is not None and _accepts_kwarg(_run_prompt, "tool_context"):
-        return _run_prompt(*args, tool_context=tool_context, **kwargs)
-    return _run_prompt(*args, **kwargs)
-
-
-def _bench_row_line(row: dict) -> str:
-    if not row.get("ok"):
-        return f"  {C.ORANGE}{row['name']}: {row.get('error') or 'failed'}{C.RESET}"
-    ttft = f"{row['ttft_s'] * 1000:.0f}ms" if row.get("ttft_s") is not None else "—"
-    return (f"  {C.GREY}{row['name']}: {row.get('output_tokens', 0)} tok  "
-            f"{row.get('tok_per_s', 0.0):.1f} tok/s  ttft {ttft}  "
-            f"wall {row.get('wall_s') or 0.0:.2f}s{C.RESET}")
-
-
-def _run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
-               maxout: int | None, quiet: bool, extras: list[str] | None,
-               ignore_local_config: bool, ignore_global_config: bool,
-               presets: list[str] | None,
-               stats_json: str | None, stats_csv: str | None,
-               debug: bool = False) -> int:
-    """Run an agent's NN-benchmark.md turns, each on a clean slate (fresh
-    context, no session), measuring TTFT / tok-s / turn time. The persona
-    (NN-prompt.md + 00-tools.yaml) is rebuilt into each benchmark's head;
-    benchmarks never see each other."""
-    try:
-        agent_id = validate_agent_id(bench_agent)
-    except ValueError as e:
-        print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
-        return 2
-    reasoning_override = None
-    if reasoning is not None:
-        reasoning_override, effort_error = _validate_cli_reasoning(reasoning)
-        if effort_error is not None:
-            print(f"{C.ORANGE}error: --reasoning {reasoning}: {effort_error}{C.RESET}", file=sys.stderr)
-            return 2
-    try:
-        cfg = _cfg_from_env_compat(
-            None, save_session=False, extras=extras, agent_id=agent_id,
-            ignore_local_config=ignore_local_config,
-            ignore_global_config=ignore_global_config, presets=presets,
-        )
-    except ValueError as e:
-        print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
-        return 2
-    try:
-        prompt_spec = P.load_configured_prompt_spec(cfg)
-    except (FileNotFoundError, ValueError) as e:
-        print(f"{C.ORANGE}{_format_prompt_load_error(cfg, e)}{C.RESET}", file=sys.stderr)
-        return 2
-
-    benchmarks = P.load_benchmarks(P.resolve_agent_prompt_dir(cfg))
-    if not benchmarks:
-        print(f"{C.ORANGE}error: agent {agent_id!r} has no NN-benchmark.md files{C.RESET}", file=sys.stderr)
-        return 2
-
-    system = prompt_spec.system
-    active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
-    try:
-        cfg = _apply_agent_model(cfg, prompt_spec, model)
-        cfg = _resolve_cli_model_override(cfg, model)
-    except ValueError as e:
-        print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
-        return 2
-    agent_default_max = prompt_spec.max_output_tokens
-    allow_code = bool(getattr(cfg, "allow_inline_code", False))
-
-    rows: list[dict] = []
-    interrupted = False
-    for bench in benchmarks:
-        # max_tokens: --max-out wins; else per-benchmark frontmatter (already
-        # -1 -> None=uncapped); else the agent default from 00-tools.yaml.
-        if maxout is not None:
-            eff_max = maxout
-        elif bench.max_tokens_set:
-            eff_max = bench.max_tokens
-        else:
-            eff_max = agent_default_max
-        prompt_text = expand_prompt(
-            bench.prompt,
-            allow_code=allow_code,
-            timeout_s=cfg.inline_code_timeout_s,
-            max_output_bytes=cfg.max_bash_output_bytes,
-        )
-        messages = [{"role": "user", "content": prompt_text}]
-        call_stats: list[dict] = []
-        turn_kwargs = {
-            "model_override": cfg.model,
-            "provider_id_override": cfg.provider_id,
-            "provider_base_url_override": cfg.provider_base_url,
-            "provider_api_key_override": cfg.provider_api_key,
-            "tool_registry": active_registry,
-            "sampling": _sampling_for_turn(cfg, prompt_spec, cfg.sampling_cli),
-            "max_output_override": eff_max,
-            "call_stats": call_stats,
-        }
-        if reasoning is not None:
-            turn_kwargs["reasoning_effort_override"] = reasoning_override
-        if not quiet:
-            print(f"{C.CYAN}▸ bench {bench.name}{C.RESET}  {C.GREY}{prompt_text.splitlines()[0][:80]}{C.RESET}", file=sys.stderr)
-        ok, err = True, None
-        t_wall = time.time()
-        try:
-            sink = io.StringIO() if quiet else None
-            with contextlib.redirect_stdout(sink) if sink is not None else contextlib.nullcontext():
-                # -d turns on the per-turn trace here too. Without it a bench run
-                # records only the model's prose, which is its own claim about
-                # what it called, not evidence — useless for measuring tool use.
-                runtime.run_turn(cfg, system, messages, runtime.Telemetry(debug_log=cfg.debug_log),
-                                 trace_override=bool(debug), **turn_kwargs)
-        except KeyboardInterrupt:
-            interrupted, ok, err = True, False, "interrupted"
-        except Exception as e:  # noqa: BLE001
-            ok, err = False, f"{type(e).__name__}: {e}"
-        row = {
-            "name": bench.name, "prompt": prompt_text, "max_tokens": eff_max,
-            "ok": ok, "error": err,
-            **stats.summarize_calls(call_stats, wall_s=time.time() - t_wall),
-        }
-        rows.append(row)
-        print(_bench_row_line(row), file=sys.stderr)
-        if interrupted:
-            break
-
-    payload = {"agent": agent_id, "model": cfg.model, "provider": cfg.provider_id, "benchmarks": rows}
-    if stats_json:
-        stats.write_json(stats_json, payload)
-        print(f"{C.GREY}stats → {stats_json}{C.RESET}", file=sys.stderr)
-    if stats_csv:
-        stats.write_csv(stats_csv, rows)
-        print(f"{C.GREY}stats → {stats_csv}{C.RESET}", file=sys.stderr)
-    if not stats_json and not stats_csv:
-        print(json.dumps(payload, indent=2, default=str))
-    return 130 if interrupted else 0
-
-
-def _commit_backup_root() -> Path:
-    return _paths.data_dir() / "commit-backups"
-
-
-def _worktree_patch(repo_dir: Path, commit_helper) -> str:
-    """The unified diff of every tracked uncommitted change.
-
-    `git diff HEAD` is staged+unstaged against the last commit. A repo with no
-    commits yet has no HEAD, so fall back to staged+unstaged separately.
-    """
-    diff = commit_helper._git("diff", "HEAD", check=False, repo=repo_dir)
-    if diff.returncode == 0:
-        return diff.stdout
-    staged = commit_helper._git("diff", "--cached", check=False, repo=repo_dir)
-    unstaged = commit_helper._git("diff", check=False, repo=repo_dir)
-    return (staged.stdout if staged.returncode == 0 else "") + (unstaged.stdout if unstaged.returncode == 0 else "")
-
-
-def _prune_commit_backups(root: Path, keep: int = 10) -> None:
-    dirs = sorted((d for d in root.iterdir() if d.is_dir()), key=lambda p: p.name)
-    for old in dirs[:-keep]:
-        shutil.rmtree(old, ignore_errors=True)
-
-
-def _snapshot_worktree(repo_dir: Path) -> Path | None:
-    """Copy all uncommitted work into a timestamped backup before the agent touches the tree.
-
-    The commit agent can revert files while splitting commits; a snapshot means any
-    failure path is recoverable. Returns the backup dir, or None on a clean tree.
-    """
-    from . import commit_helper
-
-    patch = _worktree_patch(repo_dir, commit_helper)
-    others = commit_helper._git("ls-files", "--others", "--exclude-standard", "-z", check=False, repo=repo_dir)
-    untracked = [p for p in others.stdout.split("\0") if p] if others.returncode == 0 else []
-    if not patch.strip() and not untracked:
-        return None
-
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
-    backup_dir = _commit_backup_root() / stamp
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    if patch:
-        (backup_dir / "tracked.patch").write_text(patch, encoding="utf-8")
-    for rel in untracked:
-        dest = backup_dir / "untracked" / rel
-        try:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(repo_dir / rel, dest)
-        except OSError:
-            continue  # a vanished/unreadable file must not abort the whole snapshot
-    _prune_commit_backups(_commit_backup_root())
-    return backup_dir
-
-
-def _run_commit(target: str | None,
-                model: str | None = None, debug: bool = False, debug_file: str | None = None,
-                session: str | None = None, save: bool = True,
-                reasoning: str | None = None, maxout: int | None = None,
-                extra_context: str | None = None,
-                extras: list[str] | None = None,
-                ignore_local_config: bool = False, ignore_global_config: bool = False,
-                presets: list[str] | None = None) -> int:
-    target_dir = Path(target).expanduser() if target else Path.cwd()
-    if not target_dir.is_absolute():
-        target_dir = Path.cwd() / target_dir
-    target_dir = target_dir.resolve(strict=False)
-    if not target_dir.exists():
-        print(f"{C.ORANGE}error: commit target does not exist: {target_dir}{C.RESET}", file=sys.stderr)
-        return 2
-    if not target_dir.is_dir():
-        print(f"{C.ORANGE}error: commit target is not a directory: {target_dir}{C.RESET}", file=sys.stderr)
-        return 2
-
-    from . import commit_helper
-
-    probe = commit_helper._git("rev-parse", "--is-inside-work-tree", check=False, repo=target_dir)
-    if probe.returncode != 0 or probe.stdout.strip() != "true":
-        init = commit_helper._git("init", "-q", "-b", "main", check=False, repo=target_dir)
-        if init.returncode != 0:
-            init = commit_helper._git("init", "-q", check=False, repo=target_dir)
-        if init.returncode != 0:
-            detail = (init.stderr or init.stdout).strip() or f"exit {init.returncode}"
-            print(f"{C.ORANGE}error: git init failed in {target_dir}: {detail}{C.RESET}", file=sys.stderr)
-            return 1
-
-    try:
-        backup_dir = _snapshot_worktree(target_dir)
-    except Exception as e:  # noqa: BLE001 — a snapshot failure must never block the commit run
-        print(f"{C.ORANGE}warning: could not snapshot worktree before commit: {type(e).__name__}: {e}{C.RESET}", file=sys.stderr)
-    else:
-        if backup_dir is not None:
-            print(f"{C.GREY}(worktree snapshot saved: {backup_dir}){C.RESET}")
-
-    survey_out = io.StringIO()
-    survey_err = io.StringIO()
-    with contextlib.redirect_stdout(survey_out), contextlib.redirect_stderr(survey_err):
-        survey_rc = commit_helper.main(["-C", str(target_dir), "survey"])
-    survey = survey_out.getvalue().rstrip()
-    if survey_rc != 0:
-        detail = survey_err.getvalue().strip() or survey or f"commit_helper survey exited {survey_rc}"
-        print(f"{C.ORANGE}error: commit survey failed for {target_dir}: {detail}{C.RESET}", file=sys.stderr)
-        return 1
-
-    helper_stage = f"python -m js.commit_helper -C {shlex.quote(str(target_dir))} stage <file> <hunks|all>"
-    helper_survey = f"python -m js.commit_helper -C {shlex.quote(str(target_dir))} survey"
-    helper_commit = f"python -m js.commit_helper -C {shlex.quote(str(target_dir))} commit <message-file>"
-    prompt = (
-        f"Commit all work in this target directory: {target_dir}\n\n"
-        "The repository has already been initialized if it was missing. "
-        "Use this deterministic staging helper for every commit unit:\n"
-        f"`{helper_stage}`\n"
-        "Use `all` for whole-file staging or comma-separated hunk numbers from the survey "
-        "for tracked text files. To commit a staged unit, write the full commit message "
-        "to a file with the write tool, then run:\n"
-        f"`{helper_commit}`\n"
-        "If you need a fresh snapshot after making changes, run:\n"
-        f"`{helper_survey}`\n\n"
-        "Initial deterministic commit_helper survey:\n"
-        "```text\n"
-        f"{survey}\n"
-        "```"
-    )
-    if extra_context and extra_context.strip():
-        prompt += f"\n\nOperator context:\n{extra_context.strip()}"
-
-    return _run_prompt_compat(
-        prompt,
-        model=model,
-        debug=debug,
-        debug_file=debug_file,
-        agent="commit",
-        session=session,
-        save=save,
-        resume_prefix=f"js --commit {target_dir}",
-        reasoning=reasoning,
-        maxout=maxout,
-        extras=extras,
-        tool_context=ToolContext(cwd=target_dir),
-        ignore_local_config=ignore_local_config,
-        ignore_global_config=ignore_global_config,
-        presets=presets,
-    )
-
-
-def _run_compact_offline(session: str, *, agent: str | None = None, focus: str = "", extras: list[str] | None = None, model: str | None = None) -> int:
-    try:
-        cfg = _cfg_from_env_compat(session, save_session=True, extras=extras, agent_id=agent)
-        prompt_spec = P.load_configured_prompt_spec(cfg)
-        messages = M.load_messages(cfg.session_file)
-        compact_cfg = replace(cfg, model=model) if model is not None else cfg
-        result = compaction.compact_now_sync(compact_cfg, prompt_spec.system, messages, focus=focus, forced=True)
-    except Exception as e:  # noqa: BLE001
-        print(f"{C.ORANGE}error: {_error_text(e)}{C.RESET}", file=sys.stderr)
-        return 1
-    print(result)
-    return 0
-
-def _providers_json() -> list[dict]:
-    saved = logins.load_logins()
-    known_ids = {p.id for p in providers.login_providers()}
-    rows: list[dict] = []
-    for provider in providers.login_providers():
-        env_configured = providers.first_env(provider.api_key_env + provider.base_url_env + provider.model_env) is not None
-        source = "login" if provider.id in saved else ("env" if env_configured else "registry")
-        rows.append({"id": provider.id, "name": provider.display_name, "source": source})
-    for provider_id in sorted(set(saved) - known_ids):
-        rows.append({"id": provider_id, "name": provider_id, "source": "custom"})
-    return rows
-
-
-def _logins_json() -> list[dict]:
-    rows: list[dict] = []
-    for provider_id, login in sorted(logins.load_logins().items()):
-        item = asdict(login)
-        item["provider_id"] = provider_id
-        item["has_api_key"] = bool(item.get("provider_api_key"))
-        item["has_codex_refresh_token"] = bool(item.get("codex_refresh_token"))
-        if codex_auth.is_codex_provider(provider_id):
-            item["provider_api_key"] = None
-        item["codex_refresh_token"] = None
-        rows.append(item)
-    return rows
-
-
-def _resolve_cli_model_override(cfg: Config, model: str | None) -> Config:
-    if model is None:
-        return cfg
-    route = routing.resolve_model_route(
-        model,
-        configured_provider_id=cfg.provider_id,
-        configured_base_url=cfg.provider_base_url,
-        configured_api_key=cfg.provider_api_key,
-        configured_headers=getattr(cfg, "provider_headers", {}),
-        env=os.environ,
-        explicit_model=True,
-        prefix_overrides_provider=not getattr(cfg, "explicit_provider", False),
-    )
-    return replace(
-        cfg,
-        model=route.model,
-        provider_id=route.provider_id,
-        provider_base_url=route.base_url,
-        provider_api_key=route.api_key,
-        provider_headers=route.headers,
-        vision_enabled=vision_enabled_for_model(route.model),
-    )
-
-
-
-def _list_models_payload(provider_id: str | None, cfg: Config | None = None) -> dict:
-    if provider_id:
-        provider = providers.normalize_provider_id(provider_id) or provider_id
-        model_ids = _models_for_provider(provider, None, None)
-    elif cfg is not None:
-        provider = cfg.provider_id
-        model_ids = _models_for_provider(cfg.provider_id, cfg.provider_base_url, cfg.provider_api_key)
-    else:
-        raise ValueError("provider required")
-    return {
-        "provider_id": provider,
-        "models": model_ids,
-        "pass_via_model": [f"{provider}/{model_id}" for model_id in model_ids] if provider else list(model_ids),
-    }
-
-
-def _models_cached_or_live(provider_id: str, cfg: Config | None) -> list[str]:
-    """Models for one provider, cache first (offline-friendly, fast), live on miss."""
-    cached = logins.load_model_cache().get(provider_id)
-    if cached is not None:
-        return cached
-    if cfg is not None and provider_id == cfg.provider_id:
-        return _models_for_provider(provider_id, cfg.provider_base_url, cfg.provider_api_key)
-    return _models_for_provider(provider_id, None, None)
-
-
-def _list_models_provider_ids(provider_arg: str | None, cfg: Config | None) -> list[str]:
-    """Which providers `--list-models` covers: the named one, else every provider
-    the operator has a stake in — saved logins plus the active provider."""
-    if provider_arg:
-        return [providers.normalize_provider_id(provider_arg) or provider_arg]
-    ids = set(logins.load_logins())
-    if cfg is not None and cfg.provider_id:
-        ids.add(cfg.provider_id)
-    return sorted(ids)
-
-
-
-def _models_json(provider_id: str | None, cfg: Config | None = None) -> dict:
-    payload = _list_models_payload(provider_id, cfg)
-    return {"models": payload["models"]}
-
-
-def _warn_unmatched_presets(presets: list[str], *, ignore_local: bool, ignore_global: bool) -> None:
-    from .config import _preset_config_paths
-
+def _warn_unmatched_presets(sources: InvocationSources) -> None:
     project_dir = Path.cwd()
-    for name in presets:
-        candidates = _preset_config_paths(
-            [name], project_dir,
-            ignore_local_config=ignore_local,
-            ignore_global_config=ignore_global,
-        )
+    for name in sources.presets:
+        candidates = _preset_config_paths(replace(sources, presets=(name,)), project_dir)
         if not any(path.exists() for path in candidates):
-            looked = " or ".join(str(p) for p in candidates) or "(no config dirs enabled)"
-            print(f"{C.ORANGE}warning: --preset {name}: no jsrc.{name} found ({looked}){C.RESET}", file=sys.stderr)
+            if candidates:
+                msgs.warn(msgs.PRESET_NOT_FOUND, name=name, looked=" or ".join(str(p) for p in candidates))
+            else:
+                msgs.warn(msgs.PRESET_NO_CONFIG_DIRS, name=name)
 
 
-def _print_json(value: object) -> int:
-    print(json.dumps(value, ensure_ascii=False))
-    return 0
-
-
-# External binaries js leans on. Assume NO box has them (owner runs many); warn
-# once per missing one at startup so a degraded run has an obvious cause, but
-# NEVER crash or block — `just install` provisions them.
+# External binaries js leans on. Each missing one is warned about once at
+# startup, so a run without it has an obvious cause, and startup goes on
+# without it. `just install` provisions them.
 _EXPECTED_BINARIES: tuple[tuple[str, str], ...] = (
-    ("rg", "ripgrep — fs_search degrades"),
-    ("fd", "fd-find — file finding degrades"),
-    ("bat", "bat — syntax-highlighted preview degrades"),
-    ("fzf", "fzf — interactive pickers degrade"),
+    ("rg", "fs_search"),
+    ("fd", "file finding"),
+    ("bat", "highlighted previews"),
+    ("fzf", "the interactive pickers"),
 )
 _warned_binaries: set[str] = set()
+
+
+def reset_warnings() -> None:
+    """Forget which missing binaries were reported; each is reported again once."""
+    _warned_binaries.clear()
 
 
 def _warn_missing_binaries() -> None:
@@ -2439,420 +261,40 @@ def _warn_missing_binaries() -> None:
         binary = resolve_binary(name)
         if binary is None:
             _warned_binaries.add(name)
-            expected_location = "in tools/bin or PATH"
-            print(
-                f"{C.ORANGE}warning: {name} not found {expected_location}; {why} — "
-                f"run `just install` to provision it{C.RESET}",
-                file=sys.stderr,
-            )
+            msgs.warn(msgs.BINARY_MISSING, name=name, user=why)
 
 
-def _session_mcp_host(cfg, telemetry):
-    if getattr(cfg, "mcp", None) is None or not getattr(cfg.mcp, "servers", ()):
-        return None
-    from .mcp.host import MCPHost
-
-    return MCPHost(cfg.mcp, telemetry=telemetry)
-
-
-async def _close_session_mcp_host(state: dict) -> None:
-    host = state.get("mcp_host")
-    if host is not None:
-        await host.close()
-
-
-async def _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, before_len, loop) -> None:
-    """One main turn on the async loop. Runs the turn, syncs live-settings
-    deltas, persists new messages, then awaits auto-compaction. Owns cancellation
-    ENTIRELY: on ^C the turn Task is cancelled, and this handler — never the
-    caller — persists partial work and heals orphaned tool_calls, mirroring the
-    legacy blocking KeyboardInterrupt path, then re-raises so the job ends
-    cancelled.
-    """
-    try:
-        before_turn_sampling = _sampling_override_from_live_settings(state["settings"])
-        before_turn_model = _model_from_live_settings(state["settings"])
-        before_turn_provider = _provider_from_live_settings(state["settings"])
-        before_turn_lock = _live_bool_setting(
-            state["settings"], ("subagents", "lock_model"), cfg.lock_subagent_model
-        )
-        await runtime.run_turn_async(
-            turn_cfg,
-            state["system"],
-            state["messages"],
-            telemetry,
-            trace_override=bool(
-                settings.get_dotted(state["settings"], ("runtime", "trace"), cfg.trace)
-            ),
-            reasoning_effort_override=turn_cfg.reasoning_effort,
-            max_output_override=turn_cfg.max_output_tokens,
-            tool_registry=state["tool_registry"],
-            sampling=_sampling_for_turn(turn_cfg, prompt_spec, state["sampling_cli"]),
-            event_hooks=state.get("events"),
-            mcp_host=state.get("mcp_host"),
-        )
-        after_turn_sampling = _sampling_override_from_live_settings(state["settings"])
-        if after_turn_sampling != before_turn_sampling:
-            state["sampling_cli"] = after_turn_sampling
-        after_turn_model = _model_from_live_settings(state["settings"])
-        if after_turn_model != before_turn_model:
-            _sync_model_from_live_settings(state)
-        after_turn_provider = _provider_from_live_settings(state["settings"])
-        _sync_provider_delta_from_live_settings(state, before_turn_provider, after_turn_provider)
-        after_turn_lock = _live_bool_setting(
-            state["settings"], ("subagents", "lock_model"), cfg.lock_subagent_model
-        )
-        if after_turn_lock != before_turn_lock:
-            _sync_tool_registry_from_live_settings(cfg, state)
-        _sync_telemetry_from_live_settings(cfg, state, telemetry)
-        _replace_runtime_user_message(
-            state["messages"],
-            user_bundle.runtime_message,
-            user_bundle.history_message,
-            before_len,
-        )
-        _persist_turn_messages(cfg, state["messages"])
-        await _maybe_auto_compact_async(turn_cfg, state)
-    except asyncio.CancelledError:
-        cancel_event = _emit_repl_event(state, telemetry, "cancel", reason="cancelled")
-        if _event_results_changed_sampling(cancel_event.results):
-            state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
-        if _event_results_changed_model(cancel_event.results):
-            _sync_model_from_live_settings(state)
-        cancel_changed_keys = _event_result_changed_keys(cancel_event.results)
-        if _changed_provider_key(cancel_changed_keys):
-            _sync_provider_from_live_settings(state, cancel_changed_keys)
-        if _changed_lock_subagent_model_key(cancel_changed_keys):
-            _sync_tool_registry_from_live_settings(cfg, state)
-        _sync_telemetry_from_live_settings(cfg, state, telemetry)
-        if _turn_has_progress(state["messages"], user_bundle.runtime_message):
-            print(f"\n{C.ORANGE}(turn interrupted — partial work kept){C.RESET}")
-            _replace_runtime_user_message(
-                state["messages"],
-                user_bundle.runtime_message,
-                user_bundle.history_message,
-                before_len,
-            )
-            _persist_turn_messages(cfg, state["messages"])
-            M.append_mark(cfg.session_file, "turn_interrupted")
-            state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
-        else:
-            print(f"\n{C.ORANGE}(turn aborted){C.RESET}")
-            _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
-            M.append_mark(cfg.session_file, "turn_aborted")
-        raise
-    except Exception as e:  # noqa: BLE001
-        print(f"{C.ORANGE}error: {_error_text(e)}{C.RESET}")
-        if _turn_has_progress(state["messages"], user_bundle.runtime_message):
-            _replace_runtime_user_message(state["messages"], user_bundle.runtime_message,
-                                          user_bundle.history_message, before_len)
-            _persist_turn_messages(cfg, state["messages"])
-        else:
-            _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
-        M.append_mark(cfg.session_file, f"error: {_error_text(e)}")
-
-
-async def _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop) -> None:
-    """Serialize main turns: one at a time, pulled FIFO from the input queue.
-    This is what keeps state['messages'] single-writer while the input line
-    stays live — the producer (`_repl_main`) never blocks on a turn."""
-    while True:
-        line = await queue.get()
-        try:
-            prompt_text, line_attachments = attach.split_repl_attachments(line)
-            input_event = _emit_repl_event(
-                state, telemetry, "input", text=prompt_text, attachments=line_attachments
-            )
-            if _event_results_changed_sampling(input_event.results):
-                state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
-            if _event_results_changed_model(input_event.results):
-                _sync_model_from_live_settings(state)
-            input_changed_keys = _event_result_changed_keys(input_event.results)
-            if _changed_provider_key(input_changed_keys):
-                _sync_provider_from_live_settings(state, input_changed_keys)
-            if _changed_lock_subagent_model_key(input_changed_keys):
-                _sync_tool_registry_from_live_settings(cfg, state)
-            _sync_telemetry_from_live_settings(cfg, state, telemetry)
-            try:
-                turn_cfg = _cfg_for_live_state(cfg, state)
-                user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
-            except ValueError as e:
-                # AttachmentError (a ValueError) or a login-gate routing error from
-                # re-resolving the live model: degrade to one friendly line, keep the REPL.
-                print(f"{C.ORANGE}error: {e}{C.RESET}")
-                continue
-            state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
-            before_len = len(state["messages"])
-            state["messages"].append(user_bundle.runtime_message)
-            _append_turn(cfg, user_bundle.history_message)
-            job = sup.spawn(
-                _do_turn(cfg, state, telemetry, prompt_spec, user_bundle, turn_cfg, before_len, loop),
-                kind="turn",
-                label=prompt_text[:40],
-            )
-            with contextlib.suppress(asyncio.CancelledError):
-                await job.task  # _do_turn persists partial work on cancel; keep looping
-        finally:
-            queue.task_done()
-
-
-def _is_turn_state_command(line: str) -> bool:
-    """Commands that clear/rotate/compact the live message list. Running one while
-    a turn appends to state["messages"] races the single-writer discipline the turn
-    queue enforces (empty the list mid-turn -> IndexError, dropped output, spurious
-    rollback marks) — refuse until the active turn ends."""
-    return line in ("/reset", "/wipe", "/compact") or line.startswith("/compact ")
-
-
-def _drain_queue(queue: asyncio.Queue) -> int:
-    """Drop every pending input line, balancing task_done() so the teardown
-    queue.join() still completes. Loop-thread only — asyncio.Queue is not
-    thread-safe, so this never runs from the _handle_command executor hop."""
-    dropped = 0
-    while True:
-        try:
-            queue.get_nowait()
-        except asyncio.QueueEmpty:
-            break
-        queue.task_done()
-        dropped += 1
-    return dropped
-
-
-async def _repl_main(cfg, state, telemetry, session, prompt_spec, banner: str = "") -> int:
-    """Non-blocking REPL: input, the active turn, and subagents all share ONE
-    event loop. The screen has three regions (scrollback, status, input); turn
-    output lands in the scrollback and never touches the input line. ^C cancels
-    the active turn instead of killing the process; new prompts queue behind a
-    running turn."""
-    loop = asyncio.get_running_loop()
-    loop.set_default_executor(ThreadPoolExecutor(max_workers=32, thread_name_prefix="js-dispatch"))
-    sup = supervisor.Supervisor(loop)
-    supervisor.set_current(sup)
-    queue: asyncio.Queue = asyncio.Queue()
-    consumer = loop.create_task(
-        _turn_consumer(queue, sup, cfg, state, telemetry, prompt_spec, loop)
-    )
-
-    async def on_line(line: str) -> None:
-        if not line:
-            return
-        if line in ("/flush", "/cancel queued"):
-            # Drop pending input without touching the active turn. Handled
-            # here (not in _handle_command) because the queue is loop-owned
-            # and _handle_command runs on an executor thread.
-            flushed = _drain_queue(queue)
-            print(f"{C.ORANGE}(dropped {flushed} queued prompt{'s' if flushed != 1 else ''}){C.RESET}")
-            return
-        if _is_turn_state_command(line) and sup.turn_active():
-            print(f"{C.ORANGE}(a turn is running — {line.split()[0]} would clobber its context; ^C to cancel it, or wait){C.RESET}")
-            return
-        handled = await loop.run_in_executor(None, _handle_command, line, state, cfg)
-        if handled:
-            _sync_telemetry_from_live_settings(cfg, state, telemetry)
-            if not state["running"]:
-                app.exit()
-            return
-        if (sink := _transcript_sink(telemetry)) is not None:
-            sink.write_user(line)
-        queue.put_nowait(line)
-        if sup.turn_active() or queue.qsize() > 1:
-            print(f"{C.GREY}(queued — {queue.qsize()} ahead){C.RESET}")
-
-    def on_interrupt() -> None:
-        # ^C cancels the active turn AND drops anything queued behind it —
-        # otherwise the queue keeps draining prompts the operator meant to
-        # abort. The drain-on-quit path (EOF) stays intact.
-        if sup.turn_active():
-            n = sup.cancel_kind("turn")
-            print(f"{C.ORANGE}(cancelling {n} turn){C.RESET}")
-        flushed = _drain_queue(queue)
-        if flushed:
-            print(f"{C.ORANGE}(dropped {flushed} queued prompt{'s' if flushed != 1 else ''}){C.RESET}")
-
-    def on_eof() -> None:
-        state["running"] = False
-
-    app, scrollback = screen.build_app(
-        prompt=f"{C.YELLOW}LO> {C.RESET}",
-        history=session.history,
-        completer=session.completer,
-        on_line=on_line,
-        on_interrupt=on_interrupt,
-        on_eof=on_eof,
-    )
-    try:
-        with screen.capture_stdio(loop, scrollback, app):
-            if banner:
-                print(banner)
-            await app.run_async()
-    finally:
-        supervisor.set_current(None)
-        # Graceful quit (EOF / exit): let queued and in-flight turns finish
-        # before teardown so submitted work isn't silently dropped. To abandon a
-        # long turn, cancel it with ^C first, then quit.
-        if not consumer.done() and (sup.turn_active() or not queue.empty()):
-            with contextlib.suppress(Exception):
-                await queue.join()
-        consumer.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await consumer
-        for job in sup.jobs():  # backstop: cancel any straggler
-            job.task.cancel()
-        await _close_session_mcp_host(state)
-    return 0
-
-
-# --------------------------------------------------------------------------
-# --printonly: dry-run dump of what would be sent to the model. NEVER errors —
-# every step degrades to a warning and keeps going (that is the whole point).
-# --------------------------------------------------------------------------
-
-_PRINTONLY_KNOWN = "tpeib"  # a = all of these; s/f dropped (PATH slot decides file vs stdout)
-_PRINTONLY_TITLES = {
-    "t": "TOOLS",
-    "p": "PROMPT (raw)",
-    "e": "PROMPT (env-expanded)",
-    "i": "PROMPT (inlines-expanded)",
-    "b": "BENCHMARKS",
-}
-
-
-def _printonly_slots(spec: str) -> tuple[str, int | None, str | None]:
-    """Parse ``LETTERS[:COUNT][:PATH]``. Positional slots; an empty slot skips.
-    ``p::/tmp/x.md`` -> letters 'p', no count, path '/tmp/x.md'. Never raises."""
-    parts = (spec or "").split(":", 2)
-    letters = parts[0].strip()
-    count: int | None = None
-    if len(parts) >= 2 and parts[1].strip():
-        try:
-            n = int(parts[1].strip())
-            count = n if n >= 0 else None
-        except ValueError:
-            print(f"js: --printonly ignoring non-numeric count {parts[1]!r}", file=sys.stderr)
-    path = parts[2].strip() if len(parts) >= 3 and parts[2].strip() else None
-    return letters, count, path
-
-
-def _printonly_letters(letters: str) -> list[str]:
-    """Resolve the letter cluster to an ordered, de-duplicated section list.
-    'a' means everything; unknown letters warn and skip; nothing valid -> all."""
-    if "a" in letters:
-        return list(_PRINTONLY_KNOWN)
-    chosen: list[str] = []
-    for ch in letters:
-        if ch in _PRINTONLY_KNOWN:
-            if ch not in chosen:
-                chosen.append(ch)
-        elif ch == "o":
-            print("js: --printonly letter 'o' is parked (unimplemented); skipping", file=sys.stderr)
-        else:
-            print(f"js: --printonly unknown letter {ch!r}; skipping", file=sys.stderr)
-    return chosen or list(_PRINTONLY_KNOWN)
-
-
-def _raw_configured_spec(cfg):
-    """The assembled prompt spec BEFORE inline-directive expansion — what
-    load_configured_prompt_spec builds, minus the expansion pass."""
-    roots = tuple(getattr(cfg, "prompt_roots", ()))
-    if len(roots) >= 3:
-        return P.load_agent_prompt_spec(
-            cfg.agent_id, repo_prompts_root=roots[0], global_agents_root=roots[1],
-            project_agents_root=roots[2], agents_files=getattr(cfg, "agents_files", ()),
-        )
-    return P.load_prompt_spec(cfg.prompts_dir)
-
-
-def _printonly_run(args, cli_agent, presets) -> int:
-    letters, count, path = _printonly_slots(args.printonly)
-    sections = _printonly_letters(letters)
-
-    try:
-        cfg = _cfg_from_env_compat(
-            args.session, save_session=False, extras=args.extras, agent_id=cli_agent,
-            ignore_local_config=args.ignore_local, ignore_global_config=args.ignore_global,
-            presets=presets,
-        )
-    except Exception as e:  # noqa: BLE001 — printonly never errors
-        print(f"js: --printonly could not build config: {type(e).__name__}: {e}", file=sys.stderr)
-        return 0
-
-    try:
-        raw_spec = _raw_configured_spec(cfg)
-    except Exception as e:  # noqa: BLE001
-        print(f"js: --printonly could not load prompt: {type(e).__name__}: {e}", file=sys.stderr)
-        raw_spec = None
-
-    allow_code = bool(getattr(cfg, "allow_inline_code", True))
-    timeout_s = int(getattr(cfg, "inline_code_timeout_s", 300))
-    system = raw_spec.system if raw_spec is not None else ""
-    selectors = raw_spec.tool_selectors if raw_spec is not None else ()
-
-    def _tools() -> str:
-        specs = _registry_for(cfg).select(selectors).openai_specs()
-        return json.dumps(specs, indent=2, ensure_ascii=False)
-
-    def _bench() -> str:
-        benches = P.load_benchmarks(P.resolve_agent_prompt_dir(cfg))
-        if not benches:
-            return "(no NN-benchmark.md files)"
-        blocks = []
-        for bm in benches:
-            body = expand_prompt(
-                bm.prompt,
-                allow_code=allow_code,
-                timeout_s=timeout_s,
-                max_output_bytes=cfg.max_bash_output_bytes,
-                on_error="warn",
-            )
-            blocks.append(f"# bench {bm.name}\n{body}")
-        return "\n\n".join(blocks)
-
-    builders = {
-        "t": _tools,
-        "p": lambda: system,
-        "e": lambda: expand_prompt(
-            system,
-            allow_code=False,
-            max_output_bytes=cfg.max_bash_output_bytes,
-            on_error="warn",
-        ),
-        "i": lambda: expand_prompt(
-            system,
-            allow_code=allow_code,
-            timeout_s=timeout_s,
-            max_output_bytes=cfg.max_bash_output_bytes,
-            on_error="warn",
-        ),
-        "b": _bench,
-    }
-
-    chunks: list[str] = []
-    for ch in sections:
-        try:
-            body = builders[ch]()
-        except Exception as e:  # noqa: BLE001 — a bad section degrades, never kills the run
-            print(f"js: --printonly section {ch!r} degraded: {type(e).__name__}: {e}", file=sys.stderr)
-            body = f"(section {_PRINTONLY_TITLES[ch]} unavailable: {type(e).__name__}: {e})"
-        chunks.append(f"===== {_PRINTONLY_TITLES[ch]} =====\n{body}" if len(sections) > 1 else body)
-
-    text = "\n\n".join(chunks)
-    if count is not None:
-        text = "\n".join(text.splitlines()[:count])
-
-    if path:
-        try:
-            Path(path).expanduser().write_text(text + "\n", encoding="utf-8")
-            return 0
-        except OSError as e:
-            print(f"js: --printonly could not write {path}: {e}; printing to stdout instead", file=sys.stderr)
-    print(text)
-    return 0
-
-
-@_session_scope
 def main(argv: list[str] | None = None) -> int:
-    dispatch_argv = argv if argv is not None else sys.argv[1:]
+    try:
+        code = _main(argv)
+    except snippets.SnippetError as exc:
+        msgs.warn(msgs.FAILED, error=exc)
+        code = 2
+    pending = dict(repl.pending_switch)
+    repl.pending_switch.clear()
+    if pending:
+        repl.exec_session(pending["target"])
+    return code
+
+
+@session_catalog.session_scope
+def _main(argv: list[str] | None = None) -> int:
+    try:
+        dispatch_argv = configure_home(list(argv if argv is not None else sys.argv[1:]))
+    except ValueError as exc:
+        msgs.warn(msgs.FAILED, error=exc)
+        return 2
+    display_mod.blocking_stdio()
+    # Before anything reads or writes ~/.js: move the old locations in, once,
+    # then make sure every directory of the layout is there.
+    _home.migrate_once()
+    with contextlib.suppress(OSError):
+        _paths.ensure_home()
+    try:
+        _home.sweep_tmp()
+    except (OSError, ValueError) as exc:
+        msgs.warn(msgs.FAILED, error=exc)
+        return 2
     # Handle login/logout before argparse so they don't require a valid agent/config.
     # None of them take -C, so the cwd is already final and .env can load here;
     # otherwise `js --login x` and `js --login=x` (argparse path) would disagree.
@@ -2860,231 +302,262 @@ def main(argv: list[str] | None = None) -> int:
         "--login", "login", "--logout", "logout", "--models-edit", "models-edit"
     ):
         dotenv.load()
-    if dispatch_argv and dispatch_argv[0] in ("--login", "login"):
+    if dispatch_argv and dispatch_argv[0] in ("--login", "login") and not any(
+        flag in dispatch_argv for flag in ("--json", "--json-stream")
+    ):
         from . import login_cli
         return login_cli.main(dispatch_argv[1:])
-    if dispatch_argv and dispatch_argv[0] in ("--logout", "logout"):
+    if dispatch_argv and dispatch_argv[0] in ("--logout", "logout") and not any(
+        flag in dispatch_argv for flag in ("--json", "--json-stream")
+    ):
         from . import login_cli
         return login_cli.main(["logout"] + dispatch_argv[1:])
     if dispatch_argv and dispatch_argv[0] in ("--models-edit", "models-edit"):
         from . import login_cli
         return login_cli.main(["models-edit"] + dispatch_argv[1:])
 
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("-h", "--help", action=_ShortHelpAction, nargs=0, help="show the short usage guide and exit")
-    parser.add_argument("--help-full", action="help", help="show the complete option reference and exit")
-    parser.add_argument("--login", metavar="PROVIDER", nargs="?", const="", help="interactive provider login (omit provider for list)")
-    parser.add_argument("--logout", metavar="PROVIDER", help="remove a saved provider login")
-    parser.add_argument("-p", "--prompt", nargs="?", const="-", help="run one prompt and print the final answer; reads stdin when value is omitted or '-'")
-    parser.add_argument("-f", "--file", dest="files", action="append", default=[], metavar="PATH", help="attach a file/image to a one-shot prompt; repeatable; '-' reads stdin bytes")
-    parser.add_argument("-a", "--agent", help="internal agent id; sessions live in platform data sessions/<agent>, runtime state in platform data state/<agent>")
-    parser.add_argument("-m", "--model", help="override configured/env model for this session or prompt")
-    parser.add_argument("-u", "--url", dest="url", metavar="SPEC",
-                        help="reach an endpoint with no saved login in one string: "
-                             "model[:api-key][[shape]][[effort]]@url. Shape is openai "
-                             "(default), responses, or anthropic; effort is the usual "
-                             "off..max ladder; the key defaults to a dummy. "
-                             "e.g. qwen27b@http://foo/v1  |  "
-                             "claude-sonnet-5:sk-foo[anthropic][max]@http://localhost:8317. "
-                             "Desugars to --extra model.id/provider.id/provider.base_url/"
-                             "provider.api_key, so an explicit --extra still wins.")
-    parser.add_argument("-C", dest="cd", metavar="DIR", help="run as if launched from DIR (like git -C): binds the working directory for every mode (-p, REPL, --commit, ...). DIR must exist.")
-    parser.add_argument("-d", "--debug", action="store_true", help="in prompt and --bench modes, stream the concise per-turn diagnostics (run header, tool-call lines, per-call timing) and the answer live to the terminal; the full request trace still goes only to the debug autolog file")
-    parser.add_argument("--debug-file", dest="debug_file", metavar="PATH", help="also write the full byte-honest request trace (unclipped system prompt, full tool-schema JSON with descriptions, the messages sent each call, and per-call timings) to PATH; the clean final answer still prints to stdout. The same trace is always autologged under logs/<agent>/<session>.log (runtime.debug_autolog)")
-    session_group = parser.add_mutually_exclusive_group()
-    session_group.add_argument("-s", "--session", help="create or resume a named session under platform data sessions/<agent>")
-    session_group.add_argument("--session-key", metavar="KEY", help="derive a stable session name from agent, cwd, and caller key")
-    parser.add_argument("-n", "--no-save", action="store_true", help="expensive throwaway prompt/pipe run: do not save; resume is unavailable and the next run must re-read context")
-    parser.add_argument("-q", "--quiet", action="store_true", help="suppress the 'Continue: ...' resume hint after a one-shot prompt")
-    parser.add_argument("-r", "--reasoning", help="thinking effort: off|minimal|low|medium|high|xhigh|max (off disables thinking); any other value is rejected")
-    parser.add_argument("--max-out", dest="max_out", type=int, help="max output tokens per call")
-    parser.add_argument("--bench", metavar="AGENT", help="benchmark mode: run AGENT's NN-benchmark.md turns each on a clean slate (no session), measuring TTFT/tok-s/turn-time. Pair with --stats-json/--stats-csv.")
-    parser.add_argument("--stats-json", dest="stats_json", metavar="PATH", help="write per-turn stats (ttft, tok/s, turn time, tokens) to PATH as JSON")
-    parser.add_argument("--stats-csv", dest="stats_csv", metavar="PATH", help="write per-turn stats to PATH as CSV")
-    parser.add_argument("--blocking", action="store_true", help="run the legacy blocking REPL: input waits for the turn to finish, ^C exits. The default runs one async event loop so input stays live while a turn streams and subagents run; ^C cancels the active turn.")
-    parser.add_argument("--tui", action="store_true", help="run the interactive REPL as a Textual cockpit; renders assistant Markdown in-pane")
-    parser.add_argument("--extra", dest="extras", action="append", default=[], metavar="KEY=VALUE",
-                        help="set a dotted config key for this run, e.g. --extra limits.task_max_depth=3. "
-                             "May be repeated. Wins over env and all config files.")
-    parser.add_argument("--preset", dest="presets", action="append", default=[], metavar="NAME[,NAME...]",
-                        help="layer jsrc.<name> preset files on top of the base config, in order "
-                             "(last wins). Comma-list and/or repeatable: --preset fast,debug. Looks for "
-                             "jsrc.<name> beside the global jsrc and in project .js/. Still below env/--extra.")
-    parser.add_argument("--ignore-local", action="store_true", help="ignore project .js/jsrc and .js/jsrc.local")
-    parser.add_argument("--ignore-global", action="store_true", help="ignore the platform jsrc")
-    parser.add_argument("--migrate-config", action="store_true", help="one-shot: convert a legacy config.toml to jsrc, then exit")
-    parser.add_argument("--list", action="store_true", help="list saved sessions without loading config or contacting a provider")
-    parser.add_argument("--last", action="store_true", help="resume the most recently used session for this agent")
-    parser.add_argument("--json", action="store_true", help="with --list, print compact JSON objects one per line")
-    parser.add_argument("--providers-json", action="store_true", help="print provider registry as JSON for external pickers")
-    parser.add_argument("--logins-json", action="store_true", help="print saved logins as JSON for external pickers")
-    parser.add_argument("--models-json", nargs="?", const="", metavar="PROVIDER", help="print cached/live models for provider as JSON")
-    parser.add_argument("--list-models", nargs="?", const="", metavar="PROVIDER", help="print human-readable models for provider and exact --model values to pass")
-    parser.add_argument("--refresh-model-catalog", action="store_true", help="force-refresh js's local models.dev catalog now")
-    parser.add_argument("--commit", action="store_true", help="run the built-in commit agent against target dir; auto-inits a missing repo (default: cwd)")
-    parser.add_argument("--compact", metavar="SESSION", help="offline compact an existing session id/path append-only")
-    parser.add_argument("--im-a-pussy", dest="im_a_pussy", action="store_true",
-                        help="opt OUT of inline-code execution for this run: !{sh|python|c|node ...} directives "
-                             "and ```!lang fences are left literal instead of running. Inline code runs by "
-                             "default (set runtime.allow_inline_code off / JS_ALLOW_INLINE_CODE=0 to make it "
-                             "permanent). {{VAR}} env expansion and !{env}/!{file} are always on regardless.")
-    parser.add_argument("--printonly", dest="printonly", metavar="LETTERS[:COUNT][:PATH]", nargs="?", const="a",
-                        help="dry run: assemble what would be sent and print it instead of calling the model, "
-                             "then exit. LETTERS pick sections: t=tools p=prompt e=env-expanded i=inlines-expanded "
-                             "b=benchmark a=everything (default a). Optional :COUNT caps output lines; optional "
-                             ":PATH writes to a file instead of stdout (empty slot skips, e.g. p::/tmp/x.md). "
-                             "Never errors — unknown letters/unwritable paths degrade with a warning.")
-    parser.add_argument("target", nargs="?", help="target path for built-in commit mode")
-    args = parser.parse_args(argv)
+    parser = command_line.parser()
+    _refuse_glued_short_options(parser, dispatch_argv)
+    _validate_output_argv(parser, dispatch_argv)
+    args = parser.parse_args(dispatch_argv)
+    _validate_output_flags(parser, args)
+    if args.last_prompt is not None:
+        if args.prompt is not None:
+            parser.error(msgs.LAST_PROMPT_WITH_PROMPT.text())
+        args.last, args.prompt = True, args.last_prompt
+    if args.target is not None and not args.commit:
+        parser.error(msgs.UNEXPECTED_ARGUMENT.text(word=args.target))
+    if args.bare and args.agent is not None:
+        parser.error(msgs.BARE_WITH_AGENT.text())
+    if args.loop is not None:
+        try:
+            loop_settings = run_settings(Path(args.cd).expanduser() if args.cd else None,
+                                         sources=_invocation_sources(args))
+            return loop_controller.run(dispatch_argv, args.loop, bench=args.bench, prompt=args.prompt,
+                                       settings=loop_settings)
+        except (ValueError, OSError) as exc:
+            parser.error(str(exc))
+    if args.bare:
+        args.agent = 'slim'
+    options = RunOptions(
+        system_prompt_file=args.system_prompt_file, system_prompt=args.system_prompt,
+        append_system_prompt=tuple(args.append_system_prompt), you_are=args.you_are,
+        no_env=args.no_env or args.bare, chat=args.chat, agent=args.agent,
+        no_agents_md=args.no_agents_md, no_skills=args.no_skills or args.bare,
+        no_mcp=args.no_mcp or args.bare, no_tools=args.no_tools, tools=args.tools,
+        pi=args.pi, pi_strict=args.pi_strict,
+    )
+    try:
+        options.selectors(())
+        with invocation(options):
+            if _json_run_requested(args):
+                return headless.json_run(lambda: _run_args(args, dispatch_argv), stream=args.json_stream)
+            return _run_args(args, dispatch_argv)
+    except (ValueError, OSError) as exc:
+        msgs.warn(msgs.FAILED, error=exc)
+        return 2
+
+
+_NEGATIVE_NUMBER = re.compile(r"-\d+|-\d*\.\d+")
+
+
+def _refuse_glued_short_options(parser: argparse.ArgumentParser, argv: list[str]) -> None:
+    """Exit 2 on a single-dash word that is not a defined option. argparse reads
+    one as the short option its first letters name, with the rest glued on as
+    the value: `-sysf FILE` is `-s ysf`, a session. Boolean short flags may
+    cluster (`-qn`); a word with a value-taking letter in it is refused."""
+    known = parser._option_string_actions
+    for token in argv:
+        if token == "--":
+            break
+        name = token.partition("=")[0]
+        if (not token.startswith("-") or token.startswith("--") or len(token) < 2
+                or " " in token or name in known or _NEGATIVE_NUMBER.fullmatch(token)):
+            continue
+        letters = [known.get("-" + letter) for letter in name[1:]]
+        if letters and all(action is not None and action.nargs == 0 for action in letters):
+            continue
+        parser.error(msgs.UNKNOWN_OPTION.text(option=token))
+
+
+def _validate_output_argv(parser: argparse.ArgumentParser, argv: list[str]) -> None:
+    flags = {word.partition("=")[0] for word in argv[:argv.index("--") if "--" in argv else len(argv)]}
+    if {"--json", "--json-stream"} <= flags:
+        parser.error(msgs.JSON_FLAGS_EXCLUSIVE.words())
+    if flags & {"--json", "--json-stream"}:
+        for command in ("--help", "-h", "--help-full"):
+            if command in flags:
+                error = msgs.JSON_UNSUPPORTED.words(mode="--json/--json-stream", command=command)
+                parser.error(error)
+
+
+def _validate_output_flags(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    if args.json and args.json_stream:
+        parser.error(msgs.JSON_FLAGS_EXCLUSIVE.words())
+    for name in ("list_sessions", "list_providers", "list_logins"):
+        if getattr(args, name) and not args.json:
+            error = msgs.LIST_REQUIRES_JSON.words(command="--" + name.replace("_", "-"))
+            parser.error(error)
+    listings = ("list_sessions", "list_providers", "list_logins", "list_agents", "list_models", "verify")
+    for name in listings:
+        value = getattr(args, name)
+        if value is not None and value is not False and args.json_stream:
+            error = msgs.JSON_UNSUPPORTED.words(mode="--json-stream", command="--" + name.replace("_", "-"))
+            parser.error(error)
+    if args.json or args.json_stream:
+        for name in ("commit", "compact", "login", "logout", "migrate_config", "refresh_model_catalog"):
+            value = getattr(args, name)
+            if value is not None and value is not False:
+                error = msgs.JSON_UNSUPPORTED.words(mode="--json-stream" if args.json_stream else "--json", command="--" + name.replace("_", "-"))
+                parser.error(error)
+
+
+def _json_run_requested(args: argparse.Namespace) -> bool:
+    return (args.json or args.json_stream) and not any(
+        getattr(args, name) is not None and getattr(args, name) is not False
+        for name in ("list_sessions", "list_providers", "list_logins", "list_agents", "list_models", "verify")
+    )
+
+
+@dataclass(frozen=True)
+class Setup:
+    """What the command line settles before a mode runs: the setting sources
+    the run reads, and the --agent it names once that is validated."""
+    sources: InvocationSources
+    agent: str | None = None
+
+
+def _setup(args: argparse.Namespace, dispatch_argv: list[str]) -> Setup | int:
+    """Before any mode: the setting sources with -u and the setting flags in
+    them, the session a bare --session picks, .env, and the -C jail. An exit
+    code when one of them stops the run."""
+    session_catalog.session_leases.start = {"mode": None, "command": ["js", *dispatch_argv]}
+    sources = _invocation_sources(args)
     if args.url:
-        # Desugar before anything reads args.extras. Prepended, not appended, so
+        # Desugar before anything reads the extras. Prepended, not appended, so
         # an explicit --extra on the same command line still overrides a field
         # the spec filled in.
         try:
-            args.extras = endpoint_uri.parse(args.url).as_settings() + list(args.extras)
+            endpoint_settings = run_settings(Path(args.cd).expanduser() if args.cd else None,
+                                             sources=sources)
+            endpoint = endpoint_uri.parse(args.url, settings=endpoint_settings, env=os.environ)
+            sources = replace(sources, extras=(*endpoint.as_settings(), *sources.extras))
         except endpoint_uri.EndpointSpecError as exc:
-            print(f"{C.ORANGE}error: -u {exc}{C.RESET}", file=sys.stderr)
+            msgs.warn(msgs.BAD_URL_SPEC, error=exc)
             return 2
-    presets = [name for spec in args.presets for name in spec.split(",") if name.strip()]
-    if args.cd:
-        cd_target = Path(args.cd).expanduser()
-        if not cd_target.is_dir():
-            print(f"{C.ORANGE}error: -C target is not a directory: {cd_target}{C.RESET}", file=sys.stderr)
+    else:
+        # The env layer reads a JS_BASE_URL in the -u form; one it cannot
+        # read, or one another JS_ variable contradicts, stops the run here.
+        try:
+            endpoint_uri.from_env(os.environ)
+        except endpoint_uri.EndpointSpecError as exc:
+            msgs.warn(msgs.BAD_BASE_URL, error=exc)
             return 2
-        os.chdir(cd_target)
-        # DEFAULT_CONTEXT is built at import (before this chdir), so its cwd is
-        # stale; rebind it so -p/REPL turns (which fall back to it) run in DIR.
-        runtime.T.DEFAULT_CONTEXT.cwd = Path.cwd()
-    # Fill unset env names from .env, cwd upward, then ~/.config/js/.env. The
-    # real environment always wins. `just run` already did this via the
-    # justfile's dotenv-load; this gives a bare `js` on PATH the same keys.
-    dotenv.load()
-    if args.json and not args.list:
-        print(f"{C.ORANGE}error: --json only works with --list{C.RESET}", file=sys.stderr)
-        return 2
-    if args.list:
-        ambiguous = any(
-            (
-                args.prompt is not None,
-                args.session is not None,
-                args.session_key is not None,
-                args.agent is not None,
-                args.commit,
-                args.compact is not None,
-                args.bench is not None,
-                args.target is not None,
-            )
-        )
-        if ambiguous:
-            print(f"{C.ORANGE}error: --list cannot be combined with run or session options{C.RESET}", file=sys.stderr)
-            return 2
-        return _print_session_list(json_lines=args.json)
-    if args.last:
-        if args.session is not None:
-            print(f"{C.ORANGE}error: --last cannot be combined with --session{C.RESET}", file=sys.stderr)
+    flag_extras, flag_error = _setting_flag_extras(args)
+    if flag_error is not None:
+        return flag_error
+    # After --extra, so a flag beats an --extra naming the same setting.
+    sources = replace(sources, extras=(*sources.extras, *flag_extras))
+    set_invocation(sources)
+    if args.session == "":
+        # A bare --session opens the picker; the chosen session is resumed in
+        # its own directory and agent, jailed there when it started under -C.
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            msgs.warn(msgs.SESSIONS_NEEDS_TERMINAL)
             return 2
         try:
-            last_agent = validate_agent_id(
-                args.agent or ("commit" if args.commit else None) or os.environ.get("JS_AGENT", "defaultagent")
-            )
+            choice = session_picker.pick_session(Path.cwd())
+            target = session_picker.session_target(choice) if choice is not None else None
+        except Exception as exc:  # noqa: BLE001
+            msgs.warn(msgs.FAILED, error=f"{type(exc).__name__}: {exc}")
+            return 1
+        if target is None:
+            return 0
+        session_picker.enter_session_dir(target)
+        args.session = str(target.path)
+        if target.agent:
+            args.agent = target.agent
+        if target.jailed and target.cwd and not args.cd:
+            args.cd = target.cwd
+    # Fill unset env names from .env, the run's directory (DIR under -C)
+    # upward, then ~/.js/.env. The real environment always wins. `just run`
+    # already did this via the justfile's dotenv-load; this gives a bare `js`
+    # on PATH the same keys. Every setting source is loaded before the jail
+    # below is checked and built.
+    dotenv.load(Path(args.cd).expanduser() if args.cd else None)
+    if args.cd:
+        # -C is the jail: every tool that starts a process runs under
+        # bubblewrap, and the file tools stay inside DIR and the bound paths.
+        # The self-test builds the jail this run uses: its JAIL_BIND and JAIL_HIDE.
+        try:
+            jail_settings = run_settings(Path(args.cd).expanduser())
+        except ValueError as exc:
+            msgs.warn(msgs.FAILED, error=exc)
+            return 2
+        try:
+            jailed = _jail.enter(Path(args.cd).expanduser(),
+                                 setting=settings.knob(jail_settings, "JAIL_BIND") or (),
+                                 hide=settings.knob(jail_settings, "JAIL_HIDE"))
+        except _jail.JailError as exc:
+            msgs.warn(msgs.JAIL_REFUSED, error=exc)
+            return 2
+        os.chdir(jailed.root)
+        # STOCK_CONTEXT is built at import (before this chdir), so its cwd is
+        # stale; rebind it so -p/REPL turns (which fall back to it) run in DIR.
+        runtime.T.STOCK_CONTEXT.cwd = Path.cwd()
+    return Setup(sources)
+
+
+def _settle_session(args: argparse.Namespace, setup: Setup) -> int | None:
+    """--last and --session-key name the session; the run takes the chat mode
+    a session was saved with and warns about a --preset nothing matches. An
+    exit code when the session cannot be named."""
+    sources = setup.sources
+    if args.last:
+        if args.session is not None:
+            msgs.warn(msgs.LAST_WITH_SESSION)
+            return 2
+        try:
+            last_agent = _invocation_agent(args, sources)
         except ValueError as e:
-            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+            msgs.warn(msgs.FAILED, error=e)
             return 2
         resolved_last = _latest_session_name(last_agent)
         if resolved_last is None:
-            print(f"{C.ORANGE}error: no previous session for agent {last_agent}{C.RESET}", file=sys.stderr)
+            msgs.warn(msgs.NO_PREVIOUS_SESSION, agent=last_agent)
             return 2
         args.session = resolved_last
     if args.session_key is not None:
         try:
-            mode_agent = "commit" if args.commit else None
-            effective_agent = validate_agent_id(
-                args.agent or mode_agent or os.environ.get("JS_AGENT", "defaultagent")
-            )
+            effective_agent = _invocation_agent(args, sources)
         except ValueError as e:
-            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+            msgs.warn(msgs.FAILED, error=e)
             return 2
         args.session = derive_session_name(effective_agent, Path.cwd(), args.session_key)
-    _session_leases.caller_key = args.session_key
-    if presets:
+    session_catalog.session_leases.caller_key = args.session_key
+    run_assembly.inherit_session_chat(args.session)
+    if sources.presets:
         # Resolve against the now-final cwd (after any -C). A name that matches no
         # file anywhere is almost certainly a typo — say so rather than no-op.
-        _warn_unmatched_presets(presets, ignore_local=args.ignore_local, ignore_global=args.ignore_global)
-    if args.login is not None:
-        from . import login_cli
-        return login_cli.main([args.login] if args.login else [])
-    if args.logout:
-        from . import login_cli
-        return login_cli.main(["logout", args.logout])
-    if args.providers_json:
-        return _print_json(_providers_json())
-    if args.logins_json:
-        return _print_json(_logins_json())
-    if args.models_json is not None:
-        try:
-            cfg = None
-            provider_arg = args.models_json or None
-            if provider_arg is None:
-                cfg = _cfg_from_env_compat(
-                    args.session,
-                    save_session=False,
-                    extras=args.extras,
-                    agent_id=args.agent,
-                    ignore_local_config=args.ignore_local,
-                    ignore_global_config=args.ignore_global,
-                )
-            return _print_json(_models_json(provider_arg, cfg))
-        except Exception as e:  # noqa: BLE001
-            print(json.dumps({"error": f"{type(e).__name__}: {e}"}, ensure_ascii=False))
-            return 1
-    if args.list_models is not None:
-        try:
-            cfg = None
-            provider_arg = args.list_models or None
-            if provider_arg is None:
-                cfg = _cfg_from_env_compat(
-                    args.session,
-                    save_session=False,
-                    extras=args.extras,
-                    agent_id=args.agent,
-                    ignore_local_config=args.ignore_local,
-                    ignore_global_config=args.ignore_global,
-                )
-            provider_ids = _list_models_provider_ids(provider_arg, cfg)
-            if not provider_ids:
-                print(f"{C.GREY}no providers logged in; run `js --login <provider>`{C.RESET}", file=sys.stderr)
-                return 0
-            for pid in provider_ids:
-                try:
-                    model_ids = _models_cached_or_live(pid, cfg)
-                except Exception as e:  # noqa: BLE001
-                    print(f"# {pid}: {type(e).__name__}: {e}", file=sys.stderr)
-                    continue
-                for model_id in model_ids:
-                    print(f"{pid}/{model_id}" if pid else model_id)
-            return 0
-        except Exception as e:  # noqa: BLE001
-            print(f"{C.ORANGE}error: {type(e).__name__}: {e}{C.RESET}", file=sys.stderr)
-            return 1
-    if args.refresh_model_catalog:
-        if not _force_refresh_model_catalog():
-            return 1
-        if (
-            args.prompt is None
-            and not args.commit
-            and args.compact is None
-            and args.target is None
-            and args.bench is None
-            and not args.migrate_config
-        ):
-            return 0
+        _warn_unmatched_presets(sources)
+    return None
+
+
+def _prepare_run(args: argparse.Namespace, setup: Setup) -> Setup | int:
+    """Past the listings, for a run: the flags that cannot go together, the
+    environment the run's tools read, the missing helper binaries, --agent
+    validated into the setup, and --lock. An exit code when one refuses."""
+    sources = setup.sources
     if args.debug and args.debug_file:
-        print(f"{C.ORANGE}error: choose either --debug or --debug-file, not both{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.DEBUG_FLAGS_EXCLUSIVE)
         return 2
     if args.im_a_pussy:
         # Inline code runs by default now; the opt-out flag turns it off for this
         # run via the same env knob the config layer reads.
-        os.environ["JS_ALLOW_INLINE_CODE"] = "0"
+        os.environ["JS_INLINE_CODE"] = "0"
+    if args.no_shell_history:
+        # envctx reads this; 0 drops its recent_shell block.
+        os.environ["ENVCTX_HIST"] = "0"
     # Past the machine-consumed introspection early-exits: this is a real run, so
     # surface any missing helper binary once (never crash, never block startup).
     _warn_missing_binaries()
@@ -3093,433 +566,117 @@ def main(argv: list[str] | None = None) -> int:
         try:
             cli_agent = validate_agent_id(args.agent)
         except ValueError as e:
-            print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
+            msgs.warn(msgs.FAILED, error=e)
             return 2
 
-    if args.printonly is not None:
-        return _printonly_run(args, cli_agent, presets)
+    if args.lock:
+        try:
+            agent_lock.acquire(args.bench and validate_agent_id(args.bench) or _invocation_agent(args, sources))
+        except (ValueError, agent_lock.Busy, OSError) as e:
+            msgs.warn(msgs.FAILED, error=e)
+            return 2
 
     selected_modes = [name for name, enabled in (("commit", args.commit), ("compact", args.compact)) if enabled]
     if len(selected_modes) > 1:
-        print(f"{C.ORANGE}error: choose only one built-in mode: --commit or --compact{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.MODES_EXCLUSIVE)
         return 2
     if args.files and selected_modes:
-        print(f"{C.ORANGE}error: -f/--file only works with prompt/pipe mode; use @path in the REPL{C.RESET}", file=sys.stderr)
+        msgs.warn(msgs.FILE_NEEDS_PROMPT_MODE)
         return 2
-    if args.tui and not sys.stdin.isatty():
-        print(f"{C.ORANGE}error: --tui requires an interactive terminal{C.RESET}", file=sys.stderr)
-        return 2
+    return replace(setup, agent=cli_agent)
 
+
+def _run_args(args: argparse.Namespace, dispatch_argv: list[str]) -> int:
+    """The mode picker: setup, then each mode in turn, the first named on the
+    command line running, then a -p run or the REPL."""
+    setup = _setup(args, dispatch_argv)
+    if isinstance(setup, int):
+        return setup
+    if args.verify is not None:
+        return verify.run_verify(args)
+    if args.list_sessions:
+        return listings.run_list_sessions(args)
+    if (code := _settle_session(args, setup)) is not None:
+        return code
+    if args.login is not None:
+        from . import login_cli
+        return login_cli.main([args.login] if args.login else [])
+    if args.logout:
+        from . import login_cli
+        return login_cli.main(["logout", args.logout])
+    if args.list_agents:
+        return listings.run_list_agents(args)
+    if args.list_providers:
+        return listings.print_json(listings.providers_json())
+    if args.list_logins:
+        return listings.print_json(listings.logins_json())
+    if args.list_models is not None:
+        return listings.run_list_models(args, lambda: run_assembly.from_env(
+            args.session, save_session=False, sources=setup.sources, agent_id=args.agent))
+    if args.refresh_model_catalog and (code := model_metadata.run_refresh_model_catalog(args)) is not None:
+        return code
+    setup = _prepare_run(args, setup)
+    if isinstance(setup, int):
+        return setup
     if args.bench:
-        if selected_modes or args.agent:
-            print(f"{C.ORANGE}error: --bench is its own mode; name the agent as --bench AGENT, not with --agent or a built-in mode{C.RESET}", file=sys.stderr)
-            return 2
-        return _run_bench(args.bench, model=args.model, reasoning=args.reasoning,
-                          maxout=args.max_out, quiet=args.quiet, extras=args.extras,
-                          ignore_local_config=args.ignore_local,
-                          ignore_global_config=args.ignore_global, presets=presets,
-                          stats_json=args.stats_json, stats_csv=args.stats_csv,
-                          debug=args.debug)
-
+        return bench.run_bench_mode(args, setup.sources)
     if args.compact:
-        return _run_compact_offline(args.compact, agent=cli_agent, focus=args.prompt or "", extras=args.extras, model=args.model)
-
+        return _compact(args, setup)
     if args.migrate_config:
-        return _run_migrate_config()
-
+        return migrate_config.run_migrate_config()
     if args.commit:
-        if args.agent:
-            print(f"{C.ORANGE}error: --commit always uses the built-in commit agent; omit --agent{C.RESET}", file=sys.stderr)
+        return _commit(args, setup)
+    if (code := _agent_bench(args, setup)) is not None:
+        return code
+    exchanges_only = (args.prompt is None and not args.files and sys.stdin.isatty()
+                      and _exchanges_are_the_prompt(args, setup.agent, setup.sources))
+    if args.prompt is not None or args.files or not sys.stdin.isatty() or exchanges_only:
+        return _run_headless(args, setup, exchanges_only=exchanges_only)
+    if args.json or args.json_stream:
+        msgs.warn(msgs.FAILED, error="--json/--json-stream requires -p, -f, a pipe, an agent run, or --bench")
+        return 2
+    return repl.start_repl(args, setup.sources, setup.agent)
+
+
+def _run_headless(args: argparse.Namespace, setup: Setup, *, exchanges_only: bool) -> int:
+    """One turn with no REPL: -p PROMPT, piped stdin as the prompt or beside it,
+    `-f -` attaching stdin, -f files alone as the prompt, or the agent's own
+    exchanges when they are the prompt."""
+    os.environ["JS_MODE"] = "headless"
+    stdin_attachment = None
+    if "-" in args.files:
+        if args.prompt in {None, "-"}:
+            msgs.warn(msgs.STDIN_TWICE)
             return 2
-        extra_context = None
-        if args.prompt is not None:
-            if args.prompt == "-":
-                extra_context = _read_stdin_if_piped()
-            else:
-                stdin_text = _read_stdin_if_piped()
-                extra_context = args.prompt if not stdin_text.strip() else f"{args.prompt.rstrip()}\n\n{stdin_text.strip()}"
-        return _run_commit(args.target, model=args.model, debug=args.debug, debug_file=args.debug_file,
-                           session=args.session, save=not args.no_save,
-                           reasoning=args.reasoning, maxout=args.max_out,
-                           extra_context=extra_context, extras=args.extras,
-                           ignore_local_config=args.ignore_local,
-                           ignore_global_config=args.ignore_global, presets=presets)
-
-    if args.files and args.prompt is None and sys.stdin.isatty():
-        print(f"{C.ORANGE}error: -f/--file requires -p/--prompt or piped prompt input; use @path in the REPL{C.RESET}", file=sys.stderr)
-        return 2
-
-    if args.prompt is not None or (not sys.stdin.isatty() and not args.tui):
-        os.environ["JS_MODE"] = "headless"
-        stdin_attachment = None
-        if "-" in args.files:
-            if args.prompt in {None, "-"}:
-                print(f"{C.ORANGE}error: stdin cannot be both the prompt and an attachment{C.RESET}", file=sys.stderr)
-                return 2
-            if sys.stdin.isatty():
-                print(f"{C.ORANGE}error: -f - requires piped stdin bytes{C.RESET}", file=sys.stderr)
-                return 2
-            stdin_attachment = _read_stdin_attachment_if_piped()
-            prompt = args.prompt or ""
-        elif args.prompt in {None, "-"}:
-            prompt = _read_stdin_if_piped()
-        elif sys.stdin.isatty():
-            prompt = args.prompt
-        else:
-            stdin_text = _read_stdin_if_piped()
-            prompt = args.prompt if not stdin_text.strip() else f"{args.prompt.rstrip()}\n\n{stdin_text.strip()}"
-        generated_session = (
-            not args.no_save
-            and args.session is None
-            and os.environ.get("JS_SESSION") is None
-        )
-        result = _run_prompt(prompt, model=args.model, debug=args.debug, debug_file=args.debug_file,
-                             agent=args.agent, session=args.session, save=not args.no_save,
-                             caller_key=args.session_key, announce_generated=generated_session,
-                             reasoning=args.reasoning, maxout=args.max_out,
-                             show_continue=not args.quiet,
-                             extras=args.extras,
-                             ignore_local_config=args.ignore_local,
-                             ignore_global_config=args.ignore_global,
-                             files=args.files,
-                             stdin_attachment=stdin_attachment,
-                             presets=presets,
-                             stats_json=args.stats_json, stats_csv=args.stats_csv)
-        if args.no_save:
-            print("session not saved; resume unavailable", file=sys.stderr)
-        return result
-
-    os.environ["JS_MODE"] = "repl"
-    try:
-        cfg = _cfg_from_env_compat(
-            args.session,
-            save_session=True,
-            extras=args.extras,
-            agent_id=cli_agent,
-            ignore_local_config=args.ignore_local,
-            ignore_global_config=args.ignore_global,
-            presets=presets,
-        )
-    except ValueError as e:
-        print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
-        return 2
-
-    # Resuming with no --model comes back on the model the session was using,
-    # not the config default. An explicit --model still wins. A remembered model
-    # that matches what config already resolved is left alone: applying it as an
-    # explicit override would put an otherwise fine launch through the
-    # login gate for a model it was going to use anyway.
-    if args.model is None:
-        remembered_model = last_session_model(cfg.session_file)
-        if remembered_model and remembered_model != cfg.model:
-            args.model = remembered_model
-            print(f"{C.GREY}(model: {remembered_model}){C.RESET}")
-
-    try:
-        prompt_spec = P.load_configured_prompt_spec(cfg)
-    except (FileNotFoundError, ValueError) as e:
-        print(f"{C.ORANGE}{_format_prompt_load_error(cfg, e)}{C.RESET}", file=sys.stderr)
-        return 2
-    system = prompt_spec.system
-    # A session sends the system prompt it was born with, byte for byte, for its
-    # whole life. Rebuilding it per launch puts a fresh clock and load average in
-    # front of an append-only history and breaks the shared prefix at byte zero.
-    # Genuine drift is reported to the model as a message at the end instead.
-    recorded_system = M.load_system_prompt(cfg.session_file)
-    system_drifted = recorded_system is not None and recorded_system != system
-    if recorded_system is not None:
-        system = recorded_system
-    active_registry = _registry_for(cfg).select(prompt_spec.tool_selectors)
-    try:
-        cfg = _apply_agent_model(cfg, prompt_spec, args.model)
-        cfg = _apply_agent_max_tokens(cfg, prompt_spec)
-        cfg = _resolve_cli_model_override(cfg, args.model)
-    except ValueError as e:
-        print(f"{C.ORANGE}error: {e}{C.RESET}", file=sys.stderr)
-        return 2
-
-    cfg.history_file.parent.mkdir(parents=True, exist_ok=True)
-    completer = replcomplete.JsCompleter(
-        setting_keys=[spec.key for spec in settings.REGISTRY],
-        names=lambda: sorted(set(providers.known_provider_ids()) | set(logins.load_logins())),
-        spell=replcomplete.hunspell_suggest,
-    )
-    session = PromptSession(
-        history=FileHistory(str(cfg.history_file)),
-        completer=completer,
-        complete_while_typing=False,  # Tab-triggered, never auto-pops
-        complete_style=CompleteStyle.MULTI_COLUMN,  # rotating menu, columned for the long command list
-        enable_suspend=True,  # ^Z restores terminal state and suspends; shell `fg` resumes
-    )
-
-    messages = M.load_messages(cfg.session_file)
-    if messages:
-        print(f"{C.GREY}(resumed: {len(messages)} prior messages){C.RESET}")
-    elif args.session is not None:
-        # Asked for a specific session and got nothing. Silence here reads as a
-        # successful resume, so an empty one has to say so.
-        print(f"{C.ORANGE}(empty session — nothing to resume: {cfg.session_file}){C.RESET}")
-    _activate_saved_session(cfg, caller_key=args.session_key, model=args.model)
-    M.append_mark(cfg.session_file, "session_start")
-    if recorded_system is None:
-        M.append_system_prompt(cfg.session_file, system)
-    elif system_drifted:
-        # The prompt on disk changed since this session started. The frozen one is
-        # still what gets sent; the model is told what moved rather than having the
-        # change appear silently in front of its history.
-        notice = {
-            "role": "user",
-            "content": (
-                "<js-reminder>The agent prompt files changed since this session started. "
-                "The original system prompt is still in effect for this conversation; "
-                "restart in a new session to pick up the new one.</js-reminder>"
-            ),
-        }
-        messages.append(notice)
-        _append_turn(cfg, notice)
-        print(f"{C.GREY}(agent prompt changed on disk — keeping this session's original){C.RESET}")
-
-    live_settings = copy.deepcopy(cfg.settings) if isinstance(cfg.settings, dict) else {}
-    if args.reasoning is not None:
-        reasoning_seed, effort_error = _validate_cli_reasoning(args.reasoning)
-        if effort_error is not None:
-            print(f"{C.ORANGE}error: --reasoning {args.reasoning}: {effort_error}{C.RESET}", file=sys.stderr)
+        if sys.stdin.isatty():
+            msgs.warn(msgs.STDIN_ATTACHMENT_NOT_PIPED)
             return 2
-        settings.set_dotted(live_settings, ("model", "reasoning_effort"), reasoning_seed)
-    if args.max_out is not None:
-        settings.set_dotted(live_settings, ("model", "max_output_tokens"), args.max_out)
-    elif (prompt_spec.max_output_tokens is not None
-          and settings.get_dotted(live_settings, ("model", "max_output_tokens"), None) is None):
-        # Agent default from 00-tools.yaml — seed the per-turn source of truth so
-        # it survives the _cfg_for_live_state rebuild. Config/env/--max-out win.
-        settings.set_dotted(live_settings, ("model", "max_output_tokens"), prompt_spec.max_output_tokens)
-    event_hooks = events.EventHooks()
-    event_hooks.set_dispatcher(
-        setcmd.EventCommandDispatcher(
-            settings=live_settings,
-            cwd=getattr(cfg, "project_dir", Path.cwd()),
-            events=event_hooks,
-        )
-    )
-    state = {
-        "running": True,
-        "messages": messages,
-        "system": system,
-        "model": args.model if args.model is not None else cfg.model,
-        # Where state["model"] came from, for the effective /set view. A --model
-        # flag never lands in the settings store, so record it here so /set can
-        # annotate `model.id = ... (live: --model flag)`.
-        "model_source": "--model flag" if args.model is not None else None,
-        "provider_id": cfg.provider_id,
-        "provider_base_url": cfg.provider_base_url,
-        "provider_api_key": cfg.provider_api_key,
-        "provider_headers": dict(getattr(cfg, "provider_headers", {}) or {}),
-        "settings": live_settings,
-        "prompt_spec": prompt_spec,
-        "events": event_hooks,
-        "tool_registry": active_registry,
-        "tool_selectors": prompt_spec.tool_selectors,
-        "sampling_cli": cfg.sampling_cli,
-        "compact_notified": False,
-        "compact_consecutive": 0,
-        "compact_incomplete_consecutive": 0,
-        "compact_paused": False,
-    }
-    telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
-    state["mcp_host"] = _session_mcp_host(cfg, telemetry)
-    # Attach the debug autolog sink before the first turn (all three REPL
-    # variants below share this telemetry object).
-    _sync_telemetry_from_live_settings(cfg, state, telemetry)
-
-    if args.tui:
-        with _transcript_stdio(telemetry):
-            print(BANNER.format(agent=cfg.agent_id, model=state["model"], prompt=cfg.prompts_dir, memory=cfg.session_file))
-        deps = tui.TuiDeps(
-            handle_command=_handle_command,
-            is_turn_state_command=_is_turn_state_command,
-            cfg_for_live_state=_cfg_for_live_state,
-            append_turn=_append_turn,
-            maybe_auto_compact=_maybe_auto_compact,
-            sync_telemetry_from_live_settings=_sync_telemetry_from_live_settings,
-            sync_sampling_from_live_settings=_sampling_override_from_live_settings,
-            sync_model_from_live_settings=_sync_model_from_live_settings,
-            sync_provider_from_live_settings=_sync_provider_from_live_settings,
-            sync_tool_registry_from_live_settings=_sync_tool_registry_from_live_settings,
-            event_results_changed_sampling=_event_results_changed_sampling,
-            event_results_changed_model=_event_results_changed_model,
-            event_result_changed_keys=_event_result_changed_keys,
-            changed_provider_key=_changed_provider_key,
-            changed_lock_subagent_model_key=_changed_lock_subagent_model_key,
-        )
-        return tui.run_tui_repl(cfg, state, telemetry, prompt_spec, deps)
-
-    transcript_stack = contextlib.ExitStack()
-    _enter_transcript_stdio(transcript_stack, telemetry)
-    banner = BANNER.format(agent=cfg.agent_id, model=state["model"], prompt=cfg.prompts_dir, memory=cfg.session_file)
-    if args.blocking:
-        print(banner)
+        stdin_attachment = _read_stdin_attachment_if_piped()
+        prompt = args.prompt or ""
+    elif exchanges_only:
+        prompt = None
+    elif args.prompt in {None, "-"}:
+        prompt = _read_stdin_if_piped()
+    elif sys.stdin.isatty():
+        prompt = args.prompt
     else:
-        try:
-            return model_client.run_owning_loop(
-                _repl_main(cfg, state, telemetry, session, prompt_spec, banner)
-            )
-        finally:
-            transcript_stack.close()
+        stdin_text = _read_stdin_if_piped()
+        prompt = args.prompt if not stdin_text.strip() else f"{args.prompt.rstrip()}\n\n{stdin_text.strip()}"
+    session_catalog.session_leases.start["mode"] = "-p" if args.prompt is not None or exchanges_only else "pipe"
+    result = prompt_run.run(prompt, model=args.model, debug=args.debug, debug_file=args.debug_file,
+                            agent=args.agent, session=args.session, save=not args.no_save,
+                            caller_key=args.session_key,
+                            reasoning=args.reasoning, maxout=args.max_out,
+                            show_continue=not args.quiet,
+                            sources=setup.sources,
+                            files=args.files,
+                            stdin_attachment=stdin_attachment,
+                            stats_json=args.stats_json, stats_csv=args.stats_csv,
+                            events=headless.active)
+    if args.no_save:
+        msgs.warn(msgs.NOT_SAVED_NO_RESUME)
+    return result
 
-    mcp_loop = asyncio.Runner()
-    interrupt_armed = False
-    while state["running"]:
-        try:
-            line = session.prompt(ANSI(f"{C.YELLOW}LO> {C.RESET}")).strip()
-            interrupt_armed = False
-        except KeyboardInterrupt:
-            # One stray ^C at the prompt should not end a session that took real
-            # work to build; the second one within the same idle stretch does.
-            if not interrupt_armed:
-                interrupt_armed = True
-                print(f"\n{C.GREY}(press ^C again to exit){C.RESET}")
-                continue
-            print()
-            break
-        except EOFError:
-            print()
-            break
-        if not line:
-            continue
-        if _handle_command(line, state, cfg):
-            _sync_telemetry_from_live_settings(cfg, state, telemetry)
-            continue
-        if (sink := _transcript_sink(telemetry)) is not None:
-            sink.write_user(line)
 
-        prompt_text, line_attachments = attach.split_repl_attachments(line)
-        input_event = _emit_repl_event(
-            state,
-            telemetry,
-            "input",
-            text=prompt_text,
-            attachments=line_attachments,
-        )
-        if _event_results_changed_sampling(input_event.results):
-            state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
-        if _event_results_changed_model(input_event.results):
-            _sync_model_from_live_settings(state)
-        input_changed_keys = _event_result_changed_keys(input_event.results)
-        if _changed_provider_key(input_changed_keys):
-            _sync_provider_from_live_settings(state, input_changed_keys)
-        if _changed_lock_subagent_model_key(input_changed_keys):
-            _sync_tool_registry_from_live_settings(cfg, state)
-        _sync_telemetry_from_live_settings(cfg, state, telemetry)
-        try:
-            turn_cfg = _cfg_for_live_state(cfg, state)
-            user_bundle = attach.build_user_message(prompt_text, line_attachments, turn_cfg)
-        except ValueError as e:
-            # AttachmentError (a ValueError) or a login-gate routing error from
-            # re-resolving the live model: degrade to one friendly line, keep the REPL.
-            print(f"{C.ORANGE}error: {e}{C.RESET}")
-            continue
-
-        state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
-        before_len = len(state["messages"])
-        state["messages"].append(user_bundle.runtime_message)
-        _append_turn(cfg, user_bundle.history_message)
-        try:
-            before_turn_sampling = _sampling_override_from_live_settings(state["settings"])
-            before_turn_model = _model_from_live_settings(state["settings"])
-            before_turn_provider = _provider_from_live_settings(state["settings"])
-            before_turn_lock = _live_bool_setting(
-                state["settings"],
-                ("subagents", "lock_model"),
-                cfg.lock_subagent_model,
-            )
-            runtime.run_turn(
-                turn_cfg,
-                state["system"],
-                state["messages"],
-                telemetry,
-                trace_override=bool(
-                    settings.get_dotted(state["settings"], ("runtime", "trace"), cfg.trace)
-                ),
-                reasoning_effort_override=turn_cfg.reasoning_effort,
-                max_output_override=turn_cfg.max_output_tokens,
-                tool_registry=state["tool_registry"],
-                sampling=_sampling_for_turn(turn_cfg, prompt_spec, state["sampling_cli"]),
-                event_hooks=state.get("events"),
-                mcp_host=state.get("mcp_host"),
-                loop_runner=mcp_loop,
-            )
-            after_turn_sampling = _sampling_override_from_live_settings(state["settings"])
-            if after_turn_sampling != before_turn_sampling:
-                state["sampling_cli"] = after_turn_sampling
-            after_turn_model = _model_from_live_settings(state["settings"])
-            if after_turn_model != before_turn_model:
-                _sync_model_from_live_settings(state)
-            after_turn_provider = _provider_from_live_settings(state["settings"])
-            _sync_provider_delta_from_live_settings(state, before_turn_provider, after_turn_provider)
-            after_turn_lock = _live_bool_setting(
-                state["settings"],
-                ("subagents", "lock_model"),
-                cfg.lock_subagent_model,
-            )
-            if after_turn_lock != before_turn_lock:
-                _sync_tool_registry_from_live_settings(cfg, state)
-            _sync_telemetry_from_live_settings(cfg, state, telemetry)
-            _replace_runtime_user_message(
-                state["messages"],
-                user_bundle.runtime_message,
-                user_bundle.history_message,
-                before_len,
-            )
-            _persist_turn_messages(cfg, state["messages"])
-            _maybe_auto_compact(turn_cfg, state)
-        except KeyboardInterrupt:
-            cancel_event = _emit_repl_event(state, telemetry, "cancel", reason="keyboard_interrupt")
-            if _event_results_changed_sampling(cancel_event.results):
-                state["sampling_cli"] = _sampling_override_from_live_settings(state["settings"])
-            if _event_results_changed_model(cancel_event.results):
-                _sync_model_from_live_settings(state)
-            cancel_changed_keys = _event_result_changed_keys(cancel_event.results)
-            if _changed_provider_key(cancel_changed_keys):
-                _sync_provider_from_live_settings(state, cancel_changed_keys)
-            if _changed_lock_subagent_model_key(cancel_changed_keys):
-                _sync_tool_registry_from_live_settings(cfg, state)
-            _sync_telemetry_from_live_settings(cfg, state, telemetry)
-            if _turn_has_progress(state["messages"], user_bundle.runtime_message):
-                # Turn did real work (assistant/tool messages beyond the user
-                # prompt) before ^C landed. Keep it: persist the partial turn,
-                # then heal any orphaned tool_calls in memory so the next turn is
-                # valid. The mark is informational ONLY — a `rollback_to:` mark
-                # would silently re-truncate this turn on the next session load.
-                print(f"\n{C.ORANGE}(turn interrupted — partial work kept){C.RESET}")
-                _replace_runtime_user_message(
-                    state["messages"],
-                    user_bundle.runtime_message,
-                    user_bundle.history_message,
-                    before_len,
-                )
-                _persist_turn_messages(cfg, state["messages"])
-                M.append_mark(cfg.session_file, "turn_interrupted")
-                state["messages"][:] = M.balance_orphaned_tool_calls(state["messages"])
-            else:
-                # Stopped before the model produced anything worth keeping — drop
-                # the bare user prompt (rollback removes it on reload too).
-                print(f"\n{C.ORANGE}(turn aborted){C.RESET}")
-                _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
-                M.append_mark(cfg.session_file, "turn_aborted")
-        except Exception as e:  # noqa: BLE001
-            print(f"{C.ORANGE}error: {_error_text(e)}{C.RESET}")
-            if _turn_has_progress(state["messages"], user_bundle.runtime_message):
-                _replace_runtime_user_message(state["messages"], user_bundle.runtime_message,
-                                              user_bundle.history_message, before_len)
-                _persist_turn_messages(cfg, state["messages"])
-            else:
-                _discard_unstarted_turn(cfg, state["messages"], user_bundle.runtime_message)
-            M.append_mark(cfg.session_file, f"error: {_error_text(e)}")
-    mcp_loop.run(_close_session_mcp_host(state))
-    model_client.install_asyncgen_shutdown_filter(mcp_loop.get_loop())
-    mcp_loop.close()
-    transcript_stack.close()
-    _print_resume_hint(cfg, state)
-    return 0
 if __name__ == "__main__":
     sys.exit(main())

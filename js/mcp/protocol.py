@@ -12,12 +12,12 @@ from typing import Any, Protocol
 
 from .types import JSONRPCId
 
-PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 REQUEST_CANCELLED = -32800
+_CANCEL_SEND_TIMEOUT_S = 0.1
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,10 @@ class PeerClosedError(ConnectionError):
     pass
 
 
+def _valid_id(value: object) -> bool:
+    return isinstance(value, (int, str)) and not isinstance(value, bool)
+
+
 async def _resolve(value: Any) -> Any:
     if inspect.isawaitable(value):
         return await value
@@ -70,18 +74,22 @@ class JSONRPCPeer:
         self._ids = itertools.count(1)
         self._pending: dict[JSONRPCId, asyncio.Future[Any]] = {}
         self._incoming: dict[JSONRPCId, asyncio.Task[Any]] = {}
-        self._request_handlers: dict[str, RequestHandler] = {}
+        self._request_handlers: dict[str, RequestHandler] = {"ping": lambda _params: {}}
         self._notification_handlers: dict[str, list[NotificationHandler]] = {}
         self._notification_queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
         self._notification_task: asyncio.Task[None] | None = None
         self._reader_task: asyncio.Task[None] | None = None
-        self._write_lock = asyncio.Lock()
         self._closed = False
         self._close_lock = asyncio.Lock()
 
     @property
     def closed(self) -> bool:
         return self._closed
+
+    @property
+    def requests_in_flight(self) -> int:
+        """Requests sent and not yet answered, timed out or cancelled."""
+        return len(self._pending)
 
     @classmethod
     async def connect(cls, factory: TransportFactory) -> JSONRPCPeer:
@@ -119,14 +127,14 @@ class JSONRPCPeer:
         if params is not None:
             message["params"] = dict(params)
         try:
-            await self._send(message)
-            if timeout is None:
+            async with asyncio.timeout(timeout):
+                await self._send(message)
                 return await asyncio.shield(future)
-            return await asyncio.wait_for(asyncio.shield(future), timeout)
         except (TimeoutError, asyncio.CancelledError):
             if not future.done() and not self._closed:
                 with contextlib.suppress(Exception):
-                    await self._send_cancelled(request_id)
+                    async with asyncio.timeout(_CANCEL_SEND_TIMEOUT_S):
+                        await self._send_cancelled(request_id)
             raise
         finally:
             self._pending.pop(request_id, None)
@@ -181,10 +189,7 @@ class JSONRPCPeer:
     async def _send(self, message: dict[str, Any]) -> None:
         if self._closed:
             raise PeerClosedError("JSON-RPC peer is closed")
-        async with self._write_lock:
-            if self._closed:
-                raise PeerClosedError("JSON-RPC peer is closed")
-            await self.transport.send(message)
+        await self.transport.send(message)
 
     async def _send_cancelled(self, request_id: JSONRPCId) -> None:
         await self.notify(
@@ -223,6 +228,9 @@ class JSONRPCPeer:
         if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
             return
         if "method" in message:
+            if "id" in message and not _valid_id(message["id"]):
+                await self._send_error(None, INVALID_REQUEST, "Invalid request ID")
+                return
             method = message.get("method")
             if not isinstance(method, str):
                 return
@@ -233,8 +241,10 @@ class JSONRPCPeer:
                 return
             if "id" in message:
                 request_id = message["id"]
-                if isinstance(request_id, (int, str)) and not isinstance(request_id, bool):
-                    self._start_incoming_request(request_id, method, params)
+                if request_id in self._incoming:
+                    await self._send_error(request_id, INVALID_REQUEST, "Duplicate active request ID")
+                    return
+                self._start_incoming_request(request_id, method, params)
             else:
                 self._dispatch_notification(method, params)
             return
@@ -243,6 +253,8 @@ class JSONRPCPeer:
 
     def _dispatch_response(self, message: dict[str, Any]) -> None:
         request_id = message.get("id")
+        if not _valid_id(request_id):
+            return
         future = self._pending.get(request_id)
         if future is None or future.done():
             return
@@ -316,6 +328,8 @@ class JSONRPCPeer:
     def _dispatch_notification(self, method: str, params: dict[str, Any]) -> None:
         if method == "notifications/cancelled":
             request_id = params.get("requestId")
+            if not _valid_id(request_id):
+                return
             task = self._incoming.get(request_id)
             if task is not None:
                 task.cancel()
@@ -356,7 +370,3 @@ class JSONRPCPeer:
         for future in self._pending.values():
             if not future.done():
                 future.set_exception(error)
-
-
-JsonRpcPeer = JSONRPCPeer
-JsonRpcError = JSONRPCError

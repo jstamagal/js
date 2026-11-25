@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from js import logins, model_metadata, paths, runtime
+from js import context_window, logins, model_metadata, paths
+
 
 @pytest.fixture
 def tmp_logins_dir(tmp_path: Path, monkeypatch):
@@ -43,7 +44,8 @@ def test_save_login_writes_atomically_with_no_leftover_temp_file(tmp_logins_dir)
     # Files only: the suite's XDG isolation puts its own directories in this
     # same tmp dir, and a half-written login would be a file beside the store.
     names = {entry.name for entry in tmp_logins_dir.iterdir() if entry.is_file()}
-    assert names == {"logins.toml"}
+    # The lock sidecar is by design (see logins.lock_path); nothing else.
+    assert names == {"logins.toml", "logins.toml.lock"}
 
 
 def test_save_and_load_login(tmp_logins_dir):
@@ -51,7 +53,6 @@ def test_save_and_load_login(tmp_logins_dir):
     loaded = logins.load_logins()
     assert "openai" in loaded
     assert loaded["openai"].provider_api_key == "sk-test"
-
 
 
 def test_save_login_writes_private_file_mode(tmp_logins_dir):
@@ -63,7 +64,6 @@ def test_save_login_updates_existing(tmp_logins_dir):
     logins.save_login(logins.Login(provider_id="x", provider_api_key="old"))
     logins.save_login(logins.Login(provider_id="x", provider_api_key="new"))
     assert logins.load_logins()["x"].provider_api_key == "new"
-
 
 
 def test_login_effective_provider_id_round_trip(tmp_logins_dir):
@@ -247,9 +247,9 @@ def test_runtime_resolves_server_cached_metadata_before_catalog(monkeypatch, tmp
     monkeypatch.setattr(model_metadata, "context_window", lambda model, _provider: 500000 if model == "train-only" else 999999)
     monkeypatch.setattr(model_metadata, "max_output_tokens", lambda _model, _provider: 1234)
 
-    assert runtime._resolve_context_window("served-model", "vllm") == 32768
+    assert context_window.resolve_context_window("served-model", "vllm") == 32768
     assert model_metadata.resolve_max_output("served-model", "vllm") == 4096
-    assert runtime._resolve_context_window("train-only", "vllm") == 262144
+    assert context_window.resolve_context_window("train-only", "vllm") == 262144
 
 
 def test_runtime_does_not_use_n_ctx_train_as_context_without_fallback(monkeypatch, tmp_logins_dir):
@@ -261,7 +261,7 @@ def test_runtime_does_not_use_n_ctx_train_as_context_without_fallback(monkeypatc
     monkeypatch.setattr(model_metadata, "probe_local_context_window", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(model_metadata, "context_window", lambda _model, _provider: None)
 
-    assert runtime._resolve_context_window("train-only", "vllm") is None
+    assert context_window.resolve_context_window("train-only", "vllm") is None
 
 
 def test_remove_login_clears_cache(tmp_logins_dir):
@@ -276,4 +276,4 @@ def test_login_path_creates_dir(tmp_path: Path, monkeypatch):
     logins.set_config_dir(new_dir)
     path = logins.login_path()
     assert path.parent.exists()
-    logins.set_config_dir(Path.home() / ".config" / "js")
+    logins.set_config_dir(Path.home() / ".js" / "logins")

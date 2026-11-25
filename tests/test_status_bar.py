@@ -1,0 +1,224 @@
+"""The async REPL's status bar: layout, overflow, colours, and the TurnStatus seam.
+
+No test here builds a prompt_toolkit Application.
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+import ai
+import pytest
+from repl_driver import run_async
+
+from js import (
+    fset,
+    jsrc_save,
+    messages as msgs,
+    model_client,
+    runtime,
+    setcmd,
+    setting_layers,
+    settings,
+    status_bar,
+)
+from js.config import Config
+from js.model_client import ModelStreamResult
+from js.toolkit.core import ToolContext, TurnStatus
+
+BAR = dict(
+    clock="23:59",
+    provider="cpa",
+    model="claude-fable-5-1",
+    context_tokens=121000,
+    phase="",
+    output_tokens=9642,
+    throbber="*",
+    agent_id="defaultagent",
+    session_short="b61643c8",
+    cache_pct=100,
+)
+
+
+def _cfg(tmp_path, *, session_name: str = "s.jsonl", model: str = "test-model") -> Config:
+    return Config(
+        agent_id="defaultagent",
+        agent_dir=tmp_path,
+        model=model,
+        provider_id="openai",
+        provider_base_url=None,
+        provider_api_key="k",
+        reasoning_effort=None,
+        max_output_tokens=None,
+        max_tool_iterations=5,
+        max_bash_output_bytes=65536,
+        max_tool_result_bytes=65536,
+        fetch_timeout_s=5,
+        debug_log=None,
+        trace=False,
+        history_file=tmp_path / "history",
+        sessions_dir=tmp_path,
+        session_file=tmp_path / session_name,
+        prompts_dir=tmp_path,
+    )
+
+
+def test_status_line_overflow_order_at_40_columns():
+    line = status_bar.status_line(40, **BAR)
+
+    assert len(line) == 40
+    assert "cache" not in line
+    assert "claude-fable-5-1" not in line          # truncated from the left
+    assert "fable-5-1" in line
+    assert "cpa/" not in line
+    assert "9,600" not in line
+    assert "defaultagent" not in line
+    # never dropped: the clock, the throbber, the session
+    assert line.startswith("[23:59]")
+    assert "*" in line
+    assert "b61643c8" in line
+
+
+def test_status_line_keeps_the_essentials_at_any_width():
+    for width in range(18, 120):
+        line = status_bar.status_line(width, **BAR)
+        assert len(line) == width
+        assert "[23:59]" in line and "*" in line and "b61643c8" in line
+
+
+def test_format_count_is_a_heartbeat_not_an_invoice():
+    assert status_bar.format_count(9642) == "9,600"
+    assert status_bar.format_count(99) == "0"
+    assert status_bar.format_count(10_049) == "10.0k"
+    assert status_bar.format_count(123_456) == "123.5k"
+
+
+def test_turn_centre_prefers_tool_then_compaction_then_first_byte_wait_then_tokens():
+    status = TurnStatus()
+    status.first_byte_wait(10.0)
+
+    phase, count = status_bar.turn_centre(status, now=10.5)
+    assert phase == "" and count is None          # under a second: nothing yet
+    phase, count = status_bar.turn_centre(status, now=10.0 + 252)
+    assert "4m12s" in phase and count is None
+
+    status.first_byte_done()
+    status.stream("x" * 400)
+    phase, count = status_bar.turn_centre(status, now=300.0)
+    assert phase == "" and count == 100
+
+    status.compacting = True
+    phase, count = status_bar.turn_centre(status, now=300.0)
+    assert phase and count is None
+
+    status.tool_begin(["shell", "read", "read"])
+    status.tool_started = 100.0
+    phase, count = status_bar.turn_centre(status, now=112.4)
+    assert "shell" in phase and "+2" in phase and "12s" in phase and count is None
+
+
+def test_durations_read_like_a_running_clock():
+    assert msgs.duration(7.9) == "7s"
+    assert msgs.duration(252) == "4m12s"
+    assert msgs.duration(3600 + 4 * 60 + 2) == "1h04m02s"
+
+
+def test_turn_status_estimates_tokens_until_the_provider_counts_them():
+    status = TurnStatus()
+    status.stream("abcdefgh")
+    assert status.output_tokens == 2
+
+    status.settle(40)
+    assert status.output_tokens == 40
+    status.stream("abcd")
+    assert status.output_tokens == 41
+    status.settle(0)                      # no usage: the estimate stands
+    assert status.output_tokens == 41
+
+    status.reset()
+    assert status == TurnStatus()
+
+
+def test_session_short_is_the_hex_of_the_session_stem(tmp_path):
+    path = tmp_path / "20260918T101010000000Z-b61643c8deadbeef.jsonl"
+    assert status_bar.session_short(path) == "b61643c8"
+
+
+def test_a_named_session_is_whole_or_elided_never_cut_mid_word(tmp_path):
+    name = status_bar.session_short(tmp_path / "model-swap-comparison.jsonl")
+    assert name == "model-swap-comparison"
+
+    for width in range(12, 120):
+        line = status_bar.status_line(width, **{**BAR, "session_short": name, "cache_pct": None})
+        assert len(line) == width
+        shown = line.rstrip().split()[-1].split("/")[-1]
+        if shown != name:
+            assert shown.endswith("…"), (width, line)
+            assert name.startswith(shown[:-1]), (width, line)
+
+
+def test_turn_status_climbs_during_a_turn_and_ends_zeroed(monkeypatch, tmp_path):
+    context = ToolContext(cwd=tmp_path)
+    seen: list[int] = []
+
+    async def fake_stream_model_async(*, on_text, on_reasoning, **_kwargs):
+        on_reasoning("thinking hard " * 10)
+        on_text("the answer is here")
+        seen.append(context.turn_status.output_tokens)
+        return ModelStreamResult(
+            text="the answer is here", tool_calls=[], reasoning="thinking hard " * 10,
+            usage=ai.types.usage.Usage(input_tokens=10, output_tokens=77),
+            finish_reason="stop", assistant_message=ai.assistant_message("the answer is here"),
+        )
+
+    monkeypatch.setattr(model_client, "stream_model_async", fake_stream_model_async)
+    cfg = _cfg(tmp_path)
+    messages = [{"role": "user", "content": "go"}]
+    asyncio.run(runtime.run_turn_async(
+        cfg, "sys", messages, runtime.Telemetry(debug_log=None),
+        tool_context=context, suppress_output=True,
+    ))
+
+    assert seen and seen[0] > 0
+    assert context.turn_status == TurnStatus()
+
+
+@pytest.mark.parametrize("turn_active", [False, True])
+def test_status_bar_line_never_raises_on_sparse_state(tmp_path, monkeypatch, turn_active):
+
+    cfg = _cfg(tmp_path, session_name="20260918T101010000000Z-0123456789abcdef.jsonl")
+    (tmp_path / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
+    built: dict = {}
+    lines: list[str] = []
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def turn(*args, **kwargs):
+        started.set()
+        await release.wait()
+
+    async def typing(enter):
+        if turn_active:
+            await enter("go")
+            await asyncio.wait_for(started.wait(), timeout=10)
+        lines.append(built["status"](60))
+        release.set()
+
+    monkeypatch.setattr(runtime, "run_turn_async", turn)
+    state = run_async(monkeypatch, cfg, typing, screen_parts=built)
+
+    assert state.settings == {}
+    [line] = lines
+    assert len(line) == 60
+    assert "01234567" in line
+
+
+def test_status_colour_survives_save_and_load(tmp_path):
+    live = settings.seed_defaults()
+    assert setcmd.fset_command(live, "COLOR_STATUS_BACKGROUND #000000").error is None
+    path = tmp_path / "jsrc"
+    jsrc_save.save_settings_to_jsrc(path, live, keys=[], fset_names=["COLOR_STATUS_BACKGROUND"])
+    fset.reset()
+
+    reloaded = settings.seed_defaults()
+    assert setting_layers.load_jsrc_files([path], reloaded) == []
+    assert fset.hex_for("COLOR_STATUS_BACKGROUND") == "#000000"

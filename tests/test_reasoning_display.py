@@ -1,0 +1,458 @@
+"""Reasoning has its own live display channel and remains in session history."""
+
+import asyncio
+import io
+import json
+from types import SimpleNamespace
+
+import ai
+import ai.types.events as events
+import httpx2
+import pytest
+from turn_driver import js, one_turn
+
+from js import (
+    config,
+    history_record,
+    memory,
+    model_client,
+    paths,
+    run_assembly,
+    runtime,
+    screen,
+    screen_scrollback,
+    text_layout,
+    transcript,
+)
+from js.toolkit import ToolContext
+
+THOUGHT = " first thought\n  next thought: λ\n"
+
+
+def scripted(monkeypatch, *, cancel=False, before_answer=None):
+    def stream(**kwargs):
+        async def generate():
+            yield events.StreamStart()
+            yield events.ReasoningStart(block_id="reason")
+            yield events.ReasoningDelta(chunk=THOUGHT, block_id="reason")
+            if before_answer:
+                before_answer()
+            if cancel:
+                raise asyncio.CancelledError()
+            yield events.ReasoningEnd(block_id="reason")
+            yield events.TextStart(block_id="text")
+            yield events.TextDelta(chunk="answer", block_id="text")
+            yield events.TextEnd(block_id="text")
+            yield events.StreamEnd()
+        return ai.models.Stream(generate())
+    monkeypatch.setattr(ai, "stream", stream)
+
+
+def test_provider_stream_delivers_reasoning_before_answer(monkeypatch):
+    seen = []
+    scripted(monkeypatch)
+    result = model_client.stream_model(
+        model_id="qwen-test", provider_id="openai", provider_base_url="http://local.test/v1",
+        provider_api_key="fixture", messages=[ai.user_message("first")], tools=None,
+        max_output_tokens=None, reasoning_effort=None,
+        on_reasoning=lambda chunk: seen.append(("reasoning", chunk)),
+        on_text=lambda chunk: seen.append(("text", chunk)),
+    )
+    assert seen == [("reasoning", THOUGHT), ("text", "answer")]
+    assert result.reasoning == THOUGHT
+    assert result.text == "answer"
+
+
+@pytest.mark.parametrize("level", [0, 1, 2, 3])
+@pytest.mark.parametrize("suppressed", [False, True])
+def test_display_is_separate_from_answer_transcript_and_session(monkeypatch, tmp_path, level, suppressed):
+    cfg = config.from_env(sources=config.InvocationSources(extras=(
+        "MODEL=qwen-test", "PROVIDER=openai", "BASE_URL=http://local.test/v1",
+        "API_KEY=fixture", "OUTPUT_TOKENS_MAX=64", "CONTEXT_SIZE=262144",
+        "VISION=off", f"REASONING_DISPLAY={level}",
+    )))
+    out, err, log = io.StringIO(), io.StringIO(), io.StringIO()
+    sink = transcript.TranscriptLogSink([log], [])
+    monkeypatch.setattr(runtime.sys, "stdout", transcript.TranscriptTee(out, lambda: sink))
+    monkeypatch.setattr(runtime.sys, "stderr", transcript.TranscriptTee(err, lambda: sink))
+
+    def before_answer():
+        assert (THOUGHT in transcript.strip_ansi(err.getvalue())) is (level > 0 and not suppressed)
+        assert THOUGHT not in out.getvalue()
+
+    scripted(monkeypatch, before_answer=before_answer)
+    messages = [{"role": "user", "content": "first"}]
+    one_turn(
+        cfg, "system", messages, runtime.Telemetry(None, transcript_log=sink),
+        trace_override=False, suppress_output=suppressed, tool_context=ToolContext(cwd=tmp_path),
+    )
+    assert THOUGHT not in out.getvalue()
+    assert THOUGHT not in log.getvalue()
+    assert messages[-1]["reasoning_content"] == THOUGHT
+    memory.persist_messages(cfg.session_file, messages)
+    saved = cfg.session_file.read_bytes()
+    reloaded = memory.load_messages(cfg.session_file, preserve_reasoning=True)
+    assert reloaded[-1]["reasoning_content"] == THOUGHT
+    assert history_record.history_to_ai_messages("system", reloaded, provider_id="openai")[-1].reasoning == THOUGHT
+    memory.persist_messages(cfg.session_file, reloaded)
+    assert cfg.session_file.read_bytes() == saved
+
+
+def test_cancel_during_reasoning_retains_partial_history(monkeypatch, tmp_path):
+    cfg = config.from_env(sources=config.InvocationSources(extras=(
+        "MODEL=qwen-test", "PROVIDER=openai", "BASE_URL=http://local.test/v1",
+        "API_KEY=fixture", "OUTPUT_TOKENS_MAX=64", "CONTEXT_SIZE=262144",
+        "VISION=off", "REASONING_DISPLAY=0",
+    )))
+    scripted(monkeypatch, cancel=True)
+    messages = [{"role": "user", "content": "first"}]
+    with pytest.raises(asyncio.CancelledError):
+        one_turn(
+            cfg, "system", messages, runtime.Telemetry(None), trace_override=False,
+            suppress_output=True, tool_context=ToolContext(cwd=tmp_path),
+        )
+    assert len(messages) == 2
+    assert messages[-1]["reasoning_content"] == THOUGHT
+    assert messages[-1]["incomplete_reason"] == "cancelled"
+    memory.persist_messages(cfg.session_file, messages)
+    assert memory.load_messages(cfg.session_file, preserve_reasoning=True)[-1] == messages[-1]
+
+
+@pytest.mark.parametrize("level", [1, 2, 3])
+def test_scrollback_collapse_restores_reasoning_without_losing_other_output(level):
+    scroll = screen_scrollback.Scrollback()
+    scroll.append("before\n")
+    block = scroll.reasoning(level)
+    block.append(THOUGHT)
+    assert THOUGHT in transcript.strip_ansi(scroll.buffer.text)
+    scroll.append("queued input\n")
+    block.answer_started()
+    scroll.append("answer\n")
+    block.finish(17)
+    visible = transcript.strip_ansi(scroll.buffer.text)
+    assert (THOUGHT in visible) is (level != 1)
+    assert "before\n" in visible and "queued input\nanswer\n" in visible
+    scroll.toggle_reasoning()
+    assert (THOUGHT in transcript.strip_ansi(scroll.buffer.text)) is (level == 1)
+    scroll.toggle_reasoning()
+    assert transcript.strip_ansi(scroll.buffer.text) == visible
+    assert block.text == THOUGHT
+
+
+def test_the_reasoning_toggle_key_keeps_input_intact_and_restores_reasoning():
+    # reasoning_toggle is Ctrl-O by default; Ctrl-R is history_search.
+    from prompt_toolkit.application import create_app_session
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    async def drive():
+        async def on_line(_line):
+            pass
+
+        with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()):
+            app, scroll = screen.build_app(
+                prompt="> ", history=None, completer=None, on_line=on_line,
+                on_interrupt=lambda: None, on_eof=lambda: None,
+            )
+            ready, toggled = asyncio.Event(), asyncio.Event()
+            original = scroll.toggle_reasoning
+
+            def toggle():
+                result = original()
+                toggled.set()
+                return result
+
+            scroll.toggle_reasoning = toggle
+            task = asyncio.create_task(app.run_async(pre_run=ready.set))
+            try:
+                await asyncio.wait_for(ready.wait(), 2)
+                app.current_buffer.text = "unfinished input"
+                block = scroll.reasoning(1)
+                block.append(THOUGHT)
+                block.answer_started()
+                assert THOUGHT not in transcript.strip_ansi(scroll.buffer.text)
+                for visible in (True, False):
+                    toggled.clear()
+                    pipe.send_bytes(b"\x0f")
+                    await asyncio.wait_for(toggled.wait(), 2)
+                    assert (THOUGHT in transcript.strip_ansi(scroll.buffer.text)) is visible
+                    assert app.current_buffer.text == "unfinished input"
+            finally:
+                if app.is_running:
+                    app.exit()
+                await task
+    asyncio.run(drive())
+
+
+def test_screen_reasoning_shares_stdout_ordering_without_losing_queued_input():
+    async def drive():
+        scroll = screen_scrollback.Scrollback()
+        app = SimpleNamespace(invalidate=lambda: None)
+        loop = asyncio.get_running_loop()
+        output = screen._ScreenStdout(loop, scroll, app, io.StringIO())
+        display = screen.ScreenReasoningDisplay(loop, scroll, app, 2)
+        output.write("before\n")
+        display.append("first\n")
+        output.write("queued input\n")
+        display.append("second\n")
+        display.answer_started()
+        output.write("answer\n")
+        display.finish(7)
+        await asyncio.sleep(0)
+        visible = transcript.strip_ansi(scroll.buffer.text)
+        assert visible.startswith("before\n")
+        assert "first\nsecond\nqueued input\nanswer\n" in visible
+        scroll.toggle_reasoning()
+        hidden = transcript.strip_ansi(scroll.buffer.text)
+        assert "first\nsecond\n" not in hidden
+        assert "queued input\nanswer\n" in hidden
+        scroll.toggle_reasoning()
+        assert transcript.strip_ansi(scroll.buffer.text) == visible
+    asyncio.run(drive())
+
+
+@pytest.mark.parametrize("level", [1, 2, 3])
+def test_scrollback_eviction_discards_fold_handles_not_recent_output(monkeypatch, level):
+    screen.fset.bind_settings({"SCROLLBACK_LINES_MAX": 8})
+    scroll = screen_scrollback.Scrollback()
+    block = scroll.reasoning(level)
+    block.append(THOUGHT)
+    block.answer_started()
+    tail = "".join(f"tail {i}\n" for i in range(12))
+    scroll.append(tail)
+    before = scroll.buffer.text
+    block.finish(17)
+    assert scroll.buffer.text == before
+    assert scroll.toggle_reasoning() is False
+    assert scroll.buffer.text == before
+    assert scroll.buffer.document.line_count <= 8
+    latest = scroll.reasoning(2)
+    latest.append("latest thought\n")
+    scroll.append("latest answer\n")
+    scroll.toggle_reasoning()
+    scroll.toggle_reasoning()
+    visible = transcript.strip_ansi(scroll.buffer.text)
+    assert "latest thought\nlatest answer\n" in visible
+    assert scroll.buffer.document.line_count <= 8
+
+
+def test_unlogged_reasoning_bypasses_nested_and_replaced_transcript_sinks():
+    from js.reasoning_display import StderrReasoning
+
+    visible, first, second = io.StringIO(), io.StringIO(), io.StringIO()
+    sink = transcript.TranscriptLogSink([first], [])
+    inner = transcript.TranscriptTee(visible, lambda: sink)
+    outer = transcript.TranscriptTee(inner, lambda: sink)
+    display = StderrReasoning(2, outer)
+    display.append("first thought")
+    sink = transcript.TranscriptLogSink([second], [])
+    display.append("second thought")
+    display.finish()
+    assert "first thoughtsecond thought" in transcript.strip_ansi(visible.getvalue())
+    assert first.getvalue() == second.getvalue() == ""
+
+
+@pytest.mark.parametrize("level", [2, 3])
+def test_reasoning_to_stderr_that_is_not_a_terminal_is_plain_text(level):
+    from js.reasoning_display import StderrReasoning
+
+    class Terminal(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    plain, terminal = io.StringIO(), Terminal()
+    for stream in (plain, terminal):
+        display = StderrReasoning(level, stream)
+        for fragment in ("weigh", "ing the ", "options\nthen pick"):
+            display.append(fragment)
+        display.answer_started()
+        display.finish(tokens=7)
+
+    assert "\x1b" not in plain.getvalue()
+    assert "weighing the options\nthen pick" in plain.getvalue()
+    assert transcript.strip_ansi(terminal.getvalue()) == plain.getvalue()
+    assert "\x1b[" in terminal.getvalue()
+
+
+def test_http_reasoning_streams_on_screen_before_answer_and_survives_collapse(monkeypatch, tmp_path):
+    cfg = config.from_env(sources=config.InvocationSources(extras=(
+        "MODEL=qwen-test", "PROVIDER=openai", "BASE_URL=http://local.test/v1",
+        "API_KEY=fixture", "OUTPUT_TOKENS_MAX=64", "CONTEXT_SIZE=262144",
+        "VISION=off", "REASONING_DISPLAY=1",
+    )))
+    scroll = screen_scrollback.Scrollback()
+    app = SimpleNamespace(invalidate=lambda: None)
+    received_before_answer = []
+
+    def sse(delta, finish=None):
+        chunk = {"id": "offline", "object": "chat.completion.chunk", "created": 1,
+                 "model": "qwen-test", "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+        return f"data: {json.dumps(chunk)}\n\n".encode()
+
+    class Body(httpx2.AsyncByteStream):
+        closed = False
+
+        async def __aiter__(self):
+            yield sse({"role": "assistant", "reasoning_content": THOUGHT})
+            await asyncio.sleep(0)
+            visible = transcript.strip_ansi(scroll.buffer.text)
+            # A mock transport may iterate the body again after the response
+            # ends; only the pass the turn streamed from counts.
+            if not received_before_answer:
+                received_before_answer.append(THOUGHT in visible and "answer" not in visible)
+            yield sse({"content": "answer"})
+            yield sse({}, "stop") + b"data: [DONE]\n\n"
+
+        async def aclose(self):
+            self.closed = True
+
+    body = Body()
+
+    async def drive():
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(
+            lambda _request: httpx2.Response(200, headers={"Content-Type": "text/event-stream"}, stream=body),
+        )) as client:
+            get_provider = model_client.ai.get_provider
+            monkeypatch.setattr(model_client.ai, "get_provider", lambda *a, **kw: get_provider(*a, **kw, client=client))
+            loop = asyncio.get_running_loop()
+            telemetry = runtime.Telemetry(None, reasoning_factory=lambda level: screen.ScreenReasoningDisplay(loop, scroll, app, level))
+            messages = [{"role": "user", "content": "first"}]
+            with screen.capture_stdio(loop, scroll, app):
+                await runtime.run_turn_async(
+                    cfg, "system", messages, telemetry, trace_override=False,
+                    tool_context=ToolContext(cwd=tmp_path),
+                )
+            await asyncio.sleep(0)
+            assert received_before_answer == [True]
+            assert body.closed
+            assert THOUGHT not in transcript.strip_ansi(scroll.buffer.text)
+            assert "answer" in transcript.strip_ansi(scroll.buffer.text)
+            memory.persist_messages(cfg.session_file, messages)
+            assert memory.load_messages(cfg.session_file, preserve_reasoning=True)[-1]["reasoning_content"] == THOUGHT
+            scroll.toggle_reasoning()
+            assert THOUGHT in transcript.strip_ansi(scroll.buffer.text)
+    asyncio.run(drive())
+
+
+@pytest.mark.parametrize(("level", "cancel"), [(0, False), (2, False), (2, True)])
+def test_prompt_mode_displays_reasoning_separately_and_persists_it(monkeypatch, tmp_path, capsys, level, cancel):
+    prompts = tmp_path / ".js" / "agents" / "reason-ui"
+    prompts.mkdir(parents=True)
+    (prompts / "01-prompt.md").write_text("system\n")
+    cfg = config.from_env(agent_id="reason-ui", sources=config.InvocationSources(extras=(
+        "MODEL=qwen-test", "PROVIDER=openai", "BASE_URL=http://local.test/v1",
+        "API_KEY=fixture", "OUTPUT_TOKENS_MAX=64", "CONTEXT_SIZE=262144",
+        "VISION=off", "REQUEST_LOG=off", f"REASONING_DISPLAY={level}",
+    )))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *a, **kw: cfg)
+    scripted(monkeypatch, cancel=cancel)
+    assert js(monkeypatch, "-p", "first") == (130 if cancel else 0)
+    displayed = capsys.readouterr()
+    assert (THOUGHT in transcript.strip_ansi(displayed.err)) is (level > 0)
+    assert THOUGHT not in displayed.out
+    messages = memory.load_messages(cfg.session_file, preserve_reasoning=True)
+    assert messages[-1]["reasoning_content"] == THOUGHT
+    if cancel:
+        assert messages[-1]["incomplete_reason"] == "cancelled"
+    else:
+        assert messages[-1]["content"] == "answer"
+        assert "answer" in displayed.out
+    [log_path] = (paths.logs_root() / "transcript").rglob("*.log")
+    assert log_path.stem == cfg.session_file.stem
+    assert THOUGHT not in log_path.read_text()
+
+
+# --- a broken stderr -------------------------------------
+
+from js.reasoning_display import StderrReasoning  # noqa: E402
+
+
+class _Broken(io.StringIO):
+    def __init__(self, error: BaseException) -> None:
+        super().__init__()
+        self.error = error
+        self.writes = 0
+
+    def write(self, text):
+        self.writes += 1
+        raise self.error
+
+
+@pytest.mark.parametrize("error", [BrokenPipeError(32, "Broken pipe"), ValueError("I/O operation on closed file")])
+def test_a_broken_stderr_stops_reasoning_and_never_raises(error):
+    stream = _Broken(error)
+    view = StderrReasoning(3, stream)
+    view.append("thinking")
+    view.append("more")
+    view.answer_started()
+    view.finish(tokens=5)
+    assert view.level == 0
+    assert stream.writes == 1
+
+
+def test_stderr_reasoning_shows_every_word_once_when_the_window_is_resized(monkeypatch):
+    from js.reasoning_display import StderrReasoning
+
+    class Terminal(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    words = [f"word{n}" for n in range(60)]
+    for first, then in ((20, 40), (40, 20)):
+        width = [first]
+        monkeypatch.setattr("js.reasoning_display.terminal_width", lambda width=width: width[0])
+        stream = Terminal()
+        view = StderrReasoning(2, stream)
+        for index, word in enumerate(words):
+            if index == 30:
+                width[0] = then
+            view.append(word + " ")
+        view.answer_started()
+        rows = transcript.strip_ansi(stream.getvalue()).splitlines()
+        assert [w for row in rows[1:] for w in row.split()] == words, (first, then, rows)
+
+
+def test_unfolding_long_reasoning_and_folding_it_back_loses_no_scrollback(monkeypatch):
+    screen.fset.bind_settings({"SCROLLBACK_LINES_MAX": 10})
+    scroll = screen_scrollback.Scrollback()
+    scroll.toggle_key = "c-o"
+    for n in range(5):
+        scroll.append(f"early {n}\n")
+    scroll.flush()
+    block = scroll.reasoning(1)
+    block.append("".join(f"thought {n}\n" for n in range(30)))
+    block.finish(42)
+    assert "early 0" in scroll.buffer.text
+
+    assert scroll.toggle_reasoning()
+    unfolded = transcript.strip_ansi(scroll.buffer.text)
+    assert "early 0" in unfolded and all(f"thought {n}\n" in unfolded for n in range(30))
+    assert scroll.toggle_reasoning()
+    assert "early 0" in scroll.buffer.text
+
+
+def test_open_reasoning_rewraps_only_its_last_row_as_it_streams(monkeypatch):
+    # A long line streamed in small chunks costs work in step with its length.
+    monkeypatch.setattr(text_layout, "terminal_width", lambda: 80)
+    measured = [0]
+    cut_points = text_layout.cut_points
+
+    def counting(plain, *args, **kwargs):
+        measured[0] += len(plain)
+        return cut_points(plain, *args, **kwargs)
+
+    monkeypatch.setattr(text_layout, "cut_points", counting)
+
+    def stream(words: int) -> int:
+        measured[0] = 0
+        line = " ".join(f"word{n}" for n in range(words))
+        scroll = screen_scrollback.Scrollback()
+        block = scroll.reasoning(2)
+        for start in range(0, len(line), 4):
+            block.append(line[start:start + 4])
+        wrapped = text_layout.wrap_words(line, text_layout.block_width())
+        assert "\n" + wrapped + "\n" in transcript.strip_ansi(scroll.buffer.text)
+        return measured[0]
+
+    assert stream(2000) < 3 * stream(1000)

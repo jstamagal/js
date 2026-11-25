@@ -1,0 +1,1 @@
+ Tool results longer than {{CHARACTERS}} characters are shown as their head and tail.

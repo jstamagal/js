@@ -1,0 +1,1 @@
+Stop retrying {{TOOL}}; the same error repeated {{COUNT}} times. Change approach. Repeating that error again ends this turn.

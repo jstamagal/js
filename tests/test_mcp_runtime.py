@@ -3,20 +3,32 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-from pathlib import Path
 import sys
 import time
+import urllib.request
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from turn_driver import run_async as run_turn_async
 
-from js import events as event_mod, model_client, runtime
+from js import (
+    events as event_mod,
+    history_record,
+    model_client,
+    runtime,
+    tool_calls,
+    tool_errors,
+    tool_result_messages,
+    turn_dispatch,
+)
 from js.mcp.client import CapabilityError, MCPClient, MCPClientError
 from js.mcp.host import MCPHost, mcp_tool_result, prompt_result, resource_result
 from js.mcp.types import CallToolResult, GetPromptResult, ReadResourceResult, ServerCapabilities
 from js.mcp_config import MCPConfiguration, MCPPolicy, MCPServer
 from js.toolkit.core import Tool, ToolContext, ToolResult
 from js.toolkit.registry import ToolRegistry, build_default_registry
+from js.toolkit.subagents import named_agent_tool
 
 
 class FakeClient:
@@ -98,6 +110,48 @@ def test_control_tools_obey_mcp_tool_policy_in_catalog_load_and_surface():
     assert host.tools({"mcp_resource_read", "mcp_resource_list"}) == ()
 
 
+def test_http_transport_uses_configured_request_timeout(monkeypatch):
+    server = MCPServer("HTTP", "http", "http", url="http://127.0.0.1:1/mcp")
+
+    class FactoryClient(FakeClient):
+        def __init__(self, factory, **kwargs):
+            super().__init__(factory, **kwargs)
+            self.factory = factory
+
+    host = MCPHost(MCPConfiguration((server,), MCPPolicy()), request_timeout=45, client_factory=FactoryClient)
+    timeouts = []
+
+    class Response:
+        headers = {}
+
+        def __init__(self, status):
+            self.status = status
+
+        def read(self, *_args):
+            return b""
+
+        def close(self):
+            pass
+
+    def open_request(_opener, request, *, timeout):
+        timeouts.append(timeout)
+        if timeout < 30:
+            raise TimeoutError
+        # A notification is accepted; the notification stream is unsupported.
+        return Response(202 if request.get_method() == "POST" else 405)
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", open_request)
+
+    async def drive():
+        await host.discover(source=server.name)
+        transport = host.clients[server.name].factory()
+        await transport.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        await transport.close()
+
+    asyncio.run(drive())
+    assert timeouts and all(timeout == 45 for timeout in timeouts)
+
+
 @pytest.mark.parametrize("failure_stage", ("initialize", "list_tools"))
 def test_failed_server_is_visible_without_hiding_healthy_server_tools(failure_stage):
     class MixedClient(FakeClient):
@@ -164,6 +218,58 @@ def test_silent_stdio_server_returns_within_configured_deadline():
     asyncio.run(drive())
 
 
+def test_discovery_lists_tools_after_recovering_initialization(config):
+    class RecoveringClient(FakeClient):
+        async def initialize(self, *, timeout=None):
+            if not getattr(self, "failed_once", False):
+                self.failed_once = True
+                raise ConnectionError("temporarily unavailable")
+            self.tools = [{"name": "ready", "inputSchema": {"type": "object"}}]
+            await super().initialize(timeout=timeout)
+
+    async def drive():
+        host = MCPHost(config, client_factory=RecoveringClient)
+        try:
+            await host.discover(query="mcp")
+            found = await host.discover(query="mcp")
+
+            assert "alpha_server__ready" in host.remote_tools
+            assert any(entry.id == "mcp:alpha_server__ready" for entry in found)
+        finally:
+            await host.close()
+
+    asyncio.run(drive())
+
+
+def test_cancelled_discovery_retries_pending_tool_metadata(config):
+    async def drive():
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        class WaitingClient(FakeClient):
+            async def list_tools(self, *, timeout=None):
+                entered.set()
+                await release.wait()
+                return [{"name": "ready", "inputSchema": {"type": "object"}}]
+
+        host = MCPHost(config, client_factory=WaitingClient)
+        discovery = asyncio.create_task(host.discover(query="mcp"))
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            discovery.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await discovery
+            release.set()
+
+            found = await host.discover(query="mcp")
+
+            assert any(entry.id == "mcp:alpha_server__ready" for entry in found)
+        finally:
+            await host.close()
+
+    asyncio.run(drive())
+
+
 def test_host_passes_deadline_to_metadata_calls_remote_calls_and_controls():
     class DeadlineClient(FakeClient):
         def __init__(self, factory, **kwargs):
@@ -216,7 +322,7 @@ def test_lazy_discovery_policy_collision_schema_call_and_shutdown(config):
     async def drive():
         FakeClient.instances.clear()
         host = MCPHost(config, client_factory=FakeClient)
-        assert [entry.name for entry in host.initial_catalog()] == [name for name, _ in host.CONTROL_TOOLS]
+        assert [entry.name for entry in host.initial_catalog()] == [name for name, _ in host.control_tools()]
         assert not FakeClient.instances
         found = await host.discover(query="mcp")
         assert FakeClient.instances[0].initialized
@@ -229,7 +335,7 @@ def test_lazy_discovery_policy_collision_schema_call_and_shutdown(config):
 
         client = FakeClient.instances[0]
         client.tools = [client.tools[0]]
-        host._dirty.setdefault("Alpha Server", set()).add("tools")
+        client.kwargs["on_tools_changed"]({})
         await host.before_model_call()
         found = await host.discover()
         assert any(entry.name == "alpha_server__read_file" for entry in found)
@@ -244,7 +350,7 @@ def test_lazy_discovery_policy_collision_schema_call_and_shutdown(config):
         ]
         assert client.calls == [("Read File", {"path": "a"})]
         client.tools[0]["inputSchema"]["properties"]["path"]["description"] = "refreshed"
-        host._dirty.setdefault("Alpha Server", set()).add("tools")
+        client.kwargs["on_tools_changed"]({})
         await host.before_model_call()
         refreshed = next(tool for tool in host.tools(loaded) if tool.name == "alpha_server__read_file")
         assert refreshed.params["path"]["description"] == "refreshed"
@@ -379,6 +485,68 @@ def test_turn_surface_exact_server_source_connects_only_that_server(tmp_path, so
     asyncio.run(drive())
 
 
+@pytest.mark.parametrize("query", ["agentbus", "IRC"])
+def test_unscoped_search_discovers_remote_tools(tmp_path, query):
+    class IRCClient(FakeClient):
+        async def list_tools(self, *, timeout=None):
+            return [{"name": "send", "description": "Send IRC commands", "inputSchema": {"type": "object"}}]
+
+    async def drive():
+        from js.toolkit.registry import build_default_registry
+
+        server = MCPServer("agentbus", "agentbus", "stdio", command="fake")
+        host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=IRCClient)
+        surface = build_default_registry().select([]).lazy_surface(tmp_path, mcp_host=host)
+        found = json.loads(await surface.discover_async(query=query))["results"]
+        assert any(entry["id"] == "mcp:agentbus__send" for entry in found)
+        await host.close()
+
+    asyncio.run(drive())
+
+
+def test_agent_alias_can_find_load_and_call_a_remote_tool(tmp_path):
+    class RemoteClient(FakeClient):
+        async def list_tools(self, *, timeout=None):
+            return [{"name": "send", "inputSchema": {"type": "object"}}]
+
+    async def drive():
+        server = MCPServer("agentbus", "agentbus", "stdio", command="fake")
+        host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=RemoteClient)
+        registry = build_default_registry().select([], tool_aliases={"agentbus__send": "relay"})
+        surface = registry.lazy_surface(tmp_path, mcp_host=host)
+        found = json.loads(await surface.discover_async(query="relay", kind="mcp"))["results"]
+        entry, = found
+        assert entry["name"] == "relay"
+        assert json.loads(surface.discover(load=entry["id"]))["loaded"] == ["relay"]
+        tool = surface.dispatch_registry().resolve("relay")
+        await tool.handler()
+        assert host.clients["agentbus"].calls == [("send", {})]
+        await host.close()
+
+    asyncio.run(drive())
+
+
+def test_loading_remote_tool_returns_server_instructions(tmp_path):
+    class IRCClient(FakeClient):
+        initialize_result = SimpleNamespace(instructions="Silence is the default.")
+
+        async def list_tools(self, *, timeout=None):
+            return [{"name": "send", "description": "Send IRC commands", "inputSchema": {"type": "object"}}]
+
+    async def drive():
+        from js.toolkit.registry import build_default_registry
+
+        server = MCPServer("agentbus", "agentbus", "stdio", command="fake")
+        host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=IRCClient)
+        surface = build_default_registry().select([]).lazy_surface(tmp_path, mcp_host=host)
+        await surface.discover_async(query="agentbus")
+        loaded = json.loads(surface.discover(load="mcp:agentbus__send"))
+        assert loaded["server_instructions"] == {"agentbus": "Silence is the default."}
+        await host.close()
+
+    asyncio.run(drive())
+
+
 def test_prompt_get_preserves_media_content(config):
     async def drive():
         host = MCPHost(config, client_factory=FakeClient)
@@ -422,15 +590,15 @@ def test_mixed_sync_and_async_dispatch_preserves_model_order():
             aliases={"sync": "sync", "async": "async"},
         )
         calls = [
-            runtime._PendingToolCall("1", "sync", ['{"label":"first"}']),
-            runtime._PendingToolCall("2", "async", ['{"label":"second"}']),
-            runtime._PendingToolCall("3", "sync", ['{"label":"third"}']),
-            runtime._PendingToolCall("4", "async", ['{"label":"fourth"}']),
+            tool_calls.PendingToolCall("1", "sync", ['{"label":"first"}']),
+            tool_calls.PendingToolCall("2", "async", ['{"label":"second"}']),
+            tool_calls.PendingToolCall("3", "sync", ['{"label":"third"}']),
+            tool_calls.PendingToolCall("4", "async", ['{"label":"fourth"}']),
         ]
 
-        records = await runtime._dispatch_batch(
+        records = await turn_dispatch.dispatch_batch(
             calls, runtime.Telemetry(debug_log=None), 0, False,
-            runtime.ToolErrorTracker(), registry, ToolContext(), asyncio.get_running_loop(),
+            tool_errors.ToolErrorTracker(), registry, ToolContext(), asyncio.get_running_loop(),
         )
 
         assert events == ["first", "second", "third", "fourth"]
@@ -458,9 +626,9 @@ def test_async_dispatch_cancellation_reaches_handler():
         from js.toolkit.registry import _registry_from_tools
 
         registry = _registry_from_tools((Tool("wait", "wait", wait, {}),))
-        task = asyncio.create_task(runtime._dispatch_batch(
-            [runtime._PendingToolCall("1", "wait", ["{}"])], runtime.Telemetry(debug_log=None), 0, False,
-            runtime.ToolErrorTracker(), registry, ToolContext(), asyncio.get_running_loop(),
+        task = asyncio.create_task(turn_dispatch.dispatch_batch(
+            [tool_calls.PendingToolCall("1", "wait", ["{}"])], runtime.Telemetry(debug_log=None), 0, False,
+            tool_errors.ToolErrorTracker(), registry, ToolContext(), asyncio.get_running_loop(),
         ))
         await started.wait()
         task.cancel()
@@ -511,11 +679,11 @@ def test_runtime_reuses_borrowed_host_across_turns_and_closes_owned_host(monkeyp
                 tool_registry=registry, tool_context=ToolContext(cwd=tmp_path), mcp_host=host,
                 suppress_output=True,
             )
-            assert not host._closed
+            assert not client.closed
             assert host.clients["Alpha Server"] is client
         assert calls == 2
         await host.close()
-        assert host._closed and client.closed
+        assert client.closed
 
         owned_hosts: list[MCPHost] = []
 
@@ -544,7 +712,7 @@ def test_mcp_loaded_tools_are_scoped_to_one_turn(config, tmp_path):
         await host.discover(query="mcp")
         client = FakeClient.instances[-1]
         client.tools = [client.tools[0]]
-        host._dirty.setdefault("Alpha Server", set()).add("tools")
+        client.kwargs["on_tools_changed"]({})
         await host.before_model_call()
 
         from js.toolkit.registry import build_default_registry
@@ -556,7 +724,7 @@ def test_mcp_loaded_tools_are_scoped_to_one_turn(config, tmp_path):
         assert first.by_name["alpha_server__read_file"].params["path"]["type"] == "string"
 
         client.tools[0]["inputSchema"]["properties"]["path"]["description"] = "new schema"
-        host._dirty.setdefault("Alpha Server", set()).add("tools")
+        client.kwargs["on_tools_changed"]({})
         await host.before_model_call()
         assert first.by_name["alpha_server__read_file"].params["path"]["description"] == "new schema"
 
@@ -583,7 +751,7 @@ def test_successful_server_data_is_redacted_everywhere(config):
             "description": "metadata SENTINEL",
             "inputSchema": {"type": "object", "properties": {"value": {"description": "SENTINEL"}}},
         }]
-        host._dirty.setdefault("Alpha Server", set()).add("tools")
+        client.kwargs["on_tools_changed"]({})
         await host.before_model_call()
         catalog = await host.discover(query="mcp")
 
@@ -640,10 +808,8 @@ def test_successful_server_data_is_redacted_everywhere(config):
         provider_messages = []
         history = []
         for index, (_spec, value) in enumerate(outputs):
-            provider_messages.extend(model_client.build_tool_result_messages(str(index), "mcp", value))
-            history.extend(runtime._history_tool_result_message(
-                runtime._PendingToolCall(str(index), "mcp"), value
-            ))
+            provider_messages.extend(tool_result_messages.build_tool_result_messages(str(index), "mcp", value))
+            history.append(tool_result_messages.tool_result_record(str(index), "mcp", value))
         exposed = repr((catalog, outputs, provider_messages, history, events))
         assert "SENTINEL" not in exposed
         assert "[REDACTED]" in exposed
@@ -674,7 +840,7 @@ def test_runtime_delivers_all_mcp_events_through_strict_hooks(monkeypatch, confi
             client.kwargs["log_sink"]({"level": "info", "data": "safe"})
             client.kwargs["progress_sink"]({"progressToken": 1, "progress": 0.5})
             client.kwargs["on_resource_updated"]({"uri": "file:///x"})
-            host._event("mcp_catalog_collision", tool="catalog_only__duplicate")
+            host.reserve_public_names({next(iter(host.remote_tools))})
             return SimpleNamespace(
                 text="done", tool_calls=[], reasoning="",
                 usage=SimpleNamespace(input_tokens=1, output_tokens=1),
@@ -707,19 +873,24 @@ def test_runtime_delivers_all_mcp_events_through_strict_hooks(monkeypatch, confi
     asyncio.run(drive())
 
 
-def test_structured_result_provider_media_and_dehydrated_history():
+def test_structured_result_provider_media_and_history_media_ref():
     result = ToolResult([
         {"type": "text", "text": "hello"},
         {"type": "image", "data": base64.b64encode(b"image-bytes").decode(), "mimeType": "image/png"},
         {"type": "resource", "resource": {"uri": "file:///x", "text": "embedded"}},
         {"type": "structured", "value": {"b": 2, "a": 1}},
     ])
-    messages = model_client.build_tool_result_messages("tc", "remote", result)
+    messages = tool_result_messages.build_tool_result_messages("tc", "remote", result)
     assert [message.role for message in messages] == ["tool", "user"]
     assert messages[1].parts[-1].data == b"image-bytes"
-    history = runtime._history_tool_result_message(runtime._PendingToolCall("tc", "remote"), result)
-    assert history[0]["content"] == 'hello\n[image image/png omitted from history]\n[embedded resource file:///x]\nembedded\n{"b":2,"a":1}'
-    assert "image-bytes" not in repr(history)
+    record = tool_result_messages.tool_result_record("tc", "remote", result)
+    assert "image-bytes" not in repr(record)
+    assert [part["mime"] for part in record["media"]] == ["image/png"]
+    # The record alone rebuilds the same provider messages.
+    def wire(msgs):
+        return [(m.role, [(p.kind, getattr(p, "result", None), getattr(p, "text", None), getattr(p, "data", None))
+                          for p in m.parts]) for m in msgs]
+    assert wire(history_record.history_to_ai_messages("", [record], vision=True)) == wire(messages)
 
 
 def test_mcp_safe_media_is_preserved_and_invalid_media_is_suppressed():
@@ -738,7 +909,7 @@ def test_mcp_safe_media_is_preserved_and_invalid_media_is_suppressed():
     ]
 
     result = mcp_tool_result(CallToolResult(content=safe_blocks), ("SENTINEL",))
-    messages = model_client.build_tool_result_messages("tc", "remote", result)
+    messages = tool_result_messages.build_tool_result_messages("tc", "remote", result)
     media = [
         part.data for message in messages for part in message.parts
         if isinstance(part, model_client.ai.types.messages.FilePart)
@@ -782,10 +953,8 @@ def test_mcp_credential_media_is_suppressed_from_provider_and_history(kind, resu
             ("SENTINEL",),
         )
 
-    messages = model_client.build_tool_result_messages("tc", "remote", result)
-    history = runtime._history_tool_result_message(
-        runtime._PendingToolCall("tc", "remote"), result
-    )
+    messages = tool_result_messages.build_tool_result_messages("tc", "remote", result)
+    history = [tool_result_messages.tool_result_record("tc", "remote", result)]
 
     assert all(
         not isinstance(part, model_client.ai.types.messages.FilePart)
@@ -813,9 +982,11 @@ def test_short_authorization_credentials_are_redacted_from_results_events_and_er
 
     response = _redact_value({"description": "Bearer echoes xyz789"}, secrets)
     event = _redact_value({"data": {"token": "abc123"}}, secrets)
-    client = MCPClient(lambda: None, secrets=secrets)
+    def rejected():
+        raise RuntimeError("server rejected abc123")
+
     with pytest.raises(MCPClientError) as caught:
-        client._raise_redacted(RuntimeError("server rejected abc123"))
+        asyncio.run(MCPClient(rejected, secrets=secrets).initialize())
     exposed = repr((response, event, caught.value))
     assert "abc123" not in exposed
     assert "Bearer" in exposed
@@ -880,14 +1051,11 @@ def test_turn_surface_withholds_mcp_name_claimed_by_generated_native_tool(tmp_pa
             client_factory=FakeClient,
             event_sink=lambda kind, **payload: events.append((kind, payload)),
         )
-        def generated_handler():
-            return "native"
-
-        generated_handler._js_agent_id = "alpha_server__read_file"
-        native = Tool("alpha_server__read_file", "generated agent", generated_handler, {})
+        native = named_agent_tool("alpha_server__read_file", "generated agent")
         allowed = ToolRegistry(
             tools=(native,),
             aliases={native.name.casefold(): native.name},
+            lazy=frozenset({native.name}),
         )
         surface = allowed.lazy_surface(tmp_path, mcp_host=host)
 
@@ -973,6 +1141,34 @@ def test_malformed_remote_input_schemas_fall_back_to_valid_object_schemas():
         for name in ("noschema", "nullschema", "strschema", "weird"):
             tool = host.tools({f"schema__{name}"})[0]
             assert tool.openai_spec()["function"]["parameters"] == expected
+
+    asyncio.run(drive())
+
+
+def test_patterned_context_argument_reaches_remote_server(config, tmp_path, monkeypatch):
+    schema = {
+        "type": "object",
+        "patternProperties": {"^context$": {"type": "string"}},
+        "additionalProperties": False,
+        "required": ["context"],
+    }
+
+    async def drive():
+        host = MCPHost(config, client_factory=FakeClient)
+        client = FakeClient(None)
+        host.clients["Alpha Server"] = client
+        host.remote_tools["alpha_server__patterned"] = (
+            "Alpha Server", "patterned", {"inputSchema": schema},
+        )
+        tool = host.tools({"alpha_server__patterned"})[0]
+        registry = ToolRegistry((tool,), {})
+        specs = model_client.tool_specs_to_ai_tools(registry.openai_specs())
+        assert specs[0].spec.params == schema
+        turn = await run_turn_async(tmp_path, monkeypatch, registry, [
+            [("tc", tool.name, json.dumps({"context": "remote-value"}))],
+        ])
+        assert [event["invalid"] for event in turn.events("tool_call_batch_normalized")] == [0]
+        assert client.calls == [("patterned", {"context": "remote-value"})]
 
     asyncio.run(drive())
 
@@ -1212,9 +1408,28 @@ def test_client_errors_are_encoding_redacted_and_long_names_dispatch():
 
     redactor = captured.get("redactor")
     assert redactor is not None, "client must receive the host redactor"
-    client = MCPClient(lambda: None, redactor=redactor)
     for variant in ("a:b", "a%3Ab", "a%253Ab"):
+        def echoing(variant=variant):
+            raise MCPClientError(f"remote error echoed {variant}")
+
         with pytest.raises(MCPClientError) as raised:
-            client._raise_redacted(MCPClientError(f"remote error echoed {variant}"))
+            asyncio.run(MCPClient(echoing, redactor=redactor).initialize())
         assert variant not in str(raised.value)
         assert "[REDACTED]" in str(raised.value)
+
+
+def test_a_connected_servers_credentials_are_always_redacted():
+    server = MCPServer(
+        name="s", normalized_name="s", transport="http", url="http://127.0.0.1:1/mcp",
+        headers={"Authorization": "Bearer abc123"},
+    )
+    events = []
+    host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=FakeClient,
+                   event_sink=lambda *a, **k: events.append(k))
+    FakeClient.instances.clear()
+    asyncio.run(host.discover())
+    client = FakeClient.instances[-1]
+
+    assert "abc123" not in client.kwargs["redactor"]("rejected abc123")
+    client.kwargs["log_sink"]({"data": "token abc123"})
+    assert "abc123" not in repr(events)

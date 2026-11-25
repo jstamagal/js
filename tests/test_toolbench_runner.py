@@ -19,7 +19,7 @@ def test_suite_file_parses_and_references_available_agent_assets():
     assert suite["repos"]
     for agent in suite["agents"]:
         if agent["kind"] == "js":
-            assert (RUNNER.parent / "agents" / agent["agent"] / "00-tools.yaml").exists()
+            assert (RUNNER.parent / "agents" / agent["agent"] / "agent.yaml").exists()
 
 
 def test_selection_respects_defaults_and_explicit_names():

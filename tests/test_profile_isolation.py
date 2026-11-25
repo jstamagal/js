@@ -10,8 +10,9 @@ from js import paths
 def test_default_paths_follow_a_replaced_home(monkeypatch, tmp_path):
     home = tmp_path / "another-home"
     monkeypatch.setenv("HOME", str(home))
-    assert paths.config_dir() == home / ".config" / "js"
-    assert paths.sessions_root() == home / ".local" / "share" / "js" / "sessions"
+    assert paths.home() == home / ".js"
+    assert paths.global_config_file() == home / ".js" / "jsrc"
+    assert paths.sessions_root() == home / ".js" / "sessions"
     assert "JS_SESSION" not in os.environ
 
 
@@ -20,10 +21,11 @@ def test_subprocess_inherits_isolated_profile(tmp_path):
         [sys.executable, "-c", "from js.paths import sessions_root; print(sessions_root())"],
         capture_output=True, text=True, check=True, timeout=10,
     )
-    assert result.stdout.strip() == str(tmp_path / ".local" / "share" / "js" / "sessions")
+    assert result.stdout.strip() == str(tmp_path / ".js" / "sessions")
 
 
-def test_explicit_xdg_override_remains_testable(monkeypatch, tmp_path):
+def test_xdg_variables_locate_only_the_directories_the_migration_reads(monkeypatch, tmp_path):
     data = tmp_path / "explicit-data"
     monkeypatch.setenv("XDG_DATA_HOME", str(data))
-    assert paths.sessions_root() == data / "js" / "sessions"
+    assert paths.sessions_root() == tmp_path / ".js" / "sessions"
+    assert paths.legacy_homes()["data"] == data / "js"

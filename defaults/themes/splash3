@@ -1,0 +1,15 @@
+# splash3: Light: bitchtea's splash3 palette, errors in red.
+# A theme is a palette: fset PALETTE_nn lines, each slot's #rrggbb.
+
+fset PALETTE_00 #002b80
+fset PALETTE_02 #d9e5f5
+fset PALETTE_03 #2e7d32
+fset PALETTE_04 #c62828
+fset PALETTE_06 #0a2fb9
+fset PALETTE_07 #8a6116
+fset PALETTE_10 #333436
+fset PALETTE_12 #0433d2
+fset PALETTE_13 #0a2fb9
+fset PALETTE_14 #56585c
+fset PALETTE_93 #d8dde3
+fset PALETTE_94 #56585c

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import subprocess
 
-
-from js import cli
+from js import cli, commit_cli, messages as msgs, paths, prompt_run
+from js.config import InvocationSources
 
 
 def _git(repo, *args):
@@ -25,7 +25,7 @@ def test_cli_commit_arg_dispatches_target_and_operator_context(tmp_path, monkeyp
         calls.append({"target": target, "kwargs": kwargs})
         return 0
 
-    monkeypatch.setattr(cli, "_run_commit", run_commit_stub)
+    monkeypatch.setattr(commit_cli, "run_commit", run_commit_stub)
     monkeypatch.setattr(cli.sys, "stdin", TtyStdin())
 
     actual = cli.main(["--commit", str(tmp_path), "--no-save", "-p", "operator note"])
@@ -43,10 +43,7 @@ def test_cli_commit_arg_dispatches_target_and_operator_context(tmp_path, monkeyp
                 "reasoning": None,
                 "maxout": None,
                 "extra_context": "operator note",
-                "extras": [],
-                "ignore_local_config": False,
-                "ignore_global_config": False,
-                "presets": [],
+                "sources": InvocationSources(),
             },
         }
     ]
@@ -63,9 +60,9 @@ def test_run_commit_auto_inits_non_repo_and_injects_survey(tmp_path, monkeypatch
         calls.append({"prompt": prompt, "kwargs": kwargs})
         return 0
 
-    monkeypatch.setattr(cli, "_run_prompt", run_prompt_stub)
+    monkeypatch.setattr(prompt_run, "run", run_prompt_stub)
 
-    actual = cli._run_commit(str(target), save=False)
+    actual = commit_cli.run_commit(str(target), save=False)
 
     assert actual == 0
     assert (target / ".git").is_dir()
@@ -77,7 +74,6 @@ def test_run_commit_auto_inits_non_repo_and_injects_survey(tmp_path, monkeypatch
     assert "stage <file> <hunks|all>" in prompt
     assert calls[0]["kwargs"]["agent"] == "commit"
     assert calls[0]["kwargs"]["tool_context"].cwd == target.resolve(strict=False)
-
 
 
 def test_run_commit_injects_messy_repo_snapshot_without_crashing(tmp_path, monkeypatch):
@@ -111,18 +107,18 @@ def test_run_commit_injects_messy_repo_snapshot_without_crashing(tmp_path, monke
         calls.append({"prompt": prompt, "kwargs": kwargs})
         return 0
 
-    monkeypatch.setattr(cli, "_run_prompt", run_prompt_stub)
+    monkeypatch.setattr(prompt_run, "run", run_prompt_stub)
 
-    actual = cli._run_commit(str(repo), save=False)
+    actual = commit_cli.run_commit(str(repo), save=False)
 
     assert actual == 0
     prompt = calls[0]["prompt"]
-    assert "-- staged diff" in prompt
-    assert "-- unstaged diff" in prompt
+    assert msgs.SURVEY_STAGED.text() in prompt
+    assert msgs.SURVEY_UNSTAGED.text() in prompt
     assert "line2_STAGED" in prompt
     assert "line28_UNSTAGED" in prompt
     assert "?? new.txt" in prompt
-    assert "(clean tree, nothing to commit)" not in prompt
+    assert msgs.SURVEY_CLEAN.text() not in prompt
 
 
 def _init_repo(repo):
@@ -135,6 +131,41 @@ def _init_repo(repo):
     _git(repo, "commit", "-qm", "baseline")
 
 
+def test_commit_snapshot_retention_is_per_repository(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setattr(prompt_run, "run", lambda prompt, **kwargs: 0)
+    backups = paths.commit_backups_dir()
+    legacy = backups / "20200101T000000000000Z"
+    legacy.mkdir(parents=True)
+    (legacy / "tracked.patch").write_text("legacy recovery data")
+    repo_a = tmp_path / "one" / "same-name"
+    repo_b = tmp_path / "two" / "same-name"
+    for repo in (repo_a, repo_b):
+        repo.parent.mkdir()
+        _init_repo(repo)
+        (repo / "new.txt").write_text("uncommitted\n")
+
+    def buckets() -> set:
+        return {path for path in backups.iterdir() if path != legacy}
+
+    assert commit_cli.run_commit(str(repo_a), save=False) == 0
+    [bucket_a] = buckets()
+    [first_a] = bucket_a.iterdir()
+    assert commit_cli.run_commit(str(repo_b), save=False) == 0
+    [bucket_b] = buckets() - {bucket_a}
+    [first_b] = bucket_b.iterdir()
+    for _ in range(10):
+        assert commit_cli.run_commit(str(repo_b), save=False) == 0
+    assert first_a.exists()
+    assert (legacy / "tracked.patch").read_text() == "legacy recovery data"
+    assert bucket_a != bucket_b
+    assert not first_b.exists()
+    assert len(list(bucket_b.iterdir())) == 10
+    # Resolving an equivalent path must not create another retention bucket.
+    assert commit_cli.run_commit(str(repo_a / ".." / "same-name"), save=False) == 0
+    assert buckets() == {bucket_a, bucket_b}
+
+
 def test_run_commit_snapshots_tracked_patch_and_untracked_file(tmp_path, monkeypatch):
     data_home = tmp_path / "data"
     monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
@@ -143,11 +174,13 @@ def test_run_commit_snapshots_tracked_patch_and_untracked_file(tmp_path, monkeyp
     (repo / "f.txt").write_text("changed-line1\n" + "\n".join(f"line{i}" for i in range(2, 31)) + "\n")
     (repo / "new.txt").write_text("brand new untracked\n")
 
-    monkeypatch.setattr(cli, "_run_prompt", lambda prompt, **kwargs: 0)
-    assert cli._run_commit(str(repo), save=False) == 0
+    monkeypatch.setattr(prompt_run, "run", lambda prompt, **kwargs: 0)
+    assert commit_cli.run_commit(str(repo), save=False) == 0
 
-    backups = data_home / "js" / "commit-backups"
-    snaps = sorted(backups.iterdir())
+    backups = paths.commit_backups_dir()
+    owners = list(backups.iterdir())
+    assert len(owners) == 1
+    snaps = sorted(owners[0].iterdir())
     assert len(snaps) == 1
     snap = snaps[0]
     patch = (snap / "tracked.patch").read_text()
@@ -161,34 +194,31 @@ def test_run_commit_makes_no_snapshot_on_clean_tree(tmp_path, monkeypatch):
     repo = tmp_path / "clean"
     _init_repo(repo)
 
-    monkeypatch.setattr(cli, "_run_prompt", lambda prompt, **kwargs: 0)
-    assert cli._run_commit(str(repo), save=False) == 0
+    monkeypatch.setattr(prompt_run, "run", lambda prompt, **kwargs: 0)
+    assert commit_cli.run_commit(str(repo), save=False) == 0
 
-    backups = data_home / "js" / "commit-backups"
+    backups = paths.commit_backups_dir()
     assert not backups.exists() or not any(backups.iterdir())
 
 
 def test_run_commit_snapshot_prune_keeps_ten(tmp_path, monkeypatch):
     data_home = tmp_path / "data"
     monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
-    backups = data_home / "js" / "commit-backups"
-    backups.mkdir(parents=True)
-    # Twelve older snapshots already on disk (names sort before any current UTC stamp).
-    for i in range(12):
-        (backups / f"20200101T0000{i:02d}000000Z").mkdir()
-
     repo = tmp_path / "messy"
     _init_repo(repo)
     (repo / "new.txt").write_text("fresh\n")
+    monkeypatch.setattr(prompt_run, "run", lambda prompt, **kwargs: 0)
+    assert commit_cli.run_commit(str(repo), save=False) == 0
+    [backups] = paths.commit_backups_dir().iterdir()
+    # Twelve old snapshots belong to this repository's retention bucket.
+    for i in range(12):
+        (backups / f"20200101T0000{i:02d}000000Z").mkdir()
 
-    monkeypatch.setattr(cli, "_run_prompt", lambda prompt, **kwargs: 0)
-    assert cli._run_commit(str(repo), save=False) == 0
+    assert commit_cli.run_commit(str(repo), save=False) == 0
 
     remaining = sorted(p.name for p in backups.iterdir())
     assert len(remaining) == 10
-    # The three oldest were pruned; the just-written snapshot is the newest kept.
+    # The oldest were pruned; the just-written snapshot is the newest kept.
     assert "20200101T000000000000Z" not in remaining
     assert "20200101T000002000000Z" not in remaining
     assert remaining[-1] not in {f"20200101T0000{i:02d}000000Z" for i in range(12)}
-
-

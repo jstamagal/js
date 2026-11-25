@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from js import dotenv
+from js import dotenv, paths, setting_layers
 
 
 def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -13,11 +13,11 @@ def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     `candidate_files` climbs to the filesystem root, so a real `.env` in /tmp or
     the operator's home would otherwise bleed into these assertions.
     """
-    monkeypatch.setattr(dotenv._paths, "config_dir", lambda: tmp_path / "no-such-config")
+    monkeypatch.setattr(paths, "global_env_file", lambda: tmp_path / "no-such-config" / ".env")
     real = dotenv.candidate_files
 
-    def bounded(cwd: Path | None = None) -> list[Path]:
-        return [path for path in real(cwd) if tmp_path in path.parents]
+    def bounded(cwd: Path | None = None, *, settings=None) -> list[Path]:
+        return [path for path in real(cwd, settings=settings) if tmp_path in path.parents]
 
     monkeypatch.setattr(dotenv, "candidate_files", bounded)
 
@@ -62,6 +62,19 @@ def test_load_fills_unset_names_and_never_overrides_real_env(
     assert tmp_path / ".env" in applied
 
 
+@pytest.mark.parametrize("quote", ["'", '"'])
+def test_load_quoted_key_with_a_trailing_comment(tmp_path, monkeypatch, quote):
+    _isolate(tmp_path, monkeypatch)
+    (tmp_path / ".env").write_text(
+        f"EXA_API_KEY={quote}fixture#key{quote} # account\n", encoding="utf-8"
+    )
+    env = {}
+
+    dotenv.load(cwd=tmp_path, environ=env)
+
+    assert env == {"EXA_API_KEY": "fixture#key"}
+
+
 def test_load_walks_up_and_nearest_file_wins(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -91,7 +104,7 @@ def test_global_config_env_is_the_lowest_precedence_file(
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     (config_dir / ".env").write_text("TAVILY_API_KEY=global\nEXA_API_KEY=global-only\n")
-    monkeypatch.setattr(dotenv._paths, "config_dir", lambda: config_dir)
+    monkeypatch.setattr(paths, "global_env_file", lambda: config_dir / ".env")
     project = tmp_path / "project"
     project.mkdir()
     (project / ".env").write_text("TAVILY_API_KEY=project\n")
@@ -103,8 +116,8 @@ def test_global_config_env_is_the_lowest_precedence_file(
 def test_search_tool_reads_a_key_supplied_only_by_dotenv(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The end the feature exists for: tavily_search finds a .env-only key."""
-    from js.toolkit import search
+    """The end the feature exists for: a .env-only key reaches the setting
+    tavily_search reads."""
 
     _isolate(tmp_path, monkeypatch)
     (tmp_path / ".env").write_text("TAVILY_API_KEY=from-dotenv\n")
@@ -112,4 +125,13 @@ def test_search_tool_reads_a_key_supplied_only_by_dotenv(
     # os.environ is removed again at teardown.
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     dotenv.load(cwd=tmp_path)
-    assert search._key("TAVILY_API_KEY") == "from-dotenv"
+    assert setting_layers.apply_env_overrides({})["TAVILY_API_KEY"] == "from-dotenv"
+
+
+def test_registered_setting_can_stop_dotenv_parent_walk(tmp_path):
+    child = tmp_path / "project"
+    child.mkdir()
+    (tmp_path / ".env").write_text("PARENT_VALUE=from-parent\n")
+    env = {}
+    dotenv.load(child, environ=env, settings={"DOTENV_WALK_UP": False})
+    assert "PARENT_VALUE" not in env

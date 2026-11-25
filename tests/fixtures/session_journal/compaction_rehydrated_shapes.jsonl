@@ -1,0 +1,9 @@
+{"kind":"message","message":{"role":"user","content":"one"},"ts":1790000001.0,"version":1,"id":"r001","parent":null}
+{"kind":"message","message":{"role":"assistant","content":"two"},"ts":1790000002.0,"version":1,"id":"r002","parent":"r001"}
+{"kind":"message","message":{"role":"user","content":"three"},"ts":1790000003.0,"version":1,"id":"r003","parent":"r002"}
+{"kind":"mark","marker":"compaction:{\"summary\":\"S1\",\"keep_from\":1,\"forced\":false,\"rehydrated\":{}}","ts":1790000004.0,"version":1,"id":"r004","parent":"r003"}
+{"kind":"message","message":{"role":"user","content":"x"},"ts":1790000005.0,"version":1,"id":"r005","parent":"r004"}
+{"kind":"mark","marker":"compaction:{\"summary\":\"S2\",\"keep_from\":2,\"forced\":false,\"rehydrated\":[1]}","ts":1790000006.0,"version":1,"id":"r006","parent":"r005"}
+{"kind":"message","message":{"role":"user","content":"y"},"ts":1790000007.0,"version":1,"id":"r007","parent":"r006"}
+{"kind":"mark","marker":"compaction:{\"summary\":\"S3\",\"keep_from\":1,\"forced\":false,\"rehydrated\":\"files\"}","ts":1790000008.0,"version":1,"id":"r008","parent":"r007"}
+{"kind":"message","message":{"role":"user","content":"z"},"ts":1790000009.0,"version":1,"id":"r009","parent":"r008"}

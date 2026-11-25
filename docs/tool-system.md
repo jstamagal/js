@@ -30,7 +30,6 @@ guards, task parallelism, and provider-specific name handling at the boundary.
 - file hashes
 - undo snapshots
 - search result cache
-- todos
 
 `call_tool()` filters unknown args, coerces values based on schema type, injects
 `context` when the handler accepts it, and calls the handler.
@@ -39,42 +38,191 @@ guards, task parallelism, and provider-specific name handling at the boundary.
 
 `build_default_registry()` concatenates:
 
-1. filesystem tools
-2. process/network tools
-3. meta tools
-4. wiki tools
-5. generated agent tools from layered prompt roots
+1. filesystem tools (`fs_tools.py`)
+2. shell and fetch (`shell.py`, `fetch.py`)
+3. web search, docs search and browse (`web_search.py`)
+4. jev, terminal session and browser probe tools (`jev.py`, `terminal.py`, `browser.py`)
+5. plan, skill and task (`plan.py`, `skill.py`, `subagents.py`)
+6. wiki tools (`wiki/`)
+7. kernel, toolbox, lsp and notebook tools (`python_kernel.py`, `toolbox.py`, `lsp.py`, `notebook.py`)
+8. swarm bus tools (`bus_tools.py`)
+9. generated agent tools from layered prompt roots
 
-The registry stores canonical names and lowercased aliases. Current aliases are
-only used for provider-facing name transforms; old user-facing aliases are not
-kept.
+The registry stores canonical names and resolves model-facing aliases case-insensitively.
 
-## Prompt Selection
+## Tool Selection: `agent.yaml` and `tools.yaml`
 
-Prompt frontmatter selects tools:
+Each agent directory has an `agent.yaml` beside its prompt files:
 
 ```yaml
+model: cpa/claude-fable-5-1
+reasoning: high
 tools:
-  - read
-  - fs_search
-  - todo_*
-  - task
+  - tag:code_hacker
+  - fetch:lazy
+skills:
+  - engineering:*
 ```
 
-Selectors:
+An agent can rename a selected tool with an `aliases:` mapping. The key is its
+registered name and the value is the name the model sees and calls. Select
+tools by their registered names. This agent exposes three tools.
 
-- exact name: `read`
-- glob: `todo_*`
-- full registry: `*`
+```yaml
+tools: [pi_read:eager, pi_edit:eager, shell:eager]
+aliases:
+  pi_read: read
+  pi_edit: edit
+  shell: run_command
+```
 
-No selected tools means no tools are exposed.
+### Pi tool surface
+
+`js --pi` publishes `pi_read`, `pi_bash`, `pi_edit` and `pi_write` as
+`read`, `bash`, `edit` and `write`. It replaces the native read, shell, patch
+and write tools. Pi edits and writes take js undo snapshots, so an agent that
+selects undo can reverse them. The agent keeps its other selected tools,
+including lazy tools.
+`js --pi-strict` publishes just the four Pi tools. Without either flag an agent
+can select the `pi_*` names and choose its own aliases.
+
+Pi read takes a 1-based line `offset` and a line count, `limit`. Pi edit takes `path` and an
+`edits` array of `{oldText, newText}` replacements against the original UTF-8 file. An invalid UTF-8 sequence makes
+the edit fail before writing.
+Pi write takes `path` and `content` and can overwrite a file directly.
+Pi bash takes `command` and an optional numeric `timeout` in seconds. It waits
+for completion, combines stdout and stderr, and returns the tail plus the
+full output path when a command exceeds 2,000 lines or 50 KiB. An explicit
+timeout kills the command. The js jail and shell environment policy apply.
+
+The native Python tools track the upstream Pi coding agent at
+[8209929](https://github.com/earendil-works/pi/tree/8209929fb553e7a8c91dc0894569f9ec43dd201f/packages/coding-agent/src/core/tools).
+
+### Selection rules
+
+Every `tools:` entry is `noun:modifier`. The noun is a tool name or a glob
+over tool names (quote a glob that starts with `*`: `"*:ban"`). The modifier
+is one of:
+
+- `eager`: in the boot surface, published from the first model call
+- `lazy`: listed in the `tool_discovery` catalog and loadable from it
+- `ban`: not on this agent's surface
+
+`tag:NAME` expands the tag's entries in place. Tags are defined in
+`~/.js/tools.yaml`:
+
+```yaml
+tags:
+  code_editor:
+    - "*:ban"
+    - read:eager
+    - write:eager
+    - docs_search:lazy
+  code_hacker:
+    - shell:eager
+    - tag:code_editor
+ban:                  # argument patterns, refused before dispatch
+  shell: ["rm -rf", "git reset --hard"]
+  fetch: ["*://www.example.com/*"]
+```
+
+`tag:read_only` is intrinsic: it matches every tool whose `read_only` property
+is true (tools that write nothing). It takes an optional modifier,
+`tag:read_only:lazy`; without one it means eager. A tool that writes only under
+some arguments (`fetch` with `save` or a POST,
+`browse` with `screenshot`) declares `read_only_when` instead; the tag does not
+match it, but dispatch runs its read-only calls in parallel (see Dispatch
+Semantics).
+
+Resolution: the first entry that names a tool (its exact name or an intrinsic
+tag it carries) decides it. Only when nothing names the tool does the first
+matching glob decide. So `"*:ban"` is deny-by-default and a name allows past
+it, while two names resolve by position: in `[tavily_search:ban,
+tag:read_only]` the ban fires. A tool no entry matches is not on the surface.
+js has no built-in policy; the chain is what the files say. `/tools` in the
+REPL prints every tool with its state and the entry that decided it.
+
+`tool_discovery` is published only when the surface has lazy tools, skills,
+or MCP servers. Its native catalog is exactly the agent's lazy set.
+
+`skills:` (in `agent.yaml` and `tools.yaml`) is validated as `family:name` or
+`family:*` and stored on the prompt spec. It does not filter the skill
+catalog yet: js skills have no family grouping, so every discovered skill is
+listed regardless of `skills:`.
+
+An entry that is not `noun:modifier`, an unknown tag, or a tag cycle fails
+the agent load with one line. An exact noun that names no tool prints one
+`matched no tool; ignoring` line naming the entry.
+
+The `ban:` block is checked before dispatch: a call whose string argument
+contains a plain pattern (or matches a glob pattern whole), ignoring case,
+returns one `ERROR:` line naming the pattern and runs nothing.
+
+`00-tools.yaml` and `tools:` frontmatter in a `00*.md` file are no longer
+read; an agent dir that has one fails to load with a line naming
+`agent.yaml`. `just migrate-agents` (dry run; `--apply` to write) converts
+them: bare selectors become `NAME:eager`, `reasoning_effort` becomes
+`reasoning`, and an entry that matches no tool is dropped and named. An
+entry is kept when it is a `tag:` entry, a glob that matches at least one
+tool, or a name that is a tool or an agent in the repo prompts, the global
+agents dir or a root given on the command line. The same pass drops dead
+entries from agents that already have `agent.yaml`. The ~/.js home migration
+runs this conversion on every agent it moves (`js/agent_migration.py`).
+
+### Per-model surfaces: `models:` and `TOOL_PROFILES`
+
+An agent can give particular models their own surface. `agent.yaml` takes an
+optional `models:` list:
+
+```yaml
+tools: [read:eager, write:eager, patch:eager, shell:eager, ...]
+models:
+  - match: [qwen, gemma]      # string or list
+    mode: replace             # replace (default) or prepend
+    tools: [shell:eager]
+    core: true                # default; false drops the core entries
+    prompt: small-coder       # optional: another agent's prompt as the persona
+    sampling: {temperature: 0.2}
+    reasoning: low
+  - match: deepseek
+    mode: prepend
+    tools: [remove:ban, undo:ban]
+```
+
+`match` values name model families (`opus`, `sonnet`, `haiku`, `fable`,
+`sol`, `terra`, `astra`, `luna`, `qwen`, …), matched case-insensitively as
+whole words of the model id or the provider id: `sol` matches
+`cpa/sol:latest` and `gpt-6.1-sol-medium` but not `console`, and `qwen`
+matches `Qwen3.6-35B` (a word may carry a version number). The first
+matching entry wins. The
+`TOOL_PROFILES` setting is a JSON list of entries of the same shape and applies
+when the agent has no matching `models:` entry. `--tools` beats both, and both
+beat the agent's `tools:`.
+
+- `replace` puts the profile's entries, then the core entries, in place of the
+  agent's chain. The core entries are tools.yaml's `core` tag when it defines
+  one, otherwise `skill:eager`; `tool_discovery` comes with `skill` because the
+  skill catalog publishes it. `core: false` leaves them out.
+- `prepend` puts the profile's entries ahead of the agent's chain, so they
+  decide every tool they name and the agent's chain decides the rest.
+- An entry without `tools:` leaves the chain as it is.
+- `prompt:` names an agent (project > global > repo) whose prompt files stand
+  in for this agent's persona. `sampling:` sets keys over the agent's;
+  `reasoning:` replaces the agent's.
+- A profile whose chain would select no tool is ignored, with one notice
+  naming its `match`.
+
+The profile is resolved at session start from the model and provider the run
+settles on: after agent.yaml `model:`, `--model` and a resumed session's stamp.
+A subagent resolves its own from the model it runs on. Switching models with
+`/model` keeps the surface the session started with.
 
 ## Tool Descriptions
 
 Model-facing descriptions live in:
 
 ```text
-js/toolkit/tool_descriptions/<tool>.md
+defaults/tool_descriptions/<tool>.md
 ```
 
 Descriptions are cut to what the model can act on; `just tool-bytes` shows
@@ -84,7 +232,7 @@ The filename must match the registered tool name for core/wiki tools.
 Generated agent tools build descriptions at runtime.
 
 These descriptions are not comments. They are model-facing contract text,
-explicit about ambiguity and failure modes: when to read first, what line anchors mean, how to patch, when to
+explicit about ambiguity and failure modes: when to read first, what the line-number gutter means, how to patch, when to
 use `cwd`, how tasks run, and what not to infer.
 
 Tests check description files for registered tools and protect the canonical
@@ -96,7 +244,6 @@ surface.
 read
 write
 fs_search
-ast_search
 remove
 patch
 undo
@@ -104,8 +251,6 @@ shell
 fetch
 plan
 skill
-todo_write
-todo_read
 task
 ```
 
@@ -125,7 +270,7 @@ grep
 
 Tool names remain canonical by default. There is no automatic Claude-specific capitalization.
 
-Optional `tools.alias_profiles` settings map canonical names to model-facing aliases. Each profile contains a `match` string or list of strings and an `aliases` table. Matching is case-insensitive substring matching against the model ID and provider ID. The first matching profile with usable aliases wins; without a matching profile, names remain unchanged.
+Optional `TOOL_ALIASES` settings map canonical names to model-facing aliases. Each profile contains a `match` string or list of strings and an `aliases` table. Matching is case-insensitive substring matching against the model ID and provider ID. The first matching profile with usable aliases supplies defaults. The agent’s aliases take precedence, and the Pi flags set the four Pi names.
 
 The runtime rewrites outgoing tool schema names and backtick-wrapped tool-name references in descriptions. The active registry resolves aliases back to canonical handlers, and tool-call history records canonical names.
 
@@ -138,11 +283,42 @@ tool call id.
 Dispatch rules:
 
 - task calls from one assistant turn run concurrently
-- non-task calls run sequentially
+- the other calls run in model order under a readers-writer rule, the one
+  Codex uses (`codex-rs/core/src/tools/parallel.rs`):
+  - a read-only call runs beside the read-only calls next to it, up to
+    `PARALLEL_TOOLS_MAX` at once (default 8)
+  - a call that is not read-only runs alone: it starts after every earlier
+    call has finished, and later calls wait for it
+  - so read, read, patch, read runs as [read ∥ read] → patch → read
+  - `PARALLEL_TOOLS_MAX 1` runs every call in turn
 - results are appended in original tool-call order
-- tool result content is capped
+- tool result content is capped, per result and then per batch
+  (`PARALLEL_RESULTS_MAX` covers the whole batch)
+- ^C starts no queued call; calls already running finish and their results
+  are kept (the shell command, kernel cell or search process a running call
+  waits on is interrupted first)
 - repeated tool errors get retry metadata
 - a repeated-error limit appends a final assistant error
+
+A call is read-only when its tool sets `read_only` (`read`, `fs_search`,
+`lsp`, `skill`, `jev`, `docs_search`, `exa_search`, `serper_search`,
+`tavily_search`, and the swarm `who` and `tasks`), or
+when its tool's `read_only_when` accepts its arguments: `fetch` as a GET or HEAD without `save`, `browse` without
+`screenshot`. A call that cannot be resolved or parsed is not read-only.
+
+Parallel read-only calls share one `ToolContext`. Its read ledger
+(`ToolContext.reads`, a `ReadLedger` in `js/toolkit/reads.py`) holds read
+coverage, file hashes and known content behind one lock, and records coverage
+per call id: when the runtime clips a read's result, only that call's share is
+narrowed (`narrow_to_delivered`), and lines another read of the same file
+delivered stay read. The runtime forgets the per-call shares (`settle`) once
+the batch cap has run. The same settle records the line reads the batch
+delivered whole, by call id and a hash of their text; before the next dispatch
+the runtime keeps only those whose text is still in the history
+(`keep_shown`), so an
+unchanged re-read returns a note naming the earlier call only while that result
+is there. Trace and telemetry writes hold one lock, so an exchange prints
+whole; spill files are written to a temporary name and renamed.
 
 Inside the `task` tool, multiple task strings also run concurrently.
 
@@ -186,8 +362,13 @@ discovered and loaded by catalog id.
 ## File Safety
 
 `read` records that a file was read and remembers its hash. `write` and `patch`
-require a prior read before changing existing files. New file creation does not
-require a prior read.
+require a prior read before changing existing files (`FILE_REQUIRE_READ`); an
+exact `patch` whose `old_string` is at least `EDIT_READ_BYPASS_CHARACTERS` long
+applies to an unread file. New file creation does not require a prior read.
+`patch` matches `old_string` exactly first, then (with `EDIT_FUZZY` on) in a
+view that drops trailing whitespace and reads smart quotes, Unicode dashes and
+no-break spaces as ASCII; a match found that way is replaced over the original
+text, keeping the file's bytes wherever the edit kept `old_string`.
 
 Edit operations snapshot prior state for `undo`:
 
@@ -195,37 +376,37 @@ Edit operations snapshot prior state for `undo`:
 - nonexistence before creating a file
 - directory trees before removing a directory
 
-`undo` is in-process only. Snapshots are not persisted across process restarts.
+Snapshots are kept in memory and, for a saved session, in a bounded store on
+disk (`<state>/<agent>/undo/`, in `js/toolkit/undo.py`), so js restarted on
+the session can still `undo`.
 
 ## Search
 
-`fs_search` is regex search implemented in Python. It supports:
+`fs_search` is regex search over ripgrep (`js/toolkit/file_search.py`). It
+supports:
 
 - `pattern`
 - `path`
 - `glob`
-- output modes: `files_with_matches`, `content`, `count`
-- context line knobs: `-A`, `-B`, `-C`
-- line numbers: `-n`
-- case-insensitive: `-i`
-- file type/extension
-- head limit and offset
-- multiline matching
-
-`ast_search` is structural source search backed by ast-grep. It accepts parsed
-patterns with `$NAME` and `$$$ARGS` metavariables, emits read-compatible line
-anchors, and supports snapshot-backed structural rewrite previews and applies.
+- `output_mode`: `files_with_matches` (default), `files`, `content`, `count`
+- context lines: `before_context`, `after_context`, `context_lines`
+- `show_line_numbers`
+- `case_insensitive`
+- `file_type`
+- `head_limit` and `offset`
+- `multiline`
 
 ## Shell
 
-`shell` uses the environment shell:
+`shell` runs the `SHELL_PROGRAM` setting:
 
-- Unix: `$SHELL -c`, fallback `/bin/sh -c`
-- Windows: `COMSPEC /C`
+- `bash -o pipefail -c` by default; zsh also gets `-o pipefail`, other
+  shells run with `-c` alone; `SHELL_PIPEFAIL off` drops `-o pipefail`
 
-It passes a small allowlist of environment variables by default. Extra env var
+It passes the `SHELL_ENV_KEEP` allowlist of environment variables. Extra env var
 names can be requested through the `env` parameter if the parent process has
-them.
+them. A result names the filtered variables only when the command references
+one of them.
 
 The tool output includes:
 
@@ -237,29 +418,53 @@ The tool output includes:
 
 ANSI is stripped unless `keep_ansi=true`.
 
+Stdout and stderr together get a budget: `SHELL_OUTPUT_MAX`, or
+less when the result would otherwise pass `TOOL_RESULT_INLINE_MAX`.
+A stream under half the budget is shown whole and the other gets the rest.
+The budget counts raw bytes; when the rendered text is still larger than the
+inline limit (invalid UTF-8 renders as 3-byte U+FFFD, and the markers add
+their own bytes), the budget shrinks until it fits.
+A stream past its share shows its head and its tail, with a marker between
+them naming the byte range left out, the total, and the file holding the
+whole stream.
+
+The file is written by the reader thread, not from the clipped text. Each
+stream keeps its first and last `SHELL_OUTPUT_MAX / 2` bytes in memory;
+once it passes `SHELL_OUTPUT_MAX`, every byte from the first goes to
+`<state>/tool-results/shell-<handle>-<random>-stdout.log` (or `-stderr.log`)
+as it arrives, ANSI and all. A stream cut only by the inline limit has its
+file written when the result is cut. `read` with a `start_byte` range reaches
+any byte of it.
+
+A command still running when the call returns hands back a handle. Each poll
+or wait reports the output since the last report, cut the same way, with
+byte offsets that count from the start of the stream.
+
 ## Wiki Tools
 
 Wiki tools live in the default registry even when the active prompt does not
-select them. Built-in modes select the full registry and rely on their mode
-prompts to steer behavior.
+select them.
 
 Defaultagent does not select `wiki_*` by default. To let a normal prompt or
-subagent use those tools, add selectors to that prompt's frontmatter.
+subagent use those tools, add entries to that agent's `agent.yaml`.
 
 ## Generated Agent Tools
 
-Every prompt directory with markdown files under repo `prompts/`, global
-`agents/` in the platform config dir, and project `.js/agents/` becomes a direct agent tool unless
-its name collides with a base tool. Project scope wins over global, which wins
-over repo when the same agent id appears in multiple roots.
+Every agent directory under stock `defaults/agents/`, global
+`~/.js/agents/`, and project `.js/agents/` becomes a direct agent tool unless
+its name collides with a base tool (a notice names it). Each filename resolves independently: project over home over defaults.
+An empty file shadows its lower copy.
 
-Direct generated tools take:
+Direct generated tools take `tasks` (required), and optional `model` and
+`reasoning`:
 
 ```json
 {"tasks":["task text"]}
 ```
 
-They call the same underlying `task` implementation with the agent id fixed.
+They call the same underlying `task` implementation with the agent id fixed
+(`named_agent_tool` in `js/toolkit/subagents.py`; the description is
+`defaults/tool_descriptions/named_agent.md`).
 
 ## Porting Rules
 
@@ -267,13 +472,13 @@ For another Python project, the behavior to preserve is:
 
 - canonical names only in the public registry
 - descriptions as contract text
-- prompt frontmatter tool selection
+- `agent.yaml` tool selection
 - `Tool` plus `ToolContext` separation
 - read-before-write state in context
-- exact patch/multi-patch behavior
-- in-process undo snapshots
-- `$SHELL`/`COMSPEC` shell execution
+- patch/multi-patch behavior: exact match first, then the normalised fallback
+- undo snapshots
+- `SHELL_PROGRAM` shell execution
 - task parallelism and child context isolation
-- Claude provider-facing name transform based on model string only
+- model-facing aliases from the agent, tool mode and model profile
 - canonical persisted history
 - capped tool results and shell output

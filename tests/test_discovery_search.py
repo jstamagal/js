@@ -9,7 +9,7 @@ from js.toolkit.registry import build_default_registry
 
 @pytest.mark.parametrize('filters', [{}, {'kind': 'skill'}, {'source': 'global'}])
 def test_browse_is_bounded_and_pages_all_entries(tmp_path, monkeypatch, filters):
-    surface = build_default_registry().select(['read']).lazy_surface(tmp_path)
+    surface = build_default_registry().select(['read:lazy']).lazy_surface(tmp_path)
     entries = tuple(CatalogEntry(f'skill:item-{i:03}', f'item-{i:03}', '長' * 5000, 'skill', 'global') for i in range(120))
     monkeypatch.setattr(surface, 'catalog', lambda: entries)
     seen = []
@@ -28,13 +28,13 @@ def test_browse_is_bounded_and_pages_all_entries(tmp_path, monkeypatch, filters)
 
 @pytest.mark.parametrize(('query', 'expected'), [('download', 'fetch'), ('screenshot', 'terminal_snapshot'), ('jupyter', 'kernel'), ('edit file', 'patch'), ('find files', 'fs_search'), ('spawn agent', 'task')])
 def test_intent_search_ranks_native_tools(tmp_path, query, expected):
-    surface = build_default_registry().lazy_surface(tmp_path)
+    surface = build_default_registry().select(['*:lazy']).lazy_surface(tmp_path)
     results = json.loads(surface.discover(query=query))['results']
     assert results[0]['id'] == f'native:{expected}'
 
 
 def test_screenshot_query_reaches_browser_probe_through_its_description(tmp_path):
-    surface = build_default_registry().lazy_surface(tmp_path)
+    surface = build_default_registry().select(['*:lazy']).lazy_surface(tmp_path)
     names = {
         item['name'] for item in json.loads(surface.discover(query='screenshot'))['results']
     }
@@ -43,14 +43,14 @@ def test_screenshot_query_reaches_browser_probe_through_its_description(tmp_path
 
 @pytest.mark.parametrize('query', ['take a screenshot', 'install a package', 'the a of'])
 def test_stop_words_narrow_instead_of_flooding_the_catalog(tmp_path, query):
-    surface = build_default_registry().lazy_surface(tmp_path)
+    surface = build_default_registry().select(['*:lazy']).lazy_surface(tmp_path)
     catalog_total = json.loads(surface.discover())['total']
     page = json.loads(surface.discover(query=query))
     assert page['total'] <= catalog_total // 4
 
 
 def test_word_boundaries_and_partial_match_ranking(tmp_path, monkeypatch):
-    surface = build_default_registry().select(['read']).lazy_surface(tmp_path)
+    surface = build_default_registry().select(['read:lazy']).lazy_surface(tmp_path)
     entries = (CatalogEntry('skill:skills', 'skills', 'Skill instructions', 'skill', 'global'), CatalogEntry('native:kill', 'kill', 'Stop process', 'native', 'shell'))
     monkeypatch.setattr(surface, 'catalog', lambda: entries)
     assert [item['id'] for item in json.loads(surface.discover(query='kill process unknown'))['results']] == ['native:kill']
@@ -64,7 +64,7 @@ def test_async_mcp_results_are_bounded(tmp_path):
         async def discover(self, **kwargs):
             return tuple(CatalogEntry(f'mcp:tool-{i}', f'tool-{i}', 'search ' + '長' * 5000, 'mcp', 'server') for i in range(100))
 
-    surface = build_default_registry().select(['read']).lazy_surface(tmp_path, mcp_host=Host())
+    surface = build_default_registry().select(['read:lazy']).lazy_surface(tmp_path, mcp_host=Host())
     raw = asyncio.run(surface.discover_async(kind='mcp', query='search'))
     assert len(raw.encode()) <= 8192
     assert json.loads(raw)['truncated']
@@ -72,12 +72,12 @@ def test_async_mcp_results_are_bounded(tmp_path):
 
 @pytest.mark.parametrize('offset', [-1, True, '1', 1.5])
 def test_invalid_offset_is_rejected(tmp_path, offset):
-    surface = build_default_registry().select(['read']).lazy_surface(tmp_path)
+    surface = build_default_registry().select(['read:lazy']).lazy_surface(tmp_path)
     assert surface.discover(offset=offset).startswith('ERROR: offset')
 
 
 def test_oversized_identifier_is_reported_without_corrupting_load_id(tmp_path, monkeypatch):
-    surface = build_default_registry().select(['read']).lazy_surface(tmp_path)
+    surface = build_default_registry().select(['read:lazy']).lazy_surface(tmp_path)
     entries = (CatalogEntry('skill:' + '長' * 5000, 'large', '', 'skill', 'global'), CatalogEntry('skill:ok', 'ok', '', 'skill', 'global'))
     monkeypatch.setattr(surface, 'catalog', lambda: entries)
     raw = surface.discover()
@@ -89,7 +89,7 @@ def test_oversized_identifier_is_reported_without_corrupting_load_id(tmp_path, m
 
 
 def test_empty_search_provides_browse_hint(tmp_path):
-    surface = build_default_registry().select(['read']).lazy_surface(tmp_path)
+    surface = build_default_registry().select(['read:lazy']).lazy_surface(tmp_path)
     page = json.loads(surface.discover(query='zqxnonexistent'))
     assert page['results'] == []
     assert 'empty query' in page['hint']

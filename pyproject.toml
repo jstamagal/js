@@ -4,40 +4,42 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "js"
-version = "0.2.2"
-description = "LO-shaped AI SDK agent with hacking tools"
+version = "0.2.4"
+description = "Personal terminal LLM harness with hacking tools"
 requires-python = ">=3.12"
 dependencies = [
-    "ai[openai,anthropic]>=0.5.2",
-    "openai>=3.13.0",
-    "anthropic>=1.5.0",
+    "ai[openai,anthropic]>=0.9.0",
+    "openai>=3.52.0",
+    "anthropic>=1.17.0",
     "httpx>=0.28.1",
-    # the persistent-kernel tools (js/toolkit/kernel.py, toolbox.py). base deps,
-    # not an extra: one box, one user, and a mode that half-installs is a mode
-    # that fails at the worst moment. the tools still degrade to one clear ERROR
-    # naming the package if an env somehow lacks them.
-    "ipykernel>=6.29; sys_platform != 'android'",
-    "jupyter_client>=8.0; sys_platform != 'android'",
     "pexpect>=4.9.0",
-    "Pillow>=10.0; sys_platform != 'android'",
     "prompt_toolkit>=3.0",
     "pyte>=0.8.2",
     "PyYAML>=6.0",
-    # direct import in transcript.py, tui.py, and toolkit/kernel.py. was riding
-    # in transitively on textual; declared now because three modules import it.
     "rich>=13.0",
-    "textual>=0.85",
     "tomli_w>=1.0",
-    "platformdirs>=4.0",
-    "jsonschema==4.25.1",
-    "httpx2>=2.12.0",
+    # Core tool argument validation; referencing brings native rpds-py.
+    "jsonschema>=4.26.0",
+    "httpx2>=2.16.2",
+    # The jev tool.
+    "typesafe-sdk>=0.7.5",
+    "markdown-it-py>=3.0",
 ]
 
 [project.optional-dependencies]
+kernel = [
+    "ipykernel>=6.29; sys_platform != 'android'",
+    "jupyter_client>=8.0; sys_platform != 'android'",
+]
+vision = [
+    "Pillow>=10.0; sys_platform != 'android'",
+]
 browser = [
-    "playwright>=1.61.0",
+    "js[vision]",
+    "playwright>=1.65.2; sys_platform != 'android'",
 ]
 test = [
+    "js[kernel,vision,browser]",
     "pytest>=9.0",
     "pytest-xdist>=3.6",
 ]
@@ -47,9 +49,13 @@ js = "js.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["js*"]
+# defaults/ holds the stock setup beside the js package.
+include = ["js*", "defaults*"]
 
 [tool.pytest.ini_options]
+# Raw `pytest` runs the offline suite in parallel, as `just test` does;
+# `-m live` (or `just test-live`) opts in, `-n0` runs serial.
+addopts = "-m 'not ai_provider and not vision and not e2e and not live' -n logical --dist worksteal"
 markers = [
     "e2e: exercises a complete user-visible runtime path",
     "ai_provider: requires configured ai-python provider credentials or local OpenAI-compatible endpoint",
@@ -58,19 +64,16 @@ markers = [
 ]
 
 [tool.setuptools.package-data]
-"js" = ["tool_releases.json"]
-"js.toolkit" = ["tool_descriptions/*/*.md", "toolbox_examples/*.py"]
+"js" = ["jsrc.template", "tool_releases.json"]
+"js.toolkit" = ["toolbox_examples/*.py"]
+"defaults" = ["jsrc", "fset", "secret-patterns", "themes/*", "help/*", "agents/**/*", "tool_descriptions/*", "skills/**/*", "snippets/*.md"]
 
 # dev tooling for agents hacking this code (and for the justfile quality
 # recipes). synced into the project env by `uv sync`, so ruff lands on the
 # venv PATH and js agents can call it through the shell tool directly.
 [dependency-groups]
 dev = [
-    # 0.16 turned on opinion rules by default (BLE001 blind-except, TRY004,
-    # S110 try-except-pass, PLW1510 subprocess check) plus I001 import sorting:
-    # 282 hits on unchanged code, none of them defects. This repo's gate is
-    # defaults + UP. Raise the bound deliberately, with the cleanup.
-    "ruff>=0.15,<0.16",
+    "ruff>=0.16",
 ]
 
 [tool.ruff]
@@ -80,5 +83,11 @@ line-length = 100
 exclude = [".scratch"]
 
 [tool.ruff.lint]
-# defaults already cover E (errors) + F (pyflakes); add pyupgrade.
-extend-select = ["UP"]
+# The rule set is named here, not left to ruff's defaults, so a ruff upgrade
+# does not change what the gate checks: errors, pyflakes, pyupgrade, import
+# order.
+select = ["E4", "E7", "E9", "F", "UP", "I"]
+
+[tool.ruff.lint.isort]
+# `from js import cli, memory as M` stays one statement.
+combine-as-imports = true

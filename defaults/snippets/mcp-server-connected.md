@@ -1,0 +1,1 @@
+Connected MCP server ({{DETAIL}}); use this exact server name with MCP controls.

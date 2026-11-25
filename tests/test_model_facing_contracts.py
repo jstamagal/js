@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from js.mcp.host import MCPHost
 from js.mcp_config import MCPConfiguration, MCPPolicy
-from js.toolkit.core import ToolContext, call_tool
 from js.toolkit.registry import build_default_registry
 
 
 def _specs(*names: str) -> dict[str, dict]:
-    registry = build_default_registry().select(names)
+    registry = build_default_registry().select([f"{name}:eager" for name in names])
     return {
         spec["function"]["name"]: spec["function"]
         for spec in registry.openai_specs()
@@ -40,7 +39,7 @@ def test_patch_schema_has_complete_scalar_and_nonempty_batch_forms():
 
     # Flat, not oneOf: llama.cpp's schema-to-grammar path emits {} for a bare
     # oneOf with no top-level properties, so a grammar-constrained model cannot
-    # call patch at all. _apply_edit rejects mixing the two forms in code.
+    # call patch at all. patch() rejects mixing the two forms in code.
     assert "oneOf" not in schema
     assert schema["required"] == ["file_path"]
     assert schema["additionalProperties"] is False
@@ -50,23 +49,6 @@ def test_patch_schema_has_complete_scalar_and_nonempty_batch_forms():
     # Required names may be reordered, but duplicates make the schema invalid.
     assert sorted(props["edits"]["items"]["required"]) == ["new_string", "old_string"]
     assert props["edits"]["items"]["additionalProperties"] is False
-
-
-def test_todo_item_contract_requires_content_and_defaults_status(tmp_path):
-    tool = build_default_registry().resolve("todo_write")
-    item = tool.openai_spec()["function"]["parameters"]["properties"]["todos"]["items"]
-
-    assert item["required"] == ["content"]
-    assert item["properties"]["content"]["minLength"] == 1
-    assert "pattern" not in item["properties"]["content"]  # llama.cpp grammar path chokes on regex patterns; todo_write validates in code
-    assert item["properties"]["status"]["default"] == "pending"
-    context = ToolContext(cwd=tmp_path)
-    call_tool(
-        tool,
-        {"todos": [{"content": "model contract"}]},
-        context,
-    )
-    assert context.todos["model contract"].status == "pending"
 
 
 def test_closed_sets_and_numeric_bounds_match_handler_contracts():
@@ -114,7 +96,7 @@ def test_closed_sets_and_numeric_bounds_match_handler_contracts():
 def test_mcp_control_catalog_ids_load_callable_tools():
     host = MCPHost(MCPConfiguration((), MCPPolicy()))
     entries = host.initial_catalog()
-    assert {entry.name for entry in entries} == set(dict(host.CONTROL_TOOLS))
+    assert {entry.name for entry in entries} == set(dict(host.control_tools()))
     for entry in entries:
         assert entry.loadable is True
         assert entry.description.strip()

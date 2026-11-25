@@ -3,23 +3,44 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+from prompt_toolkit.input import create_pipe_input
+from prompt_toolkit.output import DummyOutput
+
 from js import logins, paths, picker, providers
+
+
+def test_model_picker_accepts_action_keys():
+    from prompt_toolkit.input import DummyInput
+
+    state = picker.ModelPicker()
+    app = state.application(input=DummyInput(), output=DummyOutput(), keymap={"focus": (("z",),)})
+    app.key_bindings.get_bindings_for_keys(("z",))[0].handler(None)
+    assert state.focus == "models"
 
 
 def _reset_logins() -> None:
     logins.set_config_dir(paths.login_store_dir())
 
 
+async def _drive(state: picker.ModelPicker, *keys: str):
+    """Run the picker app, typing each key in turn; return the app's result."""
+    with create_pipe_input() as pipe:
+        app = state.application(input=pipe, output=DummyOutput())
+        task = asyncio.ensure_future(app.run_async())
+        for key in keys:
+            await asyncio.sleep(0.05)
+            pipe.send_text(key)
+        return await asyncio.wait_for(task, timeout=10)
+
+
 def test_model_picker_opens_without_logins(tmp_path: Path):
     logins.set_config_dir(tmp_path)
 
     async def smoke() -> None:
-        app = picker.ModelPicker()
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            assert len(app.query_one("#provider-list").children) == 0
-            await pilot.press("escape")
-            assert app.return_value is None
+        state = picker.ModelPicker()
+        assert state.provider_rows == []
+        assert await _drive(state, "\r", "q") is None
 
     try:
         asyncio.run(smoke())
@@ -27,18 +48,19 @@ def test_model_picker_opens_without_logins(tmp_path: Path):
         _reset_logins()
 
 
-def test_model_picker_shows_saved_login_models(tmp_path: Path):
+@pytest.mark.parametrize("cancel_key", ["q", "\x1b", "\x03"])
+def test_model_picker_shows_saved_login_models(tmp_path: Path, cancel_key: str):
     logins.set_config_dir(tmp_path)
     logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="sk-test"))
     logins.cache_models("deepseek", ["deepseek-v4-flash"])
 
     async def smoke() -> None:
-        app = picker.ModelPicker(provider_id="deepseek", model="deepseek-v4-flash")
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            assert app.query_one("#provider-list").index == 0
-            assert app.query_one("#model-list").index == 0
-            assert app._model_rows[0].id == "deepseek-v4-flash"
+        state = picker.ModelPicker(provider_id="deepseek", model="deepseek-v4-flash")
+        assert state.provider_index == 0
+        assert state.model_index == 0
+        assert state.model_rows[0].id == "deepseek-v4-flash"
+        # With a model selectable, each cancel key closes the picker with no choice.
+        assert await _drive(state, cancel_key) is None
 
     try:
         asyncio.run(smoke())
@@ -51,7 +73,7 @@ def test_provider_rows_include_saved_logins_only(tmp_path: Path):
     logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="sk-test"))
 
     try:
-        rows = {row.id: row for row in picker._provider_rows()}
+        rows = {row.id: row for row in picker.ModelPicker().provider_rows}
         assert rows["deepseek"].source == "login"
         assert "ollama" not in rows
         assert "openai" not in rows
@@ -61,9 +83,10 @@ def test_provider_rows_include_saved_logins_only(tmp_path: Path):
 
 def test_model_rows_use_cache_before_provider_default(tmp_path: Path):
     logins.set_config_dir(tmp_path)
+    logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="sk-test"))
     logins.cache_models("deepseek", ["cached-model"])
     try:
-        rows = picker._model_rows("deepseek")
+        rows = picker.ModelPicker(provider_id="deepseek").model_rows
         assert [row.id for row in rows] == ["cached-model"]
     finally:
         _reset_logins()
@@ -71,20 +94,22 @@ def test_model_rows_use_cache_before_provider_default(tmp_path: Path):
 
 def test_model_rows_require_cached_models(tmp_path: Path):
     logins.set_config_dir(tmp_path)
+    logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="sk-test"))
     try:
-        rows = picker._model_rows("deepseek")
+        rows = picker.ModelPicker(provider_id="deepseek").model_rows
         assert rows == []
     finally:
         _reset_logins()
 
 
-def test_codex_model_rows_are_exactly_the_cache(tmp_path: Path):
+def test_model_rows_are_exactly_the_cache(tmp_path: Path):
     # the picker used to splice in a hardcoded model id to paper over a stale
     # listing; the listing is fixed at the source now, so it shows the cache
     logins.set_config_dir(tmp_path)
-    logins.cache_models("openai-codex", ["codex-auto-review", "gpt-5.4", "gpt-5.6-sol"])
+    logins.save_login(logins.Login(provider_id="openai", provider_api_key="sk-test"))
+    logins.cache_models("openai", ["codex-auto-review", "gpt-5.4", "gpt-5.6-sol"])
     try:
-        rows = picker._model_rows("openai-codex")
+        rows = picker.ModelPicker(provider_id="openai").model_rows
         assert [row.id for row in rows] == ["codex-auto-review", "gpt-5.4", "gpt-5.6-sol"]
     finally:
         _reset_logins()
@@ -100,16 +125,43 @@ def test_picker_fetch_action_updates_model_cache(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(logins, "fetch_models", fake_fetch)
 
     async def smoke() -> None:
-        app = picker.ModelPicker(provider_id="deepseek")
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            await pilot.press("f")
-            await pilot.pause()
-            assert logins.load_model_cache()["deepseek"] == ["fresh-model"]
-            assert app._model_rows[0].id == "fresh-model"
+        state = picker.ModelPicker(provider_id="deepseek")
+        assert await _drive(state, "f", "q") is None
+        assert logins.load_model_cache()["deepseek"] == ["fresh-model"]
+        assert state.model_rows[0].id == "fresh-model"
 
     try:
         asyncio.run(smoke())
+    finally:
+        _reset_logins()
+
+
+def test_picker_refresh_keeps_a_model_selected_while_the_fetch_waits(monkeypatch, tmp_path):
+    logins.set_config_dir(tmp_path)
+    logins.save_login(logins.Login(provider_id="deepseek", provider_api_key="offline-key"))
+    logins.cache_models("deepseek", ["initial", "chosen"])
+
+    async def scenario():
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def fetch(_login):
+            started.set()
+            await release.wait()
+            return ["new", "chosen", "initial"]
+
+        monkeypatch.setattr(logins, "fetch_models", fetch)
+        state = picker.ModelPicker(provider_id="deepseek", model="initial")
+        task = asyncio.create_task(state.fetch())
+        await started.wait()
+        state.toggle_focus()
+        state.move(1)
+        release.set()
+        await task
+
+        assert state.selection()["model"] == "chosen"
+
+    try:
+        asyncio.run(scenario())
     finally:
         _reset_logins()
 
@@ -120,19 +172,14 @@ def test_picker_enter_selects_model(tmp_path: Path):
     logins.cache_models("deepseek", ["deepseek-v4-flash"])
 
     async def smoke() -> None:
-        app = picker.ModelPicker(provider_id="deepseek", model="deepseek-v4-flash")
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            await pilot.press("tab")
-            await pilot.press("enter")
-            await pilot.pause()
-            assert app.return_value == {
-                "provider_id": "deepseek",
-                "provider_base_url": None,
-                "provider_api_key": "sk-test",
-                "provider_headers": {},
-                "model": "deepseek-v4-flash",
-            }
+        state = picker.ModelPicker(provider_id="deepseek", model="deepseek-v4-flash")
+        assert await _drive(state, "\t", "\r") == {
+            "provider_id": "deepseek",
+            "provider_base_url": None,
+            "provider_api_key": "sk-test",
+            "provider_headers": {},
+            "model": "deepseek-v4-flash",
+        }
 
     try:
         asyncio.run(smoke())
@@ -148,25 +195,20 @@ def test_picker_switching_provider_does_not_leak_prior_base_or_key(tmp_path: Pat
     logins.cache_models("ollama", ["gemma4:e2b"])
 
     async def smoke() -> None:
-        app = picker.ModelPicker(
+        state = picker.ModelPicker(
             provider_id="deepseek",
             provider_base_url="https://api.deepseek.com",
             provider_api_key="sk-deepseek",
             model="deepseek-v4-flash",
         )
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            await pilot.press("down")
-            await pilot.press("tab")
-            await pilot.press("enter")
-            await pilot.pause()
-            assert app.return_value == {
-                "provider_id": "ollama",
-                "provider_base_url": "http://ollama.test/v1",
-                "provider_api_key": "ollama",
-                "provider_headers": {},
-                "model": "gemma4:e2b",
-            }
+        # down arrow moves to the next provider, tab to the model pane.
+        assert await _drive(state, "\x1b[B", "\t", "\r") == {
+            "provider_id": "ollama",
+            "provider_base_url": "http://ollama.test/v1",
+            "provider_api_key": "ollama",
+            "provider_headers": {},
+            "model": "gemma4:e2b",
+        }
 
     try:
         asyncio.run(smoke())
@@ -178,4 +220,15 @@ def test_provider_registry_shapes_for_picker_shortcuts():
     assert providers.provider_for_login("ollama").effective_sdk_provider_id == "openai"
     assert providers.provider_for_login("llama.cpp").default_base_url == "http://127.0.0.1:8080/v1"
     assert providers.provider_for_login("mimo-token-plan").append_only is True
-    assert providers.provider_for_login("deepseek").reasoning_effort == "xhigh"
+
+
+def test_model_picker_accepts_view_and_terminal_dependencies(monkeypatch):
+    from types import SimpleNamespace
+
+    source, target = object(), object()
+    seen = []
+    state = SimpleNamespace(application=lambda **kwargs: seen.append(kwargs) or "app")
+    monkeypatch.setattr(picker, "run_modal", lambda app: app)
+    result = picker.pick_model(input=source, output=target, picker_factory=lambda **kwargs: state)
+    assert result == "app"
+    assert seen == [{"input": source, "output": target}]

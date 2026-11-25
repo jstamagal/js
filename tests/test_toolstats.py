@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from js import toolstats
 
 
@@ -24,6 +26,15 @@ def test_stderr_and_devnull_redirects_are_not_writes():
     assert c("pytest -q 2>&1") == {}
     assert c("make >/dev/null 2>&1") == {}
     assert c("FOO=1 env bar --flag") == {}
+
+
+@pytest.mark.parametrize("operator", [">", ">>"])
+@pytest.mark.parametrize("spacing", ["", " ", "   ", "\t"])
+@pytest.mark.parametrize("target,is_write", [("/dev/null", False), ("out.txt", True)])
+def test_redirect_classification_does_not_backtrack(operator, spacing, target, is_write):
+    habits = toolstats.classify_shell_command(f"echo x {operator}{spacing}{target}")
+    assert bool(habits.get("write_via_shell")) is is_write
+    assert bool(habits.get("echo_only")) is not is_write
 
 
 def test_summarize_counts_calls_errors_turns_and_bytes(tmp_path):
@@ -58,6 +69,24 @@ def test_summarize_counts_calls_errors_turns_and_bytes(tmp_path):
     assert summary["final_text_chars"] == len("Done.")
 
 
+@pytest.mark.parametrize("invalid", [[], ["record"], None, False, 42, "record"])
+def test_summarize_skips_non_object_records_between_valid_lines(tmp_path, invalid):
+    session = tmp_path / "s.jsonl"
+    valid = [
+        {"kind": "session_metadata", "ts": 10, "agent": "full", "model": "m"},
+        {"kind": "message", "ts": 11, "message": {"role": "assistant", "content": "Done."}},
+    ]
+    session.write_text("\n".join(map(json.dumps, [valid[0], invalid, valid[1]])) + "\n")
+
+    summary = toolstats.summarize(session)
+
+    assert summary["agent"] == "full"
+    assert summary["model"] == "m"
+    assert summary["turns"] == 1
+    assert summary["duration_s"] == 1
+    assert summary["final_text_chars"] == 5
+
+
 def test_cli_prints_one_tagged_line_with_extras(tmp_path, capsys):
     data = tmp_path / "js" / "sessions" / "full"
     data.mkdir(parents=True)
@@ -66,3 +95,19 @@ def test_cli_prints_one_tagged_line_with_extras(tmp_path, capsys):
     line = capsys.readouterr().out.strip()
     assert line.startswith("TOOLSTATS {")
     assert json.loads(line[len("TOOLSTATS "):])["exit"] == "0"
+
+
+def test_non_object_shell_arguments_keep_the_other_calls(tmp_path):
+    session = tmp_path / "s.jsonl"
+    arguments = ["null", "[]", "42", '"command"', "true", '{"command":"cat a.py"}']
+    with session.open("w", encoding="utf-8") as stream:
+        for value in arguments:
+            stream.write(json.dumps({"kind": "message", "message": {
+                "role": "assistant", "content": "", "tool_calls": [{
+                    "function": {"name": "shell", "arguments": value},
+                }],
+            }}) + "\n")
+            stream.flush()
+            summary = toolstats.summarize(session)
+            assert summary["tool_calls"] == arguments.index(value) + 1
+    assert summary["shell_habits"] == {"read_via_shell": 1}

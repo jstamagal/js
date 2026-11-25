@@ -7,14 +7,16 @@ import re
 from pathlib import Path
 
 import pytest
+from turn_driver import one_turn
 
-from js import tools as runtime_tools
+from js import history_record, tool_result_messages, toolkit as runtime_tools
 from js.config import from_env
-from js.runtime import Telemetry, run_turn
+from js.runtime import Telemetry
 from js.toolkit import ToolContext
-from js.toolkit.fs import fs_search, patch, read, write
-from js.toolkit.meta import task
-
+from js.toolkit.file_search import fs_search
+from js.toolkit.fs import fs_read, write
+from js.toolkit.patch import patch
+from js.toolkit.subagents import task
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -44,8 +46,8 @@ def test_toolkit_exercises_grounded_file_lifecycle_and_search(tmp_path):
     actual_unread = patch("code.py", old_string="old", new_string="new", context=context)
     assert actual_unread == "ERROR: You must read the file with the read tool before attempting to edit it."
 
-    actual_read = read("code.py", context=context)
-    assert re.search(r"^1:[a-f0-9]{2}\|class TaskRunner:", actual_read, re.MULTILINE)
+    actual_read = fs_read("code.py", context=context)
+    assert re.search(r"^1\|class TaskRunner:", actual_read, re.MULTILINE)
 
     actual_patch = patch("code.py", old_string="return 'old'", new_string="return 'new'", context=context)
     assert actual_patch.startswith(f"patched {target}")
@@ -82,7 +84,7 @@ def test_task_backend_runs_real_child_turn_through_local_proxy():
 def test_real_model_turn_uses_fs_search_and_task_end_to_end(monkeypatch):
     _require_provider()
     monkeypatch.chdir(PROJECT_ROOT)
-    runtime_tools.DEFAULT_CONTEXT = ToolContext(cwd=PROJECT_ROOT)
+    runtime_tools.STOCK_CONTEXT = ToolContext(cwd=PROJECT_ROOT)
     cfg = from_env()
     messages = [
         {
@@ -97,7 +99,7 @@ def test_real_model_turn_uses_fs_search_and_task_end_to_end(monkeypatch):
 
     capture = io.StringIO()
     with contextlib.redirect_stdout(capture):
-        run_turn(
+        one_turn(
             cfg,
             "You are a precise tool-using test agent. Use requested tools. Keep final answer exact.",
             messages,
@@ -129,7 +131,7 @@ def test_real_model_turn_is_available_only_when_local_proxy_is_configured():
 def test_live_vision_model_reads_image_through_real_message_path(tmp_path):
     """End-to-end proof that image bytes reach a model that actually reads them.
 
-    Real fs_read -> real model_client.build_tool_result_message -> a LIVE
+    Real fs_read -> real tool_result_messages.build_tool_result_messages -> a LIVE
     vision model via model_client.stream_model. Skips unless Pillow and a
     reachable local vision model are present, so it never fails spuriously
     where the local model is absent."""
@@ -166,14 +168,14 @@ def test_live_vision_model_reads_image_through_real_message_path(tmp_path):
     marker = fs.fs_read("swatch.png", context=context)
     assert marker.startswith("IMAGE_RESULT\t")
 
-    convo = model_client.history_to_ai_messages("You can see images.", [
+    convo = history_record.history_to_ai_messages("You can see images.", [
         {"role": "user", "content": "Read swatch.png and name its color in one word."},
         {"role": "assistant", "content": "", "tool_calls": [
             {"id": "c1", "type": "function",
              "function": {"name": "read", "arguments": '{"file_path":"swatch.png"}'}}
         ]},
     ])
-    convo.extend(model_client.build_tool_result_messages("c1", "read", marker))
+    convo.extend(tool_result_messages.build_tool_result_messages("c1", "read", marker))
 
     reply = ""
     for _ in range(4):

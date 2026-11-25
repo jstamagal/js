@@ -16,21 +16,19 @@ runner joins it onto RepoRacer's pass/fail record.
 """
 from __future__ import annotations
 
-import argparse
 import json
 import re
-import sys
 from collections import Counter
 from pathlib import Path
 
-from . import paths as _paths
+from . import messages as msgs, paths as _paths
 
 _SEGMENT_SPLIT = re.compile(r"\s*(?:\|\||&&|\||;)\s*")
 _READ_CMDS = {"cat", "head", "tail", "less", "more", "bat"}
 _SEARCH_CMDS = {"grep", "rg", "ag", "egrep", "fgrep"}
 _FIND_CMDS = {"find", "fd", "fdfind", "locate"}
 _REMOVE_CMDS = {"rm", "rmdir", "unlink"}
-_REDIRECT = re.compile(r"(?<![<>&\d])>{1,2}\s*(?!&|/dev/)\S")  # a file redirect; not 2>&1, not >/dev/null
+_REDIRECT = re.compile(r"(?<![<>&\d])>{1,2}(?!>)\s*(?!&|/dev/)\S")  # a file redirect; not 2>&1, not >/dev/null
 _HEREDOC = re.compile(r"<<-?\s*['\"]?\w")
 _SED_INPLACE = re.compile(r"\bsed\b[^|;&]*\s-[a-zA-Z]*i")
 _PERL_INPLACE = re.compile(r"\bperl\b[^|;&]*\s-[a-zA-Z]*i")
@@ -88,6 +86,8 @@ def summarize(path: Path) -> dict:
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if not isinstance(record, dict):
+            continue
         ts = record.get("ts")
         if isinstance(ts, (int, float)):
             first_ts = ts if first_ts is None else min(first_ts, ts)
@@ -115,7 +115,8 @@ def summarize(path: Path) -> dict:
                         parsed = json.loads(arguments) if isinstance(arguments, str) else dict(arguments)
                     except (json.JSONDecodeError, TypeError, ValueError):
                         parsed = {}
-                    habits.update(classify_shell_command(str(parsed.get("command") or "")))
+                    if isinstance(parsed, dict):
+                        habits.update(classify_shell_command(str(parsed.get("command") or "")))
         elif role == "tool":
             content = message.get("content")
             text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
@@ -139,35 +140,60 @@ def summarize(path: Path) -> dict:
     }
 
 
+def _session_agent(path: Path) -> str | None:
+    """The agent a session file's last start metadata names."""
+    agent = None
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if '"session_metadata"' not in line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict) and record.get("kind") == "session_metadata":
+            agent = record.get("agent", agent)
+    return agent
+
+
 def latest_session(data_dir: Path, agent: str | None) -> Path | None:
+    """The most recently written session under `data_dir/sessions`, of `agent` when given."""
     root = data_dir / "sessions"
-    if agent:
-        root = root / agent
-    candidates = list(root.rglob("*.jsonl")) if root.is_dir() else []
-    if not candidates:
-        return None
-    return max(candidates, key=lambda p: p.stat().st_mtime)
+    candidates = []
+    if root.is_dir():
+        for path in root.rglob("*.jsonl"):
+            try:
+                candidates.append((path.stat().st_mtime, path))
+            except OSError:
+                continue
+    candidates.sort(key=lambda candidate: candidate[0], reverse=True)
+    for _, path in candidates:
+        try:
+            if not agent or _session_agent(path) == agent:
+                return path
+        except OSError:
+            continue
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="js.toolstats", description=__doc__.split("\n\n")[1])
-    parser.add_argument("path", nargs="?", help="session JSONL to summarize")
-    parser.add_argument("--latest", action="store_true", help="summarize the newest session instead of a path")
-    parser.add_argument("--data-dir", type=Path, default=None, help="js data dir holding sessions/ (default: the platform data dir)")
-    parser.add_argument("--agent", default=None, help="restrict --latest to this agent's sessions")
-    parser.add_argument("--tag", default="", help="prefix the JSON line with this word, e.g. TOOLSTATS")
-    parser.add_argument("--extra", action="append", default=[], metavar="K=V", help="extra key=value to include (repeatable)")
+    parser = msgs.ArgumentParser(prog="js.toolstats", description=msgs.TOOLSTATS_DESCRIPTION.words())
+    parser.add_argument("path", nargs="?", help=msgs.OPT_TOOLSTATS_PATH.words())
+    parser.add_argument("--latest", action="store_true", help=msgs.OPT_TOOLSTATS_LATEST.words())
+    parser.add_argument("--data-dir", type=Path, default=None, help=msgs.OPT_TOOLSTATS_DATA_DIR.words())
+    parser.add_argument("--agent", default=None, help=msgs.OPT_TOOLSTATS_AGENT.words())
+    parser.add_argument("--tag", default="", help=msgs.OPT_TOOLSTATS_TAG.words())
+    parser.add_argument("--extra", action="append", default=[], metavar="K=V", help=msgs.OPT_TOOLSTATS_EXTRA.words())
     args = parser.parse_args(argv)
 
     if args.latest:
-        path = latest_session(args.data_dir or _paths.data_dir(), args.agent)
+        path = latest_session(args.data_dir or _paths.sessions_root().parent, args.agent)
         if path is None:
-            print("js: toolstats: no session found", file=sys.stderr)
+            msgs.warn(msgs.TOOLSTATS_NO_SESSION)
             return 1
     elif args.path:
         path = Path(args.path)
     else:
-        parser.error("give a session path or --latest")
+        parser.error(msgs.TOOLSTATS_NEEDS_PATH.words())
     summary = summarize(path)
     for item in args.extra:
         key, _, value = item.partition("=")

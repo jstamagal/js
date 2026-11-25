@@ -8,22 +8,19 @@ import time
 import pytest
 
 from js.toolkit import ToolContext
-from js.toolkit.fs import _rg_stream, _rg_types, fs_read, fs_search
-
+from js.toolkit.file_search import _rg_stream, _rg_types, fs_search
+from js.toolkit.fs import fs_read
 
 requires_rg = pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep not installed")
 
 
 def _numbered_lines(body: str) -> list[int]:
-    """Line numbers out of read()'s `<number>:<2-char checksum>|<text>` prefix."""
+    """Line numbers out of read()'s `<number>|<text>` prefix."""
     out = []
     for line in body.splitlines():
         head, sep, _rest = line.partition("|")
-        if not sep or len(head) < 3:
-            continue
-        number, hash_sep, line_hash = head.partition(":")
-        if hash_sep and len(line_hash) == 2 and number.isdigit():
-            out.append(int(number))
+        if sep and head.isdigit():
+            out.append(int(head))
     return out
 
 
@@ -62,9 +59,9 @@ def test_an_oversized_range_is_clamped_rather_than_rejected(tmp_path):
 
 
 def _read_schema():
-    from js.toolkit import fs
+    from js.toolkit import fs_tools
 
-    return next(t for t in fs.tools() if t.name == "read").openai_spec()["function"]["parameters"]
+    return next(t for t in fs_tools.tools() if t.name == "read").openai_spec()["function"]["parameters"]
 
 
 def _embedded_calls(text: str) -> list[dict]:

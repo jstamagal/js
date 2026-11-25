@@ -1,0 +1,231 @@
+"""`~/.js/commands/NAME.md` is `/NAME`: the line sends the file's text with
+$1 / $@ / ${N:-default} filled from its arguments, and Tab completes the name."""
+
+from __future__ import annotations
+
+import pytest
+from repl_driver import output_of, record_turns, stub_screen, turn_stub, type_into_js
+
+from js import (
+    cli,
+    conversation,
+    prompt_commands as pc,
+    text_layout,
+)
+
+SESSION = "cmds"
+
+
+# --- substitution ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(("body", "args", "expected"), [
+    ("Review $1 for $2.", ["a.py", "bugs"], "Review a.py for bugs."),
+    ("All: $@", ["x", "y z"], "All: x y z"),
+    ("All: $ARGUMENTS", ["x", "y"], "All: x y"),
+    ("Missing: [$3]", ["a"], "Missing: []"),
+    ("Mode ${2:-quick}", ["a"], "Mode quick"),
+    ("Mode ${2:-quick}", ["a", "deep"], "Mode deep"),
+    ("Mode ${1:-quick}", [""], "Mode quick"),
+    ("Topic ${@:-anything}", [], "Topic anything"),
+    ("Rest ${@:2}", ["a", "b", "c"], "Rest b c"),
+    ("One ${@:2:1}", ["a", "b", "c"], "One b"),
+    ("Tenth $10", [str(i) for i in range(1, 11)], "Tenth 10"),
+])
+def test_placeholders(body, args, expected):
+    assert pc.substitute(body, args) == expected
+
+
+def test_an_argument_is_never_substituted_again():
+    assert pc.substitute("say $1 then $2", ["$2", "b"]) == "say $2 then b"
+
+
+def test_quotes_group_words():
+    assert pc.split_args("src/app.py \"be strict\" 'and quick' x") == ["src/app.py", "be strict", "and quick", "x"]
+    assert pc.split_args('"" b') == ["", "b"]
+
+
+# --- discovery -----------------------------------------------------------------
+
+
+@pytest.fixture
+def dirs(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".js" / "commands").mkdir(parents=True)
+    (project / ".js" / "commands").mkdir(parents=True)
+    monkeypatch.chdir(project)
+    return home / ".js" / "commands", project / ".js" / "commands"
+
+
+def test_global_and_project_commands_are_found_and_project_wins(dirs, tmp_path):
+    global_dir, project_dir = dirs
+    (global_dir / "review.md").write_text("global review of $1\n", encoding="utf-8")
+    (global_dir / "plan.md").write_text("Plan $@\n", encoding="utf-8")
+    (project_dir / "review.md").write_text("project review of $1\n", encoding="utf-8")
+    (global_dir / "notes.txt").write_text("not a command", encoding="utf-8")
+
+    found = pc.discover(tmp_path / "project")
+
+    assert sorted(found) == ["plan", "review"]
+    assert found["review"].body.strip() == "project review of $1"
+
+
+def test_description_is_frontmatter_or_first_line(dirs, tmp_path):
+    global_dir, _ = dirs
+    (global_dir / "a.md").write_text("---\ndescription: Audit a file\n---\nAudit $1\n", encoding="utf-8")
+    (global_dir / "b.md").write_text("\n\nExplain $1 simply\nmore\n", encoding="utf-8")
+
+    found = pc.discover(tmp_path / "project")
+
+    assert found["a"].description == "Audit a file"
+    assert found["a"].body.strip() == "Audit $1"
+    assert found["b"].description == "Explain $1 simply"
+
+
+def test_expand_names_only_known_commands(dirs, tmp_path):
+    global_dir, _ = dirs
+    (global_dir / "review.md").write_text("Review $1, focus ${2:-bugs}", encoding="utf-8")
+    found = pc.discover(tmp_path / "project")
+
+    assert pc.expand('/review src/app.py "error paths"', found) == "Review src/app.py, focus error paths"
+    assert pc.expand("/review", found) == "Review , focus bugs"
+    assert pc.expand("/unknown x", found) is None
+    assert pc.expand("review x", found) is None
+
+
+def test_a_file_is_parsed_again_only_when_it_changes(dirs, tmp_path):
+    global_dir, _ = dirs
+    command = global_dir / "review.md"
+    command.write_text("Review $1\n", encoding="utf-8")
+
+    first = pc.discover(tmp_path / "project")["review"]
+    assert pc.discover(tmp_path / "project")["review"] is first
+
+    command.write_text("Review $1 closely\n", encoding="utf-8")
+    found = pc.discover(tmp_path / "project")
+    assert found["review"].body.strip() == "Review $1 closely"
+    assert found["review"] is not first
+
+
+# --- completion and help -----------------------------------------------------------
+
+
+def test_tab_completes_a_command_file_name(dirs, monkeypatch):
+    global_dir, _ = dirs
+    (global_dir / "review.md").write_text("Review $1", encoding="utf-8")
+    built: dict = {}
+    assert type_into_js(monkeypatch, [], screen_parts=built) == 0
+    completer = built["completer"]
+
+    assert "/review" in completer.candidates("/rev")[0]
+    assert "/review" in completer.candidates("rev")[0]
+
+
+def test_help_lists_command_files(dirs, capsys, monkeypatch):
+    monkeypatch.setattr(text_layout, "terminal_width", lambda: 500)
+    global_dir, _ = dirs
+    (global_dir / "review.md").write_text("---\ndescription: Review a file\n---\nReview $1", encoding="utf-8")
+    record_turns(monkeypatch)
+    shown: list[str] = []
+
+    async def lines(enter):
+        shown.append(await output_of(enter, capsys, "/help"))
+
+    assert type_into_js(monkeypatch, lines) == 0
+
+    assert any("/review" in line and "Review a file" in line for line in shown[0].splitlines())
+
+
+# --- the REPL sends the expanded text -------------------------------------------------
+
+
+@pytest.fixture
+def repl(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in ("JS_DEFAULT_AGENT", "JS_SESSION", "JS_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+
+    async def no_compaction(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", no_compaction)
+    sent: list[str] = []
+
+    def run_turn_stub(cfg, system, messages, *_a, **_k):
+        sent.append(str(messages[-1]["content"]))
+        messages.append({"role": "assistant", "content": "ok"})
+
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
+
+    def run(lines):
+        stub_screen(monkeypatch, lines, wait=True)
+        cli.main(["--session", SESSION])
+        return sent
+
+    commands = tmp_path / ".js" / "commands"
+    commands.mkdir(parents=True)
+    return run, commands
+
+
+def test_slash_name_sends_the_filled_in_file(repl):
+    run, commands = repl
+    (commands / "review.md").write_text("Review $1 with focus on ${2:-correctness}.\n", encoding="utf-8")
+
+    sent = run(['/review js/cli.py "error paths"', "/review js/a.py"])
+
+    assert sent == ["Review js/cli.py with focus on error paths.", "Review js/a.py with focus on correctness."]
+
+
+def test_a_built_in_command_wins_over_a_file_of_the_same_name(repl, capsys):
+    run, commands = repl
+    (commands / "turns.md").write_text("hijacked", encoding="utf-8")
+
+    sent = run(["/turns"])
+
+    assert sent == []
+
+
+def test_an_unknown_slash_command_is_refused_and_a_path_is_still_prose(repl):
+    run, _commands = repl
+
+    sent = run(["/effort", "/usr/bin/python is broken"])
+
+    assert sent == ["/usr/bin/python is broken"]
+
+
+def test_apostrophe_inside_a_word_does_not_open_a_quote():
+    assert pc.split_args("don't break it") == ["don't", "break", "it"]
+    assert pc.split_args("it's 'a group' here") == ["it's", "a group", "here"]
+
+
+def test_unclosed_quote_is_literal_not_rest_of_line():
+    assert pc.split_args("'open and more") == ["'open", "and", "more"]
+
+
+def test_all_arguments_keep_line_breaks_and_indentation():
+    from pathlib import Path
+
+    commands = {"review": pc.PromptCommand(name="review", path=Path("review.md"), description="", body="Review:\n$@")}
+    out = pc.expand("/review def f():\n    return 1", commands)
+    assert out == "Review:\ndef f():\n    return 1"
+
+
+def test_double_dollar_is_a_literal_dollar():
+    assert pc.substitute("awk '{print $$1}' costs $$5.00 for $1", ["X"]) == "awk '{print $1}' costs $5.00 for X"
+
+
+def test_adjacent_quoted_and_unquoted_pieces_join_into_one_word():
+    assert pc.split_args('"a b"suffix tail') == ["a bsuffix", "tail"]
+    assert pc.split_args('"a""b" tail') == ["ab", "tail"]
+    assert pc.split_args("pre'x y' z") == ["pre'x", "y'", "z"]
+
+
+def test_raw_arguments_keep_the_first_line_indentation():
+    from pathlib import Path
+
+    commands = {"review": pc.PromptCommand(name="review", path=Path("r.md"), description="", body="Code:\n$@")}
+    assert pc.expand("/review     def f():\n    return 1", commands) == "Code:\n    def f():\n    return 1"

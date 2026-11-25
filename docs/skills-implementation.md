@@ -9,14 +9,31 @@ reference implementation, not as the target.
 
 | Stage | Spec | js now |
 |---|---|---|
-| Discover | `<root>/<name>/SKILL.md` across project + user roots | Same. `~/.agents/skills`, `~/.config/js/skills`, `./.agents/skills`, `./.js/skills`, package `js/skills/`. Native wins within a layer, project over global. |
-| Parse | frontmatter `name`, `description`; body kept on disk | Same. `js/skills.py` indexes metadata only; bodies read at activation. |
+| Discover | `<root>/<name>/SKILL.md` across project + user roots | Same. Layers, lowest first: built-in `defaults/skills/` (ships in the package), global `~/.agents/skills` then `~/.js/skills`, project `./.agents/skills` then `./.js/skills`. A project dir that resolves to a global dir (js run from `$HOME`) is skipped, so those skills keep the `global` source and are scanned once. Native wins within a layer; a higher layer shadows a lower one by name. |
+| Parse | frontmatter `name`, `description`; body kept on disk | Same, plus `tools`, `disable-model-invocation` and `paths`. `js/skills.py` indexes metadata only; bodies read at activation. |
 | **Disclose** | **name + description of every skill visible to the model at session start** | **Nothing.** Skills exist only inside the `tool_discovery` catalog. The model has to call `tool_discovery` with an empty query to learn a skill exists. There is no skills block in the system prompt or first turn. |
-| Activate | dedicated tool or file read; returns body, strips frontmatter | `skill(name)` tool and `tool_discovery load=skill:<name>`. Returns body, activates declared tools. |
+| Activate | dedicated tool or file read; returns body, strips frontmatter | Model: `skill(name)` tool and `tool_discovery load=skill:<name>`; returns body, activates declared tools. User: `/skill` in the REPL lists every skill, user-only ones marked; `/skill <name> [request]` sends the body, under a `Base directory for this skill:` header, as that turn's user message. |
+| Path-scoped | Claude Code `paths:` | The first `read`, `patch` or `write` of a matching file starts its result with one `<js-reminder>` offering the skill, once per session (see `docs/tools-reference.md`, `skill`). The skill stays in the catalog either way. |
+| User-only | `disable-model-invocation: true` | Honored. The skill is absent from the `tool_discovery` catalog, `skill` and `load=skill:<name>` refuse it, and `/skill <name>` still loads it. |
+| Disable | hide disabled skills from the catalog | `SKILLS_DISABLED` (a JSON list of names) leaves those skills out of discovery for the model and the user: absent from the `tool_discovery` catalog and path-scoped offers, refused by `skill`, `load=skill:<name>` and `/skill <name>`, not listed by `/skill`. `/skills` opens a picker that lists every skill with its source and description; space switches one on or off, enter sets the setting, `/save` keeps it. |
 | Protect | exempt skill content from compaction | Not checked in this pass. |
 
 The disclosure gap is why agents never load skills: a skill the model cannot see
 is a skill it will never ask for.
+
+## Built-in skills
+
+`defaults/skills/<name>/SKILL.md` ships in the package (`pyproject.toml`
+package-data) and is the lowest layer, so a global or project skill with the
+same name shadows it. The set is vendored from github.com/mattpocock/skills:
+grilling, grill-me, wait-what, diagnosing-bugs, code-review, codebase-design,
+improve-codebase-architecture, handoff, wayfinder. The copies are curated, not
+tracked: each `SKILL.md` frontmatter carries a `SOURCE:` line with the upstream
+URL, commit, and path, and `just skills-diff [upstream]` (default
+`~/matt-skills`) prints what changed upstream in each path since that commit.
+The vendored copies leave out upstream's `agents/openai.yaml`. Local edits:
+code-review and wayfinder name GitHub issues via `gh` as the tracker in place
+of upstream's `/setup-matt-pocock-skills` line.
 
 ## The spec (agentskills.io)
 
@@ -85,7 +102,7 @@ snapshot above is older than the shipped product. Current documented behaviour
 (`docs/en/skills#skill-descriptions-are-cut-short`,
 `docs/en/settings-reference#skilllistingbudgetfraction`):
 
-| Knob | Default | Notes |
+| Setting | Default | Notes |
 |---|---|---|
 | `skillListingBudgetFraction` | `0.01` (1% of context window) | settings.json, any scope. `0 < x <= 1`. |
 | `SLASH_COMMAND_TOOL_CHAR_BUDGET` | unset | env var, fixed character count; overrides the fraction |
@@ -119,7 +136,7 @@ bodies are re-injected, each truncated to 5000 tokens, 25 000 tokens total.
 
 | | Yours | Claude Code |
 |---|---|---|
-| Roots | `~/.config/js/skills` (→ `~/.js/skills`), `~/.agents/skills`, `./.js/skills`, `./.agents/skills` | `~/.claude/skills`, `.claude/skills` walking cwd→git root. No `.agents`. |
+| Roots | `~/.js/skills`, `~/.agents/skills`, `./.js/skills`, `./.agents/skills` | `~/.claude/skills`, `.claude/skills` walking cwd→git root. No `.agents`. |
 | Layout | `<root>/<name>/SKILL.md`, exact case | Same |
 | Where the catalog goes | system prompt, under a "skills available" heading | first-turn user message in `<system-reminder>`, plus rules in the tool description |
 | When | once per session | once per process; deltas for late-added skills; suppressed on resume |
@@ -138,7 +155,7 @@ Where Claude Code's is sharper:
   once. The 250-char per-entry cap also stops one verbose skill from starving
   the rest.
 - **Tiered protection.** First-party (bundled) skills never lose their
-  descriptions. For js that maps to package `js/skills/`.
+  descriptions. For js that maps to the built-in `defaults/skills/`.
 - **Delta announcements.** Byte-stable initial block, then only new names later.
   You get cache stability and still see skills added mid-session.
 - **Rules live in the tool description**, which is cached with the tool set,
@@ -179,16 +196,17 @@ Everything below is disclosure; discovery and activation already exist.
 
    Description cap 1 536 chars (current Claude Code default). Budget 1% of
    the model's context window in chars, 8 000 fallback, overridable by a
-   fixed char count. Over budget → package skills keep descriptions, then
+   fixed char count. Over budget → built-in skills keep descriptions, then
    drop descriptions least-used-first if an activation counter exists,
    otherwise truncate the rest to an even share; share under ~20 chars →
    names only plus `Descriptions: tool_discovery {"kind":"skill"}`. If no
    skills, emit nothing and do not register `skill`.
 
 2. **Place it in the system prompt** where `JS.md`/agent prompts are assembled
-   (`js/cli.py` → `js/memory.py`), after the operator context. Compute it
-   once when the session's `LazyToolRegistry` is built; the string is stored,
-   not recomputed per turn.
+   (`js/persona.py`, which puts the instruction files ahead of the agent
+   prompt), after the operator context. Compute it once when the session's
+   `TurnToolSurface` is built (`ToolRegistry.lazy_surface` in
+   `js/toolkit/registry.py`); the string is stored, not recomputed per turn.
 
 3. **Move the behavioural rules into `skill.md`'s tool description** and
    reference the block: "Available skills are listed under *Skills available* in
@@ -208,7 +226,10 @@ Everything below is disclosure; discovery and activation already exist.
    block is absent and `skill` is not registered; over budget every name is
    still present.
 
-Optional, from Claude Code, if wanted later: `disable-model-invocation`
-frontmatter to hide a skill from the model while keeping it user-invokable;
-`Base directory for this skill:` header in the activation payload so relative
-paths in a skill body resolve.
+`disable-model-invocation: true` is read at parse time: such a skill is
+user-only. It stays out of the model's catalog and the block above, the model
+cannot load it, and the user loads it with `/skill <name>`.
+
+Optional, from Claude Code, if wanted later: the `Base directory for this
+skill:` header in the model's activation payload (the `/skill` path already
+sends it) so relative paths in a skill body resolve.

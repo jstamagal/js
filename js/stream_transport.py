@@ -1,32 +1,292 @@
-"""Own HTTP response iterators until the SDK closes their response.
+"""The model request's HTTP layer: response ownership and the network channel.
 
 httpx2 2.12's default response stream closes the pool entry but not its active
 byte iterator (pydantic/httpx2#1195). This response-local wrapper closes both.
 Recheck the adapter when that upstream iterator ownership is repaired.
+
+The same wrapper sees every response byte: the first one ends the wait
+`FirstByteWait` shows, and the NET_DISPLAY channel reports the handshake. The
+channel prints only while a sink is installed (the async REPL screen);
+everywhere else each hook is a no-op.
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
+import asyncio
+import contextlib
+import contextvars
+import time
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable, Iterator
 from contextlib import AsyncExitStack, asynccontextmanager
+from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
+import httpx
 import httpx2
+from httpx._client import BoundAsyncStream as HttpxBoundAsyncStream
+from httpx._transports.default import AsyncResponseStream as HttpxAsyncResponseStream
 from httpx2._client import BoundAsyncStream
 from httpx2._transports.default import AsyncResponseStream
 
+from . import messages as msgs, network_display, output
+from .network_display import Failure, LabelledLine, describe_failure  # noqa: F401 — public failure formatter
+
+
+class FailureHold:
+    """The last failed request of a caller that retries: its failure line waits
+    here until the caller gives up (`report_held_failure`) or the next request
+    starts, which drops it."""
+
+    def __init__(self) -> None:
+        self.pending: BaseException | None = None
+
+
+@dataclass(frozen=True)
+class NetRole:
+    """Who is calling: the main turn (label ""), "Subagent N", or "Compacting".
+    `status` is the TurnStatus that shows the wait for a first byte. With a
+    `hold`, failures wait for the caller's verdict instead of printing."""
+
+    label: str = ""
+    agent: str = ""
+    status: Any = None
+    hold: FailureHold | None = None
+
+
+_role: contextvars.ContextVar[NetRole] = contextvars.ContextVar("js_net_role", default=NetRole())
+_output: contextvars.ContextVar[Callable | None] = contextvars.ContextVar("js_net_output", default=None)
+
+
+def set_output(emit: Callable[[int, Any, bool], None]) -> contextvars.Token:
+    """Route this turn's network notices to its output sink."""
+    return _output.set(emit)
+
+
+def reset_output(token: contextvars.Token) -> None:
+    _output.reset(token)
+
+
+def set_role(label: str = "", *, agent: str = "", status: Any = None,
+             retries: bool = False) -> contextvars.Token:
+    """Name the caller of the model requests this task makes from here on.
+    `retries` means the caller retries failed requests and reports the one it
+    gives up on with `report_held_failure`."""
+    hold = FailureHold() if retries else None
+    return _role.set(NetRole(label=label, agent=agent, status=status, hold=hold))
+
+
+def report_held_failure() -> None:
+    """The caller gave up: print its last request failure at level 1."""
+    hold = _role.get().hold
+    if hold is None or hold.pending is None:
+        return
+    exc, hold.pending = hold.pending, None
+    say_for_caller(1, Failure(exc))
+
+
+def say_or_print(level: int, line: str) -> None:
+    """A network line that predates the channel: the channel decides while a
+    sink is installed; otherwise it prints to stderr."""
+    emit = _output.get()
+    if emit is not None:
+        emit(level, line, True)
+    else:
+        output.emit(output.event("network", level=level, line=line, fallback=True))
+
+
+def say_for_caller(level: int, line: str) -> None:
+    """`say`, prefixed with the calling role's label ("Subagent 2: ...")."""
+    say(level, _labelled(_role.get(), line))
+
+
+def say_or_print_for_caller(level: int, line: str) -> None:
+    """`say_or_print`, prefixed with the calling role's label: a line about
+    something that changed the session, which `js -p` prints too."""
+    say_or_print(level, _labelled(_role.get(), line))
+
+
+def _labelled(role: NetRole, line: str) -> str:
+    if not role.label:
+        return line
+    return LabelledLine(role.label, line)
+
+
+def reset_role(token: contextvars.Token) -> None:
+    _role.reset(token)
+
+
+@contextlib.contextmanager
+def net_role(label: str = "", *, agent: str = "", status: Any = None) -> Iterator[None]:
+    token = set_role(label, agent=agent, status=status)
+    try:
+        yield
+    finally:
+        reset_role(token)
+
+
+def say(level: int, line: str) -> None:
+    """Print one network line when the channel is at `level` or above. A
+    `said()` entry draws through its own format, which decides whether
+    `$BANNER` leads it; plain text through NET_LINE's."""
+    emit = _output.get()
+    if emit is not None:
+        emit(level, line, False)
+    else:
+        output.emit(output.event("network", level=level, line=line, fallback=False))
+
+
+def _host(url: str) -> str:
+    return urlsplit(url).hostname or url
+
+
+
+
+class NetCall:
+    """One model request on the network channel. Every hook is safe to call at
+    any level; each decides for itself whether it prints."""
+
+    def __init__(self, role: NetRole, url: str, model: str) -> None:
+        self._role = role
+        self._url = url
+        self._model = model
+        self._started = time.perf_counter()
+        self._connected = False
+        self._sent = False
+        if role.hold is not None:
+            role.hold.pending = None
+        # A compaction request changes the session; every other request's
+        # line is chatter.
+        compacting = role.label == msgs.COMPACTING_ROLE.words()
+        say(1 if compacting else 3, self._connecting_line())
+
+    def _connecting_line(self) -> str:
+        label, agent = self._role.label, self._role.agent
+        if label == msgs.COMPACTING_ROLE.words():
+            return msgs.NET_COMPACTING.said(model=self._model, url=self._url)
+        if label:
+            entry = msgs.NET_ROLE_CONNECTING_AGENT if agent else msgs.NET_ROLE_CONNECTING
+            return entry.said(role=label, url=self._url, agent=agent)
+        return msgs.NET_CONNECTING.said(url=self._url)
+
+    def request_sent(self) -> None:
+        """The transport is sending the request: the handshake clock starts here,
+        after the SDK's own setup."""
+        if not self._sent:
+            self._sent = True
+            self._started = time.perf_counter()
+
+    def connected(self) -> None:
+        if self._connected:
+            return
+        self._connected = True
+        ms = int((time.perf_counter() - self._started) * 1000)
+        host = _host(self._url)
+        if self._role.label:
+            say(3, msgs.NET_ROLE_CONNECTED.said(role=self._role.label, host=host, ms=ms))
+        else:
+            say(3, msgs.NET_CONNECTED.said(host=host, ms=ms))
+
+    def received(self, n: int) -> None:
+        self.connected()
+
+    def first_token(self) -> None:
+        self.connected()
+
+    def failed(self, exc: BaseException) -> None:
+        if self._role.hold is not None:
+            self._role.hold.pending = exc
+            return
+        say(1, _labelled(self._role, Failure(exc)))
+
+    async def trace(self, event: str, info: dict[str, Any]) -> None:
+        """httpcore2's `trace` request extension: the handshake is the connect."""
+        if event in ("connection.start_tls.complete", "connection.connect_tcp.complete"):
+            if event.endswith("connect_tcp.complete") and self._url.startswith("https:"):
+                return
+            self.connected()
+
+
+class FirstByteWait:
+    """The wait from a model request being sent to its first response byte:
+    the prefill. The calling role's TurnStatus shows it on the status bar;
+    the main turn's also emits a `first_byte_tick` with the seconds waited
+    after each second of it and `first_byte_done` when it ends, which count
+    it up on stderr under `js -p`."""
+
+    def __init__(self) -> None:
+        self._role = _role.get()
+        self._started: float | None = None
+        self._ticker: Any = None
+
+    def start(self) -> None:
+        if self._started is not None:
+            return
+        self._started = time.monotonic()
+        if self._role.status is not None:
+            self._role.status.first_byte_wait(self._started)
+        if not self._role.label:
+            self._ticker = asyncio.get_running_loop().create_task(self._tick())
+
+    async def _tick(self) -> None:
+        while True:
+            await asyncio.sleep(1.0)
+            output.emit(output.event("first_byte_tick", waited=time.monotonic() - (self._started or 0)))
+
+    def end(self) -> None:
+        if self._started is None:
+            return
+        self._started = None
+        if self._role.status is not None:
+            self._role.status.first_byte_done()
+        if self._ticker is not None:
+            self._ticker.cancel()
+            self._ticker = None
+            output.emit(output.event("first_byte_done"))
+
+
+_call: contextvars.ContextVar[NetCall | None] = contextvars.ContextVar("js_net_call", default=None)
+
+
+def set_call(call: NetCall | None) -> contextvars.Token:
+    return _call.set(call)
+
+
+def reset_call(token: contextvars.Token) -> None:
+    _call.reset(token)
+
+
+def current_call() -> NetCall | None:
+    """The request this task is making, for the transport hooks to feed."""
+    return _call.get()
+
+
+def begin_call(url: str, model: str) -> NetCall | None:
+    """Open the network channel for one model request, or None with no sink."""
+    if network_display.installed_sink is None:
+        return None
+    return NetCall(_role.get(), url, model)
+
 
 class _OwnedCoreStream:
-    def __init__(self, stream: Any) -> None:
+    def __init__(self, stream: Any, call: NetCall | None = None,
+                 on_bytes: Callable[[], None] | None = None) -> None:
         self._stream = stream
         self._iterator: AsyncIterator[bytes] = aiter(stream)
         self._closed = False
+        self._call = call
+        self._on_bytes = on_bytes
 
     def __aiter__(self) -> AsyncIterator[bytes]:
         return self
 
     async def __anext__(self) -> bytes:
-        return await anext(self._iterator)
+        chunk = await anext(self._iterator)
+        if self._on_bytes is not None:
+            self._on_bytes()
+        if self._call is not None:
+            self._call.received(len(chunk))
+        return chunk
 
     async def aclose(self) -> None:
         if self._closed:
@@ -40,22 +300,43 @@ class _OwnedCoreStream:
 
 
 @asynccontextmanager
-async def own_responses(client: httpx2.AsyncClient):
-    """Close this model request's byte iterators when its stream scope exits."""
+async def own_responses(client: httpx2.AsyncClient | httpx.AsyncClient, call: NetCall | None = None,
+                        on_request: Callable[[], None] | None = None,
+                        on_bytes: Callable[[], None] | None = None,
+                        timeout: dict[str, float | None] | None = None):
+    """Close this model request's byte iterators when its stream scope exits.
+    With a `call`, its handshake and response bytes feed the network channel.
+    `on_request` is called as each request is sent and `on_bytes` for every
+    response chunk read. `timeout` replaces those parts of each request's own
+    (`connect`, `read`, ...)."""
     async with AsyncExitStack() as cleanup:
 
         async def own(response: httpx2.Response) -> None:
             stream: AsyncIterable[bytes] = response.stream
-            if isinstance(stream, BoundAsyncStream):
+            if isinstance(stream, (BoundAsyncStream, HttpxBoundAsyncStream)):
                 stream = stream._stream
-            if isinstance(stream, AsyncResponseStream):
-                wrapper = _OwnedCoreStream(stream._httpcore_stream)
+            if isinstance(stream, (AsyncResponseStream, HttpxAsyncResponseStream)):
+                wrapper = _OwnedCoreStream(stream._httpcore_stream, call, on_bytes)
                 stream._httpcore_stream = wrapper
                 cleanup.push_async_callback(wrapper.aclose)
 
-        hooks = client.event_hooks["response"]
-        hooks.append(own)
+        async def trace(request: httpx2.Request) -> None:
+            if timeout is not None:
+                request.extensions = {**request.extensions,
+                                      "timeout": {**request.extensions.get("timeout", {}), **timeout}}
+            if on_request is not None:
+                on_request()
+            if call is not None:
+                call.request_sent()
+                request.extensions = {**request.extensions, "trace": call.trace}
+
+        response_hooks = client.event_hooks["response"]
+        request_hooks = (client.event_hooks["request"]
+                         if call is not None or on_request is not None or timeout is not None else [])
+        response_hooks.append(own)
+        request_hooks.append(trace)
         try:
             yield
         finally:
-            hooks.remove(own)
+            response_hooks.remove(own)
+            request_hooks.remove(trace)

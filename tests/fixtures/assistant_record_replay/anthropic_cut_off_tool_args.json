@@ -1,0 +1,75 @@
+{
+ "live": [
+  {
+   "parts": [
+    {
+     "kind": "text",
+     "provider_metadata": null,
+     "text": "Writing it.\n\nResponse incomplete (max_output_tokens); dropped truncated tool call arguments for no_such_tool. Send large content across several smaller calls."
+    }
+   ],
+   "provider_metadata": {
+    "anthropic": {
+     "signature": "S1"
+    }
+   },
+   "role": "assistant",
+   "turn_id": null,
+   "usage": null
+  }
+ ],
+ "live_body": [
+  {
+   "content": [
+    {
+     "text": "Writing it.\n\nResponse incomplete (max_output_tokens); dropped truncated tool call arguments for no_such_tool. Send large content across several smaller calls.",
+     "type": "text"
+    }
+   ],
+   "role": "assistant"
+  }
+ ],
+ "records": [
+  {
+   "content": "Writing it.\n\nResponse incomplete (max_output_tokens); dropped truncated tool call arguments for no_such_tool. Send large content across several smaller calls.",
+   "incomplete_reason": "max_output_tokens",
+   "provider_metadata": {
+    "anthropic": {
+     "signature": "S1"
+    }
+   },
+   "reasoning_content": "weigh it",
+   "role": "assistant"
+  }
+ ],
+ "resumed": [
+  {
+   "parts": [
+    {
+     "kind": "text",
+     "provider_metadata": null,
+     "text": "Writing it.\n\nResponse incomplete (max_output_tokens); dropped truncated tool call arguments for no_such_tool. Send large content across several smaller calls."
+    }
+   ],
+   "provider_metadata": {
+    "anthropic": {
+     "signature": "S1"
+    }
+   },
+   "role": "assistant",
+   "turn_id": null,
+   "usage": null
+  }
+ ],
+ "resumed_body": [
+  {
+   "content": [
+    {
+     "text": "Writing it.\n\nResponse incomplete (max_output_tokens); dropped truncated tool call arguments for no_such_tool. Send large content across several smaller calls.",
+     "type": "text"
+    }
+   ],
+   "role": "assistant"
+  }
+ ]
+}

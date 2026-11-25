@@ -1,65 +1,45 @@
-"""The --nonblocking REPL drives one real turn end-to-end on the async loop:
-Enter handler → queue → supervised _do_turn → run_turn_async → persist → clean
-EOF shutdown. Headless: a stub session feeds lines, run_turn_async is stubbed,
-and patch_stdout is neutralized (prompt_toolkit's terminal machinery is its own
-concern, not ours)."""
+"""The async REPL drives one real turn end-to-end on its loop: Enter handler →
+queue → supervised _do_turn → run_turn_async → persist → clean EOF shutdown.
+Headless: a stub app feeds lines, run_turn_async is stubbed, and stdio capture
+is neutralized (prompt_toolkit's terminal machinery is its own concern)."""
 
 from __future__ import annotations
 
-import contextlib
-from types import SimpleNamespace
+import asyncio
+from dataclasses import replace
 
-from textual.binding import Binding
+import pytest
+from repl_driver import handled_while_a_turn_runs, run_async
+from test_mcp_client import SpecServer
 
-from js import cli
+from js import cli, repl
+from js.config import from_env
+from js.mcp.client import MCPClient
+from js.mcp.host import MCPHost
+from js.mcp_config import MCPConfiguration, MCPPolicy, MCPServer
 from js.memory import load_messages
 
 
 def _session_file(tmp_path):
-    found = list((tmp_path / ".local" / "share" / "js" / "sessions").rglob("*.jsonl"))
+    found = list((tmp_path / ".js" / "sessions").rglob("*.jsonl"))
     assert len(found) == 1, found
     return found[0]
 
 
 def _drive_async_repl(monkeypatch, tmp_path, lines, run_turn_async_stub):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
+    monkeypatch.delenv("JS_DEFAULT_AGENT", raising=False)
     monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-
-    class AppStub:
-        """Feeds each line to the Enter handler, then EOF — no terminal."""
-
-        def __init__(self, on_line, on_eof):
-            self._on_line, self._on_eof = on_line, on_eof
-
-        async def run_async(self):
-            for line in lines:
-                await self._on_line(line.strip())
-            self._on_eof()
-
-        def exit(self):
-            pass
-
-        def invalidate(self):
-            pass
-
-    def build_app_stub(*, on_line, on_eof, **_kwargs):
-        return AppStub(on_line, on_eof), cli.screen.Scrollback()
-
-    monkeypatch.setattr(cli.screen, "build_app", build_app_stub)
-    monkeypatch.setattr(cli.screen, "capture_stdio", lambda *a, **k: contextlib.nullcontext())
     monkeypatch.setattr(cli.runtime, "run_turn_async", run_turn_async_stub)
-    return cli.main([])
+    return run_async(monkeypatch, from_env(), lines)
 
 
 def test_nonblocking_repl_runs_a_turn_and_persists(monkeypatch, tmp_path):
     async def run_turn_async_stub(cfg, system, messages, telemetry, **kwargs):
         messages.append({"role": "assistant", "content": "did the thing"})
 
-    rc = _drive_async_repl(monkeypatch, tmp_path, ["please do the thing"], run_turn_async_stub)
-    assert rc == 0
+    _drive_async_repl(monkeypatch, tmp_path, ["please do the thing"], run_turn_async_stub)
 
     reloaded = load_messages(_session_file(tmp_path))
     assert [m["role"] for m in reloaded] == ["user", "assistant"]
@@ -71,68 +51,108 @@ def test_nonblocking_repl_empty_line_then_eof_is_clean(monkeypatch, tmp_path):
     async def run_turn_async_stub(cfg, system, messages, telemetry, **kwargs):
         raise AssertionError("no turn should run for a blank line")
 
-    rc = _drive_async_repl(monkeypatch, tmp_path, ["   "], run_turn_async_stub)
-    assert rc == 0
+    _drive_async_repl(monkeypatch, tmp_path, ["   "], run_turn_async_stub)
     assert load_messages(_session_file(tmp_path)) == []
 
 
-def test_tui_flag_routes_to_textual_repl(monkeypatch, tmp_path):
+def test_nonblocking_repl_skill_line_sends_user_only_skill(monkeypatch, tmp_path):
+    skill = tmp_path / ".js" / "skills" / "secret" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("---\ndisable-model-invocation: true\n---\nuser-only body\n", encoding="utf-8")
+    turns: list[str] = []
+
+    async def run_turn_async_stub(cfg, system, messages, telemetry, **kwargs):
+        turns.append(str(messages[-1]["content"]))
+        messages.append({"role": "assistant", "content": "ok"})
+
+    lines = ["/skill nosuch", "/skill secret check the plan"]
+    _drive_async_repl(monkeypatch, tmp_path, lines, run_turn_async_stub)
+
+    # The unknown name starts no turn; the user-only skill reaches the model.
+    assert len(turns) == 1
+    assert "user-only body" in turns[0]
+    assert "check the plan" in turns[0]
+    reloaded = load_messages(_session_file(tmp_path))
+    assert [m["role"] for m in reloaded] == ["user", "assistant"]
+    assert "user-only body" in str(reloaded[0]["content"])
+
+
+@pytest.mark.parametrize("mode", ["now", "batch"])
+@pytest.mark.parametrize("busy", [False, True])
+def test_mcp_channel_wakes_idle_repl_and_persists_literal_content(monkeypatch, tmp_path, mode, busy):
+    monkeypatch.setattr(repl, "_steer_mode", lambda _state: mode)
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_AGENT", raising=False)
-    monkeypatch.delenv("JS_SESSION", raising=False)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    seen = {}
-
-    def run_tui_repl_stub(cfg, state, telemetry, prompt_spec, deps):
-        seen["model"] = state["model"]
-        seen["system"] = state["system"]
-        seen["deps"] = deps
-        return 0
-
-    monkeypatch.setattr(cli.tui, "run_tui_repl", run_tui_repl_stub)
-
-    rc = cli.main(["--tui", "--model", "flag-model"])
-    assert rc == 0
-    assert seen["model"] == "flag-model"
-    assert seen["system"]
-    assert seen["deps"].handle_command is cli._handle_command
-
-
-def test_tui_ctrl_z_suspends_the_uv_run_process_group(monkeypatch):
-    binding = next(
-        binding
-        for binding in cli.tui.JsTuiApp.BINDINGS
-        if isinstance(binding, Binding) and binding.key == "ctrl+z"
+    server = SpecServer()
+    config = MCPConfiguration(
+        (MCPServer("channel", "channel", "stdio", command="unused"),), MCPPolicy()
     )
-    seen = []
-    app = SimpleNamespace(
-        _driver=SimpleNamespace(can_suspend=True),
-        _suspend_signal=lambda: seen.append("terminal-restored"),
+    host = MCPHost(
+        config,
+        client_factory=lambda _factory, **kwargs: MCPClient(server.factory, **kwargs),
     )
-    monkeypatch.setattr(cli.tui.os, "getpgrp", lambda: 1234)
-    monkeypatch.setattr(
-        cli.tui.os,
-        "killpg",
-        lambda process_group, sig: seen.append((process_group, sig)),
-    )
+    from repl_driver import repl_state
 
-    cli.tui.JsTuiApp.action_suspend_process(app)
+    def state_with_host(*args, **kwargs):
+        state, spec = repl_state(*args, **kwargs)
+        state.mcp_host = host
+        return state, spec
 
-    assert binding.action == "suspend_process"
-    assert binding.priority is True
-    assert seen == ["terminal-restored", (1234, cli.tui.signal.SIGTSTP)]
+    monkeypatch.setattr("repl_driver.repl_state", state_with_host)
+    received = asyncio.Event()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    content = "/exit @/not-a-local-attachment !{sh false}"
+    turns = []
+
+    async def turn(cfg, system, messages, telemetry, **kwargs):
+        turns.append(messages[-1]["content"])
+        if busy and len(turns) == 1:
+            started.set()
+            await release.wait()
+        messages.append({"role": "assistant", "content": "received"})
+        if len(turns) == (2 if busy else 1):
+            received.set()
+
+    async def incoming(on_line):
+        await host.discover(source="channel")
+        if busy:
+            await on_line("first turn")
+            await asyncio.wait_for(started.wait(), timeout=2)
+        await server.connections[0].notify(
+            "notifications/claude/channel",
+            {"content": content, "meta": {"chat_id": "42"}},
+        )
+        release.set()
+        await asyncio.wait_for(received.wait(), timeout=2)
+
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn)
+    run_async(monkeypatch, replace(from_env(), mcp=config), incoming)
+    assert len(turns) == (2 if busy else 1)
+    assert content in turns[-1]
+    assert "42" in turns[-1]
+    reloaded = load_messages(_session_file(tmp_path))
+    assert [m["role"] for m in reloaded] == ["user", "assistant"] * len(turns)
+    assert reloaded[-2]["content"] == turns[-1]
+    assert host.channel_sink is None
 
 
-def test_turn_state_commands_are_refused_while_a_turn_runs():
+def test_tui_flag_is_an_unknown_argument(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--tui"])
+    assert exc.value.code == 2
+
+
+def test_turn_state_commands_are_refused_while_a_turn_runs(monkeypatch, tmp_path):
     """Commands that clear/rotate/compact the live message list must be gated while a
     turn is active — running them off-loop races the turn's single-writer append."""
-    assert cli._is_turn_state_command("/reset")
-    assert cli._is_turn_state_command("/wipe")
-    assert cli._is_turn_state_command("/compact")
-    assert cli._is_turn_state_command("/compact up to here")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("JS_SESSION", raising=False)
+    monkeypatch.chdir(tmp_path)
+    refused = ["/reset", "/wipe", "/compact", "/compact up to here"]
     # non-mutating / unrelated commands stay live
-    assert not cli._is_turn_state_command("/compact-auto on")
-    assert not cli._is_turn_state_command("/turns")
-    assert not cli._is_turn_state_command("/model gpt")
-    assert not cli._is_turn_state_command("hello there")
+    live = ["/compact-auto on", "/turns", "/model gpt", "hello there"]
+
+    assert handled_while_a_turn_runs(monkeypatch, from_env(), refused + live) == live
+

@@ -1,52 +1,66 @@
-"""One-string endpoint specs for ``js -u``.
+"""Endpoint URLs for ``js -u`` and ``JS_BASE_URL``.
 
-    model[:api-key][[shape]][[effort]]@endpoint
+    [wire+]scheme://model[:key]@host[:port]/path
 
-The point is to reach an endpoint that has no saved login without spelling out
-four settings. These are the same:
+    js -u http://qwen3:27b@box:11434/v1
+    js -u http://qwen3.8-27b:sk-foo-bar@box/v1
+    js -u https://nex-agi/nex-n2.5-pro:free:sk-or-xxxx@openrouter.ai/api/v1
+    js -u anthropic+https://deepseek-v4-pro:sk-xxxx@api.deepseek.com/anthropic
 
-    JS_PROVIDER=openai-completions JS_BASE_URL=http://foo/v1 \\
-      JS_API_KEY=sk-no-key JS_MODEL=qwen27b js -p ...
+Wire: an explicit prefix wins (``openai+`` chat-completions, ``responses+``,
+``anthropic+``). With none, a path ending in ``/v1`` is OpenAI
+chat-completions and anything else is Anthropic, the way each SDK defines its
+base URL. The prefix is stripped; the rest, minus the model and key, is the
+base URL.
 
-    js -u qwen27b:sk-no-key@http://foo/v1 -p ...
-
-Shape tags pick the wire, defaulting to OpenAI chat-completions:
-
-    openai | completions -> openai-completions   (default)
-    responses            -> openai-responses
-    anthropic            -> anthropic-custom
-
-Effort tags are the usual ladder: off minimal low medium high xhigh max.
-Both tags are optional and order between them does not matter:
-
-    qwen27b@http://foo/v1
-    claude-sonnet-5:sk-foo-bar-baz[anthropic][max]@http://localhost:8317
-    gpt-6-astra[responses]@https://gw.example/v1
+Model and key: everything between ``://`` and the last ``@``. The text after
+the last colon is the key when the shared secret detector
+(``js/secret_patterns.py``) calls it a secret; otherwise it is part of the
+model, so ``:free``, ``:27b`` and ``:Q4_K_M`` stay in the model id. With no
+key, the key is ``JS_API_KEY`` when set, else ``ENDPOINT_DEFAULT_KEY``. With
+no ``@``, the model is ``JS_MODEL``.
 """
 
 from __future__ import annotations
 
-import re
+from collections.abc import Mapping
 from dataclasses import dataclass
+from urllib.parse import urlsplit
+
+from . import messages as msgs, secret_patterns, settings as _settings
 
 # An endpoint reached this way is usually a local box that ignores the key, but
 # most OpenAI-shaped servers still require the header to exist.
-DUMMY_KEY = "sk-dummy-key"
+DUMMY_KEY = _settings.default_value("ENDPOINT_DEFAULT_KEY")
 
-_SHAPES = {
+WIRES = {
     "openai": "openai-completions",
-    "completions": "openai-completions",
     "responses": "openai-responses",
     "anthropic": "anthropic-custom",
 }
 
-_EFFORTS = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
-
-_TRAILING_TAG = re.compile(r"\[([^\[\]]*)\]\s*$")
+_SCHEMES = ("http", "https")
 
 
 class EndpointSpecError(ValueError):
-    """A -u spec that could not be parsed, phrased for a terminal."""
+    """An endpoint URL js cannot read one exact way, phrased for a terminal."""
+
+
+@dataclass(frozen=True)
+class EndpointURL:
+    """What the URL itself says: each field None when the URL leaves it out."""
+
+    wire: str | None
+    model: str | None
+    api_key: str | None
+    base_url: str
+
+    @property
+    def provider_id(self) -> str:
+        if self.wire is not None:
+            return WIRES[self.wire]
+        path = urlsplit(self.base_url).path.rstrip("/")
+        return WIRES["openai"] if path.endswith("/v1") else WIRES["anthropic"]
 
 
 @dataclass(frozen=True)
@@ -55,89 +69,117 @@ class EndpointSpec:
     api_key: str
     base_url: str
     provider_id: str
-    reasoning_effort: str | None
 
     def as_settings(self) -> list[str]:
         """``key=value`` pairs in the form ``--extra`` already accepts."""
-        pairs = [
-            f"model.id={self.model}",
-            f"provider.id={self.provider_id}",
-            f"provider.base_url={self.base_url}",
-            f"provider.api_key={self.api_key}",
+        return [
+            f"MODEL={self.model}",
+            f"PROVIDER={self.provider_id}",
+            f"BASE_URL={self.base_url}",
+            f"API_KEY={self.api_key}",
         ]
-        if self.reasoning_effort is not None:
-            pairs.append(f"model.reasoning_effort={self.reasoning_effort}")
-        return pairs
 
 
-def parse(spec: str) -> EndpointSpec:
-    text = (spec or "").strip()
+def shown(text: str) -> str:
+    """``text`` for an error message: the part after the last colon before the
+    last ``@`` reads ``***``, so a key never reaches the terminal."""
+    head, sep, rest = text.partition("://")
+    at = rest.rfind("@")
+    if not sep or at < 0 or ":" not in rest[:at]:
+        return text
+    model, _, _key = rest[:at].rpartition(":")
+    return f"{head}://{model}:***{rest[at:]}"
+
+
+def split(text: str) -> EndpointURL:
+    """Read ``[wire+]scheme://model[:key]@host...`` into its parts."""
+    text = (text or "").strip()
+    spec = shown(text)
     if not text:
-        raise EndpointSpecError("empty endpoint spec; expected model[:key][[shape]][[effort]]@url")
-
-    # Split at the @ that introduces the URL. Prefer one followed by a scheme so
-    # a key containing @ does not steal the split; fall back to the last @.
-    match = re.search(r"@(?=[a-zA-Z][a-zA-Z0-9+.-]*://)", text)
-    at = match.start() if match else text.rfind("@")
-    if at < 0:
-        raise EndpointSpecError(
-            f"no @endpoint in {spec!r}; expected something like "
-            "qwen27b@http://host:8000/v1"
-        )
-    left, base_url = text[:at], text[at + 1:].strip()
-    if not base_url:
-        raise EndpointSpecError(f"no endpoint after @ in {spec!r}")
-    if "://" not in base_url:
-        raise EndpointSpecError(
-            f"endpoint {base_url!r} has no scheme; write http:// or https://"
-        )
-
-    # Trailing [tag] groups, innermost last. Collected before the key split so a
-    # key is never confused with a tag.
-    shape: str | None = None
-    effort: str | None = None
-    while True:
-        tag_match = _TRAILING_TAG.search(left)
-        if tag_match is None:
-            break
-        tag = tag_match.group(1).strip().lower()
-        left = left[: tag_match.start()].rstrip()
-        if not tag:
-            raise EndpointSpecError(f"empty [] in {spec!r}")
-        if tag in _SHAPES:
-            if shape is not None:
-                raise EndpointSpecError(f"two wire shapes in {spec!r}: [{tag}] and one more")
-            shape = tag
-        elif tag in _EFFORTS:
-            if effort is not None:
-                raise EndpointSpecError(f"two reasoning efforts in {spec!r}: [{tag}] and one more")
-            effort = tag
-        else:
+        raise EndpointSpecError(msgs.ENDPOINT_EMPTY.format())
+    scheme, sep, rest = text.partition("://")
+    userinfo = rest.rsplit("@", 1)[0] if "@" in rest else ""
+    if "[" in scheme or "[" in userinfo:
+        raise EndpointSpecError(msgs.ENDPOINT_BRACKET.format(spec=spec))
+    if not sep:
+        raise EndpointSpecError(msgs.ENDPOINT_NO_SCHEME.format(spec=spec))
+    wire = None
+    if "+" in scheme:
+        wire, _, scheme = scheme.partition("+")
+        if wire not in WIRES:
             raise EndpointSpecError(
-                f"unknown tag [{tag}] in {spec!r}; wire shapes are "
-                f"{', '.join(sorted(set(_SHAPES)))}; efforts are {', '.join(_EFFORTS)}"
-            )
+                msgs.ENDPOINT_UNKNOWN_WIRE.format(wire=wire, wires=", ".join(f"{w}+" for w in WIRES)))
+    scheme = scheme.lower()
+    if scheme not in _SCHEMES:
+        raise EndpointSpecError(msgs.ENDPOINT_UNKNOWN_SCHEME.format(scheme=scheme, spec=spec))
 
-    if not left:
-        raise EndpointSpecError(f"no model id in {spec!r}")
-
-    # Last colon splits the key off. Last, not first, so an ollama-style tagged
-    # id keeps its tag: `qwen3:27b:sk-foo` is model `qwen3:27b`, key `sk-foo`.
-    # A tagged id with no key is genuinely ambiguous — pass a key explicitly.
-    if ":" in left:
-        model, _, api_key = left.rpartition(":")
-        model, api_key = model.strip(), api_key.strip()
-        if not api_key:
-            raise EndpointSpecError(f"empty api key after ':' in {spec!r}")
+    model = api_key = None
+    at = rest.rfind("@")
+    if at >= 0:
+        userinfo, rest = rest[:at], rest[at + 1:]
+        model = userinfo
+        head, colon, tail = userinfo.rpartition(":")
+        if colon and not tail:
+            raise EndpointSpecError(msgs.ENDPOINT_EMPTY_AFTER_COLON.format(spec=spec))
+        if colon and secret_patterns.is_secret(tail):
+            model, api_key = head, tail
         if not model:
-            raise EndpointSpecError(f"no model id before ':' in {spec!r}")
-    else:
-        model, api_key = left, DUMMY_KEY
+            raise EndpointSpecError(msgs.ENDPOINT_NO_MODEL_BEFORE_AT.format(spec=spec))
+    if not rest or rest.startswith("/"):
+        raise EndpointSpecError(msgs.ENDPOINT_NO_HOST.format(spec=spec))
+    base_url = f"{scheme}://{rest}"
+    try:
+        _ = urlsplit(base_url).port
+    except ValueError as exc:
+        raise EndpointSpecError(str(exc)) from exc
+    return EndpointURL(wire=wire, model=model, api_key=api_key, base_url=base_url)
 
-    return EndpointSpec(
-        model=model,
-        api_key=api_key,
-        base_url=base_url,
-        provider_id=_SHAPES[shape or "openai"],
-        reasoning_effort=effort,
-    )
+
+def is_endpoint_form(text: str) -> bool:
+    """Whether a ``JS_BASE_URL`` value carries a wire prefix or a model."""
+    scheme, sep, rest = (text or "").strip().partition("://")
+    return bool(sep) and ("+" in scheme or "@" in rest)
+
+
+def _env(env: Mapping[str, str], key: str) -> str | None:
+    for name in _settings.env_names_for(_settings.SPEC_BY_KEY[key]):
+        if env.get(name):
+            return env[name]
+    return None
+
+
+def parse(spec: str, *, settings: dict | None = None, env: Mapping[str, str] | None = None) -> EndpointSpec:
+    """The ``-u`` spec as the four settings it sets. The flag beats
+    ``JS_MODEL`` and ``JS_API_KEY``; each fills only what the URL leaves out."""
+    env = {} if env is None else env
+    url = split(spec)
+    model = url.model or _env(env, "MODEL")
+    if not model:
+        raise EndpointSpecError(msgs.ENDPOINT_NO_MODEL.format(spec=shown(spec.strip())))
+    api_key = url.api_key or _env(env, "API_KEY") or _settings.knob(settings, "ENDPOINT_DEFAULT_KEY")
+    return EndpointSpec(model=model, api_key=api_key, base_url=url.base_url, provider_id=url.provider_id)
+
+
+def from_env(env: Mapping[str, str], *, settings: dict | None = None) -> EndpointSpec | None:
+    """``JS_BASE_URL`` in the ``-u`` form as the four settings it sets; None
+    for a plain base URL. A model, key or provider in another JS_ variable
+    that contradicts the URL is an error naming both."""
+    raw = env.get("JS_BASE_URL")
+    if not raw or not is_endpoint_form(raw):
+        return None
+    url = split(raw)
+    env_model, env_key = _env(env, "MODEL"), _env(env, "API_KEY")
+    env_provider = _env(env, "PROVIDER")
+    if url.model and env_model and url.model != env_model:
+        raise EndpointSpecError(msgs.ENDPOINT_ENV_MODEL_DIFFERS.format(url=url.model, env=env_model))
+    if url.api_key and env_key and url.api_key != env_key:
+        raise EndpointSpecError(msgs.ENDPOINT_ENV_KEY_DIFFERS.format())
+    if url.wire and env_provider and env_provider != url.provider_id:
+        raise EndpointSpecError(
+            msgs.ENDPOINT_ENV_PROVIDER_DIFFERS.format(wire=url.wire, provider=url.provider_id, env=env_provider))
+    model = url.model or env_model
+    if not model:
+        raise EndpointSpecError(msgs.ENDPOINT_ENV_NO_MODEL.format())
+    provider = url.provider_id if url.wire or not env_provider else env_provider
+    api_key = url.api_key or env_key or _settings.knob(settings, "ENDPOINT_DEFAULT_KEY")
+    return EndpointSpec(model=model, api_key=api_key, base_url=url.base_url, provider_id=provider)

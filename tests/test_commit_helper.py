@@ -7,7 +7,7 @@ import uuid
 
 import pytest
 
-from js import commit_helper
+from js import commit_helper, messages as msgs
 
 
 def _git(repo, *args, stdin=None):
@@ -31,7 +31,7 @@ def repo(tmp_path, monkeypatch):
 
 
 def _staged(repo):
-    return _git(repo, "diff", "--cached").stdout
+    return _git(repo, "diff", "--cached", "--no-ext-diff", "--no-color").stdout
 
 
 def test_survey_reports_status_hunks_and_log(repo, capsys):
@@ -41,10 +41,11 @@ def test_survey_reports_status_hunks_and_log(repo, capsys):
     (repo / "new.txt").write_text("brand new\n")
     assert commit_helper.main(["survey"]) == 0
     out = capsys.readouterr().out
-    assert "branch: main" in out
-    assert "-- staged diff" in out
-    assert "-- unstaged diff" in out
-    assert "### f.txt  (2 hunks)" in out          # two separated edits -> two hunks
+    assert msgs.SURVEY_BRANCH.text(branch="main") in out
+    assert msgs.SURVEY_STAGED.text() in out
+    assert msgs.SURVEY_UNSTAGED.text() in out
+    # two separated edits -> two hunks
+    assert msgs.SURVEY_FILE.text(path="f.txt", hunks=msgs.plural(2, "hunk")) in out
     assert "?? new.txt" in out                    # untracked flagged
     assert "baseline" in out                       # recent log present
 
@@ -67,8 +68,8 @@ def test_survey_reports_staged_and_unstaged_hunks_for_same_file(repo, capsys):
 
     assert commit_helper.main(["survey"]) == 0
     out = capsys.readouterr().out
-    staged_section = out.split("-- staged diff", 1)[1].split("-- unstaged diff", 1)[0]
-    unstaged_section = out.split("-- unstaged diff", 1)[1]
+    staged_at, unstaged_at = out.index(msgs.SURVEY_STAGED.text()), out.index(msgs.SURVEY_UNSTAGED.text())
+    staged_section, unstaged_section = out[staged_at:unstaged_at], out[unstaged_at:]
     assert "line2_STAGED" in staged_section
     assert "line28_UNSTAGED" not in staged_section
     assert "line28_UNSTAGED" in unstaged_section
@@ -76,8 +77,8 @@ def test_survey_reports_staged_and_unstaged_hunks_for_same_file(repo, capsys):
     # The staged section's hunk numbers don't address `stage` (only unstaged
     # hunks are stageable) — its header must not carry the `stage <file> <n>`
     # instruction, or the model can silently stage the wrong region.
-    assert "reference as `stage" not in staged_section
-    assert "reference as `stage" in unstaged_section
+    assert "stage <file>" not in staged_section
+    assert "stage <file>" in unstaged_section
 
 
 def test_stage_subset_of_hunks(repo):
@@ -109,7 +110,7 @@ def test_stage_and_survey_work_when_the_operator_forces_git_color(repo, capsys):
     assert commit_helper.main(["survey"]) == 0
     out = capsys.readouterr().out
     assert "\x1b[" not in out
-    assert "### f.txt  (3 hunks)" in out
+    assert msgs.SURVEY_FILE.text(path="f.txt", hunks=msgs.plural(3, "hunk")) in out
     assert "?? new.txt" in out
 
     assert commit_helper.main(["stage", "f.txt", "1,3"]) == 0
@@ -137,39 +138,38 @@ def test_stage_untracked_rejects_hunk_spec(repo, capsys):
     (repo / "new.txt").write_text("hello\n")
     assert commit_helper.main(["stage", "new.txt", "1"]) == 2
     err = capsys.readouterr().err
-    assert "untracked" in err
-    assert "stage new.txt all" in err
+    assert err.strip() == msgs.STAGE_UNTRACKED.text(path="new.txt")
     assert "new.txt" not in _git(repo, "diff", "--cached", "--name-only").stdout
 
 
 def test_stage_out_of_range_hunk_errors(repo, capsys):
     (repo / "f.txt").write_text("line1_X\n" + "\n".join(f"line{i}" for i in range(2, 31)) + "\n")
     assert commit_helper.main(["stage", "f.txt", "5"]) == 2   # only 1 hunk exists
-    assert "out of range" in capsys.readouterr().err
+    assert capsys.readouterr().err.strip() == msgs.STAGE_OUT_OF_RANGE.text(bad="5", path="f.txt", count=1)
     assert _staged(repo) == ""                                 # nothing staged
 
 
 def test_stage_unknown_path_errors(repo, capsys):
     assert commit_helper.main(["stage", "nope.txt", "1"]) == 2
-    assert "no pending changes" in capsys.readouterr().err
+    assert capsys.readouterr().err.strip() == msgs.STAGE_NO_CHANGES.text(path="nope.txt")
 
 
 def test_git_check_flag_distinguishes_not_repo_and_git_failure(tmp_path):
     non_repo = tmp_path / "not-repo"
     non_repo.mkdir()
-    unchecked = commit_helper._git("status", check=False, repo=non_repo)
+    unchecked = commit_helper.git("status", check=False, repo=non_repo)
     assert unchecked.returncode != 0
     with pytest.raises(commit_helper.GitCommandError) as not_repo:
-        commit_helper._git("status", repo=non_repo)
+        commit_helper.git("status", repo=non_repo)
     assert not_repo.value.kind == "not-a-repo"
 
     git_repo = tmp_path / "repo"
     git_repo.mkdir()
     _git(git_repo, "init", "-q", "-b", "main")
-    unchecked = commit_helper._git("definitely-not-a-git-command", check=False, repo=git_repo)
+    unchecked = commit_helper.git("definitely-not-a-git-command", check=False, repo=git_repo)
     assert unchecked.returncode != 0
     with pytest.raises(commit_helper.GitCommandError) as failed:
-        commit_helper._git("definitely-not-a-git-command", repo=git_repo)
+        commit_helper.git("definitely-not-a-git-command", repo=git_repo)
     assert failed.value.kind == "git-failed"
 
 
@@ -251,22 +251,183 @@ def test_commit_amend_replaces_head_message_verbatim(repo):
 
 
 def test_commit_missing_message_file_returns_2(repo, capsys):
-    assert commit_helper.main(["commit", str(repo / "nope.txt")]) == 2
-    assert "cannot read message file" in capsys.readouterr().err
+    missing = repo / "nope.txt"
+    assert commit_helper.main(["commit", str(missing)]) == 2
+    with pytest.raises(OSError) as exc:
+        missing.read_text(encoding="utf-8")
+    assert capsys.readouterr().err.strip() == msgs.MESSAGE_FILE_UNREADABLE.text(error=exc.value)
 
 
 def test_commit_empty_message_file_returns_2(repo, capsys):
     empty = repo / "EMPTY.txt"
     empty.write_text("   \n\n")
     assert commit_helper.main(["commit", str(empty)]) == 2
-    assert "empty" in capsys.readouterr().err
+    assert capsys.readouterr().err.strip() == msgs.MESSAGE_FILE_EMPTY.text(path=empty)
 
 
 def test_commit_dispatch_wrong_arity_prints_usage_returns_2(repo, capsys):
     assert commit_helper.main(["commit"]) == 2
-    err = capsys.readouterr().err
-    assert "usage:" in err
-    assert "commit <message-file>" in err
+    usage = msgs.COMMIT_HELPER_USAGE.text(usage="[-C DIR|--repo DIR] commit <message-file> [--amend]")
+    assert capsys.readouterr().err.strip() == usage
 
     assert commit_helper.main(["commit", "a.txt", "b.txt"]) == 2
-    assert "usage:" in capsys.readouterr().err
+    assert capsys.readouterr().err.strip() == usage
+
+
+def _edit_lines(path, marks, n=30, encoding="utf-8"):
+    path.write_text(
+        "\n".join((f"line{i}_X" if i in marks else f"line{i}") for i in range(1, n + 1)) + "\n",
+        encoding=encoding,
+    )
+
+
+def _commit_file(repo, name, encoding="utf-8"):
+    path = repo / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _edit_lines(path, (), encoding=encoding)
+    _git(repo, "add", "--", name)
+    _git(repo, "commit", "-qm", f"add {name}")
+    return path
+
+
+@pytest.mark.parametrize("name", ["sp ace.txt", "naïve.txt", "tab\there.txt"])
+def test_survey_and_stage_handle_paths_git_would_quote(repo, capsys, name):
+    """Plain porcelain C-quotes these names; the helper must use the raw path."""
+    path = _commit_file(repo, name)
+    _edit_lines(path, (2, 28))
+    assert commit_helper.main(["survey"]) == 0
+    out = capsys.readouterr().out
+    assert msgs.SURVEY_FILE.text(path=name, hunks=msgs.plural(2, "hunk")) in out
+    assert commit_helper.main(["stage", name, "1"]) == 0
+    staged = _staged(repo)
+    assert "line2_X" in staged and "line28_X" not in staged
+
+
+def test_survey_shows_staged_rename_and_its_unstaged_edit(repo, capsys):
+    _git(repo, "mv", "f.txt", "g.txt")
+    _edit_lines(repo / "g.txt", (2,))
+    assert commit_helper.main(["survey"]) == 0
+    out = capsys.readouterr().out
+    assert "RM f.txt -> g.txt" in out
+    unstaged = out[out.index(msgs.SURVEY_UNSTAGED.text()):]
+    assert msgs.SURVEY_FILE.text(path="g.txt", hunks=msgs.plural(1, "hunk")) in unstaged
+    assert commit_helper.main(["stage", "g.txt", "1"]) == 0
+    assert "line2_X" in _staged(repo)
+
+
+def test_untracked_directory_lists_and_stages_its_files(repo, capsys):
+    (repo / "newdir").mkdir()
+    (repo / "newdir" / "n.py").write_text("x = 1\n")
+    assert commit_helper.main(["survey"]) == 0
+    out = capsys.readouterr().out
+    assert msgs.SURVEY_UNTRACKED_ROW.text(path="newdir/n.py") in out
+    assert commit_helper.main(["stage", "newdir/n.py", "all"]) == 0
+    assert "newdir/n.py" in _git(repo, "diff", "--cached", "--name-only").stdout
+
+
+def test_survey_paths_stage_from_a_subdirectory(repo, capsys):
+    """Status paths are root-relative; -C <subdir> must not re-root them."""
+    path = _commit_file(repo, "sub/deep.txt")
+    _edit_lines(path, (2, 28))
+    sub = repo / "sub"
+    assert commit_helper.main(["-C", str(sub), "survey"]) == 0
+    out = capsys.readouterr().out
+    assert msgs.SURVEY_FILE.text(path="sub/deep.txt", hunks=msgs.plural(2, "hunk")) in out
+    assert commit_helper.main(["-C", str(sub), "stage", "sub/deep.txt", "2"]) == 0
+    staged = _staged(repo)
+    assert "line28_X" in staged and "line2_X" not in staged
+
+
+def test_latin1_file_surveys_and_partially_stages_byte_exact(repo, capsys):
+    path = _commit_file(repo, "legacy.txt", encoding="latin-1")
+    text = path.read_text(encoding="latin-1").splitlines()
+    text[1] = "caf\xe9 one"
+    text[27] = "caf\xe9 two"
+    path.write_bytes(("\n".join(text) + "\n").encode("latin-1"))
+    assert commit_helper.main(["survey"]) == 0
+    assert msgs.SURVEY_FILE.text(path="legacy.txt", hunks=msgs.plural(2, "hunk")) in capsys.readouterr().out
+    assert commit_helper.main(["stage", "legacy.txt", "1"]) == 0
+    staged_blob = subprocess.run(
+        ["git", "-C", str(repo), "show", ":legacy.txt"], capture_output=True, check=True,
+    ).stdout
+    assert b"caf\xe9 one" in staged_blob and b"caf\xe9 two" not in staged_blob
+
+
+@pytest.mark.parametrize("key,value", [
+    ("color.diff", "always"),
+    ("color.status", "always"),
+    ("diff.noprefix", "true"),
+    ("diff.mnemonicPrefix", "true"),
+    ("diff.relative", "true"),
+    ("diff.external", "false"),
+])
+def test_operator_diff_config_does_not_break_parse_or_apply(repo, capsys, key, value):
+    _git(repo, "config", key, value)
+    _edit_lines(repo / "f.txt", (2, 15, 28))
+    assert commit_helper.main(["survey"]) == 0
+    out = capsys.readouterr().out
+    assert "\x1b[" not in out
+    assert msgs.SURVEY_FILE.text(path="f.txt", hunks=msgs.plural(3, "hunk")) in out
+    assert commit_helper.main(["stage", "f.txt", "1,3"]) == 0
+    staged = _staged(repo)
+    assert "line2_X" in staged and "line28_X" in staged and "line15_X" not in staged
+
+
+def test_stage_path_is_literal_not_a_pathspec_glob(repo):
+    (repo / "*.txt").write_text("star\n")
+    (repo / "other.txt").write_text("other\n")
+    assert commit_helper.main(["stage", "*.txt", "all"]) == 0
+    names = _git(repo, "diff", "--cached", "--name-only", "-z").stdout.split("\0")
+    assert "*.txt" in names and "other.txt" not in names
+
+
+@pytest.mark.parametrize("suffix", ["\n", "\r", "\r\n", "x\ry"])
+def test_repo_root_with_control_chars_stays_that_repo(tmp_path, suffix):
+    """A root named `repo\\n` must not resolve to its sibling `repo`."""
+    roots = [tmp_path / "repo", tmp_path / f"repo{suffix}"]
+    for root in roots:
+        root.mkdir()
+        _git(root, "init", "-q", "-b", "main")
+        _git(root, "config", "user.email", "t@t")
+        _git(root, "config", "user.name", "t")
+        (root / "f.txt").write_text("a\n")
+        _git(root, "add", "f.txt")
+        _git(root, "commit", "-qm", "b")
+        (root / "f.txt").write_text("b\n")
+    sibling, target = roots
+    assert commit_helper.main(["-C", str(target), "stage", "f.txt", "all"]) == 0
+    assert _git(target, "diff", "--cached", "--name-only").stdout == "f.txt\n"
+    assert _git(sibling, "diff", "--cached", "--name-only").stdout == ""
+
+
+def test_crlf_file_partially_stages_byte_exact(repo):
+    path = repo / "dos.txt"
+    path.write_bytes(b"".join(b"line%d\r\n" % i for i in range(1, 31)))
+    _git(repo, "add", "dos.txt")
+    _git(repo, "commit", "-qm", "dos")
+    data = path.read_bytes().replace(b"line2\r\n", b"line2_X\r\n").replace(b"line28\r\n", b"line28_X\r\n")
+    path.write_bytes(data)
+    assert commit_helper.main(["stage", "dos.txt", "1"]) == 0
+    blob = subprocess.run(["git", "-C", str(repo), "show", ":dos.txt"], capture_output=True, check=True).stdout
+    assert b"line2_X\r\n" in blob and b"line28_X" not in blob
+
+
+def test_line_separator_inside_a_changed_line_is_not_a_hunk_boundary(repo):
+    path = repo / "f.txt"
+    lines = [f"line{i}" for i in range(1, 31)]
+    lines[1] = "old\u2028@@ inner"
+    lines[27] = "line28_X"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    assert commit_helper.main(["stage", "f.txt", "1"]) == 0
+    staged = _staged(repo)
+    assert "old\u2028@@ inner" in staged and "line28_X" not in staged
+
+
+def test_commit_commands_emit_to_the_caller_instead_of_the_screen(tmp_path, capsys):
+    events = []
+    assert commit_helper.cmd_commit("missing.txt", repo=tmp_path, emit=events.append) == 2
+    assert len(events) == 1 and events[0].name == "commit_output"
+    payload = dict(events[0].fields)
+    assert payload["stderr"] is True and payload["message"] is msgs.MESSAGE_FILE_UNREADABLE
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == ""

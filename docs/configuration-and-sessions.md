@@ -1,89 +1,97 @@
 # Configuration And Sessions
 
+## Selecting a profile
+
+`js --home DIR` uses `DIR` for the complete js home. The flag overrides
+`JS_HOME`; without either, the home is `~/.js`. Startup resolves it once to an
+absolute directory and creates a missing directory. An existing file is an
+error. The resolved directory is exported as `JS_HOME` to prompts and shell
+commands; `%%JS_HOME%%` is the same value during prompt expansion.
+
+Each selected profile owns its config, agents, themes, skills, snippets,
+commands, sessions, credentials, logs, state, cache, work and tmp. A separate
+profile does not run migration from the operator's legacy locations or load
+the operator's `~/.agents/skills`. Its corresponding cross-client skill root
+is `<home>/.agents/skills`. Project `.js/` and `.agents/skills` layers still
+apply; starting in the operator's home uses the selected profile for those
+home-level layers. Session start records include `home`, and Continue hints
+carry `--home` for a separate profile.
+
+
 Configuration is read by `js.config.from_env()` at run start and stored in a
 frozen `Config` dataclass. CLI flags override individual runs where supported.
+
+A program that imports js can build a `Config` in code instead:
+`Config(model=..., provider_id=..., provider_api_key=...)`. `model` is the one
+required argument. Every other field has a default: no session is written
+(the session file is `os.devnull`), and the per-turn settings are the
+`defaults/jsrc` values unless `settings=` holds them. No jsrc, env var or `~/.js`
+file is read.
 
 ## Config Files And Precedence
 
 `js` reads config in this order, lowest to highest:
 
-1. built-in defaults
-2. platform `jsrc`
+1. `defaults/jsrc`, shipped in the package: the built-in defaults
+2. user `jsrc` (`~/.js/jsrc`)
 3. project `.js/jsrc`
 4. project `.js/jsrc.local`
 5. env vars
 6. `--extra` CLI flags (may be repeated)
 
-In one line: built-in defaults < platform `jsrc` < project `.js/jsrc` < project
+In one line: `defaults/jsrc` < `~/.js/jsrc` < project `.js/jsrc` < project
 `.js/jsrc.local` < env vars < `--extra` CLI flags.
 
 A `jsrc` file is a config script: each non-comment line is
 `set <key> <value>`, using the same dotted keys as the REPL. Comments start with
-`#`. First run writes `~/.config/js/jsrc` as a set-script template with stock
-defaults and commented reference lines for the remaining registered knobs.
+`#`. `set -<key>` drops what the layers in between set, so the setting takes its
+`defaults/jsrc` value again.
 
-Stock template lines include:
+`defaults/jsrc` holds one line per registered setting and is where every default value
+lives. A setting it leaves unset is written `set -<key>`. If `defaults/jsrc` is
+missing, leaves out a registered setting, or holds a line that does not apply,
+js stops at startup with one line naming the file.
 
-```text
-set model.id deepseek/deepseek-v4-flash
-```
+js never writes `~/.js/jsrc` on its own; only `/save` does, so the file holds
+only what the operator set and a default changed in `defaults/jsrc` still reaches
+the box. `js/jsrc.template` lists every setting in sections, each described
+with examples, at its stock value. `/save` writes what changed in the session
+since it started (or since the last `/save`): the settings `/set` changed, the
+model `/model` or the picker chose, the `/fset` entries changed, and `on`
+handlers and aliases added. Nothing the environment, a login or js's defaults
+put in is written. It edits the file in place: a changed setting gets its line
+uncommented or rewritten with the live value (or appended, when the file has
+no line for it), a live line for a setting back at stock is commented out, and
+every other line is left alone. No backup is made. With nothing changed, no
+file is written.
 
-`provider.id`, `provider.base_url`, and `provider.api_key` are `<none>` by
-default. When `provider.id` is set, the provider is constructed explicitly with
-the given base URL and API key; otherwise `ai-python` routes the model id
-natively through AI Gateway or via `provider:model` syntax for direct providers.
+`PROVIDER`, `BASE_URL`, and `API_KEY` are unset in
+`defaults/jsrc`. A model routes through a saved login (a `provider/model` prefix
+names it), through `PROVIDER`, built with the given base URL and API key, or,
+with no provider, through `BASE_URL` as an OpenAI-compatible endpoint. A model
+with none of these is refused with a not-logged-in message (`js/routing.py`,
+`js/model_client.py`).
 
-## Full Key Reference
+## Setting Reference
 
-Every settable key comes from `js/settings.py` `REGISTRY`. The table uses
-dotted `set` names and `show` rendering for defaults. Empty-state rendering uses
-`off` for false booleans, `<none>` for no-value knobs, and `<unset>` for knobs
-that explicitly defer to provider defaults. A set `provider.api_key` is masked
-as `<set>`.
+Every setting is registered in `js/settings.py` `REGISTRY` with its type; its
+help text is its entry in `defaults/help/set.txt` and its default is its line in
+`defaults/jsrc`. `/set` with no argument lists every setting and its current value,
+`/set NAME` shows one, `/set compaction` one group and `/set *_FILE` the names
+a wildcard matches; `/help set NAME` prints a setting's help. Empty-state rendering uses `off` for false booleans, `<none>` for no-value
+settings, and `<unset>` for settings that explicitly defer to provider defaults. With
+`PARANOID_MODE` `on`, a set secret setting (`API_KEY`, `ENDPOINT_DEFAULT_KEY`, `EXTRA_HEADERS`,
+`EXTRA_PARAMS`, `MCP_SERVERS`, and the tool keys such as `TAVILY_API_KEY`) shows as `<set>`; with the default `off` it shows in full.
 
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `model.id` | `deepseek/deepseek-v4-flash` | Default model id; unprefixed ids route through AI Gateway. |
-| `model.max_output_tokens` | `<none>` | Per-call max_tokens; unset = models.dev metadata when known, else no explicit cap. |
-| `model.reasoning_effort` | `<none>` | Thinking effort: off\|minimal\|low\|medium\|high\|xhigh\|max (`off` disables thinking); any other value is rejected. Clear with `set -model.reasoning_effort`. |
-| `provider.id` | `<none>` | Explicit js provider id (e.g. deepseek, openai-codex, ollama). |
-| `provider.base_url` | `<none>` | Explicit provider base URL; unset = provider default. |
-| `provider.api_key` | `<none>` | Explicit provider API key; unset = env/login default. |
-| `provider.extra` | `<none>` | Free-form extra params passed through to the provider SDK. |
-| `limits.max_tool_iterations` | `500` | Max tool calls per turn before the loop gives up. |
-| `shell.wait_seconds` | `30` | Seconds a `shell` call waits for its command before returning a handle to poll. The command keeps running. |
-| `limits.max_bash_output_bytes` | `262144` | Hard cap on shell stdout per call. |
-| `limits.max_tool_result_bytes` | `262144` | Hard cap on any tool result string. |
-| `limits.fetch_timeout_s` | `15` | Whole-request deadline for unsaved fetch() calls, in seconds. |
-| `limits.inline_code_timeout_s` | `300` | Timeout in seconds for executable inline prompt directives. |
-| `limits.max_read_lines` | `2000` | Maximum lines returned by read(). |
-| `limits.max_file_bytes` | `2000000` | Maximum file bytes read by fs tools. |
-| `limits.task_max_depth` | `2` | Maximum recursive task/subagent depth. |
-| `limits.subagent_max_workers` | `8` | Maximum concurrent subagent workers per task call; minimum 1. |
-| `runtime.debug` | `off` | Append per-event records to `state/<agent>/debug.log`. |
-| `runtime.trace` | `on` | Pretty-print the tool-call trace line as the model runs. |
-| `runtime.allow_inline_code` | `on` | Execute !{sh\|python\|c\|node ...} inline directives in prompt files; `--im-a-pussy` turns it off for one run. |
-| `compact.auto` | `on` | Automatic cache-aware context compaction. |
-| `compact.context_window` | `<none>` | Context window tokens for fullness math; unset = models.dev metadata. |
-| `compact.notify_threshold` | `0.5` | Notify once when context reaches this fraction. |
-| `compact.trigger_threshold` | `0.8` | Auto-compact at this fullness fraction. |
-| `compact.force_threshold` | `0.9` | Force compact at this fullness fraction. |
-| `compact.tail_tokens` | `16384` | Recent tail budget retained after compaction. |
-| `compact.min_savings_tokens` | `400` | Skip compaction unless estimated savings exceeds this. |
-| `compact.chars_per_token` | `4.0` | Fallback/self-calibrating character-to-token estimate. |
-| `compact.model` | `same` | Model used to write the compaction summary; 'same' = active model. |
-| `compact.summary_max_tokens` | `4096` | Max tokens for the compaction summary (hard-capped at 8192). |
-| `compact.pre_hook` | `<none>` | Optional shell command whose stdout guides compaction. |
-| `subagents.prefer_inherit` | `off` | Subagents inherit the parent's model when true; else use the agent's own primary. |
-| `subagents.lock_model` | `off` | When true, the main agent cannot pick a subagent model via the task tool. |
-| `tools.alias_profiles` | `<none>` | Model-facing tool-name alias profiles: list of {match:string\|[...], aliases:{...}}. |
-| `sampling.temperature` | `<unset>` | Provider-default sampling temperature; unset = do not send. |
-| `sampling.top_p` | `<unset>` | Provider-default nucleus sampling top_p; unset = do not send. |
-| `sampling.top_k` | `<unset>` | Provider-default top_k sampling; unset = do not send. |
-| `sampling.repetition_penalty` | `<unset>` | Provider-default repetition penalty; unset = do not send. |
-| `sampling.presence_penalty` | `<unset>` | Provider-default presence penalty; unset = do not send. |
+Under `js -C DIR`, `JAIL_HIDE` paths (by default `~/.js`, `~/.ssh`, `~/.gnupg`,
+`~/.netrc`, `~/.aws`, `~/.config/gh`) are empty in the jail. The `~/.js`
+entry also covers the selected profile; an explicit replacement or empty list
+controls the hide rules. These paths stay hidden whatever DIR and
+`JAIL_BIND` show, and `js -C` refuses a DIR inside one. A hidden path created on the host while a long-running jailed
+command (kernel or terminal session) is already running can be visible to that
+command until it ends; file tools refuse it by name throughout.
 
-Tool alias profiles let a model see alternate tool names without changing the
+Tool alias profiles (`TOOL_ALIASES`, a JSON list) let a model see alternate tool names without changing the
 canonical tool handlers. Profiles are evaluated in order; each `match` value is
 case-insensitive substring-matched against the active model id and provider id.
 `match` may be a single string or a list of strings.
@@ -94,17 +102,17 @@ Aliases that collide with an active canonical tool name are also ignored.
 
 ## MCP Servers And Per-Agent Policy
 
-`mcp.servers` and `mcp.agents` are JSON-valued `jsrc` settings. A stdio server
+`MCP_SERVERS` and `MCP_AGENT_POLICY` are JSON-valued `jsrc` settings. A stdio server
 uses `command`, optional `args`/`env`, and an optional `enabled` boolean:
 
 ```text
-set mcp.servers {"Local Files":{"command":"python","args":["/opt/files-mcp.py"],"env":{"FILES_TOKEN":"secret"}}}
+set MCP_SERVERS {"Local Files":{"command":"python","args":["/opt/files-mcp.py"],"env":{"FILES_TOKEN":"secret"}}}
 ```
 
 A streamable-HTTP server uses `url` and optional `headers`:
 
 ```text
-set mcp.servers {"Project API":{"url":"http://127.0.0.1:8765/mcp","headers":{"Authorization":"Bearer secret"}}}
+set MCP_SERVERS {"Project API":{"url":"http://127.0.0.1:8765/mcp","headers":{"Authorization":"Bearer secret"}}}
 ```
 
 The value is one JSON object, so combine both entries when using both transports.
@@ -112,18 +120,17 @@ Server names must normalize uniquely. A server requires exactly one of `command`
 or `url`; HTTP URLs must use `http` or `https` and may not contain userinfo.
 Disabled servers are omitted before runtime.
 
-`mcp.agents` applies independent server and namespaced-tool policy by agent id.
+`MCP_AGENT_POLICY` applies independent server and namespaced-tool policy by agent id.
 Allow/deny entries are case-sensitive glob patterns and deny always wins:
 
 ```text
-set mcp.agents {"autocoder":{"servers":{"allow":["Local *"],"deny":["*Prod*"]},"tools":{"allow":["local_files__*"],"deny":["*__delete*"]}}}
+set MCP_AGENT_POLICY {"defaultagent":{"servers":{"allow":["Local *"],"deny":["*Prod*"]},"tools":{"allow":["local_files__*"],"deny":["*__delete*"]}}}
 ```
 
 An absent `allow` permits everything not denied; an empty `allow` permits
 nothing. The resolved policy is also applied defensively during discovery, so a
-denied server is never connected. Agent and skill tool manifests select the
-canonical `tool_discovery` tool; remote names are not static frontmatter
-selectors.
+denied server is never connected. MCP tools reach an agent through the
+canonical `tool_discovery` tool; remote names are not `agent.yaml` entries.
 
 MCP connections are lazy. Merely configuring servers starts no subprocess and
 opens no HTTP connection. An MCP-scoped `tool_discovery` call initializes the
@@ -132,9 +139,10 @@ the current turn. A normal turn-owned host closes every stdio process and HTTP
 session on exit. Session-owned hosts may retain connections across turns, but
 loaded MCP schemas do not carry into the next turn.
 
-Configured credential values are redacted from remote schemas, text/structured
-results, resources, prompts, errors, progress/log notifications, provider tool
-results, and append-only session JSONL. Credential sources include environment
+Configured credential values are always redacted, whatever `PARANOID_MODE` says,
+from remote schemas, text/structured results, resources, prompts, errors,
+progress/log notifications, provider tool results, and append-only session
+JSONL. Credential sources include environment
 values, header values and authorization payloads, URL query values, and stdio
 flag values (`--token value` or `--token=value`). Stdio stderr is drained but
 never surfaced. Redaction is a last-resort output boundary, not a reason to put
@@ -143,38 +151,33 @@ secrets in prompts or server-controlled content.
 ## Environment Variables
 
 Registry-backed `JS_*` variables overlay all `jsrc` files and use the same
-coercion as `set`.
+coercion as `set`. Setting `NAME` reads env var `JS_NAME` (`TOP_P` <->
+`JS_TOP_P`, `MODEL` <-> `JS_MODEL`). Three older env names are still read; the
+new name wins when both are set:
 
-| Variable | Key | Default | Meaning |
-| --- | --- | --- | --- |
-| `JS_MODEL` | `model.id` | `deepseek/deepseek-v4-flash` | Default model id; unprefixed ids route through AI Gateway. |
-| `JS_MAX_OUTPUT_TOKENS` | `model.max_output_tokens` | `<none>` | Per-call max_tokens; unset = models.dev metadata when known, else no explicit cap. |
-| `JS_REASONING` | `model.reasoning_effort` | `<none>` | Thinking effort: off\|minimal\|low\|medium\|high\|xhigh\|max (`off` disables thinking); any other value is rejected. |
-| `JS_PROVIDER` | `provider.id` | `<none>` | Explicit js provider id (e.g. deepseek, openai-codex, ollama). |
-| `JS_BASE_URL` | `provider.base_url` | `<none>` | Explicit provider base URL; unset = provider default. |
-| `JS_API_KEY` | `provider.api_key` | `<none>` | Explicit provider API key; unset = env/login default. |
-| `JS_MAX_TOOL_ITERATIONS` | `limits.max_tool_iterations` | `500` | Max tool calls per turn before the loop gives up. |
-| `JS_MAX_BASH_OUTPUT_BYTES` | `limits.max_bash_output_bytes` | `262144` | Hard cap on shell stdout per call. |
-| `JS_MAX_TOOL_RESULT_BYTES` | `limits.max_tool_result_bytes` | `262144` | Hard cap on any tool result string. |
-| `JS_FETCH_TIMEOUT` | `limits.fetch_timeout_s` | `15` | fetch() per-request timeout in seconds. |
-| `JS_INLINE_CODE_TIMEOUT` | `limits.inline_code_timeout_s` | `300` | Timeout in seconds for executable inline prompt directives. |
-| `JS_DEBUG` | `runtime.debug` | `off` | Append per-event records to `state/<agent>/debug.log`. |
-| `JS_TRACE` | `runtime.trace` | `on` | Pretty-print the tool-call trace line as the model runs. |
+| Old variable | New variable | Setting |
+| --- | --- | --- |
+| `JS_REASONING` | `JS_EFFORT` | `EFFORT` |
+| `JS_CONTEXT_WINDOW` | `JS_CONTEXT_SIZE` | `CONTEXT_SIZE` |
+| `JS_MAX_OUTPUT_TOKENS` | `JS_OUTPUT_TOKENS_MAX` | `OUTPUT_TOKENS_MAX` |
 
-Official `ai-python` SDK env vars (`AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`,
-`ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`) are read directly by the provider and
-do not need to be copied into `jsrc`.
+Default values are the lines in `defaults/jsrc`.
 
-Agent/session env remains accepted for compatibility (`JS_AGENT`, `JS_SESSION`),
-but CLI code threads selected agent/session through `Config` instead of mutating
-`os.environ`. Artifact mode is threaded through `ToolContext`.
+A provider's own env vars (`OPENAI_API_KEY`, `OPENAI_BASE_URL`,
+`ANTHROPIC_API_KEY`, ...) fill its key and base URL when the login and the
+settings leave them unset (`js/providers.py`). They do not stand in for a
+login, `PROVIDER` or `BASE_URL`: a model with none of them is refused.
 
-The byte caps use the canonical `_BYTES` env names only
-(`JS_MAX_BASH_OUTPUT_BYTES`, `JS_MAX_TOOL_RESULT_BYTES`); there are no shorter
-aliases. Note there is **no** env var for `limits.task_max_depth` or
-`limits.subagent_max_workers` — set them in `jsrc` or via `--extra limits.*=N`.
+The agent a run uses is the `DEFAULT_AGENT` setting (`JS_DEFAULT_AGENT`, default
+`defaultagent` in `defaults/jsrc`). `set DEFAULT_AGENT slim` in a `jsrc` file picks it for
+every run under that file; `JS_DEFAULT_AGENT` beats the `jsrc` files, and `--agent` or
+`--commit` beats both. `--last` and `--session-key` resolve the agent the same
+way. The agent is read once at startup: `/set DEFAULT_AGENT` in the REPL does not switch
+the running session, and `/save` carries it to later runs. `JS_SESSION` is still
+read from the environment. CLI code threads the selected agent and session
+through `Config` instead of mutating `os.environ`.
 
-Code-running inline prompt directives are on by default; `JS_ALLOW_INLINE_CODE=0`
+Code-running inline prompt directives are on by default; `JS_INLINE_CODE=0`
 disables them (`--im-a-pussy` sets exactly that for one run). See
 [inline-directives.md](inline-directives.md).
 
@@ -190,22 +193,23 @@ same.
 Files consulted, nearest first:
 
 1. `./.env`
-2. each parent directory's `.env`, up to the filesystem root
-3. `~/.config/js/.env`
+2. each parent directory's `.env`, up to the filesystem root, while
+   `DOTENV_WALK_UP` is on (the default)
+3. `~/.js/.env`
 
 The real process environment always wins, and the nearest file wins over a
 farther one: `TAVILY_API_KEY=x js ...` beats every file, and a project `.env`
-beats `~/.config/js/.env`. Nothing is ever overwritten — only unset names are
+beats `~/.js/.env`. Nothing is ever overwritten — only unset names are
 filled. `-C DIR` is applied first, so the walk starts at `DIR`.
 
 Format is the usual one: `KEY=value` per line, `#` comments, optional
 `export ` prefix, optional single or double quotes around the value. Malformed
 lines are skipped rather than raising.
 
-Provider credentials are a separate matter: `js` deliberately does **not**
-ride ambient provider keys in place of a login (`js/model_client.py`). A
-`.env` sets env vars, so it feeds the same knobs env vars do — including
-`JS_API_KEY` — but it does not bypass the login gate.
+Provider credentials are a separate matter: a model with no saved login, no
+`PROVIDER` and no `BASE_URL` is refused, whatever SDK keys the environment holds
+(`js/model_client.py`). A `.env` sets env vars, so it feeds the same settings
+env vars do — including `JS_API_KEY` — but it does not bypass the login gate.
 
 ## CLI Overrides
 
@@ -213,54 +217,75 @@ Common flags:
 
 ```bash
 js -m "model/id"
-js --agent autocoder
+js --agent slim
 js --session existing-session
 js --no-save
 js --debug
 js --debug-file /tmp/js-debug.log
 js --reasoning off
 js --max-out 64000
-js --extra limits.task_max_depth=3
+js --extra SUBAGENT_DEPTH_MAX=3
 js --im-a-pussy
+js -i                  # --no-shell-history
 js --migrate-config
 ```
 
-`--extra KEY=VALUE` sets any dotted config key for one run and wins over env and
-all `jsrc` files. It may be repeated. Exact registered keys use the same
-registry coercion as `set` and env vars, including JSON validation for structured
+`--extra KEY=VALUE` sets one registered setting for one run and wins over env and
+all `jsrc` files. It may be repeated. KEY is a registered setting name (any case)
+or a child of a map setting such as `EXTRA_PARAMS.organization`; any other key is
+refused with `Unknown setting`. Registered settings use the same registry
+coercion as `set` and env vars, including JSON validation for structured
 settings; values store verbatim, with no magic clear/default token (clearing a
-knob back to its default is `set -key`). Loose keys and map subkeys use
-generic int -> float -> `true`/`false`/`null` -> string coercion. The key splits
-on the first `=` only, so values may contain `=`.
+setting back to its default is `set -NAME`). Map children use generic
+int -> float -> `true`/`false`/`null` -> string coercion. The key splits on the
+first `=` only, so values may contain `=`.
 
-In the REPL, `set [key [val]]` uses the same registry: `set` lists knobs,
-`set key` shows one value, and `set key value` changes the live setting.
-`show [key]` lists every current value or only the requested key. Secret values
-such as `provider.api_key` render as `<set>` once set.
+In the REPL, `set [key [val]]` uses the same registry: `set` lists settings,
+`set key` shows one value, `set key value` changes the live setting, and
+`set -key` puts it back to the value the session started with.
+`show [key]` lists every current value or only the requested key. Under
+`PARANOID_MODE` `on`, secret values such as `API_KEY` render as
+`<set>` once set; under the default `off` they print in full.
 
-The command runner works slashless: `js/setcmd.py` `_normalize` strips a single
-optional leading `/`, so `set` and `/set` (and `show`/`/show`) dispatch
-identically in the REPL. The same runner backs REPL commands, `jsrc` config
-loading, and `/load`ed runtime scripts, but the accepted verb set differs by
-entry point. `jsrc` lines are the bare `set <key> <value>` form and accept only
-`set`; `apply_config_line` rejects every other verb. Runtime scripts loaded with
-`/load <file>` currently accept `set`, `show`, nested `load`, and `on`, with
-nested script paths resolved relative to the file that contains them. Registered
-event handlers run through that same runtime-script command surface when an
-event is emitted. Handler failures are recorded on the event emission and in
-debug telemetry rather than raised through the model loop; recursive event
-dispatch from inside a handler is skipped.
+`set` also accepts a setting's short name: `model` (`MODEL`), `provider`
+(`PROVIDER`), `baseurl` (`BASE_URL`), and `apikey`
+(`API_KEY`).
+
+A `jsrc` file is a file of commands; a leading `/` is optional. While config
+loads, the settings layer (`setcmd.apply_config_line`) applies `set` lines and
+short-name lines such as `model X`, so they sit under env and `--extra` in
+precedence and apply in `-p` runs too. It follows `load` lines and applies the
+same lines from the loaded files. When the REPL starts it runs every other
+line (`on`, `alias`, `load`, any command in the table) through the command
+table, in file order; errors name the file and line and do not stop startup.
+A `-p` run registers only the `on` lines, and only those whose command stands
+alone (`docs/user-guide.md`); it reports every other `on` line on stderr.
+A relative `load` path in a `jsrc` resolves against that file's directory.
+`/load <file>` runs every line of a file through the same table. Registered
+event handlers run through it too when an event is emitted. Handler failures
+are recorded on the event emission and in debug telemetry rather than raised
+through the model loop; recursive event dispatch from inside a handler is
+skipped.
 
 `--migrate-config` is a one-shot conversion for a legacy `config.toml`: it
-writes equivalent `set ...` lines to `jsrc` and exits. The migration path is
-temporary and is removed after 2 releases.
+writes equivalent `set ...` lines to `jsrc` and exits.
+
+js never rewrites a `jsrc` it loads. A line that still uses an old setting
+name (`model.id`, `limits.max_read_lines`) is an unknown setting at load,
+the same as `set model.id x` typed in the REPL or given with `--extra`.
+`scripts/rename-settings.py --write <file>` rewrites such a file to the new
+names when you run it; the rules are `js/rename.py`'s.
 
 `--im-a-pussy` opts OUT of the code-running inline prompt directives for the
 run; they are on by default and compile and run arbitrary code from prompt
 files -- see [inline-directives.md](inline-directives.md).
 
+`-i` / `--no-shell-history` keeps your recent shell commands out of the system prompt
+for the run: it sets `ENVCTX_HIST=0`, and envctx then prints no
+`recent_shell` block. Export `ENVCTX_HIST=0` to make it permanent.
+
 `--reasoning off` is an explicit override. It disables reasoning even when
-`JS_REASONING` is set.
+`JS_EFFORT` is set.
 
 `-m` / `--model` overrides the effective configured/env model for the selected
 run or session.
@@ -269,119 +294,362 @@ run or session.
 output is unset, the runtime asks models.dev for the active model limit and
 otherwise leaves the provider cap alone.
 `--refresh-model-catalog` forces an immediate refresh of js's local models.dev
-mirror, writes the refreshed timestamp to platform data, and exits unless you
+mirror, writes the refreshed timestamp under `~/.js/cache/`, and exits unless you
 also requested another action such as `--prompt`.
 
 ## Agent Directories
 
-Config lives in the platform config directory and runtime/session state in the
-platform data directory (resolved by `platformdirs`; on Linux these honor
-`$XDG_CONFIG_HOME`/`$XDG_DATA_HOME`, defaulting to `~/.config/js` and
-`~/.local/share/js`). Project-local `.js/` files stay with the project.
-
-Platform config directory:
+Everything js keeps outside a project lives in `~/.js/`; `js/paths.py` is the
+one module that names these locations. Project-local `.js/` files stay with the
+project.
 
 ```text
-<config-dir>/            # e.g. ~/.config/js
-  jsrc
-  logins.toml
-  models-cache.json
+~/.js/
+  jsrc                   # the user layer; only /save writes it, in place
+  .env
   JS.md                  # always-on operator context, whatever dir js runs in
   JS.local.md
+  tools.yaml
   agents/<agent_id>/     # global agent prompts
+  commands/              # markdown commands, /NAME
   skills/
+  toolbox/
+  logins/
+    logins.toml
+    models-cache.json
+  sessions/<start-dir>/   # the start directory, / and _ as - (~/js -> -home-me-js)
+    <session>.jsonl      # the record, append-only
+    <session>.txt        # its readable transcript
+    <session>/           # its subagent runs
+  keys                   # key bindings (KEYBINDS_FILE), read at REPL start
+  state/
+    history.jsonl        # every prompt sent at a REPL prompt (HISTORY_FILE)
+    <agent_id>/debug.log
+    <agent_id>/undo/
+    <agent_id>/latest.json   # the agent's latest session, for --last
+    kernel/<run>/        # kernel.log and rich-output images
+    tool-results/        # oversized results, spilled whole
+    commit-backups/
+  logs/
+    <agent_id>/          # debug autolog, compaction flights
+    transcript/<agent_id>/
+  cache/modelsdotdev/
+  cache/sessions.sqlite  # the picker's catalog and search index
+  work/                  # what the agent must not lose; notes/ holds :n and :w
+  tmp/                   # js scratch; entries a day old are removed at start
+  plans/                 # the plan tool
+  probes/
+    browser/             # browser_probe runs
+    terminal/            # terminal_snapshot images
 ```
 
-Platform data directory:
+Running js from the home directory makes `~/.js` the project `.js/` too; its
+`jsrc` then loads once, as the global layer.
 
-```text
-<data-dir>/              # e.g. ~/.local/share/js
-  sessions/<agent_id>/
-    .history
-    latest.json
-    <session>.jsonl
-  state/<agent_id>/
-    debug.log
-```
+### Moving in from the old locations
 
-The `jsrc` template is written on first run; the per-agent `sessions/`
-and `state/` directories are created lazily when an agent runs. The agent id is
+Before `~/.js`, js kept config in the XDG config directory
+(`~/.config/js`), state in the XDG data directory (`~/.local/share/js`), and
+agent keepers in `~/inbox/agents/js`. On the first start that finds any of
+them, js moves them in and prints one line per move on stderr, then writes
+`~/.js/state/home-migrated` so it never runs again. `just migrate-home` shows
+the same moves without making them; `just migrate-home --apply` makes them,
+marker or not.
+
+- Of the old config directory, only what js reads moves: `jsrc`,
+  `config.toml` (for `js --migrate-config`), `JS.md`, `JS.local.md`,
+  `agents`, `skills`, `toolbox`, `tools.yaml` and `.env` land at
+  `~/.js/<name>`; `logins.toml` and `models-cache.json` go to `~/.js/logins/`.
+- Of the old data directory, only what js reads moves: `sessions`, `state`
+  and `logs` land at `~/.js/<name>`; `transcript` goes to `logs/transcript`,
+  `modelsdotdev` to `cache/modelsdotdev`, `notes` to `work/notes` and
+  `commit-backups` to `state/commit-backups`.
+- Every other entry of the two (`sessions2`, `jsrc.bak`, a `js.zsh` your
+  shell sources, …) is left where it is, with one line naming it, and its
+  old directory stays.
+- `~/inbox/agents/js` becomes `~/.js/work`.
+
+Each entry moves by one rename, so a directory lands whole or not at all. A
+symlink moves as the link and is never followed. A relative symlink that the
+move would point somewhere else is rewritten to the absolute path it reached
+before; one that points at something that moved with it is left as it is. When the destination already
+exists, a directory is merged entry by entry, an identical file or link drops
+the old copy, and anything else is refused with the reason and left in place.
+An entry that cannot be read or compared is refused the same way; the rest
+still move. The dry run accounts for its own planned moves, so two old entries
+that land in the same place show the same merges and refusals as `--apply`.
+A refused entry is reported once at startup; the marker is written anyway, so
+`just migrate-home` is how to see it again.
+
+In the same step every agent in `~/.js/agents` is converted to `agent.yaml`
+(see `just migrate-agents` in [tool-system.md](tool-system.md)): a tools entry
+that matches no tool is dropped, and one line per agent names what was
+dropped. A symlinked agent is left for the host it lives on.
+
+Every start creates each directory of the layout above that is missing. Across filesystems an entry is copied beside its destination, renamed into
+place, and only then removed from the old location.
+
+Sessions of the old per-agent folders (`sessions/<agent>/`) are filed in the
+same step: each under the folder of the working directory in its first start
+record, or under `~`'s folder when it has none. An old subagent run carries no
+start record; it goes under the parent session whose `task` call carried its
+first message. File names are kept, so an old name or hash tail still resumes
+with `--session`. Each filed session is rewritten once so every record has an
+`id` and a `parent` (see JSONL Record Shape); its modification time is kept.
+A filed session without an agent in its start record then gets one naming the
+old folder, and each gets its `.txt`. The folder's `.history`
+and `latest.json` go to `state/<agent>/`. A session a running js holds open is
+left where it is.
+
+The per-agent `state/` directory is created when an agent runs. The agent id is
 validated (`^[A-Za-z0-9_-]+$`) *before* any directory is created, so a bad id
 never leaves stray files.
 
 ### Agent prompts
 
-Agent prompts are discovered from repo `prompts/`, global `agents/` in the
-platform config dir, and project `.js/agents/`; project scope wins over global,
-which wins over repo.
+Agent prompts are discovered from stock `defaults/agents/`, global `~/.js/agents/`,
+and project `.js/agents/`; files layer per relative name: project > home > defaults.
 
 Two layers are prepended to every main-agent and subagent system prompt,
 blank-line separated:
 
-- `JS.md` and `JS.local.md` from the platform config dir. These are js's own
+- `JS.md` and `JS.local.md` from `~/.js/`. These are js's own
   always-on operator context and load whatever directory js runs in. They are
   deliberately NOT called `AGENTS.md`: that name is the per-repo convention a
   dozen other tools also read, so a global one would silently apply
   repo-shaped instructions everywhere.
 - `AGENTS.md` and `AGENTS.local.md` from the project, exactly the way any other
-  directory's project files load. A `~/.config/js/AGENTS.md` therefore applies
-  only when js is run from inside `~/.config/js`.
+  directory's project files load. A `~/.js/AGENTS.md` therefore applies
+  only when js is run from inside `~/.js`.
 
 The assembled system prompt is run through inline-directive expansion
 ([inline-directives.md](inline-directives.md)) before it reaches the model.
-Agent manifests use a `00-tools.yaml` zero file listing tool selectors and an
-optional `max_tokens:` override.
+Agent manifests are an `agent.yaml` beside the prompt files: `tools:`
+entries in `noun:modifier` form, and optional `model:`, `secondary_model:`,
+`models:`, `reasoning:`, `sampling:`, `max_tokens:` and `skills:`. Tags used by `tools:` live in
+`~/.js/tools.yaml`. See [tool-system.md](tool-system.md).
 
 ## Session Resolution
 
-Prompt and pipe runs save by default. Without `--session`, a saved run reserves
-a new unique JSONL file under the selected agent's `sessions/` directory and
-prints a resume command after the answer. This is the normal choice for an agent
-driver: use the same session for review and correction rounds so the model does
-not have to re-read all prior context.
+Sessions are filed by the directory js started in:
+`~/.js/sessions/<start-dir>/`, where the folder name is the absolute path with
+`/` and `_` replaced by `-`. An agent in `~/js/js/toolkit` greps
+`~/.js/sessions/-home-me-js-js-toolkit/*.txt`; a prefix glob
+(`-home-me-js*`) covers a tree.
 
-`--session NAME` resumes an existing named session or creates that safe relative
-name when absent. Names may use `/` to group work under the selected agent:
+Prompt and pipe runs save by default. Without `--session`, a saved run reserves
+a new session named `YYYY-MM-DDTHHMM-xxxx` (local time, four hex digits) in the
+current directory's folder and prints a resume command after the answer. This
+is the normal choice for an agent driver: use the same session for review and
+correction rounds so the model does not have to re-read all prior context.
+
+`--session NAME` resumes an existing session or creates that safe relative name
+in the current directory's folder when absent. An existing name is looked up in
+the current directory's folder first, then in every folder, so a named session
+resumes from any directory. A name that more than one other folder holds is
+refused with the paths. A generated name also resumes from a unique tail of
+four or more characters. Names may use `/` to group work:
 
 ```bash
 js --session reviews/parser-fix -p "implement the first pass"
 js --session reviews/parser-fix -p "apply the review corrections"
-js --session 20260611T120000Z-abcd -p "resume a generated session"
+js --session 6d65 -p "resume 2026-09-29T0802-6d65"
 ```
 
-Generated session ids can be resumed from the `Continue:` hint. Driver
+`--session` with no name, and `/session` in the REPL, open the session picker
+(below).
+
+A resumed session continues on the model, provider and reasoning level of its
+last stamp (see below) unless the run names them with `--model` or
+`--reasoning`; `--model` beats the stamp. When the stamped provider is neither
+the configured one nor logged in, the session runs on the configured model
+and js prints one line naming the stamped model and the one it continues on.
+`--last` resumes the agent's most recently started session, wherever it is
+filed.
+
+Two notes ride on the next user message as a `<js-reminder>`:
+
+- **Model switch.** When the newest assistant reply in the session was stamped
+  with a model or provider other than the one this turn runs on (after
+  `/model`, or a resume with `--model`), the message says the model changed
+  from the stamped one to the current one. The turn's reply carries the new
+  stamp, so the note comes once. A stamp without a provider compares on the
+  model id alone.
+- **Cut-off turn.** When a resumed session's last turn ended without a finished
+  reply, the first message of the resume says the last turn was cut off. A
+  turn is cut off when the history ends on a user or tool message, or on an
+  assistant message with tool calls or an `incomplete_reason` (an interrupted
+  stream, a max-output stop). Trailing `<js-reminder>` and
+  `<compaction-summary>` user messages that js wrote itself are passed over.
+
+"Newest reply" means the newest one in the replayed history: a reply that a
+rollback, `/reset` or compaction dropped does not count. In the REPL, a turn
+that is dropped before the model made any progress puts its queued notes (the
+cut-off note, `/cd`, `/add`, `/drop`) back, and the next message carries them.
+
+Generated session ids can be resumed from the `*** Continue:` hint, which a
+one-shot run prints on stderr. Driver
 integrations that have a stable caller key can instead derive an opaque name
 from agent + resolved working directory + caller key; repeated runs get the same
 `derived/<sha256>` session while different agents, directories, or keys remain
 isolated.
 
-`--no-save` uses `os.devnull`. In headless prompt and pipe mode it prints exactly
-`session not saved; resume unavailable` once on stderr after the run while
-keeping stdout answer-only. It does not warn in the interactive REPL. This is an
+`--no-save` uses `os.devnull`. In headless prompt and pipe mode it prints
+`*** Session not saved. Resume unavailable.` once on stderr after the run while
+keeping stdout answer-only. It does not warn in the interactive REPL, where
+`--no-save` reads a session named with `--session` and writes nothing. This is an
 expensive throwaway choice because the next run cannot resume and must re-read
 context.
 
 Absolute session paths are accepted only when they are existing `.jsonl` files
-inside that agent's sessions directory. Relative traversal is rejected after
-resolution.
+under `~/.js/sessions`. Relative traversal is rejected after resolution.
+
+A subagent run is filed in the folder named after its parent session
+(`<session>/task-<epoch>-xxxx.jsonl`), so a plain grep of a directory's folder
+does not hit it. The children of an unsaved run are not saved either.
+
+## The Session Picker
+
+`js --session` (no name) or `/session [query]` in the REPL lists every session,
+the one last written to first, across every directory and agent: a resumed
+session moves to the top. The date column
+is still when it started. `•` marks sessions started in
+the current directory; branches sit under the session they came from. A
+session started with `--session NAME` shows NAME in the last column. Under
+the highlighted session two lines show the operator's last text (tool calls
+and js reminders left out) and the agent's last status line, the one that
+begins with 📌 (📌🔨🦍), else the last line of its last text.
+`js --list-sessions --json` lists the saved sessions as JSON.
+
+| key | does |
+|---|---|
+| Enter | resume the session in its own directory, with its own agent, on its last-stamped model |
+| `v` | cycle the views: flat, grouped by directory, grouped by agent |
+| `/` | type a search query; Enter keeps it, Esc clears it |
+| `b` | the message list: Enter branches at the highlighted message, `r` resumes at the end, Esc goes back |
+| `i` | the file path, model stamps, estimated token count and branch parent |
+| `a` | also show the hidden kinds (below), marked in the last column |
+| Esc | clear the query, or close |
+
+Hidden until `a`: **empty** sessions (nothing came back), **quick** ones (one
+operator message, at most two tool calls, a final reply under 1,000
+characters), **subagent** runs and **script**-started runs (`--commit`). A
+query naming the kind (`mode:quick`, `mode:subagent`, `mode:commit`) shows
+them without `a`. In the message list a tool row is labelled with the text the
+model wrote alongside the call, or else the call's first line.
+
+In the REPL, choosing another session ends the REPL and js starts again in
+that session. A session whose first start ran under `-C` resumes under `-C`
+at its start directory. Choosing a branch point creates the branch in the
+parent's folder first.
+
+Search terms combine with AND:
+
+| query | meaning |
+|---|---|
+| `niri motherboard` | BM25 over the conversation text; each word also matches as a prefix |
+| `"exact phrase"` | a phrase |
+| `>10`, `<2`, `>=10,<=20` | turn count |
+| `today` `yesterday` `week` `2026` `2026-09` `2026-09-29` | the session was active in that span; `today:niri` = `today niri` |
+| `agent:defaultagent`, `agent:*research*` | agent, glob |
+| `dir:~/js` | started in exactly `~/js`; a relative path is taken from the current directory |
+| `dir:~/js/*`, `dir:~/js/**` | one level under `~/js` / `~/js` or anywhere under it; `*` and `?` stay within one path component |
+| `mode:-p`, `mode:quick` | how it was started, or its kind |
+| `model:*qwen*` | any message stamped with a matching model |
+
+The words are ranked over what the operator wrote, what the model wrote, the
+`/name` title, and each tool row's label and call line; tool output is not
+searched. The line under the query shows how it was read, and each hit shows
+its best-matching row.
+
+The list and the search read `~/.js/cache/sessions.sqlite`: each session's
+summary and an FTS5 table of its text. Every write to a session updates its
+entry. On open, a file whose size or mtime differs from its entry is read
+again, an entry whose file is gone is dropped, and a missing or unreadable
+index is built again from the sessions.
+
+## The `.txt` Transcript
+
+Every write to a session's `.jsonl` brings the `.txt` beside it up to date:
+
+```text
+agent: defaultagent   dir: /home/me/js   mode: repl
+models: deepseek-v4-flash → xiaomi/mimo-v2.6-pro (#0031)
+started: 2026-09-29 08:02   last: 2026-09-29 11:40   turns: 41
+branched-from: -
+
+#0001 08:02 you  APE
+#0015 08:31 tool:shell  look at the spill file  $ wc -lc result.txt  → exit 0, 91984B
+#0016 08:32 ape  the file has no real newlines, it's escaped JSON
+```
+
+Four header lines and a blank line (`head -5 *.txt` summarises a folder), then
+one line per message, numbered by its place among the message records of the
+`.jsonl`; a multi-line message continues on indented lines. An assistant
+message that calls tools is not a line of its own: its text labels each call,
+and each tool result is a line with the tool, that label, the first line of the
+call and the result's exit code and size. Tool output is only in the `.jsonl`,
+at the same message number. A message a rollback took back out of the
+conversation is not shown; compaction removes nothing from the `.txt`.
 
 ## JSONL Record Shape
 
 The memory file is append-only JSONL. Records have:
 
 ```json
-{"kind":"session_metadata","version":1,"ts":1781189999.0,"cwd":"/work/repo","caller_key":"review-42","job_id":"slice-01"}
-{"kind":"message","ts":1781190000.0,"version":1,"message":{"role":"user","content":"..."}}
-{"kind":"mark","ts":1781190001.0,"version":1,"marker":"session_reset"}
+{"id":"3f9a0c12","parent":null,"kind":"message","ts":1781190000.0,"version":1,"message":{"role":"user","content":"..."}}
+{"id":"b07e44d1","parent":"3f9a0c12","kind":"session_metadata","version":3,"ts":1781190000.5,"cwd":"/work/repo","caller_key":"review-42","job_id":"slice-01","agent":"defaultagent","model":"m","mode":"-p","command":["js","-p","..."]}
+{"id":"c2d81e5a","parent":"3f9a0c12","kind":"message","ts":1781190002.0,"version":1,"message":{"role":"assistant","content":"..."},"stamp":{"model":"m","provider":"p","reasoning":"high"}}
+{"id":"5e6f7a80","parent":"c2d81e5a","kind":"mark","ts":1781190003.0,"version":1,"marker":"session_reset"}
+{"id":"91aa02bc","parent":"5e6f7a80","kind":"title","ts":1781190004.0,"title":"parser fix"}
+{"id":"0d4e7b19","parent":"5e6f7a80","kind":"usage","version":1,"ts":1781190005.0,"call":{"model":"m","provider":"p","input_tokens":8120,"output_tokens":41,"cache_read_tokens":6000,"cache_write_tokens":0,"reasoning_tokens":0,"cost":0.0031},"totals":{"calls":3,"...":"...","by_model":{}}}
 ```
 
-Generated/driver-managed sessions may append the `session_metadata` control
-record at start. It carries machine-facing working-directory, caller-key, and
-job-id fields for catalogs and integrations; it is not conversation context and
-the message loader ignores it. Adjacent hidden liveness sidecars track open
-processes without rewriting the append-only conversation file.
+Every record starts with an `id`, eight hex digits unique within the file, and
+a `parent`. Message and mark records form the conversation path: each one's
+`parent` is the id of the message or mark before it in the file, `null` for the
+first. A start or title record's `parent` is the message or mark it follows,
+and no record names it as its parent. `usage` records are placed the same
+way. Older sessions also hold `tags` records; they are skipped when read.
+Replay reads the file in order and does not use ids.
 
-`load_messages()` ignores:
+A record's `ts` is when its message happened. The operator's message is written
+when the turn starts; the rest of a turn is written when the turn ends, and
+each of those records still carries its own time: an assistant message when
+the model's response finished, a tool result when the tool finished.
+
+Every start appends a `session_metadata` control record: working directory,
+agent, model, caller key and job id, how it was started (`mode`: `repl`, `-p`,
+`pipe`, `subagent`, `commit`) and the command line. A subagent run's record
+names its `parent_session` file. A branch is a new file holding the parent's
+records up to the message it split at, ids kept, except the `usage`
+records, so its usage totals start at zero; its start record's
+`branched_from` names the parent session file and the `id` of that message,
+and the `.txt` shows the message's number. The start record is not
+conversation context and the message loader ignores it. Adjacent hidden
+liveness sidecars track open processes without rewriting the append-only
+conversation file.
+
+Every assistant message record carries a `stamp`: the model, provider and
+reasoning level it was written under. `/model` appends a `model_switch` record
+whose `stamp` is the model it switched to and whose `previous` is the one it
+left, in the same shape. Resume uses whichever came last: an assistant stamp, a
+`model_switch` stamp, or a start record's model (the `-m` of that start, else
+the configured model).
+
+An assistant message whose reasoning came signed (an Anthropic thinking
+signature, an OpenAI Responses encrypted reasoning item) also carries `reasoning_parts`,
+each part's text and provider metadata, and `reasoning_from`, the provider and
+model that signed them. Replay sends the signed parts back only to that
+provider and model. A record after an edit to earlier history (tool-result
+clearing, the kept tail of a compaction, a user message whose attachments are
+left out) loses `reasoning_parts` and `reasoning_from`; a compaction mark drops
+them from its kept tail on load.
+
+`/name <text>` appends a `title` record; `/name` alone prints the title. The
+newest title is the session's name in `--list-sessions --json`.
+
+`load_replay_messages()` (and `load_messages()`, which reads through it) ignores:
 
 - malformed JSON lines
 - unknown versions
@@ -398,19 +666,64 @@ The writer uses `fcntl` locks and `fsync` on append.
 when a turn is aborted or a runtime exception happens after the user message was
 already appended.
 
-`compaction:{...}` marks rebuild loaded context as one `<compaction-summary>` user message plus a safe tail. Other marks are ignored by the loader but remain in JSONL as audit notes.
+`compaction:{...}` marks rebuild loaded context as one `<compaction-summary>` user message plus a safe tail.
 
-## Wipe And Backups
+`system:{...}` records the system prompt a session was born with. Every launch
+of that session sends those bytes, so a resumed request shares its prefix with
+the one that built the conversation.
 
-`/wipe` rotates the active file:
+`prompt_seen:<hash>` is appended at every REPL launch, after `session_start`. The
+hash covers the agent prompt files before directive expansion, so output such
+as a clock does not count as a change. When the hash differs from the previous
+launch's mark, the REPL appends one `<js-reminder>` user message saying the
+prompt files changed on disk and the session keeps its original prompt. A
+session with no earlier `prompt_seen:` mark gets no notice.
 
-```text
-session.jsonl      -> session.jsonl.bak
-session.jsonl      -> session.jsonl.bak.1
-session.jsonl      -> session.jsonl.bak.2
-```
+`turn_mode:<mode>` records the mode a turn ran in: `repl`, or `-p` for a
+one-shot or piped run. It is appended when a turn's mode differs from the newest
+mark's, so the newest mark is always the last turn's mode. When a turn changes
+the mode, its user message carries one `<js-reminder>`: after `-p`, that the
+conversation now continues in interactive chat and the human can answer; after
+the REPL, that it now continues as a one-shot run and the human cannot answer.
+A launch with no turn changes nothing. A session with no earlier `turn_mode:`
+mark gets no reminder.
 
-Existing backups are preserved. The in-process REPL message list is cleared.
+The message loader ignores `system:`, `prompt_seen:`, `turn_mode:` and every
+other mark; they remain in JSONL as audit notes.
+
+## Usage And Cost
+
+Every model call a session makes is charged to it (`js/usage.py`): the turn's
+own calls, the compaction summaries made for it, and the calls of the `task`
+workers it started, which are charged to their own session and to every
+session above them. A call adds its input, output, cache-read, cache-write and
+reasoning tokens. `input_tokens` counts every prompt token, cache reads and
+writes included, for every provider.
+
+A call's cost comes from the models.dev catalog js caches (a lookup of a
+provider that is not built in refreshes a stale catalog, as any provider
+lookup does): fresh input, cache reads, cache writes and output each at
+their own rate per million tokens, cache rates falling back to the input rate,
+and the price tier whose `min_context` the prompt reaches. A call that names a
+provider is priced only from that provider's catalog row, so a local
+server's model is not charged an API price. A call with no provider goes
+through the gateway and takes the routed row. A model with no price counts
+tokens only and adds to `unpriced_calls`.
+
+Each call appends a `usage` record holding the call and the session's totals
+after it. The newest one is where a resumed session's totals start; `/wipe`
+starts them again at zero. `/cost` prints the totals, the tokens by kind, and
+each model's share. The status bar shows the session's cost; `+` after it
+means some calls had no price, and a session with no priced call shows its
+token count instead. `js -p "task" --json` carries the same figures in its final `usage`
+object; `--json-stream` includes them in `end` ([Headless JSON](headless-json.md)).
+
+## Wipe
+
+`/wipe` moves the active session file, and its `.txt` beside it, to a new
+session name in the same directory. The moved conversation is a session of
+its own and can be resumed. The in-process REPL message list is cleared. No
+backup file is made.
 
 ## Compaction
 
@@ -420,10 +733,10 @@ the same offline. On load, the mark rebuilds in-memory context as:
 
 1. the unchanged system prompt,
 2. one user message containing `<compaction-summary>...`,
-3. a fixed tail (`tail_tokens`, default `16384`) whose boundary backs up so an
+3. a recent tail (`COMPACTION_KEEP_RECENT_TOKENS`, default `16384`) whose boundary backs up so an
 assistant `tool_calls` message is not separated from its tool results.
 
-The summary model is `compact.model`; literal `same` uses the active session
+The summary model is `COMPACTION_EXTERNAL_MODEL`; literal `same` uses the active session
 model. `/compact -m <model>` overrides it for that one manual compaction.
-Optional focus text and `compact.pre_hook` stdout are supplied as guidance.
+Optional focus text and `COMPACTION_HINT_COMMAND` stdout are supplied as guidance.
 Hook failures warn but do not block compaction.

@@ -1,0 +1,7 @@
+{"kind":"message","message":{"role":"user","content":"question"},"ts":1790000001.0,"version":1,"id":"r001","parent":null}
+{"kind":"message","message":{"role":"assistant","content":"first","reasoning_content":"thinking first","reasoning_parts":[{"type":"thinking","signature":"sig-first"}],"reasoning_from":{"provider":"anthropic","model":"model-a"}},"stamp":{"model":"model-a","provider":"anthropic","reasoning":"high"},"ts":1790000002.0,"version":1,"id":"r002","parent":"r001"}
+{"kind":"message","message":{"role":"user","content":"again"},"ts":1790000003.0,"version":1,"id":"r003","parent":"r002"}
+{"kind":"message","message":{"role":"assistant","content":"second","reasoning_content":"thinking second","reasoning_parts":[{"type":"thinking","signature":"sig-second"}],"reasoning_from":{"provider":"anthropic","model":"model-a"}},"stamp":{"model":"model-b","provider":"openai","reasoning":null},"ts":1790000004.0,"version":1,"id":"r004","parent":"r003"}
+{"kind":"mark","marker":"compaction:{\"summary\":\"S\",\"keep_from\":2,\"forced\":false}","ts":1790000005.0,"version":1,"id":"r005","parent":"r004"}
+{"kind":"message","message":{"role":"user","content":"dropped"},"ts":1790000006.0,"version":1,"id":"r006","parent":"r005"}
+{"kind":"mark","marker":"rollback_to:3","ts":1790000007.0,"version":1,"id":"r007","parent":"r006"}

@@ -1,501 +1,433 @@
-"""Knob registry and config loader for the js harness.
+"""Setting registry and the default layer for the js harness.
 
-ONE registry (`REGISTRY`, a list of `SettingSpec`) is the single source of truth
-for every runtime knob: its storage path, type, default, env-var override,
-empty-state display, and doc text. From it we generate the env layer, the
-first-run config template, the `set`/`show` command surface (see `js.setcmd`),
-and the docs.
-
-The config file is a *script*: each non-comment line is a `set <key> <value>`
-command (see `js.setcmd`). The conventional filenames follow the `rc` lineage
-(`.ircrc`, `bitchtearc`): global `jsrc`, project `.js/jsrc`, local
-`.js/jsrc.local`. There is no TOML — `js --migrate-config` converts a legacy
-`config.toml` once.
-
-Precedence, lowest to highest:
-    built-in defaults < platform jsrc < project .js/jsrc
-        < project .js/jsrc.local < env vars < --extra CLI flag
+`REGISTRY` (a list of `SettingSpec`) names every runtime setting: its storage
+path, type, env-var override, empty-state display, and help text. The values
+a setting starts with live in ONE file, `defaults/jsrc`, shipped in the package: one
+`set` line per setting. `seed_defaults` and `default_value` read it; a missing
+or broken `defaults/jsrc` stops startup with one line naming the path. The
+layers over it are `js.setting_layers`.
 """
 
 from __future__ import annotations
 
 import copy
-import json
 import os
-import re
 import sys
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-# Built-in defaults — the value used when no config file or env var supplies one.
-DEFAULT_MODEL = "deepseek/deepseek-v4-flash"
-DEFAULT_MAX_TOOL_ITERATIONS = 500
-DEFAULT_MAX_TOOL_CALLS_PER_MESSAGE = 50
-DEFAULT_MAX_BASH_OUTPUT_BYTES = 256 * 1024
-DEFAULT_MAX_BASH_OUTPUT_CEILING = 150_000
-DEFAULT_MAX_TOOL_RESULT_INLINE_BYTES = 51_200
-DEFAULT_MAX_TOOL_RESULT_BYTES = 256 * 1024
-DEFAULT_FETCH_TIMEOUT_S = 15
-DEFAULT_SHELL_ENV_ALLOW = ("PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "PWD", "SHELL")
-# browse drives a real browser engine: navigation, a JS event loop, and an
-# adaptive settle wait. 15s is a plain-HTTP number and kills SPAs mid-render.
-DEFAULT_BROWSE_TIMEOUT_S = 60
-# A download is bounded by _DOWNLOAD_MAX_BYTES (32 MiB), not by page-load time.
-# At 15s that silently demanded ~2 MB/s to fetch anything large.
-DEFAULT_DOWNLOAD_TIMEOUT_S = 300
-DEFAULT_MAX_DOWNLOAD_BYTES = 0        # 0 = unlimited; a download streams to disk
-DEFAULT_INLINE_CODE_TIMEOUT_S = 300
-DEFAULT_TRACE = True
-DEFAULT_MAX_READ_LINES = 2_000
-DEFAULT_MAX_FILE_BYTES = 2_000_000
-DEFAULT_MAX_READ_BYTES = 256 * 1024
-DEFAULT_MAX_TOOL_RESULTS_PER_TURN_BYTES = 200_000
-DEFAULT_TASK_MAX_DEPTH = 2
-DEFAULT_SUBAGENT_MAX_WORKERS = 8
-DEFAULT_KERNEL_VERBOSITY = "normal"
-DEFAULT_KERNEL_RENDER_MAX_LINES = 24
-# Seconds a `kernel` call waits for a submitted cell before handing back a
-# handle. Small on purpose: a call that returns beats a call that blocks.
-DEFAULT_KERNEL_WAIT_SECONDS = 5
-# Same shape for shell: a command still running after this many seconds comes
-# back as a handle and keeps running. The operator never sits through a build.
-DEFAULT_SHELL_WAIT_SECONDS = 30
-DEFAULT_COMPACT_AUTO = True
-DEFAULT_COMPACT_CONTEXT_WINDOW = None
-DEFAULT_COMPACT_CONTEXT_WINDOW_FALLBACK = 1_000_000
-DEFAULT_COMPACT_NOTIFY_THRESHOLD = 0.50
-DEFAULT_COMPACT_TRIGGER_THRESHOLD = 0.80
-DEFAULT_COMPACT_FORCE_THRESHOLD = 0.90
-DEFAULT_COMPACT_BUFFER_TOKENS = 4096
-DEFAULT_COMPACT_SUMMARY_RESERVE_TOKENS = 20_000
-DEFAULT_COMPACT_TAIL_TOKENS = 16384
-DEFAULT_COMPACT_MIN_SAVINGS_TOKENS = 400
-DEFAULT_COMPACT_CLEAR_KEEP_RECENT = 20
-DEFAULT_COMPACT_CHARS_PER_TOKEN = 4.0
-DEFAULT_COMPACT_MODEL = "same"
-DEFAULT_COMPACT_SUMMARY_MAX_TOKENS = 8192
+from . import jsrc_line, messages as msgs, paths
+
+# The built-in default layer: one `set` line per registered setting.
+PACKAGE_JSRC = paths.defaults_dir() / "jsrc"
 
 
-CONFIG_PRECEDENCE_LAYERS = (
-    "built-in defaults",
-    "platform jsrc",
-    "project .js/jsrc",
-    "project .js/jsrc.local",
-    "env vars",
-    "--extra CLI flag",
-)
-CANONICAL_CONFIG_PRECEDENCE = " < ".join(CONFIG_PRECEDENCE_LAYERS)
-TEMPLATE_CONFIG_PRECEDENCE = CANONICAL_CONFIG_PRECEDENCE.replace(
-    "platform jsrc", "this file", 1
-)
+class DefaultsError(SystemExit):
+    """`defaults/jsrc` is missing or holds a line that does not apply. A SystemExit,
+    so an uncaught one ends the process with its one-line message."""
 
 
-# Empty-state display semantics. A knob with no value shows one of these:
-EMPTY_OFF = "off"        # boolean knob, explicitly false
+# Empty-state display semantics. A setting with no value shows one of these:
+EMPTY_OFF = "off"        # boolean setting, explicitly false
 EMPTY_NONE = "none"      # no value set (rendered "<none>")
 EMPTY_UNSET = "unset"    # param deliberately not sent; provider default wins ("<unset>")
 
 
 @dataclass(frozen=True)
 class SettingSpec:
-    """One runtime knob. ``key`` is the canonical dotted name — it is both the
-    storage path in the settings dict and the name used by `set`/`show`."""
+    """One setting. ``key`` is its name, UPPER_SNAKE (`MODEL`). The key is
+    the storage path in the settings dict, split on dots, and the name its
+    `set` takes. Its env var is ``JS_<KEY>``
+    (`canonical_env_name`)."""
 
     key: str
     type: str            # "str" | "int" | "float" | "bool" | "json" | "map"
-    default: Any
-    doc: str
-    env: str | None = None      # JS_* env var feeding the env layer, if any
+    env: str | None = None      # another env var also read (an older name, or the vendor's own); JS_<KEY> wins over it
     empty: str = EMPTY_NONE     # how an unset value renders
     live: bool = True           # settable live in the REPL
     secret: bool = False        # mask the value in `show`
+    aliases: tuple[str, ...] = ()  # jsrc verbs that set ``key``: `model X` is `set MODEL X`
+    group: str = ""             # what `/set <group>` lists it under; "" = the dotted section
 
     @property
     def path(self) -> tuple[str, ...]:
         return tuple(self.key.split("."))
 
     @property
+    def default(self) -> Any:
+        """This setting's value in `defaults/jsrc`; None when that file leaves it unset."""
+        return default_value(self.key)
+
+    @property
     def section(self) -> str:
-        return self.path[0]
+        return self.group or self.path[0]
+
+    @property
+    def doc(self) -> str:
+        """This setting's help: its entry in `defaults/help/set.txt`; "" when it
+        has none."""
+        return setting_help().get(self.key, "")
 
 
-# The single source of truth. Order here is the order `show`/the template use.
+# `/help set NAME` text, one entry per setting; `/help fset NAME` text, one
+# entry per /fset entry that is not a format or a palette slot.
+SETTING_HELP_FILE = paths.defaults_dir() / "help" / "set.txt"
+FSET_HELP_FILE = paths.defaults_dir() / "help" / "fset.txt"
+_help_cache: dict[Path, dict[str, str]] = {}
+
+
+def read_help(path: Path) -> dict[str, str]:
+    """NAME -> help text, read once from the help file at ``path``: a NAME
+    alone on a line, then its help indented. `#` lines are comments."""
+    if path in (SETTING_HELP_FILE, FSET_HELP_FILE):
+        path = paths.find(Path("help") / path.name) or path
+    if path not in _help_cache:
+        entries: dict[str, list[str]] = {}
+        current: list[str] | None = None
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("#"):
+                continue
+            if line and not line[0].isspace():
+                current = entries.setdefault(line.strip(), [])
+            elif current is not None:
+                current.append(line.strip())
+        _help_cache[path] = {name: " ".join(" ".join(body).split()) for name, body in entries.items()}
+    return _help_cache[path]
+
+
+def setting_help() -> dict[str, str]:
+    """NAME -> help text from `SETTING_HELP_FILE`."""
+    return read_help(SETTING_HELP_FILE)
+
+
+# Every setting. Order here is the order `/set` lists them in.
 REGISTRY: tuple[SettingSpec, ...] = (
+    SettingSpec("REMOVE_TRASH", "bool", group="tools"),
+    SettingSpec("TRASH_BYTES_MAX", "int", group="tools"),
+    SettingSpec("TOOL_ARGUMENT_STRICT", "bool", group="runtime"),
+    SettingSpec("JAIL_CLEAN_PRIVATE_DIRS", "bool", group="shell"),
+    SettingSpec("JAIL_HIDE_NETWORK_FILESYSTEMS", "bool", group="shell"),
+    SettingSpec("JAIL_HIDE_OPERATOR_HOME", "bool", group="shell"),
+    SettingSpec("JAIL_BASE_HIDDEN_DIRS", "json", group="shell"),
+    SettingSpec("HOOK_SHELL_PROGRAM", "str", group="events"),
+    SettingSpec("SWARM_SPAWN_MAX", "int", group="shell"),
+    SettingSpec("SESSION_TEXT_AUTO_REFRESH", "bool", group="history"),
+    SettingSpec("SESSION_STATUS_MARK", "str", group="history"),
+    SettingSpec("SESSION_QUICK_REPLY_CHARACTERS_MAX", "int", group="history"),
+    SettingSpec("SESSION_QUICK_TOOL_CALLS_MAX", "int", group="history"),
+    SettingSpec("SESSION_QUICK_TURNS_MAX", "int", group="history"),
+    SettingSpec("SESSION_SCRIPT_MODES", "json", group="history"),
+    SettingSpec("SESSION_HIDDEN_KINDS", "json", group="history"),
+    SettingSpec("TOOL_INSTALLER_USER_AGENT", "str", group="tools"),
+    SettingSpec("DOWNLOAD_RETRY_WAIT", "int", group="tools"),
+    SettingSpec("DOWNLOAD_RETRIES_MAX", "int", group="tools"),
+    SettingSpec("DOWNLOAD_CONNECTIONS_MAX", "int", group="tools"),
+    SettingSpec("DOWNLOAD_SPLITS_MAX", "int", group="tools"),
+    SettingSpec("TOOL_BINARY_PATH_FALLBACK", "bool", group="tools"),
+    SettingSpec("TMP_AGE_MAX", "float", group="runtime"),
+    SettingSpec("DOTENV_WALK_UP", "bool", group="runtime"),
+    SettingSpec("ENDPOINT_DEFAULT_KEY", "str", secret=True, group="providers"),
+    SettingSpec("MODEL_CONTEXT_PROBE", "bool", group="runtime"),
+    SettingSpec("MODEL_CATALOG_AGE_MAX", "float", group="runtime"),
+    SettingSpec("MODEL_CATALOG_AUTO_REFRESH", "bool", group="runtime"),
+    SettingSpec("LOCAL_API_KEY_PLACEHOLDER", "str", group="providers"),
+    SettingSpec("PROJECT_INSTRUCTION_FILES", "json", group="runtime"),
+    SettingSpec("GLOBAL_INSTRUCTION_FILES", "json", group="runtime"),
+    SettingSpec("PASTE_IMAGE_TIMEOUT", "float", group="input"),
+    SettingSpec("PASTE_IMAGE_BACKENDS", "json", group="input"),
+    SettingSpec("NOTE_TIMESTAMP_FORMAT", "str", group="input"),
+    SettingSpec("SPELLCHECK_TIMEOUT", "float", group="input"),
+    SettingSpec("SPELLCHECK_LANGUAGE", "str", group="input"),
+    SettingSpec("SPINNER_FRAMES", "str", group="display"),
+    SettingSpec("SCROLLBACK_LINES_MAX", "int", group="display"),
+    SettingSpec("MARKDOWN_HARD_BREAKS", "bool", group="display"),
+    SettingSpec("MARKDOWN_INLINE_PADDING", "str", group="display"),
+    SettingSpec("EXCHANGE_ARGUMENT_STYLE", "str", group="display"),
+    SettingSpec("EXCHANGE_HEADER_STYLE", "str", group="display"),
+    SettingSpec("MARKDOWN_HEADING_FOUR_STYLE", "str", group="display"),
+    SettingSpec("MARKDOWN_HEADING_THREE_STYLE", "str", group="display"),
+    SettingSpec("MARKDOWN_HEADING_TWO_STYLE", "str", group="display"),
+    SettingSpec("SHELL_LIVE_LINES_MAX", "int", group="display"),
+    SettingSpec("ARGUMENT_CHARACTERS_MAX", "int", group="display"),
+    SettingSpec("DIFF_HUNK_GAP", "str", group="display"),
+    SettingSpec("DISPLAY_ELLIPSIS", "str", group="display"),
+    SettingSpec("ARGUMENT_NEWLINE_MARK", "str", group="display"),
+    SettingSpec("TABLE_RULE", "str", group="display"),
+    SettingSpec("EXCHANGE_RAIL", "str", group="display"),
+    SettingSpec("EXCHANGE_MARK_FAILED", "str", group="display"),
+    SettingSpec("EXCHANGE_MARK_OK", "str", group="display"),
+    SettingSpec("EXCHANGE_MARK_RUNNING", "str", group="display"),
+    SettingSpec("LOOP_BACKOFF_MAX", "int", group="runtime"),
+    SettingSpec("LOOP_FAILURES_MAX", "int", group="runtime"),
+    SettingSpec("LOOP_ATTEMPTS_MULTIPLIER", "int", group="runtime"),
+    SettingSpec("NOTEBOOK_CLEAR_OUTPUTS", "bool", group="notebook"),
+    SettingSpec("NOTEBOOK_REQUIRE_READ", "bool", group="notebook"),
+    SettingSpec("LSP_ALLOW_HOME_ROOT", "bool", group="lsp"),
+    SettingSpec("LSP_ENVIRONMENT_INHERIT", "bool", group="lsp"),
+    SettingSpec("TOOLBOX_REQUIRE_BOUND_NAMES", "bool", group="tools"),
+    SettingSpec("TOOLBOX_SEED_EXAMPLES", "bool", group="tools"),
+    SettingSpec("TYPESAFE_API_KEY", "str", env="TYPESAFE_API_KEY", secret=True, group="tools"),
+    SettingSpec("SUBAGENT_RESULT_SHARE", "bool", group="tools"),
+    SettingSpec("BROWSER_FALLBACK_FILE", "str", group="tools"),
+    SettingSpec("TERMINAL_ENVIRONMENT_INHERIT", "bool", group="tools"),
+    SettingSpec("TERMINAL_SHELL_PROGRAM", "str", group="tools"),
+    SettingSpec("BROWSE_ALLOW_PRIVATE_NETWORK", "bool", group="tools"),
+    SettingSpec("BROWSE_STEALTH", "bool", group="tools"),
+    SettingSpec("CONTEXT7_API_KEY", "str", env="CONTEXT7_API_KEY", secret=True, group="tools"),
+    SettingSpec("EXA_API_KEY", "str", env="EXA_API_KEY", secret=True, group="tools"),
+    SettingSpec("TAVILY_API_KEY", "str", env="TAVILY_API_KEY", secret=True, group="tools"),
+    SettingSpec("SERPER_API_KEY", "str", env="SERPER_API_KEY", secret=True, group="tools"),
+    SettingSpec("SHELL_KILL_UNFINISHED", "bool", group="shell"),
+    SettingSpec("KILL_LOG_FILE", "str", empty=EMPTY_NONE, group="shell"),
+    SettingSpec("SHELL_MANAGED_PATH", "bool", group="shell"),
+    SettingSpec("SHELL_PIPEFAIL", "bool", group="shell"),
+    SettingSpec("SEARCH_ONE_FILE_SYSTEM", "bool", group="tools"),
+    SettingSpec("SEARCH_DEDUPLICATE", "bool", group="tools"),
+    SettingSpec("READ_DEDUPLICATE", "bool", group="tools"),
+    SettingSpec("EDIT_FUZZY", "bool", group="tools"),
+    SettingSpec("EDIT_READ_BYPASS_CHARACTERS", "int", group="tools"),
+    SettingSpec("WRITE_REQUIRE_OVERWRITE", "bool", group="tools"),
+    SettingSpec("HELD_WRITE_MIN", "int", group="tools"),
+    SettingSpec("HELD_TTL", "int", group="tools"),
+    SettingSpec("FILE_REQUIRE_READ", "bool", group="tools"),
+    SettingSpec("TOOL_ERRORS_MAX", "int", group="runtime"),
+    SettingSpec("ANTHROPIC_REQUIRED_EFFORT", "str", group="runtime"),
+    SettingSpec("ANTHROPIC_THINKING_DISPLAY", "str", group="runtime"),
+    SettingSpec("ANTHROPIC_PROMPT_CACHE", "bool", group="runtime"),
+    SettingSpec("CLAUDE_PROXY_INCLUDE_REASONING", "bool", group="runtime"),
+    SettingSpec("DEEPSEEK_REASONING_TOKENS_MAX", "int", group="runtime"),
+    SettingSpec("ANTHROPIC_OUTPUT_TOKENS_MAX", "int", group="runtime"),
+    SettingSpec("COMPACTION_CONSECUTIVE_MAX", "int", group="compaction"),
+    SettingSpec("COMPACTION_SUMMARY_REQUEST_TOKENS_MAX", "int", group="compaction"),
+    SettingSpec("COMPACTION_HINT_TIMEOUT", "int", group="compaction"),
+    SettingSpec("COMPACTION_HINT_SHELL_PROGRAM", "str", group="compaction"),
+    SettingSpec("COMPACTION_OVERFLOW_KEEP_TOOL_RESULTS", "int", group="compaction"),
+    SettingSpec("COMPACTION_OVERFLOW_ROUNDS_MAX", "int", group="compaction"),
+    SettingSpec("RETRY_BACKOFF_JITTER", "float", group="runtime"),
+    SettingSpec("RETRY_BACKOFF_MAX", "float", group="runtime"),
+    SettingSpec("RETRY_BACKOFF_MULTIPLIER", "float", group="runtime"),
+    SettingSpec("RETRY_BACKOFF_START", "float", group="runtime"),
+    # --- agent ---
+    SettingSpec("DEFAULT_AGENT", "str", group="models"),
     # --- model ---
-    SettingSpec("model.id", "str", DEFAULT_MODEL,
-                "Default model id; unprefixed ids route through AI Gateway.",
-                env="JS_MODEL"),
-    SettingSpec("model.max_output_tokens", "int", None,
-                "Per-call max_tokens; unset = models.dev metadata when known, else no explicit cap.",
-                env="JS_MAX_OUTPUT_TOKENS", empty=EMPTY_NONE),
-    SettingSpec("model.context_window", "int", None,
-                "Override the active model's context window. Unset = local runtime "
-                "allocation, then models.dev metadata. Beats every other source; for a "
-                "multi-model setup use compact.context_window_overrides instead.",
-                env="JS_CONTEXT_WINDOW", empty=EMPTY_NONE),
-    SettingSpec("model.reasoning_effort", "str", None,
-                "Thinking effort: off|minimal|low|medium|high|xhigh|max (off disables); "
-                "any other value is rejected. Clear with `set -model.reasoning_effort`.",
-                env="JS_REASONING", empty=EMPTY_NONE),
+    SettingSpec("MODEL", "str", aliases=("model",), group="models"),
+    SettingSpec("OUTPUT_TOKENS_MAX", "int",
+                env="JS_MAX_OUTPUT_TOKENS", empty=EMPTY_NONE, group="models"),
+    SettingSpec("CONTEXT_SIZE", "int",
+                env="JS_CONTEXT_WINDOW", empty=EMPTY_NONE, group="models"),
+    SettingSpec("EFFORT", "str",
+                env="JS_REASONING", empty=EMPTY_NONE, group="models"),
+    SettingSpec("THINKING_BUDGET", "int",
+                empty=EMPTY_NONE, group="models"),
+    SettingSpec("VISION", "bool", empty=EMPTY_NONE, group="models"),
+    # --- banner ---
+    SettingSpec("BANNER", "str", group="startup"),
+    SettingSpec("MOTD_FILE", "str", empty=EMPTY_NONE, group="startup"),
+    SettingSpec("MOTD_DIR", "str", empty=EMPTY_NONE, group="startup"),
+    # --- display: /fset entries ---
+    SettingSpec("REASONING_DISPLAY", "int", group="display"),
+    SettingSpec("NET_DISPLAY", "int", group="display"),
+    SettingSpec("TOOLS_DISPLAY", "int", group="display"),
+    SettingSpec("TOOLS_QUIET", "json", group="display"),
+    SettingSpec("SHELL_QUIET", "json", group="display"),
+    SettingSpec("TOOLS_PREVIEW_LINES", "int", group="display"),
+    SettingSpec("MARKDOWN", "bool", group="display"),
+    SettingSpec("RESUME_EXCHANGES", "int", group="display"),
+    SettingSpec("TRACE", "bool", empty=EMPTY_OFF, group="display"),
+    SettingSpec("KERNEL_VERBOSITY", "str", group="display"),
+    SettingSpec("KERNEL_LINES_MAX", "int", group="display"),
+    SettingSpec("EDITING_MODE", "str", group="input"),
+    SettingSpec("EXIT_ARM_TIMEOUT", "float", group="input"),
+    SettingSpec("PASTE_IMAGE_KEY", "str", group="input"),
+    SettingSpec("PASTE_COLLAPSE_LINES", "int", group="input"),
+    SettingSpec("PASTE_COLLAPSE_CHARS", "int", group="input"),
+    SettingSpec("PASTE_IMAGE_COMMAND", "str",
+                empty=EMPTY_NONE, group="input"),
+    SettingSpec("COPY_COMMAND", "str",
+                empty=EMPTY_NONE, group="input"),
+    # --- history ---
+    SettingSpec("HISTORY_FILE", "str",
+                empty=EMPTY_NONE, group="history"),
+    SettingSpec("HISTORY_ORDER", "str", group="history"),
+    SettingSpec("HISTORY_SIZE", "int", group="history"),
+    # --- keys ---
+    SettingSpec("KEYBINDS_FILE", "str",
+                empty=EMPTY_NONE, group="history"),
     # --- provider ---
-    SettingSpec("provider.id", "str", None,
-                "Explicit js provider id (e.g. deepseek, openai-codex, ollama).",
-                env="JS_PROVIDER", empty=EMPTY_NONE),
-    SettingSpec("provider.base_url", "str", None,
-                "Explicit provider base URL; unset = provider default.",
-                env="JS_BASE_URL", empty=EMPTY_NONE),
-    SettingSpec("provider.api_key", "str", None,
-                "Explicit provider API key; unset = env/login default.",
-                env="JS_API_KEY", empty=EMPTY_NONE, secret=True),
-    SettingSpec("provider.extra", "map", {},
-                "Free-form extra params passed through to the provider SDK.",
-                empty=EMPTY_NONE),
+    SettingSpec("PROVIDER", "str", empty=EMPTY_NONE, aliases=("provider",), group="providers"),
+    SettingSpec("BASE_URL", "str", empty=EMPTY_NONE, aliases=("baseurl",), group="providers"),
+    SettingSpec("API_KEY", "str", empty=EMPTY_NONE, secret=True, aliases=("apikey",), group="providers"),
+    SettingSpec("EXTRA_HEADERS", "str", empty=EMPTY_NONE, secret=True, group="providers"),
+    SettingSpec("PARANOID_MODE", "str", group="providers"),
+    SettingSpec("EXTRA_PARAMS", "map",
+                empty=EMPTY_NONE, secret=True, group="providers"),
     # --- limits ---
-    SettingSpec("limits.max_tool_iterations", "int", DEFAULT_MAX_TOOL_ITERATIONS,
-                "Max tool calls per turn before the loop gives up.",
-                env="JS_MAX_TOOL_ITERATIONS"),
-    SettingSpec("limits.max_tool_calls_per_message", "int", DEFAULT_MAX_TOOL_CALLS_PER_MESSAGE,
-                "Maximum distinct tool calls accepted from one assistant message; "
-                "duplicates are collapsed before this ceiling is applied.",
-                env="JS_MAX_TOOL_CALLS_PER_MESSAGE"),
-    SettingSpec("limits.max_bash_output_bytes", "int", DEFAULT_MAX_BASH_OUTPUT_BYTES,
-                "Hard cap on shell stdout per call.",
-                env="JS_MAX_BASH_OUTPUT_BYTES"),
-    SettingSpec("limits.max_bash_output_ceiling", "int", DEFAULT_MAX_BASH_OUTPUT_CEILING,
-                "Upper bound a caller may raise max_bash_output_bytes to; the effective "
-                "shell cap is min(max_bash_output_bytes, this)."),
-    SettingSpec("limits.max_tool_result_inline_bytes", "int", DEFAULT_MAX_TOOL_RESULT_INLINE_BYTES,
-                "Results larger than this are written to a file and replaced with a "
-                "preview plus the path, instead of being clipped and lost. 0 = off."),
-    SettingSpec("limits.max_tool_result_bytes", "int", DEFAULT_MAX_TOOL_RESULT_BYTES,
-                "Hard cap on any tool result string.",
-                env="JS_MAX_TOOL_RESULT_BYTES"),
-    SettingSpec("limits.fetch_timeout_s", "int", DEFAULT_FETCH_TIMEOUT_S,
-                "fetch() whole-request deadline in seconds, and the per-call timeout for the "
-                "web-search backends' JSON calls.",
-                env="JS_FETCH_TIMEOUT"),
-    SettingSpec("limits.shell_env_allow", "json", list(DEFAULT_SHELL_ENV_ALLOW),
-                "Environment-variable names inherited by shell() without naming "
-                "them per call in env. The default is the eight-variable safe set; "
-                "use a JSON string list to widen or narrow it."),
-    SettingSpec("limits.browse_timeout_s", "int", DEFAULT_BROWSE_TIMEOUT_S,
-                "browse() page budget in seconds. obscura is told to give up one "
-                "second earlier so its own graceful navigation-timeout path runs "
-                "and partial content survives.",
-                env="JS_BROWSE_TIMEOUT"),
-    SettingSpec("limits.download_timeout_s", "int", DEFAULT_DOWNLOAD_TIMEOUT_S,
-                "aria2c transfer timeout in seconds for saved, binary, and oversized "
-                "fetch() responses. Downloads are bounded by size, not by how fast a "
-                "page renders.",
-                env="JS_DOWNLOAD_TIMEOUT"),
-    SettingSpec("limits.max_download_bytes", "int", DEFAULT_MAX_DOWNLOAD_BYTES,
-                "Size ceiling for fetch(save=...) in bytes. 0 = unlimited, which is "
-                "the default: a save streams to disk and never lands in memory, so "
-                "an ISO or a model weight is a normal download. Set a number only to "
-                "impose a quota.",
-                env="JS_MAX_DOWNLOAD_BYTES"),
-    SettingSpec("limits.inline_code_timeout_s", "int", DEFAULT_INLINE_CODE_TIMEOUT_S,
-                "Timeout in seconds for !{sh|python|c|node ...} and ```!lang prompt expansions.",
-                env="JS_INLINE_CODE_TIMEOUT"),
-    SettingSpec("limits.max_read_lines", "int", DEFAULT_MAX_READ_LINES,
-                "Maximum lines returned by read()."),
-    SettingSpec("limits.max_file_bytes", "int", DEFAULT_MAX_FILE_BYTES,
-                "Maximum file bytes read by fs tools."),
-    SettingSpec("limits.max_read_bytes", "int", DEFAULT_MAX_READ_BYTES,
-                "Maximum file bytes for a whole-file read(); ignored when the call "
-                "passes start_line/end_line, so ranged reads work on any size file."),
-    SettingSpec("limits.max_tool_results_per_turn_bytes", "int", DEFAULT_MAX_TOOL_RESULTS_PER_TURN_BYTES,
-                "Aggregate cap on all tool results returned by one batch of parallel "
-                "calls; the largest results are clipped first. 0 = unlimited."),
-    SettingSpec("limits.task_max_depth", "int", DEFAULT_TASK_MAX_DEPTH,
-                "Maximum recursive task/subagent depth."),
-    SettingSpec("limits.subagent_max_workers", "int", DEFAULT_SUBAGENT_MAX_WORKERS,
-                "Maximum concurrent subagent workers per task call; minimum 1."),
+    SettingSpec("TURN_ROUNDS_MAX", "int", group="limits"),
+    SettingSpec("REPLY_TOOL_CALLS_MAX", "int", group="limits"),
+    SettingSpec("SHELL_OUTPUT_MAX", "int", group="limits"),
+    SettingSpec("TOOL_RESULT_INLINE_MAX", "int", group="limits"),
+    SettingSpec("TOOL_RESULT_MAX", "int", group="limits"),
+    SettingSpec("TOOL_MEDIA_MAX", "int", group="limits"),
+    SettingSpec("FETCH_TIMEOUT", "int", group="limits"),
+    SettingSpec("SHELL_ENV_KEEP", "json", group="limits"),
+    SettingSpec("BROWSE_TIMEOUT", "int", group="limits"),
+    SettingSpec("DOWNLOAD_TIMEOUT", "int", group="limits"),
+    SettingSpec("DOWNLOAD_MAX", "int", group="limits"),
+    SettingSpec("INLINE_CODE_TIMEOUT", "int", group="limits"),
+    SettingSpec("READ_LINES_MAX", "int", group="limits"),
+    SettingSpec("FILE_BYTES_MAX", "int", group="limits"),
+    SettingSpec("READ_BYTES_MAX", "int", group="limits"),
+    SettingSpec("PARALLEL_RESULTS_MAX", "int", group="limits"),
+    SettingSpec("SUBAGENT_DEPTH_MAX", "int", group="limits"),
+    SettingSpec("SUBAGENT_WORKERS_MAX", "int", group="limits"),
+    # --- swarm ---
+    SettingSpec("SWARM_ACTIVE_MAX", "int", group="shell"),
     # --- kernel ---
-    SettingSpec("kernel.verbosity", "str", DEFAULT_KERNEL_VERBOSITY,
-                "How much of each kernel/toolbox call is rendered to your terminal: "
-                "quiet (errors and interrupts only), normal (code, output, timing, "
-                "namespace), verbose (stdout/stderr/display split out, plus kernel "
-                "lifecycle and toolbox activity). Affects only what you see; the model "
-                "always receives the full result.",
-                env="JS_KERNEL_VERBOSITY"),
-    SettingSpec("kernel.render_max_lines", "int", DEFAULT_KERNEL_RENDER_MAX_LINES,
-                "Line cap per section of that terminal render, so a 4000-line cell "
-                "cannot scroll the screen away. The hidden count is always shown, and "
-                "the model still gets the untrimmed output."),
-    SettingSpec("shell.wait_seconds", "int", DEFAULT_SHELL_WAIT_SECONDS,
-                "Seconds a `shell` call waits for its command before returning a "
-                "handle to poll. The command keeps running; nothing is killed by "
-                "this wait."),
-    SettingSpec("kernel.wait_seconds", "int", DEFAULT_KERNEL_WAIT_SECONDS,
-                "Seconds a `kernel` call waits for a submitted cell before returning "
-                "a handle to poll. The cell keeps running; nothing is interrupted by "
-                "this wait."),
+    SettingSpec("SHELL_PROGRAM", "str", group="shell"),
+    SettingSpec("SHELL_WAIT", "int", group="shell"),
+    SettingSpec("PYTHON_KERNEL_WAIT", "int", group="shell"),
+    # --- jail ---
+    SettingSpec("JAIL_BIND", "json", group="shell"),
+    SettingSpec("JAIL_HIDE", "json", group="shell"),
+    SettingSpec("SILENT_OVERFLOW_RECOVERY", "bool", group="runtime"),
+    SettingSpec("SIGNED_REASONING_RECOVERY", "bool", group="runtime"),
     # --- runtime ---
-    SettingSpec("runtime.debug", "bool", False,
-                "Append per-event records to state/<agent>/debug.log.",
-                env="JS_DEBUG", empty=EMPTY_OFF),
-    SettingSpec("runtime.trace", "bool", DEFAULT_TRACE,
-                "Pretty-print the tool-call trace line as the model runs.",
-                env="JS_TRACE", empty=EMPTY_OFF),
-    SettingSpec("runtime.debug_autolog", "bool", True,
-                "Append the full request trace (unclipped system prompt, tool-schema "
-                "JSON, and the messages sent each call) to logs/<agent>/<session>.log "
-                "under the js data dir. On by default; this trace never prints to the "
-                "terminal, only to the file.",
-                env="JS_DEBUG_AUTOLOG", empty=EMPTY_OFF),
-    SettingSpec("runtime.debug_autolog_dir", "str", None,
-                "Directory for the debug autolog; unset = logs/<agent> under the js data dir.",
-                env="JS_DEBUG_AUTOLOG_DIR", empty=EMPTY_NONE),
-    SettingSpec("runtime.transcript_log", "bool", True,
-                "Append the visible terminal/TUI transcript to transcript/<agent>/<session>.log "
-                "under the js data dir. On by default; records what printed to the user with "
-                "IRC-style <USER>/<APE> tags for user/assistant turns.",
-                env="JS_TRANSCRIPT_LOG", empty=EMPTY_OFF),
-    SettingSpec("runtime.transcript_log_dir", "str", None,
-                "Directory for the visible transcript log; unset = transcript/<agent> under the js data dir.",
-                env="JS_TRANSCRIPT_LOG_DIR", empty=EMPTY_NONE),
-    SettingSpec("runtime.allow_inline_code", "bool", True,
-                "Execute !{sh|python|c|node ...} inline directives / ```!lang fences in "
-                "prompt files and inject their stdout. On by default (runs arbitrary code "
-                "from prompt files); opt out with --im-a-pussy or set this off.",
-                env="JS_ALLOW_INLINE_CODE", empty=EMPTY_OFF),
+    SettingSpec("DEBUG_LOG", "bool", empty=EMPTY_OFF, group="runtime"),
+    SettingSpec("PARALLEL_TOOLS_MAX", "int", group="runtime"),
+    SettingSpec("RETRY_COUNT_MAX", "int", group="runtime"),
+    SettingSpec("RETRY_WAIT_MAX", "float", group="runtime"),
+    SettingSpec("CONNECT_TIMEOUT", "float", group="runtime"),
+    SettingSpec("FIRST_BYTE_TIMEOUT", "float", group="runtime"),
+    SettingSpec("STREAM_IDLE_TIMEOUT", "float", group="runtime"),
+    SettingSpec("OUTPUT_TOKENS_RETRY_MAX", "int", group="runtime"),
+    SettingSpec("OUTPUT_RESUMES_MAX", "int", group="runtime"),
+    SettingSpec("STEER_MODE", "str", group="runtime"),
+    SettingSpec("REQUEST_LOG", "bool", empty=EMPTY_OFF, group="runtime"),
+    SettingSpec("REQUEST_LOG_DIR", "str", empty=EMPTY_NONE, group="runtime"),
+    SettingSpec("TRANSCRIPT_USER_LABEL", "str", group="runtime"),
+    SettingSpec("TRANSCRIPT_ASSISTANT_LABEL", "str", group="runtime"),
+    SettingSpec("TRANSCRIPT_SPEAKER_FORMAT", "str", group="runtime"),
+    SettingSpec("TRANSCRIPT_TIMESTAMP_FORMAT", "str", group="runtime"),
+    SettingSpec("TRANSCRIPT_DISABLE_ALL_ON_ERROR", "bool", group="runtime"),
+    SettingSpec("TRANSCRIPT_LOG", "bool", empty=EMPTY_OFF, group="runtime"),
+    SettingSpec("TRANSCRIPT_LOG_DIR", "str", empty=EMPTY_NONE, group="runtime"),
+    SettingSpec("INLINE_CODE", "bool", empty=EMPTY_OFF, group="runtime"),
+    # --- events ---
+    SettingSpec("EXEC_TIMEOUT", "int", group="events"),
+    SettingSpec("EXEC_OUTPUT_MAX", "int", group="events"),
     # --- compact ---
-    SettingSpec("compact.auto", "bool", DEFAULT_COMPACT_AUTO,
-                "Automatic cache-aware context compaction.", empty=EMPTY_OFF),
-    SettingSpec("compact.flight_log_dir", "str", None,
-                "Full compaction flight snapshots; unset = logs/<agent>/compactions.", empty=EMPTY_NONE),
-    SettingSpec("compact.context_window", "int", DEFAULT_COMPACT_CONTEXT_WINDOW,
-                "Context window tokens for fullness math; unset = models.dev metadata.",
-                empty=EMPTY_NONE),
-    SettingSpec("compact.context_window_overrides", "map", {},
-                "Per-model context windows, keyed 'provider/model' (most specific) or "
-                "'model'. For surfaces models.dev has no row for — a subscription "
-                "endpoint serving the same model id as the public API with a different "
-                "usable window.", empty=EMPTY_NONE),
-    SettingSpec("compact.context_window_fallback", "int", DEFAULT_COMPACT_CONTEXT_WINDOW_FALLBACK,
-                "Window to assume ONLY for models whose size cannot be resolved. Unlike "
-                "context_window this does not override models that are known, so covering "
-                "one unknown model no longer shrinks every known one.",
-                empty=EMPTY_NONE),
-    SettingSpec("compact.notify_threshold", "float", DEFAULT_COMPACT_NOTIFY_THRESHOLD,
-                "Notify once when context reaches this fraction."),
-    SettingSpec("compact.trigger_threshold", "float", DEFAULT_COMPACT_TRIGGER_THRESHOLD,
-                "Auto-compact at this fullness fraction."),
-    SettingSpec("compact.force_threshold", "float", DEFAULT_COMPACT_FORCE_THRESHOLD,
-                "Force compact at this fullness fraction."),
-    SettingSpec("compact.buffer_tokens", "int", DEFAULT_COMPACT_BUFFER_TOKENS,
-                "Extra input-token headroom reserved by preflight/mid-turn compaction."),
-    SettingSpec("compact.summary_reserve_tokens", "int", DEFAULT_COMPACT_SUMMARY_RESERVE_TOKENS,
-                "Ceiling on the reply headroom subtracted before the fullness fractions; "
-                "the actual reserve is min(model max_output_tokens, this). Stops a model "
-                "declaring a 128k output cap from eating a third of the window."),
-    SettingSpec("compact.tail_tokens", "int", DEFAULT_COMPACT_TAIL_TOKENS,
-                "Recent tail budget retained after compaction."),
-    SettingSpec("compact.min_savings_tokens", "int", DEFAULT_COMPACT_MIN_SAVINGS_TOKENS,
-                "Skip compaction unless estimated savings exceeds this."),
-    SettingSpec("compact.clear_keep_recent", "int", DEFAULT_COMPACT_CLEAR_KEEP_RECENT,
-                "Tool results left intact when an over-budget request clears old "
-                "tool-result bodies before falling back to a summary."),
-    SettingSpec("compact.chars_per_token", "float", DEFAULT_COMPACT_CHARS_PER_TOKEN,
-                "Fallback/self-calibrating character-to-token estimate."),
-    SettingSpec("compact.model", "str", DEFAULT_COMPACT_MODEL,
-                "Model used to write the compaction summary; 'same' = active model."),
-    SettingSpec("compact.summary_max_tokens", "int", DEFAULT_COMPACT_SUMMARY_MAX_TOKENS,
-                "Max tokens for the compaction summary (hard-capped at 8192)."),
-    SettingSpec("compact.pre_hook", "str", None,
-                "Optional shell command whose stdout guides compaction.",
-                empty=EMPTY_NONE),
+    SettingSpec("COMPACTION_AUTO", "bool", empty=EMPTY_OFF, group="compaction"),
+    SettingSpec("COMPACTION_LOG_DIR", "str", empty=EMPTY_NONE, group="compaction"),
+    SettingSpec("CONTEXT_SIZE_PER_MODEL", "map", empty=EMPTY_NONE, group="context"),
+    SettingSpec("CONTEXT_SIZE_UNKNOWN", "int",
+                empty=EMPTY_NONE, group="context"),
+    SettingSpec("COMPACTION_WARN_AT", "float", group="compaction"),
+    SettingSpec("COMPACTION_START_AT", "float", group="compaction"),
+    SettingSpec("COMPACTION_FORCE_AT", "float", group="compaction"),
+    SettingSpec("COMPACTION_HEADROOM_TOKENS", "int", group="compaction"),
+    SettingSpec("COMPACTION_REPLY_RESERVE_TOKENS", "int", group="compaction"),
+    SettingSpec("COMPACTION_KEEP_RECENT_TOKENS", "int", group="compaction"),
+    SettingSpec("COMPACTION_MIN_SAVINGS_TOKENS", "int", group="compaction"),
+    SettingSpec("COMPACTION_KEEP_TOOL_RESULTS", "int", group="compaction"),
+    SettingSpec("COMPACTION_REATTACH_FILES_MAX", "int", group="compaction"),
+    SettingSpec("COMPACTION_REATTACH_TOKENS_MAX", "int", group="compaction"),
+    SettingSpec("COMPACTION_REATTACH_FILE_TOKENS_MAX", "int", group="compaction"),
+    SettingSpec("COMPACTION_CHARS_PER_TOKEN", "float", group="compaction"),
+    SettingSpec("ATTACHMENT_CONTEXT_MAX", "float", group="compaction"),
+    SettingSpec("COMPACTION_EXTERNAL_MODEL", "str", group="compaction"),
+    SettingSpec("COMPACTION_SUMMARY_TOKENS_MAX", "int", group="compaction"),
+    SettingSpec("COMPACTION_SUMMARY_RESULT_CHARS_MAX", "int", group="compaction"),
+    SettingSpec("COMPACTION_FAILURES_MAX", "int", group="compaction"),
+    SettingSpec("COMPACTION_CACHE_TTL", "int", group="compaction"),
+    SettingSpec("COMPACTION_HINT_COMMAND", "str",
+                empty=EMPTY_NONE, group="compaction"),
     # --- subagents ---
-    SettingSpec("subagents.prefer_inherit", "bool", False,
-                "Subagents inherit the parent's model when true; else use the agent's own primary.",
-                empty=EMPTY_OFF),
-    SettingSpec("subagents.lock_model", "bool", False,
-                "When true, the main agent cannot pick a subagent model via the task tool.",
-                empty=EMPTY_OFF),
+    SettingSpec("SUBAGENT_INHERIT_MODEL", "bool",
+                empty=EMPTY_OFF, group="subagents"),
+    SettingSpec("SUBAGENT_MODEL_LOCK", "bool",
+                empty=EMPTY_OFF, group="subagents"),
     # --- tools ---
-    SettingSpec("tools.alias_profiles", "json", None,
-                "Model-facing tool-name alias profiles: list of {match:string|[...], aliases:{...}}.",
-                empty=EMPTY_NONE),
+    SettingSpec("TOOL_ALIASES", "json",
+                empty=EMPTY_NONE, group="tools"),
+    SettingSpec("TOOL_PROFILES", "json",
+                empty=EMPTY_NONE, group="tools"),
+    SettingSpec("HTTP_USER_AGENT", "str", group="tools"),
+    SettingSpec("JEV_MODEL", "str", group="tools"),
+    SettingSpec("SKILLS_DISABLED", "json", group="tools"),
+    SettingSpec("TERMINAL_COLUMNS", "int", group="tools"),
+    SettingSpec("TERMINAL_ROWS", "int", group="tools"),
+    # --- lsp ---
+    SettingSpec("LSP_SERVERS", "json", group="lsp"),
+    SettingSpec("LSP_TIMEOUT", "int", group="lsp"),
+    # --- notebook ---
+    SettingSpec("NOTEBOOK_OUTPUT_LINES_MAX", "int", group="notebook"),
     # --- mcp ---
-    SettingSpec("mcp.servers", "json", {},
-                "Named MCP servers as JSON: stdio uses command/args/env; streamable HTTP uses url/headers.",
-                empty=EMPTY_NONE, secret=True),
-    SettingSpec("mcp.agents", "json", {},
-                "Per-agent MCP policy JSON with servers/tools allow and deny glob lists.",
-                empty=EMPTY_NONE),
+    SettingSpec("MCP_SERVERS", "json",
+                empty=EMPTY_NONE, secret=True, group="mcp"),
+    SettingSpec("MCP_AGENT_POLICY", "json",
+                empty=EMPTY_NONE, group="mcp"),
+    SettingSpec("MCP_TIMEOUT", "float", group="mcp"),
     # --- sampling ---
-    SettingSpec("sampling.temperature", "float", None,
-                "Provider-default sampling temperature; unset = do not send.",
-                empty=EMPTY_UNSET),
-    SettingSpec("sampling.top_p", "float", None,
-                "Provider-default nucleus sampling top_p; unset = do not send.",
-                empty=EMPTY_UNSET),
-    SettingSpec("sampling.top_k", "int", None,
-                "Provider-default top_k sampling; unset = do not send.",
-                empty=EMPTY_UNSET),
-    SettingSpec("sampling.repetition_penalty", "float", None,
-                "Provider-default repetition penalty; unset = do not send.",
-                empty=EMPTY_UNSET),
-    SettingSpec("sampling.presence_penalty", "float", None,
-                "Provider-default presence penalty; unset = do not send.",
-                empty=EMPTY_UNSET),
+    SettingSpec("TEMPERATURE", "float",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("TOP_P", "float",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("TOP_K", "int",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("REPETITION_PENALTY", "float",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("PRESENCE_PENALTY", "float",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("MIN_P", "float",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("TOP_N_SIGMA", "float",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("XTC_PROBABILITY", "float",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("XTC_THRESHOLD", "float",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("DRY_MULTIPLIER", "float",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("DRY_BASE", "float",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("DRY_ALLOWED_LENGTH", "int",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("DRY_PENALTY_LAST_N", "int",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("DRY_SEQUENCE_BREAKERS", "json",
+                empty=EMPTY_UNSET, group="sampling"),
+    SettingSpec("TEMPLATE_KWARGS", "str",
+                empty=EMPTY_UNSET, group="sampling"),
 )
 
 SPEC_BY_KEY: dict[str, SettingSpec] = {spec.key: spec for spec in REGISTRY}
-KNOWN_SECTIONS: frozenset[str] = frozenset(spec.section for spec in REGISTRY)
-SECTION_ORDER: tuple[str, ...] = (
-    "model",
-    "provider",
-    "limits",
-    "shell",
-    "kernel",
-    "runtime",
-    "compact",
-    "subagents",
-    "tools",
-    "mcp",
-    "sampling",
-)
+SPEC_BY_UPPER: dict[str, SettingSpec] = {spec.key.upper(): spec for spec in REGISTRY}
+SPEC_BY_ALIAS: dict[str, SettingSpec] = {alias: spec for spec in REGISTRY for alias in spec.aliases}
 
 
-# ---------------------------------------------------------------------------
-# Value coercion (shared by the env layer and the `set` command)
-# ---------------------------------------------------------------------------
-
-_TRUE_TOKENS = {"1", "true", "yes", "on"}
-_FALSE_TOKENS = {"0", "false", "no", "off"}
-_TOOL_ALIAS_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
-
-# The only values `model.reasoning_effort` accepts. "off" disables reasoning
-# (stored as the literal "none"); everything else is rejected outright — no
-# default/auto/unset synonyms. Clearing the knob back to provider-default is
-# `set -model.reasoning_effort`, never a magic value here.
-REASONING_EFFORT_VALUES: tuple[str, ...] = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
-_REASONING_EFFORT_ERROR = "expected off|minimal|low|medium|high|xhigh|max"
 
 
-def parse_bool(raw: str) -> bool | None:
-    v = raw.strip().lower()
-    if v in _TRUE_TOKENS:
-        return True
-    if v in _FALSE_TOKENS:
-        return False
-    return None
+def spec_for(name: str) -> SettingSpec | None:
+    """The spec a `set` name refers to: its key in any case (`model` is
+    `MODEL`, `UI.TOOLS` is `ui.tools`), or a jsrc verb alias."""
+    return SPEC_BY_KEY.get(name) or SPEC_BY_UPPER.get(name.upper()) or SPEC_BY_ALIAS.get(name)
 
 
-def coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
-    """Coerce ``raw`` for ``spec``. Returns (value, error). Values store
-    VERBATIM — there is no magic clear-token (no "default"/"auto"/"none"/"unset"
-    special-casing); the only way to clear a knob back to its default/unset
-    state is `set -key` (see `apply_unset` in `js.setcmd`)."""
-    text = raw.strip()
-    if spec.key == "model.reasoning_effort":
-        v = text.lower()
-        if v not in REASONING_EFFORT_VALUES:
-            return None, _REASONING_EFFORT_ERROR
-        return ("none" if v == "off" else v), None
-    if spec.key == "provider.id" and text:
-        from . import providers as _providers
-
-        if _providers.get_provider(text) is None:
-            return None, (
-                f"unknown provider id: {text!r} — pick a known id or add a "
-                f"custom one with `js --login`"
-            )
-        return text, None
-    if spec.key == "provider.base_url" and text:
-        if not text.startswith(("http://", "https://")):
-            return None, f"expected a URL starting with http:// or https:// (got {text!r})"
-        return text, None
-    kind = spec.type
-    if kind == "bool":
-        parsed = parse_bool(text)
-        if parsed is None:
-            return None, "expected on/off"
-        return parsed, None
-    if kind == "int":
-        try:
-            value = int(text)
-        except ValueError:
-            return None, "expected an integer"
-        if spec.key in {"limits.max_tool_calls_per_message", "limits.subagent_max_workers"} and value < 1:
-            return None, "expected an integer >= 1"
-        return value, None
-    if kind == "float":
-        try:
-            return float(text), None
-        except ValueError:
-            return None, "expected a number"
-    if kind in ("json", "map"):
-        if spec.key in {"mcp.servers", "mcp.agents"}:
-            from . import mcp_config
-
-            try:
-                value = (
-                    mcp_config.parse_servers_json(raw)
-                    if spec.key == "mcp.servers"
-                    else mcp_config.parse_agents_json(raw)
-                )
-            except mcp_config.MCPConfigError as exc:
-                return None, str(exc)
-        else:
-            try:
-                value = json.loads(raw)
-            except (json.JSONDecodeError, ValueError):
-                return None, "expected a JSON value"
-        if kind == "map" and not isinstance(value, dict):
-            return None, "expected a JSON object"
-        if spec.key == "tools.alias_profiles":
-            error = _validate_alias_profiles(value)
-            if error is not None:
-                return None, error
-        if spec.key == "limits.shell_env_allow":
-            if not isinstance(value, list) or any(
-                not isinstance(item, str) or not item.strip() for item in value
-            ):
-                return None, "expected a JSON list of non-empty environment-variable names"
-        if spec.key in {"mcp.servers", "mcp.agents"}:
-            from . import mcp_config
-
-            try:
-                if spec.key == "mcp.servers":
-                    mcp_config.parse_servers(value)
-                else:
-                    mcp_config.parse_agents(value)
-            except mcp_config.MCPConfigError as exc:
-                return None, str(exc)
-        return value, None
-    return text, None  # str
+def canonical_env_name(key: str) -> str:
+    """The env var for a setting: ``NAME`` -> ``JS_NAME`` (a dotted display
+    setting ``a.b`` -> ``JS_A_B``)."""
+    return "JS_" + key.upper().replace(".", "_")
 
 
-def _validate_alias_profiles(value: Any) -> str | None:
-    if not isinstance(value, list):
-        return "expected a JSON list"
-    for profile in value:
-        if not isinstance(profile, dict):
-            return "expected profiles with match and aliases"
-        match = profile.get("match")
-        aliases = profile.get("aliases")
-        if not isinstance(match, (str, list)) or not isinstance(aliases, dict):
-            return "expected profiles with match and aliases"
-        if not aliases:
-            return "expected non-empty aliases"
-        matches = [match] if isinstance(match, str) else match
-        if not matches or any(not isinstance(item, str) or not item.strip() for item in matches):
-            return "expected non-empty match values"
-        seen_aliases: set[str] = set()
-        for canonical, alias in aliases.items():
-            if not isinstance(canonical, str) or _TOOL_ALIAS_NAME_RE.fullmatch(canonical) is None:
-                return "expected canonical tool names matching [A-Za-z0-9_-]+"
-            if not isinstance(alias, str) or _TOOL_ALIAS_NAME_RE.fullmatch(alias) is None:
-                return "expected alias names matching [A-Za-z0-9_-]+"
-            key = alias.lower()
-            if key in seen_aliases:
-                return "expected unique alias names"
-            seen_aliases.add(key)
-    return None
+def env_names_for(spec: SettingSpec) -> tuple[str, ...]:
+    """Env vars that feed ``spec``, highest precedence first: ``JS_<KEY>``,
+    then ``spec.env``, if any."""
+    canon = canonical_env_name(spec.key)
+    if spec.env and spec.env != canon:
+        return (canon, spec.env)
+    return (canon,)
 
 
 # ---------------------------------------------------------------------------
@@ -524,326 +456,146 @@ def get_dotted(settings: dict, path: tuple[str, ...], default: Any = None) -> An
     return cursor
 
 
-def _parse_dotted_key(key: str) -> tuple[str, ...]:
-    parts = tuple(p for p in key.split(".") if p)
-    if not parts:
-        raise ValueError(f"empty key: {key!r}")
-    return parts
-
-
-def _prefix_spec(key: str) -> SettingSpec | None:
+def parent_spec(key: str) -> SettingSpec | None:
+    """The registered setting ``key`` sits under (`EXTRA_PARAMS` for
+    `extra_params.organization`, the setting's name in any case), or None."""
+    upper = key.upper()
     for spec in REGISTRY:
-        if key.startswith(spec.key + "."):
+        if upper.startswith(spec.key.upper() + "."):
             return spec
     return None
 
 
+def child_key(key: str) -> str:
+    """``key`` with the setting it sits under spelled as registered and the
+    child's own part as typed: `extra_params.Team` is `EXTRA_PARAMS.Team`."""
+    spec = parent_spec(key)
+    return key if spec is None else spec.key + key[len(spec.key):]
+
+
 # ---------------------------------------------------------------------------
-# CLI --extra one-shots
+# The default layer: defaults/jsrc
 # ---------------------------------------------------------------------------
 
-def coerce_extra_value(raw: str) -> Any:
-    """Coerce a CLI ``--extra KEY=VALUE`` right-hand side: int, then float, then
-    bool/null tokens, else string."""
+# (path, settings) of the defaults/jsrc read last; a different PACKAGE_JSRC rereads.
+_package_cache: tuple[Path, dict] | None = None
+
+
+def _defaults_error(message: msgs.Message, **fields) -> BaseException:
+    return DefaultsError(msgs.line_for(message, file=sys.stderr, **fields))
+
+
+def package_settings() -> dict:
+    """The settings `defaults/jsrc` sets, read once per path. Raises `DefaultsError`
+    naming the file when it is missing, a line in it does not apply, or a
+    registered setting has no line in it."""
+    global _package_cache
+    path = PACKAGE_JSRC
+    if _package_cache is not None and _package_cache[0] == path:
+        return _package_cache[1]
     try:
-        return int(raw)
-    except ValueError:
-        pass
-    try:
-        return float(raw)
-    except ValueError:
-        pass
-    lowered = raw.strip().lower()
-    if lowered in {"true", "yes", "on"}:
-        return True
-    if lowered in {"false", "no", "off"}:
-        return False
-    if lowered in {"null", "none"}:
-        return None
-    return raw
-
-
-def parse_extra_arg(arg: str) -> tuple[tuple[str, ...], Any]:
-    """Parse one ``--extra KEY=VALUE`` argument into (path, value)."""
-    if "=" not in arg:
-        raise ValueError(f"--extra expects KEY=VALUE, got: {arg!r}")
-    raw_key, raw_value = arg.split("=", 1)
-    key = raw_key.strip()
-    if not key:
-        raise ValueError(f"--extra key is empty: {arg!r}")
-    if raw_value == "":
-        raise ValueError(f"--extra value is empty: {arg!r}")
-    spec = SPEC_BY_KEY.get(key)
-    if spec is not None:
-        value, error = coerce_value(spec, raw_value)
-        if error is not None:
-            raise ValueError(f"--extra {key}: {error}")
-        return spec.path, value
-    prefix_spec = _prefix_spec(key)
-    if prefix_spec is not None and prefix_spec.type != "map":
-        raise ValueError(f"--extra unknown knob: {key}")
-    return _parse_dotted_key(key), coerce_extra_value(raw_value)
-
-
-def apply_cli_extras(settings: dict, extras: list[str]) -> dict:
-    for arg in extras:
-        path, value = parse_extra_arg(arg)
-        set_dotted(settings, path, value)
-    return settings
-
-
-# ---------------------------------------------------------------------------
-# Env layer
-# ---------------------------------------------------------------------------
-
-def canonical_env_name(key: str) -> str:
-    """The deterministic env var for any dotted knob: ``a.b.c`` -> ``JS_A_B_C``.
-
-    Every knob is reachable from the environment under this name, so env and
-    jsrc stay at parity (``JS_SAMPLING_TOP_P`` <-> ``set sampling.top_p``). A
-    spec may ALSO carry a shorter hand-picked ``env`` alias (``JS_MODEL`` for
-    ``model.id``); that alias wins when both are set."""
-    return "JS_" + key.upper().replace(".", "_")
-
-
-def env_names_for(spec: SettingSpec) -> tuple[str, ...]:
-    """Env vars that feed ``spec``: the hand-picked alias first (highest
-    precedence), then the canonical ``JS_<DOTTED>`` form."""
-    canon = canonical_env_name(spec.key)
-    if spec.env and spec.env != canon:
-        return (spec.env, canon)
-    return (canon,)
-
-
-def apply_env_overrides(settings: dict, env: dict[str, str] | None = None) -> dict:
-    """Overlay JS_* env vars onto ``settings``. Each knob accepts its canonical
-    ``JS_<DOTTED>`` name plus any hand-picked alias; the alias wins."""
-    source = env if env is not None else os.environ
-    for spec in REGISTRY:
-        for name in env_names_for(spec):
-            if name not in source:
-                continue
-            value, error = coerce_value(spec, source[name])
-            if error is not None:
-                # garbage in the env: skip rather than clobber a working value,
-                # but say so — a silently dropped JS_BASE_URL costs an evening
-                print(f"js: ignoring {name}: {error}", file=sys.stderr)
-                continue
-            set_dotted(settings, spec.path, value)
-            break
-    return settings
-
-
-# ---------------------------------------------------------------------------
-# Collect: defaults < jsrc files < env < CLI extras
-# ---------------------------------------------------------------------------
-
-def seed_defaults() -> dict:
-    settings: dict = {}
-    for spec in REGISTRY:
-        if spec.default is not None:
-            set_dotted(settings, spec.path, copy.deepcopy(spec.default))
-    return settings
-
-
-def load_jsrc_files(paths: list[Path], settings: dict) -> list[str]:
-    """Apply each existing jsrc script onto ``settings`` in order. Returns a list
-    of human-readable warnings (bad/unknown lines) — a single typo never aborts
-    the boot."""
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        raise _defaults_error(msgs.DEFAULTS_MISSING, path=path) from None
     from . import setcmd  # lazy: setcmd imports this module
 
-    warnings: list[str] = []
-    for path in paths:
-        if not path.exists():
-            continue
-        for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            result = setcmd.apply_config_line(settings, raw)
-            if result.error:
-                warnings.append(f"{path}:{lineno}: {result.error}")
-    return warnings
-
-
-def collect_settings(
-    config_paths: list[Path] | None = None,
-    env: dict[str, str] | None = None,
-    extras: list[str] | None = None,
-) -> dict:
-    """Run precedence: built-in defaults < jsrc files (in order) < env < CLI extras.
-
-    ``config_paths`` defaults to the platform jsrc file. ``js.config.from_env``
-    passes the global, project, and project-local files explicitly.
-    """
-    settings = seed_defaults()
-
-    from . import paths as _paths
-    paths = config_paths if config_paths is not None else [_paths.global_config_file()]
-    load_jsrc_files(paths, settings)
-
-    apply_env_overrides(settings, env=env)
-    if extras:
-        apply_cli_extras(settings, extras)
+    settings: dict = {}
+    listed: set[str] = set()
+    for lineno, raw in enumerate(text.splitlines(), 1):
+        result = setcmd.apply_config_line(settings, raw)
+        if result.error or not result.handled:
+            problem = result.error or msgs.DEFAULTS_NOT_A_SET_LINE.said()
+            raise _defaults_error(msgs.DEFAULTS_BAD_LINE, location=f"{path}:{lineno}", error=problem)
+        parsed = jsrc_line.split_command(raw)
+        if parsed is not None:
+            name = jsrc_line.first_word(parsed[1])[0] if parsed[0] in ("set", "fset") else parsed[0]
+            spec = spec_for(name.removeprefix("-"))
+            if spec is not None:
+                listed.add(spec.key)
+    unlisted = [spec.key for spec in REGISTRY if spec.key not in listed]
+    if unlisted:
+        raise _defaults_error(msgs.DEFAULTS_UNLISTED, path=path, keys=", ".join(unlisted))
+    _package_cache = (path, settings)
     return settings
 
 
-# ---------------------------------------------------------------------------
-# First-run template (a commented jsrc set-script)
-# ---------------------------------------------------------------------------
-
-_SECTION_INTRO: dict[str, list[str]] = {
-    "model": ["# Default model + per-call model knobs."],
-    "provider": [
-        "# Optional explicit provider id / base_url / api_key.",
-        "# Leave unset to let ai-python route model ids natively.",
-    ],
-    "limits": ["# Per-call / per-turn caps."],
-    "shell": [
-        "# wait_seconds bounds how long a `shell` call blocks before handing back a",
-        "# handle. The command keeps running; poll/wait/kill it by handle.",
-    ],
-    "kernel": [
-        "# How the persistent-kernel tools behave and render.",
-        "# wait_seconds bounds how long a call blocks; verbosity and render_max_lines",
-        "# only change what you see. The model always receives the full result.",
-    ],
-    "runtime": ["# Live-runtime toggles."],
-    "compact": ["# Cache-first context compaction knobs."],
-    "subagents": ["# Subagent model-selection policy."],
-    "tools": ["# Model-facing tool aliasing."],
-    "mcp": [
-        "# MCP server connection definitions and per-agent allow/deny policy.",
-        "# Server values may contain credentials; /set and /show mask mcp.servers.",
-    ],
-    "sampling": ["# Per-turn sampling overrides. Default display is <unset>; provider/model defaults win."],
-}
+def seed_defaults() -> dict:
+    """A fresh copy of the settings `defaults/jsrc` sets: the bottom config layer."""
+    return copy.deepcopy(package_settings())
 
 
-def _template_value(spec: SettingSpec) -> str:
-    default = spec.default
-    if default is None:
-        return ""
-    if isinstance(default, bool):
-        return "on" if default else "off"
-    if isinstance(default, (dict, list)):
-        return json.dumps(default) if default else ""
-    return str(default)
+def default_value(key: str) -> Any:
+    """Registered setting ``key``'s value in `defaults/jsrc`; None when that file leaves
+    it unset."""
+    spec = spec_for(key)
+    path = spec.path if spec is not None else tuple(key.split("."))
+    return copy.deepcopy(get_dotted(package_settings(), path))
 
 
-def _template_lines() -> list[str]:
-    """Build the commented jsrc template written on first run. Each knob is shown
-    as a commented-out `set` line with its default; uncomment and edit."""
-    lines: list[str] = [
-        "# js config — generated on first run.",
-        "#",
-        "# This file is a script: each non-comment line is a `set <key> <value>`",
-        "# command, applied at startup. Uncomment a line and edit the value.",
-        "#",
-        f"# Precedence, lowest to highest: {TEMPLATE_CONFIG_PRECEDENCE}.",
-        "",
-        "# --- stock defaults (active lines; edit or delete) ---",
-        f"set model.id {DEFAULT_MODEL}",
-        "",
-    ]
-    by_section: dict[str, list[SettingSpec]] = {}
-    for spec in REGISTRY:
-        by_section.setdefault(spec.section, []).append(spec)
-    for section in SECTION_ORDER:
-        specs = by_section.get(section)
-        if not specs:
-            continue
-        lines.append(f"# === {section} ===")
-        lines.extend(_SECTION_INTRO.get(section, []))
-        for spec in specs:
-            lines.append(f"# {spec.doc}")
-            set_line = f"#set {spec.key} {_template_value(spec)}".rstrip()
-            lines.append(set_line)
-        lines.append("")
-    lines.append("# --- env vars (override config files; --extra wins over env) ---")
-    lines.append("# Every knob also reads a canonical JS_<DOTTED_UPPER> env var:")
-    lines.append("#   set sampling.top_p  <->  JS_SAMPLING_TOP_P")
-    lines.append("# Some knobs carry a shorter hand-picked alias too (it wins when both are set):")
-    for spec in REGISTRY:
-        if spec.env:
-            lines.append(f"# {spec.env} -> set {spec.key}")
-    lines.append("")
-    return lines
+def knob(settings: dict | None, key: str) -> Any:
+    """Setting ``key`` from a settings store, or its `defaults/jsrc` value when the
+    store does not hold it."""
+    spec = spec_for(key)
+    path = spec.path if spec is not None else tuple(key.split("."))
+    missing = object()
+    value = get_dotted(settings or {}, path, missing)
+    return default_value(key) if value is missing else value
 
 
-def write_default_template(path: Path) -> bool:
-    """Write the first-run jsrc template to ``path`` if absent. Returns True when
-    a new file was written, False if it already existed."""
-    if path.exists():
-        return False
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(_template_lines()), encoding="utf-8")
-    return True
+def knob_attr(obj: Any, attr: str, key: str) -> Any:
+    """``obj.attr`` (a Config or ToolContext field), or setting ``key``'s defaults/jsrc
+    value when ``obj`` has no such attribute."""
+    value = getattr(obj, attr, None)
+    return default_value(key) if value is None else value
 
 
-# ---------------------------------------------------------------------------
-# /save — snapshot the live settings back into a jsrc set-script
-# ---------------------------------------------------------------------------
-
-_MISSING = object()
+_live_settings: ContextVar[dict | None] = ContextVar("js_live_settings", default=None)
 
 
-def _config_line_value(spec: SettingSpec, value: Any) -> str:
-    """Render ``value`` as the right-hand side of a `set <key> <value>` line —
-    the inverse of `coerce_value`, so a saved line reloads to the same value."""
-    if isinstance(value, bool):
-        return "on" if value else "off"
-    if isinstance(value, (dict, list)):
-        return json.dumps(value)
-    return str(value)
+# The store bound last in any context: a thread started without a copy of
+# the binding context reads it.
+_process_settings: dict | None = None
+# Startup policy read once per cwd, environment and invocation.
+_policy_cache: tuple[tuple, dict] | None = None
 
 
-def _equals_default(spec: SettingSpec, value: Any) -> bool:
-    """True when ``value`` is the knob's built-in default (nothing to persist)."""
-    default = spec.default
-    if value is None or value == "":
-        return default is None
-    return value == default
+def bind_live_settings(settings: dict | None) -> None:
+    """Bind the current invocation or turn's live store in this execution context."""
+    global _process_settings
+    _live_settings.set(settings)
+    _process_settings = settings
 
 
-def settings_diff_lines(settings: dict) -> list[str]:
-    """`set <key> <value>` lines for every knob whose current value differs from
-    its built-in default, in REGISTRY order. Secrets are written verbatim — the
-    jsrc key lines are plain (see the template's `#set provider.api_key`)."""
-    lines: list[str] = []
-    for spec in REGISTRY:
-        value = get_dotted(settings, spec.path, _MISSING)
-        if value is _MISSING:
-            value = None
-        if _equals_default(spec, value):
-            continue
-        lines.append(f"set {spec.key} {_config_line_value(spec, value)}")
-    return lines
+def _startup_policy() -> dict:
+    global _policy_cache
+    from . import config
+
+    key = (os.getcwd(), frozenset(os.environ.items()), config._invocation)
+    if _policy_cache is None or _policy_cache[0] != key:
+        _policy_cache = (key, config.run_settings(held=True))
+    return _policy_cache[1]
 
 
-def save_settings_to_jsrc(
-    path: Path,
-    settings: dict,
-    *,
-    stamp: str | None = None,
-    source: str = "/save",
-) -> tuple[int, Path | None]:
-    """Write the non-default knobs in ``settings`` to ``path`` as a jsrc script.
+def live_value(key: str, settings: dict | None = None) -> Any:
+    """Read explicit settings, the bound turn store, or startup policy without migration."""
+    store = settings if settings is not None else _live_settings.get()
+    if store is None:
+        store = _process_settings
+    if store is None:
+        store = _startup_policy()
+    return knob(store, key)
 
-    An existing file is copied to ``<name>.bak`` beside itself first. Returns
-    ``(knob_count, backup_path_or_None)``."""
-    lines = settings_diff_lines(settings)
-    backup: Path | None = None
-    if path.exists():
-        backup = path.with_name(path.name + ".bak")
-        backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
-    if stamp is None:
-        from datetime import datetime
 
-        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    header = [
-        f"# js config — written by {source} on {stamp}.",
-        "# Each non-comment line is a `set <key> <value>` command; only knobs that",
-        "# differ from built-in defaults are listed.",
-        "",
-    ]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join([*header, *lines]) + "\n", encoding="utf-8")
-    return len(lines), backup
+def live_optional_str_setting(live_settings: dict, path: tuple[str, str], default: str | None) -> str | None:
+    missing = object()
+    raw = get_dotted(live_settings, path, missing)
+    if raw is missing:
+        return default
+    if raw is None or isinstance(raw, str):
+        return raw
+    return default
+
+
+def live_bool_setting(live_settings: dict, path: tuple[str, ...], default: bool) -> bool:
+    raw = get_dotted(live_settings, path, default)
+    return raw if isinstance(raw, bool) else default

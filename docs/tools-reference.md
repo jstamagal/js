@@ -1,7 +1,7 @@
 # Tools Reference
 
 This file describes the public tool surface. The exact model-facing contract
-text lives in `js/toolkit/tool_descriptions/*.md`, cut to what the model can
+text lives in `defaults/tool_descriptions/*.md`, cut to what the model can
 act on.
 
 ## Core Filesystem Tools
@@ -13,21 +13,89 @@ Reads one file.
 Parameters:
 
 - `file_path`: required path.
-- `range`: optional `{start_line, end_line}` for text files.
+- `start_line`, `end_line`: optional inclusive 1-based line range for text
+  files.
+- `start_byte`, `end_byte`: optional byte range: `start_byte` is a 0-based
+  offset and `end_byte` the offset one past the last byte. A negative or
+  non-integer offset is an error. Given a line range too, the line range is
+  read and the result says the byte range was not.
 - `show_line_numbers`: default true.
 
-Text output lines are prefixed like:
+A nested `range` object with the same fields, `offset`/`limit` (first line,
+line count) and `line_start`/`line_end` are read as line ranges too
+(`prepare_read_arguments` in `js/toolkit/fs.py`).
+
+A byte-range read returns raw text, no line prefixes, at most half the tighter
+of `TOOL_RESULT_INLINE_MAX` and `TOOL_RESULT_MAX`
+per call, so a page is never spilled again. Both ends move back to a UTF-8
+character start, and a footer names the offsets returned and the `range` that
+continues. A file over `FILE_BYTES_MAX` is read by seeking to the page,
+and that read authorizes no edit; within the limit, the lines a page shows whole
+count as read for `patch`.
+
+A tool result over `TOOL_RESULT_INLINE_MAX` is spilled to
+`~/.js/state/tool-results/` and replaced by a preview plus a notice naming
+the file and the `range` that continues past the preview: always a byte range,
+plus a line range when the result has more than one line. A single-line
+payload, such as a JSON tool response, is reachable only by byte range.
+
+Text output lines are prefixed with their line number:
 
 ```text
-12:ab|line content
+12|line content
 ```
 
-The prefix is a display anchor, not file content. Do not include it in `patch`
-strings.
+The prefix is not file content. Do not include it in `patch` strings.
+
+A line read that repeats an earlier one (same file content, same lines, same
+`show_line_numbers`) returns a one-line note naming the earlier read's call id
+instead of the lines, and counts as reading them. It does so only while that
+earlier result is in the history the model sees, whole: a result that was
+clipped, spilled, cleared by compaction or summarised away is not repeated, and
+the lines come back in full. Any write, patch or undo of the file starts over.
 
 Images return either a vision-disabled text stub or an internal image marker
-that the runtime expands for vision models. PDFs use `pdftotext`. Both are
-refused when the file exceeds `limits.max_file_bytes`.
+that the runtime expands for vision models. An image is never refused for its
+size: one over 2000 px on a side is sent scaled to fit 2000 x 2000 (aspect
+kept), and one over 3.75 MiB is re-encoded smaller (palette PNG, then JPEG at
+falling quality), as Claude Code does. The text then says
+`[Image: original WxH, displayed at wxh. Multiply coordinates by N ...]`; the
+file on disk is unchanged. Attachments, pasted images and tool image blocks
+are fitted the same way. PDFs use `pdftotext` and are refused when the file
+exceeds `FILE_BYTES_MAX`.
+
+A notebook (`.ipynb`) read without a range shows its cells: index, id (the
+nbformat `id`, or a collision-free `cell-N` positional name before the first
+edit of an older notebook), type, execution
+count and source, then each output summarised. A stream or `text/plain`
+output shows at most `NOTEBOOK_OUTPUT_LINES_MAX` lines; other MIME types show only
+their size; an error shows `ename: evalue`. That read records the file's hash
+for `notebook_edit` and `write`, but no line coverage: a `patch` of the raw
+JSON needs a ranged read, which returns the raw JSON. A `.ipynb` that is not a
+notebook is read as text.
+
+### `notebook_edit`
+
+Changes one cell of a notebook by id.
+
+Parameters:
+
+- `file_path`
+- `cell_id`: the cell to replace or delete, or to insert after; an insert
+  without one goes to the top.
+- `new_source`: the cell's whole new source; not used by `delete`.
+- `cell_type`: `code`, `markdown` or `raw`; required by `insert`, and on
+  `replace` it changes the cell's type.
+- `edit_mode`: `replace` (default), `insert` or `delete`.
+
+It needs a prior `read` of the notebook, and the file's hash must still match
+that read. A replaced code cell gets empty outputs and a null execution count.
+The first edit persists all displayed cell ids, upgrading nbformat 4 versions
+older than 4.5 to 4.5. An inserted cell gets a new 8-hex id. Later edits keep
+addressing the same cells after insertions or deletions. The JSON keeps its
+key order, indent and line endings. The notebook is
+snapshotted for `undo`, and after the edit the new hash counts as read, so
+edits in a row need no second read.
 
 ### `write`
 
@@ -38,9 +106,26 @@ Parameters:
 - `file_path`
 - `content`
 - `overwrite`
+- `expected_hash`
+- `from_held`
+- `append`
 
-Existing files require `overwrite=true` and a prior `read` in the same process.
-The previous state is snapshotted for `undo`.
+Replacing an existing file requires a prior `read` of it; one page of the file
+is enough, and a read earlier in the session counts after a restart. The
+file's hash must still match the one the read saw, and the previous state is
+snapshotted for `undo`. With `WRITE_REQUIRE_OVERWRITE` on, the call must also
+set `overwrite=true`.
+
+A write that fails, before or after its arguments parse, keeps content of at
+least `HELD_WRITE_MIN` bytes in `~/.js/tmp/held` (the jail's `~/.js/tmp` under
+`-C`, mode 0600) and its ERROR names a held id, the call that finishes the
+write, and where the model is: agent, model, cwd, jail root and writable paths,
+and whether the target exists and was read. A jail refusal also names a path
+under the cwd. `from_held` writes the held content, through the same checks,
+and deletes it once written. Arguments cut off inside `content` hold the part
+that arrived; `from_held` with `append=true` adds `content` after it. `append`
+alone adds `content` to the end of the file. Held content goes when js exits
+and after `HELD_TTL` seconds.
 
 ### `patch`
 
@@ -55,7 +140,37 @@ Parameters:
 - `edits`: list of `{old_string, new_string, replace_all?}`, used instead of
   `old_string`/`new_string`
 
-Requires a prior `read`. Each edit fails when its old string is absent, on
+Requires a prior `read` that showed every line an edit touches.
+
+When a `write` over an existing file or a `patch` finds the file changed on disk since
+the read (the hash differs), the call writes nothing. js keeps the bytes each
+read saw, so the error carries the diff from that content to the current one
+and names both hashes. Lines the model had seen that the change left alone stay
+seen at their new line numbers, and the lines the diff shows count as read, so
+the retry needs no second `read`. A diff larger than half the tighter of
+`TOOL_RESULT_INLINE_MAX` and `TOOL_RESULT_MAX` is
+replaced by the changed line numbers. `patch` then stays gated on those lines
+until they are read; an overwrite retry goes through and discards them, and
+`undo` brings them back.
+
+When `old_string` is not in the file exactly, it is matched again in a
+normalised view of both: trailing whitespace dropped from every line, smart
+quotes read as `'` and `"`, Unicode dashes and minus as `-`, and no-break and
+typographic spaces as a space. The replacement is applied over the original
+text. Every line of `old_string` that `new_string` keeps is written back from
+the file, byte for byte, and within a changed line the characters the edit kept
+come from the file too, so a smart quote the model typed as `"` stays a smart
+quote. A kept character stays ASCII where the edit inserts the same ASCII
+character beside it, so an en dash lengthened to `--` becomes `--`. Whitespace
+at the end of `old_string`, or a first line of only whitespace, takes in up to
+as much whitespace from the file as it holds, so an `old_string` that ends with
+the next line's indentation leaves that line as it was. The result says the
+match was normalised. A normalised match whose replacement would leave the file
+as it is is refused. With `replace_all`, the fallback runs only when there is
+no exact occurrence: one exact occurrence means only exact occurrences are
+replaced, and the result's count shows how many.
+
+Each edit fails when its old string is absent, on
 multiple matches without `replace_all=true`, and when `old_string` equals
 `new_string` (also after line-ending normalization, which would leave the file
 unchanged). Overlapping occurrences count as separate matches, so `aba` in
@@ -77,8 +192,10 @@ Parameters:
 - `permanent`: delete directly instead of trashing (default `false`)
 
 Default sends targets to `trash`/`trash-put`; targets over 512 MiB are refused
-unless `permanent=true`. Symlinks are removed as symlinks (not followed).
-Snapshots the prior file bytes or directory tree for `undo`.
+unless `permanent=true`. `permanent=true` never touches the trash, so it works
+on a box with no trash command or trash directory. Symlinks are removed as
+symlinks (not followed). Both paths snapshot the prior file bytes or directory
+tree for `undo`.
 
 ### `undo`
 
@@ -127,27 +244,44 @@ files are skipped in content modes. Results are absolute paths, `content` lines
 are `path:line:text`, and bytes that are not valid UTF-8 render as `\xNN`. When
 more matches exist than `head_limit`, the result ends with a continuation note.
 
-### `ast_search`
+### `lsp`
 
-Structural search and optional rewrite over parsed source code, backed by
-ast-grep 0.45.1 — the managed `tools/bin/ast-grep` installed by `just install`,
-falling back to `ast-grep` on PATH before that.
+Asks a language server about one file. Lazy in the default agent.
 
 Parameters:
 
-- `pattern`: required ast-grep pattern; `$NAME` captures one node and
-  `$$$ARGS` captures zero or more nodes.
-- `path`: file or directory, default current working directory.
-- `lang`: optional parser override from ast-grep's supported language enum.
-- `rewrite`: optional structural replacement; dry-run diff by default.
-- `apply`: set true to apply a supplied rewrite, default false.
-- `max_results`: maximum matches returned or rewritten, default `100`.
+- `operation`: `diagnostics`, `definition`, `references` or `hover`.
+- `file_path`
+- `line`: 1-based; used by every operation but `diagnostics`.
+- `character`: 1-based column on that line, or instead
+- `symbol`: text on that line; the position is its first occurrence.
 
-Search output uses absolute path headings and the same anchored source lines as
-`read`. Applying a rewrite snapshots every affected file for `undo`, clears the
-shared search cache, and refuses match sets larger than `max_results`. Search
-results mark the matches omitted past `max_results`, and an ast-grep parse
-warning about the pattern is reported above the result.
+`LSP_SERVERS` lists the servers: `{name, command, extensions, roots}`. The
+first entry that serves the file's extension and whose `command[0]` is on PATH
+is used; by default basedpyright, then pyright, for Python, rust-analyzer,
+gopls and typescript-language-server. A file no entry serves, or whose servers
+are all missing, returns one ERROR line naming them.
+
+The workspace root is the nearest directory holding one of the entry's
+`roots` files, else the nearest holding `.git`, else the working directory
+when it holds the file, else the file's directory. The operator's home, any
+directory above it, and `/` are never a root unless `LSP_ALLOW_HOME_ROOT` is
+on; the search stops at home. One server runs per entry, root and jail for the life of the
+process.
+
+Each call sends the file's content from disk: `didOpen` the first time, then
+`didChange` (whole text) and `didSave` when it changed. Other files the server
+has open are resent when they changed, and closed when they are gone.
+`diagnostics` waits for the server to publish for the new version, then
+0.3 s more for later publishes; an unchanged file returns the last ones at
+once. Nothing within `LSP_TIMEOUT` returns a line saying so, not an empty
+list. Positions are converted between code point columns and LSP's UTF-16
+offsets both ways.
+
+Under `-C` the server runs in the jail with the allowlisted environment
+(`SHELL_ENV_KEEP`); the command's directory and the symlinks it
+resolves through are bound back. A server that needs more (its runtime, a
+toolchain) gets it through `JAIL_BIND`.
 
 ## Process And Network
 
@@ -160,7 +294,7 @@ Parameters:
 - `command`
 - `cwd`
 - `timeout` — seconds the call blocks before returning a handle (default
-  `shell.wait_seconds`, 30). The command is never killed by this.
+  `SHELL_WAIT`, 30). The command is never killed by this.
 - `action` — `run` (default), `poll`, `wait`, `kill`
 - `handle` — job id for `poll`/`wait`/`kill`; defaults to the latest running job
 - `keep_ansi`
@@ -171,11 +305,34 @@ A command that outlives the wait comes back as `HANDLE n RUNNING` with the
 output so far and keeps running. `poll` returns new output without blocking,
 `wait` blocks up to `timeout` more seconds, `kill` stops the whole process
 tree. Finished jobs are kept for five more calls so a late `poll` still finds
-its output. Live jobs are killed when js exits.
+its output. Live jobs are killed when js exits. When ^C cancels the turn, the
+command a `run` or `wait` call is blocked on is killed with it; jobs that
+already came back as a handle keep running.
 
-Unix uses `$SHELL -c`, fallback `/bin/sh -c`. Windows uses `COMSPEC /C`.
+The command's stdin is `/dev/null` and it has no controlling terminal, so it
+never reads the keystrokes meant for js's input line.
+
+`shell` runs `SHELL_PROGRAM` (default `bash`) with `-c`. bash and zsh also get
+`-o pipefail` while `SHELL_PIPEFAIL` is on (the default), so a pipeline reports
+the failure of any stage.
+
+The command's environment always includes the resolved `JS_HOME`, plus the names in `SHELL_ENV_KEEP` and
+the `env` parameter. When the command text references (`$NAME`, `${NAME}`) a
+variable that js has but the command's environment does not, the result
+carries an `environment=filtered unset=NAME allowed=… present=…` line after the
+exit line.
 
 Use `cwd` instead of writing `cd ... && ...` in the command.
+
+Under `js -C DIR` the command runs under bubblewrap (`js/jail.py`): DIR
+read-write at its real path, the system read-only, `/home`, the home,
+`/run/user` and network filesystems empty except the `PATH` directories under
+them (read-only) and the `JAIL_BIND` entries, the `JAIL_HIDE` paths empty
+whatever shows them, a `/tmp` and `~/.js/tmp` private
+to the js process (`PATH` directories under the host `/tmp` bound in read-only),
+the network shared, `--die-with-parent`. `kernel`,
+`terminal_session` and the wiki converters run in the same jail. The file tools
+refuse paths outside DIR and the bound paths with one `ERROR` line.
 
 ### `fetch`
 
@@ -192,14 +349,16 @@ Parameters:
 - `save`: path to write the response body to instead of returning it inline
 
 HTML is converted to text unless `raw=true`. Inline output is capped by
-`max_tool_result_bytes`. A download streams to disk and returns
+`TOOL_RESULT_MAX`. A download streams to disk and returns
 `SAVED_RESPONSE path=... size=...`; it is bounded by
-`limits.max_download_bytes`, which defaults to `0`, meaning unlimited.
+`DOWNLOAD_MAX`, which defaults to `0`, meaning unlimited.
 
 Saved GET responses, binary responses, and bodies over the inline result budget
-are transferred through the system aria2c with segmentation, retry, resume,
-and atomic destination replacement. Missing aria2c emits a runtime warning
-before urllib handles the transfer.
+are transferred through the managed aria2c (`tools/bin/aria2c`, see
+[managed-toolkit.md](managed-toolkit.md)) with segmentation, retry, resume,
+and atomic destination replacement. Missing aria2c prints a `URLLIB_FALLBACK`
+line on stderr, once per purpose per process, before urllib handles the
+transfer.
 
 ## Search And Docs
 
@@ -268,10 +427,14 @@ static HTTP fetch returns an empty shell or when a page is a single-page app.
 Parameters:
 
 - `url`: required page URL.
-- `dump`: `markdown`, `text`, `html`, or `links`; default `markdown`.
+- `dump`: `markdown`, `text`, `html`, `links`, `original`, `assets` or
+  `cookies`; default `markdown`.
+- `screenshot`: optional `.png` path; the call then saves a picture of the
+  settled page and returns only a `SCREENSHOT path=... size=...` line, with no
+  dump.
 
-Private and localhost URLs are allowed automatically. This tool cannot render
-WebGL or take screenshots. `just install` downloads the pinned `obscura`
+Private and localhost IP literals are allowed automatically. This tool cannot
+render WebGL. `just install` downloads the pinned `obscura`
 release asset into `tools/bin` — the stealth build, which carries TLS
 impersonation alongside the browser fingerprint — together with the
 `obscura-worker` binary it spawns. Before that install, the tool falls back to
@@ -289,14 +452,19 @@ Parameters:
 - `action`: required; `start`, `send`, `look`, `stop`, or `list`.
 - `session`: name, default `main`.
 - `command`: shell command required by `start`.
-- `keys`: comma-separated named keys or literal text for `send`.
+- `text`: literal text for `send`, including commas; sent before `keys`.
+- `keys`: comma-separated named keys or legacy text tokens for `send`.
 - `cwd`: working directory for `start`.
 - `wait_ms`: redraw collection delay, default `700`.
-- `cols`, `rows`: terminal dimensions, defaults `64` by `36`.
+- `cols`, `rows`: terminal dimensions; unset, the `TERMINAL_COLUMNS` and `TERMINAL_ROWS` settings.
 
-Named input includes Enter, Tab, Escape, arrows, navigation keys, Ctrl-C/D/L,
-and F1 through F12. Results include the rendered screen, cursor, changed-line
-count, and process status. Sessions are isolated per `ToolContext`.
+Named input includes Enter, Tab, Shift-Tab, Escape, arrows, navigation keys,
+Ctrl-A through Ctrl-Z, Alt-prefixed keys (`alt-x`, `alt-enter`), and F1 through
+F12. Use `text="echo a, b"`, `keys="enter"` for a command containing commas.
+Results include the rendered screen, cursor, changed-line count, and process
+status. Each session continuously consumes output between tool calls; only
+the rendered screen is retained. Sessions are isolated per `ToolContext`, and
+stopping a session also stops its output reader.
 
 ### `terminal_snapshot`
 
@@ -310,7 +478,7 @@ Parameters:
 - `output_path`: optional `.png` destination.
 - `wait_ms`: pending-redraw collection delay, default `100`.
 
-Default output lands under `terminal-snapshots/` in the session working
+Default output lands under `~/.js/probes/terminal/`, never in the working
 directory. The result follows the standard js image contract: `IMAGE_RESULT`
 when vision is enabled, otherwise a visual-file metadata stub.
 
@@ -327,7 +495,7 @@ Parameters:
 - `target`: required URL, local HTML file, or local directory.
 - `click`: optional `>`-separated regex chain for visible buttons or links.
 - `press`: optional keyboard key to hold after clicks.
-- `output_dir`: optional parent directory for generated frames.
+- `output_dir`: optional parent directory for generated frames; default `~/.js/probes/browser/`.
 - `settle_ms`: wait after load and clicks, default `1200`.
 - `hold_ms`: key-hold duration, default `1600`.
 - `viewport_width`, `viewport_height`: defaults `1280` by `800`.
@@ -340,34 +508,41 @@ Use `browse` instead when rendered text or links are sufficient.
 
 ## Meta Tools
 
-### `todo_write`
-
-Updates the in-process todo map.
-
-Parameters:
-
-- `todos`: list of `{content, status}`
-
-Statuses: `pending`, `in_progress`, `completed`, `cancelled`. Cancelled removes
-the item.
-
-### `todo_read`
-
-Reads the in-process todo map.
-
 ### `plan`
 
-Writes a markdown plan under `plans/`.
+Writes a markdown plan under `~/.js/plans/`.
 
 Parameters:
 
 - `plan_name`
 - `version`
 - `content`
+- `overwrite`: replace an existing plan of that name and version; without it
+  the call is refused.
 
 ### `skill`
 
 Loads a local skill document by name from known skill paths.
+A skill whose frontmatter sets `disable-model-invocation: true` is user-only:
+the tool refuses it and the user loads it with `/skill <name>` in the REPL.
+The built-in skills in `defaults/skills/` are the lowest layer. A skill named in
+`SKILLS_DISABLED` is not in the catalog: the tool refuses it like an unknown name.
+
+A skill whose frontmatter sets `paths:` (a list of globs, or one string of
+comma-separated globs) is path-scoped. Globs may be unquoted (`paths: *.rs`,
+`- *.rs`), and `{a,b}` braces expand (`src/*.{ts,tsx}`). The first time `read`,
+`patch` or `write` succeeds on a file that matches, the tool result starts with
+one `<js-reminder>` that names the skill, its description and the
+`tool_discovery {"load":"skill:<name>"}` call. It goes first so a result spilled
+past `TOOL_RESULT_INLINE_MAX` or clipped still shows it. Each skill
+is offered once per session: the record lives in the session's tool-surface
+mark, so it survives later turns, compaction and resume, and a `/reset` clears
+it. A skill already loaded, through `tool_discovery`, the `skill` tool or the
+user's `/skill`, is not offered. Globs match the path relative to the working directory,
+as in `.gitignore`: a pattern without a `/` matches a name at any depth
+(`*.rs`), a pattern with one is anchored (`src/**/*.ts`), a directory pattern
+matches everything under it, and files outside the working directory match
+nothing. `paths: ['**']` scopes nothing and is ignored.
 
 Parameters:
 
@@ -379,9 +554,15 @@ Runs one or more subagent tasks.
 
 Parameters:
 
-- `tasks`: required list of strings
-- `agent_id`: required worker agent id
+- `tasks`: list of strings; required to start workers
+- `agent_id`: worker agent id; required to start workers
 - `session_id`: optional child session id
+- `model`: optional model override (absent when `SUBAGENT_MODEL_LOCK` is on)
+- `background`: return a handle at once while the workers keep running
+- `action`: `run` (default), `poll`, `wait` or `kill`
+- `handle`: the background task for `poll`/`wait`/`kill`; defaults to the
+  latest running one
+- `timeout`: seconds `wait` blocks
 
 Tasks inside one call run concurrently. Results are returned in input order.
 Workers inherit the parent turn's effective configuration and shared instruction
@@ -397,11 +578,11 @@ let it build its own. They do not replace the hardened tools, do not wrap them,
 and do not import their rails. The shipped `twotool` agent
 (`js --agent twotool`) is this mode: `kernel`, `toolbox`, `shell`, nothing else.
 
-Both need `jupyter_client` and `ipykernel`, which are base dependencies —
-`just install` puts them in the `js` on PATH, and `just sync` in this checkout's
-project venv. Without them the tools return one ERROR naming the missing package
-and the recipe that repairs the env js is running in, instead of a traceback,
-and the rest of js is unaffected.
+An agent has them when its agent.yaml lists them, like any other tool. Both
+need `jupyter_client` and `ipykernel`, the `kernel` extra: `just install` and
+`just sync` put it in this checkout's project venv, except on Termux. Without
+them the tools return one ERROR naming the missing package instead of a
+traceback, and the rest of js is unaffected.
 
 ### `kernel`
 
@@ -419,7 +600,7 @@ Parameters:
 - `restart`: kill and restart, destroying every definition.
 - `verbosity`: `quiet`, `normal`, or `verbose` for this call's terminal render.
 
-A cell is submitted with a bounded wait (`kernel.wait_seconds`, capped by
+A cell is submitted with a bounded wait (`PYTHON_KERNEL_WAIT`, capped by
 `timeout`). A cell that finishes inside the wait returns whole; one still running
 returns a `HANDLE <id> RUNNING` line and whatever it has printed so far, and the
 agent polls or waits for the rest instead of blocking the turn. A new `code`
@@ -436,27 +617,33 @@ get a `DEFINED` line, deletions a `GONE` line.
 
 A `wait` that exceeds `timeout`, an `action="interrupt"`, and Ctrl-C on the turn
 that submitted the cell all SIGINT the cell, exactly like Ctrl-C in a notebook —
-never a restart. The cell dies, the namespace lives. A cell blocked in a syscall
+never a restart. The cell dies, the namespace lives. A signalled cell that is
+still running is signalled again every second (`RESIGNAL_INTERVAL`), since the
+kernel can record a SIGINT without waking a cell blocked in `time.sleep`. A cell blocked in a syscall
 that ignores SIGINT (a DNS lookup on a dead resolver is the observed case) is
 cleared only by `restart=true`. A kernel that actually dies is reported as such,
 naming the cell, instead of blocking until the deadline. Image output (matplotlib
-and friends) is written under `.js/kernel/` and reported as `IMAGE <path>`; the
-kernel process's own stderr goes to `.js/kernel/kernel.log`, never the terminal.
-The result string is capped by `limits.max_tool_result_bytes` with the standard
+and friends) is written under `~/.js/state/kernel/<run>/` and reported as
+`IMAGE <path>`; the kernel process's own stderr goes to `kernel.log` in the same
+directory, never the terminal. The kernel's sockets are unix sockets in a
+private `js-kernel-*` directory under the temp dir, removed at shutdown, so two
+js processes starting kernels at once cannot be handed the same TCP port.
+The result string is capped by `TOOL_RESULT_MAX` with the standard
 truncation marker.
 
 Ctrl-C on a turn that has a kernel cell in flight interrupts that cell before the
 runtime abandons the worker running the tool call, so the next call does not
 queue behind a cell nobody is watching. The interrupt-on-cancel hook is
-`kernel.interrupt_inflight(context)`, called from the runtime's cancel path.
+`interrupt_inflight(context)` in `js/toolkit/python_kernel.py`, called from the
+runtime's cancel path (`js/turn_dispatch.py`).
 
 Cells run in the interpreter running js, never in a venv of their own: the
-`python3` kernelspec's `python` argv is replaced with `sys.executable`, so a
-`just install`-ed `js` gives cells the uv tool environment and `just run` gives
-them this checkout's project venv. A module installed into some other project's
-venv is not importable in a cell. To add a package to the kernel's environment,
-read `sys.executable` in a cell and install with
-`uv pip install --python <that path> <package>`.
+`python3` kernelspec's `python` argv is replaced with `sys.executable`, so the
+`js` on PATH and `just run` both give cells this checkout's project venv. A
+module installed into some other project's venv is not importable in a cell. To
+add a package to the kernel's environment, read `sys.executable` in a cell and
+install with `uv pip install --python <that path> <package>`; inexact syncs
+preserve it, while an exact `uv sync` removes what `uv.lock` does not list.
 
 Cells run inside a live asyncio loop: `await` works at cell top level,
 `asyncio.run(...)` and `loop.run_until_complete(...)` raise `RuntimeError: This
@@ -467,6 +654,55 @@ A cell that waits on the kernel's own loop — a sync wrapper calling
 handle for it instead of stalling the turn; the next `code` is refused as still
 running, and `action="interrupt"` clears it. `restart` is only for a cell stuck
 in a syscall SIGINT cannot reach.
+
+A cell calls js tools through `tools`, which js binds in the kernel namespace
+at start and after every restart: `tools.read("setup.py")`,
+`tools.fs_search(pattern="TODO")`. Keyword arguments are the tool's parameters;
+positional ones fill them in schema order. The result comes back as a Python
+value — the text the model would have received, uncapped — and a result that
+starts with `ERROR` raises `tools.ToolError` carrying that text. A tool that
+returns content it was asked for marks it `core.Output` (`read` does for a
+file's lines and byte ranges), and that is a value even when the content
+starts with `ERROR`.
+`tools.names()` lists what a cell can call; `tools.call(name, ...)` takes a name
+that is not an identifier.
+
+The kernel is a separate process, so the bridge is a unix socket (`tools.sock`)
+in the session's private `js-kernel-*` directory, which the `-C` jail already
+binds into the kernel. `python_kernel_client.py` is sent to the kernel as a cell and
+talks to it; `python_kernel_bridge.py` serves it in the js process, one request at a
+time, and checks a per-session token. A call runs as a direct call does: the
+registry the `kernel` call was dispatched through resolves the name (so a cell
+reaches the agent's surface and nothing else), the arguments are checked
+against the schema and the tools.yaml argument bans, and the handler runs with
+the live ToolContext. Jail confinement, read-before-write and read coverage are
+therefore the same: a file a cell read counts as read for a later `patch`.
+`kernel` and `toolbox` (they run cells in the busy kernel), fan-out tools
+(`task` and agent tools) and async handlers (MCP tools, `tool_discovery`) are
+refused from a cell. A kernel driven without a dispatch registry — a direct
+`kernel()` call from Python — refuses every tool call. A relative path in a
+cell's tool call resolves against the ToolContext's cwd, as a direct call's
+does, not against the kernel's `os.getcwd()`; after an `os.chdir` in a cell, or
+after `/cd` moves js while the kernel keeps its start directory, the two differ.
+
+Each cell call is traced and logged like a direct call: the trace shows the
+exchange whole, and the flight log gets `tool_ok`/`tool_exception` with
+`"via": "kernel"`. The `on` table of the turn running the `kernel` call
+(`ToolContext.tool_call_hooks`) sees each cell call as it sees a direct one:
+`tool_call` fires first and a refusal comes back to the cell as
+`tools.ToolError` without the tool running; `tool_result` fires after a call
+that ran. A kernel started from a subagent answers to the parent's guards.
+The bridge serves one request at a time and runs a tool call to its end:
+interrupting the cell ends its wait, not the tool, and the cell's next tool
+call waits behind it. A cell left running in the background keeps the
+ToolContext, registry and trace of the `kernel` call that started it, and its
+tool calls are not ordered against the model's direct calls.
+Every connection gets a reply; a request or result the bridge cannot handle
+comes back as `tools.ToolError`, and results carry any `str`, including the
+lone surrogates a non-UTF-8 file name decodes to. If the serving thread stops
+anyway, the next `kernel` call or restart serves again on the same socket with
+the same token. A kernel that died is shut down, bridge included, before its
+replacement starts.
 
 This tool has no opinion about persistence. It does not save, load, or version
 anything, and it does not import `toolbox`.
@@ -482,7 +718,7 @@ Parameters:
 - `name`: the tool name — a plain Python identifier matching the definition.
 - `note`: for `save`, what changed and why. This is the message the next model
   reads.
-- `scope`: `global` (platform config dir `toolbox/`) or `project`
+- `scope`: `global` (`~/.js/toolbox/`) or `project`
   (`.js/toolbox/`). Project shadows global, mirroring agent precedence.
 - `revision`: for `restore`.
 - `source`: an explicit definition, for saving without a live kernel.
@@ -529,13 +765,15 @@ rich — code, output, elapsed, the namespace, save/load activity. stderr so
 - `normal` — code, merged output, elapsed, namespace, defined/gone.
 - `verbose` — stdout/stderr/display split apart, plus kernel lifecycle events.
 
-Set the baseline with `set kernel.verbosity <level>` (or `JS_KERNEL_VERBOSITY`);
+Set the baseline with `set KERNEL_VERBOSITY <level>` (or `JS_KERNEL_VERBOSITY`);
 override one call with the tool's `verbosity` parameter. `set
-kernel.render_max_lines <n>` (default 24) caps each rendered section so a
-4000-line cell cannot scroll the screen away; the hidden count is always shown.
+KERNEL_LINES_MAX <n>` (default 24) caps each rendered section so a
+4000-line cell cannot scroll the screen away; the hidden count is shown. The
+cap is a fold on the screen, which Ctrl-O unfolds to the whole render; off the
+screen (`js -p`) nothing can unfold it, so the render prints whole.
 
 Verbosity governs the terminal render only. The model always receives the full,
-identically-shaped result — a display knob that could silently delete the
+identically-shaped result — a display setting that could silently delete the
 `NAMESPACE` line would break the property the whole tool rests on.
 
 ## Wiki Tools
@@ -570,7 +808,7 @@ surface has lazy native tools, skills, or configured MCP servers.
 
 Parameters:
 
-- `query`: intent or words to search with token matching and ranked partial matches. Empty returns an index without descriptions for loadable entries (at most 4 KiB); searches include short descriptions (at most 8 KiB).
+- `query`: intent or words to search. Entries rank by BM25: the name (split at `_` and camelCase, plus a few intent words for native tools) counts double, added to the id, source, full description and the schema's property names and descriptions. Plurals fold to their singular; stop words carry no weight. Empty returns an index without descriptions for loadable entries (at most 4 KiB); searches include short descriptions (at most 8 KiB).
 - `offset`: continue the same query and filters at `next_offset` when `truncated` is true. Each page has at most 40 entries and reports `total`; very large identifiers are omitted with an explicit count rather than shortened into invalid load ids.
 - `kind`: optional `native`, `skill`, or `mcp` filter. Use `mcp` to connect all
   eligible configured servers and fetch their catalogs.
@@ -582,6 +820,9 @@ MCP server tools are model-facing as `<normalized_server>__<normalized_tool>`.
 Their full remote schemas are absent until discovery connects the server and a
 later `load` call loads that exact catalog id. The schema is emitted on the next
 model call, never retroactively in the batch which loaded it.
+
+A call to a tool that is in the catalog but not loaded returns an `ERROR` that
+names the exact load call, such as `tool_discovery {"load":"native:shell"}`.
 
 The canonical resource and prompt controls are:
 
@@ -608,20 +849,20 @@ trace headers and prompt events include `tool_names` for the published schema se
 
 ## Generated Agent Tools
 
-Prompt directories under repo `prompts/`, global `agents/` in the platform config dir, and
-project `.js/agents/` become tools named after the directory. Project scope
-wins over global, which wins over repo. Current generated tool names include:
+Agent directories under stock `defaults/agents/`, global `~/.js/agents/`, and
+project `.js/agents/` become tools named after the directory. Files layer per relative name: project > home > defaults. The stock generated tools are:
 
-- `defaultagent`
-- `autocoder`
 - `commit`
+- `defaultagent`
+- `slim`
 - `twotool`
 
-Direct agent tools take:
+Direct agent tools take `tasks` (required), and optional `model` and
+`reasoning`:
 
 ```json
 {"tasks":["one or more task strings"]}
 ```
 
-Whether a model can see a generated tool depends on the active prompt
-frontmatter selection.
+Whether a model can see a generated tool depends on the active agent's
+`agent.yaml` `tools:` entries.

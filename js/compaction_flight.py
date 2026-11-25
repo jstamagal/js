@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
-from contextvars import ContextVar
-from dataclasses import asdict, is_dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
-import sys
+import re
 import time
 import traceback
+from collections.abc import Callable
+from contextvars import ContextVar
+from dataclasses import asdict, is_dataclass
+from pathlib import Path
+from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
-from . import paths
+from . import messages as msgs, output, paths, setcmd
+from .console import compaction_events
 
 ACTIVE_FLIGHT: ContextVar[CompactionFlight | None] = ContextVar("compaction_flight", default=None)
 
@@ -26,6 +30,48 @@ def _json(value):
     return str(value)
 
 
+_URL = re.compile(r"[a-z][a-z0-9+.-]*://[^\s<>\"]+", re.IGNORECASE)
+_SENSITIVE_QUERY = frozenset({
+    "key", "apikey", "xapikey", "xgoogapikey", "token", "accesstoken", "refreshtoken",
+    "password", "passwd", "secret", "clientsecret", "auth", "authorization", "signature", "sig",
+})
+
+
+def _diagnostic_url(match):
+    text = match.group()
+    try:
+        parsed = urlsplit(text)
+        netloc = parsed.netloc
+        if "@" in netloc:
+            netloc = "redacted@" + netloc.rsplit("@", 1)[1]
+        pairs = parse_qsl(parsed.query, keep_blank_values=True)
+        masked = [
+            (key, "[redacted]" if re.sub(r"[-_]", "", key.casefold()) in _SENSITIVE_QUERY else value)
+            for key, value in pairs
+        ]
+        query = urlencode(masked) if masked != pairs else parsed.query
+        if netloc == parsed.netloc and query == parsed.query:
+            return text
+        return urlunsplit((parsed.scheme, netloc, parsed.path, query, parsed.fragment))
+    except ValueError:
+        return "[redacted URL]"
+
+
+def _diagnostic(value):
+    """A diagnostic-only copy with credentials removed from URL strings."""
+    if is_dataclass(value) and not isinstance(value, type):
+        value = asdict(value)
+    if isinstance(value, Path):
+        value = str(value)
+    if isinstance(value, str):
+        return _URL.sub(_diagnostic_url, value)
+    if isinstance(value, dict):
+        return {key: _diagnostic(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_diagnostic(item) for item in value]
+    return value
+
+
 def _redact(value):
     if isinstance(value, dict):
         return {key: "[redacted]" if any(word in key.lower() for word in
@@ -36,63 +82,168 @@ def _redact(value):
     return value
 
 
+def _snapshot_settings(settings: dict) -> dict:
+    """The settings a flight records: each secret setting masked the way
+    `/set` shows it, and credential-named keys dropped."""
+
+    return setcmd.masked_store(_redact(settings), masked=True)
+
+
+_LIFECYCLE = frozenset({"start", "success", "failure", "cancelled", "skipped"})
+
+
+def _stem(cfg) -> str:
+    """The session file's name, or `<agent>-<pid>` for a one-shot run with no
+    persisted session (whose session file is /dev/null), the same rule as the
+    debug autolog in debug_trace.py. One-shot runs no longer share `null.log` and
+    `null-<id>.jsonl`."""
+    session = getattr(cfg, "session_file", None)
+    if not session or Path(session) == Path(os.devnull):
+        return f"{cfg.agent_id}-{os.getpid()}"
+    return Path(session).stem
+
+
+def flight_log_dir(cfg) -> Path:
+    """The directory js writes its flight logs to: ``COMPACTION_LOG_DIR``, or
+    ``~/.js/logs/<agent>/compactions``."""
+    settings = getattr(cfg, "settings", {}) or {}
+    override = settings.get("COMPACTION_LOG_DIR")
+    return Path(override).expanduser() if override else paths.logs_root() / cfg.agent_id / "compactions"
+
+
+NOTICE = "compaction_notice"
+
+
+def printing(emit: Callable[..., Any] | None = None, *,
+             warn: Callable[..., Any] | None = None) -> Callable[..., Any]:
+    """The console adapter for compaction's callback protocol."""
+
+    return compaction_events(emit, warn=warn)
+
+
 class CompactionFlight:
-    def __init__(self, cfg, system, messages, *, trigger, forced, focus, preserve_from, details, operation="summary"):
+    """One compaction attempt. With a ``directory`` it is recorded to a JSONL
+    file there; with None nothing is written. Notices go to ``emit`` as
+    ``NOTICE`` events."""
+
+    def __init__(self, cfg, system, messages, *, trigger, forced, focus, preserve_from, details,
+                 directory: Path | None, emit: Callable[..., Any] | None = None, operation="summary"):
         self.operation = operation
         self.id = uuid4().hex
         self.started = time.monotonic()
         self.cfg = cfg
+        self.emit = emit
+        self.path = None
+        self.stream = None
+        if directory is None:
+            return
         settings = getattr(cfg, "settings", {}) or {}
-        compact = settings.get("compact", {})
-        override = compact.get("flight_log_dir")
-        directory = Path(override).expanduser() if override else paths.logs_root() / cfg.agent_id / "compactions"
-        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.path = directory / f"{cfg.session_file.stem}-{self.id}.jsonl"
-        self.stream = os.fdopen(os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8")
+        directory = Path(directory).expanduser()
+        self.path = directory / f"{_stem(cfg)}-{self.id}.jsonl"
+        try:
+            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            self.stream = os.fdopen(os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600),
+                                    "w", encoding="utf-8", errors="backslashreplace")
+            self._start(system, messages, settings, operation=operation, trigger=trigger, forced=forced,
+                        focus=focus, preserve_from=preserve_from, details=details)
+        except OSError as exc:
+            self._disable(exc)
+        except BaseException:
+            # The caller never gets this object, so nobody else would close it.
+            self.close()
+            raise
+
+    def _start(self, system, messages, settings, *, operation, trigger, forced, focus, preserve_from, details):
+        cfg = self.cfg
         self.record("start", operation=operation, model=cfg.model, provider=cfg.provider_id,
                     base_url=cfg.provider_base_url, session=str(cfg.session_file),
                     pid=os.getpid(), parent_pid=os.getppid(),
                     trigger=trigger, forced=forced, focus=focus, preserve_from=preserve_from,
-                    settings=_redact(settings), max_output_tokens=cfg.max_output_tokens,
+                    settings=_snapshot_settings(settings),
+                    max_output_tokens=cfg.max_output_tokens,
                     model_context_window=getattr(cfg, "model_context_window", None),
                     caller_stack=traceback.format_stack(), details=details,
                     disk_compaction_source_sha256=hashlib.sha256(Path(__file__).with_name("compaction.py").read_bytes()).hexdigest())
         self.snapshot("before", system, messages)
 
+    def _disable(self, error):
+        stream, self.stream = self.stream, None
+        if stream is not None:
+            try:
+                stream.close()
+            except OSError:
+                pass
+        notice = output.event("notice", message=msgs.FLIGHT_LOG_FAILED,
+                              fields={"error": error}, stderr=True, flush=True)
+        try:
+            if self.emit is None:
+                output.emit(notice)
+            else:
+                self.emit("compaction_output", output=notice)
+        except OSError:
+            pass
+
     def record(self, event, **payload):
+        if self.stream is None:
+            return
+        try:
+            self._record(event, **payload)
+        except OSError as exc:
+            self._disable(exc)
+
+    def _record(self, event, **payload):
         self.stream.write(json.dumps({"version": 1, "id": self.id, "event": event,
-                                      "ts": time.time(), **payload}, ensure_ascii=False, default=_json) + "\n")
+                                      "ts": time.time(), **_diagnostic(payload)}, ensure_ascii=False,
+                                     default=lambda value: _diagnostic(_json(value))) + "\n")
         self.stream.flush()
+        if event not in _LIFECYCLE and event not in {"before", "after"}:
+            # Streamed chunks and traces: flushed, not fsynced. One fsync per
+            # summary chunk was thousands per compaction; the lifecycle events
+            # and snapshots below still reach the disk.
+            return
         os.fsync(self.stream.fileno())
-        if event in {"start", "success", "failure", "cancelled", "skipped"}:
+        if event in _LIFECYCLE:
             settings = getattr(self.cfg, "settings", {}) or {}
-            runtime = settings.get("runtime", {})
-            directory = runtime.get("debug_autolog_dir")
+            directory = settings.get("REQUEST_LOG_DIR")
             directory = Path(directory).expanduser() if directory else paths.logs_root() / self.cfg.agent_id
-            if runtime.get("debug_autolog", True):
+            if settings.get("REQUEST_LOG", True):
                 try:
                     directory.mkdir(parents=True, exist_ok=True)
-                    with (directory / f"{self.cfg.session_file.stem}.log").open("a", encoding="utf-8") as log:
+                    with (directory / f"{_stem(self.cfg)}.log").open("a", encoding="utf-8") as log:
                         log.write("FLIGHT " + json.dumps({"ts": time.time(), "kind": "compaction_" + event,
                                   "attempt_id": self.id, "flight_path": str(self.path),
                                   "operation": self.operation, "model": self.cfg.model, "session": str(self.cfg.session_file)}, default=_json) + "\n")
                 except OSError as exc:
-                    print(f"[FLIGHT AUTOLOG ERROR] {exc} flight={self.path}", file=sys.stderr, flush=True)
+                    notice = output.event("notice", message=msgs.FLIGHT_AUTOLOG_FAILED,
+                                          fields={"error": exc, "path": self.path}, stderr=True, flush=True)
+                    if self.emit is None:
+                        output.emit(notice)
+                    else:
+                        self.emit("compaction_output", output=notice)
 
     def snapshot(self, phase, system, messages):
-        encoded = json.dumps({"system": system, "messages": messages}, ensure_ascii=False, default=_json)
+        if self.stream is None:
+            return
+        encoded = json.dumps({"system": system, "messages": messages}, ensure_ascii=False,
+                             default=_json).encode("utf-8", "backslashreplace")
         self.record(phase, system=system, messages=messages, message_count=len(messages),
-                    utf8_bytes=len(encoded.encode()), sha256=hashlib.sha256(encoded.encode()).hexdigest())
+                    utf8_bytes=len(encoded), sha256=hashlib.sha256(encoded).hexdigest())
 
     def notice(self, event, detail=""):
-        print(f"[COMPACT {event.upper()} {self.id[:12]}] operation={self.operation} {detail} flight={self.path}", file=sys.stderr, flush=True)
+        if self.emit is not None:
+            self.emit(NOTICE, stage=event, id=self.id[:12], operation=self.operation, detail=detail,
+                      path=self.path)
 
     def write(self, text):
         if text:
             self.record("summary_trace", text=text)
 
     def flush(self):
-        self.stream.flush()
+        if self.stream is not None:
+            try:
+                self.stream.flush()
+            except OSError as exc:
+                self._disable(exc)
 
     def finish(self, event, system, messages, **payload):
         self.snapshot("after", system, messages)
@@ -100,4 +251,21 @@ class CompactionFlight:
         self.notice(event, payload.get("error") or payload.get("result", ""))
 
     def close(self):
-        self.stream.close()
+        if self.stream is not None:
+            stream, self.stream = self.stream, None
+            try:
+                stream.close()
+            except OSError as exc:
+                self._disable(exc)
+
+
+def notice(message: msgs.Message, /, *, emit=None, stderr=True, flush=True, **fields) -> None:
+    """Send a compaction message through the attempt's callback or output sink."""
+    flight = ACTIVE_FLIGHT.get()
+    if emit is None and flight is not None:
+        emit = flight.emit
+    notice = output.event("notice", message=message, fields=fields, stderr=stderr, flush=flush)
+    if emit is None:
+        output.emit(notice)
+    else:
+        emit("compaction_output", output=notice)

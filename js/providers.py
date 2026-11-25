@@ -8,13 +8,17 @@ prefix parsing.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+import re
+import time
 from collections.abc import Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 
 import modelsdotdev
 from ai.providers.base import _PROVIDER_REGISTRY
 
-from . import codex_auth, xai_auth
+from . import logins as _logins, messages as msgs
 
 Transport = str
 
@@ -53,24 +57,14 @@ class ProviderDef:
     # skipping the prompt here is the catch-22 that silently aims a fresh
     # login at 127.0.0.1 on a box where nothing is listening there.
     local: bool = False
-    # An endpoint family where the operator supplies the actual host, even when
-    # the provider is not strictly local/keyless. This deliberately stays
-    # separate from ``local`` so editable endpoint URLs do not imply local auth
-    # semantics.
-    variable_endpoint: bool = False
 
     @property
     def effective_sdk_provider_id(self) -> str | None:
         return self.sdk_provider_id or self.id
 
-    @property
-    def login_base_url_field(self) -> bool:
-        return (
-            not self.established
-            or self.local
-            or self.variable_endpoint
-            or self.transport in {"custom_openai", "custom_responses", "custom_anthropic", "cliproxyapi"}
-        )
+    def default_effort(self, settings: dict | None = None) -> str | None:
+        """The provider default when the run supplies no EFFORT."""
+        return self.reasoning_effort
 
 
 def _p(
@@ -89,11 +83,8 @@ def _p(
     requires_api_key: bool = True,
     established: bool = True,
     append_only: bool = False,
-    reasoning_effort: str | None = None,
     models_list_validates_auth: bool = True,
-    headers: Mapping[str, str] | None = None,
     local: bool = False,
-    variable_endpoint: bool = False,
 ) -> ProviderDef:
     return ProviderDef(
         id=id,
@@ -110,11 +101,8 @@ def _p(
         requires_api_key=requires_api_key,
         established=established,
         append_only=append_only,
-        reasoning_effort=reasoning_effort,
         models_list_validates_auth=models_list_validates_auth,
-        headers=headers or {},
         local=local,
-        variable_endpoint=variable_endpoint,
     )
 
 
@@ -126,12 +114,11 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         "deepseek",
         sdk="deepseek",
         base="https://api.deepseek.com",
-        model="deepseek-v4-flash",
+        model="deepseek-flash",
         key_env=("DEEPSEEK_API_KEY",),
         base_env=("DEEPSEEK_BASE_URL",),
         model_env=("DEEPSEEK_MODEL",),
         append_only=True,
-        reasoning_effort="xhigh",
     ),
     _p(
         "ollama",
@@ -146,7 +133,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         aliases=("ollama-local",),
         requires_api_key=False,
         local=True,
-        variable_endpoint=True,
     ),
     _p(
         "ollama-cloud",
@@ -171,7 +157,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         aliases=("llamacpp", "llama-cpp"),
         requires_api_key=False,
         local=True,
-        variable_endpoint=True,
     ),
     _p(
         "vllm",
@@ -184,7 +169,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         model_env=("VLLM_MODEL",),
         aliases=("vllm-openai",),
         established=False,
-        variable_endpoint=True,
     ),
     _p(
         "lmstudio",
@@ -197,7 +181,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         model_env=("LMSTUDIO_MODEL", "LM_STUDIO_MODEL"),
         aliases=("lm-studio",),
         established=False,
-        variable_endpoint=True,
     ),
     _p(
         "koboldcpp",
@@ -210,7 +193,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         model_env=("KOBOLDCPP_MODEL", "KOBOLD_MODEL"),
         aliases=("kobold-cpp",),
         established=False,
-        variable_endpoint=True,
     ),
     _p(
         "text-generation-webui",
@@ -223,7 +205,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         model_env=("TEXT_GENERATION_WEBUI_MODEL", "OOBABOOGA_MODEL"),
         aliases=("oobabooga", "textgen-webui", "text-generation-ui"),
         established=False,
-        variable_endpoint=True,
     ),
     _p(
         "localai",
@@ -236,7 +217,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         model_env=("LOCALAI_MODEL", "LOCAL_AI_MODEL"),
         aliases=("local-ai",),
         established=False,
-        variable_endpoint=True,
     ),
     _p(
         "tabbyapi",
@@ -249,7 +229,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         model_env=("TABBYAPI_MODEL", "TABBY_MODEL"),
         aliases=("tabby-api",),
         established=False,
-        variable_endpoint=True,
     ),
     _p(
         "tgi",
@@ -262,7 +241,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         model_env=("TGI_MODEL", "TEXT_GENERATION_INFERENCE_MODEL"),
         aliases=("text-generation-inference",),
         established=False,
-        variable_endpoint=True,
     ),
     _p(
         "sglang",
@@ -275,7 +253,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         model_env=("SGLANG_MODEL",),
         aliases=("sgl",),
         established=False,
-        variable_endpoint=True,
     ),
     _p(
         "llamafile",
@@ -287,7 +264,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         base_env=("LLAMAFILE_BASE_URL",),
         model_env=("LLAMAFILE_MODEL",),
         established=False,
-        variable_endpoint=True,
     ),
     _p(
         "jan",
@@ -299,7 +275,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         base_env=("JAN_BASE_URL",),
         model_env=("JAN_MODEL",),
         established=False,
-        variable_endpoint=True,
     ),
     _p(
         "xinference",
@@ -312,7 +287,6 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         model_env=("XINFERENCE_MODEL",),
         aliases=("xinference-local",),
         established=False,
-        variable_endpoint=True,
     ),
     _p(
         "opencode-go",
@@ -374,30 +348,11 @@ _BUILTINS: tuple[ProviderDef, ...] = (
         model_env=("MINIMAX_MODEL",),
     ),
     _p(
-        "openai-codex",
-        "OpenAI Codex OAuth",
-        "codex_oauth",
-        sdk=codex_auth.CODEX_PROVIDER_ID,
-        base=codex_auth.DEFAULT_CODEX_BASE_URL,
-        aliases=(codex_auth.CODEX_DEVICE_PROVIDER_ID, "codex"),
-    ),
-    _p(
-        # Subscription login rather than a console API key: the OAuth bearer is
-        # spent against the same OpenAI-shaped endpoint, so the transport is
-        # ordinary openai and only the credential's origin differs.
-        xai_auth.XAI_PROVIDER_ID,
-        "xAI OAuth",
-        "openai",
-        sdk="openai",
-        base=xai_auth.DEFAULT_XAI_BASE_URL,
-        aliases=("grok-oauth", "xai-login"),
-    ),
-    _p(
         "xai",
         "xAI API",
         "openai",
         sdk="openai",
-        base=xai_auth.DEFAULT_XAI_BASE_URL,
+        base="https://api.x.ai/v1",
         key_env=("XAI_API_KEY",),
         base_env=("XAI_BASE_URL",),
         model_env=("XAI_MODEL",),
@@ -482,6 +437,31 @@ for _provider in _BUILTINS:
         _ALIAS[_alias.lower()] = _provider.id
 
 
+_PROVIDERS: ContextVar[tuple[ProviderDef, ...] | None] = ContextVar("js_providers", default=None)
+
+
+@contextmanager
+def using_providers(definitions):
+    """Resolve providers against this assembly's builtin definitions."""
+    token = _PROVIDERS.set(tuple(definitions))
+    try:
+        yield
+    finally:
+        _PROVIDERS.reset(token)
+
+
+def _builtin_by_id() -> dict[str, ProviderDef]:
+    definitions = _PROVIDERS.get()
+    return _BUILTIN_BY_ID if definitions is None else {p.id: p for p in definitions}
+
+
+def _aliases() -> dict[str, str]:
+    definitions = _PROVIDERS.get()
+    if definitions is None:
+        return _ALIAS
+    return {name.lower(): p.id for p in definitions for name in (p.id, *p.aliases)}
+
+
 def _modelsdev_provider_supported(provider: modelsdotdev.Provider) -> bool:
     return provider.id in _PROVIDER_REGISTRY or provider.npm in _PROVIDER_REGISTRY
 
@@ -503,25 +483,73 @@ def _modelsdev_provider_def(provider: modelsdotdev.Provider) -> ProviderDef:
 
 
 def _dynamic_login_providers() -> tuple[ProviderDef, ...]:
+    """The models.dev providers js can log in to, read from the catalog once
+    per version of it.
+
+    This runs on every routing lookup, several times per model call, and the
+    catalog is a SQLite file that only changes when a refresh replaces it. The
+    rows are kept with the identity (path, inode, size, mtime) of the catalog
+    and its status file and returned again while both are unchanged; the full
+    read, including the staleness check that can refresh the catalog, runs
+    again when either changes or after `_CATALOG_RECHECK_S`.
+    """
+    global _dynamic
     from . import model_metadata
 
-    model_metadata.ensure_fresh_catalog()
-    rows: list[ProviderDef] = []
-    for provider in modelsdotdev.iter_providers():
-        if provider.id in _BUILTIN_BY_ID:
-            continue
-        if not _modelsdev_provider_supported(provider):
-            continue
-        rows.append(_modelsdev_provider_def(provider))
-    return tuple(rows)
+    key = (*_catalog_identity(), _PROVIDERS.get())
+    now = time.monotonic()
+    if _dynamic is not None and _dynamic[0] == key and now - _dynamic[1] < _CATALOG_RECHECK_S:
+        return _dynamic[2]
+    try:
+        model_metadata.ensure_fresh_catalog()
+        rows: list[ProviderDef] = []
+        for provider in modelsdotdev.iter_providers():
+            if provider.id in _builtin_by_id() or provider.id.lower() in _aliases():
+                continue
+            if not _modelsdev_provider_supported(provider):
+                continue
+            rows.append(_modelsdev_provider_def(provider))
+    except Exception:  # noqa: BLE001 - ensure_fresh_catalog re-raises any refresh failure
+        # No catalog and none to fetch (offline fresh install, broken catalog
+        # path): routing must still work for builtins and saved logins. Nothing
+        # is cached, so the next lookup tries the catalog again.
+        return ()
+    _dynamic = ((*_catalog_identity(), _PROVIDERS.get()), now, tuple(rows))
+    return _dynamic[2]
+
+
+_CATALOG_RECHECK_S = 60.0
+_dynamic: tuple[tuple, float, tuple[ProviderDef, ...]] | None = None
+
+
+def reset_catalog_cache() -> None:
+    """Drop the providers read from the catalog; the next lookup reads it again."""
+    global _dynamic
+    _dynamic = None
+
+
+def _catalog_identity() -> tuple:
+    """What a change to the catalog or its status file changes."""
+    from . import model_metadata
+
+    parts: list[tuple] = []
+    for path in (model_metadata._custom_db_path(), model_metadata._status_file_path()):
+        try:
+            info = os.stat(path)
+        except OSError:
+            parts.append((str(path), None))
+        else:
+            parts.append((str(path), info.st_ino, info.st_size, info.st_mtime_ns))
+    return tuple(parts)
 
 
 def all_providers() -> tuple[ProviderDef, ...]:
-    return _BUILTINS
+    definitions = _PROVIDERS.get()
+    return _BUILTINS if definitions is None else definitions
 
 
 def login_providers() -> tuple[ProviderDef, ...]:
-    return _BUILTINS + _dynamic_login_providers()
+    return all_providers() + _dynamic_login_providers()
 
 
 def normalize_provider_id(provider_id: str | None) -> str | None:
@@ -531,8 +559,9 @@ def normalize_provider_id(provider_id: str | None) -> str | None:
     if not key:
         return None
     lowered = key.lower()
-    if lowered in _ALIAS:
-        return _ALIAS[lowered]
+    aliases = _aliases()
+    if lowered in aliases:
+        return aliases[lowered]
     for provider in _dynamic_login_providers():
         if lowered == provider.id.lower():
             return provider.id
@@ -547,22 +576,18 @@ def _saved_login_provider_def(provider_id: str) -> ProviderDef | None:
     but invisible to routing: its ``provider/model`` prefix never splits and
     model_client hands the raw js id to the SDK, which rejects it. The stored
     SDK shape picks the transport; the stored base URL and key are defaults, so
-    explicit /set or env values still win. Lazy import + broad except because
-    a missing or corrupt login store must never break routing.
+    explicit /set or env values still win. A missing or corrupt login store
+    reads as no logins (``logins.load_logins``).
     """
-    try:
-        from . import logins as _logins
 
-        login = _logins.load_logins().get(provider_id)
-    except Exception:  # noqa: BLE001
-        return None
+    login = _logins.load_logins().get(provider_id)
     if login is None:
         return None
     sdk = (login.sdk_provider_id or "openai").strip().lower()
     transport: Transport = "custom_anthropic" if sdk == "anthropic" else "custom_openai"
     shape_id = getattr(login, "shape_provider_id", None)
     if shape_id:
-        shape = _BUILTIN_BY_ID.get(normalize_provider_id(shape_id) or shape_id)
+        shape = _builtin_by_id().get(normalize_provider_id(shape_id) or shape_id)
         if shape is not None:
             transport = shape.transport
     return _p(
@@ -581,7 +606,7 @@ def get_provider(provider_id: str | None) -> ProviderDef | None:
     normalized = normalize_provider_id(provider_id)
     if normalized is None:
         return None
-    provider = _BUILTIN_BY_ID.get(normalized)
+    provider = _builtin_by_id().get(normalized)
     if provider is not None:
         return provider
     for candidate in _dynamic_login_providers():
@@ -591,23 +616,19 @@ def get_provider(provider_id: str | None) -> ProviderDef | None:
 
 
 def known_provider_ids() -> set[str]:
-    ids = set(_ALIAS)
+    ids = set(_aliases())
     ids.update(provider.id for provider in login_providers())
-    try:
-        from . import logins as _logins
 
-        ids.update(_logins.load_logins())
-    except Exception:  # noqa: BLE001
-        pass
+    ids.update(_logins.load_logins())
     return ids
 
 
 def parse_model_prefix(model: str | None) -> tuple[str | None, str | None]:
     """Return (provider_id, model_id) when model starts with a known provider id.
 
-    Only the first slash segment is considered. Unknown slashy model ids are left
-    untouched because OpenRouter, Hugging Face, and Ollama model ids commonly
-    contain slashes that are part of the real model name.
+    Only the first slash segment is validated as a provider name and considered.
+    Unknown slashy model ids are left untouched because OpenRouter, Hugging Face,
+    and Ollama model ids commonly contain slashes that are part of the real model name.
     """
 
     if not model:
@@ -615,10 +636,23 @@ def parse_model_prefix(model: str | None) -> tuple[str | None, str | None]:
     if "/" not in model:
         return None, model
     first, rest = model.split("/", 1)
+    if first and re.fullmatch(r"[A-Za-z0-9_.-]+", first) is None:
+        raise ValueError(f"Invalid provider name: {first!r}; use letters, digits, '.', '_' or '-'.")
     provider_id = normalize_provider_id(first)
     if provider_id and get_provider(provider_id) is not None and rest:
         return provider_id, rest
     return None, model
+
+
+def qualified_model_id(provider_id: str | None, model: str) -> str:
+    """`provider/model`, the form `MODEL` takes; `model` alone without a
+    provider, and unchanged when it already carries that provider's prefix."""
+    if not provider_id:
+        return model
+    parsed_provider_id, parsed_model = parse_model_prefix(model)
+    if parsed_provider_id == provider_id and parsed_model:
+        return model
+    return f"{provider_id}/{model}"
 
 
 def first_env(names: tuple[str, ...], env: Mapping[str, str] | None = None) -> str | None:
@@ -634,6 +668,16 @@ def provider_base_url(provider: ProviderDef, explicit: str | None, env: Mapping[
     if explicit:
         return explicit
     return first_env(provider.base_url_env, env) or provider.default_base_url
+
+
+def is_custom_base_url(provider: ProviderDef | None, base_url: str | None) -> bool:
+    """Whether an explicit endpoint differs from the provider's default."""
+    if not base_url:
+        return False
+    default = provider.default_base_url if provider is not None else None
+    if provider is not None and provider.id == "openai" and default is None:
+        default = "https://api.openai.com/v1"
+    return base_url.rstrip("/") != (default or "").rstrip("/")
 
 
 def provider_api_key(provider: ProviderDef, explicit: str | None, env: Mapping[str, str] | None = None) -> str | None:
@@ -666,19 +710,13 @@ def assert_endpoint_configured(provider: ProviderDef, base_url: str | None) -> N
     if not sdk or sdk == provider.id:
         return
     hint = (
-        f"set {provider.base_url_env[0]}"
+        msgs.PROVIDER_ENDPOINT_ENV_HINT.words(value=provider.base_url_env[0])
         if provider.base_url_env
-        else "configure its base URL"
+        else msgs.PROVIDER_ENDPOINT_CONFIGURE_HINT.words()
     )
     raise ValueError(
-        f"provider {provider.id!r} has no base URL configured; refusing to fall "
-        f"back to the {sdk!r} SDK default endpoint and credentials. Run "
-        f"`js --login {provider.id}` or {hint}."
+        msgs.PROVIDER_ENDPOINT_PROVIDER_HAS_NO_BASE_URL_CONFIGURED_REFUSING.format(id=provider.id, sdk=sdk, id2=provider.id, hint=hint)
     )
-
-
-def login_ids() -> list[str]:
-    return [p.id for p in login_providers()]
 
 
 def provider_for_login(provider_id: str) -> ProviderDef:

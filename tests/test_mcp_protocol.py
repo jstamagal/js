@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from js.mcp.client import MCPClient, MCPClientError, NotInitializedError, ProtocolVersionError
-from js.mcp.protocol import JSONRPCError, JSONRPCPeer, PeerClosedError, REQUEST_CANCELLED
+from js.mcp.protocol import REQUEST_CANCELLED, JSONRPCError, JSONRPCPeer, PeerClosedError
 from js.mcp.types import LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS
 
 
@@ -83,6 +83,33 @@ def test_initialize_orders_handshake_and_advertises_only_implemented_capabilitie
         await client.close()
         await client.close()
         assert transport.close_calls == 1
+
+    asyncio.run(drive())
+
+
+def test_server_ping_during_initialization_receives_success():
+    async def drive():
+        transport = FakeTransport()
+        client = MCPClient(lambda: transport)
+        initializing = asyncio.create_task(client.initialize())
+        try:
+            initialize = await transport.next_sent()
+            await transport.server_send({"jsonrpc": "2.0", "id": "heartbeat", "method": "ping"})
+            assert await transport.next_sent() == {
+                "jsonrpc": "2.0", "id": "heartbeat", "result": {},
+            }
+            await transport.server_send({
+                "jsonrpc": "2.0", "id": initialize["id"], "result": {
+                    "protocolVersion": LATEST_PROTOCOL_VERSION,
+                    "capabilities": {}, "serverInfo": {"name": "alive", "version": "1"},
+                },
+            })
+            await initializing
+            assert client.initialized
+        finally:
+            initializing.cancel()
+            await asyncio.gather(initializing, return_exceptions=True)
+            await client.close()
 
     asyncio.run(drive())
 
@@ -302,7 +329,7 @@ def test_notification_handlers_can_request_without_blocking_reader_and_stay_orde
         await asyncio.wait_for(completed.wait(), 1)
         assert seen == [("start", 1), ("result", 1), ("start", 2), ("result", 2)]
         assert not peer.closed
-        assert "MCP notification handler failed" in caplog.text
+        assert "callback broke" in caplog.text
         await peer.close()
 
     asyncio.run(drive())
@@ -433,7 +460,10 @@ def test_failed_result_send_is_retrieved_and_logged_without_exception_text(caplo
         transport.send = send
         peer = await JSONRPCPeer.connect(lambda: transport)
 
+        handled = asyncio.Event()
+
         async def handler(params):
+            handled.set()
             return {"ok": True}
 
         peer.add_request_handler("sampling/createMessage", handler)
@@ -445,13 +475,16 @@ def test_failed_result_send_is_retrieved_and_logged_without_exception_text(caplo
         await transport.server_send(
             {"jsonrpc": "2.0", "id": "srv-1", "method": "sampling/createMessage", "params": {}}
         )
-        for _ in range(100):
-            if peer._incoming:
+        await asyncio.wait_for(handled.wait(), 1)
+
+        def failure_logged():
+            return any("ConnectionError" in record.getMessage() for record in caplog.records)
+
+        for _ in range(1000):
+            if failure_logged():
                 break
             await asyncio.sleep(0)
-        assert peer._incoming, "request task never started"
-        while peer._incoming:
-            await asyncio.sleep(0)
+        assert failure_logged(), "the failed request task was never settled"
         await peer.close()
         # Force any pending unretrieved-task diagnostics to surface now.
         import gc

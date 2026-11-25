@@ -1,19 +1,48 @@
-# Inline Directives In System Prompts
+# Prompt Expansion
 
 `js` expands a small set of directives in the assembled system prompt before it
 reaches the model. This lets a prompt file pull in environment values, file
-contents, and — when explicitly enabled — the output of commands and code
+contents, built-in session values, and the output of commands and code
 snippets.
 
 Expansion happens at the persona-load chokepoint
 (`js/persona.py:_expand_spec`), so it applies to the full assembled system
-prompt: every `*.md` file in the agent's prompt directory, the global
-`JS.md` / `JS.local.md`, and any stacked project `AGENTS.md` /
-`AGENTS.local.md`. The implementation is `js/promptexpand.py`.
+prompt: the `*-prompt.md` and `*-env.md` files in the agent's directory, the global
+`JS.md` / `JS.local.md`, and the start directory's `AGENTS.md` /
+`AGENTS.local.md`. User/agent message files and benchmarks expand separately
+when reached. The implementation is `js/promptexpand.py`.
 
 ## Syntax
 
-There are three forms.
+There are four forms.
+
+### `%%NAME%%` — built-in variables
+
+These values come from the current session, independently of environment
+variables and of any filename convention:
+
+| Variable | Value |
+| --- | --- |
+| `CURRENT_SESSION` | Session filename without `.jsonl`, e.g. `2026-10-04T1947-31ef`. Empty when no session file is selected. |
+| `CURRENT_SESSION_FULLPATH` | Absolute session JSONL path. `/dev/null` for runs without a session, including benchmarks. |
+| `CURRENT_SESSION_AGENT` | Active agent id. |
+| `CURRENT_SESSION_MODEL` | Effective model id, after agent and command-line model selection. |
+| `JS_HOME` | Absolute home selected by `--home`, `JS_HOME` or `~/.js`; always set. |
+
+```text
+This is session %%CURRENT_SESSION%% using %%CURRENT_SESSION_MODEL%%.
+!{sh grep -qw 'arr' '%%CURRENT_SESSION_FULLPATH%%' && echo 'ahoy' || echo 'are ye not a pirate matey'}
+```
+
+Built-ins expand directly in prompt text and inside inline or fenced subsystem
+bodies before the subsystem runs. Quote path values in shell commands. Unknown
+names stay literal. A backslash or a fully enclosing inline backtick span keeps
+a variable literal, just as for the other directive forms. Substituted values
+and subsystem output are never scanned again.
+
+The same expansion is used for [user/agent message files and benchmarks](technical-guide.md#message-files).
+Message files expand in conversation order, after preceding exchanges are saved;
+benchmark bodies expand after their optional user/agent setup.
 
 ### `{{NAME}}` — environment shorthand
 
@@ -27,6 +56,15 @@ variable expands to the empty string (no error). Only valid identifier names
 `{{ a + b }}`, is left untouched as a literal.
 
 This form is always on and needs no flag — it only reads the environment.
+
+js exports these variables before it expands a prompt:
+
+| Variable | Value |
+| --- | --- |
+| `JS_ROOT` | The directory holding js itself: the `js` package, `defaults/` and `tools/`. The stock agent runs `sh "$JS_ROOT/tools/envctx.c"`. |
+| `JS_HOME` | The resolved profile home; available as `{{JS_HOME}}`, `%%JS_HOME%%` and `$JS_HOME` in shell commands. |
+| `JS_SHELL` | The shell the shell tool runs commands in (`SHELL_PROGRAM`, resolved on PATH). |
+| `JS_SECRET_PATTERNS` | The secret-patterns file envctx's scrubber reads: `<home>/secret-patterns` when it exists, else `defaults/secret-patterns` in `JS_ROOT`. |
 
 ### `!{subsystem args}` — inline directive
 
@@ -71,41 +109,63 @@ the inline form when both could match.
 for opting out).
 
 Command execution captures stdout only; a trailing newline is stripped. A
-directive that fails to resolve — nonzero exit, missing interpreter/compiler,
-timeout, unknown subsystem — is left **literal** in the prompt with a one-line
-warning on stderr; it does not abort prompt assembly. (Callers of
-`expand_prompt` can pass `on_error="raise"` for the strict behavior.) The
+directive that exits nonzero after printing to stdout (grep with no match, a
+script ending on a false test) injects that stdout and warns with the exit
+code on stderr. A directive that fails to resolve — nonzero exit with no
+stdout, a failed `c` compile, missing interpreter/compiler, timeout, unknown
+subsystem — expands to **nothing**, with a one-line warning on stderr; it
+does not abort prompt assembly, and the raw directive never reaches the model.
+(Callers of `expand_prompt` can pass `on_error="raise"` for the strict
+behavior.) The
 default per-directive timeout is 300 seconds; set
-`limits.inline_code_timeout_s` or `JS_INLINE_CODE_TIMEOUT` to override it.
+`INLINE_CODE_TIMEOUT` or `JS_INLINE_CODE_TIMEOUT` to override it.
+Output is capped at `SHELL_OUTPUT_MAX`. A failing directive's
+stderr goes into the warning; a succeeding one's stderr is discarded.
+
+## When and where directives run
+
+- **Working directory.** Every code subsystem runs in the directory js was
+  started from. `python`, `node` and `c` write the snippet (and compile it)
+  in a temp dir under js's tmp dir, but the snippet itself runs in the
+  invocation directory, so it sees the same paths `!{sh pwd}` does.
+- **Environment.** Directives inherit js's environment, including the
+  exported `JS_ROOT`, `JS_HOME`, `JS_SHELL` and `JS_SECRET_PATTERNS`.
+- **How often.** The system prompt is expanded each time js loads the agent:
+  every js run, `--session` resumes included. A side effect in a prompt file
+  (making a directory, writing a file, downloading something) happens again on
+  every run, so keep it idempotent: create a fixed path if it is missing
+  rather than a fresh temp dir. Message files and benchmark bodies expand once,
+  when they are reached, so a `tempfile.mkdtemp()` work dir belongs there.
 
 ## Code execution is on by default
 
-Code subsystems run by default (`runtime.allow_inline_code`, default `on`).
+Code subsystems run by default (`INLINE_CODE`, default `on`).
 Opting out:
 
 ```bash
-js --im-a-pussy -p "..."               # this run only (sets JS_ALLOW_INLINE_CODE=0)
-set runtime.allow_inline_code off      # permanent, in jsrc
-JS_ALLOW_INLINE_CODE=0 js -p "..."     # via environment
+js --im-a-pussy -p "..."               # this run only (sets JS_INLINE_CODE=0)
+set INLINE_CODE off      # permanent, in jsrc
+JS_INLINE_CODE=0 js -p "..."     # via environment
 ```
 
-With code execution off, any `!{sh ...}`, `!{python ...}`, ` ```!c ` etc. is
-left literal in the prompt (no error); `{{VAR}}`, `!{env}`, and `!{file}` still
-expand.
+With code execution off, any `!{sh ...}`, `!{python ...}`, ` ```!c ` etc.
+expands to nothing, with a warning on stderr; `{{VAR}}`, `!{env}`, and
+`!{file}` still expand.
 
 > **Security note.** By default `js` compiles and runs arbitrary code taken
-> from your prompt files (the agent's `*.md` and any stacked `AGENTS.md`).
+> from your prompt files (the agent's `*-prompt.md` and `*-env.md`, and any stacked `AGENTS.md`).
 > Treat a prompt directory as executable input: only add prompt dirs you wrote
-> or fully trust, or run with `--im-a-pussy` / `runtime.allow_inline_code off`.
+> or fully trust, or run with `--im-a-pussy` / `INLINE_CODE off`.
 
 ## Keeping a directive literal
 
 A prompt that documents the syntax to itself needs to show a directive without
 running it. A backslash immediately before any form (`\!{sh ...}`, `\{{VAR}}`,
 `` \``` ``!sub) emits it verbatim minus the escape backslash — the universal
-escape, and the only one for fenced blocks. An inline `!{...}` / `{{...}}`
-fully wrapped in a markdown backtick code span is also left literal, backticks
-and all.
+escape, and the only one for fenced blocks. Directives inside a closed Markdown
+backtick code span on one line stay literal, backticks and all. Matching delimiter runs may
+contain several backticks, so a span can include examples with shorter backtick
+runs inside it.
 
 ## Single-pass / injection safety
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import ai
+from test_compaction_rehydration import compaction_rehydration
 
-from js import compaction, runtime
+from js import compaction, microcompact, provider_errors, result_caps
+from js.toolkit import ToolContext
 
 
 def _history(n_tools: int, body_chars: int = 5_000) -> list[dict]:
@@ -17,27 +19,27 @@ def _history(n_tools: int, body_chars: int = 5_000) -> list[dict]:
 
 def test_microcompact_clears_old_tool_bodies_and_keeps_recent_ones():
     msgs = _history(30)
-    cleared, reclaimed = compaction.microcompact(msgs, keep_recent=20)
+    cleared, reclaimed = microcompact.microcompact(msgs, keep_recent=20)
 
     assert cleared == 10
     assert reclaimed > 40_000
     tools = [m for m in msgs if m["role"] == "tool"]
-    assert all(t["content"] == compaction.MICROCOMPACT_CLEARED_MESSAGE for t in tools[:10])
-    assert all(t["content"] != compaction.MICROCOMPACT_CLEARED_MESSAGE for t in tools[10:])
+    assert all(t["content"] == microcompact.MICROCOMPACT_CLEARED_MESSAGE for t in tools[:10])
+    assert all(t["content"] != microcompact.MICROCOMPACT_CLEARED_MESSAGE for t in tools[10:])
     # Assistant reasoning about those results is untouched.
     assert all(m["content"].startswith("thinking") for m in msgs if m["role"] == "assistant")
 
 
 def test_microcompact_leaves_small_results_alone():
     msgs = _history(30, body_chars=10)
-    cleared, reclaimed = compaction.microcompact(msgs, keep_recent=0, min_chars=400)
+    cleared, reclaimed = microcompact.microcompact(msgs, keep_recent=0, min_chars=400)
     assert (cleared, reclaimed) == (0, 0)
 
 
 def test_microcompact_is_idempotent():
     msgs = _history(30)
-    first = compaction.microcompact(msgs, keep_recent=0)
-    second = compaction.microcompact(msgs, keep_recent=0)
+    first = microcompact.microcompact(msgs, keep_recent=0)
+    second = microcompact.microcompact(msgs, keep_recent=0)
     assert first[0] == 30
     assert second == (0, 0)
 
@@ -45,7 +47,7 @@ def test_microcompact_is_idempotent():
 def test_microcompact_preserves_tool_call_ids_so_the_history_stays_valid():
     # A tool message orphaned from its call id breaks the next request.
     msgs = _history(5)
-    compaction.microcompact(msgs, keep_recent=0)
+    microcompact.microcompact(msgs, keep_recent=0)
     tools = [m for m in msgs if m["role"] == "tool"]
     assert [t["tool_call_id"] for t in tools] == [f"c{i}" for i in range(5)]
     assert all(t["name"] == "read" for t in tools)
@@ -53,15 +55,15 @@ def test_microcompact_preserves_tool_call_ids_so_the_history_stays_valid():
 
 def test_microcompact_keep_recent_larger_than_history_clears_nothing():
     msgs = _history(3)
-    assert compaction.microcompact(msgs, keep_recent=20) == (0, 0)
+    assert microcompact.microcompact(msgs, keep_recent=20) == (0, 0)
 
 
 def test_spill_writes_the_full_result_and_returns_a_pointer(tmp_path):
     big = "y" * 200_000
-    out = runtime.spill_oversized_result(big, 50_000, spill_dir=tmp_path)
+    out = result_caps.spill_oversized_result(big, 50_000, spill_dir=tmp_path)
 
     assert len(out) < len(big)
-    assert "limits.max_tool_result_inline_bytes" in out
+    assert "TOOL_RESULT_INLINE_MAX" in out
     written = list(tmp_path.glob("result-*.txt"))
     assert len(written) == 1
     assert written[0].read_text(encoding="utf-8") == big
@@ -70,45 +72,67 @@ def test_spill_writes_the_full_result_and_returns_a_pointer(tmp_path):
 
 def test_spill_leaves_small_results_alone_and_can_be_disabled(tmp_path):
     small = "z" * 100
-    assert runtime.spill_oversized_result(small, 50_000, spill_dir=tmp_path) == small
+    assert result_caps.spill_oversized_result(small, 50_000, spill_dir=tmp_path) == small
     big = "z" * 200_000
-    assert runtime.spill_oversized_result(big, 0, spill_dir=tmp_path) == big
+    assert result_caps.spill_oversized_result(big, 0, spill_dir=tmp_path) == big
     assert list(tmp_path.glob("result-*.txt")) == []
 
 
-def test_post_compact_rehydration_reattaches_recent_files(tmp_path):
+def test_post_compact_rehydration_reattaches_recent_files(tmp_path, monkeypatch):
     a = tmp_path / "a.py"
     a.write_text("print('a')\n", encoding="utf-8")
     b = tmp_path / "b.py"
     b.write_text("print('b')\n", encoding="utf-8")
 
-    class Ctx:
-        read_paths = {a, b}
+    context = ToolContext()
+    context.reads.remember(a, "read")
+    context.reads.remember(b, "read")
 
-    msg = compaction._post_compact_rehydration(Ctx())
+    msg = compaction_rehydration(monkeypatch, tmp_path, context)
     assert msg["role"] == "user"
     assert "print('a')" in msg["content"]
     assert "print('b')" in msg["content"]
     assert "post-compaction-files" in msg["content"]
 
 
-def test_post_compact_rehydration_names_but_skips_huge_files(tmp_path):
+def test_post_compact_rehydration_names_but_skips_huge_files(tmp_path, monkeypatch):
     big = tmp_path / "big.log"
     big.write_text("q" * 500_000, encoding="utf-8")
 
-    class Ctx:
-        read_paths = {big}
+    context = ToolContext()
+    context.reads.remember(big, "read")
 
-    msg = compaction._post_compact_rehydration(Ctx(), per_file_tokens=1_000)
+    msg = compaction_rehydration(monkeypatch, tmp_path, context, per_file_tokens=1_000)
     assert "too large to re-attach" in msg["content"]
     assert "qqqq" not in msg["content"]
 
 
-def test_post_compact_rehydration_is_none_without_reads():
-    class Ctx:
-        read_paths = set()
+def test_post_compact_rehydration_is_none_without_reads(tmp_path, monkeypatch):
+    context = ToolContext()
 
-    assert compaction._post_compact_rehydration(Ctx()) is None
+    assert compaction_rehydration(monkeypatch, tmp_path, context) is None
+
+
+def test_post_compact_rehydration_rechecks_the_jail_after_a_file_becomes_a_symlink(tmp_path, monkeypatch):
+    from js import jail
+    from js.toolkit.fs import fs_read
+
+    root = tmp_path / "project"
+    root.mkdir()
+    target = root / "notes.txt"
+    target.write_text("project notes")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside the permitted project")
+    private = tmp_path / "private"
+    private.mkdir()
+    monkeypatch.setattr(jail, "ACTIVE", jail.Jail(root=root, bwrap="bwrap", private=private))
+    context = ToolContext(cwd=root)
+    assert "project notes" in fs_read(file_path=str(target), context=context)
+    assert target in context.reads.paths()
+    target.unlink()
+    target.symlink_to(outside)
+
+    assert compaction_rehydration(monkeypatch, tmp_path, context) is None
 
 
 # Overflow classification: recovery, microcompaction and the manual /compact path
@@ -129,7 +153,7 @@ def test_llamacpp_overflow_wording_is_classified_as_context_overflow():
         error_type="exceed_context_size_error",
     )
 
-    assert compaction.is_context_overflow_error(exc) is True
+    assert provider_errors.is_context_overflow_error(exc) is True
 
 
 def test_overflow_classification_does_not_fire_on_unrelated_provider_errors():
@@ -138,29 +162,31 @@ def test_overflow_classification_does_not_fire_on_unrelated_provider_errors():
         "Error code: 400 - unknown model 'gpt-9'",
         "Error code: 500 - internal server error",
     ):
-        assert compaction.is_context_overflow_error(ai.ProviderAPIError(message)) is False
+        assert provider_errors.is_context_overflow_error(ai.ProviderAPIError(message)) is False
 
 
 def test_overflow_classification_ignores_non_provider_exceptions():
-    assert compaction.is_context_overflow_error(RuntimeError("context length exceeded")) is False
+    assert provider_errors.is_context_overflow_error(RuntimeError("context length exceeded")) is False
 
 
 def test_recovery_records_failure_with_original_tool_bodies(monkeypatch, tmp_path, capsys):
     import json
+
     import pytest
     from test_config_compaction_layers import _compact_test_cfg
 
-    cfg = _compact_test_cfg(tmp_path, {"flight_log_dir": str(tmp_path / "flights")})
+    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_LOG_DIR": str(tmp_path / "flights")})
     msgs = _history(22)
     original = list(msgs)
 
     def fail(*args, **kwargs):
         raise RuntimeError("clear failed")
 
-    monkeypatch.setattr(compaction, "microcompact", fail)
+    monkeypatch.setattr(microcompact, "microcompact", fail)
     with pytest.raises(RuntimeError, match="clear failed"):
-        compaction.recover_overflow(msgs, 1, cfg=cfg, system="SYSTEM",
-                                    error=ai.ProviderAPIError("context length exceeded"), flight_data={})
+        microcompact.recover_overflow(msgs, 1, cfg=cfg, system="SYSTEM",
+                                    error=ai.ProviderAPIError("context length exceeded"), flight_data={},
+                                    log_dir=compaction.flight_log_dir(cfg), emit=compaction.printing())
     records = [json.loads(line) for line in next((tmp_path / "flights").glob("*.jsonl")).read_text().splitlines()]
     assert records[1]["messages"] == original
     assert records[-2]["messages"] == original
@@ -170,13 +196,63 @@ def test_recovery_records_failure_with_original_tool_bodies(monkeypatch, tmp_pat
 
 def test_recovery_records_no_eligible_results(tmp_path, capsys):
     import json
+
     from test_config_compaction_layers import _compact_test_cfg
 
-    cfg = _compact_test_cfg(tmp_path, {"flight_log_dir": str(tmp_path / "flights")})
+    cfg = _compact_test_cfg(tmp_path, {"COMPACTION_LOG_DIR": str(tmp_path / "flights")})
     msgs = _history(2)
-    assert compaction.recover_overflow(msgs, 1, cfg=cfg, system="SYSTEM",
-                                      error=ai.ProviderAPIError("context length exceeded"), flight_data={}) == ("summarize", 0, 0)
+    assert microcompact.recover_overflow(msgs, 1, cfg=cfg, system="SYSTEM",
+                                      error=ai.ProviderAPIError("context length exceeded"), flight_data={},
+                                      log_dir=compaction.flight_log_dir(cfg),
+                                      emit=compaction.printing()) == ("summarize", 0, 0)
     records = [json.loads(line) for line in next((tmp_path / "flights").glob("*.jsonl")).read_text().splitlines()]
     assert records[-1]["event"] == "skipped"
     assert records[1]["messages"] == records[-2]["messages"]
     assert records[0]["id"][:12] in capsys.readouterr().err
+
+
+def _status_error(message, status, **kwargs):
+    return ai.ProviderAPIError(message, http_context=ai.HTTPErrorContext(status_code=status), **kwargs)
+
+
+def test_rate_limit_with_413_in_request_id_is_not_overflow():
+    """A "413" inside a request id (req_84133) does not make a 429 an overflow."""
+    exc = _status_error(
+        "Rate limit reached for gpt-x. Limit 2000000, Used 1999000. request id req_84133",
+        429, code="rate_limit_exceeded",
+    )
+    assert provider_errors.is_context_overflow_error(exc) is False
+
+
+def test_openai_tpm_request_too_large_is_not_overflow():
+    message = ("Request too large for gpt-4o on tokens per min (TPM): Limit 30000, "
+               "Requested 41330. The input or output tokens must be reduced.")
+    assert provider_errors.is_context_overflow_error(_status_error(message, 429, code="rate_limit_exceeded")) is False
+    # Same text with the status lost still reads as a rate limit.
+    assert provider_errors.is_context_overflow_error(ai.ProviderAPIError(message)) is False
+    assert provider_errors.is_context_overflow_error(ai.ProviderRateLimitError(message)) is False
+
+
+def test_413_in_unrelated_numbers_is_not_overflow():
+    for message in (
+        "Error code: 400 - unknown model 'gpt-9' (request req_84133)",
+        "Error code: 500 - upstream 10.0.0.1:4130 refused",
+        "Error code: 401 - key sk-4131 invalid",
+    ):
+        assert provider_errors.is_context_overflow_error(ai.ProviderAPIError(message)) is False, message
+
+
+def test_real_overflow_shapes_still_classify():
+    cases = [
+        _status_error("Payload Too Large", 413),
+        ai.ProviderRequestTooLargeError("request_too_large"),
+        ai.ProviderAPIError("Error code: 413 - request entity too large"),
+        _status_error("prompt is too long: 210000 tokens > 200000 maximum", 400,
+                      error_type="invalid_request_error"),
+        _status_error("This model's maximum context length is 128000 tokens.", 400,
+                      code="context_length_exceeded"),
+        _status_error("The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).", 400),
+        ai.ProviderAPIError("x", code="exceed_context_size_error"),
+    ]
+    for exc in cases:
+        assert provider_errors.is_context_overflow_error(exc) is True, exc

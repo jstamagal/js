@@ -11,7 +11,7 @@
 # What the jailed process can see:
 #   rw   the work dir, and a throwaway HOME created per run
 #   ro   /usr /etc, the js source under audit, the uv tool install
-#   none everything else under /home, including ~/.ssh, ~/.config/js/logins.toml,
+#   none everything else under /home, including ~/.ssh, ~/.js/logins/logins.toml,
 #        ~/.zshrc, ~/.aws, browser profiles, other checkouts
 set -euo pipefail
 

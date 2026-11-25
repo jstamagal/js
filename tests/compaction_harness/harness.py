@@ -4,14 +4,16 @@ Usage: uv run python harness.py REPOSITORY OUTPUT_DIR
 
 import asyncio
 import copy
-from dataclasses import asdict
 import json
 import os
-from pathlib import Path
 import re
 import sys
+from dataclasses import asdict
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+
+from js import repl
 
 REPO, OUT = map(Path, sys.argv[1:3])
 OUT.mkdir(parents=True, exist_ok=True)
@@ -20,15 +22,22 @@ os.environ["JS_VISION"] = "false"
 os.environ["XDG_STATE_HOME"] = str(OUT / "state")
 os.environ["XDG_CONFIG_HOME"] = str(OUT / "config")
 os.environ["XDG_CACHE_HOME"] = str(OUT / "cache")
+sys.path.insert(0, str(REPO / "tests"))
+
+from session_marks import append_compaction_mark  # noqa: E402
+
 from js import (  # noqa: E402
-    cli,
     compaction as C,
     context_budget as B,
+    context_window,
     memory as M,
+    microcompact,
     model_client as MC,
     runtime as R,
 )  # noqa: E402
 from js.config import Config  # noqa: E402
+from js.persona import PromptSpec  # noqa: E402
+from js.screen_scrollback import Scrollback  # noqa: E402
 from js.toolkit.core import Tool, ToolContext  # noqa: E402
 from js.toolkit.registry import ToolRegistry  # noqa: E402
 
@@ -60,16 +69,14 @@ def cfg_for(name, **compact):
         prompts_dir=d,
         project_dir=d,
         settings={
-            "compact": {
-                "auto": True,
-                "context_window": 10000,
-                "buffer_tokens": 100,
-                "summary_reserve_tokens": 100,
-                "tail_tokens": 100,
-                "min_savings_tokens": 20,
-                "flight_log_dir": str(d / "flights"),
-                **compact,
-            }
+            "COMPACTION_AUTO": True,
+            "CONTEXT_SIZE": 10000,
+            "COMPACTION_HEADROOM_TOKENS": 100,
+            "COMPACTION_REPLY_RESERVE_TOKENS": 100,
+            "COMPACTION_KEEP_RECENT_TOKENS": 100,
+            "COMPACTION_MIN_SAVINGS_TOKENS": 20,
+            "COMPACTION_LOG_DIR": str(d / "flights"),
+            **compact,
         },
     )
 
@@ -122,13 +129,46 @@ def observed(name, checks, **evidence):
     print(json.dumps(rec, default=str), flush=True)
 
 
-def persist_turn(cfg, messages, user):
-    import inspect
+async def type_line(cfg, messages, line, during=None):
+    """Run a REPL session on ``cfg`` over ``messages``: type ``line``, await
+    ``during(interrupt, idle)`` when given (the session's interrupt key, and
+    a wait for its turns to end), then quit once the turn has ended. The marks
+    the session file holds, in order."""
+    state = repl.live_state(cfg, PromptSpec("", ()), messages=messages, system="",
+                            tool_registry=ToolRegistry(tools=(), aliases={}))
+    session = repl.Repl(cfg, state, state.prompt_spec)
 
-    if "user_recorded" in inspect.signature(cli._persist_turn_messages).parameters:
-        cli._persist_turn_messages(cfg, messages, user, user_recorded=True)
-    else:
-        cli._persist_turn_messages(cfg, messages)
+    class Keyboard:
+        def __init__(self, on_line, on_eof, on_interrupt):
+            self.on_line, self.on_eof, self.on_interrupt = on_line, on_eof, on_interrupt
+            self.exited = False
+
+        async def run_async(self):
+            await asyncio.sleep(0)
+            await self.on_line(line)
+            if during is not None:
+                await during(self.on_interrupt, session.idle)
+            await session.idle()
+            if not self.exited:
+                self.on_eof()
+
+        def exit(self):
+            self.exited = True
+
+        def invalidate(self):
+            pass
+
+    def build_screen(*, on_line, on_eof, on_interrupt, **_):
+        return Keyboard(on_line, on_eof, on_interrupt), Scrollback()
+
+    await session.run(build_screen)
+    records = map(json.loads, cfg.session_file.read_text(encoding="utf-8").splitlines())
+    return [record["marker"] for record in records if record.get("kind") == "mark"]
+
+
+def persist_turn(cfg, messages):
+    """Write the turn's messages to the session as the REPL does after a turn."""
+    M.persist_messages(cfg.session_file, messages, stamp=microcompact.cfg_stamp(cfg))
 
 
 async def summary_fault(mode):
@@ -159,7 +199,7 @@ async def summary_fault(mode):
     error = None
     with (
         patch.object(MC, "stream_model_async", provider),
-        patch.object(R.T, "DEFAULT_CONTEXT", context),
+        patch.object(R.T, "STOCK_CONTEXT", context),
     ):
         try:
             await C.compact_now(cfg, "", messages, forced=True)
@@ -182,7 +222,7 @@ async def summary_fault(mode):
 
 
 async def no_prefix():
-    cfg = cfg_for("no_prefix", tail_tokens=99999)
+    cfg = cfg_for("no_prefix", COMPACTION_KEEP_RECENT_TOKENS=99999)
     messages = [{"role": "user", "content": "one short input"}]
     before = copy.deepcopy(messages)
     calls = 0
@@ -194,7 +234,7 @@ async def no_prefix():
 
     with (
         patch.object(MC, "stream_model_async", provider),
-        patch.object(R.T, "DEFAULT_CONTEXT", ToolContext(cwd=cfg.agent_dir)),
+        patch.object(R.T, "STOCK_CONTEXT", ToolContext(cwd=cfg.agent_dir)),
     ):
         outcome = await C.compact_now(cfg, "", messages, forced=True, preserve_from=0)
     observed(
@@ -206,7 +246,7 @@ async def no_prefix():
 
 
 async def expanding_summary():
-    cfg = cfg_for("expanding_summary", tail_tokens=1)
+    cfg = cfg_for("expanding_summary", COMPACTION_KEEP_RECENT_TOKENS=1)
     messages = [
         {"role": "user", "content": "short old message"},
         {"role": "user", "content": "last question"},
@@ -218,7 +258,7 @@ async def expanding_summary():
 
     with (
         patch.object(MC, "stream_model_async", provider),
-        patch.object(R.T, "DEFAULT_CONTEXT", ToolContext(cwd=cfg.agent_dir)),
+        patch.object(R.T, "STOCK_CONTEXT", ToolContext(cwd=cfg.agent_dir)),
     ):
         outcome = await C.compact_now(cfg, "", messages, forced=True)
     observed(
@@ -231,11 +271,11 @@ async def expanding_summary():
 
 
 async def rehydration():
-    cfg = cfg_for("rehydration", tail_tokens=1)
+    cfg = cfg_for("rehydration", COMPACTION_KEEP_RECENT_TOKENS=1)
     file = cfg.agent_dir / "edited.py"
     file.write_text("FACT_99 = 1\n")
     context = ToolContext(cwd=cfg.agent_dir)
-    context.read_paths.add(file)
+    context.reads.remember(file, "read")
     messages = [
         {"role": "user", "content": "old " * 1000},
         {"role": "assistant", "content": "answer " * 1000},
@@ -249,7 +289,7 @@ async def rehydration():
 
     with (
         patch.object(MC, "stream_model_async", provider),
-        patch.object(R.T, "DEFAULT_CONTEXT", context),
+        patch.object(R.T, "STOCK_CONTEXT", context),
     ):
         await C.compact_now(cfg, "", messages, forced=True)
     loaded = M.load_messages(cfg.session_file)
@@ -264,7 +304,7 @@ async def rehydration():
 
 
 async def between_turn():
-    cfg = cfg_for("between_turn", tail_tokens=1)
+    cfg = cfg_for("between_turn", COMPACTION_KEEP_RECENT_TOKENS=1)
     context = ToolContext(cwd=cfg.agent_dir)
     # Provider input is 6000; 3200 new output makes next request 9200 of 9800.
     messages = [
@@ -313,10 +353,10 @@ async def between_turn():
 
 
 async def run_loop(mode):
-    cfg = cfg_for(mode, context_window=1500 if mode == "persist_active" else 10000, tail_tokens=100)
+    cfg = cfg_for(mode, CONTEXT_SIZE=1500 if mode == "persist_active" else 10000, COMPACTION_KEEP_RECENT_TOKENS=100)
     context = ToolContext(cwd=cfg.agent_dir)
     if mode == "churn":
-        prefix = C._compaction_summary_message("previous summary " * 100)
+        prefix = M.compaction_summary_message("previous summary " * 100)
         messages = [prefix, {"role": "user", "content": "current task"}]
     elif mode == "persist_active":
         messages = [{"role": "user", "content": "current task"}]
@@ -347,7 +387,7 @@ async def run_loop(mode):
         nonlocal model_calls
         payload = text_of(kw["messages"])
         if payload.startswith("Summarize this js session"):
-            summaries.append(json.loads(payload.split("Session messages JSON:\n", 1)[1]))
+            summaries.append(payload.split("<conversation>\n", 1)[1].split("\n</conversation>", 1)[0])
             return result("condensed " + str(len(summaries)))
         requests.append([m.model_dump(mode="json") for m in kw["messages"]])
         model_calls += 1
@@ -362,7 +402,7 @@ async def run_loop(mode):
 
     with (
         patch.object(MC, "stream_model_async", provider),
-        patch.object(R.T, "DEFAULT_CONTEXT", context),
+        patch.object(R.T, "STOCK_CONTEXT", context),
     ):
         try:
             await R.run_turn_async(
@@ -374,7 +414,7 @@ async def run_loop(mode):
                 tool_registry=registry,
                 suppress_output=True,
             )
-            persist_turn(cfg, messages, user)
+            persist_turn(cfg, messages)
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
     loaded = M.load_messages(cfg.session_file)
@@ -383,16 +423,10 @@ async def run_loop(mode):
         "disk_replay_matches": loaded == messages,
     }
     if mode == "churn":
+        # A summary request whose conversation holds no message beyond the
+        # previous summary and its re-attached files rewrites only the summary.
         checks["no_summary_only_rewrites"] = all(
-            any(
-                not (
-                    m.get("role") == "user"
-                    and m.get("content", "").startswith(
-                        ("<compaction-summary>", "<post-compaction-files>")
-                    )
-                )
-                for m in source
-            )
+            re.search(r"^\[(User|Assistant|Tool result)", source, re.MULTILINE)
             for source in summaries
         )
     if mode == "midturn_overflow":
@@ -414,7 +448,7 @@ async def run_loop(mode):
 
 
 async def cancelled_summary():
-    cfg = cfg_for("cancelled_summary", tail_tokens=1)
+    cfg = cfg_for("cancelled_summary", COMPACTION_KEEP_RECENT_TOKENS=1)
     messages = [
         {"role": "user", "content": "prefix " * 1000},
         {"role": "user", "content": "current"},
@@ -444,7 +478,7 @@ async def cancelled_summary():
 
 
 async def partial_partition_failure():
-    cfg = cfg_for("partial_partition_failure", tail_tokens=1)
+    cfg = cfg_for("partial_partition_failure", COMPACTION_KEEP_RECENT_TOKENS=1)
     messages = [{"role": "user", "content": f"FACT_{n} " + "text " * 400} for n in range(8)]
     messages.append({"role": "user", "content": "current"})
     before = copy.deepcopy(messages)
@@ -456,7 +490,11 @@ async def partial_partition_failure():
         if len(seen) > 2:
             raise overflow()
         if "FACT_6" in seen:
-            raise ai.ProviderAPIError("server unavailable", provider="openai", is_retryable=True)
+            # The fake provider asks for immediate retries; this probe checks
+            # source preservation after exhaustion, not wall-clock backoff.
+            error = ai.ProviderAPIError("server unavailable", provider="openai", is_retryable=True)
+            error.headers = {"retry-after-ms": "0"}
+            raise error
         return result(" ".join(seen))
 
     with patch.object(MC, "stream_model_async", provider):
@@ -468,15 +506,15 @@ async def partial_partition_failure():
 
 
 async def context_isolation():
-    cfg = cfg_for("context_isolation", tail_tokens=1)
+    cfg = cfg_for("context_isolation", COMPACTION_KEEP_RECENT_TOKENS=1)
     own = ToolContext(cwd=cfg.agent_dir)
     foreign = ToolContext(cwd=cfg.agent_dir)
     a = cfg.agent_dir / "own.py"
     a.write_text("FACT_11=1")
     b = cfg.agent_dir / "foreign.py"
     b.write_text("FACT_22=2")
-    own.read_paths.add(a)
-    foreign.read_paths.add(b)
+    own.reads.remember(a, "read")
+    foreign.reads.remember(b, "read")
     messages = [
         {"role": "user", "content": "prefix " * 2000},
         {"role": "user", "content": "current"},
@@ -498,7 +536,7 @@ async def context_isolation():
     supports = "context" in inspect.signature(C.compact_now).parameters
     with (
         patch.object(MC, "stream_model_async", provider),
-        patch.object(R.T, "DEFAULT_CONTEXT", foreign),
+        patch.object(R.T, "STOCK_CONTEXT", foreign),
     ):
         await C.compact_now(
             cfg, "", messages, forced=True, **({"context": own} if supports else {})
@@ -565,7 +603,7 @@ async def clearing_restart():
         )
     for m in messages:
         M.append_message(cfg.session_file, m)
-    action, cleared, _ = C.recover_overflow(
+    action, cleared, _ = microcompact.recover_overflow(
         messages, 1, cfg=cfg, system="", error=overflow(), flight_data={}
     )
     observed(
@@ -580,30 +618,14 @@ async def clearing_restart():
 
 
 async def zero_usage_executor():
-    cfg = cfg_for("zero_usage_executor", tail_tokens=1)
+    cfg = cfg_for("zero_usage_executor", COMPACTION_KEEP_RECENT_TOKENS=1)
     context = ToolContext(cwd=cfg.agent_dir)
-    user = {"role": "user", "content": "current question"}
     messages = [
         {"role": "user", "content": "old " * 12000},
         {"role": "assistant", "content": "answer"},
-        user,
     ]
     for m in messages:
         M.append_message(cfg.session_file, m)
-    from js.persona import PromptSpec
-    from js.sampling import Sampling
-
-    state = {
-        "settings": cfg.settings,
-        "system": "",
-        "messages": messages,
-        "tool_registry": ToolRegistry(tools=(), aliases={}),
-        "sampling_cli": Sampling(),
-        "model": cfg.model,
-        "provider_id": cfg.provider_id,
-        "provider_base_url": cfg.provider_base_url,
-        "provider_api_key": cfg.provider_api_key,
-    }
     calls = 0
     error = None
 
@@ -619,19 +641,11 @@ async def zero_usage_executor():
     with (
         patch.object(R, "run_turn_async", turn),
         patch.object(MC, "stream_model_async", provider),
-        patch.object(R.T, "DEFAULT_CONTEXT", context),
+        patch.object(R.T, "STOCK_CONTEXT", context),
     ):
         try:
-            await cli._do_turn(
-                cfg,
-                state,
-                R.Telemetry(None),
-                PromptSpec("", ()),
-                SimpleNamespace(runtime_message=user, history_message=user),
-                cfg,
-                2,
-                asyncio.get_running_loop(),
-            )
+            marks = await type_line(cfg, messages, "current question")
+            error = next((mark for mark in marks if mark.startswith("error")), None)
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
     observed(
@@ -643,7 +657,7 @@ async def zero_usage_executor():
 
 
 async def recovery_rounds():
-    cfg = cfg_for("recovery_rounds", auto=False, tail_tokens=1)
+    cfg = cfg_for("recovery_rounds", COMPACTION_AUTO=False, COMPACTION_KEEP_RECENT_TOKENS=1)
     context = ToolContext(cwd=cfg.agent_dir)
     messages = [{"role": "user", "content": "old task"}]
     for n in range(45):
@@ -681,7 +695,7 @@ async def recovery_rounds():
 
     with (
         patch.object(MC, "stream_model_async", provider),
-        patch.object(R.T, "DEFAULT_CONTEXT", context),
+        patch.object(R.T, "STOCK_CONTEXT", context),
     ):
         try:
             await R.run_turn_async(
@@ -704,7 +718,7 @@ async def recovery_rounds():
 
 
 async def small_window():
-    cfg = cfg_for("small_window", context_window=4000, buffer_tokens=4096)
+    cfg = cfg_for("small_window", CONTEXT_SIZE=4000, COMPACTION_HEADROOM_TOKENS=4096)
     context = ToolContext(cwd=cfg.agent_dir)
     messages = [{"role": "user", "content": "short question"}]
     budgets = []
@@ -719,7 +733,7 @@ async def small_window():
 
     with (
         patch.object(MC, "stream_model_async", provider),
-        patch.object(R.T, "DEFAULT_CONTEXT", context),
+        patch.object(R.T, "STOCK_CONTEXT", context),
     ):
         await R.run_turn_async(
             cfg,
@@ -734,7 +748,7 @@ async def small_window():
         "small_window",
         {
             "same_effective_budget": all(
-                b["effective_input_limit"] == C.effective_context_window(cfg, 4000) for b in budgets
+                b["effective_input_limit"] == context_window.effective_context_window(cfg, 4000) for b in budgets
             )
         },
         budgets=budgets,
@@ -745,7 +759,7 @@ async def journal_sequence():
     import random
 
     rng = random.Random(441)
-    cfg = cfg_for("journal_sequence", tail_tokens=35)
+    cfg = cfg_for("journal_sequence", COMPACTION_KEEP_RECENT_TOKENS=35)
     messages = []
     mismatches = []
     operations = []
@@ -767,17 +781,12 @@ async def journal_sequence():
         elif op == "compact":
             with (
                 patch.object(MC, "stream_model_async", provider),
-                patch.object(R.T, "DEFAULT_CONTEXT", context),
+                patch.object(R.T, "STOCK_CONTEXT", context),
             ):
                 await C.compact_now(cfg, "", messages, forced=True)
         elif op == "resume":
             messages = M.load_messages(cfg.session_file)
-        if hasattr(M, "persist_messages"):
-            M.persist_messages(cfg.session_file, messages)
-        else:
-            # Legacy CLI persistence only appends current-turn suffix. Compare the current implementation directly.
-            if messages:
-                cli._persist_turn_messages(cfg, messages, messages[-1], user_recorded=False)
+        M.persist_messages(cfg.session_file, messages)
         if M.load_messages(cfg.session_file) != messages:
             mismatches.append(step)
         operations.append(op)
@@ -790,12 +799,20 @@ async def journal_sequence():
 
 
 async def tail_budget():
+    cfg = cfg_for("tail_budget", COMPACTION_KEEP_RECENT_TOKENS=100, COMPACTION_CHARS_PER_TOKEN=4)
     messages = [
         {"role": "user", "content": "old " * 15000},
         {"role": "assistant", "content": "prior answer"},
         {"role": "user", "content": "continue"},
     ]
-    start = C._safe_tail_start(messages, 100, 4)
+
+    async def provider(**kw):
+        return result("summary")
+
+    with patch.object(MC, "stream_model_async", provider):
+        await C.compact_now(cfg, "", messages, forced=True, context=ToolContext(cwd=cfg.agent_dir))
+    marks = [json.loads(line).get("marker", "") for line in cfg.session_file.read_text().splitlines()]
+    start = json.loads(next(m for m in marks if m.startswith("compaction:")).split(":", 1)[1])["keep_from"]
     observed("tail_budget", {"oversized_old_message_not_kept": start == 1}, keep_from=start)
 
 
@@ -818,36 +835,21 @@ async def incomplete_usage():
 
 
 async def compacted_turn_cancel(error=False):
-    cfg = cfg_for("compacted_turn_error" if error else "compacted_turn_cancel", auto=False)
+    cfg = cfg_for("compacted_turn_error" if error else "compacted_turn_cancel", COMPACTION_AUTO=False)
     context = ToolContext(cwd=cfg.agent_dir)
-    prefix = [
+    messages = [
         {"role": "user" if i % 2 == 0 else "assistant", "content": f"old {i} " * 200}
         for i in range(20)
     ]
-    user = {"role": "user", "content": "current request"}
-    messages = [*prefix, user]
     for m in messages:
         M.append_message(cfg.session_file, m)
-    from js.persona import PromptSpec
-    from js.sampling import Sampling
-
-    state = {
-        "settings": cfg.settings,
-        "system": "",
-        "messages": messages,
-        "tool_registry": ToolRegistry(tools=(), aliases={}),
-        "sampling_cli": Sampling(),
-        "model": cfg.model,
-        "provider_id": cfg.provider_id,
-        "provider_base_url": cfg.provider_base_url,
-        "provider_api_key": cfg.provider_api_key,
-    }
 
     async def turn(*args, **kw):
+        user = messages[-1]
         context.compacted_during_turn = True
-        M.append_compaction_mark(cfg.session_file, summary="previous work", keep_from=20)
+        append_compaction_mark(cfg.session_file, summary="previous work", keep_from=20)
         messages[:] = [
-            C._compaction_summary_message("previous work"),
+            M.compaction_summary_message("previous work"),
             user,
             {"role": "assistant", "content": "partial new work"},
         ]
@@ -855,20 +857,8 @@ async def compacted_turn_cancel(error=False):
             raise ai.ProviderAPIError("unavailable", provider="openai")
         raise asyncio.CancelledError()
 
-    with patch.object(R, "run_turn_async", turn), patch.object(R.T, "DEFAULT_CONTEXT", context):
-        try:
-            await cli._do_turn(
-                cfg,
-                state,
-                R.Telemetry(None),
-                PromptSpec("", ()),
-                SimpleNamespace(runtime_message=user, history_message=user),
-                cfg,
-                20,
-                asyncio.get_running_loop(),
-            )
-        except asyncio.CancelledError:
-            pass
+    with patch.object(R, "run_turn_async", turn), patch.object(R.T, "STOCK_CONTEXT", context):
+        await type_line(cfg, messages, "current request")
     loaded = M.load_messages(cfg.session_file)
     observed(
         "compacted_turn_error" if error else "compacted_turn_cancel",
@@ -884,30 +874,16 @@ async def compacted_turn_cancel(error=False):
 async def between_turn_cancel():
     import threading
 
-    cfg = cfg_for("between_turn_cancel", tail_tokens=1)
+    cfg = cfg_for("between_turn_cancel", COMPACTION_KEEP_RECENT_TOKENS=1)
     context = ToolContext(cwd=cfg.agent_dir)
     context.last_prompt_tokens = 9500
-    user = {"role": "user", "content": "current"}
-    messages = [{"role": "user", "content": "old " * 12000}, user]
+    messages = [{"role": "user", "content": "old " * 12000}]
     for m in messages:
         M.append_message(cfg.session_file, m)
-    from js.persona import PromptSpec
-    from js.sampling import Sampling
-
-    state = {
-        "settings": cfg.settings,
-        "system": "",
-        "messages": messages,
-        "tool_registry": ToolRegistry(tools=(), aliases={}),
-        "sampling_cli": Sampling(),
-        "model": cfg.model,
-        "provider_id": cfg.provider_id,
-        "provider_base_url": cfg.provider_base_url,
-        "provider_api_key": cfg.provider_api_key,
-    }
     started = threading.Event()
     released = threading.Event()
     ended = threading.Event()
+    after_cancel = None
 
     async def turn(*args, **kw):
         messages.append({"role": "assistant", "content": "finished"})
@@ -921,31 +897,13 @@ async def between_turn_cancel():
         finally:
             ended.set()
 
-    with (
-        patch.object(R, "run_turn_async", turn),
-        patch.object(MC, "stream_model_async", provider),
-        patch.object(R.T, "DEFAULT_CONTEXT", context),
-    ):
-        task = asyncio.create_task(
-            cli._do_turn(
-                cfg,
-                state,
-                R.Telemetry(None),
-                PromptSpec("", ()),
-                SimpleNamespace(runtime_message=user, history_message=user),
-                cfg,
-                1,
-                asyncio.get_running_loop(),
-            )
-        )
+    async def cancel_during_summary(interrupt, idle):
+        nonlocal after_cancel
         try:
             if not await asyncio.to_thread(started.wait, 3):
                 raise AssertionError("summary never started")
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+            interrupt()
+            await idle()
             after_cancel = copy.deepcopy(messages)
             released.set()
             if not await asyncio.to_thread(ended.wait, 3):
@@ -953,15 +911,20 @@ async def between_turn_cancel():
             await asyncio.sleep(0.1)
         finally:
             released.set()
-            if not task.done():
-                task.cancel()
+
+    with (
+        patch.object(R, "run_turn_async", turn),
+        patch.object(MC, "stream_model_async", provider),
+        patch.object(R.T, "STOCK_CONTEXT", context),
+    ):
+        await type_line(cfg, messages, "current", during=cancel_during_summary)
     observed(
         "between_turn_cancel",
         {
             "cancel_stops_summary_commit": messages == after_cancel,
             "disk_matches_live": M.load_messages(cfg.session_file) == messages,
         },
-        before_count=len(after_cancel),
+        before_count=len(after_cancel or ()),
         after_count=len(messages),
     )
 

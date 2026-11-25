@@ -1,5 +1,4 @@
-"""The fs_search and ast_search dedup caches must not outlive the tree they
-describe.
+"""The fs_search dedup cache must not outlive the tree it describes.
 
 Only a regular-file root is memoized, keyed on the search arguments plus the
 root's stat; a directory root is never memoized, because its own stat does not
@@ -14,16 +13,13 @@ import shutil
 
 import pytest
 
-from js.toolkit import fs
 from js.toolkit import ToolContext
-from js.toolkit.fs import ast_search, fs_read, fs_search, patch, undo
-from js.toolkit.process_net import shell
-
+from js.toolkit.file_search import fs_search
+from js.toolkit.fs import fs_read, undo
+from js.toolkit.patch import patch
+from js.toolkit.shell import shell
 
 requires_rg = pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep not installed")
-requires_ast_grep = pytest.mark.skipif(
-    fs._ast_grep_binary() is None, reason="ast-grep 0.45.1 not installed"
-)
 
 
 @requires_rg
@@ -121,59 +117,3 @@ def test_a_nested_external_write_makes_a_directory_root_search_see_it(tmp_path):
     again = fs_search("NEEDLE before", path=str(tmp_path), output_mode="content", context=context)
     assert "deduplicated" not in again
     assert "NEEDLE before" not in again
-
-
-@requires_ast_grep
-def test_an_unchanged_ast_search_file_root_is_still_deduplicated(tmp_path):
-    target = tmp_path / "a.py"
-    target.write_text("def alpha():\n    return 1\n", encoding="utf-8")
-    context = ToolContext(cwd=tmp_path)
-
-    first = ast_search("def $F(): $$$", path=str(target), context=context)
-    again = ast_search("def $F(): $$$", path=str(target), context=context)
-
-    assert "alpha" in first
-    assert again == first + "\n[deduplicated repeated search]"
-
-
-@requires_ast_grep
-def test_an_external_write_makes_the_next_identical_ast_search_see_it(tmp_path):
-    target = tmp_path / "a.py"
-    target.write_text("def alpha():\n    return 1\n", encoding="utf-8")
-    context = ToolContext(cwd=tmp_path)
-    assert "alpha" in ast_search("def $F(): $$$", path=str(target), context=context)
-
-    target.write_text("def beta():\n    return 2\n", encoding="utf-8")
-    again = ast_search("def $F(): $$$", path=str(target), context=context)
-
-    assert "deduplicated" not in again
-    assert "beta" in again
-    assert "alpha" not in again
-
-
-@requires_ast_grep
-def test_a_directory_root_is_not_memoized_for_ast_search(tmp_path):
-    (tmp_path / "a.py").write_text("def alpha():\n    return 1\n", encoding="utf-8")
-    context = ToolContext(cwd=tmp_path)
-
-    first = ast_search("def $F(): $$$", path=str(tmp_path), context=context)
-    second = ast_search("def $F(): $$$", path=str(tmp_path), context=context)
-
-    assert "alpha" in first
-    assert "deduplicated" not in second
-
-
-@requires_ast_grep
-def test_a_nested_external_write_makes_an_ast_search_directory_root_see_it(tmp_path):
-    target = tmp_path / "sub" / "a.py"
-    target.parent.mkdir()
-    target.write_text("def alpha():\n    return 1\n", encoding="utf-8")
-    context = ToolContext(cwd=tmp_path)
-    assert "alpha" in ast_search("def $F(): $$$", path=str(tmp_path), context=context)
-
-    target.write_text("def beta():\n    return 2\n", encoding="utf-8")
-    again = ast_search("def $F(): $$$", path=str(tmp_path), context=context)
-
-    assert "deduplicated" not in again
-    assert "beta" in again
-    assert "alpha" not in again

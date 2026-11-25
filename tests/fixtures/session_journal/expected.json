@@ -1,0 +1,1967 @@
+{
+ "combination": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "<compaction-summary>\nCS2\n</compaction-summary>",
+    "role": "user"
+   },
+   {
+    "content": "e3",
+    "role": "user"
+   },
+   {
+    "content": "e4",
+    "role": "user"
+   }
+  ],
+  "retained": [
+   {
+    "content": "a1",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "k1",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "value",
+    "role": "tool",
+    "tool_call_id": "k1"
+   },
+   {
+    "content": "a2",
+    "role": "assistant"
+   },
+   {
+    "content": "b1",
+    "role": "user"
+   },
+   {
+    "content": "b1 edited",
+    "role": "user"
+   },
+   {
+    "content": "b2 again",
+    "reasoning_content": "thinking b2 again",
+    "reasoning_from": {
+     "model": "model-a",
+     "provider": "anthropic"
+    },
+    "reasoning_parts": [
+     {
+      "signature": "sig-b2 again",
+      "type": "thinking"
+     }
+    ],
+    "role": "assistant"
+   },
+   {
+    "content": "d2 edited",
+    "role": "user"
+   },
+   {
+    "content": "e1",
+    "role": "user"
+   },
+   {
+    "content": "e2",
+    "role": "assistant"
+   },
+   {
+    "content": "e3",
+    "role": "user"
+   },
+   {
+    "content": "e4",
+    "role": "user"
+   }
+  ]
+ },
+ "compaction_inert_payloads": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "one",
+    "role": "user"
+   },
+   {
+    "content": "two",
+    "role": "assistant"
+   },
+   {
+    "content": "three",
+    "role": "user"
+   },
+   {
+    "content": "four",
+    "role": "assistant"
+   }
+  ],
+  "retained": [
+   {
+    "content": "one",
+    "role": "user"
+   },
+   {
+    "content": "two",
+    "role": "assistant"
+   },
+   {
+    "content": "three",
+    "role": "user"
+   },
+   {
+    "content": "four",
+    "role": "assistant"
+   }
+  ]
+ },
+ "compaction_keep_from_zero_and_past_end": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "<compaction-summary>\nS2\n</compaction-summary>",
+    "role": "user"
+   },
+   {
+    "content": "<compaction-summary>\nS1\n</compaction-summary>",
+    "role": "user"
+   },
+   {
+    "content": "four",
+    "role": "user"
+   },
+   {
+    "content": "five",
+    "role": "user"
+   }
+  ],
+  "retained": [
+   {
+    "content": "one",
+    "role": "user"
+   },
+   {
+    "content": "two",
+    "role": "assistant"
+   },
+   {
+    "content": "three",
+    "role": "user"
+   },
+   {
+    "content": "four",
+    "role": "user"
+   },
+   {
+    "content": "five",
+    "role": "user"
+   }
+  ]
+ },
+ "compaction_no_keep_from": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "<compaction-summary>\nall gone\n</compaction-summary>",
+    "role": "user"
+   },
+   {
+    "content": "three",
+    "role": "user"
+   }
+  ],
+  "retained": [
+   {
+    "content": "one",
+    "role": "user"
+   },
+   {
+    "content": "two",
+    "role": "assistant"
+   },
+   {
+    "content": "three",
+    "role": "user"
+   }
+  ]
+ },
+ "compaction_plain": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "<compaction-summary>\nS1\n</compaction-summary>",
+    "role": "user"
+   },
+   {
+    "content": "four",
+    "role": "assistant"
+   },
+   {
+    "content": "five",
+    "role": "user"
+   },
+   {
+    "content": "six",
+    "role": "assistant"
+   },
+   {
+    "content": "seven",
+    "role": "user"
+   }
+  ],
+  "retained": [
+   {
+    "content": "one",
+    "role": "user"
+   },
+   {
+    "content": "two",
+    "role": "assistant"
+   },
+   {
+    "content": "three",
+    "role": "user"
+   },
+   {
+    "content": "four",
+    "role": "assistant"
+   },
+   {
+    "content": "five",
+    "role": "user"
+   },
+   {
+    "content": "six",
+    "role": "assistant"
+   },
+   {
+    "content": "seven",
+    "role": "user"
+   }
+  ]
+ },
+ "compaction_post_heal_space": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "<compaction-summary>\nS\n</compaction-summary>",
+    "role": "user"
+   },
+   {
+    "content": "keep-user",
+    "role": "user"
+   },
+   {
+    "content": "keep-assistant",
+    "role": "assistant"
+   }
+  ],
+  "retained": [
+   {
+    "content": "u1",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "tc1",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "keep-user",
+    "role": "user"
+   },
+   {
+    "content": "keep-assistant",
+    "role": "assistant"
+   }
+  ]
+ },
+ "compaction_rehydrated": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "<compaction-summary>\nS1\n</compaction-summary>",
+    "role": "user"
+   },
+   {
+    "content": "<post-compaction-files>\nfile.py\n</post-compaction-files>",
+    "role": "user"
+   },
+   {
+    "content": "three",
+    "role": "user"
+   },
+   {
+    "content": "four",
+    "role": "assistant"
+   },
+   {
+    "content": "five",
+    "role": "user"
+   }
+  ],
+  "retained": [
+   {
+    "content": "one",
+    "role": "user"
+   },
+   {
+    "content": "two",
+    "role": "assistant"
+   },
+   {
+    "content": "three",
+    "role": "user"
+   },
+   {
+    "content": "four",
+    "role": "assistant"
+   },
+   {
+    "content": "five",
+    "role": "user"
+   }
+  ]
+ },
+ "compaction_rehydrated_shapes": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "<compaction-summary>\nS3\n</compaction-summary>",
+    "role": "user"
+   },
+   {
+    "content": "three",
+    "role": "user"
+   },
+   {
+    "content": "x",
+    "role": "user"
+   },
+   {
+    "content": "y",
+    "role": "user"
+   },
+   {
+    "content": "z",
+    "role": "user"
+   }
+  ],
+  "retained": [
+   {
+    "content": "one",
+    "role": "user"
+   },
+   {
+    "content": "two",
+    "role": "assistant"
+   },
+   {
+    "content": "three",
+    "role": "user"
+   },
+   {
+    "content": "x",
+    "role": "user"
+   },
+   {
+    "content": "y",
+    "role": "user"
+   },
+   {
+    "content": "z",
+    "role": "user"
+   }
+  ]
+ },
+ "compaction_signed_tail": {
+  "last_reply_stamp": {
+   "model": "model-b",
+   "provider": "openai",
+   "reasoning": null
+  },
+  "replay": [
+   {
+    "content": "<compaction-summary>\nS\n</compaction-summary>",
+    "role": "user"
+   },
+   {
+    "content": "first",
+    "reasoning_content": "thinking first",
+    "role": "assistant"
+   },
+   {
+    "content": "again",
+    "role": "user"
+   },
+   {
+    "content": "second",
+    "reasoning_content": "thinking second",
+    "role": "assistant"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "c1",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "value",
+    "role": "tool",
+    "tool_call_id": "c1"
+   },
+   {
+    "content": "third",
+    "reasoning_content": "thinking third",
+    "role": "assistant"
+   },
+   {
+    "content": "after",
+    "role": "user"
+   }
+  ],
+  "retained": [
+   {
+    "content": "question",
+    "role": "user"
+   },
+   {
+    "content": "first",
+    "reasoning_content": "thinking first",
+    "reasoning_from": {
+     "model": "model-a",
+     "provider": "anthropic"
+    },
+    "reasoning_parts": [
+     {
+      "signature": "sig-first",
+      "type": "thinking"
+     }
+    ],
+    "role": "assistant"
+   },
+   {
+    "content": "again",
+    "role": "user"
+   },
+   {
+    "content": "second",
+    "reasoning_content": "thinking second",
+    "reasoning_from": {
+     "model": "model-a",
+     "provider": "anthropic"
+    },
+    "reasoning_parts": [
+     {
+      "signature": "sig-second",
+      "type": "thinking"
+     }
+    ],
+    "role": "assistant"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "c1",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "value",
+    "role": "tool",
+    "tool_call_id": "c1"
+   },
+   {
+    "content": "third",
+    "reasoning_content": "thinking third",
+    "reasoning_from": {
+     "model": "model-a",
+     "provider": "anthropic"
+    },
+    "reasoning_parts": [
+     {
+      "signature": "sig-third",
+      "type": "thinking"
+     }
+    ],
+    "role": "assistant"
+   },
+   {
+    "content": "after",
+    "role": "user"
+   }
+  ]
+ },
+ "compaction_signed_tail_then_rollback": {
+  "last_reply_stamp": {
+   "model": "model-b",
+   "provider": "openai",
+   "reasoning": null
+  },
+  "replay": [
+   {
+    "content": "<compaction-summary>\nS\n</compaction-summary>",
+    "role": "user"
+   },
+   {
+    "content": "again",
+    "role": "user"
+   },
+   {
+    "content": "second",
+    "reasoning_content": "thinking second",
+    "role": "assistant"
+   }
+  ],
+  "retained": [
+   {
+    "content": "question",
+    "role": "user"
+   },
+   {
+    "content": "first",
+    "reasoning_content": "thinking first",
+    "reasoning_from": {
+     "model": "model-a",
+     "provider": "anthropic"
+    },
+    "reasoning_parts": [
+     {
+      "signature": "sig-first",
+      "type": "thinking"
+     }
+    ],
+    "role": "assistant"
+   },
+   {
+    "content": "again",
+    "role": "user"
+   },
+   {
+    "content": "second",
+    "reasoning_content": "thinking second",
+    "reasoning_from": {
+     "model": "model-a",
+     "provider": "anthropic"
+    },
+    "reasoning_parts": [
+     {
+      "signature": "sig-second",
+      "type": "thinking"
+     }
+    ],
+    "role": "assistant"
+   }
+  ]
+ },
+ "legacy_across_compaction": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "<compaction-summary>\nS\n</compaction-summary>",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "call_X",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "file text",
+    "role": "tool",
+    "tool_call_id": "call_X"
+   },
+   {
+    "content": "answer",
+    "role": "assistant"
+   },
+   {
+    "content": "next",
+    "role": "user"
+   }
+  ],
+  "retained": [
+   {
+    "content": "p",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "call_X",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "file text",
+    "role": "tool",
+    "tool_call_id": "call_X"
+   },
+   {
+    "content": "answer",
+    "role": "assistant"
+   },
+   {
+    "content": "next",
+    "role": "user"
+   }
+  ]
+ },
+ "legacy_flagged_against_unrepaired": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "<compaction-summary>\nS\n</compaction-summary>",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "call_X",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "file text",
+    "role": "tool",
+    "tool_call_id": "call_X"
+   },
+   {
+    "content": "go",
+    "role": "user"
+   },
+   {
+    "content": "ok",
+    "role": "assistant"
+   },
+   {
+    "content": "go",
+    "role": "user"
+   },
+   {
+    "content": "ok",
+    "role": "assistant"
+   }
+  ],
+  "retained": [
+   {
+    "content": "u",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "call_X",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "file text",
+    "role": "tool",
+    "tool_call_id": "call_X"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "call_X",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "file text",
+    "role": "tool",
+    "tool_call_id": "call_X"
+   },
+   {
+    "content": "go",
+    "role": "user"
+   },
+   {
+    "content": "ok",
+    "role": "assistant"
+   },
+   {
+    "content": "go",
+    "role": "user"
+   },
+   {
+    "content": "ok",
+    "role": "assistant"
+   }
+  ]
+ },
+ "legacy_identical_neighbour": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "p",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "call_X",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "file text",
+    "role": "tool",
+    "tool_call_id": "call_X"
+   },
+   {
+    "content": "same",
+    "role": "assistant"
+   },
+   {
+    "content": "after",
+    "role": "user"
+   }
+  ],
+  "retained": [
+   {
+    "content": "p",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "call_X",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "file text",
+    "role": "tool",
+    "tool_call_id": "call_X"
+   },
+   {
+    "content": "same",
+    "role": "assistant"
+   },
+   {
+    "content": "after",
+    "role": "user"
+   }
+  ]
+ },
+ "legacy_reappended": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "yo",
+    "role": "user"
+   },
+   {
+    "content": "yo KING",
+    "role": "assistant"
+   },
+   {
+    "content": "read it",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "call_X",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "file text",
+    "role": "tool",
+    "tool_call_id": "call_X"
+   },
+   {
+    "content": "read it all",
+    "role": "assistant"
+   },
+   {
+    "content": "count",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "call_Y",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "42",
+    "role": "tool",
+    "tool_call_id": "call_Y"
+   },
+   {
+    "content": "counted",
+    "role": "assistant"
+   }
+  ],
+  "retained": [
+   {
+    "content": "yo",
+    "role": "user"
+   },
+   {
+    "content": "yo KING",
+    "role": "assistant"
+   },
+   {
+    "content": "read it",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "call_X",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "file text",
+    "role": "tool",
+    "tool_call_id": "call_X"
+   },
+   {
+    "content": "read it all",
+    "role": "assistant"
+   },
+   {
+    "content": "count",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "call_Y",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "42",
+    "role": "tool",
+    "tool_call_id": "call_Y"
+   },
+   {
+    "content": "counted",
+    "role": "assistant"
+   }
+  ]
+ },
+ "legacy_reappended_then_rollback": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "yo",
+    "role": "user"
+   },
+   {
+    "content": "yo KING",
+    "role": "assistant"
+   },
+   {
+    "content": "read it",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "call_X",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "file text",
+    "role": "tool",
+    "tool_call_id": "call_X"
+   },
+   {
+    "content": "read it all",
+    "role": "assistant"
+   },
+   {
+    "content": "again",
+    "role": "user"
+   }
+  ],
+  "retained": [
+   {
+    "content": "yo",
+    "role": "user"
+   },
+   {
+    "content": "yo KING",
+    "role": "assistant"
+   },
+   {
+    "content": "read it",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "call_X",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "file text",
+    "role": "tool",
+    "tool_call_id": "call_X"
+   },
+   {
+    "content": "read it all",
+    "role": "assistant"
+   },
+   {
+    "content": "again",
+    "role": "user"
+   }
+  ]
+ },
+ "legacy_then_clean_epoch": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "p",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "call_X",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "file text",
+    "role": "tool",
+    "tool_call_id": "call_X"
+   },
+   {
+    "content": "continue",
+    "role": "user"
+   },
+   {
+    "content": "ok",
+    "role": "assistant"
+   },
+   {
+    "content": "continue",
+    "role": "user"
+   },
+   {
+    "content": "ok",
+    "role": "assistant"
+   }
+  ],
+  "retained": [
+   {
+    "content": "p",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "call_X",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "file text",
+    "role": "tool",
+    "tool_call_id": "call_X"
+   },
+   {
+    "content": "continue",
+    "role": "user"
+   },
+   {
+    "content": "ok",
+    "role": "assistant"
+   },
+   {
+    "content": "continue",
+    "role": "user"
+   },
+   {
+    "content": "ok",
+    "role": "assistant"
+   }
+  ]
+ },
+ "legacy_with_inert_marks": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "p",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "call_X",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "file text",
+    "role": "tool",
+    "tool_call_id": "call_X"
+   },
+   {
+    "content": "done",
+    "role": "assistant"
+   }
+  ],
+  "retained": [
+   {
+    "content": "p",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "call_X",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "file text",
+    "role": "tool",
+    "tool_call_id": "call_X"
+   },
+   {
+    "content": "done",
+    "role": "assistant"
+   }
+  ]
+ },
+ "orphan_bad_call_shapes": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "go",
+    "role": "user"
+   },
+   {
+    "content": "x",
+    "role": "assistant",
+    "tool_calls": "nope"
+   },
+   {
+    "content": "y",
+    "role": "assistant",
+    "tool_calls": [
+     null,
+     {
+      "id": ""
+     },
+     {
+      "function": "f"
+     }
+    ]
+   },
+   {
+    "content": "z",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": null,
+      "id": "ok"
+     }
+    ]
+   },
+   {
+    "content": "ERROR: tool result was not recorded (session interrupted)",
+    "name": "",
+    "role": "tool",
+    "tool_call_id": "ok"
+   },
+   {
+    "content": "end",
+    "role": "user"
+   }
+  ],
+  "retained": [
+   {
+    "content": "go",
+    "role": "user"
+   },
+   {
+    "content": "x",
+    "role": "assistant",
+    "tool_calls": "nope"
+   },
+   {
+    "content": "y",
+    "role": "assistant",
+    "tool_calls": [
+     null,
+     {
+      "id": ""
+     },
+     {
+      "function": "f"
+     }
+    ]
+   },
+   {
+    "content": "z",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": null,
+      "id": "ok"
+     }
+    ]
+   },
+   {
+    "content": "end",
+    "role": "user"
+   }
+  ]
+ },
+ "orphans": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "go",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "shell"
+      },
+      "id": "c1",
+      "type": "function"
+     },
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "shell"
+      },
+      "id": "c2",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "one",
+    "role": "tool",
+    "tool_call_id": "c1"
+   },
+   {
+    "content": "ERROR: tool result was not recorded (session interrupted)",
+    "role": "tool",
+    "tool_call_id": "c2"
+   },
+   {
+    "content": "again",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "grep"
+      },
+      "id": "c3",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "ERROR: tool result was not recorded (session interrupted)",
+    "name": "grep",
+    "role": "tool",
+    "tool_call_id": "c3"
+   },
+   {
+    "content": "interrupted",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "c4",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "ERROR: tool result was not recorded (session interrupted)",
+    "name": "read",
+    "role": "tool",
+    "tool_call_id": "c4"
+   }
+  ],
+  "retained": [
+   {
+    "content": "go",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "shell"
+      },
+      "id": "c1",
+      "type": "function"
+     },
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "shell"
+      },
+      "id": "c2",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "one",
+    "role": "tool",
+    "tool_call_id": "c1"
+   },
+   {
+    "content": "ERROR: tool result was not recorded (session interrupted)",
+    "role": "tool",
+    "tool_call_id": "c2"
+   },
+   {
+    "content": "two late",
+    "role": "tool",
+    "tool_call_id": "c2"
+   },
+   {
+    "content": "stray",
+    "role": "tool",
+    "tool_call_id": "never"
+   },
+   {
+    "content": "again",
+    "role": "user"
+   },
+   {
+    "content": "stray after user",
+    "role": "tool",
+    "tool_call_id": "c1"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "grep"
+      },
+      "id": "c3",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "interrupted",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "c4",
+      "type": "function"
+     }
+    ]
+   }
+  ]
+ },
+ "plain": {
+  "last_reply_stamp": {
+   "model": "model-b",
+   "provider": "openai",
+   "reasoning": null
+  },
+  "replay": [
+   {
+    "content": "hi",
+    "role": "user"
+   },
+   {
+    "content": "hello",
+    "role": "assistant"
+   },
+   {
+    "content": "bye",
+    "role": "user"
+   },
+   {
+    "content": "later",
+    "role": "assistant"
+   }
+  ],
+  "retained": [
+   {
+    "content": "hi",
+    "role": "user"
+   },
+   {
+    "content": "hello",
+    "role": "assistant"
+   },
+   {
+    "content": "bye",
+    "role": "user"
+   },
+   {
+    "content": "later",
+    "role": "assistant"
+   }
+  ]
+ },
+ "provider_reused_call_id": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "one",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "call_0",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "a",
+    "role": "tool",
+    "tool_call_id": "call_0"
+   },
+   {
+    "content": "first",
+    "role": "assistant"
+   },
+   {
+    "content": "two",
+    "role": "user"
+   },
+   {
+    "content": "second",
+    "role": "assistant"
+   }
+  ],
+  "retained": [
+   {
+    "content": "one",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "call_0",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "a",
+    "role": "tool",
+    "tool_call_id": "call_0"
+   },
+   {
+    "content": "first",
+    "role": "assistant"
+   },
+   {
+    "content": "two",
+    "role": "user"
+   },
+   {
+    "content": "b",
+    "role": "tool",
+    "tool_call_id": "call_0"
+   },
+   {
+    "content": "second",
+    "role": "assistant"
+   }
+  ]
+ },
+ "records_unreadable_and_foreign": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "first",
+    "role": "user"
+   },
+   {
+    "content": "bad ts",
+    "role": "user"
+   },
+   {
+    "content": "kept",
+    "role": "assistant"
+   }
+  ],
+  "retained": [
+   {
+    "content": "first",
+    "role": "user"
+   },
+   {
+    "content": "bare pre-envelope",
+    "role": "user"
+   },
+   {
+    "content": "bad ts",
+    "role": "user"
+   },
+   {
+    "content": "kept",
+    "role": "assistant"
+   }
+  ]
+ },
+ "reset": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "fresh",
+    "role": "user"
+   }
+  ],
+  "retained": [
+   {
+    "content": "one",
+    "role": "user"
+   },
+   {
+    "content": "two",
+    "role": "assistant"
+   },
+   {
+    "content": "fresh",
+    "role": "user"
+   }
+  ]
+ },
+ "reset_drops_stamp": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "fresh",
+    "role": "user"
+   },
+   {
+    "content": "unstamped",
+    "role": "assistant"
+   }
+  ],
+  "retained": [
+   {
+    "content": "one",
+    "role": "user"
+   },
+   {
+    "content": "two",
+    "role": "assistant"
+   },
+   {
+    "content": "fresh",
+    "role": "user"
+   },
+   {
+    "content": "unstamped",
+    "role": "assistant"
+   }
+  ]
+ },
+ "rollback_drops_stamped_reply": {
+  "last_reply_stamp": {
+   "model": "model-a",
+   "provider": "anthropic",
+   "reasoning": "high"
+  },
+  "replay": [
+   {
+    "content": "q",
+    "role": "user"
+   },
+   {
+    "content": "first",
+    "role": "assistant"
+   }
+  ],
+  "retained": [
+   {
+    "content": "q",
+    "role": "user"
+   },
+   {
+    "content": "first",
+    "role": "assistant"
+   }
+  ]
+ },
+ "rollback_edit_last_user": {
+  "last_reply_stamp": {
+   "model": "model-a",
+   "provider": "anthropic",
+   "reasoning": "high"
+  },
+  "replay": [
+   {
+    "content": "q",
+    "role": "user"
+   },
+   {
+    "content": "ans",
+    "role": "assistant"
+   },
+   {
+    "content": "note\n\n<js-reminder>closed</js-reminder>",
+    "role": "user"
+   }
+  ],
+  "retained": [
+   {
+    "content": "q",
+    "role": "user"
+   },
+   {
+    "content": "ans",
+    "role": "assistant"
+   },
+   {
+    "content": "note\n\n<js-reminder>closed</js-reminder>",
+    "role": "user"
+   }
+  ]
+ },
+ "rollback_payloads": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "five",
+    "role": "user"
+   }
+  ],
+  "retained": [
+   {
+    "content": "five",
+    "role": "user"
+   }
+  ]
+ },
+ "rollback_plain": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "one",
+    "role": "user"
+   },
+   {
+    "content": "two",
+    "role": "assistant"
+   },
+   {
+    "content": "retry",
+    "role": "user"
+   },
+   {
+    "content": "ok",
+    "role": "assistant"
+   }
+  ],
+  "retained": [
+   {
+    "content": "one",
+    "role": "user"
+   },
+   {
+    "content": "two",
+    "role": "assistant"
+   },
+   {
+    "content": "retry",
+    "role": "user"
+   },
+   {
+    "content": "ok",
+    "role": "assistant"
+   }
+  ]
+ },
+ "rollback_post_heal_space": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "u1",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "tc1",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "ERROR: tool result was not recorded (session interrupted)",
+    "name": "read",
+    "role": "tool",
+    "tool_call_id": "tc1"
+   },
+   {
+    "content": "u2",
+    "role": "user"
+   }
+  ],
+  "retained": [
+   {
+    "content": "u1",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "tc1",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "u2",
+    "role": "user"
+   }
+  ]
+ },
+ "two_compactions": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "<compaction-summary>\nS2\n</compaction-summary>",
+    "role": "user"
+   },
+   {
+    "content": "four",
+    "role": "assistant"
+   },
+   {
+    "content": "five",
+    "role": "user"
+   },
+   {
+    "content": "six",
+    "role": "assistant"
+   },
+   {
+    "content": "seven",
+    "role": "user"
+   }
+  ],
+  "retained": [
+   {
+    "content": "one",
+    "role": "user"
+   },
+   {
+    "content": "two",
+    "role": "assistant"
+   },
+   {
+    "content": "three",
+    "role": "user"
+   },
+   {
+    "content": "four",
+    "role": "assistant"
+   },
+   {
+    "content": "five",
+    "role": "user"
+   },
+   {
+    "content": "six",
+    "role": "assistant"
+   },
+   {
+    "content": "seven",
+    "role": "user"
+   }
+  ]
+ },
+ "unreadable_record_mid_turn": {
+  "last_reply_stamp": null,
+  "replay": [
+   {
+    "content": "go",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "c9",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "ERROR: tool result was not recorded (session interrupted)",
+    "name": "read",
+    "role": "tool",
+    "tool_call_id": "c9"
+   },
+   {
+    "content": "done",
+    "role": "assistant"
+   },
+   {
+    "content": "next",
+    "role": "user"
+   }
+  ],
+  "retained": [
+   {
+    "content": "go",
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{}",
+       "name": "read"
+      },
+      "id": "c9",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "done",
+    "role": "assistant"
+   },
+   {
+    "content": "next",
+    "role": "user"
+   }
+  ]
+ }
+}

@@ -4,11 +4,11 @@ import threading
 from dataclasses import replace
 
 import pytest
+from test_lazy_tool_discovery import _cfg, _result
 
-from js import memory, runtime, supervisor
+from js import memory, result_caps, runtime, supervisor
 from js.toolkit.core import Tool, ToolContext
 from js.toolkit.registry import ToolRegistry
-from test_lazy_tool_discovery import _cfg, _result
 
 
 @pytest.mark.parametrize("mode", ["sync", "async", "mixed_sync", "mixed_async"])
@@ -78,7 +78,7 @@ def test_cancel_keeps_completed_results_and_stops_forward_work(tmp_path, monkeyp
 
 
 def test_cancel_retains_completed_fan_out_and_sync_results_with_batch_cap(tmp_path, monkeypatch):
-    from js.toolkit import meta
+    from js.toolkit import subagents
 
     messages = [{"role": "user", "content": "run"}]
     release = threading.Event()
@@ -97,8 +97,8 @@ def test_cancel_retains_completed_fan_out_and_sync_results_with_batch_cap(tmp_pa
             return "F" * 1000
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(meta, "is_fan_out_handler", lambda handler: handler is fan)
-    monkeypatch.setattr(meta, "dispatch_fan_out_async", dispatch_fan)
+    monkeypatch.setattr(subagents, "is_fan_out_handler", lambda handler: handler is fan)
+    monkeypatch.setattr(subagents, "dispatch_fan_out_async", dispatch_fan)
     monkeypatch.setattr(supervisor, "get_current", lambda: object())
     registry = ToolRegistry((Tool("fan", "test", fan, {"n": {"type": "integer"}}),
                              Tool("leaf", "test", leaf, {})), {})
@@ -126,7 +126,7 @@ def test_cancel_retains_completed_fan_out_and_sync_results_with_batch_cap(tmp_pa
     asyncio.run(run())
     answered = {m["tool_call_id"]: m["content"] for m in messages if m["role"] == "tool"}
     assert list(answered) == ["f1", "l1"]
-    assert list(answered.values()) == runtime._cap_batch_results(["F" * 1000, "L" * 1000], 300)
+    assert list(answered.values()) == result_caps.cap_batch_results(["F" * 1000, "L" * 1000], 300)
     healed = memory.balance_orphaned_tool_calls(messages)
     assert next(m["content"] for m in healed if m.get("tool_call_id") == "f2") == (
         "ERROR: tool result was not recorded (session interrupted)"
@@ -139,12 +139,12 @@ def test_cancel_interrupts_a_kernel_cell_left_in_flight(tmp_path, monkeypatch):
     The worker thread cannot be cancelled, so without this the cell would keep
     executing in the kernel and the next `kernel` call would queue behind it.
     """
-    from js.toolkit import kernel as kernel_tool
+    from js.toolkit import python_kernel
 
     class StubSession:
         def __init__(self) -> None:
             self.interrupts = 0
-            handle = kernel_tool.CellHandle(id="1", msg_id="m1", code="slow()", started=0.0)
+            handle = python_kernel.CellHandle(id="1", msg_id="m1", code="slow()", started=0.0)
             self.handles = {handle.id: handle}
             self.current = handle.id
 
@@ -190,3 +190,60 @@ def test_cancel_interrupts_a_kernel_cell_left_in_flight(tmp_path, monkeypatch):
     asyncio.run(run())
 
     assert session.interrupts == 1
+
+
+def test_cancel_revokes_a_kernel_tools_pending_approval(tmp_path, monkeypatch):
+    import tempfile
+    from pathlib import Path
+
+    from js.toolkit.python_kernel_bridge import ToolBridge
+
+    target = tmp_path / "written"
+    messages = [{"role": "user", "content": "run"}]
+
+    with tempfile.TemporaryDirectory(prefix="jsb-") as directory:
+        bridge = ToolBridge(Path(directory) / "tools.sock")
+
+        def cell(context=None):
+            return str(bridge.handle({"op": "call", "token": bridge.token, "tool": "write"}))
+
+        def write(context=None):
+            target.write_text("ran")
+            return "written"
+
+        registry = ToolRegistry((Tool("cell", "test", cell, {}), Tool("write", "test", write, {})), {})
+        context = ToolContext(cwd=tmp_path)
+        bridge.attach(registry, context)
+        monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **kw: _result(
+            ("c1", "cell", '{}')))
+
+        async def run():
+            entered = asyncio.Event()
+            release = asyncio.Event()
+
+            async def approve(call):
+                if call["name"] == "write":
+                    entered.set()
+                    await release.wait()
+                return None
+
+            job = asyncio.create_task(runtime.run_turn_async(
+                _cfg(tmp_path), "system", messages, runtime.Telemetry(None),
+                tool_registry=registry, tool_context=context, suppress_output=True, approve=approve))
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+                job.cancel()
+                # Bound the old path's wait while exposing a late decision's side effect.
+                asyncio.get_running_loop().call_later(0.1, release.set)
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(job, 2)
+                assert not target.exists()
+            finally:
+                release.set()
+                job.cancel()
+                await asyncio.gather(job, return_exceptions=True)
+
+        try:
+            asyncio.run(run())
+        finally:
+            bridge.close()

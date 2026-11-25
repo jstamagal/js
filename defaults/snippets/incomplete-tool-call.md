@@ -1,0 +1,1 @@
+Response incomplete ({{REASON}}); dropped truncated tool call arguments{{TOOLS}}. Send large content across several smaller calls.

@@ -1,0 +1,197 @@
+"""/cd moves the session's working directory; under `js -C`, /add and /drop
+change what the jail shows. Each change reaches the model once as a reminder
+on the next user message, and a resumed session is put back where it was."""
+
+from __future__ import annotations
+
+import pytest
+from jail_probe import needs_bwrap
+from repl_driver import stub_screen, turn_stub
+
+from js import cli, conversation, jail, messages as msgs, runtime, snippets
+from js.toolkit import call_tool, shell
+from js.toolkit.registry import build_default_registry
+
+SESSION = "workspace"
+
+
+@pytest.fixture
+def turns(monkeypatch, tmp_path):
+    """Each REPL turn runs the probes in `turns.probes` with the REPL's tool
+    context and records the user message and the probe results."""
+    for name in ("JS_DEFAULT_AGENT", "JS_SESSION", "JS_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runtime.T.STOCK_CONTEXT, "cwd", runtime.T.STOCK_CONTEXT.cwd)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+
+    async def no_compaction(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", no_compaction)
+
+    class Turns:
+        sent: list[str] = []
+        results: list[dict[str, str]] = []
+        probes: dict[str, object] = {}
+
+    record = Turns()
+    record.sent, record.results, record.probes = [], [], {}
+
+    def run_turn_stub(cfg, system, messages, *_a, **_k):
+        record.sent.append(str(messages[-1]["content"]))
+        context = runtime.T.STOCK_CONTEXT
+        record.results.append({name: probe(context) for name, probe in record.probes.items()})
+        messages.append({"role": "assistant", "content": "ok"})
+
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(run_turn_stub))
+    return record
+
+
+def repl(monkeypatch, args, lines):
+    stub_screen(monkeypatch, lines, wait=True)
+    cli.main([*args, "--session", SESSION])
+
+
+def shell_out(command):
+    def probe(context):
+        return shell.shell(command, context=context)
+    return probe
+
+
+def read(path):
+    def probe(context):
+        return call_tool(build_default_registry().resolve("read"), {"path": str(path)}, context)
+    return probe
+
+
+@pytest.fixture
+def places(tmp_path):
+    root = tmp_path / "foo"
+    (root / "sub").mkdir(parents=True)
+    extra = tmp_path / "extra"
+    extra.mkdir()
+    (extra / "data.txt").write_text("extra-data\n")
+    return root, extra
+
+
+@needs_bwrap
+def test_add_shows_a_path_and_drop_hides_it(monkeypatch, places, turns):
+    root, extra = places
+    turns.probes = {"shell": shell_out(f"cat {extra}/data.txt"), "read": read(extra / "data.txt")}
+
+    repl(monkeypatch, ["-C", str(root)], [f"/add {extra}", "look", f"/drop {extra}", "look again"])
+
+    shown, hidden = turns.results
+    assert "exit=0" in shown["shell"] and "extra-data" in shown["shell"]
+    assert "extra-data" in shown["read"]
+    assert "exit=0" not in hidden["shell"]
+    assert hidden["read"].startswith("ERROR:")
+    assert snippets.render('jail-path-added', PATH=extra, ACCESS="read-only") in turns.sent[0]
+    assert snippets.render('jail-path-removed', PATH=extra) in turns.sent[1]
+
+
+@needs_bwrap
+def test_add_is_read_only_unless_rw(monkeypatch, places, turns):
+    root, extra = places
+    turns.probes = {"touch": shell_out(f"touch {extra}/new")}
+
+    repl(monkeypatch, ["-C", str(root)], [f"/add {extra}", "one", f"/add {extra}:rw", "two"])
+
+    read_only, read_write = turns.results
+    assert "exit=0" not in read_only["touch"]
+    assert "exit=0" in read_write["touch"]
+    assert (extra / "new").exists()
+
+
+@needs_bwrap
+def test_cd_moves_where_commands_run(monkeypatch, places, turns):
+    root, _extra = places
+    turns.probes = {"pwd": shell_out("pwd")}
+
+    repl(monkeypatch, ["-C", str(root)], ["/cd sub", "where"])
+
+    assert f"\n{(root / 'sub').resolve()}\n" in turns.results[0]["pwd"]
+    assert snippets.render('working-directory', PATH=(root / "sub").resolve()) in turns.sent[0]
+
+
+@needs_bwrap
+def test_cd_outside_the_jail_is_refused(monkeypatch, places, turns):
+    root, extra = places
+    turns.probes = {"pwd": shell_out("pwd")}
+
+    repl(monkeypatch, ["-C", str(root)], [f"/cd {extra}", "where"])
+
+    assert f"\n{root.resolve()}\n" in turns.results[0]["pwd"]
+    assert turns.sent == ["where"]
+
+
+def test_cd_without_a_jail_moves_the_session(monkeypatch, places, turns):
+    _root, extra = places
+    turns.probes = {"pwd": shell_out("pwd")}
+
+    repl(monkeypatch, [], [f"/cd {extra}", "where"])
+
+    assert f"\n{extra.resolve()}\n" in turns.results[0]["pwd"]
+
+
+def test_add_and_drop_need_a_jail(monkeypatch, places, turns, capsys):
+    _root, extra = places
+
+    repl(monkeypatch, [], [f"/add {extra}", f"/drop {extra}", "where"])
+
+    out = capsys.readouterr().out
+    assert msgs.NO_JAIL.text(verb="add") in out
+    assert msgs.NO_JAIL.text(verb="drop") in out
+    assert turns.sent == ["where"]
+
+
+@needs_bwrap
+def test_the_root_cannot_be_dropped(monkeypatch, places, turns):
+    root, _extra = places
+    turns.probes = {"pwd": shell_out("pwd")}
+
+    repl(monkeypatch, ["-C", str(root)], [f"/drop {root}", "where"])
+
+    assert turns.sent == ["where"]
+    assert f"\n{root.resolve()}\n" in turns.results[0]["pwd"]
+
+
+@needs_bwrap
+def test_a_resume_restores_the_binds_and_the_working_directory(monkeypatch, places, turns):
+    root, extra = places
+    repl(monkeypatch, ["-C", str(root)], [f"/add {extra}:rw", f"/cd {extra}", "set up"])
+    turns.probes = {"pwd": shell_out("pwd"), "touch": shell_out("touch resumed")}
+
+    repl(monkeypatch, ["-C", str(root)], ["resumed"])
+
+    after = turns.results[-1]
+    assert f"\n{extra.resolve()}\n" in after["pwd"]
+    assert "exit=0" in after["touch"]
+    assert (extra / "resumed").exists()
+    assert jail.active().added == [jail.Bind(extra, True)]
+
+
+def test_a_resume_restores_the_working_directory(monkeypatch, places, turns):
+    root, _extra = places
+    repl(monkeypatch, [], [f"/cd {root / 'sub'}", "set up"])
+    # A new launch starts wherever it is started.
+    monkeypatch.chdir(root.parent)
+    runtime.T.STOCK_CONTEXT.cwd = root.parent
+    turns.probes = {"pwd": shell_out("pwd")}
+
+    repl(monkeypatch, [], ["resumed"])
+
+    assert f"\n{(root / 'sub').resolve()}\n" in turns.results[-1]["pwd"]
+
+
+@needs_bwrap
+def test_drop_keeps_the_path_the_working_directory_is_in(monkeypatch, places, turns):
+    root, extra = places
+    turns.probes = {"pwd": shell_out("pwd")}
+
+    repl(monkeypatch, ["-C", str(root)], [f"/add {extra}", f"/cd {extra}", f"/drop {extra}", "where"])
+
+    assert f"\n{extra.resolve()}\n" in turns.results[0]["pwd"]
+    assert snippets.render('jail-path-removed', PATH=extra) not in turns.sent[0]
+    assert jail.active().added == [jail.Bind(extra, False)]

@@ -1,0 +1,1215 @@
+################################################################################
+#
+#   ~/.js/jsrc  --  your js settings
+#
+#   Every setting js has is listed below, commented out, at the value js uses
+#   when you don't touch it. To change one, delete the `#` in front of its
+#   `set` line and edit the value. Or change it live with `/set` inside js and
+#   type `/save`: /save finds the setting's line here, uncomments it with your
+#   value, and leaves every other line, comment and blank in this file alone.
+#
+#   If you set something back to its stock value and /save, its line is
+#   commented out again. /save never writes a backup copy of this file.
+#
+#   Syntax:
+#       set SOME_SETTING value      give a setting a value
+#       set -SOME_SETTING           clear it (nothing set, js decides)
+#       #set SOME_SETTING value     commented out: js ignores the line
+#
+#   Who wins when the same setting is set in more than one place,
+#   weakest first:
+#       js's stock values  <  this file  <  .js/jsrc in the project
+#       <  .js/jsrc.local in the project  <  JS_* environment variables
+#       <  js --extra key=value
+#
+#   Every setting also reads an environment variable named after it:
+#   FETCH_TIMEOUT -> JS_FETCH_TIMEOUT, REASONING_DISPLAY -> JS_REASONING_DISPLAY, and
+#   so on.
+#
+#   Inside js:  /set              list every setting and its current value
+#               /set NAME         one setting's value
+#               /set compaction   one group;  /set *_FILE  names that match
+#               /help set NAME    what a setting does
+#
+################################################################################
+
+
+################################################################################
+#  MODEL  --  which model answers, and how hard it thinks
+################################################################################
+
+# The model js talks to when you don't pass -m. Write it as
+# provider/model. The provider part is the name of a login in
+# ~/.js/logins/logins.toml or a provider js knows. A bare model name with no
+# provider/ in front goes to PROVIDER, or with none set, to BASE_URL as an
+# OpenAI-compatible endpoint.
+#   example:  set MODEL cpa/claude-opus-5-5
+#set MODEL cpa/claude-opus-5-5
+
+# How hard the model thinks before it answers. From least to most:
+#   off      no thinking at all
+#   minimal  barely
+#   low      a little
+#   medium   moderate
+#   high     a lot
+#   xhigh    more than high
+#   max      as much as the model allows
+# More thinking: slower, more tokens, often better on hard problems.
+# Any other word is sent as typed. For a model js recognizes, a word from
+# this list becomes the nearest effort that model serves; the run line
+# shows the effort that went out.
+# Unset: the provider's own default for that model. An agent's agent.yaml
+# can set its own effort, and a one-shot `js -p` uses that.
+#   example:  set EFFORT medium
+#set EFFORT medium
+
+# Largest reply the model may write in one call, in tokens. Thinking counts
+# toward it. Unset: no limit is sent, except on Anthropic-format endpoints,
+# which require one: there the model's known output limit is sent, else
+# ANTHROPIC_OUTPUT_TOKENS_MAX.
+#   example:  set OUTPUT_TOKENS_MAX 32000
+#set -OUTPUT_TOKENS_MAX
+
+# The model's context window in tokens: how much conversation it can hold.
+# js uses this number to decide when the conversation is getting full and
+# needs compacting. Set it when the catalog has it wrong, or when your
+# endpoint gives you a different size than the public one. This one number
+# applies to whatever model is active. To set different sizes for different
+# models, use CONTEXT_SIZE_PER_MODEL instead.
+#   example:  set CONTEXT_SIZE 1000000
+#set -CONTEXT_SIZE
+
+# Only for Anthropic-format endpoints: a thinking budget in tokens, sent as
+# thinking {"type": "enabled", "budget_tokens": N}. Temperature and top_k
+# are not sent while it is in force (Anthropic rejects them with a budget).
+# Claude 4.7 and later reject a budget with a 400.
+# Unset: no budget is sent; Claude 4.6 and later think adaptively.
+#   example:  set THINKING_BUDGET 16000
+#set -THINKING_BUDGET
+
+# Whether js sends images to the model.
+#   on      always send the image itself
+#   off     never send images
+#   unset   js guesses from what the catalog says the model can see
+# Turn it on when your model can see images but js doesn't know that.
+#   example:  set VISION on
+#set -VISION
+
+
+################################################################################
+#  PROVIDER  --  where the requests go
+################################################################################
+
+# Force a provider instead of reading it from MODEL. It's the name of a
+# login from `js login` or a provider js knows: deepseek, openai, ollama,
+# cpa ...
+#   example:  set PROVIDER cpa
+#set -PROVIDER
+
+# Force the address requests go to. Leave the API path off the end when the
+# login talks Anthropic format: js adds /v1/messages itself, so
+# http://host:8999/v1 there becomes /v1/v1/messages and fails with a 404.
+# OpenAI-format endpoints usually do want the /v1.
+#   example:  set BASE_URL http://vader:8999
+#set -BASE_URL
+
+# Force the API key. Unset: the key from your login or the provider's usual
+# environment variable. This file is plain text, so prefer `js login`.
+#   example:  set API_KEY sk-...
+#set -API_KEY
+
+# Request headers sent with every model call, on top of the login's own.
+# Like curl -H; several separated by ';' or newlines. Unset: none.
+#   example:  set EXTRA_HEADERS X-JS-Scrub: on; X-Pool: fofa
+#set -EXTRA_HEADERS
+
+# Whether js hides keys on your own screen. off: keys show as typed and in
+# full. on: prompts don't echo keys and /set and js --login mask them.
+# Logs, tool output to the model and the X-JS-Scrub wire header hide keys
+# in either mode.
+#   example:  set PARANOID_MODE on
+#set PARANOID_MODE off
+
+# Extra fields js adds to every request body, as JSON. For provider options
+# js has no setting for.
+#   example:  set EXTRA_PARAMS {"include_reasoning": true}
+#   example:  set EXTRA_PARAMS {"top_a": 0.1}
+#set EXTRA_PARAMS {}
+
+
+################################################################################
+#  AGENT
+################################################################################
+
+# The agent js runs when you don't pass --agent. It's a directory name under
+# ~/.js/agents/. Read when js starts, so a change applies to the next run.
+#   example:  set DEFAULT_AGENT forge
+#set DEFAULT_AGENT defaultagent
+
+
+################################################################################
+#  SCREEN  --  what you see while js works
+################################################################################
+
+# What starts each line js prints about its own state, such as the answer
+# to /set.
+#   example:  set BANNER -!-
+#set BANNER ***
+
+# A message of the day, shown above the startup line when the REPL starts.
+# ANSI colours in it show (TheDraw .ANS, chafa output); cursor moves do not. MOTD_FILE is one file of
+# entries split by lines holding only %, like fortune(6); one is picked at
+# random. MOTD_DIR is a directory of art files; one is picked at random.
+# MOTD_FILE wins when both are set. Unset: no MOTD.
+#   example:  set MOTD_DIR ~/art
+#set -MOTD_FILE
+#set -MOTD_DIR
+
+# The model's thinking, on screen.
+#   0  hidden; you never see it
+#   1  streams in while it thinks, then folds into one line,
+#      `N tok reasoning`, when the answer starts
+#   2  streams in and stays on screen
+#   3  like 2, plus the provider's token count when the thinking ends
+# Ctrl-O folds and unfolds the thinking whatever the level. Only the screen
+# folds: in js -p, 1 to 3 print the thinking and then
+# its token count. The thinking is kept either way.
+#   example:  set REASONING_DISPLAY 2
+#set REASONING_DISPLAY 1
+
+# Network chatter in the REPL screen. Retries, the line that gives up on
+# them and the wait for a first byte show at every level.
+#   0  nothing else
+#   1  also failures js does not retry, and what changes the session: a
+#      compaction request, a resend with a bigger output cap, refused
+#      reasoning dropped
+#   2  also a line when the prompt cache breaks
+#   3  also "Connecting" and "Connected" for every other request, model catalog
+#      refreshes and per-call stream stats
+#   example:  set NET_DISPLAY 0
+#set NET_DISPLAY 2
+
+# How tool calls look on screen.
+#   0  you don't see them
+#   1  just the important part: quick calls (reads, searches) fold into one
+#      row per tool, a shell command shows its output while it runs and then
+#      shrinks to one row, an edit shows its diff, a failure shows its error
+#   2  every call, with the first few lines of each result
+#      (TOOLS_PREVIEW_LINES)
+#   3  every call, with its whole result
+#   example:  set TOOLS_DISPLAY 2
+#set TOOLS_DISPLAY 1
+
+# How many lines of a result or a diff TOOLS_DISPLAY 1 and 2 show before hiding
+# the rest.
+#   example:  set TOOLS_PREVIEW_LINES 30
+#set TOOLS_PREVIEW_LINES 12
+
+# Tools TOOLS_DISPLAY 1 counts as quick: each folds into one row instead of
+# showing its result. A JSON list of tool names.
+#   example:  set TOOLS_QUIET ["read", "fs_search"]
+#set TOOLS_QUIET ["read", "fs_search", "lsp", "fetch", "browse", "browser_probe", "exa_search", "serper_search", "tavily_search", "docs_search", "claim", "release", "subscribe", "wake_me", "who", "tasks", "take_task", "tool_discovery", "skill", "undo", "terminal_snapshot"]
+
+# Shell commands TOOLS_DISPLAY 1 counts as quick, matched by the command's first
+# word or first two words. A JSON list.
+#   example:  set SHELL_QUIET ["ls", "cat", "git status"]
+#set SHELL_QUIET ["cd", "ls", "cat", "head", "tail", "wc", "pwd", "tree", "stat", "file", "which", "find", "fd", "grep", "rg", "du", "df", "ps", "echo", "sort", "uniq", "git status", "git log", "git diff", "git show", "git branch"]
+
+# Draw the model's Markdown (headings, bold, code blocks) on screen.
+#   on   each block is drawn formatted once it's finished
+#   off  raw text exactly as it arrives
+# Output going to a pipe or a file is always raw.
+#   example:  set MARKDOWN off
+#set MARKDOWN on
+
+# When you resume a session, how many of its last exchanges are shown
+# again before the prompt. 0 shows none.
+#   example:  set RESUME_EXCHANGES 10
+#set RESUME_EXCHANGES 3
+
+# Keys on the input line.
+#   emacs  Enter sends the line
+#   vi     a multi-line box; Esc then :x sends, Esc then : opens a command
+#          line
+#   example:  set EDITING_MODE vi
+#set EDITING_MODE emacs
+
+
+# --- colours, palette and formats ---
+
+# How everything looks is /fset: `/fset` lists it, `/fset THEME bitchx`
+# picks a palette from ~/.js/themes, else a built-in one (claude, crush,
+# bitchx, github, paper, splash3); no theme is set by default.
+# `/fset COLOR_STATUS_BACKGROUND #1e1e2e` changes one colour, and /save
+# writes your fset lines here.
+#   example:  fset HOST_COLOR #0000aa
+
+
+# --- pasting ---
+
+# The key that pastes an image from the clipboard into your message. It
+# shows up as [image #N] and is sent with the line. Key names look like
+# c-v (Ctrl-V) or escape v (Esc then V). Clear it to bind no key.
+#   example:  set PASTE_IMAGE_KEY escape v
+#set PASTE_IMAGE_KEY c-v
+
+# The command js runs to get the clipboard image. Unset:
+# `wl-paste --type image/png` on Wayland,
+# `xclip -selection clipboard -t image/png -o` on X11.
+#   example:  set PASTE_IMAGE_COMMAND xclip -selection clipboard -t image/png -o
+#set -PASTE_IMAGE_COMMAND
+
+# Command /copy pipes text into, as the clipboard. Unset: wl-copy under
+# Wayland, else xclip -selection clipboard under X11.
+#   example:  set COPY_COMMAND wl-copy --primary
+
+# A paste longer than this many lines shows in the input line as one
+# [paste #N +X lines] marker so it doesn't flood your screen. The whole
+# text is still sent. 0: no line limit.
+#   example:  set PASTE_COLLAPSE_LINES 40
+#set PASTE_COLLAPSE_LINES 10
+
+# Same as above, counted in characters. When both are 0, pastes are never
+# collapsed.
+#set PASTE_COLLAPSE_CHARS 1000
+
+
+################################################################################
+#  PROMPT HISTORY  --  Up arrow and Ctrl-R
+################################################################################
+
+# Where every line you type at the prompt is saved, for all js runs.
+# Unset: ~/.js/state/history.jsonl
+#set -HISTORY_FILE
+
+# Up arrow order.
+#   last  every line, newest first
+#   cwd   lines you typed in this directory come first, newest first, then
+#         the rest
+# Ctrl-R searches all of them either way.
+#   example:  set HISTORY_ORDER cwd
+#set HISTORY_ORDER last
+
+# How many past lines are loaded for Up and Ctrl-R.
+#set HISTORY_SIZE 10000
+
+
+################################################################################
+#  KEYS
+################################################################################
+
+# A file of key changes: `bind KEY... ACTION` and `unbind KEY...`, one per
+# line. Actions: submit, history_search, ex_open, ex_run, ex_cancel,
+# interrupt, eof, suspend, reasoning_toggle, redraw, scroll_up,
+# scroll_down, complete.
+# Unset: ~/.js/keys when it exists.
+#   example line in that file:  bind c-t reasoning_toggle
+#set -KEYBINDS_FILE
+
+
+################################################################################
+#  TOOLS  --  how far the model can go in one turn
+################################################################################
+
+# Most tool calls the model may make in one turn before js stops it with
+# "Tool loop hit max iterations".
+#   example:  set TURN_ROUNDS_MAX 1000
+#set TURN_ROUNDS_MAX 500
+
+# Most separate tool calls js accepts from one reply. Exact duplicates are
+# merged first. The rest are refused with a note to the model.
+#set REPLY_TOOL_CALLS_MAX 50
+
+# How many read-only calls from one reply run at the same time (reads,
+# searches, fetches). A call that writes always runs alone, in order.
+# 1: everything runs one after another.
+#set PARALLEL_TOOLS_MAX 8
+
+# Whether the model may hand work to subagents, and how deep: a subagent
+# starting its own subagent is depth 2.
+#set SUBAGENT_DEPTH_MAX 2
+
+# Most subagents running at once, at every depth and from every task call.
+# A subagent waiting on its own subagents does not count.
+#set SUBAGENT_WORKERS_MAX 8
+
+# Subagents run on your current model instead of the one their own agent
+# names.
+#set SUBAGENT_INHERIT_MODEL off
+
+# Stop the model from choosing which model a subagent runs on.
+#set SUBAGENT_MODEL_LOCK off
+
+# In a swarm, how many agents may be in the middle of a turn at the same
+# time. 0: no limit.
+#set SWARM_ACTIVE_MAX 0
+
+
+################################################################################
+#  TOOL OUTPUT SIZES  --  how much a tool result can hand the model
+################################################################################
+
+# Most shell output the model sees from one command, stdout and stderr
+# together, in bytes. Past that it gets the start and the end, plus the path
+# of a file holding all of it.
+#   example:  set SHELL_OUTPUT_MAX 1000000
+#set SHELL_OUTPUT_MAX 262144
+
+# A tool result bigger than this many bytes is saved to a file, and the
+# model gets a preview plus the path, so nothing is cut off and lost.
+# 0: off.
+#set TOOL_RESULT_INLINE_MAX 51200
+
+# Hard cap on the text of any single tool result, in bytes. Past it, the
+# result is cut. Images and audio don't count; TOOL_MEDIA_MAX caps them.
+#set TOOL_RESULT_MAX 262144
+
+# Cap on each image or audio a tool returns, in bytes of base64 data. A
+# bigger one is dropped with a line that says why. 0: no cap.
+#set TOOL_MEDIA_MAX 5242880
+
+# Cap on all results from one batch of parallel calls added together, in
+# bytes. The biggest results are cut first. 0: no cap.
+#set PARALLEL_RESULTS_MAX 200000
+
+
+################################################################################
+#  READING FILES
+################################################################################
+
+# Most lines one read() returns.
+#set READ_LINES_MAX 2000
+
+# Biggest file read() will read whole, in bytes. A read that asks for a
+# line range or a byte range works on any size file.
+#set READ_BYTES_MAX 262144
+
+# Biggest file the other file tools (search and friends) will open.
+#set FILE_BYTES_MAX 2000000
+
+# How many lines of each cell output read() shows for a notebook (.ipynb).
+# The rest are counted, not shown. 0: just what kind of output each one is.
+#set NOTEBOOK_OUTPUT_LINES_MAX 10
+
+
+################################################################################
+#  WEB
+################################################################################
+
+# How long one fetch() may take, in seconds, start to finish. Also the
+# timeout for the web search tools.
+#   example:  set FETCH_TIMEOUT 60
+#set FETCH_TIMEOUT 15
+
+# How long browse() may spend loading a page, in seconds. The browser gives
+# up a second early so whatever did load is still returned.
+#set BROWSE_TIMEOUT 60
+
+# How long a file download (fetch with save=, or anything binary or huge)
+# may take, in seconds.
+#set DOWNLOAD_TIMEOUT 300
+
+# Biggest file fetch(save=...) may download, in bytes. 0: no limit; a
+# download goes straight to disk, so even a huge one is fine.
+#set DOWNLOAD_MAX 0
+
+# The User-Agent fetch and the web searches send.
+#   example:  set HTTP_USER_AGENT Mozilla/5.0
+#set HTTP_USER_AGENT js-agent/0.1
+
+# The TypeSafe model the jev tool asks.
+#set JEV_MODEL jev-latest
+
+# Skills switched off, by name: the model never sees or loads them, and
+# /skill <name> refuses them. /skills opens a picker that edits this list.
+#   example:  set SKILLS_DISABLED ["grilling", "handoff"]
+#set SKILLS_DISABLED []
+
+
+################################################################################
+#  SHELL
+################################################################################
+
+# The shell the model's commands run in: a name on your PATH, or a full
+# path. bash and zsh run with pipefail, so a pipeline fails when any part
+# of it fails.
+#   example:  set SHELL_PROGRAM zsh
+#set SHELL_PROGRAM bash
+
+# How long a shell call waits for its command to finish before handing the
+# model a handle to check back with. The command keeps running; nothing is
+# killed.
+#   example:  set SHELL_WAIT 120
+#set SHELL_WAIT 30
+
+# Environment variables every shell command gets without the model having
+# to ask for each one. A JSON list of names.
+#   example:  set SHELL_ENV_KEEP ["PATH", "HOME", "USER", "TERM", "GITHUB_TOKEN"]
+#set SHELL_ENV_KEEP ["PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "PWD", "SHELL", "BEADS_ACTOR"]
+
+# Only when you run `js -C DIR`, which locks commands inside DIR: more paths
+# the commands can still see. A JSON list. "path" is read-only, "path:rw" is
+# read-write. Paths that don't exist are skipped.
+#   example:  set JAIL_BIND ["~/.gitconfig", "~/notes:rw"]
+#set JAIL_BIND ["~/.gitconfig", "~/.config/git", "~/.local/share/uv", "~/.cache/uv:rw"]
+
+# Only with `js -C DIR`: paths that are always empty inside, whatever DIR
+# and JAIL_BIND show, so a jail rooted at your home still shows no keys.
+#   example:  set JAIL_HIDE ["~/.js", "~/.ssh", "~/work/secrets"]
+#set JAIL_HIDE ["~/.js", "~/.ssh", "~/.gnupg", "~/.netrc", "~/.aws", "~/.config/gh"]
+
+
+################################################################################
+#  KERNEL  --  the model's persistent Python session
+################################################################################
+
+# How much of each kernel call you see on screen. The model always gets the
+# full result.
+#   quiet    only errors and interrupts
+#   normal   code, output, timing, variables
+#   verbose  also stdout, stderr and displays split apart, plus kernel
+#            start and stop
+#set KERNEL_VERBOSITY normal
+
+# Most lines shown per part of a kernel result on screen, so one huge
+# output can't scroll everything away. The model still gets all of it.
+#set KERNEL_LINES_MAX 24
+
+# How long a kernel call waits for its code before handing the model a
+# handle to check back with. The code keeps running.
+#set PYTHON_KERNEL_WAIT 5
+
+
+################################################################################
+#  INLINE CODE IN PROMPT FILES
+################################################################################
+
+# Run !{sh ...}, !{python ...}, !{c ...}, !{node ...} and ```!lang blocks
+# found in prompt files and put their output into the prompt. That runs
+# code from those files every time.
+#   off  never run them
+#set INLINE_CODE on
+
+# How long one of those may run, in seconds.
+#set INLINE_CODE_TIMEOUT 300
+
+
+################################################################################
+#  WHEN THINGS FAIL  --  retries and cut-off replies
+################################################################################
+
+# How many times js retries a request that failed in a way worth retrying:
+# rate limited (429), a gateway that could not reach the server (502, 503,
+# 504), overloaded (529), a network failure (refused, no connection in
+# CONNECT_TIMEOUT, or a connection dropped before or during the reply), or
+# a stream that went quiet past STREAM_IDLE_TIMEOUT. A 500 or any other 4xx
+# fails at once. It waits as
+# long as the provider asks, otherwise 8s each time.
+# 0: give up on the first error.
+#set RETRY_COUNT_MAX 3
+
+# Longest wait js accepts when a provider says "retry after N seconds". If
+# it asks for longer, js fails right away instead. 0: wait as long as asked.
+#set RETRY_WAIT_MAX 120
+
+# Seconds to make the connection (TCP and TLS). A slow path such as Tor or
+# WireGuard needs more than a LAN. No connection in time is retried.
+# 0: wait forever.
+#set CONNECT_TIMEOUT 15
+
+# Seconds from sending a request to the first byte back: the prefill, which
+# takes a slow local box a long time on a big prompt. The screen counts this
+# wait up and ^C cancels it. When it runs out the request fails once and is
+# not retried, since a resend starts the prefill over. 0: wait forever.
+#set FIRST_BYTE_TIMEOUT 0
+
+# After the first byte, a request that gets no data for this many seconds is
+# dropped and retried. Keep-alive pings and reasoning count as data.
+# 0: wait forever.
+#set STREAM_IDLE_TIMEOUT 300
+
+# A reply cut off at its token limit is sent once more with this bigger
+# limit, when that's bigger than what was used and the model allows it.
+# 0: never.
+#set OUTPUT_TOKENS_RETRY_MAX 64000
+
+# After a reply gets cut off, how many times per turn js keeps what was
+# written and tells the model to carry on. 0: the turn just ends at the cut.
+#set OUTPUT_RESUMES_MAX 3
+
+
+################################################################################
+#  TYPING WHILE THE MODEL WORKS
+################################################################################
+
+# What happens to a line you type while a turn is running.
+#   now    it reaches the model at its next tool call, as a message from
+#          you; if no tool call is left, after the turn ends
+#   batch  everything you typed goes in as one message after the turn ends
+#   one    each line becomes its own turn, in order
+#set STEER_MODE now
+
+
+################################################################################
+#  LOGS
+################################################################################
+
+# Keep a full log of every request in ~/.js/logs/<agent>/<session>.log:
+# the whole system prompt, the tool definitions and every message sent.
+# It's only written to the file, never shown.
+#set REQUEST_LOG on
+
+# Where that log goes. Unset: ~/.js/logs/<agent>
+#set -REQUEST_LOG_DIR
+
+# Keep a copy of what printed on your screen in
+# ~/.js/logs/transcript/<agent>/<session>.log
+#set TRANSCRIPT_LOG on
+
+# Where that copy goes. Unset: ~/.js/logs/transcript/<agent>
+#set -TRANSCRIPT_LOG_DIR
+
+# In `js -p`, print a short line for each tool call while it runs.
+#   off  you only see the final answer
+#set TRACE on
+
+# Write a record of every internal event to state/<agent>/debug.log. Only
+# for chasing a js bug.
+#set DEBUG_LOG off
+
+
+################################################################################
+#  COMPACTION  --  keeping long conversations under the context limit
+################################################################################
+
+# When a conversation gets close to the model's context limit, js shrinks
+# it. First it clears old tool results. If that's not enough, it has a model
+# write a summary of the older part and keeps the recent part word for word.
+
+# Shrink automatically.
+#   off  only when you type /compact
+#set COMPACTION_AUTO on
+
+# How full the conversation is, from 0 to 1, when js
+#   tells you once:
+#set COMPACTION_WARN_AT 0.5
+#   starts compacting:
+#set COMPACTION_START_AT 0.8
+#   compacts no matter what:
+#set COMPACTION_FORCE_AT 0.9
+# They have to go up in that order, or js ignores all three and uses the
+# stock values.
+
+# Context windows for specific models, as JSON. Write the key as
+# "provider/model" or just "model"; provider/model wins.
+#   example:  set CONTEXT_SIZE_PER_MODEL {"cpa/claude-opus-5-5": 1000000, "qwen27b": 131072}
+#set CONTEXT_SIZE_PER_MODEL {}
+
+# Window to assume only for a model js can't find a size for. Models it
+# does know aren't affected.
+#set CONTEXT_SIZE_UNKNOWN 1000000
+
+# Most tokens set aside for the model's next reply when js works out how
+# full things are. It uses the smaller of this and the model's real output
+# limit, so a model that claims a 128k reply can't eat a third of the
+# window.
+#set COMPACTION_REPLY_RESERVE_TOKENS 20000
+
+# Extra tokens of headroom kept free on top of that.
+#set COMPACTION_HEADROOM_TOKENS 4096
+
+# How much of the most recent conversation is kept word for word after a
+# summary, in tokens.
+#set COMPACTION_KEEP_RECENT_TOKENS 16384
+
+# Skip compacting unless it would save at least this many tokens.
+#set COMPACTION_MIN_SAVINGS_TOKENS 400
+
+# When clearing old tool results, this many of the newest stay whole.
+#set COMPACTION_KEEP_TOOL_RESULTS 20
+
+# Prompt cache lifetime, in seconds. If your last request was at least this
+# long ago, the cache is gone anyway, so js clears old tool results first;
+# if it was sooner, js summarizes first so the cache isn't thrown away.
+# 0: always clear first.
+#set COMPACTION_CACHE_TTL 300
+
+# The model that writes the summary. "same" means the one you're using.
+#   example:  set COMPACTION_EXTERNAL_MODEL cpa/claude-haiku-5-5
+#set COMPACTION_EXTERNAL_MODEL same
+
+# Longest summary allowed, in tokens. It can't go over 8192.
+#set COMPACTION_SUMMARY_TOKENS_MAX 8192
+
+# Tool results sent to the summary model are cut to this many characters,
+# keeping the start and the end. 0: send them whole.
+#set COMPACTION_SUMMARY_RESULT_CHARS_MAX 2000
+
+# After this many automatic summaries fail in a row, automatic compaction
+# pauses. A successful /compact turns it back on.
+#set COMPACTION_FAILURES_MAX 3
+
+# After a summary, files the model had read recently are attached again,
+# newest first, so it doesn't lose them. How many:
+#set COMPACTION_REATTACH_FILES_MAX 5
+
+# The most tokens all those re-attached files may use together.
+#set COMPACTION_REATTACH_TOKENS_MAX 50000
+
+# A file bigger than this many tokens is named but not re-attached.
+#set COMPACTION_REATTACH_FILE_TOKENS_MAX 5000
+
+# A shell command whose output js gives to the summary model as extra
+# instructions.
+#   example:  set COMPACTION_HINT_COMMAND cat ~/notes/what-matters.md
+#set -COMPACTION_HINT_COMMAND
+
+# Where js keeps a full copy of the conversation from just before each
+# compaction. Unset: ~/.js/logs/<agent>/compactions
+#set -COMPACTION_LOG_DIR
+
+# Characters per token js assumes until it learns the real ratio from the
+# provider.
+#set COMPACTION_CHARS_PER_TOKEN 4.0
+
+# Share of the room left before compaction starts that the files attached to
+# one message may fill together; the rest is the turn's, for its tool calls.
+#set ATTACHMENT_CONTEXT_MAX 0.5
+
+
+################################################################################
+#  EXEC AND EVENT HANDLERS  --  `exec` commands and `on` lines
+################################################################################
+
+# Most seconds an exec command may run before js kills it. When an `on`
+# handler runs it, whatever triggered the handler waits that long too.
+# 0: no limit.
+#set EXEC_TIMEOUT 30
+
+# Bytes of an exec command's output kept. Its stdout is shown to the model
+# with your next message. 0: keep all of it.
+#set EXEC_OUTPUT_MAX 65536
+
+
+################################################################################
+#  LANGUAGE SERVERS  --  the lsp tool
+################################################################################
+
+# Language servers the lsp tool may start, as JSON. For a file, js uses the
+# first one whose extensions include the file's and whose program is
+# installed. "roots" are the files that mark a project's top directory;
+# without any, the nearest directory with .git in it.
+#set LSP_SERVERS [{"name": "basedpyright", "command": ["basedpyright-langserver", "--stdio"], "extensions": [".py", ".pyi"], "roots": ["pyproject.toml", "setup.py", "setup.cfg", "pyrightconfig.json"]}, {"name": "pyright", "command": ["pyright-langserver", "--stdio"], "extensions": [".py", ".pyi"], "roots": ["pyproject.toml", "setup.py", "setup.cfg", "pyrightconfig.json"]}, {"name": "rust-analyzer", "command": ["rust-analyzer"], "extensions": [".rs"], "roots": ["Cargo.toml"]}, {"name": "gopls", "command": ["gopls"], "extensions": [".go"], "roots": ["go.work", "go.mod"]}, {"name": "typescript-language-server", "command": ["typescript-language-server", "--stdio"], "extensions": [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"], "roots": ["tsconfig.json", "jsconfig.json", "package.json"]}]
+
+# How long an lsp call waits for its server to start or answer, in seconds.
+#set LSP_TIMEOUT 30
+
+
+################################################################################
+#  MCP SERVERS
+################################################################################
+
+# MCP servers js connects to, as JSON. A local server gets command, args
+# and env; a server over HTTP gets url and headers.
+#   example:  set MCP_SERVERS {"files": {"command": "python", "args": ["/opt/files-mcp.py"]}}
+#   example:  set MCP_SERVERS {"api": {"url": "http://127.0.0.1:8765/mcp", "headers": {"Authorization": "Bearer xyz"}}}
+#set MCP_SERVERS {}
+
+# Which agents may use which MCP servers and tools, as JSON. allow and deny
+# lists take wildcards.
+#   example:  set MCP_AGENT_POLICY {"forge": {"servers": {"allow": ["files"]}, "tools": {"deny": ["*__delete*"]}}}
+#set MCP_AGENT_POLICY {}
+
+# How long a request to an MCP server waits for its answer, in seconds.
+#set MCP_TIMEOUT 10.0
+
+
+################################################################################
+#  TOOL NAMES AND TERMINALS
+################################################################################
+
+# Give tools different names for particular models, as JSON. "match" is
+# checked against the model and provider names; the first profile that
+# matches is used.
+#   example:  set TOOL_ALIASES [{"match": "qwen", "aliases": {"read": "read_file"}}]
+#set -TOOL_ALIASES
+
+# Give particular models their own tool surface, as JSON. "match" is checked
+# against the model and provider names; the first profile that matches is
+# used when the agent's agent.yaml has no matching models: entry. "mode" is
+# replace (the default: these tools plus skill) or prepend (ahead of the
+# agent's tools). "core": false leaves skill out of a replace.
+#   example:  set TOOL_PROFILES [{"match": "qwen", "tools": ["shell:eager"]}]
+#set -TOOL_PROFILES
+
+# Size of a terminal_session the model starts without giving one.
+#set TERMINAL_COLUMNS 64
+#set TERMINAL_ROWS 36
+
+
+################################################################################
+#  SAMPLING  --  only sent if you set them
+################################################################################
+
+# Unset means js doesn't send the value at all and the provider uses its own
+# default. A set value is always sent: temperature, top_p, top_k (Anthropic)
+# and presence_penalty (OpenAI chat) as the wire's own fields, every other one
+# in the request body under its own lower-case name, for the server to take
+# or reject. Many reasoning models reject temperature and top_p outright.
+# Each one is also a flag (--temperature, --min-p, ...) and an agent.yaml
+# `sampling:` key (temperature, min_p, ...).
+
+# Randomness. Lower is more predictable, higher is more varied.
+#   example:  set TEMPERATURE 0.7
+#set -TEMPERATURE
+
+# Only pick from the most likely words that add up to this probability.
+#   example:  set TOP_P 0.95
+#set -TOP_P
+
+# Only pick from this many of the most likely words.
+#   example:  set TOP_K 40
+#set -TOP_K
+
+# Push back on repeating the same words. 1.0 is no push.
+#   example:  set REPETITION_PENALTY 1.1
+#set -REPETITION_PENALTY
+
+# Push toward words that haven't been used yet. 0 is no push.
+#   example:  set PRESENCE_PENALTY 0.5
+#set -PRESENCE_PENALTY
+
+# Drop words less likely than this fraction of the most likely word.
+#   example:  set MIN_P 0.05
+#set -MIN_P
+
+# Keep only words within this many standard deviations of the top logit.
+#   example:  set TOP_N_SIGMA 1.0
+#set -TOP_N_SIGMA
+
+# XTC: how often to cut the most likely words, and the probability a word
+# needs to be cut.
+#   example:  set XTC_PROBABILITY 0.5
+#set -XTC_PROBABILITY
+#   example:  set XTC_THRESHOLD 0.1
+#set -XTC_THRESHOLD
+
+# DRY repetition penalty: its strength, how fast it grows, how long a repeat
+# may get before it applies, how many tokens back it looks, and the strings
+# that break a repeat (a JSON list).
+#   example:  set DRY_MULTIPLIER 0.8
+#set -DRY_MULTIPLIER
+#   example:  set DRY_BASE 1.75
+#set -DRY_BASE
+#   example:  set DRY_ALLOWED_LENGTH 2
+#set -DRY_ALLOWED_LENGTH
+#   example:  set DRY_PENALTY_LAST_N -1
+#set -DRY_PENALTY_LAST_N
+#   example:  set DRY_SEQUENCE_BREAKERS ["\n", ":", "\"", "*"]
+#set -DRY_SEQUENCE_BREAKERS
+
+# key=value entries sent as chat_template_kwargs, e.g. llama.cpp's
+# per-request thinking switch. A value is read as JSON (false, 1, "x"); one
+# that is not JSON is a string. Also --template-kwargs.
+#   example:  set TEMPLATE_KWARGS enable_thinking=false
+#set -TEMPLATE_KWARGS
+
+
+################################################################################
+#  MODEL CALLS AND RETRIES
+################################################################################
+
+# Seconds before the first retry of a failed model call that named no Retry-
+# After.
+#set RETRY_BACKOFF_START 8
+
+# Each later retry waits this many times longer than the one before.
+#set RETRY_BACKOFF_MULTIPLIER 1
+
+# Longest wait between retries, in seconds, before jitter.
+#set RETRY_BACKOFF_MAX 8
+
+# Up to this many random seconds added to each retry wait.
+#set RETRY_BACKOFF_JITTER 0
+
+# on: a reply that stops short because the context silently overflowed is
+# retried after compaction.
+#set SILENT_OVERFLOW_RECOVERY on
+
+# on: when a provider rejects replayed signed reasoning, the call is retried
+# once without it.
+#set SIGNED_REASONING_RECOVERY on
+
+# Times one tool may repeat the same error in a row before the model is told
+# to stop retrying it; one more repeat ends the turn.
+#set TOOL_ERRORS_MAX 3
+
+# /loop with a count gives up after count times this many attempts.
+#set LOOP_ATTEMPTS_MULTIPLIER 3
+
+# Consecutive failed /loop runs before the loop stops.
+#set LOOP_FAILURES_MAX 5
+
+# Longest pause between failed /loop runs, in seconds.
+#set LOOP_BACKOFF_MAX 8
+
+# on: malformed tool arguments are refused instead of repaired.
+#set TOOL_ARGUMENT_STRICT off
+
+# max_reasoning_tokens sent to DeepSeek's own endpoint when the request sets
+# none. The run line shows it under this name.
+#set DEEPSEEK_REASONING_TOKENS_MAX 32000
+
+# max_tokens sent on Anthropic-format endpoints, which require one, when
+# OUTPUT_TOKENS_MAX is unset and the model's output limit is unknown.
+#set ANTHROPIC_OUTPUT_TOKENS_MAX 64000
+
+# on: requests through a CLIProxyAPI login carry include_reasoning: true,
+# which the proxy needs to return Claude's thinking. No other endpoint gets it.
+#set CLAUDE_PROXY_INCLUDE_REASONING on
+
+# on: Anthropic requests mark the prompt for caching.
+#set ANTHROPIC_PROMPT_CACHE on
+
+# How adaptive thinking is returned by Anthropic models: summarized or
+# omitted.
+#set ANTHROPIC_THINKING_DISPLAY summarized
+
+# Effort sent instead of off to an Anthropic model that cannot turn
+# thinking off (Fable, Mythos, Claude 5.5 and later).
+#set ANTHROPIC_REQUIRED_EFFORT low
+
+
+################################################################################
+#  COMPACTION
+################################################################################
+
+# Compaction rounds one call may run to recover from a context overflow.
+#set COMPACTION_OVERFLOW_ROUNDS_MAX 3
+
+# Recent tool results an overflow compaction keeps whole, split across its
+# rounds.
+#set COMPACTION_OVERFLOW_KEEP_TOOL_RESULTS 20
+
+# Shell that runs the compaction hint command. Empty = $SHELL, else /bin/sh.
+#set COMPACTION_HINT_SHELL_PROGRAM ""
+
+# Seconds the compaction hint command may run before it is killed.
+#set COMPACTION_HINT_TIMEOUT 30
+
+# Upper bound on COMPACTION_SUMMARY_TOKENS_MAX for the summary request.
+#set COMPACTION_SUMMARY_REQUEST_TOKENS_MAX 8192
+
+# Automatic compactions in a row before automatic compaction pauses.
+#set COMPACTION_CONSECUTIVE_MAX 2
+
+
+################################################################################
+#  FILE AND SEARCH TOOLS
+################################################################################
+
+# on: a file must be read in the session before it can be edited or
+# overwritten.
+#set FILE_REQUIRE_READ on
+
+# off: write() replaces an existing file the model has read. on: the call
+# must also set overwrite.
+#set WRITE_REQUIRE_OVERWRITE off
+
+# A failed write whose content is at least this many bytes keeps the content
+# in ~/.js/tmp/held, the jail's ~/.js/tmp under -C. The ERROR names its held
+# id, and write with from_held finishes the write without the model sending
+# it again.
+#set HELD_WRITE_MIN 512
+
+# Seconds a held write content is kept; 0 keeps it until js exits.
+#set HELD_TTL 86400
+
+# An exact edit whose old text is at least this many characters is applied to
+# an unread file.
+#set EDIT_READ_BYPASS_CHARACTERS 24
+
+# on: an edit whose old text is not found exactly may match after quotes,
+# dashes and whitespace are normalised.
+#set EDIT_FUZZY on
+
+# on: rereading an unchanged range returns a short note instead of the text
+# again.
+#set READ_DEDUPLICATE on
+
+# on: repeating an unchanged file search returns a short note instead of the
+# results again.
+#set SEARCH_DEDUPLICATE on
+
+# on: directory searches do not cross into other mounted file systems.
+#set SEARCH_ONE_FILE_SYSTEM on
+
+# on: a notebook must be read before a cell is edited.
+#set NOTEBOOK_REQUIRE_READ on
+
+# on: editing a code cell clears its outputs and execution count.
+#set NOTEBOOK_CLEAR_OUTPUTS on
+
+
+################################################################################
+#  SHELL, TERMINAL AND HOOKS
+################################################################################
+
+# on: shell commands run with pipefail, so a failing stage fails the pipeline.
+#set SHELL_PIPEFAIL on
+
+# on: js's managed tool directory is put at the front of PATH for shell
+# commands.
+#set SHELL_MANAGED_PATH on
+
+# on: a shell command still running when its wait ends is killed instead of
+# left running.
+#set SHELL_KILL_UNFINISHED off
+
+# Where js logs every process tree it kills: the time, the command, the pids
+# hit and the js calls that led to it. Unset = ~/.js/state/kill.log.
+#set -KILL_LOG_FILE
+
+# Shell the terminal tool starts. Empty = $SHELL, else /bin/sh.
+#set TERMINAL_SHELL_PROGRAM ""
+
+# on: the terminal tool's shell inherits js's environment when not jailed.
+#set TERMINAL_ENVIRONMENT_INHERIT on
+
+# Shell that runs `on` hook commands. Empty = $SHELL, else /bin/sh.
+#set HOOK_SHELL_PROGRAM ""
+
+# Most agents one swarm bus may spawn.
+#set SWARM_SPAWN_MAX 8
+
+# on: parallel subagents split the parent's TOOL_RESULT_MAX, so each reply is
+# capped at its share.
+#set SUBAGENT_RESULT_SHARE on
+
+# on: language servers inherit js's environment when not jailed.
+#set LSP_ENVIRONMENT_INHERIT on
+
+# on: your home directory or / may be a language server's project root.
+#set LSP_ALLOW_HOME_ROOT off
+
+# on: listing or loading the toolbox first adds the shipped example tools.
+#set TOOLBOX_SEED_EXAMPLES on
+
+# on: a toolbox tool that uses an unbound name is refused.
+#set TOOLBOX_REQUIRE_BOUND_NAMES on
+
+
+################################################################################
+#  WEB AND SEARCH
+################################################################################
+
+# Key for serper_search. Empty = the SERPER_API_KEY environment variable.
+#set SERPER_API_KEY ""
+
+# Key for tavily_search. Empty = the TAVILY_API_KEY environment variable.
+#set TAVILY_API_KEY ""
+
+# Key for exa_search. Empty = the EXA_API_KEY environment variable.
+#set EXA_API_KEY ""
+
+# Key for docs_search. Empty = the CONTEXT7_API_KEY environment variable, else
+# the keyless rate limit.
+#set CONTEXT7_API_KEY ""
+
+# Key for jev. Empty = the TYPESAFE_API_KEY environment variable.
+#set TYPESAFE_API_KEY ""
+
+# on: browse runs obscura with --stealth.
+#set BROWSE_STEALTH on
+
+# on: browse may open a private-network IP address.
+#set BROWSE_ALLOW_PRIVATE_NETWORK on
+
+# Browser executable used when Playwright's own browser is missing.
+#set BROWSER_FALLBACK_FILE /opt/chrome-for-testing/chrome-linux64/chrome
+
+
+################################################################################
+#  SCREEN
+################################################################################
+
+# Mark on a tool call that is still running.
+#set EXCHANGE_MARK_RUNNING "…"
+
+# Mark on a tool call that succeeded.
+#set EXCHANGE_MARK_OK "✓"
+
+# Mark on a tool call that failed.
+#set EXCHANGE_MARK_FAILED "✗"
+
+# Rail drawn down the left of a tool call's rows.
+#set EXCHANGE_RAIL "▌"
+
+# Rich style of a tool call's name.
+#set EXCHANGE_HEADER_STYLE "bold"
+
+# Rich style of a tool call's key argument.
+#set EXCHANGE_ARGUMENT_STYLE "bold"
+
+# Characters of a tool argument shown on its one-line row.
+#set ARGUMENT_CHARACTERS_MAX 40
+
+# Shown in place of a newline inside a one-line tool argument.
+#set ARGUMENT_NEWLINE_MARK " ⏎ "
+
+# Marks text cut to fit.
+#set DISPLAY_ELLIPSIS "…"
+
+# Row shown between hunks of a diff.
+#set DIFF_HUNK_GAP "⋯"
+
+# Character of a markdown table's rules.
+#set TABLE_RULE "─"
+
+# Lines of a running shell command's output shown live.
+#set SHELL_LIVE_LINES_MAX 6
+
+# Rich style of a level-two markdown heading.
+#set MARKDOWN_HEADING_TWO_STYLE "underline"
+
+# Rich style of a level-three markdown heading.
+#set MARKDOWN_HEADING_THREE_STYLE "bold"
+
+# Rich style of a level-four markdown heading.
+#set MARKDOWN_HEADING_FOUR_STYLE "italic"
+
+# Padding drawn either side of inline code.
+#set MARKDOWN_INLINE_PADDING " "
+
+# on: a single newline in a reply breaks the line.
+#set MARKDOWN_HARD_BREAKS on
+
+# Frames of the busy spinner, one character each.
+#set SPINNER_FRAMES "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+# Lines the full-screen view keeps in scrollback.
+#set SCROLLBACK_LINES_MAX 5000
+
+# hunspell dictionary for prompt spelling suggestions.
+#set SPELLCHECK_LANGUAGE en_US
+
+# Seconds hunspell may take before suggestions are skipped.
+#set SPELLCHECK_TIMEOUT 2
+
+# Clipboard backends tried in order when pasting an image: wayland, x11,
+# kitty.
+#set PASTE_IMAGE_BACKENDS ["wayland", "x11", "kitty"]
+
+# Seconds one clipboard backend may take.
+#set PASTE_IMAGE_TIMEOUT 5
+
+# strftime format of the timestamp on ex-line notes.
+#set NOTE_TIMESTAMP_FORMAT "%Y-%m-%d %H:%M:%S"
+
+
+################################################################################
+#  SESSIONS
+################################################################################
+
+# Session kinds the session list hides unless asked for all: empty, quick,
+# subagent, script.
+#set SESSION_HIDDEN_KINDS ["empty", "quick", "subagent", "script"]
+
+# Run modes whose sessions count as script sessions.
+#set SESSION_SCRIPT_MODES ["commit"]
+
+# A session with at most this many turns can count as quick.
+#set SESSION_QUICK_TURNS_MAX 1
+
+# A session with at most this many tool calls can count as quick.
+#set SESSION_QUICK_TOOL_CALLS_MAX 2
+
+# A session whose last reply is shorter than this can count as quick.
+#set SESSION_QUICK_REPLY_CHARACTERS_MAX 1000
+
+# In the session list, the last reply line starting with this mark is shown as
+# the session's status.
+#set SESSION_STATUS_MARK "📌"
+
+# on: a session's text file is rewritten when its journal changes.
+#set SESSION_TEXT_AUTO_REFRESH on
+
+
+################################################################################
+#  STARTUP AND FILES
+################################################################################
+
+# Instruction files read from ~/.js, in order.
+#set GLOBAL_INSTRUCTION_FILES ["JS.md", "JS.local.md"]
+
+# Instruction files read from the start directory, in order.
+#set PROJECT_INSTRUCTION_FILES ["AGENTS.md", "AGENTS.local.md"]
+
+# on: .env files are read from the start directory and every parent; off: the
+# start directory only.
+#set DOTENV_WALK_UP on
+
+# Seconds an entry in ~/.js/tmp may go unmodified before startup removes it.
+#set TMP_AGE_MAX 86400
+
+# API key saved for a local server that needs none.
+#set LOCAL_API_KEY_PLACEHOLDER x
+
+# API key for an endpoint URI that names none.
+#set ENDPOINT_DEFAULT_KEY sk-dummy-key
+
+# on: a stale model catalog is refreshed at startup.
+#set MODEL_CATALOG_AUTO_REFRESH on
+
+# Seconds before the model catalog counts as stale.
+#set MODEL_CATALOG_AGE_MAX 28800
+
+# on: a local server is asked for its model's context window.
+#set MODEL_CONTEXT_PROBE on
+
+
+################################################################################
+#  TOOL DOWNLOADS
+################################################################################
+
+# on: a tool binary js has not installed is looked for on PATH.
+#set TOOL_BINARY_PATH_FALLBACK on
+
+# aria2 --split for tool downloads.
+#set DOWNLOAD_SPLITS_MAX 8
+
+# aria2 --max-connection-per-server for tool downloads.
+#set DOWNLOAD_CONNECTIONS_MAX 8
+
+# aria2 --max-tries for tool downloads.
+#set DOWNLOAD_RETRIES_MAX 5
+
+# aria2 --retry-wait for tool downloads, in seconds.
+#set DOWNLOAD_RETRY_WAIT 1
+
+# User-Agent of tool installer requests.
+#set TOOL_INSTALLER_USER_AGENT js-tool-installer/0.1
+
+
+################################################################################
+#  JAIL
+################################################################################
+
+# Directories the -C jail always hides.
+#set JAIL_BASE_HIDDEN_DIRS ["/home", "/run/user"]
+
+# on: the -C jail hides your home directory.
+#set JAIL_HIDE_OPERATOR_HOME on
+
+# on: the -C jail hides network file systems.
+#set JAIL_HIDE_NETWORK_FILESYSTEMS on
+
+# on: the -C jail removes private directories left by js processes that are
+# gone.
+#set JAIL_CLEAN_PRIVATE_DIRS on
+
+
+################################################################################
+#  YOUR ALIASES AND EVENT HANDLERS
+################################################################################
+# /save adds your `alias` and `on` lines below this one.

@@ -1,0 +1,171 @@
+{
+ "live": [
+  {
+   "parts": [
+    {
+     "kind": "reasoning",
+     "provider_metadata": {
+      "anthropic": {
+       "signature": "S1"
+      }
+     },
+     "text": "weigh it"
+    },
+    {
+     "kind": "text",
+     "provider_metadata": null,
+     "text": "Reading the file."
+    },
+    {
+     "kind": "tool_call",
+     "provider_metadata": null,
+     "tool_args": "{\"path\": \"a\"}",
+     "tool_call_id": "toolu_1",
+     "tool_name": "no_such_tool"
+    }
+   ],
+   "provider_metadata": {
+    "anthropic": {
+     "signature": "S1"
+    }
+   },
+   "role": "assistant",
+   "turn_id": null,
+   "usage": {
+    "cache_read_tokens": null,
+    "cache_write_tokens": null,
+    "input_tokens": 5,
+    "output_tokens": 5,
+    "raw": {
+     "input_tokens": 5,
+     "output_tokens": 5
+    },
+    "reasoning_tokens": null
+   }
+  }
+ ],
+ "live_body": [
+  {
+   "content": [
+    {
+     "signature": "S1",
+     "thinking": "weigh it",
+     "type": "thinking"
+    },
+    {
+     "text": "Reading the file.",
+     "type": "text"
+    },
+    {
+     "id": "toolu_1",
+     "input": {
+      "path": "a"
+     },
+     "name": "no_such_tool",
+     "type": "tool_use"
+    }
+   ],
+   "role": "assistant"
+  }
+ ],
+ "records": [
+  {
+   "content": "Reading the file.",
+   "provider_metadata": {
+    "anthropic": {
+     "signature": "S1"
+    }
+   },
+   "reasoning_content": "weigh it",
+   "reasoning_from": {
+    "model": "claude-sonnet-5-5",
+    "provider": "anthropic"
+   },
+   "reasoning_layout": [
+    "reasoning",
+    17,
+    "tool_call"
+   ],
+   "reasoning_parts": [
+    {
+     "provider_metadata": {
+      "anthropic": {
+       "signature": "S1"
+      }
+     },
+     "text": "weigh it"
+    }
+   ],
+   "role": "assistant",
+   "tool_calls": [
+    {
+     "function": {
+      "arguments": "{\"path\": \"a\"}",
+      "name": "no_such_tool"
+     },
+     "id": "toolu_1",
+     "type": "function"
+    }
+   ]
+  }
+ ],
+ "resumed": [
+  {
+   "parts": [
+    {
+     "kind": "reasoning",
+     "provider_metadata": {
+      "anthropic": {
+       "signature": "S1"
+      }
+     },
+     "text": "weigh it"
+    },
+    {
+     "kind": "text",
+     "provider_metadata": null,
+     "text": "Reading the file."
+    },
+    {
+     "kind": "tool_call",
+     "provider_metadata": null,
+     "tool_args": "{\"path\": \"a\"}",
+     "tool_call_id": "toolu_1",
+     "tool_name": "no_such_tool"
+    }
+   ],
+   "provider_metadata": {
+    "anthropic": {
+     "signature": "S1"
+    }
+   },
+   "role": "assistant",
+   "turn_id": null,
+   "usage": null
+  }
+ ],
+ "resumed_body": [
+  {
+   "content": [
+    {
+     "signature": "S1",
+     "thinking": "weigh it",
+     "type": "thinking"
+    },
+    {
+     "text": "Reading the file.",
+     "type": "text"
+    },
+    {
+     "id": "toolu_1",
+     "input": {
+      "path": "a"
+     },
+     "name": "no_such_tool",
+     "type": "tool_use"
+    }
+   ],
+   "role": "assistant"
+  }
+ ]
+}

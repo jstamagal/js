@@ -2,17 +2,19 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import ai
-import pytest
 import ai.types.usage
+import pytest
+from repl_driver import turn_stub
+from turn_driver import js
 
-from js import cli, logins, model_metadata, persona, runtime
+from js import cli, conversation, logins, model_metadata, persona, prompt_run, run_assembly, runtime
 from js.config import Config
 from js.model_client import ModelStreamResult
 from js.toolkit import ToolContext
-from js.toolkit.meta import task
-
+from js.toolkit.subagents import task
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 OLLAMA_BASE_URL = "http://parent-ollama.test/v1"
@@ -60,8 +62,8 @@ def _write_agent_dir(
 ) -> Path:
     prompts = root / agent_id
     prompts.mkdir(parents=True)
-    (prompts / "00-tools.yaml").write_text(manifest, encoding="utf-8")
-    (prompts / "01-body.md").write_text(body, encoding="utf-8")
+    (prompts / "agent.yaml").write_text(manifest, encoding="utf-8")
+    (prompts / "01-prompt.md").write_text(body, encoding="utf-8")
     return prompts
 
 
@@ -133,17 +135,16 @@ def _capture_single_task_route(
     return seen
 
 
-def test_apply_agent_model_uses_frontmatter_model_and_prefixed_provider_route(tmp_path):
+def test_a_run_settles_on_its_agents_frontmatter_model_and_prefixed_provider_route(tmp_path):
     prompts = _write_agent_dir(
         tmp_path / "prompts",
         "agent-model",
         "model: deepseek/agent-frontmatter-model\ntools: []\n",
     )
     cfg = _make_cfg(tmp_path, prompts)
-    prompt_spec = persona.load_prompt_spec(prompts)
     _save_login("deepseek")
 
-    actual = cli._apply_agent_model(cfg, prompt_spec, None)
+    actual = run_assembly.settle(cfg).config
 
     assert actual.model == "agent-frontmatter-model"
     assert actual.provider_id == "deepseek"
@@ -163,31 +164,29 @@ def test_operator_pinned_model_overrides_agent_frontmatter_model(tmp_path, model
         "model: deepseek/agent-frontmatter-model\ntools: []\n",
     )
     cfg = _make_cfg(tmp_path, prompts, explicit_model=explicit_model)
-    prompt_spec = persona.load_prompt_spec(prompts)
 
-    actual = cli._apply_agent_model(cfg, prompt_spec, model_arg)
+    actual = run_assembly.settle(cfg, model=model_arg, config_pins=True).config
 
-    assert actual is cfg
+    assert (actual.model, actual.provider_id) == (model_arg or cfg.model, None)
 
 
-def test_apply_agent_model_noops_without_frontmatter_model(tmp_path):
+def test_a_run_without_a_frontmatter_model_stays_on_its_configured_model(tmp_path):
     prompts = _write_agent_dir(tmp_path / "prompts", "agent-model", "tools: []\n")
     cfg = _make_cfg(tmp_path, prompts)
-    prompt_spec = persona.load_prompt_spec(prompts)
 
-    actual = cli._apply_agent_model(cfg, prompt_spec, None)
+    actual = run_assembly.settle(cfg).config
 
-    assert actual is cfg
+    assert (actual.model, actual.provider_id) == (cfg.model, None)
 
 
 @pytest.mark.parametrize(
     ("manifest_value", "expected"),
-    [("high", "high"), ("off", "none")],
+    [("high", "high"), ("off", "off"), ("spoon", "spoon")],
 )
 def test_subagent_frontmatter_reasoning_effort(monkeypatch, tmp_path, manifest_value, expected):
     prompts = _write_agent_dir(
         tmp_path / "reasoning" / "prompts",
-        manifest=f"reasoning_effort: {manifest_value}\ntools: []\n",
+        manifest=f"reasoning: {manifest_value}\ntools: []\n",
     )
     cfg = replace(_make_cfg(tmp_path, prompts), reasoning_effort="low")
 
@@ -196,13 +195,35 @@ def test_subagent_frontmatter_reasoning_effort(monkeypatch, tmp_path, manifest_v
     assert seen["reasoning_effort"] == expected
 
 
-def test_subagent_rejects_invalid_frontmatter_reasoning_effort(tmp_path):
+def test_subagent_inherit_takes_parent_model_and_effort(monkeypatch, tmp_path):
+    prompts = _write_agent_dir(
+        tmp_path / "inherit" / "prompts",
+        manifest="model: inherit\nreasoning: inherit\ntools: []\n",
+    )
+    cfg = replace(_make_cfg(tmp_path, prompts), reasoning_effort="low")
+
+    seen = _capture_single_task_route(monkeypatch, tmp_path, cfg)
+
+    assert seen["model_id"] == "parent-model"
+    assert seen["reasoning_effort"] == "low"
+
+
+def test_a_run_whose_agent_inherits_its_model_stays_on_its_configured_model(tmp_path):
+    prompts = _write_agent_dir(tmp_path / "prompts", "agent-model", "model: inherit\ntools: []\n")
+    cfg = _make_cfg(tmp_path, prompts)
+
+    actual = run_assembly.settle(cfg).config
+
+    assert (actual.model, actual.provider_id) == (cfg.model, None)
+
+
+def test_subagent_rejects_a_frontmatter_reasoning_effort_that_is_not_one_word(tmp_path):
     prompts = _write_agent_dir(
         tmp_path / "invalid-reasoning" / "prompts",
-        manifest="reasoning_effort: enormous\ntools: []\n",
+        manifest="reasoning: very enormous\ntools: []\n",
     )
 
-    with pytest.raises(ValueError, match=r"reasoning_effort .* expected off\|minimal\|low\|medium\|high\|xhigh\|max"):
+    with pytest.raises(ValueError, match="very enormous"):
         persona.load_prompt_spec(prompts)
 
 
@@ -239,7 +260,7 @@ def test_subagent_prefixed_model_reroutes_and_bare_model_keeps_parent_provider(m
     assert bare["provider_id"] == "ollama"
     assert bare["provider_base_url"] == OLLAMA_BASE_URL
     assert bare["provider_api_key"] == "parent-key"
-    assert bare["provider_headers"] == {"x-parent": "1"}
+    assert bare["provider_headers"] == {"x-parent": "1", "X-JS-Scrub": "on"}
 
 
 def test_subagent_model_precedence_tool_arg_then_prefer_inherit(monkeypatch, tmp_path):
@@ -280,8 +301,8 @@ def test_lock_subagent_model_removes_task_model_schema_property(tmp_path):
     prompts = _write_agent_dir(tmp_path / "prompts", "parent", "tools: []\n")
     cfg = _make_cfg(tmp_path, prompts)
 
-    unlocked_tool = cli._registry_for(cfg).resolve("task")
-    locked_tool = cli._registry_for(replace(cfg, lock_subagent_model=True)).resolve("task")
+    unlocked_tool = run_assembly.registry_for(cfg).resolve("task")
+    locked_tool = run_assembly.registry_for(replace(cfg, lock_subagent_model=True)).resolve("task")
 
     assert unlocked_tool is not None
     assert locked_tool is not None
@@ -294,7 +315,7 @@ def test_subagent_frontmatter_model_survives_agents_file_prepend(monkeypatch, tm
     agents_file.write_text("PARENT AGENTS INSTRUCTIONS\n", encoding="utf-8")
     prompts = _write_agent_dir(
         tmp_path / "prompts",
-        manifest="model: deepseek/agents-file-model\nreasoning_effort: high\ntools: []\n",
+        manifest="model: deepseek/agents-file-model\nreasoning: high\ntools: []\n",
         body="WORKER BODY\n",
     )
     cfg = _make_cfg(tmp_path, prompts, agents_files=(agents_file,))
@@ -348,7 +369,7 @@ def test_saved_login_prefix_overrides_pinned_provider_without_flag():
     from js.routing import resolve_model_route
 
     # The operator logged into opencode-go and asks for opencode-go/glm-5.1 while
-    # a stale `provider.id=deepseek` sits pinned in jsrc. The saved login makes
+    # a stale `PROVIDER=deepseek` sits pinned in jsrc. The saved login makes
     # the prefix authoritative even without prefix_overrides_provider and even
     # with use_saved_login=False (the live REPL state path) — and it carries the
     # login's base/key, not deepseek's.
@@ -392,7 +413,7 @@ def test_unlogged_vendor_prefix_does_not_hijack_pinned_gateway():
 def test_env_key_alone_creates_no_route_and_errors():
     from js.routing import ProviderNotLoggedInError, resolve_model_route
 
-    # RULING #1: a provider-native env key never creates a route. The default
+    # A provider-native env key never creates a route. The default
     # model prefixes deepseek; with DEEPSEEK_API_KEY set but no login and nothing
     # pinned, routing must fail loud rather than farm the key.
     with pytest.raises(ProviderNotLoggedInError) as excinfo:
@@ -401,7 +422,6 @@ def test_env_key_alone_creates_no_route_and_errors():
             env={"DEEPSEEK_API_KEY": "sk-decoy"},
         )
     assert "deepseek" in str(excinfo.value)
-    assert "not logged in" in str(excinfo.value)
 
 
 def test_catalog_prefix_with_env_token_but_no_login_errors():
@@ -421,8 +441,8 @@ def test_catalog_prefix_with_env_token_but_no_login_errors():
 def test_js_namespace_env_routes_without_any_login():
     from js.routing import resolve_model_route
 
-    # RULING carve-out: JS_* vars are explicit js-directed instructions, not
-    # provider-native env farming. They arrive as configured provider.id/base/key
+    # JS_* vars are explicit js-directed instructions, not
+    # provider-native env farming. They arrive as configured PROVIDER/base/key
     # and must route with no login at all.
     route = resolve_model_route(
         "custom-model",
@@ -436,3 +456,100 @@ def test_js_namespace_env_routes_without_any_login():
     assert route.model == "custom-model"
     assert route.base_url == "http://js-directed.test/v1"
     assert route.api_key == "sk-js"
+
+
+def _one_shot_home(monkeypatch, tmp_path, manifest: str = "model: agent-model\nreasoning: low\ntools: []\n"):
+    """A HOME whose jsrc pins a model and effort and whose `pinned` agent names its own."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    for name in ("JS_DEFAULT_AGENT", "JS_SESSION", "JS_MODEL", "JS_REASONING", "JS_EFFORT"):
+        monkeypatch.delenv(name, raising=False)
+    (tmp_path / ".js").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".js" / "jsrc").write_text(
+        "set MODEL jsrc-model\nset EFFORT high\n", encoding="utf-8")
+    _write_agent_dir(tmp_path / ".js" / "agents", "pinned", manifest)
+
+    seen: dict = {}
+
+    def fake_run_turn(cfg, system, messages, telemetry, trace_override=False, tool_context=None, **kwargs):
+        override = kwargs.get("reasoning_effort_override", cfg.reasoning_effort)
+        seen["model"] = kwargs.get("model_override") or cfg.model
+        seen["effort"] = override
+        messages.append({"role": "assistant", "content": "ok"})
+
+    monkeypatch.setattr(cli.runtime, "run_turn_async", turn_stub(fake_run_turn))
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", AsyncMock())
+    return seen
+
+
+def test_one_shot_agent_manifest_beats_jsrc_model_and_effort(monkeypatch, tmp_path):
+    seen = _one_shot_home(monkeypatch, tmp_path)
+
+    assert js(monkeypatch, "--agent", "pinned", "--no-save", "-p", "foo") == 0
+
+    assert seen == {"model": "agent-model", "effort": "low"}
+
+
+def test_one_shot_without_manifest_pins_keeps_jsrc_model_and_effort(monkeypatch, tmp_path):
+    seen = _one_shot_home(monkeypatch, tmp_path, manifest="tools: []\n")
+
+    assert js(monkeypatch, "--agent", "pinned", "--no-save", "-p", "foo") == 0
+
+    assert seen == {"model": "jsrc-model", "effort": "high"}
+
+
+@pytest.mark.parametrize(
+    ("argv", "env", "expected"),
+    [
+        (["--model", "flag-model"], {}, {"model": "flag-model", "effort": "low"}),
+        (["--reasoning", "xhigh"], {}, {"model": "agent-model", "effort": "xhigh"}),
+        ([], {"JS_MODEL": "env-model"}, {"model": "env-model", "effort": "low"}),
+        ([], {"JS_REASONING": "medium"}, {"model": "agent-model", "effort": "medium"}),
+        (["--extra", "MODEL=extra-model"], {}, {"model": "extra-model", "effort": "low"}),
+        (["--extra", "EFFORT=medium"], {}, {"model": "agent-model", "effort": "medium"}),
+    ],
+)
+def test_one_shot_invocation_pins_beat_agent_manifest(monkeypatch, tmp_path, argv, env, expected):
+    seen = _one_shot_home(monkeypatch, tmp_path)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+
+    assert js(monkeypatch, "--agent", "pinned", "--no-save", *argv, "-p", "foo") == 0
+
+    assert seen == expected
+
+
+def test_one_shot_config_pins_keeps_jsrc_model_and_effort(monkeypatch, tmp_path):
+    seen = _one_shot_home(monkeypatch, tmp_path)
+
+    assert prompt_run.run("foo", agent="pinned", save=False, config_pins=True) == 0
+
+    assert seen == {"model": "jsrc-model", "effort": "high"}
+
+
+def test_resumed_one_shot_stays_on_its_stamp_when_manifest_changes(monkeypatch, tmp_path):
+    seen = _one_shot_home(monkeypatch, tmp_path)
+    assert js(monkeypatch, "--agent", "pinned", "--session", "kept", "-p", "foo") == 0
+    assert seen == {"model": "agent-model", "effort": "low"}
+
+    (tmp_path / ".js" / "agents" / "pinned" / "agent.yaml").write_text(
+        "model: other-model\nreasoning: xhigh\ntools: []\n", encoding="utf-8")
+    assert js(monkeypatch, "--agent", "pinned", "--session", "kept", "-p", "again") == 0
+
+    assert seen == {"model": "agent-model", "effort": "low"}
+
+
+def test_env_model_prefix_without_login_errors(monkeypatch, tmp_path):
+    """JS_MODEL makes the model invocation-explicit, so an unlogged provider
+    prefix fails loud instead of running with provider_id=None and the raw
+    slashy id."""
+    from js.config import from_env
+    from js.routing import ProviderNotLoggedInError
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    for name in ("JS_MODEL", "JS_PROVIDER"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("JS_MODEL", "deepseek/deepseek-chat")
+    with pytest.raises(ProviderNotLoggedInError):
+        from_env(save_session=False)

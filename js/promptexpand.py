@@ -1,8 +1,9 @@
 r"""Inline directive expansion for js system prompts.
 
-Three forms are resolved before the assembled system prompt reaches the model:
+Four forms are resolved before trusted prompt text reaches the model:
 
   {{NAME}}            -> value of environment variable NAME (unset -> "")
+  %%NAME%%            -> value of a js built-in variable
   !{subsystem args}   -> inline: run a subsystem, inject its output
   ```!subsystem       -> block: the fenced body is fed to the subsystem and the
   <body>                 whole fence is replaced by the subsystem's output
@@ -14,16 +15,17 @@ what an inline is activating. Subsystems are a registry:
   env, file   -- always on; they only READ (env var value / file contents).
   sh, bash,   -- they EXECUTE arbitrary code embedded in the prompt file. They
   python, py,    run when ``allow_code`` is true, which is the DEFAULT
-  c, node, js    (``runtime.allow_inline_code``). Opt out with ``--im-a-pussy``
-                 (or ``set runtime.allow_inline_code off`` / ``JS_ALLOW_INLINE_CODE=0``);
-                 a code directive then stays literal. Body is passed raw.
+  c, node, js    (``INLINE_CODE``). Opt out with ``--im-a-pussy``
+                 (or ``set INLINE_CODE off`` / ``JS_INLINE_CODE=0``);
+                 a code directive then expands to nothing. Built-ins in its body
+                 are substituted before execution.
 
 Expansion is a SINGLE pass: a directive's output is never re-scanned, so a value
 (or a command's stdout) that happens to contain another ``!{...}`` / ``{{...}}``
 cannot trigger further expansion. That is the injection guard. A directive that
-fails to resolve is, by default, left literal (with a one-line stderr warning)
-rather than aborting the load — call with ``on_error="raise"`` for the strict
-behavior.
+fails to resolve expands to nothing, with a one-line stderr warning, rather than
+aborting the load or reaching the model as raw text — call with
+``on_error="raise"`` for the strict behavior.
 
 A prompt that documents the directive syntax to itself must be able to show a
 directive without the loader running it. Two ways:
@@ -31,9 +33,9 @@ directive without the loader running it. Two ways:
   * a backslash immediately before ANY form -- ``\!{sh ...}``, ``\{{VAR}}``,
     ``\``` ``!sub`` -- emits the directive verbatim, minus the one escape
     backslash. This is the universal escape and the only one for fenced blocks.
-  * an inline ``!{...}`` / ``{{...}}`` wrapped in a markdown backtick code span --
+  * an inline ``!{...}`` / ``{{...}}`` inside a markdown backtick code span --
     e.g. ```` `!{sh ...}` ```` -- is left literal, backticks and all. An
-    ergonomic shortcut for prose; only a FULLY wrapped span is protected (a lone
+    ergonomic shortcut for prose; only a closed span is protected (a lone
     leading backtick still expands).
 """
 
@@ -45,34 +47,57 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Mapping
+from contextvars import ContextVar
 from pathlib import Path
 
-from . import settings
-from .capped_process import CappedProcessResult, _run_capped, truncation_marker
+from . import messages as msgs, paths, settings
+from .capped_process import CappedProcessResult, run_capped, truncation_marker
 
-__all__ = ["expand_prompt", "PromptExpansionError"]
+__all__ = ["expand_prompt", "session_variables", "PromptExpansionError"]
 
 
 class PromptExpansionError(ValueError):
     """A directive could not be resolved (unknown subsystem, gated/failed code,
-    unreadable file, malformed token)."""
+    unreadable file, malformed token).
+
+    ``remainder`` is text the match spans that is not part of the directive; it
+    stays in the output when the directive is dropped."""
+
+    def __init__(self, *args, remainder: str = "") -> None:
+        super().__init__(*args)
+        self.remainder = remainder
 
 
-_DEFAULT_TIMEOUT_S = 300
 _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_VARIABLE = re.compile(r"(?P<vbs>\\)?(?P<vtick>`)?%%(?P<variable>[A-Za-z_][A-Za-z0-9_]*)%%(?(vtick)`)")
 
-# One combined scanner: fenced block | inline | env shorthand. Matched in this
-# order so a ```!fence wins over the inline form. re.sub replaces each match
+
+_WARNING: ContextVar = ContextVar("js_expansion_warning", default=None)
+_CODE_ENV: ContextVar[dict | None] = ContextVar("js_expansion_code_env", default=None)
+
+
+def session_variables(cfg) -> dict[str, str]:
+    """Built-in values for the session and effective model in ``cfg``."""
+    path = Path(getattr(cfg, "session_file", os.devnull)).expanduser().absolute()
+    return {
+        "JS_HOME": str(paths.home()),
+        "CURRENT_SESSION": path.stem if path != Path(os.devnull) else "",
+        "CURRENT_SESSION_FULLPATH": str(path),
+        "CURRENT_SESSION_AGENT": getattr(cfg, "agent_id", ""),
+        "CURRENT_SESSION_MODEL": getattr(cfg, "model", ""),
+    }
+
+# One combined scanner: fenced block | code span | inline | env shorthand | built-in.
+# Explicit ```!fences win over code spans. re.sub replaces each match
 # independently and never re-scans the replacement (single pass / injection-safe).
 #
-# A leading ``bs`` backslash escapes ANY of the three forms: when present the
+# A leading backslash escapes any form: when present the
 # whole match is emitted verbatim minus that backslash (see _resolve) -- the only
-# escape that reaches the fenced block. The inline / env forms additionally carry
-# an optional leading backtick (itick / etick); the trailing ``(?(name)`)``
-# matches a closing backtick ONLY when the leading one was captured, so a directive
-# fully wrapped in a backtick code span is matched as a unit and emitted literally,
-# while a directive with no backticks -- or only a stray leading one -- backtracks
-# to the unwrapped form and expands.
+# escape that reaches the fenced block. A code span consumes matching complete
+# backtick runs on one line, keeping every directive inside it literal; a fenced
+# block spans lines, so the directives in it expand. The built-in scanner
+# also recognizes adjacent backticks when substituting inside subsystem bodies.
 #
 # The fenced form additionally must OPEN A LINE, like a real markdown fence: the
 # lookbehind admits only the start of the text or a position straight after a newline
@@ -82,9 +107,11 @@ _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # and reported `unknown inline subsystem 'sub'` on every single run.
 _DIRECTIVE = re.compile(
     r"(?:"
-    r"(?<![^\n])(?P<find>[ ]{0,3})(?P<bs>\\)?```!(?P<fsub>[A-Za-z0-9_+-]+)[^\n]*\n(?P<fbody>.*?)\n```"
+    r"(?<![^\n])(?P<find>[ ]{0,3})(?P<bs>\\)?```!(?P<fsub>[A-Za-z0-9_+-]+)[^\n]*\n(?:(?P<fbody>.*?)\n)??[ ]{0,3}```[ \t]*(?=\r?\n|\Z)"
+    r"|(?P<literal_span>(?<![\\`])(?:\\\\)*(?P<span_ticks>`+)(?!`)[^\n]*?(?<!`)(?P=span_ticks)(?!`))"
     r"|(?P<ibs>\\)?(?P<itick>`)?!\{(?P<isub>[A-Za-z0-9_+-]+)(?:[ \t]+(?P<iargs>[^}]*))?\}(?(itick)`)"
     r"|(?P<ebs>\\)?(?P<etick>`)?\{\{(?P<env>[^{}]*?)\}\}(?(etick)`)"
+    r"|" + _VARIABLE.pattern +
     r")",
     re.DOTALL,
 )
@@ -95,19 +122,23 @@ def expand_prompt(
     *,
     allow_code: bool = False,
     env: dict | None = None,
-    timeout_s: int = _DEFAULT_TIMEOUT_S,
-    max_output_bytes: int = settings.DEFAULT_MAX_BASH_OUTPUT_BYTES,
-    on_error: str = "warn",
+    code_env: dict | None = None,
+    variables: Mapping[str, str] | None = None,
+    timeout_s: int | None = None,
+    max_output_bytes: int | None = None,
+    on_error: str = "drop",
+    subsystems: Mapping | None = None,
+    warn=None,
 ) -> str:
-    """Return ``text`` with ``{{VAR}}`` / ``!{sub ...}`` / ```` ```!sub ```` directives expanded.
+    """Expand ``%%VAR%%``, ``{{VAR}}``, inline and fenced subsystem directives.
 
     ``on_error`` governs what happens when a single directive cannot be resolved
     (unknown subsystem, a code subsystem while ``allow_code`` is false, an
     execution/read failure, a malformed token):
 
-      ``"warn"`` (default) -- leave that directive LITERAL in the output, print
-      one line to stderr, and keep going. A broken directive never aborts the
-      load: js starts, that spot just stays unexpanded.
+      ``"drop"`` (default) -- that directive expands to nothing, one line goes
+      to stderr, and expansion goes on. A broken directive never aborts the
+      load and never reaches the model as raw directive text.
       ``"raise"`` -- raise :class:`PromptExpansionError` at the first failure
       (the strict behavior; used by tests).
 
@@ -115,15 +146,40 @@ def expand_prompt(
     resolved independently in a single, non-re-scanned pass (the injection guard).
 
     ``env`` substitutes only for the read-only lookups ({{VAR}} and !{env});
-    code subsystems (sh/bash/python/node/c) always execute against the real
-    process environment.
+    code subsystems (sh/bash/python/node/c) execute against the real process
+    environment unless ``code_env`` supplies an explicit child environment.
+
+    ``variables`` supplies the independent js built-ins, including substitutions
+    in subsystem bodies. Unknown built-ins stay literal.
+
+    ``timeout_s`` and ``max_output_bytes`` left None take the js/jsrc values of
+    INLINE_CODE_TIMEOUT and SHELL_OUTPUT_MAX.
     """
-    if "{{" not in text and "!{" not in text and "```!" not in text:
+    if "{{" not in text and "!{" not in text and "```!" not in text and "%%" not in text:
         return text
+    if timeout_s is None:
+        timeout_s = settings.default_value("INLINE_CODE_TIMEOUT")
+    if max_output_bytes is None:
+        max_output_bytes = settings.default_value("SHELL_OUTPUT_MAX")
 
     environ = os.environ if env is None else env
+    builtins = variables or {}
+    warning = msgs.warn if warn is None else warn
+    def dispatch(*args):
+        if subsystems is None:
+            return _run_subsystem(*args)
+        return _run_subsystem(*args, subsystems=subsystems)
+
+    def _variable(m: re.Match) -> str:
+        if m.group("vbs") is not None:
+            return m.group(0)[1:]
+        if m.group("vtick") is not None:
+            return m.group(0)
+        return builtins.get(m.group("variable"), m.group(0))
 
     def _resolve(m: re.Match) -> str:
+        if m.group("literal_span") is not None:
+            return m.group(0)
         # \-escaped directive: emit it verbatim, minus the one escape backslash.
         # Each branch carries its own escape group because the fenced branch has to
         # sit behind a line-start lookbehind that a shared leading group would break.
@@ -133,13 +189,31 @@ def expand_prompt(
             return m.group(0).replace("\\", "", 1)
         try:
             if m.group("fsub") is not None:
+                # A body that itself carries a fence opener is a malformed or
+                # nested directive: running it would hand the shell a script
+                # the author never wrote (the prefix before the stray ``` runs,
+                # then the expansion fails). Leave the directive literal.
+                fbody = "\n".join(
+                    line.removesuffix("\r").removeprefix(m.group("find"))
+                    for line in (m.group("fbody") or "").replace("\r\n", "\n").split("\n")
+                )
+                if re.search(r"(?m)^[ ]{0,3}```", fbody):
+                    # The match runs past the unterminated directive into the
+                    # next fence; that fence and everything after it is prompt.
+                    whole = m.group(0)
+                    fence = re.compile(rf"(?m)^[ ]{{0,{len(m.group('find')) + 3}}}```")
+                    foreign = fence.search(whole, whole.index("\n") + 1)
+                    raise PromptExpansionError(
+                        msgs.DIRECTIVE_FENCED_DIRECTIVE_BODY_CARRIES_A_LINE_THE.words(),
+                        remainder=whole[foreign.start():],
+                    )
                 # Put the markdown indent back. The fence may sit up to three
                 # spaces in because it is nested in a list; dropping the indent
                 # pulls the expansion out of that list and changes the structure
                 # of the prompt the model reads.
-                return m.group("find") + _run_subsystem(
+                return m.group("find") + dispatch(
                     m.group("fsub"),
-                    m.group("fbody"),
+                    _VARIABLE.sub(_variable, fbody),
                     allow_code,
                     environ,
                     timeout_s,
@@ -150,14 +224,16 @@ def expand_prompt(
             if m.group("itick") is not None or m.group("etick") is not None:
                 return m.group(0)
             if m.group("isub") is not None:
-                return _run_subsystem(
+                return dispatch(
                     m.group("isub"),
-                    (m.group("iargs") or "").strip(),
+                    _VARIABLE.sub(_variable, (m.group("iargs") or "").strip()),
                     allow_code,
                     environ,
                     timeout_s,
                     max_output_bytes,
                 )
+            if m.group("variable") is not None:
+                return _variable(m)
             # {{...}} env shorthand
             name = m.group("env").strip()
             if not _NAME.fullmatch(name):
@@ -166,11 +242,16 @@ def expand_prompt(
         except PromptExpansionError as exc:
             if on_error == "raise":
                 raise
-            # Degrade: keep the directive literal, warn once, don't brick startup.
-            print(f"js: prompt directive left literal: {exc}", file=sys.stderr)
-            return m.group(0)
+            warning(msgs.DIRECTIVE_NOT_EXPANDED, error=exc)
+            return exc.remainder
 
-    return _DIRECTIVE.sub(_resolve, text)
+    token = _WARNING.set(warning)
+    code_token = _CODE_ENV.set(code_env)
+    try:
+        return _DIRECTIVE.sub(_resolve, text)
+    finally:
+        _CODE_ENV.reset(code_token)
+        _WARNING.reset(token)
 
 
 # --------------------------------------------------------------------------- #
@@ -184,23 +265,26 @@ def _run_subsystem(
     environ: dict,
     timeout_s: int,
     max_output_bytes: int,
+    *,
+    subsystems: Mapping | None = None,
 ) -> str:
+    subsystems = _SUBSYSTEMS if subsystems is None else subsystems
     key = name.lower()
-    spec = _SUBSYSTEMS.get(key)
+    spec = subsystems.get(key)
     if spec is None:
         raise PromptExpansionError(
-            f"unknown inline subsystem '{name}'. known: {', '.join(sorted(_SUBSYSTEMS))}"
+            msgs.DIRECTIVE_UNKNOWN_SUBSYSTEM.said(name=name, known=", ".join(sorted(subsystems)))
         )
     is_code, runner = spec
     if is_code and not allow_code:
-        raise PromptExpansionError(
-            f"inline '{name}' executes code, but inline-code execution is off "
-            f"(--im-a-pussy / set runtime.allow_inline_code off / JS_ALLOW_INLINE_CODE=0)"
-        )
-    if is_code:
-        # Code subsystems run against the real process environment, always.
-        return runner(body, timeout_s=timeout_s, max_output_bytes=max_output_bytes)
-    return runner(body, environ=environ, timeout_s=timeout_s)
+        raise PromptExpansionError(msgs.DIRECTIVE_CODE_OFF.said(name=name))
+    try:
+        if is_code:
+            # Built-in runners use this expansion's child environment.
+            return runner(body, timeout_s=timeout_s, max_output_bytes=max_output_bytes)
+        return runner(body, environ=environ, timeout_s=timeout_s)
+    except OSError as exc:
+        raise PromptExpansionError(msgs.DIRECTIVE_.words(name=name, __name__=type(exc).__name__, exc=exc)) from exc
 
 
 # ---- read-only subsystems (always on) ----
@@ -208,18 +292,22 @@ def _run_subsystem(
 def _sub_env(body: str, *, environ: dict, timeout_s: int) -> str:
     name = body.strip()
     if not _NAME.fullmatch(name):
-        raise PromptExpansionError(f"!{{env ...}} needs a variable name, got '{body}'")
+        raise PromptExpansionError(msgs.DIRECTIVE_ENV_NEEDS_NAME.said(body=body))
     return environ.get(name, "")
 
 
-def _sub_file(body: str, *, environ: dict, timeout_s: int) -> str:
+def _sub_file(body: str, *, environ: dict, timeout_s: int, on_missing=None) -> str:
     path = Path(os.path.expanduser(body.strip()))
     try:
         return path.read_text(encoding="utf-8")
-    except OSError:
-        # A missing/unreadable file embeds nothing rather than aborting the
-        # whole prompt, so optional box-info embeds never brick startup.
-        return ""
+    except OSError as exc:
+        return "" if on_missing is None else on_missing(path, exc)
+    except ValueError as exc:
+        # A non-UTF-8 file raises UnicodeDecodeError (a ValueError), not
+        # OSError. Do not embed nothing silently: surface the unreadable
+        # include through the standard directive-failure warn, or a path
+        # typo hides as an empty embed.
+        raise PromptExpansionError(msgs.DIRECTIVE_UNREADABLE_AS_TEXT.format(path=path, exc=exc)) from None
 
 
 # ---- code subsystems (gated) ----
@@ -231,19 +319,21 @@ def _decode_capped(data: bytes, *, truncated: bool, max_output_bytes: int) -> st
     return text
 
 
-def _run_capture(argv, *, cwd=None, timeout_s: int, label: str, max_output_bytes: int) -> str:
+def run_capture(
+    argv, *, cwd=None, timeout_s: int, label: str, max_output_bytes: int, strict: bool = False
+) -> str:
     try:
-        proc = _run_capped(
+        proc = run_capped(
             argv,
             cwd=cwd,
-            env=None,
+            env=_CODE_ENV.get(),
             timeout=timeout_s,
             cap=max_output_bytes,
         )
     except FileNotFoundError:
-        raise PromptExpansionError(f"{label}: '{argv[0]}' not found on PATH") from None
+        raise PromptExpansionError(msgs.DIRECTIVE_NOT_ON_PATH.said(label=label, program=argv[0])) from None
     except subprocess.TimeoutExpired:
-        raise PromptExpansionError(f"{label}: timed out after {timeout_s}s") from None
+        raise PromptExpansionError(msgs.DIRECTIVE_TIMED_OUT.said(label=label, seconds=timeout_s)) from None
     if not isinstance(proc, CappedProcessResult):
         proc = CappedProcessResult(proc[0], proc[1], proc[2])
     stdout = _decode_capped(
@@ -257,13 +347,20 @@ def _run_capture(argv, *, cwd=None, timeout_s: int, label: str, max_output_bytes
         max_output_bytes=max_output_bytes,
     )
     if proc.returncode != 0:
+        if not strict and stdout:
+            # grep with no match or a script ending on a false test exits
+            # nonzero after printing what the prompt wants.
+            (_WARNING.get() or msgs.warn)(msgs.DIRECTIVE_EXITED_OUTPUT_USED, label=label, code=proc.returncode)
+            return stdout.rstrip("\n")
         err = stderr.strip()
-        raise PromptExpansionError(f"{label}: exited {proc.returncode}: {err or '(no stderr)'}")
+        if err:
+            raise PromptExpansionError(msgs.DIRECTIVE_EXITED.said(label=label, code=proc.returncode, stderr=err))
+        raise PromptExpansionError(msgs.DIRECTIVE_EXITED_SILENT.said(label=label, code=proc.returncode))
     return stdout.rstrip("\n")
 
 
 def _sub_sh(body: str, *, timeout_s: int, max_output_bytes: int) -> str:
-    return _run_capture(
+    return run_capture(
         ["sh", "-c", body],
         timeout_s=timeout_s,
         label="!{sh}",
@@ -272,7 +369,7 @@ def _sub_sh(body: str, *, timeout_s: int, max_output_bytes: int) -> str:
 
 
 def _sub_bash(body: str, *, timeout_s: int, max_output_bytes: int) -> str:
-    return _run_capture(
+    return run_capture(
         ["bash", "-c", body],
         timeout_s=timeout_s,
         label="!{bash}",
@@ -289,10 +386,10 @@ def _interpreted(label: str, interp_argv, ext: str):
     throwaway compile dir. This matches the bare ``!{sh}``/``!{bash}`` runners.
     """
     def runner(body: str, *, timeout_s: int, max_output_bytes: int) -> str:
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir=paths.tmp_dir()) as d:
             src = Path(d) / f"snippet{ext}"
             src.write_text(body, encoding="utf-8")
-            return _run_capture(
+            return run_capture(
                 [*interp_argv, str(src)],
                 timeout_s=timeout_s,
                 label=label,
@@ -309,18 +406,19 @@ def _compiled(label: str, compiler: str, ext: str):
     """
     def runner(body: str, *, timeout_s: int, max_output_bytes: int) -> str:
         cc = shutil.which(compiler) or compiler
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir=paths.tmp_dir()) as d:
             src = Path(d) / f"snippet{ext}"
             exe = Path(d) / "snippet.out"
             src.write_text(body, encoding="utf-8")
-            _run_capture(
+            run_capture(
                 [cc, str(src), "-o", str(exe)],
                 cwd=d,
                 timeout_s=timeout_s,
-                label=f"{label} (compile)",
+                label=f"{label} compile",
                 max_output_bytes=max_output_bytes,
+                strict=True,
             )
-            return _run_capture(
+            return run_capture(
                 [str(exe)],
                 timeout_s=timeout_s,
                 label=label,
@@ -335,8 +433,8 @@ _SUBSYSTEMS: dict = {
     "file": (False, _sub_file),
     "sh": (True, _sub_sh),
     "bash": (True, _sub_bash),
-    "python": (True, _interpreted("!{python}", ["python3"], ".py")),
-    "py": (True, _interpreted("!{py}", ["python3"], ".py")),
+    "python": (True, _interpreted("!{python}", [sys.executable], ".py")),
+    "py": (True, _interpreted("!{py}", [sys.executable], ".py")),
     "node": (True, _interpreted("!{node}", ["node"], ".js")),
     "js": (True, _interpreted("!{js}", ["node"], ".js")),
     "c": (True, _compiled("!{c}", "cc", ".c")),

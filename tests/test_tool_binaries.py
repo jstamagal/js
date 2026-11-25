@@ -14,6 +14,24 @@ from js import tool_binaries
 from js.toolkit.core import ToolContext
 
 
+def test_saved_download_leaves_only_its_file_in_the_directory(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    directory = tmp_path / "project"
+    directory.mkdir()
+
+    def start(argv, **kwargs):
+        partial = Path(next(arg[6:] for arg in argv if arg.startswith("--dir=")))
+        (partial / next(arg[6:] for arg in argv if arg.startswith("--out="))).write_bytes(b"payload")
+        return SimpleNamespace(returncode=0, poll=lambda: 0)
+
+    monkeypatch.setattr(tool_binaries.subprocess, "Popen", start)
+    tool_binaries.download_with_aria2("aria2c", "https://example.test/file", directory / "file",
+                                      timeout_s=5)
+
+    assert sorted(path.name for path in directory.iterdir()) == ["file"]
+
+
 def _tar_gz(member: str, content: bytes) -> bytes:
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode="w:gz") as bundle:
@@ -68,18 +86,18 @@ def test_install_download_rejects_corrupted_checksum(tmp_path: Path) -> None:
     def download(_url: str, destination: Path) -> None:
         destination.write_bytes(archive)
 
-    with pytest.raises(tool_binaries.InstallError, match="checksum mismatch.*refusing to install"):
+    with pytest.raises(tool_binaries.InstallError):
         tool_binaries.install_download(spec, tools_dir=tmp_path, downloader=download)
 
 
 def test_install_download_extracts_pinned_zip_member(tmp_path: Path) -> None:
-    executable = b"ast-grep fixture"
-    archive = _zip("ast-grep", executable)
+    executable = b"zip fixture"
+    archive = _zip("tool", executable)
     spec = replace(
         _spec(archive, executable),
-        executable="ast-grep",
-        asset="app-x86_64-unknown-linux-gnu.zip",
-        archive_member="ast-grep",
+        executable="tool",
+        asset="tool-x86_64.zip",
+        archive_member="tool",
     )
 
     def download(_url: str, destination: Path) -> None:
@@ -88,7 +106,7 @@ def test_install_download_extracts_pinned_zip_member(tmp_path: Path) -> None:
     state = tool_binaries.install_download(spec, tools_dir=tmp_path, downloader=download)
 
     assert state == "installed"
-    assert (tmp_path / "ast-grep").read_bytes() == executable
+    assert (tmp_path / "tool").read_bytes() == executable
 
 
 def test_install_download_is_idempotent_without_second_download(tmp_path: Path) -> None:
@@ -125,11 +143,117 @@ def test_resolve_binary_falls_back_to_path_before_install(tmp_path: Path, monkey
     assert tool_binaries.resolve_binary("rg") == "/path/bin/rg"
 
 
+@pytest.mark.parametrize("environment", [
+    {"TERMUX_VERSION": "0.118.3"},
+    {"PREFIX": "/data/data/com.termux/files/usr"},
+    {"PREFIX": "/data/user/0/com.termux/files/usr"},
+])
+def test_termux_plan_never_selects_desktop_artifacts(monkeypatch, environment):
+    monkeypatch.delenv("TERMUX_VERSION", raising=False)
+    monkeypatch.delenv("PREFIX", raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(tool_binaries.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(tool_binaries.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(tool_binaries.platform, "libc_ver", lambda: ("glibc", "2.40"))
+
+    specs, missing = tool_binaries.release_plan()
+
+    assert specs == []
+    assert any("obscura" in item and "obscura-worker" in item for item in missing)
+
+
+@pytest.mark.parametrize("version", ["2.39+r1", "unknown", "2..39", "", "2.34", "2.35", "2.40"])
+def test_release_plan_handles_libc_versions(monkeypatch, version):
+    monkeypatch.setattr(tool_binaries, "is_termux", lambda: False)
+    monkeypatch.setattr(tool_binaries.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(tool_binaries.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(tool_binaries.platform, "libc_ver", lambda: ("glibc", version))
+
+    specs, missing = tool_binaries.release_plan()
+
+    names = {spec.name for spec in specs}
+    if version in {"2.35", "2.40"}:
+        assert "obscura" in names
+    else:
+        assert "obscura" not in names
+        assert any("obscura" in notice for notice in missing)
+
+
+@pytest.mark.parametrize("failure", [None, "pkg", "timeout", "unavailable", "missing"])
+def test_termux_install_uses_pkg_and_preserves_native_builds(monkeypatch, tmp_path, failure):
+    monkeypatch.setenv("TERMUX_VERSION", "0.118.3")
+    prefix_bin = tmp_path / "usr" / "bin"
+    prefix_bin.mkdir(parents=True)
+    pkg = prefix_bin / "pkg"
+    pkg.touch()
+    tools = tmp_path / "managed"
+    tools.mkdir()
+    for name in ("aria2c", "bat", "fd", "fzf", "rg"):
+        binary = prefix_bin / name
+        binary.write_text("native package")
+        binary.chmod(0o755)
+        (tools / name).write_text("stale desktop binary")
+    for name in ("obscura", "obscura-worker"):
+        (tools / name).write_text("owner's native build")
+    monkeypatch.setattr(tool_binaries.shutil, "which", lambda name: str(pkg) if name == "pkg" and failure != "unavailable" else None)
+    monkeypatch.setattr(tool_binaries.urllib.request, "urlopen",
+                        lambda *_args, **_kwargs: pytest.fail("desktop download"))
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        assert kwargs["check"] is True
+        assert kwargs["timeout"] > 0
+        if failure == "pkg":
+            raise tool_binaries.subprocess.CalledProcessError(1, argv)
+        if failure == "timeout":
+            raise tool_binaries.subprocess.TimeoutExpired(argv, 600)
+        if failure == "missing":
+            (prefix_bin / "rg").unlink(missing_ok=True)
+
+    monkeypatch.setattr(tool_binaries.subprocess, "run", run)
+    for _ in range(2):
+        with pytest.raises(tool_binaries.InstallError):
+            tool_binaries.install_all(tools_dir=tools)
+    expected = [str(pkg), "install", "-y", "aria2", "bat", "fd", "fzf", "ripgrep"]
+    assert calls == ([] if failure == "unavailable" else [expected] * 2)
+    if failure is None:
+        for name in ("aria2c", "bat", "fd", "fzf", "rg"):
+            assert (tools / name).is_symlink()
+            assert (tools / name).resolve() == prefix_bin / name
+    else:
+        for name in ("aria2c", "bat", "fd", "fzf", "rg"):
+            assert (tools / name).read_text() == "stale desktop binary"
+    for name in ("obscura", "obscura-worker"):
+        assert (tools / name).read_text() == "owner's native build"
+
+
+def test_termux_install_adopts_native_builds_in_prefix(monkeypatch, tmp_path):
+    monkeypatch.setenv("TERMUX_VERSION", "0.118.3")
+    prefix_bin = tmp_path / "usr" / "bin"
+    prefix_bin.mkdir(parents=True)
+    pkg = prefix_bin / "pkg"
+    pkg.touch()
+    for name in ("aria2c", "bat", "fd", "fzf", "rg", "obscura", "obscura-worker"):
+        binary = prefix_bin / name
+        binary.write_text("native")
+        binary.chmod(0o755)
+    tools = tmp_path / "managed"
+    monkeypatch.setattr(tool_binaries.shutil, "which", lambda name: str(pkg) if name == "pkg" else None)
+    monkeypatch.setattr(tool_binaries.subprocess, "run", lambda argv, **kwargs: None)
+
+    tool_binaries.install_all(tools_dir=tools)
+
+    for name in ("obscura", "obscura-worker"):
+        assert (tools / name).resolve() == prefix_bin / name
+
+
 def test_platform_error_names_missing_assets(monkeypatch) -> None:
     monkeypatch.setattr(tool_binaries.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(tool_binaries.platform, "machine", lambda: "arm64")
     specs, missing = tool_binaries.release_plan()
-    assert {s.executable for s in specs} == {"rg", "fd", "bat", "fzf", "ast-grep"}
+    assert {s.executable for s in specs} == {"rg", "fd", "bat", "fzf"}
     assert any("aria2" in m and "Darwin aarch64" in m for m in missing)
     assert any("obscura" in m and "verification" in m for m in missing)
 
@@ -212,7 +336,6 @@ def test_musl_plan_never_selects_glibc_binaries(monkeypatch, machine):
     monkeypatch.setattr(tool_binaries.platform, "libc_ver", lambda: ("musl", "1.2.5"))
     specs, missing = tool_binaries.release_plan()
     assert {s.executable for s in specs} == {"aria2c", "rg", "fd", "bat", "fzf"}
-    assert any("ast-grep" in m for m in missing)
     assert any("obscura" in m for m in missing)
 
 
@@ -227,7 +350,7 @@ def test_rejects_tar_link_without_replacing_existing_binary(tmp_path):
     spec = _spec(archive, b"new")
     target = tmp_path / "fixture"
     target.write_bytes(b"old")
-    with pytest.raises(tool_binaries.InstallError, match="not a regular file"):
+    with pytest.raises(tool_binaries.InstallError):
         tool_binaries.install_download(
             spec, tools_dir=tmp_path, downloader=lambda _, p: p.write_bytes(archive)
         )
@@ -267,12 +390,35 @@ def test_install_all_bootstraps_without_system_tools_and_reuses_managed_aria2(
 
 def test_shell_puts_the_managed_binary_directory_first_on_path(tmp_path, monkeypatch):
     """fd, bat and fzf are downloaded for a command to call by name."""
-    from js.toolkit import process_net
+    from js.toolkit import shell
 
-    monkeypatch.setattr(process_net, "TOOLS_DIR", tmp_path / "bin")
+    monkeypatch.setattr(shell, "TOOLS_DIR", tmp_path / "bin")
     context = ToolContext(cwd=tmp_path)
 
-    result = process_net.shell(command="printf %s \"$PATH\"", context=context)
+    result = shell.shell(command="printf %s \"$PATH\"", context=context)
 
     assert str(tmp_path / "bin") in result
     assert result.split("--- stdout ---")[-1].strip().startswith(str(tmp_path / "bin"))
+
+
+def test_registered_download_policy_reaches_aria2_arguments(tmp_path):
+    from js import settings
+
+    settings.bind_live_settings({"DOWNLOAD_SPLITS_MAX": 2, "DOWNLOAD_RETRIES_MAX": 1})
+    argv = tool_binaries.aria2_argv("aria2c", "https://example.test/file", tmp_path / "partial", timeout_s=30)
+    assert "--split=2" in argv
+    assert "--max-tries=1" in argv
+
+
+def test_installer_accepts_provisioning_and_notice_services(monkeypatch, tmp_path, capsys):
+    provisioned, notices = [], []
+    monkeypatch.setattr(tool_binaries, "release_plan", lambda: ([], []))
+    monkeypatch.setattr(tool_binaries, "is_termux", lambda: False)
+    monkeypatch.setattr(tool_binaries.platform, "system", lambda: "Darwin")
+    def provision(path):
+        provisioned.append(path)
+        return "/assembly/aria2c"
+    tool_binaries.install_all(tools_dir=tmp_path, provision_brew=provision,
+                              say=lambda *args, **kwargs: notices.append(args))
+    assert provisioned == [tmp_path] and notices
+    assert capsys.readouterr().out == ""

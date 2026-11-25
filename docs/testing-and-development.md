@@ -9,13 +9,12 @@ runtime tool loops, registry surfaces, subagent isolation, memory, wiki tools, a
 UV_PROJECT_ENVIRONMENT=/tmp/js-private-venv just sync
 ```
 
-The `browser` extra only installs the Playwright Python package; run
-`just install-browser` to fetch the Chromium build the browser-probe tests
-drive. Without it those tests skip rather than fail.
+The `test` extra includes the kernel, vision and browser packages. `just sync`
+also fetches js's CLI binaries and the Chromium build the browser-probe tests
+drive; `just install-browser` fetches Chromium on its own. Without it those
+tests skip rather than fail.
 
-Playwright does not publish musllinux wheels. On Alpine or another musl system,
-omit `browser`; the browser-probe integration test skips while the rest of the
-suite remains available.
+The `test` extra needs a platform Playwright supports (not Android or musl).
 
 Use a distinct `UV_PROJECT_ENVIRONMENT` for each checkout/audit, including on
 subsequent uv/just commands. Sharing an editable environment lets another
@@ -53,20 +52,17 @@ uv run pytest --version
 ## Main Offline Suite
 
 ```bash
-python -m pytest -m "not ai_provider and not vision and not e2e"
+uv run --extra test pytest -q -m "not ai_provider and not vision and not e2e and not live" -p no:cacheprovider -n logical --dist worksteal
 ```
 
-Verified in this environment:
-
-```bash
-python -m pytest -m "not ai_provider and not vision and not e2e" -p no:cacheprovider -n auto
-```
-
-`just test` runs exactly that. `-n auto` spreads the suite over every core
-(pytest-xdist, in the `test` extra): 1681 tests in ~130s on a six-core box
-against ~590s serial. The slowest tests drive the real obscura binary and real
-Jupyter kernels, so most of that wall time is spent waiting on a subprocess.
-Drop `-n auto` when a failure needs readable interleaved output.
+`just test` runs exactly that, through `scripts/cached-test.sh`: a run on the
+same HEAD, working-tree diff and command replays the last run's output and
+exit code, and `just test --force` reruns. `-n logical` starts one pytest-xdist worker per
+hardware thread (pytest-xdist is in the `test` extra). `--dist worksteal` lets
+an idle worker take queued tests from a busy one; without it, xdist hands each
+worker a run of neighbouring tests up front, and one worker ends up alone with
+all of `test_kernel_toolbox.py`'s real Jupyter kernels long after the others
+are done. Drop `-n` when a failure needs readable interleaved output.
 
 ## Focused Suites
 
@@ -79,7 +75,7 @@ pytest -q tests/test_tool_descriptions.py tests/test_agent_tool_surface.py
 Runtime and tool smoke tests:
 
 ```bash
-pytest -q tests/test_runtime_offline_integration.py tests/test_tool_runtime_smoke.py
+pytest -q tests/test_runtime_offline_integration.py tests/test_tool_runtime_smoke.py tests/test_turn_stream.py tests/test_turn_surface.py tests/test_turn_budget.py tests/test_turn_call.py
 ```
 
 Subagents:
@@ -126,13 +122,15 @@ Declared in `pyproject.toml`:
 - `e2e`: complete user-visible runtime path.
 - `ai_provider`: requires configured `ai-python` provider credentials or local endpoint.
 - `vision`: requires local vision model and Pillow.
+- `live`: drives a real browser or network endpoint.
 
 ## Quality Gate
 
 `just check` runs `lint` and the dependency-freshness gate: it fails once
-`uv.lock` is five or more commits behind HEAD, with a prompt to run `just upgrade`,
-rerun the suites, and bump the version in `pyproject.toml`. Raise the limit for
-a one-off run with `just --set deps-stale-limit 20 check`.
+`uv.lock` has gone 14 days without changing, with a prompt to run `just upgrade`
+and `just tools-upgrade`, rerun the suites, and bump the version in
+`pyproject.toml`. Raise the limit for a one-off run with
+`just --set deps-stale-days 30 check`.
 
 ## Current Coverage Areas
 
@@ -153,16 +151,34 @@ The offline suite covers:
 - Subagent context/session/tool-surface isolation.
 - Parallel subagent sibling failure preservation.
 - Wiki conversion, guarded page writes, and ordered closeout.
-- Artifact native tools.
 
 ## Development Style
 
-Prefer tests through public behavior:
+Test the function that does the thing:
 
-- CLI `main()` for CLI behavior.
-- `runtime.run_turn()` with fake `js.model_client.stream_model` stubs for runtime behavior.
+- `cli.main()` only for what main itself does: argument parsing and
+  validation, reading stdin into the prompt, dispatch to a mode, and what a
+  launch sets up. A `/command` goes through `repl_commands.handle_command`, a
+  one-shot prompt through `prompt_run.run`, and a REPL session through
+  `tests/repl_driver.py` (`run_async` runs a `repl.Repl` over a stub screen).
+- `runtime.run_turn_async()`, through `tests/turn_driver.py`, with fake
+  `js.model_client.stream_model_async` stubs for runtime behavior.
 - real tool handlers with `ToolContext(tmp_path)` for tool behavior.
 - `tmp_path` for filesystem isolation.
+
+Assert on behavior, not on the operator's wording: a message printed to the
+terminal is checked for having been printed and for the data it carries (a
+path, a name, a count), not its phrasing. Text a model or a program reads is
+a contract and is matched exactly: tool results, tool descriptions,
+commit_helper output, JSON payloads, the `-p` answer on stdout.
+
+The offline suite touches no network. `tests/conftest.py` gives every test
+its own HOME and points the models.dev catalog at one local copy per worker;
+a js subprocess started in the test's HOME also needs the
+`home_model_catalog` fixture. A test waits on an event or a gate file, not
+on the clock: tool waits that exist to be outlasted (`ToolContext.
+kernel_wait_seconds`, `capped_process.READER_GRACE_S`) are shortened in the
+test instead of slept through.
 
 This project intentionally favors granular commits:
 

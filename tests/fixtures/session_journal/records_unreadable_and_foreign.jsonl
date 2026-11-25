@@ -1,0 +1,18 @@
+{"kind":"message","message":{"role":"user","content":"first"},"ts":1790000001.0,"version":1,"id":"r001","parent":null}
+{not json
+[1,2,3]
+"string"
+
+{"kind":"message","message":{"role":"assistant","content":"ver999"},"ts":1790000002.0,"version":999,"id":"r002","parent":"r001"}
+{"kind":"message","message":{"role":"assistant","content":"nover"},"ts":1790000003.0,"id":"r003","parent":"r002"}
+{"kind":"mark","marker":"rollback_to:0","ts":1790000004.0,"version":2,"id":"r004","parent":"r003"}
+{"kind": "session_metadata", "ts": 5, "agent": "x"}
+{"role": "user", "content": "bare pre-envelope"}
+{"kind": "message", "version": 1, "ts": 7, "message": "notadict"}
+{"kind": "message", "version": 1, "ts": "noon", "message": {"role": "user", "content": "bad ts"}}
+{"kind":"message","message":{"role":"narrator","content":"unknown role"},"ts":1790000005.0,"version":1,"id":"r005","parent":"r004"}
+{"kind":"message","message":{"content":"no role"},"ts":1790000006.0,"version":1,"id":"r006","parent":"r005"}
+{"kind":"message","message":{"role":"assistant","content":"kept"},"stamp":{"model":""},"ts":1790000007.0,"version":1,"id":"r007","parent":"r006"}
+{"kind":"mark","marker":"tool_surface:{}","ts":1790000008.0,"version":1,"id":"r008","parent":"r007"}
+{"kind":"mark","marker":"workspace:{}","ts":1790000009.0,"version":1,"id":"r009","parent":"r008"}
+{"kind":"mark","marker":"system:{\"system\":\"S\"}","ts":1790000010.0,"version":1,"id":"r010","parent":"r009"}

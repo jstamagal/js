@@ -8,17 +8,18 @@ import json
 import os
 import re
 import signal
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
+from .. import jail, paths
 from . import fs
 from .core import Tool, ToolContext
 from .descriptions import load_description
+from .presentation import Presentation
+from .results import truncate
 from .sanitize import int_or_default, text_or_default
-
-DEFAULT_COLS = 64
-DEFAULT_ROWS = 36
 
 _KEY_SEQUENCES = {
     "enter": "\r",
@@ -34,9 +35,7 @@ _KEY_SEQUENCES = {
     "pgup": "\x1b[5~",
     "pgdn": "\x1b[6~",
     "delete": "\x1b[3~",
-    "ctrl-c": "\x03",
-    "ctrl-d": "\x04",
-    "ctrl-l": "\x0c",
+    "shift-tab": "\x1b[Z",
     "f1": "\x1bOP",
     "f2": "\x1bOQ",
     "f3": "\x1bOR",
@@ -50,6 +49,20 @@ _KEY_SEQUENCES = {
     "f11": "\x1b[23~",
     "f12": "\x1b[24~",
 }
+
+def _key_sequence(token: str, application_cursor: bool = False) -> str:
+    name = token.lower()
+    if name.startswith("alt-") and len(token) > 4:
+        return "\x1b" + _key_sequence(token[4:], application_cursor)
+    if len(name) == 6 and name.startswith("ctrl-") and "a" <= name[-1] <= "z":
+        return chr(ord(name[-1]) - ord("a") + 1)
+    if name == "comma":
+        return ","
+    value = _KEY_SEQUENCES.get(name, token)
+    if application_cursor and name in {"up", "down", "right", "left", "home", "end"}:
+        return "\x1bO" + value[-1]
+    return value
+
 
 _FONT_CANDIDATES = (
     "/usr/share/fonts/TTF/JetBrainsMonoNerdFont-Regular.ttf",
@@ -83,12 +96,13 @@ _BACKGROUND = (12, 12, 12)
 _FOREGROUND = (222, 222, 222)
 _CURSOR_COLOUR = (255, 255, 255)
 _LIVE_CHILDREN: set[Any] = set()
+_LIVE_STATES: dict[int, dict[str, Any]] = {}
 
 
-def _colour(name: str, fallback: tuple[int, int, int]) -> tuple[int, int, int]:
+def _colour(name: str, fallback: tuple[int, int, int], palette=None) -> tuple[int, int, int]:
     if not name or name == "default":
         return fallback
-    named = _ANSI_RGB.get(name)
+    named = (_ANSI_RGB if palette is None else palette).get(name)
     if named is not None:
         return named
     if re.fullmatch(r"[0-9a-fA-F]{6}", name):
@@ -101,36 +115,127 @@ def _render_lines(screen: Any) -> list[str]:
 
 
 def _report(payload: dict[str, Any], context: ToolContext) -> str:
-    text = json.dumps(payload, indent=2)
-    if len(text.encode("utf-8")) <= context.max_tool_result_bytes:
-        return text
-    return text.encode("utf-8")[: context.max_tool_result_bytes].decode(
-        "utf-8", errors="ignore"
-    ) + "\n[truncated]"
+    return truncate(json.dumps(payload, indent=2), context)
+
+
+class _TerminalStream:
+    """Preserve secondary DA queries which pyte treats as primary DA."""
+
+    def __init__(self, screen: Any) -> None:
+        import pyte
+
+        self.screen = screen
+        self.stream = pyte.Stream(screen)
+        self.pending = ""
+
+    def feed(self, text: str) -> None:
+        output = []
+        for char in text:
+            if not self.pending:
+                if char == "\x1b":
+                    self.pending = char
+                else:
+                    output.append(char)
+                continue
+            self.pending += char
+            if self.pending in {"\x1b[", "\x1b[>"}:
+                continue
+            if self.pending.startswith("\x1b[>"):
+                params = self.pending[3:]
+                if len(params) < 128 and params and all(c in "0123456789;" for c in params):
+                    continue
+                if char == "c" and params[:-1] in {"", "0"}:
+                    self.stream.feed("".join(output))
+                    output.clear()
+                    self.screen.write_process_input("\x1b[>0;0;0c")
+                    self.pending = ""
+                    continue
+            output.append(self.pending)
+            self.pending = ""
+        self.stream.feed("".join(output))
+
+
+def _make_screen(width: int, height: int, send=None) -> Any:
+    import pyte
+
+    screen = pyte.Screen(width, height)
+    if send is not None:
+        screen.write_process_input = lambda text: send(text.encode("utf-8"))
+    # pyte passes private=True to every CSI handler, but only these handlers
+    # implement private variants. Unsupported private commands are no-ops.
+    private_handlers = {
+        "set_mode", "reset_mode", "erase_in_display", "erase_in_line",
+        "report_device_attributes",
+    }
+
+    def standard_only(handler):
+        def dispatch(*params, private=False):
+            if not private:
+                return handler(*params)
+        return dispatch
+
+    for name in set(pyte.Stream.csi.values()) - private_handlers:
+        setattr(screen, name, standard_only(getattr(screen, name)))
+    return screen
+
+
+def _read_terminal(state: dict[str, Any]) -> None:
+    """The session's sole PTY reader; retain only the rendered screen."""
+    import pexpect
+
+    changed = state["changed"]
+    try:
+        while not state["reader_stop"].is_set():
+            try:
+                chunk = state["child"].read_nonblocking(size=65536, timeout=0.05)
+            except pexpect.TIMEOUT:
+                chunk = b""
+            except (pexpect.EOF, OSError):
+                break
+            with changed:
+                if chunk:
+                    text = state["decoder"].decode(chunk)
+                    if text:
+                        state["stream"].feed(text)
+                state["read_generation"] += 1
+                changed.notify_all()
+    except Exception as exc:
+        with changed:
+            state["reader_error"] = f"{type(exc).__name__}: {exc}"
+    finally:
+        with changed:
+            try:
+                tail = state["decoder"].decode(b"", final=True)
+                if tail:
+                    state["stream"].feed(tail)
+            except Exception as exc:
+                state["reader_error"] = f"{type(exc).__name__}: {exc}"
+            state["reader_done"] = True
+            changed.notify_all()
+        if state["reader_stop"].is_set():
+            try:
+                state["child"].close(force=True)
+            except Exception:
+                pass
+            _LIVE_CHILDREN.discard(state["child"])
+            _LIVE_STATES.pop(id(state["child"]), None)
 
 
 def _drain(state: dict[str, Any], wait_ms: int) -> None:
-    import pexpect
-
+    # Only the reader thread touches the PTY or incremental decoder.
     deadline = time.monotonic() + max(0, wait_ms) / 1000.0
-    child = state["child"]
-    first_read = True
-    while first_read or time.monotonic() < deadline:
-        first_read = False
-        timeout = min(0.1, max(0.0, deadline - time.monotonic()))
-        try:
-            chunk = child.read_nonblocking(size=65536, timeout=timeout)
-        except pexpect.TIMEOUT:
-            continue
-        except (pexpect.EOF, OSError):
-            tail = state["decoder"].decode(b"", final=True)
-            if tail:
-                state["stream"].feed(tail)
-            break
-        if chunk:
-            text = state["decoder"].decode(chunk)
-            if text:
-                state["stream"].feed(text)
+    changed = state["changed"]
+    with changed:
+        generation = state["read_generation"]
+        changed.wait_for(
+            lambda: state["reader_done"] or state["read_generation"] != generation,
+            timeout=0.15,
+        )
+        while not state["reader_done"]:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            changed.wait(timeout=remaining)
 
 
 def _observe(
@@ -138,22 +243,25 @@ def _observe(
 ) -> str:
     _drain(state, wait_ms)
     child = state["child"]
-    screen = state["screen"]
-    lines = _render_lines(screen)
-    payload: dict[str, Any] = {
-        "session": session,
-        "did": did,
-        "lines": lines,
-        "nonblank_lines": sum(1 for line in lines if line.strip()),
-        "cursor": [screen.cursor.y, screen.cursor.x],
-        "still_running": child.isalive(),
-    }
-    previous = state.get("previous_lines")
-    if previous is not None:
-        changed = sum(1 for before, after in zip(previous, lines, strict=False) if before != after)
-        payload["lines_changed"] = changed
-        payload["screen_responded"] = changed > 0
-    state["previous_lines"] = lines
+    with state["changed"]:
+        screen = state["screen"]
+        lines = _render_lines(screen)
+        payload: dict[str, Any] = {
+            "session": session,
+            "did": did,
+            "lines": lines,
+            "nonblank_lines": sum(1 for line in lines if line.strip()),
+            "cursor": [screen.cursor.y, screen.cursor.x],
+            "still_running": child.isalive(),
+        }
+        previous = state.get("previous_lines")
+        if previous is not None:
+            changed = sum(1 for before, after in zip(previous, lines, strict=False) if before != after)
+            payload["lines_changed"] = changed
+            payload["screen_responded"] = changed > 0
+        state["previous_lines"] = lines
+        if state.get("reader_error"):
+            payload["reader_error"] = state["reader_error"]
 
     if not child.isalive():
         _LIVE_CHILDREN.discard(child)
@@ -164,20 +272,14 @@ def _observe(
         payload["exit_status"] = child.exitstatus
         payload["signal_status"] = child.signalstatus
     payload["reading"] = (
-        "lines is the rendered terminal screen. nonblank_lines=0 means the user sees "
-        "nothing. lines_changed and screen_responded compare this screen with the "
-        "most recent observation: for send they describe change during the wait window "
-        "after the sent keys, not proof the keys caused it; for look they describe "
-        "passive change since the prior observation. "
-        "terminal_snapshot updates that comparison baseline before a later send. "
-        "still_running is normal for a TUI and suspicious for a one-shot command. "
-        "Use terminal_snapshot to inspect layout and colour."
+        'lines is the rendered terminal screen. nonblank_lines=0 means the user sees nothing. lines_changed and screen_responded compare this screen with the most recent observation: for send they describe change during the wait window after the sent keys, not proof the keys caused it; for look they describe passive change since the prior observation. terminal_snapshot updates that comparison baseline before a later send. still_running is normal for a TUI and suspicious for a one-shot command. Use terminal_snapshot to inspect layout and colour.'
     )
     return _report(payload, context)
 
 
 def _stop_state(state: dict[str, Any]) -> None:
     child = state["child"]
+    state["reader_stop"].set()
     try:
         if child.isalive():
             try:
@@ -190,11 +292,18 @@ def _stop_state(state: dict[str, Any]) -> None:
                 os.killpg(child.pid, signal.SIGKILL)
             except OSError:
                 child.kill(signal.SIGKILL)
-        child.close(force=True)
     except Exception:
         pass
     finally:
-        _LIVE_CHILDREN.discard(child)
+        state["reader"].join(timeout=1)
+        # A delayed reader closes its own fd after it leaves the read loop.
+        if not state["reader"].is_alive():
+            try:
+                child.close(force=True)
+            except Exception:
+                pass
+            _LIVE_CHILDREN.discard(child)
+            _LIVE_STATES.pop(id(child), None)
 
 
 def close_terminal_sessions(context: ToolContext) -> None:
@@ -203,16 +312,17 @@ def close_terminal_sessions(context: ToolContext) -> None:
     context.terminal_sessions.clear()
 
 
+def _jail_refusal(state: dict[str, Any], session: str, context: ToolContext) -> str | None:
+    if state.get("jail") == jail.shape(context):
+        return None
+    context.terminal_sessions.pop(session, None)
+    _stop_state(state)
+    return (f'ERROR: terminal session {session!r} was started under other jail settings (JAIL_BIND, JAIL_HIDE or SHELL_ENV_KEEP) and is stopped; start it again')
+
+
 def _cleanup_live_children() -> None:
-    for child in list(_LIVE_CHILDREN):
-        try:
-            if child.isalive():
-                child.kill(signal.SIGTERM)
-            child.close(force=True)
-        except Exception:
-            pass
-        finally:
-            _LIVE_CHILDREN.discard(child)
+    for state in list(_LIVE_STATES.values()):
+        _stop_state(state)
 
 
 atexit.register(_cleanup_live_children)
@@ -228,13 +338,14 @@ def terminal_session(
     cols: int | None = None,
     rows: int | None = None,
     context: ToolContext | None = None,
+    text: str | None = "",
 ) -> str:
     """Start, drive, inspect, stop, or list a persistent PTY session."""
     if context is None:
         return "ERROR: missing ToolContext"
     try:
         import pexpect
-        import pyte
+        __import__("pyte")
     except ImportError as exc:
         return f"ERROR: terminal dependency is missing: {exc.name}"
 
@@ -242,11 +353,12 @@ def terminal_session(
     session = text_or_default(session, "main").strip() or "main"
     command = text_or_default(command)
     keys = text_or_default(keys)
+    text = text_or_default(text)
     wait = min(int_or_default(wait_ms, 700, minimum=0), 10_000)
     cols_supplied = cols is not None
     rows_supplied = rows is not None
-    width = min(int_or_default(cols, DEFAULT_COLS, minimum=1), 400)
-    height = min(int_or_default(rows, DEFAULT_ROWS, minimum=1), 200)
+    width = min(int_or_default(cols, context.terminal_cols, minimum=1), 400)
+    height = min(int_or_default(rows, context.terminal_rows, minimum=1), 200)
     sessions = context.terminal_sessions
 
     if action != "start" and (cols_supplied or rows_supplied):
@@ -274,29 +386,43 @@ def terminal_session(
         workdir = context.resolve_path(cwd) if cwd else context.cwd.resolve()
         if not workdir.is_dir():
             return f"ERROR: no such directory: {workdir}"
-        shell = os.environ.get("SHELL") or "/bin/sh"
+        shell = context.terminal_shell_program or os.environ.get("SHELL") or "/bin/sh"
+        env = dict(os.environ)
+        if jail.active() is not None or not context.terminal_environment_inherit:
+            # In the jail the command gets the shell tool's environment: the
+            # names in SHELL_ENV_KEEP, so no provider key reaches it.
+            env = {key: os.environ[key] for key in context.shell_env_allow if key in os.environ}
+        env.update({"TERM": "xterm-256color", "COLUMNS": str(width), "LINES": str(height)})
+        argv = jail.wrap([shell, "-c", command], context, cwd=workdir, env=env,
+                         extra_ro=(Path(shell),))
         try:
             child = pexpect.spawn(
-                shell,
-                ["-c", command],
+                argv[0],
+                argv[1:],
                 cwd=str(workdir),
                 dimensions=(height, width),
                 timeout=None,
                 encoding=None,
-                env={
-                    **os.environ,
-                    "TERM": "xterm-256color",
-                    "COLUMNS": str(width),
-                    "LINES": str(height),
-                },
+                env=env,
             )
         except (OSError, pexpect.ExceptionPexpect) as exc:
             return f"ERROR: could not start terminal command: {type(exc).__name__}: {exc}"
-        screen = pyte.Screen(width, height)
+        write_lock = threading.Lock()
+
+        def send(data):
+            with write_lock:
+                return child.send(data)
+
+        screen = _make_screen(width, height, send)
         replacement = {
+            "send": send,
+            "changed": threading.Condition(threading.RLock()),
+            "reader_stop": threading.Event(),
+            "reader_done": False,
+            "read_generation": 0,
             "child": child,
             "screen": screen,
-            "stream": pyte.Stream(screen),
+            "stream": _TerminalStream(screen),
             # One incremental decoder per session: a code point split across two
             # read_nonblocking chunks is carried into the next chunk instead of
             # being replaced.
@@ -305,8 +431,15 @@ def terminal_session(
             "cwd": workdir,
             "snapshot_n": 0,
             "previous_lines": None,
+            # The jail settings it started under (`jail.shape`).
+            "jail": jail.shape(context),
         }
+        reader = threading.Thread(target=_read_terminal, args=(replacement,),
+                                  name=f"js-terminal-{child.pid}", daemon=True)
+        replacement["reader"] = reader
         _LIVE_CHILDREN.add(child)
+        _LIVE_STATES[id(child)] = replacement
+        reader.start()
         old = sessions.get(session)
         if old is not None:
             _stop_state(old)
@@ -316,6 +449,11 @@ def terminal_session(
     state = sessions.get(session)
     if state is None:
         return f"ERROR: no terminal session named {session!r}; use action=start first"
+
+    if action != "stop":
+        refusal = _jail_refusal(state, session, context)
+        if refusal is not None:
+            return refusal
 
     if action == "stop":
         sessions.pop(session, None)
@@ -331,15 +469,19 @@ def terminal_session(
         # Flush output that had already arrived before the keys so the comparison
         # the caller reads covers only what lands after the send.
         _drain(state, 0)
-        state["previous_lines"] = _render_lines(state["screen"])
         sent: list[str] = []
+        with state["changed"]:
+            state["previous_lines"] = _render_lines(state["screen"])
+            if text:
+                state["send"](text.encode("utf-8"))
+                sent.append(text)
         for raw_token in keys.split(","):
             if not raw_token:
                 continue
-            value = "," if raw_token.lower() == "comma" else _KEY_SEQUENCES.get(
-                raw_token.lower(), raw_token
-            )
-            state["child"].send(value.encode("utf-8"))
+            with state["changed"]:
+                # pyte stores private modes shifted five bits (DECCKM is 1).
+                value = _key_sequence(raw_token, (1 << 5) in state["screen"].mode)
+                state["send"](value.encode("utf-8"))
             sent.append(raw_token)
             time.sleep(0.06)
         return _observe(state, session, f"sent {sent}", wait, context)
@@ -347,12 +489,18 @@ def terminal_session(
     return f"ERROR: action must be one of start, send, look, stop, list; got {action!r}"
 
 
-def _draw_screen(screen: Any, path: Path) -> None:
-    from PIL import Image, ImageDraw, ImageFont
+def _draw_screen(
+    screen: Any, path: Path, *, font_candidates=_FONT_CANDIDATES,
+    palette=None, background=_BACKGROUND, foreground=_FOREGROUND, cursor_colour=_CURSOR_COLOUR,
+) -> None:
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError as exc:
+        raise RuntimeError('terminal_snapshot needs Pillow, the `vision` extra; run `just install`') from exc
 
     size = 16
     font = None
-    for candidate in _FONT_CANDIDATES:
+    for candidate in font_candidates:
         if not Path(candidate).exists():
             continue
         try:
@@ -369,7 +517,7 @@ def _draw_screen(screen: Any, path: Path) -> None:
     image = Image.new(
         "RGB",
         (cell_width * screen.columns + 8, cell_height * screen.lines + 8),
-        _BACKGROUND,
+        background,
     )
     draw = ImageDraw.Draw(image)
     for y in range(screen.lines):
@@ -377,14 +525,14 @@ def _draw_screen(screen: Any, path: Path) -> None:
         for x in range(screen.columns):
             cell = row[x]
             char = cell.data or " "
-            foreground = _colour(getattr(cell, "fg", "default"), _FOREGROUND)
-            background = _colour(getattr(cell, "bg", "default"), _BACKGROUND)
+            cell_foreground = _colour(getattr(cell, "fg", "default"), foreground, palette)
+            cell_background = _colour(getattr(cell, "bg", "default"), background, palette)
             if getattr(cell, "reverse", False):
-                foreground, background = background, foreground
+                cell_foreground, cell_background = cell_background, cell_foreground
             px, py = 4 + x * cell_width, 4 + y * cell_height
-            if background != _BACKGROUND:
+            if cell_background != background:
                 draw.rectangle(
-                    [px, py, px + cell_width, py + cell_height], fill=background
+                    [px, py, px + cell_width, py + cell_height], fill=cell_background
                 )
             if char != " ":
                 bold = bool(getattr(cell, "bold", False))
@@ -392,19 +540,19 @@ def _draw_screen(screen: Any, path: Path) -> None:
                     (px, py),
                     char,
                     font=font,
-                    fill=foreground,
+                    fill=cell_foreground,
                     stroke_width=1 if bold else 0,
-                    stroke_fill=foreground if bold else None,
+                    stroke_fill=cell_foreground if bold else None,
                 )
                 if getattr(cell, "underscore", False):
                     draw.line(
                         [px, py + cell_height - 2, px + cell_width - 1, py + cell_height - 2],
-                        fill=foreground,
+                        fill=cell_foreground,
                     )
                 if getattr(cell, "strikethrough", False):
                     draw.line(
                         [px, py + cell_height // 2, px + cell_width - 1, py + cell_height // 2],
-                        fill=foreground,
+                        fill=cell_foreground,
                     )
     if not getattr(screen.cursor, "hidden", False):
         cursor_x, cursor_y = screen.cursor.x, screen.cursor.y
@@ -412,7 +560,7 @@ def _draw_screen(screen: Any, path: Path) -> None:
             px, py = 4 + cursor_x * cell_width, 4 + cursor_y * cell_height
             draw.rectangle(
                 [px, py, px + cell_width - 1, py + cell_height - 1],
-                outline=_CURSOR_COLOUR,
+                outline=cursor_colour,
                 width=2,
             )
     image.save(path, format="PNG")
@@ -423,6 +571,8 @@ def terminal_snapshot(
     output_path: str | None = "",
     wait_ms: int | None = 100,
     context: ToolContext | None = None,
+    *,
+    renderer=None,
 ) -> str:
     """Render one live PTY screen to PNG and return it through js vision handling."""
     if context is None:
@@ -431,25 +581,25 @@ def terminal_snapshot(
     state = context.terminal_sessions.get(session)
     if state is None:
         return f"ERROR: no terminal session named {session!r}; use terminal_session first"
+    refusal = _jail_refusal(state, session, context)
+    if refusal is not None:
+        return refusal
     raw_output_path = text_or_default(output_path)
     if raw_output_path and Path(raw_output_path).suffix.lower() != ".png":
         return "ERROR: output_path must end in .png"
     _drain(state, min(int_or_default(wait_ms, 100, minimum=0), 10_000))
-    state["previous_lines"] = _render_lines(state["screen"])
     snapshot_n = state["snapshot_n"] + 1
     if raw_output_path:
-        target = context.resolve_path(raw_output_path)
+        target = context.resolve_path(raw_output_path, write=True)
     else:
         safe_session = re.sub(r"[^a-zA-Z0-9_.-]+", "-", session).strip("-") or "main"
-        target = (
-            state["cwd"]
-            / "terminal-snapshots"
-            / f"{safe_session}-{snapshot_n:02d}.png"
-        )
+        target = paths.terminal_snapshots_dir() / f"{safe_session}-{snapshot_n:02d}.png"
     try:
         context.snapshot(target)
         target.parent.mkdir(parents=True, exist_ok=True)
-        _draw_screen(state["screen"], target)
+        with state["changed"]:
+            state["previous_lines"] = _render_lines(state["screen"])
+            (_draw_screen if renderer is None else renderer)(state["screen"], target)
     except Exception as exc:
         return f"ERROR: could not render terminal snapshot: {type(exc).__name__}: {exc}"
     state["snapshot_n"] = snapshot_n
@@ -467,12 +617,14 @@ def tools() -> tuple[Tool, ...]:
                 "session": {"type": "string", "default": "main"},
                 "command": {"type": "string"},
                 "keys": {"type": "string"},
+                "text": {"type": "string"},
                 "cwd": {"type": "string"},
                 "wait_ms": {"type": "integer", "minimum": 0, "maximum": 10_000, "default": 700},
                 "cols": {"type": "integer", "minimum": 1, "maximum": 400},
                 "rows": {"type": "integer", "minimum": 1, "maximum": 200},
             },
             required=("action",),
+            presentation=Presentation(key=("command",), body="command", lexer="bash", kind="command"),
         ),
         Tool(
             "terminal_snapshot",

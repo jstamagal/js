@@ -3,24 +3,21 @@
 from __future__ import annotations
 
 import difflib
-import hashlib
 import json
 import os
+import re
 import shutil
-import signal
-import stat
-import subprocess
-import threading
-from functools import lru_cache
 from pathlib import Path
-from collections.abc import Iterable
 
-from ..tool_binaries import resolve_binary
-from .core import Tool, ToolContext
+from .. import held, imagefit, jail, settings as _settings, tool_args as _tool_args
+from ..media import IMAGE_RESULT_PREFIX
+from . import file_bytes, notebook, policy
+from .core import Output, ToolContext, view as _view
+from .path_hints import no_such_file
+from .reads import require_read
+from .results import truncate
 from .sanitize import int_or_default
 from .wiki.helpers import run
-from .descriptions import load_description
-
 
 _TEXT_EXTS = {
     ".txt", ".md", ".rst", ".py", ".js", ".ts", ".tsx", ".jsx", ".rs", ".toml",
@@ -41,18 +38,16 @@ _IMAGE_MIME_BY_EXT = {
     ".webp": "image/webp",
     ".gif": "image/gif",
 }
-_IMAGE_RESULT_PREFIX = "IMAGE_RESULT\t"
-_TRASH_MAX_BYTES = 512 * 1024 * 1024
 
 
-def _resolve_path_no_follow(context: ToolContext, raw: str | os.PathLike[str]) -> Path:
-    path = Path(os.path.expanduser(str(raw)))
-    if not path.is_absolute():
-        path = context.cwd / path
-    return Path(os.path.abspath(path))
+def _resolve_path_no_follow(context: ToolContext, raw: str | os.PathLike[str], *,
+                            write: bool = False) -> Path:
+    return context.resolve_path(raw, write=write, follow=False)
 
 
-def _path_size_no_follow(path: Path, *, cap: int = _TRASH_MAX_BYTES + 1) -> int:
+def _path_size_no_follow(path: Path, *, cap: int | None = None) -> int:
+    if cap is None:
+        cap = int(_settings.default_value("TRASH_BYTES_MAX")) + 1
     try:
         if path.is_symlink() or path.is_file():
             return path.lstat().st_size
@@ -81,7 +76,7 @@ def _trash_command() -> str | None:
 
 def _snapshot_remove_target(context: ToolContext, target: Path) -> None:
     if target.is_symlink():
-        context.record_snapshot(target, {"kind": "symlink", "target": os.readlink(target)})
+        context.undo.record(target, {"kind": "symlink", "target": os.readlink(target)})
         return
     context.snapshot(target)
 
@@ -101,46 +96,107 @@ def _trash_target(target: Path, context: ToolContext) -> str | None:
         return "ERROR: trash command not found; pass permanent=true to delete without trash."
     rc, _out, err = run([command, str(target)], context=context, timeout=120)
     if rc != 0:
-        return f"ERROR: trash failed: {err.strip() or f'exit {rc}'}"
+        return f"ERROR: trash failed: {err.strip() or f'exit {rc}'}; pass permanent=true to delete without trash."
     return None
 
 
+def _result_page_bytes(context: ToolContext) -> int:
+    """Bytes of text one tool result can carry to the model whole: half the
+    tighter of the inline spill cap and the hard result cap, leaving room for
+    the text around it. 0 when neither cap is set."""
+    caps = [
+        cap
+        for cap in (
+            int(getattr(context, "max_tool_result_inline_bytes", 0) or 0),
+            int(getattr(context, "max_tool_result_bytes", 0) or 0),
+        )
+        if cap > 0
+    ]
+    return min(caps) // 2 if caps else 0
 
 
-
-def _hash_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()[:16]
-
-
-def _line_hash(line: str) -> str:
-    return hashlib.sha1(line.encode("utf-8", errors="replace")).hexdigest()[:2]
+def _render_line_spans(spans: list[tuple[int, int]]) -> str:
+    return ", ".join(str(start) if start == end else f"{start}-{end}" for start, end in spans)
 
 
-def _read_regular_bytes(path: Path, limit: int | None = None) -> bytes:
-    """Read bytes from *path*, refusing anything that is not a regular file and
-    never blocking on a FIFO/socket/device.
+def changed_since_read(
+    context: ToolContext,
+    target: Path,
+    action: str,
+    current: bytes,
+    current_hash: str,
+    *,
+    edits_lines: bool,
+) -> str | None:
+    """Refuse an edit of a file that changed on disk since the model read it,
+    and hand the model the diff from the content it read to the content there now.
 
-    O_NONBLOCK makes the open return immediately for a pipe with no writer (the
-    kernel would otherwise park the caller in fifo_open->wait_for_partner);
-    on a regular file the flag has no effect and the read proceeds normally.
-    Raises OSError for a non-regular file or any read error so callers degrade
-    exactly as they do for a plain OSError."""
-    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    Read coverage moves to the current content: lines the model had seen that
+    the change left alone keep counting as seen, and every current line the
+    diff shows (changed lines and their context) counts as seen when the diff
+    is delivered whole, so the retry needs no second read.
+    A diff over the result budget is replaced by the changed line numbers.
+    *edits_lines* is True for patch, which stays gated on those lines until
+    they are read; an overwrite discards them, so its retry goes through.
+    Returns None when the file is unchanged since the read, or when js holds no
+    UTF-8 copy of the content that was read; require_read covers those cases.
+    """
+    as_read = context.reads.content_as_read(target)
+    if as_read is None or as_read[0] == current_hash:
+        return None
+    known_hash, known = as_read
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise OSError(f"not a regular file: {path}")
-        chunks: list[bytes] = []
-        read_so_far = 0
-        while limit is None or read_so_far < limit:
-            want = 65536 if limit is None else min(65536, limit - read_so_far)
-            chunk = os.read(fd, want)
-            if not chunk:
-                break
-            chunks.append(chunk)
-            read_so_far += len(chunk)
-        return b"".join(chunks)
-    finally:
-        os.close(fd)
+        old_text = known.decode("utf-8")
+        new_text = current.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    # The same line split and matcher unified_diff uses, so the hunks
+    # credited below are the hunks the model is shown.
+    old_lines = old_text.splitlines(keepends=True)
+    new_lines = new_text.splitlines(keepends=True)
+    coverage = context.reads.coverage(target)
+    was_whole = coverage.whole
+    prior = [(1, len(old_lines))] if was_whole else coverage.ranges
+    carried: list[tuple[int, int]] = []
+    changed: list[tuple[int, int]] = []
+    matcher = difflib.SequenceMatcher(None, old_lines, new_lines)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            for seen_start, seen_end in prior:
+                low, high = max(seen_start, i1 + 1), min(seen_end, i2)
+                if low <= high:
+                    carried.append((low - i1 + j1, high - i1 + j1))
+        elif j2 > j1:
+            changed.append((j1 + 1, j2))
+    shown = [
+        (group[0][3] + 1, group[-1][4])
+        for group in matcher.get_grouped_opcodes(3)
+        if group[-1][4] > group[0][3]
+    ]
+    diff = unified_diff(old_text, new_text, f"{target} (as read)", f"{target} (now)")
+    budget = _result_page_bytes(context)
+    delivered = not budget or len(diff.encode("utf-8")) <= budget
+    context.reads.replace(
+        target,
+        current_hash,
+        carried + (shown if delivered else []),
+        len(new_lines),
+        whole_file=was_whole and delivered,
+    )
+    context.reads.remember_content(target, current_hash, current)
+    head = (
+        f'ERROR: {target} changed on disk since it was read (hash {known_hash} when read, {current_hash} now); nothing was written.'
+    )
+    if delivered:
+        return f'{head} Diff from what you read to what is there now:\n{diff}Retry to {action} against the current text.'
+    spans = _render_line_spans(changed) or 'none (lines were only removed)'
+    if not edits_lines:
+        return (
+            f'{head} The diff is too large to show; the changed lines are now {spans}. A retry will {action} and discard them (undo restores them); read them first if you need what changed.'
+        )
+    return (
+        f'{head} The diff is too large to show; the changed lines are now {spans}. Read those, then retry to {action}.'
+    )
 
 
 def _is_binary(path: Path) -> bool:
@@ -149,13 +205,13 @@ def _is_binary(path: Path) -> bool:
     if path.suffix.lower() in _TEXT_EXTS:
         return False
     try:
-        chunk = _read_regular_bytes(path, 4096)
+        chunk = file_bytes.read_regular_bytes(path, 4096)
     except OSError:
         return False
     return b"\x00" in chunk
 
 
-def _detect_visual_mime(path: Path, header: bytes) -> str | None:
+def detect_visual_mime(path: Path, header: bytes) -> str | None:
     suffix_mime = _IMAGE_MIME_BY_EXT.get(path.suffix.lower())
     if header.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png"
@@ -176,22 +232,28 @@ def _visual_fallback(path: Path, mime: str, size: int) -> str:
     return f"VISUAL_FILE {path} mime={mime} size={size} bytes (vision disabled; no image bytes returned)"
 
 
-def _image_marker(path: Path, mime: str, size: int) -> str:
-    return f"{_IMAGE_RESULT_PREFIX}{path}\t{mime}\tVISUAL_FILE {path} mime={mime} size={size} bytes"
+def image_marker(path: Path, mime: str, size: int, data: bytes) -> str:
+    """The marker the model client sends ``path``'s image ``data`` by. An
+    image over imagefit's limits is sent as its fitted copy, and the text
+    says what changed."""
+    stub = f"VISUAL_FILE {path} mime={mime} size={size} bytes"
+    fitted = imagefit.fit(data, mime)
+    if fitted is None or not fitted.changed:
+        return f"{IMAGE_RESULT_PREFIX}{path}\t{mime}\t{stub}"
+    return f"{IMAGE_RESULT_PREFIX}{imagefit.stored(fitted)}\t{fitted.mime}\t{stub} {fitted.note}"
 
 
 def _read_pdf_text(path: Path, context: ToolContext) -> tuple[str, bytes]:
-    data = _read_regular_bytes(path)
+    data = file_bytes.read_regular_bytes(path)
     rc, out, err = run(["pdftotext", str(path), "-"], context)
     if rc == 0 and out.strip():
-        return out[: context.max_tool_result_bytes], data
+        return truncate(out, context), data
     detail = err.strip() or "no extractable text"
     return f"ERROR: pdftotext failed for {path}: {detail}", data
 
 
-
 def _read_text(path: Path, context: ToolContext) -> tuple[str, bytes]:
-    data = _read_regular_bytes(path)
+    data = file_bytes.read_regular_bytes(path)
     if len(data) > context.max_file_bytes:
         raise ValueError(
             f"File size ({len(data)} bytes) exceeds the maximum allowed size of {context.max_file_bytes} bytes"
@@ -201,37 +263,215 @@ def _read_text(path: Path, context: ToolContext) -> tuple[str, bytes]:
     return data.decode("utf-8"), data
 
 
-def _format_numbered_lines(lines: list[str], start_line: int) -> str:
+def format_numbered_lines(lines: list[str], start_line: int) -> str:
     out: list[str] = []
     for idx, line in enumerate(lines, start=start_line):
-        out.append(f"{idx}:{_line_hash(line)}|{line}")
+        out.append(f"{idx}|{line}")
     return "\n".join(out)
 
 
-def _detect_line_ending(text: str) -> str:
-    if "\r\n" in text:
-        return "\r\n"
-    return "\r" if "\r" in text and "\n" not in text else "\n"
-
-
-def _normalize_line_endings(text: str, target: str) -> str:
-    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
-    return normalized.replace("\n", target)
-
-
-def _write_bytes_preserving_existing_newlines(path: Path, content: str) -> bytes:
+def _encode_preserving_existing_newlines(path: Path, content: str) -> bytes:
     line_ending = "\n"
     if path.exists():
         try:
             existing = path.read_bytes().decode("utf-8")
-            line_ending = _detect_line_ending(existing)
+            line_ending = file_bytes.detect_line_ending(existing)
         except UnicodeDecodeError:
             line_ending = "\n"
-    normalized = _normalize_line_endings(content, line_ending)
-    data = normalized.encode("utf-8")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(data)
-    return data
+    normalized = file_bytes.normalize_line_endings(content, line_ending)
+    return normalized.encode("utf-8")
+
+
+def _utf8_char_start(buf: bytes, index: int) -> int:
+    """Move *index* back to the first byte of the UTF-8 character it lands in."""
+    back = 0
+    while 0 < index < len(buf) and back < 3 and (buf[index] & 0xC0) == 0x80:
+        index -= 1
+        back += 1
+    return index
+
+
+def _read_byte_call(target: Path, start_byte: int) -> str:
+    """JSON arguments for a follow-up byte-range `read` call."""
+    return json.dumps({"file_path": str(target), "start_byte": start_byte})
+
+
+def _read_byte_range(target: Path, context: ToolContext, start_byte: int, end_byte: int | None) -> str:
+    """Return the text between two byte offsets of *target*, one page at most.
+
+    A page is what one tool result carries whole (_result_page_bytes), so a
+    page of a spilled result is never spilled again. Both ends move back to a
+    UTF-8 character start and the footer names the offsets actually returned.
+    The lines the page shows whole count as read, for files of at most
+    FILE_BYTES_MAX; a larger file is read by seeking and records no
+    coverage."""
+    try:
+        size = target.stat().st_size
+    except OSError as exc:
+        return f"ERROR: {exc}"
+    if size == 0:
+        return f"{target} is empty"
+    if end_byte is not None and end_byte < start_byte:
+        start_byte, end_byte = end_byte, start_byte
+    if start_byte >= size:
+        return f"{target} has {size} bytes; requested start_byte={start_byte} is past EOF"
+    page = _result_page_bytes(context) or size
+    stop = min(size, start_byte + page, end_byte if end_byte is not None else size)
+    if stop <= start_byte:
+        return f"ERROR: empty byte range {start_byte}-{end_byte}"
+    whole: bytes | None = None
+    try:
+        if size <= context.max_file_bytes:
+            whole = file_bytes.read_regular_bytes(target)
+            size = len(whole)
+            base, buf = 0, whole
+        else:
+            base = max(0, start_byte - 3)
+            with target.open("rb") as handle:
+                handle.seek(base)
+                buf = handle.read(min(size, stop + 1) - base)
+    except OSError as exc:
+        return f"ERROR: {exc}"
+    start = base + _utf8_char_start(buf, start_byte - base)
+    end = size if stop >= size else base + _utf8_char_start(buf, stop - base)
+    if end <= start:
+        end = min(size, stop)
+    text = buf[start - base:end - base].decode("utf-8", errors="replace")
+    if whole is not None:
+        _remember_byte_read(target, context, whole, start, end)
+    _view(path=str(target), start_byte=start, end_byte=end, total_bytes=size, text=text)
+    if end < size:
+        footer = f"[bytes {start}-{end} of {size}; continue with {_read_byte_call(target, end)}]"
+    else:
+        footer = f"[bytes {start}-{end} of {size}; end of file]"
+    return Output(f"{text}\n{footer}")
+
+
+def _remember_byte_read(target: Path, context: ToolContext, data: bytes, start: int, end: int) -> None:
+    """Record the lines that bytes start..end of *data* show whole, numbered
+    the way the line reader numbers them."""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return
+    content_hash = file_bytes.hash_bytes(data)
+    lines = text.splitlines(keepends=True)
+    shown: list[tuple[int, int]] = []
+    offset = 0
+    for number, line in enumerate(lines, start=1):
+        line_end = offset + len(line.encode("utf-8"))
+        if offset >= start and line_end <= end:
+            if shown and shown[-1][1] == number - 1:
+                shown[-1] = (shown[-1][0], number)
+            else:
+                shown.append((number, number))
+        offset = line_end
+        if offset >= end:
+            break
+    if shown:
+        first, last = shown[0]
+        context.reads.remember(
+            target,
+            content_hash,
+            start_line=first,
+            end_line=last,
+            total_lines=len(lines),
+            whole_file=first == 1 and last == len(lines),
+        )
+    else:
+        context.reads.remember(target, content_hash, total_lines=len(lines), whole_file=False)
+    context.reads.remember_content(target, content_hash, data)
+
+
+_READ_RANGE_FIELDS = ("start_line", "end_line", "start_byte", "end_byte")
+_READ_RANGE_ALIASES = {"line_start": "start_line", "line_end": "end_line"}
+_READ_RANGE_WORDS = re.compile(r"\b(start_line|end_line|start_byte|end_byte|line_start|line_end)\b\W*?(\d+)")
+_READ_LINE_SPAN = re.compile(r"(\d+)(?:\s*(?:-|,|:|\.\.)\s*(\d+)?)?")
+
+
+def _plain_int(value: object) -> int | None:
+    """``value`` as an int when it is one or a string of digits, else None."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def _range_fields(raw: object) -> dict | None:
+    """The fields a `range` value names, or None when it names none.
+
+    Takes the object, the object as JSON text (a missing closing brace is
+    mended), `start_line 170`, a line span written `170-185`, `1,110`,
+    `170:185` or `170`, and a list `[170, 185]`."""
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, list) and 1 <= len(raw) <= 2 and all(_plain_int(item) is not None for item in raw):
+        return dict(zip(("start_line", "end_line"), (_plain_int(item) for item in raw)))
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    if text.startswith("{"):
+        try:
+            return _tool_args.repair_jsonish(text)
+        except ValueError:
+            pass
+    named = _READ_RANGE_WORDS.findall(text)
+    if named:
+        return {key: int(value) for key, value in named}
+    span = _READ_LINE_SPAN.fullmatch(text)
+    if span is None:
+        return None
+    fields = {"start_line": int(span[1])}
+    if span[2]:
+        fields["end_line"] = int(span[2])
+    return fields
+
+
+def prepare_read_arguments(arguments: dict) -> dict:
+    """`read`'s arguments with the range shapes models send mapped onto the
+    schema's flat `start_line`/`end_line`/`start_byte`/`end_byte`.
+
+    A `range` value (see _range_fields) is flattened, its fields filling only
+    the ones the call does not name at the top level. `line_start`/`line_end`
+    are `start_line`/`end_line`; `offset` is the first line and `limit` the
+    number of lines. A `range` that names nothing, or keys it holds that are
+    not range fields, stay under `range` for validation to report."""
+    args = {key: value for key, value in arguments.items() if not (key == "range" and value is None)}
+    fields: dict[str, object] = {}
+
+    def take(source: dict) -> None:
+        for key in list(source):
+            name = _READ_RANGE_ALIASES.get(key, key)
+            if name in _READ_RANGE_FIELDS or name in ("offset", "limit"):
+                value = source.pop(key)
+                if value is not None:
+                    fields.setdefault(name, value)
+
+    take(args)
+    if "range" in args:
+        nested = _range_fields(args["range"])
+        if nested is not None:
+            take(nested)
+            if nested:
+                args["range"] = nested
+            else:
+                del args["range"]
+    offset, limit = fields.pop("offset", None), fields.pop("limit", None)
+    first, count = _plain_int(offset), _plain_int(limit)
+    if (offset is not None and first is None) or (limit is not None and count is None):
+        # Not a line count: left as sent, so validation names it.
+        if offset is not None:
+            args["offset"] = offset
+        if limit is not None:
+            args["limit"] = limit
+    elif first is not None or count is not None:
+        start = max(1, first or 1)
+        fields.setdefault("start_line", start)
+        if count:
+            fields.setdefault("end_line", start + count - 1)
+    args.update(fields)
+    return args
 
 
 def fs_read(
@@ -242,18 +482,31 @@ def fs_read(
     end_line: int | None = None,
     show_line_numbers: bool = True,
     context: ToolContext | None = None,
+    start_byte: int | None = None,
+    end_byte: int | None = None,
 ) -> str:
     assert context is not None
     raw_path = file_path or path
     if not raw_path:
         return "ERROR: file_path is required"
-    if isinstance(range, dict):
-        start_line = start_line if start_line is not None else range.get("start_line")
-        end_line = end_line if end_line is not None else range.get("end_line")
+    asked = prepare_read_arguments({
+        "start_line": start_line, "end_line": end_line,
+        "start_byte": start_byte, "end_byte": end_byte, "range": range,
+    })
+    if set(asked) - set(_READ_RANGE_FIELDS):
+        return f'ERROR: range {range!r} names no lines or bytes; pass start_line/end_line or start_byte/end_byte.'
+    start_line, end_line = asked.get("start_line"), asked.get("end_line")
+    start_byte, end_byte = asked.get("start_byte"), asked.get("end_byte")
+    for name, value in (("start_byte", start_byte), ("end_byte", end_byte)):
+        if value is not None and int_or_default(value, -1, minimum=0) == -1:
+            return f"ERROR: {name} must be a non-negative integer, got {value!r}"
+    byte_start = int_or_default(start_byte, -1, minimum=0)
+    byte_end = int_or_default(end_byte, -1, minimum=0)
+    byte_ranged = byte_start != -1 or byte_end != -1
     # A whole-file read (no range asked for) is the only one gated by
-    # max_read_bytes. Once the caller names a range it is reading deliberately,
-    # so a 40 MB log stays addressable line-by-line — max_file_bytes is still
-    # the outer ceiling for both.
+    # max_read_bytes and max_file_bytes. Once the caller names a range it is
+    # reading deliberately: a line range of a file over max_file_bytes is
+    # streamed, and a byte range seeks.
     # Matches the acceptance rule the line math below uses: bools, junk and
     # out-of-range values are not a range, so they can't smuggle a whole-file
     # read past the cap.
@@ -261,31 +514,43 @@ def fs_read(
         int_or_default(start_line, -1, minimum=1) != -1
         or int_or_default(end_line, -1, minimum=1) != -1
     )
+    # A line range and a byte range together: the line range is read, and the
+    # result says the byte range was not.
+    note = ""
+    if byte_ranged and ranged:
+        byte_ranged = False
+        note = "\n" + '[start_byte/end_byte ignored: a line range was given too, and the line range was read]'
     target = context.resolve_path(raw_path)
     if not target.exists():
-        return f"ERROR: no such file: {target}"
+        return no_such_file(context, target)
     if not target.is_file():
         return f"ERROR: not a regular file: {target}"
+    if target.suffix.lower() == ".ipynb" and not ranged and not byte_ranged:
+        view = notebook.read_view(target, context)
+        if view is not None:
+            return view
 
     try:
         size = target.stat().st_size
-        header = _read_regular_bytes(target, 16)
+        header = file_bytes.read_regular_bytes(target, 16)
     except OSError as exc:
         return f"ERROR: {exc}"
 
-    mime = _detect_visual_mime(target, header)
+    mime = detect_visual_mime(target, header)
+    if byte_ranged:
+        if mime or _is_binary(target):
+            return f"ERROR: byte ranges read text files; {target} is not text"
+        return _read_byte_range(target, context, max(0, byte_start), None if byte_end == -1 else byte_end)
     if mime and mime.startswith("image/"):
-        if size > context.max_file_bytes:
-            return f"ERROR: image size ({size} bytes) exceeds the maximum allowed size of {context.max_file_bytes} bytes"
         try:
-            data = _read_regular_bytes(target)
+            data = file_bytes.read_regular_bytes(target)
         except OSError as exc:
             return f"ERROR: {exc}"
-        content_hash = _hash_bytes(data)
-        context.remember_read(target, content_hash)
+        content_hash = file_bytes.hash_bytes(data)
+        context.reads.remember(target, content_hash)
         if not context.vision_enabled:
             return _visual_fallback(target, mime, size)
-        return _image_marker(target, mime, size)
+        return image_marker(target, mime, size, data)
 
     if mime == "application/pdf":
         # A PDF is read whole — pdftotext extracts the entire document and has no
@@ -296,31 +561,19 @@ def fs_read(
             text, data = _read_pdf_text(target, context)
         except OSError as exc:
             return f"ERROR: {exc}"
-        content_hash = _hash_bytes(data)
-        context.remember_read(target, content_hash)
+        content_hash = file_bytes.hash_bytes(data)
+        context.reads.remember(target, content_hash)
         return text
 
-    read_cap = int(getattr(context, "max_read_bytes", 0) or 0)
+    read_cap = int(context.max_read_bytes or 0)
     if not ranged and read_cap > 0 and size > read_cap:
         example = _read_call(target, 1, context.max_read_lines)
         return (
-            f"ERROR: file size ({size} bytes) exceeds limits.max_read_bytes ({read_cap}) "
-            f"for a whole-file read. Read a range instead, e.g. {example} — "
-            f"ranged reads are not subject to this cap."
+            f'ERROR: file size ({size} bytes) exceeds READ_BYTES_MAX ({read_cap}) for a whole-file read. Read a range instead, e.g. {example} — ranged reads are not subject to this cap.'
         )
-
-    try:
-        text, data = _read_text(target, context)
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
-        return f"ERROR: {exc}"
-
-    content_hash = _hash_bytes(data)
-
-    all_lines = text.splitlines()
-    total = len(all_lines)
-    if total == 0:
-        context.remember_read(target, content_hash, total_lines=0, whole_file=True)
-        return f"{target} is empty (hash {content_hash})"
+    if not ranged and size > context.max_file_bytes:
+        example = _read_call(target, 1, context.max_read_lines)
+        return f'ERROR: file size ({size} bytes) exceeds FILE_BYTES_MAX ({context.max_file_bytes}) for a whole-file read. Read it by line range instead, e.g. {example}'
 
     # Resolve the window: a reversed range is
     # swapped, an oversized one is clamped to max_read_lines, and an omitted
@@ -332,13 +585,41 @@ def fs_read(
     if raw_end and raw_end < raw_start:
         raw_start, raw_end = raw_end, raw_start
     start = max(1, raw_start)
-    if start > total:
-        return f"{target} has {total} total lines; requested start_line={start} is past EOF (hash {content_hash})"
     page_end = start + context.max_read_lines - 1
-    end = min(total, page_end, raw_end or page_end)
+    last = min(page_end, raw_end or page_end)
+    numbered = bool(show_line_numbers)
+
+    if size > context.max_file_bytes:
+        if _is_binary(target):
+            return "ERROR: Binary or visual files are not supported by this Python port yet"
+        return _read_streamed_lines(target, size, start, last, numbered, note)
+
+    try:
+        text, data = _read_text(target, context)
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return f"ERROR: {exc}"
+
+    content_hash = file_bytes.hash_bytes(data)
+
+    # File lines end at LF, CRLF or CR; Unicode separators remain content.
+    all_lines = re.split(r"\r\n|\r|\n", text)
+    if not all_lines[-1]:
+        all_lines.pop()
+    total = len(all_lines)
+    if total == 0:
+        context.reads.remember(target, content_hash, total_lines=0, whole_file=True)
+        context.reads.remember_content(target, content_hash, data)
+        _view(path=str(target), start_line=0, end_line=0, total_lines=0, lines=[])
+        return f"{target} is empty (hash {content_hash}){note}"
+
+    if start > total:
+        return f"{target} has {total} total lines; requested start_line={start} is past EOF (hash {content_hash}){note}"
+    end = min(total, last)
 
     selected = all_lines[start - 1:end]
-    context.remember_read(
+    read_key = (content_hash, start, end, numbered)
+    earlier = context.reads.shown_by(target, read_key)
+    context.reads.remember(
         target,
         content_hash,
         start_line=start,
@@ -346,75 +627,189 @@ def fs_read(
         total_lines=total,
         whole_file=start == 1 and end == total,
     )
-    # Lines are returned whole: `read` pages by line, not by column, so a cut
-    # line is unreachable content. max_read_bytes/max_read_lines bound the read,
-    # and the tool-result spill bounds what reaches the model.
-    body = _format_numbered_lines(selected, start) if show_line_numbers else "\n".join(selected)
+    context.reads.remember_content(target, content_hash, data)
+    _view(path=str(target), start_line=start, end_line=end, total_lines=total, lines=selected)
     suffix = ""
     if end < total:
         suffix = f"\n[{total} total lines; continue with {_read_call(target, end + 1)}]"
-    return f"{body}{suffix}"
+    suffix += note
+    if context.read_deduplicate and earlier is not None:
+        return (
+            f"Lines {start}-{end} are unchanged since read call {earlier} returned them "
+            f"(hash {content_hash}); that result is current.{suffix}"
+        )
+    # Lines are returned whole: `read` pages by line, not by column, so a cut
+    # line is unreachable content. max_read_bytes/max_read_lines bound the read,
+    # and the tool-result spill bounds what reaches the model.
+    body = format_numbered_lines(selected, start) if numbered else "\n".join(selected)
+    result = Output(f"{body}{suffix}")
+    context.reads.offer(target, read_key, result)
+    return result
+
+
+def _read_streamed_lines(target: Path, size: int, start: int, last: int, numbered: bool, note: str) -> str:
+    """Lines start..last of a text file over FILE_BYTES_MAX, read one line at
+    a time and never held whole. Lines end at LF, CRLF or CR, as in the
+    whole-file reader. The read records no coverage: the file is never hashed."""
+    selected: list[str] = []
+    more = False
+    count = 0
+    try:
+        with open(target, encoding="utf-8", newline="") as handle:
+            for count, line in enumerate(handle, start=1):
+                if count > last:
+                    more = True
+                    break
+                if count >= start:
+                    selected.append(line.rstrip("\r\n"))
+    except (OSError, UnicodeDecodeError) as exc:
+        return f"ERROR: {exc}"
+    if not selected:
+        return f"{target} has {count} total lines; requested start_line={start} is past EOF{note}"
+    end = start + len(selected) - 1
+    _view(path=str(target), start_line=start, end_line=end, total_lines=None, lines=selected)
+    footer = ""
+    if more:
+        footer = "\n" + f'[file is {size} bytes, too large to count its lines; continue with {_read_call(target, end + 1)}]'
+    body = format_numbered_lines(selected, start) if numbered else "\n".join(selected)
+    return Output(f"{body}{footer}{note}")
 
 
 def _read_call(target: Path, start_line: int, end_line: int | None = None) -> str:
     """JSON arguments for a follow-up `read` call, in the public schema's shape."""
-    rng: dict[str, int] = {"start_line": start_line}
+    args: dict[str, str | int] = {"file_path": str(target), "start_line": start_line}
     if end_line is not None:
-        rng["end_line"] = end_line
-    return json.dumps({"file_path": str(target), "range": rng})
+        args["end_line"] = end_line
+    return json.dumps(args)
 
 
-read = fs_read
-
-
-def write(file_path: str | None = None, content: str = "", overwrite: bool = False, context: ToolContext | None = None, path: str | None = None) -> str:
+def write(file_path: str | None = None, content: str | None = None, overwrite: bool = False, context: ToolContext | None = None, path: str | None = None, expected_hash: str | None = None, from_held: str | None = None, append: bool = False) -> str:
     assert context is not None
     raw_path = file_path or path
+    source = None
+    if from_held:
+        try:
+            source = held.load(context, from_held)
+        except held.HeldError as exc:
+            return f"ERROR: {exc}"
+        if content and not append:
+            return 'ERROR: content and from_held together need append=true, which adds content after the held text'
+        text = source.text + (content or "")
+    elif content is None:
+        return 'ERROR: content or from_held is required'
+    else:
+        text = content
+    try:
+        result = _write_text(context, raw_path, text, overwrite=overwrite, expected_hash=expected_hash,
+                             append=append and source is None)
+    except jail.JailError as exc:
+        result = jail.Refusal(f"ERROR: {exc}")
+    if not result.startswith("ERROR"):
+        if source is not None:
+            held.release(source)
+        return result
+    # The content stays held, so the retry names it instead of sending it again.
+    if source is not None and text == source.text:
+        note = held.held_note(context, source, raw_path)
+    else:
+        note = held.hold_failed_write(context, text, raw_path, append=append and source is None)
+    return type(result)(result + note) if note else result
+
+
+def _write_text(context: ToolContext, raw_path: str | None, content: str, *, overwrite: bool,
+                expected_hash: str | None, append: bool) -> str:
+    """Write ``content`` to ``raw_path``, or add it to the end with ``append``.
+    Raises JailError for a path the jail refuses."""
     if not raw_path:
         return "ERROR: file_path is required"
-    target = context.resolve_path(raw_path)
-    if target.exists() and not overwrite:
+    target = context.resolve_path(raw_path, write=True)
+    if target.exists() and context.write_require_overwrite and not overwrite and not append:
         return (
-            f"ERROR: {raw_path} already exists. To change part of it use patch; "
-            "to replace it whole, read it in full first and pass overwrite=true."
+            f'ERROR: {raw_path} already exists. To change part of it use patch; to replace it whole, read it first and pass overwrite=true.'
         )
-    if target.exists() and overwrite:
+    replacing = target.exists()
+    if replacing:
+        # One read of any page is the gate: it shows the model what the file
+        # is. The hash proves nothing moved since; the snapshot makes the
+        # discard undoable.
         try:
-            current_hash = _hash_bytes(target.read_bytes())
+            current = file_bytes.read_regular_bytes(target)
         except OSError as exc:
             return f"ERROR: {exc}"
-        guard = context.require_read(target, "overwrite it", whole_file=True, content_hash=current_hash)
+        current_hash = file_bytes.hash_bytes(current)
+        action = "append to it" if append else "overwrite it"
+        if expected_hash:
+            # The hash the model expects is its proof of what it replaces: a
+            # match needs no read, a mismatch names both and writes nothing.
+            guard = None if expected_hash.strip() == current_hash else (
+                f'ERROR: {target} has hash {current_hash}, not the expected {expected_hash.strip()}; nothing was written. Read it, then retry.'
+            )
+        else:
+            guard = changed_since_read(
+                context, target, action, current, current_hash, edits_lines=False
+            ) or require_read(context, target, action, content_hash=current_hash)
         if guard:
             return guard
     try:
+        data = _encode_preserving_existing_newlines(target, content)
+    except (OSError, UnicodeEncodeError) as exc:
+        return f"ERROR: {exc}"
+    appending = append and replacing
+    written = current + data if appending else data
+    try:
         context.snapshot(target)
-        data = _write_bytes_preserving_existing_newlines(target, content)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(written)
     except OSError as exc:
         return f"ERROR: {exc}"
-    content_hash = _hash_bytes(data)
-    context.file_hashes[target] = content_hash
+    _view(path=str(target), before=current.decode("utf-8", errors="replace") if replacing else None,
+         after=written.decode("utf-8", errors="replace"), bytes=len(written))
+    content_hash = file_bytes.hash_bytes(written)
+    total = len(written.decode("utf-8", errors="replace").splitlines())
+    if appending:
+        # The model has seen what it read of the old content and every line
+        # it added; a line the old content left unfinished continues there.
+        coverage = context.reads.coverage(target)
+        same = coverage.content_hash == current_hash
+        whole = same and coverage.whole
+        ranges = coverage.ranges if same else []
+        old_total = len(current.decode("utf-8", errors="replace").splitlines())
+        first = old_total if current and not current.endswith(b"\n") else old_total + 1
+        if data and first <= total:
+            ranges.append((max(1, first), total))
+        context.reads.replace(target, content_hash, [] if whole else ranges, total, whole_file=whole)
+        context.reads.remember_content(target, content_hash, written)
+        return f"appended {len(data)} bytes to {target} (hash {content_hash})"
+    # The model wrote every byte of the new content, so the file counts as
+    # fully read: a patch can follow without a read in between.
+    context.reads.replace(target, content_hash, [], total, whole_file=True)
+    context.reads.remember_content(target, content_hash, written)
     return f"wrote {len(data)} bytes to {target} (hash {content_hash})"
 
 
 def remove(path: str, permanent: bool | None = False, context: ToolContext | None = None) -> str:
     assert context is not None
-    target = _resolve_path_no_follow(context, path)
+    target = _resolve_path_no_follow(context, path, write=True)
     if not target.exists() and not target.is_symlink():
         return f"ERROR: no such path: {target}"
     try:
-        size = _path_size_no_follow(target)
-        if not permanent and size > _TRASH_MAX_BYTES:
-            return f"ERROR: target is over the 512 MiB trash limit ({size} bytes); confirm with the operator and pass permanent=true to delete directly."
+        maximum = int(_settings.knob_attr(context, "trash_bytes_max", "TRASH_BYTES_MAX"))
+        size = _path_size_no_follow(target, cap=maximum + 1)
+        permanent, refusal = policy.removal_decision(context, permanent=permanent, size=size)
+        if refusal is not None:
+            return refusal
         _snapshot_remove_target(context, target)
         if not permanent:
             error = _trash_target(target, context)
             if error:
-                context.discard_snapshot(target)
+                context.undo.discard(target)
                 return error
+            _view(path=str(target), trashed=True)
             return f"trashed {target}"
         _delete_target_no_follow(target)
     except OSError as exc:
         return f"ERROR: {exc}"
+    _view(path=str(target), trashed=False)
     return f"removed {target}"
 
 
@@ -425,13 +820,13 @@ def undo(path: str, context: ToolContext | None = None) -> str:
     context.invalidate_search_cache()
     # write/patch key snapshots under resolve_path (follows symlinks); remove keys
     # under the no-follow abspath. Try both so undo finds the snapshot either laid it.
-    target = context.resolve_path(path)
-    if not context.snapshots.get(target):
-        no_follow = _resolve_path_no_follow(context, path)
-        if context.snapshots.get(no_follow):
+    target = context.resolve_path(path, write=True)
+    if not context.undo.count(target):
+        no_follow = _resolve_path_no_follow(context, path, write=True)
+        if context.undo.count(no_follow):
             target = no_follow
     try:
-        with context.restoring_snapshot(target) as (found, previous):
+        with context.undo.restoring(target) as (found, previous):
             if not found:
                 return f"ERROR: no snapshot available for {target}"
             if isinstance(previous, dict) and previous.get("kind") in {"corrupt", "unavailable"}:
@@ -478,6 +873,8 @@ def undo(path: str, context: ToolContext | None = None) -> str:
                     shutil.rmtree(target)
                 return f"restored deletion state for {target}"
             target.parent.mkdir(parents=True, exist_ok=True)
+            if target.is_symlink():
+                target.unlink()
             mode = None
             coverage = None
             if isinstance(previous, dict):
@@ -489,82 +886,23 @@ def undo(path: str, context: ToolContext | None = None) -> str:
             target.write_bytes(previous)
             if mode is not None:
                 target.chmod(mode)
-            content_hash = _hash_bytes(previous)
+            content_hash = file_bytes.hash_bytes(previous)
             # Legacy snapshots have no evidence of what was displayed. Never
             # carry transformed coverage from the edited version across undo.
             valid = isinstance(coverage, dict) and coverage.get("hash") == content_hash
-            context.replace_read_coverage(
+            context.reads.replace(
                 target, content_hash,
                 [tuple(span) for span in coverage["ranges"]] if valid else [],
                 len(previous.decode("utf-8", errors="replace").splitlines()),
                 whole_file=bool(valid and coverage["whole"]),
             )
+            context.reads.remember_content(target, content_hash, previous)
             return f"restored {target} (hash {content_hash})"
     except OSError as exc:
         return f"ERROR: {exc}"
 
 
-def _normalize_edit(raw: object, label: str) -> tuple[str, str, bool] | str:
-    """Validate one edit's *shape* — the part that does not depend on file content.
-
-    Returns ``(old, new, replace_all)`` or an ERROR string. Runs for every edit
-    before the file is touched, so a malformed batch is rejected without a read
-    or a write. ``search``/``content`` are accepted as aliases here for the same
-    reason they are accepted at the top level: models emit both spellings.
-    """
-    if not isinstance(raw, dict):
-        return f"ERROR: {label}each edit must be an object with old_string and new_string"
-    old = raw.get("old_string") if raw.get("old_string") is not None else raw.get("search")
-    new = raw.get("new_string") if raw.get("new_string") is not None else raw.get("content")
-    if old is None or new is None:
-        return f"ERROR: {label}every edit requires old_string and new_string"
-    old, new = str(old), str(new)
-    if old == new:
-        return f"ERROR: {label}old_string and new_string must be different"
-    return old, new, bool(raw.get("replace_all", False))
-
-
-def _nearest_hint(text: str, old: str) -> str:
-    """The closest line in the file to the first line of a missed old_string.
-
-    A miss is almost always a near-miss: one changed character, different
-    whitespace, a line that moved. Showing the model the closest real line and
-    its number turns a blind retry into a fix."""
-    first = next((line for line in old.splitlines() if line.strip()), "").strip()
-    if not first:
-        return " Read the file again."
-    lines = text.splitlines()
-    best = difflib.get_close_matches(first, [line.strip() for line in lines], n=1, cutoff=0.6)
-    if not best:
-        return " Nothing similar is in the file; read it again."
-    for number, line in enumerate(lines, 1):
-        if line.strip() == best[0]:
-            return f" Closest line is {number}: {line!r}. Anchor old_string on the file as it is now."
-    return " Read the file again."
-
-
-def _line_span(text: str, start: int, end: int) -> tuple[int, int]:
-    start_line = _normalize_line_endings(text[:start], "\n").count("\n") + 1
-    end_line = _normalize_line_endings(text[:end], "\n").count("\n") + 1
-    total_lines = max(1, len(text.splitlines()))
-    return start_line, min(end_line, total_lines)
-
-
-def _count_overlapping(text: str, needle: str) -> int:
-    """Occurrences of *needle* in *text*, counting overlapping ones.
-
-    ``str.count`` advances past each match, so ``"ababa".count("aba")`` is 1 even
-    though ``aba`` starts at both offset 0 and offset 2. Uniqueness must be
-    judged on the real set of possible matches."""
-    count = 0
-    start = text.find(needle)
-    while start != -1:
-        count += 1
-        start = text.find(needle, start + 1)
-    return count
-
-
-def _unified_diff(source: str, updated: str, fromfile: str, tofile: str) -> str:
+def unified_diff(source: str, updated: str, fromfile: str, tofile: str) -> str:
     """Unified diff with the standard no-final-newline marker.
 
     difflib never emits ``\\ No newline at end of file``, so the last
@@ -581,1035 +919,3 @@ def _unified_diff(source: str, updated: str, fromfile: str, tofile: str) -> str:
         if line and not line.endswith("\n"):
             chunks.append("\n\\ No newline at end of file\n")
     return "".join(chunks)
-
-
-def _transform_read_ranges(
-    ranges: list[tuple[int, int]],
-    start: int,
-    end: int,
-    line_delta: int,
-) -> list[tuple[int, int]]:
-    transformed: list[tuple[int, int]] = []
-    for seen_start, seen_end in ranges:
-        if seen_start < start:
-            transformed.append((seen_start, min(seen_end, start - 1)))
-        if seen_end > end:
-            transformed.append((max(seen_start, end + 1) + line_delta, seen_end + line_delta))
-    transformed.append((start, max(start, end + line_delta)))
-    transformed.sort()
-    merged: list[tuple[int, int]] = []
-    for seen_start, seen_end in transformed:
-        if seen_end < seen_start:
-            continue
-        if not merged or seen_start > merged[-1][1] + 1:
-            merged.append((seen_start, seen_end))
-        else:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], seen_end))
-    return merged
-
-
-def _apply_edit(
-    text: str,
-    old: str,
-    new: str,
-    replace_all: bool,
-    label: str,
-    *,
-    target: Path,
-    context: ToolContext,
-    seen_ranges: list[tuple[int, int]],
-) -> tuple[str, int, list[tuple[int, int]]] | str:
-    """Apply one exact replacement to ``text`` in memory. Returns the updated text
-    and its match count, or an ERROR string. Line endings are normalised per edit
-    against the text as it stands *now*, so a later edit sees an earlier one's result."""
-    line_ending = _detect_line_ending(text)
-    if any(char in text or char in new for char in "\v\f\x1c\x1d\x1e\x85\u2028\u2029"):
-        return f"ERROR: {label}unsupported line separator; patch requires LF, CRLF, or CR lines"
-    old_norm = _normalize_line_endings(old, line_ending)
-    new_norm = _normalize_line_endings(new, line_ending)
-    if not old_norm:
-        return f"ERROR: {label}old_string cannot be empty"
-    if old_norm == new_norm:
-        return (
-            f"ERROR: {label}old_string and new_string are identical after "
-            "line-ending normalization, so this edit would not change the file"
-        )
-    occurrences = _count_overlapping(text, old_norm)
-    if occurrences == 0:
-        return f"ERROR: {label}Could not find match for search text: {old!r}.{_nearest_hint(text, old_norm)}"
-    if occurrences > 1 and not replace_all:
-        return f"ERROR: {label}Multiple matches found for search text: {old!r}. Either provide a more specific search pattern or use replace_all."
-    positions: list[tuple[int, int]] = []
-    cursor = 0
-    while True:
-        start = text.find(old_norm, cursor)
-        if start < 0:
-            break
-        end = start + len(old_norm)
-        positions.append((start, end))
-        cursor = end
-        if not replace_all:
-            break
-    line_ranges = [_line_span(text, start, end) for start, end in positions]
-    guard = context.require_read(
-        target,
-        "edit it",
-        line_ranges=line_ranges,
-        seen_ranges=seen_ranges,
-    )
-    if guard:
-        return f"ERROR: {label}{guard.removeprefix('ERROR: ')}"
-    updated = text
-    transformed = seen_ranges
-    line_delta = new_norm.count(line_ending) - old_norm.count(line_ending)
-    for start, end in reversed(positions):
-        start_line, end_line = _line_span(updated, start, end)
-        updated = updated[:start] + new_norm + updated[end:]
-        transformed = _transform_read_ranges(transformed, start_line, end_line, line_delta)
-    return updated, len(positions), transformed
-
-
-def patch(
-    path: str | None = None,
-    file_path: str | None = None,
-    old_string: str | None = None,
-    new_string: str | None = None,
-    search: str | None = None,
-    content: str | None = None,
-    replace_all: bool = False,
-    edits: list[dict] | None = None,
-    context: ToolContext | None = None,
-) -> str:
-    """Exact string replacement in one file, in one of two forms.
-
-    Scalar (the common case)::
-
-        patch(file_path, old_string, new_string, replace_all=False)
-
-    Batch — several replacements applied in order, each seeing the previous
-    one's result::
-
-        patch(file_path, edits=[{old_string, new_string, replace_all}, ...])
-
-    Both forms are ONE code path: same read-before-edit guard, same match rules
-    (must exist, must be unique unless replace_all, must differ from new_string),
-    one snapshot, one write. Batch validation is all-or-nothing: every edit is
-    validated and applied in memory first, so a miss, an ambiguity or a no-op
-    anywhere in the list writes nothing and names the offending edit. The final
-    filesystem write is not crash-atomic. Mixing the two forms is an error, never
-    a silent precedence rule.
-    """
-    assert context is not None
-    raw_path = file_path or path
-    if not raw_path:
-        return "ERROR: path is required"
-
-    old = old_string if old_string is not None else search
-    new = new_string if new_string is not None else content
-    batch = edits is not None
-
-    if batch and (old is not None or new is not None or replace_all):
-        return (
-            "ERROR: pass either the scalar form (old_string/new_string/replace_all) "
-            "or edits, not both"
-        )
-
-    if not batch:
-        if old is None or new is None:
-            return "ERROR: old_string and new_string are required"
-        single = _normalize_edit({"old_string": old, "new_string": new, "replace_all": replace_all}, "")
-        if isinstance(single, str):
-            return single
-        pending = [single]
-    else:
-        if not isinstance(edits, list) or not edits:
-            return "ERROR: edits must be a non-empty list of {old_string, new_string} objects"
-        pending = []
-        for index, raw in enumerate(edits, start=1):
-            normalized = _normalize_edit(raw, f"edit {index}: ")
-            if isinstance(normalized, str):
-                return normalized
-            pending.append(normalized)
-
-    target = context.resolve_path(raw_path)
-    # Reject a non-regular target by type before any read: opening a FIFO with
-    # no writer parks in open() forever, so read_bytes() never returns.
-    if not target.exists():
-        return f"ERROR: no such file: {target}"
-    if not target.is_file():
-        return f"ERROR: not a regular file: {target}"
-    try:
-        source_bytes = _read_regular_bytes(target)
-        source = source_bytes.decode("utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        return f"ERROR: {exc}"
-    source_hash = _hash_bytes(source_bytes)
-    guard = context.require_read(target, "edit it", content_hash=source_hash)
-    if guard:
-        return guard
-
-    updated = source
-    seen_ranges = list(context.read_ranges.get(target, []))
-    was_whole = target in context.fully_read_paths
-    if was_whole:
-        total_lines = max(1, len(source.splitlines()))
-        seen_ranges = [(1, total_lines)]
-    replacements = 0
-    for index, (old_text, new_text, edit_replace_all) in enumerate(pending, start=1):
-        applied = _apply_edit(
-            updated,
-            old_text,
-            new_text,
-            edit_replace_all,
-            f"edit {index}: " if batch else "",
-            target=target,
-            context=context,
-            seen_ranges=seen_ranges,
-        )
-        if isinstance(applied, str):
-            return applied
-        updated, count, seen_ranges = applied
-        replacements += count if edit_replace_all else 1
-
-    data = updated.encode("utf-8")
-    context.snapshot(target)
-    target.write_bytes(data)
-    content_hash = _hash_bytes(data)
-    context.replace_read_coverage(
-        target,
-        content_hash,
-        seen_ranges,
-        len(updated.splitlines()),
-        whole_file=was_whole,
-    )
-    diff = _unified_diff(source, updated, str(target), str(target))
-    if len(diff) > 4000:
-        diff = diff[:4000] + "\n... [diff truncated]"
-    if batch:
-        summary = f"{len(pending)} edit{'s' if len(pending) != 1 else ''}"
-    else:
-        summary = f"{replacements} replacement{'s' if replacements != 1 else ''}"
-    return f"patched {target} ({summary}, hash {content_hash})\n{diff}"
-
-
-def _iter_files(root: Path) -> Iterable[Path]:
-    if root.is_file():
-        yield root
-        return
-    for base, dirs, files in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in {".git", "__pycache__", "node_modules", ".venv", "venv"}]
-        for name in files:
-            candidate = Path(base) / name
-            # Regular files only: a FIFO/socket/device (or a symlink to one) in
-            # the walk would otherwise reach a reader and, for a pipe with no
-            # writer, hang the whole turn on open(). is_file() stats (never
-            # opens) and follows symlinks, so only true regular files pass.
-            if candidate.is_file():
-                yield candidate
-
-
-_RG_MISSING = "ERROR: rg (ripgrep) not found in tools/bin or PATH; run `just install` to provision it."
-_RG_TIMEOUT_S = 120
-_AST_GREP_MISSING = (
-    "ERROR: ast-grep not found in tools/bin or PATH; run `just install` to provision it."
-)
-_AST_GREP_TIMEOUT_S = 120
-_AST_GREP_LANGUAGES = (
-    "Bash", "C", "Cpp", "CSharp", "Css", "Dart", "Elixir", "Go",
-    "Haskell", "Hcl", "Html", "Java", "JavaScript", "Json", "Kotlin",
-    "Lua", "Markdown", "Nix", "Php", "Python", "Ruby", "Rust", "Scala",
-    "Solidity", "Swift", "Tsx", "TypeScript", "Yaml",
-)
-
-
-def _rg_binary() -> str | None:
-    return resolve_binary("rg")
-
-
-def _ast_grep_binary() -> str | None:
-    return resolve_binary("ast-grep")
-
-
-def _rg_env() -> dict[str, str]:
-    # Inherit the real environment (PATH, locale) but drop the box-local ripgrep
-    # config so the documented contract holds everywhere: .gitignore honoured
-    # inside a git tree, .ignore/.rgignore anywhere, hidden + binary + non-regular
-    # files skipped. A stray RIPGREP_CONFIG_PATH must not silently change results.
-    env = dict(os.environ)
-    env.pop("RIPGREP_CONFIG_PATH", None)
-    return env
-
-
-@lru_cache(maxsize=1)
-def _rg_types(rg: str) -> frozenset[str]:
-    """Names rg accepts for `--type` (`rust`, `py`, `js`, ...), from `rg --type-list`."""
-    try:
-        proc = subprocess.run(
-            [rg, "--type-list"], capture_output=True, text=True, timeout=10, env=_rg_env()
-        )
-    except (OSError, subprocess.SubprocessError):
-        return frozenset()
-    return frozenset(
-        line.split(":", 1)[0].strip() for line in proc.stdout.splitlines() if ":" in line
-    )
-
-
-def _rg_stream(
-    argv: list[str],
-    want: int,
-    timeout: int,
-    input_text: str | None = None,
-    cwd: str | None = None,
-) -> tuple[list[str], int | None, str, bool]:
-    """Run rg and collect at most *want* output lines, then stop it.
-
-    Returns (lines, returncode, stderr, timed_out). returncode is None when rg
-    was stopped early because enough lines were already gathered — the caller
-    treats that as a successful match. Streaming with an early stop keeps memory
-    bounded (a pattern matching millions of lines never buffers them all).
-
-    The deadline is enforced by a watchdog that kills rg, NOT by a check inside
-    the read loop: `for line in proc.stdout` blocks until rg emits something, so a
-    loop-side check can only fire while output is already flowing — exactly the
-    case that does not need a timeout. A long scan that matches nothing emits no
-    lines at all, and used to run unbounded.
-
-    The child gets its own session so the watchdog can signal the whole group.
-    Killing only the direct child leaves any grandchild holding the write end of
-    the pipe, and the read loop then blocks past the deadline anyway — the exact
-    hang the watchdog exists to prevent."""
-    try:
-        proc = subprocess.Popen(
-            argv, stdin=subprocess.PIPE if input_text is not None else None,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            env=_rg_env(),
-            start_new_session=True,
-            cwd=cwd,
-        )
-    except OSError as exc:
-        return [], 2, str(exc), False
-    lines: list[str] = []
-    stopped_early = False
-    expired = threading.Event()
-
-    def _kill_group() -> None:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except (OSError, AttributeError):
-            proc.kill()
-
-    def _expire() -> None:
-        expired.set()
-        _kill_group()
-
-    watchdog = threading.Timer(timeout, _expire)
-    watchdog.daemon = True
-    watchdog.start()
-    writer: threading.Thread | None = None
-    if input_text is not None:
-        assert proc.stdin is not None
-
-        def write_stdin() -> None:
-            try:
-                proc.stdin.write(input_text.encode("utf-8"))
-                proc.stdin.close()
-            except (BrokenPipeError, OSError):
-                pass
-
-        writer = threading.Thread(target=write_stdin, daemon=True, name="search-stdin")
-        writer.start()
-    assert proc.stdout is not None
-    try:
-        # Split the raw bytes on b"\n" only. Text-mode universal newlines would
-        # turn a bare CR inside a matched line (a file with CR line endings) into
-        # a break, splitting one match into several lines; decoding with
-        # backslashreplace renders bytes that are not valid UTF-8 as \xNN escapes
-        # instead of dropping them to U+FFFD.
-        for raw in proc.stdout:
-            lines.append(raw.rstrip(b"\n").decode("utf-8", errors="backslashreplace"))
-            if len(lines) >= want:
-                stopped_early = True
-                break
-    finally:
-        watchdog.cancel()
-        if stopped_early:
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                _kill_group()
-                proc.wait()
-    timed_out = expired.is_set()
-    stderr = (
-        proc.stderr.read().decode("utf-8", errors="replace")
-        if proc.stderr is not None
-        else ""
-    )
-    for stream in (proc.stdout, proc.stderr):
-        if stream is not None:
-            stream.close()
-    if not stopped_early and proc.poll() is None:
-        proc.wait()
-    if writer is not None:
-        writer.join(timeout=1)
-    rc = None if stopped_early else proc.returncode
-    return lines, rc, stderr, timed_out
-
-
-# Excludes every dot-prefixed basename, and prunes dot-prefixed directories with
-# it, restoring ripgrep's default hidden behaviour after a whitelist glob has
-# overridden it.
-_HIDDEN_GUARD_GLOB = "!.*"
-
-
-def _glob_asks_for_hidden(pattern: str | None) -> bool:
-    """True when a caller's glob names a dot-prefixed path component itself.
-
-    `.env`, `**/.github/*` and `.git/**` are explicit requests for hidden paths.
-    `.` and `..` are path syntax, not hidden names, so they do not count.
-    A negated glob (``!.env``) filters results; it never broadens the search to
-    hidden paths, so it is not an explicit request.
-    """
-    if not pattern:
-        return False
-    text = str(pattern).strip()
-    if text.startswith("!"):
-        return False
-    return any(
-        part.startswith(".") and part not in (".", "..")
-        for part in text.split("/")
-        if part
-    )
-
-
-def _stat_stamp(path: Path) -> tuple[int, int, int] | None:
-    """Identity of the file a search described, so the dedup cache stops
-    describing a tree that moved underneath it: any edit, external write, or
-    undo restore changes at least mtime or size."""
-    try:
-        info = path.stat()
-    except OSError:
-        return None
-    return (info.st_mtime_ns, info.st_size, info.st_ino)
-
-
-def fs_search(
-    pattern: str,
-    path: str | None = None,
-    glob: str | None = None,
-    output_mode: str | None = None,
-    before_context: int | None = None,
-    after_context: int | None = None,
-    context_lines: int | None = None,
-    show_line_numbers: bool | None = True,
-    case_insensitive: bool | None = False,
-    file_type: str | None = None,
-    head_limit: int | None = None,
-    offset: int | None = None,
-    multiline: bool | None = False,
-    context: ToolContext | None = None,
-    **rg_flags,
-) -> str:
-    assert context is not None
-    before_context = rg_flags.get("-B", before_context)
-    after_context = rg_flags.get("-A", after_context)
-    context_lines = rg_flags.get("-C", context_lines)
-    show_line_numbers = rg_flags.get("-n", show_line_numbers)
-    case_insensitive = rg_flags.get("-i", case_insensitive)
-    file_type = rg_flags.get("type", file_type)
-    root = context.resolve_path(path or ".")
-    if not root.exists():
-        return f"ERROR: Path does not exist: {root}"
-    try:
-        root_stat = root.stat()
-    except OSError as exc:
-        return f"ERROR: {type(exc).__name__}: {exc}"
-    if not stat.S_ISDIR(root_stat.st_mode) and not stat.S_ISREG(root_stat.st_mode):
-        return f"ERROR: not a regular file or directory: {root}"
-    mode = output_mode or "files_with_matches"
-    if file_type and (
-        (glob and not str(glob).strip().startswith("!"))
-        or (mode == "files" and pattern and not str(pattern).strip().startswith("!"))
-    ):
-        # ripgrep resolves a positive --glob ahead of --type, so a whitelist glob
-        # makes file_type a no-op. The two cannot be intersected; name the
-        # conflict instead of silently applying one.
-        return (
-            "ERROR: file_type cannot be combined with a positive glob; ripgrep "
-            "would apply the glob and drop file_type. Pass one filter."
-        )
-    # A directory's own stat does not move when a nested file changes, so the
-    # stamp cannot vouch for a directory-root result: skip the memo for
-    # directory roots. A regular-file root's stamp does establish what the hit
-    # described (st_ino catches a rename-over that preserves size and mtime).
-    memoized = not stat.S_ISDIR(root_stat.st_mode)
-    stamp = _stat_stamp(root) if memoized else None
-    cache_key = repr((pattern, str(root), glob, mode, before_context, after_context, context_lines, show_line_numbers, case_insensitive, file_type, head_limit, offset, multiline, stamp))
-    if memoized and cache_key in context.search_cache:
-        return context.search_cache[cache_key] + "\n[deduplicated repeated search]"
-
-    rg = _rg_binary()
-    if rg is None:
-        return _RG_MISSING
-
-    if head_limit is not None and not isinstance(head_limit, bool):
-        try:
-            if int(head_limit) < 1:
-                return "ERROR: head_limit must be at least 1"
-        except (TypeError, ValueError):
-            pass
-    skip = int_or_default(offset, 0, minimum=0)
-    limit = int_or_default(head_limit, 10_000, minimum=1)
-    before = int_or_default(context_lines if context_lines is not None else before_context, 0, minimum=0)
-    after = int_or_default(context_lines if context_lines is not None else after_context, 0, minimum=0)
-
-    # `--sort path` makes ripgrep walk and print in a stable single-threaded
-    # order. Offset paging slices the captured stream, and ripgrep's parallel
-    # output order is not stable, so without this consecutive pages overlap and
-    # some entries are never returned.
-    # `--one-file-system` keeps the walk on the filesystem the root is on: a
-    # mount point under the root (an NFS share, an automount) is not entered.
-    argv = [rg, "--color=never", "--no-messages", "--sort", "path", "--one-file-system"]
-    if mode == "files":
-        argv.append("--files")
-    elif mode == "files_with_matches":
-        argv.append("--files-with-matches")
-    elif mode == "count":
-        # --with-filename so a single explicit file still prints path:count;
-        # ripgrep omits the path for a lone file otherwise.
-        argv += ["--count", "--with-filename"]
-    elif mode == "content":
-        argv += ["--no-heading", "--with-filename"]
-        argv.append("--line-number" if show_line_numbers else "--no-line-number")
-        if before:
-            argv += ["--before-context", str(before)]
-        if after:
-            argv += ["--after-context", str(after)]
-    else:
-        return "ERROR: output_mode must be one of files, files_with_matches, content, count"
-    if case_insensitive and mode != "files":
-        argv.append("--ignore-case")
-    if multiline:
-        argv += ["--multiline", "--multiline-dotall"]
-    glob_flag = "--iglob" if case_insensitive and mode == "files" else "--glob"
-    if glob:
-        argv += [glob_flag, str(glob)]
-    if file_type:
-        # Prefer rg's own type table so `type=rust` matches *.rs (and `py` also
-        # matches .pyi/.pyw), as ripgrep's `--type` does. A bare extension
-        # rg has no type for ("gdshader") still works via an extension glob —
-        # previously EVERY value became `*.<value>`, so `type=rust` silently matched
-        # nothing at all.
-        name = str(file_type).strip().lstrip(".")
-        if name in _rg_types(rg):
-            argv += ["--type", name]
-        else:
-            argv += ["--glob", f"*.{name}"]
-    if mode == "files":
-        argv += [glob_flag, pattern]
-    else:
-        argv += ["--regexp", pattern]
-    # A whitelist --glob outranks ripgrep's hidden-file filter, so every mode that
-    # passes one (files mode always does: `pattern` IS the glob) was silently
-    # behaving like `rg --files --hidden` and dumping .git internals. The guard
-    # goes LAST because overrides are last-match-wins. Skipped when the caller
-    # names a dot-prefixed component themselves — that is an explicit ask, and it
-    # needs --hidden too or the hidden directory is pruned before the glob is
-    # consulted. An explicit `path` to a hidden file still works either way:
-    # ripgrep never applies the hidden filter to a root it was handed.
-    if _glob_asks_for_hidden(glob) or (mode == "files" and _glob_asks_for_hidden(pattern)):
-        argv.append("--hidden")
-    else:
-        argv += ["--glob", _HIDDEN_GUARD_GLOB]
-    argv += ["--", str(root)]
-
-    # Run rg from the search root: a glob containing a slash is matched against
-    # the path relative to rg's working directory, so `src/*.py` can never match
-    # under an absolute root unless rg's cwd is that root. Absolute roots still
-    # print absolute paths, so the output shape is unchanged.
-    rg_cwd = str(root) if root.is_dir() else str(root.parent)
-    # Ask for one past the page so an exact-fit result is not reported as
-    # truncated; only a genuine extra line proves more matches exist.
-    lines, rc, stderr, timed_out = _rg_stream(
-        argv, skip + limit + 1, _RG_TIMEOUT_S, cwd=rg_cwd
-    )
-    if timed_out:
-        return f"ERROR: search timed out after {_RG_TIMEOUT_S}s"
-    # rc None = rg stopped early with a full page of matches; 0 = matches; 1 = no
-    # matches (clean empty result); anything else = real rg error (bad regex/glob).
-    if rc is not None and rc not in (0, 1):
-        detail = (stderr or "").strip()
-        if len(detail) > 2000:
-            detail = detail[:2000] + " …[diagnostic truncated]"
-        return f"ERROR: {detail or f'rg exit {rc}'}"
-
-    truncated = len(lines) > skip + limit
-    sliced = lines[skip:skip + limit]
-    out = "\n".join(sliced) if sliced else "(no matches)"
-    if truncated:
-        out += f"\n[more matches than head_limit={limit}; continue with offset={skip + limit}]"
-    if memoized:
-        context.search_cache[cache_key] = out
-    return out
-
-
-def _ast_language(raw: str | None) -> str | None:
-    if raw is None:
-        return None
-    folded = str(raw).strip().casefold()
-    return next((language for language in _AST_GREP_LANGUAGES if language.casefold() == folded), "")
-
-
-def _ast_argv(
-    binary: str,
-    pattern: str,
-    root: Path,
-    lang: str | None,
-    rewrite: str | None = None,
-    stdin: bool = False,
-) -> list[str]:
-    argv = [
-        binary,
-        "run",
-        # Attached form: ast-grep's clap parser reads a hyphen-leading token after
-        # a separated flag as another option, so `- $A` (a YAML block sequence or
-        # Markdown bullet) never reaches the matcher.
-        f"--pattern={pattern}",
-        "--json=stream",
-        "--color",
-        "never",
-    ]
-    if lang:
-        argv += ["--lang", lang]
-    if rewrite is not None:
-        argv.append(f"--rewrite={rewrite}")
-    if stdin:
-        argv.append("--stdin")
-    else:
-        argv += ["--", str(root)]
-    return argv
-
-
-def _ast_records(
-    binary: str,
-    pattern: str,
-    root: Path,
-    lang: str | None,
-    rewrite: str | None,
-    want: int,
-) -> tuple[list[dict], int | None, str, bool, str | None, bool]:
-    lines, rc, stderr, timed_out = _rg_stream(
-        _ast_argv(binary, pattern, root, lang, rewrite), want, _AST_GREP_TIMEOUT_S
-    )
-
-    used_stdin = False
-    if rc == 1 and not lines and lang and root.is_file():
-        try:
-            source = _read_regular_bytes(root).decode("utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
-            return [], rc, stderr, timed_out, str(exc), used_stdin
-        lines, rc, stderr, timed_out = _rg_stream(
-            _ast_argv(binary, pattern, root, lang, rewrite, stdin=True),
-            want,
-            _AST_GREP_TIMEOUT_S,
-            input_text=source,
-        )
-        used_stdin = True
-
-    records: list[dict] = []
-    for line in lines:
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError as exc:
-            return [], rc, stderr, timed_out, f"invalid ast-grep JSON output: {exc.msg}", used_stdin
-        if not isinstance(record, dict):
-            return [], rc, stderr, timed_out, "invalid ast-grep JSON output: expected an object", used_stdin
-        if used_stdin and record.get("file") == "STDIN":
-            record["file"] = str(root)
-        records.append(record)
-    return records, rc, stderr, timed_out, None, used_stdin
-
-
-def _cap_ast_output(text: str, context: ToolContext) -> str:
-    cap = max(0, int(context.max_tool_result_bytes))
-    encoded = text.encode("utf-8")
-    if len(encoded) <= cap:
-        return text
-    marker = f"[truncated: limits.max_tool_result_bytes ({cap}) reached]"
-    marker_bytes = marker.encode("utf-8")
-    if len(marker_bytes) >= cap:
-        return marker_bytes[:cap].decode("utf-8", errors="ignore")
-    prefix = encoded[: cap - len(marker_bytes) - 1].decode("utf-8", errors="ignore")
-    return f"{prefix}\n{marker}"
-
-
-def _ast_match_output(records: list[dict], context: ToolContext) -> str:
-    blocks: list[str] = []
-    for record in records:
-        raw_file = record.get("file")
-        raw_range = record.get("range")
-        if not isinstance(raw_file, str) or not isinstance(raw_range, dict):
-            return "ERROR: invalid ast-grep JSON output: match has no file or range"
-        start = raw_range.get("start")
-        if not isinstance(start, dict) or not isinstance(start.get("line"), int):
-            return "ERROR: invalid ast-grep JSON output: match has no start line"
-        target = context.resolve_path(raw_file)
-        line_number = start["line"] + 1
-        source = record.get("lines", record.get("text", ""))
-        if not isinstance(source, str):
-            return "ERROR: invalid ast-grep JSON output: match has no source text"
-        source_lines = source.splitlines() or [""]
-        numbered = _format_numbered_lines(source_lines, line_number)
-        blocks.append(f"{target}:{line_number}\n{numbered}")
-    return "\n".join(blocks) if blocks else "(no matches)"
-
-
-def _ast_warning(stderr: str) -> str:
-    """Promote ast-grep's first stderr line into a model-visible note.
-
-    ast-grep prints ``Warning: Pattern contains an ERROR node …`` while exiting
-    0 or 1, so without this a pattern it could not parse as the chosen language
-    is indistinguishable from a genuine no-match."""
-    for line in stderr.splitlines():
-        detail = line.strip()
-        if detail:
-            return f"WARNING: {detail.removeprefix('Warning: ').strip()}"
-    return ""
-
-
-def _prepare_ast_rewrite(
-    records: list[dict], context: ToolContext
-) -> dict[Path, tuple[bytes, bytes]] | str:
-    edits_by_file: dict[Path, list[tuple[int, int, bytes, bytes]]] = {}
-    for record in records:
-        raw_file = record.get("file")
-        offsets = record.get("replacementOffsets")
-        replacement = record.get("replacement")
-        text = record.get("text")
-        if (
-            not isinstance(raw_file, str)
-            or not isinstance(offsets, dict)
-            or not isinstance(offsets.get("start"), int)
-            or not isinstance(offsets.get("end"), int)
-            or not isinstance(replacement, str)
-            or not isinstance(text, str)
-        ):
-            return "ERROR: invalid ast-grep JSON output: rewrite metadata is incomplete"
-        target = context.resolve_path(raw_file)
-        edits_by_file.setdefault(target, []).append(
-            (offsets["start"], offsets["end"], text.encode("utf-8"), replacement.encode("utf-8"))
-        )
-
-    prepared: dict[Path, tuple[bytes, bytes]] = {}
-    for target, edits in edits_by_file.items():
-        try:
-            source = target.read_bytes()
-        except OSError as exc:
-            return f"ERROR: {exc}"
-        previous_end = -1
-        for start, end, expected, _replacement in sorted(edits):
-            if start < previous_end:
-                return f"ERROR: ast-grep returned overlapping rewrites for {target}"
-            if start < 0 or end < start or source[start:end] != expected:
-                return f"ERROR: {target} changed while preparing the structural rewrite"
-            previous_end = end
-        updated = source
-        for start, end, _expected, replacement in sorted(edits, reverse=True):
-            updated = updated[:start] + replacement + updated[end:]
-        prepared[target] = (source, updated)
-    return prepared
-
-
-def _ast_rewrite_diff(prepared: dict[Path, tuple[bytes, bytes]]) -> str:
-    chunks: list[str] = []
-    for target, (source, updated) in prepared.items():
-        chunks.append(
-            _unified_diff(
-                source.decode("utf-8", errors="replace"),
-                updated.decode("utf-8", errors="replace"),
-                str(target),
-                str(target),
-            )
-        )
-    return "".join(chunks).rstrip()
-
-
-def ast_search(
-    pattern: str,
-    path: str | None = None,
-    lang: str | None = None,
-    rewrite: str | None = None,
-    apply: bool = False,
-    max_results: int | None = None,
-    context: ToolContext | None = None,
-) -> str:
-    assert context is not None
-    if not isinstance(pattern, str) or not pattern.strip():
-        return "ERROR: pattern is required"
-    if rewrite is not None and not isinstance(rewrite, str):
-        return "ERROR: rewrite must be a string"
-    if apply and rewrite is None:
-        return "ERROR: apply=true requires rewrite"
-
-    language = _ast_language(lang)
-    if language == "":
-        return f"ERROR: unsupported ast-grep language: {lang}"
-    root = context.resolve_path(path or ".")
-    if not root.exists():
-        return f"ERROR: Path does not exist: {root}"
-    try:
-        root_stat = root.stat()
-    except OSError as exc:
-        return f"ERROR: {type(exc).__name__}: {exc}"
-    if not stat.S_ISDIR(root_stat.st_mode) and not stat.S_ISREG(root_stat.st_mode):
-        return f"ERROR: not a regular file or directory: {root}"
-
-    limit = int_or_default(max_results, 100, minimum=1)
-    # Mirror fs_search: a directory's own stat does not move when a nested file
-    # changes, so a directory-root result cannot be vouched for by the root's
-    # stamp; only a regular-file root is memoized, keyed on its stamp.
-    memoized = not stat.S_ISDIR(root_stat.st_mode)
-    stamp = _stat_stamp(root) if memoized else None
-    cache_key = repr(("ast_search", pattern, str(root), language, rewrite, limit, stamp))
-    if memoized and not apply and cache_key in context.search_cache:
-        return context.search_cache[cache_key] + "\n[deduplicated repeated search]"
-
-    binary = _ast_grep_binary()
-    if binary is None:
-        return _AST_GREP_MISSING
-
-    records, rc, stderr, timed_out, parse_error, used_stdin = _ast_records(
-        binary, pattern, root, language, rewrite, limit + 1
-    )
-    if timed_out:
-        return f"ERROR: search timed out after {_AST_GREP_TIMEOUT_S}s"
-    if parse_error:
-        return f"ERROR: {parse_error}"
-    if rc is not None and rc not in (0, 1):
-        detail = stderr.strip()
-        first = detail.splitlines()[0] if detail else f"ast-grep exit {rc}"
-        return f"ERROR: {first}"
-
-    warning = _ast_warning(stderr)
-    overflow = len(records) > limit
-    visible = records[:limit]
-    if rewrite is None:
-        out = _cap_ast_output(_ast_match_output(visible, context), context)
-        if overflow:
-            out += "\n[additional matches omitted; increase max_results to see them]"
-        if warning:
-            out = f"{warning}\n{out}"
-        if memoized:
-            context.search_cache[cache_key] = out
-        return out
-
-    prepared = _prepare_ast_rewrite(visible, context)
-    if isinstance(prepared, str):
-        return prepared
-    diff = _ast_rewrite_diff(prepared) or "(no changes)"
-    if not apply:
-        suffix = "\n[additional matches omitted; increase max_results to preview them]" if overflow else ""
-        out = f"DRY RUN: no files changed. Pass apply=true to apply.\n{diff}{suffix}"
-        out = _cap_ast_output(out, context)
-        if warning:
-            out = f"{warning}\n{out}"
-        if memoized:
-            context.search_cache[cache_key] = out
-        return out
-    if overflow:
-        return (
-            f"ERROR: rewrite matched more than max_results={limit}; "
-            "narrow path or increase max_results before applying"
-        )
-    if not prepared or all(source == updated for source, updated in prepared.values()):
-        return "(no changes)"
-
-    for target in prepared:
-        context.snapshot(target)
-    apply_stderr = ""
-    if used_stdin:
-        rc = 0
-        for target, (_source, updated) in prepared.items():
-            try:
-                target.write_bytes(updated)
-            except OSError as exc:
-                rc = 1
-                apply_stderr = str(exc)
-                break
-    else:
-        argv = _ast_argv(binary, pattern, root, language, rewrite)
-        argv.remove("--json=stream")
-        argv.insert(-2, "--update-all")
-        rc, _stdout, apply_stderr = run(argv, context=context, timeout=_AST_GREP_TIMEOUT_S)
-    context.search_cache.clear()
-    if rc != 0:
-        detail = apply_stderr.strip()
-        first = detail.splitlines()[0] if detail else f"ast-grep exit {rc}"
-        return f"ERROR: {first}; snapshots are available through undo"
-
-    changed = 0
-    for target, (source, _predicted) in prepared.items():
-        try:
-            updated = target.read_bytes()
-        except OSError as exc:
-            return f"ERROR: {exc}; snapshots are available through undo"
-        if updated != source:
-            changed += 1
-        context.file_hashes[target] = _hash_bytes(updated)
-        prepared[target] = (source, updated)
-    diff = _ast_rewrite_diff(prepared) or "(no changes)"
-    summary = f"rewrote {len(visible)} match{'es' if len(visible) != 1 else ''} in {changed} file{'s' if changed != 1 else ''}"
-    out = _cap_ast_output(f"{summary}\n{diff}", context)
-    if warning:
-        out = f"{warning}\n{out}"
-    return out
-
-
-def list_dir(path: str, recursive: bool = False, context: ToolContext | None = None) -> str:
-    assert context is not None
-    root = context.resolve_path(path)
-    if not root.exists():
-        return f"ERROR: no such path: {root}"
-    if not root.is_dir():
-        return f"ERROR: not a directory: {root}"
-    lines: list[str] = []
-    if recursive:
-        for p in _iter_files(root):
-            rel = p.relative_to(root)
-            lines.append(f"  {rel} ({p.stat().st_size}b)")
-    else:
-        for entry in sorted(root.iterdir()):
-            marker = "/" if entry.is_dir() else ""
-            size = "" if entry.is_dir() else f" ({entry.stat().st_size}b)"
-            lines.append(f"  {entry.name}{marker}{size}")
-    return f"{root}:\n" + ("\n".join(lines) if lines else "  (empty)")
-
-
-
-def tools() -> tuple[Tool, ...]:
-    return (
-        Tool(
-            "read",
-            load_description("read"),
-            fs_read,
-            {
-                "file_path": {"type": "string", "description": "Absolute, relative, or ~ path to a file."},
-                "range": {
-                    "type": "object",
-                    "properties": {
-                        "start_line": {"type": "integer", "description": "Optional 1-based first line for text files."},
-                        "end_line": {"type": "integer", "description": "Optional inclusive 1-based last line for text files."},
-                    },
-                    "additionalProperties": False,
-                    "description": "Optional line range for partial reads.",
-                },
-                "show_line_numbers": {"type": "boolean", "default": True, "description": "For text output, prefix each line with its anchored line number."},
-            },
-            required=("file_path",),
-        ),
-        Tool(
-            "write",
-            load_description("write"),
-            write,
-            {
-                "file_path": {"type": "string", "description": "File path to create or overwrite."},
-                "content": {"type": "string", "description": "Complete file content to write."},
-                "overwrite": {"type": "boolean", "default": False, "description": "Required for existing files after reading them first."},
-            },
-            required=("file_path", "content"),
-        ),
-        Tool(
-            "fs_search",
-            load_description("fs_search"),
-            fs_search,
-            {
-                "pattern": {"type": "string", "description": "Content regular expression, or filename glob when output_mode is files."},
-                "path": {"type": "string", "description": "File or directory to search; defaults to the current working directory."},
-                "glob": {"type": "string", "description": "Optional glob filter such as *.py or **/*.tsx."},
-                "output_mode": {"type": "string", "enum": ["files", "content", "files_with_matches", "count"], "default": "files_with_matches", "description": "Result format: filename-glob paths, content-matching lines, paths whose contents match, or per-file content-match counts."},
-                # The handler also takes ripgrep's short spellings (-B/-A/-C/-n/-i and
-                # `type`) through **rg_flags, but only the readable names are declared:
-                # the schema is what the model reads, and declaring both doubled it.
-                "before_context": {"type": "integer", "description": "Lines before each match when output_mode is content."},
-                "after_context": {"type": "integer", "description": "Lines after each match when output_mode is content."},
-                "context_lines": {"type": "integer", "description": "Lines before and after each match when output_mode is content."},
-                "show_line_numbers": {"type": "boolean", "default": True, "description": "Include file:line prefixes for content output."},
-                "case_insensitive": {"type": "boolean", "default": False, "description": "Match without case sensitivity."},
-                "file_type": {"type": "string", "description": "ripgrep type name or bare extension, e.g. rust, py, rs. Cannot be combined with a positive glob."},
-                "head_limit": {"type": "integer", "description": "Maximum number of result entries after offset; must be at least 1."},
-                "offset": {"type": "integer", "description": "Number of result entries to skip before returning output."},
-                "multiline": {"type": "boolean", "default": False, "description": "Allow the regex to span line breaks."},
-            },
-            required=("pattern",),
-        ),
-        Tool(
-            "ast_search",
-            load_description("ast_search"),
-            ast_search,
-            {
-                "pattern": {"type": "string", "description": "ast-grep structural pattern with metavariables such as $NAME and $$$ARGS."},
-                "path": {"type": "string", "description": "File or directory to search; defaults to the current working directory."},
-                "lang": {"type": "string", "enum": list(_AST_GREP_LANGUAGES), "description": "Optional language override; source extensions are inferred when omitted."},
-                "rewrite": {"type": "string", "description": "Optional structural replacement. Supplying it produces a dry-run diff unless apply is true."},
-                "apply": {"type": "boolean", "default": False, "description": "Apply the rewrite to files. False is a non-mutating dry run."},
-                "max_results": {"type": "integer", "default": 100, "description": "Maximum matches returned or rewritten; an apply is refused when more matches exist."},
-            },
-            required=("pattern",),
-        ),
-        Tool("remove", load_description("remove"), remove, {"path": {"type": "string", "description": "File or directory path to delete."}, "permanent": {"type": "boolean", "default": False, "description": "Delete directly after the operator confirms permanent deletion."}}, required=("path",)),
-        Tool(
-            "patch",
-            load_description("patch"),
-            patch,
-            {
-                "file_path": {"type": "string", "description": "File path to edit."},
-                "old_string": {"type": "string", "description": "Exact text to replace. Required unless edits is used."},
-                "new_string": {"type": "string", "description": "Replacement text; must differ from old_string. Required unless edits is used."},
-                "replace_all": {"type": "boolean", "default": False, "description": "Replace every occurrence instead of requiring one unique match."},
-                "edits": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "old_string": {"type": "string", "description": "Exact text to replace."},
-                            "new_string": {"type": "string", "description": "Replacement text; must differ from old_string."},
-                            "replace_all": {"type": "boolean", "default": False, "description": "Replace every occurrence of this edit."},
-                        },
-                        "required": ["old_string", "new_string"],
-                        "additionalProperties": False,
-                    },
-                    "description": "Several replacements validated and applied in order before one final write. Use instead of old_string/new_string, never alongside them.",
-                },
-            },
-            input_schema={
-                # Flat, not oneOf: llama.cpp's schema-to-grammar path emits {} for a
-                # bare oneOf with no top-level properties (same lesson as meta.py:630).
-                # _apply_edit already rejects mixing the scalar and batch forms.
-                "type": "object",
-                "properties": {
-                    "file_path": {"type": "string", "description": "File path to edit."},
-                    "old_string": {"type": "string", "description": "Exact text to replace. Pair with new_string, or use edits instead."},
-                    "new_string": {"type": "string", "description": "Replacement text; must differ from old_string."},
-                    "replace_all": {"type": "boolean", "default": False, "description": "Replace every occurrence instead of requiring one unique match."},
-                    "edits": {
-                        "type": "array",
-                        "minItems": 1,
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "old_string": {"type": "string", "description": "Exact text to replace."},
-                                "new_string": {"type": "string", "description": "Replacement text; must differ from old_string."},
-                                "replace_all": {"type": "boolean", "default": False, "description": "Replace every occurrence of this edit."},
-                            },
-                            "required": ["old_string", "new_string"],
-                            "additionalProperties": False,
-                        },
-                        "description": "Several replacements applied in order before one final write. Use instead of old_string/new_string, never alongside them.",
-                    },
-                },
-                "required": ["file_path"],
-                "additionalProperties": False,
-            },
-        ),
-        Tool("undo", load_description("undo"), undo, {"path": {"type": "string", "description": "Path whose latest snapshot should be restored."}}, required=("path",)),
-    )

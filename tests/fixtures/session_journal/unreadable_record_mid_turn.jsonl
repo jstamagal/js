@@ -1,0 +1,5 @@
+{"kind":"message","message":{"role":"user","content":"go"},"ts":1790000001.0,"version":1,"id":"r001","parent":null}
+{"kind":"message","message":{"role":"assistant","content":"","tool_calls":[{"id":"c9","type":"function","function":{"name":"read","arguments":"{}"}}]},"ts":1790000002.0,"version":1,"id":"r002","parent":"r001"}
+{"kind":"message","version":1,"ts":3,"message":{"role":"tool"
+{"kind":"message","message":{"role":"assistant","content":"done"},"ts":1790000003.0,"version":1,"id":"r003","parent":"r002"}
+{"kind":"message","message":{"role":"user","content":"next"},"ts":1790000004.0,"version":1,"id":"r004","parent":"r003"}

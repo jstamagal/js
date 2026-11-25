@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import re
+import tomllib
 from importlib import metadata
 from pathlib import Path
-import tomllib
+
+
+def _release(version: str) -> tuple[int, ...]:
+    """The numeric release part of a version, compared as numbers."""
+    return tuple(int(part) for part in re.findall(r"\d+", version.split("+")[0])[:3])
 
 
 def test_installed_provider_stack_matches_project_constraints():
@@ -12,9 +18,9 @@ def test_installed_provider_stack_matches_project_constraints():
     dependencies = set(project["project"]["dependencies"])
 
     expected = {
-        "ai": "0.5.2",
-        "openai": "3.13.0",
-        "anthropic": "1.5.0",
+        "ai": "0.9.0",
+        "openai": "3.52.0",
+        "anthropic": "1.17.0",
         "httpx": "0.28.1",
     }
     for package, version in expected.items():
@@ -24,4 +30,4 @@ def test_installed_provider_stack_matches_project_constraints():
             and dependency.endswith(f">={version}")
             for dependency in dependencies
         )
-        assert metadata.version(package) >= version
+        assert _release(metadata.version(package)) >= _release(version)

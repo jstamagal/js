@@ -1,0 +1,9 @@
+tools:
+  - shell:eager
+  - read:eager
+  - write:eager
+  - patch:eager
+  - remove:eager
+  - undo:eager
+  - fs_search:eager
+  - fetch:eager

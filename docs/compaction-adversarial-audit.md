@@ -4,8 +4,8 @@ Baseline: `67a6500`. The initial failing code was exercised independently of the
 existing pytest helpers. Both standalone runners live in `tests/compaction_harness/`.
 
 ```sh
-uv run python tests/compaction_harness/harness.py "$PWD" "$HOME/inbox/agents/js/compact-probe"
-uv run python tests/compaction_harness/wire.py "$PWD" "$HOME/inbox/agents/js/compact-wire"
+uv run python tests/compaction_harness/harness.py "$PWD" "$HOME/.js/work/compact-probe"
+uv run python tests/compaction_harness/wire.py "$PWD" "$HOME/.js/work/compact-wire"
 just test-file tests/test_compaction_adversarial.py
 ```
 

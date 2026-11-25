@@ -1,47 +1,44 @@
-"""Runtime configuration. Read env once, freeze."""
+"""Runtime configuration. Read env once into a `Config` (see its docstring for
+what frozen does and does not cover)."""
 
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
-import secrets
-from dataclasses import dataclass, field
-from datetime import datetime, UTC
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from . import paths as _paths
-from . import providers as _providers
-from . import settings as _settings
-from . import routing as _routing
+from . import (
+    fset as _fset,
+    login_defaults as _login_defaults,
+    mcp_config,
+    messages as msgs,
+    model_metadata,
+    paths as _paths,
+    providers as _providers,
+    routing as _routing,
+    session_store as _session_store,
+    setting_layers,
+    settings as _settings,
+    turn_settings as _turn_settings,
+)
+from .cli_options import current
 
-from .sampling import Sampling
-
-_DEFAULT_MODEL = _settings.DEFAULT_MODEL
-_DEFAULT_AGENT_ID = "defaultagent"
 _AGENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
-_EFFORT_ALIASES = {"min": "low", "none": "none", "off": "none", "0": "none", "": None}
-
-# DeepSeek reasoning: xhigh is forwarded verbatim for deepseek-native models.
-# `max` is a real ladder stop (reasoning.py) and is NOT aliased away here —
-# reasoning.snap_effort floors it for families that don't serve it.
-
 def _norm_effort(raw: str | None) -> str | None:
-    """Normalize a thinking-effort value. off/none->\"none\", unset->None.
-    Pass through low|medium|high|minimal|xhigh|max."""
+    """An effort value as it is sent: the word as typed, without surrounding
+    whitespace. Unset or empty is None."""
     if raw is None:
         return None
-    v = raw.strip().lower()
-    if v in _EFFORT_ALIASES:
-        return _EFFORT_ALIASES[v]
-    return v  # low | medium | high | minimal | xhigh | max — forwarded as-is to the SDK
+    return raw.strip() or None
 
 
 def validate_agent_id(agent_id: str) -> str:
     if not _AGENT_ID_RE.fullmatch(agent_id):
-        raise ValueError("agent id must contain only letters, numbers, '_' or '-'")
+        raise ValueError(msgs.CONFIG_AGENT_ID_MUST_CONTAIN_ONLY_LETTERS_NUMBERS.format())
     return agent_id
 
 
@@ -54,45 +51,19 @@ def _env_bool(raw: str) -> bool | None:
     return None
 
 
-def _env_int(*names: str, default: int | None = None) -> int | None:
-    for name in names:
-        raw = os.environ.get(name)
-        if raw not in (None, ""):
-            return int(raw)
-    return default
-
-
-def _numeric_setting(root: dict, path: tuple[str, ...], default: int | None) -> int | None:
-    raw = _settings.get_dotted(root, path, default)
-    if raw is None or isinstance(raw, bool):
-        return default
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return default
-
-
-def _sampling_from_extras(extras: list[str] | None) -> Sampling:
-    values: dict[str, object] = {}
-    for arg in extras or []:
-        path, value = _settings.parse_extra_arg(arg)
-        if len(path) == 2 and path[0] == "sampling":
-            values[path[1]] = value
-    return Sampling.from_mapping(values)
-
 # Vision-capable model-name fragments the SDK registry does not cover (proxy-
 # and ollama-served ids it has never heard of). Matched case-insensitively as substrings.
 _VISION_NAME_HINTS = (
     "-vl", ":vl", "vl-", "vl:", "vision", "llava", "pixtral", "internvl",
     "minicpm-v", "minicpm5", "gemma3", "gemma-3", "gemma4", "gemma-4",
     "qwen2-vl", "qwen2.5-vl", "qwen3-vl", "glm-4v", "glm-4.5v",
-    "gemini", "gpt-4o", "gpt-4.1", "gpt-5",
-    "claude-3", "claude-4", "claude-opus-4", "claude-sonnet-4", "claude-haiku-4",
+    "claude", "gemini", "gpt-", "grok-", "muse-",
 )
 # Text/audio/image-generation variants that share a vision-family substring but take
 # no image *input* — never enable image bytes for these.
 _VISION_NAME_ANTI = (
     "coder", "codex", "-code", "embed", "rerank", "guard", "tts", "whisper", "-image",
+    "gpt-oss", "realtime", "transcribe", "composer", "imagine",
 )
 
 
@@ -103,19 +74,32 @@ def _vision_by_name(model: str) -> bool:
     return any(hint in name for hint in _VISION_NAME_HINTS)
 
 
-def vision_enabled_for_model(model: str) -> bool:
+# Models whose endpoint refused a request for carrying an image, this process.
+_TEXT_ONLY_MODELS: set[str] = set()
+
+
+def mark_text_only(model: str) -> None:
+    """``model``'s endpoint refused images: send it none for the rest of the run."""
+    _TEXT_ONLY_MODELS.add(model)
+
+
+def vision_enabled_for_model(model: str, settings: dict | None = None) -> bool:
     """Whether image bytes should be sent to ``model``.
 
-    Order: explicit JS_VISION override → models.dev input modalities → curated
-    name heuristic for ids the catalog has never heard of (private builds, local
-    GGUF paths). The catalog is keyed on the model, not the provider: the same
-    model behind a proxy, a router prefix, or a local server has the same inputs."""
-    override = os.environ.get("JS_VISION")
-    if override is not None:
-        parsed = _env_bool(override)
-        if parsed is not None:
-            return parsed
-    from . import model_metadata
+    Resolved ``settings`` already include environment, CLI and live overrides.
+    Without a settings store, JS_VISION supplies the override. Unset falls back
+    to a refusal seen this run (`mark_text_only`), then models.dev input
+    modalities, then curated name hints for unknown ids. The catalog follows
+    the model rather than its serving provider.
+    """
+    if settings is None:
+        explicit = _env_bool(os.environ.get("JS_VISION", ""))
+    else:
+        explicit = _settings.get_dotted(settings, ("VISION",))
+    if isinstance(explicit, bool):
+        return explicit
+    if model in _TEXT_ONLY_MODELS:
+        return False
 
     try:
         catalog = model_metadata.accepts_image_input(model)
@@ -126,82 +110,122 @@ def vision_enabled_for_model(model: str) -> bool:
     return _vision_by_name(model)
 
 
+_CFG_SETTINGS = object()
+
+
+def apply_route(cfg, route: _routing.ModelRoute, *, settings=_CFG_SETTINGS):
+    """``cfg`` on ``route``: its model, provider id, base URL, API key and
+    headers, and ``vision_enabled`` for the route's model under ``settings``
+    (``cfg.settings`` when not given)."""
+    if settings is _CFG_SETTINGS:
+        settings = getattr(cfg, "settings", None)
+    return replace(
+        cfg,
+        model=route.model,
+        provider_id=route.provider_id,
+        provider_base_url=route.base_url,
+        provider_api_key=route.api_key,
+        provider_headers=route.headers,
+        vision_enabled=vision_enabled_for_model(route.model, settings),
+    )
+
+
+def _require_model() -> str:
+    raise TypeError("Config requires a model")
+
+
 @dataclass(frozen=True)
-class Config:
-    agent_id: str
-    agent_dir: Path
-    model: str
-    provider_id: str | None       # explicit js provider id (e.g. "deepseek")
-    provider_base_url: str | None # explicit provider base URL
-    provider_api_key: str | None   # explicit provider API key
-    reasoning_effort: str | None   # deepseek/o1 thinking: low|medium|high|minimal (None = provider default)
-    max_output_tokens: int | None  # per-call max_tokens; None = models.dev metadata or provider default
-    max_tool_iterations: int
-    max_bash_output_bytes: int
-    max_tool_result_bytes: int
-    fetch_timeout_s: int
-    debug_log: Path | None
-    trace: bool            # print the pretty tool-call trace line
-    history_file: Path
-    sessions_dir: Path
-    session_file: Path
-    prompts_dir: Path
-    max_tool_calls_per_message: int = _settings.DEFAULT_MAX_TOOL_CALLS_PER_MESSAGE
-    inline_code_timeout_s: int = _settings.DEFAULT_INLINE_CODE_TIMEOUT_S
-    browse_timeout_s: int = _settings.DEFAULT_BROWSE_TIMEOUT_S
-    download_timeout_s: int = _settings.DEFAULT_DOWNLOAD_TIMEOUT_S
-    max_download_bytes: int = _settings.DEFAULT_MAX_DOWNLOAD_BYTES
+class Config(_turn_settings.ConfigSettings):
+    """One run's configuration. The per-turn settings are fields of the
+    ``ConfigSettings`` base, one per row of ``js.turn_settings.TURN_SETTINGS``.
+
+    ``frozen=True`` only stops field reassignment: ``settings``,
+    ``provider_headers`` and ``mcp`` are plain dicts that callers can and do
+    change in place, so a Config is not hashable and not a snapshot.
+
+    ``from_env`` builds the Config a js run uses from jsrc, env and ~/.js.
+    A program can build one in code instead: ``model`` is the one required
+    argument, and every other field has a default. Built that way, the
+    session file is os.devnull, so no session is written; ``agent_dir`` is
+    the agent's state directory, not created. ``prompts_dir`` is what the
+    agent's prompt is assembled from: the agent's directories in
+    ``prompt_roots`` (`paths.agent_dirs`), or with no roots its stock agent
+    directory. The per-turn settings are the `defaults/jsrc` values unless
+    ``settings`` holds them."""
+
+    agent_id: str = field(default_factory=lambda: _settings.default_value("DEFAULT_AGENT"))
+    agent_dir: Path = None  # type: ignore[assignment]  # None: the agent's state directory
+    model: str = field(default_factory=_require_model)
+    provider_id: str | None = None       # explicit js provider id (e.g. "deepseek")
+    provider_base_url: str | None = None # explicit provider base URL
+    provider_api_key: str | None = None   # explicit provider API key
+    reasoning_effort: str | None = None   # deepseek/o1 thinking: low|medium|high|minimal (None = provider default)
+    debug_log: Path | None = None
+    history_file: Path = field(default_factory=lambda: _paths.prompt_history_file())
+    sessions_dir: Path = field(default_factory=lambda: _session_store.folder_for(Path.cwd().resolve(strict=False)))
+    session_file: Path = field(default_factory=lambda: Path(os.devnull))
+    prompts_dir: Path | tuple[Path, ...] = None  # type: ignore[assignment]  # None: found in prompt_roots
     provider_headers: dict[str, str] = field(default_factory=dict)
-    sampling_setscript: Sampling = field(default_factory=Sampling)
-    sampling_env: Sampling = field(default_factory=Sampling)
-    sampling_cli: Sampling = field(default_factory=Sampling)
-    explicit_model: bool = False  # model.id was set by JS_MODEL or config (not the built-in default); gates --agent frontmatter model
-    explicit_provider: bool = False  # provider.id was set by config/env/CLI extras, not inferred from a model prefix
+    explicit_model: bool = False  # MODEL was set by JS_MODEL or config (not the built-in default); gates --agent agent.yaml model
+    explicit_provider: bool = False  # PROVIDER was set by config/env/CLI extras, not inferred from a model prefix
+    invocation_model: bool = False  # MODEL was set by a JS_* env var or --extra, not a jsrc file
     vision_enabled: bool = False
-    model_context_window: int | None = None  # explicit window for this model; None = server/metadata resolved
     settings: dict = field(default_factory=dict, compare=False)  # raw merged view, for the runtime
     prompt_roots: tuple[Path, ...] = field(default_factory=tuple, compare=False)
     agents_files: tuple[Path, ...] = field(default_factory=tuple, compare=False)
     project_dir: Path = field(default_factory=Path.cwd, compare=False)
-    max_read_lines: int = _settings.DEFAULT_MAX_READ_LINES
-    max_file_bytes: int = _settings.DEFAULT_MAX_FILE_BYTES
-    max_read_bytes: int = _settings.DEFAULT_MAX_READ_BYTES
-    max_bash_output_ceiling: int = _settings.DEFAULT_MAX_BASH_OUTPUT_CEILING
-    max_tool_result_inline_bytes: int = _settings.DEFAULT_MAX_TOOL_RESULT_INLINE_BYTES
-    shell_env_allow: tuple[str, ...] = _settings.DEFAULT_SHELL_ENV_ALLOW
-    max_tool_results_per_turn_bytes: int = _settings.DEFAULT_MAX_TOOL_RESULTS_PER_TURN_BYTES
-    task_max_depth: int = _settings.DEFAULT_TASK_MAX_DEPTH
-    subagent_max_workers: int = _settings.DEFAULT_SUBAGENT_MAX_WORKERS
-    kernel_verbosity: str = _settings.DEFAULT_KERNEL_VERBOSITY
-    kernel_render_max_lines: int = _settings.DEFAULT_KERNEL_RENDER_MAX_LINES
-    kernel_wait_seconds: int = _settings.DEFAULT_KERNEL_WAIT_SECONDS
-    shell_wait_seconds: int = _settings.DEFAULT_SHELL_WAIT_SECONDS
-    allow_inline_code: bool = True  # !{sh|python|c ...} inline-code execution; on by default, opt out via --im-a-pussy
-    prefer_inherit: bool = False  # subagents inherit the parent's model when true; when false (default) they use the agent's own primary (frontmatter `model:`)
-    lock_subagent_model: bool = False  # when true, the main agent cannot pick a subagent model via the task tool — the `model` arg is dropped from the tool description and ignored if passed
-    debug_autolog: bool = True  # append the full request trace to logs/<agent>/<session>.log; on by default
-    debug_autolog_dir: str | None = None  # override dir for the autolog; None = logs/<agent> under the data dir
-    transcript_log: bool = True  # append the visible transcript to transcript/<agent>/<session>.log; on by default
-    transcript_log_dir: str | None = None  # override dir for transcript logs; None = transcript/<agent> under data dir
     mcp: object | None = field(default=None, compare=False)  # immutable server definitions + active-agent policy
+    # The layers js.login_defaults resolves its KEYS from, each holding only
+    # the keys it sets. The server and model layers come from the login.
+    layer_agent_default: dict = field(default_factory=dict, compare=False)
+    # None: a Config not built by from_env, which has no layers to resolve.
+    layer_jsrc: dict | None = field(default=None, compare=False)
+    layer_agent: dict = field(default_factory=dict, compare=False)
+    layer_env: dict = field(default_factory=dict, compare=False)
+    layer_flag: dict = field(default_factory=dict, compare=False)
+    layer_set: dict = field(default_factory=dict, compare=False)
+    layer_resume: dict = field(default_factory=dict, compare=False)
+
+    def __post_init__(self) -> None:
+        if self.agent_dir is None:
+            object.__setattr__(self, "agent_dir", _paths.state_root() / self.agent_id)
+        if self.prompts_dir is None:
+            object.__setattr__(self, "prompts_dir", _paths.agent_dirs(self.agent_id, self.prompt_roots)
+                               if self.prompt_roots else _paths.defaults_dir() / "agents" / self.agent_id)
+        # A key that is not a setting (an old name such as retry_attempts)
+        # would be read by nothing; refuse it as `set` does.
+        unknown = _unknown_setting_keys(self.settings)
+        if unknown:
+            raise ValueError(msgs.UNKNOWN_SETTING.said(key=", ".join(unknown)))
 
 
-def _session_timestamp() -> str:
-    return datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+# A settings store holds each setting under its name. A flat name's value is
+# what the setting takes (a map setting's contents are free); a dotted display
+# setting sits in its section's dict, which holds nothing else.
+_FLAT_SETTINGS = frozenset(spec.key for spec in _settings.REGISTRY if len(spec.path) == 1)
+_SECTION_KEYS: dict[str, frozenset[str]] = {}
+for _spec in _settings.REGISTRY:
+    if len(_spec.path) == 2:
+        _SECTION_KEYS[_spec.path[0]] = _SECTION_KEYS.get(_spec.path[0], frozenset()) | {_spec.path[1]}
+
+
+def _unknown_setting_keys(store: dict) -> list[str]:
+    """The keys of ``store`` that are not settings, as dotted names."""
+    unknown: list[str] = []
+    for key, value in store.items():
+        if key in _FLAT_SETTINGS:
+            continue
+        if key in _SECTION_KEYS and isinstance(value, dict):
+            unknown += [f"{key}.{child}" for child in value if child not in _SECTION_KEYS[key]]
+        else:
+            unknown.append(str(key))
+    return sorted(unknown)
 
 
 def _reserve_session(agent_dir: Path, sessions_dir: Path) -> Path:
-    sessions_dir.mkdir(parents=True, exist_ok=True)
-    for _ in range(16):
-        path = sessions_dir / f"{_session_timestamp()}-{secrets.token_hex(8)}.jsonl"
-        try:
-            with path.open("x", encoding="utf-8"):
-                pass
-        except FileExistsError:
-            continue
-        _write_latest_session(agent_dir, path)
-        return path
-    raise RuntimeError(f"could not reserve unique session under {sessions_dir}")
+    path = _session_store.reserve(sessions_dir)
+    _session_store.write_latest(agent_dir, path)
+    return path
 
 
 def derive_session_name(agent_id: str, cwd: Path, caller_key: str) -> str:
@@ -216,74 +240,86 @@ def derive_session_name(agent_id: str, cwd: Path, caller_key: str) -> str:
 
 def _relative_session_path(session: str) -> Path:
     if not session or "\\" in session:
-        raise ValueError(f"session name must be a safe relative path: {session}")
+        raise ValueError(msgs.SESSION_NAME_UNSAFE.said(session=session))
     components = session.split("/")
     if any(not component or component in {".", ".."} for component in components):
-        raise ValueError(f"session name must not contain empty or traversal components: {session}")
+        raise ValueError(msgs.SESSION_NAME_TRAVERSAL.said(session=session))
 
     raw_path = Path(session)
     if raw_path.is_absolute():
-        raise ValueError(f"session name must be a relative path: {session}")
+        raise ValueError(msgs.SESSION_NAME_ABSOLUTE.said(session=session))
     if raw_path.suffix and raw_path.suffix != ".jsonl":
-        raise ValueError(f"session name must have no suffix or end in .jsonl: {session}")
+        raise ValueError(msgs.SESSION_NAME_SUFFIX.said(session=session))
     return raw_path if raw_path.suffix else raw_path.with_suffix(".jsonl")
 
 
-def _existing_tail_match(
-    sessions_dir: Path, relative_path: Path, resolved_sessions_dir: Path
-) -> Path | None:
+def _existing_tail_match(root: Path, relative_path: Path, resolved_root: Path, first: int = 1) -> Path | None:
     """Find an existing session named by the trailing components of *relative_path*.
 
-    `<name>`, `<name>.jsonl`, `<dir>/<name>` and a whole pasted
-    `.local/share/js/sessions/<agent>/<name>.jsonl` all name one session, because
+    `<name>`, `<name>.jsonl`, `<folder>/<name>` and a whole pasted
+    `~/.js/sessions/<folder>/<name>.jsonl` all name one session, because
     that is how the flag reads to anyone pasting a path back out of `--list`.
     Without this, the leading components are taken literally and mkdir'd, so the
     paste silently opens an empty session instead of the one it names.
 
     Only ever resolves to a file that already exists; never creates."""
     parts = relative_path.parts
-    for start in range(1, len(parts)):
-        candidate = sessions_dir.joinpath(*parts[start:])
+    for start in range(first, len(parts)):
+        candidate = root.joinpath(*parts[start:])
         if not candidate.is_file():
             continue
-        if not candidate.resolve(strict=True).is_relative_to(resolved_sessions_dir):
+        if not candidate.resolve(strict=True).is_relative_to(resolved_root):
             continue
         return candidate
     return None
 
 
 def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = False) -> Path:
-    """Resolve a safe session name, optionally reserving it when absent."""
+    """Resolve a session name to its file, optionally creating it in `sessions_dir`.
+
+    `sessions_dir` is the current directory's folder. An existing session is
+    looked up there first, then in every folder (`js.session_store.find`); a
+    name that more than one other folder holds is refused. A new session is
+    only ever created in `sessions_dir`."""
     raw_path = Path(session).expanduser()
+    root = _paths.sessions_root()
+    resolved_root = root.resolve(strict=False)
     resolved_sessions_dir = sessions_dir.resolve(strict=False)
 
-    # Existing absolute paths inside this agent remain a compatibility seam. New
+    # An existing absolute path to any session is accepted as it is. New
     # sessions, however, can only be named with relative paths.
     if raw_path.is_absolute():
         if raw_path.suffix != ".jsonl" or not raw_path.is_file():
-            raise ValueError(f"session path must be an existing .jsonl file: {session}")
+            raise ValueError(msgs.CONFIG_SESSION_PATH_MUST_BE_AN_EXISTING_JSONL.format(session=session))
         resolved_path = raw_path.resolve(strict=True)
-        if not resolved_path.is_relative_to(resolved_sessions_dir):
-            raise ValueError(f"session path must be inside {sessions_dir}: {session}")
+        if not resolved_path.is_relative_to(resolved_root):
+            raise ValueError(msgs.CONFIG_SESSION_PATH_MUST_BE_INSIDE.format(root=root, session=session))
         return raw_path
 
     relative_path = _relative_session_path(session)
     concrete_path = sessions_dir / relative_path
     resolved_path = concrete_path.resolve(strict=False)
     if not resolved_path.is_relative_to(resolved_sessions_dir):
-        raise ValueError(f"session path must be inside {sessions_dir}: {session}")
+        raise ValueError(msgs.CONFIG_SESSION_PATH_MUST_BE_INSIDE_273.format(sessions_dir=sessions_dir, session=session))
 
     if concrete_path.exists():
         if not concrete_path.is_file():
-            raise ValueError(f"session path must be a .jsonl file: {session}")
+            raise ValueError(msgs.CONFIG_SESSION_PATH_MUST_BE_A_JSONL_FILE.format(session=session))
         return concrete_path
 
-    tail_match = _existing_tail_match(sessions_dir, relative_path, resolved_sessions_dir)
-    if tail_match is not None:
-        return tail_match
+    found = (
+        _existing_tail_match(sessions_dir, relative_path, resolved_sessions_dir)
+        or _existing_tail_match(root, relative_path, resolved_root, first=0)
+        or _session_store.find(session, relative_path, sessions_dir)
+    )
+    if found is not None:
+        return found
 
-    if not create:
-        raise ValueError(f"session must identify an existing .jsonl file: {session}")
+    # A generated or subagent-task name is only ever js's own: one that
+    # matches nothing is a lookup that missed, not a new name.
+    stem = relative_path.with_suffix("").name
+    if not create or _session_store.is_generated(stem) or _session_store.is_task(stem):
+        raise ValueError(msgs.CONFIG_SESSION_MUST_IDENTIFY_AN_EXISTING_JSONL_FILE.format(session=session))
 
     sessions_dir.mkdir(parents=True, exist_ok=True)
     parent = sessions_dir
@@ -293,61 +329,40 @@ def resolve_session_file(sessions_dir: Path, session: str, *, create: bool = Fal
             parent.mkdir()
         except FileExistsError:
             if not parent.is_dir():
-                raise ValueError(f"session parent must be a directory: {session}") from None
+                raise ValueError(msgs.CONFIG_SESSION_PARENT_MUST_BE_A_DIRECTORY.format(session=session)) from None
         if not parent.resolve(strict=True).is_relative_to(resolved_sessions_dir):
-            raise ValueError(f"session path must be inside {sessions_dir}: {session}")
+            raise ValueError(msgs.CONFIG_SESSION_PATH_MUST_BE_INSIDE_273.format(sessions_dir=sessions_dir, session=session))
     try:
         with concrete_path.open("x", encoding="utf-8"):
             pass
     except FileExistsError:
         if not concrete_path.is_file() or not concrete_path.resolve(strict=True).is_relative_to(resolved_sessions_dir):
-            raise ValueError(f"session path must be a .jsonl file inside {sessions_dir}: {session}") from None
+            raise ValueError(msgs.CONFIG_SESSION_PATH_MUST_BE_A_JSONL_FILE_307.format(sessions_dir=sessions_dir, session=session)) from None
     return concrete_path
 
 
-def _write_latest_session(agent_dir: Path, session_file: Path) -> None:
-    latest_file = agent_dir / "latest.json"
-    tmp_file = agent_dir / f".latest.{secrets.token_hex(6)}.tmp"
-    latest_file.parent.mkdir(parents=True, exist_ok=True)
-    tmp_file.write_text(
-        json.dumps(
-            {
-                "session_file": str(session_file),
-                "session_name": session_file.relative_to(agent_dir).as_posix(),
-            },
-            separators=(",", ":"),
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    os.replace(tmp_file, latest_file)
+def _same_config_path(one: Path, other: Path) -> bool:
+    """True when two jsrc paths name the same file, however each is spelled.
+
+    The home directory reached through a second name (a symlink to it, or a
+    physical cwd where `$HOME` is the link) is still the home directory: its
+    jsrc is the global layer, so the project branch must not add it back."""
+    return one == other or one.resolve(strict=False) == other.resolve(strict=False)
 
 
-def _reserve_default_session(agent_dir: Path, sessions_dir: Path) -> Path:
-    return _reserve_session(agent_dir, sessions_dir)
+@dataclass(frozen=True)
+class InvocationSources:
+    """What a command line adds to the settings a run loads: ``extras`` from
+    --extra and the flags turned into it, ``presets`` from --preset (one name
+    each, in order), and the --no-local-config / --no-global-config switches."""
+
+    extras: tuple[str, ...] = ()
+    presets: tuple[str, ...] = ()
+    ignore_local_config: bool = False
+    ignore_global_config: bool = False
 
 
-
-def _select_prompt_dir(agent_id: str, repo_root: Path, global_root: Path, project_root: Path) -> Path:
-    for root in (project_root, global_root, repo_root):
-        candidate = root / agent_id
-        try:
-            if candidate.is_dir() and any(candidate.glob("*.md")):
-                return candidate
-        except OSError as exc:
-            # Named agent exists but can't be read (symlink onto a sleeping
-            # NFS/automount host). Stop here; falling through would silently
-            # run a different agent of the same name.
-            raise ValueError(f"agent {agent_id!r} at {candidate} is unreadable: {exc.strerror}") from exc
-    return repo_root / agent_id
-
-def _preset_config_paths(
-    presets: list[str] | None,
-    project_dir: Path,
-    *,
-    ignore_local_config: bool,
-    ignore_global_config: bool,
-) -> list[Path]:
+def _preset_config_paths(sources: InvocationSources, project_dir: Path) -> list[Path]:
     """Resolve ``--preset foo,bar`` to ``jsrc.foo``/``jsrc.bar`` files, in order.
 
     Each preset name layers on top of the base jsrc files like another `set`
@@ -356,27 +371,106 @@ def _preset_config_paths(
     loader, so an unused preset is a no-op (the CLI warns when a name matches
     nothing)."""
     paths: list[Path] = []
-    for raw in presets or []:
+    for raw in sources.presets:
         name = raw.strip()
         if not name:
             continue
-        if not ignore_global_config:
-            paths.append(_paths.global_config_file().with_name(f"jsrc.{name}"))
-        if not ignore_local_config:
-            paths.append(project_dir / ".js" / f"jsrc.{name}")
+        global_path = _paths.global_config_file().with_name(f"jsrc.{name}")
+        local_path = _paths.project_home(project_dir) / f"jsrc.{name}"
+        if not sources.ignore_global_config:
+            paths.append(global_path)
+        if not sources.ignore_local_config and not _same_config_path(local_path, global_path):
+            paths.append(local_path)
     return paths
+
+
+# This process's command line. The CLI records it once (`set_invocation`);
+# `run_settings` loads with it.
+_invocation = InvocationSources()
+
+
+def set_invocation(sources: InvocationSources) -> None:
+    global _invocation
+    _invocation = sources
+
+
+def run_settings(cwd: Path | None = None, *, sources: InvocationSources | None = None,
+                 held: bool = False) -> dict:
+    """The settings a run started in ``cwd`` (default: here) loads: every
+    jsrc layer, the environment and the command line ``sources`` (default:
+    this process's). ``held`` leaves the live /fset entries as they are."""
+    sources = _invocation if sources is None else sources
+    paths = jsrc_paths((cwd or Path.cwd()).resolve(strict=False), sources)
+    if held:
+        with _fset.held():
+            return setting_layers.collect_settings(config_paths=paths, extras=sources.extras)
+    return setting_layers.collect_settings(config_paths=paths, extras=sources.extras)
+
+
+def jsrc_paths(project_dir: Path, sources: InvocationSources = InvocationSources()) -> list[Path]:
+    """The jsrc files a run loads, lowest layer first, each once.
+
+    Run from the home directory, the project `.js/` is `~/.js` itself, so its
+    jsrc is the global layer and loads there only."""
+    paths: list[Path] = []
+    global_path = _paths.global_config_file()
+    if not sources.ignore_global_config:
+        paths.append(global_path)
+    if not sources.ignore_local_config:
+        local_path = _paths.project_home(project_dir) / "jsrc"
+        if not _same_config_path(local_path, global_path):
+            paths.append(local_path)
+        paths.append(_paths.project_home(project_dir) / "jsrc.local")
+    # Presets layer on top of the base jsrc files (still below env / --extra).
+    paths.extend(_preset_config_paths(sources, project_dir))
+    return list(dict.fromkeys(paths))
+
+
+def agent_from_settings(settings: dict, agent_id: str | None = None) -> str:
+    """The agent a run uses: ``agent_id`` (from --agent or --commit) when
+    given, else the ``DEFAULT_AGENT`` setting from ``settings``. Raises ValueError for
+    an id that is not letters, digits, '_' or '-'."""
+    return validate_agent_id(agent_id or _settings.knob(settings, "DEFAULT_AGENT"))
+
+
+def resolve_agent_id(
+    agent_id: str | None = None,
+    *,
+    sources: InvocationSources = InvocationSources(),
+) -> str:
+    """The agent `from_env` picks for the same arguments, without building a
+    Config: ``agent_id`` beats env JS_DEFAULT_AGENT, which beats the jsrc layers."""
+    return agent_from_settings(run_settings(sources=sources), agent_id)
+
+
+def _set_by_invocation(key: str, env: Mapping[str, str], extras: tuple[str, ...]) -> bool:
+    """True when a JS_* env var or a --extra argument sets ``key`` for this run."""
+    spec = _settings.SPEC_BY_KEY[key]
+    if any(name in env for name in _settings.env_names_for(spec)):
+        return True
+    return any(tuple(setting_layers.parse_extra_arg(arg)[0]) == tuple(spec.path) for arg in extras)
+
+
+@dataclass(frozen=True)
+class ConfigAssembly:
+    """Dependencies used to assemble a Config from the invocation layers."""
+
+    prompt_roots: tuple[Path, ...] | None = None
+    collect: Callable | None = None
+    set_banner: Callable | None = None
+    bind_formats: Callable | None = None
+    resolve_route: Callable | None = None
+    missing_login: Callable | None = None
 
 
 def from_env(
     *,
     save_session: bool = True,
-    extras: list[str] | None = None,
+    sources: InvocationSources = InvocationSources(),
     agent_id: str | None = None,
     session: str | None = None,
     cwd: Path | None = None,
-    ignore_local_config: bool = False,
-    ignore_global_config: bool = False,
-    presets: list[str] | None = None,
+    assembly: ConfigAssembly | None = None,
 ) -> Config:
     """Read jsrc + env + CLI extras once, populate everything explicitly.
 
@@ -390,50 +484,40 @@ def from_env(
     - Provider-specific env vars are scanned so a fresh shell with
       `DEEPSEEK_API_KEY` works without `js --login`.
     """
+    assembly = assembly or ConfigAssembly()
+    collect = setting_layers.collect_settings if assembly.collect is None else assembly.collect
+    set_banner = msgs.set_banner if assembly.set_banner is None else assembly.set_banner
+    bind_formats = _fset.bind_settings if assembly.bind_formats is None else assembly.bind_formats
+    resolve_route = _routing.resolve_model_route if assembly.resolve_route is None else assembly.resolve_route
     env = os.environ
-    pkg = Path(__file__).resolve().parent
-    js_root = pkg.parent
     project_dir = (cwd or Path.cwd()).resolve(strict=False)
+    config_paths = jsrc_paths(project_dir, sources)
 
-    config_paths: list[Path] = []
-    if not ignore_global_config:
-        config_file_path = _paths.global_config_file()
-        _settings.write_default_template(config_file_path)
-        config_paths.append(config_file_path)
-    if not ignore_local_config:
-        config_paths.extend([
-            project_dir / ".js" / "jsrc",
-            project_dir / ".js" / "jsrc.local",
-        ])
-    # Presets layer on top of the base jsrc files (still below env / --extra).
-    config_paths.extend(_preset_config_paths(
-        presets,
-        project_dir,
-        ignore_local_config=ignore_local_config,
-        ignore_global_config=ignore_global_config,
-    ))
-
-    jsrc_settings = _settings.collect_settings(
+    jsrc_settings = collect(
         config_paths=config_paths,
         env={},
         extras=None,
     )
-    js_root_settings = _settings.collect_settings(
+    js_root_settings = collect(
         config_paths=config_paths,
-        extras=extras,
+        extras=sources.extras,
     )
-    sampling_setscript = Sampling.from_mapping(jsrc_settings.get("sampling", {}))
-    sampling_env = Sampling.from_env(env)
-    sampling_cli = _sampling_from_extras(extras)
-    raw_model = _settings.get_dotted(js_root_settings, ("model", "id")) or _DEFAULT_MODEL
-    invocation_explicit_model = bool(env.get("JS_MODEL"))
-    explicit_model = invocation_explicit_model or raw_model != _DEFAULT_MODEL
-    _cfg_provider_id = _settings.get_dotted(js_root_settings, ("provider", "id"))
+    agent_id = agent_from_settings(js_root_settings, agent_id)
+    set_banner(str(_settings.knob(js_root_settings, "BANNER")))
+    default_model = _settings.default_value("MODEL")
+
+    model_metadata.bind_settings(js_root_settings)
+    raw_model = _settings.get_dotted(js_root_settings, ("MODEL",)) or default_model
+    # Any env name that feeds MODEL makes the model invocation-explicit.
+    invocation_explicit_model = any(
+        env.get(name) for name in _settings.env_names_for(_settings.SPEC_BY_KEY["MODEL"]))
+    explicit_model = _set_by_invocation("MODEL", env, sources.extras) or raw_model != default_model
+    _cfg_provider_id = _settings.get_dotted(js_root_settings, ("PROVIDER",))
     explicit_provider = _cfg_provider_id is not None
-    _cfg_base_url = _settings.get_dotted(js_root_settings, ("provider", "base_url"))
-    _cfg_api_key = _settings.get_dotted(js_root_settings, ("provider", "api_key"))
+    _cfg_base_url = _settings.get_dotted(js_root_settings, ("BASE_URL",))
+    _cfg_api_key = _settings.get_dotted(js_root_settings, ("API_KEY",))
     try:
-        route = _routing.resolve_model_route(
+        route = resolve_route(
             raw_model,
             configured_provider_id=_cfg_provider_id,
             configured_base_url=_cfg_base_url,
@@ -442,20 +526,23 @@ def from_env(
             explicit_model=explicit_model,
             prefix_overrides_provider=invocation_explicit_model and not explicit_provider,
         )
-    except _routing.ProviderNotLoggedInError:
-        if invocation_explicit_model:
+    except _routing.ProviderNotLoggedInError as exc:
+        if assembly.missing_login is not None:
+            route = assembly.missing_login(exc, raw_model)
+        elif invocation_explicit_model:
             raise
         # The base/default model names a provider the operator never logged into.
         # Don't fail config-build: a -m override, an agent `model:`, or a later
         # /model may replace it, and a plain run surfaces the friendly
         # not-logged-in error at the model boundary (model_client). Carry NO
         # provider so nothing farms the vendor's env keys in the meantime.
-        route = _routing.ModelRoute(
-            model=raw_model,
-            provider_id=None,
-            base_url=_cfg_base_url,
-            api_key=_cfg_api_key,
-        )
+        else:
+            route = _routing.ModelRoute(
+                model=raw_model,
+                provider_id=None,
+                base_url=_cfg_base_url,
+                api_key=_cfg_api_key,
+            )
     model = route.model
     provider_id = route.provider_id
     provider_base_url = route.base_url
@@ -463,133 +550,72 @@ def from_env(
     provider_headers = route.headers
     provider_def = _providers.get_provider(provider_id)
 
-    reasoning_effort = _settings.get_dotted(js_root_settings, ("model", "reasoning_effort"))
+    # The layers js.login_defaults resolves the login-default settings from.
+
+    layer_jsrc = _login_defaults.session_values(jsrc_settings)
+    layer_env = _login_defaults.env_layer(env)
+    layer_flag = _login_defaults.flag_layer(sources.extras)
+
+    reasoning_effort = _settings.get_dotted(js_root_settings, ("EFFORT",))
     if reasoning_effort is None and provider_def is not None and provider_def.reasoning_effort:
-        reasoning_effort = provider_def.reasoning_effort
+        reasoning_effort = provider_def.default_effort(js_root_settings)
 
-    max_output_tokens = _numeric_setting(js_root_settings, ("model", "max_output_tokens"), None)
-    model_context_window = _numeric_setting(js_root_settings, ("model", "context_window"), None)
-    max_tool_iterations = _numeric_setting(js_root_settings, ("limits", "max_tool_iterations"), _settings.DEFAULT_MAX_TOOL_ITERATIONS)
-    max_tool_calls_per_message = _numeric_setting(js_root_settings, ("limits", "max_tool_calls_per_message"), _settings.DEFAULT_MAX_TOOL_CALLS_PER_MESSAGE)
-    max_bash_output_bytes = _numeric_setting(js_root_settings, ("limits", "max_bash_output_bytes"), _settings.DEFAULT_MAX_BASH_OUTPUT_BYTES)
-    max_tool_result_bytes = _numeric_setting(js_root_settings, ("limits", "max_tool_result_bytes"), _settings.DEFAULT_MAX_TOOL_RESULT_BYTES)
-    fetch_timeout_s = _numeric_setting(js_root_settings, ("limits", "fetch_timeout_s"), _settings.DEFAULT_FETCH_TIMEOUT_S)
-    raw_shell_env_allow = _settings.get_dotted(
-        js_root_settings,
-        ("limits", "shell_env_allow"),
-        _settings.DEFAULT_SHELL_ENV_ALLOW,
-    )
-    shell_env_allow = (
-        tuple(raw_shell_env_allow)
-        if isinstance(raw_shell_env_allow, (list, tuple))
-        and all(isinstance(name, str) and name.strip() for name in raw_shell_env_allow)
-        else _settings.DEFAULT_SHELL_ENV_ALLOW
-    )
-    browse_timeout_s = _numeric_setting(js_root_settings, ("limits", "browse_timeout_s"), _settings.DEFAULT_BROWSE_TIMEOUT_S)
-    download_timeout_s = _numeric_setting(js_root_settings, ("limits", "download_timeout_s"), _settings.DEFAULT_DOWNLOAD_TIMEOUT_S)
-    max_download_bytes = _numeric_setting(js_root_settings, ("limits", "max_download_bytes"), _settings.DEFAULT_MAX_DOWNLOAD_BYTES)
-    inline_code_timeout_s = _numeric_setting(js_root_settings, ("limits", "inline_code_timeout_s"), _settings.DEFAULT_INLINE_CODE_TIMEOUT_S)
-    max_read_lines = _numeric_setting(js_root_settings, ("limits", "max_read_lines"), _settings.DEFAULT_MAX_READ_LINES)
-    max_file_bytes = _numeric_setting(js_root_settings, ("limits", "max_file_bytes"), _settings.DEFAULT_MAX_FILE_BYTES)
-    max_read_bytes = _numeric_setting(js_root_settings, ("limits", "max_read_bytes"), _settings.DEFAULT_MAX_READ_BYTES)
-    max_bash_output_ceiling = _numeric_setting(js_root_settings, ("limits", "max_bash_output_ceiling"), _settings.DEFAULT_MAX_BASH_OUTPUT_CEILING)
-    max_tool_result_inline_bytes = _numeric_setting(js_root_settings, ("limits", "max_tool_result_inline_bytes"), _settings.DEFAULT_MAX_TOOL_RESULT_INLINE_BYTES)
-    max_tool_results_per_turn_bytes = _numeric_setting(js_root_settings, ("limits", "max_tool_results_per_turn_bytes"), _settings.DEFAULT_MAX_TOOL_RESULTS_PER_TURN_BYTES)
-    task_max_depth = _numeric_setting(js_root_settings, ("limits", "task_max_depth"), _settings.DEFAULT_TASK_MAX_DEPTH)
-    subagent_max_workers = _numeric_setting(js_root_settings, ("limits", "subagent_max_workers"), _settings.DEFAULT_SUBAGENT_MAX_WORKERS)
-    kernel_render_max_lines = _numeric_setting(js_root_settings, ("kernel", "render_max_lines"), _settings.DEFAULT_KERNEL_RENDER_MAX_LINES)
-    kernel_wait_seconds = _numeric_setting(js_root_settings, ("kernel", "wait_seconds"), _settings.DEFAULT_KERNEL_WAIT_SECONDS)
-    shell_wait_seconds = _numeric_setting(js_root_settings, ("shell", "wait_seconds"), _settings.DEFAULT_SHELL_WAIT_SECONDS)
-    kernel_verbosity = str(_settings.get_dotted(js_root_settings, ("kernel", "verbosity"), _settings.DEFAULT_KERNEL_VERBOSITY) or _settings.DEFAULT_KERNEL_VERBOSITY).strip().lower()
-    if kernel_verbosity not in ("quiet", "normal", "verbose"):
-        kernel_verbosity = _settings.DEFAULT_KERNEL_VERBOSITY
-    runtime_debug = bool(_settings.get_dotted(js_root_settings, ("runtime", "debug"), False))
-    trace = bool(_settings.get_dotted(js_root_settings, ("runtime", "trace"), _settings.DEFAULT_TRACE))
-    debug_autolog = bool(_settings.get_dotted(js_root_settings, ("runtime", "debug_autolog"), True))
-    debug_autolog_dir = _settings.get_dotted(js_root_settings, ("runtime", "debug_autolog_dir"))
-    transcript_log = bool(_settings.get_dotted(js_root_settings, ("runtime", "transcript_log"), True))
-    transcript_log_dir = _settings.get_dotted(js_root_settings, ("runtime", "transcript_log_dir"))
-    prefer_inherit = bool(_settings.get_dotted(js_root_settings, ("subagents", "prefer_inherit"), False))
-    lock_subagent_model = bool(_settings.get_dotted(js_root_settings, ("subagents", "lock_model"), False))
+    runtime_debug = bool(_settings.knob(js_root_settings, "DEBUG_LOG"))
 
-    agent_id = validate_agent_id(agent_id or env.get("JS_AGENT", _DEFAULT_AGENT_ID))
-    from . import mcp_config
+    options = current()
+    mcp = None if options.skips_mcp else mcp_config.resolve(js_root_settings, agent_id)
 
-    mcp = mcp_config.resolve(js_root_settings, agent_id)
-
-    sessions_dir = _paths.sessions_root() / agent_id
-    sessions_dir.mkdir(parents=True, exist_ok=True)
+    # Sessions are filed by the directory js started in; what belongs to the
+    # agent across directories (its latest session) lives in its state dir.
+    # The REPL's prompt history is one file for every agent.
+    sessions_dir = _session_store.folder_for(project_dir)
     state_dir = _paths.state_root() / agent_id
     state_dir.mkdir(parents=True, exist_ok=True)
+    history_setting = _settings.knob(js_root_settings, "HISTORY_FILE")
+    history_file = Path(history_setting).expanduser() if history_setting else _paths.prompt_history_file()
 
     session_name = session if session is not None else env.get("JS_SESSION")
     if session_name is not None:
         session_file = resolve_session_file(sessions_dir, session_name, create=save_session)
         if save_session:
-            _write_latest_session(sessions_dir, session_file)
+            _session_store.write_latest(state_dir, session_file)
     elif save_session:
-        session_file = _reserve_default_session(sessions_dir, sessions_dir)
+        session_file = _reserve_session(state_dir, sessions_dir)
     else:
         session_file = Path(os.devnull)
     debug = state_dir / "debug.log" if runtime_debug else None
 
-    global_instruction_files = _paths.global_instruction_files()
+    global_instruction_files = tuple(_paths.home() / name for name in _settings.knob(js_root_settings, "GLOBAL_INSTRUCTION_FILES"))
+    project_instruction_files = tuple(project_dir / name for name in _settings.knob(js_root_settings, "PROJECT_INSTRUCTION_FILES"))
+    bind_formats(js_root_settings)
 
-    return Config(
+    prompt_roots = assembly.prompt_roots if assembly.prompt_roots is not None else _paths.agent_roots(project_dir)
+
+    return _login_defaults.for_turn(Config(
         agent_id=agent_id,
-        agent_dir=sessions_dir,
+        agent_dir=state_dir,
         model=model,
         provider_id=provider_id,
         provider_base_url=provider_base_url,
         provider_api_key=provider_api_key,
         provider_headers=provider_headers,
-        sampling_setscript=sampling_setscript,
-        sampling_env=sampling_env,
-        sampling_cli=sampling_cli,
         reasoning_effort=_norm_effort(reasoning_effort),
-        max_output_tokens=max_output_tokens,
-        model_context_window=model_context_window,
-        max_tool_iterations=max_tool_iterations,
-        max_tool_calls_per_message=max_tool_calls_per_message,
-        max_bash_output_bytes=max_bash_output_bytes,
-        max_tool_result_bytes=max_tool_result_bytes,
-        fetch_timeout_s=fetch_timeout_s,
-        shell_env_allow=shell_env_allow,
-        browse_timeout_s=browse_timeout_s,
-        download_timeout_s=download_timeout_s,
-        max_download_bytes=max_download_bytes,
-        inline_code_timeout_s=inline_code_timeout_s,
         debug_log=debug,
-        trace=trace,
         sessions_dir=sessions_dir,
         session_file=session_file,
-        history_file=sessions_dir / ".history",
-        prompts_dir=_select_prompt_dir(agent_id, js_root / "prompts", _paths.global_agents_dir(), project_dir / ".js" / "agents"),
-        vision_enabled=vision_enabled_for_model(model),
+        history_file=history_file,
+        vision_enabled=vision_enabled_for_model(model, js_root_settings),
         settings=js_root_settings,
-        prompt_roots=(js_root / "prompts", _paths.global_agents_dir(), project_dir / ".js" / "agents"),
-        agents_files=tuple(p for p in (*global_instruction_files, project_dir / "AGENTS.md", project_dir / "AGENTS.local.md") if p.is_file()),
+        prompt_roots=prompt_roots,
+        agents_files=() if options.skips_agents_md else tuple(
+            p for p in (*global_instruction_files, *project_instruction_files) if p.is_file()),
         project_dir=project_dir,
-        max_read_lines=max_read_lines,
-        max_file_bytes=max_file_bytes,
-        max_read_bytes=max_read_bytes,
-        max_bash_output_ceiling=max_bash_output_ceiling,
-        max_tool_result_inline_bytes=max_tool_result_inline_bytes,
-        max_tool_results_per_turn_bytes=max_tool_results_per_turn_bytes,
-        task_max_depth=task_max_depth,
-        subagent_max_workers=subagent_max_workers,
-        kernel_verbosity=kernel_verbosity,
-        kernel_render_max_lines=kernel_render_max_lines,
-        kernel_wait_seconds=kernel_wait_seconds,
-        shell_wait_seconds=shell_wait_seconds,
-        allow_inline_code=bool(_settings.get_dotted(js_root_settings, ("runtime", "allow_inline_code"), True)),
-        prefer_inherit=prefer_inherit,
-        lock_subagent_model=lock_subagent_model,
-        debug_autolog=debug_autolog,
-        debug_autolog_dir=debug_autolog_dir,
-        transcript_log=transcript_log,
-        transcript_log_dir=transcript_log_dir,
         mcp=mcp,
         explicit_model=explicit_model,
         explicit_provider=explicit_provider,
-    )
+        invocation_model=_set_by_invocation("MODEL", env, sources.extras),
+        layer_jsrc=layer_jsrc,
+        layer_env=layer_env,
+        layer_flag=layer_flag,
+        **_turn_settings.project(js_root_settings),
+    ))

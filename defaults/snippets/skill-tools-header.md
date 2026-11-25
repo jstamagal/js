@@ -1,0 +1,1 @@
+Tools this skill declares (load them with tool_discovery): 

@@ -5,11 +5,12 @@ to cover, and ``shell`` puts it on PATH so a command can reach fd, bat and fzf
 by name. Runtime callers prefer ``tools/bin/<name>`` and consult PATH only when
 the installer has not populated that file. Keeping that fallback here makes the
 degraded behavior explicit while ensuring an installed tool is never resolved
-through PATH (notably, ``sg`` on this box is not ast-grep).
+through PATH.
 """
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import math
@@ -18,18 +19,17 @@ import platform
 import shutil
 import stat
 import subprocess
-import sys
 import tarfile
 import tempfile
 import time
 import urllib.error
 import urllib.request
-import warnings
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import messages as msgs, output, paths, settings as _settings
 
 TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools" / "bin"
 class InstallError(RuntimeError):
@@ -56,8 +56,7 @@ class DownloadTool:
 
 # Versions and asset names were read from each project's GitHub release page
 # and releases API on 2026-08-10. ripgrep's asset hash is from its published
-# .sha256 file. ast-grep does not publish checksum files, so its archive and
-# extracted executable hashes were computed from the pinned release asset.
+# .sha256 file.
 DOWNLOAD_TOOLS = (
     DownloadTool(
         name="ripgrep",
@@ -71,19 +70,6 @@ DOWNLOAD_TOOLS = (
         asset_sha256="33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c",
         archive_member="ripgrep-15.2.0-x86_64-unknown-linux-musl/rg",
         executable_sha256="e62198eb19b136b88c330af83647b5a962cb99b6b1f066758568f12de1974849",
-    ),
-    DownloadTool(
-        name="ast-grep",
-        executable="ast-grep",
-        version="0.45.1",
-        asset="app-x86_64-unknown-linux-gnu.zip",
-        url=(
-            "https://github.com/ast-grep/ast-grep/releases/download/0.45.1/"
-            "app-x86_64-unknown-linux-gnu.zip"
-        ),
-        asset_sha256="76fb6555be6734fb5057dba8d2fb756430f374bb9e1af694cf1ce00e13238d63",
-        archive_member="ast-grep",
-        executable_sha256="6a66162e0a2447af4b7524ee04195239eb1911d07f4868f918909e7d4f453eea",
     ),
     # The `stealth` asset, not the plain one: that build carries TLS
     # impersonation on top of the browser fingerprint, which is what browse
@@ -140,7 +126,7 @@ def aria2_release(machine: str | None = None, system: str | None = None) -> Down
         ),
     }
     if system != "Linux" or machine not in hashes:
-        raise InstallError(f"aria2: no verified release asset for {system} {machine}")
+        raise InstallError(msgs.TOOL_RELEASE_ARIA_NO_VERIFIED_RELEASE_ASSET_FOR.format(system=system, machine=machine))
     asset = f"aria2-{machine}-linux-musl_static.zip"
     archive_hash, executable_hash = hashes[machine]
     return DownloadTool(
@@ -161,17 +147,20 @@ def resolve_binary(executable: str) -> str | None:
     managed = TOOLS_DIR / executable
     if managed.is_file() and os.access(managed, os.X_OK):
         return str(managed)
-    return shutil.which(executable)
+    return shutil.which(executable) if _settings.live_value("TOOL_BINARY_PATH_FALLBACK") else None
 
 
-def warn_urllib_fallback(purpose: str) -> None:
-    """Make loss of aria2c's transfer guarantees visible without changing results."""
-    warnings.warn(
-        f"aria2c is unavailable; {purpose} is falling back to urllib without "
-        "segmented transfer or cross-attempt resume",
-        RuntimeWarning,
-        stacklevel=2,
-    )
+# The purposes warn_urllib_fallback has reported in this process.
+_URLLIB_FALLBACK_REPORTED: set[str] = set()
+
+
+def warn_urllib_fallback(purpose: str, *, emit: Callable | None = None) -> None:
+    """Make loss of aria2c's transfer guarantees visible without changing
+    results: one output event per purpose per process."""
+    if purpose in _URLLIB_FALLBACK_REPORTED:
+        return
+    _URLLIB_FALLBACK_REPORTED.add(purpose)
+    (emit or output.notice)(msgs.URLLIB_FALLBACK, purpose=purpose)
 
 
 def aria2_argv(
@@ -181,20 +170,28 @@ def aria2_argv(
     *,
     timeout_s: float,
     headers: dict[str, str] | None = None,
+    input_file: Path | None = None,
 ) -> list[str]:
-    """Build the single-file aria2c invocation used by runtime and installer."""
+    """Build the single-file aria2c invocation used by runtime and installer.
+
+    `--no-conf=true`: a ~/.aria2/aria2.conf must not change what a download
+    does (check-certificate=false, all-proxy, on-download-complete hooks).
+    Headers never go on the command line, where `ps` and /proc/<pid>/cmdline
+    show them to every user: with headers, pass `input_file` (see
+    `write_aria2_input`) and the URL and headers are read from it."""
     socket_timeout = max(1, min(30, math.ceil(timeout_s)))
     connect_timeout = max(1, min(10, math.ceil(timeout_s)))
     argv = [
         binary,
+        "--no-conf=true",
         "--continue=true",
         "--allow-overwrite=true",
         "--auto-file-renaming=false",
-        "--split=8",
-        "--max-connection-per-server=8",
+        f"--split={_settings.live_value('DOWNLOAD_SPLITS_MAX')}",
+        f"--max-connection-per-server={_settings.live_value('DOWNLOAD_CONNECTIONS_MAX')}",
         "--min-split-size=1M",
-        "--max-tries=5",
-        "--retry-wait=1",
+        f"--max-tries={_settings.live_value('DOWNLOAD_RETRIES_MAX')}",
+        f"--retry-wait={_settings.live_value('DOWNLOAD_RETRY_WAIT')}",
         f"--connect-timeout={connect_timeout}",
         f"--timeout={socket_timeout}",
         "--file-allocation=none",
@@ -207,20 +204,45 @@ def aria2_argv(
         f"--dir={partial.parent}",
         f"--out={partial.name}",
     ]
-    argv.extend(f"--header={name}: {value}" for name, value in (headers or {}).items())
-    argv.append(url)
+    if headers:
+        if input_file is None:
+            raise ValueError("aria2c headers go through input_file, never argv")
+        argv.append(f"--input-file={input_file}")
+    else:
+        argv.append(url)
     return argv
+
+
+def write_aria2_input(path: Path, url: str, headers: dict[str, str], partial: Path) -> None:
+    """An aria2c input file holding `url`, its headers and where it goes, mode
+    0600 from the first byte (aria2c ignores a command-line --out for input-file
+    entries). A line break in any value is refused: it would end the option and
+    start another."""
+    for value in (url, str(partial)):
+        if any(ch in value for ch in "\r\n"):
+            raise DownloadError("download URL or path contains a line break")
+    if "\t" in url:
+        # A TAB on the URI line separates mirror URIs in aria2's input format.
+        raise DownloadError("download URL contains a TAB")
+    lines = [url, f"  dir={partial.parent}", f"  out={partial.name}"]
+    for name, value in headers.items():
+        if any(ch in f"{name}{value}" for ch in "\r\n"):
+            raise DownloadError(f"header {name!r} contains a line break")
+        lines.append(f"  header={name}: {value}")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        stream.write("\n".join(lines) + "\n")
 
 
 def _partial_download_path(destination: Path) -> Path:
     return destination.with_name(f".{destination.name}.aria2-part")
 
 
-def _captured_tail(stream, limit: int = 500) -> str:
+def _captured_tail(stream) -> str:
     stream.flush()
     stream.seek(0, os.SEEK_END)
     size = stream.tell()
-    stream.seek(max(0, size - limit))
+    stream.seek(max(0, size - 500))
     return stream.read().decode("utf-8", errors="replace").strip()
 
 
@@ -231,6 +253,35 @@ def _stop_process(process: subprocess.Popen[bytes]) -> None:
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
+
+
+def _wait_for_aria2(
+    process: subprocess.Popen[bytes],
+    partial: Path,
+    control: Path,
+    metadata: Path,
+    *,
+    url: str,
+    timeout_s: float,
+    max_bytes: int | None,
+    started: float,
+) -> None:
+    """Wait for aria2c to exit, stopping it on the size limit or the deadline."""
+    while process.poll() is None:
+        if max_bytes is not None and partial.exists() and partial.stat().st_size > max_bytes:
+            _stop_process(process)
+            partial.unlink(missing_ok=True)
+            control.unlink(missing_ok=True)
+            metadata.unlink(missing_ok=True)
+            raise DownloadError(f"response exceeds {max_bytes} byte download limit")
+        remaining = timeout_s - (time.monotonic() - started)
+        if remaining <= 0:
+            _stop_process(process)
+            raise DownloadError(f"aria2c timed out after {timeout_s:g}s downloading {url}")
+        try:
+            process.wait(timeout=min(0.05, remaining))
+        except subprocess.TimeoutExpired:
+            pass
 
 
 def download_with_aria2(
@@ -244,7 +295,41 @@ def download_with_aria2(
     before_publish: Callable[[], None] | None = None,
 ) -> None:
     """Download to a resumable hidden partial and atomically publish on success."""
+    started = time.monotonic()
     destination.parent.mkdir(parents=True, exist_ok=True)
+    # The persistent lock inode covers partials, identity metadata and publication.
+    # It lives in js's tmp directory, keyed by the destination, not beside it.
+    locks = paths.tmp_dir() / "aria2-locks"
+    locks.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha256(str(destination.resolve(strict=False)).encode()).hexdigest()
+    lock_path = locks / f"{key}.lock"
+    with lock_path.open("ab") as lock:
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                remaining = timeout_s - (time.monotonic() - started)
+                if remaining <= 0:
+                    raise DownloadError(
+                        f"aria2c timed out after {timeout_s:g}s waiting to download {url}"
+                    ) from None
+                time.sleep(min(0.05, remaining))
+        _download_with_aria2(binary, url, destination, timeout_s=timeout_s, headers=headers,
+                             max_bytes=max_bytes, before_publish=before_publish, started=started)
+
+
+def _download_with_aria2(
+    binary: str,
+    url: str,
+    destination: Path,
+    *,
+    timeout_s: float,
+    headers: dict[str, str] | None,
+    max_bytes: int | None,
+    before_publish: Callable[[], None] | None,
+    started: float,
+) -> None:
     partial = _partial_download_path(destination)
     control = Path(f"{partial}.aria2")
     metadata = Path(f"{partial}.js-meta")
@@ -270,28 +355,26 @@ def download_with_aria2(
         stream.write(identity)
     temporary_metadata.chmod(0o600)
     os.replace(temporary_metadata, metadata)
-    argv = aria2_argv(binary, url, partial, timeout_s=timeout_s, headers=headers)
-    started = time.monotonic()
-    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+    with tempfile.TemporaryDirectory(prefix="js-aria2-") as private, \
+            tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+        input_file = None
+        if headers:
+            input_file = Path(private) / "input"
+            write_aria2_input(input_file, url, headers, partial)
+        argv = aria2_argv(binary, url, partial, timeout_s=timeout_s, headers=headers, input_file=input_file)
         try:
             process = subprocess.Popen(argv, stdout=stdout, stderr=stderr)
         except OSError as exc:
             raise DownloadError(f"could not start aria2c for {url}: {exc}") from exc
-        while process.poll() is None:
-            if max_bytes is not None and partial.exists() and partial.stat().st_size > max_bytes:
+        try:
+            _wait_for_aria2(process, partial, control, metadata, url=url, timeout_s=timeout_s,
+                            max_bytes=max_bytes, started=started)
+        except BaseException:
+            # Ctrl-C, a cancelled task, an OSError from stat racing aria2's
+            # rename: the caller gave up, so aria2c must not keep writing.
+            if process.poll() is None:
                 _stop_process(process)
-                partial.unlink(missing_ok=True)
-                control.unlink(missing_ok=True)
-                metadata.unlink(missing_ok=True)
-                raise DownloadError(f"response exceeds {max_bytes} byte download limit")
-            remaining = timeout_s - (time.monotonic() - started)
-            if remaining <= 0:
-                _stop_process(process)
-                raise DownloadError(f"aria2c timed out after {timeout_s:g}s downloading {url}")
-            try:
-                process.wait(timeout=min(0.05, remaining))
-            except subprocess.TimeoutExpired:
-                pass
+            raise
 
         if process.returncode != 0:
             captured = _captured_tail(stderr) or _captured_tail(stdout)
@@ -339,11 +422,11 @@ def _download(url: str, destination: Path) -> None:
             url,
             destination,
             timeout_s=120,
-            headers={"User-Agent": "js-tool-installer/0.1"},
+            headers={"User-Agent": _settings.live_value("TOOL_INSTALLER_USER_AGENT")},
         )
         return
     warn_urllib_fallback("the tool-binary installer")
-    request = urllib.request.Request(url, headers={"User-Agent": "js-tool-installer/0.1"})
+    request = urllib.request.Request(url, headers={"User-Agent": _settings.live_value("TOOL_INSTALLER_USER_AGENT")})
     with urllib.request.urlopen(request, timeout=120) as response, destination.open("wb") as output:
         shutil.copyfileobj(response, output)
 
@@ -436,12 +519,28 @@ def install_download(
     return "installed"
 
 
+def is_termux() -> bool:
+    """Recognize Termux even when Android reports itself as Linux."""
+    prefix = os.environ.get("PREFIX", "").rstrip("/")
+    return bool(os.environ.get("TERMUX_VERSION")) or (
+        prefix.startswith("/data/") and prefix.endswith("/com.termux/files/usr")
+    )
+
+
 def release_plan() -> tuple[list[DownloadTool], list[str]]:
     """Select verified native assets; never substitute a compatibility layer."""
+    if is_termux():
+        return [], [
+            msgs.TOOL_TERMUX_OBSCURA_MISSING.format(),
+        ]
     system = platform.system()
     machine = platform.machine().lower()
     machine = {"amd64": "x86_64", "arm64": "aarch64"}.get(machine, machine)
     libc, version = platform.libc_ver()
+    try:
+        glibc_version = tuple(map(int, version.split(".")))
+    except ValueError:
+        glibc_version = ()
     specs: list[DownloadTool] = []
     missing: list[str] = []
     try:
@@ -449,48 +548,44 @@ def release_plan() -> tuple[list[DownloadTool], list[str]]:
     except InstallError as exc:
         missing.append(str(exc))
     rows = json.loads(Path(__file__).with_name("tool_releases.json").read_text())
-    for name in ("rg", "fd", "bat", "fzf", "ast-grep"):
+    for name in ("rg", "fd", "bat", "fzf"):
         row = next((r for r in rows if r["executable"] == name
                     and r["system"] == system and r["machine"] == machine), None)
         if row is None:
-            missing.append(f"{name}: no verified release asset for {system} {machine}")
+            missing.append(msgs.TOOL_VERIFIED_RELEASE_MISSING.format(name=name, system=system, machine=machine))
             continue
         minimum = row["minimum_glibc"]
-        if minimum and (libc != "glibc" or not version or
-                        tuple(map(int, version.split("."))) < tuple(map(int, minimum.split(".")))):
-            missing.append(f"{name}: {row['asset']} requires glibc >= {minimum}; "
-                           f"found {libc or 'unknown libc'} {version}; no verified musl asset")
+        if minimum and (libc != "glibc" or
+                        glibc_version < tuple(map(int, minimum.split(".")))):
+            missing.append(msgs.TOOL_RELEASE_GLIBC_REQUIRED.format(name=name, value=row['asset'], minimum=minimum, value2=libc or 'unknown libc', version=version))
             continue
         specs.append(DownloadTool(**{k: v for k, v in row.items()
                                      if k not in ("system", "machine", "minimum_glibc")}))
-    if system == "Linux" and machine == "x86_64" and libc == "glibc" and version and (
-        tuple(map(int, version.split("."))) >= (2, 35)
-    ):
+    if system == "Linux" and machine == "x86_64" and libc == "glibc" and glibc_version >= (2, 35):
         specs.append(next(s for s in DOWNLOAD_TOOLS if s.name == "obscura"))
     else:
-        missing.append(f"obscura: no verified compatible release for {system} {machine} "
-                       f"{libc} {version}; pinned x86_64 Linux asset requires glibc >= 2.35; "
-                       "ARM64 Linux/macOS archives await content verification")
+        missing.append(msgs.TOOL_OBSCURA_RELEASE_MISSING.format(system=system, machine=machine, libc=libc, version=version))
     return specs, missing
 
 
-def _provision_aria2_via_brew(tools_dir: Path) -> str | None:
+def _provision_aria2_via_brew(tools_dir: Path, *, run=None) -> str | None:
     """macOS: no verified static release exists, so aria2 comes from Homebrew.
 
     Returns the installed executable path, or None when brew cannot provide it.
     """
+    runner = subprocess.run if run is None else run
     brew = shutil.which("brew")
     if brew is None:
         return None
     candidate = shutil.which(ARIA2_EXECUTABLE)
     if candidate is None:
         try:
-            subprocess.run([brew, "install", "aria2"], check=True, timeout=600)
+            runner([brew, "install", "aria2"], check=True, timeout=600)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
             return None
         candidate = shutil.which(ARIA2_EXECUTABLE)
     if candidate is None:
-        prefix = subprocess.run([brew, "--prefix"], capture_output=True, text=True).stdout.strip()
+        prefix = runner([brew, "--prefix"], capture_output=True, text=True).stdout.strip()
         brewed = Path(prefix) / "bin" / ARIA2_EXECUTABLE
         candidate = str(brewed) if brewed.is_file() else None
     if candidate is None:
@@ -503,18 +598,90 @@ def _provision_aria2_via_brew(tools_dir: Path) -> str | None:
     return str(target)
 
 
-def install_all(*, tools_dir: Path = TOOLS_DIR) -> None:
+def _provision_termux_tools(tools_dir: Path, *, run=None) -> Path:
+    """Link package-owned Android executables, resolving outside managed PATH."""
+    runner = subprocess.run if run is None else run
+    pkg = shutil.which("pkg")
+    if pkg is None:
+        raise InstallError(msgs.TOOL_RELEASE_TERMUX_PKG_UNAVAILABLE_RESTORE_PKG_ON_PATH.format())
+    packages = {"aria2": "aria2c", "bat": "bat", "fd": "fd", "fzf": "fzf", "ripgrep": "rg"}
+    try:
+        runner([pkg, "install", "-y", *packages], check=True, timeout=600)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+        raise InstallError(msgs.TOOL_RELEASE_TERMUX_PKG_INSTALL_FAILED_NO_DESKTOP_FALLBACK.format(exc=exc)) from exc
+    package_bin = Path(pkg).resolve().parent
+    candidates = {name: package_bin / name for name in packages.values()}
+    for name, candidate in candidates.items():
+        if not candidate.is_file() or not os.access(candidate, os.X_OK):
+            raise InstallError(msgs.TOOL_RELEASE_TERMUX_PKG_DID_NOT_PROVIDE_EXECUTABLE_NO.format(candidate=candidate))
+        if candidate.resolve().is_relative_to(tools_dir.resolve()):
+            raise InstallError(msgs.TOOL_RELEASE_TERMUX_PACKAGE_EXECUTABLE_RESOLVES_TO_MANAGED_TOOLS.format(candidate=candidate))
+    tools_dir.mkdir(parents=True, exist_ok=True)
+    for name, candidate in candidates.items():
+        target = tools_dir / name
+        with tempfile.TemporaryDirectory(prefix=f".{name}-", dir=tools_dir) as staging:
+            link = Path(staging) / name
+            link.symlink_to(candidate)
+            os.replace(link, target)
+    return package_bin
+
+
+# Termux tools with no verified release, keyed by the prefix of their
+# release_plan() message. All executables of a group must be present: obscura
+# spawns obscura-worker from its own directory.
+TERMUX_NATIVE_BUILDS = {"obscura/obscura-worker": ("obscura", "obscura-worker")}
+
+
+def _adopt_termux_native_builds(tools_dir: Path, package_bin: Path, missing: list[str]) -> list[str]:
+    """Accept native builds the owner installed; return what is still missing.
+
+    A build already in ``tools_dir`` is kept as is. One in ``$PREFIX/bin`` is
+    linked into ``tools_dir`` the same way the pkg-provided tools are.
+    """
+    still_missing = []
+    for message in missing:
+        group = next((names for key, names in TERMUX_NATIVE_BUILDS.items()
+                      if message.startswith(f"{key}:")), None)
+        if group is None:
+            still_missing.append(message)
+            continue
+        sources = {}
+        for name in group:
+            managed = tools_dir / name
+            installed = package_bin / name
+            if managed.is_file() and os.access(managed, os.X_OK):
+                sources[name] = None
+            elif installed.is_file() and os.access(installed, os.X_OK):
+                sources[name] = installed
+        if len(sources) < len(group):
+            still_missing.append(message)
+            continue
+        for name, installed in sources.items():
+            if installed is None:
+                continue
+            with tempfile.TemporaryDirectory(prefix=f".{name}-", dir=tools_dir) as staging:
+                link = Path(staging) / name
+                link.symlink_to(installed)
+                os.replace(link, tools_dir / name)
+    return still_missing
+
+
+def install_all(*, tools_dir: Path = TOOLS_DIR, say=None, provision_brew=None) -> None:
+    announce = msgs.say if say is None else say
+    brew = _provision_aria2_via_brew if provision_brew is None else provision_brew
     specs, missing = release_plan()
+    if is_termux():
+        package_bin = _provision_termux_tools(tools_dir)
+        missing = _adopt_termux_native_builds(tools_dir, package_bin, missing)
 
     if platform.system() == "Darwin" and not any(s.executable == ARIA2_EXECUTABLE for s in specs):
-        brewed = _provision_aria2_via_brew(tools_dir)
+        brewed = brew(tools_dir)
         if brewed is not None:
-            print(f"present: aria2 (Homebrew) at {brewed}")
+            announce(msgs.TOOL_PRESENT_BREW, name="aria2", path=brewed)
             missing = [m for m in missing if not m.startswith("aria2:")]
         else:
             missing = [m for m in missing if not m.startswith("aria2:")] + [
-                "aria2: Homebrew unavailable or `brew install aria2` failed; "
-                "install Homebrew (https://brew.sh) and rerun `just install`"
+                msgs.TOOL_ARIA2_HOMEBREW_FAILED.format()
             ]
 
     def download(url: str, destination: Path) -> None:
@@ -522,41 +689,36 @@ def install_all(*, tools_dir: Path = TOOLS_DIR) -> None:
         aria_spec = next((s for s in specs if s.executable == ARIA2_EXECUTABLE), None)
         if aria_spec is not None and _is_current(managed, aria_spec.executable_sha256):
             download_with_aria2(str(managed), url, destination, timeout_s=120,
-                                headers={"User-Agent": "js-tool-installer/0.1"})
+                                headers={"User-Agent": _settings.live_value("TOOL_INSTALLER_USER_AGENT")})
         else:
             # Bootstrap is independent of PATH (including unrelated system aria2).
-            request = urllib.request.Request(url, headers={"User-Agent": "js-tool-installer/0.1"})
+            request = urllib.request.Request(url, headers={"User-Agent": _settings.live_value("TOOL_INSTALLER_USER_AGENT")})
             with urllib.request.urlopen(request, timeout=120) as response:
                 with destination.open("wb") as output:
                     shutil.copyfileobj(response, output)
 
-    print(f"js tool directory: {tools_dir}")
+    announce(msgs.TOOL_DIR, path=tools_dir)
     for spec in specs:
         target = tools_dir / spec.executable
         if _is_current(target, spec.executable_sha256) and all(
             _is_current(tools_dir / name, checksum)
             for _member, name, checksum in spec.companions
         ):
-            print(
-                f"present: {spec.name} {spec.version} at {target} "
-                f"(sha256 {spec.executable_sha256})"
-            )
+            announce(msgs.TOOL_PRESENT, name=spec.name, version=spec.version, path=target,
+                     sha=spec.executable_sha256)
             continue
-        print(f"download: {spec.name} {spec.version} ({spec.asset})")
-        print(f"  {spec.url}")
+        announce(msgs.TOOL_DOWNLOAD, name=spec.name, version=spec.version, asset=spec.asset, url=spec.url)
         state = install_download(spec, tools_dir=tools_dir, downloader=download)
-        print(
-            f"{state}: {target} (asset sha256 {spec.asset_sha256}; "
-            f"executable sha256 {spec.executable_sha256})"
-        )
+        announce(msgs.TOOL_INSTALLED, state=state, path=target, asset_sha=spec.asset_sha256,
+                 sha=spec.executable_sha256)
     if missing:
-        raise InstallError("toolkit incomplete:\n" + "\n".join(missing))
+        raise InstallError(msgs.TOOLKIT_INCOMPLETE_PREFIX.format() + "\n".join(missing))
 
 def main() -> int:
     try:
         install_all()
     except (DownloadError, InstallError, OSError, urllib.error.URLError) as exc:
-        print(f"!! tool install failed: {exc}", file=sys.stderr)
+        msgs.warn(msgs.TOOL_INSTALL_FAILED, error=exc)
         return 1
     return 0
 

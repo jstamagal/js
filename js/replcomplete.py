@@ -1,24 +1,26 @@
 """REPL Tab completion — prefix match, rotating menu. No fuzzyfind.
 
 Routed by where the word under the cursor sits (a port of an ircII `bind ^I`).
-First word of the line is always command completion (a bare word gets an
-implicit leading ``/`` — ``comp`` -> ``/compact``). For every other word,
-path detection runs FIRST — a token that looks like a path (``/a/b`` or
-``@/a/b``) always wins filesystem completion regardless of which command it's
-an argument to — then:
+First word of the line is always command completion from the command table
+(a bare word gets an implicit leading ``/`` — ``comp`` -> ``/compact``). For
+every other word, path detection runs FIRST — a token that looks like a path
+(``/a/b`` or ``@/a/b``) always wins filesystem completion regardless of which
+command it's an argument to — then the command's ``complete`` source decides:
 
-1. arg of ``/set``/``/show``       -> setting keys; a second `/set` word (the
-   key already typed) completes known enum values instead, e.g.
-   ``model.reasoning_effort``.
-2. arg of ``/login``/``/provider`` -> provider ids + saved login names.
-3. arg of ``/on``                  -> event names.
-4. arg of ``/load``                -> filesystem.
-5. mid-line word whose command is any other known ``COMMANDS`` entry ->
-   no completion (a command argument never reaches the spellchecker).
-6. anything else (genuine prose)   -> spellcheck (backend injected via ``spell``).
+- ``set``    -> setting keys; the word after the key completes known enum
+  values instead, e.g. ``EFFORT``.
+- ``keys``   -> setting keys.
+- ``names``  -> provider ids + saved login names.
+- ``events`` -> event names.
+- ``path``   -> filesystem.
+- none       -> no completion (a command argument never reaches the
+  spellchecker).
+
+A first word that is not a command is prose -> spellcheck (backend injected
+via ``spell``).
 
 Always PREFIX match (``startswith``), never fuzzy subsequence. Tab-triggered,
-rotating menu is configured on the PromptSession, not here.
+rotating menu is configured on the screen, not here.
 """
 
 from __future__ import annotations
@@ -27,54 +29,18 @@ import glob
 import os
 import re
 import subprocess
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 
 from prompt_toolkit.completion import Completer, Completion
 
-from . import events
-from . import settings as _settings
+from . import events, fset, setting_values
 
-# Real REPL commands only — what _handle_command / _handle_provider_command actually dispatch.
-COMMANDS: tuple[str, ...] = (
-    "/help",
-    "/set",
-    "/show",
-    "/save",
-    "/load",
-    "/on",
-    "/model",
-    "/pick-model",
-    "/provider",
-    "/baseurl",
-    "/apikey",
-    "/login",
-    "/logout",
-    "/models",
-    "/reset",
-    "/wipe",
-    "/persona",
-    "/turns",
-    "/session",
-    "/jobs",
-    "/cancel",
-    "/compact",
-    "/compact-auto",
-    "/refresh-model-catalog",
-    "exit",
-    "quit",
-    ":q",
-)
-
-_SET_CMDS = ("/set", "/show")
-_NAME_CMDS = ("/login", "/provider")
-_ON_CMDS = ("/on",)
-_PATH_ARG_CMDS = ("/load",)
 _TRAILING_TOKEN = re.compile(r"\S*$")  # run of non-space chars before the cursor
 
 # `/set <key> <value>` — keys whose value is a known small enum get their
 # legal values completed instead of falling through to no candidates.
 _VALUE_ENUM_KNOBS: dict[str, tuple[str, ...]] = {
-    "model.reasoning_effort": _settings.REASONING_EFFORT_VALUES,
+    "EFFORT": setting_values.REASONING_EFFORT_VALUES,
 }
 
 
@@ -82,24 +48,24 @@ def _prefix(pool: Iterable[str], token: str) -> list[str]:
     return sorted({c for c in pool if c.startswith(token)})
 
 
-def value_candidates(key: str, token: str) -> list[str]:
+def value_candidates(key: str, token: str, enums: Mapping | None = None) -> list[str]:
     """Known-good values for `key` (e.g. reasoning-effort stops), prefix-matched."""
-    values = _VALUE_ENUM_KNOBS.get(key)
+    values = (_VALUE_ENUM_KNOBS if enums is None else enums).get(key.upper())
     if values is None:
         return []
     return _prefix(values, token.lower())
 
 
-def command_candidates(token: str) -> list[str]:
-    """First-word completion. Prefix match; a slashless word gets an implicit
-    ``/`` so ``comp`` completes to ``/compact``. Returns sorted full commands."""
-    out: set[str] = set()
-    for cmd in COMMANDS:
-        if cmd.startswith(token):
-            out.add(cmd)
-        elif token and not token.startswith("/") and cmd.startswith("/" + token):
-            out.add(cmd)
-    return sorted(out)
+def command_candidates(token: str, verbs: Iterable[str], bare_words: Iterable[str] = (), *,
+                       command_prefix: str = "/") -> list[str]:
+    """First-word completion over the table's verbs. Prefix match; a slashless
+    word gets an implicit ``/`` so ``comp`` completes to ``/compact``.
+    ``bare_words`` are commands typed without the ``/`` (``exit``); they
+    complete as themselves."""
+    word = token[len(command_prefix):] if token.startswith(command_prefix) else token
+    found = {command_prefix + verb for verb in verbs if verb.startswith(word)}
+    found.update(bare for bare in bare_words if bare.startswith(token))
+    return sorted(found)
 
 
 def looks_like_path(token: str) -> bool:
@@ -113,7 +79,7 @@ def path_candidates(token: str) -> list[str]:
     raw = token[1:] if at else token
     base = os.path.expanduser(raw)
     try:
-        hits = glob.glob(base + "*")
+        hits = glob.glob(glob.escape(base) + "*")
     except OSError:
         return []
     prefix = "@" if at else ""
@@ -127,7 +93,7 @@ def event_candidates(token: str) -> list[str]:
     return [prefix + event for event in _prefix(events.CANONICAL_EVENT_NAMES, raw)]
 
 
-def hunspell_suggest(word: str, *, lang: str = "en_US") -> list[str]:
+def hunspell_suggest(word: str, *, lang: str | None = None) -> list[str]:
     """Spelling suggestions for one word via ``hunspell -a``. Returns [] for a
     correct word, an empty/non-alpha token, or if hunspell/the dict is missing
     (so the REPL never breaks when ``hunspell-<lang>`` isn't installed)."""
@@ -135,11 +101,11 @@ def hunspell_suggest(word: str, *, lang: str = "en_US") -> list[str]:
         return []
     try:
         proc = subprocess.run(
-            ["hunspell", "-a", "-d", lang],
+            ["hunspell", "-a", "-d", lang if lang is not None else fset.setting_value("SPELLCHECK_LANGUAGE")],
             input=word + "\n",
             capture_output=True,
             text=True,
-            timeout=2,
+            timeout=float(fset.setting_value("SPELLCHECK_TIMEOUT")),
         )
     except (OSError, subprocess.SubprocessError):
         return []
@@ -154,51 +120,77 @@ def hunspell_suggest(word: str, *, lang: str = "en_US") -> list[str]:
 class JsCompleter(Completer):
     """Routes the cursor word to command / arg / path / spell candidates.
 
-    ``setting_keys`` is the static knob list; ``names`` is a callable returning
-    provider ids + saved login names (dynamic — a login may be added mid-session);
-    ``spell`` is an injected ``str -> list[str]`` suggester (None until a backend
-    is wired). Keeps this module dependency-free and unit-testable.
+    ``commands`` returns the command table as verb -> argument completion
+    source (read per keystroke, so aliases defined mid-session complete);
+    ``setting_keys`` is the static setting list; ``fset_names`` the /fset entries; ``names`` returns provider ids
+    + saved login names; ``spell`` is an injected ``str -> list[str]``
+    suggester; ``bare_words`` are the slashless commands. Keeps this module dependency-free and unit-testable.
     """
 
     def __init__(
         self,
+        commands: Callable[[], Mapping[str, str | None]],
         setting_keys: Iterable[str] = (),
         names: Callable[[], Iterable[str]] | None = None,
         spell: Callable[[str], list[str]] | None = None,
+        bare_words: Iterable[str] = (),
+        fset_names: Iterable[str] = (),
+        path_completion: Callable[[str], list[str] | None] | None = None,
+        unknown_arguments: Callable[[str, str], list[str]] | None = None,
+        value_enums: Mapping | None = None,
+        command_prefix: str = "/",
     ) -> None:
+        self._command_prefix = command_prefix
+        self._commands = commands
+        self._fset_names = tuple(fset_names)
+        self._bare_words = tuple(bare_words)
         self._setting_keys = tuple(setting_keys)
         self._names = names
         self._spell = spell
+        self._path_completion = path_completion
+        self._unknown_arguments = unknown_arguments
+        self._value_enums = value_enums
 
     def candidates(self, text_before_cursor: str) -> tuple[list[str], int]:
         """Pure-ish: (candidate list, token length) for the text left of cursor."""
         token = _TRAILING_TOKEN.search(text_before_cursor).group(0)
         before = text_before_cursor[: len(text_before_cursor) - len(token)]
+        table = self._commands()
         if before.strip() == "":  # nothing but whitespace before -> first word
-            return command_candidates(token), len(token)
-        head = before.split()[0]
-        norm = head if head.startswith("/") else "/" + head
-        if looks_like_path(token):
-            return path_candidates(token), len(token)
-        if norm in _SET_CMDS:
-            words = before.split()
-            if norm == "/set" and len(words) >= 2:
-                return value_candidates(words[1], token), len(token)
-            return _prefix(self._setting_keys, token), len(token)
-        if norm in _NAME_CMDS:
-            names = list(self._names()) if self._names else []
-            return _prefix(names, token), len(token)
-        if norm in _ON_CMDS:
+            return command_candidates(token, table, self._bare_words, command_prefix=self._command_prefix), len(token)
+        words = before.split()
+        head = words[0].removeprefix(self._command_prefix).lower()
+        paths = (self._path_completion(token) if self._path_completion is not None
+                 else path_candidates(token) if looks_like_path(token) else None)
+        if paths is not None:
+            return paths, len(token)
+        if head not in table:
+            if self._unknown_arguments is not None:
+                return self._unknown_arguments(head, token), len(token)
+            return (self._spell(token) if self._spell is not None else []), len(token)
+        source = table[head]
+        if source == "set" and len(words) >= 2:
+            if words[1].startswith("-"):
+                return [], len(token)
+            return value_candidates(words[1], token, self._value_enums), len(token)
+        unset = source in ("set", "fset") and token.startswith("-")
+        key_token = token[1:] if unset else token
+        prefix = "-" if unset else ""
+        if source in ("set", "keys"):
+            # `set` takes a setting name in any case. A lowercase prefix gets
+            # its matches in lowercase, so the part they share can be filled in.
+            keys = [key for key in self._setting_keys if key.upper().startswith(key_token.upper())]
+            return sorted({prefix + (key.lower() if key_token.islower() else key) for key in keys}), len(token)
+        if source == "fset" and len(words) == 1:
+            # `fset` takes a name in any case, the same way.
+            names = [name for name in self._fset_names if name.startswith(key_token.upper())]
+            return sorted({prefix + (name.lower() if key_token.islower() else name) for name in names}), len(token)
+        if source == "names":
+            return _prefix(list(self._names()) if self._names else [], token), len(token)
+        if source == "events":
             return event_candidates(token), len(token)
-        if norm in _PATH_ARG_CMDS:
+        if source == "path":
             return path_candidates(token), len(token)
-        if norm in COMMANDS:
-            # A known command's argument with no specific completion source
-            # above (e.g. /model, /baseurl, /apikey, /models, /compact) —
-            # never let it fall through to the prose spellchecker.
-            return [], len(token)
-        if self._spell is not None:
-            return self._spell(token), len(token)
         return [], len(token)
 
     def get_completions(self, document, complete_event):

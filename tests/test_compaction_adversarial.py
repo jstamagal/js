@@ -1,10 +1,10 @@
 """Fresh-process adversarial probes independent of the existing test fixtures."""
 
-from pathlib import Path
 import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -12,7 +12,7 @@ import pytest
 @pytest.mark.parametrize(
     "script,result_file", [("harness.py", "results.json"), ("wire.py", "wire-results.json")]
 )
-def test_adversarial_compaction(tmp_path, script, result_file):
+def test_adversarial_compaction(tmp_path, home_model_catalog, script, result_file):
     root = Path(__file__).resolve().parents[1]
     proc = subprocess.run(
         [

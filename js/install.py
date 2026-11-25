@@ -1,0 +1,210 @@
+"""What `just install` asks the operator: the keys js uses and a provider for
+the default model.
+
+Each key in `KEYS` that is in neither the environment nor ~/.js/.env is asked
+for in the terminal; an answer is appended to ~/.js/.env, which is kept at mode
+600, and Enter skips the key. When the `MODEL` js starts with has no
+provider to run on, the operator can add a provider through the login flow.
+A rerun asks only about what is still missing. Without a terminal nothing is
+asked: the missing keys and an unrouted model are named instead.
+
+    uv run python -m js.install
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from collections.abc import Callable, Mapping, MutableMapping
+from getpass import getpass
+from pathlib import Path
+from typing import Any
+
+from . import (
+    dotenv,
+    home,
+    login_cli,
+    logins,
+    messages as msgs,
+    paranoid,
+    paths,
+    routing,
+    setting_layers,
+    settings as settings_mod,
+)
+
+# The keys js reads from the environment, and what each one is for.
+KEYS: tuple[tuple[str, str], ...] = (
+    ("TYPESAFE_API_KEY", "jev"),
+    ("TAVILY_API_KEY", "tavily_search"),
+    ("EXA_API_KEY", "exa_search"),
+    ("SERPER_API_KEY", "serper_search"),
+    ("CONTEXT7_API_KEY", "docs_search, which also runs without one at a lower rate limit"),
+)
+
+Ask = Callable[[str], "str | None"]
+
+
+def missing_keys(environ: Mapping[str, str], env_file: Path, *, keys=None) -> list[tuple[str, str]]:
+    """The `KEYS` entries set neither in ``environ`` nor in ``env_file``."""
+    try:
+        saved = dotenv.parse(env_file.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        saved = {}
+    return [(name, use) for name, use in (KEYS if keys is None else keys)
+            if not environ.get(name, "").strip() and not saved.get(name, "").strip()]
+
+
+def _env_value(value: str) -> str:
+    """``value`` as `dotenv.parse` reads it back: quoted when bare text would
+    lose a space, an inline comment or its quotes."""
+    if value and not any(ch.isspace() or ch in "#'\"" for ch in value):
+        return value
+    return f'"{value}"' if '"' not in value else f"'{value}'"
+
+
+def save_key(env_file: Path, name: str, value: str) -> None:
+    """Append `name=value` to ``env_file``, creating it, and leave it mode 600."""
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        before = env_file.read_bytes()
+    except FileNotFoundError:
+        before = b""
+    fd = os.open(env_file, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "a", encoding="utf-8") as handle:
+        os.fchmod(handle.fileno(), 0o600)
+        if before and not before.endswith(b"\n"):
+            handle.write("\n")
+        handle.write(f"{name}={_env_value(value)}\n")
+
+
+class Cancelled(Exception):
+    """The operator pressed Ctrl-C or closed the terminal at a prompt."""
+
+
+def ask_keys(environ: Mapping[str, str], env_file: Path, ask: Ask, *, keys=None, say=None) -> list[str]:
+    """Ask for each missing key and save the answers. An empty answer skips a
+    key; None, the terminal closing or Ctrl-C, raises Cancelled so the install
+    stops instead of going on to the next question. Returns the names saved."""
+    announce = msgs.say if say is None else say
+    saved: list[str] = []
+    for name, use in missing_keys(environ, env_file, keys=keys):
+        answer = ask(msgs.INSTALL_ASK_KEY.words(name=name, use=use))
+        if answer is None:
+            raise Cancelled
+        value = answer.strip()
+        if not value:
+            continue
+        save_key(env_file, name, value)
+        announce(msgs.INSTALL_KEY_SAVED, name=name, path=env_file)
+        saved.append(name)
+    return saved
+
+
+def default_model(environ: Mapping[str, str]) -> tuple[str | None, bool]:
+    """The `MODEL` js starts with outside a project (~/.js/jsrc under the
+    environment), and whether it routes to a provider."""
+    settings = setting_layers.collect_settings([paths.global_config_file()], env=dict(environ))
+
+    def knob(key: str) -> Any:
+        return settings_mod.knob(settings, key)
+
+    model_id = knob("MODEL")
+    if not model_id:
+        return None, False
+    try:
+        route = routing.resolve_model_route(
+            str(model_id),
+            configured_provider_id=knob("PROVIDER"),
+            configured_base_url=knob("BASE_URL"),
+            configured_api_key=knob("API_KEY"),
+            env=environ,
+        )
+    except ValueError:
+        return str(model_id), False
+    return str(model_id), bool(route.provider_id or route.base_url)
+
+
+def _say_unrouted(model_id: str | None) -> None:
+    if model_id:
+        msgs.say(msgs.INSTALL_MODEL_UNROUTED, model=model_id)
+    else:
+        msgs.say(msgs.INSTALL_MODEL_UNSET)
+
+
+MODEL_ANSWERS: Mapping[str, str] = {"a": "add"}
+
+
+def _model_question(message: msgs.Message, answers: Mapping[str, str]) -> str:
+    def keymap(table):
+        return {action: tuple((word,) for word, target in table.items() if target == action)
+                for action in set(table.values())}
+
+    return message.with_keymap(keymap(answers), keymap(MODEL_ANSWERS)).words()
+
+
+def ask_model(environ: Mapping[str, str], ask: Ask, *, add_provider: Callable[[], Any],
+              answers: Mapping[str, str] | None = None) -> None:
+    """When the default model does not route: offer the login flow to add a
+    provider until the default model routes or the operator skips."""
+    answers = MODEL_ANSWERS if answers is None else answers
+    model_id, routes = default_model(environ)
+    if routes:
+        return
+    _say_unrouted(model_id)
+    while True:
+        saved = logins.load_logins()
+        if saved:
+            cache = logins.load_model_cache()
+            rows = ", ".join(msgs.INSTALL_LOGIN_ROW.words(provider=provider_id,
+                                                         models=msgs.plural(len(cache.get(provider_id, [])), "model"))
+                             for provider_id in sorted(saved))
+            msgs.say(msgs.INSTALL_LOGINS, logins=rows)
+        choice = (ask(_model_question(msgs.INSTALL_ASK_PROVIDER, answers)) or "").strip().lower()
+        if not choice:
+            return
+        if answers.get(choice) == "add":
+            add_provider()
+            # The new login may be the default model's provider: then the
+            # default routes and there is nothing left to ask.
+            if default_model(environ)[1]:
+                return
+
+
+def _asker(read: Callable[[str], str]) -> Ask:
+    def ask(prompt: str) -> str | None:
+        try:
+            return read(f"{prompt}: ")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+    return ask
+
+
+def _add_provider() -> None:
+    login_cli.main([])
+
+
+def main(argv: list[str] | None = None, environ: MutableMapping[str, str] | None = None) -> int:
+    env = os.environ if environ is None else environ
+    home.migrate_once()
+    paths.ensure_home()
+    env_file = paths.global_env_file()
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        missing = missing_keys(env, env_file)
+        if missing:
+            msgs.say(msgs.INSTALL_KEYS_MISSING, names=", ".join(name for name, _use in missing), path=env_file)
+        model_id, routes = default_model(env)
+        if not routes:
+            _say_unrouted(model_id)
+        return 0
+    try:
+        ask_keys(env, env_file, _asker(getpass if paranoid.masks(paranoid.mode()) else input))
+    except Cancelled:
+        return 130
+    ask_model(env, _asker(input), add_provider=_add_provider)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

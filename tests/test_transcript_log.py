@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import ai
+from prompt_toolkit.application import Application, create_app_session
+from repl_driver import stub_screen, turn_stub
+from turn_driver import js
 
-from js import cli, runtime, settings, transcript, tui
+from js import cli, console, conversation, run_assembly, runtime, screen, transcript
 from js.config import Config
 from js.model_client import ModelStreamResult
+
+
+async def _no_compaction(*_args, **_kwargs):
+    return None
 
 
 def _fake_stream_result(text: str = "ok") -> ModelStreamResult:
@@ -24,7 +31,7 @@ def _fake_stream_result(text: str = "ok") -> ModelStreamResult:
 def _cfg(tmp_path: Path, log_dir: Path, *, session_name: str = "sess.jsonl") -> Config:
     prompts = tmp_path / "prompts"
     prompts.mkdir(exist_ok=True)
-    (prompts / "00-tools.md").write_text("---\ntools: []\n---\nSYSTEM\n", encoding="utf-8")
+    (prompts / "01-prompt.md").write_text("SYSTEM\n", encoding="utf-8")
     sessions = tmp_path / ".js" / "sessions" / "test-agent"
     return Config(
         agent_id="test-agent",
@@ -46,10 +53,7 @@ def _cfg(tmp_path: Path, log_dir: Path, *, session_name: str = "sess.jsonl") -> 
         session_file=sessions / session_name,
         prompts_dir=prompts,
         settings={
-            "runtime": {
-                "debug_autolog": False,
-                "transcript_log_dir": str(log_dir),
-            }
+            "REQUEST_LOG": False, "TRANSCRIPT_LOG_DIR": str(log_dir)
         },
         debug_autolog=False,
         transcript_log_dir=str(log_dir),
@@ -57,19 +61,19 @@ def _cfg(tmp_path: Path, log_dir: Path, *, session_name: str = "sess.jsonl") -> 
 
 
 def test_transcript_log_knob_defaults_on(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("JS_SESSION", raising=False)
-    monkeypatch.delenv("JS_TRANSCRIPT_LOG", raising=False)
+    from js import settings
 
-    from js.config import from_env
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", lambda **_kwargs: _fake_stream_result("OK"))
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", AsyncMock())
 
-    cfg = from_env()
-    path = cli._transcript_log_path(cfg, cfg.settings)
-    assert cfg.transcript_log is True
-    assert path is not None
+    assert js(monkeypatch, "-p", "hello") == 0
+
+    [path] = (tmp_path / ".js" / "logs" / "transcript").rglob("*.log")
+    [session] = (tmp_path / ".js" / "sessions").rglob("*.jsonl")
     assert path.parent.parent.name == "transcript"
-    assert path.parent.name == cfg.agent_id
-    assert path.stem == cfg.session_file.stem
+    assert path.parent.name == settings.default_value("DEFAULT_AGENT")
+    assert path.stem == session.stem
 
 
 def test_prompt_mode_transcript_logs_final_answer_with_ape(monkeypatch, tmp_path, capsys):
@@ -79,15 +83,15 @@ def test_prompt_mode_transcript_logs_final_answer_with_ape(monkeypatch, tmp_path
     def completion_stub(**_kwargs):
         return _fake_stream_result("FINAL_OK")
 
-    monkeypatch.setattr(cli, "_warn_missing_binaries", lambda: None)
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
-    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", AsyncMock())
 
-    rc = cli.main(["-p", "hello"])
+    rc = js(monkeypatch, "-p", "hello")
 
     assert rc == 0
-    assert capsys.readouterr().out == "FINAL_OK\nContinue: js --session sess\n"
+    assert capsys.readouterr().out.splitlines()[0] == "FINAL_OK"
     log = (log_dir / "sess.log").read_text(encoding="utf-8")
     assert "<USER> hello" in log
     assert "<APE> FINAL_OK" in log
@@ -97,29 +101,44 @@ def test_repl_transcript_logs_user_then_streamed_assistant(monkeypatch, tmp_path
     log_dir = tmp_path / "transcripts"
     cfg = _cfg(tmp_path, log_dir, session_name="repl.jsonl")
 
-    class SessionStub:
-        def __init__(self, history=None, **_kwargs):
-            self.lines = iter(["hello", "exit"])
-
-        def prompt(self, *_args, **_kwargs):
-            return next(self.lines)
-
     def completion_stub(**kwargs):
         kwargs["on_text"]("\x1b[32mREPL_OK\x1b[0m")
         return _fake_stream_result("REPL_OK")
 
     monkeypatch.setattr(cli, "_warn_missing_binaries", lambda: None)
-    monkeypatch.setattr(cli, "_from_env", lambda *args, **kwargs: cfg)
-    monkeypatch.setattr(cli, "PromptSession", SessionStub)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
-    monkeypatch.setattr(cli, "_maybe_auto_compact", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", _no_compaction)
+    stub_screen(monkeypatch, ["hello", "exit"], wait=True)
 
-    assert cli.main(["--blocking"]) == 0
+    assert cli.main([]) == 0
 
     log = (log_dir / "repl.log").read_text(encoding="utf-8")
     assert log.index("<USER> hello") < log.index("<APE> REPL_OK")
     assert "\x1b[" not in log
+
+
+def test_the_screen_draws_on_the_terminal_not_on_the_transcript_tee(monkeypatch, tmp_path):
+    cfg = _cfg(tmp_path, tmp_path / "transcripts", session_name="repl.jsonl")
+    monkeypatch.setattr(cli, "_warn_missing_binaries", lambda: None)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
+    stub_screen(monkeypatch, [])
+    stub = screen.build_app
+
+    def build_app(**kwargs):
+        # The real screen is a prompt_toolkit Application, which takes the
+        # session's output; prompt_toolkit creates that from sys.stdout on
+        # first use.
+        Application()
+        return stub(**kwargs)
+
+    monkeypatch.setattr(screen, "build_app", build_app)
+
+    with create_app_session():
+        assert cli.main([]) == 0
 
 
 def test_transcript_sink_strips_ansi(tmp_path):
@@ -134,6 +153,25 @@ def test_transcript_sink_strips_ansi(tmp_path):
     assert "\x1b[" not in text
     assert "error: bad" in text
     assert "<APE> ok" in text
+
+
+def test_lone_surrogates_do_not_disable_transcript_destinations(tmp_path):
+    paths = [tmp_path / "session.log", tmp_path / "combined.log"]
+    sink = transcript.open_transcript_sink(paths)
+    assert sink is not None
+
+    sink.write_plain("bad \udc80\n")
+    sink.write_user("user \ud800")
+    sink.write_assistant("reply \udcff")
+    sink.write_plain("next healthy line\n")
+    sink.close()
+
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        assert "bad \\udc80" in text
+        assert "user \\ud800" in text
+        assert "reply \\udcff" in text
+        assert "next healthy line" in text
 
 
 def test_transcript_logging_failure_never_raises(tmp_path):
@@ -153,27 +191,184 @@ def test_transcript_logging_failure_never_raises(tmp_path):
     sink.close()
 
 
-def test_tui_write_transcript_reaches_file(monkeypatch, tmp_path):
-    log_dir = tmp_path / "transcripts"
-    path = log_dir / "tui.log"
+def test_strip_ansi_removes_string_sequences_and_two_byte_escapes():
+    """OSC (title, clipboard 52, hyperlink 8), DCS, APC and two-byte escapes
+    must not reach the transcript file, where `cat`/`tail -f` would run them."""
+    for raw in (
+        "a\x1b]0;PWNED\x07b",
+        "a\x1b]52;c;ZGF0YQ==\x07b",
+        "a\x1b]8;;http://x.test\x1b\\b",
+        "a\x1bPq#0;2;0;0;0\x1b\\b",
+        "a\x1b_payload\x1b\\b",
+        "a\x1b(Bb",
+        "a\x1b=b",
+        "a\x1b[31mb",
+    ):
+        assert transcript.strip_ansi(raw) == "ab", repr(raw)
+
+
+def test_strip_ansi_keeps_plain_control_characters():
+    assert transcript.strip_ansi("a\tb\r\nc") == "a\tb\r\nc"
+
+
+def test_strip_ansi_drops_lone_esc_and_c1_openers():
+    for raw in ("a\x1b", "a\x9d0;PWNED", "a\x90qpayload", "a\x9b2J"):
+        assert "\x1b" not in transcript.strip_ansi(raw)
+        assert not any("\x80" <= ch <= "\x9f" for ch in transcript.strip_ansi(raw)), repr(raw)
+
+
+def test_escape_split_across_writes_does_not_rejoin_in_the_file(tmp_path):
+    path = tmp_path / "t.log"
     sink = transcript.open_transcript_sink([path])
-    assert sink is not None
-    cfg = _cfg(tmp_path, log_dir, session_name="tui.jsonl")
-    telemetry = runtime.Telemetry(debug_log=None, transcript_log=sink)
-    state = {"settings": settings.seed_defaults(), "model": cfg.model}
-    app = tui.JsTuiApp(cfg, state, telemetry, None, SimpleNamespace())
-    written: list[object] = []
+    sink.write_plain("a\x1b")
+    sink.write_plain("[2Jb\n")
+    sink.close()
+    assert "\x1b" not in path.read_text(encoding="utf-8")
 
-    class Pane:
-        def write(self, obj):
-            written.append(obj)
 
-    monkeypatch.setattr(tui.JsTuiApp, "query_one", lambda self, *_args, **_kwargs: Pane())
-
-    app._write_transcript("[orange1]error: boom[/]")
-    app._write_transcript("answer", speaker="APE", log_text="answer")
-
-    assert written
+def test_transcript_file_gets_no_osc(tmp_path):
+    path = tmp_path / "t.log"
+    sink = transcript.open_transcript_sink([path])
+    sink.write_assistant("hi\x1b]0;PWNED\x07 there")
+    sink.write_plain("tool \x1b]52;c;eA==\x07out\n")
+    sink.close()
     text = path.read_text(encoding="utf-8")
-    assert "error: boom" in text
-    assert "<APE> answer" in text
+    assert "\x1b" not in text
+    assert "hi there" in text and "tool out" in text
+
+
+def test_prompt_mode_transcript_records_each_tool_call_whole(monkeypatch, tmp_path, capsys):
+    from types import SimpleNamespace
+
+    log_dir = tmp_path / "transcripts"
+    cfg = _cfg(tmp_path, log_dir)
+    result = "shell=bash\nexit=0\n--- stdout ---\n" + "\n".join(f"TOOL_LINE_{n}" for n in range(30)) + "\n"
+
+    def run_turn(cfg, system, messages, telemetry, **_kwargs):
+        context = SimpleNamespace(config=SimpleNamespace(settings={"TOOLS_DISPLAY": 1}))
+        opened = console.trace_call(telemetry, context, "shell", {"command": "make"})
+        console.trace_result(telemetry, context, "shell", result, args={"command": "make"}, exchange=opened)
+        messages.append({"role": "assistant", "content": "FINAL_OK"})
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(run_assembly, "from_env", lambda *args, **kwargs: cfg)
+    monkeypatch.setattr(runtime, "run_turn_async", turn_stub(run_turn))
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", AsyncMock())
+
+    js(monkeypatch, "-p", "hello")
+
+    capsys.readouterr()
+    log = (log_dir / "sess.log").read_text(encoding="utf-8")
+    assert all(f"TOOL_LINE_{n}" in log for n in range(30)), log
+
+
+def test_the_transcript_records_the_same_bytes_whatever_console_draws_the_turn(monkeypatch, tmp_path, capsys):
+    import asyncio
+    import re
+
+    from test_output import _offline_config, _reply
+    from tool_loading import after_loading
+
+    from js import output
+    from js.model_client import ModelToolCall
+    from js.toolkit import ToolContext
+
+    (tmp_path / "notes.txt").write_text("alpha\nbeta\n", encoding="utf-8")
+
+    def respond(**kwargs):
+        if not any(part.kind == "tool_result" and part.tool_call_id == "r1"
+                   for message in kwargs["messages"] for part in message.parts):
+            return _reply(tool_calls=[ModelToolCall(id="r1", name="read", arguments='{"file_path":"notes.txt"}')])
+        kwargs["on_text"]("the answer")
+        return _reply("the answer")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", after_loading(respond, "read"))
+
+    class Silent:
+        def emit(self, event):
+            pass
+
+    def record(console) -> str:
+        path = tmp_path / f"{console}.log"
+        log = transcript.open_transcript_sink([path])
+        telemetry = runtime.Telemetry(None, transcript_log=log)
+        if console == "silent":
+            telemetry.sink = output.Fanout(transcript.TranscriptSink(telemetry), Silent())
+        asyncio.run(runtime.run_turn_async(
+            _offline_config(tmp_path, trace=True, settings={}), "system",
+            [{"role": "user", "content": "read notes.txt"}], telemetry, tool_context=ToolContext(cwd=tmp_path)))
+        log.close()
+        return re.sub(r"\[\d\d:\d\d\] ", "", path.read_text(encoding="utf-8"))
+
+    drawn = record("js")
+    assert capsys.readouterr().out
+    assert record("silent") == drawn
+    assert capsys.readouterr().out == ""
+    assert "alpha" in drawn and "<APE> the answer" in drawn
+
+
+def test_transcript_stdio_capture_emits_text_to_its_sink():
+    import io
+
+    captured = []
+
+    class Sink:
+        def emit(self, event):
+            captured.append(event)
+
+    sink = Sink()
+    stream = transcript.TranscriptTee(io.StringIO(), lambda: sink)
+    stream.write("raw output\n")
+
+    assert captured[0].name == "transcript_plain"
+    assert dict(captured[0].fields)["text"] == "raw output\n"
+
+
+def test_transcript_failure_setting_keeps_healthy_files_writable(tmp_path, monkeypatch):
+    import io
+
+    class BadFile:
+        def write(self, text):
+            raise OSError("unwritable")
+
+        def close(self):
+            pass
+
+    cfg = _cfg(tmp_path, tmp_path / "transcripts")
+    cfg.settings["TRANSCRIPT_DISABLE_ALL_ON_ERROR"] = False
+    healthy = io.StringIO()
+    monkeypatch.setattr(transcript, "_open_transcript_log_sink",
+                        lambda paths: transcript.TranscriptLogSink([BadFile(), healthy], paths))
+    telemetry = runtime.Telemetry(None)
+    transcript.sync_transcript_sink(cfg, cfg.settings, telemetry)
+    sink = telemetry.transcript_log
+    sink.write_plain("first\n")
+    sink.write_plain("second\n")
+
+    assert "first\n" in healthy.getvalue()
+    assert "second\n" in healthy.getvalue()
+
+
+def test_repl_transcript_records_the_lines_the_screen_shows(monkeypatch, tmp_path):
+    from repl_driver import run_async
+
+    from js import stream_transport
+
+    log_dir = tmp_path / "transcripts"
+    cfg = _cfg(tmp_path, log_dir, session_name="screen.jsonl")
+    cfg.settings["NET_DISPLAY"] = 2
+
+    def completion_stub(**kwargs):
+        stream_transport.say(2, "NETLINE_SEEN")
+        kwargs["on_text"]("ANSWER_SEEN")
+        return _fake_stream_result("ANSWER_SEEN")
+
+    monkeypatch.setattr(runtime.model_client, "stream_model_async", completion_stub)
+    monkeypatch.setattr(conversation, "maybe_auto_compact_async", _no_compaction)
+
+    run_async(monkeypatch, cfg, ["hello"])
+
+    log = (log_dir / "screen.log").read_text(encoding="utf-8")
+    assert log.count("NETLINE_SEEN") == 1
+    assert log.count("ANSWER_SEEN") == 1
+    assert log.index("<USER> hello") < log.index("NETLINE_SEEN") < log.index("<APE> ANSWER_SEEN")

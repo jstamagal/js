@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
-from js.promptexpand import expand_prompt, PromptExpansionError
-
+from js import messages as msgs, promptexpand
+from js.promptexpand import PromptExpansionError, expand_prompt
 
 # ---- {{VAR}} env shorthand (always on) ----
 
@@ -55,7 +56,8 @@ def test_file_missing_skips():
 def test_unknown_subsystem_errors():
     with pytest.raises(PromptExpansionError) as e:
         expand_prompt("!{wat hi}", env={}, on_error="raise")
-    assert "unknown inline subsystem" in str(e.value)
+    known = ", ".join(sorted(promptexpand._SUBSYSTEMS))
+    assert str(e.value) == msgs.DIRECTIVE_UNKNOWN_SUBSYSTEM.text(name="wat", known=known)
 
 
 # ---- backtick-quoted directives stay literal (documentation, not a request) ----
@@ -64,6 +66,22 @@ def test_backtick_wrapped_code_directive_not_evaluated():
     # the bug: a `!{sh ...}` example in a prompt tripped the code gate at load.
     text = "Executable directives -- `!{sh ...}`, `!{bash ...}` -- use sparingly."
     assert expand_prompt(text, allow_code=False) == text
+
+
+def test_directive_inside_a_longer_markdown_code_span_never_runs(tmp_path):
+    marker = tmp_path / "executed"
+    text = f"``example `tick`: !{{sh touch {marker}}} end``"
+
+    actual = expand_prompt(text, allow_code=True)
+
+    assert not marker.exists()
+    assert actual == text
+
+
+def test_code_span_after_escaped_backslash_never_runs():
+    text = r"\\`example !{sh printf EXECUTED} end`"
+
+    assert expand_prompt(text, allow_code=True) == text
 
 
 def test_backtick_wrapped_readonly_directive_not_blanked():
@@ -113,42 +131,37 @@ def test_sh_inline_runs_when_allowed():
     assert expand_prompt("!{sh printf hello}", allow_code=True) == "hello"
 
 
-@pytest.mark.skipif(shutil.which("python3") is None, reason="python3 not on PATH")
-def test_directive_output_is_capped_and_marked():
-    out = expand_prompt(
-        "!{python import sys; sys.stdout.write('x' * 10000000)}",
-        allow_code=True,
-        max_output_bytes=1024,
-    )
-    assert out.startswith("x" * 1024)
-    assert "[truncated: limits.max_bash_output_bytes (1024) reached]" in out
-    assert len(out) < 1200
+# ---- default degrade: a failed directive expands to nothing, never raised ----
 
-
-# ---- default degrade: a failed directive is left literal, never raised ----
-
-def test_unknown_subsystem_degrades_to_literal(capsys):
+def test_unknown_subsystem_expands_to_nothing(capsys):
     out = expand_prompt("a !{wat hi} b", env={})
-    assert out == "a !{wat hi} b"
-    assert "left literal" in capsys.readouterr().err
+    assert out == "a  b"
+    assert capsys.readouterr().err  # a warning, and the load goes on
 
 
-def test_code_while_off_degrades_to_literal(capsys):
+def test_code_while_off_expands_to_nothing(capsys):
     out = expand_prompt("run !{sh echo hi} now", allow_code=False)
-    assert out == "run !{sh echo hi} now"
-    assert "left literal" in capsys.readouterr().err
+    assert out == "run  now"
+    assert capsys.readouterr().err  # a warning, and the load goes on
 
 
 def test_one_bad_directive_does_not_kill_the_others():
     # The good !{env} still expands even though the sibling directive failed.
     out = expand_prompt("!{wat x} then !{env WHO}", env={"WHO": "ape"})
-    assert out == "!{wat x} then ape"
+    assert out == " then ape"
 
 
-def test_failed_code_run_degrades_to_literal(capsys):
+def test_failed_code_run_expands_to_nothing(capsys):
     out = expand_prompt("!{sh sh -c 'exit 3'}", allow_code=True)
-    assert out == "!{sh sh -c 'exit 3'}"
-    assert "left literal" in capsys.readouterr().err
+    assert out == ""
+    assert capsys.readouterr().err  # a warning, and the load goes on
+
+
+def test_silent_failure_after_good_directives_leaves_no_directive_text(capsys):
+    text = "!{sh echo The cake}\n!{sh rm /nonexistent/js-test-file 2>/dev/null}\n!{sh exit 127}"
+    out = expand_prompt(text, allow_code=True)
+    assert out == "The cake\n\n"
+    assert "!{" not in out
 
 
 def test_sh_nonzero_exit_errors():
@@ -176,6 +189,20 @@ def test_fence_python_block():
     assert expand_prompt(text, allow_code=True) == "42"
 
 
+@pytest.mark.parametrize("subsystem", ["python", "py"])
+def test_python_directive_uses_harness_interpreter(subsystem, monkeypatch):
+    import sys
+
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    directive = f"!{{{subsystem} import sys; print(sys.executable)}}"
+    assert expand_prompt(directive, allow_code=True, on_error="raise") == sys.executable
+
+
+def test_python_fence_nested_in_list_removes_markdown_indent():
+    text = "- result:\n  ```!python\n  if True:\n      print(42)\n  ```"
+    assert expand_prompt(text, allow_code=True, on_error="raise") == "- result:\n  42"
+
+
 @pytest.mark.skipif(not shutil.which("python3"), reason="python3 not on PATH")
 def test_inline_python_runs_in_invocation_cwd(tmp_path, monkeypatch):
     # An env-probing directive must see the dir js was launched from, not the
@@ -188,10 +215,11 @@ def test_inline_python_runs_in_invocation_cwd(tmp_path, monkeypatch):
 @pytest.mark.skipif(not shutil.which("python3"), reason="python3 not on PATH")
 def test_inline_python_snippet_does_not_litter_cwd(tmp_path, monkeypatch):
     # Running in the invocation cwd must not leave the snippet file behind there.
-    monkeypatch.chdir(tmp_path)
-    before = set(tmp_path.iterdir())
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.chdir(project)
     expand_prompt("!{python print(1)}", allow_code=True)
-    assert set(tmp_path.iterdir()) == before
+    assert list(project.iterdir()) == []
 
 
 @pytest.mark.skipif(not (shutil.which("cc") or shutil.which("gcc")), reason="no C compiler")
@@ -217,34 +245,34 @@ def test_persona_expands_env(tmp_path, monkeypatch):
     import js.persona as P
     d = tmp_path / "agent"
     d.mkdir()
-    (d / "00-seed.md").write_text("hello {{NAME}}\n", encoding="utf-8")
+    (d / "00-prompt.md").write_text("hello {{NAME}}\n", encoding="utf-8")
     monkeypatch.setenv("NAME", "world")
     spec = P.load_configured_prompt_spec(_cfg(d))
     assert "hello world" in spec.system
 
 
-def test_persona_code_blocked_leaves_literal_and_starts(tmp_path, capsys):
+def test_persona_code_blocked_drops_directive_and_starts(tmp_path, capsys):
     # Opt-out (allow_inline_code False): the code directive must NOT abort the
-    # load — it stays literal and js keeps starting, with a stderr warning.
+    # load — it expands to nothing and js keeps starting, with a stderr warning.
     import js.persona as P
     d = tmp_path / "agent"
     d.mkdir()
-    (d / "00-seed.md").write_text("ctx !{sh echo hi}\n", encoding="utf-8")
+    (d / "00-prompt.md").write_text("ctx !{sh echo hi}\n", encoding="utf-8")
     spec = P.load_configured_prompt_spec(_cfg(d, allow_inline_code=False))
-    assert "!{sh echo hi}" in spec.system  # left literal, not expanded, not crashed
-    assert "left literal" in capsys.readouterr().err
+    assert "!{sh echo hi}" not in spec.system and "ctx " in spec.system
+    assert capsys.readouterr().err  # a warning, and the load goes on
 
 
 def test_persona_unknown_subsystem_degrades(tmp_path, capsys):
-    # A bad directive (unknown subsystem) degrades gracefully at load: literal +
+    # A bad directive (unknown subsystem) degrades gracefully at load: dropped +
     # one warning + startup continues — never a raw traceback at startup.
     import js.persona as P
     d = tmp_path / "agent"
     d.mkdir()
-    (d / "00-seed.md").write_text("ctx !{wat huh}\n", encoding="utf-8")
+    (d / "00-prompt.md").write_text("ctx !{wat huh}\n", encoding="utf-8")
     spec = P.load_configured_prompt_spec(_cfg(d, allow_inline_code=True))
-    assert "!{wat huh}" in spec.system
-    assert "left literal" in capsys.readouterr().err
+    assert "!{wat huh}" not in spec.system and "ctx " in spec.system
+    assert capsys.readouterr().err  # a warning, and the load goes on
 
 
 def test_persona_passes_configured_inline_code_timeout(tmp_path, monkeypatch):
@@ -252,7 +280,7 @@ def test_persona_passes_configured_inline_code_timeout(tmp_path, monkeypatch):
 
     seen = {}
 
-    def fake_expand(text, *, allow_code=False, env=None, timeout_s=None, max_output_bytes=None):
+    def fake_expand(text, *, allow_code=False, env=None, code_env=None, timeout_s=None, max_output_bytes=None):
         seen["text"] = text
         seen["allow_code"] = allow_code
         seen["timeout_s"] = timeout_s
@@ -261,7 +289,7 @@ def test_persona_passes_configured_inline_code_timeout(tmp_path, monkeypatch):
 
     d = tmp_path / "agent"
     d.mkdir()
-    (d / "00-seed.md").write_text("ctx !{sh echo hi}\n", encoding="utf-8")
+    (d / "00-prompt.md").write_text("ctx !{sh echo hi}\n", encoding="utf-8")
     cfg = _cfg(d, allow_inline_code=True)
     cfg.inline_code_timeout_s = 17
     monkeypatch.setattr(P, "expand_prompt", fake_expand)
@@ -286,10 +314,10 @@ def test_persona_passes_configured_inline_code_timeout(tmp_path, monkeypatch):
 def test_fence_mentioned_mid_sentence_is_not_a_directive(capsys):
     text = "see ```!sub ` fenced block for detail\nmore prose\n```\ntail"
 
-    actual = expand_prompt(text, allow_code=True, on_error="warn")
+    actual = expand_prompt(text, allow_code=True)
 
     assert actual == text
-    assert "unknown inline subsystem" not in capsys.readouterr().err
+    assert capsys.readouterr().err == ""
 
 
 def test_fence_at_line_start_still_runs():
@@ -340,10 +368,10 @@ def test_repo_agents_md_expands_to_itself(capsys):
         pytest.skip("AGENTS.md not present in this tree")
     text = agents_md.read_text(encoding="utf-8")
 
-    actual = expand_prompt(text, allow_code=True, on_error="warn")
+    actual = expand_prompt(text, allow_code=True)
 
     assert actual == text
-    assert "prompt directive left literal" not in capsys.readouterr().err
+    assert capsys.readouterr().err == ""
 
 
 # --- global instruction files ---------------------------------------------------
@@ -352,6 +380,94 @@ def test_global_instruction_files_are_js_md_only(tmp_path, monkeypatch):
     """Global context is JS.md. A global AGENTS.md must NOT be loaded everywhere."""
     from js import paths
 
-    monkeypatch.setattr(paths, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(paths, "home", lambda: tmp_path)
 
     assert [p.name for p in paths.global_instruction_files()] == ["JS.md", "JS.local.md"]
+
+
+# --- the stock agent's environment block -----------------------------------------
+
+
+def _recording_sh(bodies: list[str]):
+    """An `sh` code subsystem that records each body it runs, then runs it;
+    its output loses its trailing newlines, as the stock runner's does."""
+
+    def run(body, *, timeout_s, max_output_bytes):
+        bodies.append(body)
+        result = subprocess.run(["sh", "-c", body], capture_output=True, text=True, timeout=timeout_s)
+        return result.stdout.rstrip("\n")
+
+    return run
+
+
+def test_fenced_directive_with_empty_body_does_not_swallow_the_next_fence():
+    """An empty ```! body must not swallow the next fence."""
+    text = "```!sh\n```\nfoo\n```!sh\necho HI\n```\n"
+    bodies = []
+    out = expand_prompt(text, allow_code=True, subsystems={"sh": (True, _recording_sh(bodies))})
+    assert bodies == ["", "echo HI"], bodies
+    assert out == "\nfoo\nHI\n", repr(out)
+
+
+def test_fenced_directive_allows_indented_closer():
+    """A fence closed with the same indent the opener has must run."""
+    text = "  ```!sh\necho IND\n  ```\n"
+    out = expand_prompt(text, allow_code=True)
+    assert out == "  IND\n", repr(out)
+
+
+def test_unterminated_stream_after_python_fence_fails_closed():
+    """A ```! opener must not close at the next ```python opener:
+    the body never runs, the unterminated directive is dropped, the python
+    fence stays."""
+    text = "```!sh\necho SWALLOWED\n```python\nprint(1)\n```\n"
+    out = expand_prompt(text, allow_code=True)
+    assert out == "```python\nprint(1)\n```\n"
+
+
+def test_fenced_directive_accepts_crlf_closer():
+    """A CRLF-terminated fence closes and runs."""
+    text = "```!sh\r\necho CRLF\r\n```\r\n"
+    out = expand_prompt(text, allow_code=True)
+    assert "CRLF" in out, repr(out)
+
+
+def test_fenced_directive_with_foreign_fence_in_body_never_executes(tmp_path):
+    """A body carrying its own ``` opener must not run AT ALL: the shell would
+    execute everything before the stray fence."""
+    marker = tmp_path / "marker"
+    text = "```!sh\nprintf SIDE_EFFECT > " + str(marker) + "\n```python\nprint(1)\n```\n"
+    assert "\n" in text  # real newlines, not escaped ones
+    runner_calls = []
+    out = expand_prompt(text, allow_code=True, subsystems={"sh": (True, _recording_sh(runner_calls))})
+    assert runner_calls == [], runner_calls
+    assert not marker.exists()
+    assert out == "```python\nprint(1)\n```\n"
+
+
+def test_file_directive_with_non_utf8_bytes_embeds_nothing(tmp_path):
+    """A non-UTF-8 file raises UnicodeDecodeError (a ValueError), not OSError;
+    embeds nothing either way."""
+    path = tmp_path / "bin.dat"
+    path.write_bytes(b"\xff\xfe\x00binary\xff")
+    # warns and embeds nothing (on_error=drop default)
+    out = expand_prompt(f"!{{file {path}}}", allow_code=True)
+    assert out == ""
+    # on_error=raise propagates
+    with pytest.raises(PromptExpansionError):
+        expand_prompt(f"!{{file {path}}}", allow_code=True, on_error="raise")
+    # a directive after the broken one still runs (warn path, not silent "")
+    out2 = expand_prompt(f"!{{file {path}}} and !{{env AFTER}}", allow_code=True, env={"AFTER": "SURVIVED"})
+    assert out2.endswith(" and SURVIVED"), repr(out2)
+
+
+def test_expansion_accepts_subsystems_and_warning_sink(capsys):
+    from js.promptexpand import expand_prompt
+
+    warnings = []
+    result = expand_prompt("!{custom hi} !{missing}",
+                           subsystems={"custom": (False, lambda body, **kwargs: "!{custom again}")},
+                           warn=lambda message, **fields: warnings.append((message, fields)))
+    assert result == "!{custom again} "
+    assert len(warnings) == 1
+    assert capsys.readouterr().err == ""
