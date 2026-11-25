@@ -2,7 +2,7 @@
 
 Research and proposed interface, 2026-11-24. The `js generate` examples below are designs. The GitHub examples identify the tools that already implement the underlying behaviors.
 
-The [editable flag list](generate-flags.txt) groups the source-checked candidates by backend. The design ideas below also include possible future workflows.
+The [selected flags](generate-flags.txt) define the implementation scope. This research note records the broader options considered.
 
 ## The one-line command
 

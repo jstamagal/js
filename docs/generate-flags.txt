@@ -1,4 +1,4 @@
-# js generate — shortlist. One proposed flag per line.
+# js generate — selected command-line interface for implementation.
 # js generate --t2i -p 'A squirrel with big nuts'    -> ./out.png
 # js generate --stt --audio-file interview.wav      -> transcript on stdout
 
@@ -28,12 +28,13 @@
 --aspect-ratio W:H           Request proportions such as 16:9 (Grok, Google).
 --resolution NAME            Request a tier such as 2K for a still or 720p for a clip.
 
-# Video — Grok Imagine
+# Video — Grok Imagine. Print the request ID to stderr as soon as the job is accepted.
 --t2v                        Generate a clip from text.
 --i2v                        Animate a starting image.
 --r2v                        Use reference images to guide a shot.
 --v2v                        Edit an existing clip.
 --extend-video               Continue a clip from its ending.
+--resume REQUEST_ID          Wait for an already submitted video and save its output without starting another render.
 --video FILE                 Supply the source clip for editing or extension.
 --first-frame FILE           Pin the opening frame.
 --last-frame FILE            Pin the closing frame on a compatible model.
@@ -55,7 +56,7 @@
 
 # Music and effects — ElevenLabs fields; Sono routing still to verify
 --music                      Generate a music track from a description.
---lyrics TEXT                 Supply exact words to sing; js places them in an ElevenLabs composition plan.
+--lyrics TEXT                Supply exact words to sing; js places them in an ElevenLabs composition plan.
 --instrumental               Request a track without vocals.
 --composition-plan FILE      Supply a complete song plan with lyrics, sections and timing.
 --sfx                        Generate a sound effect from text.
