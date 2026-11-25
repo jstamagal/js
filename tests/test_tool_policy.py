@@ -251,9 +251,9 @@ def test_an_eager_tool_is_published_on_the_first_call_and_runs(monkeypatch, tmp_
 
 
 def test_tools_command_prints_each_tool_with_its_deciding_entry(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
     policy.tools_config_path().parent.mkdir(parents=True, exist_ok=True)
     policy.tools_config_path().write_text(SPEC_TOOLS_YAML, encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
     cfg = _cfg(tmp_path)
     cfg.prompts_dir.mkdir(parents=True)
     (cfg.prompts_dir / "agent.yaml").write_text("tools: [tag:code_hacker]\n", encoding="utf-8")
@@ -287,6 +287,7 @@ def _run_shell_rm(monkeypatch, tmp_path, registry) -> tuple[Path, list[str]]:
 
 
 def test_banned_shell_argument_is_refused_before_it_runs(monkeypatch, tmp_path, offline_model):
+    monkeypatch.chdir(tmp_path)
     policy.tools_config_path().parent.mkdir(parents=True, exist_ok=True)
     policy.tools_config_path().write_text(SPEC_TOOLS_YAML, encoding="utf-8")
     registry = build_default_registry().select(["shell:eager"])
@@ -327,7 +328,8 @@ def test_an_agent_naming_a_removed_tool_gets_one_line_naming_it(capsys):
     assert len(err) == 1 and "todo_write" in err[0]
 
 
-def test_live_resync_keeps_the_surface_when_tools_yaml_stops_resolving(tmp_path, capsys):
+def test_live_resync_keeps_the_surface_when_tools_yaml_stops_resolving(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     path = policy.tools_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(SPEC_TOOLS_YAML, encoding="utf-8")
