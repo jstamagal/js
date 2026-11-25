@@ -25,7 +25,7 @@ handle="3", timeout=N` blocks up to N more seconds, and `action="kill",
 handle="3"` stops it. `handle` defaults to the most recent running job. Do a
 poll before assuming a long build or test run has failed.
 
-- Set `cwd` instead of `cd`.
+- Each call starts a fresh shell in the working directory, or in `cwd`: no `cd`, `export` or venv activation carries over to the next call. Set `cwd` instead of `cd`, use absolute paths, and call venv tools by full path.
 - When js runs with `-C DIR`, the command runs in a jail: DIR is writable, the
   system is read-only, the home directory is empty except the tool directories
   on PATH and the paths the operator bound, `/tmp` is private, and the network
