@@ -78,9 +78,17 @@ def __js_src(target_name):
                 source = kernel_client.class_sources.source(target)
                 if source:
                     return source
+            def owns_definition(wrapper):
+                if not inspect.isfunction(wrapper):
+                    return False
+                # A raw exec can borrow an older definition's __wrapped__.
+                inspect.findsource(wrapper.__code__)
+                return wrapper.__code__.co_name == target_name
             try:
-                return textwrap.dedent(inspect.getsource(target))
-            except (OSError, TypeError):
+                definition = inspect.unwrap(target, stop=owns_definition)
+                subject = definition.__code__ if inspect.isfunction(definition) else definition
+                return textwrap.dedent(inspect.getsource(subject))
+            except (OSError, TypeError, ValueError):
                 return ''
         history = globals().get('In')
         if isinstance(history, list):

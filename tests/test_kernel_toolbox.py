@@ -939,7 +939,10 @@ def test_saved_function_carries_aliased_imported_classes_and_functions(ctx):
 def test_dynamic_redefinition_never_saves_the_earlier_cell(ctx):
     python_kernel.kernel(code="def current(): return 1", context=ctx)
     tbmod.toolbox(action="save", name="current", context=ctx)
-    python_kernel.kernel(code="from functools import cache\nexec('@cache\\ndef current(): return 2')", context=ctx)
+    python_kernel.kernel(code=(
+        "from functools import cache, wraps\n"
+        "exec('@cache\\n@wraps(current)\\ndef current(): return 2')"
+    ), context=ctx)
 
     report = tbmod.toolbox(action="save", name="current", context=ctx)
 
