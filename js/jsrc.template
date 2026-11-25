@@ -123,10 +123,10 @@
 #   example:  set EXTRA_HEADERS X-JS-Scrub: on; X-Pool: fofa
 #set -EXTRA_HEADERS
 
-# How much js hides keys. off: nothing hidden, keys show as typed and in
-# full. on: prompts don't echo keys and /set, js --login, logs and search
-# errors mask them. extra: on, and every model call asks the CLIProxyAPI
-# secret-scrub plugin to swap keys for placeholders.
+# Whether js hides keys on your own screen. off: keys show as typed and in
+# full. on: prompts don't echo keys and /set and js --login mask them.
+# Logs, tool output to the model and the X-JS-Scrub wire header hide keys
+# in either mode.
 #   example:  set PARANOID_MODE on
 #set PARANOID_MODE off
 

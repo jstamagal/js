@@ -490,7 +490,7 @@ pickers (e.g. the Go picker), all printing a single line to stdout:
   (configured via env vars), `registry` (known but unconfigured), or `custom`
   (saved login with no built-in def).
 - `python -m js --list-logins --json` — only saved logins, with a `has_api_key`
-  boolean. With `PARANOID_MODE on` or `extra`, API keys are nulled and
+  boolean. With `PARANOID_MODE on`, API keys are nulled and
   provider headers are empty. With it off, other providers'
   credentials remain available for a picker to reconnect.
 - `python -m js --list-models <provider> --json` — the model list for a

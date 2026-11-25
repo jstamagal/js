@@ -612,7 +612,7 @@ Every compaction js runs writes a unique attempt under
 changes that directory. The directory is the `log_dir` argument of
 `compact_now`, `recover_overflow` and `clear_for_budget`; js's callers pass
 `compaction.flight_log_dir(cfg)`, and None writes no record. Records contain caller stack/PIDs, active model and
-settings (secret settings and credential fields masked under `PARANOID_MODE` `on`/`extra`), exact system/messages before and after,
+settings (secret settings and credential fields always masked), exact system/messages before and after,
 content hashes, retention decision, summary input/output and provider trace,
 plus success, skip, failure or cancellation. Runtime-triggered records also
 include the tool schemas, request budget and usage anchor. Files are created
