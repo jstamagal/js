@@ -262,8 +262,8 @@ def _render_header(meta: dict) -> str:
 def discover(cwd: Path) -> dict[str, ToolRecord]:
     """Index every tool file. A file that will not parse is recorded, never raised."""
     found: dict[str, ToolRecord] = {}
-    for index, directory in enumerate(toolbox_dirs(cwd)):
-        scope = "project" if index else "global"
+    for directory in toolbox_dirs(cwd):
+        scope = "global" if directory == _paths.global_toolbox_dir() else "project"
         if not directory.is_dir():
             continue
         for path in sorted(directory.glob("*.py")):
