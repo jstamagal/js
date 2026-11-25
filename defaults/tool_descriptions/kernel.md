@@ -50,10 +50,9 @@ Output behavior:
   raises returns the real traceback, not a summary.
 - Images produced by matplotlib and friends are written to files under
   `~/.js/state/kernel/` and reported as `IMAGE <path>`.
-- The whole result is capped by `TOOL_RESULT_MAX`. Past the cap the middle of
-  the printed output is cut, with a line saying how much; the traceback,
-  `IMAGE` lines and the closing `HANDLE` or `NAMESPACE` line always arrive.
-  Do not shrink output by hand; let the cap do it.
+- Large results are previewed within `TOOL_RESULT_MAX` and spill to a file
+  above `TOOL_RESULT_INLINE_MAX`. The preview cuts printed output first to
+  make room for the traceback, `IMAGE` lines and final `HANDLE` or `NAMESPACE`.
 
 Interrupting does not destroy your work. A `KeyboardInterrupt` — from a `wait`
 that ran out of time, from `action="interrupt"`, or from Ctrl-C on the turn that

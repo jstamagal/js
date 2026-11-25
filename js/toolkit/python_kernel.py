@@ -53,7 +53,7 @@ from . import python_kernel_bridge
 from .core import Tool, ToolContext, ToolOutput, current_observer, current_registry
 from .descriptions import load_description
 from .presentation import Presentation
-from .results import truncate
+from .results import spill_oversized_result, truncate
 from .sanitize import text_or_default
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
@@ -828,12 +828,6 @@ def _tail(output: CellOutput) -> list[str]:
     return lines
 
 
-# Bytes held back for the line that says how much output a cut left out.
-_CUT_LINE_ROOM = 100
-# Below this much room for output, the result is cut as one text instead.
-_BODY_ROOM_MIN = 400
-
-
 def compose(context: Any, head: list[str], output: CellOutput,
             footer: list[str]) -> str | ToolOutput:
     """A cell's result within TOOL_RESULT_MAX. Over the cap, the middle of the
@@ -842,15 +836,38 @@ def compose(context: Any, head: list[str], output: CellOutput,
     body, tail = _body(output), _tail(output)
     whole = "\n".join(part for part in [*head, body, *tail, *footer] if part)
     budget = int(_settings.knob_attr(context, "max_tool_result_bytes", "TOOL_RESULT_MAX") or 0)
-    if budget <= 0 or byte_size(whole) <= budget:
-        return whole
-    room = budget - byte_size("\n".join([*head, *tail, *footer])) - 2 - _CUT_LINE_ROOM
-    if room < _BODY_ROOM_MIN:
-        return cap_for_model(whole, context)
-    first, last = byte_prefix(body, room // 2), byte_suffix(body, room // 2)
-    left_out = byte_size(body) - byte_size(first) - byte_size(last)
-    cut = f"{first}\n[{left_out} bytes of output not shown: TOOL_RESULT_MAX]\n{last}"
-    return ToolOutput("\n".join(part for part in [*head, cut, *tail, *footer] if part), whole)
+    inline = int(getattr(context, "max_tool_result_inline_bytes", 0) or 0)
+    size = byte_size(whole)
+    if 0 < inline < size:
+        # Leave room for the spill notice under both the inline and hard caps.
+        reserve = max(0, inline - budget) if budget > 0 else 0
+        model = spill_oversized_result(
+            whole, inline, registry=current_registry() or getattr(context, "tool_registry", None),
+            preview=lambda room: _preview(head, body, tail, footer, max(0, room - reserve)),
+        )
+        if model is not whole:
+            return ToolOutput(model, whole)
+    if 0 < budget < size:
+        return ToolOutput(_preview(head, body, tail, footer, budget), whole)
+    return whole
+
+
+def _preview(head: list[str], body: str, tail: list[str], footer: list[str], budget: int) -> str:
+    fixed = "\n".join(part for part in [*head, *tail, *footer] if part)
+    room = budget - byte_size(fixed)
+    # When even the metadata exceeds the cap, keep its end, including the
+    # traceback's exception, IMAGE lines and closing handle or namespace.
+    if room < 0:
+        return byte_suffix(fixed, budget)
+    body_bytes = byte_size(body)
+    marker = "[{} bytes of output not shown]"
+    space = room - byte_size(marker.format(body_bytes)) - bool(fixed)
+    if space < 0:
+        return fixed
+    first = byte_prefix(body, max(0, space - 2) // 2)
+    last = byte_suffix(body, max(0, space - 2) // 2)
+    left_out = body_bytes - byte_size(first) - byte_size(last)
+    return "\n".join(part for part in [*head, first, marker.format(left_out), last, *tail, *footer] if part)
 
 
 def _namespace_footer(session: KernelSession, added: list[str], removed: list[str]) -> list[str]:

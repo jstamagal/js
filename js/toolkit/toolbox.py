@@ -611,6 +611,9 @@ def _busy_refusal(session: Any, verb: str) -> str:
     Both run a cell of their own; behind the agent's cell it would wait out that
     cell, and on its timeout the interrupt would stop the agent's cell instead."""
     live = python_kernel.busy_handle(session)
+    if live is not None:
+        python_kernel.collect_until(session, live, time.monotonic() + python_kernel.DRAIN_SLICE)
+        live = python_kernel.busy_handle(session)
     if live is None:
         return ""
     return (f"ERROR: kernel cell {live.id} is still running ({live.first_line()}); "
@@ -675,9 +678,12 @@ def toolbox(
         body = text_or_default(source)
         warnings: list[str] = []
         if not body.strip():
-            session, problem, _started = python_kernel.get_session(context)
+            session, problem, started = python_kernel.get_session(context)
             if session is None:
                 return (f'{problem}\nWithout a kernel, save needs the definition passed explicitly in `source`.')
+            if started and session.replaced:
+                return (f'ERROR: no source found for {name!r}. {python_kernel.started_note(session)}. '
+                        'Define it in the kernel first, or pass the definition in `source`.')
             busy = _busy_refusal(session, verb)
             if busy:
                 python_kernel.render_event(context, level, busy, style="COLOR_ERROR")
