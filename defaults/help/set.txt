@@ -815,6 +815,15 @@ SPINNER_FRAMES
 SCROLLBACK_LINES_MAX
     Lines the full-screen view keeps in scrollback.
 
+WINDOW_MAX
+    Windows open at once on the REPL screen, window 1 included. A subagent
+    launched with this many open runs without one.
+
+WINDOW_KEEP_UNSEEN
+    on: a subagent's window that was never on screen stays open when its
+    subagent ends. off: it closes; the parent has the answer, the session
+    the rest.
+
 SPELLCHECK_LANGUAGE
     hunspell dictionary for prompt spelling suggestions.
 

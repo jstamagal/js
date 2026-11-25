@@ -1111,6 +1111,14 @@
 # Lines the full-screen view keeps in scrollback.
 #set SCROLLBACK_LINES_MAX 5000
 
+# Windows open at once on the REPL screen, window 1 included. A subagent
+# launched with this many open runs without one.
+#set WINDOW_MAX 9
+
+# on: a subagent's window that was never on screen stays open when its
+# subagent ends. off: it closes; the parent has the answer, the session the rest.
+#set WINDOW_KEEP_UNSEEN off
+
 # hunspell dictionary for prompt spelling suggestions.
 #set SPELLCHECK_LANGUAGE en_US
 

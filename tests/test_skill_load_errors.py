@@ -1,7 +1,5 @@
 """Edited skill frontmatter fails cleanly before any tools are activated."""
 
-import json
-
 import pytest
 
 from js import skills
@@ -51,5 +49,5 @@ def test_changed_skill_load_is_clean_and_does_not_activate(tmp_path, broken, rai
         assert "Read carefully." in skill.skill("inspect", context)
         assert surface.resolve("read") is not None
     else:
-        assert "Read carefully." in json.loads(surface.discover(load="skill:inspect"))["instructions"]
+        assert "Read carefully." in surface.discover(load="skill:inspect")
         assert surface.resolve("read") is not None

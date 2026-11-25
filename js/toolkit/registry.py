@@ -293,11 +293,18 @@ class TurnToolSurface:
         self._skills = {
             f"skill:{skill.name}": skill for skill in self._skill_catalog.model_skills
         }
+        # The skill tool carries the catalog of the skills the model may load,
+        # and is left out when there are none.
+        surface_tools = tuple(
+            tool for tool in (
+                skill.with_catalog(tool, self._skill_catalog.model_skills) if tool.name == "skill" else tool
+                for tool in allowed.tools)
+            if tool is not None)
         # The catalog's native entries are exactly the chain's lazy set.
         self._lazy: dict[str, Tool] = {
-            f"native:{tool.name}": tool for tool in allowed.tools if tool.name in allowed.lazy
+            f"native:{tool.name}": tool for tool in surface_tools if tool.name in allowed.lazy
         }
-        self._eager = tuple(tool for tool in allowed.tools if tool.name not in allowed.lazy)
+        self._eager = tuple(tool for tool in surface_tools if tool.name not in allowed.lazy)
         self._loaded: set[str] = set()
         self._mcp_loaded: set[str] = set()
         self._loaded_ids: set[str] = set()
@@ -311,7 +318,7 @@ class TurnToolSurface:
     def tools(self) -> tuple[Tool, ...]:
         eager_names = {tool.name for tool in self._eager}
         loaded = tuple(
-            tool for tool in self.allowed.tools
+            tool for tool in self._lazy.values()
             if tool.name in self._loaded and tool.name not in eager_names
         )
         mcp_tools = self.mcp_host.tools(self._mcp_loaded) if self.mcp_host is not None else ()
@@ -588,16 +595,7 @@ class TurnToolSurface:
             return f'ERROR: skill {skill.name!r} instructions could not be read'
         self._loaded_ids.add(item_id)
         self._state_changed()
-        result: dict[str, object] = {
-            "id": item_id,
-            "instructions": loaded.instructions,
-            "loaded": [self.public_name(name) for name in loaded.activation.activated],
-        }
-        if loaded.activation.denied:
-            result["denied_tools"] = list(loaded.activation.denied)
-        if loaded.activation.missing:
-            result["missing_tools"] = list(loaded.activation.missing)
-        return discovery.compact_result(result)
+        return loaded.render(self.public_name)
 
 
 def _registry_from_tools(

@@ -48,11 +48,12 @@ from pathlib import Path
 from typing import Any
 
 from .. import jail, messages as msgs, output, paths, settings as _settings
+from ..text_bytes import byte_prefix, byte_size, byte_suffix
 from . import python_kernel_bridge
 from .core import Tool, ToolContext, ToolOutput, current_observer, current_registry
 from .descriptions import load_description
 from .presentation import Presentation
-from .results import truncate
+from .results import spill_oversized_result, truncate
 from .sanitize import text_or_default
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
@@ -244,6 +245,9 @@ class KernelSession:
     jail_bind: tuple[str, ...] = ()
     jail_hide: tuple[str, ...] | None = None
     env_allow: tuple[str, ...] = ()
+    # Why this kernel replaced an earlier one in the same context: "died",
+    # "jail" (the jail settings changed), or "" for the first kernel.
+    replaced: str = ""
 
     @property
     def log_path(self) -> Path:
@@ -408,7 +412,8 @@ class KernelSession:
 
     def prune(self) -> None:
         """Keep the handle table proportional to the live session, not its history."""
-        finished = sorted((h for h in self.handles.values() if h.finished),
+        finished = sorted((h for h in self.handles.values()
+                           if h.finished and h.delivered >= len(h.messages)),
                           key=lambda h: h.started)
         for handle in finished[:-KEEP_FINISHED_HANDLES]:
             self.forget(handle)
@@ -438,7 +443,9 @@ def get_session(context: Any) -> tuple[KernelSession | None, str, bool]:
     if session is not None and session.alive() and jail.shape(session) == jail.shape(context):
         _attach_tools(session, context)
         return session, "", False
+    replaced = ""
     if session is not None:
+        replaced = "died" if not session.alive() else "jail"
         # The kernel died, or the jail it was started in (JAIL_BIND, JAIL_HIDE,
         # the kept environment) has changed since: release its bridge
         # thread, socket dir and log, and start one in the current jail.
@@ -448,7 +455,8 @@ def get_session(context: Any) -> tuple[KernelSession | None, str, bool]:
     session = KernelSession(cwd=Path(context.cwd), artifacts=artifacts,
                             jail_bind=tuple(getattr(context, "jail_bind", ()) or ()),
                             jail_hide=getattr(context, "jail_hide", None),
-                            env_allow=tuple(getattr(context, "shell_env_allow", ()) or ()))
+                            env_allow=tuple(getattr(context, "shell_env_allow", ()) or ()),
+                            replaced=replaced)
     try:
         session.start()
     except Exception as exc:  # noqa: BLE001 - a dead start is a tool result, not a crash
@@ -457,6 +465,17 @@ def get_session(context: Any) -> tuple[KernelSession | None, str, bool]:
     context.kernel_session = session
     _attach_tools(session, context)
     return session, "", True
+
+
+def started_note(session: KernelSession) -> str:
+    """The line a call that started a kernel opens its result with."""
+    if session.replaced == "died":
+        return (f"kernel started (cwd {session.cwd}): the previous kernel died, so everything "
+                "defined before is gone and no earlier cell handle exists")
+    if session.replaced == "jail":
+        return (f"kernel started (cwd {session.cwd}): the jail settings changed, so the previous "
+                "kernel was replaced and everything defined before is gone")
+    return f"kernel started (cwd {session.cwd}); the namespace is empty"
 
 
 def _attach_tools(session: KernelSession, context: Any) -> None:
@@ -794,29 +813,72 @@ def wait_seconds(context: Any) -> float:
                              float(_settings.default_value("PYTHON_KERNEL_WAIT")))
 
 
-def _output_parts(output: CellOutput) -> list[str]:
-    text = output.text()
-    parts = [text.rstrip("\n") if text.strip() else "(no output)"]
-    parts.extend(f"IMAGE {image}" for image in output.images)
-    return parts
+def _body(output: CellOutput) -> str:
+    """What the cell printed and displayed: the part of a result a cap may cut."""
+    text = output.stdout + output.stderr + output.display
+    if text.strip():
+        return text.rstrip("\n")
+    return "" if output.error else "(no output)"
 
 
-def _finished_parts(session: KernelSession, output: CellOutput) -> list[str]:
-    """The tail of a result for a cell the kernel has finished with."""
-    added, removed = refresh_namespace(session)
-    parts = _output_parts(output)
+def _tail(output: CellOutput) -> list[str]:
+    """The traceback and the IMAGE lines: kept whole when the output is cut."""
+    lines = [output.error.rstrip("\n")] if output.error.strip() else []
+    lines.extend(f"IMAGE {image}" for image in output.images)
+    return lines
+
+
+def compose(context: Any, head: list[str], output: CellOutput,
+            footer: list[str]) -> str | ToolOutput:
+    """A cell's result within TOOL_RESULT_MAX. Over the cap, the middle of the
+    printed output is cut, so the traceback, IMAGE lines and the HANDLE or
+    NAMESPACE footer still arrive."""
+    body, tail = _body(output), _tail(output)
+    whole = "\n".join(part for part in [*head, body, *tail, *footer] if part)
+    budget = int(_settings.knob_attr(context, "max_tool_result_bytes", "TOOL_RESULT_MAX") or 0)
+    inline = int(getattr(context, "max_tool_result_inline_bytes", 0) or 0)
+    size = byte_size(whole)
+    if 0 < inline < size:
+        # Leave room for the spill notice under both the inline and hard caps.
+        reserve = max(0, inline - budget) if budget > 0 else 0
+        model = spill_oversized_result(
+            whole, inline, registry=current_registry() or getattr(context, "tool_registry", None),
+            preview=lambda room: _preview(head, body, tail, footer, max(0, room - reserve)),
+        )
+        if model is not whole:
+            return ToolOutput(model, whole)
+    if 0 < budget < size:
+        return ToolOutput(_preview(head, body, tail, footer, budget), whole)
+    return whole
+
+
+def _preview(head: list[str], body: str, tail: list[str], footer: list[str], budget: int) -> str:
+    fixed = "\n".join(part for part in [*head, *tail, *footer] if part)
+    room = budget - byte_size(fixed)
+    # When even the metadata exceeds the cap, keep its end, including the
+    # traceback's exception, IMAGE lines and closing handle or namespace.
+    if room < 0:
+        return byte_suffix(fixed, budget)
+    body_bytes = byte_size(body)
+    marker = "[{} bytes of output not shown]"
+    space = room - byte_size(marker.format(body_bytes)) - bool(fixed)
+    if space < 0:
+        return fixed
+    first = byte_prefix(body, max(0, space - 2) // 2)
+    last = byte_suffix(body, max(0, space - 2) // 2)
+    left_out = body_bytes - byte_size(first) - byte_size(last)
+    return "\n".join(part for part in [*head, first, marker.format(left_out), last, *tail, *footer] if part)
+
+
+def _namespace_footer(session: KernelSession, added: list[str], removed: list[str]) -> list[str]:
+    """The DEFINED, GONE and NAMESPACE lines that end a finished cell's result."""
+    footer: list[str] = []
     if added:
-        parts.append("DEFINED " + ", ".join(session.namespace.get(name, name) for name in added))
+        footer.append("DEFINED " + ", ".join(session.namespace.get(name, name) for name in added))
     if removed:
-        parts.append("GONE " + ", ".join(removed))
-    parts.append("NAMESPACE " + (", ".join(sorted(session.namespace)) or "(none)"))
-    return parts
-
-
-def _running_parts(handle: CellHandle, output: CellOutput) -> list[str]:
-    parts = _output_parts(output)
-    parts.append(f"HANDLE {handle.id} RUNNING")
-    return parts
+        footer.append("GONE " + ", ".join(removed))
+    footer.append("NAMESPACE " + (", ".join(sorted(session.namespace)) or "(none)"))
+    return footer
 
 
 def _died(context: ToolContext, session: KernelSession, level: str, notes: list[str],
@@ -846,16 +908,16 @@ def _report(context: ToolContext, session: KernelSession, level: str, notes: lis
     """Render a cell that may or may not have finished into the model-facing string."""
     if handle.died or not session.alive():
         return _died(context, session, level, notes, handle.id)
-    parts: list[str] = list(notes)
+    head: list[str] = list(notes)
     if timed_out_note:
-        parts.append(timed_out_note)
+        head.append(timed_out_note)
     if status:
-        parts.append(status)
+        head.append(status)
     if handle.finished:
-        parts.extend(_finished_parts(session, output))
+        footer = _namespace_footer(session, *refresh_namespace(session))
     else:
-        parts.extend(_running_parts(handle, output))
-    return cap_for_model("\n".join(parts), context)
+        footer = [f"HANDLE {handle.id} RUNNING"]
+    return compose(context, head, output, footer)
 
 
 def kernel(
@@ -884,7 +946,7 @@ def kernel(
     notes: list[str] = []
     if started_now:
         render_entry(context, level, msgs.KERNEL_STARTED.body_runs(cwd=session.cwd), verbose_only=True)
-        notes.append(f"kernel started (cwd {session.cwd})")
+        notes.append(started_note(session))
 
     if restart:
         try:
@@ -971,28 +1033,20 @@ def kernel(
     )
 
     if live.finished:
-        parts: list[str] = list(notes)
+        head: list[str] = list(notes)
         if live.timed_out:
-            parts.append(
+            head.append(
                 f'INTERRUPTED after {limit:g}s. The cell was stopped with a KeyboardInterrupt; the namespace and everything defined in it are intact.'
             )
-        parts.extend(_output_parts(output))
         # Images are reported before the footer so every result really does end with
         # the NAMESPACE line the description promises.
-        if added:
-            parts.append("DEFINED " + ", ".join(session.namespace.get(n, n) for n in added))
-        if removed:
-            parts.append("GONE " + ", ".join(removed))
-        parts.append("NAMESPACE " + (", ".join(sorted(session.namespace)) or "(none)"))
-        return cap_for_model("\n".join(parts), context)
+        return compose(context, head, output, _namespace_footer(session, added, removed))
 
-    parts = [
+    head = [
         *notes,
         f'cell {session.executions} is still running after {window:.1f}s (handle {live.id}). Poll it with action="poll", handle="{live.id}"; interrupt it with action="interrupt".',
-        *_output_parts(output),
-        f"HANDLE {live.id} RUNNING",
     ]
-    return cap_for_model("\n".join(parts), context)
+    return compose(context, head, output, [f"HANDLE {live.id} RUNNING"])
 
 
 def tools() -> tuple[Tool, ...]:

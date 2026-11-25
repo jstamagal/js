@@ -539,6 +539,12 @@ def unbound_names(source: str) -> list[str]:
             bound.add(node.name)
         elif isinstance(node, (ast.Global, ast.Nonlocal)):
             bound.update(node.names)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+            bound.add(node.name)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            bound.add(node.rest)
+        elif isinstance(node, (ast.TypeVar, ast.ParamSpec, ast.TypeVarTuple)):
+            bound.add(node.name)
     seen: set[str] = set()
     missing: list[str] = []
     for name in used:
@@ -599,6 +605,23 @@ def load_into_kernel(session: Any, cwd: Path) -> tuple[list[str], list[str]]:
 # --------------------------------------------------------------------------
 
 
+def _busy_refusal(session: Any, verb: str) -> str:
+    """The ERROR for a `load` or `save` that would queue behind a running cell.
+
+    Both run a cell of their own; behind the agent's cell it would wait out that
+    cell, and on its timeout the interrupt would stop the agent's cell instead."""
+    live = python_kernel.busy_handle(session)
+    if live is not None:
+        python_kernel.collect_until(session, live, time.monotonic() + python_kernel.DRAIN_SLICE)
+        live = python_kernel.busy_handle(session)
+    if live is None:
+        return ""
+    return (f"ERROR: kernel cell {live.id} is still running ({live.first_line()}); "
+            f"toolbox {verb} runs in the kernel and needs it idle. Wait for that cell "
+            "or interrupt it with the kernel tool, then call again.\n"
+            f"HANDLE {live.id} RUNNING")
+
+
 def toolbox(
     action: str = "list",
     name: str = "",
@@ -655,9 +678,16 @@ def toolbox(
         body = text_or_default(source)
         warnings: list[str] = []
         if not body.strip():
-            session, problem, _started = python_kernel.get_session(context)
+            session, problem, started = python_kernel.get_session(context)
             if session is None:
                 return (f'{problem}\nWithout a kernel, save needs the definition passed explicitly in `source`.')
+            if started and session.replaced:
+                return (f'ERROR: no source found for {name!r}. {python_kernel.started_note(session)}. '
+                        'Define it in the kernel first, or pass the definition in `source`.')
+            busy = _busy_refusal(session, verb)
+            if busy:
+                python_kernel.render_event(context, level, busy, style="COLOR_ERROR")
+                return busy
             extracted = source_from_kernel(session, name)
             body = extracted.body()
             if extracted.imports:
@@ -666,9 +696,10 @@ def toolbox(
             return (f'ERROR: no source found for {name!r}. Define it in the kernel first, or pass the definition in `source`.')
         # A saved sibling is carried: load execs every tool file into one
         # namespace and retries a file whose module level needs one not yet
-        # loaded, so a call to another tool resolves there.
-        siblings = set(discover(cwd)) - {name}
-        missing = [free for free in unbound_names(body) if free not in siblings]
+        # loaded, so a call to another tool resolves there. `tools`, the js
+        # tool bridge, is bound in every kernel that namespace lives in.
+        provided = (set(discover(cwd)) - {name}) | {"tools"}
+        missing = [free for free in unbound_names(body) if free not in provided]
         if missing and context.toolbox_require_bound_names:
             message = (
                 f'ERROR: {name!r} uses ' + ", ".join(missing)
@@ -691,11 +722,15 @@ def toolbox(
     if started_now:
         python_kernel.render_entry(context, level, msgs.KERNEL_STARTED.body_runs(cwd=session.cwd),
                              verbose_only=True)
+    busy = _busy_refusal(session, verb)
+    if busy:
+        python_kernel.render_event(context, level, busy, style="COLOR_ERROR")
+        return busy
     loaded, problems = load_into_kernel(session, cwd)
     if loaded:
         python_kernel.refresh_namespace(session)
     records = discover(cwd)
-    lines: list[str] = []
+    lines: list[str] = [python_kernel.started_note(session)] if started_now else []
     if loaded:
         lines.append("TOOLBOX loaded " + ", ".join(
             records[item].summary() if item in records else item for item in loaded))

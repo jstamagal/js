@@ -165,7 +165,7 @@ What exists today:
 - prompt-directory agents under stock `defaults/agents/`, global
   `~/.js/agents/` and project `.js/agents/`.
 - generated direct tools for prompt directories.
-- bundled prompt dirs: `commit`, `defaultagent`, `slim`, `twotool`.
+- bundled prompt dirs: `commit`, `defaultagent`, `slim`.
 - built-in CLI mode: commit, exposed as a prompt-directory agent and a
   `js --commit` wrapper.
 

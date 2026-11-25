@@ -331,19 +331,48 @@ and `[Act: 3,5]` names the windows with output you have not seen.
 ### Windows
 
 The scrollback is window 1, the main conversation. Each subagent a turn
-launches from the REPL opens the next free window, 2 to 9; its launch
-line in window 1 says which (`window 2`), or that windows 2 to 9 are all open,
-and that subagent then runs without one, as under `-p`. A subagent's window
-shows everything it streams: its launch and end lines, its answer, reasoning
-and tool exchanges, each at the levels window 1 uses. Output in a window you
-are not looking at marks it on the bar's `[Act: ...]` list until you show it.
+launches from the REPL opens the next free window, hidden; its launch line in
+window 1 says which (`window 2`), or that `WINDOW_MAX` windows (9 by default,
+window 1 included) are already open, and that subagent then runs without one,
+as under `-p`. A subagent's window shows everything it streams: its launch
+and end lines, its answer, reasoning and tool exchanges, each at the levels
+window 1 uses. Output in a hidden window marks it on the bar's `[Act: ...]`
+list until you show it. A subagent's window that was never on screen closes
+when its subagent ends: the parent has the answer and the session has the
+rest. `set WINDOW_KEEP_UNSEEN on` keeps them.
 
-**Ctrl-W** then a digit shows that window; Ctrl-W 1 is the main conversation.
-Ctrl-W followed by any other key still deletes the word before the cursor.
-`/window` lists the windows (`*` the one on screen, `+` one with unseen
-output), `/window N` shows window N, and `/window close [N]` closes a
-finished subagent's window (the one on screen without N). Window 1 never
-closes. Every window keeps running while another is on screen.
+`/window` is ircII's: a chain of ops run in order on the current window,
+`/window new agent reviewer name rv`, `/window 3 kill`. Any prefix that names
+one op works (`/window k`, `/window prev`), and where an op's name starts
+every other match, that op (`k` is kill, `h` is hide). A bare number or name
+makes that window current. With no ops it lists the windows: `*` the current
+one, `+` one with unseen output.
+
+| Op | What it does |
+|---|---|
+| `list` | List the windows |
+| `new` | Open a window under the current one, split; the first line typed there launches the current agent in it as a subagent |
+| `agent NAME` | The next line in this window starts a new conversation with agent NAME |
+| `kill` | Stop what runs in the window and close it; window 1 stays |
+| `kill_others` | Kill every window but this one and window 1 |
+| `hide` | Take the window off a split screen; it keeps running |
+| `hide_others` | Leave only this window on screen |
+| `show N` | Put window N on screen under this one |
+| `swap N` | Window N takes this one's place on screen |
+| `refnum N`, `N` | Make window N current; a hidden one takes this one's place |
+| `goto N` | Make the Nth window on screen, from the top, current |
+| `next`, `previous`, `back` | The next or previous window by number, or the one current before |
+| `name NAME` | Name the window; `name -` clears it |
+| `number N` | Renumber the window, trading numbers with the window that has N |
+| `move N` | Move the window N places down the screen, up when negative |
+| `grow N`, `shrink N`, `size N` | Ask for N more, fewer, or exactly N rows |
+| `balance` | Share the rows evenly again |
+
+**Ctrl-W** then a digit makes that window current, as `/window N` does;
+Ctrl-W `n`, `p` and `b` are next, previous and back, Ctrl-W `h` hides the
+current window and Ctrl-W `k` kills it. Ctrl-W followed by any other key still
+deletes the word before the cursor. Every window keeps running while it is
+hidden. On a split screen a line under each window names it.
 
 What you type in a subagent's window goes to that subagent; commands still
 run as commands, their output in that window. While the subagent runs, the

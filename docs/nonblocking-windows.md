@@ -77,7 +77,9 @@ Full async, not worker threads (fork B resolved — see below).
 - A window = a scrollback buffer + a binding (which sources/events it shows).
 - Screen shows ONE window full-size (or a split when asked). Others live
   hidden.
-- `/window new|switch|swap|kill|hide|resize|bind`, plus window→key bind.
+- `/window` is ircII's op chain (`js/repl_window_commands.py`, user guide
+  "Windows"): new, kill, hide, show, swap, refnum, next, back, name, number,
+  move, grow, shrink, size, balance. Binding a window to sources is not built.
 - Low-vision default: one big window. Splits are opt-in, never forced.
 
 ## irciipy → library

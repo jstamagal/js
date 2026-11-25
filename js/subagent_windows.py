@@ -1,14 +1,18 @@
 """Subagent windows on the REPL screen.
 
 Each subagent launched from the async REPL gets the next free window
-(`screen.Windows`, 2 to 9). Its window shows everything it streams: its launch
+(`screen.Windows`, up to `WINDOW_MAX` open). `/window new` opens one with no
+subagent yet: the first line typed there launches its agent as a subagent of
+the main conversation, in that window. A window shows everything it streams: its launch
 and end lines, its answer, reasoning and tool exchanges. A line typed in the
 window reaches the subagent: while it runs, the line is queued and delivered
 as a user message at its next tool boundary (the runtime's ``steer``); once
 it has finished, the line runs a new turn on the subagent's own session with
 its own agent, model, effort and tools. That turn stays in the subagent's
 session; the result its task returned to the parent stands, and the parent
-is not told.
+is not told. A subagent's window that was never on screen closes when its
+task ends, unless `WINDOW_KEEP_UNSEEN` is on: the parent has the answer and
+the session keeps the rest.
 
 `subagents._run_one_task_async` calls `window_opener` (set here for the REPL's
 tasks) with the subagent_start fields; the `SubagentWindow` it gets back
@@ -19,22 +23,25 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import sys
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from . import display, messages as msgs, runtime, screen, screen_scrollback
+from . import display, fset, messages as msgs, runtime, screen, screen_scrollback
 from .toolkit import subagents
 
 
 class SubagentWindow:
     """One subagent's window and the conversation typed into it."""
 
-    def __init__(self, owner: SubagentWindows, view: screen.View, launch: dict) -> None:
+    def __init__(self, owner: SubagentWindows, view: screen.View, launch: dict | None, agent: str = "") -> None:
         self._owner = owner
         self.view = view
-        self.number = view.number
-        self.launch = dict(launch)
+        # What its subagent_start said of it; None until a subagent runs here.
+        self.launch = dict(launch) if launch is not None else None
+        # The agent the next line starts when no subagent runs here yet.
+        self.agent = launch["agent"] if launch is not None else agent
         # Lines typed while a turn runs, delivered at its next tool boundary.
         self.inbox: list[str] = []
         # The child's ToolContext, for the status bar.
@@ -47,6 +54,15 @@ class SubagentWindow:
     @property
     def scrollback(self) -> screen_scrollback.Scrollback:
         return self.view.scrollback
+
+    @property
+    def number(self) -> int:
+        return self.view.number
+
+    @property
+    def fresh(self) -> bool:
+        """No conversation here yet: the next line starts one."""
+        return self._resume is None and not self.busy()
 
     def telemetry(self, debug_log: Any) -> Any:
         """A Telemetry whose answer, reasoning and tool exchanges draw in this window."""
@@ -84,18 +100,52 @@ class SubagentWindow:
         self._resume = resume
         if self.inbox:
             self._start(self.steer()["content"])
+        elif (not self.view.seen and not fset.setting_value("WINDOW_KEEP_UNSEEN")
+              and self._owner.windows.view(self.number) is self.view):
+            self._owner.windows.close(self.number)
 
     def busy(self) -> bool:
         return self.task is not None and not self.task.done()
 
     def send(self, text: str) -> None:
-        """A line typed in the window: queued while a turn runs, else a new turn."""
-        if self.busy() or self._resume is None:
+        """A line typed in the window: queued while a turn runs, else a new
+        turn, or the subagent it launches when none ran here yet."""
+        if self.busy():
             self.inbox.append(text)
             with self.writing():
-                msgs.say(msgs.WINDOW_QUEUED, agent=self.launch["agent"])
+                msgs.say(msgs.WINDOW_QUEUED, agent=self.agent)
+            return
+        if self._resume is None:
+            self.task = self._owner.supervisor.spawn(
+                self._launch(text), kind="subagent", label=f"window {self.number}").task
             return
         self._start(text)
+
+    async def _launch(self, text: str) -> None:
+        """Run ``text`` as a task for this window's agent, from the main
+        conversation, its subagent drawing here. The subagents it launches
+        in turn open windows of their own."""
+        adopted: list[dict] = []
+
+        def opener(launch: dict) -> SubagentWindow | None:
+            if adopted:
+                return self._owner.open(launch)
+            adopted.append(launch)
+            self.launch = dict(launch)
+            return self
+
+        token = subagents.window_opener.set(opener)
+        try:
+            with self.writing():
+                result = await subagents.task_async(tasks=[text], agent_id=self.agent,
+                                                    context=self._owner.parent_context())
+                if not adopted:
+                    msgs.warn(msgs.FAILED, error=result)
+        except Exception as exc:  # noqa: BLE001 - shown in its window like a REPL turn's
+            with self.writing():
+                msgs.warn(msgs.FAILED, error=f"{type(exc).__name__}: {exc}")
+        finally:
+            subagents.window_opener.reset(token)
 
     def _start(self, text: str) -> None:
         self.task = self._owner.supervisor.spawn(
@@ -130,14 +180,19 @@ class SubagentWindows:
         self.supervisor = supervisor
         self.loop: asyncio.AbstractEventLoop = supervisor.loop
         self.app: Any = None
+        windows.stop = self._stop
+        windows.label = self._label
+        # The context a window's subagent is launched from: the main
+        # conversation's, on its live settings.
+        self.parent_context: Callable[[], Any] = lambda: copy.copy(runtime.T.STOCK_CONTEXT)
 
     def attach(self, app: Any) -> None:
         self.app = app
         self.windows.invalidate = app.invalidate
 
     def open(self, launch: dict) -> SubagentWindow | None:
-        """A window for the subagent ``launch`` describes; None when windows
-        2 to 9 are all open or there is no screen."""
+        """A hidden window for the subagent ``launch`` describes; None when
+        `WINDOW_MAX` windows are open or there is no screen."""
         if self.app is None:
             return None
         view = self.windows.open()
@@ -147,37 +202,69 @@ class SubagentWindows:
         view.owner = window
         return window
 
-    def on_screen(self) -> SubagentWindow | None:
-        """The subagent window on screen; None in window 1."""
-        view = self.windows.view()
-        return view.owner if view is not None else None
+    def new(self, agent: str) -> str | None:
+        """Open a window on screen, under the current one, whose first line
+        launches ``agent``; why not, or None once it is open."""
+        view = self.windows.open()
+        if view is None:
+            return msgs.WINDOW_FULL.said(max=self.windows.limit())
+        view.owner = SubagentWindow(self, view, None, agent=agent)
+        self.windows.show(view.number)
+        return None
 
-    def close(self, number: int) -> str | None:
-        """Close window ``number``: why it stays, or None once it is closed."""
+    def set_agent(self, number: int, agent: str) -> str | None:
+        """The next line in window ``number`` starts a new conversation with
+        ``agent``; why not, or None once it will."""
         view = self.windows.view(number)
         if view is None:
             return msgs.NO_SUCH_WINDOW.said(number=number)
-        if number == 1:
-            return msgs.WINDOW_MAIN_STAYS.said()
-        if view.owner is not None and view.owner.busy():
-            return msgs.WINDOW_STILL_RUNNING.said(number=number, agent=view.owner.launch["agent"])
-        self.windows.close(number)
+        if view.owner is None:
+            return msgs.WINDOW_AGENT_MAIN.said()
+        if view.owner.busy():
+            return msgs.WINDOW_AGENT_BUSY.said(number=number, agent=view.owner.agent)
+        view.owner.agent, view.owner.launch, view.owner._resume = agent, None, None
+        self.windows.invalidate()
         return None
 
+    def on_screen(self) -> SubagentWindow | None:
+        """The current window's subagent window; None in window 1."""
+        view = self.windows.view()
+        return view.owner if view is not None else None
+
+    @staticmethod
+    def _stop(view: screen.View) -> None:
+        if view.owner is not None:
+            view.owner.cancel()
+
+    def _label(self, view: screen.View) -> str:
+        row = self._row(view)
+        mark = msgs.WINDOW_MARK_CURRENT.words() if row["current"] else ""
+        return f" [{row['number']}{mark}] {' '.join(filter(None, (row['name'], row['agent'], row['state'])))}"
+
+    def _row(self, view: screen.View) -> dict:
+        owner = view.owner
+        if owner is None:
+            state = ""
+        elif owner.busy():
+            state = msgs.WINDOW_STATE_RUNNING.words()
+        elif owner.fresh:
+            state = msgs.WINDOW_STATE_NEW.words()
+        else:
+            state = msgs.WINDOW_STATE_FINISHED.words()
+        return {
+            "number": view.number,
+            "name": view.name or (msgs.WINDOW_MAIN.words() if owner is None else ""),
+            "current": view.number == self.windows.current,
+            "active": view.active,
+            "visible": view.number in self.windows.visible,
+            "agent": owner.agent if owner is not None else "",
+            "running": owner.busy() if owner is not None else False,
+            "state": state,
+        }
+
     def rows(self) -> list[dict]:
-        """One row per open window, for /window."""
-        rows = []
-        for number in self.windows.numbers():
-            view = self.windows.view(number)
-            owner = view.owner
-            rows.append({
-                "number": number,
-                "current": number == self.windows.current,
-                "active": view.active,
-                "agent": owner.launch["agent"] if owner else "",
-                "running": owner.busy() if owner else False,
-            })
-        return rows
+        """One row per open window, for /window list."""
+        return [self._row(self.windows.view(number)) for number in self.windows.numbers()]
 
 
 @contextlib.contextmanager
