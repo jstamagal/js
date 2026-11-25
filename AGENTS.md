@@ -30,6 +30,14 @@ owner says remove, it is gone — deleted, not renamed, no compatibility alias.
    then run `just install` there (it refuses to run from a worktree), so the
    `js` on PATH runs the change.
 
+## Where the suite runs
+
+The owner works at yoda's screen, so the full suite does not run there:
+`just test-on vader` copies the checkout to vader and runs it on vader's
+cores (about two minutes). Focused runs (`just test-file`, one test) stay
+local. `just test` locally takes a quarter of the cores; `JS_TEST_WORKERS`
+names another count.
+
 ## Privacy 
 - Keep our chat out of the files unless its relavent.
 Commentary about having a hard drive go bad - No.
