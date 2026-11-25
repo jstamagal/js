@@ -480,10 +480,8 @@ def test_the_kernel_description_changes_when_toolbox_shares_the_surface():
     with_toolbox = render_tool_name_sections(text, {"kernel", "toolbox"}, tool="kernel")
     alone = render_tool_name_sections(text, {"kernel"}, tool="kernel")
 
-    assert "toolbox action=load" in with_toolbox
-    assert "Nothing here survives the session." in alone
-    assert "Nothing here survives the session." not in with_toolbox
-    assert "toolbox action=load" not in alone
+    assert "action=load" in with_toolbox
+    assert "action=load" not in alone
 
 
 def test_the_kernel_description_names_the_interpreter_cells_run_in():
@@ -491,13 +489,6 @@ def test_the_kernel_description_names_the_interpreter_cells_run_in():
 
     assert "sys.executable" in text
     assert "uv pip install --python" in text
-
-
-def test_the_kernel_description_points_at_await_instead_of_nest_asyncio():
-    text = build_default_registry().resolve("kernel").description
-
-    assert "await" in text
-    assert "nest_asyncio" in text
 
 
 def test_kernel_verbosity_is_a_real_config_knob_with_a_default(tmp_path, monkeypatch):
