@@ -43,7 +43,7 @@ class _Idle:
     def __init__(self, replies=None, *, request=None, **live):
         self.now = 1000.0
         self.busy = False
-        self.route = ("claude-opus-5-5", "cliproxyapi")
+        self.route = ("claude-opus-5-5", "cliproxyapi", "http://vader:8999/v1", None, {})
         self.sent: list[CachedRequest] = []
         self.said: list[str] = []
         self.compactions = 0
@@ -209,7 +209,7 @@ def test_a_cache_that_ran_out_while_the_machine_slept_is_not_refreshed():
 def test_a_model_switch_stops_the_refreshing():
     idle = _Idle()
     idle.at(10)
-    idle.route = ("gpt-5.5", "cliproxyapi")
+    idle.route = ("gpt-5.5", *idle.route[1:])
     idle.at(DELAY)
     assert idle.sent == []
 

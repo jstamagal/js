@@ -45,6 +45,7 @@ from . import (
     logins,
     memory as M,
     messages as msgs,
+    model_client,
     motd,
     network_display,
     output,
@@ -870,13 +871,17 @@ class Repl:
             compact.job_label = "idle compaction"
             queue.put_nowait(compact)
 
+        def live_cache_route():
+            active = _live_cfg_snapshot(cfg, state)
+            return (active.model, active.provider_id, active.provider_base_url, active.provider_api_key,
+                    model_client.turn_headers(active.provider_headers, active))
+
         keepalive = self._keepalive = cache_keepalive.CacheKeepalive(
             context=runtime.T.STOCK_CONTEXT,
             live=lambda: state.settings,
             busy=lambda: (sup.turn_active() or not queue.empty() or bool(steer_inbox)
                           or runtime.T.STOCK_CONTEXT.turn_status.compacting),
-            route=lambda: (repl_state.model_from_live_settings(state.settings),
-                           repl_state.provider_from_live_settings(state.settings)),
+            route=live_cache_route,
             compact=queue_idle_compaction,
             telemetry=telemetry,
         )

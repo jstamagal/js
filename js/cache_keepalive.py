@@ -170,7 +170,6 @@ class CacheKeepalive:
         self._send = send
         self._telemetry = telemetry
         self._request: CachedRequest | None = None
-        self._route_at_start: Any = None
         self._read_at = 0.0
         self._stopped = True
         self.next_at: float | None = None
@@ -203,7 +202,6 @@ class CacheKeepalive:
             return
         if request is not self._request:
             self._request = request
-            self._route_at_start = self._route()
             self._read_at = request.sent_at
             self.refreshes = 0
             reason = not_replayable(request)
@@ -221,10 +219,13 @@ class CacheKeepalive:
         due = self._read_at + delay
         self.next_at = due
         now = self._clock()
-        if now < due:
-            return
         idle_max = int(_settings.knob(live, "CACHE_KEEPALIVE_IDLE_MAX") or 0)
         if idle_max <= 0:
+            self._stop()
+            return
+        if now < min(due, request.sent_at + idle_max):
+            return
+        if self._route() != (request.model, request.provider_id, request.base_url, request.api_key, request.headers or {}):
             self._stop()
             return
         if now - request.sent_at >= idle_max:
@@ -232,9 +233,6 @@ class CacheKeepalive:
             return
         if now >= self._read_at + ttl:
             self._stop(msgs.KEEPALIVE_WHY_EXPIRED.words(seconds=int(now - self._read_at)))
-            return
-        if self._route() != self._route_at_start:
-            self._stop()
             return
         await self._refresh(request, now)
 
