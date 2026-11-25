@@ -500,16 +500,6 @@ def test_the_kernel_description_points_at_await_instead_of_nest_asyncio():
     assert "nest_asyncio" in text
 
 
-def test_the_twotool_agent_ships_with_exactly_kernel_toolbox_and_shell():
-    import yaml
-
-    root = Path(__file__).resolve().parents[1]
-    spec = yaml.safe_load((root / "defaults" / "agents" / "twotool" / "agent.yaml").read_text())
-
-    assert spec["tools"] == ["kernel:eager", "toolbox:eager", "shell:eager"]
-    assert (root / "defaults" / "agents" / "twotool" / "01-prompt.md").read_text().strip()
-
-
 def test_kernel_verbosity_is_a_real_config_knob_with_a_default(tmp_path, monkeypatch):
     keys = {spec.key for spec in jssettings.REGISTRY}
     assert {"KERNEL_VERBOSITY", "KERNEL_LINES_MAX"} <= keys

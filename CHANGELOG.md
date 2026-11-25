@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **The `twotool` agent is gone.** `js --agent twotool` no longer exists; `kernel` and `toolbox` are listed in any agent.yaml like other tools.
 - **Dependencies bumped; ruff is no longer held back.**
   - The lock moves to current releases, including:
     - ai 0.5.2 → 0.9.0

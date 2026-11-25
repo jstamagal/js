@@ -575,8 +575,7 @@ session.
 `kernel` and `toolbox` are the other side of js from the curated tool surface:
 instead of handing an agent forty fixed tools, hand it a stateful Python REPL and
 let it build its own. They do not replace the hardened tools, do not wrap them,
-and do not import their rails. The shipped `twotool` agent
-(`js --agent twotool`) is this mode: `kernel`, `toolbox`, `shell`, nothing else.
+and do not import their rails.
 
 An agent has them when its agent.yaml lists them, like any other tool. Both
 need `jupyter_client` and `ipykernel`, the `kernel` extra: `just install` and
@@ -855,7 +854,6 @@ project `.js/agents/` become tools named after the directory. Files layer per re
 - `commit`
 - `defaultagent`
 - `slim`
-- `twotool`
 
 Direct agent tools take `tasks` (required), and optional `model` and
 `reasoning`:
