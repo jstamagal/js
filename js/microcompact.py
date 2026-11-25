@@ -30,6 +30,7 @@ MAX_OVERFLOW_ROUNDS = _settings.default_value("COMPACTION_OVERFLOW_ROUNDS_MAX")
 
 
 MICROCOMPACT_CLEARED_MESSAGE = '[old tool result cleared]'
+SKILL_CONTENT_PREFIX = '<skill_content name="'
 
 
 # Tool results shorter than this are not worth clearing.
@@ -50,7 +51,8 @@ def microcompact(
 
     Leaves the newest ``keep_recent`` tool results untouched (the model is
     usually still working with those) and ignores results already small enough
-    that clearing them buys nothing; a result carrying media (`js.media`) is
+    that clearing them buys nothing, and keeps every loaded skill's
+    ``<skill_content>``; a result carrying media (`js.media`) is
     always worth clearing, and loses its media too. Signed reasoning after the
     first cleared result is dropped (`history_record.drop_signed_reasoning`). Returns
     (results_cleared, chars_reclaimed).
@@ -61,6 +63,8 @@ def microcompact(
         and m.get("role") == "tool"
         and isinstance(m.get("content"), str)
         and m["content"] != MICROCOMPACT_CLEARED_MESSAGE
+        # A loaded skill's instructions stay: the model is following them.
+        and not m["content"].startswith(SKILL_CONTENT_PREFIX)
     ]
     if keep_recent > 0:
         indexes = indexes[:-keep_recent] if keep_recent < len(indexes) else []
