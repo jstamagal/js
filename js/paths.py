@@ -1,8 +1,10 @@
 """Every location js keeps outside a project, and nothing else.
 
 One home: `--home DIR`, else `$JS_HOME`, else `~/.js/`. Startup resolves it
-once to an absolute directory. Project-local `.js/` files (jsrc, jsrc.local,
-agents, skills, commands, toolbox) stay with their project.
+once to an absolute directory. Project `.js/` directories (jsrc, jsrc.local,
+agents, skills, commands, toolbox, JS.md) stay with their project: each one
+from the project root (`project_root`) down to the working directory is a
+layer over the home, the nearest winning.
 
 `ensure_home()` creates every directory of the layout on each start, so the
 whole structure is always there:
@@ -34,7 +36,7 @@ from pathlib import Path
 
 _ROOT = Path(os.path.realpath(__file__)).parent.parent
 _HOME: Path | None = None
-_PROJECT_SCOPES = frozenset({"agents", "skills", "commands", "toolbox", "jsrc", "jsrc.local"})
+_PROJECT_SCOPES = frozenset({"agents", "skills", "commands", "toolbox", "jsrc", "jsrc.local", "tools.yaml"})
 
 
 def user_home() -> Path:
@@ -75,12 +77,80 @@ def custom_home() -> bool:
     return home() != (default_home()).resolve(strict=False)
 
 
-def project_home(cwd: Path | None = None) -> Path:
-    """Project setup, with the operator's home using the selected profile."""
-    root = (cwd or Path.cwd()) / ".js"
-    if custom_home() and root.resolve(strict=False) == (default_home()).resolve(strict=False):
-        return home()
-    return root
+def _submodule_marker(marker: Path) -> bool:
+    """Whether the `.git` file ``marker`` is a submodule's: its gitdir sits in
+    another repository's `.git/modules/`. A worktree's `.git` file points into
+    `.git/worktrees/` and is a root of its own."""
+    try:
+        text = marker.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    line = next((row for row in text.splitlines() if row.startswith("gitdir:")), "")
+    if not line:
+        return False
+    parts = (marker.parent / line[len("gitdir:"):].strip()).resolve(strict=False).parts
+    return any(parts[i:i + 2] == (".git", "modules") for i in range(len(parts) - 1))
+
+
+def project_root(cwd: Path | None = None) -> Path | None:
+    """The top of the project ``cwd`` (default: here) is in: the nearest
+    directory at or above it holding a `.git`, lifted out of a submodule to
+    the repository that holds it. None outside any repository."""
+    current = (cwd or Path.cwd()).resolve(strict=False)
+    found: Path | None = None
+    for directory in (current, *current.parents):
+        marker = directory / ".git"
+        if marker.is_dir() or marker.is_file():
+            if found is None:
+                found = directory
+            if marker.is_file() and _submodule_marker(marker):
+                continue
+            return directory
+    return found
+
+
+def project_chain(cwd: Path | None = None) -> tuple[Path, ...]:
+    """Every directory from the project root down to ``cwd`` (default: here),
+    root first. Empty outside any repository."""
+    current = (cwd or Path.cwd()).resolve(strict=False)
+    root = project_root(current)
+    if root is None:
+        return ()
+    try:
+        rel = current.relative_to(root)
+    except ValueError:
+        return (root,)
+    return (root, *(root.joinpath(*rel.parts[:depth]) for depth in range(1, len(rel.parts) + 1)))
+
+
+def project_dirs(cwd: Path | None = None) -> tuple[Path, ...]:
+    """Each project `.js/` from the root down to ``cwd``, lowest first, that
+    exists. A `.js/` that is the home (or, under another profile, the
+    operator's `~/.js`) is the global layer, never a project one."""
+    skip = {home().resolve(strict=False), default_home().resolve(strict=False)}
+    found = []
+    for directory in project_chain(cwd):
+        candidate = directory / ".js"
+        if candidate.is_dir() and candidate.resolve(strict=False) not in skip:
+            found.append(candidate)
+    return tuple(found)
+
+
+def project_skill_dirs(cwd: Path | None = None) -> tuple[tuple[Path, ...], ...]:
+    """Each project directory's skill roots, root first: its cross-client
+    `.agents/skills`, then its `.js/skills`. `$HOME/.agents/skills` is the
+    shared global root (`shared_skills_dir`), so a chain through `$HOME`
+    leaves it out."""
+    setup = {directory.parent: directory for directory in project_dirs(cwd)}
+    user = user_home().resolve(strict=False)
+    layers_found = []
+    for directory in project_chain(cwd):
+        roots = [] if directory == user else [directory / ".agents" / "skills"]
+        if directory in setup:
+            roots.append(setup[directory] / "skills")
+        if roots:
+            layers_found.append(tuple(roots))
+    return tuple(layers_found)
 
 
 def defaults_dir() -> Path:
@@ -88,23 +158,25 @@ def defaults_dir() -> Path:
     return _ROOT / "defaults"
 
 
-def layers() -> tuple[Path, ...]:
-    """Setup roots, lowest priority first. Project files use their existing scopes."""
-    return tuple(dict.fromkeys((defaults_dir(), home(), project_home())))
+def layers(cwd: Path | None = None) -> tuple[Path, ...]:
+    """Setup roots, lowest priority first: stock, home, then each project
+    `.js/` from the root down to ``cwd``. Project files use their existing scopes."""
+    return tuple(dict.fromkeys((defaults_dir(), home(), *project_dirs(cwd))))
 
 
 def agent_roots(cwd: Path | None = None) -> tuple[Path, ...]:
-    """Each layer's agents directory, lowest first: stock, home, project.
-    The home and project entries are one directory when js runs in the
-    directory that holds the home."""
-    return defaults_dir() / "agents", global_agents_dir(), project_home(cwd) / "agents"
+    """Each layer's agents directory, lowest first: stock, home, then each
+    project `.js/agents` from the root down to ``cwd``."""
+    return (defaults_dir() / "agents", global_agents_dir(),
+            *(directory / "agents" for directory in project_dirs(cwd)))
 
 
 def agent_dirs(agent_id: str, roots: tuple[Path, ...] | None = None) -> tuple[Path, ...]:
-    """Agent ``agent_id``'s directory in each of ``roots`` (default
-    `agent_roots()`) that has one, lowest layer first, or every candidate
-    when none has. A directory that cannot be listed is a ValueError, so a
-    lower layer never stands in for it."""
+    """Agent ``agent_id``'s directory in the highest of ``roots`` (default
+    `agent_roots()`) that has one, as a one-entry tuple: a nearer agent
+    directory replaces a lower one whole. Every candidate when none has one.
+    A directory that cannot be listed is a ValueError, so a lower layer never
+    stands in for it."""
     candidates = tuple(dict.fromkeys(root / agent_id for root in (agent_roots() if roots is None else roots)))
     existing = []
     for candidate in candidates:
@@ -114,7 +186,7 @@ def agent_dirs(agent_id: str, roots: tuple[Path, ...] | None = None) -> tuple[Pa
                 existing.append(candidate)
         except OSError as exc:
             raise ValueError(f"agent {agent_id!r} at {candidate} is unreadable: {exc}") from exc
-    return tuple(existing) or candidates
+    return tuple(existing[-1:]) or candidates
 
 
 def agent_names(roots: tuple[Path, ...] | None = None) -> list[str]:

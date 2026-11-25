@@ -198,6 +198,7 @@ def test_a_config_built_in_code_runs_a_turn_and_a_compaction_with_an_empty_home(
 
 def test_registered_instruction_files_select_project_context(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir()
     rules = tmp_path / "RULES.md"
     rules.write_text("project instructions")
     cfg = from_env(save_session=False, sources=InvocationSources(extras=(

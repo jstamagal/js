@@ -51,6 +51,8 @@ def _shell_argv(shell_path: str, command: str, pipefail: bool | None = None) -> 
     if pipefail is None:
         pipefail = _settings.default_value("SHELL_PIPEFAIL")
     flags = ["-o", "pipefail"] if pipefail and Path(shell_path).name in _PIPEFAIL_SHELLS else []
+    if Path(shell_path).name == "zsh":
+        flags.extend(["-o", "nonomatch"])
     return [shell_path, *flags, "-c", command]
 
 

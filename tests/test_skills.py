@@ -106,6 +106,7 @@ def test_skill_catalog_scans_every_layer_for_skill_dirs(tmp_path):
     package = tmp_path / "package"
     global_dir = tmp_path / "global"
     project = tmp_path / "project"
+    (project / ".git").mkdir(parents=True)
     user_dir = project / "user-agents-skills"
     expected = {
         "package-dir": _write(package / "package-dir" / "SKILL.md", "package dir"),
@@ -136,6 +137,7 @@ def test_project_beats_global_beats_package_and_native_beats_agents_with_warning
     package = tmp_path / "package"
     global_dir = tmp_path / "global"
     project = tmp_path / "project"
+    (project / ".git").mkdir(parents=True)
     user_dir = project / "user-agents-skills"
     _write(package / "same" / "SKILL.md", "package")
     _write(global_dir / "same" / "SKILL.md", "global")

@@ -232,6 +232,7 @@ def test_from_env_extra_wins_over_env_and_jsrc_for_one_run(monkeypatch, tmp_path
     project = tmp_path / "project"
     cfg_path = project / ".js" / "jsrc"
     cfg_path.parent.mkdir(parents=True)
+    (project / ".git").mkdir()
     cfg_path.write_text("set SUBAGENT_DEPTH_MAX 1\n", encoding="utf-8")
     monkeypatch.setenv("JS_MODEL", "env-model")
 
@@ -256,6 +257,7 @@ def test_from_env_extra_is_one_shot_not_persisted(monkeypatch, tmp_path):
     project = tmp_path / "project"
     cfg_path = project / ".js" / "jsrc"
     cfg_path.parent.mkdir(parents=True)
+    (project / ".git").mkdir()
     cfg_path.write_text("set SUBAGENT_DEPTH_MAX 1\n", encoding="utf-8")
 
     with_extra = from_env(cwd=project, save_session=False, sources=InvocationSources(extras=("SUBAGENT_DEPTH_MAX=3",)))

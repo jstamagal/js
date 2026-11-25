@@ -180,10 +180,9 @@ def test_yaml_manifest_malformed_yaml_fails_clear(tmp_path):
         persona.load_prompt_spec(prompts)
 
 
-def test_project_dir_missing_manifest_falls_back_to_lower_layer_manifest(tmp_path):
-    """A project agent dir that only overrides the prompt wording (no
-    agent.yaml of its own) must not silently boot with zero tools — it
-    should inherit the nearest lower layer's manifest instead."""
+def test_project_dir_without_a_manifest_does_not_inherit_the_lower_one(tmp_path):
+    """A nearer agent directory replaces the lower one whole: with no
+    agent.yaml of its own it has no tools and no model."""
     repo_root = tmp_path / "prompts"
     global_root = tmp_path / "global-agents"
     project_root = tmp_path / "project-agents"
@@ -203,8 +202,8 @@ def test_project_dir_missing_manifest_falls_back_to_lower_layer_manifest(tmp_pat
     spec = persona.load_agent_prompt_spec("myagent", (repo_root, global_root, project_root))
 
     assert spec.system == "PROJECT PROMPT\n"
-    assert spec.tool_selectors == ("wiki_*:lazy",)
-    assert spec.model == "repo-model"
+    assert spec.tool_selectors == ()
+    assert spec.model == ""
 
 
 def test_project_dir_with_explicit_empty_manifest_is_not_overridden_by_fallback(tmp_path):

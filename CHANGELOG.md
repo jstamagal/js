@@ -18,6 +18,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   model switch or a history rewrite. `CACHE_KEEPALIVE off` turns it off. GPT
   routes are not refreshed.
 
+- **Project setup layers through the repository.** The project root is the
+  nearest directory holding a `.git` (a submodule lifts to its superproject).
+  Each `.js/` from the root down to the working directory is a layer over
+  `~/.js`, the nearest winning; outside a repository only `~/.js` is read.
+  - jsrc: each layer's `jsrc`, then its `jsrc.local`; presets the same way.
+    `set -KEY` in a file falls back to what the layers below that file set,
+    not to the stock value.
+  - Agents: the nearest layer holding an agent's directory supplies the whole
+    agent. Files no longer merge across layers, stock and home included: a
+    home `defaultagent/` with only an `agent.yaml` is now an agent with no
+    prompt.
+  - `--system-prompt-file` takes its tool surface from the run's agent
+    (`--agent` or `DEFAULT_AGENT`) instead of always `defaultagent`.
+  - Skills, commands, toolbox and `tools.yaml` read every layer; a nearer
+    skill, command or tool of a name replaces a farther one.
+  - Instructions: `JS.md`/`JS.local.md` from `~/.js` and from each project
+    `.js/`; from each directory of the chain, `JS.md` else `AGENTS.md`, then
+    `JS.local.md` else `AGENTS.local.md` (`PROJECT_INSTRUCTION_FILES` entries
+    may now be a list: its first file present is read). Nothing above the
+    root is read.
+
 - **Dependencies bumped; ruff is no longer held back.**
   - The lock moves to current releases, including:
     - ai 0.5.2 → 0.9.0

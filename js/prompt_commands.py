@@ -44,8 +44,9 @@ class PromptCommand:
 
 
 def command_dirs(project_dir: Path) -> tuple[Path, ...]:
-    """Where commands live, lowest layer first: global, then project."""
-    return (paths.global_commands_dir(), paths.project_home(project_dir) / "commands")
+    """Where commands live, lowest layer first: global, then each project
+    `.js/commands` from the root down to ``project_dir``."""
+    return (paths.global_commands_dir(), *(directory / "commands" for directory in paths.project_dirs(project_dir)))
 
 
 def _split_frontmatter(text: str) -> tuple[dict, str]:

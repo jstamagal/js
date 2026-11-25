@@ -55,6 +55,7 @@ def dirs(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(home))
     (home / ".js" / "commands").mkdir(parents=True)
     (project / ".js" / "commands").mkdir(parents=True)
+    (project / ".git").mkdir()
     monkeypatch.chdir(project)
     return home / ".js" / "commands", project / ".js" / "commands"
 

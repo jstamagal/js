@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import copy
 import io
 import json
 import os
@@ -147,7 +148,54 @@ def run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
     autolog = debug_trace.debug_autolog_path(cfg, getattr(cfg, "settings", {}) or {})
     trace_sink = debug_trace.open_debug_trace_sink([autolog] if autolog is not None else [])
 
+    def telemetry_for(tools: _BenchTools):
+        telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
+        telemetry.trace_sink = trace_sink
+        telemetry.event_observer = tools.event
+        if events is not None:
+            telemetry.sink = output.Fanout(output.sink_of(telemetry), headless.OutputEvents(events))
+        return telemetry
+
+    def turn_options(cap, calls):
+        options = settled.turn_kwargs(max_output_override=cap, call_stats=calls)
+        if events is not None:
+            options["event_sink"] = events.runtime_event
+        return options
+
+    def redirect():
+        if quiet:
+            return contextlib.redirect_stdout(io.StringIO())
+        if trace_sink is not None:
+            return contextlib.redirect_stdout(debug_trace.StdoutTee(sys.stdout, trace_sink))
+        return contextlib.nullcontext()
+
     rows: list[dict] = []
+    setup_messages: list[dict] = []
+    setup_stats: list[dict] = []
+    setup_tools = _BenchTools()
+    started = time.time()
+    try:
+        with redirect():
+            owning_loop.run_owning_loop(agent_messages.initialize(
+                cfg, prompt_spec, setup_messages, telemetry_for(setup_tools), save=False,
+                trace_override=True, **turn_options(maxout if maxout is not None else agent_default_max, setup_stats),
+            ))
+    except (KeyboardInterrupt, Exception) as e:
+        if trace_sink is not None:
+            trace_sink.close()
+        if isinstance(e, KeyboardInterrupt):
+            return 130
+        if isinstance(e, snippets.SnippetError):
+            raise
+        msgs.warn(msgs.FAILED, error=f"{type(e).__name__}: {e}")
+        return 1
+
+    setup_row = None
+    if setup_stats:
+        setup_row = {"name": "setup", "ok": True, "tools": setup_tools.names,
+                     **stats.summarize_calls(setup_stats, wall_s=time.time() - started)}
+        msgs.say_said(_bench_row_line(setup_row), file=sys.stderr)
+
     interrupted = False
     for bench in benchmarks:
         # max_tokens: --max-out wins; else per-benchmark frontmatter (already
@@ -159,29 +207,17 @@ def run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         else:
             eff_max = agent_default_max
         prompt_text = bench.prompt
-        messages = []
+        messages = copy.deepcopy(setup_messages)
         call_stats: list[dict] = []
         tool_names = _BenchTools()
-        turn_kwargs = settled.turn_kwargs(max_output_override=eff_max, call_stats=call_stats)
-        if events is not None:
-            turn_kwargs["event_sink"] = events.runtime_event
+        turn_kwargs = turn_options(eff_max, call_stats)
         ok, err = True, None
         t_wall = time.time()
         try:
-            sink = io.StringIO() if quiet else None
-            out = sink if sink is not None else (debug_trace.StdoutTee(sys.stdout, trace_sink) if trace_sink is not None else None)
-            with contextlib.redirect_stdout(out) if out is not None else contextlib.nullcontext():
+            with redirect():
                 async def run_benchmark():
                     nonlocal prompt_text
-                    telemetry = runtime.Telemetry(debug_log=cfg.debug_log)
-                    telemetry.trace_sink = trace_sink
-                    telemetry.event_observer = tool_names.event
-                    if events is not None:
-                        telemetry.sink = output.Fanout(output.sink_of(telemetry), headless.OutputEvents(events))
-                    await agent_messages.initialize(
-                        cfg, prompt_spec, messages, telemetry, save=False,
-                        trace_override=True, **turn_kwargs,
-                    )
+                    telemetry = telemetry_for(tool_names)
                     prompt_text = P.expand_agent_text(bench.prompt, cfg)
                     if not quiet:
                         first = (prompt_text.splitlines() or [""])[0][:80]
@@ -212,6 +248,8 @@ def run_bench(bench_agent: str, *, model: str | None, reasoning: str | None,
         trace_sink.close()
 
     payload = {"agent": agent_id, "model": cfg.model, "provider": cfg.provider_id, "benchmarks": rows}
+    if setup_row is not None:
+        payload["setup"] = setup_row
     stats_ok = stats.write_requested(stats_json, stats_csv, payload, rows, announce=True)
     if events is not None:
         events.result = payload

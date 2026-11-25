@@ -60,21 +60,25 @@ at startup, `--bench` and swarm agents start from; `js/conversation.py` keeps
 a session's history across turns, and `-p` and swarm agents run their turns
 through it; `js/toolkit/` is the tools — model-facing contracts live
 in `tool_descriptions/*.md`, not in code. Agents are prompt directories
-(`js/persona.py` + `defaults/agents/`; layered per file, project > home > defaults; `agent.yaml`
+(`js/persona.py` + `defaults/agents/`; the nearest layer's directory of a name replaces lower ones whole; `agent.yaml`
 beside the prompt picks model, reasoning and tool surface, resolved against
-`tools.yaml` noun:modifier rules). Config layers `defaults/jsrc` < home `jsrc` < `.js/jsrc` <
-`.js/jsrc.local` < env < `--extra`. Sessions are append-only JSONL and
+`tools.yaml` noun:modifier rules). The project chain (`js/paths.py`
+`project_root`/`project_dirs`): the root is the nearest `.git`, lifted out of a
+submodule; each `.js/` from the root down to the start directory is a layer
+over the home, nearest wins; no repository means home only. Config layers
+`defaults/jsrc` < home `jsrc` < each chain `.js/jsrc` then `.js/jsrc.local` <
+presets < env < `--extra`; `set -KEY` falls back to the layer below. Sessions are append-only JSONL and
 compaction leaves history intact. Inline-directive expansion
 (`js/promptexpand.py`) is single-pass on purpose — that is the injection
-guard; preserve it. Project instructions come from the start directory only
-(`AGENTS.md`, `AGENTS.local.md`): js never walks up to parent directories, so
-`~/js` never reads `~/AGENTS.md`. Deep dives belong in `docs/technical-guide.md`.
+guard; preserve it. Instructions: `JS.md`/`JS.local.md` from the home and
+each chain `.js/`, and from each chain directory `JS.md` else `AGENTS.md` (and
+the `.local` pair the same way). Nothing above the root is read. Deep dives belong in `docs/technical-guide.md`.
 
 Stock setup lives in `defaults/`: jsrc, fset, agents, themes, tool descriptions,
 skills, help, snippets and secret-patterns. A home file replaces only the same
 relative stock file; an empty file shadows it too. Listings union names across
 layers. Skills shadow whole directories by name. Only agents, skills, commands,
-toolbox and jsrc use the project layer. Missing named setup is a hard error.
+toolbox, tools.yaml and jsrc use the project chain. Missing named setup is a hard error.
 `--home DIR` beats `JS_HOME`, then `~/.js`; the selected absolute directory holds
 all configuration, sessions, logs, state, cache and tmp. Prompts and shell commands
 receive `JS_HOME`; inline prompts also support `{{JS_HOME}}` and `%%JS_HOME%%`.

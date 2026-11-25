@@ -35,7 +35,8 @@ CANONICAL_EVENT_NAMES: tuple[str, ...] = (
 )
 
 # The one event whose handlers can refuse what it announces: a refused tool
-# call never runs, and the model reads the refusal as its result.
+# call never runs, and the model reads the refusal as its result. Its handlers
+# can also rewrite the call's arguments before it runs.
 REFUSABLE_EVENTS = frozenset({"tool_call"})
 
 _EVENT_SET = frozenset(CANONICAL_EVENT_NAMES)
@@ -54,6 +55,8 @@ class EventHandlerResult:
     error: str | None = None
     # Set when the handler refused the event: the one line the model reads.
     refusal: str | None = None
+    # Set when the handler rewrote a tool call's arguments: the new JSON text.
+    arguments: str | None = None
 
 
 @dataclass(frozen=True)
@@ -71,11 +74,12 @@ EventHandlerDispatcher = Callable[[EventHook, EventEmission], EventHandlerResult
 @dataclass
 class HandlerCall:
     """The handler running now: its hook, the emission it answers, and the
-    refusal it records, if any."""
+    refusal or argument rewrite it records, if any."""
 
     hook: EventHook
     emission: EventEmission
     refusal: str | None = None
+    arguments: str | None = None
 
 
 _CURRENT_CALL: ContextVar[HandlerCall | None] = ContextVar("js_event_handler_call", default=None)
@@ -93,6 +97,18 @@ def refusal_of(emission: object) -> str | None:
         if refusal:
             return refusal
     return None
+
+
+def arguments_of(emission: object) -> str | None:
+    """The arguments a handler of ``emission`` rewrote the call to, as JSON
+    text; None when no handler rewrote them. Handlers run in order and each
+    reads the arguments the one before it left, so the last rewrite wins."""
+    rewritten = None
+    for result in getattr(emission, "results", ()) or ():
+        arguments = getattr(result, "arguments", None)
+        if arguments is not None:
+            rewritten = arguments
+    return rewritten
 
 
 def normalize_event_name(raw: str) -> str | None:
@@ -185,6 +201,11 @@ class EventHooks:
                     )
                 if call.refusal and result.refusal is None and name in REFUSABLE_EVENTS:
                     result = replace(result, refusal=call.refusal)
+                if call.arguments is not None and result.arguments is None and name in REFUSABLE_EVENTS:
+                    result = replace(result, arguments=call.arguments)
+                if result.arguments is not None:
+                    # The next handler reads the call as this one left it.
+                    emission.payload["arguments"] = result.arguments
                 emission.results.append(result)
         finally:
             self._dispatch_depth.reset(depth_token)

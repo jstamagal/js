@@ -463,6 +463,16 @@ async def _record_tool_results(pending_calls: list[tool_calls.PendingToolCall], 
                 "arguments": tool_calls.canonical_tool_args(pc.arguments())}
         emission = events.emit("tool_call", **call)
         refusal = event_mod.refusal_of(emission)
+        rewrite = event_mod.arguments_of(emission)
+        if not refusal and rewrite is not None and pc.validation_error is None:
+            # An `on tool_call` handler rewrote the arguments: the call runs
+            # with them, and the model's history keeps its own.
+            pc = pending_calls[index] = tool_calls.rewritten_call(pc, rewrite, dispatch_registry)
+            call["arguments"] = pc.arguments()
+            telemetry.event("tool_call_rewritten", tool=pc.called_name or pc.name, call_id=pc.id)
+            if pc.validation_error is not None:
+                telemetry.event("tool_call_refused", tool=pc.called_name or pc.name, call_id=pc.id, refusal=pc.validation_error)
+                continue
         if refusal and pc.validation_error is None:
             # An `on tool_call` handler refused it: the call never runs
             # and the model reads the refusal as its result.

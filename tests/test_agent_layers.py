@@ -21,23 +21,24 @@ AGENTS = {
                   PROJECT: {"agent.yaml": "model: project-model\n"}},
     "both": {STOCK: {"01-prompt.md": "stock prompt", "agent.yaml": "model: stock-model\n"},
              HOME: {"01-prompt.md": "home prompt", "agent.yaml": "model: home-model\n"}},
-    "shadowed": {STOCK: {"01-prompt.md": "stock prompt", "02-env.md": "stock env"}, HOME: {"02-env.md": ""}},
+    "shadowed": {STOCK: {"01-prompt.md": "stock prompt", "02-env.md": "stock env"}, HOME: {"02-env.md": "home env"}},
     "manifest": {HOME: {"agent.yaml": "model: home-model\n"}},
     "one-layer": {PROJECT: {"01-prompt.md": "project prompt"}},
     "empty": {HOME: {}},
     "notes": {STOCK: {"01-prompt.md": "stock prompt"}, PROJECT: {"notes.txt": "not an agent file"}},
 }
 
-# agent -> (layers in prompts_dir, assembled system prompt, agent.yaml model)
+# agent -> (layers in prompts_dir, assembled system prompt, agent.yaml model).
+# The nearest layer holding the agent supplies all of it.
 ASSEMBLED = {
-    "prompt-only": ((STOCK, HOME), "home prompt\n", ""),
-    "yaml-only": ((STOCK, PROJECT), "stock prompt\n", "project-model"),
-    "both": ((STOCK, HOME), "home prompt\n", "home-model"),
-    "shadowed": ((STOCK, HOME), "stock prompt\n", ""),
+    "prompt-only": ((HOME,), "home prompt\n", ""),
+    "yaml-only": ((PROJECT,), "\n", "project-model"),
+    "both": ((HOME,), "home prompt\n", "home-model"),
+    "shadowed": ((HOME,), "home env\n", ""),
     "manifest": ((HOME,), "\n", "home-model"),
     "one-layer": ((PROJECT,), "project prompt\n", ""),
     "empty": ((HOME,), "\n", ""),
-    "notes": ((STOCK, PROJECT), "stock prompt\n", ""),
+    "notes": ((PROJECT,), "\n", ""),
 }
 
 
@@ -54,6 +55,7 @@ def layers(tmp_path, monkeypatch):
     for entry in (real / "agents").iterdir():
         (stock / "agents" / entry.name).symlink_to(entry)
     project = tmp_path / "project"
+    (project / ".git").mkdir(parents=True)
     roots = {STOCK: stock / "agents", HOME: paths.home() / "agents", PROJECT: project / ".js" / "agents"}
     for agent, by_layer in AGENTS.items():
         for layer, files in by_layer.items():
@@ -80,14 +82,12 @@ def test_agent_is_assembled_from_its_layers(layers, agent):
 
 
 def test_chat_takes_the_agent_prompt_from_its_layers_without_env(layers):
+    (layers[HOME] / "shadowed" / "01-prompt.md").write_text("home prompt", encoding="utf-8")
     with invocation(RunOptions(chat=True, agent="shadowed")):
         cfg = config.from_env(agent_id="shadowed", cwd=Path.cwd(), save_session=False)
-        assert persona.load_configured_prompt_spec(cfg, expand=False).system == "stock prompt\n"
-    (layers[HOME] / "shadowed" / "02-env.md").unlink()
+        assert persona.load_configured_prompt_spec(cfg, expand=False).system == "home prompt\n"
     cfg = config.from_env(agent_id="shadowed", cwd=Path.cwd(), save_session=False)
-    assert persona.load_configured_prompt_spec(cfg, expand=False).system == "stock prompt\n\nstock env\n"
-    with invocation(RunOptions(chat=True, agent="shadowed")):
-        assert persona.load_configured_prompt_spec(cfg, expand=False).system == "stock prompt\n"
+    assert persona.load_configured_prompt_spec(cfg, expand=False).system == "home prompt\n\nhome env\n"
 
 
 def test_missing_agent_names_every_directory_searched(layers):

@@ -351,6 +351,27 @@ def test_a_tool_call_guard_refuses_a_cells_call(ctx):
 
 
 @needs_kernel
+def test_a_tool_call_handler_rewrites_a_cells_arguments(ctx):
+    from js import events
+
+    hooks = events.EventHooks()
+
+    def dispatch(hook, emission):
+        if emission.event == "tool_call" and emission.payload.get("name") == "write":
+            arguments = json.loads(emission.payload["arguments"])
+            arguments["content"] = "rewritten\n"
+            return events.EventHandlerResult(hook=hook, arguments=json.dumps(arguments))
+        return events.EventHandlerResult(hook=hook)
+
+    hooks.set_dispatcher(dispatch)
+    hooks.add("tool_call", "rewrite")
+
+    cell("tools.write(file_path='out.txt', content='original\\n')\n", ctx, event_hooks=hooks)
+
+    assert (ctx.cwd / "out.txt").read_text() == "rewritten\n"
+
+
+@needs_kernel
 def test_a_read_of_content_starting_with_error_is_a_value(ctx):
     (ctx.cwd / "log.txt").write_text("ERROR: disk full at 03:00\nsecond line\n")
 
