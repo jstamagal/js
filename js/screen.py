@@ -78,52 +78,93 @@ def writing(scrollback: screen_scrollback.Scrollback):
 
 
 class View:
-    """One window: its number, its scrollback, whether it has output not yet
-    seen, and what it shows (``owner``: None for window 1, else the object
-    that opened it)."""
+    """One window: its number, its name ("" for none), its scrollback, what it
+    shows (``owner``: None for window 1, else the object that opened it),
+    whether it has output not yet seen (``active``), whether it has ever been
+    on screen (``seen``), and the rows it asks for on a split screen
+    (``height``; None shares the rows left over)."""
 
     def __init__(self, number: int, scrollback: screen_scrollback.Scrollback, owner=None) -> None:
         self.number = number
+        self.name = ""
         self.scrollback = scrollback
         self.owner = owner
         self.active = False
+        self.seen = False
+        self.height: int | None = None
         self.window: Window | None = None
+        self.label_window: Window | None = None
+
+    def rows(self) -> int | None:
+        """The rows it filled at the last paint; None before its first."""
+        info = self.window.render_info if self.window is not None else None
+        return info.window_height if info is not None else None
+
+
+def _pane_height(rows: int | None) -> Dimension:
+    """Sized panes ask for their rows first. Unsized panes share what is left."""
+    if rows:
+        return Dimension(min=1, max=rows, preferred=rows)
+    return Dimension(min=1, preferred=1)
 
 
 class Windows:
-    """ircII-style windows over the scrollback region: window 1 is the main
-    conversation; ``open`` numbers the next one from 2 to `LAST`. One window
-    shows at a time; output to a hidden window marks it active until it is
-    shown."""
+    """ircII-style windows over the scrollback region. Window 1 is the main
+    conversation; ``open`` numbers the next one with the lowest free number
+    from 2. ``visible`` lists the windows on screen, top to bottom; the rest
+    are hidden and keep running. ``current`` is the visible window that
+    lines, scroll keys and the status bar act on. Output to a hidden window
+    marks it active until it is shown. ``WINDOW_MAX`` caps how many windows
+    are open at once."""
 
-    LAST = 9
+    # Ctrl-W then a digit reaches windows 1 to 9.
+    KEYED = 9
 
     def __init__(self) -> None:
         self._views: dict[int, View] = {}
+        self.visible: list[int] = []
         self.current = 1
+        # The window that was current before this one, for `back`.
+        self.previous: int | None = None
         self.invalidate: Callable[[], None] = lambda: None
+        # The line under each window of a split screen.
+        self.label: Callable[[View], str] = lambda view: f"[{view.number}] {view.name}"
+        # What killing a window stops besides closing it (`kill`).
+        self.stop: Callable[[View], None] = lambda view: None
+
+    @staticmethod
+    def limit() -> int:
+        return max(1, int(fset.setting_value("WINDOW_MAX")))
 
     def set_main(self, scrollback: screen_scrollback.Scrollback) -> None:
         """Window 1 shows ``scrollback``."""
         if 1 not in self._views:
             self._views[1] = View(1, scrollback)
+            self._views[1].seen = True
+            self.visible = [1]
 
     def view(self, number: int | None = None) -> View | None:
         return self._views.get(self.current if number is None else number)
 
+    def find(self, word: str) -> View | None:
+        """The window ``word`` names: its number, else its name."""
+        if word.isdigit():
+            return self._views.get(int(word))
+        return next((view for view in self._views.values() if view.name and view.name == word), None)
+
     def scrollback(self) -> screen_scrollback.Scrollback:
-        """The scrollback of the window on screen."""
+        """The scrollback of the current window."""
         return self._views[self.current].scrollback
 
     def numbers(self) -> list[int]:
         return sorted(self._views)
 
     def open(self, owner=None) -> View | None:
-        """A new window numbered with the lowest free number from 2 to
-        `LAST`, its output marking it active; None when every one is taken."""
-        free = next((n for n in range(2, self.LAST + 1) if n not in self._views), None)
-        if free is None:
+        """A new hidden window numbered with the lowest free number from 2,
+        its output marking it active; None when `WINDOW_MAX` are open."""
+        if len(self._views) >= self.limit():
             return None
+        free = next(n for n in range(2, len(self._views) + 3) if n not in self._views)
         view = self._views[free] = View(free, screen_scrollback.Scrollback(), owner)
         view.scrollback.toggle_key = self._views[1].scrollback.toggle_key if 1 in self._views else ""
         view.scrollback.changed = functools.partial(self._changed, view)
@@ -131,45 +172,211 @@ class Windows:
         return view
 
     def _changed(self, view: View) -> None:
-        if view.number != self.current and not view.active and self._views.get(view.number) is view:
+        if view.number not in self.visible and not view.active and self._views.get(view.number) is view:
             view.active = True
             self.invalidate()
 
-    def switch(self, number: int) -> bool:
-        """Show window ``number`` and clear its activity mark; False when
-        there is no such window."""
-        view = self._views.get(number)
-        if view is None:
-            return False
+    def _make_current(self, number: int) -> None:
+        if number != self.current:
+            self.previous = self.current
         self.current = number
+        view = self._views[number]
         view.active = False
+        view.seen = True
+        self.invalidate()
+
+    def switch(self, number: int) -> bool:
+        """Make window ``number`` current: a hidden one takes the current
+        window's place on screen. False when there is no such window."""
+        if number not in self._views:
+            return False
+        if number not in self.visible:
+            self.visible[self.visible.index(self.current)] = number
+        self._make_current(number)
+        return True
+
+    def show(self, number: int) -> bool:
+        """Put window ``number`` on screen, under the current window, and make
+        it current. False when there is no such window."""
+        if number not in self._views:
+            return False
+        if number not in self.visible:
+            self.visible.insert(self.visible.index(self.current) + 1, number)
+        self._make_current(number)
+        return True
+
+    def swap(self, number: int) -> bool:
+        """Trade places on screen with window ``number`` and make it current:
+        a hidden one takes the current window's place and the current window
+        is hidden; a visible one swaps rows with it. False when there is no
+        such window."""
+        if number not in self._views:
+            return False
+        if number in self.visible:
+            here, there = self.visible.index(self.current), self.visible.index(number)
+            self.visible[here], self.visible[there] = number, self.current
+            self._make_current(number)
+            return True
+        return self.switch(number)
+
+    def _hand_over(self, number: int) -> None:
+        """Before window ``number`` leaves the screen, make another window
+        current if it is the current one: the previous window when it is on
+        screen, else the one above it, else the one below. When it is the
+        only window on screen, the previous window (else window 1) takes its
+        place."""
+        if number != self.current:
+            return
+        rest = [n for n in self.visible if n != number]
+        if self.previous in rest:
+            self._make_current(self.previous)
+        elif rest:
+            self._make_current(rest[max(0, self.visible.index(number) - 1)])
+        else:
+            heir = self.previous if self.previous in self._views and self.previous != number else 1
+            self.visible = [heir, number]
+            self._make_current(heir)
+
+    def hide(self, number: int | None = None) -> bool:
+        """Take window ``number`` (the current one without it) off the
+        screen. False when it is not on screen or is the last one there."""
+        number = self.current if number is None else number
+        if number not in self.visible or len(self.visible) == 1:
+            return False
+        self._hand_over(number)
+        self.visible.remove(number)
         self.invalidate()
         return True
 
+    def hide_others(self) -> None:
+        """Leave only the current window on screen."""
+        self.visible = [self.current]
+        self.invalidate()
+
     def close(self, number: int) -> View | None:
-        """Take window ``number`` off the screen; window 1 stays. The view
-        closed, or None when there was none to close."""
-        if number == 1:
+        """Close window ``number``; window 1 stays. The view closed, or None
+        when there was none to close."""
+        if number == 1 or number not in self._views:
             return None
-        view = self._views.pop(number, None)
-        if view is not None and self.current == number:
-            self.current = 1
-            self._views[1].active = False
+        if number in self.visible:
+            self._hand_over(number)
+            self.visible.remove(number)
+        if self.previous == number:
+            self.previous = None
+        view = self._views.pop(number)
         self.invalidate()
         return view
 
+    def kill(self, number: int) -> View | None:
+        """Stop what runs in window ``number`` (`stop`) and close it; window 1
+        stays. The view killed, or None when there was none to kill."""
+        view = self._views.get(number)
+        if view is None or number == 1:
+            return None
+        self.stop(view)
+        return self.close(number)
+
+    def cycle(self, step: int) -> int:
+        """Make the window ``step`` places on in number order current (wrapping),
+        as `switch` does; the number it made current."""
+        numbers = self.numbers()
+        number = numbers[(numbers.index(self.current) + step) % len(numbers)]
+        self.switch(number)
+        return number
+
+    def renumber(self, number: int) -> bool:
+        """Give the current window ``number``, trading numbers with the
+        window that has it. Window 1 keeps its number and no other window
+        takes it: False for either."""
+        old = self.current
+        if old == 1 or number < 2:
+            return False
+        if number == old:
+            return True
+        other = self._views.pop(number, None)
+        view = self._views.pop(old)
+        view.number = number
+        self._views[number] = view
+        if other is not None:
+            other.number = old
+            self._views[old] = other
+        swap = {old: number, number: old} if other is not None else {old: number}
+        self.visible = [swap.get(n, n) for n in self.visible]
+        self.previous = swap.get(self.previous, self.previous) if self.previous is not None else None
+        self.current = number
+        self.invalidate()
+        return True
+
+    def move(self, step: int) -> None:
+        """Move the current window ``step`` rows of windows down the screen
+        (up when negative), stopping at the top and bottom."""
+        here = self.visible.index(self.current)
+        there = max(0, min(len(self.visible) - 1, here + step))
+        self.visible.insert(there, self.visible.pop(here))
+        self.invalidate()
+
+    def resize(self, rows: int | None = None, *, by: int = 0) -> None:
+        """Ask for ``rows`` rows for the current window, or ``by`` more than it
+        has now; at least one. None with no ``by`` shares the rows again."""
+        view = self._views[self.current]
+        if rows is None and not by:
+            view.height = None
+        else:
+            base = rows if rows is not None else (view.height or view.rows() or 1)
+            view.height = max(1, base + by)
+        self.invalidate()
+
+    def balance(self) -> None:
+        """Share the rows evenly among the windows on screen."""
+        for number in self.visible:
+            self._views[number].height = None
+        self.invalidate()
+
     def activity(self) -> list[int]:
-        """The windows with output not yet seen, in number order."""
-        return [n for n in self.numbers() if self._views[n].active and n != self.current]
+        """The hidden windows with output not yet seen, in number order."""
+        return [n for n in self.numbers() if self._views[n].active and n not in self.visible]
+
+    def page(self) -> int:
+        """Rows a scroll key moves the current window: its height less two."""
+        rows = self._views[self.current].rows()
+        return max(1, (rows or 3) - 2)
 
     def container(self, make: Callable[[screen_scrollback.Scrollback], Window]) -> DynamicContainer:
-        """The scrollback region: the window on screen, each view keeping its
-        own prompt_toolkit Window (and so its own scroll position)."""
-        def current() -> Window:
-            view = self._views[self.current]
+        """The scrollback region: the windows on screen stacked top to bottom,
+        each over a line naming it when there is more than one, each view
+        keeping its own prompt_toolkit Window (and so its own scroll
+        position)."""
+        def pane(view: View, *, split: bool = True) -> Window:
             if view.window is None:
                 view.window = make(view.scrollback)
+            view.window.height = _pane_height(view.height if split else None)
             return view.window
+
+        def label(view: View) -> Window:
+            if view.label_window is None:
+                def text():
+                    try:
+                        return ANSI(self.label(view))
+                    except Exception:  # noqa: BLE001 - a label must never take the screen down
+                        return f"[{view.number}]"
+                view.label_window = Window(FormattedTextControl(text), height=1, style="class:status")
+            return view.label_window
+
+        def current() -> HSplit | Window:
+            views = [self._views[n] for n in self.visible if n in self._views] or [self._views[1]]
+            if len(views) == 1:
+                return pane(views[0], split=False)
+            rows = get_app().output.get_size().rows
+            # Leave room for the input, status and an auxiliary line on short terminals.
+            if rows < len(views) + 3:
+                return pane(self._views[self.current], split=False)
+            if rows < 2 * len(views) + 3:
+                return HSplit([pane(view) for view in views])
+            parts = []
+            for view in views:
+                parts += [pane(view), label(view)]
+            return HSplit(parts)
+
         return DynamicContainer(current)
 
 
@@ -508,6 +715,12 @@ def build_app(
                 event.app.invalidate()
         return handler
 
+    def _window(act: Callable[[], object]):
+        def handler(event) -> None:
+            act()
+            event.app.invalidate()
+        return handler
+
     def _tab(event) -> None:
         if complete_tab is not None:
             complete_tab(event)
@@ -519,9 +732,6 @@ def build_app(
             b.complete_next()
         else:
             b.start_completion(insert_common_part=True)
-
-    def _page() -> int:
-        return max(1, get_app().output.get_size().rows - 3)
 
     keymap = keymap if keymap is not None else keys.default_keymap()
     handlers = {
@@ -540,10 +750,15 @@ def build_app(
         "suspend": Handler(lambda event: event.app.suspend_to_background()),
         "reasoning_toggle": Handler(_toggle_reasoning),
         "redraw": Handler(lambda event: event.app.renderer.clear()),
-        "scroll_up": Handler(lambda event: windows.scrollback().buffer.cursor_up(count=_page())),
-        "scroll_down": Handler(lambda event: windows.scrollback().buffer.cursor_down(count=_page())),
+        "scroll_up": Handler(lambda event: windows.scrollback().buffer.cursor_up(count=windows.page())),
+        "scroll_down": Handler(lambda event: windows.scrollback().buffer.cursor_down(count=windows.page())),
         "complete": Handler(_tab),
-        **{f"window_{n}": Handler(_switch(n)) for n in range(1, Windows.LAST + 1)},
+        **{f"window_{n}": Handler(_switch(n)) for n in range(1, Windows.KEYED + 1)},
+        "window_next": Handler(_window(lambda: windows.cycle(1))),
+        "window_previous": Handler(_window(lambda: windows.cycle(-1))),
+        "window_back": Handler(_window(lambda: windows.previous is not None and windows.switch(windows.previous))),
+        "window_hide": Handler(_window(windows.hide)),
+        "window_kill": Handler(_window(lambda: windows.kill(windows.current))),
     }
     bind_actions(kb, keymap, handlers if handler_factory is None else handler_factory(handlers))
     toggle = keymap.get("reasoning_toggle", ())
