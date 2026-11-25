@@ -45,6 +45,36 @@ holding a `.git`; inside a submodule it is the superproject's. Outside any
 repository there is no project layer. A `.js/` that is the home is the global
 layer only, so a repository rooted at `$HOME` reads `~/.js` once.
 
+### Isolation
+
+A `.isolate` file in a directory, or in its `.js/`, is a border: no layer
+above it is read. `~/.js` and every project `.js/` farther up are skipped for
+settings, presets, agents, skills (`~/.agents/skills` included), commands,
+toolbox, `tools.yaml` and instruction files, and so are the instruction files
+of the directories above. The marked directory's `.js/` and every chain layer
+below it stack as usual, over stock. js only reads markers; you `touch` and
+`rm` them.
+
+- js looks for a marker from the working directory up to, not including,
+  `$HOME` (every parent, outside `$HOME`). The nearest one is the border.
+- A marker inside a repository borders where it is. A marker above the
+  repository root still cuts `~/.js`, but the border sits at the root:
+  nothing above the root is read.
+- Outside a repository a marked directory is a root of its own, so
+  `touch ~/scratch/.isolate` makes `~/scratch/.js` the top layer for runs
+  from `~/scratch` and below.
+- A marker in `$HOME` or `~/.js` borders nothing, since only stock is under
+  the home.
+- A marker git tracks is ignored, and startup warns about it. Put `.isolate`
+  in your global gitignore (`~/.config/git/ignore`).
+
+`--isolate` puts the border at the nearest project `.js/` for one run, and
+`--no-isolate` ignores every marker for one run; together they are an error.
+Neither touches a file. The REPL banner names the border and what set it.
+Under isolation `/save` writes the border layer's `jsrc`, the topmost one the
+run reads. `~/.js` still holds sessions, logins, `.env`, key bindings, state
+and logs.
+
 A `jsrc` file is a config script: each non-comment line is
 `set <key> <value>`, using the same dotted keys as the REPL. Comments start with
 `#`. `set -<key>` puts the setting back to what the layers below that file

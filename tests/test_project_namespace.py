@@ -136,3 +136,36 @@ def test_outside_a_project_the_prompt_project_is_the_directory(monkeypatch, tmp_
     cfg = replace(from_env(save_session=False, agent_id="scout"), model="m")
 
     assert persona.load_configured_prompt_spec(cfg).system == f"scratch {work.resolve()}\n"
+
+
+@pytest.mark.parametrize("marker", [".isolate", ".js/.isolate"])
+def test_an_isolated_directory_outside_git_is_its_own_namespace(monkeypatch, tmp_path, marker):
+    scratch = (tmp_path / "scratch").resolve()
+    sub = scratch / "notes" / "today"
+    sub.mkdir(parents=True)
+    (scratch / marker).parent.mkdir(parents=True, exist_ok=True)
+    (scratch / marker).touch()
+    assert paths.project_namespace(sub) == scratch
+
+    for directory in (scratch, sub):
+        monkeypatch.chdir(directory)
+        assert cli.main(["-p", "hello"]) == 0
+
+    found = _sessions()
+    assert len(found) == 2
+    assert {path.parent for path in found} == {session_store.folder_for(scratch)}
+    assert sorted(first_metadata(path)["cwd"] for path in found) == sorted([str(scratch), str(sub)])
+
+
+def test_prompts_see_an_isolated_directory_as_the_project(monkeypatch, tmp_path):
+    scratch = (tmp_path / "scratch").resolve()
+    sub = scratch / "sub"
+    agent = scratch / ".js" / "agents" / "scout"
+    agent.mkdir(parents=True)
+    sub.mkdir()
+    (scratch / ".isolate").touch()
+    (agent / "01-prompt.md").write_text("%%CURRENT_PROJECT%% %%CURRENT_PROJECT_ROOT%%\n", encoding="utf-8")
+    monkeypatch.chdir(sub)
+    cfg = replace(from_env(save_session=False, agent_id="scout"), model="m")
+
+    assert persona.load_configured_prompt_spec(cfg).system == f"scratch {scratch}\n"

@@ -47,7 +47,7 @@ def verify(agent: str | None = None) -> list[str]:
         validate_agent_id(agent)
         agent_ids = [agent]
     else:
-        setup_dirs = (home, *paths.project_dirs(project))
+        setup_dirs = ((home,) if paths.uses_home(project) else ()) + paths.project_dirs(project)
         configs = {paths.defaults_dir() / 'jsrc', *(directory / 'jsrc' for directory in setup_dirs)}
         for directory in setup_dirs:
             configs.update(directory.glob('jsrc.*'))
@@ -75,7 +75,8 @@ def verify(agent: str | None = None) -> list[str]:
                     policy.expand(profile.tools or (), config, f"{location} models")
         check(location, validate_agent)
 
-    skill_roots = (skills.BUILTIN_SKILLS_DIR, paths.global_skills_dir(), paths.shared_skills_dir(),
+    global_skills = (paths.global_skills_dir(), paths.shared_skills_dir()) if paths.uses_home(project) else ()
+    skill_roots = (skills.BUILTIN_SKILLS_DIR, *global_skills,
                    *(root for layer in paths.project_skill_dirs(project) for root in layer))
     for root in skill_roots:
         for path in skills._skill_paths(root):

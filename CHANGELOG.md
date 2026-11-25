@@ -27,6 +27,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     may now be a list: its first file present is read). Nothing above the
     root is read.
 
+- **Isolation.** A `.isolate` file in a directory or its `.js/` cuts off
+  every layer above it, `~/.js` included; its own `.js/` and the layers below
+  still stack over stock. The nearest marker wins. A marker above the
+  repository root cuts `~/.js` without reading above the root; outside a
+  repository a marked directory is a root. A marker git tracks is ignored
+  with a warning. `--isolate` /
+  `--no-isolate` force or ignore it for one run. The REPL banner names the
+  border, and `/save` writes the border layer's `jsrc`.
+
 - **Sessions are filed by project.** A run files its sessions under its
   project root (the project chain's root), else under the directory it
   started in: `~/monorepo` and `~/monorepo/packages/dingus` both use

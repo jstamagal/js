@@ -10,7 +10,7 @@ import sys
 from dataclasses import dataclass, fields
 from typing import Any
 
-from . import messages as msgs, sampling as sampling_mod
+from . import messages as msgs, paths, sampling as sampling_mod
 
 
 class _ShortHelpAction(argparse.Action):
@@ -95,6 +95,9 @@ def parser() -> argparse.ArgumentParser:
                         help=msgs.OPT_PRESET.words())
     groups['CONFIG'].add_argument("--no-local-config", action="store_true", help=msgs.OPT_NO_LOCAL_CONFIG.words())
     groups['CONFIG'].add_argument("--no-global-config", action="store_true", help=msgs.OPT_NO_GLOBAL_CONFIG.words())
+    isolate_group = groups['CONFIG'].add_mutually_exclusive_group()
+    isolate_group.add_argument("--isolate", action="store_true", help=msgs.OPT_ISOLATE.words())
+    isolate_group.add_argument("--no-isolate", action="store_true", help=msgs.OPT_NO_ISOLATE.words())
     groups['CONFIG'].add_argument("--migrate-config", action="store_true", help=msgs.OPT_MIGRATE_CONFIG.words())
     groups['SESSIONS'].add_argument("--list-sessions", action="store_true", help=msgs.OPT_LIST_SESSIONS.words())
     groups['RUNNING'].add_argument("--list-agents", action="store_true", help=msgs.OPT_LIST_AGENTS.words())
@@ -253,3 +256,10 @@ def options_argv(options: Any) -> list[str]:
     The agent is not among them: the command names the agent it resolved."""
     return argv(*((flag(field.name), getattr(options, field.name))
                   for field in fields(options) if field.name != "agent"))
+
+
+def isolate_argv() -> tuple[tuple[str, bool], ...]:
+    """The (option, value) pairs that repeat this run's --isolate or
+    --no-isolate, for `argv`."""
+    override = paths.isolate_override()
+    return (("--isolate", override is True), ("--no-isolate", override is False))
