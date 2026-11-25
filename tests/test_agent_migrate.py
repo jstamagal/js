@@ -286,6 +286,7 @@ def test_mcp_globs_and_project_agents_survive_a_partial_registry(tmp_path, monke
     """Entries the registry cannot see are not proven dead."""
     project = tmp_path / "project"
     _agent(project / ".js" / "agents", "local_helper", {"01-prompt.md": "H\n"})
+    (project / ".git").mkdir()
     monkeypatch.chdir(project)
     root = tmp_path / "agents"
     text = ("tools:\n  - read:eager\n  - mcp__*:lazy\n  - mcp__files__read:eager\n"

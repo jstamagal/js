@@ -23,6 +23,7 @@ def test_collect_settings_layers_global_project_and_local_with_env_cli(monkeypat
     global_js = home / ".js"
     global_js.mkdir(parents=True)
     (project / ".js").mkdir(parents=True)
+    (project / ".git").mkdir()
     (global_js / "jsrc").write_text("set MODEL global\nset FETCH_TIMEOUT 20\n", encoding="utf-8")
     (project / ".js" / "jsrc").write_text("set MODEL project\nset TURN_ROUNDS_MAX 9\n", encoding="utf-8")
     (project / ".js" / "jsrc.local").write_text("set MODEL local\n", encoding="utf-8")

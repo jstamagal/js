@@ -170,9 +170,21 @@ del __js_load
 """
 
 
-def toolbox_dirs(cwd: Path) -> tuple[Path, Path]:
-    """(global, project). Project wins on a name clash, mirroring agent precedence."""
-    return _paths.global_toolbox_dir(), _paths.project_home(Path(cwd)) / "toolbox"
+def toolbox_dirs(cwd: Path) -> tuple[Path, ...]:
+    """The global toolbox, then each project `.js/toolbox` from the root down
+    to ``cwd``. A nearer one wins on a name clash, mirroring agent precedence."""
+    return (_paths.global_toolbox_dir(),
+            *(directory / "toolbox" for directory in _paths.project_dirs(Path(cwd))))
+
+
+def project_toolbox_dir(cwd: Path) -> Path | None:
+    """Where a project-scope save goes: the nearest project `.js/toolbox`,
+    else the project root's. None outside a repository."""
+    found = _paths.project_dirs(Path(cwd))
+    if found:
+        return found[-1] / "toolbox"
+    root = _paths.project_root(Path(cwd))
+    return None if root is None else root / ".js" / "toolbox"
 
 
 _EXAMPLES = Path(__file__).with_name("toolbox_examples")
@@ -250,7 +262,8 @@ def _render_header(meta: dict) -> str:
 def discover(cwd: Path) -> dict[str, ToolRecord]:
     """Index every tool file. A file that will not parse is recorded, never raised."""
     found: dict[str, ToolRecord] = {}
-    for scope, directory in zip(("global", "project"), toolbox_dirs(cwd), strict=True):
+    for index, directory in enumerate(toolbox_dirs(cwd)):
+        scope = "project" if index else "global"
         if not directory.is_dir():
             continue
         for path in sorted(directory.glob("*.py")):
@@ -308,6 +321,7 @@ def write_revision(
     note: str = "",
     scope: str = "global",
     stamp: float | None = None,
+    directory: Path | None = None,
 ) -> str:
     """Promote a body to disk as revision N+1, archiving revision N first."""
     if not _SAFE_NAME.match(name):
@@ -323,8 +337,10 @@ def write_revision(
     if not any(isinstance(node, definitions) and node.name == name for node in tree.body):
         return f"ERROR: source must define a top-level function or class named {name!r}"
 
-    global_dir, project_dir = toolbox_dirs(cwd)
-    directory = project_dir if scope == "project" else global_dir
+    if directory is None:
+        directory = project_toolbox_dir(cwd) if scope == "project" else _paths.global_toolbox_dir()
+    if directory is None:
+        return f"ERROR: {Path(cwd)} is not inside a repository, so it has no project toolbox"
     try:
         directory.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -406,7 +422,7 @@ def restore(cwd: Path, name: str, revision: int, *, model: str = "") -> str:
         return f"ERROR: could not read {archive}: {exc}"
     body = _HEADER.sub("", text).strip()
     return write_revision(cwd, name, body, model=model or "restore",
-                          note=f"rolled back to r{revision}", scope=record.scope)
+                          note=f"rolled back to r{revision}", scope=record.scope, directory=record.path.parent)
 
 
 @dataclass

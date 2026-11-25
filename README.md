@@ -105,7 +105,8 @@ Project `.js/` layers still apply in the working directory.
 
 Config is a script: each line of a `jsrc` file is a `set <key> <value>` command,
 applied at startup. Files layer lowest-to-highest as `defaults/jsrc` (shipped with js: one line per setting, the built-in defaults), `~/.js/jsrc`,
-project `.js/jsrc`, then project `.js/jsrc.local`; env vars override files and
+then each project `.js/jsrc` and `.js/jsrc.local` from the repository root down
+to the working directory; env vars override files and
 CLI `--extra key=value` overrides env. js never writes `~/.js/jsrc` on its
 own: it exists once you write it or run `/save`, and holds only what you set.
 `js/jsrc.template` lists every setting, described, at its stock value.
