@@ -245,6 +245,9 @@ def _prepare_attachment(
             raise AttachmentError(msgs.ATTACHMENT_NOT_FOUND.said(path=raw_path)) from exc
         msgs.warn(msgs.ATTACHMENT_NOT_FOUND, path=raw_path)
         return _PreparedAttachment(f'[Attachment {raw_path} not found: nothing was attached.]')
+    if path.is_dir():
+        # A directory is a place the user points at, not content to inline.
+        return _PreparedAttachment(f'[User referred to directory {path}]')
     if not path.is_file():
         raise AttachmentError(msgs.ATTACHMENT_NOT_A_FILE.said(path=path))
     try:

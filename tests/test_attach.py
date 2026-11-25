@@ -454,6 +454,12 @@ def test_repl_missing_attachment_becomes_note(tmp_path):
     assert "gone.png" in message["content"]
 
 
+def test_at_directory_becomes_a_reference_not_an_error(tmp_path):
+    (tmp_path / "proj").mkdir()
+    message = attach.build_user_message("look in please", ["proj"], _cfg(tmp_path), cwd=tmp_path)
+    assert message["content"] == f"look in please\n\n[User referred to directory {tmp_path / 'proj'}]"
+
+
 def test_copy_puts_the_answer_n_back_on_the_clipboard(monkeypatch, tmp_path):
     cfg = _cfg(tmp_path)
     for message in ({"role": "user", "content": "q"}, {"role": "assistant", "content": "first answer"},
