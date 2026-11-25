@@ -656,7 +656,7 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     active_context = tool_context or T.STOCK_CONTEXT
     owns_mcp_host = mcp_host is None
     if owns_mcp_host and getattr(cfg, "mcp", None) is not None and getattr(cfg.mcp, "servers", ()):
-        mcp_host = mcp_hosts.MCPHost(cfg.mcp, telemetry=telemetry, paranoid_mode=getattr(cfg, "paranoid_mode", "off"))
+        mcp_host = mcp_hosts.MCPHost(cfg.mcp, telemetry=telemetry)
     # A fresh registry rechecks current policy and aliases while restoring the
     # session's visibility. Marks survive compaction and process restarts.
     # A tool that cannot run here is left off the surface the model sees.
@@ -678,7 +678,6 @@ async def run_turn_async(cfg: Config, system: str, messages: list[dict],
     if mcp_host is not None:
         mcp_host.telemetry = telemetry
         mcp_host.event_sink = events.emit
-        mcp_host.paranoid_mode = getattr(cfg, "paranoid_mode", "off")
     events.start(len(messages))
 
     trace = trace_override if trace_override is not None else cfg.trace

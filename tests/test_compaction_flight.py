@@ -23,7 +23,7 @@ def read_flight(cfg):
 @pytest.mark.parametrize("failure", [None, RuntimeError("summary failed"), asyncio.CancelledError()])
 def test_flight_persists_before_after_and_terminal_outcome(monkeypatch, tmp_path, capsys, failure):
     cfg = replace(_compact_test_cfg(tmp_path, {"COMPACTION_LOG_DIR": str(tmp_path / "flights"),
-                                               "COMPACTION_KEEP_RECENT_TOKENS": 1}), paranoid_mode="on")
+                                               "COMPACTION_KEEP_RECENT_TOKENS": 1}), paranoid_mode="off")
     cfg.settings["API_KEY"] = "private-key"
     original = [{"role": "user", "content": "old content " * 100}, {"role": "user", "content": "new content"}]
     messages = list(original)

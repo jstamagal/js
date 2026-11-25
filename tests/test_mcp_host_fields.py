@@ -60,7 +60,7 @@ def test_discovery_source_whitespace_matches_exact_server(source):
     asyncio.run(run())
 
 
-def test_paranoid_reindex_retains_last_remote_refresh_error_until_success():
+def test_last_remote_refresh_error_is_redacted_and_kept_until_success():
     class FlakyClient(FakeClient):
         fail = False
 
@@ -72,7 +72,7 @@ def test_paranoid_reindex_retains_last_remote_refresh_error_until_success():
     async def run():
         server = MCPServer(name="server", normalized_name="server", transport="stdio", command=("unused",),
                            env={"API_KEY": "sentinel-secret"})
-        host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=FlakyClient, paranoid_mode="off")
+        host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=FlakyClient)
 
         async def errors_shown():
             found = await host.discover(source="server")
@@ -83,15 +83,13 @@ def test_paranoid_reindex_retains_last_remote_refresh_error_until_success():
         client.fail = True
         client.kwargs["on_tools_changed"]({})
         await host.refresh()
-        assert ["sentinel-secret" in shown for shown in await errors_shown()] == [True]
         cached = dict(host.remote_tools)
-        for mode in ("on", "off", "on"):
-            host.paranoid_mode = mode
-            assert host.remote_tools.keys() == cached.keys()
+        for _ in range(2):
             shown = await errors_shown()
+            assert host.remote_tools.keys() == cached.keys()
             assert len(shown) == 1
             assert "refresh failed" in shown[0]
-            assert ("sentinel-secret" in shown[0]) is (mode == "off")
+            assert "sentinel-secret" not in shown[0]
         client.kwargs["on_tools_changed"]({})
         client.fail = False
         await host.refresh()
@@ -101,9 +99,9 @@ def test_paranoid_reindex_retains_last_remote_refresh_error_until_success():
     asyncio.run(run())
 
 
-def test_a_mode_change_redacts_a_stored_error_discovery_does_not_retry():
+def test_a_stored_error_is_redacted_and_a_narrowed_discovery_does_not_retry():
     """A server with no tools whose reconnect failed is not listed again by a
-    discovery narrowed to another server; its stored error follows the mode."""
+    discovery narrowed to another server; its stored error stays redacted."""
     class PromptsOnly(FakeClient):
         down = False
 
@@ -125,8 +123,7 @@ def test_a_mode_change_redacts_a_stored_error_discovery_does_not_retry():
         web = MCPServer(name="web", normalized_name="web", transport="http", url="http://127.0.0.1:9/mcp")
         local = MCPServer(name="local", normalized_name="local", transport="stdio", command=("unused",),
                           env={"API_KEY": "sentinel-secret"})
-        host = MCPHost(MCPConfiguration((web, local), MCPPolicy()), client_factory=client_factory,
-                       paranoid_mode="off")
+        host = MCPHost(MCPConfiguration((web, local), MCPPolicy()), client_factory=client_factory)
 
         async def errors_shown(query=""):
             found = await host.discover(query=query)
@@ -136,14 +133,11 @@ def test_a_mode_change_redacts_a_stored_error_discovery_does_not_retry():
         prompts_only = host.clients[local.name]
         prompts_only.initialized = False
         prompts_only.down = True
-        assert ["sentinel-secret" in shown for shown in await errors_shown()] == [True]
-        host.paranoid_mode = "on"
+        assert ["sentinel-secret" in shown for shown in await errors_shown()] == [False]
         shown = await errors_shown("http error")
         assert len(shown) == 1
         assert "reconnect failed" in shown[0]
         assert "sentinel-secret" not in shown[0]
-        host.paranoid_mode = "off"
-        assert ["sentinel-secret" in shown for shown in await errors_shown("http error")] == [True]
         await host.close()
 
     asyncio.run(run())

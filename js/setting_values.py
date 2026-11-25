@@ -180,8 +180,8 @@ def _coerce_value(spec: SettingSpec, raw: str) -> tuple[Any, str | None]:
         return v, None
     if spec.key == "PARANOID_MODE":
         v = text.lower()
-        if v not in ("off", "on", "extra"):
-            return None, msgs.EXPECTED_ONE_OF.said(choices="off|on|extra")
+        if v not in ("off", "on"):
+            return None, msgs.EXPECTED_ONE_OF.said(choices="off|on")
         return v, None
     if spec.key == "PROVIDER" and text:
         from . import providers as _providers

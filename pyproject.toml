@@ -53,6 +53,9 @@ where = ["."]
 include = ["js*", "defaults*"]
 
 [tool.pytest.ini_options]
+# Raw `pytest` runs the offline suite in parallel, as `just test` does;
+# `-m live` (or `just test-live`) opts in, `-n0` runs serial.
+addopts = "-m 'not ai_provider and not vision and not e2e and not live' -n logical --dist worksteal"
 markers = [
     "e2e: exercises a complete user-visible runtime path",
     "ai_provider: requires configured ai-python provider credentials or local OpenAI-compatible endpoint",

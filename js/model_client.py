@@ -97,9 +97,9 @@ def with_extra_headers(
 
 def turn_headers(headers: dict[str, str] | None, cfg: Any) -> dict[str, str]:
     """The headers a turn's model request sends: the login's ``headers``,
-    then ``cfg``'s EXTRA_HEADERS, then what PARANOID_MODE adds."""
+    then ``cfg``'s EXTRA_HEADERS, then the secret-scrub header."""
     merged = with_extra_headers(headers, getattr(cfg, "extra_headers", None))
-    return with_extra_headers(merged, paranoid.wire_headers(getattr(cfg, "paranoid_mode", "off")))
+    return with_extra_headers(merged, paranoid.wire_headers())
 
 
 _model_factory: contextvars.ContextVar[Callable[..., ai.Model] | None] = contextvars.ContextVar(

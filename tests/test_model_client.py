@@ -686,7 +686,7 @@ def test_set_refuses_extra_headers_without_a_colon():
     assert value is None and error
 
 
-def test_paranoid_mode_extra_sends_the_scrub_header(tmp_path, monkeypatch):
+def test_every_model_request_sends_the_scrub_header(tmp_path, monkeypatch):
     from js import turn_settings
     from js.config import Config
 
@@ -695,7 +695,7 @@ def test_paranoid_mode_extra_sends_the_scrub_header(tmp_path, monkeypatch):
         provider_base_url="http://x", provider_api_key=None, reasoning_effort=None,
         debug_log=None, history_file=tmp_path / "h", sessions_dir=tmp_path,
         session_file=tmp_path / "s.jsonl", prompts_dir=tmp_path,
-        **turn_settings.project({"PARANOID_MODE": "extra"}),
+        **turn_settings.project({"PARANOID_MODE": "off"}),
     )
     assert _sent_headers(tmp_path, monkeypatch, cfg) == {"X-JS-Scrub": "on"}
 

@@ -507,7 +507,7 @@ def test_docs_search_can_keep_authorization_on_refusal(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("failure", ["http", "transport"])
 @pytest.mark.parametrize("paranoid_mode", ["on", "off"])
-def test_search_error_secrets_at_truncation_boundary(monkeypatch, tmp_path, failure, paranoid_mode):
+def test_search_error_hides_the_key_from_the_model_in_every_mode(monkeypatch, tmp_path, failure, paranoid_mode):
     key = "sk-boundary-" + "SECRET" * 7
     detail = "x" * 190 + key
 
@@ -518,10 +518,7 @@ def test_search_error_secrets_at_truncation_boundary(monkeypatch, tmp_path, fail
 
     monkeypatch.setattr(web_search.urllib.request, "urlopen", fail)
     result = web_search.serper_search("test", context=ToolContext(cwd=tmp_path, paranoid_mode=paranoid_mode, serper_api_key=key))
-    if paranoid_mode == "on":
-        assert "sk-boundar" not in result
-    else:
-        assert "sk-boundar" in result
+    assert "sk-boundar" not in result
 
 
 _LONG = "é" * 400

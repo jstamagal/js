@@ -205,7 +205,7 @@ def _session_mcp_host(cfg, telemetry):
         return None
     from .mcp.host import MCPHost
 
-    return MCPHost(cfg.mcp, telemetry=telemetry, paranoid_mode=getattr(cfg, "paranoid_mode", "off"))
+    return MCPHost(cfg.mcp, telemetry=telemetry)
 
 
 async def _close_session_mcp_host(state: ReplState) -> None:

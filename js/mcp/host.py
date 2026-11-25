@@ -330,7 +330,6 @@ class MCPHost:
         telemetry: Any = None,
         event_sink: Callable[..., Any] | None = None,
         request_timeout: float | None = None,
-        paranoid_mode: str = "on",
     ) -> None:
         if request_timeout is None:
             request_timeout = getattr(config, "request_timeout_s", None)
@@ -347,12 +346,7 @@ class MCPHost:
         self.clients: dict[str, MCPClient] = {}
         self.remote_tools: dict[str, tuple[str, str, dict[str, Any]]] = {}
         self._server_tools: dict[str, dict[str, tuple[str, str, dict[str, Any]]]] = {}
-        # Each server's last tool listing as it came, so a mode change can
-        # index it again at once, without a call to the server.
-        self._raw_tools: dict[str, list[dict[str, Any]]] = {}
-        # Each server's last error as raised, and as shown under the current
-        # PARANOID_MODE.
-        self._raw_server_errors: dict[str, str] = {}
+        # Each server's last error, redacted.
         self._server_errors: dict[str, str] = {}
         self._server_collisions: dict[str, tuple[CatalogEntry, ...]] = {}
         self._cross_server_collisions: tuple[CatalogEntry, ...] = ()
@@ -360,38 +354,11 @@ class MCPHost:
         self._reserved_public_names: set[str] = set()
         self._reported_public_collisions: set[str] = set()
         self._closed = False
-        # PARANOID_MODE: off shows a server's configured credentials in
-        # results, errors and events; on and extra replace them with [REDACTED].
-        self._paranoid_mode = paranoid_mode
-
-    @property
-    def paranoid_mode(self) -> str:
-        return self._paranoid_mode
-
-    @paranoid_mode.setter
-    def paranoid_mode(self, mode: str) -> None:
-        """A new mode indexes every server's cached tool listing again at
-        once, redacted for it, before anything reads the metadata; the next
-        model call also lists the tools again."""
-        changed = mode != self._paranoid_mode
-        self._paranoid_mode = mode
-        if not changed:
-            return
-        for name, tools in self._raw_tools.items():
-            server = next((s for s in self.config.servers if s.name == name), None)
-            if server is not None:
-                self._index_server_tools(server, tools)
-        if self._raw_tools:
-            self._regroup_tools()
-        for name in self.clients:
-            self._dirty.setdefault(name, set()).add("tools")
-        for name, message in self._raw_server_errors.items():
-            server = next((s for s in self.config.servers if s.name == name), None)
-            self._server_errors[name] = message if server is None else _redact_text(message, self._secrets(server))
 
     def _secrets(self, server: MCPServer) -> tuple[str, ...]:
-        """What this host redacts for ``server``: nothing when PARANOID_MODE is off."""
-        return _secret_values(server) if self.paranoid_mode != "off" else ()
+        """A server's configured credentials, which results, errors and
+        events carry as [REDACTED]."""
+        return _secret_values(server)
 
     def reserve_public_names(self, names: set[str]) -> None:
         """Withhold MCP names already claimed by the turn's native surface."""
@@ -510,13 +477,11 @@ class MCPHost:
 
     def _record_server_error(self, server: MCPServer, exc: Exception) -> None:
         raw = str(exc).strip() or type(exc).__name__
-        self._raw_server_errors[server.name] = raw
         message = _redact_text(raw, self._secrets(server))
         self._server_errors[server.name] = message
         self._event("mcp_server_error", server=server.name, error=message)
 
     def _forget_server_error(self, name: str) -> None:
-        self._raw_server_errors.pop(name, None)
         self._server_errors.pop(name, None)
 
     async def _ensure_server(self, server: MCPServer) -> MCPClient:
@@ -531,8 +496,6 @@ class MCPHost:
         def changed(feature: str, name: str = server.name) -> None:
             self._dirty.setdefault(name, set()).add(feature)
 
-        # Every callback reads PARANOID_MODE when it runs: the mode can change
-        # while the server stays connected.
         def secrets() -> tuple[str, ...]:
             return self._secrets(server)
 
@@ -615,13 +578,12 @@ class MCPHost:
                 self._record_server_error(server, exc)
                 self._dirty.setdefault(server_name, set()).add("tools")
                 continue
-            self._raw_tools[server_name] = list(tools)
             self._index_server_tools(server, tools)
             self._forget_server_error(server_name)
         self._regroup_tools()
 
     def _index_server_tools(self, server: MCPServer, tools: list[dict[str, Any]]) -> None:
-        """Index one server's listed tools, redacted for the current mode."""
+        """Index one server's listed tools, redacted."""
         server_name = server.name
         replacement: dict[str, tuple[str, str, dict[str, Any]]] = {}
         grouped_tools: dict[

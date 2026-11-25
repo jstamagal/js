@@ -18,7 +18,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .. import paranoid, settings as _settings
+from .. import settings as _settings
 from ..capped_process import CappedProcessResult, run_capped
 from ..tool_binaries import resolve_binary
 from .core import Tool, ToolContext
@@ -152,10 +152,7 @@ def missing_api_key(tool_name: str, context: ToolContext) -> str | None:
 
 
 def _hidden(context: ToolContext, *keys: str | None) -> tuple[str, ...]:
-    """The keys an error to the model shows as [REDACTED]: all of them when
-    PARANOID_MODE masks, none when it is off."""
-    if not paranoid.masks(getattr(context, "paranoid_mode", "off")):
-        return ()
+    """The keys an error to the model shows as [REDACTED]."""
     return tuple(key for key in keys if key)
 
 

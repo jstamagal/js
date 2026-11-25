@@ -216,7 +216,7 @@ TURN_SETTINGS: tuple[TurnSetting, ...] = (
     TurnSetting("lsp_timeout_s", "LSP_TIMEOUT", integer, on_context=True),
     TurnSetting("notebook_output_lines", "NOTEBOOK_OUTPUT_LINES_MAX", integer, on_context=True),
     TurnSetting("jev_model", "JEV_MODEL", text, on_context=True),
-    TurnSetting("paranoid_mode", "PARANOID_MODE", choice("off", "on", "extra"), on_context=True),
+    TurnSetting("paranoid_mode", "PARANOID_MODE", choice("off", "on"), on_context=True),
     TurnSetting("skills_disabled", "SKILLS_DISABLED", names, on_context=True),
     # --- on the Config only ---
     TurnSetting("silent_overflow_recovery", "SILENT_OVERFLOW_RECOVERY", flag),

@@ -22,7 +22,7 @@ def test_login_test_request_carries_extra_headers_and_the_scrub_header(monkeypat
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("JS_EXTRA_HEADERS", "X-Pool: fofa")
-    monkeypatch.setenv("JS_PARANOID_MODE", "extra")
+    monkeypatch.delenv("JS_PARANOID_MODE", raising=False)
     _no_provider_env(monkeypatch, "opencode-go")
     sent = {}
 
@@ -154,7 +154,7 @@ def test_an_invalid_value_for_a_secret_setting_is_never_echoed(monkeypatch, caps
         key = name.split()[0]
         if bad is None:
             continue
-        for mode in ("off", "on", "extra"):
+        for mode in ("off", "on"):
             store = settings.seed_defaults()
             setcmd.set_command(store, f"PARANOID_MODE {mode}")
             result = setcmd.set_command(store, f"{key} {bad}")

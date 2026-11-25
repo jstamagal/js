@@ -8,7 +8,6 @@ import time
 import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 from turn_driver import run_async as run_turn_async
@@ -688,7 +687,7 @@ def test_runtime_reuses_borrowed_host_across_turns_and_closes_owned_host(monkeyp
 
         owned_hosts: list[MCPHost] = []
 
-        def host_factory(mcp_config, *, telemetry=None, paranoid_mode="on"):
+        def host_factory(mcp_config, *, telemetry=None):
             owned = MCPHost(mcp_config, telemetry=telemetry, client_factory=FakeClient)
             owned_hosts.append(owned)
             return owned
@@ -820,8 +819,7 @@ def test_successful_server_data_is_redacted_everywhere(config):
 
 def test_runtime_delivers_all_mcp_events_through_strict_hooks(monkeypatch, config, tmp_path):
     async def drive():
-        # The mode the turn runs with, so the turn does not list tools again.
-        host = MCPHost(config, client_factory=FakeClient, paranoid_mode="off")
+        host = MCPHost(config, client_factory=FakeClient)
         await host.discover(query="mcp")
         client = FakeClient.instances[-1]
         delivered = []
@@ -1420,36 +1418,18 @@ def test_client_errors_are_encoding_redacted_and_long_names_dispatch():
         assert "[REDACTED]" in str(raised.value)
 
 
-def test_a_connected_servers_redaction_follows_paranoid_mode_changes():
+def test_a_connected_servers_credentials_are_always_redacted():
     server = MCPServer(
         name="s", normalized_name="s", transport="http", url="http://127.0.0.1:1/mcp",
         headers={"Authorization": "Bearer abc123"},
     )
     events = []
-    host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=FakeClient, paranoid_mode="off",
+    host = MCPHost(MCPConfiguration((server,), MCPPolicy()), client_factory=FakeClient,
                    event_sink=lambda *a, **k: events.append(k))
     FakeClient.instances.clear()
     asyncio.run(host.discover())
     client = FakeClient.instances[-1]
 
-    assert "abc123" in client.kwargs["redactor"]("rejected abc123")
-    host.paranoid_mode = "on"
     assert "abc123" not in client.kwargs["redactor"]("rejected abc123")
     client.kwargs["log_sink"]({"data": "token abc123"})
     assert "abc123" not in repr(events)
-
-
-def test_run_turn_gives_a_reused_host_the_turns_paranoid_mode(tmp_path, monkeypatch):
-    from dataclasses import replace
-
-    from test_lazy_tool_discovery import _cfg
-
-    from js import runtime
-
-    host = MCPHost(MCPConfiguration((), MCPPolicy()), client_factory=FakeClient, paranoid_mode="off")
-    cfg = replace(_cfg(tmp_path), paranoid_mode="on")
-    monkeypatch.setattr(runtime.model_client, "stream_model_async", AsyncMock(side_effect=RuntimeError("stop")))
-    with pytest.raises(Exception):
-        asyncio.run(runtime.run_turn_async(cfg, "s", [{"role": "user", "content": "hi"}],
-                                           runtime.Telemetry(None), mcp_host=host))
-    assert host.paranoid_mode == "on"

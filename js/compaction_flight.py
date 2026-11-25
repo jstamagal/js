@@ -16,7 +16,7 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
-from . import messages as msgs, output, paranoid, paths, setcmd
+from . import messages as msgs, output, paths, setcmd
 from .console import compaction_events
 
 ACTIVE_FLIGHT: ContextVar[CompactionFlight | None] = ContextVar("compaction_flight", default=None)
@@ -82,12 +82,10 @@ def _redact(value):
     return value
 
 
-def _snapshot_settings(settings: dict, mode: str) -> dict:
+def _snapshot_settings(settings: dict) -> dict:
     """The settings a flight records: each secret setting masked the way
-    `/set` shows it, and credential-named keys dropped, when ``mode`` masks."""
+    `/set` shows it, and credential-named keys dropped."""
 
-    if not paranoid.masks(mode):
-        return settings
     return setcmd.masked_store(_redact(settings), masked=True)
 
 
@@ -161,7 +159,7 @@ class CompactionFlight:
                     base_url=cfg.provider_base_url, session=str(cfg.session_file),
                     pid=os.getpid(), parent_pid=os.getppid(),
                     trigger=trigger, forced=forced, focus=focus, preserve_from=preserve_from,
-                    settings=_snapshot_settings(settings, getattr(cfg, "paranoid_mode", "off")),
+                    settings=_snapshot_settings(settings),
                     max_output_tokens=cfg.max_output_tokens,
                     model_context_window=getattr(cfg, "model_context_window", None),
                     caller_stack=traceback.format_stack(), details=details,

@@ -331,7 +331,7 @@ def test_provider_config_reaches_stream_model(monkeypatch, tmp_path):
     assert captured_kwargs.get("provider_id") == "openai"
     assert captured_kwargs.get("provider_base_url") == "http://127.0.0.1:11434/v1"
     assert captured_kwargs.get("provider_api_key") == "ollama"
-    assert captured_kwargs.get("provider_headers") == {"x-test": "1"}
+    assert captured_kwargs.get("provider_headers") == {"x-test": "1", "X-JS-Scrub": "on"}
 
 
 def test_loading_a_jsrc_with_old_names_leaves_it_as_written(tmp_path):

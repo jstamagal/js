@@ -260,7 +260,7 @@ def test_subagent_prefixed_model_reroutes_and_bare_model_keeps_parent_provider(m
     assert bare["provider_id"] == "ollama"
     assert bare["provider_base_url"] == OLLAMA_BASE_URL
     assert bare["provider_api_key"] == "parent-key"
-    assert bare["provider_headers"] == {"x-parent": "1"}
+    assert bare["provider_headers"] == {"x-parent": "1", "X-JS-Scrub": "on"}
 
 
 def test_subagent_model_precedence_tool_arg_then_prefer_inherit(monkeypatch, tmp_path):
