@@ -202,6 +202,34 @@ def append_turn(cfg: Config, message: dict) -> None:
     memory.append_message(cfg.session_file, message)
 
 
+async def idle_compact_async(cfg: Config, state: ReplState) -> None:
+    """The compaction the idle cache keepalive asks for as it stops
+    (CACHE_KEEPALIVE_COMPACTION): the history summarized while nobody
+    waits on it, so the next turn writes a small prompt to the cache."""
+    active_cfg = state.config_for_turn(cfg)
+    context = runtime.T.STOCK_CONTEXT
+    turn_status = context.turn_status
+    turn_status.compacting = True
+    try:
+        with stream_transport.net_role(msgs.COMPACTING_ROLE.words()):
+            result = await compaction.compact_now(
+                active_cfg, state.system, state.messages, context=context,
+                trigger={"phase": "idle", "context_tokens": context.last_prompt_tokens + context.last_output_tokens},
+                **compaction.compact_hooks(state, active_cfg),
+            )
+    except snippets.SnippetError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - a failed summary leaves the history as it was
+        msgs.say(msgs.COMPACTION_FAILED, error=f"{type(exc).__name__}: {exc}")
+        return
+    finally:
+        turn_status.compacting = False
+    if compaction.compacted(result):
+        context.last_prompt_tokens = 0
+        context.last_output_tokens = 0
+    msgs.say(msgs.COMPACTION_DONE, result=result)
+
+
 async def maybe_auto_compact_async(cfg: Config, state: ReplState) -> None:
     """The REPL's between-turn trigger: the policy lives in compaction, the
     printing lives here. The gate reads the live settings, so a /set made

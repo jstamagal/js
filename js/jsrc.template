@@ -631,8 +631,25 @@
 # Prompt cache lifetime, in seconds. If your last request was at least this
 # long ago, the cache is gone anyway, so js clears old tool results first;
 # if it was sooner, js summarizes first so the cache isn't thrown away.
-# 0: always clear first.
+# 0: always clear first. The idle cache keepalive refreshes the cache at 90%
+# of it. Claude through a CLIProxyAPI OAuth login caches for an hour: 3600.
 #set COMPACTION_CACHE_TTL 300
+
+# While the REPL sits idle, resend the last request of a Claude route with a
+# one-token output cap just before the prompt cache runs out, so the next
+# turn reads the cache instead of writing it again. Each refresh costs a
+# cache read of the whole prompt plus one output token. GPT routes are
+# never refreshed: OpenAI keeps its own cache.
+#set CACHE_KEEPALIVE on
+
+# Seconds of idle after which no more refreshes go out.
+#set CACHE_KEEPALIVE_IDLE_MAX 3600
+
+# on: at that point, compact the history first, so the next turn writes a
+# small prompt. Only when the context is at least
+# CACHE_KEEPALIVE_COMPACTION_TOKENS_MIN tokens.
+#set CACHE_KEEPALIVE_COMPACTION on
+#set CACHE_KEEPALIVE_COMPACTION_TOKENS_MIN 50000
 
 # The model that writes the summary. "same" means the one you're using.
 #   example:  set COMPACTION_EXTERNAL_MODEL cpa/claude-haiku-5-5

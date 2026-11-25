@@ -681,3 +681,44 @@ uses current user position rather than a pre-compaction list offset.
 `tests/compaction_harness/` contains standalone adversarial runners: scripted
 provider-boundary failures and a loopback HTTP/SSE server exercising the actual
 SDK adapter. See [Compaction adversarial audit](compaction-adversarial-audit.md).
+
+### Idle cache keepalive
+
+`js/cache_keepalive.py`. Every model call of a turn records the request it
+sends on its ToolContext (`cached_request`): messages, tools, route, effort,
+sampling, headers, cache key and the usage meter, everything but the
+callbacks and the output cap. While the REPL waits for input, a loop beside
+the input line looks every 5 seconds. At 90% of `COMPACTION_CACHE_TTL` after
+the cache was last read (at least 10 seconds before it runs out) it resends
+the main context's recorded request with `max_output_tokens=1`. The replay is
+the same prefix the provider cached, so it is a cache read that renews the
+entry; it bills that read plus one output token, charged to the sessions the
+request was charged to, and prints `NET_CACHE_KEEPALIVE` at `NET_DISPLAY` 2.
+A refresh sets `last_request_at`, so compaction ordering sees a warm cache.
+The status bar shows the next refresh as `STATUS_KEEPALIVE`.
+
+Only Claude routes are refreshed: the Anthropic wire with
+`ANTHROPIC_PROMPT_CACHE` on, and a model whose id says claude behind any
+other wire. CLIProxyAPI adds the cache breakpoints itself to a translated
+Claude request (system block and last message) and, on an OAuth login, gives
+them the 1h ttl, so there `COMPACTION_CACHE_TTL 3600` matches what the
+provider does and costs one refresh an hour. A request with `THINKING_BUDGET`
+set is not replayed: a one-token cap changes the budget, and a thinking change
+invalidates the cached messages. OpenAI caches automatically, keeps entries
+for a retention it decides, and its Responses API takes no output cap under
+16, so no GPT route is refreshed.
+
+Refreshing stops for the rest of the idle stretch when the session has been
+idle `CACHE_KEEPALIVE_IDLE_MAX` seconds (0: no refreshes), when a refresh reads
+less than half its prompt from the cache, when a refresh fails, when the cache
+had already run out (the machine slept), and silently when the live model or
+provider changed. A history rewrite (`compaction.history_rewritten`) forgets
+the recorded request. A turn records a new one and starts a new stretch.
+
+At the idle limit, with `CACHE_KEEPALIVE_COMPACTION` on and the last
+context at least `CACHE_KEEPALIVE_COMPACTION_TOKENS_MIN` tokens, the keepalive
+queues `conversation.idle_compact_async` on the turn queue, where it runs as a
+turn does (^C cancels it) and summarizes the history, so the request that ends
+the idle stretch writes a small prompt. The summary request is the plain-text
+`<conversation>` shape, not the conversation's own prefix, so it does not read
+the cache; it costs the same whether the cache is warm or not.
