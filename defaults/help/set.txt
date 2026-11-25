@@ -24,6 +24,24 @@ MOTD_DIR
 MODEL
     Default model id; unprefixed ids route through AI Gateway.
 
+IMAGE_MODEL
+    Default provider/model for image in js generate. Override with -m.
+
+VIDEO_MODEL
+    Default provider/model for video in js generate. Override with -m.
+
+MUSIC_MODEL
+    Default provider/model for music in js generate. Override with -m.
+
+SFX_MODEL
+    Default provider/model for sfx in js generate. Override with -m.
+
+TTS_MODEL
+    Default provider/model for tts in js generate. Override with -m.
+
+STT_MODEL
+    Default provider/model for stt in js generate. Override with -m.
+
 OUTPUT_TOKENS_MAX
     Per-call max_tokens; unset = not sent, except on the Anthropic wire,
     which sends the model's known output limit, else

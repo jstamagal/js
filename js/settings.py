@@ -212,6 +212,12 @@ REGISTRY: tuple[SettingSpec, ...] = (
     # --- agent ---
     SettingSpec("DEFAULT_AGENT", "str", group="models"),
     # --- model ---
+    SettingSpec("IMAGE_MODEL", "str", group="models"),
+    SettingSpec("VIDEO_MODEL", "str", group="models"),
+    SettingSpec("MUSIC_MODEL", "str", group="models"),
+    SettingSpec("SFX_MODEL", "str", group="models"),
+    SettingSpec("TTS_MODEL", "str", group="models"),
+    SettingSpec("STT_MODEL", "str", group="models"),
     SettingSpec("MODEL", "str", aliases=("model",), group="models"),
     SettingSpec("OUTPUT_TOKENS_MAX", "int",
                 env="JS_MAX_OUTPUT_TOKENS", empty=EMPTY_NONE, group="models"),

@@ -681,6 +681,91 @@ still carries its image.
 The `fetch` tool covers the network side — methods, headers, raw/JSON body,
 `file://`, downloads to disk, binary descriptors, and image-for-vision.
 
+## Generate media
+
+`js generate --help` lists the operations and flags. Put the operation after
+`generate`. For example, `-n 3` requests three images in one request. Ordinary
+chat keeps its own `-n` flag.
+
+```sh
+export JS_IMAGE_MODEL=cpa/gpt-image-1.5
+js generate --t2i -p 'A squirrel with big nuts'
+js generate --i2i --image out.png -p 'Keep the squirrel. Make it winter.' -o winter.png
+js generate --t2i -u http://minimax-h3-image@localhost:8888/v1 \
+  -a h3-image --enhance-url http://refiner-27b@localhost:8080/v1 -p 'An owl at dusk'
+```
+
+The bare image run writes `out.png` in the current directory. Use `--force`
+to replace an existing file, `-o -` for a single artifact on stdout, and
+`-p -` or `--prompt-file FILE` for input. Multiple images get numbered paths.
+`--dry-run` prints the request, writer route and destinations without submitting
+a job. Repeat `--param-json KEY=JSON` for additional native fields.
+
+`-m provider/model` selects a saved login and its model. `-u` selects the
+media server directly. A bare `-u http://localhost:8888/v1` takes its model
+from `-m` or the operation's setting. The six settings are `IMAGE_MODEL`,
+`VIDEO_MODEL`, `TTS_MODEL`, `STT_MODEL`, `MUSIC_MODEL` and `SFX_MODEL`.
+Set them in jsrc, with `/set`, or with a `JS_` environment variable.
+
+`--enhance` runs a tool-free text call before submission. `-a NAME`,
+`--enhance-model` and `--enhance-url` each enable it. A CLI writer route wins,
+then the agent's model, then the normal js text model. A target containing
+`h3-image` selects the stock H3 image writer. Use `-a` to pick another agent,
+including a colon-qualified name. Agent instructions can include trusted
+prompt files using normal js inline directives. The writer receives reference
+names and their order. For speech, the input script stays verbatim and the
+writer supplies delivery instructions to endpoints that accept them.
+
+### Video jobs and Hugging Face Spaces
+
+```sh
+export JS_VIDEO_MODEL=hf.space/multimodalart/minimax-h3
+js generate --t2v -p 'A squirrel buries an acorn in fresh snow' --duration 4 --submit-only > shot.id
+js generate --resume "$(cat shot.id)" -o shot.mp4
+
+js generate --t2i --space MiniMaxAI/minimax-h3-image -p 'A squirrel at dawn' -o dawn.png
+js generate --i2v -m cpa/grok-imagine-video-1.5 --first-frame dawn.png -p 'Slow push in' -o dawn.mp4
+```
+
+Normally js prints the accepted ID to stderr, waits, downloads the result and
+prints its path. `--submit-only` prints the ID alone on stdout. Resume with the
+same endpoint and, for a Space, the same function. For a Space image, include
+`--t2i` when resuming. A resume only retrieves an existing job. Gradio can
+expire or consume events, so save the finished artifact while it is available.
+
+Spaces use the Gradio named-argument HTTP API. js reads `HF_TOKEN` or the
+active Hugging Face token file so calls can use the account's ZeroGPU quota.
+The official `MiniMaxAI/MiniMax-H3-Turbo-Lora` video Space uses `/output_video`.
+Its named overrides include `--param-json steps=6` and `--param-json seed=42`.
+Other Spaces default to `/generate`. Select a function with `--api-name` and pass
+its named inputs with `--param-json`. The H3 image Space takes an ordered
+gallery and the H3 video Space above takes first and last frames. Each Space
+defines its own function names, inputs, outputs and retention.
+
+### Media endpoints
+
+- OpenAI Images and sd.cpp accept generations and multipart edits under
+  `/v1/images`. A ComfyUI bridge exposing these endpoints can use the same
+  commands. Grok edits encode image references in JSON. Gemini image models
+  on the CPA login use Google's `generateContent`. For a native Google
+  endpoint, use a base ending in `/v1beta`. Imagen text-to-image uses
+  `:predict` on deployments that serve it.
+- Grok video supports submission and retrieval by request ID. Frame anchors,
+  reference images, keyframes, audio and clip extension depend on the model.
+- OpenAI-compatible speech uses `/audio/speech`. Native Grok uses `/tts` and
+  `/tts/voices`. Voxtral uses multipart `/audio/transcriptions`; `--diarize`
+  and `--timestamps` preserve the provider's segments in JSON.
+- ElevenLabs music, sound effects and speech use a saved login or a model such
+  as `elevenlabs/music_v1` with `ELEVENLABS_API_KEY`. For `--lyrics`, js builds
+  one section of the requested duration (30 seconds by default). Use
+  `--composition-plan FILE` for multiple sections with their own timing.
+
+```sh
+js generate --music -m elevenlabs/music_v1 -p 'Brushed jazz trio' --duration 12 --instrumental -o bed.mp3
+js generate --tts -m cpa/grok-tts --voice eve -p 'Winter came early.' -o line.mp3
+js generate --stt -m mistral/voxtral-mini-latest --audio-file line.mp3 --diarize -o line.json
+```
+
 ## Commit Mode
 
 The built-in commit workflow is a shortcut for the prompt-directory commit

@@ -589,6 +589,38 @@ EXEC_FAILED = Message("exec: {command} did not start: {error}")
 
 # --- js --help ----------------------------------------------------------------
 
+GENERATE_DESCRIPTION = Message("Generate media on a saved login, HTTP endpoint or Hugging Face Space.")
+GENERATE_MODEL = Message("media provider/model (default JS_<KIND>_MODEL)")
+GENERATE_URL = Message("media endpoint, e.g. http://model@localhost:8888/v1")
+GENERATE_SPACE = Message("Hugging Face Gradio Space, owner/name")
+GENERATE_API_NAME = Message("Space function (default /generate)")
+GENERATE_PARAM_JSON = Message("additional request field or named Space input (repeatable)")
+GENERATE_PROMPT = Message("prompt or spoken script, - for stdin")
+GENERATE_OUTPUT = Message("file to create, or - for stdout")
+GENERATE_FORCE = Message("replace existing output")
+GENERATE_FORMAT = Message("output format, inferred from -o when possible")
+GENERATE_DRY_RUN = Message("show request and destination without calling an endpoint")
+GENERATE_AGENT = Message("writer agent, including colon-qualified names")
+GENERATE_ENHANCE_MODEL = Message("writer provider/model")
+GENERATE_ENHANCE_URL = Message("writer endpoint, independent of -u")
+GENERATE_IMAGE = Message("source image")
+GENERATE_REF = Message("ordered reference path or URL (repeatable)")
+GENERATE_SUBMIT_ONLY = Message("print the accepted job ID on stdout and exit")
+GENERATE_RESUME = Message("retrieve a submitted job on the same route")
+GENERATE_OPERATIONS = {
+    "t2i": Message("Generate an image from text."),
+    "i2i": Message("Edit one or more images."),
+    "t2v": Message("Generate a clip from text."),
+    "i2v": Message("Animate a first frame."),
+    "r2v": Message("Generate a shot from reference images."),
+    "v2v": Message("Edit a video."),
+    "extend-video": Message("Continue a video."),
+    "music": Message("Compose a music track."),
+    "sfx": Message("Generate a sound effect."),
+    "tts": Message("Speak a script."),
+    "stt": Message("Transcribe a recording."),
+}
+
 SHORT_HELP = Message(
     'js — one agent, one terminal.\n'
     '\n'
@@ -607,6 +639,7 @@ SHORT_HELP = Message(
     '  js --login                          Sign in to a provider.\n'
     '  js --verify                         Check agents and tool configuration.\n'
     '  js --bench AGENT                    Run an agent benchmark.\n'
+    '  js generate --help                   Generate images, video, music and speech.\n'
     '  js --commit                         Run the commit agent.\n'
     '  js -p "task" --json                  Print one final JSON object.\n'
     '  js -p "task" --json-stream           Stream JSON Lines during the run.\n'

@@ -9,6 +9,12 @@
 # --- model ---
 set DEFAULT_AGENT defaultagent
 set MODEL cpa/claude-opus-5-5
+set -IMAGE_MODEL
+set -VIDEO_MODEL
+set -MUSIC_MODEL
+set -SFX_MODEL
+set -TTS_MODEL
+set -STT_MODEL
 set -OUTPUT_TOKENS_MAX
 set -CONTEXT_SIZE
 set EFFORT medium

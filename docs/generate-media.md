@@ -1,5 +1,7 @@
 # A media generation command for js
 
+For the installed command, see [Generate media](user-guide.md#generate-media).
+
 Research and proposed interface, 2026-11-24. The `js generate` examples below are designs. The GitHub examples identify the tools that already implement the underlying behaviors.
 
 The [selected flags](generate-flags.txt) define the implementation scope. This research note records the broader options considered.

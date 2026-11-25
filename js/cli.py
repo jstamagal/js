@@ -295,6 +295,10 @@ def _main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError) as exc:
         msgs.warn(msgs.FAILED, error=exc)
         return 2
+    if dispatch_argv[:1] == ["generate"]:
+        from . import generate_cli
+        dotenv.load()
+        return generate_cli.main(dispatch_argv[1:])
     # Handle login/logout before argparse so they don't require a valid agent/config.
     # None of them take -C, so the cwd is already final and .env can load here;
     # otherwise `js --login x` and `js --login=x` (argparse path) would disagree.
