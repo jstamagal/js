@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **CLIProxyAPI gets the session's prompt cache key.** Requests on the
+  `cliproxyapi` transport now carry `prompt_cache_key`, whatever address the
+  proxy runs on. CLIProxyAPI passes it to Codex as the upstream cache key and
+  pins the conversation to one account; before, it guessed a session from the
+  system prompt and first user message, which a compaction summary replaces.
+  The key is now `js-` and a hash of the agent and the session file's full
+  path: a derived session's name made the old key longer than the 64
+  characters OpenAI takes, and two same-named sessions in different projects
+  shared one.
+
 - **Idle cache keepalive.** While the REPL waits for input, js resends the
   last request of a Claude route with a one-token output cap at 90% of
   `COMPACTION_CACHE_TTL`, so the prompt cache stays warm and the next turn

@@ -199,10 +199,20 @@ def build_request_params(
     # `Unsupported parameter(s): prompt_cache_key`). Ask the host instead. Losing
     # the hint on an unlisted endpoint costs cache hit rate; sending it costs the
     # entire request.
+    # CLIProxyAPI is the one endpoint known by its transport rather than its
+    # host, since it runs wherever its operator put it. It reads the key as the
+    # conversation's session: toward Codex it becomes the upstream
+    # `prompt_cache_key` and pins the conversation to one account; toward Claude
+    # it seeds `metadata.user_id` and the same account pinning. Without one it
+    # derives a session from the system prompt and first user message, which a
+    # compaction summary replaces, so the conversation lands on a new key and,
+    # with several accounts, possibly a new account with a cold cache.
+    # `prompt_cache_retention` is not sent: CLIProxyAPI strips it before Codex.
     accepts_cache_key = accepts_prompt_cache_key(
         provider_name=wire.provider_name,
         sdk_provider_name=wire.sdk_provider_name,
         base_url=provider_base_url,
+        transport=wire.transport,
     )
     if wire.anthropic and _settings.knob(settings, "ANTHROPIC_PROMPT_CACHE"):
         cache_params = ai_params.CacheParams()
@@ -272,15 +282,20 @@ OPENCODE_SESSION_HEADER = "x-opencode-session"
 
 
 def accepts_prompt_cache_key(
-    *, provider_name: str, sdk_provider_name: str, base_url: str | None
+    *, provider_name: str, sdk_provider_name: str, base_url: str | None,
+    transport: str | None = None,
 ) -> bool:
     """Does the endpoint this request is actually going to take `prompt_cache_key`?
 
     A provider id names a vendor only until someone points it elsewhere; the base
     URL is what says where the request lands. So a redirected `openai` provider
     answers no, and a `sdk="openai"` provider serving its own vendor's host
-    (ollama, vLLM, mimo, xAI) was never OpenAI to begin with.
+    (ollama, vLLM, mimo, xAI) was never OpenAI to begin with. A `cliproxyapi`
+    transport is CLIProxyAPI at whatever address it was given, and it takes the
+    key.
     """
+    if transport == "cliproxyapi":
+        return True
     if base_url:
         try:
             host = (urlsplit(base_url).hostname or "").lower()

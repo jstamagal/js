@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import hashlib
 import inspect
 import json
 import os
@@ -198,16 +199,24 @@ def _overridden(cfg: Config, model_override: str | None, provider_id_override: s
     )
 
 
+# OpenAI refuses a `prompt_cache_key` longer than this.
+_CACHE_KEY_MAX = 64
+
+
 def _cache_key(cfg: Config) -> str | None:
     """One conversation, one cache key: OpenAI-compatible endpoints use it to
     route a request to the machine already holding that conversation's prefix.
-    Keyed on the session rather than the agent so two concurrent sessions do
-    not contend for one prefix. A session-less run sends no key and falls back
-    to the provider's own longest-prefix matching."""
+    Keyed on the agent and the session file's full path, so two concurrent
+    sessions do not contend for one prefix even when their files share a name
+    in different projects. Hashed, because a derived session's name alone is
+    64 hex digits and the key has `_CACHE_KEY_MAX` characters. A session-less
+    run sends no key and falls back to the provider's own longest-prefix
+    matching."""
     session_file = getattr(cfg, "session_file", None)
     if session_file is None or Path(session_file).name in ("", os.devnull, "null"):
         return None
-    return f"js-{cfg.agent_id}-{Path(session_file).stem}"
+    identity = f"{cfg.agent_id}\0{Path(session_file).expanduser().resolve(strict=False)}"
+    return "js-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:_CACHE_KEY_MAX - 3]
 
 
 def _prepare_turn_context(context: ToolContext, cfg: Config, request: ModelRequest,
