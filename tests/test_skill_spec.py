@@ -75,7 +75,8 @@ def test_loaded_skill_names_its_directory_and_bundled_files(tmp_path):
 
     result = skill.skill("pdf", context=context)
 
-    assert result.startswith('<skill_content name="pdf">\nRun scripts/extract.py.\n')
+    assert result.startswith('<skill_content name="pdf">\n')
+    assert "Run scripts/extract.py." in result
     assert f"Skill directory: {path.parent}\n" in result
     assert "<file>references/spec.md</file>\n<file>scripts/extract.py</file>" in result
     assert "<file>SKILL.md</file>" not in result

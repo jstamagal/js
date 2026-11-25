@@ -21,7 +21,8 @@ def test_skill_loads_local_skill_from_agents_skills_dir(tmp_path):
 
     result = skill.skill("deploy", context=context)
 
-    assert result.startswith('<skill_content name="deploy">\n# Deploy\n\nrun the thing\n')
+    assert result.startswith('<skill_content name="deploy">\n')
+    assert "# Deploy\n\nrun the thing\n" in result
     assert f"Skill directory: {tmp_path / '.agents' / 'skills' / 'deploy'}\n" in result
 
 
@@ -30,7 +31,9 @@ def test_skill_loads_from_native_js_skills_dir(tmp_path):
     context = ToolContext(cwd=tmp_path)
     _write_skill(tmp_path / ".js" / "skills", "lint", "lint skill")
 
-    assert '<skill_content name="lint">\nlint skill\n' in skill.skill("lint", context=context)
+    result = skill.skill("lint", context=context)
+    assert result.startswith('<skill_content name="lint">\n')
+    assert "lint skill\n" in result
 
 
 def test_skill_tool_refuses_user_only_skill(tmp_path):

@@ -117,7 +117,7 @@ def skill_content(metadata: SkillMetadata, instructions: str, notes: Iterable[st
     directory (relative paths in the body resolve against it), the files
     bundled with it, and ``notes``."""
     directory = metadata.path.parent
-    lines = [f'<skill_content name="{metadata.name}">', instructions.strip("\n"), "",
+    lines = [f'<skill_content name="{metadata.name}">',
              f"Skill directory: {directory}",
              "Relative paths in this skill are relative to the skill directory."]
     resources, more = skill_resources(directory)
@@ -128,6 +128,7 @@ def skill_content(metadata: SkillMetadata, instructions: str, notes: Iterable[st
             lines.append(f"<!-- {more} more files not listed -->")
         lines.append("</skill_resources>")
     lines += list(notes)
+    lines += ["", instructions.strip("\n")]
     lines.append("</skill_content>")
     return "\n".join(lines)
 

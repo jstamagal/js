@@ -1,10 +1,8 @@
 Load a skill's full instructions by name.
 
-Skills are specialized instructions for specific tasks. The skills available
-in this session are listed in `<available_skills>` at the end of this
-description, each with what it is for. When a task matches a skill's
-description, call this tool with the skill's name to load its instructions,
-then follow them.
+Skills are specialized instructions for specific tasks. When a task matches
+an available skill's description, call this tool with the skill's name to
+load its instructions, then follow them.
 
 Rules:
 - Only load skills that are relevant to the current task.
@@ -33,4 +31,4 @@ A nearer layer's skill replaces a farther one of the same name.
 
 ### name
 
-The name of a skill listed in `<available_skills>`.
+The name of an available skill.

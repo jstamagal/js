@@ -522,10 +522,10 @@ Parameters:
 
 ### `skill`
 
-Loads a skill's instructions by name. The tool's description ends with an
-`<available_skills>` block naming every skill the model may load, with its
-description, and its `name` argument is an enum of those names; with none to
-load, the tool is left off the turn. The result is a `<skill_content>` block:
+Loads a skill's instructions by name. The tool publishes an `<available_skills>`
+block and a name enum when they fit within 8 KiB. For larger catalogs, look up
+descriptions with `tool_discovery` and `kind="skill"`. With no skill to load,
+the tool is left off the turn. The result is a `<skill_content>` block:
 the body without frontmatter, `Skill directory: <dir>` (relative paths in the
 body resolve against it), a `<skill_resources>` list of the other files under
 the directory (the first 50), and which declared tools were loaded or are

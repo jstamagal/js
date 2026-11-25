@@ -158,7 +158,8 @@ def test_skill_load_returns_instructions_and_activates_allowed_requirements(tmp_
     assert [item["id"] for item in skills_found] == ["skill:inspect"]
     assert skills_found[0]["loadable"] is True
     loaded = surface.discover(load="skill:inspect")
-    assert loaded.startswith('<skill_content name="inspect">\nOpen the page and report visual defects.\n')
+    assert loaded.startswith('<skill_content name="inspect">\n')
+    assert "Open the page and report visual defects." in loaded
     assert "browser_probe" in loaded
     assert surface.resolve("browser_probe") is not None
 
@@ -202,7 +203,8 @@ def test_turn_and_skill_tool_use_supplied_catalog(tmp_path, monkeypatch):
         suppress_output=True,
     )
     [content] = [m["content"] for m in messages if m["role"] == "tool"]
-    assert content.startswith('<skill_content name="inspect">\n' + instructions)
+    assert content.startswith('<skill_content name="inspect">\n')
+    assert instructions in content
     assert len(calls) == 2
 
 

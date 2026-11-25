@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from dataclasses import replace
 
 from ..skills import SkillMetadata, catalog_block, discover_skills, load_skill
+from ..text_bytes import byte_size
 from .core import Tool, ToolContext
 from .descriptions import load_description, load_parameter_description
 from .presentation import Presentation
+
+_CATALOG_BYTES_MAX = 8_192
 
 
 def skill(name: str, context: ToolContext | None = None, *, user_command: str = "/skill") -> str:
@@ -29,13 +33,21 @@ def skill(name: str, context: ToolContext | None = None, *, user_command: str = 
 
 
 def with_catalog(tool: Tool, skills: Sequence[SkillMetadata]) -> Tool | None:
-    """The skill tool for one turn: its description ends with the
-    ``<available_skills>`` catalog and its ``name`` takes only those names.
-    None when no skill is available, so the tool is left out."""
+    """Advertise available skills within the schema budget, using discovery
+    for larger catalogs. Return None when no skill is available."""
     if not skills:
         return None
-    name = {**tool.params["name"], "enum": [skill.name for skill in skills]}
-    description = tool.description.rstrip("\n") + "\n\n" + catalog_block(skills)
+    names = [skill.name for skill in skills]
+    enum_bytes = byte_size(json.dumps(names))
+    catalog = catalog_block(skills)
+    name = dict(tool.params["name"])
+    if enum_bytes <= _CATALOG_BYTES_MAX:
+        name["enum"] = names
+    if enum_bytes + byte_size(catalog) <= _CATALOG_BYTES_MAX:
+        listing = catalog
+    else:
+        listing = 'Search available skills with tool_discovery and kind="skill".'
+    description = tool.description.rstrip("\n") + "\n\n" + listing
     return replace(tool, description=description, params={**tool.params, "name": name})
 
 
